@@ -5,12 +5,77 @@
 | Spec ID | `ADR-046-provider-volume-local` |
 | Parent | ADR 0046 |
 | Status | Accepted |
-| Version | 2 |
+| Version | 3 |
 | Baseline | `b5ddbed67867d9244bf33390868101bd9b053e49` |
 | Normative | Yes |
 | Owners | `d2b-provider-volume-local` crate |
 | Depends on | `ADR-046-resources-volume`, `ADR-046-provider-state`, `ADR-046-components-processes-and-sandbox`, `ADR-046-componentsession-and-bus`, `ADR-046-telemetry-audit-and-support`, `ADR-046-nix-configuration`, `ADR-046-resource-api-and-authorization`, `ADR-046-primitive-resource-composition` |
-| Supersedes | `d2b-priv-broker/src/ops/{state_dir,store_sync,store_sync_audit,store_sync_export,store_view_farm,store_view_posture,swtpm_dir}.rs`; `d2b-core/src/{storage,sync,storage_lifecycle}.rs` StorageJson/SyncJson contract; `nixos-modules/store.nix` per-VM hardlink farm activation |
+| Supersedes | Version 2 effect, audit, and telemetry authority where corrected below; `d2b-priv-broker/src/ops/{state_dir,store_sync,store_sync_audit,store_sync_export,store_view_farm,store_view_posture,swtpm_dir}.rs`; `d2b-core/src/{storage,sync,storage_lifecycle}.rs` StorageJson/SyncJson contract; `nixos-modules/store.nix` per-VM hardlink farm activation |
+
+## Prospective Wave 6 authority correction
+
+Version 3 is prospective Wave 6 authority and consumes Version 3 of
+`ADR-046-telemetry-audit-and-support`. The following rules supersede every
+later Version 2 example where they conflict:
+
+1. `VolumeEffectPort` is a pure, total mapping from one closed Provider request
+   type to one closed `VolumeBrokerOperation` variant and its typed result. The
+   adapter may validate bounds, attach the committed operation proof, dispatch,
+   and correlate an out-of-band FD transfer. It does not resolve a path or
+   numeric identity, retain a trusted FD table, call a filesystem or key
+   syscall, execute a command, choose audit fields, or append audit.
+2. The privileged broker resolves opaque Volume, layout-entry, user, source
+   policy, view, and sealing-policy IDs from its private bundle authority. Every
+   host-authority `openat2`, `fstatat`, ACL, mount, unmount, `fallocate`,
+   `linkat`, `renameat`, `unlinkat`, `read`, `write`, `fsync`, `statfs`, and key
+   effect occurs inside the handler for a closed typed broker operation. There
+   is no generic filesystem, command, path, ACL-string, mount-option-string, or
+   key-handle operation. Adding a syscall effect requires adding a broker enum
+   variant, bounded request/result DTOs, policy, audit class, and negative
+   tests first.
+3. Every privileged Volume effect durably commits immutable intent before
+   effect release and durably records completion exactly once before returning
+   success. The broker derives `PrivilegedEffectAuditDigest` from the Zone
+   partition, `OperationCorrelationDigest`, effect ordinal, and closed
+   `VolumeEffectClass`. If completion cannot become durable after a mutation,
+   the broker returns `CommitPendingAudit`; the controller retries the
+   byte-identical request and does not report success. Audit is never emitted
+   by the Provider, rate-limited, lossy, informational, or best-effort.
+4. The Zone selects the private audit partition and is not serialized. A
+   required Volume join uses only `ResourceCorrelationDigest`; actor,
+   execution, and operation joins use only `SubjectCorrelationDigest`,
+   `ExecutionCorrelationDigest`, and `OperationCorrelationDigest`
+   respectively. Audit payload values otherwise use closed enums and bounded
+   non-identity scalars. Raw Zone, Volume, resource, user, Process, policy,
+   snapshot, operation, or execution identity; `ResourceRef`; UID/GID; handle;
+   and a general or Provider-local digest are forbidden.
+5. Telemetry selects exact rows from the single
+   `d2b-contracts::METRIC_DESCRIPTOR_REGISTRY`. Metrics and OTEL Resource
+   attributes contain neither raw identity nor correlation digests; label
+   values are closed enums from the selected row. A matching operation span
+   may carry `OperationCorrelationDigest`, and span linkage may carry only
+   `TraceCorrelationDigest` and `SpanCorrelationDigest`. The Provider owns no
+   descriptor, label domain, bucket list, audit writer, or durability choice.
+6. T608 owns only the feature-local storage and Host-global authority
+   foundation assigned by the W6 local task contract: the shared Volume
+   contract/Nix surfaces, the typed broker-effect foundation, and the serial
+   foundation edits under the volume-local crate. It adopts the six retained
+   W5 obligations named by that contract without changing their historical
+   rows. It does not own or satisfy a manifest-backed `ADR046-vl-*` work item.
+   After T608 is `Merged` with its required evidence, its files are handed off
+   serially to the `wi:ADR-046-provider-volume-local` group. `ADR046-vl-001`
+   through `ADR046-vl-013` remain the generated implementation identities and
+   own the dossier deliverables below. T609 separately supplies the
+   authoritative audit types/writer and central telemetry registry before
+   `ADR046-vl-009` consumes them. No T608/T609 checkbox substitutes for a
+   dossier work-item state or evidence row.
+
+Current committed code is canon for its present reachability: the partial
+volume-local crate still exposes `VolumeStateEffectPort`, carries raw
+`ZonePath`/`ResourceRef` in `VolumeAuditEvent`, and defines Provider-local
+metric descriptors. Those are recorded implementation gaps, not evidence that
+this prospective correction has landed. W6 removes them only through the
+manifest-backed dossier tasks and their named validation.
 
 ---
 
@@ -71,8 +136,8 @@ The v3 target name appears in parentheses or an explicit mapping.
 | Reconciled ResourceType | `Volume` - exported as volume-local's primary ResourceType; reconciles physical state (layout, ACL, quota, identity marker) for all assigned Volumes; operators create/delete ordinary Volumes via Resource API; **core ProviderDeployment** creates/deletes component state Volumes before/after component Processes; volume-local never issues Volume create/delete API calls; component Processes consume their required view only |
 | Source kinds | `local-path`, `block-image`, `tmpfs` |
 | Controller component | `volume-local-controller`; `Process` under `Host/host-system`, `domain: system`; `controllerExecutionRef: Host/host-system` |
-| Effect operations | `ProvisionLayoutEntry`, `RepairLayoutEntry`, `CleanupLayoutEntry`, `PrepareSwtpmDir`, `StoreSyncComplete`, `MountTmpfs`, `ProvisionBlockImage`, `RotateSealingKey` (all via injected `VolumeEffectPort`; no direct broker connection) |
-| Permissions | No special host-path permission; all host path resolution in core/broker adapter; broker ops not called directly from Provider process |
+| Effect operations | Pure `VolumeEffectPort` mappings to the closed `VolumeBrokerOperation` catalogue: `ProvisionLayoutEntry`, `RepairLayoutEntry`, `CleanupLayoutEntry`, `PrepareSwtpmDir`, `CheckQuotaCapacity`, `PollQuotaUsage`, `StoreSyncComplete`, `MountTmpfs`, `UnmountTmpfs`, `ProvisionBlockImage`, `CommitVolumeTransaction`, `CreateVolumeSnapshot`, `ExpireVolumeSnapshot`, `RelocateVolumeContents`, `OpenVolumeMountToken`, `WriteVolumeMarker`, `VerifyVolumeMarker`, `CleanupVolumeMarker`, `CleanupVolumeRoot`, and `RotateSealingKey`; no direct broker connection or host syscall in Provider code |
+| Permissions | No special host-path permission; all host path and numeric-identity resolution in closed broker handlers; the Provider has no direct broker connection |
 | ProviderStateSet | Optional query-time logical grouping (not a ResourceType): `{ v : Volume \| ownerRef == "Provider/volume-local" }`; **empty** - volume-local declares no state Volume of its own (its bounded non-secret operational state lives in `status`/the core Operation ledger, D087). Volume-local is the **sole reconciler** for all assigned Volumes carrying `providerRef: Provider/volume-local` (operator-created Volumes and other Providers' *declared* state Volumes; Volume is its exported type) and never issues Volume create/delete API calls; **core ProviderDeployment** creates/deletes other Providers' declared state Volume instances before/after their component Processes; a declared component state Volume is created only when its payload passes the storage-need test; Nix-preprovisioned `User/<name>` layout principals; no cross-component sharing; no empty identity-only Volume |
 | Finalizers | `volume-local/layout` |
 | Supported Host variants | Local NixOS Host; bare-metal Host; ACA if backing filesystem is accessible |
@@ -126,9 +191,10 @@ Backed by a Host directory resolved from an opaque `sourcePolicyId`. The
 `sourcePolicyId` references a source policy declared in the Provider root config
 (see §Source policies). The raw host-path prefix is private Nix/bundle authority
 and is never projected into Provider config, Volume spec, status, or any public
-DTO. The core/broker adapter resolves the trusted path prefix and opens the
-directory via `openat2` anchored at the prefix root; the controller receives only
-an opaque `VolumeMountToken` (authorization/correlation handle; no `OwnedFd` in Provider).
+DTO. The broker resolves the trusted path prefix and opens the directory via
+the closed `OpenVolumeMountToken` operation using `openat2` anchored at the
+prefix root. The pure adapter returns only an opaque `VolumeMountToken`
+(authorization/correlation handle; no `OwnedFd` in Provider).
 
 Source config schema:
 
@@ -148,9 +214,9 @@ Compatible `VolumeKind`: `durable`, `state`, `cache`, `ephemeral`, `tmp`.
 
 ### `block-image`
 
-A raw or qcow2 disk-image file resolved from the `sourcePolicyId`. The
-core/broker adapter manages the image file (create at provision via the
-`ProvisionBlockImage` effect op, resize if declared, delete at cleanup). The
+A raw or qcow2 disk-image file resolved from the `sourcePolicyId`. The broker
+manages the image file through closed operations (create at provision via
+`ProvisionBlockImage`, resize if declared, and delete at cleanup). The
 Guest runtime provider (cloud-hypervisor or QEMU) receives a validated FD and
 attaches the image as `virtio-blk`. The image is never passed by path; the FD
 is transferred via the LaunchTicket for the Guest runtime process.
@@ -178,9 +244,10 @@ Constraints:
 
 ### `tmpfs`
 
-A memory-backed `tmpfs` mount. The controller sends a `MountTmpfs` semantic
-operation to the injected `VolumeEffectPort`; the adapter issues the mount
-syscall with `size=` and `nr_inodes=` derived from the Volume quota.
+A memory-backed `tmpfs` mount. The controller sends a typed `MountTmpfs`
+request to the injected `VolumeEffectPort`; the pure adapter maps it to the
+closed broker operation. The broker derives `size=` and `nr_inodes=` from
+trusted Volume quota fields and issues the mount syscall.
 `quota.maxBytes` maps to `size=` and `quota.maxInodes` to `nr_inodes=`; both
 are required. The kernel enforces these limits so enforcement is always
 effectively `hard`. Cleanup unmounts the tmpfs via `umount_tmpfs` on the
@@ -401,16 +468,20 @@ only for `ephemeral`/`tmp`) the controller:
 1. Resolves each `accessAcl` and `defaultAcl` entry's `User/<name>` to its
    stable UID via the Zone's User resource. Stale UID mappings (User revised)
    trigger an immediate re-resolve.
-2. Calls broker `RepairLayoutEntry` with the resolved UID/GID, mode, and ACL
-   list.
+2. Calls `VolumeEffectPort::repair_layout_entry` with opaque User and
+   LayoutEntry IDs. The pure adapter maps it to the closed broker
+   `RepairLayoutEntry` operation; numeric IDs, mode, and ACL material are
+   broker-resolved trusted inputs.
 3. The broker applies `setfacl`/`acl_set_fd` on the anchored open FD, then
    compares the resulting `acl_get_fd` output with the declared set.
 4. If the entry's `foreignChildPolicy == "fail"`, the broker reads the directory
    ACL and fails with `ForeignAclViolation` on any ACL entry not present in the
    declared `defaultAcl`. If `foreignChildPolicy == "preserve"`, surplus ACL
    entries are left unchanged.
-5. The controller writes a `RepairLayoutEntry` audit record with the Volume UID,
-   entry type, and repair action class - never with entry paths or ACL values.
+5. The broker durably completes the `RepairLayoutEntry` audit record with
+   `PrivilegedEffectAuditDigest`, optional `ResourceCorrelationDigest`, entry
+   type, and repair action class - never with a raw Volume identity, entry path,
+   or ACL value.
 
 ### View rights enforcement
 
@@ -684,9 +755,11 @@ The store-sync operation (`StoreSyncComplete`) runs the hardlink farm rebuild:
 1. Broker acquires the `sync.lock` OFD write lock on the anchored FD.
 2. Broker calls `d2b_host::hardlink_farm::build_store_view` with the
    `BuildStoreViewRequest` derived from the Volume's current generation metadata.
-3. On completion, broker releases the OFD lock and emits `StoreSyncComplete`
-   audit record: Volume UID and generation number only (no paths, no store-path
-   list, no size).
+3. On completion, the broker releases the OFD lock, durably commits the
+   exactly-once `StoreSyncComplete` record, and only then returns success. The
+   record carries `PrivilegedEffectAuditDigest`, optional
+   `ResourceCorrelationDigest`, and the generation number only (no raw Volume
+   identity, paths, store-path list, or size).
 
 ---
 
@@ -810,9 +883,11 @@ The controller's attach-time flow:
 
 1. Verify marker (see §Identity markers).
 2. Call `request_mount_token(vol, view_id, access)` on the `VolumeEffectPort`.
-   The adapter opens the Volume root via `openat2` anchored at the policy prefix
-   FD, verifies `st_dev`/`st_ino` match the marker record, and routes the
-   anchored FD **directly** to the target ProviderSupervisor out-of-band.
+   The pure adapter maps the request to `OpenVolumeMountToken`. The broker
+   opens the Volume root via `openat2` anchored at its private policy-prefix FD,
+   verifies `st_dev`/`st_ino` against the marker record, durably completes the
+   effect audit, and transfers the anchored FD out-of-band for direct routing
+   to the target ProviderSupervisor.
 3. The adapter returns a `VolumeMountToken` - an opaque authorization/correlation
    handle with a fully redacted `Debug` impl. The token contains no `OwnedFd`
    visible to the Provider process.
@@ -855,17 +930,21 @@ and must not contain host paths, secret content, process data, or terminal bytes
 
 The `Provider/volume-local` controller process never opens host paths, calls
 `openat2` or any syscall that takes a raw host path, issues `setfacl`,
-`mount`/`umount`, or `fallocate`, receives numeric UIDs, or holds a direct
-connection to the Zone broker. All filesystem mutation, path resolution, and
-audit emission are performed by the injected `VolumeEffectPort` implementation -
-a core/broker adapter that runs outside the Provider process boundary.
+`mount`/`umount`, `fallocate`, `unlinkat`, `write`, or a key operation, receives
+numeric UIDs, or holds a direct connection to the Zone broker. The injected
+`VolumeEffectPort` implementation is a pure core adapter outside the Provider
+process. It maps typed requests to closed broker operations; the broker alone
+resolves authority, performs host effects, and owns durable audit.
 
 ### VolumeEffectPort trait
 
-Defined in `d2b-contracts/src/v3/effect_port.rs` (neutral contract crate
-shared by the Provider and the core/broker adapter). The core/broker adapter
-implements the trait; the Provider crate imports and uses it. The Provider crate
-must not define the trait, and core must not import any Provider-implementation
+Defined in `d2b-contracts/src/v3/effect_port.rs` (neutral contract crate shared
+by the Provider and the pure core adapter). The core adapter implements the
+trait; the Provider crate imports and uses it. The separate closed
+`VolumeBrokerOperation` request/result sum types live in
+`d2b-contracts/src/broker_wire.rs` and are imported only by the adapter and
+broker surfaces, not re-exported by the Provider crate. The Provider crate must
+not define the trait, and core must not import any Provider-implementation
 crate. The Provider crate depends only on `d2b-contracts`, `d2b-provider`, and
 `d2b-provider-toolkit`.
 
@@ -996,6 +1075,10 @@ pub struct VolumeMountToken {
 impl fmt::Debug for VolumeMountToken { fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { f.write_str("VolumeMountToken([redacted])") } }
 
 pub trait VolumeEffectPort: Send + Sync + 'static {
+    /// Provision or reconcile a TPM state directory and fail-closed marker.
+    async fn prepare_swtpm_dir(&self, vol: VolumeId)
+        -> Result<SwtpmDisposition, EffectError>;
+
     /// Provision or verify-create a layout entry relative to the Volume root.
     async fn provision_layout_entry(&self, vol: VolumeId, entry: LayoutEntryId,
         owner: UserId, group: UserId) -> Result<ProvisionOutcome, EffectError>;
@@ -1018,13 +1101,11 @@ pub trait VolumeEffectPort: Send + Sync + 'static {
     async fn cleanup_marker(&self, vol: VolumeId) -> Result<(), EffectError>;
 
     /// Check that the backing FS can reserve the declared quota.
-    /// Implemented via statfs(2) dispatched to a bounded blocking thread pool
-    /// in the adapter; never called non-blocking.
+    /// The broker performs statfs(2) in its bounded blocking pool.
     async fn check_quota_capacity(&self, vol: VolumeId, max_bytes: u64,
         max_inodes: Option<u64>) -> Result<QuotaCapacityStatus, EffectError>;
 
-    /// Poll current quota usage via statfs(2). Dispatched to a bounded blocking
-    /// thread pool in the adapter; never called non-blocking.
+    /// Poll current quota usage. The broker performs statfs(2).
     async fn poll_quota_usage(&self, vol: VolumeId) -> Result<QuotaUsage, EffectError>;
 
     /// Create or verify a block-image file at declared size; fallocate if preallocate.
@@ -1041,6 +1122,20 @@ pub trait VolumeEffectPort: Send + Sync + 'static {
     /// Execute the hardlink farm sync cycle (acquire OFD lock, build farm, release).
     async fn run_store_sync(&self, vol: VolumeId,
         generation: u64) -> Result<StoreSyncOutcome, EffectError>;
+
+    /// Durably replace one declared structured-state slot.
+    async fn commit_volume_transaction(&self, request: CommitVolumeTransactionRequest)
+        -> Result<CommitVolumeTransactionResult, EffectError>;
+
+    /// Create or expire one snapshot through a closed broker operation.
+    async fn create_volume_snapshot(&self, request: CreateVolumeSnapshotRequest)
+        -> Result<CreateVolumeSnapshotResult, EffectError>;
+    async fn expire_volume_snapshot(&self, request: ExpireVolumeSnapshotRequest)
+        -> Result<(), EffectError>;
+
+    /// Copy and durably commit one relocation generation.
+    async fn relocate_volume_contents(&self, request: RelocateVolumeContentsRequest)
+        -> Result<RelocateVolumeContentsResult, EffectError>;
 
     /// Atomically rewrap all sealed StateEnvelopes from the expected key
     /// generation to the target generation through the closed broker operation.
@@ -1059,54 +1154,61 @@ pub trait VolumeEffectPort: Send + Sync + 'static {
 }
 ```
 
-The core/broker adapter implementing this trait:
+The core adapter implementing this trait:
 
-1. Receives opaque IDs (never a raw path or numeric UID).
-2. Looks up the Volume root from the private bundle/trusted FD table keyed by
-   `VolumeId`; resolves the actual path prefix from the private bundle keyed by
-   `SourcePolicyId`.
-3. Performs all filesystem operations using `openat2(RESOLVE_BENEATH)` rooted at
-   the retained FD; never uses `open(2)` with an absolute path.
-4. Calls `setfacl`/`acl_set_fd`, `mount`/`umount`, `fallocate`, and any other
-   privileged syscall entirely within the adapter.
-5. Dispatches all blocking FS calls (`openat2`, `fstatat`, `acl_get_fd`,
-   `acl_set_fd`, `unlinkat`, `linkat`, `fsync`, `read`, `write`, `statfs`) to a
-   bounded blocking thread pool (tokio `spawn_blocking` equivalent); no handler
-   holds a blocking syscall across an `await` in async code paths.
-6. Routes the anchored FD for a `request_mount_token` call directly to the
-   target ProviderSupervisor out-of-band; the FD is never returned to the
-   Provider process. The `VolumeMountToken` returned to the controller is an
-   opaque authorization/correlation handle only.
-7. Maps `rotate_sealing_key` one-to-one to the planned closed broker operation
-   `RotateSealingKey`. The adapter and broker independently resolve and authorize
-   the opaque `VolumeId` and `SealingPolicyId`; neither wire carries key bytes,
-   credential bytes, key handles, or paths.
-8. Emits path-free audit records naming only the Volume UID, entry type, and
-   action class; audit is broker/core-owned and is never atomic with any redb
-   write.
+1. Receives opaque IDs and bounded semantic DTOs, never a raw path, numeric
+   UID/GID, ACL string, mount option string, key handle, command, or FD.
+2. Maps each trait method to exactly one `VolumeBrokerOperation` variant. The
+   mapping is exhaustive in both directions; no generic or fall-through
+   variant exists.
+3. Attaches the committed operation proof and dispatches the typed request. It
+   does not open the private bundle, maintain a trusted FD table, or perform a
+   syscall.
+4. For `OpenVolumeMountToken`, correlates the broker's audited SCM_RIGHTS
+   transfer directly to the target ProviderSupervisor. The Provider receives
+   only the opaque token.
+5. Returns success only after the broker response proves durable completion
+   audit. `CommitPendingAudit` remains pending and is retried byte-identically.
 
-No `VolumeEffectPort` method accepts a caller-supplied path string or numeric
-UID. Every path is derived by the adapter from opaque IDs via the private bundle.
+The broker independently resolves and authorizes every opaque ID, derives all
+paths and numeric identities from private authority, performs every blocking
+syscall in its bounded blocking pool, and owns intent/completion audit. No
+`VolumeEffectPort` or `VolumeBrokerOperation` request accepts a caller-supplied
+path, numeric identity, ACL string, mount option string, key material, or
+broker-resolved handle.
 
-### Effect operation catalogue (semantic names)
+### Closed broker operation catalogue
 
-| Semantic op | Description | Audit fields |
+Every row is one `VolumeBrokerOperation` variant. The broker audit envelope
+always carries `PrivilegedEffectAuditDigest`, closed `VolumeEffectClass`,
+closed outcome, and closed failure reason. `ResourceCorrelationDigest` is
+present only when the record class requires a Volume join.
+
+| Broker operation | Broker-owned effect | Additional typed audit fields |
 | --- | --- | --- |
-| `ProvisionLayoutEntry` | Create or verify-create a layout entry (file, directory, symlink, unix-socket) | Volume UID, entry type, owner UID digest |
-| `RepairLayoutEntry` | Reconcile owner/group/mode and ACLs for an existing entry | Volume UID, entry type, repair action class |
-| `CleanupLayoutEntry` | Remove a layout entry at the declared relative path | Volume UID, entry type, cleanup trigger |
-| `PrepareSwtpmDir` | Provision or reconcile a TPM state directory with fail-closed marker | VM (Volume) UID, result class: `provisioned`, `reconciled`, `quarantined` |
-| `StoreSyncComplete` | Complete a hardlink farm sync cycle; acquire OFD lock, build farm, release | Volume UID, generation number |
-| `MountTmpfs` | Mount or unmount a tmpfs at the Volume root with quota limits | Volume UID, action: `mount` \| `umount` |
-| `ProvisionBlockImage` | Create or verify an image file at declared size | Volume UID, action: `create` \| `verify` |
-| `RotateSealingKey` | Atomically rewrap sealed envelopes through the one-to-one planned closed broker operation `RotateSealingKey`; request contains only opaque Volume/policy IDs and committed generation/precondition fields | Volume UID, policy ID digest, from/to generation, operation ID digest, result class |
-| `OpenVolumeMountToken` | Open a Volume-root FD and route it directly to the target ProviderSupervisor; return opaque `VolumeMountToken` handle (no FD in Provider) | Volume UID, view ID, access class |
-| `AnchorMarkerRoot` | Ensure the `volume-local-markers/` root exists and is correctly owned | action class |
-| `WriteVolumeMarker` | Write the identity marker for a Volume (called at first provision) | Volume UID |
-| `VerifyVolumeMarker` | Verify the identity marker for a Volume (called at restart/attach) | Volume UID, result: `verified` \| `missing` \| `replaced` \| `tampered` |
-| `CleanupMarker` | Remove the identity marker (destruction only) | Volume UID |
+| `ProvisionLayoutEntry` | Anchored `openat2`; create/write/link as required by closed `EntryType`; ownership and mode application | `EntryType`, `ProvisionDisposition` |
+| `RepairLayoutEntry` | Anchored open/stat; resolve User IDs; apply and verify access/default ACL, owner, group, and mode | `EntryType`, `RepairActionClass` |
+| `CleanupLayoutEntry` | Anchored open and leaf-first `unlinkat`/directory removal | `EntryType`, `CleanupTrigger` |
+| `PrepareSwtpmDir` | Anchored provision/adopt plus fail-closed marker and ancestor ACL | `SwtpmDisposition` |
+| `CheckQuotaCapacity` | Anchored `statfs` capability/capacity check | `QuotaCapacityClass` |
+| `PollQuotaUsage` | Anchored `statfs` observation | `QuotaUsageClass` |
+| `StoreSyncComplete` | OFD lock, anchored hardlink/copy/write/unlink, and generation commit | generation number, `StoreSyncDisposition` |
+| `MountTmpfs` | Broker-derived flags/options and `mount` | `MountAction::Mount` |
+| `UnmountTmpfs` | Anchored mount identity verification and `umount2` | `MountAction::Unmount` |
+| `ProvisionBlockImage` | Anchored create/verify, size enforcement, optional `fallocate`, and durable metadata | `BlockImageAction` |
+| `CommitVolumeTransaction` | Anchored bounded write, `fsync`, atomic link/rename, and parent `fsync` | `TransactionDisposition` |
+| `CreateVolumeSnapshot` | Anchored snapshot generation create/copy/write and durable commit | `SnapshotTrigger`, `SnapshotDisposition` |
+| `ExpireVolumeSnapshot` | Anchored snapshot generation `unlinkat` cleanup | `SnapshotExpiryReason` |
+| `RelocateVolumeContents` | Broker-authorized anchored copy/write/fsync and target-generation commit | `RelocationDisposition` |
+| `OpenVolumeMountToken` | Anchored `openat2`, marker/inode verification, audited SCM_RIGHTS transfer | `AccessClass`, `MountTokenDisposition` |
+| `WriteVolumeMarker` | Anchored bounded marker write and durable rename | `MarkerWriteDisposition` |
+| `VerifyVolumeMarker` | Anchored open/read/HMAC verification | `MarkerStatus` |
+| `CleanupVolumeMarker` | Anchored marker `unlinkat` | `CleanupTrigger::Destruction` |
+| `CleanupVolumeRoot` | Anchored final root removal after empty/posture verification | `CleanupTrigger` |
+| `RotateSealingKey` | Journaled key-generation rewrap, atomic switch, retirement, and recovery | from/to generation, `RotateSealingKeyDisposition` |
 
-No semantic op accepts a caller-supplied path string or numeric UID.
+An effect that cannot be expressed by exactly one row is denied until the
+contract, broker policy, durable audit class, and tests add a new row.
 
 ---
 
@@ -1507,7 +1609,7 @@ The referenced Credential must be `Ready` before the Volume is provisioned.
 The controller observes only Credential identity, readiness, and generation. It
 never reads a Credential lease or obtains envelope-key material. The admitted
 Volume binds `sealingCredentialRef` to an opaque `SealingPolicyId`; the trusted
-core/broker adapter resolves that policy and performs initial wrapping. Raw keys
+broker resolves that policy and performs initial wrapping. Raw keys
 remain inside the Credential authority and closed broker operation.
 
 ### Canonical sealing-key rotation
@@ -1542,12 +1644,13 @@ the proof for that committed status revision permits the adapter call. A status
 conflict causes re-read and re-plan without an effect. This status-first rule
 applies equally to normal reconcile and `execute_upgrade`.
 
-The adapter authorizes the controller ComponentSession principal for the closed
-`volume.rotate-sealing-key` capability, checks same-Zone ownership and
-`providerRef`, verifies the committed revision proof, and then maps the method
-one-to-one to the planned closed broker operation `RotateSealingKey`. The broker
-independently repeats the capability, Volume/policy binding, generation, and
-revision checks against its signed private policy table. The broker request
+The core authorization owner authorizes the controller ComponentSession
+principal for the closed `volume.rotate-sealing-key` capability, checks
+same-Zone ownership and `providerRef`, and verifies the committed revision
+proof. The pure adapter then maps the method one-to-one to the closed broker
+operation `RotateSealingKey`. The broker independently repeats the capability,
+Volume/policy binding, generation, and revision checks against its signed
+private policy table. The broker request
 contains only opaque `VolumeId`, opaque `SealingPolicyId`, generation/revision
 preconditions, opaque `operation_id`, and the derived idempotency key. No key
 bytes, Credential bytes, KDF parameters, host paths, relative paths, key
@@ -1565,9 +1668,10 @@ SHA-256(
 )
 ```
 
-Fields use their canonical length-prefixed wire encodings. Core derives the key;
-the adapter and broker recompute it. Reusing a key with different request bytes
-is `IdempotencyConflict`. A retry of byte-identical request fields returns
+Fields use their canonical length-prefixed wire encodings. Core and the broker
+independently derive the key from the canonical typed request; the adapter only
+maps the request. Reusing a key with different request bytes is
+`IdempotencyConflict`. A retry of byte-identical request fields returns
 `AlreadyCommitted` or `RecoveredCommitted` without another rewrite or duplicate
 success audit. A distinct in-flight request for the same Volume is
 `RotationConflict`; rotation is single-flight per Volume.
@@ -1587,7 +1691,9 @@ The broker uses an anchored, fsync'd rotation journal keyed by the idempotency
 key and a staged sealing generation:
 
 1. `Prepared`: authorize and lease the expected and target policy generations;
-   persist only their opaque policy/generation references and request digest.
+   persist only their opaque policy/generation references and request digest,
+   then durably commit the immutable privileged-effect audit intent before
+   releasing the effect.
 2. `Staged`: rewrap every sealed `StateEnvelope` into an anchored staging
    generation, verify every authentication tag, then fsync files and directory.
 3. `Committed`: atomically switch authenticated sealing metadata to the target
@@ -1643,11 +1749,13 @@ new rotation plan. If status says `sealed` but the broker reports a different
 active generation, reconcile sets `SealingReady=False/sealing-generation-drift`
 and fails closed rather than issuing an implicit rewrite.
 
-The controller emits path-free start/failure/commit lifecycle audit events. The
-broker emits one durable `RotateSealingKey` success record containing only
-Volume UID, policy ID digest, from/to generations, operation ID digest,
-idempotency-key digest, and result class. No raw credential bytes, key material,
-KDF parameters, data counts/sizes, paths, or content enter status, audit, OTEL,
+The controller submits closed start/failure/commit observations to the typed
+audit port; it opens no writer. The broker durably completes exactly one
+`RotateSealingKey` record with `PrivilegedEffectAuditDigest`, optional
+`ResourceCorrelationDigest`, `OperationCorrelationDigest`, from/to
+generations, and `RotateSealingKeyDisposition`. No raw Zone, Volume, resource,
+policy, operation, or credential identity; credential bytes; key material; KDF
+parameters; data counts/sizes; paths; or content enters status, audit, OTEL,
 errors, `Debug`, or logs at any cardinality.
 
 ---
@@ -1799,16 +1907,19 @@ with valid marker is quarantined rather than silently re-provisioned.
 
 ## Within-Volume transactions
 
-Provider components write structured state atomically using Volume transaction
-helpers backed by `d2b-state::AtomicFilesystem` (adapted from main `6faa5256`):
+Provider components commit structured state through
+`VolumeEffectPort::commit_volume_transaction`, a pure mapping to the closed
+`CommitVolumeTransaction` broker operation:
 
-1. Writer opens a temp file in the Volume view's anchored root with
-   `O_CLOEXEC | O_TMPFILE`.
-2. Serializes payload as canonical JSON; wraps in `StateEnvelope` with digest
-   and generation counter.
-3. Calls `fsync` on the temp fd.
-4. Calls `linkat` to rename temp fd into target relative path (atomic on Linux).
-5. Calls `fsync` on the parent directory fd (anchored; never caller-controlled).
+1. The Provider serializes a bounded payload as canonical JSON and wraps it in
+   `StateEnvelope` with digest and generation counter. The request identifies a
+   declared state slot by opaque ID, never by path.
+2. The broker resolves the slot and opens a temporary file in the anchored
+   Volume root with `O_CLOEXEC | O_TMPFILE`.
+3. The broker performs the bounded write and calls `fsync` on the temporary fd.
+4. The broker links/renames the temporary fd into the broker-resolved target.
+5. The broker calls `fsync` on the parent directory, durably completes the
+   effect audit, and returns the typed disposition.
 
 A crash between steps 3 and 5 leaves the old file intact. The toolkit validates
 the `StateEnvelope` digest and generation bound before exposing payload.
@@ -1850,15 +1961,15 @@ External drift observation: volume-local declares a bounded observe interval
 (default 60 s) for `durable`/`state` Volumes. `ephemeral`/`tmp` Volumes observe
 only on start.
 
-### Blocking syscalls in core adapter
+### Blocking syscalls in broker handlers
 
 All blocking FS syscalls (`openat2`, `fstatat`, `acl_get_fd`, `acl_set_fd`,
 `unlinkat`, `linkat`, `fsync`, `read`, `write`, `statfs`, `mount`, `umount2`,
-`fallocate`) are dispatched by the core/broker adapter to a bounded blocking
-thread pool (tokio `spawn_blocking` equivalent). No adapter method holds a
-blocking syscall across an `await` in async code paths. The `VolumeEffectPort`
-trait's `async fn` signatures expose this as an async interface to the
-controller; the blocking dispatch is an adapter implementation detail.
+`fallocate`) execute only in closed broker handlers and are dispatched to the
+broker's bounded blocking thread pool (tokio `spawn_blocking` equivalent). No
+broker async handler holds a blocking syscall across an `await`. The
+`VolumeEffectPort` trait's `async fn` signatures expose the pure typed dispatch
+interface to the controller; the adapter itself performs no blocking work.
 
 Async sub-operations (migration, snapshot, relocation EphemeralProcess
 coordination) carry a cancellation token derived from the ComponentSession so
@@ -1900,8 +2011,8 @@ Cross-references to main `a1cc0b2d` symbols used by volume-local (per
   `d2b-provider-toolkit/src/fixture.rs`: used by `tests/` as the fake Zone
   runtime; no live daemon required.
 - `VolumeEffectPort` trait from `d2b-contracts/src/v3/effect_port.rs`: imported
-  by the Provider crate; implemented by the core/broker adapter in the host
-  runtime crate.
+  by the Provider crate; implemented by the pure core adapter, which maps each
+  method to one closed broker operation.
 
 ---
 
@@ -1936,7 +2047,8 @@ rules:
 
 No special host-path permission claims. The controller process holds no claim
 that grants access to raw host paths; path resolution is performed exclusively
-within the core/broker adapter implementing `VolumeEffectPort`.
+inside the privileged broker. The `VolumeEffectPort` adapter performs no path
+resolution or host syscall.
 
 No subject may write spec for a Volume they do not own. Status may be written
 only by the current controller lease for the declared `providerRef`.
@@ -2083,6 +2195,7 @@ carry raw host paths, secret bytes, or unbounded records.
 | `entry-quarantined` | Adoption ambiguity | Degraded |
 | `volume-local/layout` finalizer timeout | Controller exceeded `maxFinalizerDurationSeconds` | Degraded/finalizer-timeout |
 | `marker-tampered` | Marker HMAC validation failed | Failed |
+| `volume-effect-audit-pending` | A non-sealing broker effect committed but durable completion audit is not yet confirmed | Operation remains pending; retry the byte-identical request |
 | `sealing-rotation-unauthorized` | Caller lacks the closed `volume.rotate-sealing-key` capability or Volume/policy binding | rotation-failed |
 | `sealing-rotation-precondition` | Volume generation, Resource revision, policy binding, or active/target key generation no longer matches | rotation-pending; re-read/re-plan |
 | `sealing-target-unavailable` | Target policy generation is not yet available | rotation-pending; retry same request |
@@ -2102,38 +2215,42 @@ and must not contain host paths, secret content, process data, or terminal bytes
 
 ### Audit event table
 
-| Event kind | Trigger | Required payload fields |
+The Provider opens no audit writer. It submits closed lifecycle observations to
+the T609-owned typed audit port; the resource/operation owner decides and
+durably writes the authoritative record. The Zone selects the private
+partition and is never a serialized field.
+
+| Event kind | Authoritative owner and trigger | Required payload fields |
 | --- | --- | --- |
-| `volume-provisioned` | First-provision complete | zone, volume-ref, schemaId, schemaVersion, persistenceClass |
-| `volume-layout-repaired` | `RepairLayoutEntry` completed | zone, volume-ref, entry-type, action-class |
-| `volume-migration-start` | Migration EphemeralProcess created | zone, volume-ref, from-version, to-version, migration-policy |
-| `volume-migration-committed` | Migration committed | zone, volume-ref, from-version, to-version |
-| `volume-migration-failed` | Migration EphemeralProcess failed | zone, volume-ref, from-version, to-version, bounded-reason |
-| `volume-migration-rolled-back` | Migration precommit rollback completed | zone, volume-ref |
-| `volume-snapshot-created` | Snapshot worker succeeded | zone, volume-ref, snapshot-id (opaque), trigger |
-| `volume-relocation-start` | Relocation worker created | zone, volume-ref, from-execution-ref |
-| `volume-relocation-committed` | Relocation complete | zone, volume-ref, to-execution-ref |
-| `volume-incident-hold-set` | `IncidentHold` condition added | zone, volume-ref, actor-digest |
-| `volume-incident-hold-cleared` | `IncidentHold` condition removed | zone, volume-ref, actor-digest |
-| `volume-sealing-rotation-start` | Status-first rotation-pending transition committed | zone, volume-ref, from-generation, to-generation, operation-id-digest |
-| `volume-sealing-rotation-failed` | Typed rotation returns a terminal error | zone, volume-ref, from-generation, to-generation, bounded-reason |
-| `volume-sealing-rotation-committed` | Typed result and broker success audit confirmed | zone, volume-ref, from-generation, to-generation, result-class |
-| `volume-destroyed` | Volume fully destroyed | zone, volume-ref, schemaId |
-| `volume-marker-check` | Marker verification result | zone, volume-ref, result-class |
-| `volume-quota-exceeded` | Write rejected due to quota | zone, volume-ref |
-| `volume-store-sync-complete` | Hardlink farm sync finished | zone, volume-ref, generation-number |
-| `PrepareSwtpmDir` (broker) | TPM dir provisioned/reconciled/quarantined | VM (Volume) UID, result-class |
-| `ProvisionLayoutEntry` (broker) | Entry created | Volume UID, entry type, owner UID digest |
-| `RepairLayoutEntry` (broker) | Entry repaired | Volume UID, entry type, repair action class |
-| `CleanupLayoutEntry` (broker) | Entry removed | Volume UID, entry type, cleanup trigger |
-| `StoreSyncComplete` (broker) | Store sync complete | Volume UID, generation number |
-| `RotateSealingKey` (broker) | Rotation committed/recovered and success audit made durable | Volume UID, policy ID digest, from/to generation, operation ID digest, idempotency-key digest, result-class |
+| `volume-provisioned` | Core resource lifecycle owner after first provision completes | `ResourceCorrelationDigest`, `PersistenceClass`, `SourceKind`, `AuditOutcome` |
+| `volume-layout-repaired` | Broker after `RepairLayoutEntry` completes durably | `PrivilegedEffectAuditDigest`, optional `ResourceCorrelationDigest`, `EntryType`, `RepairActionClass`, `AuditOutcome` |
+| `volume-migration-start` | Core operation owner after migration operation commit | `ResourceCorrelationDigest`, `OperationCorrelationDigest`, from/to version, `MigrationPolicy`, `AuditOutcome` |
+| `volume-migration-committed` | Core operation owner after migration commit | `ResourceCorrelationDigest`, `OperationCorrelationDigest`, from/to version, `AuditOutcome` |
+| `volume-migration-failed` | Core operation owner after terminal migration failure | `ResourceCorrelationDigest`, `OperationCorrelationDigest`, from/to version, `VolumeFailureReason` |
+| `volume-migration-rolled-back` | Core operation owner after precommit rollback | `ResourceCorrelationDigest`, `OperationCorrelationDigest`, `AuditOutcome` |
+| `volume-snapshot-created` | Core operation owner after snapshot commit | `ResourceCorrelationDigest`, `OperationCorrelationDigest`, `SnapshotTrigger`, `AuditOutcome` |
+| `volume-relocation-start` | Core operation owner after relocation operation commit | `ResourceCorrelationDigest`, `OperationCorrelationDigest`, `ExecutionCorrelationDigest` for source, `AuditOutcome` |
+| `volume-relocation-committed` | Core operation owner after relocation commit | `ResourceCorrelationDigest`, `OperationCorrelationDigest`, `ExecutionCorrelationDigest` for destination, `AuditOutcome` |
+| `volume-incident-hold-set` | Core authorization/resource owner after condition commit | `ResourceCorrelationDigest`, `SubjectCorrelationDigest`, `IncidentHoldAction::Set`, `AuditOutcome` |
+| `volume-incident-hold-cleared` | Core authorization/resource owner after condition commit | `ResourceCorrelationDigest`, `SubjectCorrelationDigest`, `IncidentHoldAction::Clear`, `AuditOutcome` |
+| `volume-sealing-rotation-start` | Core operation owner after status-first pending commit | `ResourceCorrelationDigest`, `OperationCorrelationDigest`, from/to generation, `AuditOutcome` |
+| `volume-sealing-rotation-failed` | Core operation owner after terminal typed result | `ResourceCorrelationDigest`, `OperationCorrelationDigest`, from/to generation, `VolumeFailureReason` |
+| `volume-sealing-rotation-committed` | Core operation owner after broker durable completion is confirmed | `ResourceCorrelationDigest`, `OperationCorrelationDigest`, from/to generation, `RotateSealingKeyDisposition` |
+| `volume-destroyed` | Core resource lifecycle owner after finalizer completion | `ResourceCorrelationDigest`, `AuditOutcome` |
+| `volume-marker-check` | Broker after `VerifyVolumeMarker` completes durably | `PrivilegedEffectAuditDigest`, optional `ResourceCorrelationDigest`, `MarkerStatus` |
+| `volume-quota-exceeded` | Core resource owner after typed write denial | `ResourceCorrelationDigest`, `QuotaOutcome::Exceeded` |
+| `volume-store-sync-complete` | Broker after `StoreSyncComplete` completes durably | `PrivilegedEffectAuditDigest`, optional `ResourceCorrelationDigest`, generation number, `StoreSyncDisposition` |
+| Every other `VolumeBrokerOperation` variant | Broker before effect release and after terminal completion | `PrivilegedEffectAuditDigest`, optional `ResourceCorrelationDigest`, `VolumeEffectClass`, closed outcome/reason, and only the additional closed fields in the broker catalogue |
 
 ### Excluded from all audit records
 
 The following are explicitly prohibited from appearing in any audit record,
 status field, log line, OTEL span attribute, or metric label:
 
+- raw Zone, Volume, resource, user, Process, policy, snapshot, operation, or
+  execution identity;
+- `ZonePath`, `ResourceRef`, `ResourceUid`, UID/GID, a Provider-local
+  `VolumeAuditDigest`, or a general digest string;
 - `source.settings.sourcePolicyId` resolved host path (the path exists only in the private bundle, never in any public field or record);
 - layout entry relative paths;
 - ACL grant values or permission strings;
@@ -2142,31 +2259,33 @@ status field, log line, OTEL span attribute, or metric label:
 - migration data or snapshot content;
 - credential or key material;
 - process argv, environment, or stdout/stderr bytes;
-- `st_dev` / `st_ino` raw values (only UID or digest references);
+- `st_dev` / `st_ino` raw values;
 - `sizeBytes` for `secret-adjacent` Volumes.
+
+A required audit join uses only the approved correlation newtype for that
+record class. A digest is absent when the join is unnecessary.
 
 ---
 
 ## OTEL metrics
 
-All metric labels are closed at a bounded, fixed semantic set:
-`provider` (`volume-local`), `schema_id`, `schema_version`,
-`persistence_class`, `source_kind`, `operation`, `trigger`, `view`, `access`,
-and `outcome`.
-
-No schema content, raw path, instance ID, process arguments, or credential
-identifier enters any metric label. Zone identity is carried only in the
-bounded `d2b.zone` OTEL resource attribute.
+`d2b-contracts::METRIC_DESCRIPTOR_REGISTRY` owns the descriptors, complete
+label value domains, aggregation scopes, and buckets. The table below is the
+exact row set volume-local requests from that registry; it is not a
+Provider-local descriptor authority. Label values are closed enums. Raw
+identity, ResourceRefs, names, handles, paths, schema IDs, view IDs, and every
+correlation digest are forbidden from metric labels and OTEL Resource
+attributes.
 
 | Metric | Unit | Labels |
 | --- | --- | --- |
 | `d2b_volume_provision_total` | Counter | provider, persistence_class, source_kind, outcome |
 | `d2b_volume_provision_duration_ms` | Histogram | provider, source_kind |
 | `d2b_volume_layout_repair_total` | Counter | provider, outcome |
-| `d2b_volume_state_size_bytes` | Gauge | provider, schema_id |
-| `d2b_volume_state_migration_total` | Counter | provider, schema_id, outcome |
-| `d2b_volume_state_migration_duration_ms` | Histogram | provider, schema_id |
-| `d2b_volume_state_snapshot_total` | Counter | provider, schema_id, trigger |
+| `d2b_volume_state_size_bytes` | Histogram | provider, source_kind |
+| `d2b_volume_state_migration_total` | Counter | provider, outcome |
+| `d2b_volume_state_migration_duration_ms` | Histogram | provider |
+| `d2b_volume_state_snapshot_total` | Counter | provider, trigger |
 | `d2b_volume_state_marker_check_total` | Counter | provider, outcome |
 | `d2b_volume_state_quota_exceeded_total` | Counter | provider |
 | `d2b_volume_store_sync_total` | Counter | provider, outcome |
@@ -2174,7 +2293,17 @@ bounded `d2b.zone` OTEL resource attribute.
 | `d2b_volume_relocation_total` | Counter | provider, outcome |
 | `d2b_volume_sealing_rotation_total` | Counter | provider, outcome |
 | `d2b_volume_unclaimed_gc_total` | Counter | provider, persistence_class |
-| `d2b_volume_fd_handoff_total` | Counter | provider, view, access, outcome |
+| `d2b_volume_fd_handoff_total` | Counter | provider, access, outcome |
+
+The only OTEL Resource attributes are the central fixed
+`service.name`, `service.version`, `d2b.provider`, and `d2b.component`
+semantic/build classes. A matching operation span may carry only
+`OperationCorrelationDigest`; parent/child linkage uses only
+`TraceCorrelationDigest` and `SpanCorrelationDigest`. Every admitted span has
+one terminal transition. Metric, trace, and log buffers enforce byte bounds and
+the central 60-second, 300-second, and 120-second age ceilings respectively.
+Telemetry failure updates only the bounded closed diagnostic accumulator and
+never changes a Volume operation.
 
 ---
 
@@ -2347,12 +2476,12 @@ This code is absent from the v3 baseline. Selected symbols:
 
 | Main symbol | Main path | Reuse action | v3 destination | Adaptation notes |
 | --- | --- | --- | --- | --- |
-| `AtomicFilesystem`, `RealAtomicFilesystem`, `AtomicWrite`, `CanonicalJson`, `DurableState`, `QuarantineRecord`, `GenerationPolicy`, `MetadataExpectation`, `ReadPolicy`, `WritePolicy` | `packages/d2b-state/src/atomic.rs` | adapt | `packages/d2b-provider-volume-local/src/atomic.rs` | Replace ADR 0045 `v2_state` contract imports with v3 `StateEnvelope`; retain all filesystem + fsync semantics unchanged |
-| `AnchoredDir`, `AnchoredResource`, `LeafName`, `RelativePath` | `packages/d2b-state/src/path.rs` | copy-unchanged | `packages/d2b-provider-volume-local/src/path.rs` | No ADR 0045 contract dependencies; path resolution logic is self-contained |
-| `LockGuard`, `LockSet`, `OfdTransfer`, `Cancellation`, `Clock`, `NeverCancelled`, `SystemClock` | `packages/d2b-state/src/lock.rs` | adapt | `packages/d2b-provider-volume-local/src/lock.rs` | Replace `v2_state` LockSpec/ResourceId with v3 typed lock IDs; retain OFD lock/CLOEXEC/fd-transfer semantics |
+| `AtomicFilesystem`, `RealAtomicFilesystem`, `AtomicWrite`, `CanonicalJson`, `DurableState`, `QuarantineRecord`, `GenerationPolicy`, `MetadataExpectation`, `ReadPolicy`, `WritePolicy` | `packages/d2b-state/src/atomic.rs` | adapt | Provider-side canonical request builder in `packages/d2b-provider-volume-local/src/atomic.rs`; filesystem implementation in the closed broker `CommitVolumeTransaction` handler | Replace ADR 0045 `v2_state` imports with v3 `StateEnvelope`; retain ordering semantics while moving every open/write/link/rename/fsync effect and durable audit into the broker |
+| `AnchoredDir`, `AnchoredResource`, `LeafName`, `RelativePath` | `packages/d2b-state/src/path.rs` | adapt | Broker-private Volume path resolver; Provider keeps opaque `LayoutEntryId`/state-slot bindings only | Do not copy raw path-resolution types into the Provider; retain validation and anchored-resolution algorithms behind closed broker operations |
+| `LockGuard`, `LockSet`, `OfdTransfer`, `Cancellation`, `Clock`, `NeverCancelled`, `SystemClock` | `packages/d2b-state/src/lock.rs` | adapt | Broker-private Volume operation handlers plus Provider cancellation/clock abstractions | Replace `v2_state` LockSpec/ResourceId with v3 typed lock IDs; OFD lock/CLOEXEC/fd-transfer effects remain broker-owned |
 | `LeaseStatus`, `grant_lease`, `revoke_lease`, `validate_lease` | `packages/d2b-state/src/lease.rs` | adapt | `packages/d2b-contracts/src/v3/state_lease.rs` | Map to v3 Volume Credential rotation protocol; retain expiry/revocation semantics |
-| `AuditAppender`, `AuditRecordInput`, `SegmentBuilder`, `checkpoint`, `decide_retention`, `detect_gap`, `read_audit_segment` | `packages/d2b-state/src/audit.rs` | adapt | `packages/d2b-provider-volume-local/src/audit.rs` | Adapt to Zone audit stream interface; retain segment builder, hash chain, and gap detection |
-| Integration tests | `packages/d2b-state/tests/{state,async_state}.rs` | adapt | `packages/d2b-provider-volume-local/tests/state.rs` | Port exact test scenarios; replace ADR 0045 contract setup with v3 Volume/StateEnvelope; retain all fault-injection and order-of-operations coverage |
+| `AuditAppender`, `AuditRecordInput`, `SegmentBuilder`, `checkpoint`, `decide_retention`, `detect_gap`, `read_audit_segment` | `packages/d2b-state/src/audit.rs` | adapt | T609-owned `d2b-audit`; `packages/d2b-provider-volume-local/src/audit.rs` keeps closed observation construction only | Provider opens no writer and chooses no durability; retain hash-chain/gap behavior only in the authoritative audit owner |
+| Integration tests | `packages/d2b-state/tests/{state,async_state}.rs` | adapt | Provider fake-port tests plus broker Volume-operation integration tests | Retain crash/fault ordering while proving pure Provider mapping, broker-only syscalls, intent-before-effect, and durable exactly-once completion |
 
 Excluded ADR 0045 assumptions:
 - `d2b-contracts::v2_state` envelope schema and authority refs;
@@ -2366,6 +2495,7 @@ Excluded ADR 0045 assumptions:
 
 | Item | Evidence class | Treatment |
 | --- | --- | --- |
+| Current `packages/d2b-provider-volume-local/src/{effect_port,audit,otel}.rs` after the dossier baseline | `implemented-and-reachable` partial scaffold | Keep as current-code evidence only: `VolumeStateEffectPort` is not the closed W6 port, raw `ZonePath`/`ResourceRef` audit fields violate Version 3, and Provider-local metric descriptors violate central registry ownership. `ADR046-vl-001`, `ADR046-vl-009`, and `ADR046-vl-012` replace these prospectively; no historical work-item state changes. |
 | `d2b-core/src/storage.rs`: `StorageJson`, `StoragePathSpec`, all policy enums (`CleanupPolicy`, `RepairPolicy`, `StorageRestartPolicy`, `StorageAdoptionPolicy`, `LeaseClass`, `SensitivityClass`, `StorageInvariant`, `StoragePathKind`, `PrincipalRef`, `ActorRef`, `AclGrant`) | `generated-or-eval-contract` | Extract and adapt to Volume LayoutEntry; enum values preserved with renames where noted |
 | `d2b-core/src/sync.rs`: `SyncJson`, `LockSpec` | `generated-or-eval-contract` | OFD lock rows become Volume layout entries with `leaseClass: file-record` |
 | `d2b-core/src/storage_lifecycle.rs`: `StorageLifecycleReport`, `StorageLifecycleIssue`, `StorageContractValidationReason` | `production-reachable` | Daemon startup lifecycle report; migrated to Volume controller phase/condition reporting |
@@ -2407,21 +2537,21 @@ Required modules:
 | `src/controller.rs` | Async reconcile loop; Volume watch; layout dispatch; EphemeralProcess dispatch |
 | `src/source.rs` | Source-kind resolution: `LocalPath`, `BlockImage`, `Tmpfs`; `sourcePolicyId` validation against declared policies; semantic `VolumeEffectPort` operation dispatch |
 | `src/layout.rs` | LayoutEntry evaluation; topological sort; parent-before-child ordering |
-| `src/acl.rs` | ACL reconciliation logic: translates `AclGrant` entries and `foreignChildPolicy` rules into `repair_layout_entry` calls on the `VolumeEffectPort`; no direct `acl_set_fd`/`acl_get_fd` (those are in the core adapter) |
-| `src/marker.rs` | Identity marker write/verify/check; HMAC generation and validation; fail-closed detection |
-| `src/quota.rs` | Quota enforcement; `statfs` polling; write-reject gate |
+| `src/acl.rs` | ACL policy logic: translates `AclGrant` entries and `foreignChildPolicy` rules into `repair_layout_entry` calls on the `VolumeEffectPort`; no ACL values, numeric identities, or syscall bindings |
+| `src/marker.rs` | Marker status state machine and typed write/verify/cleanup request mapping; HMAC, path, and bytes remain broker-private |
+| `src/quota.rs` | Quota policy and write-reject gate; maps checks/observations to closed broker operations; no direct `statfs` |
 | `src/migration.rs` | Pre-launch and online migration dispatch; staging Volume lifecycle; cross-component prepare/commit/rollback |
 | `src/sealing.rs` | Status-first sealing state machine; constructs canonical `RotateSealingKeyRequest`; dispatches only `VolumeEffectPort::rotate_sealing_key`; classifies typed result/errors and retry; no key lease, direct rewrite, generic broker call, or EphemeralProcess worker |
 | `src/snapshot.rs` | Snapshot EphemeralProcess dispatch; `.snapshots/` subtree; `snapshotPolicy` enforcement |
-| `src/relocation.rs` | Relocation EphemeralProcess dispatch; source finalizer; anchored copy; commit/failure handling |
-| `src/store_view.rs` | Store-view Volume specifics: hardlink farm layout, private-NS sync, generation meta, gcroots, `sync.lock` |
-| `src/swtpm_volume.rs` | TPM Volume specifics: `create-if-never-provisioned`, fail-closed marker, ancestor traverse ACL |
-| `src/effect_port.rs` | Re-exports `VolumeEffectPort` trait from `d2b-contracts::v3::effect_port`; Provider-side opaque ID construction helpers and semantic binding glue; no adapter implementation (adapter lives in the host runtime crate, outside this Provider crate) |
-| `src/atomic.rs` | Adapted `AtomicFilesystem`, `CanonicalJson`, `StateEnvelope`, `QuarantineRecord` (from main `6faa5256`) |
-| `src/path.rs` | Copied `AnchoredDir`, `AnchoredResource`, `LeafName`, `RelativePath` (from main `6faa5256`) |
-| `src/lock.rs` | Adapted `LockGuard`, `LockSet`, `OfdTransfer` (from main `6faa5256`) |
-| `src/audit.rs` | Volume audit event types; Zone audit stream emission adapter |
-| `src/otel.rs` | OTEL metric definitions; cardinality-bounded label sets |
+| `src/relocation.rs` | Relocation EphemeralProcess coordination, source finalizer, typed `RelocateVolumeContents` mapping, and commit/failure handling; no copy syscall |
+| `src/store_view.rs` | Store-view policy: layout, generation, gcroots, and lock semantics mapped to `StoreSyncComplete`; no hardlink, mount-namespace, write, or unlink implementation |
+| `src/swtpm_volume.rs` | TPM Volume policy: `create-if-never-provisioned`, fail-closed marker, and typed `PrepareSwtpmDir` mapping; no ACL or filesystem implementation |
+| `src/effect_port.rs` | Re-exports the shared `VolumeEffectPort` and Provider-side opaque IDs; constructs bounded semantic requests only; does not import/re-export broker-wire DTOs and contains no adapter, syscall, broker, or audit implementation |
+| `src/atomic.rs` | `CanonicalJson`/`StateEnvelope` validation and typed `CommitVolumeTransactionRequest` construction; no `RealAtomicFilesystem`, path, fd, write, link, rename, or fsync |
+| `src/path.rs` | Opaque declared layout/state-slot ID bindings and lexical schema validation only; broker-private anchored path types do not enter this crate |
+| `src/lock.rs` | Cancellation and logical lock-order policy only; OFD lock and FD-transfer effects remain broker-owned |
+| `src/audit.rs` | Closed lifecycle observation enums and typed audit-port requests; no writer, segment, raw identity, general digest constructor, or durability choice |
+| `src/otel.rs` | Exact central metric-registry row selection, closed enum values, complete span terminalization, and bounded diagnostics; no descriptors |
 | `src/status.rs` | Volume status builders; condition constructors; phase transition |
 | `src/error.rs` | Typed error catalog; bounded message construction; no-path invariant |
 
@@ -2450,13 +2580,13 @@ Required test files and minimum coverage:
 | `tests/symlink.rs` | Valid relative target; `..` component rejected; absolute target rejected; null byte rejected; target resolves outside Volume root rejected |
 | `tests/domain_isolation.rs` | `private` Volume: concurrent mount from different domain rejected; `internal` Volume: cross-Provider mount rejected; `shared-read` Volume: read-only cross-Provider permitted; `shared-read` write rejected |
 | `tests/view_rights.rs` | Mount with rights subset of View: admitted; mount with extra right: `volume-view-rights-exceeded`; `read-write` access on `read-only` View: rejected; single-writer constraint: second `read-write` rejected |
-| `tests/effect_port_contract.rs` | Compile-time bounds prove `VolumeId` and `SealingPolicyId` are `Clone + Serialize + DeserializeOwned` and `RotateSealingKeyRequest` is `Serialize + DeserializeOwned`; a complete request JSON round-trip is byte-equivalent; each ID uses the canonical string encoding; manual `Debug` is exactly redacted; empty, over-128-byte, non-ASCII, whitespace, and control-byte IDs fail deserialization without echoing input; unknown request fields fail |
-| `tests/state.rs` | Ported `d2b-state/tests/state.rs` scenarios under v3 StateEnvelope: atomic write, fsync ordering, crash between rename steps, OFD lock acquire/release, quarantine record, generation bound, state-envelope digest |
+| `tests/effect_port_contract.rs` | Existing Provider-side ID/wire/redacted-Debug bounds and semantic request coverage; Provider dependency/source scan proves no broker-wire import, syscall, path resolver, command, or audit writer. The exhaustive trait-method-to-`VolumeBrokerOperation` bijection is tested with the adapter under `ADR046-vl-012` |
+| `tests/state.rs` | Provider-side StateEnvelope/generation/quarantine validation and fake-port request mapping; real atomic write/fsync/rename/OFD-lock crash ordering lives in broker Volume-operation integration tests |
 | `tests/migration_unit.rs` | Pre-launch migration dispatch; staging Volume create/destroy; EphemeralProcess succeeded → commit; EphemeralProcess failed → rollback; N-Volume cross-component prepare/commit/rollback protocol; roll-forward on restart detection |
 | `tests/sealing_unit.rs` | Initial seal/read without exposing a key lease; status CAS commits `rotation-pending` before the first effect; exact request fields and generation/revision/policy preconditions using the canonical validated effect-port ID newtypes; operation ID comes from committed proof; deterministic idempotency vector; byte-identical timeout/restart retry; duplicate success → `AlreadyCommitted`; recovered commit → `RecoveredCommitted`; changed bytes under one key → `IdempotencyConflict`; concurrent different rotation → `RotationConflict`; retryable/terminal error table; new generation re-plan; success → `sealed`; integrity failure → Failed; no key/path/handle in DTO, status, error, Debug, log, audit, or OTEL; no direct rewrite/generic broker/EphemeralProcess dispatch |
 | `tests/snapshot_unit.rs` | `snapshotPolicy` enforcement; retention count; retention TTL; `triggerOnMigration` auto-snapshot; snapshot EphemeralProcess dispatch; list in Volume status |
 | `tests/relocation_unit.rs` | Finalizer set; EphemeralProcess created; commit: source deleted; failure: source retained; state machine round-trip |
-| `tests/audit_unit.rs` | Golden audit record for each event kind; no paths in any record; no credential material; structural OTEL label-policy check with exact absence of `vm`, `zone`, `zone_id`, `zone_uid`, and resource-name-derived keys |
+| `tests/audit_unit.rs` | Golden typed observation for each event kind; authoritative records use only approved correlation newtypes and closed enums; exact absence of raw Zone/Volume/resource identity, `ResourceRef`, UID/GID, Provider-local/general digests, paths, credentials, and identity-bearing OTEL labels/attributes; central registry row equality and complete span outcomes |
 | `tests/error_messages.rs` | Every error code emitted with bounded (≤512 byte) message; no host path in any error message |
 
 ### `integration/`
@@ -2481,7 +2611,7 @@ Required files:
 | `integration/snapshot.rs` | Real Host filesystem snapshot byte-equality verification; retention expiry removes snapshot directory; pre-migration auto-snapshot with interrupted migration; snapshot list in status |
 | `integration/relocation.rs` | Real Host-to-Host anchored file copy; crash at copy midpoint → source preserved; successful relocation → source deleted; virtiofsd source re-point after relocation (via volume-virtiofs stub) |
 | `integration/domain_isolation.rs` | Cross-process domain-isolation rejection: two fake Processes in different domains attempt same Volume mount; `volume-domain-mismatch` returned |
-| `integration/audit.rs` | Live Zone audit stream emission: each event kind from real controller actions; verify no path in emitted records; OTEL metric export against running `observability-otel` Provider stub |
+| `integration/audit.rs` | Live typed audit-port and broker audit path: intent is durable before every privileged effect, completion is durable exactly once before success, `CommitPendingAudit` recovers by byte-identical retry, and records contain only approved typed digests/enums; central-registry OTEL export carries no identity |
 | `integration/provider_state.rs` | End-to-end served-Volume lifecycle: live daemon, volume-local controller starts and reaches Ready with no Provider state Volume of its own (bounded operational state in status/core ledger, D087); another Provider's *declared* state Volume is created by core ProviderDeployment, reconciled by volume-local, marker verified on restart, and removed on Provider delete; no cross-component dirfd sharing; full served-Volume lifecycle (provision → migrate → snapshot → destroy) |
 
 An empty `integration/` directory is not acceptable. The `README.md` and at
@@ -2526,17 +2656,21 @@ Documents:
    EphemeralProcess template names and their triggers.
 5. **Placement**: system-domain Host process only; no Guest attachment.
 6. **Dependencies and RBAC**: Zone User resource; Zone Credential resource;
-   all filesystem mutations via injected `VolumeEffectPort` trait (implemented
-   by core/broker adapter); no direct broker connection from Provider process;
+   all host-authority effects map one-to-one through the injected
+   `VolumeEffectPort` to closed broker operations; the pure core adapter has no
+   syscall or audit writer; no direct broker connection from Provider process;
    no host-path permission claim.
 7. **Security model**: no ambient host capabilities; no path in status/audit;
-   all filesystem mutations and path resolution via `VolumeEffectPort` adapter;
-   marker fail-closed; same-filesystem invariant; ADR 0021 inapplicable
+   all path/numeric-ID resolution and openat2/ACL/mount/fallocate/unlink/write/
+   key effects inside closed broker handlers with durable intent/completion
+   audit; marker fail-closed; same-filesystem invariant; ADR 0021 inapplicable
    (virtiofsd is volume-virtiofs's concern).
 8. **State surfaces**: identity marker at `$stateDir/volume-local-markers/<uid>`;
    staging Volumes; snapshot `.snapshots/` subtree; never in status/audit.
-9. **Telemetry surfaces**: OTEL metric names; closed label set; no cardinality
-   unbounded labels.
+9. **Audit and telemetry surfaces**: approved typed audit digests and closed
+   enums only; exact central metric-registry rows; no raw identity,
+   Provider-local descriptor/digest, identity label/attribute, or unbounded
+   cardinality.
 10. **Build, test, and integration command reference**:
     ```bash
     cargo build -p d2b-provider-volume-local
@@ -2552,6 +2686,26 @@ Documents:
 
 ## Implementation work items
 
+### W6 foundation ownership and serial handoff
+
+The feature-local T608 task is a readiness foundation, not a manifest work-item
+identity. Its owned-file list is authoritative while T608 is active. No
+`ADR046-vl-*` task writes one of those files concurrently. After T608 reaches
+`Merged`, ownership transfers serially as follows:
+
+| T608/T609 foundation surface | Manifest-backed receiving tasks | Handoff rule |
+| --- | --- | --- |
+| Shared Volume contracts and typed broker-effect foundation | `ADR046-vl-001`, `ADR046-vl-012` | Provider contracts consume the merged semantic DTOs without re-exporting broker wire; the adapter consumes both sides and extends them only through a new typed variant, policy, durable audit class, and negative tests |
+| Foundational volume-local crate edits | `ADR046-vl-002` through `ADR046-vl-009`, `ADR046-vl-013` | T608 supplies no completion state for these rows; each task implements and validates its full dossier deliverable against the merged foundation |
+| Volume Nix generator/compiler/assertion surfaces | `ADR046-vl-010` | Consume T608's strict generated base; preserve generator/module/assertion/schema bijection and follow the W6 shared-file order |
+| `packages/d2bd/src/volume_effect_adapter.rs` | `ADR046-vl-012` | Preserve the adapter as a pure exhaustive mapping; every syscall and durable audit implementation remains in closed broker handlers |
+| T609 typed audit writer and central telemetry registry | `ADR046-vl-009`, `ADR046-vl-012` | Consume only typed ports/registry rows; do not add a Provider writer, descriptor, general digest, or durability policy |
+
+File ownership may hand off after T608 merges, but the receiving group becomes
+Ready only after the feature task contract proves T606, T607, T608, and T609
+`Merged`. This handoff changes no retained W5 checkbox, implementation state,
+evidence, or delivery row.
+
 ### ADR046-vl-001 - Volume contracts and state schema
 
 | Field | Value |
@@ -2561,11 +2715,11 @@ Documents:
 | Depends on | `ADR046-pstate-001` (VolumeStateSchema/PersistenceClass/SensitivityClass/StateEnvelope in `d2b-contracts/src/v3/volume_state.rs`) |
 | Current source | `d2b-core/src/storage.rs` (`StoragePathSpec`, `StoragePathKind`, policy enums); `d2b-core/src/sync.rs` (`SyncJson`, `LockSpec`) |
 | Reuse action | adapt |
-| Destination | `d2b-contracts/src/v3/volume_layout.rs` (LayoutEntry, EntryType, all policy enums, AclGrant, Invariant, SensitivityClass); `d2b-contracts/src/v3/volume_spec.rs` (VolumeSpec, ViewSpec, Attachment, QuotaSpec, SourceKind, `SourcePolicyId` opaque newtype); `d2b-contracts/src/v3/effect_port.rs` (`VolumeEffectPort` trait, opaque ID newtypes `VolumeId`/`LayoutEntryId`/`UserId`/`ViewId`/`SealingPolicyId` each with custom redacted Debug, `VolumeId` and `SealingPolicyId` with the exact `Clone`/serde wire derives and bounded `TryFrom<String>` deserialization required by the canonical request, `VolumeMountToken`, and canonical `RotateSealingKeyRequest`/`Result`/`Error` types) |
-| Detailed design | All LayoutEntry fields as documented in this dossier; enum value names preserved from `StoragePathKind`/policy enums with renames where noted; `User/<name>` ACL principal (no numeric UID); `sourcePolicyId` opaque newtype replaces raw `hostPath` in `SourceKind::LocalPath` and `SourceKind::BlockImage`; deny-unknown sealing-rotation request contains only opaque Volume/policy/operation IDs and generation/revision preconditions, with no key bytes/path/handle; its crate-private `VolumeId` and `SealingPolicyId` strings serialize canonically and deserialize only when non-empty, ASCII-graphic, and at most 128 bytes, while retaining manual redacted Debug Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
+| Destination | `d2b-contracts/src/v3/volume_layout.rs` (LayoutEntry, EntryType, all policy enums, AclGrant, Invariant, SensitivityClass); `d2b-contracts/src/v3/volume_spec.rs` (VolumeSpec, ViewSpec, Attachment, QuotaSpec, SourceKind, `SourcePolicyId` opaque newtype); `d2b-contracts/src/v3/effect_port.rs` (`VolumeEffectPort`, opaque ID newtypes `VolumeId`/`LayoutEntryId`/`UserId`/`ViewId`/`SealingPolicyId`, `VolumeMountToken`, transaction/snapshot/relocation DTOs, and canonical `RotateSealingKeyRequest`/`Result`/`Error` types); consumes the T608-frozen broker-wire variants without redefining them |
+| Detailed design | All LayoutEntry fields as documented in this dossier; enum value names preserved from `StoragePathKind`/policy enums with renames where noted; `User/<name>` ACL principal (no numeric UID); `sourcePolicyId` opaque newtype replaces raw `hostPath`; semantic requests accept no path, numeric identity, ACL/mount string, FD, key bytes, broker handle, or broker-wire DTO; deny-unknown sealing rotation retains canonical bounded opaque IDs and redacted Debug. The adapter-owned one-to-one mapping remains an `ADR046-vl-012` obligation Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | Volume spec and status structs; Provider descriptor component stateNamespace; Nix resource compiler schema validation |
 | Data migration | Full v3 reset; no row-level import |
-| Validation | Schema golden vectors; round-trip serde; ACL principal validation rejects numeric forms; `sourcePolicyId` present; no `hostPath` field in any volume_spec contract; compile-time assertions for the exact `Clone + Serialize + DeserializeOwned` ID bounds and `Serialize + DeserializeOwned` request bounds; sealing-rotation request canonical-string/round-trip and deny-unknown tests; exact redacted-Debug assertions; deserialization rejects empty, over-128-byte, non-ASCII, whitespace, and control-byte IDs without echoing input; compile-time trait conformance includes `rotate_sealing_key` |
+| Validation | Existing schema/serde/opaque-ID/redacted-Debug vectors; compile-fail tests deny a generic Provider request, raw path, numeric identity, ACL/mount string, FD, key bytes, broker handle, and broker-wire import; compile-time trait conformance includes transaction/snapshot/relocation and `rotate_sealing_key`; emit the exact port-method census consumed by the executable adapter/broker bijection gate in `ADR046-vl-012` |
 | Removal proof | `d2b-core/src/storage.rs` StoragePathSpec/policy enums removed only after all Provider descriptor consumers are on v3 Volume spec |
 | Implementation state | Planned |
 | Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
@@ -2580,10 +2734,10 @@ Documents:
 | Current source | `d2b-state/src/{atomic,path,lock}.rs` (main `6faa5256`); `d2b-priv-broker/src/ops/swtpm_dir.rs` (marker algorithm) |
 | Reuse action | adapt |
 | Destination | Full `packages/d2b-provider-volume-local/` scaffold per §Crate layout: `src/`, `tests/`, `integration/`, `README.md`; crate `Cargo.toml` depends only on `d2b-contracts`, `d2b-provider`, `d2b-provider-toolkit` |
-| Detailed design | `AnchoredDir`, `AnchoredResource`, `LeafName`, `RelativePath`; adapted `AtomicFilesystem`/`StateEnvelope`; adapted `LockGuard`/`LockSet`/`OfdTransfer`; marker write/verify/check; `src/effect_port.rs` re-exports `VolumeEffectPort` trait from `d2b-contracts::v3::effect_port` and provides Provider-side opaque ID construction helpers (no adapter implementation; adapter lives in host runtime); `sourcePolicyId` validation against declared policy list; no `openat2`/`setfacl`/`fallocate`/numeric-UID call sites in Provider crate Primary reuse disposition: `adapt`. Preserved source-plan detail: copy-unchanged (`path.rs`); adapt (`atomic.rs`, `lock.rs`); adapt swtpm_dir marker algorithm. |
-| Integration | Controller binary receives `VolumeEffectPort` via ComponentSession injection; adapter calls `provision_marker` when a new Volume first appears in the `providerRef` reconcile queue (ProviderDeployment has already created the resource; volume-local provisions physical state) and `verify_marker` on restart relist |
+| Detailed design | Provider keeps only canonical `StateEnvelope` validation, opaque layout/state-slot bindings, logical lock order, marker status policy, and bounded semantic effect requests. Anchored path, real atomic filesystem, OFD lock, HMAC, ACL, mount, fallocate, unlink, write, fsync, and key implementations are adapted behind closed broker operations. `src/effect_port.rs` re-exports only the shared Provider trait/DTOs and provides no adapter, broker-wire import, syscall, broker, or audit implementation; `sourcePolicyId` validation remains Provider-side Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt `atomic.rs`, `path.rs`, `lock.rs`, and the swtpm marker algorithm across the sealed boundary. |
+| Integration | Controller binary receives `VolumeEffectPort` via ComponentSession injection; its pure adapter maps `provision_marker` and `verify_marker` to closed broker operations when a Volume first appears or restart relist runs |
 | Data migration | New marker written for each Volume at v3 first-boot |
-| Validation | All `tests/marker.rs`, `tests/state.rs` scenarios; all `integration/provision.rs` scenarios; `cargo deny check` verifies no `d2b-priv-broker`/`d2bd` dependency |
+| Validation | All `tests/marker.rs`, `tests/state.rs`, and `integration/provision.rs` scenarios; dependency/source checks prove no `d2b-priv-broker`/`d2bd`, syscall binding, command execution, raw host-path type, audit writer, or Provider-local descriptor in the Provider crate |
 | Removal proof | `swtpm_dir.rs` marker implementation retired only after device-tpm Provider Volume is live and marker-check parity is confirmed |
 | Implementation state | Planned |
 | Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
@@ -2597,7 +2751,7 @@ Documents:
 | Current source | `d2b-priv-broker/src/ops/{state_dir,storage_contract}.rs` (broker layout ops); `d2b-core/src/storage_lifecycle.rs` (lifecycle report) |
 | Reuse action | adapt |
 | Destination | `src/controller.rs`, `src/layout.rs`, `src/acl.rs`, `src/source.rs` |
-| Detailed design | Async reconcile loop; topological LayoutEntry evaluation; `VolumeEffectPort` semantic op dispatch (no direct broker connection; no `openat2`/`setfacl` call sites); ACL reconciliation cycle via effect port; drift detection; status write with expected revision; `sourcePolicyId` validation against declared `sourcePolicies`; controller watch remains responsive while per-resource effect calls run concurrently; **single watch scope** `providerRef: Provider/volume-local` - physical state reconciliation for all served Volumes (layout/ACL/quota/marker); ProviderDeployment creates/deletes Volume instances; volume-local does not issue create/delete API calls; Nix-preprovisioned `User/<name>` layout principals; no cross-component Volume sharing; each component consumes only its declared view; empty-payload stateNamespace Volumes use `migrationPolicy: none` - no migration EphemeralProcess dispatched |
+| Detailed design | Async reconcile loop; topological LayoutEntry evaluation; semantic `VolumeEffectPort` dispatch through the injected pure adapter; ACL reconciliation by opaque IDs; drift detection; expected-revision status; source-policy validation; responsive concurrent per-resource calls; **single watch scope** `providerRef: Provider/volume-local`; ProviderDeployment owns Volume resource create/delete; no direct broker connection, broker-wire import, host syscall, path/numeric-ID resolution, audit writer, or generic effect; Nix-preprovisioned User principals; no cross-component Volume sharing; empty-payload stateNamespace Volumes use `migrationPolicy: none` |
 | Integration | Controller binary instantiated by Zone runtime after Provider Ready; receives `VolumeEffectPort` implementation and d2b-bus `ResourceClient` via ComponentSession |
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | `tests/layout_provision.rs`, `tests/layout_repair.rs`, `tests/layout_adopt.rs`, `tests/acl.rs`, `tests/view_rights.rs`, `tests/source.rs`, `integration/provision.rs` |
@@ -2614,7 +2768,7 @@ Documents:
 | Current source | `d2b-host/src/hardlink_farm.rs`; `d2b-priv-broker/src/ops/{store_sync,store_view_posture,store_view_farm,store_sync_audit,store_sync_export}.rs`; `nixos-modules/store.nix` |
 | Reuse action | adapt |
 | Destination | `src/store_view.rs`; `tests/store_view.rs`; `integration/store_view.rs` |
-| Detailed design | Store-view LayoutEntry matrix (see §Same-filesystem hardlink farm); private-NS sync via `run_store_sync` effect op; `StoreSyncComplete` semantic operation; OFD lock semantics; `gcroots/` and `state/` at store-view root; spec-correction enforcement |
+| Detailed design | Store-view LayoutEntry matrix; Provider maps `run_store_sync` to closed `StoreSyncComplete`; broker owns private-NS sync, OFD lock, hardlink/copy/write/unlink, durable generation commit, and privileged-effect audit; `gcroots/` and `state/` remain at the store-view root; enforce the spec correction |
 | Integration | `runtime-cloud-hypervisor` Provider declares store-view Volume in its ProviderStateSet; volume-local controller handles sync |
 | Data migration | None (format preserved; activation changed from Nix to Volume controller) |
 | Validation | `tests/store_view.rs` all invariants; `integration/store_view.rs` same-filesystem boundary; private-NS sync with concurrent reader |
@@ -2648,7 +2802,7 @@ Documents:
 | Current source | No equivalent in baseline; new |
 | Reuse action | create |
 | Destination | `src/source.rs` (block-image and tmpfs branches); `tests/source.rs`; `integration/block_image.rs` |
-| Detailed design | `block-image`: image file create/verify via `provision_block_image` effect op; `fallocate` performed by adapter when `preallocate: true`; FD transfer to Guest runtime via LaunchTicket via `open_volume_mount_token` effect op; `tmpfs`: `mount_tmpfs`/`umount_tmpfs` effect ops; `size=` and `nr_inodes=` derived from quota fields; cleanup via `umount_tmpfs` op |
+| Detailed design | `block-image`: pure mapping from `provision_block_image` to closed `ProvisionBlockImage`; broker performs anchored create/verify and optional `fallocate`; `OpenVolumeMountToken` audits and transfers the FD out-of-band; `tmpfs`: pure mappings to separate `MountTmpfs`/`UnmountTmpfs` variants, with broker-derived size/inode options and broker-owned mount/unmount |
 | Integration | Guest runtime Provider (cloud-hypervisor) receives block-image FD from volume-local via LaunchTicket; no path crosses the boundary |
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | `tests/source.rs` allowlist pass/fail; block-image/tmpfs eval constraints; `integration/block_image.rs` real image lifecycle |
@@ -2665,7 +2819,7 @@ Documents:
 | Current source | `d2b-state/src/atomic.rs` (main); no existing migration/snapshot infrastructure in v3 |
 | Reuse action | adapt |
 | Destination | `src/{migration,snapshot,sealing}.rs`; `tests/{migration_unit,snapshot_unit,sealing_unit}.rs`; `integration/{migration,snapshot,sealing}.rs` |
-| Detailed design | Schema migration (see §Schema migration) via `volume-migration-worker` EphemeralProcess; Snapshot create/list/expire (see §Snapshots) via `volume-snapshot-worker` EphemeralProcess; controller reports `stateSchemaPhase` and `snapshots` in Volume status. Sealing lifecycle uses the status-first `rotation-pending` transition and only canonical `VolumeEffectPort::rotate_sealing_key`; it persists/resumes the core Operation-ledger fingerprint, classifies exact typed errors, and has no key lease, direct rewrite, generic broker call, or Provider-owned EphemeralProcess worker. |
+| Detailed design | Schema migration and snapshot workers coordinate policy/status only; every host-authority transaction/snapshot effect maps through `CommitVolumeTransaction`, `CreateVolumeSnapshot`, or `ExpireVolumeSnapshot`. Sealing uses status-first `rotation-pending` and only `VolumeEffectPort::rotate_sealing_key`; it persists/resumes the core Operation-ledger fingerprint and has no key lease, direct rewrite, generic broker call, or sealing worker. Broker effects commit audit intent before release and completion exactly once before success. |
 | Integration | Controller's reconcile handler dispatches migration/snapshot EphemeralProcess via d2b-bus `ResourceClient`; sealing reconcile/upgrade commits status before effect and maps typed results to `sealed`/`rotation-failed`; volume-local reports state schema, snapshots, and safe sealing generations in Volume status |
 | Data migration | None (new protocol) |
 | Validation | All `tests/migration_unit.rs`, `tests/snapshot_unit.rs`, `tests/sealing_unit.rs`, `integration/migration.rs`, `integration/snapshot.rs`, and `integration/sealing.rs` scenarios, including restart/idempotency and status-before-effect assertions |
@@ -2683,7 +2837,7 @@ Documents:
 | Reuse action | create |
 | Destination | `src/relocation.rs`; `tests/relocation_unit.rs`; `integration/relocation.rs` |
 | Detailed design | As documented in §Relocation, §Retention, §Incident hold, §Unclaimed Volume GC, §Destruction |
-| Integration | Controller adds `Relocating` finalizer; creates relocation EphemeralProcess; destruction sequence is ordered leaf-first with `fsync` after each step |
+| Integration | Controller adds `Relocating` finalizer and coordinates the relocation worker; every copy/write/fsync/unlink step is expressed by `RelocateVolumeContents`, `CleanupLayoutEntry`, `CleanupVolumeMarker`, or `CleanupVolumeRoot`, with broker-enforced order and durable effect audit |
 | Data migration | Not applicable |
 | Validation | All `tests/relocation_unit.rs`, `integration/relocation.rs` scenarios; destruction ordering under fault injection |
 | Removal proof | Not applicable (new) |
@@ -2695,14 +2849,14 @@ Documents:
 | Field | Value |
 | --- | --- |
 | Work item ID | `ADR046-vl-009` |
-| Dependency/owner | ADR046-vl-001; Zone audit stream owner; `observability-otel` Provider owner |
+| Dependency/owner | ADR046-vl-001; ADR046-audit-001; ADR046-telem-001; authoritative audit owner; central telemetry registry owner |
 | Current source | `d2b-state/src/audit.rs` (main `6faa5256`); OTEL cardinality model from `d2b-provider-observability-local/src/` (main `a1cc0b2d`) |
 | Reuse action | adapt |
 | Destination | `src/audit.rs`; `src/otel.rs`; `src/error.rs`; `tests/audit_unit.rs`; `integration/audit.rs` |
-| Detailed design | Event types and Zone audit emission per §Audit events, including controller rotation start/failure/commit and exactly-once broker `RotateSealingKey` success; OTEL metric definitions per §OTEL metrics with closed semantic labels and no Zone/resource-name-derived dimensions; Zone identity remains in `d2b.zone` resource attributes; error catalog per §Error catalog; no-path/no-key invariant enforced in all outputs |
-| Integration | Every lifecycle transition calls `audit::emit_volume_event`; OTEL metrics exported via `observability-otel` Provider |
+| Detailed design | Consume the T609 typed audit port and central `METRIC_DESCRIPTOR_REGISTRY`. Provider code constructs closed lifecycle observations but opens no writer and chooses no durability; broker operations own durable intent/completion. Audit uses only approved `ResourceCorrelationDigest`, `SubjectCorrelationDigest`, `ExecutionCorrelationDigest`, `OperationCorrelationDigest`, and `PrivilegedEffectAuditDigest` in their allowed record classes plus closed enums. Metrics/Resource attributes carry no raw identity or digest, and operation/trace span linkage uses only approved typed digests. Remove raw `ZonePath`/`ResourceRef`, Provider-local `VolumeAuditDigest`, local metric descriptors, and `d2b.zone`. |
+| Integration | Every lifecycle transition submits to the typed audit port; every broker effect proves durable intent/completion; telemetry selects central rows exported via `observability-otel` |
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
-| Validation | `tests/audit_unit.rs` golden records and structural metric descriptor assertions for exact absence of `vm`, `zone`, `zone_id`, `zone_uid`, and resource-name-derived keys plus resource-name canary absence; rotation audit exact-once/digest-only vectors; `tests/error_messages.rs` bounded messages; `integration/audit.rs` live stream |
+| Validation | Golden typed records reject raw Zone/Volume/resource/user/process/policy/snapshot/operation/execution identity, `ResourceRef`, UID/GID, general/provider-local digests, paths, keys, and handles; central registry equality and identity-free label/Resource-attribute tests; complete span terminal outcomes; broker intent-before-effect, exactly-once completion, `CommitPendingAudit`, restart, and concurrency fault injection; bounded errors; live integration stream |
 | Removal proof | Not applicable |
 | Implementation state | Planned |
 | Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
@@ -2741,7 +2895,7 @@ Documents:
 | Implementation state | Planned |
 | Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
-### ADR046-vl-012 - Core/broker adapter implementing VolumeEffectPort
+### ADR046-vl-012 - Pure core adapter and closed Volume broker operations
 
 | Field | Value |
 | --- | --- |
@@ -2750,11 +2904,11 @@ Documents:
 | Depends on | `ADR046-pstate-003`; `ADR-046-provider-model-and-packaging` (generic effect-port injection contract) |
 | Current source | `d2b-priv-broker/src/ops/{state_dir,storage_contract,swtpm_dir,store_sync,store_view_posture}.rs`; `d2b-host/src/hardlink_farm.rs` |
 | Reuse action | adapt |
-| Destination | `packages/d2b-host/src/volume_effect_adapter.rs` (or the equivalent host-runtime crate designated by the Zone broker owner), implementing the `VolumeEffectPort` trait defined in `d2b-contracts`; planned `d2b-priv-broker/src/ops/rotate_sealing_key.rs` closed operation |
-| Detailed design | Adapter holds trusted FD table keyed by `VolumeId`; resolves `SourcePolicyId` to host path prefix from private bundle; calls `openat2(RESOLVE_BENEATH)` anchored at retained FD for all FS ops; calls `setfacl`/`acl_set_fd`, `mount`/`umount`, `fallocate` from within adapter only; authorizes `volume.rotate-sealing-key`, verifies committed proof, recomputes the canonical idempotency key, and maps `rotate_sealing_key` one-to-one to the closed broker `RotateSealingKey` operation. Broker independently resolves opaque `VolumeId`/`SealingPolicyId`, checks policy/generation/preconditions, performs journaled atomic rewrap and roll-forward recovery, and durably emits exactly one success audit before returning. Neither boundary accepts key bytes, credential bytes, key handles, or paths. Other blocking filesystem calls run in the bounded blocking-thread pool Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt into adapter. |
-| Integration | Zone runtime creates the concrete adapter with the required FD table and bundle reference at Provider startup; the controller is generic over `P: VolumeEffectPort` and receives that implementation through ComponentSession bootstrap, with no trait object or `async-trait` dependency |
-| Data migration | None (adapter replaces direct broker-op call sites) |
-| Validation | Adapter hermetic tests: each effect op called with mock FD table and bundle; rotation authorization, policy binding, all generation/revision preconditions, canonical idempotency vectors, byte-identical duplicate/retry, different-payload conflict, typed retry classification, and no key/path/handle in wire/Debug/error/audit; broker crash injection at every journal boundary with old-or-target visibility, roll-forward, and exactly-once success audit; anchored-path rejection for RESOLVE_BENEATH violations; `cargo deny check` verifies adapter exposes neither raw paths nor broker implementation to Provider crate; `integration/{provision,sealing}.rs` exercise full adapter paths |
+| Destination | T608-handoff `packages/d2bd/src/volume_effect_adapter.rs` implementing the pure `VolumeEffectPort` mapping; closed Volume request/result types in `d2b-contracts`; broker handlers under `packages/d2b-priv-broker/src/ops/volume/`, including rotation |
+| Detailed design | Adapter exhaustively maps each trait method to one closed `VolumeBrokerOperation`, attaches committed proof, dispatches, and correlates audited FD transfer; it has no bundle/path/FD table, syscall, command, key operation, audit writer, or durability policy. Broker independently resolves opaque IDs from private authority; performs every openat2/ACL/mount/fallocate/link/rename/unlink/read/write/fsync/statfs/key effect in bounded blocking handlers; durably commits intent before effect release and completion exactly once before success; and returns `CommitPendingAudit` after a committed mutation whose completion audit is pending. Requests carry no raw path, numeric identity, ACL/mount string, key/credential bytes, broker handle, or caller FD. Rotation retains canonical idempotency and roll-forward recovery Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt behind the sealed broker boundary. |
+| Integration | Zone runtime injects the pure adapter through ComponentSession bootstrap; broker alone receives its private bundle/FD authority; controller remains generic over `P: VolumeEffectPort` with no trait object or `async-trait` dependency |
+| Data migration | None (pure typed mappings replace direct or adapter-local effect call sites) |
+| Validation | Exhaustive mapping tests and planted unknown/generic-op negatives; source/dependency checks prove zero adapter/provider syscall, path resolver, command, audit-writer, and broker-implementation access; broker tests cover every closed effect class, private resolution, authorization, intent-before-effect, durable exactly-once completion, byte-identical `CommitPendingAudit` retry, restart/concurrency, and path/ACL/mount/key rejection; rotation crash injection retains old-or-target visibility and roll-forward; audit wire contains only approved typed digests/enums; `integration/{provision,sealing,audit}.rs` exercise the real boundary |
 | Removal proof | Baseline broker op handlers (`state_dir.rs`, `storage_contract.rs`, `swtpm_dir.rs`, `store_sync.rs`, `store_view_posture.rs`) retired only after Volume controller parity is confirmed and all callers are on the adapter |
 | Implementation state | Planned |
 | Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
@@ -2784,15 +2938,16 @@ Documents:
 1. **No raw host path in any surface**: Raw host paths never appear in Volume
    `source.settings`, Volume status, resource list/watch responses, audit
    records, OTEL spans, logs, or CLI output. The `source.settings.sourcePolicyId`
-   is the only source reference in the public schema; the `VolumeEffectPort`
-   adapter privately resolves the matching path prefix from the trusted private
-   bundle at effect time. The controller never holds a raw path string or
-   numeric UID.
+   is the only source reference in the public schema. The broker privately
+   resolves the matching path prefix from trusted bundle authority at effect
+   time. The pure `VolumeEffectPort` adapter and controller never hold a raw
+   path string or numeric UID.
 
 2. **Anchored relative paths**: all LayoutEntry paths are validated as relative
    with no `..`, no leading `/`, no null bytes, no Unicode homoglyphs of path
    separators. Validation runs at schema-validation time (Nix eval), at
-   controller admit time, and at each effect op dispatch within the adapter.
+   controller admit time, and again after broker-private resolution in the
+   closed operation handler.
 
 3. **`noFollow: true` default**: symlink traversal is disabled by default.
    Only `symlink`-type entries with explicit `noFollow: false` traverse.
@@ -2818,10 +2973,14 @@ Documents:
    accessible to a process in a different domain or a different User. Domain
    isolation is enforced through `sensitivityClass` validation at attach time.
 
-9. **No path in any audit record or error message**: audit events name only
-   opaque Volume UIDs, action classes, and result classes. Error messages are
-   bounded (≤512 bytes) and must not contain host paths, secret content,
-   process arguments, or terminal bytes.
+9. **Typed identity only in audit; no identity in metrics**: the Zone selects
+   the private audit partition but is not serialized. Required joins use only
+   the approved record-specific correlation newtype, and all other values are
+   closed enums or bounded non-identity scalars. Raw Zone/Volume/resource
+   identity, ResourceRef, UID/GID, Provider-local/general digests, and paths are
+   denied. Metrics and OTEL Resource attributes contain no correlation digest
+   or identity. Errors are bounded (≤512 bytes) and contain no path, secret,
+   process argument, or terminal byte.
 
 10. **Marker HMAC**: every identity marker's integrity is verified by HMAC before
     any Volume FD is handed out. A tampered marker fails closed with no
@@ -2846,14 +3005,22 @@ Documents:
     `component-state-not-justified`. There is no empty identity-only state
     Volume.
 
-13. **Sealing rotation is one closed, status-first effect**: the Provider commits
+13. **Every host-authority effect is closed and durably audited**: every
+    openat2/ACL/mount/fallocate/link/rename/unlink/read/write/fsync/statfs/key
+    effect runs only inside a closed broker handler. The adapter is a pure
+    one-to-one mapping. Immutable intent is durable before effect release and
+    completion is durable exactly once before success; pending completion audit
+    returns `CommitPendingAudit`.
+
+14. **Sealing rotation is one closed, status-first effect**: the Provider commits
     `rotation-pending` before calling only
     `VolumeEffectPort::rotate_sealing_key`; the adapter maps it one-to-one to the
-    closed broker `RotateSealingKey` operation. Both boundaries authorize and
-    verify the opaque Volume/policy binding and committed preconditions. Key
-    bytes, Credential leases, handles, and paths never cross those boundaries;
-    crash recovery is roll-forward, retries reuse the canonical idempotency key,
-    and success requires a durable exactly-once broker audit.
+    closed broker `RotateSealingKey` operation. Core and broker authorization
+    owners verify the opaque Volume/policy binding and committed preconditions.
+    Key bytes, Credential leases, handles, and paths never cross those
+    boundaries; crash recovery is roll-forward, retries reuse the canonical
+    idempotency key, and success requires durable intent and exactly-once
+    completion audit.
 
 ---
 
