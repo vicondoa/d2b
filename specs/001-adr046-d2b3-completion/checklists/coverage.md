@@ -156,6 +156,10 @@ Are requirements present for each scenario class, or explicitly excluded?
 - [x] CHK066 Are material invalidation and status-only updates separated at first dispatch,
   the graph fixed at 600 nodes/1960 edges/545 manifest items, feature tasks fixed at 609,
   W6 fixed at 36 groups/265 records, and no fixed agent count retained?
+- [x] CHK067 Does the public operator sequence first create-or-compare empty candidate-bound
+  entry surfaces with `--entry-prepare true`, then record real commands externally, import
+  exactly eight repeated `--command-evidence` paths through entry preparation, and use
+  ordinary snapshot alone to validate all records and write `snapshot.json`?
 
 ## Notes
 

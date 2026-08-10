@@ -295,6 +295,17 @@ below is the sole feature authority for cross-provider acceptance coordination.
     "pre_t221_rule": "derive launched groups from ledger entries whose state is not NotLaunched and require the derived set to be empty",
     "not_authentication": true
   },
+  "entry_prepare_contract": {
+    "public_command": "delivery wave snapshot",
+    "flag": "--entry-prepare true",
+    "first_call": "fresh-fetch and discover candidate; atomically create-or-compare the 36-entry NotLaunched dispatch ledger and create-or-compare an empty command-evidence directory; emit digests; do not write snapshot.json",
+    "first_call_command_evidence_count": 0,
+    "import_flag": "--command-evidence PATH",
+    "import_cardinality": 8,
+    "import_rule": "repeat entry preparation with one flag per closed command identity; strict-parse and create-or-compare every record",
+    "ordinary_snapshot_rule": "omit --entry-prepare and --command-evidence; validate ledger and exact eight-record evidence set before writing snapshot.json",
+    "records_must_preexist_before_discovery": false
+  },
   "structured_command_evidence_contract": {
     "artifact_kind": "d2b-feature-local/command-evidence",
     "schema_version": 1,
@@ -1602,13 +1613,21 @@ silently reinterpret the external dossier.
     delivery::work_item_state::tests
   ```
 
-  Before snapshot or panel dispatch, execute the exact evidence block in `quickstart.md`.
-  It must derive a focused test count greater than zero, derive zero ignored tests, execute
-  the focused suite with zero skip markers, run `make test-drift` as Gate 0 mechanical
-  evidence, run `make test-policy`, run `make test-unit` while the Layer-1 manifest includes
-  `test-flake`, `test-nix-unit`, and `test-runtime-ledger`, and acquire/release the production
-  heavy-gate with a successful `true` child. Each command must exit 0 and its result must be
-  retained in T221 entry evidence.
+  First set `D2B_W6_DISPATCH_LEDGER` and `D2B_W6_COMMAND_EVIDENCE_DIR` to absolute external
+  paths and run the exact public `delivery wave snapshot ... --entry-prepare true` command in
+  `quickstart.md` with no `--command-evidence`. That call fresh-fetches/discovers the
+  candidate, create-or-compares the candidate-bound 36-entry `NotLaunched` ledger, and
+  creates-or-compares the empty command-evidence directory. It emits discovery digests but
+  does not write `snapshot.json`; command records are not a precondition for this first call.
+
+  After discovery, execute the exact evidence block in `quickstart.md` through an external
+  recorder. It must produce strict schema-version-1 command-evidence JSON for the closed eight
+  command identities, derive a focused test count greater than zero, derive zero ignored
+  tests, execute the focused suite with zero skip markers, run `make test-drift` as Gate 0
+  mechanical evidence, run `make test-policy`, run `make test-unit` while the Layer-1
+  manifest includes `test-flake`, `test-nix-unit`, and `test-runtime-ledger`, acquire/release
+  the production heavy-gate with a successful `true` child, and record the predispatch census.
+  Each command must exit 0; the recorder must not fabricate or edit success.
 
   Run the exact machine-derived pre-dispatch census in `quickstart.md`. It must prove 258 W6
   work-item nodes, 29 W6 work-item groups, seven local contract tasks, 265 post-entry records,
@@ -1616,10 +1635,15 @@ silently reinterpret the external dossier.
   task unchecked, and zero launched implementation groups before T221. A prose count, empty
   query, or hand-maintained list is ineligible.
 
-  Then confirm destinations are uncontended and the stack is proposed against that exact
-  base. The guard validates the retained W5 candidate/snapshot/head identities only inside
-  predecessor state. The new W6 snapshot must emit distinct candidate/content/snapshot
-  identities; equality with a retained W5 identity refuses. Run `/d2b-panel-round plan`
+  Rerun the same entry-prepare command with exactly eight repeated
+  `--command-evidence PATH` arguments so production tooling strictly parses and
+  create-or-compares each record into the candidate evidence directory. Then run ordinary
+  snapshot with neither `--entry-prepare` nor `--command-evidence`; it validates all eight
+  records, the ledger, predecessor, and census before writing `snapshot.json`. Confirm
+  destinations are uncontended and the stack is proposed against that exact base. The guard
+  validates the retained W5 candidate/snapshot/head identities only inside predecessor state.
+  The new W6 snapshot must emit distinct candidate/content/snapshot identities; equality with
+  a retained W5 identity refuses. Run `/d2b-panel-round plan`
   against the exact base, new entry snapshot, and current
   feature snapshot. Require one record for every selected seat, N/N sign-off, and zero
   recommendations. The selection uses the current thirteen-seat role domain and may only

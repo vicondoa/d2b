@@ -167,12 +167,19 @@ Passing T221 authorizes T606 only.
 The predecessor guard validates the retained W5 candidate, embedded snapshot, head, request,
 evidence inventory, zero-attestation state, and absent seal inside the predecessor record.
 The W6 snapshot emits distinct new candidate/content/snapshot identities from the current W6
-material. It must not equal a retained W5 identity. Before that snapshot, T221 runs the exact
-quickstart evidence block: nonempty focused guard enumeration, zero ignored/skipped results,
+material. It must not equal a retained W5 identity. The public sequence first sets
+`D2B_W6_DISPATCH_LEDGER` and `D2B_W6_COMMAND_EVIDENCE_DIR`, then runs
+`delivery wave snapshot ... --entry-prepare true` without command evidence. That call
+fresh-fetches/discovers the candidate and atomically create-or-compares the 36-entry
+`NotLaunched` ledger plus empty evidence directory; it does not write `snapshot.json`.
+The integrator then runs the closed eight commands through an external strict-JSON recorder,
+including nonempty focused guard enumeration, zero ignored/skipped results,
 `make test-drift`, `make test-policy`, `make test-unit` with flake/nix-unit/runtime-ledger
-membership, heavy-gate acquisition, and the machine-derived 258/29/7/265 launch census with
-all 29 manifest group foundations present, T606 as the only first-ready local task, and the
-pre-T221 launched set derived as empty from the external dispatch ledger.
+membership, heavy-gate acquisition, and the machine-derived 258/29/7/265 census. Entry
+preparation is rerun with one repeated `--command-evidence PATH` for each record. Ordinary
+snapshot omits both entry-prepare and command-evidence flags, validates the exact imported
+eight-record set and ledger, and only then writes the W6 snapshot. No command record is
+required before the first candidate discovery, and no evidence may be fabricated.
 
 Before the ledger's first `Dispatched` transition, a material base/guard/requirement/
 dependency/ownership/validation/readiness change invalidates T221. After first dispatch,

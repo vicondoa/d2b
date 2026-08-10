@@ -1352,6 +1352,16 @@ binding the base, plan material, new snapshot, selection, ledger, command eviden
 roster, and zero recommendations. These artifacts are process correlation and completeness
 evidence, not authentication. That result authorizes T606 only.
 
+The implemented public preparation sequence is discovery-first: set
+`D2B_W6_DISPATCH_LEDGER` and `D2B_W6_COMMAND_EVIDENCE_DIR`; call
+`delivery wave snapshot ... --entry-prepare true` with no evidence to fresh-fetch/discover
+and create-or-compare the empty candidate-bound ledger/import surface; run the eight required
+commands through the external strict-JSON recorder; rerun entry preparation with eight
+repeated `--command-evidence PATH` arguments; then run ordinary snapshot with neither flag.
+Only ordinary snapshot validates the complete eight-record set and writes `snapshot.json`.
+No plan step may require command records to preexist candidate discovery or fabricate them
+from expected results.
+
 ## Complexity Tracking
 
 ### Constitution Principle VI disposition

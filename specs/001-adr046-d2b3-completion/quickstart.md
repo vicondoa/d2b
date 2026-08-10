@@ -46,28 +46,64 @@ domain and may only widen over fix deltas.
 
 ### 1b. Verify the Wave 5 to Wave 6 boundary
 
-Wave 5 recovery and close commands are unavailable. Fetch and bind the exact Wave 6 base,
-then run the focused guard tests:
+Wave 5 recovery and close commands are unavailable. Do not pre-create command-evidence
+records or require a candidate identity before discovery. Set the two external entry paths,
+then use the public entry-preparation mode to fresh-fetch `origin/v3`, discover the W6
+candidate, atomically create-or-compare the candidate-bound 36-entry `NotLaunched` dispatch
+ledger, and create-or-compare the empty command-evidence directory. Entry preparation returns
+candidate digests but does not write `snapshot.json`.
 
 ```bash
 set -euo pipefail
 
 REPOSITORY="github.com/vicondoa/d2b"
 CHECKOUT_ROOT="$(git rev-parse --show-toplevel)"
-TARGET_BRANCH="v3"
-git fetch origin "$TARGET_BRANCH"
-BASE_OID="$(git rev-parse "refs/remotes/origin/$TARGET_BRANCH")"
-test "$(git rev-parse "refs/remotes/origin/$TARGET_BRANCH")" = "$BASE_OID"
-git merge-base --is-ancestor \
-  177235ed37188b3be87525e7f016fb43401574c5 "$BASE_OID"
+BASE_REF="refs/remotes/origin/v3"
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/d2b/delivery"
+ENTRY_STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/d2b/spec001w6-entry"
+export D2B_W6_DISPATCH_LEDGER="$ENTRY_STATE_DIR/dispatch-ledger.json"
+export D2B_W6_COMMAND_EVIDENCE_DIR="$ENTRY_STATE_DIR/command-evidence"
 
-cargo test --manifest-path packages/Cargo.toml -p xtask \
-  delivery::work_item_state::tests
+PR_NUMBER="$(gh pr view --json number --jq .number)"
+HEAD_REF="$(git symbolic-ref --short HEAD)"
+SNAPSHOT_ARGS=(
+  --program ADR046
+  --wave adr046w6
+  --repo "$REPOSITORY=$CHECKOUT_ROOT"
+  --base "$REPOSITORY=$BASE_REF"
+  --pull-request "$REPOSITORY=$PR_NUMBER:$HEAD_REF"
+  --state-dir "$STATE_DIR"
+)
+
+cargo run --manifest-path packages/Cargo.toml -p xtask -- \
+  delivery wave snapshot \
+  "${SNAPSHOT_ARGS[@]}" \
+  --entry-prepare true
 ```
 
-Before snapshot or panel dispatch, prove that the focused guard is nonempty and has no
-ignored or skipped result, then collect the required Gate 0, policy, Layer-1 development, and
-heavy-gate evidence:
+The first call is the only step that creates the empty external import surfaces. A repeat
+with the same discovered candidate compares them byte-for-byte and refuses drift. After it
+succeeds, execute the eight required commands through an external recorder. The recorder,
+not d2b and not this runbook, executes each argv and writes strict
+`d2b-feature-local/command-evidence` schema-version-1 JSON under
+`D2B_W6_COMMAND_EVIDENCE_DIR`; it must not synthesize success or copy prose values. The exact
+command identities are:
+
+```text
+focused-guard-list
+focused-guard-ignored-list
+focused-guard-run
+gate0-test-drift
+test-policy
+test-unit
+heavy-gate-acquire
+predispatch-census
+```
+
+The first seven commands execute the following argv through that recorder. The recorder
+binds every record to the discovered W6 working-tree OID and records exit status, timing,
+stdout/stderr SHA-256, output bytes, and the focused discovered/ignored/skip counts where
+applicable:
 
 ```bash
 set -euo pipefail
@@ -119,59 +155,12 @@ The entry evidence records the exact focused nonzero test count, zero ignored co
 skip matches, and exit status 0 for every command above. `make test-drift` is the Gate 0
 mechanical evidence. `make test-unit` is eligible only while the checked Layer-1 manifest
 contains and executes `test-flake`, `test-nix-unit`, and `test-runtime-ledger`.
-Run every command through an external recorder that writes one structured record matching
-`structured_command_evidence_contract` in `tasks.md`. Reviewer self-report, terminal scrollback,
-or a prose PASS is ineligible. Raw output stays outside Git; the record retains argv, exit,
-timing, output digests, and byte count. For the focused records it also retains discovered,
-ignored, and skip counts. Validate the complete record set before census or snapshot:
+Reviewer self-report, terminal scrollback, or a prose PASS is ineligible. Raw output stays
+outside Git. Do not edit the recorder's JSON to make a failed command success-shaped.
 
-```bash
-node <<'NODE'
-const fs = require("fs");
-const path = require("path");
-const assert = require("assert/strict");
-
-const evidenceDir = process.env.D2B_W6_COMMAND_EVIDENCE_DIR;
-assert(evidenceDir, "set D2B_W6_COMMAND_EVIDENCE_DIR");
-assert(path.isAbsolute(evidenceDir));
-assert(!evidenceDir.startsWith(process.cwd() + "/"));
-
-const tasks = fs.readFileSync(
-  "specs/001-adr046-d2b3-completion/tasks.md",
-  "utf8",
-);
-const local = JSON.parse(tasks.match(
-  /```json\n(\{\n  "artifact_kind": "d2b-feature-local-task-contract"[\s\S]*?\n\})\n```/,
-)[1]);
-const contract = local.structured_command_evidence_contract;
-const records = fs.readdirSync(evidenceDir)
-  .filter((name) => name.endsWith(".json"))
-  .map((name) => JSON.parse(fs.readFileSync(path.join(evidenceDir, name), "utf8")));
-const byId = new Map(records.map((record) => [record.commandId, record]));
-
-assert.deepEqual(
-  [...byId.keys()].sort(),
-  [...contract.required_t221_command_ids].sort(),
-);
-for (const id of contract.required_t221_command_ids) {
-  const record = byId.get(id);
-  assert.equal(record.artifactKind, contract.artifact_kind);
-  assert.equal(record.schemaVersion, contract.schema_version);
-  assert.equal(record.exitCode, 0);
-  assert.equal(record.result, "passed");
-  for (const field of contract.required_fields) {
-    assert(Object.hasOwn(record, field), `${id} missing ${field}`);
-  }
-}
-assert(byId.get("focused-guard-list").discoveredTests > 0);
-assert.equal(byId.get("focused-guard-ignored-list").ignoredTests, 0);
-assert.equal(byId.get("focused-guard-run").skipMatches, 0);
-console.log("structured-command-evidence=valid");
-NODE
-```
-
-Derive and assert the pre-dispatch census from the current graph, work-item state, and local
-task contract rather than copying counts from prose:
+Execute the following census through the same external recorder under command identity
+`predispatch-census`. It derives the ledger state, graph, task contract, group foundations,
+and writer-handoff pins rather than copying counts from prose:
 
 ```bash
 node <<'NODE'
@@ -325,9 +314,49 @@ console.log(JSON.stringify({
 NODE
 ```
 
-Create the Wave 6 entry snapshot through the production delivery command, using
-`BASE_OID` as the exact base and the current draft Wave 6 PR. The production historical-
-predecessor guard validates the following retained W5 identities inside predecessor state:
+After the recorder writes all eight strict JSON records, rerun entry preparation with one
+repeated `--command-evidence PATH` per closed command identity. This call fresh-fetches and
+rediscovers the candidate again, create-or-compares the same ledger/evidence surfaces, and
+imports each completed record by strict parse and create-or-compare. A missing, extra,
+duplicate, malformed, wrong-candidate, or changed record refuses:
+
+```bash
+COMMAND_EVIDENCE_ARGS=()
+for COMMAND_ID in \
+  focused-guard-list \
+  focused-guard-ignored-list \
+  focused-guard-run \
+  gate0-test-drift \
+  test-policy \
+  test-unit \
+  heavy-gate-acquire \
+  predispatch-census
+do
+  COMMAND_EVIDENCE_PATH="$D2B_W6_COMMAND_EVIDENCE_DIR/$COMMAND_ID.json"
+  test -f "$COMMAND_EVIDENCE_PATH"
+  COMMAND_EVIDENCE_ARGS+=(--command-evidence "$COMMAND_EVIDENCE_PATH")
+done
+
+cargo run --manifest-path packages/Cargo.toml -p xtask -- \
+  delivery wave snapshot \
+  "${SNAPSHOT_ARGS[@]}" \
+  --entry-prepare true \
+  "${COMMAND_EVIDENCE_ARGS[@]}"
+```
+
+Finally run ordinary snapshot mode with neither `--entry-prepare` nor
+`--command-evidence`. It validates the candidate-bound 36-entry ledger, reads and validates
+the complete exact eight-record evidence directory, reruns the historical predecessor and
+W6 census guards, and only then writes `snapshot.json`:
+
+```bash
+cargo run --manifest-path packages/Cargo.toml -p xtask -- \
+  delivery wave snapshot \
+  "${SNAPSHOT_ARGS[@]}"
+```
+
+The production historical-predecessor guard validates the following retained W5 identities
+inside predecessor state:
 candidate
 `d20267eec23f90b9cd6931e4bd322b66e259533849c8170617fbd002381493a4`,
 snapshot identity `7a04d9b86df6c8b8704b4bd79ddc25603fedae47d1a521f0b6fa420451816c3a`,
@@ -340,21 +369,6 @@ here. These are not W6 output identities. The W6 snapshot command emits distinct
 `candidate_id`, `content_id`, and `snapshot_sha256` values bound to the current W6 base,
 head, pull request, graph, and feature content. Equality between a W6 output identity and any
 retained W5 identity is a failure, not a success condition.
-
-```bash
-STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/d2b/delivery"
-PR_NUMBER="$(gh pr view --json number --jq .number)"
-HEAD_REF="$(git symbolic-ref --short HEAD)"
-
-cargo run --manifest-path packages/Cargo.toml -p xtask -- \
-  delivery wave snapshot \
-  --program ADR046 \
-  --wave adr046w6 \
-  --repo "$REPOSITORY=$CHECKOUT_ROOT" \
-  --base "$REPOSITORY=$BASE_OID" \
-  --pull-request "$REPOSITORY=$PR_NUMBER:$HEAD_REF" \
-  --state-dir "$STATE_DIR"
-```
 
 Only after that succeeds, run `/d2b-panel-round plan` against the exact base, entry snapshot,
 and current feature snapshot. T221 remains incomplete until every selected seat signs off

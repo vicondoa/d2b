@@ -69,6 +69,10 @@
 - [x] T221 invalidation stops at pre-first-dispatch material changes; later status-only
   ledger projections cannot change requirements, dependencies, owners, destinations,
   validation, readiness, census, or guards
+- [x] The public T221 sequence is discovery-first: external ledger/evidence paths, empty
+  `--entry-prepare true`, externally recorded strict JSON, entry-prepare import with eight
+  repeated `--command-evidence` flags, then ordinary snapshot validation/write; no evidence
+  record is required or fabricated before candidate discovery
 
 ## Feature Readiness
 
