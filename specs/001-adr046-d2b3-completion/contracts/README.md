@@ -187,24 +187,25 @@ status-only checkbox/completion/evidence/dispatch/merge/seal projections derived
 ledger do not invalidate it and cannot change plan authority. A later material change blocks
 affected groups until replacement plan material and approval receipt are accepted.
 
-The production entry-plan approval writer owns the complete strict receipt. In addition to
-entry/base/material/selection/ledger/evidence digests and unanimous counts, it embeds the
-completion-bound `lifecycleApproval` object and an exact `seatRecords` map for the selected
-roster; every seat is signed off with zero recommendations. The production writer and
-verifier, not a hand-authored JSON file, perform durable creation and validation. These
-records remain correlation/completeness evidence rather than authentication.
+The current `plan-approval` command consumes the candidate-bound plan selection and canonical
+`d2b-panel/approval`, then durably writes the simplified receipt binding snapshot identities/
+fingerprints plus selection, approval, dispatch-ledger, and command-evidence digests. It does
+not embed duplicate seat records or a second lifecycle approval schema. These records remain
+correlation/completeness evidence rather than authentication.
 
-Entry-plan selection, final-plan selection, and binding-work selection are non-interchangeable.
-Final F6 uses a distinct snapshot and final-plan selection. Its unchanged candidate receives
-a separate exactly-once binding-work selection. Every completed group needs a candidate-bound
-completion record and accepted-commit record before it projects to Merged. Merge eligibility
-is recorded only after evaluation succeeds.
+The entry snapshot's plan selection, final F6 plan selection, and F6 work selection are
+non-interchangeable. Final F6 uses a distinct snapshot and new plan selection. Its unchanged
+candidate receives a separate exactly-once work selection passed to `panel-request`. Groups
+reach Completed only through current `validate`/`complete` commands with accepted commit/tree
+evidence; T479/T480 own the prospective post-integration/merge projection to Merged without
+inventing another artifact schema. `merge-eligibility` retains its result only after
+evaluation succeeds.
 
-Candidate material auto-derives the canonical graph and hashes typed normative, machine-
-contract, graph, work-item, handoff, and command-profile inputs. Only parsed fields classified
-as status projections normalize to fixed sentinels; free-form text and every requirement,
-dependency, owner, destination, validation, handoff, profile, graph, selection stage, and
-guard remain byte-significant.
+Candidate material auto-derives the canonical graph. Snapshot generated/dependency/contract
+fingerprints plus selection, canonical approval, ledger, and command-runner digests form the
+composite binding. Only parsed status projections normalize; free-form text and every
+authority-bearing requirement, dependency, owner, destination, validation, handoff, profile,
+graph, selection purpose, and guard remain byte-significant.
 
 The same production guard runs at Wave 6 snapshot/entry and is rechecked at panel request,
 seal, and merge eligibility. Missing, extra, partial, changed, unfetched, non-first-parent,

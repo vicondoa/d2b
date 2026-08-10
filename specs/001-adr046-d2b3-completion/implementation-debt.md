@@ -65,13 +65,14 @@ blocks affected groups. The corrected live census is 600 graph nodes, 1963 edges
 manifest items, 609 feature task rows, and 36 W6 post-entry groups containing 265 work
 records.
 
-Final entry discovery further requires source/tooling closure for distinct entry/final/work
-selection stages; production approval/completion/accepted-commit/eligibility writers; closed
-command profiles and repository census; canonical graph and typed material derivation;
-disk-capacity ready-set admission; and accepted-commit projection to Merged. The feature
-contract now owns those requirements. The paired system-core specs are already Version 2,
-while their T423 implementation remains Planned. Per-group changelog fragments and T479's
-final fold are part of completion rather than release cleanup debt.
+Final entry discovery further requires source/tooling closure for distinct entry/final plan
+and work selections; canonical `d2b-panel/approval` consumption by `plan-approval`; closed
+command profiles and repository census; canonical graph/composite material derivation;
+command-validated accepted commit/tree evidence; and T479/T480's prospective Completed-to-
+Merged reconciliation. Current verbs own these paths; no duplicate feature-local artifact
+schema or disk reservation mechanism is authorized. The paired system-core specs are already
+Version 2, while their T423 implementation remains Planned. Per-group changelog fragments
+and T479's final fold are part of completion rather than release cleanup debt.
 
 ---
 

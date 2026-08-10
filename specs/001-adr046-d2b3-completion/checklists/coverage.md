@@ -160,15 +160,17 @@ Are requirements present for each scenario class, or explicitly excluded?
   entry surfaces with `--entry-prepare true`, then record real commands externally, import
   exactly eight repeated `--command-evidence` paths through entry preparation, and use
   ordinary snapshot alone to validate all records and write `snapshot.json`?
-- [x] CHK068 Are entry-plan, final-plan, and binding-work snapshots/selections separate, with
-  candidate-bound completion and accepted-commit records gating Completed-to-Merged?
-- [x] CHK069 Does the complete approval schema include lifecycleApproval and exact
-  seatRecords through the production writer, and is merge eligibility recorded only after
-  evaluation?
+- [x] CHK068 Are entry snapshot plan, final F6 plan, and F6 work selections separate, with
+  validate/complete accepted commit/tree evidence preceding T479/T480's prospective
+  Completed-to-Merged projection?
+- [x] CHK069 Does `plan-approval` consume canonical `d2b-panel/approval` into the simplified
+  composite-bound receipt without duplicate seat schemas, and is merge eligibility retained
+  only after evaluation?
 - [x] CHK070 Do closed command profiles use the repository-owned census runner and Layer-1
   membership, while canonical graph derivation rejects caller-maintained edges?
-- [x] CHK071 Does typed material normalization exclude only parsed status projections, and
-  do T604 readiness plus disk-capacity dispatch consume production records rather than prose?
+- [x] CHK071 Does composite binding normalize only parsed status projections, and do T604
+  readiness plus existing 10 GiB `dispatch-ready` preflight consume production evidence
+  rather than prose or duplicate disk reservations?
 - [x] CHK072 Is every shared path assigned one order, including volume-local, T609/broker,
   and final Cargo locks, with expanded changelog treatment and correct system-core state?
 

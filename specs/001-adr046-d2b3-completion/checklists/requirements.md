@@ -73,14 +73,17 @@
   `--entry-prepare true`, externally recorded strict JSON, entry-prepare import with eight
   repeated `--command-evidence` flags, then ordinary snapshot validation/write; no evidence
   record is required or fabricated before candidate discovery
-- [x] Entry-plan, final-plan, and binding-work selections are distinct and candidate-bound;
-  completion plus accepted-commit records are required before Completed projects to Merged
-- [x] The approval receipt includes lifecycleApproval and exact seatRecords and is written by
-  the production durable writer; merge eligibility is recorded only after evaluation
+- [x] Entry snapshot plan selection, final F6 plan selection, and F6 work selection are
+  distinct and candidate-bound; validate/complete accepted commit/tree evidence precedes the
+  T479/T480-owned prospective Completed-to-Merged projection
+- [x] `plan-approval` consumes canonical `d2b-panel/approval` and writes the simplified
+  composite-bound receipt without duplicating seat records; merge eligibility is retained
+  only after command evaluation
 - [x] Command evidence uses closed production profiles, the repository-owned census runner,
   and explicit Layer-1 membership; ADR046 snapshots auto-derive the canonical graph
-- [x] Typed plan material normalizes only parsed status projections; T604 readiness requires
-  completion/accepted-commit records, and ready-set dispatch preserves the 10 GiB disk floor
+- [x] Composite material binding normalizes only parsed status projections; T604 readiness
+  requires command-validated accepted commit/tree evidence, and `dispatch-ready` preserves
+  the existing fail-closed 10 GiB disk floor without duplicate reservations
 - [x] Shared ownership is one-path-one-order, including volume-local, T609/broker audit, and
   T479 final Cargo locks; expanded changelog fragments and final fold are mandatory
 - [x] The paired system-core specs are currently Accepted Version 2 while T423 implementation

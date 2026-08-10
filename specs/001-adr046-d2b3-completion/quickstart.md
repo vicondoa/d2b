@@ -218,43 +218,30 @@ This feature edit invalidates that binding. Generate new identities; do not reus
 them. A passing replacement T221 result authorizes T606 only.
 
 After the replacement selected roster returns unanimous signoff with zero recommendations,
-use the production writer. It consumes the entry snapshot and entry-plan selection, the
-completion-bound lifecycle approval, and exactly one seat record for every selected roster
-seat. It writes the complete receipt schema, including `lifecycleApproval` and `seatRecords`,
-using same-directory temp/write/fsync/rename/parent-fsync durability:
+run the current `plan-approval` verb. It consumes the entry snapshot, candidate-bound plan
+selection, and canonical `d2b-panel/approval`. The delivery command validates unanimous
+zero-recommendation approval, binds the selection/approval/ledger/command-evidence digests to
+the snapshot fingerprints, and durably writes the simplified external receipt:
 
 ```bash
 export D2B_W6_PLAN_APPROVAL_RECEIPT="$ENTRY_STATE_DIR/plan-approval.json"
 ENTRY_SNAPSHOT_PATH="$STATE_DIR/ADR046/adr046w6/<entry-candidate-id>/snapshot.json"
-ENTRY_SELECTION_PATH="<completion-bound-entry-plan-selection.json>"
-LIFECYCLE_APPROVAL_PATH="<completion-bound-lifecycle-approval.json>"
-SEAT_RECORD_DIR="<completion-bound-entry-plan-seat-record-directory>"
-
-SEAT_RECORD_ARGS=()
-while IFS= read -r SEAT_RECORD_PATH; do
-  SEAT_RECORD_ARGS+=(--seat-record "$SEAT_RECORD_PATH")
-done < <(find "$SEAT_RECORD_DIR" -maxdepth 1 -type f -name '*.json' -print | LC_ALL=C sort)
+ENTRY_SELECTION_PATH="<candidate-bound-plan-selection.json>"
+PANEL_APPROVAL_PATH="<canonical-d2b-panel-approval.json>"
 
 cargo run --manifest-path packages/Cargo.toml -p xtask -- \
-  delivery wave entry-plan-approval write \
+  delivery wave plan-approval \
   --snapshot "$ENTRY_SNAPSHOT_PATH" \
   --selection "$ENTRY_SELECTION_PATH" \
-  --lifecycle-approval "$LIFECYCLE_APPROVAL_PATH" \
-  "${SEAT_RECORD_ARGS[@]}" \
-  --receipt "$D2B_W6_PLAN_APPROVAL_RECEIPT" \
-  --state-dir "$STATE_DIR"
-
-cargo run --manifest-path packages/Cargo.toml -p xtask -- \
-  delivery wave entry-plan-approval verify \
-  --snapshot "$ENTRY_SNAPSHOT_PATH" \
-  --selection "$ENTRY_SELECTION_PATH" \
-  --receipt "$D2B_W6_PLAN_APPROVAL_RECEIPT" \
+  --approval "$PANEL_APPROVAL_PATH" \
+  --repo "$REPOSITORY=$CHECKOUT_ROOT" \
   --state-dir "$STATE_DIR"
 ```
 
 Replace angle-bracket values only with paths emitted by the production entry lifecycle; do
-not construct or edit approval/seat JSON. `featurePlanMaterialSha256` uses the typed
-status-normalized material digest, so only classified status projections normalize.
+not construct or edit approval JSON. The receipt uses composite snapshot fingerprints plus
+selection, canonical approval, dispatch-ledger, and command-runner digests rather than a
+duplicate monolithic feature digest.
 The structured command records, dispatch ledger, observed run metadata, and durable plan
 receipt provide candidate correlation, completeness, uniqueness, and crash-safe process
 state. They are not authentication, proof of reviewer identity, or a security boundary.
@@ -557,56 +544,51 @@ and every group `NotLaunched`, its dependency computation yields T606 only. Afte
 `manifest_group_foundations` plus graph prerequisites. The 258 manifest work items are only
 the manifest body; four foundation groups and three acceptance/close groups make 36
 post-entry groups and 265 active post-entry work records. Before each dispatch cycle, use the
-public `delivery wave ready-set` stage. It reads the external ledger, canonical auto-derived
-graph, foundation/commit records, and repository-owned filesystem-capacity probe. It admits
-only the canonical maximal ready-group prefix whose declared reservations leave at least
-10 GiB free on the integration-worktree filesystem. Insufficient-capacity groups remain
-unlaunched and receive a typed disk-capacity blocker; never dispatch every logically ready
-group or a fixed agent count without this probe.
+public `delivery wave dispatch-ready` verb. It reads the external ledger and canonical
+auto-derived graph and runs the existing fail-closed 10 GiB free-disk preflight before
+dispatch. Insufficient disk blocks dispatch with the existing remediation; there is no
+second per-group reservation system and no fixed agent count.
 
-Use only public lifecycle writers for group state. `ready-set` returns the capacity-admitted
-groups; `dispatch-transition` durably moves each selected group to `Dispatched`. After the
-group's exact candidate evidence passes, `completion-record write` creates the
-candidate-bound record and the transition writer may move it to `Completed`. Do not edit the
-ledger, checkbox, or completion JSON directly:
+Use only current public lifecycle verbs for group state. `dispatch-ready` moves exactly the
+currently ready group set to Dispatched. `validate` consumes candidate-bound evidence.
+`complete` accepts only the command-supported exact accepted commit/tree evidence and moves
+the group to Completed. `block` and `resume` own the replacement-approval path. Do not edit
+the ledger or checkbox directly:
 
 ```bash
 cargo run --manifest-path packages/Cargo.toml -p xtask -- \
-  delivery wave ready-set \
+  delivery wave dispatch-ready \
   --snapshot "$SNAPSHOT" \
-  --dispatch-ledger "$D2B_W6_DISPATCH_LEDGER" \
+  --selection "$SELECTION" \
+  --dispatch-id "$DISPATCH_ID" \
   --repo "$REPOSITORY=$CHECKOUT_ROOT" \
   --state-dir "$STATE_DIR"
 
 cargo run --manifest-path packages/Cargo.toml -p xtask -- \
-  delivery wave dispatch-transition \
+  delivery wave validate \
   --snapshot "$SNAPSHOT" \
   --group "$GROUP" \
-  --to Dispatched \
-  --dispatch-ledger "$D2B_W6_DISPATCH_LEDGER" \
+  --evidence "$GROUP_VALIDATION_EVIDENCE" \
+  --selection "$SELECTION" \
+  --repo "$REPOSITORY=$CHECKOUT_ROOT" \
   --state-dir "$STATE_DIR"
 
 cargo run --manifest-path packages/Cargo.toml -p xtask -- \
-  delivery wave completion-record write \
+  delivery wave complete \
   --snapshot "$SNAPSHOT" \
   --group "$GROUP" \
-  --completion-evidence "$COMPLETION_EVIDENCE_SET" \
-  --record "$COMPLETION_RECORD" \
-  --state-dir "$STATE_DIR"
-
-cargo run --manifest-path packages/Cargo.toml -p xtask -- \
-  delivery wave dispatch-transition \
-  --snapshot "$SNAPSHOT" \
-  --group "$GROUP" \
-  --to Completed \
-  --completion-record "$COMPLETION_RECORD" \
-  --dispatch-ledger "$D2B_W6_DISPATCH_LEDGER" \
+  --evidence "$ACCEPTED_COMMIT_TREE_EVIDENCE" \
+  --selection "$SELECTION" \
+  --repo "$REPOSITORY=$CHECKOUT_ROOT" \
   --state-dir "$STATE_DIR"
 ```
 
-`Completed` is not `Merged`. Only the post-merge production `accepted-commit write` stage
-validates the exact commit/tree and integration ancestry and permits the Merged/checkbox
-projection.
+When a defect or capacity failure blocks a group, use `delivery wave block`; use
+`delivery wave resume --replacement-approved true --replacement-approval PATH` only after
+the canonical replacement approval exists. `Completed` is not `Merged`. T479/T480 own the
+future post-integration/merge reconciliation that projects command-validated accepted
+commit/tree evidence to manifest Merged and feature checkbox status; it is not a current
+T221 verb or separate feature-local artifact schema.
 
 ### 3. Inner loop while implementing
 
@@ -766,7 +748,7 @@ if jq -e 'any(.[]; .type == "merge_queue")' \
 fi
 
 FINAL_PLAN_SELECTION="$ROUND/selection.json"
-WORK_SELECTION="$ROUND/work-selection.json"
+WORK_SELECTION="<candidate-bound-work-selection.json>"
 LEDGER="$ROUND/discovery-ledger.json"
 RESPONSES="$ROUND/responses.json"
 VERIFICATION_RESULTS="$ROUND/verification-results.json"
@@ -809,12 +791,12 @@ jq -e --slurpfile snapshot "$STATE_DIR/$SNAPSHOT" '
   .snapshot_sha256 == $snapshot[0].snapshot_sha256
 ' "$FINAL_PLAN_SELECTION"
 
-"${X[@]}" binding-work-selection \
-  --snapshot "$SNAPSHOT" \
-  --plan-selection "$FINAL_PLAN_SELECTION" \
-  --output "$WORK_SELECTION" \
-  --repo "$REPOSITORY=$CHECKOUT_ROOT" \
-  --state-dir "$STATE_DIR"
+jq -e --slurpfile snapshot "$STATE_DIR/$SNAPSHOT" '
+  .phase == "work" and
+  .candidate_id == $snapshot[0].candidate_id and
+  .content_id == $snapshot[0].content_id and
+  .snapshot_sha256 == $snapshot[0].snapshot_sha256
+' "$WORK_SELECTION"
 
 PANEL_REQUEST_RESULT="$("${X[@]}" panel-request \
   --snapshot "$SNAPSHOT" \
@@ -1010,16 +992,6 @@ git fetch origin "$TARGET_BRANCH"
 test "$(git rev-parse "${MERGE_COMMIT}^{tree}")" = \
   "$(git rev-parse "${HEAD_OID}^{tree}")"
 
-COMPLETION_RECORD_DIR="$STATE_DIR/ADR046/adr046w6/group-completion"
-ACCEPTED_COMMIT_RESULT="$("${X[@]}" accepted-commit write \
-  --snapshot "$SNAPSHOT" \
-  --merge-commit "$MERGE_COMMIT" \
-  --completion-record-directory "$COMPLETION_RECORD_DIR" \
-  --dispatch-ledger "$D2B_W6_DISPATCH_LEDGER" \
-  --repo "$REPOSITORY=$CHECKOUT_ROOT" \
-  --state-dir "$STATE_DIR")"
-ACCEPTED_COMMIT="$(printf '%s\n' "$ACCEPTED_COMMIT_RESULT" | artifact_ref)"
-
 SEAL_RESULT="$("${X[@]}" seal \
   --snapshot "$SNAPSHOT" \
   --repo "$REPOSITORY=$CHECKOUT_ROOT" \
@@ -1033,11 +1005,9 @@ MERGE_TARGET_RESULT="$("${X[@]}" merge-target \
   --state-dir "$STATE_DIR")"
 MERGE_TARGET="$(printf '%s\n' "$MERGE_TARGET_RESULT" | artifact_ref)"
 
-MERGE_ELIGIBILITY_RESULT="$("${X[@]}" merge-eligibility-evaluate-and-record \
+MERGE_ELIGIBILITY_RESULT="$("${X[@]}" merge-eligibility \
   --seal "$SEAL" \
   --target "$MERGE_TARGET" \
-  --accepted-commit "$ACCEPTED_COMMIT" \
-  --record "$STATE_DIR/ADR046/adr046w6/merge-eligibility-evaluation.json" \
   --repo "$REPOSITORY=$CHECKOUT_ROOT" \
   --state-dir "$STATE_DIR")"
 MERGE_ELIGIBILITY="$(printf '%s\n' "$MERGE_ELIGIBILITY_RESULT" | artifact_ref)"
@@ -1048,7 +1018,6 @@ printf '%s\n' \
   "$EVIDENCE_LOCAL_HOST" \
   "$PANEL_REQUEST" \
   "$PANEL_RECORDS" \
-  "$ACCEPTED_COMMIT" \
   "$SEAL" \
   "$MERGE_TARGET" \
   "$MERGE_ELIGIBILITY"
@@ -1060,14 +1029,16 @@ above still captures its emitted artifact reference and repeats the same valid r
 mapping.
 
 The order is deliberate: distinct final-plan approval, final F6 snapshot, distinct
-binding-work selection, the sole request, observed process metadata, records and attestation,
-protected PR checks, merge, accepted-commit recording and Completed-to-Merged projection,
-seal, merge-target registration, then merge-eligibility evaluation and durable recording.
-`seal` refuses until accepted-commit records project every current-wave item to Merged;
-moving it before the PR merge recreates the cycle this workflow is designed to prevent.
+candidate-bound work selection, the sole request, observed process metadata, records and
+attestation, protected PR checks, merge, seal, merge-target registration, then
+`merge-eligibility`. T479/T480 must already have reconciled each group command's accepted
+commit/tree evidence into the candidate's Merged projection before seal; there is no separate
+accepted-commit CLI or feature-defined artifact at this stage. Moving seal before the PR
+merge recreates the cycle this workflow is designed to prevent.
 The merge-target input is captured from the green PR immediately before merge, then
 registered after the seal so post-merge commands consume the exact pre-merge head/check
-state. Eligibility success is never pre-created.
+state. The merge-eligibility result is retained only after the command evaluates successfully;
+no second eligibility schema or pre-created success record exists.
 R12 and R55 do not reorder those stages. The Wave 5 historical disposition does not relax
 them for Wave 6.
 

@@ -27,7 +27,7 @@ before exact-candidate evidence, and iterate scoped findings through nonbinding
 `/d2b-panel-round plan` phase reviews before selecting the final candidate. Then gate the
 integrated work on imported validation evidence plus, only when the wave has not already
 consumed its once-per-wave request, one binding selected-roster `/d2b-panel-round work` delivery
-request bound to that immutable snapshot. Entry-plan review, iterative phase-plan review, and
+request bound to that immutable snapshot. Entry snapshot plan review, final-candidate plan review, and
 the binding delivery panel are separate surfaces and none substitutes for another. A retained
 delivery request is never reclassified as a phase-plan round. Merge an attested tree through a
 pull request without a post-attestation content change, then seal and run merge-target and
@@ -1362,21 +1362,21 @@ Only ordinary snapshot validates the complete eight-record set and writes `snaps
 No plan step may require command records to preexist candidate discovery or fabricate them
 from expected results.
 
-Entry approval, final-plan approval, and binding-work selection are three distinct
-candidate-bound stages. The entry snapshot/selection/seat records authorize T606 only and
-cannot be reused for F6. T479 creates a separate final F6 snapshot after candidate-bound
-completion and accepted-commit records prove every prerequisite; T480 creates a new
-`final-plan` selection for nonbinding convergence and, only after its unanimous approval, a
-distinct exactly-once `binding-work` selection over unchanged F6. Merge eligibility is
-evaluated before its immutable record is written. `Completed` is pre-merge; only a validated
-accepted-commit record projects a group/task to Merged.
+The entry snapshot's plan selection, final F6 snapshot's plan selection, and unchanged F6's
+work selection are distinct candidate-bound artifacts. Entry approval authorizes T606 only
+and cannot be reused for F6. T479 creates the final F6 snapshot after every prerequisite
+reaches `complete` with accepted commit/tree evidence. T480 obtains a new nonbinding plan
+selection/approval for F6 and then a distinct exactly-once work selection passed directly to
+`panel-request`. `Completed` is pre-merge; T479/T480 prospectively reconcile the accepted
+commit/tree evidence to Merged without inventing another CLI verb or artifact schema.
 
 All ADR046 W6 candidate material auto-derives the canonical graph from the committed graph,
 foundation map, local dependencies, and one-path-one-order handoffs. Manual edge input is
-forbidden. The typed plan-material digest includes normative files, machine contract, graph,
-work-item manifest, handoffs, and command profiles; it normalizes only parsed status fields,
-never free-form prose. Ready-set dispatch additionally applies the repository filesystem
-capacity probe and per-group reservation table, retaining at least 10 GiB free.
+forbidden. Snapshot fingerprints plus selection, canonical panel approval, dispatch-ledger,
+and command-runner digests form the composite binding; no duplicate monolithic feature
+digest is required. Only parsed status projections normalize, never free-form prose or
+authority fields. `dispatch-ready` uses the existing fail-closed 10 GiB preflight; no second
+reservation table exists.
 
 Release treatment is part of group completion. T606-T609 and every behavior-changing
 manifest group own a unique fragment with operator impact, migration/no-migration, breaking
