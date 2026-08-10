@@ -3221,7 +3221,7 @@ fn validate_w6_census(repository_roots: &BTreeMap<String, PathBuf>) -> Result<()
         .filter(|node| node.get("kind").and_then(Value::as_str) == Some("work-item"))
         .filter(|node| node.get("wave").and_then(Value::as_str) == Some("W6"))
         .collect::<Vec<_>>();
-    if nodes.len() != 600 || edges.len() != 1962 || w6.len() != 258 {
+    if nodes.len() != 600 || edges.len() != 1963 || w6.len() != 258 {
         return Err(DeliveryError::new(
             "Wave 6 pre-dispatch census does not match the committed graph",
         ));
