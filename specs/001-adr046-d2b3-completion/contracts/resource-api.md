@@ -1,5 +1,7 @@
 # Contract: Resource API and ComponentSession
 
+<!-- RETIRED-READONLY-BEGIN: historical Wave 5 contract compatibility -->
+
 **Owning specs**: `ADR-046-resource-api-and-authorization`, `ADR-046-componentsession-and-bus`,
 `ADR-046-zone-routing`, `ADR-046-resource-store-redb`
 
@@ -194,3 +196,5 @@ Making this reachable is the core of User Story 1 and the precondition for SC-02
   historical-predecessor guard before the ordinary Wave 6 plan panel. T604's W6 result
   appears only as `operator-nix-activation-cleanup`, is imported by T479, and remains outside
   the retained Wave 5 evidence inventory.
+
+<!-- RETIRED-READONLY-END -->

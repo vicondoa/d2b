@@ -36,7 +36,7 @@ boundary and retained no-seal state. It does not weaken any Wave 6 gate.
 - **[P]**: Parallelizable with other ready tasks after all of its declared prerequisites
   complete, with no file-overlap edge among the tasks launched together. The marker does not
   remove an incoming dependency or mean immediate wave-entry eligibility. 91 of 545 manifest
-  work items qualify. Across the full task list, 96 of 605 total tasks carry `[P]`.
+  work items qualify. Across the full task list, 98 of 605 total tasks carry `[P]`.
 - **[Story]**: US1 live resource plane, US2 Providers, US3 cutover, US4 release.
 - Text after `WorkItemId` is a **non-authoritative navigation label**, not the manifest
   `destination` field, a writable path list, or a substitute for retrieval. Labels use
@@ -89,7 +89,8 @@ or binding panel, create a candidate, attest, seal, or merge. Each requires exac
 delivery-record confirmation or an accepted external correction. Wave 5 is also exceptional: its retained pre-amendment `panel-request.json` consumed the
 once-per-wave binding request with zero attestations and no seal. The exact validator/tooling
 contract applies the generic Constitution 3.1.0 disposition to that state through merged
-commit `177235ed37188b3be87525e7f016fb43401574c5` as closed history only. T219 records the disposition. No nonbinding phase round, current panel,
+commit `177235ed37188b3be87525e7f016fb43401574c5` as closed history only. The
+feature-owned record preserves the disposition. No nonbinding phase round, current panel,
 replacement candidate, second request, attestation, seal, or recovery action may alter it.
 
 **Generic Constitution 3.1.0 disposition plus exact ADR-046 contract (FR-036, accepted)**:
@@ -120,11 +121,10 @@ every unexpected lifecycle unit refuses.
 The negative matrix injects one unexpected loaded `d2b-unexpected.slice` and, separately, one
 unexpected loaded `d2b-unexpected.service`; both remain after the sole `d2b.slice` exclusion
 and must fail the exact-set comparison.
-Historical T028, T035, T070, T220, and T600 records describe retained evidence and own no
-current execution or test edit. T604 is the sole W6
-source owner of `tests/host-integration/daemon-restart-vm-survival.nix` and that check's
-discovery/build recipe in `Makefile`; its public target must fail on empty discovery, any
-`SKIP`, a missing build, or a non-x86 result presented as passing. The positive case proves
+Historical W2-W5 records describe retained evidence and own no current execution or test
+edit. Current host-check ownership resolves only from authoritative member specs and
+generated manifests; its public target must fail on empty discovery, any `SKIP`, a missing
+build, or a non-x86 result presented as passing. The positive case proves
 `Ready` before daemon restart, reachability, fresh-pidfd adoption of the original runner with
 the same PID and start identity, continued reachability, and `Stopped` after public stop.
 Its negative cases inject numeric PID reuse, pidfd/start-identity mismatch, and multiple
@@ -153,9 +153,9 @@ evidence from the applicable first-dispatch base. W2-W4 do not run remedial plan
 their remaining tasks require exact external delivery-record confirmation or an accepted
 external correction and remain historical verification/adjudication only.
 
-Wave 5's recorded pre-edit and post-edit selected-roster plan lifecycle instructions around
-T603 are historical planning evidence. They leave T072 unchecked and cannot rewrite the
-missed boundary or dispose the retained request. T219 has no recovery artifact.
+Wave 5's recorded pre-edit and post-edit lifecycle instructions are historical planning
+evidence. They leave T072 unchecked and cannot rewrite the missed boundary or dispose the
+retained request.
 
 Prospective ADR046 `SINGLE BINDING WORK GATE` tasks beginning with W6 permit exactly one
 binding delivery-panel request per wave. Before that request, provisional candidates may be
@@ -197,17 +197,15 @@ it. The exact ADR-046 contract permits no Wave 5 replacement binding. These R12 
 add no task ID, change no checkbox, preserve Track A order, and remain mandatory for
 prospective Wave 6.
 
-T589 owns the wave-scoped fail-closed implementation and table-driven coverage in
-`packages/xtask/src/delivery/{panel.rs,seal.rs,eligibility.rs,history_proof.rs,storage.rs}` for
-`adr046w5` and later users. W2-W4 cannot depend on code delivered in W5. T008 therefore owns
+The checked-in delivery validator/tooling contract owns the exact retained-history guard.
+W2-W4 cannot depend on later code. T008 therefore owns
 the historical W2 entry attestation for versioned feature-local contract
 `adr046-candidate-recovery-prerequisite/v1` in `contracts/README.md`: the coordinated external
 ADR/index, validation/delivery spec and generated manifests, delivery tooling, `AGENTS.md`,
 and contributor guidance had to be ancestors of the actual W2 entry base. The unchecked T008
 state cannot now authorize work that was already dispatched. W2-W4 may use the accepted
 external v1 behavior only to read and adjudicate retained delivery records or an accepted
-external correction; they do not invoke it to repeat a close and never claim T589's later
-strict storage profile. The generic history-proof reuse path remains available only before a
+external correction; they do not invoke it to repeat a close. The generic history-proof reuse path remains available only before a
 candidate's binding request or for delivery programs that do not select the strict profile.
 
 ### Historical entry-attestation adjudication
@@ -449,10 +447,10 @@ current-facing sole Network-opt-in path on the T221 base. The generated work-ite
 must retain T336-T355 as authoritative W6 implementation under T221 and assign all
 four Network/Host cases to that W6 group. A feature-local matrix, single-opt-in assertion,
 declaration-only fixture, fake adapter, or evidence from the old env surface cannot resolve
-the conflict. T220 remains historical planned evidence. T221 requires the accepted migration
+the conflict. The retired Wave 5 plan remains read-only evidence. T221 requires the accepted migration
 and regenerated double-opt-in contract on the exact fetched Wave 6 base, and T480 revalidates
-the production cases at close. T604 remains W6 acceptance-only after merged T336-T355 and
-reuses that landed implementation; no feature-local status correction can unblock any
+the production cases at close. Current acceptance ownership resolves only from authoritative
+member specs and generated manifests; no feature-local status correction can unblock any
 boundary.
 
 ### Group `wi:core-config-hub:w4` (1 items)
@@ -484,8 +482,9 @@ Support resources cannot substitute. W4 history remains byte-preserved but its s
 Network result is nonconforming. T221 requires the accepted Network contract/work-item
 amendment to remove stale sole-opt-in contract paths and retain the production implementation
 plus four-case matrix in authoritative W6 rows T336-T355. Wave 5
-does not claim T604's positive operator activation result. T604 remains W6 acceptance-only
-and consumes the implementation after T336-T355 merge. Guest runtime-effect acceptance
+does not claim the prospective positive operator result. Current acceptance ownership
+resolves only from authoritative member specs and generated manifests after T336-T355 merge.
+Guest runtime-effect acceptance
 remains fail-closed until Wave 6
 `Provider/runtime-cloud-hypervisor` completes T384 and T479/T480 accept its exact-F6 evidence.
 
@@ -496,6 +495,8 @@ remains fail-closed until Wave 6
   `177235ed37188b3be87525e7f016fb43401574c5`. It does not check T072, authorize remediation,
   or permit a new Wave 5 request, attestation, seal, merge, or close. Preserve this checkbox
   unchecked as historical evidence.
+
+<!-- RETIRED-READONLY-BEGIN: historical Wave 5 completion graph summary -->
 
 **Approved production-completion amendment**: the 12 manifest groups remain authoritative for
 their 146 work items. T589-T602 and T605 add the missing Wave 5 composition, coordinated
@@ -526,6 +527,8 @@ T219 -> T221 prospective entry
 The historical plan assigned twelve source-writing fragments to T589-T599 and T605. T603
 owns no fragment; T600-T602 were evidence-only; T219 writes nothing. T604's fragment belongs
 to prospective W6.
+
+<!-- RETIRED-READONLY-END -->
 
 <!-- RETIRED-W5-MANIFEST-BEGIN: read-only historical compatibility -->
 
@@ -850,8 +853,8 @@ retained candidate or delivery history.
 **Manifest inventory**: 27 Provider dossiers and 258 work items. T336-T355 remain
 authoritative W6 work and may start only after T221's W6 plan lifecycle passes. The launch
 set remains all 27 dossiers and all 258 work items, in 29 groups including
-process-provider integration and core-controller coordination. T604 is the W6 operator
-acceptance task that consumes the merged T336-T355 result; it does not move those rows.
+process-provider integration and core-controller coordination. Prospective acceptance
+ownership resolves only from authoritative member specs and generated manifests.
 
 - [ ] T221 [US2] W6 HISTORICAL-PREDECESSOR GUARD + PLAN PANEL + ENTRY - before any Wave 6
   implementation lane is dispatched, fetch `origin/v3` and require the exact resolved
@@ -888,34 +891,17 @@ acceptance task that consumes the merged T336-T355 result; it does not move thos
 ### Group `wi:ADR-046-provider-activation-nixos` (7 items)
 
 NIX-8 and NIX-9 are code-canon gaps, not landed Wave 5 work. The exact searches recorded in
-`research.md` found no production handoff contract and no rebuild-reference option. T222 then
-T227 are serialized prospective W6 owners and both must merge before T604.
+`research.md` found no production handoff contract and no rebuild-reference option.
+Prospective ownership resolves only from authoritative member specs and generated manifests.
 
-- [ ] T222 [US2] `ADR046-activation-001` + NIX-8 PROSPECTIVE HOST-GENERATION HANDOFF - after
-  T221, own `packages/d2b-host/src/bin/d2b-activation-helper.rs` plus the exact typed
-  contract/core/broker/daemon/client and focused-test files required for
-  `SourceGenerationCompatibilityFloorV1` and `ApplyHostGenerationHandoff`. Implement the
-  unprivileged target entry, broker-owned durable coordinator and audited mutation, one
-  durable source-to-target transfer, restart adoption, and target/apply/GC-root/live-peer and
-  unauthorized-caller denials using only the existing broker socket/service lifecycle.
-  **Done when** exact source, target, restart, substitution, authorization, and three-unit
-  tests pass and T227 can consume the typed handoff contract.
+- [ ] T222 [P] [US2] `ADR046-activation-001` - complete manifest object; depends on
+  `ADR046-audit-001` and `ADR046-cli-001`; first serialized shared broker/contract writer
 - [ ] T223 [P] [US2] `ADR046-activation-002` - docs/reference/schemas/v3/activation-nixos.d2bus.org.NixosGeneration.json and packages/d2b-contracts/src/activation_nixos.rs (create)
 - [ ] T224 [US2] `ADR046-activation-003` - packages/d2b-provider-activation-nixos/src/controller/ (replace)
 - [ ] T225 [US2] `ADR046-activation-004` - packages/d2b-provider-activation-nixos/src/runner/ (adapt)
 - [ ] T226 [P] [US2] `ADR046-activation-005` - packages/d2b/src/activation.rs (replace)
-- [ ] T227 [US2] `ADR046-activation-006` + NIX-9 PROSPECTIVE REBUILD-REFERENCE CARRIER -
-  depends on T222. Own `nixos-modules/providers/activation-nixos.nix`,
-  `nixos-modules/options-site.nix`, the host-generation carrier/emitter module,
-  `tests/unit/nix/cases/host-generation-rebuild-ref.nix`, affected flake/example/template
-  fixtures, and required inventory regeneration. Declare required no-default
-  `d2b.site.hostGenerationRebuildRef` with
-  `^[A-Za-z0-9+._~:/?@%=&,-]+#[A-Za-z0-9][A-Za-z0-9_-]{0,63}$` and an exact 2048-byte UTF-8
-  ceiling. Publish only the validated target-closure bytes through T222's typed broker
-  operation as root:d2bd 0640, audit only the fixed digest, restore prior bytes or absence on
-  rollback, and emit no value or stable path. **Done when** valid, boundary, missing,
-  malformed, multiline, whitespace, selector, and redaction cases pass and T604 can consume
-  the exact carrier without retired Wave 5 ownership.
+- [ ] T227 [P] [US2] `ADR046-activation-006` - complete manifest object; depends on
+  `ADR046-activation-001` and `ADR046-nix-003`; serialized later `options-site.nix` writer
 - [ ] T228 [US2] `ADR046-activation-007` - packages/d2b/src/lib.rs (delete-after-cutover)
 
 ### Group `wi:ADR-046-provider-audio-pipewire` (13 items)
@@ -1065,11 +1051,12 @@ require
 remove every current-facing sole Network-opt-in path, and regenerate these rows with the
 production adapter, site-gate transport, schema migration, and all four real
 emitter/controller/broker/net-VM cases still assigned to W6. The amendment must not move or
-replace T336-T355 with retired Wave 5 owners. T604 remains W6 acceptance-only, owns
+replace T336-T355 with retired Wave 5 owners. Prospective acceptance ownership resolves only
+from authoritative objects and owns
 no Network implementation, and consumes the merged T336-T355 result. T479 revalidates the
 implementation and evidence, and T480 rechecks them at close.
 
-- [ ] T336 [P] [US2] `ADR046-nl-001` - preserve the landed `d2b-provider-network-local::controller::NetworkEffectPort`; amend the stale generated destination; implement it in `packages/d2bd/src/network_effect_adapter.rs`; wire it after T595 through `packages/d2bd/{Cargo.toml,src/lib.rs,src/resource_runtime.rs}` to the typed broker client, with no direct host mutation (adapt/create)
+- [ ] T336 [P] [US2] `ADR046-nl-001` - preserve the landed `d2b-provider-network-local::controller::NetworkEffectPort`; implement the authoritative generated destination and typed broker adapter with no direct host mutation (adapt/create)
 - [ ] T337 [US2] `ADR046-nl-002` - Broker wire contract and broker/core adapter operation table for `DeletePersistentTap` (adapt)
 - [ ] T338 [P] [US2] `ADR046-nl-003` - `d2b-contracts` opaque byte-array newtypes (create)
 - [ ] T339 [US2] `ADR046-nl-004` - Core LaunchTicket builder and dependency resolver that walks `Guest.ownerRef: Network/<name>` to resolved tap FDs. (create)
@@ -1090,6 +1077,8 @@ implementation and evidence, and T480 rechecks them at close.
 - [ ] T354 [P] [US2] `ADR046-nl-019` - Provider descriptor (create)
 - [ ] T355 [P] [US2] `ADR046-nl-020` - Network schema/Provider descriptor (adapt)
 
+<!-- RETIRED-READONLY-BEGIN: retired feature-local acceptance task -->
+
 - [ ] T604 [US1] **Prove exact-F6 operator activation through real effect and cleanup.**
   Depends on T221, merged prospective T222/T227 host-generation ownership, merged T423
   system-core contract ownership, and merged W6 T336-T355 production implementation plus the
@@ -1100,6 +1089,8 @@ implementation and evidence, and T480 rechecks them at close.
   imports its `operator-nix-activation-cleanup` evidence; T384/T479/T480 own Guest and
   host-continuity acceptance.
   T604 consumes only the T604-owned rows in the generated Version 2 traceability table. Its Network positive is blocked until authoritative W6 T336-T355 have merged and their double-opt-in production implementation plus all four cases pass; its SC-002 positive is blocked until `VD2-SC002-RECEIPT`, `VD2-SC002-REGISTRIES`, and `VD2-SC002-TRACEABILITY` resolve to exact enforcing evidence. T479 imports `operator-nix-activation-cleanup` for exact F6. No feature-local protocol copy or historical registry count is an acceptance source.
+
+<!-- RETIRED-READONLY-END -->
 
 ### Group `wi:ADR-046-provider-notification-desktop` (6 items)
 
@@ -1191,16 +1182,10 @@ implementation and evidence, and T480 rechecks them at close.
 
 ### Group `wi:ADR-046-provider-system-core` (1 items)
 
-- [ ] T423 [US2] `ADR046-system-core-001` + RETIRED-T605 CONTRACT REASSIGNMENT -
-  `packages/d2b-provider-system-core/src/manifest.rs` plus
-  `packages/d2b-contracts/src/v3/zone.rs`, focused contract tests, compiler-derived API
-  snapshots, the production status emitter and consumers, governing specification/reference
-  pages, generated-manifest reconciliation, and unchanged Zone desired-schema proof. Code
-  canon lacks `ZoneHandlerName::SystemCoreHost` and `SystemCoreUser`. Add the exact
-  `system-core-host`/`system-core-user` wire values, preserve telemetry-only underscore
-  labels, and prove exactly-one-each list acceptance plus duplicate/missing/wrong-name and
-  `ProviderLifecycle` non-substitution. This prospective W6 task follows T221 and must merge
-  before T604/T479.
+- [ ] T423 [US2] `ADR046-system-core-001` - complete manifest object; depends on
+  `ADR046-provider-001`, `ADR046-core-001`, `ADR046-zone-control-001`, `ADR046-cli-009`,
+  `ADR046-exec-003`, `ADR046-exec-004`, `ADR046-exec-005`, `ADR046-pstate-012`,
+  `ADR046-telem-001`, and `ADR046-audit-001`; serialized later Zone contract/CLI writer
 
 ### Group `wi:ADR-046-provider-system-minijail` (6 items)
 
@@ -1238,12 +1223,9 @@ implementation and evidence, and T480 rechecks them at close.
 - [ ] T442 [US2] `ADR046-transport-unix-003` - `packages/d2b-provider-transport-unix/src/{stream,socket}.rs` (adapt)
 - [ ] T443 [US2] `ADR046-transport-unix-004` - `packages/d2b-provider-transport-unix/src/credit.rs` (adapt)
 - [ ] T444 [US2] `ADR046-transport-unix-005` - `packages/d2b-provider-transport-unix/src/descriptor.rs` (adapt)
-- [ ] T445 [US2] `ADR046-transport-unix-006` + RETIRED-T592/T593 PEER-PIDFD REASSIGNMENT -
-  own `packages/d2b-provider-transport-unix/src/admission.rs` plus the typed broker
-  accepted-socket pidfd operation, safe session adapter, descriptor ownership, ancillary-fd
-  closure, private registrar issuance, compile-fail/API seals, and focused tests. Code canon
-  contains no `OpenPeerPidfdFromAcceptedSocket`; add it prospectively after T221 and before
-  T479, with no numeric-PID fallback or new FFI crate.
+- [ ] T445 [US2] `ADR046-transport-unix-006` - complete manifest object; depends on
+  `ADR046-transport-unix-002`, `ADR046-session-001`, `ADR046-bus-001`, and
+  `ADR046-activation-001`; dependency-ordered second shared broker/contract writer
 - [ ] T446 [US2] `ADR046-transport-unix-007` - `packages/d2b-provider-transport-unix/src/{portal,service}.rs` (adapt)
 - [ ] T447 [US2] `ADR046-transport-unix-008` - `packages/d2b-provider-transport-unix/` crate Cargo.toml binary target `d2b-transport-unix-service` (adapt)
 - [ ] T448 [US2] `ADR046-transport-unix-009` - `docs/reference/schemas/v3/providers/transport-unix.transport-binding.json` (create)
@@ -1290,7 +1272,13 @@ implementation and evidence, and T480 rechecks them at close.
 
 - [ ] T478 [US2] `ADR046-core-002` - `packages/d2b-core-controller/tests/system_core_coordination.rs` (adapt)
 
-- [ ] T479 [US2] W6 CONVERGE + FREEZE + OPERATOR/GUEST ACCEPTANCE - depends on T039, T604, T221, and every W6 work item in the authoritative manifest regenerated by the accepted Network amendment. Derive that exact set from the manifest, reject missing/extra/duplicate/unchecked/unreachable rows, and require every member to reach T479 in the dependency graph; no stale numeric interval or pre-amendment census is authority. Require every Wave 6 head to descend from T221's fetched exact `origin/v3` base and the accepted integration commit carrying the generic Constitution 3.1.0 disposition. Reinvoke the production historical-predecessor guard before freezing F6; it must still match the immutable retained Wave 5 state and evidence inventory. Confirm the accepted double-opt-in migration remains an ancestor, merge every W6 slice including T336-T355 plus T604, require the four Network/Host production cases, run integration/CI, fold W6 fragments, and freeze clean proposed F6. On that exact candidate, run no-skip `make test-host-integration` for `resource-operator-activation`, `runtime-cloud-hypervisor-guest-acceptance`, and `daemon-restart-vm-survival`. Require real Volume/Network/Device effects and cleanup, real Cloud Hypervisor/KVM and authenticated guest-control readiness, and FR-075 continuity. Import exactly one F6-bound `operator-nix-activation-cleanup` record from T604 and one `w6-cloud-hypervisor-guest-acceptance` record from T384; fake, status-only, refusal, skipped, empty, stale, wrong-family, or wrong-candidate evidence is ineligible. T479 issues no binding request, attestation, or seal. Any content, merge, generated-output, fold, rebase, base, retained-state, or evidence-identity change invalidates F6 and reruns both acceptance lanes.
+- [ ] T479 [US2] W6 CONVERGE + FREEZE + OPERATOR/GUEST ACCEPTANCE - depends on T039, T221,
+  every W6 work item, and every prospective acceptance object named by authoritative member
+  specs and generated manifests. Derive the exact set from those authorities and reject
+  missing, extra, duplicate, unchecked, or unreachable rows. Reinvoke the production
+  historical-predecessor guard, converge W6, run the authoritative no-skip operator, Guest,
+  and daemon-restart acceptance lanes, import their exact F6-bound evidence, and freeze only
+  the clean accepted candidate. T479 issues no binding request, attestation, or seal.
 - [ ] T480 [US2] W6 SINGLE BINDING WORK GATE + MERGE - depends on T479 including its exact-F6 `operator-nix-activation-cleanup` and `w6-cloud-hypervisor-guest-acceptance` records. Require HEAD and tree to equal clean F6; revalidate T221's exact-base unanimous plan-panel receipt, reviewed feature snapshot, accepted first-parent generic Constitution 3.1.0 integration ancestry, and exact retained Wave 5 inventory; and require the reviewed entry base to be an ancestor of every W6 implementation head. Reinvoke the production historical-predecessor guard and both closed acceptance predicates before panel request, merge, post-merge seal, and merge eligibility; missing, extra, changed, wrong-family, fake-boundary, skipped, empty, stale, or wrong-candidate evidence refuses each boundary. T480's work panel is not a substitute. Against F6, first dispatch the read-only reviewer Task lane and rubber-duck Task lane in parallel, each bound to `gpt-5.6-luna` / `max` / `long_context`; a content defect from either lane abandons F6 and returns to T479 before any binding panel request. Route the defect through scoped fixes, convergence, validation, and both acceptance lanes, then iterate delta/full-context `/d2b-panel-round plan` phase reviews until the replacement provisional candidate has N/N sign-off for the selected lifecycle roster with zero recommendations. Only that final candidate may receive W6's exactly one binding `/d2b-panel-round work` request: create the final snapshot and candidate-bound selection, issue the sole panel request, run `make-records`, and panel-attest N/N for the selected roster. Then require the already-open PR to preserve that exact head, wait for required CI, import the final evidence, capture the green merge-target input, and merge through the protected PR flow. The merge MUST preserve the successful candidate's tree byte-for-byte. Only after the merge may T480 seal the wave, register the captured merge target, and pass merge eligibility. A nonunanimous binding result permanently fails the W6 close: retain its candidate, request, findings, and records, issue no second binding request for any candidate, and stop with an integrator scope escalation; findings are not waived. From binding panel request through disposition, the final candidate and its tree are immutable. After the post-merge close passes, rebase the next wave onto updated `v3`, then clean up in order: delete each worktree `packages/target`, remove worktrees, delete local branches, delete remote branches, run `nix-collect-garbage`, and audit `git worktree list` plus `git branch -a` for residue. The one-time predecessor disposition never substitutes for these Wave 6 gates.
 
 **Checkpoint**: W6 converged, panelled, merged to `v3`, sealed, rebased, and cleaned up.
@@ -1756,8 +1744,8 @@ agents share a working tree or a `packages/target/`:
 | W2 | 2 | **2** - zero file-overlap edges; both start together |
 | W3 | 1 | **1** - strictly serial by design |
 | W4 | 6 | **6** |
-| W5 | historical only | Retired T589-T605 rows remain inside the explicit read-only compatibility block |
-| W6 | 29 manifest/coordination groups + T604 acceptance | **up to 28** after dependencies - all 27 Provider dossiers, process-provider integration, core-controller coordination, and T604 stay scheduled in W6 |
+| W5 | historical only | Retired rows remain inside explicit read-only compatibility blocks |
+| W6 | authoritative manifest and acceptance groups | Concurrency resolves from authoritative member specs and generated manifests |
 | W7 | 5 | **5** |
 
 Worktree setup per slice (cut from the wave integration branch, never from `v3`):
@@ -1843,15 +1831,14 @@ wave entry criteria**.
 | W2 | 2 | Zero file-overlap edges; both groups start together. The 3 `primitives` items have no intra-wave dependency at all |
 | W3 | 1 | Strictly serial by design; every Provider dossier depends on it |
 | W4 | 6 | Five parallel member-spec groups plus `core-config-hub:w4`; all six start together |
-| W5 (`adr046w5`) | historical only | Retain the unchecked completion graph as planning evidence; T219 records the exact merged no-seal disposition and no Wave 5 task is dispatched |
-| W6 | all 27 Provider dossiers + T604 acceptance | T221 gates all Provider dossiers; T336-T355 implement the double-opt-in Network path and four-case matrix, then T604 consumes that merged implementation as acceptance-only work and T479/T480 bind its W6 result |
+| W5 (`adr046w5`) | historical only | Retain the fenced completion graph as planning evidence; no Wave 5 task is dispatched |
+| W6 | authoritative manifest and acceptance groups | T221 gates implementation; later ownership resolves only from authoritative member specs and generated manifests |
 | W7 | 5 | Five file-disjoint closing groups; all five start together |
 
 ### The 14 manifest file-overlap ordering constraints
 
 These are the manifest-derived edges that constrain shared files. Honor them as strict
-ordering; the local completion graph additionally serializes `T591 -> T592` for
-`transaction.rs` and `T595 -> T599` for `packages/d2b/src/dispatch.rs`:
+ordering; retired Wave 5 overlap edges remain only inside fenced history:
 
 - W5: `ADR046-device-006` -> `ADR046-nix-014` -> `ADR046-cli-011` -> `ADR046-nix-019` -> `ADR046-nix-031`
 - W6: `ADR046-gpu-007` -> `ADR046-transport-unix-009` -> `ADR046-qemu-media-017` -> `ADR046-usbip-008`
@@ -1862,11 +1849,8 @@ ordering; the local completion graph additionally serializes `T591 -> T592` for
 The integrator-only rule applies when no explicit serial edge assigns every writer. A
 contended file with named, non-overlapping-in-time owners is permitted: the plan must identify
 all writers, state their order, and block the later branch until the earlier owner merges.
-`transaction.rs` (`T591 -> T592`) is the representative slice-to-slice ownership transfer;
-prep-to-slice ownership transfers are named in T589's file map and dependency chain.
-The former T595/T599 `packages/d2b/src/dispatch.rs` transfer is read-only history.
-`packages/Cargo.lock` is not transferred: T592 is its sole owner and T593 is a read-only
-consumer of the frozen dependency graph. None is parallel ownership.
+Retired Wave 5 ownership transfers are read-only history. Current transfers resolve only from
+authoritative member specs and generated manifests.
 
 `packages/d2b-contracts/src/v3/volume.rs`; the `packages/Cargo.toml` member list; the
 `flake.nix` output list; `nixos-modules/index.nix` and `default.nix`;
@@ -1891,22 +1875,19 @@ W3 was the narrowest historical point in the program. The current critical path 
 T221. It must prove the fetched exact `origin/v3` base, accepted first-parent Constitution
 3.1.0 integration commit, exact retained Wave 5 inventory and digests, and focused production
 guard tests before the ordinary unanimous Wave 6 plan panel. The retained Wave 5 request is
-already consumed with zero attestations and no seal; historical T219 records only that
-history. Final R9
-keeps T336-T355 as authoritative W6 implementation under T221, followed by T604 and the
-T479/T480 prospective acceptance and close gates.
+already consumed with zero attestations and no seal; the feature-owned record preserves that
+history. Final R9 keeps T336-T355 as authoritative W6 implementation under T221, followed by
+authoritative acceptance and close gates.
 
 ### Incremental value
 
 Each user story is independently demonstrable:
 
 - **After historical `adr046w5`** - the only accepted output is the exact immutable merged
-  boundary and retained no-seal state. T602 remains unchecked historical planning evidence;
-  T219 is complete only as historical disposition. T336-T355 land the Network path
-  prospectively in W6; T604 then consumes it on proposed F6 without owning production files,
-  and T479/T480 accept the operator and Guest results together.
+  boundary and retained no-seal state. Retired planning remains fenced. T336-T355 land the
+  Network path prospectively in W6, and authoritative acceptance objects bind later results.
 - **After W6** - full US1 completes only after T479/T480 accept exact-F6
-  T604 operator activation/cleanup plus `Provider/runtime-cloud-hypervisor`
+  authoritative operator activation/cleanup plus `Provider/runtime-cloud-hypervisor`
   production-boundary evidence for the declared Guest's real Cloud Hypervisor process effect,
   authenticated guest-control session, and ready state;
   missing, skipped, status-only, fake-boundary, other-family, or refusal evidence leaves US1 incomplete.
@@ -1922,7 +1903,7 @@ deliverables.
 605 tasks: 18 pre-wave/process hygiene tasks (4 panel-model migration, 4 pipelined-wave
 migration), 531 initial-scope work items, 18 wave entry/gate/merge tasks for W2-W7, 5 for the terminal wave,
 4 added at W5/W7 by the earlier analysis remediation, 15 added to Wave 5 by the approved
-production-completion amendment, 1 W6 T604 operator-acceptance task, 1 T603
+production-completion amendment, 1 retired feature-local acceptance task, 1 retired
 feature-editor reconciliation task, and 12 for
 the release.
 The 531 primary work-item tasks preserve the exact items that were `Planned` at program

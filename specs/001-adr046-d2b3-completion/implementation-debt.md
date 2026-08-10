@@ -1680,12 +1680,9 @@ that trait and owns the production implementation in
 `packages/d2bd/src/network_effect_adapter.rs`, with prospective W6 edits to
 `d2bd/{Cargo.toml,src/lib.rs,src/resource_runtime.rs}`. It maps opaque intents only to typed
 broker operations and performs no direct host mutation. Current generated rows T336-T355
-place that work in W6, and final R9 preserves that ownership. The former T220/T219 blocker is
-historical. T221 now requires the accepted amendment to remove every current-facing sole
-Network-opt-in path, install the double-opt-in migration, and retain T336-T355 plus all four
-Network/Host production cases as W6 work. T604 remains W6 acceptance-only after those rows
-merge and consumes the landed path. T479/T480 own the prospective implementation and evidence
-refusals.
+place that work in W6, and final R9 preserves that ownership. The retired Wave 5 blocker has
+no prospective effect. T221 requires the accepted amendment and authoritative member specs
+and generated manifests own subsequent implementation and evidence.
 
 ### 16.3 Credential Provider work is in progress, not complete
 
@@ -2272,14 +2269,15 @@ false positive costs one investigation while a false negative hides a stuck
 finalizer for twice as long, and the shorter window is the fail-closed direction
 for a threshold that surfaces rather than denies.
 
-## 21. C1 reassigned to prospective W6: add the omitted system-core handler names
+## 21. C1 code-canon gap: add the omitted system-core handler names
 
 **Status: planned/assigned, not delivered.** The earlier read-only analysis correctly found
 that the committed unreleased v3 `ZoneHandlerName` enum cannot encode the two system-core
 handler observations. The retired Wave 5 repair did not land.
 
-Code canon still lacks the contract correction. Retired T605 owns nothing prospective.
-T423 now owns `ZoneHandlerName::SystemCoreHost` and
+Code canon still lacks the contract correction. Prospective ownership resolves only from
+authoritative member specs and generated manifests. The required values are
+`ZoneHandlerName::SystemCoreHost` and
 `ZoneHandlerName::SystemCoreUser`, serialized by the existing kebab-case rule as
 `system-core-host` and `system-core-user`. The actual projection is the
 `Zone.status.handlers[]` list, with exactly one record of each name and each record carrying
@@ -2287,23 +2285,21 @@ T423 now owns `ZoneHandlerName::SystemCoreHost` and
 substitution are rejected. `ProviderLifecycle` remains a distinct allowed value and cannot
 substitute for either required record.
 
-T423 also owns focused Rust round-trip/list coverage, the ownership-compatible
+The authoritative prospective object also covers focused Rust round-trip/list coverage, the ownership-compatible
 `packages/d2b-contract-tests/tests/policy_contracts.rs` guard, compiler-regenerated public
 and private snapshots under `tests/golden/api-surface/` via `make api-surface-pin` only, and
 the existing paired `docs/reference/resource-plane-runtime.md`. It treats
 `packages/xtask/src/zone_schema.rs` and
 `docs/reference/schemas/v3/core.d2bus.org_Zone.schema.json` as read-only proof inputs and must
 show that generator output remains byte-identical because the desired Zone spec is unchanged.
-The historical plan assigned T605 the pre-consumer artifacts, T595 the production emitter,
-T599 downstream reconciliation, T220 generated-manifest/full-drift convergence, and
-T596/T600-T602/T219 list-shape evidence consumption. Those unchecked or disposition-only
-records are read-only history and authorize no current run, evidence import, or close action.
+The retired Wave 5 ownership map remains read-only history and authorizes no current run,
+evidence import, or close action.
 
 No `apiVersion`, `schemaVersion`, `manifestVersion`, `bundleVersion`, or wire-field version
 bump is required: no field or operation changes, the desired-state Zone schema is unchanged,
-and v3 is unreleased. Prospective T423 carries all paired Rust contract changes, tests, API
-snapshots, reference status docs, consumers/emitters, and generator no-drift proof before
-T604/T479.
+and v3 is unreleased. Prospective ownership of paired Rust contract changes, tests, API
+snapshots, reference status docs, consumers/emitters, and generator no-drift proof resolves
+only from authoritative member specs and generated manifests.
 
-CHK054 is checked only as a specification-quality resolution. Retired T603/T589 editor and
-lifecycle text is read-only history. Prospective implementation is owned by T423.
+CHK054 is checked only as a specification-quality resolution. Retired editor/lifecycle text
+is read-only history. Prospective implementation resolves only from authoritative objects.

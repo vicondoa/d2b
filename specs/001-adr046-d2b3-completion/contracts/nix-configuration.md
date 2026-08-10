@@ -15,8 +15,8 @@ and never authored. Per-Zone compiler policy is the narrow exception: it is type
 option schema for the 19 ResourceTypes and qualified types. `bundle-zones.nix` now emits the
 pinned per-Zone `zones/<zone>/resource-bundle.json` artifact. What remains unproved is the
 complete operator activation from that emitted artifact through the production daemon,
-controller-owned effect, and declared-resource removal cleanup. That positive proof is W6
-T604 acceptance after authoritative T336-T355 merge. W5 retains the emitted-bundle,
+controller-owned effect, and declared-resource removal cleanup. That positive proof belongs
+to the authoritative prospective acceptance row after authoritative T336-T355 merge. W5 retains the emitted-bundle,
 source-generation compatibility, deployment, and double-opt-in contract prerequisites only.
 `zone-resources-json.nix` is retained only as a historical/compatibility input. It cannot
 emit, version, hash, or publish the active envelope. The sole canonical active chain is
@@ -32,10 +32,10 @@ emit, version, hash, or publish the active envelope. The sole canonical active c
 | NIX-3 | Add Zone assertions to `assertions.nix` (sole W2 writer of that file) | FR-001 | W2 |
 | NIX-4 | Removing a declared resource activates the new generation immediately and requests async owner- and finalizer-safe deletion with visible cleanup status | FR-005 | W5 |
 | NIX-5 | Extend the `eval-*` flake checks with Zone and resource examples | FR-032 | W5 |
-| NIX-6 | In W6 T604, after T221, prospective T222/T227, and merged authoritative T336-T355, prove the exact-candidate positive operator path for `Volume/acceptance-state`, `Network/acceptance-net`, and `Device/acceptance-tpm`, including state-preserving Device cleanup. T604 consumes the landed host-generation and double-opt-in Network implementations and owns no implementation row. Guest acceptance remains distinct T384/T479/T480 work. | FR-001, FR-005, FR-072, FR-075, SC-034, SC-035 | W6 |
-| NIX-7 | Historical Wave 5 design for the compiler-only `d2b.zones.<zone>.audit` carrier and its bundle-version transition. The former plan assigned option/schema work to T592, emitter/daemon work to T595, and generated-artifact coordination to T220. Those unchecked rows are read-only history and authorize no current implementation or regeneration. | FR-070, SC-032 | historical W5 |
-| NIX-8 | **Prospective T222 ownership.** Code-canon search found no `ApplyHostGenerationHandoff`, `SourceGenerationCompatibilityFloorV1`, `apply-authorized-handoff`, or equivalent production host-generation handoff in `packages/`, `nixos-modules/`, or `tests/`. After T221, T222 owns the typed contracts, broker operation, durable coordinator, unprivileged target entry, daemon/client integration, source-to-target transfer, substitution denials, restart adoption, and focused tests. It uses only the three existing root-visible units and must merge before T227 and T604. | FR-070, SC-032 | W6 before T604 |
-| NIX-9 | **Prospective T227 ownership.** Code-canon search found no `hostGenerationRebuildRef` option, emitter, or test in source, examples, templates, or tests. After T222, T227 owns the required no-default option, exact `<flake-ref>#<configuration-name>` grammar and 2048-byte bound, target-closure carrier, broker-published root:d2bd 0640 file, redaction, rollback restoration, nix-unit cases, fixture updates, and inventory regeneration. It must merge before T604. | FR-070, SC-032 | W6 before T604 |
+| NIX-6 | The authoritative prospective acceptance row proves the exact Volume/Network/Device path and state-preserving cleanup after T221 and all generated predecessors. This feature does not assign its owner. | FR-001, FR-005, FR-072, FR-075, SC-034, SC-035 | prospective W6 generated row |
+| NIX-7 | Historical Wave 5 design for the compiler-only audit carrier and bundle-version transition. Exact retired ownership remains only in fenced history. | FR-070, SC-032 | historical W5 |
+| NIX-8 | Code-canon search found no production host-generation handoff. Prospective ownership, file assignment, dependencies, and validation resolve only from the authoritative member spec and generated manifest after T221. | FR-070, SC-032 | prospective authoritative row |
+| NIX-9 | Code-canon search found no rebuild-reference option, emitter, or test. Prospective ownership, grammar/bounds, carrier, dependencies, and validation resolve only from the authoritative member spec and generated manifest after T221. | FR-070, SC-032 | prospective authoritative row |
 
 ## Invariants
 
@@ -87,7 +87,7 @@ emit, version, hash, or publish the active envelope. The sole canonical active c
 
 - A declared Zone with resources evaluates, emits its pinned generation, and is rejected at
   eval time when malformed.
-- T604 pins the declaration and removal generations at the fixture-backed contract layer,
+- The authoritative prospective acceptance row pins declaration and removal generations at the fixture-backed contract layer,
   consumes those exact generations through the Type-3 production daemon startup/change
   ingestion test, and exercises declaration and removal deployments for exactly
   the closed identity set `Volume/acceptance-state`, `Network/acceptance-net`, and
@@ -99,7 +99,7 @@ emit, version, hash, or publish the active envelope. The sole canonical active c
   `Ready` projection must both carry that same exact resource identity; a missing, duplicate,
   unrelated, or mixed-identity member is rejected. Guest support objects remain
   prerequisites only: Guest runtime-effect acceptance is deferred specifically to Wave 6
-  `Provider/runtime-cloud-hypervisor` T384/T479/T480 and cannot satisfy T604. Direct
+  `Provider/runtime-cloud-hypervisor` T384/T479/T480 and cannot satisfy the authoritative acceptance row. Direct
   ResourceService calls, status-only
   effects, actionable refusals, a skipped lane, or empty check discovery are ineligible for
   that positive proof. Evidence must enumerate and successfully build the exact
@@ -117,8 +117,8 @@ emit, version, hash, or publish the active envelope. The sole canonical active c
   post-export-only journal retention and degraded health on prune or file/directory-sync
   failure.
 - Host activation positive coverage consumes only the generated `VD2-SC002-SOURCE-FLOOR`,
-  `VD2-SC002-REGISTRIES`, and `VD2-SC002-TRACEABILITY` rows assigned prospectively to T222,
-  T227, and T604. Those rows own source-floor membership, fixture ids, poison cases, counts,
+  `VD2-SC002-REGISTRIES`, and `VD2-SC002-TRACEABILITY` rows assigned by authoritative member
+  specs and generated manifests. Those rows own source-floor membership, fixture ids, poison cases, counts,
   and transition ordering; this contract does not copy them. The Type-10 positive runs the
   parameterized target-closure entrypoint from an independently installed source floor,
   proves unprivileged request-only entrypoint behavior, broker-only mutation, one durable

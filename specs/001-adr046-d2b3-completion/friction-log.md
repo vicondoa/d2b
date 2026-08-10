@@ -30,6 +30,8 @@ attestation payload.** Describe the friction, not the review text that surfaced 
 
 ## Log
 
+<!-- RETIRED-READONLY-BEGIN: immutable historical delivery-memory rows -->
+
 | ID | Date | Category | Wave | Friction | Impact | Status |
 | --- | --- | --- | --- | --- | --- | --- |
 | F001 | 2026-07-29 | `signoff` | W1 | A single wave required 21 follow-up rounds (W0 required 14) | Review consumed a large multiple of implementation time | Constitution 3.0 superseded bounded deferral with one Discover-Fix-Verify lifecycle and a stable shared ledger |
@@ -57,6 +59,8 @@ attestation payload.** Describe the friction, not the review text that surfaced 
 | F023 | 2026-08-08 | `test` | all | Separate post-round-22 consistency analysis found a 33-row checklist census where the checked table currently has 22 rows | Coverage reporting overstated the authoritative checklist census | Corrected in this separate consistency batch: the current checklist census is 22 of 22 |
 | F024 | 2026-08-08 | `merge` | W4 | Separate post-round-22 consistency analysis found the implementation-debt summary reporting 32 W4 items instead of the authoritative 31 | Debt accounting disagreed with the wave task census | Corrected in this separate consistency batch: W4 has 31 work items |
 | F025 | 2026-08-09 | `signoff` | W5/W6 | Feature artifacts still required an impossible Wave 5 recovery and seal after Wave 5 had merged | The program could not enter Wave 6 without fabricating retroactive evidence | The exact ADR-046 validator/tooling contract applies generic Constitution 3.1.0 only to the retained no-seal state through merge `177235ed37188b3be87525e7f016fb43401574c5`. T219 is historical disposition complete; T221 now requires exact fetched-base lineage/state validation and the ordinary unanimous Wave 6 plan panel |
+
+<!-- RETIRED-READONLY-END -->
 
 ## Standing obligations
 

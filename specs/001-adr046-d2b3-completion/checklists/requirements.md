@@ -21,27 +21,25 @@
 - [x] Edge cases are identified
 - [x] Scope is clearly bounded
 - [x] Dependencies and assumptions identified
-- [x] Wave 6 T604 Nix acceptance, after T221 and merged T336-T355, names exactly
+- [x] The authoritative Wave 6 Nix acceptance row, after T221 and merged T336-T355, names exactly
   `Volume/acceptance-state`, `Network/acceptance-net`, and `Device/acceptance-tpm`; each effect
-  and production `Ready` projection is bound to that same identity. T222/T227 own the
-  unlanded host-generation prerequisites and T423 owns the unlanded system-core contract,
-  while Guest
+  and production `Ready` projection is bound to that same identity. Host-generation and
+  system-core ownership resolve only from authoritative member specs/generated manifests, while Guest
   runtime-effect acceptance remains distinct Wave 6 `Provider/runtime-cloud-hypervisor`
   T384/T479/T480 work
 - [x] Accepted Version 2 `ADR-046-validation-and-delivery` and generated `ADR-046-validation-and-delivery-traceability.{json,md}` are the sole authority for `VD2-SC002-RECEIPT`, `VD2-SC002-PUBLICATION`, `VD2-SC002-INCIDENT`, `VD2-SC002-DISPOSITION`, `VD2-SC002-RECOVERY`, `VD2-SC002-SOURCE-FLOOR`, `VD2-SC002-REGISTRIES`, and `VD2-SC002-TRACEABILITY`
-- [x] Retired T589-T603/T605/T220 rows are read-only history; prospective generated ownership
-  belongs to T222/T227/T423/T445/T604/T479, and no feature-local encoding or historical count
-  substitutes
-- [x] Prospective T222/T227 host-generation recovery is broker-coordinator-owned before first mutation, transfers
+- [x] Retired Wave 5 rows are read-only fenced history; prospective ownership resolves only
+  from authoritative member specs and generated manifests
+- [x] Prospective host-generation recovery is broker-coordinator-owned before first mutation, transfers
   durably from bootstrap broker to target broker, survives broker/daemon startup failures
   through existing units only, and never treats daemon identity or euid 0 as authorization
-- [x] T070/T071 and the T220/T219 records are historical only. T221 requires the accepted
+- [x] Historical W2-W5 records are read-only. T221 requires the accepted
   `effectiveEastWest = Network.spec.isolation.allowEastWest &&
   d2b.site.allowUnsafeEastWest` migration to remove every current-facing sole opt-in path and
-  retain T336-T355 plus all four cases as authoritative W6 work; T604/T479 require that W6
-  implementation and evidence after it merges
+  retain T336-T355 plus all four cases as authoritative W6 work; current acceptance ownership
+  resolves from authoritative objects
 - [x] Generic Constitution 3.1.0 contains no ADR-046 detail; FR-036 and the exact feature-owned
-  validator/tooling contract preserve the immutable W0-W5 history, authorize no T219 recovery
+  validator/tooling contract preserve the immutable W0-W5 history, authorize no recovery
   or reconstructed seal, and make T221 the next executable gate
 
 ## Feature Readiness

@@ -1,5 +1,7 @@
 # Gate 0 re-evaluation: SPIKE-01 RSS rerun amendment
 
+<!-- RETIRED-READONLY-BEGIN: immutable historical compatibility record -->
+
 | Field | Value |
 | --- | --- |
 | Trigger | FR-056 - amending an Accepted specification-set member re-triggers Gate 0 across the manifest |
@@ -198,3 +200,5 @@ because the fold moves text into an inventoried document. The failure names
 the file and the expected count, so the fix is to bump the pinned count in the
 same change that adds the release note. The fragment landed with this
 amendment deliberately carries no numeric literal for that reason.
+
+<!-- RETIRED-READONLY-END -->

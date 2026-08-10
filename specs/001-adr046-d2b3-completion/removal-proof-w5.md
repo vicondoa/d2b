@@ -1,5 +1,7 @@
 # Removal proofs: the three W5 crate removals (FR-023)
 
+<!-- RETIRED-READONLY-BEGIN: immutable historical compatibility record -->
+
 | Field | Value |
 | --- | --- |
 | Satisfies | FR-023, scoped by FR-060 |
@@ -561,3 +563,5 @@ than being an invariant that could regress from ordinary work, and a
 single-purpose gate for three deleted crates would outlive its subject. If a
 later wave wants standing enforcement, the place for it is a row in the
 existing policy crate, not a new shell gate.
+
+<!-- RETIRED-READONLY-END -->

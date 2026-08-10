@@ -810,6 +810,8 @@ choice.
 
 ### Wave 5 production reachability is boundary-bound
 
+<!-- RETIRED-READONLY-BEGIN: historical Wave 5 completion coverage -->
+
 The approved 2026-08-06 amendment added fifteen local Wave 5 completion/evidence task
 definitions without changing the 545-item manifest census. They remain unchecked historical
 planning evidence and MUST NOT be dispatched to reconstruct Wave 5. The exact ADR-046
@@ -900,6 +902,8 @@ evidence identifier, post-attestation content under the same candidate, a second
 one immutable candidate, or evidence from another commit cannot cover
 FR-066 through FR-072 or SC-030 through SC-034.
 
+<!-- RETIRED-READONLY-END -->
+
 ### D106 keeps policy interpretation out of both store crates
 
 `d2b-resource-store` and `d2b-resource-store-redb` own sealed mutation admission,
@@ -907,7 +911,8 @@ policy-neutral envelope/schema/atomicity checks, revisions, and persistence. The
 deserialize or own Role, RoleBinding, PolicySet, or any other RBAC DTO. The Resource API and
 Zone policy owner compile and interpret policy. `PolicyBootstrapRead` may expose only
 policy-neutral envelopes to `d2b-resource-api`; its existence does not permit either store to
-select or parse an RBAC DTO. T591 must extend the existing guard to the whole source and
+select or parse an RBAC DTO. Prospective ownership resolves from authoritative member specs
+and generated manifests; the guard must cover the whole source and
 dependency surface; checking only selected files does not cover D106.
 
 ### The 19 ResourceTypes have exclusive owners
@@ -938,7 +943,7 @@ weakening durability, authorization, or audit, and never by adding a sleep, a ti
 | p95 crash-safe single-resource mutation | <= 10 ms |
 | p95 durable commit to controller handler start | <= 5 ms |
 | p95 ready Process commit to launch-attempt start | <= 20 ms |
-| Whole-process RSS, no baseline subtraction | <= 24,576 KiB (**historical corrected proof and production fixtures passed at their recorded tips; T601 owns the current completed-publication-path measurement on F**) |
+| Whole-process RSS, no baseline subtraction | <= 24,576 KiB (**historical corrected proof and production fixtures passed at their recorded tips; current measurement ownership resolves from authoritative generated rows**) |
 | Aggregate idle RSS | <= 64 MiB |
 | `Provider/system-core` / `Provider/system-minijail` | 22 MiB / 12 MiB |
 | Per-Provider-crate hermetic suite, aggregate process CPU p95 | <= 3 s |
@@ -976,6 +981,8 @@ authored with the wave that removes its path.
 
 ## Detail-preservation checklist
 
+<!-- RETIRED-READONLY-BEGIN: historical task-graph checklist -->
+
 Run this against `tasks.md` before implementation starts.
 
 - [x] Every one of the 531 work-item ids that was `Planned` at program opening has exactly
@@ -999,7 +1006,7 @@ Run this against `tasks.md` before implementation starts.
       15-field manifest object, carries that object unchanged, and treats all of its fields as
       the task definition; selecting only named fields is not equivalent
 - [x] `dependencyOwner` edges are represented: 91 of 545 manifest work items are marked
-      free-to-start, while the full `tasks.md` census has 96 `[P]` tasks of 605 total
+      free-to-start, while the full `tasks.md` census has 98 `[P]` tasks of 605 total
 - [x] Wave assignment matches the implementation graph, with no item moved between waves
 - [x] Parallel groups are preserved so file-disjoint slices launch together (FR-028)
 - [x] The 14 manifest `file-overlap-order` edges are recorded as explicit ordering
@@ -1034,6 +1041,8 @@ Run this against `tasks.md` before implementation starts.
       transferred in the historical map: retired T592/T593 ownership remains read-only
 ---
 
+<!-- RETIRED-READONLY-END -->
+
 ## Requirement traceability (FR/SC to ADR-046 owners)
 
 Answers CHK040 and CHK041. Every functional requirement maps to at least one owning spec and
@@ -1065,7 +1074,7 @@ jq -r --arg p routing '.items[] | select(.workItemId | startswith("ADR046-\($p)-
 | FR-023 | Removal only after successor plus proof, own commit | `current-code-migration-map`, `streamline` | `streamline`, `reuse` |
 | FR-024 | No dual control plane in the release | `reset-and-cutover`, `streamline` | `reset`, `streamline` |
 | FR-025 - FR-033 | Wave gating, seal, evidence, anti-serialization, semaphore, drift, test layers, suite retirement | `validation-and-delivery` | `delivery` |
-| FR-034 - FR-036 | Generic Constitution 3.1.0 historical-process disposition plus exact ADR-046 validator/tooling bounds through merged Wave 5, immutable retained state, and T221 production predecessor guard before prospective Wave 6 | `validation-and-delivery` (§4 entry/exit), generic constitution, and feature-owned exact contract | `delivery` plus T219/T221 |
+| FR-034 - FR-036 | Generic Constitution 3.1.0 historical-process disposition plus exact ADR-046 validator/tooling bounds through merged Wave 5, immutable retained state, and T221 production predecessor guard before prospective Wave 6 | `validation-and-delivery` (§4 entry/exit), generic constitution, and feature-owned exact contract | `delivery` plus T221 |
 | FR-037 - FR-038 | Deliver W2-W8; satisfy the six-condition release gate | `validation-and-delivery` §15 | `delivery` |
 | FR-039 - FR-040 | Companion compatibility as a release blocker | **Locally added** - no ADR-046 owner | none |
 | FR-041 - FR-042 | Parity where a successor was promised; explicit retirement otherwise | `current-code-migration-map` | `streamline`, `reuse` |
@@ -1078,10 +1087,10 @@ jq -r --arg p routing '.items[] | select(.workItemId | startswith("ADR046-\($p)-
 | FR-056 - FR-059 | Standing Gate 0, entry/exit distinction with the feature-owned exact predecessor exception under generic Constitution 3.1.0, historical-record scope, unordered contended-file prep or explicitly ordered serial ownership | `validation-and-delivery` plus program process | `delivery` |
 | FR-060 | Removal proof follows the wave that removes the path | `current-code-migration-map`, `validation-and-delivery` | `reuse`, `streamline`, `delivery` |
 | FR-061 - FR-065 | Contract publication versus artifact release; companion classification, membership, and verification | **Locally added** - companion clarification family | none |
-| FR-066 - FR-072 | Authenticated production publication and the historical Wave 5 production-plane evidence design. T589-T603/T605 are read-only history. Code-canon gaps are reassigned to T222/T227 host generation, T423 system-core handlers, and T445 peer-pidfd admission. T221 owns entry, T336-T355 Network, and T604/T479/T480 acceptance. | **Historical Wave 5 design plus explicit prospective Wave 6 owners**, constrained by the listed ADR-046 member specs and ADR 0034 | historical T589-T605; prospective T221/T222/T227/T423/T445/T604/T479/T480 |
-| FR-073 | RBAC policy DTOs and interpretation stay outside store/redb | `decision-register` D106, `resource-api-and-authorization`, ADR 0049 | `api`, `store` plus T591 |
-| FR-074 | CLI/reference promises match emitted behavior | `cli-and-operations`, `validation-and-delivery` | `cli`, `delivery` plus T599 |
-| FR-075 | Exact-candidate pre-ADR-046 operator lifecycle continuity, retained as immutable W2-W5 history and prospective W6 evidence | **Locally promoted from the former assumption**, constrained by ADR 0015, `validation-and-delivery`, and the committed daemon restart survival case | Historical T028/T029, T035/T036, T070/T071, T219; prospective T221/T479/T480 |
+| FR-066 - FR-072 | Authenticated production publication, historical Wave 5 design, and prospective correction | **Historical design plus authoritative member-spec/generated-manifest ownership** | T221 plus authoritative generated rows |
+| FR-073 | RBAC policy DTOs and interpretation stay outside store/redb | `decision-register` D106, `resource-api-and-authorization`, ADR 0049 | authoritative generated row |
+| FR-074 | CLI/reference promises match emitted behavior | `cli-and-operations`, `validation-and-delivery` | authoritative generated row |
+| FR-075 | Exact-candidate pre-ADR-046 operator lifecycle continuity, retained as immutable W2-W5 history and prospective W6 evidence | **Locally promoted from the former assumption**, constrained by ADR 0015, `validation-and-delivery`, and the committed daemon restart survival case | T221 and authoritative generated rows |
 
 ### Locally added requirements
 
@@ -1094,10 +1103,10 @@ content. The original clarification family and the later approved additions are:
 | FR-043 | Clarification: qualified recovery-point attestation required | Tightens `reset-and-cutover`. The owning spec permits proceeding past the rollback boundary without attestation; this program does not. A qualifying point is an externally verified full-host snapshot or backup covering boot/system state, the active generation, the exact preview inventory, and preserved identity state for the same daily-driver host. Its closed version 1 record binds F7 candidate/commit/tree, preview and host digests, exact qualification fields, ordered timestamps, 86,400-second freshness, retention and expiration. T580 owns import through one digest-bound `EvidenceRecord`; T555/T556 refuse every missing, extra, duplicate, malformed, partial, failed, stale, expired, wrong-host, wrong-candidate, wrong-commit, wrong-tree, wrong-preview, or unresolvable record. External snapshot/backup creation and restore remain operator-owned and unimplemented by this feature. |
 | FR-046 | Applies the repository's existing-code-is-canon rule to spec-versus-manifest drift | Governs the recorded W2 destination drift. |
 | FR-061 - FR-065 | Companion contract/artifact, classification, membership, and verification clarifications | Makes the locally added companion release blocker mechanically decidable. |
-| FR-066 - FR-072, FR-074 | Historical Wave 5 amendment plus prospective Wave 6 correction | Retired rows remain read-only. T221 matches retained bytes; T222/T227/T423/T445 own code-canon gaps; T604/T479/T480 own exact-F6 acceptance and close. |
+| FR-066 - FR-072, FR-074 | Historical Wave 5 amendment plus prospective correction | Retired rows remain fenced; T221 matches retained bytes and all later ownership resolves from authoritative member specs/generated manifests. |
 | FR-075 | Analysis finding promoted the former W2-W6 host-continuity assumption | Retains W2-W5 bytes as historical evidence and makes the existing daemon restart VM survival check exact-candidate close evidence for prospective W6, with full namespace equality after excluding only canonical `d2b.slice` and separate unexpected-slice/unexpected-service negative injections. It adds no task and no W5 evidence identifier. |
 
-Accepted external Version 2 and generated `ADR-046-validation-and-delivery-traceability.{json,md}` remain the authority for the `VD2-SC002-*` families. Retired Wave 5 consumers are historical only; prospective T222/T227/T423/T445/T604/T479 use only current assigned rows. Feature-local counts or protocol copies are non-authoritative.
+Accepted external Version 2 and generated `ADR-046-validation-and-delivery-traceability.{json,md}` remain the authority for the `VD2-SC002-*` families. Retired consumers are fenced history; prospective ownership resolves only from current authoritative rows.
 
 ### Success-criteria traceability
 
@@ -1111,5 +1120,5 @@ Accepted external Version 2 and generated `ADR-046-validation-and-delivery-trace
 | SC-024 | FR-039, FR-040 - locally added |
 | SC-025 | FR-043 - locally added; candidate-bound enforcement through T580/T555/T556 |
 | SC-027 - SC-029 | FR-025 - FR-029, FR-049, FR-051 - FR-055 |
-| SC-030 - SC-034 | FR-066 - FR-074; historical Wave 5 planning and exact retained state, T221 predecessor guard, and T604/T479/T480 exact-F6 operator acceptance |
-| SC-035 | FR-075; immutable historical evidence through T219 and prospective T221/T479/T480 validation |
+| SC-030 - SC-034 | FR-066 - FR-074; historical Wave 5 planning, exact retained state, T221 predecessor guard, and authoritative prospective acceptance |
+| SC-035 | FR-075; immutable historical evidence plus T221 and authoritative prospective validation |

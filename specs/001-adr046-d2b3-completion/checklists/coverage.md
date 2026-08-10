@@ -103,13 +103,12 @@ Are requirements present for each scenario class, or explicitly excluded?
 - [x] CHK046 Is the daily-driver validation risk acceptance recorded with an explicit accepter and a stated fallback? [Assumption, Spec §Assumptions]
 - [x] CHK047 Are the external dependencies required for cloud-backed Provider validation identified, including whether the necessary accounts and access exist? [Dependency, Gap, Spec §SC-022]
 
-## Wave 5 Production-Completion Remediation
+## Historical Wave 5 specification-quality checks
 
 - [x] CHK048 Is the first policy install and restart path specified without requiring a policy-authorized read before the first `PolicySet`, while preserving authenticated normal access, private-issuer compiler/API capability seals, and D106? [Consistency, Spec FR-067]
 - [x] CHK049 Is the Wave 5 Provider readiness member the exact `Provider/system-core` registration and its two owned handler-health handles rather than all Wave 6 dossiers or a boolean? [Clarity, Spec FR-069]
-- [x] CHK050 Is the former T603/T589 editor sequence explicitly retained as read-only history
-  with no current resume or mutation authority? [Traceability, Plan "Historical adr046w5
-  production-completion graph"]
+- [x] CHK050 Is the former editor/lifecycle sequence explicitly retained inside a read-only
+  fence with no current resume or mutation authority? [Traceability, Plan historical graph]
 - [x] CHK051 Does commit create immutable authoritative audit in the same transaction, keep export completion separate, make export-pending behavior explicit about the protobuf-represented committed state, exact replay binding, fixed digests, retention health, restart replay, and no rollback claim, and confine bounded Version 2 `zoneRef`/`operationId` recovery coordinates to direct operator responses without telemetry, span, exported-audit, or unrelated-error propagation? [Scenario, Spec FR-070]
 - [x] CHK052 Does the Constitution Check keep Constitution 3.1.0 generic while the feature and
   exact delivery validator/tooling contract own the one-time historical disposition through
@@ -118,13 +117,13 @@ Are requirements present for each scenario class, or explicitly excluded?
   exact-base production guard plus unanimous selected-roster plan panel as the prospective
   Wave 6 gate? [Consistency, Plan "Constitution Check"]
 - [x] CHK053 Do current Wave 5 panel, checkpoint, resume, and commit-tag instructions use qualified lowercase `adr046w5` while preserving labeled historical identifiers? [Consistency, Plan/Tasks wave addressing]
-- [x] CHK054 Does the historical correction record preserve the former T605/T595/T599/T220 map without claiming implementation, while code-canon absence reassigns the still-required `Zone.status.handlers[]` contract prospectively to T423 before T604/T479? [Constitution, Spec/Plan "C1 correction and version impact"]
+- [x] CHK054 Does the historical correction remain fenced while current handler-contract
+  ownership resolves only from authoritative member specs and generated manifests?
 - [x] CHK055 Does `CommittedPendingAudit` preserve the layered `ResourceStatus` composite without claiming phase/code members on `ResourceUpdateStatus`, while assigning the additive protobuf field to every mutation response including delete and recording the ResourceService fingerprint impact? [Consistency, Spec FR-070]
-- [x] CHK056 Does W6 T604, after T221 and merged authoritative T336-T355, prove automatic startup/declaration/removal ingestion and same-identity owned effect/Ready evidence for exactly `Volume/acceptance-state`, `Network/acceptance-net`, and `Device/acceptance-tpm` in the canonical lowest feasible and host-integration destinations, with Guest runtime-effect acceptance remaining distinct at T479/T480, refusals separate, and no top-level gate or new unit? [Coverage, Tasks T604]
-- [x] CHK057 Are T220/T600-T602 retained as historical planned evidence without an
-  implementation claim, is T219 limited to the completed no-seal historical disposition,
-  and is every actionable Wave 5 recovery, second request, retroactive attestation, or
-  reconstructed seal removed? [Traceability, Tasks T600-T602/T219-T220]
+- [x] CHK056 Does the authoritative prospective acceptance row, after T221 and generated
+  predecessors, preserve the exact Volume/Network/Device identity and effect/readiness scope?
+- [x] CHK057 Is every retired Wave 5 task occurrence confined to an explicit read-only fence,
+  with no feature-local prospective ownership?
 
 ## Notes
 
@@ -139,6 +138,8 @@ Are requirements present for each scenario class, or explicitly excluded?
   scanning spec.md: those terms currently appear zero times.
 
 ## Resolution log
+
+<!-- RETIRED-READONLY-BEGIN: historical checklist resolution log -->
 
 ### Gate 1 - closed before `/speckit-tasks` (2026-07-29)
 
@@ -594,3 +595,5 @@ plan panel with zero recommendations.
 FR-036 is resolved only for the exact historical state through merged Wave 5. T221 remains
 unchecked and is the prospective Wave 6 gate. This planning batch claims no T221 panel,
 implementation, validation, seal, or merge result and does not change T072.
+
+<!-- RETIRED-READONLY-END -->

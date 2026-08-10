@@ -1,5 +1,7 @@
 # Historical record: W0 and W1 delivered without sealed wave records
 
+<!-- RETIRED-READONLY-BEGIN: immutable historical compatibility record -->
+
 | Field | Value |
 | --- | --- |
 | Scope | Waves W0 and W1 of the ADR-046 d2b 3.0 delivery program |
@@ -106,3 +108,5 @@ treating it as standalone authorization would create a second violation. The gen
 Constitution disposition plus the exact feature-owned validator/tooling contract now define
 the bounded historical treatment. No T219 recovery or refusal workflow remains; T221 is the
 next executable gate.
+
+<!-- RETIRED-READONLY-END -->

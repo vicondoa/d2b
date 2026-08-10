@@ -248,8 +248,9 @@ Version 2 and the generated traceability table MUST publish these stable identif
 
 The generated JSON is the machine authority and the generated Markdown is its review view.
 Generation MUST fail on a missing, duplicate, extra, or ownerless identifier and drift gates
-MUST compare both artifacts byte-for-byte. T589/T220 are historical planned consumers only.
-T604 emits only its W6 acceptance evidence and T479 imports that exact-F6 result. No feature-local field list, count, digest recipe, state table,
+MUST compare both artifacts byte-for-byte. Retired consumers remain fenced history.
+Prospective evidence ownership resolves only from authoritative member specs and generated
+manifests. No feature-local field list, count, digest recipe, state table,
 fixture registry, or transition matrix may substitute for generated rows.
 
 ---
@@ -262,15 +263,16 @@ fixtures, poison registries, and transitions are owned solely by accepted Versio
 `VD2-SC002-SOURCE-FLOOR`, `VD2-SC002-REGISTRIES`, and
 `VD2-SC002-TRACEABILITY`.
 
-Code canon contains no source-floor or host-generation handoff implementation. Retired
-T589/T592 assignments are read-only history. Prospective W6 T222 owns production,
-installation, typed import/validation, and the generated-row enforcement before T227/T604.
-No feature-local field list, digest recipe, fixture census, registry count, or transition copy
-substitutes.
+Code canon contains no source-floor or host-generation handoff implementation. Prospective
+ownership and ordering resolve only from authoritative member specs and generated manifests.
+No feature-local field list, digest recipe, fixture census, registry count, or transition
+copy substitutes.
 
 ---
 
 ## 11. Immutable Wave 5 historical predecessor
+
+<!-- RETIRED-READONLY-BEGIN: exact immutable Wave 5 evidence -->
 
 The former actionable retained-request disposition model is superseded. Constitution 3.1.0
 supplies only the generic historical-process disposition. This feature and the exact delivery
@@ -325,3 +327,5 @@ retroactive attestation, reconstructed seal, replacement candidate, or import re
 Historical T219 records the disposition only. T221 consumes the production guard result before
 the ordinary prospective Wave 6 plan panel. The guard provides process-integrity and signoff
 tracking; it is not authentication and does not establish a security boundary.
+
+<!-- RETIRED-READONLY-END -->

@@ -25,6 +25,8 @@ third source of truth that the drift gates do not check.
 
 ## Candidate recovery prerequisite v1
 
+<!-- RETIRED-READONLY-BEGIN: historical candidate-recovery compatibility -->
+
 **Contract id**: `adr046-candidate-recovery-prerequisite/v1`
 
 **Owner**: T008 and the ADR046 plan integrator
@@ -115,6 +117,8 @@ T029, T036, and T071 invoke this same validator, not local predicates, before pr
 dispatch, panel request, panel-attest, merge, post-merge seal, merge-target registration,
 and merge eligibility. Any matrix case that would pass at one of those boundaries leaves the
 corresponding wave open.
+
+<!-- RETIRED-READONLY-END -->
 
 ## ADR-046 Wave 6 historical predecessor guard
 
@@ -248,6 +252,13 @@ post-merge seal, merge-target registration, and merge eligibility.
     make same-ID retry observe rather than reapply the mutation. Audit/export identifiers are
     fixed domain-separated digests, and retention/prune failure is typed degraded health
     (FR-070).
+
+Current prospective host-generation, handler-contract, admission, and operator-acceptance
+ownership resolves only from authoritative member specs and generated manifests. This feature
+does not independently assign it.
+
+<!-- RETIRED-READONLY-BEGIN: retired Wave 5 rules 11-16 -->
+
 11. **Amended-plan reconciliation is historical.** The former T603/T589 editor and lifecycle
     sequence is read-only history and authorizes no current mutation. Code canon lacks the
     source-generation handoff; prospective T222/T227 own it before T604.
@@ -309,6 +320,9 @@ post-merge seal, merge-target registration, and merge eligibility.
     `docs/how-to/host-generation-recovery-v1.md` and the generated public action mapping.
     The former T220 release check is historical and supplies no current gate. Recovery uses
     only the existing broker unit and preserves the daemon-only three-unit architecture.
+
+<!-- RETIRED-READONLY-END -->
+
 17. **Observed panel values are process metadata, not authentication.** Before prospective
     Track A `make-records`, round-local `observed.json` contains exactly one entry for every
     selected seat and no other seat. Every entry requires `provider`, `model`,

@@ -283,12 +283,9 @@ OpenPeerPidfdFromAcceptedSocket
   -> zero matches in packages/ and tests/
 ```
 
-Therefore neither NIX-8 nor NIX-9 is landed. The old T592/T595/T220 ownership is retired.
-Prospective Wave 6 T222 owns NIX-8's typed handoff and T227 owns NIX-9's required rebuild
-reference and carrier. T222 precedes T227; both precede T604. T221 remains the next
-executable gate. The retired T605 handler contract is likewise unlanded and is reassigned to
-prospective T423 before T604/T479. The retired T592/T593 peer-pidfd operation is unlanded and
-reassigned to prospective T445 before T479.
+Therefore NIX-8, NIX-9, the handler contract, and the peer-pidfd operation are not landed.
+Their prospective ownership, ordering, and file maps resolve only from authoritative member
+specs and generated manifests after T221; this feature does not independently assign them.
 
 ---
 
@@ -308,5 +305,5 @@ wrote, file-synced, and revalidated an
 AT_SYMLINK_FOLLOW)` to capability-free link the exact opened inode directly to its final
 no-replace name. No linked temporary or name-consuming publication rename exists.
 
-The former T589 matrix and its failure injections are read-only historical design evidence.
+The former matrix and its failure injections are read-only historical design evidence.
 They authorize no current run or publication path.

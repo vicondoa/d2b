@@ -108,21 +108,23 @@ instructions, including multiline forms, and round-threshold deferral rules are 
 set -eu
 
 FEATURE_DIR="specs/001-adr046-d2b3-completion"
-RETIRED='T(219|220|589|590|591|592|593|594|595|596|597|598|599|600|601|602|603|605)'
-ACTION="(?s)\\b${RETIRED}\\b([[:space:]]*(/|,|and)[[:space:]]*\\b${RETIRED}\\b)*[[:space:]]+(MUST[[:space:]]+)?(dispatch|implement|prepare|reconcile|fold|measure|consume|reject|seal|close|run|verify|import|freeze|refuse|require|revalidate|emit|reopen|block)(s|es|ed|ing|ation|ment)?\\b"
-EDGE="(?s)\\b(before|until|depends[[:space:]]+on)[[:space:]]+\\b${RETIRED}\\b"
+RETIRED='T(219|220|589|590|591|592|593|594|595|596|597|598|599|600|601|602|603|604|605)'
+ACTION="(?s)\\b${RETIRED}\\b([[:space:]]*(/|,|and)[[:space:]]*\\b${RETIRED}\\b)*[[:space:]]+(MUST[[:space:]]+)?(own|add|check|harden|prove|extend|wire|consume|require|depend|block|dispatch|run|measure|validate|reject|reconcile|fold|seal|close)(s|es|ed|ing|er|ership|ment|ation)?\\b"
+REVERSE="(?s)\\b(own|add|check|harden|prove|extend|wire|consume|require|depend|block|dispatch|run|measure|validate|reject|reconcile|fold|seal|close)(s|es|ed|ing|er|ership|ment|ation)?\\b.{0,240}\\b${RETIRED}('s)?\\b"
+EDGE="(?s)\\b(after|before|depends[[:space:]]+on|owned[[:space:]]+by)[[:space:]]+.{0,160}\\b${RETIRED}('s)?\\b"
+ANY_RETIRED="(?s)\\b${RETIRED}\\b"
 
 current_hits="$(
   while IFS= read -r -d '' file; do
     awk -v file="$file" '
-      /RETIRED-W5-.*-BEGIN/ { retired = 1; next }
-      /RETIRED-W5-.*-END/ { retired = 0; next }
-      /STALE-PROSE-CHECK-BEGIN/ { retired = 1; next }
-      /STALE-PROSE-CHECK-END/ { retired = 0; next }
-      !retired { print file ":" FNR ":" $0 }
+      /RETIRED-.*-BEGIN/ { retired += 1; next }
+      /RETIRED-.*-END/ { retired -= 1; next }
+      /STALE-PROSE-CHECK-BEGIN/ { retired += 1; next }
+      /STALE-PROSE-CHECK-END/ { retired -= 1; next }
+      retired == 0 { print file ":" FNR ":" $0 }
     ' "$file"
   done < <(find "$FEATURE_DIR" -type f -name '*.md' -print0) |
-    rg -n -U -i "$ACTION|$EDGE" || true
+    rg -n -U -i "$ACTION|$REVERSE|$EDGE|$ANY_RETIRED" || true
 )"
 test -z "$current_hits" || {
   printf '%s\n' "$current_hits"
@@ -150,7 +152,7 @@ git worktree add -b adr046-w2-routing    ../d2b-w2-routing    adr046-w2-integrat
 A ready slice left unlaunched without a recorded blocker fails wave entry.
 
 `adr046w5` has no executable implementation or close chain in this guide. Its retained state
-is immutable history with zero attestations and no seal. T219 records that historical
+is immutable history with zero attestations and no seal. The feature-owned record preserves that
 disposition. Start only Wave 6 work selected by the T221 plan result, and launch every ready,
 file-disjoint Wave 6 slice in the same coordination cycle.
 
@@ -166,7 +168,7 @@ make check                       # full PR-equivalent Layer-1 gate
 Read `tests/layer1-jobs.json` for the current enforcing-vs-advisory split rather than assuming
 it. An advisory result is not validation evidence.
 
-The former T605/T595/T599/T220 Wave 5 loop is historical planning evidence. Do not rerun it to
+The former Wave 5 loop is historical planning evidence. Do not rerun it to
 reconstruct Wave 5 completion. Wave 6 implementers run only the validation owned by their
 T221-selected tasks.
 
@@ -646,7 +648,7 @@ and is never re-attested, replaced, or used for successor admission.
 
 ### Historical SC-002 recovery plan
 
-The former T589/T599/T220 recovery sequence is read-only historical planning evidence. It is
+The former Wave 5 recovery sequence is read-only historical planning evidence. It is
 not an executable runbook and supplies no current command, gate, or refusal. Current work must
 obtain any recovery action from an accepted current generated traceability row owned by a
 prospective task after T221; nothing in the retired Wave 5 plan may be inferred or run.
@@ -657,13 +659,13 @@ This is the loop that distinguishes a live control plane from a sealed wave. Its
 operator activation positive remains W6 acceptance after T221. T221 first requires the
 accepted external Network contract/work-item amendment to remove every current-facing sole
 Network-opt-in path and retain T336-T355 plus all four double-opt-in cases as authoritative
-W6 work. T604 then consumes their merged implementation. A stale sole-opt-in contract makes
+W6 work. The authoritative prospective acceptance row consumes their merged implementation. A stale sole-opt-in contract makes
 T221 fail closed; an unimplemented T336-T355 row blocks T479.
 
 ### Story 1 - declare and reconcile
 
-The exact-F6 automated proof is T604. It remains W6 work under T221 and consumes the merged
-T336-T355 result without moving those tasks into W5. Its fixture-contract leg owns
+The exact-F6 automated proof and its ownership resolve only from authoritative member specs
+and generated manifests after T221 and merged T336-T355. Its fixture-contract leg names
 `packages/d2b-contract-tests/tests/resource_operator_activation.rs`; its lowest feasible
 production-boundary leg owns `packages/d2bd/tests/resource_operator_activation.rs`; and its
 real activation/effect leg owns
@@ -692,14 +694,14 @@ ready, identity-stable, intact, and unrecreated. The same candidate must also pa
 no-skip `vmChecks.x86_64-linux.daemon-restart-vm-survival` FR-075 continuity case. Guest
 runtime-effect acceptance remains distinct Wave 6
 `Provider/runtime-cloud-hypervisor` T384/T479/T480 work; Guest emission, status, or refusal
-cannot satisfy T604. This host leg is W6 T604 operator acceptance, not Wave 5 evidence. Wave 5
+cannot satisfy the authoritative acceptance row. This host leg is prospective W6 acceptance, not Wave 5 evidence. Wave 5
 retains only its production-plane prerequisites, the accepted double-opt-in contract
 migration, and the settled T336-T355 W6 ownership. Full US1 completes only after
 T479/T480 accept exact-F6 `Provider/runtime-cloud-hypervisor` evidence for a real Cloud
 Hypervisor process effect, authenticated guest-control session, and ready Guest; missing,
 skipped, status-only, fake-boundary, other-family, or refusal evidence leaves it incomplete.
-Direct ResourceService calls, private reloads, and status-only effects do not satisfy T604.
-After prospective T227 lands, the host configuration must set
+Direct ResourceService calls, private reloads, and status-only effects do not satisfy the
+authoritative acceptance row. After the authoritative NIX-9 object lands, the host configuration must set
 `d2b.site.hostGenerationRebuildRef` to the exact `<flake-ref>#<configuration-name>` value. It
 is required, has no default, and is limited to 2048 bytes. Use the real validated flake and
 configuration values below; this procedure has no fixed illustrative target.
@@ -708,16 +710,16 @@ configuration values below; this procedure has no fixed illustrative target.
 > host-generation handoff operation, and the existing broker service cannot execute a
 > target-closure compatibility binary before profile publication. Exact code-canon searches
 > also find no `hostGenerationRebuildRef` option or carrier. Do not run migration or rollback
-> until T221 passes and prospective T222/T227 merge.
+> until T221 passes and the authoritative NIX-8/NIX-9 objects merge.
 >
 > The source-floor schema, encoding, digest and signature rules, receipts, capability
 > transitions, fixtures, poison registries, and transition matrices are owned solely by
 > accepted Version 2 through `VD2-SC002-SOURCE-FLOOR`, `VD2-SC002-REGISTRIES`, and
-> `VD2-SC002-TRACEABILITY`. T222 owns the typed handoff and T227 owns the option/carrier. A
-> missing, stale, wrong-owner, or failing prospective row blocks T604. Retired T589/T592/T595
-> text supplies no implementation or command.
+> `VD2-SC002-TRACEABILITY`. Ownership resolves only from those authoritative rows. A missing,
+> stale, wrong-owner, or failing prospective row blocks acceptance. Retired Wave 5 text
+> supplies no implementation or command.
 >
-After T222/T227 merge, the first 3/1-to-4/2 migration cannot read
+After the authoritative NIX-8/NIX-9 objects merge, the first 3/1-to-4/2 migration cannot read
 the stable reference because only the target broker can publish it. The following is the
 post-prerequisite operator contract named `host-generation-deploy-bootstrap-v1`, using the
 deployment entrypoint from the explicit target configuration:
@@ -1024,7 +1026,7 @@ become durable, immediately before each individual later mutation edge.
 
 The mutation-edge, peer-transition, pre-start, unit-census, redaction, and source-floor
 fixture sets are resolved only through the accepted generated `VD2-SC002-REGISTRIES` and
-`VD2-SC002-TRACEABILITY` rows assigned prospectively to T222, T227, and T604. This quickstart does
+`VD2-SC002-TRACEABILITY` rows assigned by authoritative member specs and manifests. This quickstart does
 not copy their ids, counts, ordering, or poison cases. The generated rows must name
 independently authored expectations and enforcing gates; missing, duplicate, stale,
 wrong-owner, non-ancestor, runtime-derived, skipped, or unvisited coverage fails closed.
@@ -1039,8 +1041,8 @@ may survive, and metrics carry no peer-identity label.
 `Device/acceptance-tpm` completes the pinned state-preserving cleanup; and FR-075 continuity
 passes separately through T479 on the same candidate. Actionable refusal coverage runs
 separately and cannot satisfy this positive proof. Guest passes through the distinct Wave 6
-`Provider/runtime-cloud-hypervisor` T479/T480 exact-F6 acceptance. T604 remains W6
-acceptance-only and consumes the Network implementation after authoritative T336-T355 merge.
+`Provider/runtime-cloud-hypervisor` T479/T480 exact-F6 acceptance. The authoritative
+acceptance row consumes Network implementation after authoritative T336-T355 merge.
 
 This acceptance run fixes `isolation.allowEastWest = false`; it does not alone prove
 Host/Network double opt-in. T221 requires the accepted Network contract/work-item amendment
@@ -1049,9 +1051,9 @@ on the exact fetched Wave 6 base. It must require
 default both inputs false, remove every current-facing sole Network-opt-in path, and
 regenerate the manifest with T336-T355 retained as authoritative W6 implementation under
 T221 and all four Network/Host production cases assigned there. T480 revalidates that
-migration, implementation, and evidence before every Wave 6 close boundary. T604 and T479
-require the merged W6 implementation and all four passing cases. Historical or current sole
-opt-in cannot satisfy T221, T604, T479, or T480. Do not change feature status to bypass that
+migration, implementation, and evidence before every Wave 6 close boundary. The authoritative
+acceptance row and T479 require the merged W6 implementation and all four passing cases.
+Historical or current sole opt-in cannot satisfy T221, T479, T480, or that authoritative row. Do not change feature status to bypass that
 stop.
 
 If migration rolls back to a 3/1 generation that had no stable reference, verified absence is
@@ -1097,7 +1099,7 @@ d2b vm status acceptance-vm
 ```
 
 The host test repeats that exact census before VM start, after public start, after daemon
-restart/adoption, and after public stop. Its fixture membership comes only from T604's
+restart/adoption, and after public stop. Its fixture membership comes only from authoritative
 generated `VD2-SC002-REGISTRIES` and `VD2-SC002-TRACEABILITY` rows; this quickstart copies no
 ids or counts. Every assigned injected unit survives the sole `d2b.slice` exclusion and fails
 exact equality. Missing, runtime-derived, skipped, or unvisited coverage fails, so a transient
