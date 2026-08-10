@@ -729,8 +729,7 @@ fn check_local_coordination_tasks(markdown: &str, graph: &Value) -> Vec<String> 
             "T480": ["T479"]
         },
         "required_manifest_dependencies": {
-            "T604": t604_manifest,
-            "T479": []
+            "T604": t604_manifest
         },
         "required_manifest_dependency_queries": {
             "T479": {
@@ -739,7 +738,8 @@ fn check_local_coordination_tasks(markdown: &str, graph: &Value) -> Vec<String> 
                 "project": "id",
                 "project_semantics": "workItemId",
                 "expected_count": 258,
-                "cardinality": "exact"
+                "cardinality": "exact",
+                "complete_for_task": true
             }
         },
         "shared_file_order": {
@@ -972,7 +972,6 @@ fn check_local_coordination_tasks(markdown: &str, graph: &Value) -> Vec<String> 
             [
                 "T604",
                 "T221",
-                "ADR046-process-002",
                 "operator-nix-activation-cleanup",
                 "w6-cloud-hypervisor-guest-acceptance",
             ]
