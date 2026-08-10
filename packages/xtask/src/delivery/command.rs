@@ -88,6 +88,8 @@ pub enum WaveCommand {
     Complete,
     Block,
     Resume,
+    RunCommandProfile,
+    EntryCensus,
     ValidateImport,
     PanelRequest,
     PanelAttest,
@@ -97,7 +99,7 @@ pub enum WaveCommand {
 }
 
 /// Every wave subcommand, in workflow order.
-pub const WAVE_COMMANDS: [WaveCommand; 14] = [
+pub const WAVE_COMMANDS: [WaveCommand; 16] = [
     WaveCommand::Snapshot,
     WaveCommand::PlanApproval,
     WaveCommand::DispatchReady,
@@ -105,6 +107,8 @@ pub const WAVE_COMMANDS: [WaveCommand; 14] = [
     WaveCommand::Complete,
     WaveCommand::Block,
     WaveCommand::Resume,
+    WaveCommand::RunCommandProfile,
+    WaveCommand::EntryCensus,
     WaveCommand::ValidateImport,
     WaveCommand::PanelRequest,
     WaveCommand::PanelAttest,
@@ -125,6 +129,8 @@ impl WaveCommand {
             Self::Complete => "complete",
             Self::Block => "block",
             Self::Resume => "resume",
+            Self::RunCommandProfile => "run-command-profile",
+            Self::EntryCensus => "entry-census",
             Self::ValidateImport => "validate-import",
             Self::PanelRequest => "panel-request",
             Self::PanelAttest => "panel-attest",
@@ -148,6 +154,7 @@ impl WaveCommand {
             Self::PlanApproval => "T221",
             Self::DispatchReady => "T606",
             Self::Validate | Self::Complete | Self::Block | Self::Resume => "T606",
+            Self::RunCommandProfile | Self::EntryCensus => "T221",
             Self::ValidateImport => "ADR046-delivery-003",
             Self::PanelRequest | Self::PanelAttest => "ADR046-delivery-005",
             Self::Seal | Self::MergeTarget | Self::MergeEligibility => "ADR046-delivery-006",
@@ -173,6 +180,12 @@ impl WaveCommand {
             Self::Complete => "Complete one validated group after accepted commit/tree evidence.",
             Self::Block => "Record a durable blocker for one candidate-bound group.",
             Self::Resume => "Resume one blocked group only under replacement approval.",
+            Self::RunCommandProfile => {
+                "Run one repository-owned Layer-1 or census command profile and record strict evidence."
+            }
+            Self::EntryCensus => {
+                "Derive and validate the complete Wave 6 entry census and first-ready group."
+            }
             Self::ValidateImport => {
                 "Import CI, local, and host validator command results as evidence addressed by \
                  candidate ID."
@@ -244,6 +257,14 @@ impl WaveCommand {
                  --snapshot PATH --group GROUP --replacement-approved true \
                  --repo LOGICAL_ID=CHECKOUT_ROOT [--state-dir DIR]"
             }
+            Self::RunCommandProfile => {
+                "cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave run-command-profile \
+                 --profile PROFILE --repo LOGICAL_ID=CHECKOUT_ROOT [entry snapshot options]"
+            }
+            Self::EntryCensus => {
+                "cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave entry-census \
+                 --repo LOGICAL_ID=CHECKOUT_ROOT [entry snapshot options]"
+            }
             Self::ValidateImport => {
                 "cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave validate-import --snapshot PATH --validation NAME \
                  --result passed|failed --repo LOGICAL_ID=CHECKOUT_ROOT \
@@ -282,6 +303,8 @@ impl WaveCommand {
             Self::Validate | Self::Complete => &["--snapshot", "--group", "--evidence", "--repo"],
             Self::Block => &["--snapshot", "--group", "--reason", "--repo"],
             Self::Resume => &["--snapshot", "--group", "--replacement-approved", "--repo"],
+            Self::RunCommandProfile => &["--profile", "--repo"],
+            Self::EntryCensus => &["--repo"],
             Self::ValidateImport => &["--snapshot", "--validation", "--result", "--repo"],
             Self::PanelRequest => &["--snapshot", "--selection", "--repo"],
             Self::PanelAttest => &["--snapshot", "--records", "--repo"],
@@ -311,6 +334,18 @@ impl WaveCommand {
             | Self::Complete
             | Self::Block
             | Self::Resume => &["--state-dir"],
+            Self::RunCommandProfile | Self::EntryCensus => &[
+                "--program",
+                "--wave",
+                "--state-dir",
+                "--base",
+                "--head",
+                "--pull-request",
+                "--edge",
+                "--generated",
+                "--dependency",
+                "--contract",
+            ],
             Self::ValidateImport => &[
                 "--state-dir",
                 "--lane",
@@ -349,6 +384,8 @@ impl WaveCommand {
                 | Self::Complete
                 | Self::Block
                 | Self::Resume
+                | Self::RunCommandProfile
+                | Self::EntryCensus
                 | Self::ValidateImport
                 | Self::PanelRequest
                 | Self::PanelAttest
@@ -604,6 +641,8 @@ fn dispatch_wave(args: &[String]) -> Result<WorkflowOutput> {
         WaveCommand::Complete => super::coordination::run_complete(rest),
         WaveCommand::Block => super::coordination::run_block(rest),
         WaveCommand::Resume => super::coordination::run_resume(rest),
+        WaveCommand::RunCommandProfile => super::coordination::run_command_profile(rest),
+        WaveCommand::EntryCensus => super::coordination::run_entry_census(rest),
         WaveCommand::ValidateImport => super::evidence::run(rest),
         WaveCommand::PanelRequest => super::panel::run_request(rest),
         WaveCommand::PanelAttest => super::panel::run_attest(rest),
@@ -1205,6 +1244,10 @@ mod tests {
                     WaveCommand::Complete => WAVE_COMMANDS.contains(&WaveCommand::Complete),
                     WaveCommand::Block => WAVE_COMMANDS.contains(&WaveCommand::Block),
                     WaveCommand::Resume => WAVE_COMMANDS.contains(&WaveCommand::Resume),
+                    WaveCommand::RunCommandProfile => {
+                        WAVE_COMMANDS.contains(&WaveCommand::RunCommandProfile)
+                    }
+                    WaveCommand::EntryCensus => WAVE_COMMANDS.contains(&WaveCommand::EntryCensus),
                     WaveCommand::ValidateImport => {
                         WAVE_COMMANDS.contains(&WaveCommand::ValidateImport)
                     }

@@ -160,6 +160,17 @@ const REQUIRED_T221_COMMANDS: [&str; 8] = [
     "predispatch-census",
 ];
 
+const COMMAND_PROFILES: [&str; 8] = [
+    "focused-guard-list",
+    "focused-guard-ignored-list",
+    "focused-guard-run",
+    "gate0-test-drift",
+    "test-policy",
+    "test-unit",
+    "heavy-gate-acquire",
+    "predispatch-census",
+];
+
 const LOCAL_COMPLETION_EVIDENCE: [(&str, &[&str]); 7] = [
     (
         "feature-local:w6-shared-prep",
@@ -315,6 +326,8 @@ pub struct FreshFetchEvidence {
     pub stdout_sha256: String,
     pub stderr_sha256: String,
     pub output_bytes: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runner_digest: Option<String>,
     pub fetched_at_unix: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub before_oid: Option<String>,
@@ -1451,6 +1464,114 @@ impl CommandEvidenceRecord {
                 ));
             }
         }
+
+        fn profile_argv(profile: &str) -> Result<Vec<String>> {
+            let values: &[&str] = match profile {
+                "focused-guard-list" => &[
+                    "cargo",
+                    "test",
+                    "--manifest-path",
+                    "packages/Cargo.toml",
+                    "-p",
+                    "xtask",
+                    "delivery::work_item_state::tests",
+                    "--",
+                    "--list",
+                ],
+                "focused-guard-ignored-list" => &[
+                    "cargo",
+                    "test",
+                    "--manifest-path",
+                    "packages/Cargo.toml",
+                    "-p",
+                    "xtask",
+                    "delivery::work_item_state::tests",
+                    "--",
+                    "--list",
+                    "--ignored",
+                ],
+                "focused-guard-run" => &[
+                    "cargo",
+                    "test",
+                    "--manifest-path",
+                    "packages/Cargo.toml",
+                    "-p",
+                    "xtask",
+                    "delivery::work_item_state::tests",
+                    "--",
+                    "--nocapture",
+                ],
+                "gate0-test-drift" => &["make", "test-drift"],
+                "test-policy" => &["make", "test-policy"],
+                "test-unit" => &["make", "test-unit"],
+                "heavy-gate-acquire" => &[
+                    "cargo",
+                    "run",
+                    "--quiet",
+                    "--manifest-path",
+                    "packages/Cargo.toml",
+                    "-p",
+                    "xtask",
+                    "--",
+                    "heavy-gate",
+                    "--",
+                    "true",
+                ],
+                "predispatch-census" => &[
+                    "cargo",
+                    "run",
+                    "--quiet",
+                    "--manifest-path",
+                    "packages/Cargo.toml",
+                    "-p",
+                    "xtask",
+                    "--",
+                    "delivery",
+                    "wave",
+                    "entry-census",
+                ],
+                _ => {
+                    return Err(DeliveryError::usage(format!(
+                        "--profile must be one of {}",
+                        COMMAND_PROFILES.join(", ")
+                    )));
+                }
+            };
+            Ok(values.iter().map(|value| (*value).to_owned()).collect())
+        }
+
+        fn profile_runner_digest() -> String {
+            sha256_bytes(
+                COMMAND_PROFILES
+                    .iter()
+                    .flat_map(|profile| {
+                        profile_argv(profile)
+                            .expect("closed command profile")
+                            .into_iter()
+                            .chain(std::iter::once("\n".to_owned()))
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\0")
+                    .as_bytes(),
+            )
+        }
+
+        fn validate_profile_argv(record: &CommandEvidenceRecord) -> Result<()> {
+            let expected = profile_argv(&record.command_id)?;
+            if record.command_id == "predispatch-census" {
+                if record.argv.len() < expected.len() || record.argv[..expected.len()] != expected {
+                    return Err(DeliveryError::new(
+                        "predispatch census command argv does not use the repository-owned runner",
+                    ));
+                }
+            } else if record.argv != expected {
+                return Err(DeliveryError::new(format!(
+                    "command evidence {} argv differs from the repository-owned profile",
+                    record.command_id
+                )));
+            }
+            Ok(())
+        }
         validate_hash(&self.working_tree_oid, "command evidence working-tree OID")?;
         if self.completed_at_unix < self.started_at_unix {
             return Err(DeliveryError::new(
@@ -1509,6 +1630,15 @@ impl CommandEvidenceSet {
                 return Err(DeliveryError::new(format!(
                     "T221 command evidence {command_id} did not pass against the entry head"
                 )));
+            }
+            validate_profile_argv(record)?;
+            if let Some(digest) = &record.runner_digest {
+                validate_sha256(digest, "command profile runner digest")?;
+                if digest != &profile_runner_digest() {
+                    return Err(DeliveryError::new(
+                        "command evidence runner digest differs from the checked-in profile table",
+                    ));
+                }
             }
         }
         let list = self.record("focused-guard-list")?;
@@ -2762,6 +2892,145 @@ pub fn run_resume(args: &[String]) -> Result<WorkflowOutput> {
     Ok(WorkflowOutput::ok(WaveCommand::Resume).with_digests(&snapshot.digests()))
 }
 
+fn profile_context(options: &mut CliOptions) -> Result<BTreeMap<String, PathBuf>> {
+    let _ = options.optional_string("--program")?;
+    let _ = options.optional_string("--wave")?;
+    let _ = options.optional_string("--state-dir")?;
+    let _ = options.repeated_strings("--base");
+    let _ = options.repeated_strings("--head");
+    let _ = options.repeated_strings("--pull-request");
+    let _ = options.repeated_strings("--edge");
+    let _ = options.repeated_strings("--generated");
+    let _ = options.repeated_strings("--dependency");
+    let _ = options.repeated_strings("--contract");
+    options.repository_roots()
+}
+
+fn profile_counts(profile: &str, stdout: &[u8]) -> (Option<u64>, Option<u64>, Option<u64>) {
+    let text = String::from_utf8_lossy(stdout);
+    match profile {
+        "focused-guard-list" => (
+            Some(text.lines().filter(|line| line.ends_with(": test")).count() as u64),
+            None,
+            None,
+        ),
+        "focused-guard-ignored-list" => (
+            None,
+            Some(text.lines().filter(|line| line.ends_with(": test")).count() as u64),
+            None,
+        ),
+        "focused-guard-run" => (
+            None,
+            None,
+            Some(
+                text.lines()
+                    .filter(|line| line.to_ascii_lowercase().contains("skipped"))
+                    .count() as u64,
+            ),
+        ),
+        _ => (None, None, None),
+    }
+}
+
+pub fn run_command_profile(args: &[String]) -> Result<WorkflowOutput> {
+    let mut options = CliOptions::parse(args)?;
+    let profile = options.required_string("--profile")?;
+    if !COMMAND_PROFILES.contains(&profile.as_str()) {
+        return Err(DeliveryError::usage(format!(
+            "--profile must be one of {}",
+            COMMAND_PROFILES.join(", ")
+        )));
+    }
+    let roots = profile_context(&mut options)?;
+    options.finish()?;
+    let root = roots
+        .get("github.com/vicondoa/d2b")
+        .or_else(|| roots.values().next())
+        .ok_or_else(|| DeliveryError::new("command profile has no repository root"))?;
+    if profile == "test-unit" {
+        let manifest: Value = serde_json::from_slice(
+            &fs::read(root.join("tests/layer1-jobs.json"))
+                .map_err(|_| DeliveryError::environment("cannot read Layer-1 job manifest"))?,
+        )?;
+        let jobs = manifest.to_string();
+        for required in ["test-flake", "test-nix-unit", "test-runtime-ledger"] {
+            if !jobs.contains(required) {
+                return Err(DeliveryError::new(format!(
+                    "Layer-1 manifest is missing required job {required}"
+                )));
+            }
+        }
+    }
+    let argv = profile_argv(&profile)?;
+    let started = now_unix();
+    let (stdout, stderr, exit_code) = if profile == "predispatch-census" {
+        validate_w6_census(root)?;
+        (b"{\"census\":\"passed\"}".to_vec(), Vec::new(), 0)
+    } else {
+        let output = Command::new(&argv[0])
+            .args(&argv[1..])
+            .current_dir(root)
+            .env("GIT_OPTIONAL_LOCKS", "0")
+            .output()
+            .map_err(|_| DeliveryError::environment("cannot execute command profile"))?;
+        (
+            output.stdout,
+            output.stderr,
+            output.status.code().unwrap_or(1),
+        )
+    };
+    let completed = now_unix();
+    let (discovered, ignored, skips) = profile_counts(&profile, &stdout);
+    let record = CommandEvidenceRecord {
+        artifact_kind: COMMAND_EVIDENCE_ARTIFACT_KIND.to_owned(),
+        schema_version: COMMAND_EVIDENCE_SCHEMA_VERSION,
+        command_id: profile,
+        argv,
+        working_tree_oid: git_resolve_commit(root, "HEAD")?,
+        started_at_unix: started,
+        completed_at_unix: completed,
+        exit_code,
+        result: if exit_code == 0 {
+            CommandResult::Passed
+        } else {
+            CommandResult::Failed
+        },
+        stdout_sha256: sha256_bytes(&stdout),
+        stderr_sha256: sha256_bytes(&stderr),
+        output_bytes: (stdout.len() + stderr.len()) as u64,
+        runner_digest: Some(profile_runner_digest()),
+        discovered_tests: discovered,
+        ignored_tests: ignored,
+        skip_matches: skips,
+    };
+    let paths = W6Paths::entry_from_environment(&roots)?;
+    prepare_command_evidence_directory(&paths.1, &roots)?;
+    write_command_evidence(&paths.1, &record, &roots)?;
+    Ok(WorkflowOutput::ok(WaveCommand::RunCommandProfile))
+}
+
+pub fn run_entry_census(args: &[String]) -> Result<WorkflowOutput> {
+    let mut options = CliOptions::parse(args)?;
+    let roots = profile_context(&mut options)?;
+    options.finish()?;
+    let root = roots
+        .get("github.com/vicondoa/d2b")
+        .or_else(|| roots.values().next())
+        .ok_or_else(|| DeliveryError::new("entry census has no repository root"))?;
+    validate_w6_census(root)?;
+    let paths = W6Paths::entry_from_environment(&roots)?;
+    let ledger = read_dispatch_ledger(&paths.0, &roots)?;
+    ledger.require_pre_t221_state()?;
+    if ledger.ready_groups_for_checkout(true, root)?
+        != vec!["feature-local:w6-shared-prep".to_owned()]
+    {
+        return Err(DeliveryError::new(
+            "entry census does not derive T606 as the only first-ready group",
+        ));
+    }
+    Ok(WorkflowOutput::ok(WaveCommand::EntryCensus))
+}
+
 fn feature_root(repository_roots: &BTreeMap<String, PathBuf>) -> Result<PathBuf> {
     let root = repository_roots
         .get("github.com/vicondoa/d2b")
@@ -3087,6 +3356,7 @@ mod tests {
             stdout_sha256: sha256_bytes(b"stdout"),
             stderr_sha256: sha256_bytes(b"stderr"),
             output_bytes: 12,
+            runner_digest: None,
             discovered_tests: Some(1),
             ignored_tests: Some(0),
             skip_matches: Some(0),
