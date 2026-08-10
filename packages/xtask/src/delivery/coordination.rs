@@ -3127,6 +3127,12 @@ pub fn run_command_profile(args: &[String]) -> Result<WorkflowOutput> {
     let paths = W6Paths::entry_from_environment(&roots)?;
     prepare_command_evidence_directory(&paths.1, &roots)?;
     write_command_evidence(&paths.1, &record, &roots)?;
+    if exit_code != 0 {
+        return Err(DeliveryError::new(format!(
+            "repository command profile {} failed",
+            record.command_id
+        )));
+    }
     Ok(WorkflowOutput::ok(WaveCommand::RunCommandProfile))
 }
 
