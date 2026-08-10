@@ -1330,12 +1330,14 @@ fn is_local_handoff_destination(destination: &str) -> bool {
 
 fn canonical_destination_token(token: &str, provider_root: Option<&str>) -> Option<String> {
     let token = trim_destination_token(token);
-    let token = if provider_root.is_some() && is_provider_relative_path(&token) {
-        format!("{}{}", provider_root.expect("provider root"), token)
-    } else if is_path_like(&token) {
-        token
-    } else {
-        return None;
+    let token = match (
+        provider_root,
+        is_provider_relative_path(&token),
+        is_path_like(&token),
+    ) {
+        (Some(root), true, _) => format!("{root}{token}"),
+        (_, _, true) => token,
+        _ => return None,
     };
     (!token.is_empty() && !is_ignored_destination_root(&token)).then_some(token)
 }
@@ -1382,10 +1384,10 @@ fn normalized_destination_atoms(
     for candidate in candidates {
         for part in split_top_level(&candidate) {
             for expanded in expand_destination_braces(&part) {
-                if let Some(token) = canonical_destination_token(&expanded, provider_root) {
-                    if !token.ends_with('/') || preserves_directory_roots {
-                        atoms.insert(token);
-                    }
+                if let Some(token) = canonical_destination_token(&expanded, provider_root)
+                    && (!token.ends_with('/') || preserves_directory_roots)
+                {
+                    atoms.insert(token);
                 }
             }
         }
@@ -2256,53 +2258,56 @@ fn manifest_dependency_contains(
             .unwrap_or(false)
 }
 
-fn handoff_edge_is_executable(
-    contract: &Value,
-    graph: &Value,
-    from: &str,
-    to: &str,
-    local_ids: &BTreeSet<String>,
-    manifest_ids: &BTreeSet<&str>,
-    manifest_groups: &BTreeMap<String, String>,
-    w6_ids: &BTreeSet<String>,
-) -> bool {
-    let from_local = local_ids.contains(from);
-    let to_local = local_ids.contains(to);
-    let from_manifest = manifest_ids.contains(from);
-    let to_manifest = manifest_ids.contains(to);
+struct HandoffOrdering<'a> {
+    contract: &'a Value,
+    graph: &'a Value,
+    local_ids: &'a BTreeSet<String>,
+    manifest_ids: &'a BTreeSet<&'a str>,
+    manifest_groups: &'a BTreeMap<String, String>,
+    w6_ids: &'a BTreeSet<String>,
+}
+
+fn handoff_edge_is_executable(from: &str, to: &str, ordering: &HandoffOrdering<'_>) -> bool {
+    let from_local = ordering.local_ids.contains(from);
+    let to_local = ordering.local_ids.contains(to);
+    let from_manifest = ordering.manifest_ids.contains(from);
+    let to_manifest = ordering.manifest_ids.contains(to);
 
     match (from_local, to_local, from_manifest, to_manifest) {
-        (true, true, false, false) => local_dependency_precedes(contract, from, to),
-        (true, false, false, true) => manifest_groups
+        (true, true, false, false) => local_dependency_precedes(ordering.contract, from, to),
+        (true, false, false, true) => ordering
+            .manifest_groups
             .get(to)
             .map(|group| {
                 string_array(value_at(
-                    contract,
+                    ordering.contract,
                     &["manifest_group_foundations", group.as_str()],
                 ))
                 .iter()
                 .any(|foundation| foundation == from)
             })
             .unwrap_or(false),
-        (false, true, true, false) => manifest_dependency_contains(contract, to, from, w6_ids),
+        (false, true, true, false) => {
+            manifest_dependency_contains(ordering.contract, to, from, ordering.w6_ids)
+        }
         (false, false, true, true) => {
-            if graph_precedes(graph, from, to) {
+            if graph_precedes(ordering.graph, from, to) {
                 true
-            } else if graph_precedes(graph, to, from) {
+            } else if graph_precedes(ordering.graph, to, from) {
                 false
             } else {
-                let Some(from_group) = manifest_groups.get(from) else {
+                let Some(from_group) = ordering.manifest_groups.get(from) else {
                     return false;
                 };
-                let Some(to_group) = manifest_groups.get(to) else {
+                let Some(to_group) = ordering.manifest_groups.get(to) else {
                     return false;
                 };
                 let from_foundations = string_array(value_at(
-                    contract,
+                    ordering.contract,
                     &["manifest_group_foundations", from_group.as_str()],
                 ));
                 let to_foundations = string_array(value_at(
-                    contract,
+                    ordering.contract,
                     &["manifest_group_foundations", to_group.as_str()],
                 ));
                 from_foundations
@@ -2399,6 +2404,14 @@ fn check_shared_writer_handoffs(
         .collect::<BTreeSet<_>>();
     let local_ids = string_set(EXPECTED_LOCAL_TASK_IDS);
     let manifest_groups = manifest_group_by_id(graph);
+    let ordering = HandoffOrdering {
+        contract,
+        graph,
+        local_ids: &local_ids,
+        manifest_ids: &manifest_ids,
+        manifest_groups: &manifest_groups,
+        w6_ids: &w6_ids,
+    };
     let declared_handoff_paths = value_at(
         contract,
         &["local_to_manifest_shared_writer_handoffs", "handoffs"],
@@ -2581,16 +2594,7 @@ fn check_shared_writer_handoffs(
                 let Some(to) = pair[1].as_str() else {
                     continue;
                 };
-                if !handoff_edge_is_executable(
-                    contract,
-                    graph,
-                    from,
-                    to,
-                    &local_ids,
-                    &manifest_ids,
-                    &manifest_groups,
-                    &w6_ids,
-                ) {
+                if !handoff_edge_is_executable(from, to, &ordering) {
                     findings.push(format!(
                         "shared-writer handoff `{surface}` adjacent order `{from}` -> `{to}` is absent from graph/readiness ordering"
                     ));
