@@ -788,59 +788,6 @@ impl DispatchLedger {
             return Ok(Vec::new());
         }
 
-        pub fn graph_group_prerequisites(
-            repository_root: &Path,
-        ) -> Result<BTreeMap<String, BTreeSet<String>>> {
-            let graph: Value =
-                serde_json::from_slice(&fs::read(repository_root.join(GRAPH_PATH)).map_err(
-                    |_| DeliveryError::environment("cannot read the implementation graph"),
-                )?)?;
-            let nodes = graph
-                .get("nodes")
-                .and_then(Value::as_array)
-                .ok_or_else(|| DeliveryError::new("implementation graph has no nodes"))?;
-            let edges = graph
-                .get("edges")
-                .and_then(Value::as_array)
-                .ok_or_else(|| DeliveryError::new("implementation graph has no edges"))?;
-            let mut groups = BTreeMap::new();
-            for node in nodes {
-                if node.get("kind").and_then(Value::as_str) != Some("work-item")
-                    || node.get("wave").and_then(Value::as_str) != Some("W6")
-                {
-                    continue;
-                }
-                let id = node
-                    .get("id")
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| DeliveryError::new("Wave 6 graph node has no id"))?;
-                let group = node
-                    .get("parallelGroup")
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| DeliveryError::new("Wave 6 graph node has no parallel group"))?;
-                groups.insert(id.to_owned(), group.to_owned());
-            }
-            let mut prerequisites = BTreeMap::<String, BTreeSet<String>>::new();
-            for edge in edges {
-                let from = edge.get("from").and_then(Value::as_str);
-                let to = edge.get("to").and_then(Value::as_str);
-                let (Some(from), Some(to)) = (from, to) else {
-                    return Err(DeliveryError::new(
-                        "implementation graph edge has no endpoints",
-                    ));
-                };
-                let (Some(from_group), Some(to_group)) = (groups.get(from), groups.get(to)) else {
-                    continue;
-                };
-                if from_group != to_group {
-                    prerequisites
-                        .entry(to_group.clone())
-                        .or_default()
-                        .insert(from_group.clone());
-                }
-            }
-            Ok(prerequisites)
-        }
         let complete = |group: &str| {
             self.entry(group)
                 .map(|entry| matches!(entry.state, DispatchState::Completed))
@@ -852,6 +799,7 @@ impl DispatchLedger {
             if entry.state != DispatchState::NotLaunched {
                 continue;
             }
+
             let is_ready = if group == "feature-local:w6-shared-prep" {
                 true
             } else if group == "feature-local:w6-core-control-foundations"
@@ -905,6 +853,60 @@ impl DispatchLedger {
         }
         Ok(())
     }
+}
+
+pub fn graph_group_prerequisites(
+    repository_root: &Path,
+) -> Result<BTreeMap<String, BTreeSet<String>>> {
+    let graph: Value = serde_json::from_slice(
+        &fs::read(repository_root.join(GRAPH_PATH))
+            .map_err(|_| DeliveryError::environment("cannot read the implementation graph"))?,
+    )?;
+    let nodes = graph
+        .get("nodes")
+        .and_then(Value::as_array)
+        .ok_or_else(|| DeliveryError::new("implementation graph has no nodes"))?;
+    let edges = graph
+        .get("edges")
+        .and_then(Value::as_array)
+        .ok_or_else(|| DeliveryError::new("implementation graph has no edges"))?;
+    let mut groups = BTreeMap::new();
+    for node in nodes {
+        if node.get("kind").and_then(Value::as_str) != Some("work-item")
+            || node.get("wave").and_then(Value::as_str) != Some("W6")
+        {
+            continue;
+        }
+        let id = node
+            .get("id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| DeliveryError::new("Wave 6 graph node has no id"))?;
+        let group = node
+            .get("parallelGroup")
+            .and_then(Value::as_str)
+            .ok_or_else(|| DeliveryError::new("Wave 6 graph node has no parallel group"))?;
+        groups.insert(id.to_owned(), group.to_owned());
+    }
+    let mut prerequisites = BTreeMap::<String, BTreeSet<String>>::new();
+    for edge in edges {
+        let from = edge.get("from").and_then(Value::as_str);
+        let to = edge.get("to").and_then(Value::as_str);
+        let (Some(from), Some(to)) = (from, to) else {
+            return Err(DeliveryError::new(
+                "implementation graph edge has no endpoints",
+            ));
+        };
+        let (Some(from_group), Some(to_group)) = (groups.get(from), groups.get(to)) else {
+            continue;
+        };
+        if from_group != to_group {
+            prerequisites
+                .entry(to_group.clone())
+                .or_default()
+                .insert(from_group.clone());
+        }
+    }
+    Ok(prerequisites)
 }
 
 pub fn initial_ledger(candidate_id: &CandidateId, head_oid: &str) -> Result<DispatchLedger> {
