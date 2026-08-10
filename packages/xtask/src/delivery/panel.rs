@@ -1045,6 +1045,17 @@ fn request_checked(
         &snapshot.material,
         repository_roots,
     )?;
+    if super::coordination::is_wave6_entry_wave(&snapshot.material) {
+        let selection = selection_path
+            .map(|path| read_json_file::<PanelSelectionV1>(path, "panel selection"))
+            .transpose()?;
+        super::coordination::require_plan_receipt(
+            &snapshot.material,
+            repository_roots,
+            selection.as_ref(),
+            None,
+        )?;
+    }
     match selection_path {
         Some(path) => request_with_selection(candidate, snapshot, path),
         None => {

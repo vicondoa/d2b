@@ -23,6 +23,7 @@
 use std::fmt;
 
 pub mod command;
+pub mod coordination;
 pub mod eligibility;
 pub mod evidence;
 pub mod history_proof;

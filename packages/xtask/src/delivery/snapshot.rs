@@ -131,14 +131,40 @@ pub fn run(args: &[String]) -> Result<WorkflowOutput> {
 }
 
 fn run_with_root(request: &SnapshotRequest, root: &StateRoot) -> Result<WorkflowOutput> {
+    let automatic_fetch = if request.fetch_evidence.is_none()
+        && super::coordination::is_wave6_identity(&request.program, &request.wave)
+    {
+        let roots = request.checkout_roots()?;
+        roots
+            .get("github.com/vicondoa/d2b")
+            .filter(|checkout| {
+                Command::new("git")
+                    .arg("-C")
+                    .arg(checkout)
+                    .args(["rev-parse", "--verify", "refs/remotes/origin/v3"])
+                    .env("GIT_OPTIONAL_LOCKS", "0")
+                    .output()
+                    .map(|output| output.status.success())
+                    .unwrap_or(false)
+            })
+            .map(|checkout| super::coordination::refresh_origin_v3(checkout))
+            .transpose()?
+    } else {
+        None
+    };
     let material = discover(request)?;
     super::work_item_state::reject_adr046_w5_mutation(&material, "snapshot")?;
     let repository_roots = request.checkout_roots()?;
-    super::work_item_state::require_adr046_historical_predecessor_at_entry(
+    super::work_item_state::require_adr046_historical_predecessor_at_entry_with_fetch_record(
         root,
         &material,
         &repository_roots,
+        request.fetch_evidence.as_deref(),
+        automatic_fetch.as_ref(),
     )?;
+    if super::coordination::is_w6_entry_wave(&material) {
+        super::coordination::require_entry_receipts(&material, &repository_roots)?;
+    }
     // FR-036/FR-048: a wave's implementation may start before its predecessor
     // is sealed and merged, so entry runs no prior-wave-merged assertion. That
     // condition is enforced at the panel-request, seal, and merge-eligibility
@@ -300,6 +326,7 @@ pub struct SnapshotRequest {
     dependency_fingerprints: Vec<FingerprintInput>,
     contract_fingerprints: Vec<FingerprintInput>,
     state_dir: Option<PathBuf>,
+    fetch_evidence: Option<PathBuf>,
 }
 
 impl SnapshotRequest {
@@ -316,6 +343,9 @@ impl SnapshotRequest {
         let dependency_fingerprints = fingerprints(options.repeated_strings("--dependency"))?;
         let contract_fingerprints = fingerprints(options.repeated_strings("--contract"))?;
         let state_dir = options.optional_path("--state-dir")?;
+        let fetch_evidence = options
+            .optional_path("--fetch-evidence")?
+            .or_else(|| std::env::var_os(super::coordination::FRESH_FETCH_ENV).map(PathBuf::from));
         options.finish()?;
 
         validate_program_wave(&program, &wave)?;
@@ -367,6 +397,7 @@ impl SnapshotRequest {
             dependency_fingerprints,
             contract_fingerprints,
             state_dir,
+            fetch_evidence,
         };
         request.ensure_fingerprint_repositories()?;
         Ok(request)

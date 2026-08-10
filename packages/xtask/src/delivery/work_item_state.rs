@@ -10,6 +10,7 @@ use serde::Deserialize;
 
 use super::{
     DeliveryError, Result,
+    coordination::{self, FreshFetchEvidence},
     model::{
         CandidateId, CandidateMaterial, MAX_WAVE_ORDINAL, RepositoryRecord, qualified_wave_parts,
         sha256_bytes,
@@ -196,6 +197,68 @@ pub fn require_adr046_historical_predecessor_at_entry(
     repository_roots: &BTreeMap<String, PathBuf>,
 ) -> Result<()> {
     require_adr046_historical_predecessor(state_root, material, repository_roots, true)
+}
+
+/// Entry variant that consumes an external, structured fetch receipt.  The
+/// remote-tracking ref is only a locator for the fetch result; it is never the
+/// freshness proof itself.
+pub fn require_adr046_historical_predecessor_at_entry_with_fetch_evidence(
+    state_root: &StateRoot,
+    material: &CandidateMaterial,
+    repository_roots: &BTreeMap<String, PathBuf>,
+    fetch_evidence_path: Option<&Path>,
+) -> Result<()> {
+    require_adr046_historical_predecessor_at_entry_with_fetch_record(
+        state_root,
+        material,
+        repository_roots,
+        fetch_evidence_path,
+        None,
+    )
+}
+
+pub fn require_adr046_historical_predecessor_at_entry_with_fetch_record(
+    state_root: &StateRoot,
+    material: &CandidateMaterial,
+    repository_roots: &BTreeMap<String, PathBuf>,
+    fetch_evidence_path: Option<&Path>,
+    fetched: Option<&FreshFetchEvidence>,
+) -> Result<()> {
+    if !is_adr046_post_w5(material) {
+        return Ok(());
+    }
+    let repository = material
+        .repository_set
+        .iter()
+        .find(|repository| repository.id == D2B_REPOSITORY_ID)
+        .ok_or_else(|| DeliveryError::new("Wave 6 material has no d2b repository record"))?;
+    let root = repository_roots
+        .get(D2B_REPOSITORY_ID)
+        .ok_or_else(|| DeliveryError::new("Wave 6 material has no d2b repository checkout"))?;
+    let integration_tip = resolve_commit(root, D2B_INTEGRATION_REF, "integration ref")?;
+    if repository.base_oid != integration_tip {
+        return Err(DeliveryError::new(
+            "ADR-046 Wave 6 base commit is not the fetched integration tip",
+        ));
+    }
+    if let Some(fetched) = fetched {
+        fetched.validate(root, &integration_tip)?;
+    } else {
+        let path = fetch_evidence_path.ok_or_else(|| {
+            DeliveryError::new(
+                "ADR-046 Wave 6 entry requires verifiable fresh-fetch evidence for origin/v3",
+            )
+        })?;
+        let _evidence =
+            coordination::read_fresh_fetch_evidence(path, root, repository_roots, &integration_tip)?;
+    }
+    validate_historical_predecessor(
+        &ADR046_W6_HISTORICAL_POLICY,
+        state_root,
+        material,
+        repository_roots,
+        true,
+    )
 }
 
 fn require_adr046_historical_predecessor(
@@ -418,6 +481,14 @@ fn find_first_parent_amendment(
             "cannot enumerate the ADR-046 integration lineage",
         ));
     }
+    if let Some(constitution) =
+        read_tree_object(root, repository_id, predecessor, CONSTITUTION_PATH)?
+        && sha256_bytes(&constitution) == expected_constitution_sha256
+    {
+        return Err(DeliveryError::new(
+            "accepted Constitution bytes pre-existed the exact Wave 5 boundary",
+        ));
+    }
     for commit in String::from_utf8_lossy(&output.stdout)
         .lines()
         .filter(|line| !line.is_empty())
@@ -426,13 +497,59 @@ fn find_first_parent_amendment(
         else {
             continue;
         };
-        if sha256_bytes(&constitution) == expected_constitution_sha256 {
-            return Ok(commit.to_owned());
+        if sha256_bytes(&constitution) != expected_constitution_sha256 {
+            continue;
         }
+        let parents = commit_parents(root, commit)?;
+        let first_parent = parents.first().ok_or_else(|| {
+            DeliveryError::new(
+                "accepted historical amendment has no first parent after the Wave 5 boundary",
+            )
+        })?;
+        if parents.len() != 1 {
+            return Err(DeliveryError::new(
+                "accepted Constitution bytes arrived through a side-parent merge, not a \
+                 first-parent amendment",
+            ));
+        }
+        let Some(parent_constitution) =
+            read_tree_object(root, repository_id, first_parent, CONSTITUTION_PATH)?
+        else {
+            return Ok(commit.to_owned());
+        };
+        if sha256_bytes(&parent_constitution) == expected_constitution_sha256 {
+            return Err(DeliveryError::new(
+                "accepted Constitution bytes pre-existed the historical amendment first parent",
+            ));
+        }
+        return Ok(commit.to_owned());
     }
     Err(DeliveryError::new(
         "delivery base has no accepted historical disposition on first-parent integration history",
     ))
+}
+
+fn commit_parents(root: &Path, commit: &str) -> Result<Vec<String>> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["rev-list", "--parents", "-n", "1", commit])
+        .output()
+        .map_err(|_| DeliveryError::environment("cannot inspect historical amendment parents"))?;
+    if !output.status.success() {
+        return Err(DeliveryError::environment(
+            "cannot inspect historical amendment parents",
+        ));
+    }
+    let mut parents = String::from_utf8(output.stdout)
+        .map_err(|_| DeliveryError::environment("historical amendment parent list was not UTF-8"))?
+        .split_whitespace()
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    if parents.first().map(String::as_str) == Some(commit) {
+        parents.remove(0);
+    }
+    Ok(parents)
 }
 
 fn resolve_commit(root: &Path, revision: &str, label: &str) -> Result<String> {

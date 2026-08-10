@@ -240,6 +240,14 @@ pub(crate) fn evaluate_checked(
         &seal.material,
         repository_roots,
     )?;
+    if super::coordination::is_wave6_entry_wave(&seal.material) {
+        super::coordination::require_close_receipts(
+            &seal.material,
+            repository_roots,
+            Some(&seal.panel.roles),
+            true,
+        )?;
+    }
     evaluate(candidate, seal, target)
 }
 

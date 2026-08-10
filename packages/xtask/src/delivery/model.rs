@@ -1394,6 +1394,14 @@ impl CandidateMaterial {
                 )));
             }
         }
+        if is_wave6_material(self) {
+            if self.dependency_graph.is_empty() {
+                return Err(DeliveryError::new(
+                    "Wave 6 snapshot must bind a nonempty canonical dependency graph",
+                ));
+            }
+            ensure_acyclic_dependency_graph(&self.dependency_graph)?;
+        }
 
         for (label, list) in [
             ("generated artifact", &self.generated_artifacts),
@@ -1416,6 +1424,7 @@ impl CandidateMaterial {
                     )));
                 }
             }
+
         }
         Ok(())
     }
@@ -1542,6 +1551,59 @@ impl CandidateMaterial {
         )
         .map(SnapshotSha256)
     }
+}
+
+fn is_wave6_material(material: &CandidateMaterial) -> bool {
+    let ordinal = if material.wave == "W6" {
+        Some(6)
+    } else {
+        qualified_wave_parts(&material.wave).map(|(_, ordinal)| ordinal)
+    };
+    ordinal == Some(6)
+        && (material.program.eq_ignore_ascii_case("ADR046")
+            || material.program.eq_ignore_ascii_case("SPEC001"))
+}
+
+fn ensure_acyclic_dependency_graph(edges: &[DependencyEdge]) -> Result<()> {
+    let mut adjacency = BTreeMap::<&str, Vec<&str>>::new();
+    for edge in edges {
+        adjacency.entry(&edge.from).or_default().push(&edge.to);
+    }
+    let mut visiting = BTreeSet::new();
+    let mut visited = BTreeSet::new();
+    fn visit<'a>(
+        node: &'a str,
+        adjacency: &BTreeMap<&'a str, Vec<&'a str>>,
+        visiting: &mut BTreeSet<&'a str>,
+        visited: &mut BTreeSet<&'a str>,
+    ) -> bool {
+        if visited.contains(node) {
+            return false;
+        }
+        if !visiting.insert(node) {
+            return true;
+        }
+        let cycle = adjacency
+            .get(node)
+            .into_iter()
+            .flatten()
+            .any(|next| visit(next, adjacency, visiting, visited));
+        visiting.remove(node);
+        if !cycle {
+            visited.insert(node);
+        }
+        cycle
+    }
+    if adjacency
+        .keys()
+        .copied()
+        .any(|node| visit(node, &adjacency, &mut visiting, &mut visited))
+    {
+        return Err(DeliveryError::new(
+            "Wave 6 dependency graph must be acyclic",
+        ));
+    }
+    Ok(())
 }
 
 /// Domain-separated SHA-256 over the canonical JSON encoding of `value`.
