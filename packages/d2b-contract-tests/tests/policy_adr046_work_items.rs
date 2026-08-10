@@ -10,9 +10,13 @@
 //! Every helper below takes plain in-memory inputs, which lets the negative
 //! fixtures exercise the same code path the real tree is checked with.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt,
+};
 
 use d2b_contract_tests::{read_repo_file, repo_root};
+use serde::de::{self, DeserializeSeed, MapAccess, SeqAccess, Visitor};
 use serde_json::Value;
 
 /// A mutation applied to a serialized work-item row in a negative fixture.
@@ -63,6 +67,109 @@ const MANDATORY_FIELDS: &[&str] = &[
     "Reuse action",
     "Validation",
 ];
+
+struct NoDuplicateValue;
+
+impl<'de> DeserializeSeed<'de> for NoDuplicateValue {
+    type Value = Value;
+
+    fn deserialize<D>(self, deserializer: D) -> Result<Value, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer.deserialize_any(NoDuplicateVisitor)
+    }
+}
+
+struct NoDuplicateVisitor;
+
+impl<'de> Visitor<'de> for NoDuplicateVisitor {
+    type Value = Value;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("JSON without duplicate object keys")
+    }
+
+    fn visit_bool<E>(self, value: bool) -> Result<Value, E> {
+        Ok(Value::Bool(value))
+    }
+
+    fn visit_i64<E>(self, value: i64) -> Result<Value, E> {
+        Ok(Value::Number(value.into()))
+    }
+
+    fn visit_u64<E>(self, value: u64) -> Result<Value, E> {
+        Ok(Value::Number(value.into()))
+    }
+
+    fn visit_f64<E>(self, value: f64) -> Result<Value, E>
+    where
+        E: de::Error,
+    {
+        serde_json::Number::from_f64(value)
+            .map(Value::Number)
+            .ok_or_else(|| E::custom("non-finite JSON number"))
+    }
+
+    fn visit_str<E>(self, value: &str) -> Result<Value, E> {
+        Ok(Value::String(value.to_owned()))
+    }
+
+    fn visit_string<E>(self, value: String) -> Result<Value, E> {
+        Ok(Value::String(value))
+    }
+
+    fn visit_none<E>(self) -> Result<Value, E> {
+        Ok(Value::Null)
+    }
+
+    fn visit_unit<E>(self) -> Result<Value, E> {
+        Ok(Value::Null)
+    }
+
+    fn visit_some<D>(self, deserializer: D) -> Result<Value, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        NoDuplicateValue.deserialize(deserializer)
+    }
+
+    fn visit_seq<A>(self, mut sequence: A) -> Result<Value, A::Error>
+    where
+        A: SeqAccess<'de>,
+    {
+        let mut values = Vec::new();
+        while let Some(value) = sequence.next_element_seed(NoDuplicateValue)? {
+            values.push(value);
+        }
+        Ok(Value::Array(values))
+    }
+
+    fn visit_map<A>(self, mut object: A) -> Result<Value, A::Error>
+    where
+        A: MapAccess<'de>,
+    {
+        let mut values = serde_json::Map::new();
+        while let Some(key) = object.next_key::<String>()? {
+            if values.contains_key(&key) {
+                return Err(de::Error::custom(format!(
+                    "duplicate JSON object key `{key}`"
+                )));
+            }
+            values.insert(key, object.next_value_seed(NoDuplicateValue)?);
+        }
+        Ok(Value::Object(values))
+    }
+}
+
+fn parse_json_without_duplicates(source: &str) -> Result<Value, String> {
+    let mut deserializer = serde_json::Deserializer::from_str(source);
+    let value = NoDuplicateValue
+        .deserialize(&mut deserializer)
+        .map_err(|error| error.to_string())?;
+    deserializer.end().map_err(|error| error.to_string())?;
+    Ok(value)
+}
 
 // ---------------------------------------------------------------------------
 // Markdown side
@@ -690,21 +797,33 @@ fn real_tree() -> (Value, Value, BTreeMap<String, Vec<Declaration>>) {
 
 fn check_local_coordination_tasks(markdown: &str, graph: &Value) -> Vec<String> {
     let mut findings = Vec::new();
-    let contracts = markdown
+    let mut contracts = Vec::new();
+    for body in markdown
         .split("```json")
         .skip(1)
         .filter_map(|tail| tail.split("```").next())
-        .filter_map(|body| serde_json::from_str::<Value>(body).ok())
-        .filter(|value| value["artifact_kind"] == "d2b-feature-local-task-contract")
-        .collect::<Vec<_>>();
+    {
+        let claims_local_contract = body.contains("d2b-feature-local-task-contract");
+        match parse_json_without_duplicates(body) {
+            Ok(value) if value["artifact_kind"] == "d2b-feature-local-task-contract" => {
+                contracts.push(value);
+            }
+            Ok(_) if claims_local_contract => findings
+                .push("claimed feature-local task contract has the wrong artifact kind".to_owned()),
+            Err(error) if claims_local_contract => findings.push(format!(
+                "claimed feature-local task contract is invalid: {error}"
+            )),
+            Ok(_) | Err(_) => {}
+        }
+    }
     if contracts.len() != 1 {
-        return vec![format!(
+        findings.push(format!(
             "expected exactly one feature-local task contract, found {}",
             contracts.len()
-        )];
+        ));
     }
     let Some(contract) = contracts.into_iter().next() else {
-        return vec!["feature-local task contract JSON block is missing".to_owned()];
+        return findings;
     };
 
     let mut t604_manifest = vec![
@@ -1141,6 +1260,22 @@ fn feature_local_coordination_contract_rejects_load_bearing_mutations() {
     assert!(
         !check_local_coordination_tasks(&duplicated, &graph).is_empty(),
         "duplicate local-task contract unexpectedly passed"
+    );
+    let duplicate_key = tasks.replacen(
+        "\"schema_version\": 1",
+        "\"schema_version\": 1,\n  \"schema_version\": 1",
+        1,
+    );
+    assert!(
+        !check_local_coordination_tasks(&duplicate_key, &graph).is_empty(),
+        "duplicate JSON key unexpectedly passed"
+    );
+    let malformed = format!(
+        "{tasks}\n```json\n{{\"artifact_kind\":\"d2b-feature-local-task-contract\",\n```\n"
+    );
+    assert!(
+        !check_local_coordination_tasks(&malformed, &graph).is_empty(),
+        "malformed competing local-task contract unexpectedly passed"
     );
 }
 
