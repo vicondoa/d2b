@@ -27,6 +27,17 @@ const WORK_ITEMS: &str = "docs/specs/ADR-046-work-items.json";
 const GRAPH_JSON: &str = "docs/specs/ADR-046-implementation-graph.json";
 const GRAPH_MD: &str = "docs/specs/ADR-046-implementation-graph.md";
 const FEATURE_TASKS: &str = "specs/001-adr046-d2b3-completion/tasks.md";
+/// SHA-256 of the compact, recursively key-sorted JSON contract in `tasks.md`.
+/// The pin keeps the full contract exact without copying its long ownership
+/// arrays into this policy.
+const FEATURE_TASK_CONTRACT_SHA256: &str =
+    "cf317616723e50911f504974ac46ff3b77141991b2f3499a8ae8e44b4bfb01fc";
+
+const EXPECTED_LOCAL_TASK_IDS: &[&str] = &["T606", "T607", "T608", "T609", "T604", "T479", "T480"];
+const EXPECTED_PERMITTED_LOCAL_DEPENDENCY_IDS: &[&str] = &[
+    "T221", "T606", "T607", "T608", "T609", "T604", "T479", "T480",
+];
+const EXPECTED_OWNED_TASK_IDS: &[&str] = &["T606", "T607", "T608", "T609", "T604"];
 
 /// The normative member count, per `docs/specs/README.md`.
 const EXPECTED_MEMBERS: usize = 55;
@@ -864,6 +875,186 @@ fn markdown_json_fences(markdown: &str) -> Vec<MarkdownJsonFence> {
     bodies
 }
 
+fn canonical_json(value: &Value) -> Vec<u8> {
+    match value {
+        Value::Null => b"null".to_vec(),
+        Value::Bool(value) => value.to_string().into_bytes(),
+        Value::Number(value) => value.to_string().into_bytes(),
+        Value::String(value) => {
+            serde_json::to_vec(value).expect("JSON strings are always serializable")
+        }
+        Value::Array(values) => {
+            let mut output = vec![b'['];
+            for (index, value) in values.iter().enumerate() {
+                if index != 0 {
+                    output.push(b',');
+                }
+                output.extend(canonical_json(value));
+            }
+            output.push(b']');
+            output
+        }
+        Value::Object(values) => {
+            let mut entries: Vec<_> = values.iter().collect();
+            entries.sort_unstable_by(|left, right| left.0.cmp(right.0));
+
+            let mut output = vec![b'{'];
+            for (index, (key, value)) in entries.into_iter().enumerate() {
+                if index != 0 {
+                    output.push(b',');
+                }
+                output.extend(
+                    serde_json::to_vec(key).expect("JSON object keys are always serializable"),
+                );
+                output.push(b':');
+                output.extend(canonical_json(value));
+            }
+            output.push(b'}');
+            output
+        }
+    }
+}
+
+fn value_at<'a>(value: &'a Value, path: &[&str]) -> Option<&'a Value> {
+    let mut current = value;
+    for component in path {
+        current = current.get(*component)?;
+    }
+    Some(current)
+}
+
+fn string_array(value: Option<&Value>) -> Vec<String> {
+    value
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_owned)
+        .collect()
+}
+
+fn expected_strings(values: &[&str]) -> Vec<String> {
+    values.iter().map(|value| (*value).to_owned()).collect()
+}
+
+fn string_set(values: &[&str]) -> BTreeSet<String> {
+    expected_strings(values).into_iter().collect()
+}
+
+fn object_keys(value: Option<&Value>) -> BTreeSet<String> {
+    value
+        .and_then(Value::as_object)
+        .map(|object| object.keys().cloned().collect())
+        .unwrap_or_default()
+}
+
+fn expect_contract_value(
+    contract: &Value,
+    path: &[&str],
+    expected: Value,
+    label: &str,
+    findings: &mut Vec<String>,
+) {
+    if value_at(contract, path) != Some(&expected) {
+        findings.push(format!("feature-local contract {label} is incorrect"));
+    }
+}
+
+fn expect_contract_string_array(
+    contract: &Value,
+    path: &[&str],
+    expected: &[&str],
+    label: &str,
+    findings: &mut Vec<String>,
+) {
+    if string_array(value_at(contract, path)) != expected_strings(expected) {
+        findings.push(format!("feature-local contract {label} is incorrect"));
+    }
+}
+
+fn expected_local_dependencies() -> BTreeMap<&'static str, Vec<&'static str>> {
+    BTreeMap::from([
+        ("T606", vec!["T221"]),
+        ("T607", vec!["T606"]),
+        ("T608", vec!["T606"]),
+        ("T609", vec!["T606"]),
+        ("T604", vec!["T221", "T607", "T608", "T609"]),
+        ("T479", vec!["T604", "T221"]),
+        ("T480", vec!["T479"]),
+    ])
+}
+
+fn expected_historical_foundation_adoption() -> BTreeMap<&'static str, Vec<&'static str>> {
+    BTreeMap::from([
+        (
+            "T607",
+            vec![
+                "ADR046-cli-001",
+                "ADR046-cli-009",
+                "ADR046-exec-003",
+                "ADR046-exec-004",
+                "ADR046-exec-005",
+                "ADR046-nix-003",
+                "ADR046-zone-control-001",
+            ],
+        ),
+        (
+            "T608",
+            vec![
+                "ADR046-volume-001",
+                "ADR046-volume-002",
+                "ADR046-volume-004",
+                "ADR046-zone-control-019",
+                "ADR046-zone-control-020",
+                "ADR046-zone-control-024",
+            ],
+        ),
+        ("T609", vec!["ADR046-audit-001", "ADR046-telem-001"]),
+    ])
+}
+
+fn expected_shared_file_order() -> BTreeMap<&'static str, Vec<&'static str>> {
+    BTreeMap::from([
+        ("Makefile", vec!["T606", "ADR046-ch-001", "T604"]),
+        ("packages/Cargo.toml", vec!["T606"]),
+        ("packages/Cargo.lock", vec!["T606"]),
+        ("flake.nix", vec!["T606"]),
+        ("packages/d2b-contracts/src/broker_wire.rs", vec!["T606"]),
+        ("packages/d2b-priv-broker/src/runtime.rs", vec!["T606"]),
+        ("packages/d2bd/src/lib.rs", vec!["T606"]),
+        ("packages/d2b/src/lib.rs", vec!["T606"]),
+    ])
+}
+
+fn expected_t604_manifest_dependencies() -> Vec<String> {
+    let mut dependencies = vec![
+        "ADR046-activation-001".to_owned(),
+        "ADR046-activation-006".to_owned(),
+        "ADR046-system-core-001".to_owned(),
+        "ADR046-ch-001".to_owned(),
+    ];
+    dependencies.extend((1..=20).map(|ordinal| format!("ADR046-nl-{ordinal:03}")));
+    dependencies.extend((1..=13).map(|ordinal| format!("ADR046-device-tpm-{ordinal:03}")));
+    dependencies.extend((1..=13).map(|ordinal| format!("ADR046-vl-{ordinal:03}")));
+    dependencies
+}
+
+fn contract_task_row(line: &str, task_ids: &BTreeSet<String>) -> Option<(String, bool)> {
+    let rest = line.strip_prefix("- ")?;
+    if !rest.starts_with('[') {
+        return None;
+    }
+    let close = rest.find(']')?;
+    let marker = &rest[..=close];
+    let id = rest[close + 1..]
+        .split_whitespace()
+        .next()?
+        .trim_matches('`');
+    task_ids
+        .contains(id)
+        .then_some((id.to_owned(), marker != "[ ]"))
+}
+
 fn check_local_coordination_tasks(markdown: &str, graph: &Value) -> Vec<String> {
     let mut findings = Vec::new();
     let mut contracts = Vec::new();
@@ -892,115 +1083,73 @@ fn check_local_coordination_tasks(markdown: &str, graph: &Value) -> Vec<String> 
         return findings;
     };
 
-    let mut t604_manifest = vec![
-        "ADR046-activation-001".to_owned(),
-        "ADR046-activation-006".to_owned(),
-        "ADR046-system-core-001".to_owned(),
-        "ADR046-ch-001".to_owned(),
-    ];
-    t604_manifest.extend((1..=20).map(|ordinal| format!("ADR046-nl-{ordinal:03}")));
-    t604_manifest.extend((1..=13).map(|ordinal| format!("ADR046-device-tpm-{ordinal:03}")));
-    t604_manifest.extend((1..=13).map(|ordinal| format!("ADR046-vl-{ordinal:03}")));
-    let expected_contract = serde_json::json!({
-        "artifact_kind": "d2b-feature-local-task-contract",
-        "schema_version": 1,
-        "task_ids": ["T604", "T479", "T480"],
-        "unchecked_task_ids": ["T604", "T479", "T480"],
-        "outside_retired_fences": true,
-        "permitted_local_dependency_ids": ["T221", "T604", "T479", "T480"],
-        "required_local_dependencies": {
-            "T604": ["T221"],
-            "T479": ["T604", "T221"],
-            "T480": ["T479"]
-        },
-        "required_manifest_dependencies": {
-            "T604": t604_manifest
-        },
-        "required_manifest_dependency_queries": {
-            "T479": {
-                "artifact": "docs/specs/ADR-046-implementation-graph.json",
-                "where": {"kind": "work-item", "wave": "W6"},
-                "project": "id",
-                "project_semantics": "workItemId",
-                "expected_count": 258,
-                "cardinality": "exact",
-                "complete_for_task": true
-            }
-        },
-        "shared_file_order": {
-            "Makefile": ["ADR046-ch-001", "T604"]
-        },
-        "owned_files": {
-            "T604": [
-                "packages/d2b-contract-tests/tests/resource_operator_activation.rs",
-                "packages/d2bd/tests/resource_operator_activation.rs",
-                "tests/host-integration/resource-operator-activation.nix",
-                "tests/host-integration/daemon-restart-vm-survival.nix",
-                "tests/golden/delivery/host-generation-pre-start-case-ids.txt",
-                "tests/golden/delivery/host-generation-unit-census-case-ids.txt",
-                "Makefile",
-                "changelog.d/operator-resource-activation.md"
-            ]
-        },
-        "case_id_fixture_paths": [
-            "tests/golden/delivery/host-generation-pre-start-case-ids.txt",
-            "tests/golden/delivery/host-generation-unit-census-case-ids.txt"
-        ],
-        "validator_identity_literals": {
-            "T604": ["operator-nix-activation-cleanup"]
-        },
-        "acceptance_resource_identities": [
-            "Volume/acceptance-state",
-            "Network/acceptance-net",
-            "Device/acceptance-tpm"
-        ],
-        "candidate_evidence_literals": {
-            "T479": [
-                "operator-nix-activation-cleanup",
-                "w6-cloud-hypervisor-guest-acceptance"
-            ]
-        },
-        "t479_candidate_execution_order": [
-            "converge-f6",
-            "freeze-f6",
-            "invoke-t604-operator-validator",
-            "execute-t604-authored-daemon-restart-case-with-cloud-hypervisor-case",
-            "emit-both-candidate-records"
-        ],
-        "operator_acceptance": {
-            "validator_author": "T604",
-            "candidate_executor": "T479",
-            "candidate_evidence_owner": "T479",
-            "candidate_evidence_literal": "operator-nix-activation-cleanup",
-            "candidate_record_count": 1,
-            "t604_pre_f6_candidate_evidence_emission": false,
-            "close_revalidator": "T480"
-        },
-        "fr075": {
-            "case_author": "T604",
-            "candidate_executor": "T479",
-            "candidate_evidence_owner": "T479",
-            "candidate_evidence_literal": "w6-cloud-hypervisor-guest-acceptance",
-            "candidate_record_count": 1,
-            "t604_candidate_bound_evidence": false,
-            "close_revalidator": "T480"
-        }
-    });
-    if contract != expected_contract {
-        findings.push("feature-local task contract differs from the exact schema".to_owned());
+    let contract_hash = hex_sha256(&canonical_json(&contract));
+    if contract_hash != FEATURE_TASK_CONTRACT_SHA256 {
+        findings.push(format!(
+            "feature-local task contract canonical SHA-256 pin mismatch (got {contract_hash})"
+        ));
     }
+
+    expect_contract_value(
+        &contract,
+        &["artifact_kind"],
+        serde_json::json!("d2b-feature-local-task-contract"),
+        "artifact_kind",
+        &mut findings,
+    );
+    expect_contract_value(
+        &contract,
+        &["schema_version"],
+        serde_json::json!(1),
+        "schema_version",
+        &mut findings,
+    );
+    expect_contract_string_array(
+        &contract,
+        &["task_ids"],
+        EXPECTED_LOCAL_TASK_IDS,
+        "task_ids",
+        &mut findings,
+    );
+    expect_contract_string_array(
+        &contract,
+        &["unchecked_task_ids"],
+        EXPECTED_LOCAL_TASK_IDS,
+        "unchecked_task_ids",
+        &mut findings,
+    );
+    expect_contract_value(
+        &contract,
+        &["outside_retired_fences"],
+        serde_json::json!(true),
+        "outside_retired_fences",
+        &mut findings,
+    );
+    expect_contract_string_array(
+        &contract,
+        &["permitted_local_dependency_ids"],
+        EXPECTED_PERMITTED_LOCAL_DEPENDENCY_IDS,
+        "permitted_local_dependency_ids",
+        &mut findings,
+    );
 
     let query_nodes = graph["nodes"]
         .as_array()
         .into_iter()
         .flatten()
         .filter(|node| node["kind"] == "work-item" && node["wave"] == "W6")
+        .collect::<Vec<_>>();
+    let query_ids = query_nodes
+        .iter()
         .filter_map(|node| node["id"].as_str())
         .collect::<BTreeSet<_>>();
+    if query_ids.len() != query_nodes.len() {
+        findings.push("feature-local T479 W6 query projects duplicate or missing ids".to_owned());
+    }
     if query_nodes.len() != 258 {
         findings.push(format!(
             "feature-local T479 W6 query expected 258 rows, got {}",
-            query_nodes.len()
+            query_nodes.len(),
         ));
     }
     let graph_ids = graph["nodes"]
@@ -1010,112 +1159,283 @@ fn check_local_coordination_tasks(markdown: &str, graph: &Value) -> Vec<String> 
         .filter_map(|node| node["id"].as_str())
         .collect::<BTreeSet<_>>();
 
-    let json_set = |path: &[&str]| -> BTreeSet<String> {
-        let mut value = &contract;
-        for component in path {
-            value = &value[*component];
-        }
-        value
-            .as_array()
+    let expected_local = string_set(EXPECTED_LOCAL_TASK_IDS);
+    let expected_local_dependencies = expected_local_dependencies();
+    if object_keys(value_at(&contract, &["required_local_dependencies"])) != expected_local {
+        findings.push("feature-local local dependency task set is incorrect".to_owned());
+    }
+    let permitted_dependencies =
+        string_array(value_at(&contract, &["permitted_local_dependency_ids"]))
             .into_iter()
-            .flatten()
-            .filter_map(Value::as_str)
-            .map(str::to_owned)
-            .collect()
-    };
-    let expected_local = ["T479", "T480", "T604"]
-        .into_iter()
-        .map(str::to_owned)
-        .collect::<BTreeSet<_>>();
-    for field in ["task_ids", "unchecked_task_ids"] {
-        let actual = json_set(&[field]);
-        if actual != expected_local {
-            findings.push(format!(
-                "feature-local contract {field} must be {expected_local:?}, got {actual:?}"
-            ));
-        }
-    }
-    if contract["outside_retired_fences"] != true {
-        findings.push("feature-local tasks must be outside retired fences".to_owned());
-    }
-    let expected_local_dependencies = BTreeMap::from([
-        ("T604", ["T221"].as_slice()),
-        ("T479", ["T221", "T604"].as_slice()),
-        ("T480", ["T479"].as_slice()),
-    ]);
-    for (task, expected) in expected_local_dependencies {
-        let actual = json_set(&["required_local_dependencies", task]);
-        let expected = expected.iter().map(|value| (*value).to_owned()).collect();
+            .collect::<BTreeSet<_>>();
+    for (task, expected) in &expected_local_dependencies {
+        let actual = string_array(value_at(&contract, &["required_local_dependencies", *task]));
+        let expected = expected
+            .iter()
+            .map(|value| (*value).to_owned())
+            .collect::<Vec<_>>();
         if actual != expected {
             findings.push(format!(
                 "feature-local contract {task} local dependencies are incorrect"
             ));
         }
     }
-    let mut expected_t604_manifest = BTreeSet::from([
-        "ADR046-activation-001".to_owned(),
-        "ADR046-activation-006".to_owned(),
-        "ADR046-system-core-001".to_owned(),
-        "ADR046-ch-001".to_owned(),
-    ]);
-    expected_t604_manifest.extend((1..=20).map(|ordinal| format!("ADR046-nl-{ordinal:03}")));
-    expected_t604_manifest
-        .extend((1..=13).map(|ordinal| format!("ADR046-device-tpm-{ordinal:03}")));
-    expected_t604_manifest.extend((1..=13).map(|ordinal| format!("ADR046-vl-{ordinal:03}")));
-    if json_set(&["required_manifest_dependencies", "T604"]) != expected_t604_manifest {
+    if let Some(dependencies) =
+        value_at(&contract, &["required_local_dependencies"]).and_then(Value::as_object)
+    {
+        for (task, values) in dependencies {
+            for dependency in string_array(Some(values)) {
+                if !permitted_dependencies.contains(&dependency) {
+                    findings.push(format!(
+                        "feature-local contract {task} uses unpermitted dependency `{dependency}`"
+                    ));
+                }
+            }
+        }
+    }
+
+    let expected_adoption = expected_historical_foundation_adoption();
+    let expected_adoption_keys = {
+        let mut keys = string_set(&["source_wave_label", "execution_wave"]);
+        keys.insert("mutates_historical_state".to_owned());
+        keys.extend(expected_adoption.keys().map(|key| (*key).to_owned()));
+        keys
+    };
+    if object_keys(value_at(&contract, &["historical_foundation_adoption"]))
+        != expected_adoption_keys
+    {
+        findings.push("feature-local historical adoption task set is incorrect".to_owned());
+    }
+    expect_contract_value(
+        &contract,
+        &["historical_foundation_adoption", "source_wave_label"],
+        serde_json::json!("W5"),
+        "historical_foundation_adoption.source_wave_label",
+        &mut findings,
+    );
+    expect_contract_value(
+        &contract,
+        &["historical_foundation_adoption", "execution_wave"],
+        serde_json::json!("W6"),
+        "historical_foundation_adoption.execution_wave",
+        &mut findings,
+    );
+    expect_contract_value(
+        &contract,
+        &["historical_foundation_adoption", "mutates_historical_state"],
+        serde_json::json!(false),
+        "historical_foundation_adoption.mutates_historical_state",
+        &mut findings,
+    );
+    for (task, expected) in &expected_adoption {
+        let actual = string_array(value_at(
+            &contract,
+            &["historical_foundation_adoption", *task],
+        ));
+        let expected = expected
+            .iter()
+            .map(|value| (*value).to_owned())
+            .collect::<Vec<_>>();
+        if actual != expected {
+            findings.push(format!(
+                "feature-local historical adoption set for {task} is incorrect"
+            ));
+        }
+    }
+
+    let expected_t604_manifest = expected_t604_manifest_dependencies();
+    if object_keys(value_at(&contract, &["required_manifest_dependencies"]))
+        != string_set(&["T604"])
+    {
+        findings.push("feature-local manifest dependency task set is incorrect".to_owned());
+    }
+    if string_array(value_at(
+        &contract,
+        &["required_manifest_dependencies", "T604"],
+    )) != expected_t604_manifest
+    {
         findings.push("feature-local T604 manifest dependency set is incorrect".to_owned());
     }
-    if !json_set(&["required_manifest_dependencies", "T479"]).is_empty() {
-        findings.push("feature-local T479 manifest dependency set is incorrect".to_owned());
-    }
-    for dependency in json_set(&["required_manifest_dependencies", "T604"]) {
+    for dependency in &expected_t604_manifest {
         if !graph_ids.contains(dependency.as_str()) {
             findings.push(format!(
                 "feature-local T604 dependency `{dependency}` is absent from the graph"
             ));
         }
     }
-    if contract["shared_file_order"]["Makefile"] != serde_json::json!(["ADR046-ch-001", "T604"]) {
-        findings.push("feature-local Makefile ownership order is incorrect".to_owned());
-    }
-    let expected_fixtures = BTreeSet::from([
-        "tests/golden/delivery/host-generation-pre-start-case-ids.txt".to_owned(),
-        "tests/golden/delivery/host-generation-unit-census-case-ids.txt".to_owned(),
-    ]);
-    if json_set(&["case_id_fixture_paths"]) != expected_fixtures {
-        findings.push("feature-local case-id fixture set is incorrect".to_owned());
-    }
-    if contract["operator_acceptance"]["validator_author"] != "T604"
-        || contract["operator_acceptance"]["candidate_executor"] != "T479"
-        || contract["operator_acceptance"]["candidate_evidence_owner"] != "T479"
-        || contract["operator_acceptance"]["t604_pre_f6_candidate_evidence_emission"] != false
-        || contract["fr075"]["case_author"] != "T604"
-        || contract["fr075"]["candidate_executor"] != "T479"
-        || contract["fr075"]["candidate_evidence_owner"] != "T479"
-        || contract["fr075"]["t604_candidate_bound_evidence"] != false
+
+    let expected_query = serde_json::json!({
+        "artifact": "docs/specs/ADR-046-implementation-graph.json",
+        "where": {"kind": "work-item", "wave": "W6"},
+        "project": "id",
+        "project_semantics": "workItemId",
+        "expected_count": 258,
+        "cardinality": "exact",
+        "complete_for_task": true
+    });
+    expect_contract_value(
+        &contract,
+        &["required_manifest_dependency_queries", "T479"],
+        expected_query,
+        "required_manifest_dependency_queries.T479",
+        &mut findings,
+    );
+    if object_keys(value_at(
+        &contract,
+        &["required_manifest_dependency_queries"],
+    )) != string_set(&["T479"])
     {
-        findings.push("feature-local acceptance ownership contract is incorrect".to_owned());
+        findings.push("feature-local manifest query task set is incorrect".to_owned());
     }
 
+    let expected_shared = expected_shared_file_order();
+    let expected_shared_keys = expected_shared
+        .keys()
+        .map(|key| (*key).to_owned())
+        .collect::<BTreeSet<_>>();
+    if object_keys(value_at(&contract, &["shared_file_order"])) != expected_shared_keys {
+        findings.push("feature-local shared-file ownership set is incorrect".to_owned());
+    }
+    for (path, expected) in &expected_shared {
+        let actual = string_array(value_at(&contract, &["shared_file_order", *path]));
+        let expected = expected
+            .iter()
+            .map(|value| (*value).to_owned())
+            .collect::<Vec<_>>();
+        if actual != expected {
+            findings.push(format!(
+                "feature-local shared-file order for `{path}` is incorrect"
+            ));
+        }
+    }
+
+    let expected_owned = string_set(EXPECTED_OWNED_TASK_IDS);
+    if object_keys(value_at(&contract, &["owned_files"])) != expected_owned {
+        findings.push("feature-local owned task set is incorrect".to_owned());
+    }
+    let expected_owned_counts = BTreeMap::from([
+        ("T606", 36usize),
+        ("T607", 10usize),
+        ("T608", 13usize),
+        ("T609", 12usize),
+        ("T604", 8usize),
+    ]);
+    for (task, expected_count) in expected_owned_counts {
+        let actual_count = string_array(value_at(&contract, &["owned_files", task])).len();
+        if actual_count != expected_count {
+            findings.push(format!(
+                "feature-local owned file count for {task} expected {expected_count}, got {actual_count}"
+            ));
+        }
+    }
+
+    expect_contract_string_array(
+        &contract,
+        &["case_id_fixture_paths"],
+        &[
+            "tests/golden/delivery/host-generation-pre-start-case-ids.txt",
+            "tests/golden/delivery/host-generation-unit-census-case-ids.txt",
+        ],
+        "case_id_fixture_paths",
+        &mut findings,
+    );
+    expect_contract_value(
+        &contract,
+        &["validator_identity_literals"],
+        serde_json::json!({"T604": ["operator-nix-activation-cleanup"]}),
+        "validator_identity_literals",
+        &mut findings,
+    );
+    expect_contract_string_array(
+        &contract,
+        &["acceptance_resource_identities"],
+        &[
+            "Volume/acceptance-state",
+            "Network/acceptance-net",
+            "Device/acceptance-tpm",
+        ],
+        "acceptance_resource_identities",
+        &mut findings,
+    );
+    expect_contract_value(
+        &contract,
+        &["candidate_evidence_literals"],
+        serde_json::json!({
+            "T479": [
+                "operator-nix-activation-cleanup",
+                "w6-cloud-hypervisor-guest-acceptance"
+            ]
+        }),
+        "candidate_evidence_literals",
+        &mut findings,
+    );
+    expect_contract_string_array(
+        &contract,
+        &["t479_candidate_execution_order"],
+        &[
+            "converge-f6",
+            "freeze-f6",
+            "invoke-t604-operator-validator",
+            "execute-t604-authored-daemon-restart-case-with-cloud-hypervisor-case",
+            "emit-both-candidate-records",
+        ],
+        "t479_candidate_execution_order",
+        &mut findings,
+    );
+    expect_contract_value(
+        &contract,
+        &["operator_acceptance"],
+        serde_json::json!({
+            "validator_author": "T604",
+            "candidate_executor": "T479",
+            "candidate_evidence_owner": "T479",
+            "candidate_evidence_literal": "operator-nix-activation-cleanup",
+            "candidate_record_count": 1,
+            "t604_pre_f6_candidate_evidence_emission": false,
+            "close_revalidator": "T480"
+        }),
+        "operator_acceptance",
+        &mut findings,
+    );
+    expect_contract_value(
+        &contract,
+        &["fr075"],
+        serde_json::json!({
+            "case_author": "T604",
+            "candidate_executor": "T479",
+            "candidate_evidence_owner": "T479",
+            "candidate_evidence_literal": "w6-cloud-hypervisor-guest-acceptance",
+            "candidate_record_count": 1,
+            "t604_candidate_bound_evidence": false,
+            "close_revalidator": "T480"
+        }),
+        "fr075",
+        &mut findings,
+    );
+
+    let contract_task_ids = string_array(value_at(&contract, &["task_ids"]))
+        .into_iter()
+        .collect::<BTreeSet<_>>();
     let lines = markdown.lines().collect::<Vec<_>>();
-    let mut blocks = BTreeMap::new();
+    let mut line_retired_depths = Vec::with_capacity(lines.len());
     let mut retired_depth = 0usize;
-    let mut index = 0usize;
-    while index < lines.len() {
-        let line = lines[index];
+    for line in &lines {
         let trimmed = line.trim();
         if trimmed.starts_with("<!-- RETIRED-") && trimmed.ends_with("-BEGIN -->") {
             retired_depth += 1;
-        } else if trimmed.starts_with("<!-- RETIRED-") && trimmed.ends_with("-END -->") {
+        }
+        line_retired_depths.push(retired_depth);
+        if trimmed.starts_with("<!-- RETIRED-") && trimmed.ends_with("-END -->") {
             retired_depth = retired_depth.saturating_sub(1);
         }
+    }
 
-        if line.starts_with("- [")
-            && line.contains("FEATURE-LOCAL COORDINATION/COMPLETION")
-            && let Some(id) = line.split_whitespace().find(|token| {
-                token.starts_with('T') && token[1..].chars().all(|c| c.is_ascii_digit())
-            })
-        {
+    let mut blocks = BTreeMap::new();
+    let mut index = 0usize;
+    while index < lines.len() {
+        let line = lines[index];
+
+        if let Some((id, checked)) = contract_task_row(line, &contract_task_ids) {
             let start = index;
             index += 1;
             while index < lines.len() && !lines[index].starts_with("- [") {
@@ -1123,7 +1443,10 @@ fn check_local_coordination_tasks(markdown: &str, graph: &Value) -> Vec<String> 
             }
             let block = lines[start..index].join("\n");
             if blocks
-                .insert(id.to_owned(), (line.to_owned(), block, retired_depth))
+                .insert(
+                    id.clone(),
+                    (line.to_owned(), block, line_retired_depths[start], checked),
+                )
                 .is_some()
             {
                 findings.push(format!(
@@ -1135,18 +1458,21 @@ fn check_local_coordination_tasks(markdown: &str, graph: &Value) -> Vec<String> 
         index += 1;
     }
 
-    let expected = ["T479", "T480", "T604"]
-        .into_iter()
-        .map(str::to_owned)
-        .collect::<BTreeSet<_>>();
     let actual = blocks.keys().cloned().collect::<BTreeSet<_>>();
-    if actual != expected {
+    if actual != expected_local {
         findings.push(format!(
-            "feature-local task set must be exactly {expected:?}, got {actual:?}"
+            "feature-local task set must be exactly {expected_local:?}, got {actual:?}"
         ));
     }
 
     let requirements = BTreeMap::from([
+        (
+            "T606",
+            ["T221", "machine-readable local task contract"].as_slice(),
+        ),
+        ("T607", ["T606", "local task contract"].as_slice()),
+        ("T608", ["T606", "local task contract"].as_slice()),
+        ("T609", ["T606", "local task contract"].as_slice()),
         (
             "T604",
             [
@@ -1178,10 +1504,10 @@ fn check_local_coordination_tasks(markdown: &str, graph: &Value) -> Vec<String> 
         ),
     ]);
     for (id, required) in requirements {
-        let Some((heading, block, depth)) = blocks.get(id) else {
+        let Some((heading, block, depth, checked)) = blocks.get(id) else {
             continue;
         };
-        if !heading.starts_with("- [ ]") {
+        if *checked || !heading.starts_with("- [ ]") {
             findings.push(format!("feature-local task {id} must remain unchecked"));
         }
         if *depth != 0 {
@@ -1197,6 +1523,22 @@ fn check_local_coordination_tasks(markdown: &str, graph: &Value) -> Vec<String> 
             }
         }
     }
+
+    for (task, obligations) in expected_adoption {
+        let Some((_, block, _, _)) = blocks.get(task) else {
+            continue;
+        };
+        for obligation in obligations {
+            if !block.contains(obligation) {
+                findings.push(format!(
+                    "feature-local task {task} is missing adopted obligation `{obligation}`"
+                ));
+            }
+        }
+    }
+
+    findings.sort();
+    findings.dedup();
     findings
 }
 
@@ -1315,15 +1657,32 @@ fn feature_local_coordination_contract_rejects_load_bearing_mutations() {
     for (from, to) in [
         ("\"schema_version\": 1", "\"schema_version\": 2"),
         (
-            "\"task_ids\": [\"T604\", \"T479\", \"T480\"]",
-            "\"task_ids\": [\"T479\", \"T480\"]",
+            "\"task_ids\": [\"T606\", \"T607\", \"T608\", \"T609\", \"T604\", \"T479\", \"T480\"]",
+            "\"task_ids\": [\"T606\", \"T607\", \"T608\", \"T609\", \"T604\", \"T479\"]",
         ),
-        ("\"T604\": [\"T221\"]", "\"T604\": []"),
+        ("\"T607\": [\"T606\"]", "\"T607\": []"),
+        (
+            "\"T604\": [\"T221\", \"T607\", \"T608\", \"T609\"]",
+            "\"T604\": [\"T221\"]",
+        ),
+        (
+            "\"source_wave_label\": \"W5\"",
+            "\"source_wave_label\": \"W4\"",
+        ),
+        ("\"ADR046-cli-001\"", "\"ADR046-cli-999\""),
         ("\"ADR046-ch-001\"", "\"ADR046-ch-999\""),
         ("\"expected_count\": 258", "\"expected_count\": 257"),
         (
-            "\"Makefile\": [\"ADR046-ch-001\", \"T604\"]",
-            "\"Makefile\": [\"T604\", \"ADR046-ch-001\"]",
+            "\"Makefile\": [\"T606\", \"ADR046-ch-001\", \"T604\"]",
+            "\"Makefile\": [\"T606\", \"T604\", \"ADR046-ch-001\"]",
+        ),
+        (
+            "\"packages/Cargo.toml\": [\"T606\"]",
+            "\"packages/Cargo.toml\": [\"T604\"]",
+        ),
+        (
+            "\"T606\": [\n      \"packages/Cargo.toml\"",
+            "\"T610\": [\n      \"packages/Cargo.toml\"",
         ),
         (
             "\"candidate_record_count\": 1",
@@ -1347,6 +1706,45 @@ fn feature_local_coordination_contract_rejects_load_bearing_mutations() {
             "mutation unexpectedly passed: {from} -> {to}"
         );
     }
+
+    let without_legacy_phrase = tasks.replace(
+        "FEATURE-LOCAL COORDINATION/COMPLETION",
+        "LOCAL COORDINATION",
+    );
+    let phrase_findings = check_local_coordination_tasks(&without_legacy_phrase, &graph);
+    assert!(
+        phrase_findings.is_empty(),
+        "local task parsing still depends on the retired coordination phrase:\n{}",
+        phrase_findings.join("\n")
+    );
+
+    for task_id in EXPECTED_LOCAL_TASK_IDS {
+        let prefix = format!("- [ ] {task_id}");
+        let original_line = tasks
+            .lines()
+            .find(|line| line.starts_with(&prefix))
+            .unwrap_or_else(|| panic!("local task row missing from fixture: {task_id}"));
+        let checked_line = original_line.replacen("- [ ]", "- [x]", 1);
+        let checked = tasks.replacen(original_line, &checked_line, 1);
+        assert!(
+            !check_local_coordination_tasks(&checked, &graph).is_empty(),
+            "checked local task row unexpectedly passed: {task_id}"
+        );
+
+        let fenced = tasks.replacen(
+            original_line,
+            &format!(
+                "<!-- RETIRED-CONTRACT-TEST-BEGIN -->\n{original_line}\n\
+                 <!-- RETIRED-CONTRACT-TEST-END -->"
+            ),
+            1,
+        );
+        assert!(
+            !check_local_coordination_tasks(&fenced, &graph).is_empty(),
+            "retired-fenced local task row unexpectedly passed: {task_id}"
+        );
+    }
+
     let duplicated = format!(
         "{tasks}\n```json\n{{\"artifact_kind\":\"d2b-feature-local-task-contract\"}}\n```\n"
     );
