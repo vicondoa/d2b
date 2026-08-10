@@ -2481,7 +2481,7 @@ fn check_shared_writer_handoffs(
                     ));
                     continue;
                 };
-                if !path_owners.contains(first) {
+                if !path_owners.iter().any(|owner| owner.as_str() == first) {
                     findings.push(format!(
                         "shared-writer handoff `{surface}` starts `{first}` instead of a local owner of `{path}`"
                     ));
