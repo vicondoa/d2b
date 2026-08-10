@@ -169,7 +169,7 @@
         "ADR-046-telemetry-audit-and-support"
       ],
       "path" : "docs/specs/providers/ADR-046-provider-activation-nixos.md",
-      "sha256" : "8ad755e065afc4cabe6716b99d0785e00d12de8e68c85aa63baca95f2406dfe9",
+      "sha256" : "cb8d2f2b2565f8495777a60f9826c98bc8626ee6a8050b86bab564e4ccfe5a09",
       "specId" : "ADR-046-provider-activation-nixos",
       "status" : "Accepted",
       "supersedes" : "Current `d2b switch`/`boot`/`test`/`rollback`/`build`/`generations`/`gc`/`migrate` top-level verbs in `packages/d2b/src/lib.rs` and hardlink-farm activation in `packages/d2b-host/src/hardlink_farm.rs`",
@@ -429,7 +429,7 @@
         "ADR-046-telemetry-audit-and-support"
       ],
       "path" : "docs/specs/providers/ADR-046-provider-network-local.md",
-      "sha256" : "a288c5247068048826a5a5201700ec2be89f5b7c41ba9d2fd7d5afd40467d795",
+      "sha256" : "c36de2a8a817e819bee406fc6fc128d278876161d175ac97cfaee99afb2ba209",
       "specId" : "ADR-046-provider-network-local",
       "status" : "Accepted",
       "supersedes" : "`nixos-modules/network.nix`, `nixos-modules/net.nix`",
@@ -548,7 +548,7 @@
         "ADR-046-telemetry-audit-and-support"
       ],
       "path" : "docs/specs/providers/ADR-046-provider-runtime-cloud-hypervisor.md",
-      "sha256" : "bd567dc9e137e222e0e0b189ddb9145d5bb5359e6e4024730dbaf865ed19e10c",
+      "sha256" : "494640c9494d5a85aa34142a06ea9c9f6b436d37cf86d86246818f3387226131",
       "specId" : "ADR-046-provider-runtime-cloud-hypervisor",
       "status" : "Accepted",
       "supersedes" : "`packages/d2b-host/src/runtime_provider.rs` `CloudHypervisorRuntimeProvider`; `packages/d2bd/src/` VM lifecycle paths; `d2b-host-providers` adapter; `ProcessRole::CloudHypervisor`, `ProcessRole::Swtpm`, `ProcessRole::NetVm`; systemd unit `d2b-<vm>-vm.service`; `SwtpmDir` broker op",
@@ -641,7 +641,7 @@
         "ADR-046-telemetry-audit-and-support"
       ],
       "path" : "docs/specs/providers/ADR-046-provider-system-core.md",
-      "sha256" : "914a0bd91d8a660858dc050588f83c5789324714bb68e940f04a1896fb815544",
+      "sha256" : "093fd21b437193f7b5af5b1ab93c1e63645b20405f66502bdd0cac86d2820680",
       "specId" : "ADR-046-provider-system-core",
       "status" : "Accepted",
       "supersedes" : "Current `WorkloadProviderKind::UnsafeLocal`, host/User grouping helpers, `HostJson`/`VmRuntimeRow` host-management paths in `d2bd` and `d2b-realm-core`",
@@ -730,7 +730,7 @@
         "ADR-046-zone-routing"
       ],
       "path" : "docs/specs/providers/ADR-046-provider-transport-unix.md",
-      "sha256" : "221c89de14803360dd9ae2bfbc07e9b56750504e70f002735bff13eb8ce7739a",
+      "sha256" : "7e281d18513db814a5a0cfab6b4003717dc20c446fe566d06ba71b93d00c8610",
       "specId" : "ADR-046-provider-transport-unix",
       "status" : "Accepted",
       "supersedes" : "v1 of this dossier (ADR-046-provider-transport-unix v1; incorrect ownership model); `InheritedSocketTransport` SD_LISTEN_FDS path (`packages/d2b-session-unix/src/systemd.rs`)",

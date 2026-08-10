@@ -259,7 +259,33 @@ Constraints").
 | RK-3 | W6 is 258 items across 27 crates | Nearly half the program in one wave | The specs guarantee each Provider's hermetic suite compiles without any other Provider; exploit the five file-disjoint families |
 | RK-4 | Destructive validation on the daily driver | A bad cutover costs the working environment | FR-043 recovery-point attestation is the primary control; rehearse cutover phases on disposable Zone state first |
 | RK-5 | 33 of the current 48 DELETE/REPLACE census rows lack removal proofs | FR-023 requires one per removed path | Author proofs with the removing wave, not at W7 |
-| RK-6 | The W0/W1 missing-gate history hides unverified foundation | Those waves carry the contracts every later wave builds on | FR-036 blocks continuation pending an external constitution amendment; if continuation is authorized, SC-021 forces the unwired surfaces to become reachable and re-tests them in anger |
+| RK-6 | The W0/W1 missing-gate history hides unverified foundation | Those waves carry the contracts every later wave builds on | Constitution 3.1.0 supplies the generic historical-process disposition; the exact ADR-046 delivery validator/tooling contract bounds it through merged Wave 5. T221 must match the accepted first-parent generic-amendment lineage and immutable retained state before the ordinary prospective Wave 6 plan panel; SC-021 still forces live reachability |
+
+## NIX-8 and NIX-9 code-canon adjudication
+
+Read-only searches against the current merged code found:
+
+```text
+hostGenerationRebuildRef|host-generation-rebuild-ref
+  -> zero matches in nixos-modules/, packages/, tests/, examples/, templates/
+
+ApplyHostGenerationHandoff|SourceGenerationCompatibilityFloorV1|
+apply-authorized-handoff|source-handoff-v1
+  -> zero matches in packages/, nixos-modules/, tests/
+
+host generation|host-generation
+  -> zero matches in the d2b, d2bd, broker, and contracts source trees
+
+ZoneHandlerName::SystemCoreHost|ZoneHandlerName::SystemCoreUser
+  -> zero matches in the contracts, daemon, and system-core source trees
+
+OpenPeerPidfdFromAcceptedSocket
+  -> zero matches in packages/ and tests/
+```
+
+Therefore NIX-8, NIX-9, the handler contract, and the peer-pidfd operation are not landed.
+Their prospective ownership, ordering, and file maps resolve only from authoritative member
+specs and generated manifests after T221; this feature does not independently assign them.
 
 ---
 
@@ -271,16 +297,13 @@ set, user namespace, procfs mount, target mount, kernel, or production filesyste
 restricts `AT_EMPTY_PATH` linking to a caller with `CAP_DAC_READ_SEARCH`; that observation
 therefore cannot authorize the required zero-effective-capability target.
 
-**Decision**: Wave 5 forbids `AT_EMPTY_PATH` and create-and-unlink link probing. Preimage,
-candidate sidecar, and request-output publishers write, file-sync, and revalidate an
+**Historical Wave 5 decision**: the retired plan forbade `AT_EMPTY_PATH` and
+create-and-unlink link probing. Its preimage, candidate-sidecar, and request-output design
+wrote, file-synced, and revalidated an
 `O_TMPFILE` inode, retain a validated procfs `/proc/self/fd` directory fd, and use
 `linkat(proc_self_fd_dirfd, decimal_fd, target_parent_fd, final_name,
 AT_SYMLINK_FOLLOW)` to capability-free link the exact opened inode directly to its final
 no-replace name. No linked temporary or name-consuming publication rename exists.
 
-T589 must run the production credential/kernel/mount/filesystem matrix with an empty
-effective capability set and independently inject unsupported-open, invalid-procfs/mount,
-and unsupported-link failures. Preimage link failure exposes no incident name or internal
-request. Request-output open/environment failure occurs before freeze/request creation;
-link failure occurs only after candidate-internal durability and retains that exact pair as
-an ordinary replayable output failure. No named-partial fallback is allowed.
+The former matrix and its failure injections are read-only historical design evidence.
+They authorize no current run or publication path.

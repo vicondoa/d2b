@@ -1675,18 +1675,16 @@ writes, but they are not the same broker state.
 
 The current tree corrects one ownership assumption in that table:
 `NetworkEffectPort` already lives in
-`packages/d2b-provider-network-local/src/controller.rs`, not in `d2b-contracts`. T336 keeps
+`packages/d2b-provider-network-local/src/controller.rs`, not in `d2b-contracts`.
+Manifest-backed `ADR046-nl-001` keeps
 that trait and owns the production implementation in
-`packages/d2bd/src/network_effect_adapter.rs`, with serialized post-T595 edits to
+`packages/d2bd/src/network_effect_adapter.rs`, with prospective W6 edits to
 `d2bd/{Cargo.toml,src/lib.rs,src/resource_runtime.rs}`. It maps opaque intents only to typed
-broker operations and performs no direct host mutation. Current generated rows T336-T355
-place that work in W6, and final R9 preserves that ownership. The external
-contract/work-item-manifest blocker is narrower: before T220 freezes F, the accepted amendment
-must remove every current-facing sole Network-opt-in path, install the double-opt-in
-migration, and regenerate T336-T355 plus all four Network/Host production cases as W6 work
-under T221. T604 remains W6 acceptance-only after those rows merge and consumes the landed
-path. T220 and T219 refuse stale sole-opt-in contract or ownership state; T604 and T479 refuse
-missing W6 implementation or production evidence.
+broker operations and performs no direct host mutation. Current generated work items
+`ADR046-nl-001` through `ADR046-nl-020`
+place that work in W6, and final R9 preserves that ownership. The retired Wave 5 blocker has
+no prospective effect. T221 requires the accepted amendment and authoritative member specs
+and generated manifests own subsequent implementation and evidence.
 
 ### 16.3 Credential Provider work is in progress, not complete
 
@@ -1857,6 +1855,8 @@ regenerate `wire-protocol.json`; hand-editing the generated schema would leave
 the canonical source stale and fail the drift contract.
 
 ## 19. Rulings recorded before Wave 5 opens, and what debt the wave takes on
+
+<!-- RETIRED-READONLY-BEGIN -->
 
 Recorded the way sections 9 and 14 were, before any slice opens, so the wave's
 scope and its shared-file decisions are settled rather than argued at review.
@@ -2149,6 +2149,8 @@ part of the evidence, not as an aside.
 **Class: unmet obligation** until the measurement of record is taken under that
 precondition. The provisional slice reading is explicitly not evidence.
 
+<!-- RETIRED-READONLY-END -->
+
 ## 20. Wave 5 destination and rename drift, and two corrections to earlier entries
 
 The full adjudication is
@@ -2273,14 +2275,15 @@ false positive costs one investigation while a false negative hides a stuck
 finalizer for twice as long, and the shorter window is the fail-closed direction
 for a threshold that surfaces rather than denies.
 
-## 21. C1 planned and assigned: add the omitted system-core handler names
+## 21. C1 code-canon gap: add the omitted system-core handler names
 
 **Status: planned/assigned, not delivered.** The earlier read-only analysis correctly found
 that the committed unreleased v3 `ZoneHandlerName` enum cannot encode the two system-core
-handler observations. Constitution 2.2.0 now authorizes the approved plan/contract defect to
-be repaired in the same coordinated Wave 5 PR as its implementation.
+handler observations. The retired Wave 5 repair did not land.
 
-T605 owns the contract correction: add `ZoneHandlerName::SystemCoreHost` and
+Code canon still lacks the contract correction. Prospective ownership resolves only from
+authoritative member specs and generated manifests. The required values are
+`ZoneHandlerName::SystemCoreHost` and
 `ZoneHandlerName::SystemCoreUser`, serialized by the existing kebab-case rule as
 `system-core-host` and `system-core-user`. The actual projection is the
 `Zone.status.handlers[]` list, with exactly one record of each name and each record carrying
@@ -2288,22 +2291,21 @@ T605 owns the contract correction: add `ZoneHandlerName::SystemCoreHost` and
 substitution are rejected. `ProviderLifecycle` remains a distinct allowed value and cannot
 substitute for either required record.
 
-T605 also owns focused Rust round-trip/list coverage, the ownership-compatible
+The authoritative prospective object also covers focused Rust round-trip/list coverage, the ownership-compatible
 `packages/d2b-contract-tests/tests/policy_contracts.rs` guard, compiler-regenerated public
 and private snapshots under `tests/golden/api-surface/` via `make api-surface-pin` only, and
 the existing paired `docs/reference/resource-plane-runtime.md`. It treats
 `packages/xtask/src/zone_schema.rs` and
 `docs/reference/schemas/v3/core.d2bus.org_Zone.schema.json` as read-only proof inputs and must
 show that generator output remains byte-identical because the desired Zone spec is unchanged.
-T605 completes on those owned pre-consumer artifacts and does not run the full drift gate.
-T595 consumes the variants in the production emitter; T599 reconciles downstream consumers;
-T220 reconciles integrator-owned generated spec manifests and the full drift gate; T596,
-T600-T602, and T219 consume the coordinated list-shape evidence after those stages.
+The retired Wave 5 ownership map remains read-only history and authorizes no current run,
+evidence import, or close action.
 
 No `apiVersion`, `schemaVersion`, `manifestVersion`, `bundleVersion`, or wire-field version
 bump is required: no field or operation changes, the desired-state Zone schema is unchanged,
-and v3 is unreleased. The same Wave 5 PR still carries all paired Rust contract changes,
-tests, API snapshots, reference status docs, consumers/emitters, generator no-drift proof,
-and panel evidence.
+and v3 is unreleased. Prospective ownership of paired Rust contract changes, tests, API
+snapshots, reference status docs, consumers/emitters, and generator no-drift proof resolves
+only from authoritative member specs and generated manifests.
 
-CHK054 is checked only as a specification-quality resolution. Implementation remains unchecked. T603 uses `/d2b-spec-edit` as the sole mutation surface; the editor receipt and dedicated checkbox-only Git commit are the only authority. Fresh analysis and a current selected-roster lifecycle bind the pre-edit snapshot, and fresh analysis plus a new selected-roster lifecycle bind the post-edit snapshot before T589. T603 owns no validator source, changelog fragment, scratch receipt, sidecar, or digest chain.
+CHK054 is checked only as a specification-quality resolution. Retired editor/lifecycle text
+is read-only history. Prospective implementation resolves only from authoritative objects.

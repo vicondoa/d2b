@@ -35,29 +35,320 @@ eval that follows the same path. A forgotten `git add` on a new module is the mo
 
 ### 1. Confirm entry criteria
 
-Entry first requires FR-036's separate accepted Principle VI constitution amendment to be an
-ancestor of the exact execution base. The feature-local W0/W1 historical record and W2-W4
-remedial receipts cannot satisfy it. After that external prerequisite, entry requires Gate 0
-passed, no unresolved contention flag on this wave's destination paths,
-the stack proposed against the exact named parent commit rather than a stale `v3`, a free
-heavy-gate semaphore, and a green fast hermetic suite. If the predecessor is not yet merged,
-implementation may start only after at least five of its selected-roster reviews return and
-integration is green on its converged tree. The candidate-bound selection uses the current
-thirteen-seat role domain and may only widen over fix deltas. Prior-wave `Merged` state is not entry evidence. It is checked at
-the successor's panel request, seal, and merge-eligibility boundary, after the successor
-rebases onto the merged predecessor.
+Constitution 3.1.0 supplies a generic historical-process disposition with no ADR-046 detail.
+This feature's exact delivery validator/tooling contract bounds it through merged Wave 5
+commit `177235ed37188b3be87525e7f016fb43401574c5`. The Wave 5 seal remains absent and recovery
+is unavailable. For Wave 6, entry first requires the production historical-predecessor guard
+against the fetched exact `origin/v3` base. After that guard, entry requires Gate 0 passed, no
+unresolved contention flag on Wave 6 destinations, a free heavy-gate semaphore, and a green
+fast hermetic suite. The ordinary T221 selected roster uses the current thirteen-seat role
+domain and may only widen over fix deltas.
 
-### 1b. Reconcile `adr046w5` progress before implementation
+### 1b. Verify the Wave 5 to Wave 6 boundary
 
-At one clean base, validate the accepted FR-036 predecessor and exactly one T072 disposition,
-run cross-artifact analysis, and create one current selected-roster plan lifecycle for the
-complete feature snapshot. Audit T073-T218 against commits and delivery records. If any row
-is open, stop without changing a checkbox. If all rows are satisfied, submit one
-`/d2b-spec-edit` batch that checks exactly T073-T218 and T603, then create one dedicated
-checkbox-only commit. The editor batch receipt and that Git commit are the sole authority; do
-not create a validator, changelog fragment, scratch receipt, sidecar, digest chain, or custom
-resume state. Rerun analysis and a new selected-roster plan lifecycle on the changed commit
-and snapshot before T589.
+Wave 5 recovery and close commands are unavailable. Fetch and bind the exact Wave 6 base,
+then run the focused guard tests:
+
+```bash
+set -euo pipefail
+
+REPOSITORY="github.com/vicondoa/d2b"
+CHECKOUT_ROOT="$(git rev-parse --show-toplevel)"
+TARGET_BRANCH="v3"
+git fetch origin "$TARGET_BRANCH"
+BASE_OID="$(git rev-parse "refs/remotes/origin/$TARGET_BRANCH")"
+test "$(git rev-parse "refs/remotes/origin/$TARGET_BRANCH")" = "$BASE_OID"
+git merge-base --is-ancestor \
+  177235ed37188b3be87525e7f016fb43401574c5 "$BASE_OID"
+
+cargo test --manifest-path packages/Cargo.toml -p xtask \
+  delivery::work_item_state::tests
+```
+
+Create the Wave 6 entry snapshot through the production delivery command, using
+`BASE_OID` as the exact base and the current draft Wave 6 PR. The snapshot command must
+match candidate
+`d20267eec23f90b9cd6931e4bd322b66e259533849c8170617fbd002381493a4`,
+snapshot identity `7a04d9b86df6c8b8704b4bd79ddc25603fedae47d1a521f0b6fa420451816c3a`,
+head `19b77dad63060bcadd41f1ef800978d2c53cc030`, retained request digest
+`15f49657490410f0fb5530513144c7c2392f567b211eb630551f3110b94633f7`, zero attestations,
+no seal, and every retained evidence filename and digest in `data-model.md`. It must also
+identify the accepted first-parent integration commit after the Wave 5 merge whose tree
+contains the exact generic Constitution 3.1.0 bytes. A missing, extra, or changed entry stops
+here.
+
+```bash
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/d2b/delivery"
+PR_NUMBER="$(gh pr view --json number --jq .number)"
+HEAD_REF="$(git symbolic-ref --short HEAD)"
+
+cargo run --manifest-path packages/Cargo.toml -p xtask -- \
+  delivery wave snapshot \
+  --program ADR046 \
+  --wave adr046w6 \
+  --repo "$REPOSITORY=$CHECKOUT_ROOT" \
+  --base "$REPOSITORY=$BASE_OID" \
+  --pull-request "$REPOSITORY=$PR_NUMBER:$HEAD_REF" \
+  --state-dir "$STATE_DIR"
+```
+
+Only after that succeeds, run `/d2b-panel-round plan` against the exact base, entry snapshot,
+and current feature snapshot. T221 remains incomplete until every selected seat signs off
+with zero recommendations.
+
+### 1c. Reject actionable retired-phase prose
+
+Run this read-only check after any feature-artifact edit. Explicitly marked historical blocks
+are allowed; the word `historical` alone is not suppression. Actionable retired-task
+instructions, including multiline forms, and round-threshold deferral rules are not. The only
+retired marker kinds are `RETIRED-READONLY`, `RETIRED-W5-VALIDATION`,
+`RETIRED-W5-EVIDENCE`, `RETIRED-W5-MANIFEST`, `RETIRED-W5-PLAN`, and
+`RETIRED-W5-CLI`; the validator additionally reserves exactly `STALE-PROSE-CHECK` for this
+self-check block. Every marker is a whole line with no payload. Copy and run the complete
+block below from the repository root; it prints the actual and expected status for every
+planted case before reporting the feature scan.
+
+<!-- STALE-PROSE-CHECK-BEGIN -->
+
+```bash
+set -eu
+
+FEATURE_DIR="specs/001-adr046-d2b3-completion"
+SELF_FILE="$FEATURE_DIR/quickstart.md"
+SELF_HEADING='### 1c. Reject actionable retired-phase prose'
+SELF_BEGIN='<!-- STALE-PROSE-CHECK-BEGIN -->'
+SELF_END='<!-- STALE-PROSE-CHECK-END -->'
+RETIRED='T(219|220|589|590|591|592|593|594|595|596|597|598|599|600|601|602|603|605)'
+ACTION="(?s)\\b${RETIRED}\\b([[:space:]]*(/|,|and)[[:space:]]*\\b${RETIRED}\\b)*[[:space:]]+(MUST[[:space:]]+)?(own|add|check|harden|prove|extend|wire|consume|require|depend|block|dispatch|run|measure|validate|reject|reconcile|fold|seal|close)(s|es|ed|ing|er|ership|ment|ation)?\\b"
+REVERSE="(?s)\\b(own|add|check|harden|prove|extend|wire|consume|require|depend|block|dispatch|run|measure|validate|reject|reconcile|fold|seal|close)(s|es|ed|ing|er|ership|ment|ation)?\\b.{0,240}\\b${RETIRED}('s)?\\b"
+EDGE="(?s)\\b(after|before|depends[[:space:]]+on|owned[[:space:]]+by)[[:space:]]+.{0,160}\\b${RETIRED}('s)?\\b"
+ANY_RETIRED="(?s)\\b${RETIRED}\\b"
+PHASE='((historical|retired|former)[[:space:]]+(Wave[[:space:]]+5[[:space:]]+)?(prep|preparation|implementation|measurement)|Wave[[:space:]]+5[[:space:]]+(prep|preparation|implementation|measurement))'
+PHASE_ACTION="(?s)\\b${PHASE}\\b[[:space:]]+(MUST[[:space:]]+)?(own|add|check|harden|prove|extend|wire|consume|require|depend|block|dispatch|run|measure|validate|reject|reconcile|fold|seal|close)(s|es|ed|ing|er|ership|ment|ation)?\\b"
+PHASE_REVERSE="(?s)\\b(own|add|check|harden|prove|extend|wire|consume|require|depend|block|dispatch|run|measure|validate|reject|reconcile|fold|seal|close)(s|es|ed|ing|er|ership|ment|ation)?\\b[^.!?\\n]{0,40}\\b(after|for|in)\\b[[:space:]]+\\b${PHASE}\\b"
+
+check_fences() {
+  input="$1"
+  logical_file="${2:-$1}"
+  awk \
+    -v file="$logical_file" \
+    -v self_file="$SELF_FILE" \
+    -v self_heading="$SELF_HEADING" '
+    file == self_file { source[FNR] = $0 }
+    file == self_file && /^### / { last_heading = $0 }
+    stack[depth] == "STALE-PROSE-CHECK" &&
+      $0 !~ /^[[:space:]]*<!-- STALE-PROSE-CHECK-(BEGIN|END) -->[[:space:]]*$/ { next }
+    /^[[:space:]]*<!-- (RETIRED-(READONLY|W5-VALIDATION|W5-EVIDENCE|W5-MANIFEST|W5-PLAN|W5-CLI)|STALE-PROSE-CHECK)-BEGIN -->[[:space:]]*$/ {
+      kind = $0
+      sub(/^[[:space:]]*<!-- /, "", kind)
+      sub(/-BEGIN -->[[:space:]]*$/, "", kind)
+      if (kind == "STALE-PROSE-CHECK") {
+        if (file != self_file || self_begin_count != 0) {
+          fatal = 46
+          exit fatal
+        }
+        if (last_heading != self_heading) {
+          fatal = 47
+          exit fatal
+        }
+        self_begin_count += 1
+        self_begin_line = FNR
+      }
+      for (i = 1; i <= depth; i += 1) {
+        if (stack[i] == kind) {
+          fatal = 45
+          exit fatal
+        }
+      }
+      depth += 1
+      stack[depth] = kind
+      next
+    }
+    /^[[:space:]]*<!-- (RETIRED-(READONLY|W5-VALIDATION|W5-EVIDENCE|W5-MANIFEST|W5-PLAN|W5-CLI)|STALE-PROSE-CHECK)-END -->[[:space:]]*$/ {
+      kind = $0
+      sub(/^[[:space:]]*<!-- /, "", kind)
+      sub(/-END -->[[:space:]]*$/, "", kind)
+      if (kind == "STALE-PROSE-CHECK") {
+        if (file != self_file || self_begin_count != 1 || self_end_count != 0) {
+          fatal = 46
+          exit fatal
+        }
+        if (last_heading != self_heading) {
+          fatal = 47
+          exit fatal
+        }
+        self_end_count += 1
+        self_end_line = FNR
+      }
+      if (depth == 0) {
+        fatal = 42
+        exit fatal
+      }
+      if (stack[depth] != kind) {
+        fatal = 43
+        exit fatal
+      }
+      delete stack[depth]
+      depth -= 1
+      next
+    }
+    /<!-- [^>]*-(BEGIN|END)[^>]*-->/ {
+      fatal = 45
+      exit fatal
+    }
+    depth == 0 { print file ":" FNR ":" $0 }
+    END {
+      if (fatal != 0) exit fatal
+      if (depth != 0) exit 44
+      if (file == self_file) {
+        if (self_begin_count != 1 || self_end_count != 1) exit 46
+        if (self_begin_line >= self_end_line) exit 47
+        if (source[self_begin_line + 1] !~ /^[[:space:]]*$/) exit 47
+        if (source[self_begin_line + 2] != "```bash") exit 47
+        if (source[self_end_line - 1] !~ /^[[:space:]]*$/) exit 47
+        if (source[self_end_line - 2] != "```") exit 47
+      }
+    }
+  ' "$input"
+}
+
+# Planted positive and negative fence cases. Each helper reads its case on stdin.
+expect_fence_case() {
+  label="$1"
+  expected="$2"
+  logical_file="$3"
+  set +e
+  check_fences - "$logical_file" >/dev/null 2>&1
+  actual="$?"
+  set -e
+  printf 'fence-case %s expected=%s actual=%s\n' "$label" "$expected" "$actual"
+  test "$actual" -eq "$expected"
+}
+
+printf '%s\n' \
+  '<!-- RETIRED-READONLY-BEGIN -->' \
+  'read-only bytes' \
+  '<!-- RETIRED-READONLY-END -->' |
+  expect_fence_case balanced 0 -
+printf '%s\n' '<!-- RETIRED-READONLY-BEGIN -->' |
+  expect_fence_case unmatched-begin 44 -
+printf '%s\n' '<!-- RETIRED-READONLY-END -->' |
+  expect_fence_case unmatched-end 42 -
+printf '%s\n' \
+  '<!-- RETIRED-READONLY-BEGIN -->' \
+  '<!-- RETIRED-W5-PLAN-BEGIN -->' \
+  '<!-- RETIRED-READONLY-END -->' \
+  '<!-- RETIRED-W5-PLAN-END -->' |
+  expect_fence_case nested-mismatch 43 -
+printf '%s\n' \
+  '<!-- RETIRED-READONLY-BEGIN --><!-- RETIRED-READONLY-BEGIN -->' |
+  expect_fence_case duplicate-inline 45 -
+printf '%s\n' \
+  '<!-- RETIRED-READONLY-BEGIN -->' \
+  '<!-- RETIRED-READONLY-BEGIN -->' \
+  '<!-- RETIRED-READONLY-END -->' \
+  '<!-- RETIRED-READONLY-END -->' |
+  expect_fence_case duplicate-nested 45 -
+printf '%s\n' \
+  'prefix <!-- RETIRED-READONLY-BEGIN -->' |
+  expect_fence_case text-before-begin 45 -
+printf '%s\n' \
+  '<!-- RETIRED-READONLY-END --> suffix' |
+  expect_fence_case text-after-end 45 -
+printf '%s\n' \
+  '<!-- ACTIVE-BEGIN -->' |
+  expect_fence_case invented-active 45 -
+printf '%s\n' \
+  '<!-- RETIRED-INVENTED-BEGIN -->' |
+  expect_fence_case invented-retired 45 -
+printf '%s\n' \
+  '<!-- RETIRED-READONLY-BEGIN: payload -->' |
+  expect_fence_case begin-payload 45 -
+printf '%s\n' \
+  '<!-- RETIRED-READONLY-END: payload -->' |
+  expect_fence_case end-payload 45 -
+printf '%s\n' \
+  "$SELF_HEADING" \
+  "$SELF_BEGIN" \
+  '' \
+  '```bash' \
+  'echo planted-self-check' \
+  '```' \
+  '' \
+  "$SELF_END" |
+  expect_fence_case self-fence-balanced 0 "$SELF_FILE"
+printf '%s\n' \
+  "$SELF_HEADING" \
+  "$SELF_BEGIN" \
+  '' \
+  '```bash' \
+  'echo first' \
+  '```' \
+  '' \
+  "$SELF_END" \
+  "$SELF_BEGIN" \
+  '' \
+  '```bash' \
+  'echo duplicate' \
+  '```' \
+  '' \
+  "$SELF_END" |
+  expect_fence_case duplicate-self-fence 46 "$SELF_FILE"
+printf '%s\n' "$SELF_BEGIN" "$SELF_END" |
+  expect_fence_case other-file-self-fence 46 "$FEATURE_DIR/spec.md"
+printf '%s\n' "$SELF_HEADING" "$SELF_END" "$SELF_BEGIN" |
+  expect_fence_case reversed-self-fence 46 "$SELF_FILE"
+printf '%s\n' \
+  "$SELF_HEADING" \
+  "$SELF_BEGIN" \
+  '```bash' \
+  '```' \
+  '' \
+  "$SELF_END" |
+  expect_fence_case misplaced-self-fence 47 "$SELF_FILE"
+
+# Planted identifier-free retired-phase action negatives.
+expect_phase_case() {
+  label="$1"
+  expected="$2"
+  text="$3"
+  set +e
+  printf '%s\n' "$text" |
+    rg -U -i "$PHASE_ACTION|$PHASE_REVERSE" >/dev/null
+  actual="$?"
+  set -e
+  printf 'phase-case %s expected=%s actual=%s\n' "$label" "$expected" "$actual"
+  test "$actual" -eq "$expected"
+}
+
+expect_phase_case forward-action 0 'Wave 5 implementation runs validation'
+expect_phase_case reverse-action 0 'measure results after retired measurement'
+expect_phase_case read-only-control 1 'Wave 5 evidence remains read-only'
+
+# Validate every file independently before filtering fenced history.
+while IFS= read -r -d '' file; do
+  check_fences "$file" "$file" >/dev/null
+done < <(find "$FEATURE_DIR" -type f -name '*.md' -print0)
+
+current_hits="$(
+  while IFS= read -r -d '' file; do
+    check_fences "$file" "$file"
+  done < <(find "$FEATURE_DIR" -type f -name '*.md' -print0) |
+    rg -n -U -i \
+      "$ACTION|$REVERSE|$EDGE|$ANY_RETIRED|$PHASE_ACTION|$PHASE_REVERSE" || true
+)"
+test -z "$current_hits" || {
+  printf '%s\n' "$current_hits"
+  exit 1
+}
+printf 'feature-scan retired-action-and-fence-policy=passed\n'
+
+! rg -n -i \
+  'round nine.*\bMAY\b|eight panel rounds.*\bMAY\b|^## Standing obligations$' \
+  "$FEATURE_DIR/deferred-findings.md"
+```
+
+<!-- STALE-PROSE-CHECK-END -->
 
 ### 2. Launch every ready, file-disjoint slice together
 
@@ -72,26 +363,10 @@ git worktree add -b adr046-w2-routing    ../d2b-w2-routing    adr046-w2-integrat
 
 A ready slice left unlaunched without a recorded blocker fails wave entry.
 
-For `adr046w5`, the exact implementation and close chain is
-`T589 -> {T590,T591,T594}; T591 -> T592 -> T593 -> T605;
-{T590,T592,T594,T605} -> T595 -> {T596,T597,T598,T599} ->
-T220 -> F -> {T600,T601} -> T602 -> T219`.
-T595 may not start until both serialized branches and the other completion slices converge and consumes T605's
-`SystemCoreHost` and `SystemCoreUser` variants. T220 reconciles generated manifests and every
-remaining content change before F through exactly one nonbinding lifecycle and one stable
-discovery ledger. Every provisional candidate or fix reruns deterministic widen-only
-selection and scoped verification; comprehensive discovery runs once and is never rerun.
-T219 remains an external-disposition gate because Wave 5
-already consumed its binding request; it performs no binding action. Until the
-external delivery-contract/tooling owner lands the contract and typed validator for
-`Wave5RetainedRequestDispositionV1`, and that validator imports one record bound to the
-retained request and exact F, the actionable refusal is: `adr046w5 binding request already
-consumed; obtain an accepted external delivery-contract/tooling disposition naming the
-retained request, exact F, and one closed action`. `remain-blocked` stays blocked;
-`abandon-without-merge` cannot advance; and `recover-panel-without-new-request` still requires
-the complete unanimous selected-roster exact-F lifecycle from the current thirteen-seat role
-domain, with selection allowed only to widen over fix deltas, before seal or merge. The record creates no
-second request and is never panel sign-off or a constitutional waiver.
+`adr046w5` has no executable implementation or close chain in this guide. Its retained state
+is immutable history with zero attestations and no seal. The feature-owned record preserves that
+disposition. Start only Wave 6 work selected by the T221 plan result, and launch every ready,
+file-disjoint Wave 6 slice in the same coordination cycle.
 
 ### 3. Inner loop while implementing
 
@@ -105,22 +380,13 @@ make check                       # full PR-equivalent Layer-1 gate
 Read `tests/layer1-jobs.json` for the current enforcing-vs-advisory split rather than assuming
 it. An advisory result is not validation evidence.
 
-T605 alone regenerates compiler-derived public/private API snapshots, and only through the
-pin target. Its focused loop is:
+<!-- RETIRED-READONLY-BEGIN -->
 
-```bash
-make api-surface-pin
-make test-rust-api-surface
-D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts
-```
+The former Wave 5 loop is historical planning evidence. Do not rerun it to
+reconstruct Wave 5 completion. Wave 6 implementers run only the validation owned by their
+T221-selected tasks.
 
-The result must prove `SystemCoreHost`/`SystemCoreUser` kebab-case round-trip, exactly one
-`Zone.status.handlers[]` record named `system-core-host` and one named `system-core-user`
-with `phase` and `lastReconciledAt`, duplicate/missing/wrong-name rejection,
-`ProviderLifecycle` non-substitution, current API snapshots, paired runtime reference text,
-and byte-identical generated Zone desired schema. T605 does not wait for T595/T599 and does
-not run the full drift gate. T595 owns the emitter, T599 owns downstream consumers, and T220
-reconciles integrator-owned generated spec manifests and runs `make test-drift` before F.
+<!-- RETIRED-READONLY-END -->
 
 ### 4. Heavy lanes, through the semaphore only
 
@@ -133,14 +399,13 @@ Never invoke an internal `heavy-lane-*` target directly - it fails closed by des
 
 ### 4b. Pre-panel gates (parallel, read-only)
 
-**`adr046w5` exception:** this subsection's `/d2b-panel-round work` instruction is forbidden
-for this wave because its binding request is already consumed. Its only panel work is T220's
-one nonbinding `/d2b-panel-round plan` lifecycle with one stable discovery ledger. For every
-provisional candidate or fix, rerun deterministic selection, widen but never reduce the
-roster, and run scoped verification with the ledger and full candidate. Run comprehensive
-discovery exactly once. These iterations create no delivery request, reservation,
-attestation, or seal. After T220 freezes F, run T600, T601, and T602, then stop for T219's
-accepted external disposition. Do not fall through to section 5.
+<!-- RETIRED-READONLY-BEGIN -->
+
+**Historical `adr046w5` boundary:** do not dispatch any Wave 5 panel lane or run any Wave 5
+delivery command. Its consumed request, zero attestations, and absent seal are immutable.
+Proceed here only for Wave 6 after T221 passes.
+
+<!-- RETIRED-READONLY-END -->
 
 Before any panel lane is dispatched, run both gates against **this wave scope**:
 
@@ -163,16 +428,13 @@ thirteen-seat role domain and are bound in its table to
 There is no separate dotted verification or review command.
 
 Clear every actionable content finding, at any severity, including constitution conflicts, before the
-binding panel request on an ordinary unconsumed wave. For `adr046w5`, a defect found here
-returns to T220, preserves its lifecycle and stable discovery ledger, reruns deterministic
-widen-only selection and scoped verification without comprehensive discovery, freezes a
-replacement F, reruns T600-T602, and stops again for the external disposition; no binding
-panel is invoked.
+binding panel request on an ordinary unconsumed wave. For Wave 6, a defect found here returns to convergence and requires a replacement candidate
+before the sole binding request.
 
 ### 5. Track A - approve, bind, merge, seal, and close
 
 This procedure applies only to a wave whose binding request has not been consumed.
-`adr046w5` MUST NOT execute any command in this subsection.
+The historical `adr046w5` state MUST NOT execute any command in this subsection.
 
 Enter only after the final nonbinding Discover-Fix-Verify lifecycle is unanimously approved
 and no content-changing fix remains. The PR may already exist as a draft because `snapshot`
@@ -543,7 +805,8 @@ current-wave item is `Merged`; moving it before the PR merge recreates the cycle
 workflow is designed to prevent. The merge-target input is captured from the green PR
 immediately before merge, then registered after the seal so the post-merge commands consume
 the exact pre-merge head and check state.
-R12 and R55 do not reorder those stages and do not relax FR-036.
+R12 and R55 do not reorder those stages. The Wave 5 historical disposition does not relax
+them for Wave 6.
 
 Every seat in `observed.json` has exactly these required fields: `provider`, `model`,
 `reasoning_effort`, `context_tier`, `communication`, `agent_type`,
@@ -573,11 +836,8 @@ together in one message. They take no heavy-gate slot, so all selected lanes run
 concurrently. They must not run tests or builds unless you explicitly ask a
 specific lane to.
 
-For ordinary waves, local/host validators may run against the snapshot while the final
-records are assembled. Required PR checks must be green and imported before merge. For
-`adr046w5`, T600/T601 evidence and T602's closed-set check complete, then execution stops
-before T219 until the accepted external disposition exists. They do not authorize another
-binding request.
+For prospective waves, local/host validators may run against the snapshot while the final
+records are assembled. Required PR checks must be green and imported before merge.
 
 ### 6. Rebase and clean up
 
@@ -603,45 +863,35 @@ proof passes, and required CI reruns regardless.
 ### If content changes after snapshotting
 
 Any content change before the binding panel request invalidates validation evidence: converge,
-re-snapshot, and rerun before requesting the panel. For `adr046w5`, the retained historical request already consumed the binding surface. F and
-its evidence identity do not receive a request, and no candidate receives another one through
-this feature. T220 may replace provisional candidates only during nonbinding
-pre-request phase convergence within its one lifecycle and stable discovery ledger, with
-deterministic widen-only reselection and scoped verification but no repeated comprehensive
-discovery. After T602, stop until an accepted external disposition
-preserves the consumed request and authorizes a specific non-request close action; never
-silently re-attest changed content, waive findings, or infer successor admission. Any
-authorized integration-lineage merge preserves F's tree.
+re-snapshot, and rerun before requesting the panel. The retained Wave 5 request is historical
+and is never re-attested, replaced, or used for successor admission.
 
-### Recover an SC-002 sidecar incident
+### Historical SC-002 recovery plan
 
-This quickstart does not restate the protocol. Recovery is unavailable until accepted
-Version 2 `ADR-046-validation-and-delivery` and its generated
-`ADR-046-validation-and-delivery-traceability.{json,md}` artifacts provide complete rows for
-`VD2-SC002-INCIDENT`, `VD2-SC002-DISPOSITION`, and `VD2-SC002-RECOVERY`, and T589 installs
-the commands those rows own. Before then, stop and do not infer a command from historical
-feature prose.
+<!-- RETIRED-READONLY-BEGIN -->
 
-After those gates pass, use only the exact invocation or versioned runbook anchor resolved by
-the generated traceability row for the emitted action. A missing row, broken link, unknown
-action, or action without an owned invocation is a release-blocking refusal. The runbook is
-`docs/how-to/host-generation-recovery-v1.md`; T599 owns it and
-`docs/reference/host-generation-recovery-actions-v1.json`, while T220 verifies complete
-emitted-action coverage.
+The former Wave 5 recovery sequence is read-only historical planning evidence. It is
+not an executable runbook and supplies no current command, gate, or refusal. Current work must
+obtain any recovery action from an accepted current generated traceability row owned by a
+prospective task after T221; nothing in the retired Wave 5 plan may be inferred or run.
+
+<!-- RETIRED-READONLY-END -->
 
 ## Operator loop: prove the plane works
 
 This is the loop that distinguishes a live control plane from a sealed wave. Its exact
-operator activation positive remains W6 acceptance after T221. T220 first requires the
+operator activation positive remains W6 acceptance after T221. T221 first requires the
 accepted external Network contract/work-item amendment to remove every current-facing sole
-Network-opt-in path and retain T336-T355 plus all four double-opt-in cases as authoritative
-W6 work. T604 then consumes their merged implementation. A stale sole-opt-in contract makes
-T220 fail closed; an unimplemented T336-T355 row remains expected before W6 starts.
+Network-opt-in path and retain `ADR046-nl-001` through `ADR046-nl-020` plus all four
+double-opt-in cases as authoritative
+W6 work. Active local T604 consumes the merged generated `ADR046-nl-001` through
+`ADR046-nl-020` implementation. A stale sole-opt-in contract makes T221 fail closed; an
+unimplemented workItemId in that exact set blocks T479.
 
 ### Story 1 - declare and reconcile
 
-The exact-F6 automated proof is T604. It remains W6 work under T221 and consumes the merged
-T336-T355 result without moving those tasks into W5. Its fixture-contract leg owns
+The implementation and development-validation work is active local T604 after T221 and its
+authoritative dependencies. Its fixture-contract leg owns
 `packages/d2b-contract-tests/tests/resource_operator_activation.rs`; its lowest feasible
 production-boundary leg owns `packages/d2bd/tests/resource_operator_activation.rs`; and its
 real activation/effect leg owns
@@ -653,6 +903,13 @@ D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts
 make test-rust
 make test-host-integration
 ```
+
+For T604, this development command validates the authored operator and daemon-restart tests
+and recipes only. It emits no candidate-bound record and is not candidate-bound FR-075
+execution. After converging and freezing exact F6, T479 invokes the operator validator and runs
+`runtime-cloud-hypervisor-guest-acceptance` and `daemon-restart-vm-survival` together once on
+exact F6 and emits the sole FR-075 result inside
+`w6-cloud-hypervisor-guest-acceptance`.
 
 The host leg declares Zone `acceptance` with the exact W6 operator acceptance set -
 `Volume/acceptance-state` through `Provider/volume-local`,
@@ -666,38 +923,37 @@ every one of those three exact resources under the Provider/config/effect predic
 exact swtpm/flush cleanup, an unresolvable Endpoint, finalizer clearance, and same-identity
 TPM state-Volume preservation,
 and proves `Volume/acceptance-state`, `Network/acceptance-net`, and unrelated resources remain
-ready, identity-stable, intact, and unrecreated. The same candidate must also pass the
-no-skip `vmChecks.x86_64-linux.daemon-restart-vm-survival` FR-075 continuity case. Guest
-runtime-effect acceptance remains distinct Wave 6
-`Provider/runtime-cloud-hypervisor` T384/T479/T480 work; Guest emission, status, or refusal
-cannot satisfy T604. This host leg is W6 T604 operator acceptance, not Wave 5 evidence. Wave 5
+ready, identity-stable, intact, and unrecreated. T604 owns and development-validates the
+`operator-nix-activation-cleanup` validator but emits no candidate-bound record. After
+converging and freezing exact F6, T479 invokes it once and emits that one record. Guest
+runtime-effect acceptance remains distinct Wave 6 manifest-backed `ADR046-ch-001` plus local
+T479/T480 work; Guest emission, status, or refusal
+cannot satisfy T604. This host leg is active local T604 acceptance, not Wave 5 evidence. Wave 5
 retains only its production-plane prerequisites, the accepted double-opt-in contract
-migration, and the settled T336-T355 W6 ownership. Full US1 completes only after
+migration, and the settled `ADR046-nl-001` through `ADR046-nl-020` W6 ownership. Full US1 completes only after
 T479/T480 accept exact-F6 `Provider/runtime-cloud-hypervisor` evidence for a real Cloud
 Hypervisor process effect, authenticated guest-control session, and ready Guest; missing,
 skipped, status-only, fake-boundary, other-family, or refusal evidence leaves it incomplete.
 Direct ResourceService calls, private reloads, and status-only effects do not satisfy T604.
-The host configuration must set `d2b.site.hostGenerationRebuildRef` to the exact
-`<flake-ref>#<configuration-name>` value. It is required, has no default, and is limited to
-2048 bytes. Use the real validated flake and configuration values below; this procedure has
-no fixed illustrative target.
+After the authoritative NIX-9 object lands, the host configuration must set
+`d2b.site.hostGenerationRebuildRef` to the exact `<flake-ref>#<configuration-name>` value. It
+is required, has no default, and is limited to 2048 bytes. Use the real validated flake and
+configuration values below; this procedure has no fixed illustrative target.
 
 > **Blocked at this committed base.** The installed protocol-4 broker has no
 > host-generation handoff operation, and the existing broker service cannot execute a
-> target-closure compatibility binary before profile publication. Do not run migration or
-> rollback until the accepted external compatibility disposition installs and validates
-> `SourceGenerationCompatibilityFloorV1` on the source generation.
+> target-closure compatibility binary before profile publication. Exact code-canon searches
+> also find no `hostGenerationRebuildRef` option or carrier. Do not run migration or rollback
+> until T221 passes and the authoritative NIX-8/NIX-9 objects merge.
 >
 > The source-floor schema, encoding, digest and signature rules, receipts, capability
 > transitions, fixtures, poison registries, and transition matrices are owned solely by
 > accepted Version 2 through `VD2-SC002-SOURCE-FLOOR`, `VD2-SC002-REGISTRIES`, and
-> `VD2-SC002-TRACEABILITY`. T589 and T592 consume only their generated rows. A missing,
-> stale, non-ancestor, wrong-owner, or failing row blocks with remediation to accept Version 2,
-> regenerate traceability, and pass Gate 0. Do not infer any field, count, or command from
-> superseded feature-local prose. The accepted external disposition must name the source
-> producer/installer and typed import/validation owners; no feature task substitutes for them.
+> `VD2-SC002-TRACEABILITY`. Ownership resolves only from those authoritative rows. A missing,
+> stale, wrong-owner, or failing prospective row blocks acceptance. Retired Wave 5 text
+> supplies no implementation or command.
 >
-After that prerequisite is accepted and installed, the first 3/1-to-4/2 migration cannot read
+After the authoritative NIX-8/NIX-9 objects merge, the first 3/1-to-4/2 migration cannot read
 the stable reference because only the target broker can publish it. The following is the
 post-prerequisite operator contract named `host-generation-deploy-bootstrap-v1`, using the
 deployment entrypoint from the explicit target configuration:
@@ -1004,7 +1260,7 @@ become durable, immediately before each individual later mutation edge.
 
 The mutation-edge, peer-transition, pre-start, unit-census, redaction, and source-floor
 fixture sets are resolved only through the accepted generated `VD2-SC002-REGISTRIES` and
-`VD2-SC002-TRACEABILITY` rows assigned to T589, T592, T595, and T604. This quickstart does
+`VD2-SC002-TRACEABILITY` rows assigned by authoritative member specs and manifests. This quickstart does
 not copy their ids, counts, ordering, or poison cases. The generated rows must name
 independently authored expectations and enforcing gates; missing, duplicate, stale,
 wrong-owner, non-ancestor, runtime-derived, skipped, or unvisited coverage fails closed.
@@ -1019,19 +1275,22 @@ may survive, and metrics carry no peer-identity label.
 `Device/acceptance-tpm` completes the pinned state-preserving cleanup; and FR-075 continuity
 passes separately through T479 on the same candidate. Actionable refusal coverage runs
 separately and cannot satisfy this positive proof. Guest passes through the distinct Wave 6
-`Provider/runtime-cloud-hypervisor` T479/T480 exact-F6 acceptance. T604 remains W6
-acceptance-only and consumes the Network implementation after authoritative T336-T355 merge.
+`Provider/runtime-cloud-hypervisor` T479/T480 exact-F6 acceptance. Active local T604 consumes
+Network implementation after the authoritative `ADR046-nl-001` through `ADR046-nl-020` set
+merges and owns the `operator-nix-activation-cleanup` validator. T479 alone invokes it after
+F6 freezes and emits the one F6-bound record.
 
 This acceptance run fixes `isolation.allowEastWest = false`; it does not alone prove
-Host/Network double opt-in. Before T220 freezes F, the accepted external Network
-contract/work-item amendment must require
+Host/Network double opt-in. T221 requires the accepted Network contract/work-item amendment
+on the exact fetched Wave 6 base. It must require
 `effectiveEastWest = Network.spec.isolation.allowEastWest && d2b.site.allowUnsafeEastWest`,
 default both inputs false, remove every current-facing sole Network-opt-in path, and
-regenerate the manifest with T336-T355 retained as authoritative W6 implementation under
-T221 and all four Network/Host production cases assigned there. T219 revalidates that
-migration and ownership before seal or merge. T604 and T479 later require the merged W6
-implementation and all four passing cases. Historical or current sole opt-in cannot close
-T070, T071, T220, T219, T604, or T479. Do not change feature status to bypass that stop.
+regenerate the manifest with `ADR046-nl-001` through `ADR046-nl-020` retained as authoritative
+W6 implementation under T221 and all four Network/Host production cases assigned there. T480 revalidates that
+migration, implementation, and evidence before every Wave 6 close boundary. T604 and T479
+require the merged W6 implementation and all four passing cases. Historical or current sole
+opt-in cannot satisfy T221, T604, T479, or T480. Do not change feature status to bypass that
+stop.
 
 If migration rolls back to a 3/1 generation that had no stable reference, verified absence is
 the correct restored state. The broker-owned durable coordinator resumes rollback after an
@@ -1076,7 +1335,7 @@ d2b vm status acceptance-vm
 ```
 
 The host test repeats that exact census before VM start, after public start, after daemon
-restart/adoption, and after public stop. Its fixture membership comes only from T604's
+restart/adoption, and after public stop. Its fixture membership comes only from authoritative
 generated `VD2-SC002-REGISTRIES` and `VD2-SC002-TRACEABILITY` rows; this quickstart copies no
 ids or counts. Every assigned injected unit survives the sole `d2b.slice` exclusion and fails
 exact equality. Missing, runtime-derived, skipped, or unvisited coverage fails, so a transient

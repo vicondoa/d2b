@@ -21,8 +21,11 @@ third source of truth that the drift gates do not check.
 | [generated-artifacts.md](./generated-artifacts.md) | Schemas, per-Zone bundles, UI colors, delivery artifacts | Broker, daemon, companions, drift gates | W2-W7 |
 | [companion-contracts.md](./companion-contracts.md) | What the four revision-2 desktop companions consume | Sibling repositories | W5 publish, W8 verify |
 | [Candidate recovery prerequisite v1](#candidate-recovery-prerequisite-v1) | Immutable-candidate failure closure and external disposition | Plan integrator, delivery tooling, panel process | Historical W2 entry; requalified at close if unattested |
+| [ADR-046 Wave 6 historical predecessor guard](#adr-046-wave-6-historical-predecessor-guard) | Exact one-time Wave 5 historical disposition | T221 and delivery snapshot/panel/seal/eligibility | W6 entry and close |
 
 ## Candidate recovery prerequisite v1
+
+<!-- RETIRED-READONLY-BEGIN -->
 
 **Contract id**: `adr046-candidate-recovery-prerequisite/v1`
 
@@ -115,6 +118,49 @@ dispatch, panel request, panel-attest, merge, post-merge seal, merge-target regi
 and merge eligibility. Any matrix case that would pass at one of those boundaries leaves the
 corresponding wave open.
 
+<!-- RETIRED-READONLY-END -->
+
+## ADR-046 Wave 6 historical predecessor guard
+
+**Owner**: production delivery tooling; T221 is the feature entry consumer
+
+**Status**: binding one-time historical predecessor contract
+
+Constitution 3.1.0 supplies only the generic historical-process disposition. This exact
+feature-owned delivery validator/tooling contract instantiates it through merged Wave 5
+commit `177235ed37188b3be87525e7f016fb43401574c5`. The retained state is immutable: candidate
+`d20267eec23f90b9cd6931e4bd322b66e259533849c8170617fbd002381493a4`, embedded snapshot
+identity `7a04d9b86df6c8b8704b4bd79ddc25603fedae47d1a521f0b6fa420451816c3a`,
+`snapshot.json` SHA-256 `dcf4d71a572bdf0766de557dde6b8ede7fd680eb9f85572238575d2ab5c82149`,
+head `19b77dad63060bcadd41f1ef800978d2c53cc030`, retained `panel-request.json` SHA-256
+`15f49657490410f0fb5530513144c7c2392f567b211eb630551f3110b94633f7`, the exact candidate
+root and `evidence/local-host/` inventory in `data-model.md`, evidence-tree SHA-256
+`7deb84943d36962493422407ac74342fd598b2fea4970ea1a162942e25cfd33d`, zero attestations, and
+no seal.
+
+Before Wave 6 implementation dispatch, T221 must:
+
+1. fetch `origin/v3` and use the exact fetched tip as the clean base;
+2. require merged Wave 5 and the unique integration commit on the base's first-parent
+   lineage after it whose tree contains the exact accepted generic Constitution 3.1.0 bytes to be
+   ancestors of the Wave 6 base and head;
+3. create the Wave 6 entry snapshot through the production guard and match every retained
+   root entry, filename, and digest;
+4. pass the focused `xtask` work-item-state tests; and
+5. run the ordinary exact-base selected-roster plan lifecycle to N/N sign-off with zero
+   recommendations.
+
+The same production guard runs at Wave 6 snapshot/entry and is rechecked at panel request,
+seal, and merge eligibility. Missing, extra, partial, changed, unfetched, non-first-parent,
+non-ancestor, or substituted state refuses with remediation to restore the exact retained
+state or rebase onto the fetched accepted integration lineage. The guard does not create or
+require a Wave 5 seal.
+
+The former actionable retained-request disposition contract is retired. No Wave 5 recovery,
+second request, replacement candidate, retroactive attestation, reconstructed seal, import
+record, or close action exists. This guard tracks process integrity and signoff state; it is
+not authentication and is not a security boundary.
+
 ## Recovery-point attestation validator v1
 
 **Contract id**: `d2b-recovery-point-attestation/v1`
@@ -206,8 +252,24 @@ post-merge seal, merge-target registration, and merge eligibility.
     make same-ID retry observe rather than reapply the mutation. Audit/export identifiers are
     fixed domain-separated digests, and retention/prune failure is typed degraded health
     (FR-070).
-11. **Amended-plan reconciliation is editor-bound.** T603 uses `/d2b-spec-edit` as the sole feature mutation surface. One current selected-roster lifecycle binds the pre-edit snapshot; the editor receipt plus dedicated checkbox-only Git commit are the only authority; and fresh analysis plus a new selected-roster lifecycle bind the post-edit snapshot before T589. T603 owns no source, fragment, sidecar, digest chain, or resume receipt. The installed source-generation compatibility floor is a separate external prerequisite owned only by accepted Version 2 and generated `VD2-SC002-SOURCE-FLOOR` plus `VD2-SC002-TRACEABILITY` rows. Feature-local census or encoding prose cannot satisfy it (FR-072, SC-034).
-12. **Operator activation is acceptance evidence.** T604 starts from the emitted Nix
+
+Current prospective host-generation, handler-contract, admission, and operator-acceptance
+implementation ownership resolves only from authoritative member specs and generated
+manifests. Active feature-local T604 is the narrow cross-provider acceptance exception; its
+task row owns its files, development validation, and the
+`operator-nix-activation-cleanup` validator identity. It authors the daemon-restart host case
+and its Makefile recipe after manifest-backed `ADR046-ch-001`, but emits no candidate-bound
+record. After converging and freezing F6, T479 invokes the operator validator, runs the
+daemon-restart case with the Cloud Hypervisor case, emits the one
+`operator-nix-activation-cleanup` record, and records FR-075 only in
+`w6-cloud-hypervisor-guest-acceptance`; T480 revalidates both closed predicates.
+
+<!-- RETIRED-READONLY-BEGIN -->
+
+11. **Amended-plan reconciliation is historical.** The former T603/T589 editor and lifecycle
+    sequence is read-only history and authorizes no current mutation. Code canon lacks the
+    source-generation handoff.
+12. **Operator activation is acceptance evidence.** The acceptance task starts from the emitted Nix
     resource declaration and per-Zone bundle, activates on startup and public declaration and
     removal switches without manual restart, observes the spec-pinned Provider/config/effect
     and readiness for `Volume/acceptance-state`, `Network/acceptance-net`, and
@@ -215,61 +277,59 @@ post-merge seal, merge-target registration, and merge eligibility.
     cleanup without disturbing the ready, identity-stable, unrecreated acceptance
     Volume/Network or unrelated resources. W4 history remains byte-preserved but its sole
     Network opt-in is nonconforming and non-authorizing.
-    This one denied-east-west sample is not double-opt-in evidence. Before T220 freezes F,
-    an accepted external Network contract/work-item amendment must land the double-opt-in
+    This one denied-east-west sample is not double-opt-in evidence. T221 requires the
+    accepted Network contract/work-item amendment and double-opt-in
     migration, remove every current-facing sole Network-opt-in path, and retain T336-T355
-    plus all four Network/Host production cases as W6 work under T221. T070, T071, T220, and
-    T219 fail closed until that migration and ownership are ancestors; no feature-local
-    status can unblock them. T604 remains W6 acceptance-only after T336-T355 merge and
-    consumes the landed implementation.
+    plus all four Network/Host production cases as W6 work under T221. T070 and T071 retain
+    historical evidence only. T221 fail-closes prospective Wave 6 entry until the migration,
+    ownership, and exact historical-predecessor guard are on the fetched integration base.
+    The task remains W6 acceptance-only after T336-T355 merge and consumes the landed
+    implementation.
     Guest runtime-effect acceptance
     is deferred specifically to Wave 6 `Provider/runtime-cloud-hypervisor` T384/T479/T480;
     Guest emission, status, or refusal cannot
     satisfy this partial US1 production-plane checkpoint. Refusals are
     separate negative cases. The exact
-    candidate result is emitted once by T604 as
+    candidate result is emitted once as
     `operator-nix-activation-cleanup`, imported by T479 on exact F6, and excluded from the
     Wave 5 T589/T600-T602 profile.
-13. **C1 is a coordinated unreleased-v3 correction.** Constitution 2.2.0 authorizes T605 to
-    add `ZoneHandlerName::SystemCoreHost` and `ZoneHandlerName::SystemCoreUser`, serialized only
+13. **C1 is a prospective W6 correction.** Retired T605 did not land: code canon contains
+    neither `ZoneHandlerName::SystemCoreHost` nor `SystemCoreUser`. T423 now owns those values, serialized only
     as `system-core-host` and `system-core-user`; underscore spellings remain internal
     telemetry labels. Both governing normative specs and their version metadata move with
     targeted Rust/contract tests, compiler-derived public/private API snapshots, paired
-    reference status text, and byte-identical Zone desired-schema proof. T605 completes on
-    those owned pre-consumer artifacts; T595 consumes the variants, T599 reconciles other
-    consumers, and T220 reconciles generated spec manifests plus the full drift gate in the
-    same Wave 5 PR. C1 changes no desired Zone field or JSON schema version. Implementation
-    remains pending.
-14. **Exact-candidate evidence and close are closed.** T220 converges every repository change
-    before freezing F through exactly one nonbinding lifecycle and one stable discovery
-    ledger. Every provisional candidate or fix reruns deterministic widen-only selection and
-    scoped verification; comprehensive discovery runs once and is never rerun. T600 owns
-    exactly `production-session-watch`,
+    reference status text, and byte-identical Zone desired-schema proof before acceptance.
+    Former T595/T599/T605/T220 ownership is historical and not reconstructed.
+14. **Wave 5 evidence is immutable history.** The former T220 graph and T600/T601 evidence
+    ownership are retained as unchecked historical design only. The T600 set was
+    `production-session-watch`,
     `effect-replay-cleanup`, `audit-drain-replay`, and `system-core-handler-contract`;
     T601 owns exactly
     `resource-plane-rss-owner-fanin`, `wave5-removal-proofs`, and
-    `cli-reference-conformance`. Those seven identifiers are the complete Wave 5 profile.
-    T604 separately owns W6 `operator-nix-activation-cleanup`, which T479 imports and which
-    cannot enter the Wave 5 profile. T602 rejects any unknown, duplicate, missing, extra,
-    wrong-lane, or conflated identifier. Wave 5's retained `panel-request.json` has already
-    consumed its binding surface. T219 performs no binding action and may perform
-    only a non-request close action expressly authorized by an accepted external disposition
-    that preserves the historical bytes. F and delivery history remain immutable.
+    `cli-reference-conformance`. Those seven identifiers were the complete historical plan.
+    The acceptance task separately produces W6 `operator-nix-activation-cleanup`, which T479 imports and which
+    cannot enter the Wave 5 profile. T602's planned validator rejects any unknown, duplicate,
+    missing, extra, wrong-lane, or conflated identifier. The exact disposition does not claim
+    those unchecked planned rows completed. Wave 5's retained `panel-request.json` consumed
+    its binding surface with zero attestations and no seal. T219 records only that immutable
+    historical disposition. T221 is the next executable gate.
 15. **SC-002 has one external authority.** The accepted Version 2
     `ADR-046-validation-and-delivery` specification and its generated
     `ADR-046-validation-and-delivery-traceability.{json,md}` artifacts solely own
     `VD2-SC002-RECEIPT`, `VD2-SC002-PUBLICATION`, `VD2-SC002-INCIDENT`,
     `VD2-SC002-DISPOSITION`, `VD2-SC002-RECOVERY`, `VD2-SC002-SOURCE-FLOOR`,
-    `VD2-SC002-REGISTRIES`, and `VD2-SC002-TRACEABILITY`. T589, T600, T604, and T220 consume
-    only their generated rows. Until Version 2 is accepted and the generated bijection passes
-    Gate 0 and drift validation, all four tasks remain blocked. This feature contains no
-    normative SC-002 encoding, census, registry count, or recovery state copy.
+    `VD2-SC002-REGISTRIES`, and `VD2-SC002-TRACEABILITY`. T589/T600/T220 are historical
+    planned consumers. Prospective acceptance uses only current generated rows. This feature
+    contains no normative SC-002 encoding, census, registry count, or recovery state copy.
 16. **Recovery is never a status-only dead end.** `VD2-SC002-RECOVERY` requires every emitted
     action to resolve to an exact invocation or an owned versioned runbook section and binds
     the resulting state transition. T599 separately owns
-    `docs/how-to/host-generation-recovery-v1.md` and the generated public action mapping;
-    T220 blocks release on missing or broken mappings. Recovery uses only the existing broker
-    unit and preserves the daemon-only three-unit architecture.
+    `docs/how-to/host-generation-recovery-v1.md` and the generated public action mapping.
+    The former T220 release check is historical and supplies no current gate. Recovery uses
+    only the existing broker unit and preserves the daemon-only three-unit architecture.
+
+<!-- RETIRED-READONLY-END -->
+
 17. **Observed panel values are process metadata, not authentication.** Before prospective
     Track A `make-records`, round-local `observed.json` contains exactly one entry for every
     selected seat and no other seat. Every entry requires `provider`, `model`,
@@ -292,7 +352,8 @@ post-merge seal, merge-target registration, and merge eligibility.
     change requires an integration-branch update and makes the old validation,
     selected-roster verification, snapshot, binding, records, attestation, and CI evidence
     ineligible; validation, selected-roster verification, snapshot, binding, and required
-    checks restart in Track A order. If the wave's sole request is already consumed,
-    replacement binding remains blocked until accepted external disposition. This rule does
+    checks restart in Track A order. If a prospective wave's sole request is consumed,
+    replacement binding is forbidden unless a later accepted contract explicitly authorizes
+    it. The exact ADR-046 contract provides no such authorization for Wave 5. This rule does
     not reorder request, records, attestation, merge, seal, merge-target, or
-    merge-eligibility and does not relax FR-036.
+    merge-eligibility and does not relax the Wave 6 T221 gate.

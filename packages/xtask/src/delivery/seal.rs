@@ -56,7 +56,7 @@ use super::{
         sha256_bytes, validate_identifier, validate_program_wave, validate_sha256,
     },
     panel::{self, PanelAttestation, SnapshotView, ensure_artifact_kind},
-    storage::{CandidateDir, PANEL_REQUEST_FILE, SEAL_FILE},
+    storage::{CandidateDir, PANEL_REQUEST_FILE, SEAL_FILE, StateRoot},
 };
 
 /// One lane's accepted validations, as bound into the seal.
@@ -243,16 +243,19 @@ pub fn run(args: &[String]) -> Result<WorkflowOutput> {
     options.finish()?;
     let snapshot_path = state.resolve_artifact_ref(&snapshot_path);
     let (candidate, snapshot) = panel::open_candidate(&state, &snapshot_path)?;
-    seal_checked(&candidate, &snapshot, &repository_roots)
+    super::work_item_state::reject_adr046_w5_mutation(&snapshot.material, "seal")?;
+    seal_checked(&state, &candidate, &snapshot, &repository_roots)
 }
 
 fn seal_checked(
+    state: &StateRoot,
     candidate: &CandidateDir,
     snapshot: &SnapshotView,
     repository_roots: &BTreeMap<String, PathBuf>,
 ) -> Result<WorkflowOutput> {
     super::work_item_state::require_current_wave_merged(&snapshot.material, repository_roots)?;
-    super::work_item_state::require_prior_waves_merged_for_exit(
+    super::work_item_state::require_predecessor_state_for_exit(
+        state,
         &snapshot.material,
         repository_roots,
     )?;
@@ -471,8 +474,9 @@ pub(crate) mod tests {
 
         let scratch = Scratch::new("seal-planned-state");
         let (candidate, snapshot) = sealable_from(&scratch, material);
+        let state = StateRoot::for_tests(&scratch.path.join("state")).expect("state root");
         let roots = BTreeMap::from([("github.com/example/d2b".to_string(), repository.repo())]);
-        let error = seal_checked(&candidate, &snapshot, &roots)
+        let error = seal_checked(&state, &candidate, &snapshot, &roots)
             .expect_err("a Planned item must block the seal command");
         assert!(error.message().contains("cannot seal W0"), "{error}");
         assert!(error.message().contains("ADR046-foundation-001"), "{error}");
@@ -507,8 +511,9 @@ pub(crate) mod tests {
 
         let scratch = Scratch::new("seal-prior-wave");
         let (candidate, snapshot) = sealable_from(&scratch, material);
+        let state = StateRoot::for_tests(&scratch.path.join("state")).expect("state root");
         let roots = BTreeMap::from([("github.com/example/d2b".to_string(), repository.repo())]);
-        let error = seal_checked(&candidate, &snapshot, &roots)
+        let error = seal_checked(&state, &candidate, &snapshot, &roots)
             .expect_err("an unmerged prior-wave item must block the seal command");
         assert!(
             error

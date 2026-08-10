@@ -18,7 +18,7 @@ companion reads this surface or the socket beside it.
 
 | # | Obligation | Requirement | Wave |
 | --- | --- | --- | --- |
-| CLI-1 | Resource inspection: list and inspect resources, exact owning Provider, status, and the reason for any degraded or failed condition; committed-pending-audit status lands only with the coordinated accepted-spec Version 2 amendment and follows the exact commands, flags, exits, mandatory envelope fields, closed remediation actions, and human/JSON forms below; Zone readiness renders the actual handler-list names from T605 rather than a map-shaped alias | FR-016, FR-069, FR-070, SC-005, SC-032, SC-033 | W5 |
+| CLI-1 | Resource inspection and committed-pending-audit Version 2 text below is historical Wave 5 design. Prospective Zone readiness consumes the handler-list contract from authoritative member specs and generated manifests. | FR-016, FR-069, FR-070, SC-005, SC-032, SC-033 | historical W5 / prospective W6 |
 | CLI-2 | Every failure names a specific cause and an actionable next step | FR-017, SC-004 | W5 |
 | CLI-3 | Cutover verbs: a non-mutating preview, and an apply gated on explicit intent plus exact content-bound consent | FR-020, FR-021 | W7 |
 | CLI-4 | The apply path refuses to pass the rollback boundary without a recorded recovery-point attestation | FR-043, SC-025 | W7 |
@@ -26,9 +26,11 @@ companion reads this surface or the socket beside it.
 | CLI-6 | `d2b userd` is removed only after parity with the fixed user supervisor Process | FR-041 | W5 |
 | CLI-7 | Desktop-wrapper, companion, audio, USB, security-key, and resource reference pages match exact emitted help, JSON, capabilities, typed refusals, and wire fields; absent behavior is not promised | FR-019, FR-074 | W5 |
 
-## Committed-pending-audit recovery
+## Historical committed-pending-audit recovery plan
 
-This recovery surface requires T599's coordinated amendment of the accepted
+<!-- RETIRED-W5-CLI-BEGIN -->
+
+This retired design assigned T599 a coordinated amendment of the accepted
 `ADR-046-cli-and-operations` specification from Version 1 to Version 2. Version 2 assigns the
 resource-recovery meanings of exits 75 and 76, makes `zoneRef` and `schemaVersion: 2`
 mandatory in every recovery JSON envelope, and pins the ID and remediation contracts below.
@@ -36,7 +38,7 @@ The existing meanings of 75 and 76 for unrelated exec commands remain command-sc
 owns migration guidance, DTO/schema and contract tests, reference and release treatment plus
 `changelog.d/cli-operation-recovery.md`; T220 reconciles the generated manifests and folds
 that fragment. The implementation
-MUST NOT ship this surface under the accepted Version 1 contract.
+was not authorized to ship under the accepted Version 1 contract.
 
 The replay handle is an exact 16-byte UUIDv7-layout operation ID rendered as lowercase
 32-hex without separators. It remains opaque to operators. Every
@@ -205,15 +207,16 @@ version or `schemaVersion: 1` retains the old 0/1/2 behavior and MUST NOT be int
 Version 2. Arbitrary Version 1 operation IDs are not converted to the 16-byte Version 2 form.
 The d2b 3.0 clean cutover imports no persisted Version 1 recovery state.
 
+<!-- RETIRED-W5-CLI-END -->
+
 ## Host-generation handoff recovery
 
-This is a planned T595/T599 surface, not behavior available merely because this feature
-contract names it. SC-002 protocol authority belongs solely to accepted Version 2
+Code canon does not provide this surface. Prospective ownership and ordering resolve only
+from authoritative member specs and generated manifests after T221. SC-002
+protocol authority belongs solely to accepted Version 2
 `docs/specs/ADR-046-validation-and-delivery.md` and its generated
 `docs/specs/ADR-046-validation-and-delivery-traceability.{json,md}` artifacts. The generated
-JSON is machine authority and the generated Markdown is its review view. FR-056 requires that
-Version 2, regenerated manifests, Gate 0, and the generated rows be valid on an ancestor of
-the implementation base before T589 or any downstream consumer proceeds.
+JSON is machine authority and the generated Markdown is its review view.
 
 The CLI consumes these stable generated rows rather than copying their protocol:
 
@@ -292,9 +295,8 @@ Version 2 and generated `VD2-SC002-RECOVERY`, `VD2-SC002-INCIDENT`,
 | `preserve-and-escalate-audit-integrity-incident` | site security authority runs `host-generation-audit-integrity-escalation-v1` |
 
 Each named `host-generation-*-v1` procedure is an identically named anchor in
-`docs/how-to/host-generation-recovery-v1.md`. T599 owns that public runbook and generated
-`docs/reference/host-generation-recovery-actions-v1.json`; T220 verifies links and complete
-agreement with the generated emitted-action assignments. A missing, extra, duplicate,
+`docs/how-to/host-generation-recovery-v1.md`. The retired runbook/action-map ownership is
+read-only history and supplies no current gate. A missing, extra, duplicate,
 unowned, or broken action mapping blocks release. Machine output carries only the generated
 action token, never an argv array, shell fragment, free-form command, Zone, operation ID, or
 artifact path. Escalation procedures preserve the affected evidence and authorize no repair,
@@ -338,11 +340,8 @@ FR-042 explicit retirement list rather than the parity list.
   `zoneRef` and `operationId` recovery coordinates stay confined to direct operator responses
   and occur zero times in telemetry labels, spans, exported audit identities, or unrelated
   error context.
-- T599 bumps the accepted CLI specification to Version 2 and owns migration guidance,
-  DTO/schema, contract tests, references, and
-  `changelog.d/cli-operation-recovery.md`. T220 verifies and folds the coordinated
-  version/reference/test/schema/release treatment. Missing or Version 1 envelopes
-  are never interpreted as Version 2, and arbitrary Version 1 IDs are never silently migrated.
+- The former Version 2 amendment, migration, and fold are read-only historical design and
+  authorize no current implementation.
 - Host-generation handoff commands consume only accepted generated `VD2-SC002-*` rows for
   protocol states, publication, capacity, rendering, exits, and transitions. Every generated
   public action resolves to exactly one command or named owner and public runbook procedure
@@ -354,7 +353,8 @@ FR-042 explicit retirement list rather than the parity list.
   `Zone.status.handlers[]` record: `system-core-host` or `system-core-user`, with its `phase`
   and `lastReconciledAt`. Exactly one of each is required; duplicate, missing, wrong-name, or
   `provider-lifecycle` substitution is reported as an actionable refusal rather than a vague
-  Provider path or boolean failure. T599 must match T605's paired contract/reference evidence.
+  Provider path or boolean failure. Current ownership resolves only from authoritative member
+  specs and generated manifests.
 - The cutover preview modifies nothing, and the apply path is unreachable without both consent
   and attestation.
 - No retired verb remains, verified by its removal proof.

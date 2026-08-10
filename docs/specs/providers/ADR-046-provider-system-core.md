@@ -1117,25 +1117,24 @@ using a bounded priority lane.
 Each system-core handler reports to the core-controller aggregate:
 
 ```yaml
-handler: system_core_host    # stable closed name
+name: system-core-host
 phase: Ready
 lastReconciledAt: "2026-07-22T00:00:01.000Z"
-queueDepth: 0
-runningCount: 0
-lastWatchRevision: 42
 ```
 
 ```yaml
-handler: system_core_user
+name: system-core-user
 phase: Ready
 lastReconciledAt: "2026-07-22T00:00:01.000Z"
-queueDepth: 0
-runningCount: 0
-lastWatchRevision: 38
 ```
 
-These appear in `Zone.status.handlers` as name/phase/lastReconciledAt entries.
-No resource names, counts by type, or provider diagnostics appear in that list.
+These are the exact serialized `ZoneHandlerName::SystemCoreHost` and
+`ZoneHandlerName::SystemCoreUser` values. Every `Zone.status.handlers` list
+contains exactly one of each. Duplicate or missing entries, underscore
+spellings, any other name substituted for either entry, and use of
+`ProviderLifecycle` as a substitute are invalid. `ProviderLifecycle` remains a
+distinct allowed handler name for its own record. No resource names, counts by
+type, or provider diagnostics appear in the list.
 
 ### 12.2 Stable error codes
 
@@ -1204,13 +1203,14 @@ if converged, kind=warning if Degraded, kind=error if Failed):
   "generation": 1,
   "observed_generation": 1,
   "outcome": "converged",
-  "handler": "system_core_host",
+  "handler": "system-core-host",
   "conditions_summary": "HostAvailable=True CapabilitiesVerified=True"
 }
 ```
 
 `resource_name_digest` is the SHA-256 of `ResourceType/resource_name`. The
-raw resource name does not appear in audit records.
+raw resource name does not appear in audit records. The audit adapter serializes
+the same typed `ZoneHandlerName` wire value used by Zone status.
 
 ### 12.4 OTEL telemetry
 
@@ -1240,7 +1240,9 @@ system_core_user
 ```
 
 These are the only two `handler` label values system-core contributes to
-`d2b_controller_*` metrics.
+`d2b_controller_*` metrics. The underscore forms are telemetry labels only;
+they are forbidden in `Zone.status.handlers[]`, resource status, Provider
+manifests, reconcile audit records, and API output.
 
 `no_isolation` is not a metric label. It must not appear in any telemetry
 dimension.
@@ -1381,15 +1383,15 @@ column above are the complete removal-proof assignment for this dossier.
 | Field | Value |
 | --- | --- |
 | Work item ID | `ADR046-system-core-001` |
-| Dependency/owner | `ADR046-provider-001`, `ADR046-exec-003`, `ADR046-exec-004`, `ADR046-exec-005`, `ADR046-pstate-012`, `ADR046-telem-001`, and `ADR046-audit-001`; `Provider/system-core` owner |
-| Current source | No canonical v3 equivalent. Adapt the Provider descriptor pattern from `packages/d2b-realm-provider/src/provider.rs` and the bounded audit-envelope pattern from `packages/d2bd/src/daemon_audit.rs`; do not carry forward daemon topology or unsafe-local helper protocol types. |
+| Dependency/owner | `ADR046-provider-001`, `ADR046-core-001`, `ADR046-zone-control-001`, `ADR046-cli-009`, `ADR046-exec-003`, `ADR046-exec-004`, `ADR046-exec-005`, `ADR046-pstate-012`, `ADR046-telem-001`, and `ADR046-audit-001`; `Provider/system-core` owner, serialized later writer of `packages/d2b-contracts/src/v3/zone.rs` after the generic Zone contract owner, and serialized later writer of `packages/d2b/src/zone.rs` after the Zone CLI owner |
+| Current source | `packages/d2b-contracts/src/v3/zone.rs` has the closed `ZoneHandlerName` enum and generic handler-list validation but no `SystemCoreHost` or `SystemCoreUser` variants or mandatory-pair rule. `packages/d2b-core-controller/src/metrics.rs` and `packages/d2b-contracts/src/v3/telemetry_policy.rs` already contain the underscore telemetry labels. Adapt the Provider descriptor pattern from `packages/d2b-realm-provider/src/provider.rs` and the bounded audit-envelope pattern from `packages/d2bd/src/daemon_audit.rs`; do not carry forward daemon topology or unsafe-local helper protocol types. |
 | Reuse action | adapt |
-| Destination | `packages/d2b-provider-system-core/src/manifest.rs`, `packages/d2b-provider-system-core/src/audit.rs`, and `packages/d2b-provider-system-core/tests/provider_boundary.rs` |
-| Detailed design | Compile the system-core Provider manifest, empty closed config schema, Host/User component descriptors, and empty state-namespace declaration. The manifest binds both library handlers to the fixed `d2b-core-controller` bootstrap process without declaring either handler as a Process resource. The audit adapter emits one bounded, redacted `ResourceReconciled` record after each Host/User reconcile. The boundary rejects Provider config fields and proves that handler call paths neither write `Provider.status` nor emit `ProcessEffect`; core-controller infrastructure owns the former and `ADR046-exec-006`/`ADR046-exec-007` own the latter. `ADR046-pstate-012` remains the owner of generic optional-state admission; this item only declares system-core's empty state set. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt descriptor/audit patterns; implement the v3 Provider-specific boundary. |
-| Integration | `ADR046-exec-003` and `ADR046-exec-004` call the audit adapter after reconcile; `ADR046-exec-005` and core-controller infrastructure load the manifest and derive the runtime-owned `Provider/system-core` resource/status. |
+| Destination | `packages/d2b-provider-system-core/src/{manifest.rs,audit.rs}`; `packages/d2b-provider-system-core/tests/provider_boundary.rs`; `packages/d2b-contracts/src/v3/zone.rs`; `packages/d2b-contracts/tests/zone_handler_contract.rs`; `packages/d2b-core-controller/src/{zone_status.rs,lib.rs}`; `packages/d2bd/src/resource_runtime.rs`; `packages/d2b/src/zone.rs`; `packages/d2b-contract-tests/tests/policy_contracts.rs`; `tests/golden/api-surface/{public-api.txt,hidden-public-api.txt,capability-api.txt,capability-trait-impls.txt,input-fingerprint.txt}`; `docs/reference/resource-plane-runtime.md` |
+| Detailed design | Compile the system-core Provider manifest, empty closed config schema, Host/User component descriptors, and empty state-namespace declaration. Add `ZoneHandlerName::SystemCoreHost` and `ZoneHandlerName::SystemCoreUser` with the one exact wire values `system-core-host` and `system-core-user`. `Zone.status.handlers[]` must contain exactly one record for each, including its phase and `lastReconciledAt`; duplicate, missing, underscore, unknown, or wrong-name records are rejected. `ZoneHandlerName::ProviderLifecycle` remains a distinct allowed value and cannot satisfy either required record. The production status emitter emits the typed values, and daemon and CLI consumers deserialize and validate the mandatory pair rather than treating names as free-form strings. The existing `system_core_host` and `system_core_user` strings remain only the closed telemetry-label values and are not serialized into status, manifests, audit, or API output. The manifest binds both library handlers to the fixed `d2b-core-controller` bootstrap process without declaring either handler as a Process resource. The audit adapter emits one bounded, redacted `ResourceReconciled` record with the typed hyphenated handler value after each Host/User reconcile. The boundary rejects Provider config fields and proves that handler call paths neither write `Provider.status` nor emit `ProcessEffect`; core-controller infrastructure owns the former and `ADR046-exec-006`/`ADR046-exec-007` own the latter. `ADR046-pstate-012` remains the owner of generic optional-state admission; this item only declares system-core's empty state set. Compiler-derived public/private API snapshots are regenerated, while the Zone desired-state schema must remain byte-identical because `ZoneSpec` is unchanged. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt descriptor/audit patterns and implement the Provider-specific boundary plus the missing typed status-handler contract. |
+| Integration | `ADR046-exec-003` and `ADR046-exec-004` call the audit adapter after reconcile; `ADR046-exec-005` and core-controller infrastructure load the manifest and derive the runtime-owned `Provider/system-core` resource/status. `packages/d2b-core-controller/src/zone_status.rs` projects exactly one Host and one User handler record into Zone status; `packages/d2bd/src/resource_runtime.rs` publishes only a validated projection, and `packages/d2b/src/zone.rs` rejects malformed status before rendering it. `packages/d2b-contract-tests/tests/policy_contracts.rs` binds the source contract, API snapshots, this normative Provider specification, runtime reference prose, and unchanged desired-schema proof. |
 | Data migration | Full d2b 3.0 reset; no Provider config, handler checkpoint, or audit state is imported. |
-| Validation | `config_schema_empty_only`, `provider_status_not_written_by_handlers`, `provider_state_set_empty`, `host_no_process_effect_emitted`, `host_resource_reconciled_audit`, and `user_resource_reconciled_audit`; manifest golden vector proves no Process descriptor and no state namespace for either handler. |
-| Removal proof | No independent destination removal. `ADR046-exec-009` owns unsafe-local helper/wire retirement, and `ADR046-telem-008` owns removal proofs for legacy unsafe-local and VM-name telemetry labels. |
+| Validation | `zone_handler_name_exact_wire_roundtrip` proves only `system-core-host` and `system-core-user`; `zone_status_system_core_exactly_one_each` proves one record with phase and `lastReconciledAt` for each; focused negatives reject duplicate, missing, underscore, unknown, and wrong-name entries; `zone_status_provider_lifecycle_not_substitute` proves `ProviderLifecycle` remains allowed but cannot replace either required record. `config_schema_empty_only`, `provider_status_not_written_by_handlers`, `provider_state_set_empty`, `host_no_process_effect_emitted`, `host_resource_reconciled_audit`, and `user_resource_reconciled_audit` retain the Provider manifest/audit scope. Compiler-derived public/private API snapshots pin the enum and removed free-form surface; the existing Zone desired-schema generator is run before and after and its output digest is byte-identical. |
+| Removal proof | Source and API-surface checks prove no free-form or underscore spelling can enter `Zone.status.handlers[]`, Provider manifests, reconcile audit, or API output, and no alternate public status emitter bypasses the mandatory-pair constructor. `ADR046-exec-009` retains unsafe-local helper/wire retirement, and `ADR046-telem-008` retains removal proofs for legacy unsafe-local and VM-name telemetry labels; the underscore telemetry labels themselves remain intentionally unchanged. |
 | Implementation state | Planned |
 | Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
@@ -1443,6 +1445,11 @@ per-test advisory threshold.
 | `host_no_process_effect_emitted` | system-core reconcile emits no `ProcessEffect` audit records for any Host reconcile scenario | `ADR046-system-core-001` |
 | `host_resource_reconciled_audit` | Host reconcile emits one bounded, redacted `ResourceReconciled` record with the canonical handler value | `ADR046-system-core-001` |
 | `user_resource_reconciled_audit` | User reconcile emits one bounded, redacted `ResourceReconciled` record with the canonical handler value | `ADR046-system-core-001` |
+| `zone_handler_name_exact_wire_roundtrip` | `SystemCoreHost` and `SystemCoreUser` round-trip only as `system-core-host` and `system-core-user`; underscore spellings fail | `ADR046-system-core-001` |
+| `zone_status_system_core_exactly_one_each` | Zone status accepts exactly one Host and one User handler record, each with phase and `lastReconciledAt` | `ADR046-system-core-001` |
+| `zone_status_system_core_duplicate_missing_or_wrong_rejected` | Duplicate, missing, unknown, underscore, and wrong-name substitutions are rejected | `ADR046-system-core-001` |
+| `zone_status_provider_lifecycle_not_substitute` | `ProviderLifecycle` remains independently accepted but cannot satisfy either mandatory system-core record | `ADR046-system-core-001` |
+| `zone_desired_schema_unchanged` | The existing Zone desired-schema generator produces byte-identical output because `ZoneSpec` is unchanged | `ADR046-system-core-001` |
 | `otel_no_isolation_not_a_label` | Metric/span labels for user-only Host reconcile contain no `no_isolation` dimension | `ADR046-telem-008` |
 | `provider_state_set_empty` | `Provider/system-core` declares no Provider state Volume; `ProviderStateSet(zone, "system-core")` is empty; neither controller Process mounts a state Volume; bounded non-secret operational state is written to `status`/the core Operation ledger and handler checkpoints are reconstructible from a resource-store relist; no bootstrap-state pre-provisioning path exists | `ADR046-system-core-001` |
 | `provider_status_not_written_by_handlers` | system-core handler code paths contain no `update_status(Provider/system-core, ...)` calls; Provider.status updates are absent from the handler call graph | `ADR046-system-core-001` |

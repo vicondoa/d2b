@@ -1,5 +1,7 @@
 # Gate 0 re-evaluation: SPIKE-01 RSS rerun amendment
 
+<!-- RETIRED-READONLY-BEGIN -->
+
 | Field | Value |
 | --- | --- |
 | Trigger | FR-056 - amending an Accepted specification-set member re-triggers Gate 0 across the manifest |
@@ -105,9 +107,9 @@ re-evaluation, the input set here is **not empty**.
 
 | Wave | Delivery state | Disposition |
 | --- | --- | --- |
-| `ADR046-W0`, `ADR046-W1` | Delivered without required panel/seal records; historical evidence is retained in [`waiver-w0-w1.md`](./waiver-w0-w1.md) | Unaffected as work-item state only. Their 14 work items are recorded `Merged`; this does not authorize program continuation or satisfy FR-036's external constitution prerequisite. `ADR046-feasibility-001` stays `Merged` on the strength of the proof crate existing, which the amendment does not touch. |
+| `ADR046-W0`, `ADR046-W1` | Delivered without required panel/seal records; historical evidence is retained in [`waiver-w0-w1.md`](./waiver-w0-w1.md) | Unaffected as work-item state only. The exact ADR-046 validator/tooling contract later applied the generic Constitution 3.1.0 disposition to these deviations only as part of the closed history through merged Wave 5. `ADR046-feasibility-001` stays `Merged` on the strength of the proof crate existing, which the amendment does not touch. |
 | `ADR046-W2`, `ADR046-W3`, `ADR046-W4` | Delivery state reports sealed and merged | Historical status only. Each reportedly sealed against a snapshot in which the RSS row read MEASURED-FAIL, which was the true state at that time and is preserved verbatim in `RESULTS.md`. Before this feature graph relies on those closes, it requires exact external delivery-record confirmation of each historical candidate, binding panel, seal, and merge, or an accepted external correction. It must not schedule a new binding panel, seal, or merge for any of these waves. |
-| `ADR046-W5` | **Binding panel request outstanding, no seal** | **Blocked pending external disposition.** The retained request consumed Wave 5's once-per-wave binding request. The amendment prevents that request from authorizing a seal against changed content, but it does not delete, reclassify, or free the request slot. See 4.2. |
+| `ADR046-W5` | **Binding panel request retained, zero attestations, no seal** | Historical finding later dispositioned by the exact ADR-046 validator/tooling contract under generic Constitution 3.1.0 only for the state through merged commit `177235ed37188b3be87525e7f016fb43401574c5`. The request remains immutable and no recovery is authorized. See 4.2. |
 | `ADR046-W6`-`ADR046-W8` | Not started | Nothing to regather. |
 
 ### 4.2 The W5 finding
@@ -138,17 +140,14 @@ The disposition is therefore:
    reviews are process evidence only: they create no delivery request,
    consume no request slot, and cannot replace or dispose the retained
    delivery request.
-3. An explicit disposition from the external delivery-contract/tooling
-   authority must reconcile the consumed request with the amended candidate
-   while preserving the historical record. It must name whether the retained
-   delivery state is confirmed or corrected and what close action, if any, is
-   authorized. Feature-local prose is not that authority.
-4. Until that disposition is accepted, T219 is non-authorizing:
-   `ADR046-W5` must not issue another binding request, attest, seal, register a
-   merge target, pass merge eligibility, or merge.
+3. The exact ADR-046 validator/tooling contract later applied the generic Constitution 3.1.0
+   disposition to these bytes and the merged Wave 5 boundary as closed historical deviations.
+   It did not confirm a panel pass, create a seal, or authorize a close action.
+4. T219 records that historical disposition. T221, not any Wave 5 recovery
+   path, is the next executable gate.
 
-This is the fail-closed cost FR-056 and the once-per-wave rule jointly make
-visible; this feature batch does not resolve it by rewriting history.
+This dated record remains historical evidence. Its former external-disposition
+blocker and recovery path are superseded and are not current instructions.
 
 ### 4.3 What the passing rerun does not license
 
@@ -201,3 +200,5 @@ because the fold moves text into an inventoried document. The failure names
 the file and the expected count, so the fix is to bump the pinned count in the
 same change that adds the release note. The fragment landed with this
 amendment deliberately carries no numeric literal for that reason.
+
+<!-- RETIRED-READONLY-END -->

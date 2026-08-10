@@ -1,12 +1,14 @@
 # Historical record: W0 and W1 delivered without sealed wave records
 
+<!-- RETIRED-READONLY-BEGIN -->
+
 | Field | Value |
 | --- | --- |
 | Scope | Waves W0 and W1 of the ADR-046 d2b 3.0 delivery program |
 | Purpose | FR-034 historical evidence only |
 | Bounded by | FR-035, FR-036, FR-058 |
-| Status | Recorded, non-authorizing |
-| External prerequisite | Separate accepted Constitution Principle VI amendment under FR-036 |
+| Status | Recorded, immutable historical evidence |
+| External disposition | Generic Constitution historical-process rule plus the exact feature-owned FR-036 validator/tooling contract |
 
 ## 1. What this historical record contains
 
@@ -15,10 +17,10 @@ records. This legacy-named file is the explicit historical record that FR-034
 requires, and it exists so that the gap is recorded rather than silently
 absorbed. It is not a constitutional waiver.
 
-This record does not cure the missing gates, authorize W2 entry, permit resumed
-implementation, or allow any phase to close or advance. Constitution Principle
-VI can be changed only through a separate constitution amendment outside this
-feature root. FR-036 requires that accepted amendment before any such action.
+This record does not claim the missing gates passed and does not reconstruct them. The generic
+Constitution 3.1.0 historical-process disposition supplies no ADR-046 detail. FR-036 and the
+exact feature-owned validator/tooling contract bind this evidence into the immutable history
+through merged Wave 5. T221 is the next executable gate.
 
 ## 2. Missing artifacts, named precisely
 
@@ -79,28 +81,19 @@ that fixed W0/W1 number exactly: 8 items in W0 plus 6 items in W1 equals 14, and
 `Merged`. The current whole-manifest census is intentionally larger, so the record does not
 describe 14 as the current repository-wide total.
 
-## 4. Relationship to W2 entry
+## 4. Historical relationship to W2 entry
 
 This record predates the attempted W2 entry disposition, but timing does not
-give it authority. Under FR-036, W2 and every later implementation, resume,
-fix, work-panel, seal, merge, and advance boundary remain blocked until a
-separate accepted Principle VI constitution amendment expressly dispositions
-the W0/W1 history and the W2-W4 late-remediation history. This file is evidence
-for that decision, not the decision itself.
+give it authority. The exact validator/tooling contract now preserves the W0-W5 history
+without asserting that the historical W2 entry gate passed. This file is evidence consumed
+by that contract, not executable entry or recovery authority.
 
 ## 5. Bounded historical record, not a precedent
 
-Under FR-035:
-
-- Sealed delivery may begin at W2 only after FR-036's external prerequisite.
-- Every wave from W2 through W8 MUST produce a complete seal.
-- This record **MUST NOT** be extended to any other wave.
-- This record **MUST NOT** be reused, in whole or in part, for any other wave.
-- This record **MUST NOT** be cited as authorization, precedent, analogy, or mitigating
-  context for any wave from W2 onward.
-
-Any request to continue despite the recorded Principle VI violations belongs in
-the separate constitution-amendment path, not in this document.
+Under FR-035, this record remains bounded to W0/W1 and is not extended, reused, or cited as
+precedent. The exact historical disposition does not require or reconstruct seals for W0,
+W1, or retained Wave 5. Every prospective wave from W6 onward supplies its own ordinary
+panel, validation, PR, seal, and merge evidence.
 
 ## 6. Relationship to the constitution violation
 
@@ -110,7 +103,10 @@ reconstruct the missing receipts against delivered snapshots. The W2-W4
 late-remediation records likewise cannot become contemporaneous plan-panel
 evidence.
 
-Consequently, removing this record would make the historical violation
-undocumented, while treating it as authorization would create a second
-violation. Only an accepted external Principle VI amendment can state whether
-and under what conditions the program may continue.
+Consequently, removing this record would make the historical violation undocumented, while
+treating it as standalone authorization would create a second violation. The generic
+Constitution disposition plus the exact feature-owned validator/tooling contract now define
+the bounded historical treatment. No T219 recovery or refusal workflow remains; T221 is the
+next executable gate.
+
+<!-- RETIRED-READONLY-END -->

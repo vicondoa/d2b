@@ -1013,6 +1013,7 @@ pub fn run_request(args: &[String]) -> Result<WorkflowOutput> {
     let snapshot_path = state.resolve_artifact_ref(&snapshot_path);
     let (candidate, snapshot) = open_candidate(&state, &snapshot_path)?;
     request_checked(
+        &state,
         &candidate,
         &snapshot,
         &repository_roots,
@@ -1027,12 +1028,20 @@ pub fn run_request(args: &[String]) -> Result<WorkflowOutput> {
 /// refuses a state root inside a Git working tree, and every hermetic fixture
 /// lives under the ignored build tree inside this repository.
 fn request_checked(
+    state: &StateRoot,
     candidate: &CandidateDir,
     snapshot: &SnapshotView,
     repository_roots: &BTreeMap<String, PathBuf>,
     selection_path: Option<&Path>,
 ) -> Result<WorkflowOutput> {
-    super::work_item_state::require_prior_waves_merged_for_exit(
+    super::work_item_state::reject_adr046_w5_mutation(&snapshot.material, "panel request")?;
+    super::work_item_state::require_adr046_historical_predecessor_at_entry(
+        state,
+        &snapshot.material,
+        repository_roots,
+    )?;
+    super::work_item_state::require_predecessor_state_for_exit(
+        state,
         &snapshot.material,
         repository_roots,
     )?;
@@ -1097,6 +1106,7 @@ fn write_request(
 pub fn run_attest(args: &[String]) -> Result<WorkflowOutput> {
     let (state, snapshot_path, records_dir) = parse_attest_invocation(args)?;
     let (candidate, snapshot) = open_candidate(&state, &snapshot_path)?;
+    super::work_item_state::reject_adr046_w5_mutation(&snapshot.material, "panel attestation")?;
     attest(&candidate, &snapshot, &records_dir)
 }
 
@@ -2593,9 +2603,9 @@ pub(crate) mod tests {
         let mut material = fixtures::material();
         "W1".clone_into(&mut material.wave);
         material.repository_set[0].integration_tree_oid = fixture.head();
-        let (_state, candidate, snapshot) = candidate_with_snapshot_from(&scratch, material);
+        let (state, candidate, snapshot) = candidate_with_snapshot_from(&scratch, material);
 
-        let error = request_checked(&candidate, &snapshot, &roots, None)
+        let error = request_checked(&state, &candidate, &snapshot, &roots, None)
             .expect_err("panel-request must refuse an unmerged predecessor");
         assert!(
             error

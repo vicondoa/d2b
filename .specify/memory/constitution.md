@@ -1,89 +1,34 @@
 <!--
 Sync Impact Report
 ==================
-Version change: 2.1.0 -> 3.0.0 (this amendment); 1.0.0 -> 2.0.0 (prior, same day)
-Rationale: MAJOR. Principle VI replaces repeated discovery and delayed
-LOW/MEDIUM deferral with the accepted ADR 0055 Discover-Fix-Verify lifecycle.
+Version change: 3.0.0 -> 3.1.0
+Rationale: MINOR. Principle VI gains a generic historical process disposition
+for immutable delivery records that cannot truthfully satisfy current process
+rules, while preserving every prospective review and delivery gate.
 
-Amendment 3.0.0 (2026-08-08): Selected-roster Discover-Fix-Verify
-- Principle VI replaces the operative fixed roster with the versioned
-  candidate-bound selection artifact and current thirteen-seat role domain.
-- One comprehensive discovery, a shared stable ledger, batched implementation
-  responses and self-verification, and scoped verification are now binding.
-- Legacy fixed-ten delivery records remain readable as compatibility data; they
-  do not define current selection.
-- The active bounded-deferral-after-eight-rounds rule is superseded. During
-  verification, pre-existing MINOR and NIT observations are non-blocking from
-  the start, while admitted BLOCKER and MAJOR findings remain blocking.
-- Rationale: selection and a complete shared ledger prevent repeated
-  rediscovery while preserving unanimous, request-bound sign-off.
-
-Amendment 2.2.0 (2026-08-06): Approved contract-defect correction
-- Principle IV now permits one approved correction to amend the governing plan,
-  specification, or contract while moving the affected contract, schema,
-  reference documentation, emitter, consumer, generated artifacts, and tests
-  together.
-- Approval must precede implementation and bind the defect, exact governed
-  surfaces, version impact, and candidate snapshot. A vague intent to "fix
-  drift" is not approval.
-- The correction still requires every applicable version bump and drift gate.
-  It cannot be used to land a contract-only change, defer a paired artifact, or
-  treat stale prose as authority over committed passing code.
-- Rationale: an accepted artifact can itself contain a defect. Requiring a
-  second artificial sequencing step after the defect and coordinated repair
-  are already approved adds delay without improving contract consistency.
-
-Amendment 2.1.0 (2026-07-29): Bounded deferral and delivery memory
-- Principle VI gains a "Bounded deferral after eight rounds" clause: from round
-  nine onward a reviewer MAY defer a LOW or MEDIUM finding instead of blocking.
-  CRITICAL and HIGH remain non-deferrable in every round.
-- MINOR, not MAJOR: the sign-off invariant is untouched. `signoff` is still true
-  iff `recommendations` is empty, because a deferred finding is MOVED OUT of
-  `recommendations` into a register rather than left there alongside a true
-  sign-off. This deliberately avoids changing the enforced consistency check in
-  packages/xtask/src/delivery/panel.rs, which rejects that combination in both
-  directions.
-- Principle VI also gains a "Delivery memory" clause requiring two durable
-  registers: a deferred-findings register and a friction log, both restricted to
-  classification metadata so no panel transcript enters Git.
-- Rationale: one wave in this project ran twenty-one follow-up rounds. Unbounded
-  LOW/MEDIUM churn can cost more than the defects it removes.
-
-Amendment 2.0.0 (2026-07-29): Pipelined dispatch
-- Principle VI gains a "Pipelined dispatch" clause permitting the next phase's
-  implementation to begin after five roster reviews return and integration tests
-  pass, while requiring that the next phase issue no panel request, no seal, and
-  no merge until the current phase is sealed at full unanimity and merged, and
-  that it rebase onto the updated integration lineage before its own panel.
-- The unanimity requirement, the roster, the seal ordering, and the merge
-  ordering are unchanged. The gate moved; it did not loosen.
-- Rationale: panel review commonly runs one to two times the coding duration, so
-  strict serialization idles implementation capacity for more than half of each
-  cycle.
-- Accepted cost recorded in the principle text: rework, when a finding changes a
-  contract that in-flight next-phase work already consumed.
+Amendment 3.1.0 (2026-08-09): Historical process disposition
+- A separately reviewed disposition may classify exact immutable historical
+  process gaps without claiming that missing gates passed.
+- Retroactive attestations, replacement records, and success-shaped
+  reinterpretation remain forbidden.
+- Program-specific identifiers, hashes, state inventories, and transition
+  mechanics belong in feature and delivery artifacts, never in this
+  constitution.
+- Prospective work requires the accepted disposition on the integration
+  lineage, exact-base unanimous entry review, and every ordinary later gate.
+- Process records and validators provide deterministic signoff tracking. They
+  are not authentication and do not create a security boundary.
 
 Modified principles:
-- IV. Contract-Driven Compatibility (expanded in 2.2.0)
-- VI. Panel-Gated Multi-Phase Work (redefined)
+- VI. Panel-Gated Multi-Phase Work (expanded)
 Added sections: none
 Removed sections: none
 
 Templates and artifacts requiring follow-up:
-- specs/001-adr046-d2b3-completion/ - the open Wave 5 contract defect may now
-  be corrected through one approved `/d2b-spec-edit` batch that assigns the
-  contract, schema, docs, generated artifacts, implementation, and tests to the
-  same coordinated change. Its analysis and plan panel must be rerun.
-- specs/001-adr046-d2b3-completion/spec.md - FR-025 and FR-036 restated for the
-  pipeline; new FRs added for the strict panel/seal/merge ordering. DISCHARGED:
-  FR-056 through FR-059 landed, FR-025 was narrowed to exit, and FR-057 states
-  the entry-versus-exit distinction that reconciles FR-025 with FR-036.
-- docs/specs/ADR-046-validation-and-delivery.md - Section 4 entry criteria said
-  "there is no partial-wave advance" and the tooling enforced it. DISCHARGED:
-  sections 4, 12.1 and 12.4 were amended to permit a pipelined start under the
-  four Principle VI conditions, and the tooling moved the prior-wave-merged
-  assertion out of wave entry to the panel-request, seal and merge-eligibility
-  boundary. The pipeline is executable.
+- Active feature and delivery artifacts must carry every exact historical
+  identifier, state digest, transition rule, and validation command.
+- Delivery tooling and its tests must enforce those external artifacts without
+  copying program-specific details into this constitution.
 
 Deferred / TODO items: none.
 -->
@@ -221,7 +166,7 @@ mandatory post-fix panel), and documentation-only changes that describe no
 load-bearing behavior are the only exceptions. Where a harness stands in for
 the per-round panel, it MUST preserve the same unanimity rule and no-rerun
 discipline; it does not substitute for the separate, binding selected-roster
-panel required once at a wave's close for wave-scale (ADR 0046-class) work.
+panel required once at the close of large multi-phase work.
 
 **Discover-Fix-Verify.** A lifecycle MUST run one comprehensive discovery over
 the full candidate, require an explicit complete result from every selected
@@ -256,6 +201,31 @@ BLOCKER or MAJOR findings. A pre-existing MINOR or NIT observation discovered
 after the comprehensive discovery remains non-blocking history. There is no
 round-count threshold and no later transition from blocking to non-blocking.
 
+**Historical process dispositions.** When immutable delivery history cannot
+truthfully satisfy current process rules, continuation MAY be authorized only
+by a separately reviewed disposition. That disposition MUST live in an
+external feature or delivery artifact and MUST:
+
+1. identify the exact immutable historical record and its nonconforming state;
+2. preserve that record without claiming that missing gates passed;
+3. forbid retroactive attestations, replacement records, and duplicate binding
+   actions;
+4. define one fail-closed continuation path and the exact validation required
+   before prospective work starts; and
+5. preserve every ordinary prospective review, validation, merge, and close
+   gate.
+
+The accepted disposition MUST be present on the integration lineage of the
+exact execution base. The next prospective phase MUST pass unanimous
+selected-roster entry review against that base and its current feature
+snapshot before implementation begins. Program-specific identifiers, hashes,
+state inventories, and transition mechanics MUST remain outside this
+constitution.
+
+Disposition metadata and validators provide deterministic process integrity
+for signoff tracking. They are not authentication, do not prove reviewer
+identity, and do not create a security boundary.
+
 Rationale: convergence comes from comprehensive discovery and scoped
 verification, not fatigue after an arbitrary number of open-ended rounds. The
 project's own history includes a panel catching 11 HIGH findings that
@@ -263,10 +233,10 @@ automated tests caught none of, so testing and review remain complementary.
 
 ### VII. Traceable, Marker-Free Shipped Artifacts
 Shipped source, docs, CLI text, and CHANGELOG entries MUST NOT carry
-internal process bookkeeping (wave/phase/follow-up/finding tags). Those
+internal process bookkeeping (delivery/phase/follow-up/finding tags). Those
 belong in planning artifacts, ADRs, commit messages, and PR descriptions
 only. Every in-development commit on a feature branch MUST carry the
-canonical trailing wave/phase tag form; every PR must ship release notes
+canonical trailing delivery tag form; every PR must ship release notes
 (a CHANGELOG entry or a `changelog.d/` fragment) and MUST NOT attribute
 authorship to an AI agent, assistant, or model. Dashes MUST be spelled with
 the ASCII hyphen only, everywhere.
@@ -343,4 +313,4 @@ described in the amendment procedure above. The version, ratification date,
 and last-amended date are recorded in the footer and MUST be updated
 together in any amending change.
 
-**Version**: 3.0.0 | **Ratified**: 2026-07-29 | **Last Amended**: 2026-08-08
+**Version**: 3.1.0 | **Ratified**: 2026-07-29 | **Last Amended**: 2026-08-09

@@ -1,5 +1,7 @@
 # Removal proofs: the three W5 crate removals (FR-023)
 
+<!-- RETIRED-READONLY-BEGIN -->
+
 | Field | Value |
 | --- | --- |
 | Satisfies | FR-023, scoped by FR-060 |
@@ -551,9 +553,9 @@ test 0 -eq "$(git ls-files \
 && (cd packages && cargo metadata --no-deps --format-version 1 --offline >/dev/null)
 ```
 
-All five conjuncts return true at `a7f4a6a4`. The W5 gate at T219 and the W8
-re-verification at T563 evaluate this expression; a nonzero count or a nonzero
-`cargo metadata` exit is a failed removal proof, not a warning.
+All five conjuncts returned true at `a7f4a6a4`. The former T219 evaluation is retained only as
+historical evidence and is not rerun or consumed. Any prospective later verification belongs
+to its current task and candidate; this record does not supply that result.
 
 The expression is deliberately not wired into a `tests/` gate. The drift and
 meta gate set is a closed set, the paths it names are gone permanently rather
@@ -561,3 +563,5 @@ than being an invariant that could regress from ordinary work, and a
 single-purpose gate for three deleted crates would outlive its subject. If a
 later wave wants standing enforcement, the place for it is a row in the
 existing policy crate, not a new shell gate.
+
+<!-- RETIRED-READONLY-END -->

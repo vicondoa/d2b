@@ -2499,7 +2499,7 @@ On controller binary upgrade:
 ### ADR046-nl-002
 | Field | Value |
 | --- | --- |
-| Dependency/owner | Core; broker/core contract work consumed by ADR046-nl-001. |
+| Dependency/owner | `ADR046-transport-unix-006`; Core; broker/core contract work consumed by ADR046-nl-001. The transport item is the dependency-ordered prior writer of the shared broker wire, privilege, audit, runtime, and dispatch surfaces; this item is their later Network-operation writer. |
 | Current source | Existing broker wire has related ApplyNftables, ApplyRoute, ApplySysctl, ApplyNmUnmanaged, UpdateHostsFile, SeedDnsmasqLease, and `CreatePersistentTap` operations, but no paired `DeletePersistentTap`, `CreateBridge`, `DeleteBridge`, `ReadNftablesDigest`, `ReadSysctlState`, `ReadBridgePortFlags`, or `ApplyNftablesProjection` v3 ops. The shipped `ApplyNftables` op discards `ownership_id` and does a whole-table `delete table ...; table ...` replace (`packages/d2b-priv-broker/src/ops/nft.rs`), so it cannot express per-Network projection mutation; `ApplyNftablesProjection` is authored to replace that mapping for `apply_host_firewall`/`remove_host_firewall` (D-NETWORK-004 in `ADR-046-resources-network.md`). |
 | Reuse action | adapt |
 | Destination | Broker wire contract and broker/core adapter operation table for `DeletePersistentTap`, `CreateBridge`, `DeleteBridge`, `ReadNftablesDigest`, `ReadSysctlState`, `ReadBridgePortFlags`, and `ApplyNftablesProjection`. |

@@ -10,9 +10,13 @@
 //! Every helper below takes plain in-memory inputs, which lets the negative
 //! fixtures exercise the same code path the real tree is checked with.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt,
+};
 
 use d2b_contract_tests::{read_repo_file, repo_root};
+use serde::de::{self, DeserializeSeed, MapAccess, SeqAccess, Visitor};
 use serde_json::Value;
 
 /// A mutation applied to a serialized work-item row in a negative fixture.
@@ -22,6 +26,7 @@ const SPEC_SET: &str = "docs/specs/ADR-046-spec-set.json";
 const WORK_ITEMS: &str = "docs/specs/ADR-046-work-items.json";
 const GRAPH_JSON: &str = "docs/specs/ADR-046-implementation-graph.json";
 const GRAPH_MD: &str = "docs/specs/ADR-046-implementation-graph.md";
+const FEATURE_TASKS: &str = "specs/001-adr046-d2b3-completion/tasks.md";
 
 /// The normative member count, per `docs/specs/README.md`.
 const EXPECTED_MEMBERS: usize = 55;
@@ -31,7 +36,7 @@ const EXPECTED_WORK_ITEMS: usize = 545;
 /// The certified graph shape. Pinned so a silent edge gain or loss fails here
 /// even when the generator regenerates itself consistently.
 const EXPECTED_NODES: u64 = 600;
-const EXPECTED_EDGES: u64 = 1949;
+const EXPECTED_EDGES: u64 = 1960;
 const EXPECTED_MAX_RANK: u64 = 22;
 const EXPECTED_WAVES: u64 = 8;
 const EXPECTED_CRITICAL_PATH: usize = 23;
@@ -62,6 +67,109 @@ const MANDATORY_FIELDS: &[&str] = &[
     "Reuse action",
     "Validation",
 ];
+
+struct NoDuplicateValue;
+
+impl<'de> DeserializeSeed<'de> for NoDuplicateValue {
+    type Value = Value;
+
+    fn deserialize<D>(self, deserializer: D) -> Result<Value, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer.deserialize_any(NoDuplicateVisitor)
+    }
+}
+
+struct NoDuplicateVisitor;
+
+impl<'de> Visitor<'de> for NoDuplicateVisitor {
+    type Value = Value;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("JSON without duplicate object keys")
+    }
+
+    fn visit_bool<E>(self, value: bool) -> Result<Value, E> {
+        Ok(Value::Bool(value))
+    }
+
+    fn visit_i64<E>(self, value: i64) -> Result<Value, E> {
+        Ok(Value::Number(value.into()))
+    }
+
+    fn visit_u64<E>(self, value: u64) -> Result<Value, E> {
+        Ok(Value::Number(value.into()))
+    }
+
+    fn visit_f64<E>(self, value: f64) -> Result<Value, E>
+    where
+        E: de::Error,
+    {
+        serde_json::Number::from_f64(value)
+            .map(Value::Number)
+            .ok_or_else(|| E::custom("non-finite JSON number"))
+    }
+
+    fn visit_str<E>(self, value: &str) -> Result<Value, E> {
+        Ok(Value::String(value.to_owned()))
+    }
+
+    fn visit_string<E>(self, value: String) -> Result<Value, E> {
+        Ok(Value::String(value))
+    }
+
+    fn visit_none<E>(self) -> Result<Value, E> {
+        Ok(Value::Null)
+    }
+
+    fn visit_unit<E>(self) -> Result<Value, E> {
+        Ok(Value::Null)
+    }
+
+    fn visit_some<D>(self, deserializer: D) -> Result<Value, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        NoDuplicateValue.deserialize(deserializer)
+    }
+
+    fn visit_seq<A>(self, mut sequence: A) -> Result<Value, A::Error>
+    where
+        A: SeqAccess<'de>,
+    {
+        let mut values = Vec::new();
+        while let Some(value) = sequence.next_element_seed(NoDuplicateValue)? {
+            values.push(value);
+        }
+        Ok(Value::Array(values))
+    }
+
+    fn visit_map<A>(self, mut object: A) -> Result<Value, A::Error>
+    where
+        A: MapAccess<'de>,
+    {
+        let mut values = serde_json::Map::new();
+        while let Some(key) = object.next_key::<String>()? {
+            if values.contains_key(&key) {
+                return Err(de::Error::custom(format!(
+                    "duplicate JSON object key `{key}`"
+                )));
+            }
+            values.insert(key, object.next_value_seed(NoDuplicateValue)?);
+        }
+        Ok(Value::Object(values))
+    }
+}
+
+fn parse_json_without_duplicates(source: &str) -> Result<Value, String> {
+    let mut deserializer = serde_json::Deserializer::from_str(source);
+    let value = NoDuplicateValue
+        .deserialize(&mut deserializer)
+        .map_err(|error| error.to_string())?;
+    deserializer.end().map_err(|error| error.to_string())?;
+    Ok(value)
+}
 
 // ---------------------------------------------------------------------------
 // Markdown side
@@ -687,6 +795,411 @@ fn real_tree() -> (Value, Value, BTreeMap<String, Vec<Declaration>>) {
     (spec_set, work_items, declared)
 }
 
+struct MarkdownJsonFence {
+    body: String,
+    closed: bool,
+}
+
+fn markdown_fence(line: &str) -> Option<(char, usize, &str)> {
+    let indentation = line.bytes().take_while(|byte| *byte == b' ').count();
+    if indentation > 3 || line.as_bytes().get(indentation) == Some(&b'\t') {
+        return None;
+    }
+    let trimmed = &line[indentation..];
+    let delimiter = trimmed.chars().next()?;
+    if !matches!(delimiter, '`' | '~') {
+        return None;
+    }
+    let length = trimmed
+        .chars()
+        .take_while(|char| *char == delimiter)
+        .count();
+    (length >= 3).then(|| (delimiter, length, &trimmed[length..]))
+}
+
+fn is_json_fence_info(info: &str) -> bool {
+    info.split_whitespace()
+        .next()
+        .is_some_and(|language| language.eq_ignore_ascii_case("json"))
+}
+
+fn markdown_json_fences(markdown: &str) -> Vec<MarkdownJsonFence> {
+    let mut bodies = Vec::new();
+    let mut body = String::new();
+    let mut open_fence = None;
+
+    for line in markdown.lines() {
+        if let Some((delimiter, length)) = open_fence {
+            let closes_fence = markdown_fence(line).is_some_and(
+                |(candidate_delimiter, candidate_length, remainder)| {
+                    candidate_delimiter == delimiter
+                        && candidate_length >= length
+                        && remainder.bytes().all(|byte| matches!(byte, b' ' | b'\t'))
+                },
+            );
+            if closes_fence {
+                bodies.push(MarkdownJsonFence {
+                    body: std::mem::take(&mut body),
+                    closed: true,
+                });
+                open_fence = None;
+            } else {
+                body.push_str(line);
+                body.push('\n');
+            }
+        } else if let Some((delimiter, length, info)) = markdown_fence(line)
+            && is_json_fence_info(info)
+        {
+            open_fence = Some((delimiter, length));
+            body.clear();
+        }
+    }
+    if open_fence.is_some() {
+        bodies.push(MarkdownJsonFence {
+            body,
+            closed: false,
+        });
+    }
+
+    bodies
+}
+
+fn check_local_coordination_tasks(markdown: &str, graph: &Value) -> Vec<String> {
+    let mut findings = Vec::new();
+    let mut contracts = Vec::new();
+    for fence in markdown_json_fences(markdown) {
+        if !fence.closed {
+            findings.push("JSON task contract fence is not closed".to_owned());
+            continue;
+        }
+        match parse_json_without_duplicates(&fence.body) {
+            Ok(value) if value["artifact_kind"] == "d2b-feature-local-task-contract" => {
+                contracts.push(value);
+            }
+            Ok(_) => {}
+            Err(error) => {
+                findings.push(format!("JSON task contract fence is invalid: {error}"));
+            }
+        }
+    }
+    if contracts.len() != 1 {
+        findings.push(format!(
+            "expected exactly one feature-local task contract, found {}",
+            contracts.len()
+        ));
+    }
+    let Some(contract) = contracts.into_iter().next() else {
+        return findings;
+    };
+
+    let mut t604_manifest = vec![
+        "ADR046-activation-001".to_owned(),
+        "ADR046-activation-006".to_owned(),
+        "ADR046-system-core-001".to_owned(),
+        "ADR046-ch-001".to_owned(),
+    ];
+    t604_manifest.extend((1..=20).map(|ordinal| format!("ADR046-nl-{ordinal:03}")));
+    t604_manifest.extend((1..=13).map(|ordinal| format!("ADR046-device-tpm-{ordinal:03}")));
+    t604_manifest.extend((1..=13).map(|ordinal| format!("ADR046-vl-{ordinal:03}")));
+    let expected_contract = serde_json::json!({
+        "artifact_kind": "d2b-feature-local-task-contract",
+        "schema_version": 1,
+        "task_ids": ["T604", "T479", "T480"],
+        "unchecked_task_ids": ["T604", "T479", "T480"],
+        "outside_retired_fences": true,
+        "permitted_local_dependency_ids": ["T221", "T604", "T479", "T480"],
+        "required_local_dependencies": {
+            "T604": ["T221"],
+            "T479": ["T604", "T221"],
+            "T480": ["T479"]
+        },
+        "required_manifest_dependencies": {
+            "T604": t604_manifest
+        },
+        "required_manifest_dependency_queries": {
+            "T479": {
+                "artifact": "docs/specs/ADR-046-implementation-graph.json",
+                "where": {"kind": "work-item", "wave": "W6"},
+                "project": "id",
+                "project_semantics": "workItemId",
+                "expected_count": 258,
+                "cardinality": "exact",
+                "complete_for_task": true
+            }
+        },
+        "shared_file_order": {
+            "Makefile": ["ADR046-ch-001", "T604"]
+        },
+        "owned_files": {
+            "T604": [
+                "packages/d2b-contract-tests/tests/resource_operator_activation.rs",
+                "packages/d2bd/tests/resource_operator_activation.rs",
+                "tests/host-integration/resource-operator-activation.nix",
+                "tests/host-integration/daemon-restart-vm-survival.nix",
+                "tests/golden/delivery/host-generation-pre-start-case-ids.txt",
+                "tests/golden/delivery/host-generation-unit-census-case-ids.txt",
+                "Makefile",
+                "changelog.d/operator-resource-activation.md"
+            ]
+        },
+        "case_id_fixture_paths": [
+            "tests/golden/delivery/host-generation-pre-start-case-ids.txt",
+            "tests/golden/delivery/host-generation-unit-census-case-ids.txt"
+        ],
+        "validator_identity_literals": {
+            "T604": ["operator-nix-activation-cleanup"]
+        },
+        "acceptance_resource_identities": [
+            "Volume/acceptance-state",
+            "Network/acceptance-net",
+            "Device/acceptance-tpm"
+        ],
+        "candidate_evidence_literals": {
+            "T479": [
+                "operator-nix-activation-cleanup",
+                "w6-cloud-hypervisor-guest-acceptance"
+            ]
+        },
+        "t479_candidate_execution_order": [
+            "converge-f6",
+            "freeze-f6",
+            "invoke-t604-operator-validator",
+            "execute-t604-authored-daemon-restart-case-with-cloud-hypervisor-case",
+            "emit-both-candidate-records"
+        ],
+        "operator_acceptance": {
+            "validator_author": "T604",
+            "candidate_executor": "T479",
+            "candidate_evidence_owner": "T479",
+            "candidate_evidence_literal": "operator-nix-activation-cleanup",
+            "candidate_record_count": 1,
+            "t604_pre_f6_candidate_evidence_emission": false,
+            "close_revalidator": "T480"
+        },
+        "fr075": {
+            "case_author": "T604",
+            "candidate_executor": "T479",
+            "candidate_evidence_owner": "T479",
+            "candidate_evidence_literal": "w6-cloud-hypervisor-guest-acceptance",
+            "candidate_record_count": 1,
+            "t604_candidate_bound_evidence": false,
+            "close_revalidator": "T480"
+        }
+    });
+    if contract != expected_contract {
+        findings.push("feature-local task contract differs from the exact schema".to_owned());
+    }
+
+    let query_nodes = graph["nodes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|node| node["kind"] == "work-item" && node["wave"] == "W6")
+        .filter_map(|node| node["id"].as_str())
+        .collect::<BTreeSet<_>>();
+    if query_nodes.len() != 258 {
+        findings.push(format!(
+            "feature-local T479 W6 query expected 258 rows, got {}",
+            query_nodes.len()
+        ));
+    }
+    let graph_ids = graph["nodes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|node| node["id"].as_str())
+        .collect::<BTreeSet<_>>();
+
+    let json_set = |path: &[&str]| -> BTreeSet<String> {
+        let mut value = &contract;
+        for component in path {
+            value = &value[*component];
+        }
+        value
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(str::to_owned)
+            .collect()
+    };
+    let expected_local = ["T479", "T480", "T604"]
+        .into_iter()
+        .map(str::to_owned)
+        .collect::<BTreeSet<_>>();
+    for field in ["task_ids", "unchecked_task_ids"] {
+        let actual = json_set(&[field]);
+        if actual != expected_local {
+            findings.push(format!(
+                "feature-local contract {field} must be {expected_local:?}, got {actual:?}"
+            ));
+        }
+    }
+    if contract["outside_retired_fences"] != true {
+        findings.push("feature-local tasks must be outside retired fences".to_owned());
+    }
+    let expected_local_dependencies = BTreeMap::from([
+        ("T604", ["T221"].as_slice()),
+        ("T479", ["T221", "T604"].as_slice()),
+        ("T480", ["T479"].as_slice()),
+    ]);
+    for (task, expected) in expected_local_dependencies {
+        let actual = json_set(&["required_local_dependencies", task]);
+        let expected = expected.iter().map(|value| (*value).to_owned()).collect();
+        if actual != expected {
+            findings.push(format!(
+                "feature-local contract {task} local dependencies are incorrect"
+            ));
+        }
+    }
+    let mut expected_t604_manifest = BTreeSet::from([
+        "ADR046-activation-001".to_owned(),
+        "ADR046-activation-006".to_owned(),
+        "ADR046-system-core-001".to_owned(),
+        "ADR046-ch-001".to_owned(),
+    ]);
+    expected_t604_manifest.extend((1..=20).map(|ordinal| format!("ADR046-nl-{ordinal:03}")));
+    expected_t604_manifest
+        .extend((1..=13).map(|ordinal| format!("ADR046-device-tpm-{ordinal:03}")));
+    expected_t604_manifest.extend((1..=13).map(|ordinal| format!("ADR046-vl-{ordinal:03}")));
+    if json_set(&["required_manifest_dependencies", "T604"]) != expected_t604_manifest {
+        findings.push("feature-local T604 manifest dependency set is incorrect".to_owned());
+    }
+    if !json_set(&["required_manifest_dependencies", "T479"]).is_empty() {
+        findings.push("feature-local T479 manifest dependency set is incorrect".to_owned());
+    }
+    for dependency in json_set(&["required_manifest_dependencies", "T604"]) {
+        if !graph_ids.contains(dependency.as_str()) {
+            findings.push(format!(
+                "feature-local T604 dependency `{dependency}` is absent from the graph"
+            ));
+        }
+    }
+    if contract["shared_file_order"]["Makefile"] != serde_json::json!(["ADR046-ch-001", "T604"]) {
+        findings.push("feature-local Makefile ownership order is incorrect".to_owned());
+    }
+    let expected_fixtures = BTreeSet::from([
+        "tests/golden/delivery/host-generation-pre-start-case-ids.txt".to_owned(),
+        "tests/golden/delivery/host-generation-unit-census-case-ids.txt".to_owned(),
+    ]);
+    if json_set(&["case_id_fixture_paths"]) != expected_fixtures {
+        findings.push("feature-local case-id fixture set is incorrect".to_owned());
+    }
+    if contract["operator_acceptance"]["validator_author"] != "T604"
+        || contract["operator_acceptance"]["candidate_executor"] != "T479"
+        || contract["operator_acceptance"]["candidate_evidence_owner"] != "T479"
+        || contract["operator_acceptance"]["t604_pre_f6_candidate_evidence_emission"] != false
+        || contract["fr075"]["case_author"] != "T604"
+        || contract["fr075"]["candidate_executor"] != "T479"
+        || contract["fr075"]["candidate_evidence_owner"] != "T479"
+        || contract["fr075"]["t604_candidate_bound_evidence"] != false
+    {
+        findings.push("feature-local acceptance ownership contract is incorrect".to_owned());
+    }
+
+    let lines = markdown.lines().collect::<Vec<_>>();
+    let mut blocks = BTreeMap::new();
+    let mut retired_depth = 0usize;
+    let mut index = 0usize;
+    while index < lines.len() {
+        let line = lines[index];
+        let trimmed = line.trim();
+        if trimmed.starts_with("<!-- RETIRED-") && trimmed.ends_with("-BEGIN -->") {
+            retired_depth += 1;
+        } else if trimmed.starts_with("<!-- RETIRED-") && trimmed.ends_with("-END -->") {
+            retired_depth = retired_depth.saturating_sub(1);
+        }
+
+        if line.starts_with("- [")
+            && line.contains("FEATURE-LOCAL COORDINATION/COMPLETION")
+            && let Some(id) = line.split_whitespace().find(|token| {
+                token.starts_with('T') && token[1..].chars().all(|c| c.is_ascii_digit())
+            })
+        {
+            let start = index;
+            index += 1;
+            while index < lines.len() && !lines[index].starts_with("- [") {
+                index += 1;
+            }
+            let block = lines[start..index].join("\n");
+            if blocks
+                .insert(id.to_owned(), (line.to_owned(), block, retired_depth))
+                .is_some()
+            {
+                findings.push(format!(
+                    "feature-local task {id} is declared more than once"
+                ));
+            }
+            continue;
+        }
+        index += 1;
+    }
+
+    let expected = ["T479", "T480", "T604"]
+        .into_iter()
+        .map(str::to_owned)
+        .collect::<BTreeSet<_>>();
+    let actual = blocks.keys().cloned().collect::<BTreeSet<_>>();
+    if actual != expected {
+        findings.push(format!(
+            "feature-local task set must be exactly {expected:?}, got {actual:?}"
+        ));
+    }
+
+    let requirements = BTreeMap::from([
+        (
+            "T604",
+            [
+                "T221",
+                "ADR046-ch-001",
+                "operator-nix-activation-cleanup",
+                "T479",
+            ]
+            .as_slice(),
+        ),
+        (
+            "T479",
+            [
+                "T604",
+                "T221",
+                "operator-nix-activation-cleanup",
+                "w6-cloud-hypervisor-guest-acceptance",
+            ]
+            .as_slice(),
+        ),
+        (
+            "T480",
+            [
+                "T479",
+                "operator-nix-activation-cleanup",
+                "w6-cloud-hypervisor-guest-acceptance",
+            ]
+            .as_slice(),
+        ),
+    ]);
+    for (id, required) in requirements {
+        let Some((heading, block, depth)) = blocks.get(id) else {
+            continue;
+        };
+        if !heading.starts_with("- [ ]") {
+            findings.push(format!("feature-local task {id} must remain unchecked"));
+        }
+        if *depth != 0 {
+            findings.push(format!(
+                "feature-local task {id} must not be inside a retired fence"
+            ));
+        }
+        for literal in required {
+            if !block.contains(literal) {
+                findings.push(format!(
+                    "feature-local task {id} is missing required contract literal `{literal}`"
+                ));
+            }
+        }
+    }
+    findings
+}
+
 #[test]
 fn the_real_spec_tree_declares_every_work_item_exactly_once() {
     let (spec_set, work_items, declared) = real_tree();
@@ -711,6 +1224,7 @@ fn the_real_spec_tree_declares_every_work_item_exactly_once() {
     for item in declared.values().flatten() {
         *census.entry(item.form).or_default() += 1;
     }
+
     assert_eq!(
         census,
         BTreeMap::from([
@@ -758,6 +1272,168 @@ fn the_real_spec_tree_declares_every_work_item_exactly_once() {
         "ADR 0046 work-item bijection violations:\n{}",
         findings.join("\n")
     );
+}
+
+#[test]
+fn markdown_json_fences_require_commonmark_delimiters() {
+    let fences = markdown_json_fences("````json\n{\"artifact_kind\":\"other\"}\n```\n~~~\n`````\n");
+    assert_eq!(fences.len(), 1);
+    assert!(fences[0].closed);
+    assert_eq!(fences[0].body, "{\"artifact_kind\":\"other\"}\n```\n~~~\n");
+
+    let tasks = read_repo_file(FEATURE_TASKS);
+    let graph = load(GRAPH_JSON);
+    for indentation in 0..=3 {
+        let spaces = " ".repeat(indentation);
+        let duplicate = format!(
+            "{tasks}\n{spaces}```json\n\
+             {{\"artifact_kind\":\"d2b-feature-local-task-contract\"}}\n\
+             {spaces}```\n"
+        );
+        assert!(
+            !check_local_coordination_tasks(&duplicate, &graph).is_empty(),
+            "{indentation}-space duplicate local-task contract unexpectedly passed"
+        );
+    }
+}
+
+#[test]
+fn feature_local_coordination_tasks_are_closed_and_authoritative() {
+    let findings =
+        check_local_coordination_tasks(&read_repo_file(FEATURE_TASKS), &load(GRAPH_JSON));
+    assert!(
+        findings.is_empty(),
+        "feature-local coordination task policy failed:\n{}",
+        findings.join("\n")
+    );
+}
+
+#[test]
+fn feature_local_coordination_contract_rejects_load_bearing_mutations() {
+    let tasks = read_repo_file(FEATURE_TASKS);
+    let graph = load(GRAPH_JSON);
+    for (from, to) in [
+        ("\"schema_version\": 1", "\"schema_version\": 2"),
+        (
+            "\"task_ids\": [\"T604\", \"T479\", \"T480\"]",
+            "\"task_ids\": [\"T479\", \"T480\"]",
+        ),
+        ("\"T604\": [\"T221\"]", "\"T604\": []"),
+        ("\"ADR046-ch-001\"", "\"ADR046-ch-999\""),
+        ("\"expected_count\": 258", "\"expected_count\": 257"),
+        (
+            "\"Makefile\": [\"ADR046-ch-001\", \"T604\"]",
+            "\"Makefile\": [\"T604\", \"ADR046-ch-001\"]",
+        ),
+        (
+            "\"candidate_record_count\": 1",
+            "\"candidate_record_count\": 2",
+        ),
+        (
+            "\"close_revalidator\": \"T480\"",
+            "\"close_revalidator\": \"T479\"",
+        ),
+        ("\"freeze-f6\"", "\"emit-before-freeze\""),
+        (
+            "\"t604_candidate_bound_evidence\": false",
+            "\"t604_candidate_bound_evidence\": true",
+        ),
+        ("\"Volume/acceptance-state\"", "\"Volume/acceptance-other\""),
+    ] {
+        assert!(tasks.contains(from), "mutation source missing: {from}");
+        let mutated = tasks.replacen(from, to, 1);
+        assert!(
+            !check_local_coordination_tasks(&mutated, &graph).is_empty(),
+            "mutation unexpectedly passed: {from} -> {to}"
+        );
+    }
+    let duplicated = format!(
+        "{tasks}\n```json\n{{\"artifact_kind\":\"d2b-feature-local-task-contract\"}}\n```\n"
+    );
+    assert!(
+        !check_local_coordination_tasks(&duplicated, &graph).is_empty(),
+        "duplicate local-task contract unexpectedly passed"
+    );
+    let duplicate_key = tasks.replacen(
+        "\"schema_version\": 1",
+        "\"schema_version\": 1,\n  \"schema_version\": 1",
+        1,
+    );
+    assert!(
+        !check_local_coordination_tasks(&duplicate_key, &graph).is_empty(),
+        "duplicate JSON key unexpectedly passed"
+    );
+    let malformed = format!(
+        "{tasks}\n```json\n{{\"artifact_kind\":\"d2b-feature-local-task-contract\",\n```\n"
+    );
+    assert!(
+        !check_local_coordination_tasks(&malformed, &graph).is_empty(),
+        "malformed competing local-task contract unexpectedly passed"
+    );
+    let spaced_fence = tasks.replacen("```json", "``` json", 1)
+        + "\n``` json\n{\"artifact_kind\":\"d2b-feature-local-task-contract\"}\n```\n";
+    assert!(
+        !check_local_coordination_tasks(&spaced_fence, &graph).is_empty(),
+        "spaced duplicate local-task contract unexpectedly passed"
+    );
+    let escaped_kind = format!(
+        "{tasks}\n```json\n{{\"artifact_kind\":\"d2b-feature-local-task-\\u0063ontract\"}}\n```\n"
+    );
+    assert!(
+        !check_local_coordination_tasks(&escaped_kind, &graph).is_empty(),
+        "escaped duplicate local-task contract unexpectedly passed"
+    );
+    let malformed_escaped_kind = format!(
+        "{tasks}\n``` json\n{{\"artifact_kind\":\"d2b-feature-local-task-\\u0063ontract\",\n```\n"
+    );
+    assert!(
+        !check_local_coordination_tasks(&malformed_escaped_kind, &graph).is_empty(),
+        "malformed escaped competing local-task contract unexpectedly passed"
+    );
+    for (label, opening, closing) in [
+        ("long backtick", "````json", "````"),
+        ("tilde", "~~~ json", "~~~"),
+        (
+            "case-insensitive attributed",
+            "````` JSON contract=local",
+            "`````",
+        ),
+    ] {
+        let duplicate = format!(
+            "{tasks}\n{opening}\n{{\"artifact_kind\":\"d2b-feature-local-task-contract\"}}\n{closing}\n"
+        );
+        assert!(
+            !check_local_coordination_tasks(&duplicate, &graph).is_empty(),
+            "{label} duplicate local-task contract unexpectedly passed"
+        );
+        let malformed = format!(
+            "{tasks}\n{opening}\n{{\"artifact_kind\":\"d2b-feature-local-task-\\u0063ontract\",\n{closing}\n"
+        );
+        assert!(
+            !check_local_coordination_tasks(&malformed, &graph).is_empty(),
+            "{label} malformed local-task contract unexpectedly passed"
+        );
+    }
+    let unclosed =
+        format!("{tasks}\n````json\n{{\"artifact_kind\":\"d2b-feature-local-task-contract\"}}\n");
+    assert!(
+        !check_local_coordination_tasks(&unclosed, &graph).is_empty(),
+        "unclosed local-task contract unexpectedly passed"
+    );
+    for (label, pseudo_closer) in [
+        ("overindented", "    ````"),
+        ("tab-indented", "\t````"),
+        ("unicode-whitespace", "````\u{00a0}"),
+    ] {
+        let malformed = format!(
+            "{tasks}\n````json\n{{\"artifact_kind\":\"other\"}}\n{pseudo_closer}\n\
+             {{\"artifact_kind\":\"d2b-feature-local-task-contract\"}}\n`````\n"
+        );
+        assert!(
+            !check_local_coordination_tasks(&malformed, &graph).is_empty(),
+            "{label} pseudo-closer unexpectedly hid a competing contract"
+        );
+    }
 }
 
 #[test]

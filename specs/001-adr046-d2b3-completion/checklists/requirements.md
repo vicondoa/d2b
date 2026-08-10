@@ -21,24 +21,31 @@
 - [x] Edge cases are identified
 - [x] Scope is clearly bounded
 - [x] Dependencies and assumptions identified
-- [x] Wave 6 T604 Nix acceptance, after T221 and merged T336-T355, names exactly
+- [x] Generated authority owns Wave 6 provider implementation, including the merged
+  `ADR046-nl-001` through `ADR046-nl-020` set and manifest-backed `ADR046-ch-001`. The exact
+  machine-readable T604/T479/T480 local contract owns cross-provider acceptance coordination
+  and names exactly
   `Volume/acceptance-state`, `Network/acceptance-net`, and `Device/acceptance-tpm`; each effect
-  and production `Ready` projection is bound to that same identity. Wave 5 retains only the
-  emitted-bundle, source-floor, and double-opt-in contract prerequisites, while Guest
-  runtime-effect acceptance remains distinct Wave 6 `Provider/runtime-cloud-hypervisor`
-  T384/T479/T480 work
+  and production `Ready` projection is bound to that same identity. Guest runtime-effect
+  acceptance remains the distinct T479/T480 coordination over the generated Cloud Hypervisor
+  implementation
 - [x] Accepted Version 2 `ADR-046-validation-and-delivery` and generated `ADR-046-validation-and-delivery-traceability.{json,md}` are the sole authority for `VD2-SC002-RECEIPT`, `VD2-SC002-PUBLICATION`, `VD2-SC002-INCIDENT`, `VD2-SC002-DISPOSITION`, `VD2-SC002-RECOVERY`, `VD2-SC002-SOURCE-FLOOR`, `VD2-SC002-REGISTRIES`, and `VD2-SC002-TRACEABILITY`
-- [x] The generated bijection maps every Version 2 identifier to exact schemas, fixtures, implementation owners, tasks, and enforcing gates; missing, duplicate, extra, ownerless, or stale rows block T589, T600, T604, and T220, and no feature-local encoding or historical count substitutes
-- [x] Host-generation recovery is broker-coordinator-owned before first mutation, transfers
+- [x] Retired Wave 5 rows are read-only fenced history. Prospective provider-implementation
+  ownership resolves only from authoritative member specs and generated manifests; the exact
+  machine-readable T604/T479/T480 local contract owns cross-provider acceptance coordination
+- [x] Prospective host-generation recovery is broker-coordinator-owned before first mutation, transfers
   durably from bootstrap broker to target broker, survives broker/daemon startup failures
   through existing units only, and never treats daemon identity or euid 0 as authorization
-- [x] T070/T071 preserve W4 history; T220/T219 require the accepted
+- [x] Historical W2-W5 records are read-only. T221 requires the accepted
   `effectiveEastWest = Network.spec.isolation.allowEastWest &&
   d2b.site.allowUnsafeEastWest` migration to remove every current-facing sole opt-in path and
-  retain T336-T355 plus all four cases as authoritative W6 work under T221; T604/T479 require
-  that W6 implementation and evidence after it merges
-- [x] T219 performs only externally authorized historical adjudication, emits an actionable
-  external-disposition refusal, and offers no successor or second-request path
+  retain `ADR046-nl-001` through `ADR046-nl-020` plus all four cases as
+  generated-authority-owned W6 provider implementation. The exact machine-readable
+  T604/T479/T480 local contract owns
+  cross-provider acceptance coordination over that generated implementation
+- [x] Generic Constitution 3.1.0 contains no ADR-046 detail; FR-036 and the exact feature-owned
+  validator/tooling contract preserve the immutable W0-W5 history, authorize no recovery
+  or reconstructed seal, and make T221 the next executable gate
 
 ## Feature Readiness
 
@@ -63,8 +70,9 @@ in:
 - **W0/W1 seal gap (historical Iteration 2 disposition, superseded)**: Iteration 2 treated a
   feature-local written record as authority to begin sealed delivery at W2. The 2026-08-06
   analysis correction rejects that constitutional interpretation. FR-034 now makes the file
-  historical evidence only, and FR-036 requires a separate accepted Principle VI
-  constitution amendment before any implementation, resume, fix, close, merge, or advance.
+  historical evidence only. Generic Constitution 3.1.0 plus the exact feature-owned FR-036
+  validator/tooling contract now preserve the accepted immutable history without requiring a
+  historical seal.
 
 Final shape: 38 functional requirements, 23 success criteria, 4 prioritized user stories,
 9 key entities, 12 assumptions, explicit Out of Scope. No bracketed placeholder tokens
@@ -120,10 +128,10 @@ pass under the completion-program scope reflected by the current specification. 
 The current shape is **75 functional requirements and 35 buildable success criteria**. The
 earlier 45/26 shape records the end of Iteration 3; it is not the current census.
 
-Lifecycle state: **specification reconciled - plan approval pending**. Passing these 22 current
-specification-quality checks means the artifacts are ready to request the required analysis
-and plan-review gates. It does not record plan approval, implementation completion, or
-permission to bypass the later exact-C/Q gate before T589.
+Lifecycle state: **specification reconciled - T221 approval pending**. Passing these 22
+current specification-quality checks does not record plan approval, implementation
+completion, or permission to bypass the exact-base historical-predecessor guard and ordinary
+selected-roster plan gate.
 
 This is a technical completion and delivery contract, not a technology-agnostic greenfield
 product brief. Exact APIs, paths, commands, protocol fields, timing bounds, candidate
