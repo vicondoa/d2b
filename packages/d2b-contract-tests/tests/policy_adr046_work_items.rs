@@ -1442,7 +1442,7 @@ fn local_owned_path_owners(contract: &Value) -> BTreeMap<String, BTreeSet<String
                 owners
                     .entry(path.to_owned())
                     .or_insert_with(BTreeSet::new)
-                    .insert(task.to_owned());
+                    .insert((*task).to_owned());
             }
         }
     }
@@ -2218,7 +2218,7 @@ fn check_shared_writer_handoffs(
         .into_iter()
         .flatten()
         .filter(|node| node["kind"] == "work-item" && node["wave"] == "W6")
-        .filter_map(|node| node["id"].as_str())
+        .filter_map(|node| node["id"].as_str().map(str::to_owned))
         .collect::<BTreeSet<_>>();
     let local_ids = string_set(EXPECTED_LOCAL_TASK_IDS);
     let manifest_groups = manifest_group_by_id(graph);
