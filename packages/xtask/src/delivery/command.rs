@@ -1185,6 +1185,14 @@ mod tests {
                 let listed = match command {
                     WaveCommand::Help => WAVE_COMMANDS.contains(&WaveCommand::Help),
                     WaveCommand::Snapshot => WAVE_COMMANDS.contains(&WaveCommand::Snapshot),
+                    WaveCommand::PlanApproval => WAVE_COMMANDS.contains(&WaveCommand::PlanApproval),
+                    WaveCommand::DispatchReady => {
+                        WAVE_COMMANDS.contains(&WaveCommand::DispatchReady)
+                    }
+                    WaveCommand::Validate => WAVE_COMMANDS.contains(&WaveCommand::Validate),
+                    WaveCommand::Complete => WAVE_COMMANDS.contains(&WaveCommand::Complete),
+                    WaveCommand::Block => WAVE_COMMANDS.contains(&WaveCommand::Block),
+                    WaveCommand::Resume => WAVE_COMMANDS.contains(&WaveCommand::Resume),
                     WaveCommand::ValidateImport => {
                         WAVE_COMMANDS.contains(&WaveCommand::ValidateImport)
                     }

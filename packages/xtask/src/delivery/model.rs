@@ -328,28 +328,29 @@ impl DependencyEdge {
             )));
         }
 
-        /// Graph node and local-group identifiers are copied from the committed
-        /// implementation graph. Unlike command and artifact names, they may retain
-        /// the graph's uppercase `ADR046` spelling and a `:` group separator.
-        pub fn validate_dependency_identifier(value: &str, label: &str) -> Result<()> {
-            if value.is_empty()
-                || value.len() > 256
-                || !value.bytes().all(|byte| {
-                    byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':')
-                })
-                || !value
-                    .as_bytes()
-                    .first()
-                    .is_some_and(u8::is_ascii_alphanumeric)
-            {
-                return Err(DeliveryError::new(format!(
-                    "{label} must use ASCII letters, digits, '.', '_', '-' or ':'"
-                )));
-            }
-            Ok(())
-        }
         Ok(())
     }
+}
+
+/// Graph node and local-group identifiers are copied from the committed
+/// implementation graph. Unlike command and artifact names, they may retain
+/// the graph's uppercase `ADR046` spelling and a `:` group separator.
+pub fn validate_dependency_identifier(value: &str, label: &str) -> Result<()> {
+    if value.is_empty()
+        || value.len() > 256
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':'))
+        || !value
+            .as_bytes()
+            .first()
+            .is_some_and(u8::is_ascii_alphanumeric)
+    {
+        return Err(DeliveryError::new(format!(
+            "{label} must use ASCII letters, digits, '.', '_', '-' or ':'"
+        )));
+    }
+    Ok(())
 }
 
 /// Digest of one tracked file whose content participates in the wave's

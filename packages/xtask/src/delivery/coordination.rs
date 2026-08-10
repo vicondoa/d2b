@@ -1187,12 +1187,6 @@ pub fn update_group(
             "dispatch ledger updates are only available for Wave 6",
         ));
     }
-    let digests = material.digests()?;
-    let head = material
-        .repository_set
-        .first()
-        .map(|repository| repository.head_oid.as_str())
-        .ok_or_else(|| DeliveryError::new("Wave 6 material has no repository head"))?;
     let expected_revision = read_dispatch_ledger(path, repository_roots)?.revision;
     update_group_cas(
         path,
@@ -1718,130 +1712,132 @@ fn git_resolve_commit_tree(root: &Path, commit: &str) -> Result<String> {
             "group evidence commit is not present in the repository",
         ));
     }
-
-    pub const PLAN_LIFECYCLE_ARTIFACT_KIND: &str = "d2b-feature-local/plan-lifecycle";
-    pub const WORK_SELECTION_ARTIFACT_KIND: &str = "d2b-feature-local/work-selection";
-
-    #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-    #[serde(rename_all = "camelCase", deny_unknown_fields)]
-    pub struct PlanLifecycleResult {
-        pub artifact_kind: String,
-        pub schema_version: u32,
-        pub program: String,
-        pub wave: String,
-        pub candidate_id: CandidateId,
-        pub content_id: super::model::ContentId,
-        pub snapshot_sha256: SnapshotSha256,
-        pub selected_roster: Vec<String>,
-        pub signoff_count: u32,
-        pub recommendation_count: u32,
-        pub result: String,
-        pub durable_write_evidence_sha256: String,
-        pub seat_records: BTreeMap<String, Value>,
-    }
-
-    impl PlanLifecycleResult {
-        pub fn validate_for(&self, snapshot: &super::snapshot::WaveSnapshot) -> Result<()> {
-            if self.artifact_kind != PLAN_LIFECYCLE_ARTIFACT_KIND || self.schema_version != 1 {
-                return Err(DeliveryError::new(
-                    "plan lifecycle result has an unexpected artifact kind or schema version",
-                ));
-            }
-            if self.program != "ADR046" || self.wave != "adr046w6" {
-                return Err(DeliveryError::new(
-                    "plan lifecycle result must identify ADR046 Wave 6",
-                ));
-            }
-            if self.candidate_id != snapshot.candidate_id
-                || self.content_id != snapshot.content_id
-                || self.snapshot_sha256 != snapshot.snapshot_sha256
-            {
-                return Err(DeliveryError::new(
-                    "plan lifecycle result is bound to a different entry snapshot",
-                ));
-            }
-            validate_sha256(
-                &self.durable_write_evidence_sha256,
-                "plan lifecycle durable-write evidence",
-            )?;
-            if self.selected_roster.is_empty()
-                || self.signoff_count != self.selected_roster.len() as u32
-                || self.recommendation_count != 0
-                || self.result != "approved"
-            {
-                return Err(DeliveryError::new(
-                    "plan lifecycle result is not unanimous and recommendation-free",
-                ));
-            }
-            let expected = self.selected_roster.iter().collect::<BTreeSet<_>>();
-            let actual = self.seat_records.keys().collect::<BTreeSet<_>>();
-            if expected != actual
-                || self
-                    .seat_records
-                    .values()
-                    .any(|seat| seat.get("signoff").and_then(Value::as_bool) != Some(true))
-            {
-                return Err(DeliveryError::new(
-                    "plan lifecycle result per-seat records do not match unanimous selection",
-                ));
-            }
-            Ok(())
-        }
-    }
-
-    #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-    #[serde(rename_all = "camelCase", deny_unknown_fields)]
-    pub struct WorkSelection {
-        pub artifact_kind: String,
-        pub schema_version: u32,
-        pub program: String,
-        pub wave: String,
-        pub candidate_id: CandidateId,
-        pub content_id: super::model::ContentId,
-        pub snapshot_sha256: SnapshotSha256,
-        pub groups: Vec<String>,
-        pub selected_at_unix: u64,
-    }
-
-    impl WorkSelection {
-        pub fn validate_for(&self, material: &CandidateMaterial) -> Result<()> {
-            if self.artifact_kind != WORK_SELECTION_ARTIFACT_KIND || self.schema_version != 1 {
-                return Err(DeliveryError::new(
-                    "work selection has an unexpected artifact kind or schema version",
-                ));
-            }
-            let digests = material.digests()?;
-            if self.program != material.program
-                || self.wave != material.wave
-                || self.candidate_id != digests.candidate_id
-                || self.content_id != digests.content_id
-                || self.snapshot_sha256 != digests.snapshot_sha256
-            {
-                return Err(DeliveryError::new(
-                    "work selection is bound to a different final snapshot",
-                ));
-            }
-            let mut seen = BTreeSet::new();
-            for group in &self.groups {
-                if !W6_GROUPS.contains(&group.as_str()) || !seen.insert(group.as_str()) {
-                    return Err(DeliveryError::new(
-                        "work selection contains an unknown or repeated Wave 6 group",
-                    ));
-                }
-            }
-            if self.groups.is_empty() {
-                return Err(DeliveryError::new(
-                    "work selection must select at least one group",
-                ));
-            }
-            Ok(())
-        }
-    }
-    String::from_utf8(output.stdout)
+    let resolved = String::from_utf8(output.stdout)
         .map(|value| value.trim().to_owned())
-        .map_err(|_| DeliveryError::environment("group evidence tree verification was not UTF-8"))
+        .map_err(|_| {
+            DeliveryError::environment("group evidence tree verification was not UTF-8")
+        })?;
+    Ok(resolved)
 }
 
+pub const PLAN_LIFECYCLE_ARTIFACT_KIND: &str = "d2b-feature-local/plan-lifecycle";
+pub const WORK_SELECTION_ARTIFACT_KIND: &str = "d2b-feature-local/work-selection";
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PlanLifecycleResult {
+    pub artifact_kind: String,
+    pub schema_version: u32,
+    pub program: String,
+    pub wave: String,
+    pub candidate_id: CandidateId,
+    pub content_id: super::model::ContentId,
+    pub snapshot_sha256: SnapshotSha256,
+    pub selected_roster: Vec<String>,
+    pub signoff_count: u32,
+    pub recommendation_count: u32,
+    pub result: String,
+    pub durable_write_evidence_sha256: String,
+    pub seat_records: BTreeMap<String, Value>,
+}
+
+impl PlanLifecycleResult {
+    pub fn validate_for(&self, snapshot: &super::snapshot::WaveSnapshot) -> Result<()> {
+        if self.artifact_kind != PLAN_LIFECYCLE_ARTIFACT_KIND || self.schema_version != 1 {
+            return Err(DeliveryError::new(
+                "plan lifecycle result has an unexpected artifact kind or schema version",
+            ));
+        }
+        if self.program != "ADR046" || self.wave != "adr046w6" {
+            return Err(DeliveryError::new(
+                "plan lifecycle result must identify ADR046 Wave 6",
+            ));
+        }
+        if self.candidate_id != snapshot.candidate_id
+            || self.content_id != snapshot.content_id
+            || self.snapshot_sha256 != snapshot.snapshot_sha256
+        {
+            return Err(DeliveryError::new(
+                "plan lifecycle result is bound to a different entry snapshot",
+            ));
+        }
+        validate_sha256(
+            &self.durable_write_evidence_sha256,
+            "plan lifecycle durable-write evidence",
+        )?;
+        if self.selected_roster.is_empty()
+            || self.signoff_count != self.selected_roster.len() as u32
+            || self.recommendation_count != 0
+            || self.result != "approved"
+        {
+            return Err(DeliveryError::new(
+                "plan lifecycle result is not unanimous and recommendation-free",
+            ));
+        }
+        let expected = self.selected_roster.iter().collect::<BTreeSet<_>>();
+        let actual = self.seat_records.keys().collect::<BTreeSet<_>>();
+        if expected != actual
+            || self
+                .seat_records
+                .values()
+                .any(|seat| seat.get("signoff").and_then(Value::as_bool) != Some(true))
+        {
+            return Err(DeliveryError::new(
+                "plan lifecycle result per-seat records do not match unanimous selection",
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkSelection {
+    pub artifact_kind: String,
+    pub schema_version: u32,
+    pub program: String,
+    pub wave: String,
+    pub candidate_id: CandidateId,
+    pub content_id: super::model::ContentId,
+    pub snapshot_sha256: SnapshotSha256,
+    pub groups: Vec<String>,
+    pub selected_at_unix: u64,
+}
+
+impl WorkSelection {
+    pub fn validate_for(&self, material: &CandidateMaterial) -> Result<()> {
+        if self.artifact_kind != WORK_SELECTION_ARTIFACT_KIND || self.schema_version != 1 {
+            return Err(DeliveryError::new(
+                "work selection has an unexpected artifact kind or schema version",
+            ));
+        }
+        let digests = material.digests()?;
+        if self.program != material.program
+            || self.wave != material.wave
+            || self.candidate_id != digests.candidate_id
+            || self.content_id != digests.content_id
+            || self.snapshot_sha256 != digests.snapshot_sha256
+        {
+            return Err(DeliveryError::new(
+                "work selection is bound to a different final snapshot",
+            ));
+        }
+        let mut seen = BTreeSet::new();
+        for group in &self.groups {
+            if !W6_GROUPS.contains(&group.as_str()) || !seen.insert(group.as_str()) {
+                return Err(DeliveryError::new(
+                    "work selection contains an unknown or repeated Wave 6 group",
+                ));
+            }
+        }
+        if self.groups.is_empty() {
+            return Err(DeliveryError::new(
+                "work selection must select at least one group",
+            ));
+        }
+        Ok(())
+    }
+}
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PlanApprovalReceipt {
@@ -2598,7 +2594,7 @@ pub fn run_plan_approval(args: &[String]) -> Result<WorkflowOutput> {
     let lifecycle_path = absolute_path(&lifecycle_path)?;
     let selection = read_external_json(&selection_path, "plan selection")?;
     let lifecycle = read_external_json(&lifecycle_path, "plan lifecycle result")?;
-    let receipt =
+    let _receipt =
         create_plan_approval(&snapshot_to_wave(&snapshot), &selection, &lifecycle, &roots)?;
     Ok(WorkflowOutput::ok(WaveCommand::PlanApproval).with_digests(&snapshot.digests()))
 }

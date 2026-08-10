@@ -28,7 +28,7 @@
 //! proven to sit outside every repository checkout and every Git working tree.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs::File,
     io::Read,
     path::{Path, PathBuf},
