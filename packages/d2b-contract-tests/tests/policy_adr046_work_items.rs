@@ -834,7 +834,7 @@ fn markdown_json_fences(markdown: &str) -> Vec<MarkdownJsonFence> {
                 |(candidate_delimiter, candidate_length, remainder)| {
                     candidate_delimiter == delimiter
                         && candidate_length >= length
-                        && remainder.trim().is_empty()
+                        && remainder.bytes().all(|byte| matches!(byte, b' ' | b'\t'))
                 },
             );
             if closes_fence {
@@ -1422,7 +1422,11 @@ fn feature_local_coordination_contract_rejects_load_bearing_mutations() {
         !check_local_coordination_tasks(&unclosed, &graph).is_empty(),
         "unclosed local-task contract unexpectedly passed"
     );
-    for (label, pseudo_closer) in [("overindented", "    ````"), ("tab-indented", "\t````")] {
+    for (label, pseudo_closer) in [
+        ("overindented", "    ````"),
+        ("tab-indented", "\t````"),
+        ("unicode-whitespace", "````\u{00a0}"),
+    ] {
         let malformed = format!(
             "{tasks}\n````json\n{{\"artifact_kind\":\"other\"}}\n{pseudo_closer}\n\
              {{\"artifact_kind\":\"d2b-feature-local-task-contract\"}}\n`````\n"
