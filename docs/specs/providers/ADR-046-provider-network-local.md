@@ -23,8 +23,9 @@ It governs:
   validation, attachment lifecycle, east-west isolation, DHCP/DNS, firewall,
   and mDNS;
 - all child resources created per Network: one config Volume, one net-VM Guest,
-  four Process resources (net-agent service, dnsmasq worker, mdns-reflector
-  worker, mdns-dnsbridge worker), and one User resource;
+  two mandatory Process resources (net-agent and dnsmasq), one conditional
+  external-DHCP Process, up to two optional mDNS Processes, and one User
+  resource;
 - the `NetworkEffectPort` abstraction through which ALL host-kernel effects are
   driven - the provider crate has **no** broker dependency or socket;
 - the controller's reconcile/observe/finalize loops, the ProviderStateSet, RBAC,
@@ -87,6 +88,27 @@ Core atomically reserves all Network CIDRs, derived kernel names, net-VM vsock
 CIDs, and external physical-NIC claims across every Zone on the Host before the
 Provider may request an effect. The Provider's peer scans remain diagnostic;
 they are not admission authority.
+
+#### Final corrections within Version 4
+
+Version 4 keeps its accepted metadata and additionally binds these corrections:
+
+- `subnetIp` masks 32-bit IPv4 before checked host-ordinal addition, including
+  `/30` bases ending `.0`, `.4`, and `.252`;
+- attachment refs are unique same-Zone Guests and every NIC role is bound by
+  the stable NET role-MAC algorithm before effects;
+- Host forwarding, filter, and re-NAT are typed Host-global aggregates and are
+  part of the workload-to-internet acceptance path;
+- external DHCP is a conditional Process bound only to `external0`; all DHCP
+  client state on primary `eth0` is forbidden;
+- dnsmasq requires `interface=eth1`, `bind-interfaces`,
+  `dhcp-ignore-names`, staged restart, and actual UDP/67, UDP/53, TCP/53
+  socket readback;
+- first ownership of NetworkManager and hosts markers uses the journaled NET
+  bootstrap rather than treating a pristine file as foreign; and
+- Ready requires Host routes, NetworkManager, hosts, agent plan, Host
+  forwarding/filter/re-NAT, exact service sockets, and an attached-Guest
+  dataplane probe.
 
 ---
 
@@ -375,6 +397,13 @@ pub trait NetworkEffectPort: Send + Sync {
         intent: &NftContribution,
     ) -> Result<FirewallDigest, EffectError>;
 
+    /// Publish typed aggregate Host forwarding, filter, and re-NAT intent.
+    async fn publish_host_dataplane(
+        &self,
+        network_uid: &Uid,
+        intent: &HostDataplaneContribution,
+    ) -> Result<HostDataplaneReadback, EffectError>;
+
     /// Publish one hosts contribution. Core aggregates all active Networks.
     async fn publish_hosts(
         &self,
@@ -402,12 +431,15 @@ identities through the admitted private realization plan.
 | --- | --- | --- |
 | `NetworkAdmissionIntent` | Network UID/generation, canonical spec digest, Host ref, Zone UID, requested east-west bit | Core adds trusted Host/site policy and atomically reserves Host-global CIDR/name/vsock/NIC authority |
 | `LinkIntent` | link roles, effective MTU, STP, multicast snooping, IPv6 suppression | Core derives IfNames; external parent MTU is observed, never mutated |
+| `RoleMacIntent` | Network UID, exact NIC role, optional Guest UID/index | Core derives stable locally administered unicast MAC and rejects collisions |
 | `AddressIntent` | typed address role and validated `Ipv4Cidr`/`Ipv4Address` | No free-form `ip address` body |
 | `AttachmentIntent` | attachment UID/generation, index, effective MTU, typed bridge role | Exact double opt-in selects isolated or east-west role |
 | `PrivateAttachment` | associated capability of the injected port | Concrete type is Core-private and unnameable to Provider code; no construction, clone, serialization, display, accessor, or export |
 | `AttachmentGenerationFence` | `expected_network_generation`, `expected_attachment_generation` | Both are non-zero resource generations captured from the current realization; stale values fail closed |
 | `RouteContribution` | typed destination, next-hop role, table class, metric class, action | Host-global dispatcher resolves devices and owns durable route markers |
 | `NftContribution` | typed chains/rules, semantic link/address refs, Network ownership ID | No USBIP rule; Host-global dispatcher composes all Providers |
+| `HostDataplaneContribution` | typed `HostForwardingContribution`, `HostFilterContribution`, and `HostRenatContribution` | Filter/re-NAT before forwarding; reverse on removal; foreign forwarding is observed, never claimed |
+| `ParentL2Reservation` | resolved parent identity, trusted prefix, exact static/leased address, owner proof | Host-global; only resolved-parent overlap is allowed |
 | `NmContribution` | Network UID plus semantic link roles | Host-global aggregate renders one marker-delimited file |
 | `HostsContribution` | validated attachment refs and resolved address roles | Host-global aggregate renders one marker-delimited block |
 | `GuestNetworkPlan` | ordered `AddressEffect`, `RouteEffect`, `ForwardingEffect`, `FilterEffect`, and `NatEffect` vectors | Net-agent validates and renders inside the Guest; no free-form route or nft text |
@@ -430,6 +462,7 @@ provider crate.
 | `release_attachment` | `DeletePersistentTap` consuming Core-private realization | current generation-fenced delete op |
 | `publish_routes` | Host-global dispatcher, then typed `ReconcileNetworkRoutes` | replaces per-Network free-form `ApplyRoute` submission |
 | `publish_nft` | Host-global dispatcher, then generation-fenced `ApplyNftablesProjection` per composed owner | retains D123-D125 projection semantics |
+| `publish_host_dataplane` | typed aggregate `ApplyNftablesProjection` filter/re-NAT plus `ReconcileHostIpv4Forwarding` | new ordered Host dataplane effect; no raw sysctl/nft/SNAT input |
 | `publish_hosts` | Host-global dispatcher, then `UpdateHostsFile` once for the aggregate | existing marker-preserving broker op |
 | `release_network` | aggregate contribution removal, marked route/address/link deletion, authority release | strict reverse order |
 
@@ -575,11 +608,13 @@ admission.
 | --- | --- | --- |
 | Base object | Exact NET Version 3 schema and fingerprint; unknown fields denied | `network-spec-invalid` |
 | Provider envelope | omitted or exact empty schema above | `spec-provider-schema-invalid`, `spec-provider-shadow` |
+| Attachments | each index and same-Zone Guest `executionRef` is unique | `attachment-index-duplicate`, `attachment-guest-duplicate`, `attachment-guest-zone-mismatch` |
+| DHCP names | `dhcp.ignoreClientNames` is exactly true | `network-spec-invalid` |
 | External DHCP | no static address, gateway, or DNS values | `external-ipv4-invalid` |
-| External static IPv4 | canonical usable address and same-subnet usable gateway; distinct from each other and from network/broadcast | `external-ipv4-invalid` |
+| External static IPv4 | canonical usable address and same-subnet gateway matching one trusted resolved-parent L2 prefix; exact Host-global address reservation | `external-ipv4-invalid`, `external-parent-l2-address-conflict` |
 | Forward target | exactly one selector; `targetRef` or `targetIp` resolves to exactly one attached Guest | `port-forward-target-invalid` |
 | Forward listener | unique `(protocol, listenPort)` with nonzero 16-bit listen/target ports | `port-forward-conflict` |
-| External CIDRs | canonical and bounded | `network-cidr-invalid` |
+| External CIDRs | canonical/bounded; disjoint except explicit overlap with the resolved parent's own L2 prefix | `network-cidr-invalid`, `external-parent-l2-cidr-invalid` |
 
 Core then atomically admits all CIDRs, derived names, vsock CID, source/egress
 CIDR disjointness, and physical-NIC arbitration across all Zones on the Host.
@@ -642,24 +677,34 @@ never stored in or read from the public resource store.
 | `ControllerReady` | Controller Process is Ready | `controller-unavailable` |
 | `FabricReady` | Both host bridges exist and sysctls applied | `bridge-create-error`, `sysctl-error`, `ifname-collision` |
 | `FirewallReady` | Host nftables `inet d2b` rules applied; digest matches | `nftables-error`, `nftables-drift` |
-| `NmUnmanagedReady` | `00-d2b-unmanaged.conf` written | `nm-unmanaged-error` |
-| `HostRoutesReady` | Host route to LAN CIDR via uplink bridge applied | `route-error` |
+| `HostForwardingReady` | Aggregate Host IPv4 forwarding ownership/readback matches | `host-forwarding-error` |
+| `HostFilterReady` | Aggregate Host forwarding filter projection/digest matches | `host-filter-error` |
+| `HostRenatReady` | Aggregate Host re-NAT projection/digest matches | `host-renat-error` |
+| `NmUnmanagedReady` | marker ownership is safely bootstrapped/current, durable, and NetworkManager reloaded | `nm-unmanaged-error`, `host-projection-bootstrap-conflict` |
+| `HostRoutesReady` | durable marked Host route aggregate matches | `route-error`, `route-ownership-conflict` |
+| `HostsReady` | safely owned aggregate hosts block matches and preserves foreign bytes | `hosts-aggregate-error`, `host-projection-bootstrap-conflict` |
 | `ConfigVolumeReady` | Config Volume backing Ready; content written | `config-volume-error`, `volume-backing-error`, `attachment-not-ready` |
 | `NetVmReady` | net-VM Guest in Ready phase | `net-vm-pending`, `net-vm-failed`, `net-vm-degraded`, `agent-restart` |
-| `DhcpReady` | The one owned dnsmasq Process is Ready and reports `dnsmasq-bound` | `dnsmasq-process-not-ready`, `dnsmasq-not-bound` |
-| `FirewallReady` (guest) | Guest-agent reports `nft-applied` readiness predicate | `nft-not-applied` |
-| `DnsReady` | Guest-agent reports `routes-applied` and dnsmasq DNS socket bound | `dns-not-ready` |
+| `AgentReady` | exact typed guest plan generation and all stage readbacks match | `agent-plan-failed`, `network-role-mac-mismatch` |
+| `DhcpReady` | one dnsmasq Process has actual eth1 UDP/67, UDP/53, TCP/53 sockets, mandatory name ignore, and matching reservations | `dnsmasq-process-not-ready`, `dnsmasq-socket-readback-failed` |
+| `DataPlaneReady` | attached Guest completed DHCP/DNS and full guest-NAT plus Host-re-NAT upstream round trip | `attached-guest-probe-required`, `dataplane-probe-failed` |
 | `CidrConflict` | No CIDR overlap detected | `network-cidr-conflict` |
 | `ExternalNicAuthorityReady` | Core admitted/adopted the Host-global physical-NIC claim, or no external attachment is configured | `external-physical-nic-claimed`, `external-physical-nic-conflict`, `external-physical-nic-cross-zone-l2`, `external-nic-owner-ambiguous`, `not-required` |
-| `ExternalAttachmentReady` | macvtap interface in net VM Ready (if externalAttachment≠null) | `macvtap-not-ready` |
+| `ExternalAttachmentReady` | external0 static/DHCP Process, socket/lease, firewall, routes, role MAC, and parent-L2 reservation match with zero eth0 DHCP state | `macvtap-not-ready`, `external-dhcp-primary-uplink-forbidden`, `external-parent-l2-address-conflict` |
 | `MdnsReady` | mDNS Process(es) in Ready phase (if mdns.enable) | `mdns-process-not-ready` |
+
+Network phase is Ready only when every non-optional condition above is true.
+Routes, NetworkManager, hosts, agent, Host forwarding/filter/re-NAT, dnsmasq
+socket ports, and `DataPlaneReady` are mandatory. With no Ready attached Guest,
+the fabric may stage but Network remains
+`Pending/attached-guest-probe-required`.
 
 ---
 
 ## 7. IfName derivation
 
-IfNames are **internal** to the core adapter.  They are derived deterministically
-from `(networkName, role, optional guestName)` using the algorithm in
+IfNames are **internal** to the core adapter. They are derived deterministically
+from `(Network.metadata.name, role, optional Guest.metadata.name)` using the algorithm in
 `packages/d2b-host/src/ifname.rs:derive_ifname`:
 
 - FNV-1a 64-bit hash of the input tuple;
@@ -687,6 +732,27 @@ IfNames **never** appear in:
 - audit records;
 - OTEL span attributes or metric labels;
 - any user-facing diagnostic beyond the bounded diagnostic API.
+
+### 7.1 Address and role-MAC derivation
+
+All address construction calls NET's masked 32-bit `subnetIp`; Provider-local
+octet concatenation is forbidden. Unit vectors cover `/30` network bases ending
+`.0`, `.4`, and `.252` and both valid host ordinals.
+
+Core also derives every NIC's stable locally administered unicast role MAC from
+NET's domain-separated algorithm. Before any guest effect, VMM launch,
+dnsmasq start, or external DHCP start, readback must prove:
+
+| Guest name | Role | Stable interface |
+| --- | --- | --- |
+| net VM | `net-vm-uplink` | `eth0` |
+| net VM | `net-vm-lan` | `eth1` |
+| net VM, optional | `external` | `external0` |
+| workload Guest | `workload-lan` | its Network NIC |
+
+An interface name without the matching role MAC is not authority. Missing,
+duplicate, or mismatched role mapping is `network-role-mac-mismatch` and no
+address/DHCP/route/filter/NAT effect runs.
 
 ---
 
@@ -821,9 +887,9 @@ Content that appears in files:
 
 | File | Content |
 | --- | --- |
-| `dnsmasq.conf` | DHCP reservations, RFC 5737 example forwarders, domain, static pools, DHCP MTU option, `bind-interfaces=true`, and `dhcp-ignore-names=true` |
-| `network-plan.json` | Strict versioned `GuestNetworkPlan` with typed address, route, forwarding, filter, and NAT effects in canonical order; unknown fields denied; no command or script text |
-| `attachments.json` | Attachment index to MAC mapping; no Guest resource names |
+| `dnsmasq.conf` | Unique Guest reservations, RFC 5737 example forwarders, domain, pools, DHCP MTU, mandatory `interface=eth1`, `bind-interfaces`, and `dhcp-ignore-names` |
+| `network-plan.json` | Strict typed guest plan plus external0-only DHCP firewall policy and role-MAC expectations; unknown fields denied; no command/script text |
+| `attachments.json` | Unique same-Zone Guest/index to stable MAC mapping |
 
 No raw kernel interface name, host bridge name, IP address, or hostname appears in
 any Volume file in a form that constitutes a network configuration secret.
@@ -900,8 +966,9 @@ the `DependenciesReady` condition.
 ## 11. Process resources
 
 The network-local controller creates two mandatory Process resources per
-Network (net-agent and dnsmasq) and up to two optional mDNS Processes. All are
-owned by `Network/<networkName>` and run on `Guest/<netVmName>`.
+Network (net-agent and dnsmasq), one conditional external-DHCP Process, and up
+to two optional mDNS Processes. All are owned by `Network/<networkName>` and
+run on `Guest/<netVmName>`.
 
 ### 11.1 Net-agent service (Process/net-\<networkName\>-agent)
 
@@ -1164,7 +1231,7 @@ spec:
     failureThreshold: 3
     successThreshold: 1
     class: provider-defined
-    # Provider-defined readiness: dnsmasq-bound socket detected by the Process Provider
+    # Ready only after eth1 UDP/67, UDP/53, and TCP/53 socket readback.
   healthCheck:
     enabled: true
     interval: "30s"
@@ -1175,18 +1242,87 @@ spec:
   drainTimeout: "5s"
 ```
 
-**Config updates**: when the controller writes new config Volume content, it
-forces a dnsmasq restart by setting `desiredLifecycle: stopped` followed by
-`running` in a ResourceMutationBatch.  The controller waits for the dnsmasq
-Process to reach Ready again before reporting `DhcpReady=True`.
+**Config updates** use one staged Process-generation transition. The controller
+syntax-validates the candidate while the old generation serves, applies the
+new network plan, stops the old generation and waits for terminal proof, then
+starts the same Process identity with the candidate. No two dnsmasq generations
+overlap. Failure restarts the last-known-good config within `drainTimeout` and
+keeps `DhcpReady=False`.
 
 dnsmasq invariants (preserved from `nixos-modules/net.nix` lines 302-441):
-- `bind-interfaces=true` (binds only to `eth1`/LAN);
-- `dhcp-ignore-names=true` (no hostname spoofing);
+- `interface=eth1` and the stable `net-vm-lan` role MAC are mandatory;
+- `bind-interfaces` is mandatory; wildcard, eth0, and external0 listeners are
+  forbidden;
+- `dhcp-ignore-names` is mandatory; `dhcp.ignoreClientNames=false` is rejected;
 - static DHCP host reservations from `spec.attachments[]` (via config Volume);
 - DHCP dynamic pool: `lanCidr.251`-`lanCidr.254`;
 - DNS forwarders from `spec.dns.forwarders`;
 - runs under the `net-local-controller` OS user with hardened minijail confinement.
+
+Readiness uses Guest-netns socket diagnostics, not Process phase alone. It
+requires actual eth1 UDP/67, UDP/53, and TCP/53 sockets, no corresponding
+listener on eth0/external0, matching reservations, one attached-Guest DHCP
+renewal, and one DNS query.
+
+### 11.2.1 Conditional external DHCP worker
+
+Created only when `spec.externalAttachment.ipv4.method = dhcp`:
+
+```yaml
+apiVersion: resources.d2bus.org/v3
+type: Process
+metadata:
+  name: net-work-net-external-dhcp
+  zone: dev
+  ownerRef: Network/work-net
+spec:
+  providerRef: Provider/system-minijail
+  executionRef: Guest/net-work-net
+  domain: system
+  processClass: worker
+  template: net-vm-external-dhcp
+  sandbox:
+    namespaceClasses: []
+    capabilityClasses: [network-bind, network-raw]
+    seccompClass: strict
+    noNewPrivileges: true
+    startRoot: false
+    readOnlyRoot: true
+    environmentClass: minimal
+  budget:
+    memory: { request: "4Mi", limit: "16Mi" }
+    pids: { limit: 4 }
+    fds: { limit: 32 }
+  networkUsage:
+    networkRef: Network/work-net
+    ports:
+      - { port: 68, protocol: udp, purpose: external-dhcp-client }
+  desiredLifecycle: running
+  restartPolicy:
+    class: on-failure
+    backoffBase: "1s"
+    backoffMax: "30s"
+    backoffMultiplierMilli: 2000
+    maxRestarts: null
+    resetAfter: "300s"
+  readiness:
+    initialDelay: "0s"
+    timeout: "20s"
+    failureThreshold: 3
+    successThreshold: 1
+    class: provider-defined
+  adoptionPolicy: adopt-on-restart
+  drainTimeout: "5s"
+```
+
+The typed template accepts only role `external`; the Process Provider resolves
+it by stable MAC to `external0` and supplies no free-form interface argument.
+Its firewall permits UDP/68 to UDP/67 and the reply only on external0 and
+explicitly drops DHCP client traffic on eth0. Readiness requires an
+external0-bound UDP/68 socket while acquiring/renewing, a current parent-L2
+lease, exact route/filter readback, and no eth0 DHCP socket/rule/lease. The
+Process reaches terminal state before the macvtap FD or parent-L2 reservation
+is released.
 
 ### 11.3 mDNS reflector worker (Process/net-\<networkName\>-mdns-reflector)
 
@@ -1381,8 +1517,14 @@ a Provider input.
 - `NetworkEffectPort.publish_hosts()` likewise updates one contribution to the
   single Host-global `/etc/hosts` block. Removing a Network recomputes the
   aggregate and cannot erase sibling entries.
-- Missing, nested, duplicated, or foreign markers fail closed with an
-  actionable ownership-conflict code. systemd-networkd remains detection-only.
+- On a pristine surface only, the Core adapter runs NET's
+  `Preparing`/`Owned` first-ownership journal: anchored no-follow checks,
+  preimage digest, byte-preserving marker append/create, atomic replace,
+  file/directory fsync, postimage verification, and durable commit.
+- After first ownership, missing, nested, duplicated, partial, or foreign
+  markers fail closed. A marker/record mismatch during bootstrap or recovery is
+  `host-projection-bootstrap-conflict` and preserves all bytes.
+  systemd-networkd remains detection-only.
 
 ### 12.5 DHCP pre-seed
 
@@ -1454,6 +1596,16 @@ only this Network UID's ownership projection and is stored in
 Device-usbip-owned rules and markers are excluded. No rule text appears in
 status, audit, or telemetry.
 
+The controller also calls `publish_host_dataplane()` with typed aggregate
+forwarding, filter, and re-NAT contributions. Core privately resolves the Host
+upstream role/address. It composes default-deny forwarding filters and re-NAT
+for every Network uplink CIDR, applies and reads back those nftables
+projections, then enables d2b-owned IPv4 forwarding. The returned readback has
+independent forwarding, filter, and re-NAT digests. Removal disables
+d2b-owned forwarding before removing the last filter/re-NAT projection.
+Pre-existing foreign forwarding and foreign nftables state are observed but
+never claimed or restored.
+
 ### 13.3 Net-VM-side firewall (via config Volume)
 
 The controller writes a strict `GuestNetworkPlan` to `network-plan.json`. The
@@ -1477,6 +1629,14 @@ On each observe cycle (`observeInterval: 60s`):
   mismatch queues reconcile or blocks on foreign ownership.
 - Query each private attachment through `read_attachment()` and compare MTU
   plus the role chosen by the exact double opt-in.
+- Read independent Host forwarding, filter, and re-NAT digests plus their
+  ordering/ownership state.
+- Read the exact applied agent generation and dnsmasq eth1 UDP/67, UDP/53,
+  TCP/53 sockets.
+- In external DHCP mode, read external0 socket/lease/address/routes/firewall
+  and prove eth0 has none of those DHCP-client artifacts.
+- Refresh the attached-Guest full dataplane probe after any relevant
+  generation, route, DNS, or upstream change.
 
 Observation commits status-only updates without incrementing resource generation.
 
@@ -1487,6 +1647,8 @@ Observation commits status-only updates without incrementing resource generation
 ### 14.1 Workload Guest attachment
 
 A workload Guest requests attachment by appearing in `Network.spec.attachments`.
+Every ref resolves to a Guest in the Network's Zone, and both Guest refs and
+indices are unique. Duplicate refs are rejected before tap or DHCP effects.
 The network-local controller:
 1. Calls `NetworkEffectPort.ensure_attachment()` and receives only the port's
    associated private capability.
@@ -1521,11 +1683,14 @@ When `spec.externalAttachment` is non-null:
    static fields; static IPv4 has a usable address and a distinct same-subnet
    usable gateway; DNS entries are IPv4; every forward has exactly one attached
    Guest target; `(protocol, listenPort)` is unique; ports are nonzero; and
-   source/egress CIDRs are canonical and Host-globally disjoint.
+   source/egress CIDRs are canonical. They are Host-globally disjoint except
+   for the explicit resolved-parent-L2 `allowedCidrs` exception.
 2. Core resolves the operator-declared `parentInterface` through trusted Host
    inventory, derives the private physical-NIC authority identity, and admits
    the Host-global claim. The controller receives only success/failure and
    bounded authority status; it does not receive the key/digest or owner proof.
+   Static mode also acquires the exact parent-L2 address reservation; DHCP mode
+   reserves the accepted lease before publishing it.
 3. Core checks the parent MTU. It sets the d2b-created macvtap child to the
    effective Network MTU but never changes the parent; a smaller parent fails
    with `network-mtu-parent-too-small`.
@@ -1540,10 +1705,15 @@ When `spec.externalAttachment` is non-null:
 5. Port-forward DNAT and external masquerade are typed `NatEffect` entries in
    `GuestNetworkPlan`; they are applied only after address, route, and
    forwarding readback.
+6. DHCP mode creates the conditional external-DHCP Process. Its socket,
+   firewall, lease, address, DNS, and allowed-CIDR routes are external0-only;
+   eth0 DHCP is a terminal refusal and no external lease replaces the primary
+   default route.
 
-The `ExternalAttachmentReady` condition reflects macvtap interface state via the
-net VM's Guest readiness predicates. `ExternalNicAuthorityReady` independently
-reflects authority admission/adoption.
+`ExternalAttachmentReady` requires macvtap state, role-MAC mapping,
+parent-L2 reservation, external0 static/DHCP lifecycle, socket/lease,
+filter/routes, and categorical eth0-DHCP absence. `ExternalNicAuthorityReady`
+independently reflects authority admission/adoption.
 
 ### 14.4 External physical-NIC AuthorityDescriptor
 
@@ -1579,6 +1749,15 @@ share one L2 broadcast domain and work and personal Zones never share an L2
 bridge. Core retains one authority owner and treats additional admitted
 same-Zone Networks as bounded holders; no holder opens the backing a second
 time.
+
+Static IPv4 additionally claims
+`(Host, external-parent-l2-address, parentIdentityDigest, IPv4Address)` and
+requires the authored prefix to match exactly one trusted prefix on that
+parent. An explicit `egress.allowedCidrs` overlap with that same parent prefix
+means scope-link parent-L2 reachability; it is not a general Host-inventory
+exception and never permits Host addresses. Off-link allowed CIDRs use the
+validated gateway. DHCP validates the lease against the same trusted parent-L2
+set and acquires the exact address claim before publishing the lease.
 
 Changing `parentInterface`, `macvtapMode`, or `sharingPolicy` reports
 `UpgradeRequired` with disruptive recycle. The planner drains dependent
@@ -1684,14 +1863,16 @@ using a bounded priority lane.
 ### 16.2 Reconcile (Network resource)
 
 ```text
-1. Strictly validate NET Version 3 and external IPv4/forward shapes.
+1. Strictly validate NET Version 3, masked subnet arithmetic, unique same-Zone
+   Guest refs/indices, mandatory name ignore, and parent-L2 external shapes.
 
 2. After CommittedRevisionProof, call admit().
    - Atomically reserve Host-global CIDRs, derived names, vsock CID, and NIC.
    - Evaluate the exact Network plus Host/site east-west predicate.
    - Any conflict or missing site acknowledgement performs zero effects.
 
-3. publish_nm(); wait for aggregate marker write, fsync, and NM reload.
+3. publish_nm(); safely bootstrap first marker ownership when pristine, or
+   apply the owned aggregate; wait for fsync and NM reload.
 
 4. ensure_links(); reconcile_addresses().
    - Create marked bridges down.
@@ -1699,7 +1880,8 @@ using a bounded priority lane.
    - Bring links up only after readback and durable ownership record.
 
 5. ensure_attachment() for net-VM and workload taps.
-   - Apply MTU and selected bridge role; read back before LaunchTicket.
+   - Derive and read back stable role MAC, MTU, and selected bridge role before
+     LaunchTicket.
 
 6. Create/update the config Volume and write dnsmasq.conf,
    network-plan.json, and attachments.json in one committed revision.
@@ -1713,19 +1895,28 @@ using a bounded priority lane.
    - Require addresses, routes, forwarding, filter, and NAT in order.
    - Stop on the first failed stage; do not apply later effects.
 
-9. Create exactly one dnsmasq Process after address and route readiness.
-   - Wait for Process Ready and dnsmasq-bound.
+9. Stage exactly one dnsmasq Process generation after address/route readiness.
+   - Preflight candidate, stop/confirm/start, then require actual eth1 UDP/67,
+     UDP/53, and TCP/53 socket readback plus mandatory name ignore.
+   - For external DHCP, start the conditional external0-only Process and prove
+     socket/lease/firewall/routes plus zero eth0 DHCP state.
    - Reconcile optional mDNS Processes separately.
 
-10. publish_routes(), publish_nft(), and publish_hosts().
-    - Host-global owners compose all active contributions.
-    - Require durable route and aggregate marker readback.
+10. publish_routes(), publish_nft(), publish_host_dataplane(), and
+    publish_hosts().
+    - Require durable route and Host filter/re-NAT readback before enabling
+      d2b-owned Host IPv4 forwarding.
+    - Safely bootstrap/update hosts markers and require aggregate readback.
 
-11. For removed attachments, wait for VMM FD closure and consume the private
+11. Run the attached-Guest DHCP/DNS and full workload-to-upstream probe through
+    guest NAT plus Host re-NAT.
+
+12. For removed attachments, wait for VMM FD closure and consume the private
     capability through release_attachment() with exact generations.
 
-12. Commit ResourceMutationBatch and layered status only after each required
-    readback barrier; Ready requires all barriers.
+13. Commit ResourceMutationBatch and layered status only after routes, NM,
+    hosts, agent, Host forwarding/filter/re-NAT, service sockets, and dataplane
+    are current; Ready requires every barrier.
 ```
 
 ### 16.3 Finalizer (delete sequence, strictly child-first)
@@ -1751,29 +1942,35 @@ network.d2bus.org/fabric-cleanup finalizer
 
 6. Delete Process/net-<networkName>-agent; wait for Deleted event
 
-7. Delete Process/net-<networkName>-dnsmasq; wait for Deleted event
+7. Delete conditional Process/net-<networkName>-external-dhcp; wait for
+   terminal/Deleted and confirm no lease/socket remains
 
-8. Update Volume attachments to [] (remove Guest attachment); wait for removal
+8. Delete Process/net-<networkName>-dnsmasq; wait for Deleted event
 
-9. Delete Guest/<netVmName>; wait for Deleted event
+9. Update Volume attachments to [] (remove Guest attachment); wait for removal
+
+10. Delete Guest/<netVmName>; wait for Deleted event
    └─ confirms the VMM and macvtap FD owner are gone
 
-10. Delete Volume/net-<networkName>-config; wait for Deleted event
+11. Delete Volume/net-<networkName>-config; wait for Deleted event
 
-11. Remove nftables, hosts, and NetworkManager contributions.
+12. Disable d2b-owned Host IPv4 forwarding when this is the last contribution,
+    then remove Host filter/re-NAT, Network nftables, hosts, and NetworkManager
+    contributions.
     └─ each Host-global owner applies the recomputed aggregate
-    └─ sibling and foreign markers/bytes remain unchanged
+    └─ sibling/foreign state remains unchanged; empty owned NM/hosts markers remain
 
-12. Remove the durable marked Host route, typed addresses, and empty marked
+13. Remove the durable marked Host route, typed addresses, and empty marked
     bridges in reverse dependency order.
     └─ live marker and durable record must agree
     └─ foreign ownership blocks without mutation
 
-13. Release the Host-global external-NIC authority claim, if present
+14. Release the parent-L2 address reservation and Host-global external-NIC
+    authority claim, if present
     └─ release is forbidden until Guest/VMM/macvtap ownership is closed
     └─ multiplexed owner transfer is an atomic Core authority-index operation
 
-14. Release CIDR, derived-name, and vsock-CID reservations; clear finalizer
+15. Release CIDR, role-MAC/derived-name, and vsock-CID reservations; clear finalizer
 ```
 
 Each step is driven by `owned-resource-changed` hints rather than polling.
@@ -1979,7 +2176,9 @@ the network-local controller is authorized to resolve and call this service
 | Code | Phase | Description |
 | --- | --- | --- |
 | `network-cidr-conflict` | Failed | Host-global CIDR reservation conflict; choose disjoint CIDRs |
+| `network-subnet-host-invalid` | Failed | masked 32-bit host ordinal is network, broadcast, or overflow |
 | `ifname-collision` | Failed | Host-global derived-name conflict; rename the Network or Guest |
+| `network-role-mac-mismatch` | Failed | stable role MAC mapping is missing, duplicate, or wrong |
 | `vsock-cid-conflict` | Failed | Host-global CID reservation conflict; release or reallocate the stale owner |
 | `east-west-site-opt-in-required` | Failed | Network requested east-west but Host/site acknowledgement is false |
 | `bridge-create-error` | Degraded | typed link reconciliation failed |
@@ -1988,8 +2187,12 @@ the network-local controller is authorized to resolve and call this service
 | `sysctl-error` | Degraded | typed link sysctl readback failed |
 | `nftables-error` | Degraded | Host-global nftables dispatch failed |
 | `nftables-drift` | Degraded | Firewall digest mismatch detected at observe |
+| `host-forwarding-error` | Degraded | aggregate Host IPv4 forwarding ownership/readback failed |
+| `host-filter-error` | Degraded | aggregate Host forwarding filter projection failed |
+| `host-renat-error` | Degraded | aggregate Host re-NAT projection failed |
 | `nm-unmanaged-error` | Degraded | aggregate NM marker reconciliation failed |
 | `hosts-aggregate-error` | Degraded | aggregate hosts marker reconciliation failed |
+| `host-projection-bootstrap-conflict` | Failed | pristine-marker journal or live marker/record bytes are ambiguous |
 | `route-error` | Degraded | typed Host route reconciliation failed |
 | `route-ownership-conflict` | Failed | live route marker and durable ownership record disagree |
 | `network-mtu-parent-too-small` | Failed | external parent MTU is smaller than requested; lower Network MTU or raise parent MTU |
@@ -1999,18 +2202,26 @@ the network-local controller is authorized to resolve and call this service
 | `config-volume-error` | Degraded | Volume create failed |
 | `volume-backing-error` | Degraded | Volume backing not Ready |
 | `attachment-not-ready` | Degraded | Volume Guest attachment not Ready |
+| `attachment-guest-duplicate` | Failed | one same-Zone Guest appears more than once |
+| `attachment-guest-zone-mismatch` | Failed | attachment Guest is not in the Network Zone |
 | `net-vm-pending` | Pending | Guest not yet Ready |
 | `net-vm-failed` | Failed | Guest in Failed phase |
 | `net-vm-degraded` | Degraded | Guest in Degraded phase |
 | `agent-restart` | Degraded | Agent process restarted unexpectedly |
 | `agent-plan-failed` | Degraded | NetworkAgentService.ApplyPlan() returned a typed stage error |
-| `dnsmasq-not-bound` | Degraded | dnsmasq process not Ready; DNS/DHCP unavailable |
+| `dnsmasq-not-bound` | Degraded | dnsmasq Process not Ready; DNS/DHCP unavailable |
+| `dnsmasq-socket-readback-failed` | Degraded | eth1 UDP/67, UDP/53, TCP/53 set is incomplete or another role has a listener |
 | `nft-not-applied` | Degraded | Agent reports nft_applied=false |
+| `attached-guest-probe-required` | Pending | no Ready attached Guest exists for dataplane readiness |
+| `dataplane-probe-failed` | Degraded | attached Guest failed DHCP/DNS or full guest-NAT plus Host-re-NAT upstream probe |
 | `macvtap-not-ready` | Degraded | External attachment macvtap not ready |
 | `external-attachment-mode-invalid` | Failed | External attachment type is not macvtap |
 | `external-parent-interface-invalid` | Failed | Declared parentInterface fails IfName syntax |
 | `external-parent-interface-not-found` | Failed | Trusted Host inventory cannot resolve parentInterface |
 | `external-ipv4-invalid` | Failed | DHCP/static IPv4 fields are inconsistent or static address/gateway is unusable |
+| `external-parent-l2-address-conflict` | Failed | exact static/leased address is not available on the trusted parent L2 |
+| `external-parent-l2-cidr-invalid` | Failed | allowed CIDR uses an unrelated Host prefix or invalid parent-L2 exception |
+| `external-dhcp-primary-uplink-forbidden` | Failed | any external DHCP socket/rule/lease/address/route appeared on eth0 |
 | `port-forward-target-invalid` | Failed | Forward target does not resolve to exactly one attached Guest |
 | `port-forward-conflict` | Failed | Duplicate protocol/listen-port pair or invalid port |
 | `external-sharing-policy-invalid` | Failed | Multiplexing requested for a non-bridge mode or policy is incomplete |
@@ -2241,10 +2452,13 @@ marker-delimited `00-d2b-unmanaged.conf` projection before creating links.
 | `netVmSystemArtifactId` present | Required field; fails if absent |
 | `netVmSystemArtifactId` type is `nixos-system` | Artifact catalog type check |
 | `lanCidr` / `uplinkCidr` format | Regex + prefix length at Nix eval time |
+| `subnetIp` vectors | masked 32-bit `/30` bases ending `.0`, `.4`, `.252`; network/broadcast rejected |
 | CIDR overlaps between declared Networks | Host-wide declared-Network and Host-inventory overlap check |
 | Resource name | Canonical `metadata.name` grammar; no duplicate `networkName` field |
+| Attachments | unique indices and unique same-Zone Guest refs |
+| dnsmasq policy | `dhcp.ignoreClientNames` exactly true |
 | East-west request | `isolation.allowEastWest = true` requires `d2b.site.allowUnsafeEastWest = true` |
-| External IPv4/forwards | Shape, usable static address/gateway, attached target, port uniqueness, and declared Host-global CIDR disjointness |
+| External IPv4/forwards | Shape, parent-L2 address reservation/allowed-CIDR exception, attached target, port uniqueness, and external0-only DHCP |
 
 Runtime checks in `validateSpec` cover the full set.
 
@@ -2307,7 +2521,9 @@ true, the guest filter plan contains no peer accept and workload taps remain
 
 **Invariant**: no two Networks anywhere on one Host may have overlapping
 `lanCidr`, `uplinkCidr`, or external route CIDRs, and no such CIDR may overlap
-Host inventory. Core atomically reserves them before effects.
+unrelated Host inventory. The only Host overlap is an explicit
+`allowedCidrs` entry within the resolved parent's own L2 prefix. Core
+atomically reserves all exact addresses/CIDRs before effects.
 
 ### INV-NET-007: hostBlocklist effectiveness
 
@@ -2322,8 +2538,9 @@ tenant networks.
 ### INV-NET-008: Guest-network-admin isolation
 
 **Invariant**: `CAP_NET_ADMIN`, `CAP_NET_RAW`, and `CAP_NET_BIND_SERVICE`
-granted to the net-agent and dnsmasq Processes are effective only within the
-inherited Guest VM network namespace (the `namespaceClasses: []` Process spec
+granted to the net-agent, dnsmasq, and conditional external-DHCP Processes are
+effective only within the inherited Guest VM network namespace (the
+`namespaceClasses: []` Process spec
 field causes the Process Provider to inherit the Guest's netns).  No host
 capability is conferred.
 
@@ -2417,6 +2634,47 @@ never spawns or supervises dnsmasq, and the generic net-VM artifact declares no
 competing service. Restart/adoption preserves the Process identity and refuses
 an ambiguous second owner.
 
+### INV-NET-017: subnet arithmetic masks before add
+
+**Invariant**: Provider code uses NET's masked 32-bit `subnetIp`; `.0`, `.4`,
+and `.252` `/30` vectors and invalid network/broadcast ordinals are pinned.
+
+### INV-NET-018: stable role MACs precede effects
+
+**Invariant**: VMM and Process role resolution uses NET's stable role MAC.
+Interface names alone never authorize an address, DHCP, route, filter, or NAT
+effect.
+
+### INV-NET-019: Host forwarding/filter/re-NAT aggregate is ordered
+
+**Invariant**: one Host-global owner installs/reads back filter and re-NAT
+before enabling d2b-owned IPv4 forwarding; removal reverses the order and
+preserves foreign forwarding/nftables state.
+
+### INV-NET-020: external DHCP is external0-only
+
+**Invariant**: the conditional DHCP Process and every socket, rule, lease,
+address, DNS value, and route it produces bind to external0. Matching eth0
+state fails terminally, and external DHCP never owns the primary default route.
+
+### INV-NET-021: marker bootstrap is recoverable
+
+**Invariant**: first NetworkManager/hosts ownership uses exact preimage and
+postimage digests plus `Preparing`/`Owned` journal state. Partial, foreign, or
+ambiguous markers are preserved and refused.
+
+### INV-NET-022: attachments and parent L2 are exact
+
+**Invariant**: attachments are unique same-Zone Guests. Static/leased external
+addresses hold an exact parent-L2 reservation, and allowed-CIDR overlap applies
+only to the resolved parent's own prefix.
+
+### INV-NET-023: Ready requires actual dataplane and sockets
+
+**Invariant**: routes, NetworkManager, hosts, agent generation, Host
+forwarding/filter/re-NAT, exact dnsmasq socket ports, and the attached-Guest
+dataplane probe are mandatory Ready inputs. Status assignment cannot substitute.
+
 ---
 
 ## 24. Provider lifecycle (install / upgrade / remove)
@@ -2498,7 +2756,7 @@ On controller binary upgrade:
 | Current source | None - net-new v3 work; no pre-ADR45 baseline equivalent for a provider-neutral `NetworkEffectPort` core adapter. |
 | Reuse action | create |
 | Destination | `d2b-contracts` trait plus `d2b-core` core adapter; maps to broker wire operations and audit emission. |
-| Detailed design | Implement the sealed Version 4 `NetworkEffectPort` and production Core adapter. The trait has a Core-private associated attachment capability rather than a concrete public handle. It accepts only the typed admission, link, address, attachment, route, nftables, NetworkManager, and hosts intents in §5. Provider methods publish contributions to Host-global owners; only Core maps admitted desired state to broker operations and audit. No IfName, path, command, script, allocated vsock CID, or caller-authored marker crosses the trait. |
+| Detailed design | Implement the sealed Version 4 `NetworkEffectPort` and production Core adapter. It accepts typed admission, role-MAC, link, address, attachment, route, nftables, Host forwarding/filter/re-NAT, NetworkManager, and hosts intents. The attachment capability stays Core-private. Only Core maps admitted desired state to broker operations/audit; no IfName, path, command, script, allocated vsock CID, SNAT address, or caller-authored marker crosses the trait. |
 | Integration | `Provider/network-local` reconcile calls injected `NetworkEffectPort`; the core adapter resolves opaque Network intents to closed broker wire ops and emits broker-level audit records. |
 | Data migration | Full d2b 3.0 reset; no v2 state/config import. |
 | Validation | `packages/d2b-provider-network-local/tests/fault_injection.rs` verifies fake `NetworkEffectPort` behavior, error mapping, no broker socket in provider context, and audit-safe adapter boundaries. |
@@ -2510,10 +2768,10 @@ On controller binary upgrade:
 | Field | Value |
 | --- | --- |
 | Dependency/owner | `ADR046-transport-unix-006`; Core; broker/core contract work consumed by ADR046-nl-001. The transport item is the dependency-ordered prior writer of the shared broker wire, privilege, audit, runtime, and dispatch surfaces; this item is their later Network-operation writer. |
-| Current source | The baseline contains `DeletePersistentTap`, `CreateBridge`, `DeleteBridge`, and `ApplyNftablesProjection` preview primitives plus older `ApplyRoute`, `ApplyNmUnmanaged`, and `UpdateHostsFile` operations. It does not provide the Version 4 typed address/aggregate-route operations, durable bridge/route marker records, or one production Host-global dispatcher for nftables/NM/hosts. |
+| Current source | The baseline contains preview bridge/tap/projection primitives and older route/NM/hosts operations. It lacks typed address/aggregate-route/Host-forwarding operations, durable bridge/route records, safe first-marker bootstrap, and production Host-global dispatchers for filter/re-NAT/NM/hosts. |
 | Reuse action | adapt |
 | Destination | Broker wire/core adapter operation table for typed address and route reconciliation, durable bridge/route ownership, readback, aggregate NetworkManager/hosts application, and the retained generation-fenced tap/nftables projection operations. |
-| Detailed design | Reuse the existing closed bridge/tap/projection ops. Add typed `ReconcileNetworkAddress` and `ReconcileNetworkRoutes` operations with no free-form command strings. Extend bridge and route effects to fsync broker-resolved ADR 0034 ownership records and verify live kernel markers. Add one in-process Host-global dispatcher for nftables, NM, and hosts; it is not a unit. The broker receives only opaque bundle refs and generation fences, preserves foreign state, and emits path-free audit. |
+| Detailed design | Reuse closed bridge/tap/projection ops. Add typed address, aggregate route, and `ReconcileHostIpv4Forwarding` operations. Compose Host filters and re-NAT through typed projection refs, with filter/re-NAT before forwarding and reverse removal. Extend bridge/route ownership records and add NET's journaled first-marker bootstrap for NM/hosts. No new unit. |
 | Integration | `NetworkEffectPort` core adapter invokes these broker ops for attachment/fabric/firewall lifecycle and observe/drift checks; `Provider/network-local` receives only typed results and opaque digests/handles. Attachment removal and Network finalization retain the handle until `DeletePersistentTap` confirms deletion or validated absence; firewall apply/remove retains the projection reference until `ApplyNftablesProjection` confirms the effect or validated absence. |
 | Data migration | Full d2b 3.0 reset; no v2 state/config import. |
 | Validation | Broker tests cover `DeletePersistentTap` success, validated already-absent idempotency, stale Network/attachment generations, foreign-marker fail-closed behavior, path-free audit, and rejection of any IfName/path field; `ApplyNftablesProjection` tests cover apply/remove of exactly one ownership marker, sibling-Network and device-usbip marker preservation, never-whole-table-replace, generation-fence rejection of stale same-projection mutation, validated-absence idempotency, foreign-marker fail-closed, projection-scoped digest, and path-free audit with no rule text/IfName/path; `integration/host_fabric.rs` covers persistent-tap deletion, bridge create/delete, nftables projection apply/remove/digest, IPv6 suppression, NetworkManager unmanaged handling, and real `NetworkEffectPort` implementation. |
@@ -2559,7 +2817,7 @@ On controller binary upgrade:
 | Reuse source | `d2b-host` IfName, nftables, bridge-port, route preflight, and sysctl/netlink modules. |
 | Reuse action | adapt |
 | Destination | Core adapter imports `d2b-host` modules; `packages/d2b-provider-network-local/src/ifname.rs` re-exports `d2b_host::ifname::derive_ifname` only. |
-| Detailed design | Consume `d2b-host` modules in the Core adapter, not the Provider. Extend link/route adapters for durable ownership marker readback, typed address/route operations, and complete MTU propagation. Provider-local derivation is diagnostic only; Host-global Core admission owns collision decisions. |
+| Detailed design | Consume `d2b-host` modules in Core. Replace octet concatenation with NET's masked 32-bit `subnetIp`, add stable role-MAC derivation/readback, durable link/route markers, typed address/routes, and complete MTU propagation. Provider-local scans remain diagnostic; Host-global admission owns collisions. |
 | Integration | Provider validateSpec uses deterministic IfName derivation for collision checks; core adapter applies bridge, nftables, route, and sysctl effects through reused `d2b-host` helpers. |
 | Data migration | Full d2b 3.0 reset; no v2 state/config import. |
 | Validation | `tests/ifname_derive.rs`, `tests/fault_injection.rs`, and `integration/host_fabric.rs` prove derivation, adapter reuse, and real host-fabric behavior. |
@@ -2574,7 +2832,7 @@ On controller binary upgrade:
 | Current source | None - net-new v3 provider controller; v1 behavior lived in `nixos-modules/network.nix` and `nixos-modules/net.nix` static NixOS module logic. |
 | Reuse action | adapt |
 | Destination | `packages/d2b-provider-network-local/src/{controller.rs,metrics.rs}`. |
-| Detailed design | Implement the §16 ordered handlers with sealed `NetworkEffectPort` injection. Admission precedes effects; aggregate NM precedes link creation; typed addresses/routes/forwarding/filter/NAT and one dnsmasq Process obey readiness barriers; aggregate routes/nft/hosts follow guest readiness; deletion reverses the order. Attachment removal consumes the private associated capability only after FD closure. |
+| Detailed design | Implement §16 ordering: exact admission; safe NM bootstrap; role-MAC/link/address; guest plan; staged dnsmasq sockets and conditional external0 DHCP; durable routes; Host filter/re-NAT then forwarding; hosts bootstrap; attached-Guest dataplane. Ready requires every readback. Deletion reverses the order. |
 | Integration | Controller watches Network, Guest, Volume, Process, User, Host, and Zone resources; creates child resources, writes status, invokes `NetworkEffectPort`, and drives finalizers. |
 | Data migration | Full d2b 3.0 reset; no v2 state/config import. |
 | Validation | `tests/controller_state.rs` covers normal reconcile, errors, finalizer ordering, adoption on restart, and observe/drift cycles with deterministic clock; `tests/metrics_labels.rs` structurally asserts exact identity-key absence and that a Network-name canary never enters metric label values. |
@@ -2605,7 +2863,7 @@ On controller binary upgrade:
 | Reuse source | `nixos-modules/net.nix` dnsmasq, nftables, routing, and attachment configuration semantics. |
 | Reuse action | adapt |
 | Destination | `packages/d2b-provider-network-local/src/config_volume.rs`. |
-| Detailed design | Render `dnsmasq.conf`, strict `network-plan.json`, and `attachments.json`. The plan contains typed effects, never free-form nft/route text, and dnsmasq config carries the effective DHCP MTU. |
+| Detailed design | Render `dnsmasq.conf`, strict `network-plan.json`, and `attachments.json`. dnsmasq includes mandatory `interface=eth1`, `bind-interfaces`, `dhcp-ignore-names`, effective DHCP MTU, and unique Guest reservations. The plan carries typed guest effects and external0-only DHCP firewall policy. |
 | Integration | Controller writes the three files in one Volume revision, attaches the read-only view, applies the typed plan, and restarts the one dnsmasq Process after address/route readiness. |
 | Data migration | Full d2b 3.0 reset; config Volume is runtime tmpfs content regenerated from Network spec. |
 | Validation | `tests/controller_state.rs`, `integration/agent_reload.rs`, and `integration/delete_sequence.rs` validate rendering, write flow, reload, and cleanup ordering. |
@@ -2620,8 +2878,8 @@ On controller binary upgrade:
 | Current source | v1 dnsmasq and mDNS process shape came from `nixos-modules/net.nix` and static NixOS services; no v3 Process builder exists. |
 | Reuse action | adapt |
 | Destination | `packages/d2b-provider-network-local/src/process_specs.rs`. |
-| Detailed design | Implement canonical Process builders for one agent, exactly one dnsmasq worker, and optional mDNS workers. The generic artifact has no competing dnsmasq service; the agent cannot spawn dnsmasq. |
-| Integration | Controller creates/adopts one stable dnsmasq Process identity and uses its `dnsmasq-bound` readiness; update performs one stop/terminal/start transition. |
+| Detailed design | Implement canonical builders for one agent, exactly one dnsmasq, one conditional external-DHCP worker, and optional mDNS workers. dnsmasq uses staged candidate/last-known-good restart and exact socket ports. External DHCP accepts only the external role and forbids eth0 state. |
+| Integration | Controller preserves one dnsmasq identity, performs stop/terminal/start, reads eth1 UDP/67 UDP/53 TCP/53, and separately owns the external0 DHCP Process lifecycle. |
 | Data migration | Full d2b 3.0 reset; no v2 state/config import. |
 | Validation | `tests/controller_state.rs`, `integration/mdns_reflector.rs`, and eval case `process-sandbox-netns.nix` validate Process shape, optional mDNS, and guest-netns capability isolation. |
 | Removal proof | Supersedes static per-env systemd services; old duplicate service tests are retired after successor Process coverage passes. |
@@ -2636,10 +2894,10 @@ On controller binary upgrade:
 | Reuse source | `nixos-modules/base.nix` `10-eth-dhcp` lib.mkForce override and host-users reservation table. |
 | Reuse action | adapt |
 | Destination | `net-vm-base` nixos-system artifact and artifact catalog entry `d2b.artifacts.net-vm-base`. |
-| Detailed design | Build generic `net-vm-base` nixos-system artifact with net-agent binary, agent-service endpoint, guest-agent binary, standard NIC bootstrap, lib.mkForce override; bake `net-local-controller` account with the UID/GID allocated from the host-users reservation table (documented in `nixos-modules/host-users.nix`). Primary reuse disposition: `adapt`. Preserved source-plan detail: preserve generic boot/safety invariants; exclude per-Network static config. |
+| Detailed design | Build generic `net-vm-base` with agent/service endpoint, stable role-MAC matched eth0/eth1/external0 naming, standard NIC bootstrap, lib.mkForce override, and controller account. It contains no competing dnsmasq or DHCP client service and no per-Network data. |
 | Integration | Network resource `spec.netVmSystemArtifactId` points to `net-vm-base`; runtime-cloud-hypervisor consumes the artifact ID, and the config Volume provides all per-Network DHCP/firewall/routing content. |
 | Data migration | Full d2b 3.0 reset; no per-Network v2 net-VM config import. |
-| Validation | Current root `flake.checks.<system>.nix-unit` case `tests/unit/nix/cases/net-vm-network.nix` proves the `lib.mkForce` neutralizer and MTU propagation. It asserts non-`ether` `10-eth-dhcp` matching and exact `00:00:00:00:00:00`; the retired standalone script is not evidence. |
+| Validation | Current nix-unit `net-vm-network.nix` proves lib.mkForce, MTU, stable role mapping, and masked `subnetIp` vectors for `/30` bases `.0`, `.4`, `.252`, including invalid network/broadcast ordinals. |
 | Removal proof | Supersedes implicit microvm/Nix path coupling; remove `net-vm-base` artifact catalog entry only after all Network resources and provider references are gone. |
 | Implementation state | Planned |
 | Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
@@ -2667,7 +2925,7 @@ On controller binary upgrade:
 | Reuse source | `nixos-modules/lib.nix:cidrOverlaps`. |
 | Reuse action | adapt |
 | Destination | Nix flake/resource schema checks for declared Networks and provider `validate.rs` parity. |
-| Detailed design | Evaluate all declared Host Network CIDRs, names, external IPv4/forwards, and the exact east-west double opt-in. Runtime Core atomically reserves CIDRs, derived names, vsock CIDs, and external-NIC authority across all Zones on the Host before effects. |
+| Detailed design | Evaluate all declared Host Network CIDRs/names, unique same-Zone Guest refs, mandatory name ignore, parent-L2 external reservation/allowed-CIDR semantics, and double opt-in. Runtime Core atomically reserves CIDRs, role MACs/names, vsock CIDs, external NIC, and exact parent-L2 addresses before effects. |
 | Integration | Nix rejects visible conflicts early; Core admission closes observed-state, cross-Zone, and concurrent-create races. |
 | Data migration | None - docs/tooling only; no runtime state. |
 | Validation | Eval plus Core concurrency tests cover cross-Zone CIDR/name/vsock collisions, exact external IPv4/forward validation, and all four east-west input combinations with zero loser effects. |
@@ -2712,7 +2970,7 @@ On controller binary upgrade:
 | Current source | Existing Layer-1 eval and shell gates cover fragments; no v3 provider lifecycle integration test exists. |
 | Reuse action | adapt |
 | Destination | `packages/d2b-provider-network-local/integration/host_fabric.rs`, `guest_lifecycle.rs`, `agent_reload.rs`, and `delete_sequence.rs`. |
-| Detailed design | Add full lifecycle integration plus `tests/host-integration/network-local-data-plane.nix`. The host case enters through evaluated Nix, emitted bundle, daemon, production Core adapter, broker, net-VM, one dnsmasq Process, and attached workload Guests. It proves DHCP/DNS/egress, MTU, typed effect ordering, aggregate foreign-byte preservation, durable adoption/delete, and all four double opt-in combinations. |
+| Detailed design | Add full lifecycle plus `network-local-data-plane.nix`: evaluated Nix through daemon/Core/broker/net-VM/attached Guests. Prove dnsmasq sockets/staging, full TCP/UDP/ICMP workload path through guest NAT and Host re-NAT, removal negatives, safe marker bootstrap/foreign-byte preservation, external0-only DHCP with eth0 forbidden, parent-L2 static/allowed CIDRs, durable adoption/delete, and the four-case matrix. |
 | Integration | The positive Network acceptance declares at least one workload Guest attachment; the four-case matrix uses two attached Guests. Empty attachments, fake ports, status assignment, or the owned net-VM alone are ineligible. |
 | Data migration | None - docs/tooling only; no runtime state. |
 | Validation | `make test-integration` for container tests and `make test-host-integration` where guest lifecycle requires host/KVM coverage. |
@@ -2787,10 +3045,10 @@ On controller binary upgrade:
 | Current source | Current macvtap spawn resolves a raw parent interface but has no Host-global duplicate admission, sharing policy, authority status, or owner-proof lifecycle. |
 | Reuse action | adapt |
 | Destination | Network schema/Provider descriptor, Core authority index, Network reconcile/update/finalizer, runtime LaunchTicket resolver, and authority tests |
-| Detailed design | Register the external physical-NIC authority as described above and require canonical external IPv4/forward validation before admission. Apply effective MTU only to the d2b-created macvtap child; refuse a smaller parent. Encode DNAT/forwarding/NAT as typed guest effects after address and route readiness. Adapt the existing broker-internal macvtap-FD creation path behind mandatory Core authority admission. |
+| Detailed design | Register physical-NIC plus exact parent-L2 address authorities. Static prefixes match trusted parent inventory; only explicit allowed CIDRs within that parent prefix receive the scope-link exception, while Host addresses remain blocked. DHCP owns one external0-only Process/socket/firewall/lease lifecycle and forbids eth0/default-route takeover. Apply child-only MTU and typed route/forward/NAT after readiness. |
 | Integration | Core preflight gates every runtime LaunchTicket/`SpawnRunner`; status reports bounded authority state and conditions; D091 update and finalizer close macvtap ownership before release. |
 | Data migration | Full d2b 3.0 reset; no legacy authority import. |
-| Validation | `external_nic_authority.rs` covers Core-derived identity, same-/cross-Zone conflicts, explicit same-Zone bridge multiplexing, categorical cross-Zone bridge multiplex rejection with `external-physical-nic-cross-zone-l2` and no host effect (INV-NET-011), incompatible policy, non-bridge multiplex denial, no-effect rejection, adoption ambiguity, owner transfer, disruptive update, release ordering, and redaction; Nix eval and host integration cover declared configuration and lifecycle. |
+| Validation | Authority tests cover NIC and exact static/leased address collision, parent-prefix mismatch, scope-link allowed-CIDR exception, unrelated Host overlap refusal, external0 DHCP socket/lease/firewall/readback, categorical eth0 absence, no default-route takeover, role MAC, update/release ordering, and redaction; host integration proves the real lifecycle. |
 | Removal proof | The old direct macvtap spawn path is unreachable unless Core supplies an admitted authority claim in the LaunchTicket. |
 | Implementation state | Planned |
 | Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
@@ -2798,6 +3056,23 @@ On controller binary upgrade:
 ---
 
 ## 26. Tests
+
+### Production workload-to-internet acceptance
+
+`tests/host-integration/network-local-data-plane.nix` is the decisive Provider
+acceptance. It starts from evaluated Nix and the emitted bundle, uses the
+production daemon/Core adapter/broker, boots the net VM plus attached workload
+Guests, and places an RFC 5737 upstream fixture beyond the Host upstream.
+
+TCP, UDP, and ICMP request/reply traffic must traverse workload tap, net-VM
+filter/NAT, uplink bridge, Host filter/re-NAT, and Host upstream. Packet/counter
+evidence proves both source translations. Removing guest NAT, Host re-NAT,
+either forwarding owner, either filter, or the durable Host route must break
+the probe. The same case proves dnsmasq staging and exact sockets, safe
+NM/hosts first bootstrap, external0-only DHCP with eth0 negatives,
+parent-L2 static/allowed-CIDR semantics, unique Guest refs, stable role MACs,
+and Ready gating. A net-VM-only probe, fake port, or assigned status is
+ineligible.
 
 ### 26.1 Workspace policy
 
@@ -2840,10 +3115,11 @@ budget.
 | `schema_roundtrip.rs` | `NetworkSpec` and `NetworkStatus` JSON serialize/deserialize; external `parentInterface`/mode/sharing policy; bounded authority status; all optional fields and enum variants |
 | `state_schema_roundtrip.rs` | Provider descriptor has no stateNamespace for `controller-main`; no Provider state Volume, state mount, identity marker, migration worker, or state-layout principal is emitted; ProviderStateSet query returns empty; bounded operational observations live in status/core Operation ledger and pass redaction/size-bound checks; per-Network config Volumes are excluded from ProviderStateSet (ownerRef mismatch) |
 | `ifname_derive.rs` | IfName derivation determinism; collision detection; 15-byte constraint; all role prefixes |
-| `cidr_overlap.rs` | CIDR overlap matrix: same Network, cross-Network, external CIDR; all boundaries; no-false-positive at adjacent CIDRs |
-| `controller_state.rs` | Ordered reconcile/finalizer: Host-global admission, NM aggregate before links, typed address/guest plan barriers, exactly one dnsmasq Process, route/nft/hosts aggregates, private-capability deletion after FD closure, reverse cleanup, adoption, and drift |
+| `address_derivation.rs` | masked 32-bit subnetIp with `.0`, `.4`, `.252` `/30` vectors; stable role MACs and collision/mismatch refusal |
+| `cidr_overlap.rs` | Network overlap plus parent-L2 static reservation and allowed-CIDR exception boundaries |
+| `controller_state.rs` | Exact admission/order/readiness: safe NM/hosts bootstrap, role MAC, guest plan, staged dnsmasq sockets, external0 DHCP, Host routes/filter/re-NAT/forwarding, dataplane, private cleanup, adoption/drift |
 | `external_nic_authority.rs` | Core-derived Host-global identity; same-/cross-Zone exclusive collision; non-bridge multiplex denial; explicit same-Zone compatible bridge multiplex; categorical cross-Zone bridge multiplex rejection (`external-physical-nic-cross-zone-l2`, no effect); mixed-policy conflict; no effect before admission; owner-proof adoption/ambiguity; owner transfer; update/release ordering; no raw identity in status |
-| `firewall_ownership.rs` | Host and net-VM intents contain no TCP/3240/USBIP rule; device-usbip marker/rule churn does not alter Network digest or `FirewallReady` |
+| `firewall_ownership.rs` | Host aggregate default-deny filter/re-NAT/forwarding order; Network/USBIP projection isolation; foreign preservation |
 | `conformance.rs` | Provider toolkit black-box conformance suite; descriptor validation; ResourceType schema fingerprint |
 | `fault_injection.rs` | `NetworkEffectPort` returns each `EffectError` variant; `DeletePersistentTap` transient/generation/ownership errors have exact retry/terminal classification; each step fails independently; reconcile context has no broker socket; provider crate has no broker import |
 | `metrics_labels.rs` | Every metric descriptor uses only closed semantic labels; exact absence of `vm`, `zone`, `zone_id`, `zone_uid`, `network`, and resource-name-derived keys; Network-name canary absent from emitted labels; `d2b.zone` retained as an OTEL resource attribute |
@@ -2852,13 +3128,14 @@ budget.
 
 | Test file | Coverage | Runner |
 | --- | --- | --- |
-| `host_fabric.rs` | Typed address/route operations; durable bridge/route markers; aggregate nftables/NM/hosts composition with sibling/device/foreign preservation; tap generation fences; IPv6 and MTU readback | `make test-integration` (container) |
+| `host_fabric.rs` | Typed address/routes and Host forwarding/filter/re-NAT; durable markers; first NM/hosts bootstrap and crash recovery; sibling/device/foreign preservation; MTU | `make test-integration` (container) |
 | `guest_lifecycle.rs` | net-VM Guest create/delete; private LaunchTicket attachment and Host-global vsock resolution; systemArtifactId binding | `make test-host-integration` |
 | `agent_reload.rs` | Agent `ApplyPlan()` strict decode; address, route, forwarding, filter, and NAT order/readback; digest and generation match | `make test-host-integration` |
+| `dnsmasq_lifecycle.rs` | mandatory eth1 config/name ignore; candidate preflight; stop/terminal/start; LKG recovery; actual UDP/67 UDP/53 TCP/53 sockets | `make test-host-integration` |
 | `mdns_reflector.rs` | mDNS reflector Process lifecycle; create when mdns.enable; delete on Network delete | `make test-integration` (container) |
 | `delete_sequence.rs` | Reverse cleanup: FD closure, private-capability consume, Process/Guest/Volume deletion, aggregate contribution removal, marked route/address/bridge deletion, then Host-global reservation release | `make test-host-integration` |
-| `external_nic_lifecycle.rs` | Validated DHCP/static IPv4 and forwards; fake parent claim; child-only MTU; typed DNAT/NAT ordering; update drain/reacquire; release after macvtap close | `make test-host-integration` |
-| `tests/host-integration/network-local-data-plane.nix` | Evaluated Nix to production daemon/Core/broker/net-VM/attached workload Guest; DHCP, DNS, egress, MTU, foreign-byte preservation, durable restart/adoption/delete, and exact four-case east-west matrix | `make test-host-integration` |
+| `external_nic_lifecycle.rs` | parent-L2 static/lease authority, allowed-CIDR exception, external0-only DHCP socket/firewall/readback, eth0 negatives, child MTU, typed DNAT/NAT, release | `make test-host-integration` |
+| `tests/host-integration/network-local-data-plane.nix` | Full TCP/UDP/ICMP workload-to-RFC5737-upstream path through guest NAT and Host re-NAT, DHCP/DNS/socket readiness, removal negatives, aggregates, and four-case matrix | `make test-host-integration` |
 
 ### 26.4 Eval tests (Layer-1, `tests/unit/nix/cases/`)
 
@@ -2866,9 +3143,9 @@ budget.
 | --- | --- |
 | `network-spec-eval.nix` | `d2b.zones.dev.resources.work-net` Nix option round-trip; `netVmSystemArtifactId` required field; artifact type check |
 | `network-cidr-overlap-eval.nix` | Host-wide declared cross-Zone CIDR overlap assertion |
-| `net-vm-network.nix` | Current `lib.mkForce` DHCP neutralizer and full MTU propagation |
+| `net-vm-network.nix` | Current `lib.mkForce`, MTU, stable role mapping, and masked `.0`/`.4`/`.252` subnetIp vectors |
 | `network-east-west-eval.nix` | Both false defaults and all four Network/site combinations; true/false refuses |
-| `network-external-ipv4-eval.nix` | DHCP/static shape, usable gateway, attached forward target, unique listener, and CIDR disjointness |
+| `network-external-ipv4-eval.nix` | parent-L2 static reservation/allowed-CIDR semantics, external0-only DHCP, attached target, unique listener, and unrelated CIDR refusal |
 | `process-sandbox-netns.nix` | Agent and dnsmasq Process sandbox: `namespaceClasses: []` → inherits Guest netns; no capabilityClass on host |
 | `net-vm-artifact-id-eval.nix` | `net-vm-base` artifact ID format; `nixos-system` type; no path separator |
 | `user-no-managed-by-eval.nix` | `User/net-local-controller` spec contains no `managedBy`; `ownerRef` is in metadata |

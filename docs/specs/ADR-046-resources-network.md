@@ -133,22 +133,56 @@ Host-global state independently.
 - One Host-global NetworkManager projection and one Host-global `/etc/hosts`
   projection aggregate all active Network contributions. Each broker apply
   replaces only the single `# d2b-managed begin` / `# d2b-managed end` region,
-  preserves every byte outside it, and refuses missing, nested, duplicate, or
-  foreign markers. Removing one Network recomputes the aggregate and cannot
-  erase a sibling Network.
+  preserves every byte outside it, and after first ownership refuses missing,
+  nested, duplicate, or foreign markers. Removing one Network recomputes the
+  aggregate and cannot erase a sibling Network.
+- One Host-global IPv4 dataplane owner aggregates typed
+  `HostForwardingContribution`, `HostFilterContribution`, and
+  `HostRenatContribution` values from every active Network. It installs the
+  default-deny filter and re-NAT projections before enabling d2b-owned IPv4
+  forwarding. Teardown disables forwarding first when d2b owns the setting and
+  the last contribution is removed, then removes filter/re-NAT projections.
+  A pre-enabled foreign `net.ipv4.ip_forward` is observed but never claimed or
+  restored by d2b.
 
 NetworkManager reload happens after its aggregate block is durable and before
 new d2b links are created. The `/etc/hosts` aggregate is installed only after
 addresses are admitted and resolved. systemd-networkd remains detection-only;
 d2b never writes its configuration.
 
+#### First-ownership marker bootstrap
+
+Missing markers are valid only for the first transition from an unowned
+surface. Under the surface's ordered OFD lock, the broker:
+
+1. opens the fixed path with anchored no-follow resolution and verifies file
+   type, owner, mode, and non-world-writable parents;
+2. requires no begin marker, end marker, partial marker, or durable ownership
+   record;
+3. records `Preparing` with the preimage digest and trusted ownership ID in the
+   broker-resolved ADR 0034 journal;
+4. appends one empty begin/end block to `/etc/hosts`, or creates/appends the
+   block in `00-d2b-unmanaged.conf`, preserving the complete preimage bytes;
+5. atomically replaces and fsyncs the file and parent directory, verifies the
+   resulting digest, then commits the journal record as `Owned`.
+
+Restart may finish a `Preparing` transition only when the live preimage or
+postimage digest exactly matches the journal. A marker without its record, a
+record without the expected marker, duplicate/partial/nested markers, or any
+byte mismatch is `host-projection-bootstrap-conflict` and is preserved without
+mutation. After ownership is established, a missing marker is always a
+conflict. Removing the final Network writes an empty owned block and retains
+the record; only explicit Provider removal may relinquish ownership after the
+same exact-marker check.
+
 ### Typed effects and ordered realization
 
 No provider-authored command, nft script, route string, interface name,
 ownership marker, or host path crosses the effect boundary. The canonical
 semantic inputs are bounded typed `LinkIntent`, `AddressIntent`,
-`RouteIntent`, `ForwardingIntent`, `NatIntent`, `FilterIntent`, and
-`HostProjectionContribution` values. Core resolves them to private
+`RouteIntent`, `ForwardingIntent`, `NatIntent`, `FilterIntent`,
+`HostForwardingContribution`, `HostFilterContribution`,
+`HostRenatContribution`, and `HostProjectionContribution` values. Core resolves them to private
 bundle-backed broker operations; the net-agent resolves the guest portion
 inside the net VM. Every mutation has typed readback and a generation fence.
 
@@ -171,10 +205,13 @@ Reconcile uses this order:
 7. Start exactly one owned dnsmasq Process after guest address and route
    readiness. It reads the committed config Volume and must reach
    `dnsmasq-bound`.
-8. Install the Host route only after guest routes and dnsmasq are ready, then
-   apply the composed Host nftables and `/etc/hosts` projections.
+8. Install the Host route only after guest routes and dnsmasq are ready. Apply
+   aggregate Host filter/re-NAT, enable or observe IPv4 forwarding, then apply
+   the composed `/etc/hosts` projection.
 9. Mark attachments and the Network Ready only after MTU, isolation, address,
-   route, forwarding, NAT/filter, dnsmasq, and Host projection readback agree.
+   guest and Host routes, aggregate NetworkManager/hosts, agent plan,
+   forwarding, filter, re-NAT/NAT, dnsmasq sockets, and the attached-Guest
+   dataplane probe all agree.
 
 Delete reverses dependency order. It removes Host projections and routes before
 addresses and links, releases each private attachment only after its VMM FD is
@@ -310,7 +347,7 @@ spec:
   # --- DHCP/DNS ---
   dhcp:
     domain: null          # optional dnsmasq domain name for the LAN
-    ignoreClientNames: true  # prevents workloads spoofing hostnames
+    ignoreClientNames: true  # mandatory; false is rejected
     # dhcp-authoritative is always on. DHCP pool: lanCidr.251-254 (unreserved).
     # Static reservations derive from spec.attachments.
 
@@ -376,15 +413,17 @@ status:
 
 ### AttachmentSpec (inline in NetworkSpec)
 
-Each entry reserves one address and MAC on the LAN bridge for a Guest or Host:
+Each entry reserves one address and MAC on the LAN bridge for exactly one
+same-Zone Guest. `executionRef` values and indices are each unique within the
+Network; Host resources are not attachment-table entries.
 
 ```yaml
 executionRef: Guest/corp-vm
 index: 10
 # index: 2..250; 1 is reserved for the net VM's LAN interface.
-# Uniqueness within the Network is enforced at validateSpec time.
+# Both index and executionRef uniqueness are enforced at validateSpec time.
 mac: null
-# null = derive deterministically from (networkName, index) using mkMac.
+# null = derive the stable workload role MAC from Network UID, Guest UID, and index.
 # A fixed value must be a valid unicast MAC in colon notation.
 # Indices are stable across reconcile cycles; changing an index
 # changes both the DHCP reservation and the tap IfName.
@@ -400,9 +439,41 @@ Addresses:
 | Workload IP for attachment at index N | `lanCidr.N` |
 | DHCP dynamic pool | `lanCidr.251`-`lanCidr.254` |
 
-The `subnetIp` formula extracts the first three octets of the CIDR base and
-appends the host ordinal, preserving the v3-baseline `subnetIp` helper in
-`nixos-modules/lib.nix` line 399.
+`subnetIp(cidr, hostOrdinal)` uses masked 32-bit IPv4 arithmetic, not string
+octet replacement:
+
+```text
+address   = ipv4_to_u32(cidr.address)
+mask      = (0xffffffff << (32 - prefix)) & 0xffffffff
+network   = address & mask
+broadcast = network | (~mask & 0xffffffff)
+candidate = checked_add_u32(network, hostOrdinal)
+require network < candidate && candidate < broadcast
+return u32_to_ipv4(candidate)
+```
+
+Prefix zero uses mask zero without a 32-bit shift. Overflow, the network
+address, and the broadcast address are rejected. The `/30` vectors are
+mandatory: `.0/30` yields hosts `.1` and `.2`; `.4/30` yields `.5` and `.6`;
+`.252/30` yields `.253` and `.254`. This corrects the old first-three-octets
+shortcut, which produced wrong results for nonzero `/30` bases.
+
+### Stable role MACs
+
+Every d2b-created NIC has one stable locally administered unicast role MAC.
+Core derives the low 40 bits from
+`SHA-256("d2b-network-role-mac/v1" || Network UID || role ||
+optional Guest UID || optional attachment index)` and prefixes octet `02`.
+Roles are exactly `net-vm-uplink`, `net-vm-lan`, `workload-lan`, and
+`external`. A caller-supplied attachment MAC, when allowed by the base schema,
+replaces only that workload role value and enters the same Host-global
+collision admission.
+
+The VMM, generic net-VM network units, net-agent, dnsmasq, and external DHCP
+Process all resolve `eth0`, `eth1`, and `external0` from these stable role MACs
+and verify the observed mapping before effects. A missing, duplicated, or
+mismatched role MAC is `network-role-mac-mismatch` and performs no address,
+DHCP, route, forwarding, filter, or NAT mutation.
 
 ### ExternalAttachmentSpec (inline in NetworkSpec)
 
@@ -471,9 +542,16 @@ Both non-null is also rejected.
 External IPv4 and forwarding validation is fail-closed:
 
 - DHCP requires `address = null`, `gateway = null`, and `dns = []`.
+- DHCP is an `external0`-role lifecycle only. It may not emit, start, bind,
+  firewall, or accept a lease for the primary `eth0` role.
 - Static mode requires a canonical IPv4 CIDR, a usable host address, and a
   gateway in the same subnet. The address and gateway must differ and neither
   may be the network or broadcast address.
+- The static prefix must match exactly one trusted IPv4 prefix observed on the
+  resolved parent interface. Core acquires an
+  `external-parent-l2-address/v1` Host-global reservation for the exact static
+  address before VMM spawn. The address must not equal a Host address, another
+  reservation, or an address already observed in use on that parent L2.
 - Every static DNS entry is a validated IPv4 address. The list remains bounded
   by the canonical base schema.
 - `targetRef` must resolve to exactly one Guest in this Network's
@@ -481,9 +559,13 @@ External IPv4 and forwarding validation is fail-closed:
   address in `lanCidr`; an arbitrary LAN address is not accepted.
 - `(protocol, listenPort)` is unique within the external attachment. Both
   ports are nonzero 16-bit values.
-- Every `sourceCidrs` and `egress.allowedCidrs` entry is canonical, bounded,
-  and disjoint from every Host-global d2b Network CIDR and the Host's observed
-  non-d2b inventory.
+- Every `sourceCidrs` and `egress.allowedCidrs` entry is canonical and bounded.
+  It remains disjoint from all d2b LAN/uplink CIDRs and all unrelated Host
+  inventory. An `egress.allowedCidrs` entry may overlap the resolved parent's
+  own L2 prefix only as an explicit parent-L2 reachability opt-in; it does not
+  authorize any other Host CIDR. Parent-L2 destinations use a scope-link route;
+  off-link allowed CIDRs use the validated static/DHCP gateway. Host addresses
+  on the parent L2 remain blocked.
 
 Examples use RFC 5737 ranges for documentation-only external addresses.
 
@@ -621,21 +703,33 @@ externalAttachment:
 | --- | --- |
 | `FabricReady` | Host bridges and tap dispatch rules are present and correct |
 | `NetVmReady` | Owned net-VM Guest is Ready per its own status |
-| `DhcpReady` | dnsmasq is bound on the LAN bridge IP and DHCP reservations match spec |
+| `AgentReady` | Net-agent applied and read back the exact address/route/forward/filter/NAT plan generation |
+| `DhcpReady` | One dnsmasq Process has exact eth1 UDP/67, UDP/53, TCP/53 sockets, mandatory client-name ignore, and matching reservations |
 | `FirewallReady` | nftables `inet d2b` table is applied and digest matches |
+| `HostForwardingReady` | Aggregate Host IPv4 forwarding ownership/readback matches |
+| `HostFilterReady` | Aggregate Host forwarding filter projection and digest match |
+| `HostRenatReady` | Aggregate Host re-NAT projection and digest match |
+| `HostRoutesReady` | Durable marked Host route aggregate matches |
+| `NmUnmanagedReady` | Host-global NetworkManager marker block is owned, current, durable, and reloaded |
+| `HostsReady` | Host-global `/etc/hosts` marker block is owned and current with foreign bytes preserved |
+| `DataPlaneReady` | An attached same-Zone Guest completed DHCP/DNS and a full workload-to-upstream round trip through guest NAT plus Host re-NAT |
 | `CidrConflict` | No CIDR overlap detected with Host-global Networks or the Host resource's network inventory |
 | `ExternalNicAuthorityReady` | Core admitted or adopted the Host-global physical-NIC authority claim; absent external attachments report `not-required` |
-| `ExternalAttachmentReady` | External macvtap interface is up and net VM external0 is configured |
+| `ExternalAttachmentReady` | External macvtap is up and static/DHCP external0 lifecycle, firewall, routes, lease/socket readback, and parent-L2 reservation match |
 | `ReconcileError` | Latest reconcile attempt produced a retryable or terminal error |
 | `ConfigVolumeReady` | Owned config Volume is Ready and contains current configuration; guest-agent has applied it |
 | `NetworkDraining` | Network deletion requested; owned resources and attachments are being removed |
 
 Phase rules:
 
-- `Ready`: `FabricReady`, `NetVmReady`, `DhcpReady`, `FirewallReady`, and
-  `ConfigVolumeReady` are all True; no `CidrConflict`; when an external
-  attachment is configured, `ExternalNicAuthorityReady` and
-  `ExternalAttachmentReady` are also True.
+- `Ready`: `FabricReady`, `NetVmReady`, `AgentReady`, `DhcpReady`,
+  `FirewallReady`, `HostForwardingReady`, `HostFilterReady`,
+  `HostRenatReady`, `HostRoutesReady`, `NmUnmanagedReady`, `HostsReady`,
+  `DataPlaneReady`, and `ConfigVolumeReady` are all True; no `CidrConflict`.
+  When an external attachment is configured, `ExternalNicAuthorityReady` and
+  `ExternalAttachmentReady` are also True. A Network with no Ready attached
+  Guest remains `Pending/DataPlaneReady=False/attached-guest-probe-required`;
+  empty attachments can stage fabric but cannot establish Ready.
 - `Degraded`: fabric is present but at least one condition is impaired; workloads
   may be running with reduced capability.
 - `Failed`: CIDR conflict, `external-physical-nic-conflict`, or another terminal
@@ -826,7 +920,7 @@ spec:
       createPolicy: create-if-absent
       repairPolicy: exact-owner
       cleanupPolicy: owner-controlled
-    - path: "dnsmasq.conf"           # DHCP reservations, forwarders, domain config
+    - path: "dnsmasq.conf"           # eth1-only DHCP/DNS, mandatory name ignore
       type: file
       ownerRef: User/net-local-controller
       groupRef: User/net-local-controller
@@ -1009,7 +1103,8 @@ broker's typed effect interface:
 | `CreateBridge` / `DeleteBridge` | Present preview broker ops | Create/delete only durable-marked bridges with MTU and readback; never cascade tap deletion |
 | `ReconcileNetworkAddress` | **New closed broker op** | Apply/remove a typed Host address and verify readback; accepts no command string |
 | `ReconcileNetworkRoutes` | **New closed broker op** | Apply the Host-global typed route aggregate with durable protocol/record ownership |
-| `ApplyNftablesProjection` | Present preview closed op, invoked only by Host-global dispatcher | Apply/remove one composed ownership projection; preserve sibling/device/foreign markers |
+| `ReconcileHostIpv4Forwarding` | **New closed broker op** | Enable/disable only d2b-owned aggregate forwarding after/before filter and re-NAT ordering; preserve foreign state |
+| `ApplyNftablesProjection` | Present preview closed op, invoked only by Host-global dispatcher | Apply/remove typed aggregate Host filter and re-NAT projections plus Network/device projections; preserve sibling/device/foreign markers |
 | `ApplyNmUnmanaged` | Existing closed op, invoked once per Host aggregate | Replace one marker-delimited aggregate and preserve foreign bytes |
 | `ApplySysctl` | `d2b_contracts::broker_wire::ApplySysctlRequest`; `d2b-host/src/netlink.rs` | Per-bridge IPv6 suppression defense-in-depth (re-applied after networkd restart or sysctl drift) |
 | `CreatePersistentTap` | Existing closed broker op | Create/adopt the persistent tap for an opaque attachment realization |
@@ -1071,16 +1166,35 @@ generic nixos-system artifact declares no dnsmasq service.
 Key dnsmasq invariants preserved from `nixos-modules/net.nix` lines 302-441,
 now encoded in the controller-rendered `dnsmasq.conf` Volume entry:
 
-- `bind-interfaces = true` binds only to `eth1` (LAN interface);
-- `dhcp-ignore-names = true` prevents hostname spoofing;
+- `interface=eth1` is mandatory and names the verified net-VM LAN role;
+- `bind-interfaces` is mandatory; no wildcard, `eth0`, or `external0` listener
+  is allowed;
+- `dhcp-ignore-names` is mandatory. The canonical
+  `dhcp.ignoreClientNames` field may only be true; false is
+  `network-spec-invalid` with remediation to remove the override;
 - static DHCP host reservations are derived from `spec.attachments[]`;
 - DHCP dynamic pool covers `lanCidr.251`-`lanCidr.254`;
 - DNS forwarders are set from `spec.dns.forwarders`;
 - the dnsmasq Process runs under the dedicated system user with hardened
   confinement (preserving the hardening from net.nix lines 363-441).
 
-The `DhcpReady` condition is set by the network-local controller observing the
-dnsmasq Process status and its `dnsmasq-bound` readiness predicate.
+Config changes use a staged restart:
+
+1. write and syntax-validate the candidate config while the old Process keeps
+   serving;
+2. wait for the new typed address/route/filter/NAT plan to be ready;
+3. stop the old dnsmasq Process and require terminal proof before starting the
+   same Process identity at the new generation;
+4. read the Guest netns socket table and require actual `eth1` listeners on
+   UDP/67, UDP/53, and TCP/53, with no DNS/DHCP listener on `eth0` or
+   `external0`;
+5. on failure, start the last-known-good config within the bounded restart
+   deadline, set `DhcpReady=False/dnsmasq-socket-readback-failed`, and never
+   report the new generation Ready.
+
+`DhcpReady` is true only after the Process is Ready, the exact three socket
+ports pass role-bound readback, reservations match, and an attached Guest
+completes one DHCP renewal plus DNS query.
 
 ### Firewall and NAT lifecycle
 
@@ -1117,6 +1231,23 @@ projection containing only rules owned by that Network UID. USBIP-owned chains,
 rules, and ownership markers are excluded, so USBIP attach/detach cannot create
 false Network drift. Network-local compares only this ownership-scoped digest
 on each observe cycle.
+
+The Host-global dataplane projection additionally composes:
+
+- typed IPv4 forwarding ownership for all active Network uplink CIDRs;
+- typed filter rules that admit only established/related return traffic and
+  net-VM-uplink-to-trusted-upstream forwarding while retaining default deny;
+- typed re-NAT rules that translate the net VM's already NATed uplink source to
+  the Host upstream address selected from trusted Host route inventory.
+
+The Host dispatcher resolves the upstream role and addresses privately. No
+Provider supplies an upstream IfName, sysctl key, nft text, or SNAT address.
+It installs filter and re-NAT first, verifies exact owned-rule readback, and
+only then enables d2b-owned IPv4 forwarding. `HostForwardingReady`,
+`HostFilterReady`, and `HostRenatReady` each carry their own digest/readback;
+one cannot substitute for another. Removal disables d2b-owned forwarding
+before deleting the last filter/re-NAT projection. Foreign forwarding state and
+foreign nftables rules remain untouched.
 
 **Net VM side** (typed plan delivered through the config Volume):
 
@@ -1164,6 +1295,27 @@ When `spec.externalAttachment` is non-null, the network-local controller:
    address, route, and forwarding readback.
 5. Egress CIDRs enter typed filter and route effects. The d2b-created macvtap
    child receives the effective MTU; d2b never changes its physical parent.
+
+For `ipv4.method = dhcp`, the controller creates exactly one conditional
+`Process/net-<networkName>-external-dhcp`. Its typed template receives only the
+`external` role; the Process Provider resolves and verifies that role as
+`external0` from the stable MAC. The template has no caller-supplied interface
+argument and must bind its client socket to `external0`.
+
+The guest filter plan admits DHCP client traffic only as UDP/68 to UDP/67
+outbound and UDP/67 to UDP/68 inbound on `external0`. It installs an explicit
+DHCP-client drop for `eth0`; any DHCP client process, socket, lease, address,
+route, DNS value, or firewall accept on `eth0` is
+`external-dhcp-primary-uplink-forbidden`. `external0` DHCP never replaces the
+primary `eth0` default route. It contributes only the leased parent-L2 address,
+gateway, DNS data, and routes for explicit `egress.allowedCidrs`.
+
+`ExternalAttachmentReady` requires the Process Ready state, an actual
+external0-bound UDP/68 socket while acquiring/renewing, a current lease whose
+address and gateway satisfy the trusted parent-L2 semantics, exact route/filter
+readback, and zero DHCP client socket/rule/lease on `eth0`. Update/delete stops
+the Process and observes terminal state before closing the macvtap FD or
+releasing the parent-L2 address reservation.
 
 Before step 1, Core resolves `parentInterface` against trusted Host inventory
 and admits the Host-global `external-physical-nic/v1` authority claim. No
@@ -1307,8 +1459,9 @@ the gap for observed and concurrently created state.
 | `lanCidr` ↔ `uplinkCidr` | Must not overlap within the same Network |
 | Any Network `lanCidr` or `uplinkCidr` ↔ any other Network CIDR | Must not overlap anywhere on the Host |
 | Any Network CIDR ↔ Host resource network inventory | Must not overlap |
-| `externalAttachment.egress.allowedCidrs` ↔ any Host-global Network CIDR or Host inventory CIDR | Must not overlap |
+| `externalAttachment.egress.allowedCidrs` ↔ Network/Host inventory | Must not overlap any d2b Network or unrelated Host CIDR; explicit overlap with the resolved parent's own L2 prefix is the sole exception |
 | Attachment `index` | 2-250 inclusive; unique within the Network |
+| Attachment `executionRef` | Must resolve to a Guest in the same Zone; unique within the Network |
 
 CIDR overlap uses the same two-prefix IPv4 arithmetic as `cidrOverlaps` in
 `nixos-modules/lib.nix` lines 429-462: two CIDRs overlap if and only if their
@@ -1326,7 +1479,8 @@ Validation and admission run at:
    inventory and all Zones, then durably reserves the exact CIDRs before any
    effect. A concurrent create has exactly one winner.
 
-The same CIDR rules apply to `externalAttachment.egress.allowedCidrs` entries.
+`externalAttachment.egress.allowedCidrs` follows the parent-L2 exception and
+otherwise the same Host-global disjointness rules.
 A port-forward `sourceCidrs` entry must not overlap a Host-global Network CIDR
 (prevents accidental cross-env routing).
 
@@ -1416,14 +1570,16 @@ The network-local controller implements the full reconciliation contract from
 
 ### Reconcile
 
-1. Validate the one canonical base schema, external IPv4 and forward targets,
-   attachment indices, and the two east-west inputs.
+1. Validate the one canonical base schema, unique same-Zone Guest attachment
+   refs/indices, parent-L2 external IPv4/forward targets, mandatory
+   client-name ignore, and the two east-west inputs.
 2. After `CommittedRevisionProof`, atomically acquire the Host-global CIDR,
    derived-name, vsock-CID, and external-NIC reservations. A failed reservation
    performs no effect.
 3. Publish this Network's desired NetworkManager contribution. The Host-global
-   aggregate owner applies the complete marker-delimited projection and reloads
-   NetworkManager before link creation.
+   owner safely bootstraps first ownership or applies the complete
+   marker-delimited projection, fsyncs it, and reloads NetworkManager before
+   link creation.
 4. Through typed effect intents, create or adopt both marked bridges down,
    propagate MTU, apply bridge flags and IPv6 suppression, verify readback, and
    bring them up. Assign only the typed Host uplink address at this stage.
@@ -1436,16 +1592,19 @@ The network-local controller implements the full reconciliation contract from
    Attach the read-only Volume only after both resources are Ready.
 7. Create one owned net-agent Process. It applies and reads back guest
    addresses, routes, IPv4 forwarding, filter rules, and NAT in that order.
-   Create exactly one separate owned dnsmasq Process only after address and
-   route readiness. Create the optional mDNS Processes when requested.
-8. After dnsmasq reports `dnsmasq-bound`, publish the typed Host-route,
-   nftables, and `/etc/hosts` contributions. Their Host-global aggregate owners
-   apply complete desired projections while preserving foreign bytes and
-   ownership markers.
+   Stage the one dnsmasq Process restart and require actual eth1 UDP/67,
+   UDP/53, and TCP/53 socket readback. When external DHCP is selected, start
+   its conditional Process only after external0 role verification and require
+   zero eth0 DHCP state. Create optional mDNS Processes when requested.
+8. Publish the durable typed Host route and aggregate Host filter/re-NAT
+   contributions. Verify them, then enable/observe aggregate Host IPv4
+   forwarding. Safely bootstrap or update the aggregate `/etc/hosts`
+   projection after address resolution.
 9. For each attached workload Guest, require LaunchTicket FD consumption, NIC
-   MTU readback, DHCP or reserved-address reachability, and the requested
-   isolation state. Removed attachments wait for VMM FD closure before the
-   private handle is consumed by generation-fenced tap deletion.
+   MTU readback, DHCP or reserved-address reachability, DNS, requested
+   isolation, and a full upstream round trip through guest NAT and Host re-NAT.
+   Removed attachments wait for VMM FD closure before the private capability is
+   consumed by generation-fenced tap deletion.
 10. Commit the child-resource batch and layered status only after every
     dependency/readback barrier required for that phase holds.
 
@@ -1464,6 +1623,14 @@ The controller declares an observe interval for external drift detection:
   every device-usbip ownership marker; that Provider owns USBIP drift/status.
 - Check bridge IPv6 sysctl values against expected. If drift, queue reconcile.
 - Check bridge isolation flags via broker readback. If drift, queue reconcile.
+- Read aggregate Host forwarding/filter/re-NAT, durable Host routes,
+  NetworkManager, and hosts projection generations/digests. Any missing
+  readiness owner or marker drift clears the matching condition.
+- Read the applied agent plan generation and actual dnsmasq socket ports.
+- For external DHCP, verify the external0-only client socket, lease, address,
+  routes, and firewall plus the categorical absence of eth0 DHCP state.
+- Refresh the attached-Guest dataplane probe after any relevant generation or
+  upstream route change.
 - Verify the durable Host-global CIDR, name, and vsock reservations still match
   the exact owner proof.
 - Re-check the external-NIC authority owner proof and compatible holder policy.
@@ -1829,10 +1996,12 @@ uses only derived IfNames and configured CIDRs.
 
 ### INV-NET-007: ExternalAttachment CIDR isolation
 
-**Invariant**: `externalAttachment.egress.allowedCidrs` entries MUST NOT
-overlap with any Zone-local Network CIDR (lan or uplink) or the Host
-resource's network inventory. A DNAT port-forward source CIDR must not
-coincide with a LAN CIDR.
+**Invariant**: `externalAttachment.egress.allowedCidrs` entries do not overlap
+any d2b Network CIDR or unrelated Host inventory. The sole Host-inventory
+exception is an explicit overlap with the resolved parent interface's own L2
+prefix. That exception installs a scope-link route, reserves a static address
+when static mode is used, and continues to block Host addresses. A DNAT
+port-forward source CIDR must not overlap a LAN CIDR.
 
 **Rationale**: an external CIDR overlapping a local CIDR would create an
 ambiguous routing table; traffic to the CIDR would split between the external
@@ -1976,6 +2145,53 @@ same injected port by reference or consuming delete.
 **Test**: compile-fail and API-surface seals reject construction, naming,
 cloning, serialization, conversion, and extraction outside the Core adapter;
 runtime tests prove FD handoff only through LaunchTicket.
+
+### INV-NET-016: subnet arithmetic masks before adding
+
+**Invariant**: `subnetIp` converts IPv4 to a 32-bit integer, masks the network,
+checked-adds the host ordinal, and rejects network/broadcast/overflow. `/30`
+bases ending `.0`, `.4`, and `.252` produce the mandatory vectors in
+AttachmentSpec.
+
+### INV-NET-017: role MAC binding is stable
+
+**Invariant**: every d2b-created NIC uses the domain-separated stable role MAC
+algorithm. All guest effects verify the expected role-to-MAC mapping first;
+no interface name alone establishes a role.
+
+### INV-NET-018: Host forwarding/filter/re-NAT aggregate
+
+**Invariant**: one Host-global owner composes typed forwarding, filter, and
+re-NAT contributions. Filter and re-NAT are installed/read back before
+d2b-owned IPv4 forwarding is enabled; teardown reverses the order. Foreign
+forwarding and nftables state is never claimed.
+
+### INV-NET-019: external DHCP is external0-only
+
+**Invariant**: the conditional external DHCP Process, its UDP/68 socket,
+firewall accepts, lease, address, routes, and DNS values bind only to the
+verified `external0` role. Any corresponding `eth0` state is a terminal
+refusal. DHCP never replaces the primary default route.
+
+### INV-NET-020: first marker ownership is journaled
+
+**Invariant**: first ownership of NetworkManager and hosts marker regions uses
+the `Preparing`/`Owned` journal and exact preimage/postimage recovery above.
+Markers never bootstrap over partial, foreign, or ambiguous state.
+
+### INV-NET-021: attachment and parent-L2 admission is exact
+
+**Invariant**: attachment refs are unique same-Zone Guests. Static external
+addresses hold an exact Host-global parent-L2 reservation; allowed CIDRs use
+the parent-L2 exception only for the resolved parent and otherwise remain
+disjoint.
+
+### INV-NET-022: Ready is observed data-plane readiness
+
+**Invariant**: Network Ready requires current routes, NetworkManager, hosts,
+agent plan, Host forwarding/filter/re-NAT, exact dnsmasq sockets, and an
+attached-Guest dataplane probe. Fabric-only or status-only readiness is
+insufficient.
 
 ## Azure/ACA scope boundary
 
@@ -2236,10 +2452,11 @@ concurrent Host-global state.
 | `isolation.allowEastWest = true` without `d2b.site.allowUnsafeEastWest = true` | eval error with `east-west-site-opt-in-required` remediation |
 | Attachment `index` values are in `[2, 250]` | eval error |
 | Attachment `index` values are unique within each Network | eval error |
-| `attachments[].executionRef` matches `^(Guest\|Host)/[a-z][a-z0-9-]*$` | eval error |
+| `attachments[].executionRef` matches `^Guest/[a-z][a-z0-9-]*$`, resolves in the same Zone, and is unique within the Network | eval error |
+| `dhcp.ignoreClientNames` is exactly true | eval error with remediation to remove the false override |
 | `netVmNameOverride`, if non-null, matches `^[a-z][a-z0-9-]*$` and is not `"launcher"` and does not start with `"sys-"` | eval error |
 | `externalAttachment.portForwards[].targetRef` and `targetIp` are mutually exclusive; both null rejected | eval error |
-| `externalAttachment` IPv4 and forwards satisfy the canonical shape, target membership, port uniqueness, and Host-global CIDR rules | eval error |
+| `externalAttachment` IPv4 and forwards satisfy canonical shape, parent-L2 reservation/allowed-CIDR semantics, target membership, port uniqueness, and Host-global CIDR rules | eval error |
 | Any `{ credentialRef = "..." }` value references a declared `Credential/<name>` resource | eval error |
 | No inline value for a field declared `secret: true` in the Provider schema - enforced by the generated option's `type = lib.d2b.secretOrCredentialRef` type | eval error |
 
@@ -2257,8 +2474,8 @@ concurrent Host-global state.
    records the resolved artifact ID in the bundle for runtime use.
 3. **`attachments[].mac` format**: if non-null, must be a unicast MAC in colon
    notation (`^([0-9a-f]{2}:){5}[0-9a-f]{2}$`, LSB of first octet = 0).
-4. **Cross-Zone `executionRef`**: any `executionRef` pointing outside the
-   current Zone is a build error in v3 initial implementation.
+4. **Guest attachment identity**: every `executionRef` resolves to a Guest in
+   the current Zone, and no Guest appears twice in one Network.
 5. **Host-global admission**: Core atomically reserves every CIDR, derived
    kernel name, and net-VM vsock CID across all Zones assigned to the Host.
    External IPv4 and forwarding targets are revalidated against the committed
@@ -2387,7 +2604,8 @@ Bundle properties:
     };
     egress = {
       enable       = true;
-      allowedCidrs = [ "198.51.100.0/24" ];
+      # Explicit parent-L2 reachability plus one off-link route.
+      allowedCidrs = [ "203.0.113.0/24" "198.51.100.0/24" ];
     };
     portForwards = [
       {
@@ -2434,13 +2652,22 @@ The positive case declares `Guest/acceptance-vm` in
 `Network/acceptance-net.spec.attachments`, boots both Guests, and proves:
 
 - the workload NIC has the derived IPv4 reservation and effective MTU;
-- DHCP and DNS are served by the one owned dnsmasq Process;
-- the workload reaches the permitted egress destination through the typed
-  route, forwarding, and NAT plan;
+- DHCP and DNS are served by the one owned dnsmasq Process with actual eth1
+  UDP/67, UDP/53, and TCP/53 sockets and mandatory client-name ignore;
+- the workload reaches an RFC 5737 upstream fixture through the complete path:
+  workload NIC, LAN bridge, net VM forwarding/filter/NAT, uplink bridge, Host
+  forwarding/filter/re-NAT, and Host upstream;
+- TCP, UDP, and ICMP request/reply traffic succeeds, packet observation proves
+  the workload source becomes the net-VM uplink source and then the Host
+  upstream source, and removing guest NAT, Host re-NAT, either forwarding
+  owner, either filter projection, or the Host route makes the probe fail;
 - Host route, nftables, NetworkManager, and hosts readback match the aggregate
   desired projection while foreign bytes remain byte-identical; and
 - deleting the Network removes only its marked links/routes/projections and
   releases its Host-global reservations.
+
+This synthetic upstream leg is the full workload-to-internet acceptance
+boundary; a net-VM-only ping or status/readback assertion is not equivalent.
 
 The same production boundary runs all four east-west combinations from the
 Version 3 matrix with two attached workload Guests. Only the true/true case
@@ -2449,12 +2676,20 @@ named remediation; the other false-effective cases remain Ready and isolated.
 A fake effect port, empty attachment list, manually assigned Ready status, or
 Network-owned net-VM Guest alone cannot satisfy this acceptance.
 
+The external-DHCP case uses a synthetic parent L2. It proves DHCP discovery,
+renewal, firewall, lease, and socket readback only on `external0`, verifies no
+DHCP client activity or allow rule on `eth0`, and covers static address
+reservation plus the explicit parent-L2 `allowedCidrs` exception. The dnsmasq
+update case proves candidate preflight, stop/terminal/start staging,
+last-known-good recovery, and exact socket-port readiness.
+
 The current eval safety proof remains the root
 `flake.checks.<system>.nix-unit` case
 `tests/unit/nix/cases/net-vm-network.nix`. It must continue to assert that
 `systemd.network.networks."10-eth-dhcp".matchConfig.Type` is not `ether` and
 that `matchConfig.MACAddress` is exactly `00:00:00:00:00:00`, and it must retain
-its MTU propagation cases. The retired standalone
+its MTU propagation cases. The matching subnet helper cases must cover `/30`
+bases ending `.0`, `.4`, and `.252` and compare the masked 32-bit results. The retired standalone
 `tests/net-vm-network-eval.sh` path is not current validation evidence.
 
 ## Generation lifecycle and cleanup contract
@@ -2677,7 +2912,7 @@ resource names appear in these records.
 | Current anchor | `nixos-modules/network.nix` (bridge/NAT/sysctl, 500+ lines), `nixos-modules/net.nix` (net-VM NixOS config, 450 lines), `nixos-modules/options-envs.nix` (`d2b.envs.<env>.*`), `nixos-modules/options-realms-network.nix` (`d2b.realms.<realm>.network.*` mode/cidrs), `nixos-modules/options-vms.nix` (`d2b.vms.<vm>.env` line 944, `d2b.vms.<vm>.index` line 962, `d2b.vms.<vm>.staticIp` deprecated line 974), `nixos-modules/options-site.nix` (`d2b.site.allowUnsafeEastWest` line 48, `d2b.hostLanCidrs` line 382), `nixos-modules/options-realms-workloads.nix` (`d2b.realms.<realm>.workloads.<workload>.networkIndex` line 326), `nixos-modules/host-json.nix` (emits `host.json` `environments[].nftables`, `environments[].ifNameMappings`, `environments[].usbipBusidLocks`), `nixos-modules/processes-json.nix` (emits `processes.json` `ProcessNetworkInterface`/`ProcessMacvtapInterface` per-VM runner), `nixos-modules/lib.nix` (`subnetIp` line 399, `subnetMask` line 408, `mkMac` ~line 60, `cidrOverlaps` lines 429-462), `nixos-modules/index.nix` (netMeta section), `packages/d2b-core/src/host.rs` (`NetEnv` lines 290-328, `VmRuntimeRow` lines 155-167 with `tap`/`bridge`/`net_vm`/`env` fields, `ExternalNetworkPolicy` lines 332-413, `NftablesModel` lines 520-549, `BridgePortFlags`, `TapRole`, `Ipv6SysctlEntry`, `IfNameMapping` lines 242-256), `packages/d2b-core/src/processes.rs` (`ProcessNetworkInterface` lines 98-113, `ProcessMacvtapInterface`), `packages/d2b-contracts/src/broker_wire.rs` (`ApplyNftables`, `ApplyNmUnmanaged`, `ApplyRoute`, `ApplySysctl`, `CreatePersistentTap`, `CreateTapFd`, `SetBridgePortFlags`, `UpdateHostsFile`, `SeedDnsmasqLease`), `packages/d2b-host/src/ifname.rs` (FNV-1a derivation), `packages/d2b-host/src/nftables.rs` (`NftBatch`, `hash_inet_d2b_table`, coexistence policy), `packages/d2b-host/src/bridge_port.rs`, `packages/d2b-host/src/routes.rs`, `packages/d2b-host/src/netlink.rs`, `packages/d2b-host-providers/src/lib.rs` (unwired ADR 0032 runtime/display/substrate provider adapters; no network Provider trait) |
 | Evidence class | The v2 Nix network path and its broker operations are `implemented-and-reachable`. `packages/d2b-contracts/src/v3/network.rs`, `nixos-modules/resources-network.nix`, `packages/d2b-provider-network-local/`, and the newer bridge/projection broker primitives exist, but the Provider controller is not composed through a production Core adapter. Those v3 pieces are `generated-or-eval-contract`, `test-only-or-preview`, or `implemented-but-unwired` as their current call sites show. This Version 3 amendment must not be cited as production reachability. |
 | Behavior retained | `lib.mkForce` 10-eth-dhcp neutralization; bridge isolation (`Isolated=true` default); ADR 0012's exact Network plus Host/site double opt-in; IPv6 suppression at boot and runtime; `cidrOverlaps` arithmetic; `hostBlocklist` defaults; IfName derivation and collision detection; dnsmasq DHCP reservations with `dhcp-ignore-names`; `bind-interfaces`; hardened confinement; nftables ownership markers and coexistence policy; net-VM IPv6 drop; MTU and MSS behavior; macvtap external attachment; DHCP/static IPv4; egress CIDRs, NAT, and validated port forwarding |
-| Required delta | Production Core composition and adapter wiring; atomic Host-global CIDR/name/vsock admission; one canonical base/provider schema; private attachment capability; typed address/route/forwarding/filter/NAT effects and readback; durable bridge/route ownership; Host-global nftables, NetworkManager, and hosts aggregation; one Process-owned dnsmasq lifecycle; MTU propagation; external IPv4/forward validation; and production data-plane acceptance with attached Guests and the four-case double opt-in matrix |
+| Required delta | Production Core composition; masked subnet arithmetic; stable role MACs; atomic Host-global CIDR/name/vsock/parent-address admission; unique same-Zone Guest attachments; private attachment capability; typed guest plus aggregate Host forwarding/filter/re-NAT effects; durable link/routes; safe NM/hosts bootstrap; staged eth1-only dnsmasq sockets; external0-only DHCP; parent-L2 semantics; MTU; and full attached-Guest internet acceptance plus the four-case matrix |
 | Reuse path | Extract `subnetIp`/`mkMac`/`cidrOverlaps` from `lib.nix`; copy IfName/derive/detect_collisions from `ifname.rs`; adapt `NetEnv`/`ExternalNetworkPolicy`/`NftablesModel`/`BridgePortFlags`/`TapRole`/`Ipv6SysctlEntry`/`IfNameMapping` from `host.rs`; extract nftables/bridge-port/routes/netlink modules from `d2b-host`; adapt `net.nix` and `network.nix` into sealed v3 template and controller. `VmRuntimeRow.tap`/`bridge`/`net_vm`/`env` fields (host.rs lines 155-167) become Network attachment status fields. `ProcessNetworkInterface`/`ProcessMacvtapInterface` (processes.rs) migrate to Guest spec under Provider/runtime-cloud-hypervisor (not NetworkSpec). |
 | Replacement/deletion | `nixos-modules/network.nix`, `nixos-modules/net.nix`, `nixos-modules/options-envs.nix`, `nixos-modules/options-realms-network.nix`, `nixos-modules/index.nix` envMeta section removed only after `nixos-modules/resources-network.nix` and Provider/network-local controller pass parity tests; `d2b.envs.*` options removed only after the v3 cutover and consumer migration |
 | Feasibility proof | Existing unit and eval tests prove primitives only. Production reachability and the acceptance matrix remain prospective Wave 6 work. |
