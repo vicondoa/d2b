@@ -249,8 +249,12 @@ pub fn require_adr046_historical_predecessor_at_entry_with_fetch_record(
                 "ADR-046 Wave 6 entry requires verifiable fresh-fetch evidence for origin/v3",
             )
         })?;
-        let _evidence =
-            coordination::read_fresh_fetch_evidence(path, root, repository_roots, &integration_tip)?;
+        let _evidence = coordination::read_fresh_fetch_evidence(
+            path,
+            root,
+            repository_roots,
+            &integration_tip,
+        )?;
     }
     validate_historical_predecessor(
         &ADR046_W6_HISTORICAL_POLICY,
@@ -1481,13 +1485,9 @@ mod tests {
     fn historical_amendment_rejects_accepted_bytes_arriving_from_a_side_parent() {
         let fixture = HistoricalFixture::new("historical-predecessor-side-parent");
         let predecessor = fixture.predecessor_merge_oid.clone();
-        fixture.repository.git(&[
-            "checkout",
-            "--quiet",
-            "-B",
-            "main",
-            &predecessor,
-        ]);
+        fixture
+            .repository
+            .git(&["checkout", "--quiet", "-B", "main", &predecessor]);
         fixture.repository.git(&[
             "checkout",
             "--quiet",
@@ -1499,9 +1499,7 @@ mod tests {
             .repository
             .write(CONSTITUTION_PATH, "constitution 3.1.0\n");
         fixture.repository.commit("side-parent constitution");
-        fixture
-            .repository
-            .git(&["checkout", "--quiet", "main"]);
+        fixture.repository.git(&["checkout", "--quiet", "main"]);
         fixture.repository.write("main-only.txt", "main\n");
         fixture.repository.commit("main integration work");
         fixture.repository.git(&[

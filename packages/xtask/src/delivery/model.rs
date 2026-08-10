@@ -1424,7 +1424,6 @@ impl CandidateMaterial {
                     )));
                 }
             }
-
         }
         Ok(())
     }
