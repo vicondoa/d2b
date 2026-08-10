@@ -847,11 +847,11 @@ fn markdown_json_fences(markdown: &str) -> Vec<MarkdownJsonFence> {
                 body.push_str(line);
                 body.push('\n');
             }
-        } else if let Some((delimiter, length, info)) = markdown_fence(line) {
-            if is_json_fence_info(info) {
-                open_fence = Some((delimiter, length));
-                body.clear();
-            }
+        } else if let Some((delimiter, length, info)) = markdown_fence(line)
+            && is_json_fence_info(info)
+        {
+            open_fence = Some((delimiter, length));
+            body.clear();
         }
     }
     if open_fence.is_some() {
@@ -1347,11 +1347,9 @@ fn feature_local_coordination_contract_rejects_load_bearing_mutations() {
             "mutation unexpectedly passed: {from} -> {to}"
         );
     }
-    let duplicated = tasks.replacen(
-        "```json\n{\n  \"artifact_kind\": \"d2b-feature-local-task-contract\"",
-        "```json\n{\n  \"artifact_kind\": \"d2b-feature-local-task-contract\"",
-        1,
-    ) + "\n```json\n{\"artifact_kind\":\"d2b-feature-local-task-contract\"}\n```\n";
+    let duplicated = format!(
+        "{tasks}\n```json\n{{\"artifact_kind\":\"d2b-feature-local-task-contract\"}}\n```\n"
+    );
     assert!(
         !check_local_coordination_tasks(&duplicated, &graph).is_empty(),
         "duplicate local-task contract unexpectedly passed"
