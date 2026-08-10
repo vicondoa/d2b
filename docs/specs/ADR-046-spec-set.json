@@ -429,7 +429,7 @@
         "ADR-046-telemetry-audit-and-support"
       ],
       "path" : "docs/specs/providers/ADR-046-provider-network-local.md",
-      "sha256" : "29d4d0950867c536fd5f14fe84aa0719e95d4c3320bd600558df2a3e10362cbc",
+      "sha256" : "d3380a659606d8f5667a7c13d1e05f32a372dda1a29236647990bc1e19e0c639",
       "specId" : "ADR-046-provider-network-local",
       "status" : "Accepted",
       "supersedes" : "`nixos-modules/network.nix`, `nixos-modules/net.nix`",
@@ -474,11 +474,11 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/providers/ADR-046-provider-observability-otel.md",
-      "sha256" : "7e0a9d0289694037d33344ef7c88c235661caf92861465b34783a7b75153ba67",
+      "sha256" : "acd0f20d0379493c28a0143323573852057d218028c8f6bc39d1342f2c0cae69",
       "specId" : "ADR-046-provider-observability-otel",
       "status" : "Accepted",
-      "supersedes" : "Version 3 telemetry fields where corrected below; `ProcessRole::OtelHostBridge` / `RunnerRole::OtelHostBridge`; socat-based vsock forwarder in `packages/d2b-host/src/otel_host_bridge_argv.rs`; `packages/d2bd/src/otel_host_bridge_readiness.rs`; hand-rolled per-VM `nixos-modules/components/observability/` pipeline (adapted to per-Zone)",
-      "version" : 4,
+      "supersedes" : "Version 4 prospective authority where corrected below; Version 3 telemetry fields; `ProcessRole::OtelHostBridge` / `RunnerRole::OtelHostBridge`; socat-based vsock forwarder in `packages/d2b-host/src/otel_host_bridge_argv.rs`; `packages/d2bd/src/otel_host_bridge_readiness.rs`; hand-rolled per-VM `nixos-modules/components/observability/` pipeline (adapted to per-Zone)",
+      "version" : 5,
       "workItemPrefixes" : [
         "otel"
       ]
@@ -522,11 +522,11 @@
         "ADR-046-zone-routing"
       ],
       "path" : "docs/specs/providers/ADR-046-provider-runtime-azure-virtual-machine.md",
-      "sha256" : "062eba57e7b69f14029eaaf5096f0ed9df6407a5102f2a3ccded01811199bc45",
+      "sha256" : "2c3a1a3eb1d43fdd25fb73b74c7f3254ed16b4f69879ecf3e92f2c1a00b198db",
       "specId" : "ADR-046-provider-runtime-azure-virtual-machine",
       "status" : "Accepted",
-      "supersedes" : "Version 3 audit/telemetry fields where corrected below; current `InfrastructureProvider` trait (`d2b-realm-provider/src/provider.rs`); `AzureVmForbidden` explicit rejection in `provider_registry.rs`; `AZURE_VM_IMPLEMENTATION_ID` constant; `WorkloadProviderKind::ProviderManaged` paths for Azure VM workloads",
-      "version" : 4,
+      "supersedes" : "Version 4 prospective authority where corrected below; Version 3 audit/telemetry fields; current `InfrastructureProvider` trait (`d2b-realm-provider/src/provider.rs`); `AzureVmForbidden` explicit rejection in `provider_registry.rs`; `AZURE_VM_IMPLEMENTATION_ID` constant; `WorkloadProviderKind::ProviderManaged` paths for Azure VM workloads",
+      "version" : 5,
       "workItemPrefixes" : [
         "azure-vm"
       ]
@@ -548,11 +548,11 @@
         "ADR-046-telemetry-audit-and-support"
       ],
       "path" : "docs/specs/providers/ADR-046-provider-runtime-cloud-hypervisor.md",
-      "sha256" : "00f8442ac7f2f6623c1f6b0a78a6e0467b677d16bde9673490c97bfabb210fd5",
+      "sha256" : "89a48208cdd1ab9346bf237d961954a6101134db1d0c9c32008984184c3a5188",
       "specId" : "ADR-046-provider-runtime-cloud-hypervisor",
       "status" : "Accepted",
       "supersedes" : "`packages/d2b-host/src/runtime_provider.rs` `CloudHypervisorRuntimeProvider`; `packages/d2bd/src/` VM lifecycle paths; `d2b-host-providers` adapter; `ProcessRole::CloudHypervisor`, `ProcessRole::Swtpm`, `ProcessRole::NetVm`; systemd unit `d2b-<vm>-vm.service`; `SwtpmDir` broker op",
-      "version" : 2,
+      "version" : 3,
       "workItemPrefixes" : [
         "ch"
       ]
@@ -601,11 +601,11 @@
         "ADR-046-zone-routing"
       ],
       "path" : "docs/specs/providers/ADR-046-provider-shell-terminal.md",
-      "sha256" : "c74a1137c1785103b903f4916c86ea2f0e95d393056aaed9face2366206a3867",
+      "sha256" : "2122e56aaa9b2eff8b944c444f73b0d462119f63d579627e368e1fc855757d3b",
       "specId" : "ADR-046-provider-shell-terminal",
       "status" : "Accepted",
-      "supersedes" : "Version 2 audit/telemetry fields where corrected below; v1 of this spec; `guestd/src/shell.rs` guest persistent-shell runtime (ADR 0038); `d2b-unsafe-local-helper` shell supervisor and wire protocol v2 (ADR 0044); `ShellOp`/`ShellOpResponse` seqpacket protocol (`d2b-contracts/src/public_wire.rs:1319,1394,1527`)",
-      "version" : 3,
+      "supersedes" : "Version 3 prospective authority where corrected below; Version 2 audit/telemetry fields; v1 of this spec; `guestd/src/shell.rs` guest persistent-shell runtime (ADR 0038); `d2b-unsafe-local-helper` shell supervisor and wire protocol v2 (ADR 0044); `ShellOp`/`ShellOpResponse` seqpacket protocol (`d2b-contracts/src/public_wire.rs:1319,1394,1527`)",
+      "version" : 4,
       "workItemPrefixes" : [
         "sterm"
       ]
@@ -666,11 +666,11 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/providers/ADR-046-provider-system-minijail.md",
-      "sha256" : "d32b960375af14e1c0be33ccfd9b3f2a59306739a42ebee16f7895013146dbea",
+      "sha256" : "29e9c0b20b0811fae0b19946ec231a078846924d13ec3a53711c2fdb4e83a4e8",
       "specId" : "ADR-046-provider-system-minijail",
       "status" : "Accepted",
       "supersedes" : "Current `d2b-priv-broker` SpawnRunner, `d2b-core` minijail profile, and `d2bd` supervisor pidfd/wait paths for minijail-spawned processes",
-      "version" : 2,
+      "version" : 3,
       "workItemPrefixes" : [
         "minijail"
       ]
@@ -686,11 +686,11 @@
         "ADR-046-telemetry-audit-and-support"
       ],
       "path" : "docs/specs/providers/ADR-046-provider-system-systemd.md",
-      "sha256" : "aba5c9a6f060492bf67bf20c82aeaf3e2eeea1dbd67651179e4b2a4f7dfda9cf",
+      "sha256" : "50e1c9ae2a8e57ea0995ed666d21a117325cdd275db40177efaeb43153ed1c15",
       "specId" : "ADR-046-provider-system-systemd",
       "status" : "Accepted",
       "supersedes" : "Current `d2b-unsafe-local-helper` systemd scope runtime; current `d2bd` `supervisor/` VM process management; broker `SpawnRunner` (systemd-owned roles)",
-      "version" : 2,
+      "version" : 3,
       "workItemPrefixes" : [
         "systemd"
       ]
@@ -706,11 +706,11 @@
         "ADR-046-zone-routing"
       ],
       "path" : "docs/specs/providers/ADR-046-provider-transport-azure-relay.md",
-      "sha256" : "fc0f3f687c984778c96aa9341f0485c1a677ef4ae07caea519f5b28127b920ec",
+      "sha256" : "d8fd0c5edc012d2ff0becf70023c173aba902f3b5c0f8bbcc52f372083cad33e",
       "specId" : "ADR-046-provider-transport-azure-relay",
       "status" : "Accepted",
-      "supersedes" : "Version 1 audit/telemetry fields where corrected below; `d2b-provider-relay` gateway-display relay path (`AcaWorkloadProvider` + `RelayProvider` traits in `d2b-realm-provider`); `d2b-gateway-runtime/src/bin/d2b-gateway-relay.rs`; `packages/d2b-provider-relay/src/lib.rs` as a first-party transport surface",
-      "version" : 2,
+      "supersedes" : "Version 2 prospective authority where corrected below; Version 1 audit/telemetry fields; `d2b-provider-relay` gateway-display relay path (`AcaWorkloadProvider` + `RelayProvider` traits in `d2b-realm-provider`); `d2b-gateway-runtime/src/bin/d2b-gateway-relay.rs`; `packages/d2b-provider-relay/src/lib.rs` as a first-party transport surface",
+      "version" : 3,
       "workItemPrefixes" : [
         "transport-relay"
       ]
@@ -730,11 +730,11 @@
         "ADR-046-zone-routing"
       ],
       "path" : "docs/specs/providers/ADR-046-provider-transport-unix.md",
-      "sha256" : "236297f11e037010d882b3a43f7c5e465bed2d6681b14692ddf3f118dfb68609",
+      "sha256" : "e482ee13e0d192f277150f76d6126586378d81fef676d7ef5027459d5ff7f71e",
       "specId" : "ADR-046-provider-transport-unix",
       "status" : "Accepted",
       "supersedes" : "v1 of this dossier (ADR-046-provider-transport-unix v1; incorrect ownership model); `InheritedSocketTransport` SD_LISTEN_FDS path (`packages/d2b-session-unix/src/systemd.rs`)",
-      "version" : 4,
+      "version" : 5,
       "workItemPrefixes" : [
         "transport-unix"
       ]
@@ -772,11 +772,11 @@
         "ADR-046-telemetry-audit-and-support"
       ],
       "path" : "docs/specs/providers/ADR-046-provider-volume-local.md",
-      "sha256" : "17f17a8284fa4a198192bfed3f9feb0ecae9e7045b3c38ea761bd42273f9c197",
+      "sha256" : "7212f712e9308948c6b27cb8f0db61ecd3d483c296ec4dd6c3694f8da0177dac",
       "specId" : "ADR-046-provider-volume-local",
       "status" : "Accepted",
-      "supersedes" : "`d2b-priv-broker/src/ops/{state_dir,store_sync,store_sync_audit,store_sync_export,store_view_farm,store_view_posture,swtpm_dir}.rs`; `d2b-core/src/{storage,sync,storage_lifecycle}.rs` StorageJson/SyncJson contract; `nixos-modules/store.nix` per-VM hardlink farm activation",
-      "version" : 2,
+      "supersedes" : "Version 2 effect, audit, and telemetry authority where corrected below; `d2b-priv-broker/src/ops/{state_dir,store_sync,store_sync_audit,store_sync_export,store_view_farm,store_view_posture,swtpm_dir}.rs`; `d2b-core/src/{storage,sync,storage_lifecycle}.rs` StorageJson/SyncJson contract; `nixos-modules/store.nix` per-VM hardlink farm activation",
+      "version" : 3,
       "workItemPrefixes" : [
         "vl"
       ]
@@ -955,11 +955,11 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/ADR-046-resources-host-guest-process-user.md",
-      "sha256" : "88c1bb7a9895336de3ef165fe9e8347ed3ebe9f8cab5c2d9f0c7c4f0b7b3e752",
+      "sha256" : "6399690a2ae427cdbcc9dff56a47be782fe6e3f925ff40983506edfefd84e05d",
       "specId" : "ADR-046-resources-host-guest-process-user",
       "status" : "Accepted",
       "supersedes" : "Current `ProcessRole`/`VmProcessDag` as the public process model; current Realm workload/unsafe-local/execution DTOs; `WorkloadProviderKind`/`IsolationPosture` posture enums",
-      "version" : 1,
+      "version" : 2,
       "workItemPrefixes" : [
         "exec",
         "user-session"
@@ -974,7 +974,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/ADR-046-resources-network.md",
-      "sha256" : "ad4361923f6263e49f6e2f5917c25ef32174cdd9d900a1797460da35b327ab24",
+      "sha256" : "06937fd0fff7dd271ab132e84d9404661ba2fbeadb2bdb88bf8728424d9e74db",
       "specId" : "ADR-046-resources-network",
       "status" : "Accepted",
       "supersedes" : "`d2b.envs.<env>` and `d2b.realms.<realm>.network` Nix surfaces (v3 reset)",
@@ -1122,11 +1122,11 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/ADR-046-telemetry-audit-and-support.md",
-      "sha256" : "91ba4a062a14ca64a04f8f2948de70a5eec7a9e4f73d249d8d6560a25aafcba8",
+      "sha256" : "0e93d2c59aef74e791d2041853353aba89a5ce9e9c278af9e7b5606e6247d8cb",
       "specId" : "ADR-046-telemetry-audit-and-support",
       "status" : "Accepted",
-      "supersedes" : "Version 2 telemetry/audit authority where corrected below; current `d2bd` hand-rolled Prometheus registry; current daemon/broker/gateway JSONL audit paths",
-      "version" : 3,
+      "supersedes" : "Version 3 prospective authority where corrected below; Version 2 telemetry/audit authority; current `d2bd` hand-rolled Prometheus registry; current daemon/broker/gateway JSONL audit paths",
+      "version" : 4,
       "workItemPrefixes" : [
         "audit",
         "doctor",
