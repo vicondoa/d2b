@@ -205,6 +205,7 @@ pub fn run(args: &[String]) -> Result<WorkflowOutput> {
     let seal_path = state.resolve_artifact_ref(&seal_path);
     let target_path = target_path.map(|path| state.resolve_artifact_ref(&path));
     let (candidate, seal) = open_sealed_candidate(&state, &seal_path)?;
+    super::work_item_state::reject_adr046_w5_mutation(&seal.material, "merge eligibility")?;
     let target = load_target(&candidate, target_path.as_deref())?;
     evaluate_checked(&state, &candidate, &seal, &target, &repository_roots)
 }
@@ -234,8 +235,7 @@ pub(crate) fn evaluate_checked(
     repository_roots: &BTreeMap<String, PathBuf>,
 ) -> Result<WorkflowOutput> {
     super::work_item_state::require_current_wave_merged(&seal.material, repository_roots)?;
-    super::work_item_state::require_prior_waves_merged_for_exit(&seal.material, repository_roots)?;
-    super::work_item_state::require_adr046_w6_historical_predecessor_for_exit(
+    super::work_item_state::require_predecessor_state_for_exit(
         state,
         &seal.material,
         repository_roots,
@@ -263,7 +263,8 @@ pub fn run_capture(args: &[String]) -> Result<WorkflowOutput> {
     // `--seal` chains from a prior stage, so it resolves under the state root.
     // `--target` is the integrator's own out-of-band capture, taken verbatim.
     let seal_path = state.resolve_artifact_ref(&seal_path);
-    let (candidate, _seal) = open_sealed_candidate(&state, &seal_path)?;
+    let (candidate, seal) = open_sealed_candidate(&state, &seal_path)?;
+    super::work_item_state::reject_adr046_w5_mutation(&seal.material, "merge target capture")?;
     let target: MergeTarget = read_json_file(&target_path, "merge target")?;
     capture(&candidate, target)
 }

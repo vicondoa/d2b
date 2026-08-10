@@ -242,6 +242,7 @@ pub fn run(args: &[String]) -> Result<WorkflowOutput> {
 
 fn run_with_root(request: &ImportRequest, root: &StateRoot) -> Result<WorkflowOutput> {
     let supplied = snapshot::read_file(&request.snapshot_path)?;
+    super::work_item_state::reject_adr046_w5_mutation(&supplied.material, "evidence import")?;
     if let Some(expected) = &request.candidate
         && expected != &supplied.candidate_id
     {

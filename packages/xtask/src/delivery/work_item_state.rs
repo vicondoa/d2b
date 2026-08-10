@@ -123,6 +123,37 @@ pub fn require_prior_waves_merged_for_exit(
     validate_state(&material.wave, Gate::Exit, &graph, &work_items)
 }
 
+/// Applies the ordinary predecessor-state gate, with the one accepted
+/// historical predecessor disposition integrated into that same decision.
+///
+/// The historical state is validated first. Only after that exact check passes
+/// may the ordinary prior-item scan treat the disposed predecessor phase as
+/// satisfied without rewriting its retained work-item states.
+pub fn require_predecessor_state_for_exit(
+    state_root: &StateRoot,
+    material: &CandidateMaterial,
+    repository_roots: &BTreeMap<String, PathBuf>,
+) -> Result<()> {
+    let disposed_wave = if is_adr046_w6(material) {
+        require_adr046_w6_historical_predecessor_for_exit(state_root, material, repository_roots)?;
+        Some(5)
+    } else {
+        None
+    };
+    let wave = wave_number(&material.wave)?;
+    if wave == 0 {
+        return Ok(());
+    }
+    let (graph, work_items) = load_bound_state(material, repository_roots)?;
+    validate_state_with_disposition(
+        &material.wave,
+        Gate::Exit,
+        &graph,
+        &work_items,
+        disposed_wave,
+    )
+}
+
 /// Validates the one-time ADR-046 Wave 5 historical predecessor disposition.
 ///
 /// The ordinary work-item gate proves that every prior item is marked
@@ -144,6 +175,25 @@ pub fn require_adr046_w6_historical_predecessor_for_exit(
     material: &CandidateMaterial,
     repository_roots: &BTreeMap<String, PathBuf>,
 ) -> Result<()> {
+    require_adr046_w6_historical_predecessor(state_root, material, repository_roots, false)
+}
+
+/// Entry variant: the candidate base must be the fetched integration tip
+/// before a snapshot can authorize implementation.
+pub fn require_adr046_w6_historical_predecessor_at_entry(
+    state_root: &StateRoot,
+    material: &CandidateMaterial,
+    repository_roots: &BTreeMap<String, PathBuf>,
+) -> Result<()> {
+    require_adr046_w6_historical_predecessor(state_root, material, repository_roots, true)
+}
+
+fn require_adr046_w6_historical_predecessor(
+    state_root: &StateRoot,
+    material: &CandidateMaterial,
+    repository_roots: &BTreeMap<String, PathBuf>,
+    require_current_tip: bool,
+) -> Result<()> {
     if !is_adr046_w6(material) {
         return Ok(());
     }
@@ -152,6 +202,7 @@ pub fn require_adr046_w6_historical_predecessor_for_exit(
         state_root,
         material,
         repository_roots,
+        require_current_tip,
     )
 }
 
@@ -161,11 +212,29 @@ fn is_adr046_w6(material: &CandidateMaterial) -> bool {
         || (material.program.eq_ignore_ascii_case("SPEC001") && material.wave == "spec001w6")
 }
 
+/// Freezes the historically dispositioned predecessor phase.
+///
+/// Its retained state is read-only process evidence. Production delivery
+/// commands must not create a replacement candidate, append evidence, issue
+/// another request, attest, seal, or register close artifacts for it.
+pub fn reject_adr046_w5_mutation(material: &CandidateMaterial, operation: &str) -> Result<()> {
+    let historical = (material.program.eq_ignore_ascii_case("ADR046")
+        && matches!(material.wave.as_str(), "W5" | "adr046w5"))
+        || (material.program.eq_ignore_ascii_case("SPEC001") && material.wave == "spec001w5");
+    if historical {
+        return Err(DeliveryError::new(format!(
+            "{operation} is refused for immutable historical delivery state"
+        )));
+    }
+    Ok(())
+}
+
 fn validate_historical_predecessor(
     policy: &HistoricalPredecessorPolicy<'_>,
     state_root: &StateRoot,
     material: &CandidateMaterial,
     repository_roots: &BTreeMap<String, PathBuf>,
+    require_current_tip: bool,
 ) -> Result<()> {
     let repository = material
         .repository_set
@@ -185,11 +254,13 @@ fn validate_historical_predecessor(
         ))
     })?;
 
-    let integration_tip = resolve_commit(root, policy.integration_ref, "integration ref")?;
-    if repository.base_oid != integration_tip {
-        return Err(DeliveryError::new(
-            "ADR-046 Wave 6 base commit is not the fetched integration tip",
-        ));
+    if require_current_tip {
+        let integration_tip = resolve_commit(root, policy.integration_ref, "integration ref")?;
+        if repository.base_oid != integration_tip {
+            return Err(DeliveryError::new(
+                "ADR-046 Wave 6 base commit is not the fetched integration tip",
+            ));
+        }
     }
     for (label, descendant) in [
         ("base commit", repository.base_oid.as_str()),
@@ -271,7 +342,12 @@ fn retained_evidence_digest(candidate: &super::storage::CandidateDir) -> Result<
         .into_iter()
         .map(str::to_owned)
         .collect::<BTreeSet<_>>();
-    let actual_root = utf8_entries(candidate.list("evidence")?, "retained evidence directory")?;
+    let actual_root = utf8_entries(
+        candidate
+            .list("evidence")
+            .map_err(|_| DeliveryError::new("retained evidence directory is unreadable"))?,
+        "retained evidence directory",
+    )?;
     if actual_root != expected_root {
         return Err(DeliveryError::new(
             "retained evidence directory entry set differs from the accepted historical state",
@@ -279,13 +355,17 @@ fn retained_evidence_digest(candidate: &super::storage::CandidateDir) -> Result<
     }
 
     let files = utf8_entries(
-        candidate.list("evidence/local-host")?,
+        candidate.list("evidence/local-host").map_err(|_| {
+            DeliveryError::new("retained local-host evidence directory is unreadable")
+        })?,
         "retained local-host evidence directory",
     )?;
     let mut manifest = Vec::with_capacity(files.len());
     for name in files {
         let relative = format!("evidence/local-host/{name}");
-        let bytes = candidate.read_bytes(&relative)?;
+        let bytes = candidate
+            .read_bytes(&relative)
+            .map_err(|_| DeliveryError::new("retained evidence entry is unreadable"))?;
         manifest.push((format!("local-host/{name}"), sha256_bytes(&bytes)));
     }
     Ok(sha256_bytes(&serde_json::to_vec(&manifest)?))
@@ -403,6 +483,16 @@ enum Gate {
 }
 
 fn validate_state(wave: &str, gate: Gate, graph: &[u8], work_items: &[u8]) -> Result<()> {
+    validate_state_with_disposition(wave, gate, graph, work_items, None)
+}
+
+fn validate_state_with_disposition(
+    wave: &str,
+    gate: Gate,
+    graph: &[u8],
+    work_items: &[u8],
+    disposed_wave: Option<u8>,
+) -> Result<()> {
     let current_wave = wave_number(wave)?;
     let graph: GraphView = serde_json::from_slice(graph)?;
     let work_items: WorkItemsView = serde_json::from_slice(work_items)?;
@@ -427,7 +517,7 @@ fn validate_state(wave: &str, gate: Gate, graph: &[u8], work_items: &[u8]) -> Re
         }
         let node_wave = wave_number(&node.wave)?;
         let in_scope = match gate {
-            Gate::Exit => node_wave < current_wave,
+            Gate::Exit => node_wave < current_wave && Some(node_wave) != disposed_wave,
             Gate::Seal => node_wave == current_wave,
         };
         if !in_scope {
@@ -702,6 +792,54 @@ mod tests {
             .expect("after rebasing past the predecessor merge the wave exit gate passes");
     }
 
+    #[test]
+    fn accepted_historical_predecessor_satisfies_only_its_prior_wave_rows() {
+        let graph = br#"{
+          "nodes": [
+            {"id":"ADR046-history-001","kind":"work-item","wave":"W5"},
+            {"id":"ADR046-current-001","kind":"work-item","wave":"W6"}
+          ]
+        }"#;
+        let work_items = br#"{
+          "items": [
+            {"workItemId":"ADR046-history-001","implementationState":"Planned"},
+            {"workItemId":"ADR046-current-001","implementationState":"Merged"}
+          ]
+        }"#;
+
+        validate_state_with_disposition("spec001w6", Gate::Exit, graph, work_items, Some(5))
+            .expect("the validated historical predecessor satisfies its exact prior rows");
+        validate_state("spec001w6", Gate::Exit, graph, work_items)
+            .expect_err("without the disposition the Planned predecessor remains blocking");
+    }
+
+    #[test]
+    fn immutable_historical_phase_rejects_all_supported_addresses() {
+        for (program, wave) in [
+            ("ADR046", "W5"),
+            ("ADR046", "adr046w5"),
+            ("adr046", "adr046w5"),
+            ("SPEC001", "spec001w5"),
+            ("spec001", "spec001w5"),
+        ] {
+            let mut material = crate::delivery::model::fixtures::material();
+            program.clone_into(&mut material.program);
+            wave.clone_into(&mut material.wave);
+            let error = reject_adr046_w5_mutation(&material, "snapshot")
+                .expect_err("historical delivery mutation must be refused");
+            assert!(
+                error
+                    .message()
+                    .contains("immutable historical delivery state"),
+                "{program}/{wave}: {error}"
+            );
+        }
+
+        let material = crate::delivery::model::fixtures::material();
+        reject_adr046_w5_mutation(&material, "snapshot")
+            .expect("unrelated delivery state remains mutable");
+    }
+
     const RETAINED_REQUEST_BYTES: &[u8] = br#"{"roles":["software","test"]}"#;
     const RETAINED_SNAPSHOT_BYTES: &[u8] = br#"{"snapshot":"retained"}"#;
     const TEST_RETAINED_EVIDENCE: [(&str, &str, &[u8]); 2] = [
@@ -816,7 +954,7 @@ mod tests {
         }
 
         fn validate(&self, policy: &HistoricalPredecessorPolicy<'_>) -> Result<()> {
-            validate_historical_predecessor(policy, &self.state, &self.material, &self.roots)
+            validate_historical_predecessor(policy, &self.state, &self.material, &self.roots, true)
         }
     }
 
@@ -1003,6 +1141,7 @@ mod tests {
             &fixture.state,
             &material,
             &fixture.roots,
+            true,
         )
         .expect_err("copied bytes outside the integration tip must fail");
         assert!(
@@ -1033,8 +1172,56 @@ mod tests {
             &fixture.state,
             &material,
             &fixture.roots,
+            true,
         )
         .expect("the first-parent history still contains the accepted amendment");
+    }
+
+    #[test]
+    fn exit_rechecks_allow_the_integration_tip_to_advance_after_entry() {
+        let fixture = HistoricalFixture::new("historical-predecessor-post-merge");
+        fixture.repository.write("merged.txt", "merged\n");
+        fixture.repository.commit("later integration tip");
+        let later = fixture.repository.head();
+        fixture
+            .repository
+            .git(&["update-ref", D2B_INTEGRATION_REF, &later]);
+
+        validate_historical_predecessor(
+            &fixture.policy(),
+            &fixture.state,
+            &fixture.material,
+            &fixture.roots,
+            false,
+        )
+        .expect("exit rechecks use the immutable entry base after the integration tip advances");
+        validate_historical_predecessor(
+            &fixture.policy(),
+            &fixture.state,
+            &fixture.material,
+            &fixture.roots,
+            true,
+        )
+        .expect_err("a new entry must use the advanced integration tip");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn retained_evidence_read_failures_use_a_closed_diagnostic() {
+        use std::os::unix::fs::symlink;
+
+        let fixture = HistoricalFixture::new("historical-predecessor-diagnostic");
+        let retained = fixture.retained();
+        let evidence = retained.path().join("evidence/local-host/one.json");
+        fs::remove_file(&evidence).expect("remove evidence");
+        symlink("/definitely-not-readable", &evidence).expect("plant symlink");
+
+        let error = fixture
+            .validate(&fixture.policy())
+            .expect_err("symlinked retained evidence must fail");
+        assert_eq!(error.message(), "retained evidence entry is unreadable");
+        assert!(!error.message().contains("one.json"), "{error}");
+        assert!(!error.message().contains('/'), "{error}");
     }
 
     #[test]

@@ -132,8 +132,9 @@ pub fn run(args: &[String]) -> Result<WorkflowOutput> {
 
 fn run_with_root(request: &SnapshotRequest, root: &StateRoot) -> Result<WorkflowOutput> {
     let material = discover(request)?;
+    super::work_item_state::reject_adr046_w5_mutation(&material, "snapshot")?;
     let repository_roots = request.checkout_roots()?;
-    super::work_item_state::require_adr046_w6_historical_predecessor_for_exit(
+    super::work_item_state::require_adr046_w6_historical_predecessor_at_entry(
         root,
         &material,
         &repository_roots,
@@ -1067,6 +1068,45 @@ pub(crate) mod tests {
             !root.path().join("spec001w6").exists(),
             "a failed entry guard must not publish a candidate"
         );
+    }
+
+    #[test]
+    fn historical_w5_snapshot_mutation_is_refused_before_candidate_creation() {
+        let fixture = GitFixture::new("snapshot-w5-immutable");
+        for (program_value, wave_value) in [
+            ("ADR046", "W5"),
+            ("ADR046", "adr046w5"),
+            ("SPEC001", "spec001w5"),
+        ] {
+            let mut args = fixture.snapshot_args();
+            let program = args
+                .iter()
+                .position(|value| value == "--program")
+                .expect("--program in the fixture arguments")
+                + 1;
+            args[program] = program_value.to_owned();
+            let wave = args
+                .iter()
+                .position(|value| value == "--wave")
+                .expect("--wave in the fixture arguments")
+                + 1;
+            args[wave] = wave_value.to_owned();
+
+            let request = SnapshotRequest::parse(&args).expect("parse historical request");
+            let root = StateRoot::for_tests(&fixture.state()).expect("anchor state root");
+            let error =
+                run_with_root(&request, &root).expect_err("historical snapshot mutation must fail");
+            assert!(
+                error
+                    .message()
+                    .contains("immutable historical delivery state"),
+                "{error}"
+            );
+            assert!(
+                !root.path().join(wave_value).exists(),
+                "a refused historical mutation must not create a candidate"
+            );
+        }
     }
 
     #[test]

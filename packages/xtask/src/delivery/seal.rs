@@ -243,6 +243,7 @@ pub fn run(args: &[String]) -> Result<WorkflowOutput> {
     options.finish()?;
     let snapshot_path = state.resolve_artifact_ref(&snapshot_path);
     let (candidate, snapshot) = panel::open_candidate(&state, &snapshot_path)?;
+    super::work_item_state::reject_adr046_w5_mutation(&snapshot.material, "seal")?;
     seal_checked(&state, &candidate, &snapshot, &repository_roots)
 }
 
@@ -253,11 +254,7 @@ fn seal_checked(
     repository_roots: &BTreeMap<String, PathBuf>,
 ) -> Result<WorkflowOutput> {
     super::work_item_state::require_current_wave_merged(&snapshot.material, repository_roots)?;
-    super::work_item_state::require_prior_waves_merged_for_exit(
-        &snapshot.material,
-        repository_roots,
-    )?;
-    super::work_item_state::require_adr046_w6_historical_predecessor_for_exit(
+    super::work_item_state::require_predecessor_state_for_exit(
         state,
         &snapshot.material,
         repository_roots,

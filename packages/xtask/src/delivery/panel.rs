@@ -1034,11 +1034,8 @@ fn request_checked(
     repository_roots: &BTreeMap<String, PathBuf>,
     selection_path: Option<&Path>,
 ) -> Result<WorkflowOutput> {
-    super::work_item_state::require_prior_waves_merged_for_exit(
-        &snapshot.material,
-        repository_roots,
-    )?;
-    super::work_item_state::require_adr046_w6_historical_predecessor_for_exit(
+    super::work_item_state::reject_adr046_w5_mutation(&snapshot.material, "panel request")?;
+    super::work_item_state::require_predecessor_state_for_exit(
         state,
         &snapshot.material,
         repository_roots,
@@ -1104,6 +1101,7 @@ fn write_request(
 pub fn run_attest(args: &[String]) -> Result<WorkflowOutput> {
     let (state, snapshot_path, records_dir) = parse_attest_invocation(args)?;
     let (candidate, snapshot) = open_candidate(&state, &snapshot_path)?;
+    super::work_item_state::reject_adr046_w5_mutation(&snapshot.material, "panel attestation")?;
     attest(&candidate, &snapshot, &records_dir)
 }
 
