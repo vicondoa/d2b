@@ -15,7 +15,7 @@ The design work is already done and Accepted: 55 normative specs, a 600-node imp
 graph, and 545 work items with exact destination paths and validation obligations. This plan
 therefore does **not** re-derive architecture. It preserves the 531 work items that were
 `Planned` at program opening as the primary W2-W7 task scope. At committed HEAD
-`868469bf9c293cd48fff483717f14cb88c246821`, the authoritative manifest records 68 `Merged`
+`bfeaf3fe39e4eea9c9180441b7a892b682dfc7f0`, the authoritative manifest records 68 `Merged`
 and 477 `Planned`; 54 of the initial 531 have moved to `Merged`, while the 14 W0/W1 items were
 already `Merged` before this plan. The plan resolves the four unknowns that block delivery
 (next-wave scope, the failed footprint gate, the companion release blocker, and the
@@ -339,7 +339,7 @@ applies without modification.
 | W3 | 1 | 4 | 1, strictly serial | Delivery state reports sealed/merged; T030, T035, and T036 are historical verification/adjudication only under the same external-confirmation-or-correction rule. |
 | W4 | 5 | 31 | 6 parallel | Delivery state reports sealed/merged; T037, T070, and T071 are historical verification/adjudication only under the same external-confirmation-or-correction rule. |
 | W5 (`adr046w5` delivery address) | 7 | historical manifest and local records | Historical only | Merged at `177235ed37188b3be87525e7f016fb43401574c5`; exact retained state is immutable and fenced |
-| W6 | 27 manifest dossiers | 258 manifest work items plus T606-T609 foundations and active local T604/T479/T480 coordination | T221 authorizes only T606; T606 freezes shared contracts/scaffolds; T607-T609 then run in parallel; each Provider group opens only after its named foundation dependencies | 29 manifest groups + 4 foundation groups + 3 acceptance/close groups = 36 post-entry groups; T604 follows its complete foundation/manifest set, T479 freezes F6 and creates both candidate records, and T480 revalidates them |
+| W6 | 27 manifest dossiers | 258 manifest work items plus T606-T609 foundations and active local T604/T479/T480 coordination | External ledger readiness: durable T221 approval yields T606; T606 completion yields T607-T609; every one of the 29 manifest groups requires all four foundations plus graph prerequisites | 29 manifest groups + 4 foundation groups + 3 acceptance/close groups = 36 post-entry groups; T604 follows its complete foundation/manifest set, T479 freezes F6 and creates both candidate records, and T480 revalidates them |
 | W7 | 5 | 73 | 5 parallel | T481 plan panel before implementation; T555 work panel after convergence |
 | W8 | 0 | determined by T557 after W7 merge, seal, and cleanup | friction closure | No pipelined triage or entry; T558 plan panel after triage and before implementation; T565 work panel after convergence |
 
@@ -394,10 +394,12 @@ all 258 manifest W6 items + T607..T609 + T604
   -> T480
 ```
 
-The first post-entry ready set is exactly `{T606}`. The next is exactly
-`{T607,T608,T609}`. Provider readiness then resolves by dependency rather than by treating
-all 29 manifest groups as simultaneously launchable. The manifest count stays 258; the
-complete post-entry census is 265 work records and 36 groups. T221 remains a separate gate.
+Readiness and launch state are derived from the external dispatch ledger, not from a prose
+counter. With a durable T221 approval and all 36 ledger groups `NotLaunched`, the first
+computed ready set is exactly `{T606}`. After its `Completed` transition, the next is exactly
+`{T607,T608,T609}`. Every manifest group then requires all four foundations through the
+closed 29-entry map plus its graph prerequisites. The manifest count stays 258; the complete
+post-entry census is 265 work records and 36 groups. T221 remains a separate gate.
 
 Existing accepted ADR decisions and committed passing code are the implementation canon when
 a Provider dossier drifts. T606 freezes that boundary for shared contracts. T607-T609 and
@@ -411,10 +413,10 @@ The closed local ownership map is:
 
 | Local task | Owned files or evidence surface | Mechanically checkable boundary |
 | --- | --- | --- |
-| T606 | Shared workspace/lockfile/flake/catalog/import/broker-contract/dispatch/registration/Makefile surfaces plus the thirteen absent Provider crate roots enumerated in `tasks.md` | Cargo metadata reports exactly 27 dossier Provider crates, both dossier/crate set differences are empty, every shared file has one initial owner and explicit later handoff, and inventory/policy/drift/Rust gates pass |
+| T606 | Shared workspace/lockfile/flake/catalog/import/broker-contract/dispatch/registration/Makefile surfaces plus the thirteen absent Provider crate roots enumerated in `tasks.md` | Both workspaces pass locked metadata without lockfile change, exactly 27 dossier packages resolve through flake/catalog, flake evaluation leaves `flake.lock` unchanged, every shared file has one ordered handoff, and inventory/policy/drift/Rust/package gates pass |
 | T607 | Dedicated Zone, CLI context/zone projection, system-core Host/User/bootstrap, and Zone-option files listed in `tasks.md` | The seven adopted obligations are production-reachable through authenticated routes and cannot be satisfied by test-only adapters; focused Rust, nix-unit, policy, and fixture-contract gates pass |
-| T608 | Dedicated Volume, volume-local, Volume Nix, export/import projection, and Core Host-global authority files listed in `tasks.md` | Typed broker effects expose no raw path, cross-Zone Host-global conflicts refuse before effects, and focused Rust plus executed integration coverage passes |
-| T609 | Dedicated `d2b-audit` and `d2b-telemetry` foundation files listed in `tasks.md` | Durable privileged audit refusal, rotation/retention/restart/concurrency, lossy telemetry separation, and redaction canaries pass focused Rust and policy gates |
+| T608 | Dedicated Volume, strict Nix generator/modules/assertions, volume-local, TPM migration, export/import projection, typed host-effect adapters, and Core Host-global authority files listed in `tasks.md` | Generator/module/assertion/schema drift and planted negatives pass; all host mutation is typed-broker mediated; legacy TPM state is durably migrated/adopted before ensure; Host-global conflicts refuse before effects |
+| T609 | Complete production audit wiring plus `d2b-audit` and `d2b-telemetry` foundation files listed in `tasks.md` | Transactional privileged audit durability, single-writer wiring, rotation/retention/restart/concurrency, forbidden-identity redaction, bounded telemetry, and closed descriptor/label gates pass |
 | T604 | `packages/d2b-contract-tests/tests/resource_operator_activation.rs`; `packages/d2bd/tests/resource_operator_activation.rs`; `tests/host-integration/resource-operator-activation.nix`; `tests/host-integration/daemon-restart-vm-survival.nix`; `tests/golden/delivery/host-generation-pre-start-case-ids.txt`; `tests/golden/delivery/host-generation-unit-census-case-ids.txt`; its distinct recipes in `Makefile`; `changelog.d/operator-resource-activation.md` | Completes after exact dependencies in `tasks.md` and `ADR046-ch-001 -> T604` serialization; development-validates the `operator-nix-activation-cleanup` validator and daemon-restart case but emits no candidate-bound record |
 | T479 | No source file; exact-F6 `operator-nix-activation-cleanup` and `w6-cloud-hypervisor-guest-acceptance` records | First converges and freezes clean F6, then invokes the T604-owned operator validator and solely executes exact-candidate FR-075 |
 | T480 | No source file; the immutable records owned by T479 | Revalidates both closed predicates at every prospective close boundary |
@@ -1340,8 +1342,15 @@ The first T221 discovery used fetched base
 `177235ed37188b3be87525e7f016fb43401574c5`. Its candidate, content, snapshot, and
 selection identities are recorded in `tasks.md`. This feature-content correction invalidates
 that panel binding, so it is not an entry pass. T221 must create a replacement production
-snapshot and receive a new unanimous zero-recommendation plan result. That result authorizes
-T606 only.
+snapshot and receive a new unanimous zero-recommendation plan result. Before first dispatch,
+material changes to base/guard/requirements/local contract/dependencies/ownership/validation/
+readiness invalidate that result. After first dispatch, ledger-derived status-only checkbox/
+state/evidence/dispatch/merge/seal projections do not invalidate it and may not alter plan
+authority. T221 completion additionally requires the complete structured command-evidence
+set, the external 36-group dispatch ledger, and a durably written plan-approval receipt
+binding the base, plan material, new snapshot, selection, ledger, command evidence, unanimous
+roster, and zero recommendations. These artifacts are process correlation and completeness
+evidence, not authentication. That result authorizes T606 only.
 
 ## Complexity Tracking
 

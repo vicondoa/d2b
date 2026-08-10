@@ -54,6 +54,17 @@ ensure; arbitrate scarce backing Host-globally; couple privileged success to tra
 durable audit; redact forbidden identity; bound telemetry retention; and close metric
 descriptor/label domains. Existing ADR/code canon wins if a dossier still says otherwise.
 
+Replacement discovery also found the local exception, state machine, evidence, group
+foundations, and writer handoffs under-specified. The corrected feature authority closes the
+exception over exactly seven tasks, maps all 29 manifest groups to T606-T609, binds shared
+handoffs to the current manifest/graph digests, and derives readiness from an external
+36-group dispatch ledger. Structured command evidence and a durably written plan-approval
+receipt are required for T221 process completeness but are not authentication. Feature
+status-only projections after first dispatch do not change plan authority; a material change
+blocks affected groups. The corrected live census is 600 graph nodes, 1960 edges, 545
+manifest items, 609 feature task rows, and 36 W6 post-entry groups containing 265 work
+records.
+
 ---
 
 ## 0. Wave 2 delivery claim, stated precisely

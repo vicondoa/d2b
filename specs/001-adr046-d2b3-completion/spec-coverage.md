@@ -73,10 +73,12 @@ definition.
 | Member specs | 55 | implementation graph, `kind == "spec"` |
 | Work items | 545 | implementation graph and work-item manifest agree |
 | Initial program scope | 531 | items that were `Planned` when primary tasks were generated |
-| Merged | 68 | current manifest at `868469bf9c293cd48fff483717f14cb88c246821` |
+| Merged | 68 | current manifest at `bfeaf3fe39e4eea9c9180441b7a892b682dfc7f0` |
 | Planned | 477 | current manifest remainder of the initial 531 |
-| Graph nodes / edges | 600 / 1949 | 55 + 545 |
+| Graph nodes / edges | 600 / 1960 | 55 + 545 |
 | Max topological rank | 22 | |
+| Feature task rows | 609 | `tasks.md`, including four prospective W6 foundation tasks |
+| Parallel feature task rows | 101 | T607-T609 add three `[P]` foundations to the prior 98 |
 
 ### Manifest work items by wave
 
@@ -93,9 +95,10 @@ definition.
 | W8 | 0 | recorded after W7 seal, merge, and cleanup | 545+ | Terminal; release gate evaluated here |
 
 The W6 executable group census is 29 manifest groups, four local foundation groups, and three
-local acceptance/close groups: 36 post-entry groups. T221 is the separate entry gate. Its
-replacement unanimous plan result authorizes only T606; T607, T608, and T609 are the next
-parallel ready set.
+local acceptance/close groups: 36 post-entry groups. All 29 manifest groups map to
+T606-T609. T221 is the separate entry gate. The external ledger derives T606 as the only
+ready group after durable approval, then T607-T609 after T606 completion; no prose or fixed
+agent count is launch authority.
 
 ### Reuse disposition across all 545 items
 
@@ -1106,7 +1109,7 @@ jq -r --arg p routing '.items[] | select(.workItemId | startswith("ADR046-\($p)-
 | FR-056 - FR-059 | Standing Gate 0, entry/exit distinction with the feature-owned exact predecessor exception under generic Constitution 3.1.0, historical-record scope, unordered contended-file prep or explicitly ordered serial ownership | `validation-and-delivery` plus program process | `delivery` |
 | FR-060 | Removal proof follows the wave that removes the path | `current-code-migration-map`, `validation-and-delivery` | `reuse`, `streamline`, `delivery` |
 | FR-061 - FR-065 | Contract publication versus artifact release; companion classification, membership, and verification | **Locally added** - companion clarification family | none |
-| FR-066 - FR-072 | Authenticated production publication, historical Wave 5 design, and prospective correction | **Historical design plus authoritative provider rows and the closed feature-local acceptance exception** | T221, authoritative generated rows, active local T604, T479, and T480 |
+| FR-066 - FR-072 | Authenticated production publication, historical Wave 5 design, and prospective correction | **Historical design plus authoritative provider rows and the closed feature-local foundation/coordination exception** | T221, T606-T609 foundations, authoritative generated rows, active local T604, T479, and T480 |
 | FR-073 | RBAC policy DTOs and interpretation stay outside store/redb | `decision-register` D106, `resource-api-and-authorization`, ADR 0049 | authoritative generated row |
 | FR-074 | CLI/reference promises match emitted behavior | `cli-and-operations`, `validation-and-delivery` | authoritative generated row |
 | FR-075 | Exact-candidate pre-ADR-046 operator lifecycle continuity, retained as immutable W2-W5 history and prospective W6 evidence | **Local split**: T604 authors the case/recipe after manifest-backed `ADR046-ch-001`; T479 solely executes and records it; T480 revalidates | T604, T479, T480 |

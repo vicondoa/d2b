@@ -36,7 +36,7 @@ boundary and retained no-seal state. It does not weaken any Wave 6 gate.
 - **[P]**: Parallelizable with other ready tasks after all of its declared prerequisites
   complete, with no file-overlap edge among the tasks launched together. The marker does not
   remove an incoming dependency or mean immediate wave-entry eligibility. 91 of 545 manifest
-  work items qualify. Across the full task list, 98 of 605 total tasks carry `[P]`.
+  work items qualify. Across the full task list, 101 of 609 total tasks carry `[P]`.
 - **[Story]**: US1 live resource plane, US2 Providers, US3 cutover, US4 release.
 - Text after `WorkItemId` is a **non-authoritative navigation label**, not the manifest
   `destination` field, a writable path list, or a substitute for retrieval. Labels use
@@ -68,14 +68,16 @@ Deliberately, this file does not copy that text. Duplicating 531 manifest entrie
 Markdown would create a second source of truth that no drift gate checks - the same failure
 this program is trying to avoid. Reference, never paraphrase.
 
-**Closed feature-local coordination/completion exception.** A task explicitly labeled
-`FEATURE-LOCAL COORDINATION/COMPLETION` has no generated work-item because its only purpose is
-cross-provider convergence, candidate evidence, or delivery coordination that no single
-member-spec work-item can own. For T604, T479, and T480 only, the complete task row below is
-authoritative and may name exact files, validation, evidence, and ordering. Their dependencies
-must point to authoritative work-item IDs or another task in this closed local set. This does
-not make summaries authoritative for manifest-backed rows and does not create a broad second
-authority.
+**Closed feature-local foundation/coordination exception.** A task explicitly labeled
+`FEATURE-LOCAL FOUNDATION/COMPLETION` or `FEATURE-LOCAL COORDINATION/COMPLETION` has no
+generated work-item because it owns either a prerequisite foundation stranded behind
+immutable W5 history or cross-provider convergence/evidence/delivery coordination that no
+single member-spec work item can own. The closed set is exactly T606, T607, T608, T609,
+T604, T479, and T480. Their complete task rows and the machine contract below are
+authoritative for their files, dependencies, validation, evidence, handoffs, and state
+transitions. Dependencies must resolve to manifest work-item IDs or another task in this
+closed set. The exception substitutes no manifest identity or state, applies only to this W6
+plan, and creates no general feature-local implementation authority.
 
 All provider implementation remains manifest-backed and comes only from generated authority.
 Manifest-backed dependencies are named by exact `workItemId`; T aliases and numeric T ranges
@@ -134,6 +136,269 @@ below is the sole feature authority for cross-provider acceptance coordination.
       "ADR046-audit-001",
       "ADR046-telem-001"
     ]
+  },
+  "adoption_substitution_semantics": {
+    "scope": "W6 readiness and local completion only",
+    "substitutes_execution_and_validation_obligation": true,
+    "substitutes_manifest_identity": false,
+    "substitutes_manifest_implementation_state": false,
+    "mutates_historical_checkbox_or_delivery_state": false,
+    "usable_for_prior_wave_seal_or_recovery": false,
+    "satisfaction_rule": "every adopted id resolves to exactly one local task in historical_foundation_adoption; that task must reach Merged with all required completion evidence before any dependent manifest group is Ready"
+  },
+  "local_completion_state_machine": {
+    "states": ["Planned", "Dispatched", "Validated", "Merged"],
+    "initial_state": "Planned",
+    "transitions": {
+      "Planned": ["Dispatched"],
+      "Dispatched": ["Validated"],
+      "Validated": ["Dispatched", "Merged"],
+      "Merged": []
+    },
+    "transition_authority": "external dispatch ledger plus structured evidence; checkbox rendering is a status projection only",
+    "validated_requires_all_evidence": true,
+    "merged_requires_validated_state_and_accepted_commit": true,
+    "validation_failure_transition": ["Validated", "Dispatched"]
+  },
+  "required_local_completion_evidence": {
+    "T606": [
+      "w6-shared-prep-inventory",
+      "w6-shared-prep-shared-writers",
+      "w6-shared-prep-lockfile-flake-packages"
+    ],
+    "T607": [
+      "w6-core-control-production-route",
+      "w6-real-so-peercred-admission"
+    ],
+    "T608": [
+      "w6-typed-broker-host-effects",
+      "w6-strict-resource-nix-validation",
+      "w6-tpm-legacy-migration",
+      "w6-host-global-authority"
+    ],
+    "T609": [
+      "w6-transactional-privileged-audit",
+      "w6-forbidden-identity-redaction",
+      "w6-bounded-telemetry",
+      "w6-closed-metric-descriptors"
+    ],
+    "T604": [
+      "operator-nix-activation-cleanup-development",
+      "daemon-restart-vm-survival-development"
+    ],
+    "T479": [
+      "operator-nix-activation-cleanup",
+      "w6-cloud-hypervisor-guest-acceptance"
+    ],
+    "T480": [
+      "w6-binding-panel-unanimous",
+      "w6-protected-merge",
+      "w6-post-merge-seal",
+      "w6-merge-eligibility"
+    ]
+  },
+  "t608_strict_nix_and_tpm_prerequisites": {
+    "nix_owners": [
+      "packages/xtask/src/zone_schema.rs",
+      "nixos-modules/generated/resource-types.nix",
+      "nixos-modules/generated/options-zones-Zone.nix",
+      "nixos-modules/generated/options-zones-ZoneLink.nix",
+      "nixos-modules/options-resources.nix",
+      "nixos-modules/options-zones-resources.nix",
+      "nixos-modules/resource-schema-validation.nix",
+      "nixos-modules/resource-compiler.nix",
+      "nixos-modules/resources.nix",
+      "nixos-modules/resources-bundle.nix",
+      "nixos-modules/assertions.nix"
+    ],
+    "tpm_before_first_ensure": [
+      "T606 shared broker and storage contract freeze is Merged",
+      "T608 Volume contract and Host-global authority index are Validated",
+      "legacy swtpm state and marker inventory is complete",
+      "migration or exact-owner adoption is durable",
+      "missing, replacement, ambiguity, and foreign-owner cases are refused"
+    ]
+  },
+  "t609_production_audit_wiring": {
+    "single_foundation_owner": "T609",
+    "surfaces": [
+      "d2b-audit record, sink, segment, export, rotation, and prune",
+      "resource-store transactional mutation audit",
+      "daemon runtime and daemon audit",
+      "broker privileged audit writer",
+      "core authorization audit",
+      "bus and session audit producers",
+      "production boundary and failure-injection tests"
+    ],
+    "provider_rule": "Provider-specific emitters consume typed ports after T609; no Provider opens a writer or chooses durability"
+  },
+  "manifest_group_foundations": {
+    "wi:ADR-046-provider-activation-nixos": ["T606", "T607", "T608", "T609"],
+    "wi:ADR-046-provider-audio-pipewire": ["T606", "T607", "T608", "T609"],
+    "wi:ADR-046-provider-clipboard-wayland": ["T606", "T607", "T608", "T609"],
+    "wi:ADR-046-provider-credential-entra": ["T606", "T607", "T608", "T609"],
+    "wi:ADR-046-provider-credential-managed-identity": ["T606", "T607", "T608", "T609"],
+    "wi:ADR-046-provider-credential-secret-service": ["T606", "T607", "T608", "T609"],
+    "wi:ADR-046-provider-device-gpu": ["T606", "T607", "T608", "T609"],
+    "wi:ADR-046-provider-device-security-key": ["T606", "T607", "T608", "T609"],
+    "wi:ADR-046-provider-device-tpm": ["T606", "T607", "T608", "T609"],
+    "wi:ADR-046-provider-device-usbip": ["T606", "T607", "T608", "T609"],
+    "wi:ADR-046-provider-display-wayland": ["T606", "T607", "T608", "T609"],
+    "wi:ADR-046-provider-network-local": ["T606", "T607", "T608", "T609"],
+    "wi:ADR-046-provider-notification-desktop": ["T606", "T607", "T608", "T609"],
+    "wi:ADR-046-provider-observability-otel": ["T606", "T607", "T608", "T609"],
+    "wi:ADR-046-provider-runtime-azure-container-apps": ["T606", "T607", "T608", "T609"],
+    "wi:ADR-046-provider-runtime-azure-virtual-machine": ["T606", "T607", "T608", "T609"],
+    "wi:ADR-046-provider-runtime-cloud-hypervisor": ["T606", "T607", "T608", "T609"],
+    "wi:ADR-046-provider-runtime-qemu-media": ["T606", "T607", "T608", "T609"],
+    "wi:ADR-046-provider-shell-terminal": ["T606", "T607", "T608", "T609"],
+    "wi:ADR-046-provider-system-core": ["T606", "T607", "T608", "T609"],
+    "wi:ADR-046-provider-system-minijail": ["T606", "T607", "T608", "T609"],
+    "wi:ADR-046-provider-system-systemd": ["T606", "T607", "T608", "T609"],
+    "wi:ADR-046-provider-transport-azure-relay": ["T606", "T607", "T608", "T609"],
+    "wi:ADR-046-provider-transport-unix": ["T606", "T607", "T608", "T609"],
+    "wi:ADR-046-provider-transport-vsock": ["T606", "T607", "T608", "T609"],
+    "wi:ADR-046-provider-volume-local": ["T606", "T607", "T608", "T609"],
+    "wi:ADR-046-provider-volume-virtiofs": ["T606", "T607", "T608", "T609"],
+    "wi:core-controller-coordination:w6": ["T606", "T607", "T608", "T609"],
+    "wi:process-provider-integration:w6": ["T606", "T607", "T608", "T609"]
+  },
+  "dispatch_ledger_contract": {
+    "path_environment": "D2B_W6_DISPATCH_LEDGER",
+    "must_be_absolute": true,
+    "must_be_outside_git": true,
+    "artifact_kind": "d2b-feature-local/dispatch-ledger",
+    "schema_version": 1,
+    "entry_key": "group",
+    "states": ["NotLaunched", "Dispatched", "Validated", "Completed", "Blocked"],
+    "entry_required_fields": [
+      "group",
+      "state",
+      "candidateId",
+      "headOid",
+      "dispatchId",
+      "updatedAtUnix",
+      "completionEvidenceIds"
+    ],
+    "not_launched_null_fields": ["dispatchId"],
+    "required_groups": 36,
+    "local_group_ids": [
+      "feature-local:w6-shared-prep",
+      "feature-local:w6-core-control-foundations",
+      "feature-local:w6-storage-authority-foundations",
+      "feature-local:w6-audit-telemetry-foundations",
+      "feature-local:w6-operator-acceptance",
+      "feature-local:w6-converge",
+      "feature-local:w6-close"
+    ],
+    "readiness_rule": "a group is Ready only when every local foundation in manifest_group_foundations and every graph prerequisite is Completed or Merged in the ledger",
+    "pre_t221_rule": "derive launched groups from ledger entries whose state is not NotLaunched and require the derived set to be empty",
+    "not_authentication": true
+  },
+  "structured_command_evidence_contract": {
+    "artifact_kind": "d2b-feature-local/command-evidence",
+    "schema_version": 1,
+    "required_fields": [
+      "commandId",
+      "argv",
+      "workingTreeOid",
+      "startedAtUnix",
+      "completedAtUnix",
+      "exitCode",
+      "result",
+      "stdoutSha256",
+      "stderrSha256",
+      "outputBytes"
+    ],
+    "required_t221_command_ids": [
+      "focused-guard-list",
+      "focused-guard-ignored-list",
+      "focused-guard-run",
+      "gate0-test-drift",
+      "test-policy",
+      "test-unit",
+      "heavy-gate-acquire",
+      "predispatch-census"
+    ],
+    "focused_fields": ["discoveredTests", "ignoredTests", "skipMatches"],
+    "result_values": ["passed", "failed"],
+    "raw_output_persisted_in_git": false,
+    "not_authentication": true
+  },
+  "plan_approval_receipt_contract": {
+    "path_environment": "D2B_W6_PLAN_APPROVAL_RECEIPT",
+    "must_be_absolute": true,
+    "must_be_outside_git": true,
+    "artifact_kind": "d2b-feature-local/plan-approval",
+    "schema_version": 1,
+    "required_fields": [
+      "program",
+      "wave",
+      "entryBaseOid",
+      "featurePlanMaterialSha256",
+      "entryCandidateId",
+      "entryContentId",
+      "entrySnapshotSha256",
+      "selectionSha256",
+      "dispatchLedgerSha256",
+      "commandEvidenceSetSha256",
+      "selectedRoster",
+      "signoffCount",
+      "recommendationCount",
+      "result",
+      "durableWriteEvidenceSha256",
+      "approvedAtUnix"
+    ],
+    "required_values": {
+      "program": "ADR046",
+      "wave": "adr046w6",
+      "recommendationCount": 0,
+      "result": "approved"
+    },
+    "feature_plan_material_digest": "SHA-256 over the ordered FEATURE_DIR files with only entry_plan_invalidation_policy.status_only_updates normalized to fixed placeholders; requirements, machine contract, dependencies, ownership, validation, readiness, census, and guards remain byte-significant",
+    "durable_write": [
+      "create same-directory temporary file",
+      "write canonical JSON",
+      "fsync temporary file",
+      "rename over target",
+      "fsync parent directory"
+    ],
+    "correlation_only": true,
+    "not_authentication": true
+  },
+  "entry_plan_invalidation_policy": {
+    "boundary": "first Dispatched transition in the external dispatch ledger",
+    "pre_first_dispatch_material_changes_invalidate": [
+      "entry base or ancestry",
+      "retained predecessor material",
+      "guard implementation or command evidence",
+      "requirements or success criteria",
+      "local task contract",
+      "dependencies or launch/readiness rules",
+      "ownership or shared-writer handoffs",
+      "validation or completion evidence",
+      "manifest group membership or foundation mapping"
+    ],
+    "status_only_updates": [
+      "checkbox projection derived from the dispatch ledger",
+      "local completion state projection",
+      "evidence result, digest, byte count, or external locator",
+      "dispatch, validation, merge, or seal status",
+      "timestamps and non-authorizing progress summaries"
+    ],
+    "status_only_must_not_change": [
+      "requirements",
+      "dependencies",
+      "owners",
+      "destinations",
+      "validation",
+      "state transitions",
+      "launch census",
+      "readiness rules",
+      "guard predicates"
+    ],
+    "status_only_updates_do_not_invalidate_after_first_dispatch": true,
+    "material_change_after_first_dispatch": "stop affected dispatch, record Blocked in the ledger, replace the plan material and approval receipt before further launch"
   },
   "required_manifest_dependencies": {
     "T604": [
@@ -204,16 +469,152 @@ below is the sole feature authority for cross-provider acceptance coordination.
     "Makefile": ["T606", "ADR046-ch-001", "T604"],
     "packages/Cargo.toml": ["T606"],
     "packages/Cargo.lock": ["T606"],
+    "packages/d2b-priv-broker/Cargo.toml": ["T606"],
+    "packages/d2b-priv-broker/Cargo.lock": ["T606"],
     "flake.nix": ["T606"],
     "packages/d2b-contracts/src/broker_wire.rs": ["T606"],
     "packages/d2b-priv-broker/src/runtime.rs": ["T606"],
     "packages/d2bd/src/lib.rs": ["T606"],
     "packages/d2b/src/lib.rs": ["T606"]
   },
+  "local_to_manifest_shared_writer_handoffs": {
+    "derivation_source": "current candidate docs/specs/ADR-046-work-items.json destination fields plus docs/specs/ADR-046-implementation-graph.json W6 nodes",
+    "work_items_sha256": "117ed5b7bdfc183f217c9ad67631655f2d87a79f7683c0ddc75c38427a8a0cdd",
+    "implementation_graph_sha256": "bd749c4345de7b9da0c1d05d35b7a573dca05fa3f233bb8d2ffadded6b9679cf",
+    "completeness_rule": "expand current manifest destination path expressions; every intersection with a T606-T609 owned path must appear in exactly one ordered handoff, every order endpoint must resolve, and every T606 scaffold root must map to exactly one W6 manifest group",
+    "handoffs": [
+      {
+        "surface": "shared broker contract, privilege, runtime, dispatch, and module registration",
+        "paths": [
+          "packages/d2b-contracts/src/broker_wire.rs",
+          "packages/d2b-contracts/src/lib.rs",
+          "packages/d2b-core/src/privileges.rs",
+          "packages/d2b-core/src/lib.rs",
+          "packages/d2b-priv-broker/src/live_handlers.rs",
+          "packages/d2b-priv-broker/src/main.rs",
+          "packages/d2b-priv-broker/src/runtime.rs",
+          "packages/d2b-priv-broker/src/ops/mod.rs",
+          "packages/d2bd/src/lib.rs",
+          "packages/d2bd/src/wire.rs",
+          "packages/d2b/src/dispatch.rs",
+          "packages/d2b/src/lib.rs"
+        ],
+        "order": [
+          "T606",
+          "ADR046-activation-001",
+          "ADR046-transport-unix-006",
+          "ADR046-nl-002",
+          "ADR046-minijail-004"
+        ]
+      },
+      {
+        "surface": "production audit writer and broker audit integration",
+        "paths": [
+          "packages/d2b-priv-broker/src/audit.rs"
+        ],
+        "order": [
+          "T606",
+          "T609",
+          "ADR046-activation-001",
+          "ADR046-transport-unix-006"
+        ]
+      },
+      {
+        "surface": "flake and site options",
+        "paths": ["flake.nix", "nixos-modules/options-site.nix"],
+        "order": ["T606", "ADR046-activation-006"]
+      },
+      {
+        "surface": "public CLI registration",
+        "paths": ["packages/d2b/src/dispatch.rs", "packages/d2b/src/lib.rs"],
+        "order": ["T606", "ADR046-activation-001", "ADR046-activation-007"]
+      },
+      {
+        "surface": "host acceptance Makefile",
+        "paths": ["Makefile"],
+        "order": ["T606", "ADR046-ch-001", "T604"]
+      },
+      {
+        "surface": "Provider crate policy",
+        "paths": ["packages/xtask/src/provider_crate_policy.rs"],
+        "order": ["T606", "ADR046-vl-011"]
+      },
+      {
+        "surface": "Zone contract and CLI",
+        "paths": [
+          "packages/d2b-contracts/src/v3/zone.rs",
+          "packages/d2b/src/zone.rs",
+          "packages/d2b-provider-system-core/tests/"
+        ],
+        "order": ["T607", "ADR046-system-core-001"]
+      },
+      {
+        "surface": "Zone option aggregation",
+        "paths": ["nixos-modules/options-zones.nix"],
+        "order": ["T607", "ADR046-qemu-media-017", "ADR046-usbip-008"]
+      },
+      {
+        "surface": "Volume Nix resources",
+        "paths": [
+          "nixos-modules/resources-volume.nix",
+          "nixos-modules/options-volumes.nix"
+        ],
+        "order": ["T608", "ADR046-vvfs-006"]
+      },
+      {
+        "surface": "shared ResourceType option module",
+        "paths": ["nixos-modules/options-resources.nix"],
+        "order": [
+          "T608",
+          "ADR046-cred-ss-005",
+          "ADR046-device-tpm-011",
+          "ADR046-cred-mi-003"
+        ]
+      },
+      {
+        "surface": "shared Nix assertions",
+        "paths": ["nixos-modules/assertions.nix"],
+        "order": [
+          "T608",
+          "ADR046-gpu-007",
+          "ADR046-transport-unix-009",
+          "ADR046-qemu-media-017",
+          "ADR046-usbip-008"
+        ]
+      },
+      {
+        "surface": "generated ZoneLink options",
+        "paths": ["nixos-modules/generated/options-zones-ZoneLink.nix"],
+        "order": ["T608", "ADR046-transport-unix-009"]
+      },
+      {
+        "surface": "production resource runtime audit wiring",
+        "paths": ["packages/d2bd/src/resource_runtime.rs"],
+        "order": ["T609", "ADR046-system-core-001"]
+      }
+    ],
+    "scaffold_handoffs": {
+      "packages/d2b-provider-activation-nixos/": "wi:ADR-046-provider-activation-nixos",
+      "packages/d2b-provider-audio-pipewire/": "wi:ADR-046-provider-audio-pipewire",
+      "packages/d2b-provider-clipboard-wayland/": "wi:ADR-046-provider-clipboard-wayland",
+      "packages/d2b-provider-display-wayland/": "wi:ADR-046-provider-display-wayland",
+      "packages/d2b-provider-notification-desktop/": "wi:ADR-046-provider-notification-desktop",
+      "packages/d2b-provider-runtime-azure-container-apps/": "wi:ADR-046-provider-runtime-azure-container-apps",
+      "packages/d2b-provider-runtime-azure-virtual-machine/": "wi:ADR-046-provider-runtime-azure-virtual-machine",
+      "packages/d2b-provider-runtime-cloud-hypervisor/": "wi:ADR-046-provider-runtime-cloud-hypervisor",
+      "packages/d2b-provider-runtime-qemu-media/": "wi:ADR-046-provider-runtime-qemu-media",
+      "packages/d2b-provider-shell-terminal/": "wi:ADR-046-provider-shell-terminal",
+      "packages/d2b-provider-transport-azure-relay/": "wi:ADR-046-provider-transport-azure-relay",
+      "packages/d2b-provider-transport-unix/": "wi:ADR-046-provider-transport-unix",
+      "packages/d2b-provider-transport-vsock/": "wi:ADR-046-provider-transport-vsock"
+    }
+  },
   "owned_files": {
     "T606": [
       "packages/Cargo.toml",
       "packages/Cargo.lock",
+      "packages/d2b-priv-broker/Cargo.toml",
+      "packages/d2b-priv-broker/Cargo.lock",
       "flake.nix",
       "Makefile",
       "nixos-modules/provider-catalog.nix",
@@ -275,6 +676,17 @@ below is the sole feature authority for cross-provider acceptance coordination.
       "packages/d2b-provider-volume-local/README.md",
       "nixos-modules/resources-volume.nix",
       "nixos-modules/options-volumes.nix",
+      "nixos-modules/options-resources.nix",
+      "nixos-modules/options-zones-resources.nix",
+      "nixos-modules/resource-schema-validation.nix",
+      "nixos-modules/resource-compiler.nix",
+      "nixos-modules/resources.nix",
+      "nixos-modules/resources-bundle.nix",
+      "nixos-modules/assertions.nix",
+      "nixos-modules/generated/resource-types.nix",
+      "nixos-modules/generated/options-zones-Zone.nix",
+      "nixos-modules/generated/options-zones-ZoneLink.nix",
+      "packages/xtask/src/zone_schema.rs",
       "packages/d2b-core-controller/src/export_import.rs",
       "packages/d2b-core-controller/src/export_import_projection.rs",
       "packages/d2b-core-controller/src/authority.rs",
@@ -292,6 +704,12 @@ below is the sole feature authority for cross-provider acceptance coordination.
       "packages/d2b-audit/src/export.rs",
       "packages/d2b-resource-store-redb/src/audit.rs",
       "packages/d2b-resource-store-redb/tests/transactional_audit.rs",
+      "packages/d2bd/src/daemon_audit.rs",
+      "packages/d2bd/src/resource_runtime.rs",
+      "packages/d2b-priv-broker/src/audit.rs",
+      "packages/d2b-core-controller/src/authz_audit.rs",
+      "packages/d2b-bus/src/audit.rs",
+      "packages/d2b-session/src/audit.rs",
       "packages/d2b-telemetry/src/trace_context.rs",
       "packages/d2b-telemetry/src/audit_hash.rs",
       "packages/d2b-telemetry/src/emitter.rs",
@@ -740,11 +1158,12 @@ current-facing sole Network-opt-in path on the T221 base. The generated work-ite
 must retain `ADR046-nl-001` through `ADR046-nl-020` as authoritative W6 implementation under T221 and assign all
 four Network/Host cases to that W6 group. A feature-local matrix, single-opt-in assertion,
 declaration-only fixture, fake adapter, or evidence from the old env surface cannot resolve
-the conflict. The retired Wave 5 plan remains read-only evidence. T221 requires the accepted migration
-and regenerated double-opt-in contract on the exact fetched Wave 6 base, and T480 revalidates
-the production cases at close. Generated authority owns provider implementation; the exact
-machine-readable T604/T479/T480 local contract owns cross-provider acceptance coordination
-over it. No feature-local status correction can unblock any boundary.
+the conflict. The retired Wave 5 plan remains read-only evidence. ADR/code canon fixes the
+double-opt-in invariant; T608 and the Network manifest lane implement it prospectively, and
+T480 revalidates the production cases at close. Generated authority owns provider
+implementation; the expanded seven-task machine contract owns foundation substitution and
+cross-provider acceptance coordination without replacing manifest identity. No status-only
+feature update can alter that boundary.
 
 ### Group `wi:core-config-hub:w4` (1 items)
 
@@ -1204,8 +1623,16 @@ silently reinterpret the external dossier.
   against the exact base, new entry snapshot, and current
   feature snapshot. Require one record for every selected seat, N/N sign-off, and zero
   recommendations. The selection uses the current thirteen-seat role domain and may only
-  widen over fix deltas. Any base, constitution, retained-state, evidence, feature, or guard
-  change invalidates the entry snapshot and plan result. This authorizes implementation only.
+  widen over fix deltas. Before the first `Dispatched` transition in the external dispatch
+  ledger, any material change named by `entry_plan_invalidation_policy` invalidates the entry
+  snapshot, command evidence, approval receipt, and plan result. After first dispatch,
+  ledger-derived status-only updates do not invalidate T221: they may project only checkbox/
+  completion/evidence/dispatch/merge/seal status, digests, external locators, timestamps, and
+  non-authorizing progress summaries, and must change no requirement, dependency, owner,
+  destination, validation, state transition, launch/readiness rule, census, or guard
+  predicate. A material change after first dispatch blocks affected groups and requires
+  replacement plan material and approval receipt before further launch. This authorizes
+  implementation only.
   The same production guard is rechecked at panel request, seal, and merge eligibility.
   T480's distinct validation, exact-candidate panel, protected PR, post-merge seal, and
   merge-eligibility gates remain mandatory. No Wave 5 seal is required or created.
@@ -1219,12 +1646,16 @@ silently reinterpret the external dossier.
   `2399894e8b1b0383d84511853b5a89c4bee553c5eaa3a6f6353a6b81963463a6`.
   This feature-artifact correction invalidates that content binding. T221 remains unchecked
   until production tooling creates a replacement snapshot and selection and every selected
-  seat returns signoff with zero recommendations. Once that replacement result passes,
-  T221 authorizes T606 only; it does not authorize immediate Provider-lane fan-out.
+  seat returns signoff with zero recommendations, all structured command evidence is
+  complete, the external dispatch ledger proves no launch, and the durable external
+  plan-approval receipt passes its contract. These artifacts are correlation/process
+  evidence, not authentication. Once that replacement result passes, T221 authorizes T606
+  only; it does not authorize immediate Provider-lane fan-out.
 
 ### Group `feature-local:w6-shared-prep` (1 task)
 
-- [ ] T606 [US2] **W6 SHARED-CONTRACT AND PROVIDER-SCAFFOLD PREP.** Depends on
+- [ ] T606 [US2] **FEATURE-LOCAL FOUNDATION/COMPLETION - W6 SHARED-CONTRACT AND
+  PROVIDER-SCAFFOLD PREP.** Depends on
   T221. Land one integrator-owned prep commit before any implementation worktree opens.
   Freeze the shared broker contract, privilege table, dispatch/module registration, workspace,
   lockfile, flake, Provider catalog, aggregate import, and Makefile anchors named by the
@@ -1236,12 +1667,17 @@ silently reinterpret the external dossier.
 
   **Done when** Cargo metadata sees exactly the twenty-seven dossier Provider crates as
   workspace members; both dossier-minus-crate and crate-minus-dossier sets are empty; every
-  shared file has exactly one initial writer and a declared later handoff; and
+  shared file has exactly one initial writer and a declared later handoff; both workspace
+  `cargo metadata --locked` commands succeed without changing either lockfile; all twenty-
+  seven Provider package outputs resolve through the flake/catalog with exactly one package
+  per dossier; `nix flake check --no-build --all-systems --no-write-lock-file` passes without
+  changing `flake.lock`; the generated Provider catalog is byte-current; and
   `make test-inventory`, `make test-policy`, `make test-drift`, and `make test-rust` pass.
 
 ### Group `feature-local:w6-core-control-foundations` (1 task)
 
-- [ ] T607 [US2] **PROSPECTIVELY COMPLETE CORE AND CONTROL FOUNDATIONS.** Depends
+- [ ] T607 [P] [US2] **FEATURE-LOCAL FOUNDATION/COMPLETION - PROSPECTIVELY
+  COMPLETE CORE AND CONTROL FOUNDATIONS.** Depends
   on T606. Adopt the obligations of `ADR046-cli-001`, `ADR046-cli-009`,
   `ADR046-exec-003`, `ADR046-exec-004`, `ADR046-exec-005`, `ADR046-nix-003`, and
   `ADR046-zone-control-001` as current W6 work without changing their retained W5 labels,
@@ -1266,8 +1702,9 @@ silently reinterpret the external dossier.
 
 ### Group `feature-local:w6-storage-authority-foundations` (1 task)
 
-- [ ] T608 [US2] **PROSPECTIVELY COMPLETE STORAGE AND HOST-GLOBAL AUTHORITY
-  FOUNDATIONS.** Depends on T606. Adopt the obligations of `ADR046-volume-001`,
+- [ ] T608 [P] [US2] **FEATURE-LOCAL FOUNDATION/COMPLETION - PROSPECTIVELY
+  COMPLETE STORAGE AND HOST-GLOBAL AUTHORITY FOUNDATIONS.** Depends on T606.
+  Adopt the obligations of `ADR046-volume-001`,
   `ADR046-volume-002`, `ADR046-volume-004`, `ADR046-zone-control-019`,
   `ADR046-zone-control-020`, and `ADR046-zone-control-024` as current W6 work without
   changing retained W5 history. Own the dedicated Volume contracts, volume-local
@@ -1281,23 +1718,34 @@ silently reinterpret the external dossier.
   first TPM ensure, the migration path must inventory and bind any legacy swtpm state and
   identity marker to the exact Device/Volume owner; missing, replaced, ambiguous, or
   foreign-owned legacy state fails closed and is never silently initialized or wiped.
+  T608 owns the strict ResourceType schema/Nix generator, generated module outputs,
+  resource compiler/validation modules, and assertion layer named by the local contract.
+  Generator output, module option types/defaults, assertion predicates, Rust schema, and
+  emitted canonical JSON must move together and pass drift checks. TPM migration additionally
+  requires the T606 broker/storage contract freeze, T608's completed Volume contract and
+  Host-global authority index, an inventory of legacy state and markers, and a durable
+  migration/adoption result before any `Provider/device-tpm` ensure may be dispatched.
 
   **Done when** Volume effects use opaque typed broker operations and expose no raw host path;
   source/dependency policy proves Provider and controller code has no direct filesystem,
   network, or system-manager mutation path; strict generated ResourceType Nix positive and
-  planted-negative validation passes; Host-global ownership rejects cross-Zone physical
-  device, external NIC, fixed listener, store writer, and conflicting service claims before
-  effects; external-NIC cross-Zone bridge multiplexing fails closed; TPM migration proves
+  planted-negative validation passes; `make test-nix-unit`, `make test-drift`, and planted
+  eval/build negatives prove the generator/module/assertion/schema bijection; Host-global
+  ownership rejects cross-Zone physical device, external NIC, fixed listener, store writer,
+  and conflicting service claims before effects; external-NIC cross-Zone bridge multiplexing
+  fails closed; TPM migration proves
   preserve/adopt/refuse ordering before first ensure; marker, adoption, cleanup, and authority
   ordering tests pass; and focused Cargo tests plus executed `make test-integration` pass. A
   declaration-only fixture is not execution evidence.
 
 ### Group `feature-local:w6-audit-telemetry-foundations` (1 task)
 
-- [ ] T609 [US2] **PROSPECTIVELY COMPLETE AUDIT AND TELEMETRY FOUNDATIONS.**
-  Depends on T606. Adopt `ADR046-audit-001` and `ADR046-telem-001` as current W6
-  work without modifying retained W5 state. Own only the `d2b-audit` and `d2b-telemetry`
-  foundation files assigned by the local task contract. A privileged mutation may report
+- [ ] T609 [P] [US2] **FEATURE-LOCAL FOUNDATION/COMPLETION - PROSPECTIVELY
+  COMPLETE AUDIT AND TELEMETRY FOUNDATIONS.** Depends on T606. Adopt
+  `ADR046-audit-001` and `ADR046-telem-001` as current W6
+  work without modifying retained W5 state. Own the complete production audit wiring and the
+  `d2b-audit`/`d2b-telemetry` foundation files assigned by the local task contract. A
+  privileged mutation may report
   success only when its audit row is appended in the mutation's transactional durability
   boundary and the required data and parent-directory synchronization has completed. Audit,
   errors, logs, spans, metrics, support output, and `Debug` must reject raw resource names,
@@ -1306,7 +1754,11 @@ silently reinterpret the external dossier.
   diagnostic output must carry explicit byte/count/age bounds and deterministic drop/prune
   behavior. Every metric descriptor and every label value must come from the closed
   descriptor/semantic-domain registry; resource-derived or free-form label keys and values
-  are forbidden.
+  are forbidden. T609 owns complete production audit wiring across the authoritative audit
+  crate, resource-store transaction adapter, daemon runtime, broker writer, core authz,
+  bus/session producers, export/rotation/prune path, and their production-boundary tests.
+  Provider-specific emitters consume that frozen wiring through typed ports and may not open
+  a competing writer or choose durability.
 
   **Done when** audit records are hash-chained, redacted, append-only, rotated, and pruned;
   transaction abort, audit append failure, file sync failure, and parent sync failure all
@@ -1343,10 +1795,12 @@ all 258 manifest W6 items + T607..T609 + T604
 ```
 
 The census is twenty-nine manifest groups, four local foundation groups, and
-three local acceptance/close groups: thirty-six post-entry groups total. The first ready
-set contains only T606. The second ready set contains T607, T608, and T609 in parallel.
-The 258 count describes only manifest-backed W6 work; it is not the complete executable W6
-task count.
+three local acceptance/close groups: thirty-six post-entry groups total. Readiness and launch
+state come only from the external dispatch ledger, the local completion state machine, the
+29-entry `manifest_group_foundations` map, and graph prerequisites. Immediately after a
+durable T221 approval with every group `NotLaunched`, that computation yields T606 only;
+after T606 is `Completed`, it yields T607, T608, and T609 in parallel. The 258 count
+describes only manifest-backed W6 work; it is not the complete executable W6 task count.
 
 ### Group `wi:ADR-046-provider-activation-nixos` (7 items)
 
@@ -2235,7 +2689,7 @@ agents share a working tree or a `packages/target/`:
 | W3 | 1 | **1** - strictly serial by design |
 | W4 | 6 | **6** |
 | W5 | historical only | Retired rows remain inside explicit read-only compatibility blocks |
-| W6 | generated provider groups plus local acceptance coordination | Provider implementation concurrency resolves from generated authority; cross-provider acceptance coordination remains with the exact machine-readable T604/T479/T480 local contract |
+| W6 | 36 post-entry groups | T606 runs first; T607-T609 may then run in parallel; all 29 manifest groups require the closed four-foundation map and graph prerequisites; T604/T479/T480 remain serialized acceptance/close groups |
 | W7 | 5 | **5** |
 
 Worktree setup per slice (cut from the wave integration branch, never from `v3`):
@@ -2271,8 +2725,9 @@ Panels run as exactly the read-only seats and profiles recorded by the candidate
 | Free disk under the repo root | **10 GiB minimum**, fail-closed preflight | Wave fails at the preflight guard |
 
 The practical consequence: **implementation fan-out can be wide, heavy validation cannot.**
-Dispatch the 26 remaining W6 Provider subagents freely, but serialize their `make test-integration` and
-`make test-host-integration` runs through the gate.
+Dispatch exactly the groups whose external ledger state computes as Ready; no fixed agent or
+Provider count is authoritative. Serialize every `make test-integration` and
+`make test-host-integration` run through the gate.
 
 ### What each subagent needs in its prompt
 
@@ -2392,15 +2847,16 @@ deliverables.
 
 ### Task count
 
-605 tasks: 18 pre-wave/process hygiene tasks (4 panel-model migration, 4 pipelined-wave
+609 tasks: 18 pre-wave/process hygiene tasks (4 panel-model migration, 4 pipelined-wave
 migration), 531 initial-scope work items, 18 wave entry/gate/merge tasks for W2-W7, 5 for the terminal wave,
 4 added at W5/W7 by the earlier analysis remediation, 15 added to Wave 5 by the approved
-production-completion amendment, 1 active unchecked feature-local acceptance task, 1 retired
+production-completion amendment, 4 prospective W6 feature-local foundation tasks, 1 active
+unchecked feature-local acceptance task, 1 retired
 feature-editor reconciliation task, and 12 for
 the release.
 The 531 primary work-item tasks preserve the exact items that were `Planned` at program
 opening - one primary task each, no more and no fewer. At committed HEAD
-`868469bf9c293cd48fff483717f14cb88c246821`, 54 of those items are now manifest `Merged` and
+`bfeaf3fe39e4eea9c9180441b7a892b682dfc7f0`, 54 of those items are now manifest `Merged` and
 checked, while 477 remain manifest `Planned` and unchecked. Together with the 14 W0/W1 items
 that were already `Merged` before primary-task generation, the current authoritative census
 is 68 `Merged` and 477 `Planned`. T575 and T583 are process tasks that cite manifest ids; they

@@ -261,7 +261,7 @@ Constraints").
 | Target platform | `x86_64-linux` NixOS with KVM; graphics gated to x86_64 | `checkVmPlatform`, flake checks |
 | Test layers | nix-unit eval cases, cargo unit/integration, rendered-artifact contract tests, policy lints, flake checks; podman containers and `runNixOSTest` for Layer 2 | `tests/AGENTS.md` |
 | Hard scale fixtures | 10,000 resources; 100 live watches | §10.4 |
-| Program size | Initial scope 531 work items across 53 specs and 7 waves; current manifest 477 `Planned` across 43 specs and 68 `Merged` total; 27 Provider crates | implementation graph plus work-item manifest at `868469bf9c293cd48fff483717f14cb88c246821` |
+| Program size | Initial scope 531 work items across 53 specs and 7 waves; current manifest 477 `Planned` across 43 specs and 68 `Merged` total; 27 Provider crates | implementation graph plus work-item manifest at `bfeaf3fe39e4eea9c9180441b7a892b682dfc7f0` |
 
 ---
 

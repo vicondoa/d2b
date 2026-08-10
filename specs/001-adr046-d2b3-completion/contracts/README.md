@@ -159,8 +159,10 @@ snapshot `edd532c5e3dc13c74f1ab8daa285fee17a3347938f77af674eeb047ad19f0cf3`,
 and selection digest
 `2399894e8b1b0383d84511853b5a89c4bee553c5eaa3a6f6353a6b81963463a6`. This
 feature-content correction invalidates that binding. It remains discovery evidence, not an
-entry pass. T221 requires a replacement snapshot, selection, and unanimous result. Passing
-T221 authorizes T606 only.
+entry pass. T221 requires a replacement snapshot, selection, complete structured command
+evidence, external dispatch ledger, unanimous result, and durably written plan-approval
+receipt. Those records provide process correlation/completeness and are not authentication.
+Passing T221 authorizes T606 only.
 
 The predecessor guard validates the retained W5 candidate, embedded snapshot, head, request,
 evidence inventory, zero-attestation state, and absent seal inside the predecessor record.
@@ -169,7 +171,14 @@ material. It must not equal a retained W5 identity. Before that snapshot, T221 r
 quickstart evidence block: nonempty focused guard enumeration, zero ignored/skipped results,
 `make test-drift`, `make test-policy`, `make test-unit` with flake/nix-unit/runtime-ledger
 membership, heavy-gate acquisition, and the machine-derived 258/29/7/265 launch census with
-T606 as the only first-ready local task and zero implementation groups launched.
+all 29 manifest group foundations present, T606 as the only first-ready local task, and the
+pre-T221 launched set derived as empty from the external dispatch ledger.
+
+Before the ledger's first `Dispatched` transition, a material base/guard/requirement/
+dependency/ownership/validation/readiness change invalidates T221. After first dispatch,
+status-only checkbox/completion/evidence/dispatch/merge/seal projections derived from the
+ledger do not invalidate it and cannot change plan authority. A later material change blocks
+affected groups until replacement plan material and approval receipt are accepted.
 
 The same production guard runs at Wave 6 snapshot/entry and is rechecked at panel request,
 seal, and merge eligibility. Missing, extra, partial, changed, unfetched, non-first-parent,

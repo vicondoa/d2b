@@ -142,6 +142,20 @@ Are requirements present for each scenario class, or explicitly excluded?
   transactional privileged audit, redaction, bounded telemetry, and descriptor closure?
 - [x] CHK061 Does every affected Provider lane follow accepted ADR/code canon over drifted
   dossier prose and require reconciliation before completion?
+- [x] CHK062 Is the closed feature-local exception exactly T606-T609 plus
+  T604/T479/T480, with foundation and coordination labels explicit and no general local
+  implementation authority?
+- [x] CHK063 Does the machine contract define exact local state transitions, completion
+  evidence, W6-only adoption substitution, and no manifest/history substitution?
+- [x] CHK064 Does every one of the 29 manifest groups map to all four foundations, and are
+  every local/manifest shared writer and all thirteen scaffold handoffs ordered against
+  candidate-bound manifest destination hashes?
+- [x] CHK065 Are readiness and launch derived from the external 36-group dispatch ledger, and
+  are command evidence plus the durably written approval receipt required as non-
+  authentication process evidence?
+- [x] CHK066 Are material invalidation and status-only updates separated at first dispatch,
+  the graph fixed at 600 nodes/1960 edges/545 manifest items, feature tasks fixed at 609,
+  W6 fixed at 36 groups/265 records, and no fixed agent count retained?
 
 ## Notes
 

@@ -119,6 +119,56 @@ The entry evidence records the exact focused nonzero test count, zero ignored co
 skip matches, and exit status 0 for every command above. `make test-drift` is the Gate 0
 mechanical evidence. `make test-unit` is eligible only while the checked Layer-1 manifest
 contains and executes `test-flake`, `test-nix-unit`, and `test-runtime-ledger`.
+Run every command through an external recorder that writes one structured record matching
+`structured_command_evidence_contract` in `tasks.md`. Reviewer self-report, terminal scrollback,
+or a prose PASS is ineligible. Raw output stays outside Git; the record retains argv, exit,
+timing, output digests, and byte count. For the focused records it also retains discovered,
+ignored, and skip counts. Validate the complete record set before census or snapshot:
+
+```bash
+node <<'NODE'
+const fs = require("fs");
+const path = require("path");
+const assert = require("assert/strict");
+
+const evidenceDir = process.env.D2B_W6_COMMAND_EVIDENCE_DIR;
+assert(evidenceDir, "set D2B_W6_COMMAND_EVIDENCE_DIR");
+assert(path.isAbsolute(evidenceDir));
+assert(!evidenceDir.startsWith(process.cwd() + "/"));
+
+const tasks = fs.readFileSync(
+  "specs/001-adr046-d2b3-completion/tasks.md",
+  "utf8",
+);
+const local = JSON.parse(tasks.match(
+  /```json\n(\{\n  "artifact_kind": "d2b-feature-local-task-contract"[\s\S]*?\n\})\n```/,
+)[1]);
+const contract = local.structured_command_evidence_contract;
+const records = fs.readdirSync(evidenceDir)
+  .filter((name) => name.endsWith(".json"))
+  .map((name) => JSON.parse(fs.readFileSync(path.join(evidenceDir, name), "utf8")));
+const byId = new Map(records.map((record) => [record.commandId, record]));
+
+assert.deepEqual(
+  [...byId.keys()].sort(),
+  [...contract.required_t221_command_ids].sort(),
+);
+for (const id of contract.required_t221_command_ids) {
+  const record = byId.get(id);
+  assert.equal(record.artifactKind, contract.artifact_kind);
+  assert.equal(record.schemaVersion, contract.schema_version);
+  assert.equal(record.exitCode, 0);
+  assert.equal(record.result, "passed");
+  for (const field of contract.required_fields) {
+    assert(Object.hasOwn(record, field), `${id} missing ${field}`);
+  }
+}
+assert(byId.get("focused-guard-list").discoveredTests > 0);
+assert.equal(byId.get("focused-guard-ignored-list").ignoredTests, 0);
+assert.equal(byId.get("focused-guard-run").skipMatches, 0);
+console.log("structured-command-evidence=valid");
+NODE
+```
 
 Derive and assert the pre-dispatch census from the current graph, work-item state, and local
 task contract rather than copying counts from prose:
@@ -126,14 +176,24 @@ task contract rather than copying counts from prose:
 ```bash
 node <<'NODE'
 const fs = require("fs");
+const crypto = require("crypto");
+const path = require("path");
 const assert = require("assert/strict");
 
-const graph = JSON.parse(
-  fs.readFileSync("docs/specs/ADR-046-implementation-graph.json", "utf8"),
+const graphBytes = fs.readFileSync(
+  "docs/specs/ADR-046-implementation-graph.json",
 );
-const workItems = JSON.parse(
-  fs.readFileSync("docs/specs/ADR-046-work-items.json", "utf8"),
+const workItemBytes = fs.readFileSync("docs/specs/ADR-046-work-items.json");
+const graph = JSON.parse(graphBytes);
+const workItems = JSON.parse(workItemBytes);
+const ledgerPath = process.env.D2B_W6_DISPATCH_LEDGER;
+assert(ledgerPath, "set D2B_W6_DISPATCH_LEDGER to the external ledger");
+assert(path.isAbsolute(ledgerPath));
+assert(
+  !ledgerPath.startsWith(process.cwd() + "/"),
+  "dispatch ledger must be outside the git working tree",
 );
+const ledger = JSON.parse(fs.readFileSync(ledgerPath, "utf8"));
 const tasks = fs.readFileSync(
   "specs/001-adr046-d2b3-completion/tasks.md",
   "utf8",
@@ -143,18 +203,97 @@ const match = tasks.match(
 );
 assert(match, "feature-local task contract must exist");
 const local = JSON.parse(match[1]);
+const sha256 = (bytes) => crypto.createHash("sha256").update(bytes).digest("hex");
+assert.equal(
+  sha256(workItemBytes),
+  local.local_to_manifest_shared_writer_handoffs.work_items_sha256,
+);
+assert.equal(
+  sha256(graphBytes),
+  local.local_to_manifest_shared_writer_handoffs.implementation_graph_sha256,
+);
 
 const w6 = graph.nodes.filter(
   (node) => node.kind === "work-item" && node.wave === "W6",
 );
+assert.equal(graph.nodes.length, 600);
+assert.equal(graph.edges.length, 1960);
+assert.equal(workItems.items.length, 545);
 assert.equal(w6.length, 258);
-assert.equal(new Set(w6.map((node) => node.parallelGroup)).size, 29);
+const manifestGroups = new Set(w6.map((node) => node.parallelGroup));
+assert.equal(manifestGroups.size, 29);
 assert.equal(local.task_ids.length, 7);
 assert.equal(258 + local.task_ids.length, 265);
+assert.deepEqual(
+  [...new Set(Object.keys(local.manifest_group_foundations))].sort(),
+  [...manifestGroups].sort(),
+  "all 29 manifest groups must have an exact foundation mapping",
+);
+for (const foundations of Object.values(local.manifest_group_foundations)) {
+  assert.deepEqual(foundations, ["T606", "T607", "T608", "T609"]);
+}
+const knownHandoffOwners = new Set([
+  ...local.task_ids,
+  ...w6.map((node) => node.id),
+]);
+for (const handoff of local.local_to_manifest_shared_writer_handoffs.handoffs) {
+  assert(handoff.paths.length > 0);
+  assert(handoff.order.length > 1);
+  for (const owner of handoff.order) {
+    assert(knownHandoffOwners.has(owner), `unknown handoff owner ${owner}`);
+  }
+}
+for (const group of Object.values(
+  local.local_to_manifest_shared_writer_handoffs.scaffold_handoffs
+)) {
+  assert(manifestGroups.has(group), `unknown scaffold handoff group ${group}`);
+}
+
+assert.equal(ledger.artifact_kind, local.dispatch_ledger_contract.artifact_kind);
+assert.equal(ledger.schema_version, local.dispatch_ledger_contract.schema_version);
+const requiredGroups = new Set([
+  ...manifestGroups,
+  ...local.dispatch_ledger_contract.local_group_ids,
+]);
+assert.equal(requiredGroups.size, 36);
+assert.deepEqual(
+  [...new Set(ledger.entries.map((entry) => entry.group))].sort(),
+  [...requiredGroups].sort(),
+  "dispatch ledger must contain exactly the 36 closed groups",
+);
+for (const entry of ledger.entries) {
+  for (const field of local.dispatch_ledger_contract.entry_required_fields) {
+    assert(Object.hasOwn(entry, field), `${entry.group} missing ${field}`);
+  }
+  assert(local.dispatch_ledger_contract.states.includes(entry.state));
+  if (entry.state === "NotLaunched") {
+    assert.equal(entry.dispatchId, null);
+    assert.deepEqual(entry.completionEvidenceIds, []);
+  }
+}
+const launched = ledger.entries.filter((entry) => entry.state !== "NotLaunched");
+assert.deepEqual(
+  launched,
+  [],
+  "derive pre-T221 launch state from the external ledger and require none",
+);
 
 const firstReady = local.task_ids.filter((id) => {
   const dependencies = local.required_local_dependencies[id] || [];
-  return dependencies.every((dependency) => dependency === "T221");
+  return dependencies.every((dependency) => {
+    if (dependency === "T221") return true;
+    const groupByTask = {
+      T606: "feature-local:w6-shared-prep",
+      T607: "feature-local:w6-core-control-foundations",
+      T608: "feature-local:w6-storage-authority-foundations",
+      T609: "feature-local:w6-audit-telemetry-foundations",
+      T604: "feature-local:w6-operator-acceptance",
+      T479: "feature-local:w6-converge",
+      T480: "feature-local:w6-close",
+    };
+    const entry = ledger.entries.find((item) => item.group === groupByTask[dependency]);
+    return entry && entry.state === "Completed";
+  });
 });
 assert.deepEqual(firstReady, ["T606"]);
 
@@ -163,7 +302,7 @@ const stateById = new Map(
 );
 assert(
   w6.every((node) => stateById.get(node.id) === "Planned"),
-  "no manifest implementation group may be launched before T221",
+  "manifest state census must remain Planned before T221; launch state comes from the ledger",
 );
 assert.deepEqual(
   [...local.unchecked_task_ids].sort(),
@@ -172,12 +311,16 @@ assert.deepEqual(
 );
 
 console.log(JSON.stringify({
+  graphNodes: graph.nodes.length,
+  graphEdges: graph.edges.length,
+  manifestWorkItemTotal: workItems.items.length,
   manifestWorkItems: w6.length,
   manifestGroups: new Set(w6.map((node) => node.parallelGroup)).size,
   localTasks: local.task_ids.length,
   postEntryRecords: w6.length + local.task_ids.length,
   firstReadyLocalTask: firstReady,
-  launchedImplementationGroupsBeforeT221: 0,
+  launchedImplementationGroupsBeforeT221: launched.length,
+  dispatchLedger: ledgerPath,
 }));
 NODE
 ```
@@ -224,6 +367,61 @@ with zero recommendations. The first discovery packet
 snapshot `edd532c5e3dc13c74f1ab8daa285fee17a3347938f77af674eeb047ad19f0cf3`.
 This feature edit invalidates that binding. Generate new identities; do not reuse or predict
 them. A passing replacement T221 result authorizes T606 only.
+
+After the replacement selected roster returns unanimous signoff with zero recommendations,
+write one external plan-approval receipt matching `plan_approval_receipt_contract` in
+`tasks.md`. The writer must create a same-directory temporary file, write canonical JSON,
+fsync the file, rename it over the destination, and fsync the parent directory. The receipt's
+durable-write evidence digest binds the recorder result for that sequence.
+`featurePlanMaterialSha256` uses the contract's status-normalized plan-material digest, so
+later status-only projections do not change it. Validate the receipt before changing T221
+status or dispatching T606:
+
+```bash
+node <<'NODE'
+const fs = require("fs");
+const path = require("path");
+const assert = require("assert/strict");
+
+const receiptPath = process.env.D2B_W6_PLAN_APPROVAL_RECEIPT;
+assert(receiptPath, "set D2B_W6_PLAN_APPROVAL_RECEIPT");
+assert(path.isAbsolute(receiptPath));
+assert(!receiptPath.startsWith(process.cwd() + "/"));
+
+const tasks = fs.readFileSync(
+  "specs/001-adr046-d2b3-completion/tasks.md",
+  "utf8",
+);
+const local = JSON.parse(tasks.match(
+  /```json\n(\{\n  "artifact_kind": "d2b-feature-local-task-contract"[\s\S]*?\n\})\n```/,
+)[1]);
+const contract = local.plan_approval_receipt_contract;
+const receipt = JSON.parse(fs.readFileSync(receiptPath, "utf8"));
+
+assert.equal(receipt.artifactKind, contract.artifact_kind);
+assert.equal(receipt.schemaVersion, contract.schema_version);
+for (const field of contract.required_fields) {
+  assert(Object.hasOwn(receipt, field), `receipt missing ${field}`);
+}
+for (const [field, value] of Object.entries(contract.required_values)) {
+  assert.deepEqual(receipt[field], value);
+}
+assert.equal(receipt.signoffCount, receipt.selectedRoster.length);
+assert(receipt.selectedRoster.length > 0);
+assert.match(receipt.durableWriteEvidenceSha256, /^[0-9a-f]{64}$/);
+console.log("durable-plan-approval-receipt=valid");
+NODE
+```
+
+The structured command records, dispatch ledger, observed run metadata, and durable plan
+receipt provide candidate correlation, completeness, uniqueness, and crash-safe process
+state. They are not authentication, proof of reviewer identity, or a security boundary.
+Before the ledger's first `Dispatched` transition, any material change listed in the local
+contract invalidates this evidence and approval. After first dispatch, status-only updates
+are ledger-derived projections of checkbox/completion/evidence/dispatch/merge/seal status,
+digests, locators, timestamps, or non-authorizing progress text. They do not invalidate T221
+and may not change requirements, dependencies, owners, destinations, validation, state
+transitions, launch/readiness, census, or guard predicates.
 
 ### 1c. Reject actionable retired-phase prose
 
@@ -511,10 +709,12 @@ T608 + T609
   -> ADR046-nl-006..ADR046-nl-020
 ```
 
-After T606, other Provider groups open only when their own T607/T608/T609 dependency is
-complete. The first ready set is exactly T606. The second is exactly T607, T608, and T609.
-The 258 manifest work items are only the manifest body; four foundation groups and three
-acceptance/close groups make 36 post-entry groups and 265 active post-entry work records.
+The external dispatch ledger is the launch/readiness authority. With durable T221 approval
+and every group `NotLaunched`, its dependency computation yields T606 only. After T606 is
+`Completed`, it yields T607, T608, and T609. Every manifest group requires all four through
+`manifest_group_foundations` plus graph prerequisites. The 258 manifest work items are only
+the manifest body; four foundation groups and three acceptance/close groups make 36
+post-entry groups and 265 active post-entry work records.
 
 ### 3. Inner loop while implementing
 

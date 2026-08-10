@@ -58,6 +58,17 @@
   and closed metric descriptors to mechanically checkable completion evidence
 - [x] Existing accepted ADRs and committed passing code override drifted Provider prose, and
   each affected dossier lane must reconcile the implementation before completion
+- [x] The feature-local exception is closed over exactly seven tasks, with explicit
+  foundation/coordination labels, state transitions, completion evidence, W6-only adoption
+  substitution, and no manifest identity or historical-state substitution
+- [x] All 29 manifest groups require T606-T609, and all shared local/manifest writers plus
+  thirteen scaffold transfers have candidate-manifest-bound handoff order
+- [x] Dispatch/readiness comes from an external 36-group ledger; structured command evidence
+  and the durably written zero-recommendation plan receipt are required process records and
+  are explicitly not authentication
+- [x] T221 invalidation stops at pre-first-dispatch material changes; later status-only
+  ledger projections cannot change requirements, dependencies, owners, destinations,
+  validation, readiness, census, or guards
 
 ## Feature Readiness
 
@@ -151,8 +162,8 @@ bindings, and validation procedures are present where removing them would make a
 architecture, security, or fail-closed delivery obligation ambiguous or untestable. The
 content-quality checks above therefore reject accidental or gratuitous implementation detail,
 while accepting the deliberate technical contract detail required by the current 75 FRs and
-35 SCs. This reconciliation changes planning prose only, preserves all 605 task IDs, and
-records no implementation completion.
+35 SCs. This reconciliation changes planning prose only, preserves every prior task ID, adds
+T606-T609 for a current total of 609 task rows, and records no implementation completion.
 
 ## Notes
 

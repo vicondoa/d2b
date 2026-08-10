@@ -22,7 +22,7 @@ reconciliation toolkit, ComponentSession runtime, transport substrate, Zone mess
 and the storage feasibility proof. At program opening, 14 of 545 enumerated work items were
 `Merged` and 531 were `Planned` across waves W2 through W7. That 531-item initial scope is
 preserved in the primary task set. At committed HEAD
-`868469bf9c293cd48fff483717f14cb88c246821`, the authoritative manifest records 68 `Merged`
+`bfeaf3fe39e4eea9c9180441b7a892b682dfc7f0`, the authoritative manifest records 68 `Merged`
 and 477 `Planned`. The terminal wave W8 has no work items yet by design: its contents are the
 delivery friction accumulated across the program and are triaged and recorded only after W7
 is sealed, merged, and cleaned up, so the program's final total exceeds 545.
@@ -1015,9 +1015,14 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   `bfeaf3fe39e4eea9c9180441b7a892b682dfc7f0` and entry commit
   `d6de52ca44240b890dd7cc90e6962bf244945b7c`; this feature correction invalidates
   its candidate binding. A replacement production snapshot and unanimous plan result are
-  required. Passing T221 authorizes T606 only. T606 then freezes shared contracts and
-  Provider scaffolds before T607, T608, and T609 run in parallel and before any Provider
-  group opens.
+  required. T221 completion also requires structured command evidence, an external dispatch
+  ledger covering the closed 36-group census, and a durably written plan-approval receipt;
+  those artifacts prove process correlation/completeness, not authentication. Only material
+  plan changes before first dispatch invalidate entry approval. After first dispatch,
+  ledger-derived status-only checkbox/state/evidence/progress projections do not invalidate
+  T221 and may not alter requirements, dependencies, ownership, validation, readiness, or
+  guards. Passing T221 authorizes T606 only. T606 then freezes shared contracts and Provider
+  scaffolds before T607, T608, and T609 run in parallel and before any Provider group opens.
 - **FR-057**: After FR-036's historical disposition is matched, the program
   MUST distinguish **entry evidence** from **exit evidence**, and
   MUST NOT treat a requirement for one as a requirement for the other. Entry evidence is what
