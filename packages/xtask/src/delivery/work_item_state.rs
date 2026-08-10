@@ -658,7 +658,7 @@ mod tests {
 
             let roots = BTreeMap::from([(D2B_REPOSITORY_ID.to_owned(), repository.repo())]);
             let state = StateRoot::for_tests(&repository.state()).expect("state root");
-            let current_id = CandidateId::parse(&"a".repeat(64)).expect("current candidate id");
+            let current_id = CandidateId::parse("a".repeat(64)).expect("current candidate id");
             let current = state
                 .candidate("spec001w6", &current_id)
                 .expect("current candidate");
