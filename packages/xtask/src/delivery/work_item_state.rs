@@ -1090,10 +1090,13 @@ mod tests {
         for wave in ["spec001w6", "spec001w7", "spec001w8"] {
             let mut material = fixture.material.clone();
             wave.clone_into(&mut material.wave);
-            require_adr046_historical_predecessor_for_exit(
+            assert!(is_adr046_post_w5(&material));
+            validate_historical_predecessor(
+                &fixture.policy(),
                 &fixture.state,
                 &material,
                 &fixture.roots,
+                false,
             )
             .expect("the accepted historical predecessor carries through later phases");
         }
