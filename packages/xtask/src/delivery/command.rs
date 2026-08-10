@@ -169,7 +169,7 @@ impl WaveCommand {
                  one immutable candidate."
             }
             Self::PlanApproval => {
-                "Create the durable unanimous T221 plan-approval receipt for the immutable entry snapshot."
+                "Create the durable T221 plan-approval receipt from the canonical panel approval for the immutable entry snapshot."
             }
             Self::DispatchReady => {
                 "Dispatch exactly the currently Ready Wave 6 groups under candidate and plan guards."
@@ -229,7 +229,7 @@ impl WaveCommand {
             }
             Self::PlanApproval => {
                 "cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave plan-approval \
-                 --snapshot PATH --selection PATH --lifecycle PATH --repo LOGICAL_ID=CHECKOUT_ROOT \
+                 --snapshot PATH --selection PATH --approval PATH --repo LOGICAL_ID=CHECKOUT_ROOT \
                  [--state-dir DIR]"
             }
             Self::DispatchReady => {
@@ -298,7 +298,7 @@ impl WaveCommand {
         match self {
             Self::Help => &[],
             Self::Snapshot => &["--program", "--wave", "--repo", "--base", "--pull-request"],
-            Self::PlanApproval => &["--snapshot", "--selection", "--lifecycle", "--repo"],
+            Self::PlanApproval => &["--snapshot", "--selection", "--approval", "--repo"],
             Self::DispatchReady => &["--snapshot", "--repo"],
             Self::Validate | Self::Complete => &["--snapshot", "--group", "--evidence", "--repo"],
             Self::Block => &["--snapshot", "--group", "--reason", "--repo"],
@@ -966,6 +966,38 @@ mod tests {
         .expect_err("panel-request without --selection");
         assert_eq!(error.kind(), DeliveryErrorKind::Usage);
         assert!(error.message().contains("--selection"), "{error}");
+    }
+
+    #[test]
+    fn plan_approval_requires_the_canonical_approval_path() {
+        let error = dispatch(&args(&[
+            "wave",
+            "plan-approval",
+            "--snapshot",
+            "W6/candidate/snapshot.json",
+            "--selection",
+            "/tmp/selection.json",
+            "--repo",
+            "github.com/example/d2b=/checkout",
+        ]))
+        .expect_err("plan-approval without --approval");
+        assert_eq!(error.kind(), DeliveryErrorKind::Usage);
+        assert!(error.message().contains("--approval"), "{error}");
+
+        let output = dispatch(&args(&["wave", "help"])).expect("help succeeds");
+        let command = output
+            .commands
+            .iter()
+            .find(|command| command.name == "plan-approval")
+            .expect("plan-approval is listed");
+        assert!(command.synopsis.contains("--approval PATH"));
+        assert!(!command.synopsis.contains("--lifecycle"));
+        assert!(
+            !command
+                .required_options
+                .iter()
+                .any(|option| option == "--lifecycle")
+        );
     }
 
     #[test]

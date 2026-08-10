@@ -7,8 +7,8 @@
 //! * a versioned dispatch ledger owns group and local-task transitions;
 //! * command evidence keeps command identity, output digests, counts, and
 //!   status without retaining raw output;
-//! * a plan-approval receipt binds the selected lifecycle to the exact entry
-//!   material.
+//! * a plan-approval receipt binds the canonical panel approval and selected
+//!   lifecycle to the exact entry material.
 //!
 //! These records are process-correlation evidence.  They are deliberately not
 //! authentication, a signature, or a new service boundary.  Their writers use
@@ -36,9 +36,9 @@ use super::{
     DeliveryError, Result,
     command::{CliOptions, WaveCommand, WorkflowOutput},
     model::{
-        CandidateId, CandidateMaterial, PANEL_CURRENT_ROLES, PanelRole, PanelSelectionV1,
-        SnapshotSha256, canonical_digest, qualified_wave_parts, sha256_bytes,
-        validate_bounded_string, validate_hash, validate_identifier, validate_sha256,
+        CandidateId, CandidateMaterial, PanelRole, PanelSelectionV1, SnapshotSha256,
+        canonical_digest, qualified_wave_parts, sha256_bytes, validate_bounded_string,
+        validate_hash, validate_identifier, validate_sha256,
     },
     panel,
     storage::{MAX_JSON_BYTES, absolute_path, ensure_external_path},
@@ -48,12 +48,14 @@ pub const DISPATCH_LEDGER_ARTIFACT_KIND: &str = "d2b-feature-local/dispatch-ledg
 pub const COMMAND_EVIDENCE_ARTIFACT_KIND: &str = "d2b-feature-local/command-evidence";
 pub const GROUP_EVIDENCE_ARTIFACT_KIND: &str = "d2b-feature-local/group-evidence";
 pub const PLAN_APPROVAL_ARTIFACT_KIND: &str = "d2b-feature-local/plan-approval";
+pub const PANEL_APPROVAL_ARTIFACT_KIND: &str = "d2b-panel/approval";
 pub const FRESH_FETCH_ARTIFACT_KIND: &str = "d2b-feature-local/fresh-fetch";
 
 pub const DISPATCH_LEDGER_SCHEMA_VERSION: u32 = 1;
 pub const COMMAND_EVIDENCE_SCHEMA_VERSION: u32 = 1;
 pub const GROUP_EVIDENCE_SCHEMA_VERSION: u32 = 1;
-pub const PLAN_APPROVAL_SCHEMA_VERSION: u32 = 1;
+pub const PLAN_APPROVAL_SCHEMA_VERSION: u32 = 2;
+pub const PANEL_APPROVAL_SCHEMA_VERSION: u32 = 1;
 pub const FRESH_FETCH_SCHEMA_VERSION: u32 = 1;
 
 pub const DISPATCH_LEDGER_ENV: &str = "D2B_W6_DISPATCH_LEDGER";
@@ -1851,70 +1853,196 @@ fn git_resolve_commit_tree(root: &Path, commit: &str) -> Result<String> {
     Ok(resolved)
 }
 
-pub const PLAN_LIFECYCLE_ARTIFACT_KIND: &str = "d2b-feature-local/plan-lifecycle";
 pub const WORK_SELECTION_ARTIFACT_KIND: &str = "d2b-feature-local/work-selection";
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct PlanLifecycleResult {
-    pub artifact_kind: String,
-    pub schema_version: u32,
+#[serde(deny_unknown_fields)]
+pub struct PanelApprovalSelection {
+    pub lifecycle_id: String,
+    pub phase: String,
     pub program: String,
     pub wave: String,
     pub candidate_id: CandidateId,
     pub content_id: super::model::ContentId,
     pub snapshot_sha256: SnapshotSha256,
-    pub selected_roster: Vec<String>,
-    pub signoff_count: u32,
-    pub recommendation_count: u32,
-    pub result: String,
-    pub durable_write_evidence_sha256: String,
-    pub seat_records: BTreeMap<String, Value>,
+    pub selection_schema_version: u32,
+    pub selection_table_version: u32,
+    pub roster: Vec<PanelRole>,
+    pub profiles: BTreeMap<String, Vec<String>>,
 }
 
-impl PlanLifecycleResult {
-    pub fn validate_for(&self, snapshot: &super::snapshot::WaveSnapshot) -> Result<()> {
-        if self.artifact_kind != PLAN_LIFECYCLE_ARTIFACT_KIND || self.schema_version != 1 {
-            return Err(DeliveryError::new(
-                "plan lifecycle result has an unexpected artifact kind or schema version",
-            ));
-        }
-        if self.program != "ADR046" || self.wave != "adr046w6" {
-            return Err(DeliveryError::new(
-                "plan lifecycle result must identify ADR046 Wave 6",
-            ));
-        }
-        if self.candidate_id != snapshot.candidate_id
-            || self.content_id != snapshot.content_id
-            || self.snapshot_sha256 != snapshot.snapshot_sha256
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PanelApprovalCandidate {
+    pub program: String,
+    pub wave: String,
+    pub candidate_id: CandidateId,
+    pub content_id: super::model::ContentId,
+    pub snapshot_sha256: SnapshotSha256,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PanelApprovalLedger {
+    pub artifact_kind: String,
+    pub schema_version: u32,
+    pub lifecycle_id: String,
+    pub selection_schema_version: u32,
+    pub selection_table_version: u32,
+    pub program: String,
+    pub wave: String,
+    pub candidate_id: CandidateId,
+    pub content_id: super::model::ContentId,
+    pub snapshot_sha256: SnapshotSha256,
+    pub roster: Vec<PanelRole>,
+    pub sources: Vec<Value>,
+    pub issues: Vec<Value>,
+    pub complete: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PanelApprovalArtifact {
+    pub artifact_kind: String,
+    pub schema_version: u32,
+    pub lifecycle_id: String,
+    pub phase: String,
+    pub approved: bool,
+    pub blocking_issues: Vec<String>,
+    pub response_blocking_issues: Vec<String>,
+    pub late_blocking_issues: Vec<String>,
+    pub status_blocks: Vec<Value>,
+    pub verification_blocks: Vec<Value>,
+    pub missing_verification_seats: Vec<PanelRole>,
+    pub signoff: bool,
+    pub selection: PanelApprovalSelection,
+    pub current_candidate: PanelApprovalCandidate,
+    pub selection_sha256: String,
+    pub discovery_ledger_sha256: String,
+    pub response_sha256: String,
+    pub verification_results_sha256: String,
+    pub late_issue_ids: Vec<String>,
+    pub late_blocker_count: u64,
+    pub late_major_count: u64,
+    pub ledger: PanelApprovalLedger,
+}
+
+impl PanelApprovalArtifact {
+    pub fn validate_for(
+        &self,
+        snapshot: &super::snapshot::WaveSnapshot,
+        selection: &PanelSelectionV1,
+        selection_bytes: &[u8],
+    ) -> Result<()> {
+        if self.artifact_kind != PANEL_APPROVAL_ARTIFACT_KIND
+            || self.schema_version != PANEL_APPROVAL_SCHEMA_VERSION
         {
             return Err(DeliveryError::new(
-                "plan lifecycle result is bound to a different entry snapshot",
+                "panel approval has an unexpected artifact kind or schema version",
             ));
         }
-        validate_sha256(
-            &self.durable_write_evidence_sha256,
-            "plan lifecycle durable-write evidence",
-        )?;
-        if self.selected_roster.is_empty()
-            || self.signoff_count != self.selected_roster.len() as u32
-            || self.recommendation_count != 0
-            || self.result != "approved"
-        {
+        if self.phase != "verification" {
             return Err(DeliveryError::new(
-                "plan lifecycle result is not unanimous and recommendation-free",
+                "panel approval phase must be verification",
             ));
         }
-        let expected = self.selected_roster.iter().collect::<BTreeSet<_>>();
-        let actual = self.seat_records.keys().collect::<BTreeSet<_>>();
-        if expected != actual
-            || self
-                .seat_records
-                .values()
-                .any(|seat| seat.get("signoff").and_then(Value::as_bool) != Some(true))
+        if !self.approved || !self.signoff {
+            return Err(DeliveryError::new(
+                "panel approval is not approved and signed off",
+            ));
+        }
+        if !self.blocking_issues.is_empty()
+            || !self.response_blocking_issues.is_empty()
+            || !self.late_blocking_issues.is_empty()
+            || !self.status_blocks.is_empty()
+            || !self.verification_blocks.is_empty()
+            || !self.missing_verification_seats.is_empty()
         {
             return Err(DeliveryError::new(
-                "plan lifecycle result per-seat records do not match unanimous selection",
+                "panel approval contains blocking issues",
+            ));
+        }
+        for (value, label) in [
+            (&self.selection_sha256, "panel approval selection digest"),
+            (
+                &self.discovery_ledger_sha256,
+                "panel approval discovery ledger digest",
+            ),
+            (&self.response_sha256, "panel approval response digest"),
+            (
+                &self.verification_results_sha256,
+                "panel approval verification results digest",
+            ),
+        ] {
+            validate_sha256(value, label)?;
+        }
+
+        let digests = snapshot.digests();
+        selection.validate_for_snapshot(snapshot.program(), snapshot.wave(), &digests)?;
+        if sha256_bytes(selection_bytes) != self.selection_sha256 {
+            return Err(DeliveryError::new(
+                "panel approval selection digest does not match the exact selection bytes",
+            ));
+        }
+        if self.lifecycle_id != selection.lifecycle_id
+            || self.selection.lifecycle_id != selection.lifecycle_id
+            || self.selection.phase != selection.phase
+        {
+            return Err(DeliveryError::new(
+                "panel approval lifecycle or selection phase does not match the selection",
+            ));
+        }
+        if selection.phase != "verification" {
+            return Err(DeliveryError::new(
+                "panel approval requires a verification selection",
+            ));
+        }
+        if self.selection.program != selection.program
+            || self.selection.wave != selection.wave
+            || self.selection.candidate_id != selection.candidate_id
+            || self.selection.content_id != selection.content_id
+            || self.selection.snapshot_sha256 != selection.snapshot_sha256
+            || self.selection.selection_schema_version != selection.schema_version
+            || self.selection.selection_table_version != selection.selection_table_version
+            || self.selection.roster != selection.roster
+            || self.selection.profiles != selection.profiles
+        {
+            return Err(DeliveryError::new(
+                "panel approval selection summary does not match the exact selection",
+            ));
+        }
+        if self.current_candidate.program != snapshot.program()
+            || self.current_candidate.wave != snapshot.wave()
+            || self.current_candidate.candidate_id != digests.candidate_id
+            || self.current_candidate.content_id != digests.content_id
+            || self.current_candidate.snapshot_sha256 != digests.snapshot_sha256
+        {
+            return Err(DeliveryError::new(
+                "panel approval current candidate does not match the entry snapshot",
+            ));
+        }
+        if self.ledger.artifact_kind != "d2b-panel/issue-ledger"
+            || self.ledger.schema_version != PANEL_APPROVAL_SCHEMA_VERSION
+            || self.ledger.selection_schema_version != selection.schema_version
+            || self.ledger.selection_table_version != selection.selection_table_version
+            || self.ledger.lifecycle_id != selection.lifecycle_id
+            || self.ledger.program != snapshot.program()
+            || self.ledger.wave != snapshot.wave()
+            || self.ledger.candidate_id != digests.candidate_id
+            || self.ledger.content_id != digests.content_id
+            || self.ledger.snapshot_sha256 != digests.snapshot_sha256
+            || !self.ledger.complete
+        {
+            return Err(DeliveryError::new(
+                "panel approval discovery ledger is not bound to the entry snapshot",
+            ));
+        }
+        let mut ledger_roster = BTreeSet::new();
+        if self.ledger.roster.iter().any(|role| {
+            !role.is_current() || !ledger_roster.insert(*role) || !selection.roster.contains(role)
+        }) {
+            return Err(DeliveryError::new(
+                "panel approval discovery ledger roster is not a selection-bound roster",
             ));
         }
         Ok(())
@@ -1977,23 +2105,14 @@ pub struct PlanApprovalReceipt {
     pub program: String,
     pub wave: String,
     pub entry_base_oid: String,
-    pub feature_plan_material_sha256: String,
     pub entry_candidate_id: CandidateId,
     pub entry_content_id: super::model::ContentId,
     pub entry_snapshot_sha256: SnapshotSha256,
     pub selection_sha256: String,
+    pub panel_approval_sha256: String,
     pub dispatch_ledger_sha256: String,
     pub command_evidence_set_sha256: String,
-    pub selected_roster: Vec<String>,
-    pub signoff_count: u32,
-    pub recommendation_count: u32,
-    pub result: String,
-    pub durable_write_evidence_sha256: String,
     pub approved_at_unix: u64,
-    #[serde(rename = "lifecycleApproval")]
-    pub lifecycle_approval: Value,
-    #[serde(rename = "seatRecords")]
-    pub seat_records: BTreeMap<String, Value>,
 }
 
 impl PlanApprovalReceipt {
@@ -2015,81 +2134,15 @@ impl PlanApprovalReceipt {
         }
         validate_hash(&self.entry_base_oid, "plan approval entry base")?;
         for (value, label) in [
-            (
-                &self.feature_plan_material_sha256,
-                "feature plan material digest",
-            ),
             (&self.selection_sha256, "selection digest"),
+            (&self.panel_approval_sha256, "panel approval digest"),
             (&self.dispatch_ledger_sha256, "dispatch ledger digest"),
             (
                 &self.command_evidence_set_sha256,
                 "command evidence set digest",
             ),
-            (
-                &self.durable_write_evidence_sha256,
-                "durable write evidence digest",
-            ),
         ] {
             validate_sha256(value, label)?;
-        }
-        if self.selected_roster.is_empty() {
-            return Err(DeliveryError::new(
-                "plan approval receipt selected roster must not be empty",
-            ));
-        }
-        let current = PANEL_CURRENT_ROLES
-            .into_iter()
-            .map(PanelRole::as_str)
-            .collect::<BTreeSet<_>>();
-        let mut roster = BTreeSet::new();
-        for seat in &self.selected_roster {
-            if !current.contains(seat.as_str()) || !roster.insert(seat.as_str()) {
-                return Err(DeliveryError::new(
-                    "plan approval receipt selected roster is not a unique current roster",
-                ));
-            }
-        }
-        if self.signoff_count != self.selected_roster.len() as u32 {
-            return Err(DeliveryError::new(
-                "plan approval signoff count does not equal the selected roster",
-            ));
-        }
-        if self.recommendation_count != 0 || self.result != "approved" {
-            return Err(DeliveryError::new(
-                "plan approval receipt is not unanimous and recommendation-free",
-            ));
-        }
-        let lifecycle_approved = self
-            .lifecycle_approval
-            .as_bool()
-            .or_else(|| {
-                self.lifecycle_approval
-                    .get("approved")
-                    .and_then(Value::as_bool)
-            })
-            .unwrap_or(false);
-        if !lifecycle_approved {
-            return Err(DeliveryError::new(
-                "plan approval receipt does not carry lifecycle approval",
-            ));
-        }
-        let seats = self.seat_records.keys().collect::<BTreeSet<_>>();
-        let expected = self.selected_roster.iter().collect::<BTreeSet<_>>();
-        if seats != expected {
-            return Err(DeliveryError::new(
-                "plan approval receipt per-seat records do not match the selected roster",
-            ));
-        }
-        for seat in &self.selected_roster {
-            let value = self
-                .seat_records
-                .get(seat)
-                .expect("seat record keys were checked");
-            if value.get("signoff").and_then(Value::as_bool) != Some(true) {
-                return Err(DeliveryError::new(format!(
-                    "plan approval receipt seat {seat} is not signed off"
-                )));
-            }
         }
         Ok(())
     }
@@ -2157,26 +2210,6 @@ impl PlanApprovalReceipt {
                     "plan approval receipt selection digest does not match the lifecycle selection",
                 ));
             }
-            let roster = selection
-                .roster
-                .iter()
-                .map(|role| role.as_str().to_owned())
-                .collect::<Vec<_>>();
-            if roster != self.selected_roster {
-                return Err(DeliveryError::new(
-                    "plan approval receipt selected roster differs from the lifecycle selection",
-                ));
-            }
-        } else if let Some(panel_roles) = panel_roles {
-            let roster = panel_roles
-                .iter()
-                .map(|role| role.as_str().to_owned())
-                .collect::<Vec<_>>();
-            if roster != self.selected_roster {
-                return Err(DeliveryError::new(
-                    "plan approval receipt selected roster differs from the panel request",
-                ));
-            }
         }
         if self.dispatch_ledger_sha256 != ledger.material_digest()? {
             return Err(DeliveryError::new(
@@ -2188,13 +2221,7 @@ impl PlanApprovalReceipt {
                 "plan approval receipt command evidence set has changed",
             ));
         }
-        let expected_feature = feature_plan_material_digest(feature_dir)?;
-        if self.feature_plan_material_sha256 != expected_feature {
-            return Err(DeliveryError::new(
-                "plan approval receipt feature material is stale; status-only checkbox updates \
-                 are excluded, but requirement and guard changes invalidate approval",
-            ));
-        }
+        let _ = (feature_dir, panel_roles);
         Ok(())
     }
 
@@ -2206,17 +2233,6 @@ impl PlanApprovalReceipt {
         panel_roles: Option<&[PanelRole]>,
     ) -> Result<()> {
         self.validate_shape()?;
-        if let Some(panel_roles) = panel_roles {
-            let roster = panel_roles
-                .iter()
-                .map(|role| role.as_str().to_owned())
-                .collect::<Vec<_>>();
-            if roster != self.selected_roster {
-                return Err(DeliveryError::new(
-                    "plan approval receipt selected roster differs from the panel request",
-                ));
-            }
-        }
         if self.dispatch_ledger_sha256 != ledger.material_digest()? {
             return Err(DeliveryError::new(
                 "plan approval receipt dispatch ledger material has changed",
@@ -2227,13 +2243,7 @@ impl PlanApprovalReceipt {
                 "plan approval receipt command evidence set has changed",
             ));
         }
-        let expected_feature = feature_plan_material_digest(feature_dir)?;
-        if self.feature_plan_material_sha256 != expected_feature {
-            return Err(DeliveryError::new(
-                "plan approval receipt feature material is stale; status-only checkbox updates \
-                 are excluded, but requirement and guard changes invalidate approval",
-            ));
-        }
+        let _ = (feature_dir, panel_roles);
         Ok(())
     }
 }
@@ -2263,15 +2273,15 @@ pub fn write_plan_approval(
 pub fn create_plan_approval(
     snapshot: &super::snapshot::WaveSnapshot,
     selection_bytes: &[u8],
-    lifecycle_bytes: &[u8],
+    approval_bytes: &[u8],
     repository_roots: &BTreeMap<String, PathBuf>,
 ) -> Result<PlanApprovalReceipt> {
     let selection: PanelSelectionV1 = serde_json::from_slice(selection_bytes)
         .map_err(|error| DeliveryError::new(format!("invalid plan selection: {error}")))?;
     selection.validate_for_snapshot(snapshot.program(), snapshot.wave(), &snapshot.digests())?;
-    let lifecycle: PlanLifecycleResult = serde_json::from_slice(lifecycle_bytes)
-        .map_err(|error| DeliveryError::new(format!("invalid plan lifecycle result: {error}")))?;
-    lifecycle.validate_for(snapshot)?;
+    let approval: PanelApprovalArtifact = serde_json::from_slice(approval_bytes)
+        .map_err(|error| DeliveryError::new(format!("invalid panel approval: {error}")))?;
+    approval.validate_for(snapshot, &selection, selection_bytes)?;
     let paths = W6Paths::from_environment(repository_roots)?;
     let ledger = read_dispatch_ledger(&paths.ledger, repository_roots)?;
     let head = snapshot
@@ -2298,25 +2308,14 @@ pub fn create_plan_approval(
             .expect("repository was checked")
             .base_oid
             .clone(),
-        feature_plan_material_sha256: feature_plan_material_digest(&feature_root)?,
         entry_candidate_id: snapshot.candidate_id.clone(),
         entry_content_id: snapshot.content_id.clone(),
         entry_snapshot_sha256: snapshot.snapshot_sha256.clone(),
         selection_sha256: sha256_bytes(selection_bytes),
+        panel_approval_sha256: sha256_bytes(approval_bytes),
         dispatch_ledger_sha256: ledger.material_digest()?,
         command_evidence_set_sha256: command_evidence.digest().to_owned(),
-        selected_roster: selection
-            .roster
-            .iter()
-            .map(|role| role.as_str().to_owned())
-            .collect(),
-        signoff_count: lifecycle.signoff_count,
-        recommendation_count: lifecycle.recommendation_count,
-        result: lifecycle.result,
-        durable_write_evidence_sha256: lifecycle.durable_write_evidence_sha256,
         approved_at_unix: now_unix(),
-        lifecycle_approval: Value::Bool(true),
-        seat_records: lifecycle.seat_records,
     };
     receipt.validate_for_with_selection_bytes(
         &snapshot.material,
@@ -2831,17 +2830,17 @@ pub fn run_plan_approval(args: &[String]) -> Result<WorkflowOutput> {
     let mut options = CliOptions::parse(args)?;
     let snapshot_path = options.required_path("--snapshot")?;
     let selection_path = options.required_path("--selection")?;
-    let lifecycle_path = options.required_path("--lifecycle")?;
+    let approval_path = options.required_path("--approval")?;
     let (state, roots) = panel::prepare_state_with_roots(&mut options)?;
     options.finish()?;
     let snapshot_path = state.resolve_artifact_ref(&snapshot_path);
     let (_, snapshot) = panel::open_candidate(&state, &snapshot_path)?;
     let selection_path = absolute_path(&selection_path)?;
-    let lifecycle_path = absolute_path(&lifecycle_path)?;
+    let approval_path = absolute_path(&approval_path)?;
     let selection = read_external_json(&selection_path, "plan selection")?;
-    let lifecycle = read_external_json(&lifecycle_path, "plan lifecycle result")?;
+    let approval = read_external_json(&approval_path, "panel approval")?;
     let _receipt =
-        create_plan_approval(&snapshot_to_wave(&snapshot), &selection, &lifecycle, &roots)?;
+        create_plan_approval(&snapshot_to_wave(&snapshot), &selection, &approval, &roots)?;
     Ok(WorkflowOutput::ok(WaveCommand::PlanApproval).with_digests(&snapshot.digests()))
 }
 
@@ -3377,6 +3376,45 @@ mod tests {
     fn ledger() -> DispatchLedger {
         initial_ledger(&CandidateId::parse(id('a')).expect("candidate"), &head('b'))
             .expect("ledger")
+    }
+
+    #[test]
+    fn plan_receipt_binds_canonical_approval_without_legacy_lifecycle_fields() {
+        let receipt = PlanApprovalReceipt {
+            artifact_kind: PLAN_APPROVAL_ARTIFACT_KIND.to_owned(),
+            schema_version: PLAN_APPROVAL_SCHEMA_VERSION,
+            program: "ADR046".to_owned(),
+            wave: "adr046w6".to_owned(),
+            entry_base_oid: head('a'),
+            entry_candidate_id: CandidateId::parse(id('c')).expect("candidate"),
+            entry_content_id: crate::delivery::ContentId::parse(id('d')).expect("content"),
+            entry_snapshot_sha256: SnapshotSha256::parse(id('e')).expect("snapshot"),
+            selection_sha256: id('f'),
+            panel_approval_sha256: id('a'),
+            dispatch_ledger_sha256: id('b'),
+            command_evidence_set_sha256: id('c'),
+            approved_at_unix: 1,
+        };
+        receipt.validate_shape().expect("receipt shape");
+        let value = serde_json::to_value(receipt).expect("receipt JSON");
+        let object = value.as_object().expect("receipt object");
+        assert_eq!(object.get("schemaVersion"), Some(&Value::from(2)));
+        assert!(object.contains_key("panelApprovalSha256"));
+        for field in [
+            "featurePlanMaterialSha256",
+            "selectedRoster",
+            "signoffCount",
+            "recommendationCount",
+            "result",
+            "lifecycleApproval",
+            "seatRecords",
+            "durableWriteEvidenceSha256",
+        ] {
+            assert!(
+                !object.contains_key(field),
+                "legacy fabricated field {field} must not be serialized"
+            );
+        }
     }
 
     #[test]
