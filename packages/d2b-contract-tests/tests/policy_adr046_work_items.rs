@@ -37,7 +37,7 @@ const EXPECTED_LOCAL_TASK_IDS: &[&str] = &["T606", "T607", "T608", "T609", "T604
 const EXPECTED_PERMITTED_LOCAL_DEPENDENCY_IDS: &[&str] = &[
     "T221", "T606", "T607", "T608", "T609", "T604", "T479", "T480",
 ];
-const EXPECTED_OWNED_TASK_IDS: &[&str] = &["T606", "T607", "T608", "T609", "T604"];
+const EXPECTED_OWNED_TASK_IDS: &[&str] = &["T606", "T607", "T608", "T609", "T604", "T479"];
 const EXPECTED_LOCAL_GROUP_IDS: &[&str] = &[
     "feature-local:w6-shared-prep",
     "feature-local:w6-core-control-foundations",
@@ -1039,10 +1039,10 @@ fn expected_historical_foundation_adoption() -> BTreeMap<&'static str, Vec<&'sta
 fn expected_shared_file_order() -> BTreeMap<&'static str, Vec<&'static str>> {
     BTreeMap::from([
         ("Makefile", vec!["T606", "ADR046-ch-001", "T604"]),
-        ("packages/Cargo.toml", vec!["T606"]),
-        ("packages/Cargo.lock", vec!["T606"]),
-        ("packages/d2b-priv-broker/Cargo.toml", vec!["T606"]),
-        ("packages/d2b-priv-broker/Cargo.lock", vec!["T606"]),
+        ("packages/Cargo.toml", vec!["T606", "T479"]),
+        ("packages/Cargo.lock", vec!["T606", "T479"]),
+        ("packages/d2b-priv-broker/Cargo.toml", vec!["T606", "T479"]),
+        ("packages/d2b-priv-broker/Cargo.lock", vec!["T606", "T479"]),
         ("flake.nix", vec!["T606"]),
         ("packages/d2b-contracts/src/broker_wire.rs", vec!["T606"]),
         ("packages/d2b-priv-broker/src/runtime.rs", vec!["T606"]),
@@ -1112,6 +1112,8 @@ fn expected_local_completion_evidence() -> BTreeMap<&'static str, Vec<&'static s
             [
                 "operator-nix-activation-cleanup",
                 "w6-cloud-hypervisor-guest-acceptance",
+                "w6-final-cargo-locks",
+                "w6-changelog-fold",
             ]
             .to_vec(),
         ),
@@ -1344,6 +1346,7 @@ fn normalized_destination_atoms(
     destination: &str,
     provider_root: Option<&str>,
 ) -> BTreeSet<String> {
+    let preserves_directory_roots = destination.to_ascii_lowercase().contains("scaffold");
     let mut candidates = Vec::new();
     let mut code = String::new();
     let mut in_code = false;
@@ -1376,7 +1379,9 @@ fn normalized_destination_atoms(
         for part in split_top_level(&candidate) {
             for expanded in expand_destination_braces(&part) {
                 if let Some(token) = canonical_destination_token(&expanded, provider_root) {
-                    atoms.insert(token);
+                    if !token.ends_with('/') || preserves_directory_roots {
+                        atoms.insert(token);
+                    }
                 }
             }
         }
@@ -1973,6 +1978,37 @@ fn check_local_completion_contract(
                 "heavy-gate-acquire",
                 "predispatch-census"
             ],
+            "profile_runner": "delivery wave run-command-profile --profile <closed-id>",
+            "command_profiles": {
+                "focused-guard-list": [
+                    "cargo", "test", "--manifest-path", "packages/Cargo.toml", "-p",
+                    "xtask", "delivery::work_item_state::tests", "--", "--list"
+                ],
+                "focused-guard-ignored-list": [
+                    "cargo", "test", "--manifest-path", "packages/Cargo.toml", "-p",
+                    "xtask", "delivery::work_item_state::tests", "--", "--list", "--ignored"
+                ],
+                "focused-guard-run": [
+                    "cargo", "test", "--manifest-path", "packages/Cargo.toml", "-p",
+                    "xtask", "delivery::work_item_state::tests", "--", "--nocapture"
+                ],
+                "gate0-test-drift": ["make", "test-drift"],
+                "test-policy": ["make", "test-policy"],
+                "test-unit": ["make", "test-unit"],
+                "heavy-gate-acquire": [
+                    "cargo", "run", "--quiet", "--manifest-path", "packages/Cargo.toml",
+                    "-p", "xtask", "--", "heavy-gate", "--", "true"
+                ],
+                "predispatch-census": [
+                    "cargo", "run", "--quiet", "--manifest-path", "packages/Cargo.toml",
+                    "-p", "xtask", "--", "delivery", "wave", "entry-census",
+                    "--program", "ADR046", "--wave", "adr046w6"
+                ]
+            },
+            "layer1_membership_for_test_unit": [
+                "test-flake", "test-nix-unit", "test-runtime-ledger"
+            ],
+            "argv_rule": "production profile runner owns argv; evidence argv must exactly equal the selected closed profile and caller-supplied replacement argv is refused",
             "focused_fields": ["discoveredTests", "ignoredTests", "skipMatches"],
             "result_values": ["passed", "failed"],
             "raw_output_persisted_in_git": false,
@@ -1991,6 +2027,8 @@ fn check_local_completion_contract(
             "artifact_kind": "d2b-feature-local/plan-approval",
             "schema_version": 1,
             "required_fields": [
+                "artifactKind",
+                "schemaVersion",
                 "program",
                 "wave",
                 "entryBaseOid",
@@ -2006,7 +2044,9 @@ fn check_local_completion_contract(
                 "recommendationCount",
                 "result",
                 "durableWriteEvidenceSha256",
-                "approvedAtUnix"
+                "approvedAtUnix",
+                "lifecycleApproval",
+                "seatRecords"
             ],
             "required_values": {
                 "program": "ADR046",
@@ -2014,6 +2054,24 @@ fn check_local_completion_contract(
                 "recommendationCount": 0,
                 "result": "approved"
             },
+            "lifecycle_approval_fields": [
+                "artifactKind",
+                "schemaVersion",
+                "lifecycleId",
+                "phase",
+                "candidateId",
+                "contentId",
+                "snapshotSha256",
+                "selectionSha256",
+                "approved"
+            ],
+            "lifecycle_approval_required_values": {
+                "phase": "plan",
+                "approved": true
+            },
+            "seat_record_rule": "seatRecords is an exact key map for selectedRoster; every value is candidate/selection-bound, has signoff true, recommendations [], and carries its completion-bound recordSha256",
+            "production_writer": "delivery wave entry-plan-approval write",
+            "production_verifier": "delivery wave entry-plan-approval verify",
             "feature_plan_material_digest": "SHA-256 over the ordered FEATURE_DIR files with only entry_plan_invalidation_policy.status_only_updates normalized to fixed placeholders; requirements, machine contract, dependencies, ownership, validation, readiness, census, and guards remain byte-significant",
             "durable_write": [
                 "create same-directory temporary file",
@@ -2137,6 +2195,26 @@ fn local_dependency_contains(contract: &Value, task: &str, dependency: &str) -> 
         .any(|candidate| candidate == dependency)
 }
 
+fn local_dependency_precedes(contract: &Value, before: &str, after: &str) -> bool {
+    let mut pending = vec![after.to_owned()];
+    let mut visited = BTreeSet::new();
+    while let Some(current) = pending.pop() {
+        if !visited.insert(current.clone()) {
+            continue;
+        }
+        for dependency in string_array(value_at(
+            contract,
+            &["required_local_dependencies", current.as_str()],
+        )) {
+            if dependency == before {
+                return true;
+            }
+            pending.push(dependency);
+        }
+    }
+    false
+}
+
 fn manifest_dependency_contains(
     contract: &Value,
     task: &str,
@@ -2175,7 +2253,7 @@ fn handoff_edge_is_executable(
     let to_manifest = manifest_ids.contains(to);
 
     match (from_local, to_local, from_manifest, to_manifest) {
-        (true, true, false, false) => local_dependency_contains(contract, to, from),
+        (true, true, false, false) => local_dependency_precedes(contract, from, to),
         (true, false, false, true) => manifest_groups
             .get(to)
             .map(|group| {
@@ -2191,6 +2269,56 @@ fn handoff_edge_is_executable(
         (false, false, true, true) => graph_precedes(graph, from, to),
         _ => false,
     }
+}
+
+fn canonical_handoff_path(local_path: &str, declared_paths: &BTreeSet<String>) -> String {
+    declared_paths
+        .iter()
+        .filter(|path| {
+            path.as_str() == local_path
+                || (path.ends_with('/') && local_path.starts_with(path.as_str()))
+        })
+        .max_by_key(|path| path.len())
+        .cloned()
+        .unwrap_or_else(|| local_path.to_owned())
+}
+
+fn handoff_writers(
+    path: &str,
+    owners: &BTreeMap<String, BTreeSet<String>>,
+    manifest: &Value,
+    w6_ids: &BTreeSet<String>,
+    manifest_groups: &BTreeMap<String, String>,
+) -> BTreeSet<String> {
+    let mut writers = BTreeSet::new();
+    for (local_path, local_owners) in owners {
+        if destination_paths_overlap(path, local_path) {
+            writers.extend(local_owners.iter().cloned());
+        }
+    }
+    for item in manifest["items"].as_array().into_iter().flatten() {
+        let Some(id) = item["workItemId"].as_str() else {
+            continue;
+        };
+        if !w6_ids.contains(id) {
+            continue;
+        }
+        let provider_root = manifest_groups
+            .get(id)
+            .and_then(|group| provider_root_for_group(Some(group.as_str())));
+        let atoms = item["destination"]
+            .as_str()
+            .map(|destination| normalized_destination_atoms(destination, provider_root.as_deref()))
+            .unwrap_or_default();
+        if atoms
+            .iter()
+            .filter(|destination| !path_has_glob(destination))
+            .any(|destination| destination_paths_overlap(path, destination))
+        {
+            writers.insert(id.to_owned());
+        }
+    }
+    writers
 }
 
 fn check_shared_writer_handoffs(
@@ -2222,9 +2350,19 @@ fn check_shared_writer_handoffs(
         .collect::<BTreeSet<_>>();
     let local_ids = string_set(EXPECTED_LOCAL_TASK_IDS);
     let manifest_groups = manifest_group_by_id(graph);
+    let declared_handoff_paths = value_at(
+        contract,
+        &["local_to_manifest_shared_writer_handoffs", "handoffs"],
+    )
+    .and_then(Value::as_array)
+    .into_iter()
+    .flatten()
+    .flat_map(|handoff| handoff["paths"].as_array().into_iter().flatten())
+    .filter_map(Value::as_str)
+    .map(str::to_owned)
+    .collect::<BTreeSet<_>>();
     let mut writers_by_path: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     for path in owners.keys().filter(|path| !scaffold_roots.contains(*path)) {
-        let mut writers = owners.get(path).cloned().unwrap_or_default();
         for item in manifest["items"].as_array().into_iter().flatten() {
             let Some(id) = item["workItemId"].as_str() else {
                 continue;
@@ -2243,13 +2381,35 @@ fn check_shared_writer_handoffs(
                 .unwrap_or_default();
             if atoms
                 .iter()
+                .filter(|destination| !path_has_glob(destination))
                 .any(|destination| local_path_overlaps_destination(path, destination))
             {
-                writers.insert(id.to_owned());
+                let destination = atoms
+                    .iter()
+                    .filter(|destination| {
+                        !path_has_glob(destination)
+                            && local_path_overlaps_destination(path, destination)
+                    })
+                    .max_by_key(|destination| destination.len())
+                    .expect("overlapping destination");
+                let raw_path = if destination.ends_with('/')
+                    && !path_has_glob(destination)
+                    && path.starts_with(destination)
+                {
+                    destination.to_owned()
+                } else {
+                    path.to_owned()
+                };
+                let canonical = canonical_handoff_path(&raw_path, &declared_handoff_paths);
+                writers_by_path
+                    .entry(canonical)
+                    .or_default()
+                    .extend(owners.get(path).into_iter().flatten().cloned());
+                writers_by_path
+                    .entry(canonical)
+                    .or_default()
+                    .insert(id.to_owned());
             }
-        }
-        if writers.iter().any(|writer| !local_ids.contains(writer)) {
-            writers_by_path.insert(path.to_owned(), writers);
         }
     }
 
@@ -2302,13 +2462,19 @@ fn check_shared_writer_handoffs(
                 .or_default()
                 .push(surface.to_owned());
             handoff_paths.insert(path.to_owned());
-            let Some(path_writers) = writers_by_path.get(path) else {
+            let path_writers = handoff_writers(path, &owners, manifest, &w6_ids, &manifest_groups);
+            if path_writers.is_empty() {
                 findings.push(format!(
                     "shared-writer handoff `{surface}` names a path without a local/manifest overlap `{path}`"
                 ));
                 continue;
-            };
-            if let Some(path_owners) = owners.get(path) {
+            }
+            let path_owners = owners
+                .iter()
+                .filter(|(local_path, _)| destination_paths_overlap(path, local_path))
+                .flat_map(|(_, owners)| owners.iter())
+                .collect::<BTreeSet<_>>();
+            if !path_owners.is_empty() {
                 let Some(first) = order.first().and_then(Value::as_str) else {
                     findings.push(format!(
                         "shared-writer handoff `{surface}` has an empty order"
@@ -2340,13 +2506,12 @@ fn check_shared_writer_handoffs(
                     ));
                 }
             }
-            let expected_order = path_writers;
-            if &seen_order != expected_order {
+            if seen_order != path_writers {
                 findings.push(format!(
                     "shared-writer handoff `{surface}` order for `{path}` does not contain exactly all local and manifest owners"
                 ));
             }
-            if order.len() < 2 {
+            if order.is_empty() {
                 findings.push(format!(
                     "shared-writer handoff `{surface}` has an incomplete order"
                 ));
@@ -2391,10 +2556,15 @@ fn check_shared_writer_handoffs(
             ));
         }
     }
-    for path in handoff_paths.difference(&writers_by_path.keys().cloned().collect()) {
-        findings.push(format!(
-            "shared-writer handoff path `{path}` has no derived local/manifest overlap"
-        ));
+    for path in &handoff_paths {
+        let writers = handoff_writers(path, &owners, manifest, &w6_ids, &manifest_groups);
+        if writers.iter().any(|writer| !local_ids.contains(writer))
+            && !writers_by_path.contains_key(path)
+        {
+            findings.push(format!(
+                "shared-writer handoff path `{path}` has no derived local/manifest overlap"
+            ));
+        }
     }
 
     let expected_scaffolds = expected_scaffold_handoffs();
@@ -2814,11 +2984,12 @@ fn check_local_coordination_tasks(markdown: &str, graph: &Value) -> Vec<String> 
         findings.push("feature-local owned task set is incorrect".to_owned());
     }
     let expected_owned_counts = BTreeMap::from([
-        ("T606", 38usize),
-        ("T607", 14usize),
-        ("T608", 27usize),
-        ("T609", 20usize),
+        ("T606", 39usize),
+        ("T607", 15usize),
+        ("T608", 28usize),
+        ("T609", 21usize),
         ("T604", 8usize),
+        ("T479", 5usize),
     ]);
     for (task, expected_count) in expected_owned_counts {
         let actual_count = string_array(value_at(&contract, &["owned_files", task])).len();
@@ -3245,7 +3416,7 @@ fn feature_local_coordination_contract_rejects_load_bearing_mutations() {
             "\"Makefile\": [\"T606\", \"T604\", \"ADR046-ch-001\"]",
         ),
         (
-            "\"packages/Cargo.toml\": [\"T606\"]",
+            "\"packages/Cargo.toml\": [\"T606\", \"T479\"]",
             "\"packages/Cargo.toml\": [\"T604\"]",
         ),
         (
