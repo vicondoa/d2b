@@ -2,118 +2,33 @@
 Sync Impact Report
 ==================
 Version change: 3.0.0 -> 3.1.0
-Rationale: MINOR. Principle VI gains a narrow, one-time historical
-disposition for the already-merged ADR-046 delivery history while preserving
-every prospective panel, validation, delivery, and merge gate.
+Rationale: MINOR. Principle VI gains a generic historical process disposition
+for immutable delivery records that cannot truthfully satisfy current process
+rules, while preserving every prospective review and delivery gate.
 
-Amendment 3.1.0 (2026-08-09): ADR-046 historical gate disposition
-- Principle VI expressly dispositions the missing W0/W1 panel receipts and
-  seals and the unproven contemporaneous W2-W5 plan panels through the exact
-  merged Wave 5 boundary at `177235ed37188b3be87525e7f016fb43401574c5`.
-- The disposition also closes the retained Wave 5 candidate
-  `d20267eec23f90b9cd6931e4bd322b66e259533849c8170617fbd002381493a4`,
-  snapshot `7a04d9b86df6c8b8704b4bd79ddc25603fedae47d1a521f0b6fa420451816c3a`,
-  head `19b77dad63060bcadd41f1ef800978d2c53cc030`, and retained
-  `panel-request.json` SHA-256
-  `15f49657490410f0fb5530513144c7c2392f567b211eb630551f3110b94633f7`
-  as immutable historical state with one consumed request, zero attestations,
-  and no seal.
-- For ADR-046 W6 predecessor checks only, merged Wave 5 boundary
-  `177235ed37188b3be87525e7f016fb43401574c5` is the one-time historical
-  predecessor disposition. It is not a reconstructed seal and authorizes no
-  Wave 5 recovery or second binding request.
-- Every post-boundary ADR-046 action requires the accepted first-parent
-  integration commit carrying these exact amendment bytes to be an ancestor of
-  the exact execution base. W6 additionally requires the ordinary exact-base
-  unanimous T221 entry plan panel and every remaining prospective gate.
-- Rationale: missing historical evidence cannot be recreated truthfully. A
-  closed, commit-bound disposition preserves that fact while restoring strict
-  forward enforcement.
-
-Amendment 3.0.0 (2026-08-08): Selected-roster Discover-Fix-Verify
-- Principle VI replaces the operative fixed roster with the versioned
-  candidate-bound selection artifact and current thirteen-seat role domain.
-- One comprehensive discovery, a shared stable ledger, batched implementation
-  responses and self-verification, and scoped verification are now binding.
-- Legacy fixed-ten delivery records remain readable as compatibility data; they
-  do not define current selection.
-- The active bounded-deferral-after-eight-rounds rule is superseded. During
-  verification, pre-existing MINOR and NIT observations are non-blocking from
-  the start, while admitted BLOCKER and MAJOR findings remain blocking.
-- Rationale: selection and a complete shared ledger prevent repeated
-  rediscovery while preserving unanimous, request-bound sign-off.
-
-Amendment 2.2.0 (2026-08-06): Approved contract-defect correction
-- Principle IV now permits one approved correction to amend the governing plan,
-  specification, or contract while moving the affected contract, schema,
-  reference documentation, emitter, consumer, generated artifacts, and tests
-  together.
-- Approval must precede implementation and bind the defect, exact governed
-  surfaces, version impact, and candidate snapshot. A vague intent to "fix
-  drift" is not approval.
-- The correction still requires every applicable version bump and drift gate.
-  It cannot be used to land a contract-only change, defer a paired artifact, or
-  treat stale prose as authority over committed passing code.
-- Rationale: an accepted artifact can itself contain a defect. Requiring a
-  second artificial sequencing step after the defect and coordinated repair
-  are already approved adds delay without improving contract consistency.
-
-Amendment 2.1.0 (2026-07-29): Bounded deferral and delivery memory
-- Principle VI gains a "Bounded deferral after eight rounds" clause: from round
-  nine onward a reviewer MAY defer a LOW or MEDIUM finding instead of blocking.
-  CRITICAL and HIGH remain non-deferrable in every round.
-- MINOR, not MAJOR: the sign-off invariant is untouched. `signoff` is still true
-  iff `recommendations` is empty, because a deferred finding is MOVED OUT of
-  `recommendations` into a register rather than left there alongside a true
-  sign-off. This deliberately avoids changing the enforced consistency check in
-  packages/xtask/src/delivery/panel.rs, which rejects that combination in both
-  directions.
-- Principle VI also gains a "Delivery memory" clause requiring two durable
-  registers: a deferred-findings register and a friction log, both restricted to
-  classification metadata so no panel transcript enters Git.
-- Rationale: one wave in this project ran twenty-one follow-up rounds. Unbounded
-  LOW/MEDIUM churn can cost more than the defects it removes.
-
-Amendment 2.0.0 (2026-07-29): Pipelined dispatch
-- Principle VI gains a "Pipelined dispatch" clause permitting the next phase's
-  implementation to begin after five roster reviews return and integration tests
-  pass, while requiring that the next phase issue no panel request, no seal, and
-  no merge until the current phase is sealed at full unanimity and merged, and
-  that it rebase onto the updated integration lineage before its own panel.
-- The unanimity requirement, the roster, the seal ordering, and the merge
-  ordering are unchanged. The gate moved; it did not loosen.
-- Rationale: panel review commonly runs one to two times the coding duration, so
-  strict serialization idles implementation capacity for more than half of each
-  cycle.
-- Accepted cost recorded in the principle text: rework, when a finding changes a
-  contract that in-flight next-phase work already consumed.
+Amendment 3.1.0 (2026-08-09): Historical process disposition
+- A separately reviewed disposition may classify exact immutable historical
+  process gaps without claiming that missing gates passed.
+- Retroactive attestations, replacement records, and success-shaped
+  reinterpretation remain forbidden.
+- Program-specific identifiers, hashes, state inventories, and transition
+  mechanics belong in feature and delivery artifacts, never in this
+  constitution.
+- Prospective work requires the accepted disposition on the integration
+  lineage, exact-base unanimous entry review, and every ordinary later gate.
+- Process records and validators provide deterministic signoff tracking. They
+  are not authentication and do not create a security boundary.
 
 Modified principles:
-- IV. Contract-Driven Compatibility (expanded in 2.2.0)
-- VI. Panel-Gated Multi-Phase Work (redefined in 3.0.0; expanded in 3.1.0)
+- VI. Panel-Gated Multi-Phase Work (expanded)
 Added sections: none
 Removed sections: none
 
 Templates and artifacts requiring follow-up:
-- specs/001-adr046-d2b3-completion/ - after this amendment lands on `v3`,
-  rerun the exact-base W6 entry plan panel required by T221. The feature
-  artifacts remain evidence of the formerly open prerequisite and are not
-  rewritten by this constitution-only amendment.
-- packages/xtask/src/delivery/ and its existing unit-test surface - DISCHARGED
-  in this amendment by the exact one-time Wave 5 predecessor validator and its
-  positive and planted-negative coverage.
-- changelog.d/ - DISCHARGED by the marker-free amendment fragment shipped with
-  this change.
-- specs/001-adr046-d2b3-completion/spec.md - FR-025 and FR-036 restated for the
-  pipeline; new FRs added for the strict panel/seal/merge ordering. DISCHARGED:
-  FR-056 through FR-059 landed, FR-025 was narrowed to exit, and FR-057 states
-  the entry-versus-exit distinction that reconciles FR-025 with FR-036.
-- docs/specs/ADR-046-validation-and-delivery.md - Section 4 entry criteria said
-  "there is no partial-wave advance" and the tooling enforced it. DISCHARGED:
-  sections 4, 12.1 and 12.4 were amended to permit a pipelined start under the
-  four Principle VI conditions, and the tooling moved the prior-wave-merged
-  assertion out of wave entry to the panel-request, seal and merge-eligibility
-  boundary. The pipeline is executable.
+- Active feature and delivery artifacts must carry every exact historical
+  identifier, state digest, transition rule, and validation command.
+- Delivery tooling and its tests must enforce those external artifacts without
+  copying program-specific details into this constitution.
 
 Deferred / TODO items: none.
 -->
@@ -251,7 +166,7 @@ mandatory post-fix panel), and documentation-only changes that describe no
 load-bearing behavior are the only exceptions. Where a harness stands in for
 the per-round panel, it MUST preserve the same unanimity rule and no-rerun
 discipline; it does not substitute for the separate, binding selected-roster
-panel required once at a wave's close for wave-scale (ADR 0046-class) work.
+panel required once at the close of large multi-phase work.
 
 **Discover-Fix-Verify.** A lifecycle MUST run one comprehensive discovery over
 the full candidate, require an explicit complete result from every selected
@@ -286,52 +201,30 @@ BLOCKER or MAJOR findings. A pre-existing MINOR or NIT observation discovered
 after the comprehensive discovery remains non-blocking history. There is no
 round-count threshold and no later transition from blocking to non-blocking.
 
-**ADR-046 historical disposition.** The delivery history for
-`specs/001-adr046-d2b3-completion` through merged `v3` commit
-`177235ed37188b3be87525e7f016fb43401574c5` contains three nonconforming
-evidence classes:
+**Historical process dispositions.** When immutable delivery history cannot
+truthfully satisfy current process rules, continuation MAY be authorized only
+by a separately reviewed disposition. That disposition MUST live in an
+external feature or delivery artifact and MUST:
 
-1. W0/W1 lack the panel receipts and seals required by this principle.
-2. Contemporaneous W2-W5 plan-panel evidence is unproven.
-3. Wave 5 retained candidate
-   `d20267eec23f90b9cd6931e4bd322b66e259533849c8170617fbd002381493a4`,
-   snapshot `7a04d9b86df6c8b8704b4bd79ddc25603fedae47d1a521f0b6fa420451816c3a`,
-   head `19b77dad63060bcadd41f1ef800978d2c53cc030`, and retained
-   `panel-request.json` SHA-256
-   `15f49657490410f0fb5530513144c7c2392f567b211eb630551f3110b94633f7`
-   consumed its sole binding request with zero attestations and no seal before
-   the later Wave 5 tree merged at
-   `177235ed37188b3be87525e7f016fb43401574c5`.
+1. identify the exact immutable historical record and its nonconforming state;
+2. preserve that record without claiming that missing gates passed;
+3. forbid retroactive attestations, replacement records, and duplicate binding
+   actions;
+4. define one fail-closed continuation path and the exact validation required
+   before prospective work starts; and
+5. preserve every ordinary prospective review, validation, merge, and close
+   gate.
 
-Those facts are accepted as closed historical governance deviations for those
-exact bytes and identifiers only. They MUST NOT be described as gates that
-passed, reconstructed through retroactive attestations, replaced with current
-reviews, or used as precedent for another program or wave. The retained
-candidate, request, imported evidence, and missing attestation and seal state
-remain immutable. No Wave 5 recovery action, replacement candidate, second
-binding request, attestation, or reconstructed seal is authorized.
+The accepted disposition MUST be present on the integration lineage of the
+exact execution base. The next prospective phase MUST pass unanimous
+selected-roster entry review against that base and its current feature
+snapshot before implementation begins. Program-specific identifiers, hashes,
+state inventories, and transition mechanics MUST remain outside this
+constitution.
 
-For ADR-046 W6 predecessor checks only, merged Wave 5 boundary
-`177235ed37188b3be87525e7f016fb43401574c5` is the one-time historical
-predecessor disposition. Delivery tooling MUST match the exact retained Wave 5
-candidate, snapshot, head, consumed request, imported evidence subtree, and
-merged boundary above and MUST reject every partial, missing, additional, or
-mismatched state. It MUST identify the accepted amendment as the unique
-first-parent integration commit after the merged Wave 5 boundary whose tree
-contains the exact Version 3.1.0 constitution bytes, and require that commit to
-be an ancestor of the Wave 6 base and head. This treatment records a historical
-exception; it does not create a Wave 5 seal. These checks provide deterministic
-process integrity for signoff tracking. They are not authentication and do not
-create a security boundary.
-
-Before any post-boundary ADR-046 implementation, resume, fix, panel, seal,
-merge, or advance action, the accepted first-parent integration commit carrying
-these exact amendment bytes MUST be an ancestor of the exact execution base.
-W6 begins only after rebasing onto that lineage and passing the ordinary T221
-unanimous selected-roster entry plan panel against the exact base and current
-feature snapshot with zero recommendations. Every later implementation,
-validation, Discover-Fix-Verify, binding request, attestation, protected PR
-merge, seal, and merge-eligibility requirement remains unchanged.
+Disposition metadata and validators provide deterministic process integrity
+for signoff tracking. They are not authentication, do not prove reviewer
+identity, and do not create a security boundary.
 
 Rationale: convergence comes from comprehensive discovery and scoped
 verification, not fatigue after an arbitrary number of open-ended rounds. The
@@ -340,10 +233,10 @@ automated tests caught none of, so testing and review remain complementary.
 
 ### VII. Traceable, Marker-Free Shipped Artifacts
 Shipped source, docs, CLI text, and CHANGELOG entries MUST NOT carry
-internal process bookkeeping (wave/phase/follow-up/finding tags). Those
+internal process bookkeeping (delivery/phase/follow-up/finding tags). Those
 belong in planning artifacts, ADRs, commit messages, and PR descriptions
 only. Every in-development commit on a feature branch MUST carry the
-canonical trailing wave/phase tag form; every PR must ship release notes
+canonical trailing delivery tag form; every PR must ship release notes
 (a CHANGELOG entry or a `changelog.d/` fragment) and MUST NOT attribute
 authorship to an AI agent, assistant, or model. Dashes MUST be spelled with
 the ASCII hyphen only, everywhere.
