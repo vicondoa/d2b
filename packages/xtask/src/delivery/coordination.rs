@@ -2688,23 +2688,44 @@ pub fn record_eligibility_success(
     repository_roots: &BTreeMap<String, PathBuf>,
 ) -> Result<DispatchLedger> {
     let paths = W6Paths::from_environment(repository_roots)?;
-    let ledger = read_dispatch_ledger(&paths.ledger, repository_roots)?;
+    let _lock = lock_ledger(&paths.ledger)?;
+    let mut ledger = read_dispatch_ledger(&paths.ledger, repository_roots)?;
     let entry = ledger.entry("feature-local:w6-close")?.clone();
+    if !is_wave6(material) {
+        return Err(DeliveryError::new(
+            "eligibility success is only valid for Wave 6",
+        ));
+    }
+    require_transition_approval(material, repository_roots, true)?;
+    if entry.state != DispatchState::Validated {
+        return Err(DeliveryError::new(
+            "eligibility success requires a Validated local close group",
+        ));
+    }
     let mut evidence = entry.completion_evidence_ids.clone();
     if !evidence.iter().any(|id| id == "w6-merge-eligibility") {
         evidence.push("w6-merge-eligibility".to_owned());
     }
-    update_group_cas(
-        &paths.ledger,
-        material,
-        "feature-local:w6-close",
-        DispatchState::Completed,
-        entry.dispatch_id.as_deref(),
-        &evidence,
-        None,
-        ledger.revision,
-        repository_roots,
-    )
+    if !evidence
+        .iter()
+        .all(|id| validate_identifier(id, "completion evidence").is_ok())
+    {
+        return Err(DeliveryError::new(
+            "eligibility success carries an invalid completion evidence identifier",
+        ));
+    }
+    CandidateId::parse(&entry.candidate_id)?;
+    let entry = ledger.entry_mut("feature-local:w6-close")?;
+    entry.state = DispatchState::Completed;
+    entry.completion_evidence_ids = evidence;
+    entry.updated_at_unix = now_unix();
+    ledger.revision = ledger
+        .revision
+        .checked_add(1)
+        .ok_or_else(|| DeliveryError::new("dispatch ledger revision overflowed"))?;
+    ledger.validate()?;
+    write_external_json_replace(&paths.ledger, &ledger, repository_roots)?;
+    Ok(ledger)
 }
 
 fn read_group_evidence_files(
