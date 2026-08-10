@@ -618,9 +618,8 @@ impl DispatchLedger {
             )));
         }
         let expected = W6_GROUPS.into_iter().collect::<BTreeSet<_>>();
-        let expected_order = W6_GROUPS;
         let mut actual = BTreeSet::new();
-        for (index, entry) in self.entries.iter().enumerate() {
+        for entry in &self.entries {
             validate_bounded_string(&entry.group, "dispatch ledger group")?;
             if entry.group.chars().any(char::is_control) {
                 return Err(DeliveryError::new(
@@ -639,28 +638,20 @@ impl DispatchLedger {
                     entry.group
                 )));
             }
-            if entry.group != expected_order[index] {
-                return Err(DeliveryError::new(
-                    "dispatch ledger entries must be in canonical group order",
-                ));
-            }
             validate_hash(&entry.head_oid, "dispatch ledger head OID")?;
             CandidateId::parse(entry.candidate_id.as_str())?;
             if let Some(dispatch_id) = &entry.dispatch_id {
                 validate_identifier(dispatch_id, "dispatch identifier")?;
             }
+            let mut evidence_ids = BTreeSet::new();
             for evidence_id in &entry.completion_evidence_ids {
                 validate_identifier(evidence_id, "completion evidence identifier")?;
-            }
-            if entry
-                .completion_evidence_ids
-                .windows(2)
-                .any(|window| window[0] >= window[1])
-            {
-                return Err(DeliveryError::new(format!(
-                    "completion evidence for group {} must be sorted and unique",
-                    entry.group
-                )));
+                if !evidence_ids.insert(evidence_id.as_str()) {
+                    return Err(DeliveryError::new(format!(
+                        "completion evidence for group {} repeats {}",
+                        entry.group, evidence_id
+                    )));
+                }
             }
             match entry.state {
                 DispatchState::NotLaunched => {
