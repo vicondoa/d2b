@@ -1082,8 +1082,6 @@ pkgs.testers.runNixOSTest {
         "${fakeSidecar} /run/gascity-contributor/publisher.sock gascity-publisher-channel";
     systemd.services.gascity-check.serviceConfig.ExecStartPre =
       [ "${credentialProbe} check none" ];
-    systemd.services.gascity-check.serviceConfig.ExecStart =
-      lib.mkForce fakeSidecar;
     systemd.services.gascity-buildbuddy-proxy.serviceConfig.ExecStartPre =
       [ "${credentialProbe} buildbuddy buildbuddy-api-key" ];
     systemd.services.gascity-buildbuddy-proxy.serviceConfig.ExecStart =
