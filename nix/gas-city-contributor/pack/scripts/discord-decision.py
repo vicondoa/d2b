@@ -922,7 +922,7 @@ class DecisionRouter:
                     break
         if record is None:
             raise DecisionError("orphaned prompt reply")
-        validated = validate_gateway_event(event, record, operator_ids=self.operator_ids)
+        validated = validate_gateway_event(value, record, operator_ids=self.operator_ids)
         return self.store.reserve_answer(
             {
                 **validated,
