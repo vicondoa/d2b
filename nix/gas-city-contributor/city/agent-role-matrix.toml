@@ -25,7 +25,7 @@ model = "gpt-5.6-luna"
 context = "long_context"
 effort = "max"
 fallback = "none"
-tool_policy = "planning-artifacts"
+tool_policy = "read-only-review"
 
 [profiles.planning-sol]
 provider = "copilot-planning-sol"
@@ -34,7 +34,7 @@ model = "gpt-5.6-sol"
 context = "long_context"
 effort = "xhigh"
 fallback = "review-luna"
-tool_policy = "read-only-review"
+tool_policy = "planning-artifacts"
 
 [profiles.code-luna]
 provider = "copilot-code-luna"

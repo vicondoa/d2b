@@ -519,6 +519,8 @@ def _launcher_argv(
         launcher,
         "--profile",
         profile,
+        "--tool-policy",
+        tool_policy,
         "--settings",
         str(settings),
         "--copilot",

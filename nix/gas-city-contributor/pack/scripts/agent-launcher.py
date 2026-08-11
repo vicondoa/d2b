@@ -151,12 +151,272 @@ def _parse_positive(value: str | int, label: str) -> int:
     return number
 
 
-class ConcurrencyLease:
-    """A service-owned lifetime lease for one agent and one active run."""
+class _ActiveRunMembership:
+    """Reference-count one active-run slot while each member holds a shared lock."""
 
-    def __init__(self, file_descriptors: Sequence[int], paths: Sequence[pathlib.Path]):
+    def __init__(
+        self,
+        *,
+        lease_root: pathlib.Path,
+        slot_path: pathlib.Path,
+        slot_index: int,
+        run_id: str,
+        slot_fd: int,
+    ):
+        self.lease_root = lease_root
+        self.slot_path = slot_path
+        self.slot_index = slot_index
+        self.run_id = run_id
+        self.slot_fd = slot_fd
+        self.released = False
+
+    @staticmethod
+    def _open(path: pathlib.Path) -> int:
+        return os.open(
+            path,
+            os.O_RDWR
+            | os.O_CREAT
+            | os.O_CLOEXEC
+            | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+        )
+
+    @staticmethod
+    def _try_exclusive(descriptor: int) -> bool:
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return False
+        return True
+
+    @staticmethod
+    def _unlock_close(descriptor: int) -> None:
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+        finally:
+            os.close(descriptor)
+
+    @classmethod
+    def _registry_lock(cls, path: pathlib.Path) -> int:
+        descriptor = cls._open(path)
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+        except OSError:
+            os.close(descriptor)
+            raise
+        return descriptor
+
+    @staticmethod
+    def _read_registry(path: pathlib.Path) -> dict[str, dict[str, object]]:
+        if not path.exists():
+            return {}
+        try:
+            with path.open("r", encoding="utf-8") as stream:
+                value = json.load(stream)
+        except (OSError, json.JSONDecodeError) as error:
+            raise LauncherError("active-run registry is unreadable or malformed") from error
+        if not isinstance(value, dict) or value.get("version") != 1:
+            raise LauncherError("active-run registry version is unsupported")
+        slots = value.get("slots")
+        if not isinstance(slots, dict):
+            raise LauncherError("active-run registry slots are malformed")
+        result: dict[str, dict[str, object]] = {}
+        for key, record in slots.items():
+            if not isinstance(key, str) or not key.isdigit():
+                raise LauncherError("active-run registry slot is malformed")
+            if (
+                not isinstance(record, dict)
+                or not isinstance(record.get("run_id"), str)
+                or not isinstance(record.get("refcount"), int)
+                or record["refcount"] < 1
+            ):
+                raise LauncherError("active-run registry entry is malformed")
+            _validate_identifier(str(record["run_id"]), "run id")
+            result[key] = {
+                "run_id": str(record["run_id"]),
+                "refcount": int(record["refcount"]),
+            }
+        return result
+
+    @staticmethod
+    def _write_registry(
+        path: pathlib.Path,
+        slots: Mapping[str, Mapping[str, object]],
+    ) -> None:
+        temporary = path.with_name(
+            f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp"
+        )
+        payload = {
+            "version": 1,
+            "slots": {
+                str(key): {
+                    "run_id": str(value["run_id"]),
+                    "refcount": int(value["refcount"]),
+                }
+                for key, value in slots.items()
+            },
+        }
+        descriptor = os.open(
+            temporary,
+            os.O_WRONLY
+            | os.O_CREAT
+            | os.O_EXCL
+            | os.O_CLOEXEC
+            | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+        )
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+                descriptor = -1
+                json.dump(payload, stream, sort_keys=True, separators=(",", ":"))
+                stream.write("\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, path)
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
+            try:
+                temporary.unlink()
+            except FileNotFoundError:
+                pass
+
+    @classmethod
+    def acquire(
+        cls,
+        lease_root: pathlib.Path,
+        runs: pathlib.Path,
+        *,
+        run_id: str,
+        max_active_runs: int,
+    ) -> "_ActiveRunMembership":
+        registry = lease_root / "active-runs.json"
+        registry_lock = lease_root / "active-runs.registry.lock"
+        lock_fd = cls._registry_lock(registry_lock)
+        try:
+            slots = cls._read_registry(registry)
+            existing_key = next(
+                (
+                    key
+                    for key, record in slots.items()
+                    if record.get("run_id") == run_id
+                ),
+                None,
+            )
+            if existing_key is not None:
+                slot_index = int(existing_key)
+                slot_path = runs / f"active-run-{slot_index:04d}.lock"
+                slot_fd = cls._open(slot_path)
+                try:
+                    if cls._try_exclusive(slot_fd):
+                        fcntl.flock(slot_fd, fcntl.LOCK_SH)
+                        refcount = 1
+                    else:
+                        fcntl.flock(
+                            slot_fd,
+                            fcntl.LOCK_SH | fcntl.LOCK_NB,
+                        )
+                        refcount = int(slots[existing_key]["refcount"]) + 1
+                    slots[existing_key] = {
+                        "run_id": run_id,
+                        "refcount": refcount,
+                    }
+                    cls._write_registry(registry, slots)
+                    return cls(
+                        lease_root=lease_root,
+                        slot_path=slot_path,
+                        slot_index=slot_index,
+                        run_id=run_id,
+                        slot_fd=slot_fd,
+                    )
+                except BaseException:
+                    cls._unlock_close(slot_fd)
+                    raise
+
+            for key in tuple(slots):
+                slot_index = int(key)
+                if slot_index >= max_active_runs:
+                    continue
+                slot_path = runs / f"active-run-{slot_index:04d}.lock"
+                slot_fd = cls._open(slot_path)
+                if cls._try_exclusive(slot_fd):
+                    cls._unlock_close(slot_fd)
+                    del slots[key]
+                else:
+                    os.close(slot_fd)
+
+            for slot_index in range(max_active_runs):
+                key = str(slot_index)
+                if key in slots:
+                    continue
+                slot_path = runs / f"active-run-{slot_index:04d}.lock"
+                slot_fd = cls._open(slot_path)
+                try:
+                    if not cls._try_exclusive(slot_fd):
+                        os.close(slot_fd)
+                        continue
+                    fcntl.flock(slot_fd, fcntl.LOCK_SH)
+                    slots[key] = {"run_id": run_id, "refcount": 1}
+                    cls._write_registry(registry, slots)
+                    return cls(
+                        lease_root=lease_root,
+                        slot_path=slot_path,
+                        slot_index=slot_index,
+                        run_id=run_id,
+                        slot_fd=slot_fd,
+                    )
+                except BaseException:
+                    cls._unlock_close(slot_fd)
+                    raise
+            raise LeaseBusy(f"active-run concurrency cap ({max_active_runs}) is exhausted")
+        finally:
+            cls._unlock_close(lock_fd)
+
+    def release(self) -> None:
+        if self.released:
+            return
+        self.released = True
+        registry = self.lease_root / "active-runs.json"
+        registry_lock = self.lease_root / "active-runs.registry.lock"
+        lock_fd = self._registry_lock(registry_lock)
+        try:
+            self._unlock_close(self.slot_fd)
+            slots = self._read_registry(registry)
+            key = str(self.slot_index)
+            record = slots.get(key)
+            if record is None or record.get("run_id") != self.run_id:
+                return
+            probe_fd = self._open(self.slot_path)
+            try:
+                if self._try_exclusive(probe_fd):
+                    self._unlock_close(probe_fd)
+                    del slots[key]
+                else:
+                    os.close(probe_fd)
+                    record["refcount"] = max(1, int(record["refcount"]) - 1)
+                self._write_registry(registry, slots)
+            except BaseException:
+                try:
+                    os.close(probe_fd)
+                except OSError:
+                    pass
+                raise
+        finally:
+            self._unlock_close(lock_fd)
+
+
+class ConcurrencyLease:
+    """A service-owned lifetime lease for one agent, bead, and active run."""
+
+    def __init__(
+        self,
+        file_descriptors: Sequence[int],
+        paths: Sequence[pathlib.Path],
+        active_run: _ActiveRunMembership,
+    ):
         self.file_descriptors = tuple(file_descriptors)
         self.paths = tuple(paths)
+        self.active_run = active_run
         self.released = False
 
     @classmethod
@@ -177,33 +437,35 @@ class ConcurrencyLease:
         lease_root = _private_directory(root, "lease root")
         agents = lease_root / "agents"
         runs = lease_root / "active-runs"
-        runs_by_id = lease_root / "run-locks"
         beads = lease_root / "bead-locks"
-        for directory in (agents, runs, runs_by_id, beads):
+        for directory in (agents, runs, beads):
             _private_directory(directory, "lease directory")
         descriptors: list[int] = []
         paths: list[pathlib.Path] = []
+        active_run: _ActiveRunMembership | None = None
         try:
             agent_fd, agent_path = cls._claim_slot(agents, "agent", max_agents)
             descriptors.append(agent_fd)
             paths.append(agent_path)
-            active_fd, active_path = cls._claim_slot(
-                runs, "active-run", max_active_runs
+            active_run = _ActiveRunMembership.acquire(
+                lease_root,
+                runs,
+                run_id=run_id,
+                max_active_runs=max_active_runs,
             )
-            descriptors.append(active_fd)
-            paths.append(active_path)
-            run_path = runs_by_id / f"{run_id}.lock"
-            run_fd = cls._open_and_lock(run_path)
-            descriptors.append(run_fd)
-            paths.append(run_path)
+            descriptors.append(active_run.slot_fd)
+            paths.append(active_run.slot_path)
             bead_path = beads / f"{bead_id or run_id}.lock"
-            if bead_path != run_path:
-                bead_fd = cls._open_and_lock(bead_path)
-                descriptors.append(bead_fd)
-                paths.append(bead_path)
-            return cls(descriptors, paths)
+            bead_fd = cls._open_and_lock(bead_path)
+            descriptors.append(bead_fd)
+            paths.append(bead_path)
+            return cls(descriptors, paths, active_run)
         except (OSError, LauncherError):
+            if active_run is not None:
+                active_run.release()
             for descriptor in reversed(descriptors):
+                if active_run is not None and descriptor == active_run.slot_fd:
+                    continue
                 cls._unlock_close(descriptor)
             raise
 
@@ -253,8 +515,13 @@ class ConcurrencyLease:
         if self.released:
             return
         self.released = True
-        for descriptor in reversed(self.file_descriptors):
-            self._unlock_close(descriptor)
+        try:
+            self.active_run.release()
+        finally:
+            for descriptor in reversed(self.file_descriptors):
+                if descriptor == self.active_run.slot_fd:
+                    continue
+                self._unlock_close(descriptor)
 
     def __enter__(self) -> "ConcurrencyLease":
         return self
@@ -284,10 +551,15 @@ def materialize_copilot_home(
     profile: str,
     runtime_root: str | os.PathLike[str],
     run_id: str,
+    bead_id: str | None = None,
 ) -> pathlib.Path:
     settings = _load_settings(settings_path, profile)
+    _validate_identifier(run_id, "run id")
+    if bead_id is not None:
+        _validate_identifier(bead_id, "bead id")
     root = _private_directory(runtime_root, "agent runtime root")
-    home = root / f"{run_id}.copilot-home"
+    suffix = f".{bead_id}" if bead_id is not None else ""
+    home = root / f"{run_id}{suffix}.copilot-home"
     if home.exists():
         raise LauncherError(f"Copilot home already exists for run: {run_id}")
     home.mkdir(mode=0o700)
@@ -1490,6 +1762,7 @@ def _serve_client(
             profile=profile,
             runtime_root=runtime_root,
             run_id=run_id,
+            bead_id=bead_id,
         )
         environment = scrub_environment(
             profile=profile,
@@ -1511,6 +1784,7 @@ def _serve_client(
             environment.pop("GC_AGENT_FD", None)
         child = _spawn_child(
             profile=profile,
+            tool_policy=tool_policy,
             settings_path=settings,
             copilot=str(_absolute_existing(args.copilot, "Copilot executable")),
             child_arguments=_profile_child_arguments(
@@ -1743,6 +2017,7 @@ def require_readiness(
 def _spawn_child(
     *,
     profile: str,
+    tool_policy: str,
     settings_path: pathlib.Path,
     copilot: str,
     child_arguments: Sequence[str],
@@ -1774,6 +2049,7 @@ def _spawn_child(
         sandbox_argv, inherited_fds = sandbox_module.build_sandbox_argv(
             command,
             worktree=str(worktree),
+            tool_policy=tool_policy,
             state_root=str(state_root) if state_root else None,
             copilot_home=str(home),
             runtime_paths=args.runtime_path,
@@ -1830,6 +2106,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--server", action="store_true")
     parser.add_argument("--socket")
     parser.add_argument("--profile", choices=sorted(PROFILE_NAMES))
+    parser.add_argument("--tool-policy", choices=["review", "planning", "coding"])
     parser.add_argument("--settings")
     parser.add_argument("--settings-root")
     parser.add_argument("--copilot", required=True)
@@ -1884,7 +2161,13 @@ def run(args: argparse.Namespace) -> int:
         raise LauncherError(
             "single-child launcher mode is restricted to explicit GC_TEST_MODE fixtures"
         )
-    if not args.profile or not args.settings or not args.run_id or not args.bead_id:
+    if (
+        not args.profile
+        or not args.settings
+        or not args.run_id
+        or not args.bead_id
+        or not args.tool_policy
+    ):
         raise LauncherError("fixture launcher mode is missing launch metadata")
     run_id = _validate_identifier(args.run_id, "run id")
     bead_id = _validate_identifier(args.bead_id, "bead id")
@@ -1953,6 +2236,7 @@ def run(args: argparse.Namespace) -> int:
         profile=args.profile,
         runtime_root=runtime_root,
         run_id=run_id,
+        bead_id=bead_id,
     )
     environment = scrub_environment(
         profile=args.profile,
@@ -1986,6 +2270,7 @@ def run(args: argparse.Namespace) -> int:
         ):
             child = _spawn_child(
                 profile=args.profile,
+                tool_policy=args.tool_policy,
                 settings_path=settings,
                 copilot=str(copilot),
                 child_arguments=child_arguments,

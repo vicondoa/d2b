@@ -35,6 +35,8 @@ HIDDEN_ENV_NAMES = frozenset(
         "SSH_AUTH_SOCK",
     }
 )
+TOOL_POLICIES = frozenset({"review", "planning", "coding"})
+PLANNING_ARTIFACT_ROOTS = ("docs/plans",)
 ALLOWED_GC_ENV_NAMES = frozenset(
     {
         "GC_AGENT_FD",
@@ -76,6 +78,27 @@ def _validate_worktree(worktree: str | os.PathLike[str], state_root: str | None)
         if assigned.is_relative_to(state) or state.is_relative_to(assigned):
             raise SandboxError("state root and assigned worktree must be disjoint")
     return assigned
+
+
+def _planning_artifact_roots(worktree: pathlib.Path) -> list[tuple[pathlib.Path, str]]:
+    roots: list[tuple[pathlib.Path, str]] = []
+    for relative in PLANNING_ARTIFACT_ROOTS:
+        candidate = worktree / relative
+        if not candidate.exists():
+            raise SandboxError(
+                f"planning artifact root does not exist: {candidate}"
+            )
+        resolved = candidate.resolve()
+        try:
+            resolved.relative_to(worktree)
+        except ValueError as error:
+            raise SandboxError(
+                f"planning artifact root escapes the assigned worktree: {candidate}"
+            ) from error
+        if not resolved.is_dir():
+            raise SandboxError(f"planning artifact root is not a directory: {candidate}")
+        roots.append((resolved, f"/workspace/{relative}"))
+    return roots
 
 
 def _add_parent_dirs(arguments: list[str], destination: str, known: set[str]) -> None:
@@ -162,6 +185,7 @@ def build_sandbox_argv(
     command: Sequence[str],
     *,
     worktree: str | os.PathLike[str],
+    tool_policy: str = "coding",
     state_root: str | os.PathLike[str] | None = None,
     copilot_home: str | os.PathLike[str] | None = None,
     runtime_paths: Sequence[str | os.PathLike[str]] = (),
@@ -184,6 +208,8 @@ def build_sandbox_argv(
 
     if not command:
         raise SandboxError("sandbox command must not be empty")
+    if tool_policy not in TOOL_POLICIES:
+        raise SandboxError(f"unknown sandbox tool policy: {tool_policy}")
     assigned = _validate_worktree(worktree, os.fspath(state_root) if state_root else None)
     home = None
     if copilot_home is not None:
@@ -243,7 +269,13 @@ def build_sandbox_argv(
 
     arguments.extend(["--dir", "/workspace"])
     known_dirs.add("/workspace")
-    _bind_writable(arguments, assigned, "/workspace", known_dirs)
+    if tool_policy == "coding":
+        _bind_writable(arguments, assigned, "/workspace", known_dirs)
+    else:
+        _bind_read_only(arguments, assigned, "/workspace", known_dirs)
+        if tool_policy == "planning":
+            for source, destination in _planning_artifact_roots(assigned):
+                _bind_writable(arguments, source, destination, known_dirs)
     if home is not None:
         arguments.extend(["--dir", "/home/copilot"])
         known_dirs.add("/home/copilot")
@@ -252,8 +284,7 @@ def build_sandbox_argv(
         arguments.extend(["--dir", "/home/copilot"])
         known_dirs.add("/home/copilot")
 
-    # The only writable project path is /workspace.  These mounts ensure that
-    # common host state and service-control locations do not reappear through
+    # Common host state and service-control locations do not reappear through
     # an inherited root mount.
     for hidden in ("/var/lib", "/var/run", "/etc/gascity", "/srv", "/opt"):
         _add_parent_dirs(arguments, hidden, known_dirs)
@@ -349,6 +380,7 @@ def build_sandbox_argv(
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--worktree", required=True)
+    parser.add_argument("--tool-policy", default="coding")
     parser.add_argument("--state-root")
     parser.add_argument("--copilot-home")
     parser.add_argument("--runtime-path", action="append", default=[])
@@ -372,6 +404,7 @@ def main() -> int:
     argv, inherited = build_sandbox_argv(
         command,
         worktree=args.worktree,
+        tool_policy=args.tool_policy,
         state_root=args.state_root,
         copilot_home=args.copilot_home,
         runtime_paths=args.runtime_path,

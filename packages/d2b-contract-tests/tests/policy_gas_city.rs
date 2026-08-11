@@ -13,6 +13,7 @@ const CITY: &str = "nix/gas-city-contributor/city/city.toml";
 const MATRIX: &str = "nix/gas-city-contributor/city/agent-role-matrix.toml";
 const INSTRUCTIONS: &str = "nix/gas-city-contributor/copilot/instructions.md";
 const COPILOT_PROFILE: &str = "nix/gas-city-contributor/pack/scripts/copilot-profile.py";
+const AGENT_LAUNCHER: &str = "nix/gas-city-contributor/pack/scripts/agent-launcher.py";
 const AGENT_SANDBOX: &str = "nix/gas-city-contributor/pack/scripts/agent-sandbox.py";
 const LOCAL_PACK: &str = "nix/gas-city-contributor/pack/pack.toml";
 const SERVICE_MODULE: &str = "nixos-modules/gas-city-contributor/service.nix";
@@ -159,7 +160,101 @@ fn validate_sibling_imports(city: &str, local_pack: &str) -> Result<(), String> 
     Ok(())
 }
 
-fn validate_role_routes(matrix: &str, city: &str) -> Result<(), String> {
+fn profile_tool_policies(matrix: &str) -> Result<BTreeMap<String, String>, String> {
+    let profile = Regex::new(
+        r#"(?ms)^\[profiles\.([^\]]+)\]\s.*?^tool_policy = "([^"]+)""#,
+    )
+    .expect("valid profile tool-policy regex");
+    let mut policies = BTreeMap::new();
+    for capture in profile.captures_iter(matrix) {
+        if policies
+            .insert(capture[1].to_owned(), capture[2].to_owned())
+            .is_some()
+        {
+            return Err(format!("duplicate profile tool policy: {}", &capture[1]));
+        }
+    }
+    Ok(policies)
+}
+
+fn provider_tool_policies(city: &str) -> Result<BTreeMap<String, String>, String> {
+    let provider = Regex::new(
+        r#"(?ms)^\[providers\.([^\]]+)\]\s.*?^acp_args = \[\s*"--profile",\s*"[^"]+",\s*"--tool-policy",\s*"([^"]+)""#,
+    )
+    .expect("valid provider tool-policy regex");
+    let mut policies = BTreeMap::new();
+    for capture in provider.captures_iter(city) {
+        if policies
+            .insert(capture[1].to_owned(), capture[2].to_owned())
+            .is_some()
+        {
+            return Err(format!("duplicate provider tool policy: {}", &capture[1]));
+        }
+    }
+    Ok(policies)
+}
+
+fn validate_tool_policies(
+    matrix: &str,
+    city: &str,
+    launcher: &str,
+    copilot_profile: &str,
+) -> Result<(), String> {
+    let expected = BTreeMap::from([
+        (
+            "planning-sol".to_owned(),
+            ("planning-artifacts", "planning", "copilot-planning-sol"),
+        ),
+        (
+            "review-sol".to_owned(),
+            ("read-only-review", "review", "copilot-review-sol"),
+        ),
+        (
+            "review-luna".to_owned(),
+            ("read-only-review", "review", "copilot-review-luna"),
+        ),
+        (
+            "code-luna".to_owned(),
+            ("worktree-edit-check", "coding", "copilot-code-luna"),
+        ),
+    ]);
+    let matrix_policies = profile_tool_policies(matrix)?;
+    let city_policies = provider_tool_policies(city)?;
+    for (profile, (matrix_policy, executable_policy, provider)) in expected {
+        if matrix_policies.get(&profile).map(String::as_str) != Some(matrix_policy) {
+            return Err(format!(
+                "profile {profile} must use matrix tool policy {matrix_policy}"
+            ));
+        }
+        if city_policies.get(provider).map(String::as_str) != Some(executable_policy) {
+            return Err(format!(
+                "provider {provider} must use executable tool policy {executable_policy}"
+            ));
+        }
+        let launcher_mapping = format!(
+            "\"{executable_policy}\": \"{}\"",
+            match executable_policy {
+                "review" => "view,search",
+                "planning" => "view,search,apply_patch",
+                "coding" => "bash,view,search,apply_patch",
+                _ => unreachable!("expected executable policy"),
+            }
+        );
+        if !launcher.contains(&launcher_mapping) {
+            return Err(format!(
+                "launcher is missing executable policy mapping {launcher_mapping}"
+            ));
+        }
+        if !copilot_profile.contains(&launcher_mapping) {
+            return Err(format!(
+                "Copilot profile is missing executable policy mapping {launcher_mapping}"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_role_routes(matrix: &str, city: &str, launcher: &str) -> Result<(), String> {
     if matrix.contains("provider = \"auto\"")
         || matrix.contains("fallback = \"auto\"")
         || city.contains("provider = \"auto\"")
@@ -242,6 +337,12 @@ fn validate_role_routes(matrix: &str, city: &str) -> Result<(), String> {
     if !city.contains("[session]\n# Control-plane") || !city.contains("provider = \"subprocess\"") {
         return Err("city default session runtime must be subprocess".to_owned());
     }
+    validate_tool_policies(
+        matrix,
+        city,
+        launcher,
+        &owned_asset(COPILOT_PROFILE),
+    )?;
     Ok(())
 }
 
@@ -299,7 +400,8 @@ fn gas_city_uses_four_immutable_sibling_imports() {
 fn gas_city_role_matrix_is_complete_and_executable() {
     let matrix = owned_asset(MATRIX);
     let city = owned_asset(CITY);
-    validate_role_routes(&matrix, &city).unwrap();
+    let launcher = owned_asset(AGENT_LAUNCHER);
+    validate_role_routes(&matrix, &city, &launcher).unwrap();
 
     for profile in ["planning-sol", "review-sol", "review-luna", "code-luna"] {
         assert!(
@@ -478,8 +580,30 @@ profile = "coding"
 fallback = "auto"
 "#;
     assert!(
-        validate_role_routes(planted, &owned_asset(CITY)).is_err(),
+        validate_role_routes(
+            planted,
+            &owned_asset(CITY),
+            &owned_asset(AGENT_LAUNCHER),
+        )
+        .is_err(),
         "a planted auto fallback must fail the role policy"
+    );
+}
+
+#[test]
+fn planted_tool_policy_drift_fails_closed() {
+    let matrix = owned_asset(MATRIX).replace(
+        "tool_policy = \"planning-artifacts\"",
+        "tool_policy = \"read-only-review\"",
+    );
+    assert!(
+        validate_role_routes(
+            &matrix,
+            &owned_asset(CITY),
+            &owned_asset(AGENT_LAUNCHER),
+        )
+        .is_err(),
+        "a planning/review tool-policy reversal must fail the role policy"
     );
 }
 
