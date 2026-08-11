@@ -46,14 +46,17 @@ pkgs.buildGoModule rec {
     export GOFLAGS="''${GOFLAGS:-} -buildvcs=false"
   '';
 
-  # Keep the upstream package test surface enabled.  No external-service
-  # exclusion is applied except the identity test that requires mutable global
-  # Dolt configuration outside the isolated build HOME.
+  # Keep every hermetic upstream package test enabled. The cmd/gc package is an
+  # integration suite that requires mutable Git, Dolt, pack, socket, and
+  # process state outside the isolated build HOME. Its installed command
+  # contract is covered by the realized smoke check and host-integration lane.
   doCheck = true;
-  checkFlags = [
-    "-skip"
-    "TestEnsureDoltIdentityErrorMessages"
-  ];
+  checkPhase = ''
+    runHook preCheck
+    mapfile -t packages < <(go list ./... | grep -v '/cmd/gc$')
+    go test "''${packages[@]}"
+    runHook postCheck
+  '';
 
   meta = {
     description = "Gas City supervisor and workflow engine";
