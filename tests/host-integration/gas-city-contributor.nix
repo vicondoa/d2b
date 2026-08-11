@@ -1255,7 +1255,10 @@ pkgs.testers.runNixOSTest {
     check_exec = machine.succeed("systemctl cat gascity-check.service")
     assert "--max-heavy-checks 1" in check_exec
     assert "/nix/var/nix/daemon-socket/socket" in check_exec
-    check_env = machine.succeed("systemctl show -P Environment gascity-check.service")
+    check_pid = machine.succeed(
+        "systemctl show -P MainPID gascity-check.service"
+    ).strip()
+    check_env = machine.succeed(f"xargs -0 -n1 </proc/{check_pid}/environ")
     assert "NIX_REMOTE=local?root=/var/lib/gascity-check/nix-root" in check_env
     assert "max-jobs = 1" in check_env and "cores = 2" in check_env
 
