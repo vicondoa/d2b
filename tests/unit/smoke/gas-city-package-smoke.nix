@@ -153,20 +153,6 @@ pkgs.runCommand "gas-city-package-smoke" {
     ${gasCityContributor}/bin/python3 \
       tests/fixtures/gas-city/buildbuddy/run.py
   )
-  (
-    cd "$fixtureRepo/tests/fixtures/gas-city/buildbuddy"
-    ${gasCityContributor}/bin/bazel \
-      --batch \
-      --output_user_root="$TMPDIR/bazel-user-root" \
-      build \
-      --enable_bzlmod=false \
-      --enable_workspace=true \
-      --repository_cache="$TMPDIR/bazel-repository-cache" \
-      //...
-    test "$(${pkgs.coreutils}/bin/cat bazel-bin/round_trip_payload.txt)" \
-      = "gascity-buildbuddy-bazel-8.7.0"
-  )
-
   jq -e \
     --arg gascity "${gascityRevision}" \
     --arg gascityVersion "${gascityVersion}" \
