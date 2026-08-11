@@ -19,6 +19,7 @@ import argparse
 import array
 import base64
 import contextlib
+import datetime
 import fcntl
 import hashlib
 import json
@@ -45,6 +46,13 @@ MAX_BUNDLE_BYTES = 512 * 1024 * 1024
 MAX_BODY_BYTES = 64 * 1024
 MAX_TITLE_BYTES = 512
 MAX_ATTEMPTS = 3
+MAX_RETRY_AFTER_SECONDS = 300.0
+GITHUB_REQUEST_TIMEOUT_SECONDS = 20.0
+INSTALLATION_TOKEN_REFRESH_MARGIN_SECONDS = 60.0
+PUBLISHER_OPERATION_BUDGET_SECONDS = MAX_ATTEMPTS * (
+    GITHUB_REQUEST_TIMEOUT_SECONDS + MAX_RETRY_AFTER_SECONDS
+)
+RPC_TIMEOUT_SECONDS = PUBLISHER_OPERATION_BUDGET_SECONDS
 DEFAULT_API_BASE = "https://api.github.com"
 DEFAULT_REPOSITORY_HOST = "github.com"
 DEFAULT_BRANCH_NAMESPACE = "gascity/"
@@ -63,6 +71,14 @@ class RetryableGitHubError(PublicationError):
     def __init__(self, message: str, *, retry_after: float = 0.0) -> None:
         super().__init__(message)
         self.retry_after = max(0.0, float(retry_after))
+
+
+class GitHubAuthenticationError(PublicationError):
+    """Raised when GitHub rejects the bearer used for an API request."""
+
+    def __init__(self, message: str, *, refreshable: bool) -> None:
+        super().__init__(message)
+        self.refreshable = refreshable
 
 
 class AmbiguousMutation(PublicationError):
@@ -204,16 +220,30 @@ def _retry_after(headers: Mapping[str, str] | None) -> float:
     value = headers.get("Retry-After") or headers.get("retry-after")
     if value:
         try:
-            return max(0.0, min(300.0, float(value)))
+            return max(0.0, min(MAX_RETRY_AFTER_SECONDS, float(value)))
         except (TypeError, ValueError):
             pass
     reset = headers.get("X-RateLimit-Reset") or headers.get("x-ratelimit-reset")
     if reset:
         try:
-            return max(0.0, min(300.0, float(reset) - time.time()))
+            return max(0.0, min(MAX_RETRY_AFTER_SECONDS, float(reset) - time.time()))
         except (TypeError, ValueError):
             pass
     return 0.0
+
+
+def _github_timestamp(value: object, label: str) -> float:
+    text = _string(value, label, max_bytes=64)
+    try:
+        parsed = datetime.datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except (TypeError, ValueError) as error:
+        raise PublicationError(f"{label} is malformed") from error
+    if parsed.tzinfo is None:
+        raise PublicationError(f"{label} must include a timezone")
+    try:
+        return parsed.timestamp()
+    except (OverflowError, OSError, ValueError) as error:
+        raise PublicationError(f"{label} is malformed") from error
 
 
 def validate_publication_request(
@@ -623,6 +653,7 @@ class GitHubAPI:
         self.sleep = sleep
         self.openssl = openssl
         self._installation_token = ""
+        self._installation_token_expires_at = 0.0
 
     def _jwt(self) -> str:
         now = int(time.time())
@@ -682,17 +713,28 @@ class GitHubAPI:
             method=method,
         )
         try:
-            with self.opener(request, timeout=20) as response:
+            with self.opener(request, timeout=GITHUB_REQUEST_TIMEOUT_SECONDS) as response:
+                status = int(response.status)
+                if status == 401:
+                    raise GitHubAuthenticationError(
+                        "GitHub authentication failed",
+                        refreshable=not bearer and bool(token),
+                    )
                 raw = response.read(MAX_FRAME_BYTES + 1)
                 if len(raw) > MAX_FRAME_BYTES:
                     raise PublicationError("GitHub response exceeds the size limit")
                 if not raw:
-                    return int(response.status), {}
+                    return status, {}
                 value = json.loads(raw)
                 if not isinstance(value, (dict, list)):
                     raise PublicationError("GitHub response is not a JSON object or list")
-                return int(response.status), value
+                return status, value
         except urllib.error.HTTPError as error:
+            if error.code == 401:
+                raise GitHubAuthenticationError(
+                    "GitHub authentication failed",
+                    refreshable=not bearer and bool(token),
+                ) from error
             if error.code == 429 or error.code >= 500:
                 if mutating and error.code >= 500:
                     raise AmbiguousMutation(
@@ -707,8 +749,14 @@ class GitHubAPI:
         except (urllib.error.URLError, TimeoutError, socket.timeout, OSError) as error:
             raise AmbiguousMutation("GitHub request outcome is ambiguous") from error
 
-    def installation_token(self) -> str:
-        if self._installation_token:
+    def installation_token(self, *, force_refresh: bool = False) -> str:
+        now = time.time()
+        if (
+            not force_refresh
+            and self._installation_token
+            and now + INSTALLATION_TOKEN_REFRESH_MARGIN_SECONDS
+            < self._installation_token_expires_at
+        ):
             return self._installation_token
         status, response = self._request_once(
             "POST",
@@ -719,8 +767,19 @@ class GitHubAPI:
         if status < 200 or status >= 300 or not isinstance(response, dict):
             raise PublicationError("GitHub installation token response is malformed")
         token = response.get("token")
-        self._installation_token = _string(token, "GitHub installation token", max_bytes=4096)
+        expires_at = _github_timestamp(
+            response.get("expires_at"),
+            "GitHub installation token expiry",
+        )
+        parsed_token = _string(token, "GitHub installation token", max_bytes=4096)
+        self._installation_token = parsed_token
+        self._installation_token_expires_at = expires_at
         return self._installation_token
+
+    def _invalidate_installation_token(self, token: str) -> None:
+        if token and token == self._installation_token:
+            self._installation_token = ""
+            self._installation_token_expires_at = 0.0
 
     def request(
         self,
@@ -730,18 +789,27 @@ class GitHubAPI:
         payload: Mapping[str, object] | None = None,
         mutating: bool = False,
     ) -> dict[str, object] | list[object]:
+        forced_refresh = False
         for attempt in range(1, MAX_ATTEMPTS + 1):
+            token = ""
             try:
+                token = self.installation_token()
                 status, response = self._request_once(
                     method,
                     path,
                     payload=payload,
-                    token=self.installation_token(),
+                    token=token,
                     mutating=mutating,
                 )
                 if status < 200 or status >= 300:
                     raise PublicationError(f"GitHub returned unexpected HTTP {status}")
                 return response
+            except GitHubAuthenticationError as error:
+                if attempt == MAX_ATTEMPTS or not error.refreshable or forced_refresh:
+                    raise PublicationError("GitHub authentication failed") from error
+                self._invalidate_installation_token(token)
+                self.installation_token(force_refresh=True)
+                forced_refresh = True
             except RetryableGitHubError as error:
                 if attempt == MAX_ATTEMPTS:
                     raise PublicationError("GitHub retry ceiling reached") from error
@@ -843,7 +911,12 @@ def _pr_url(value: Mapping[str, object], repository: str) -> str:
 
 
 def _is_merged(value: Mapping[str, object]) -> bool:
-    return bool(value.get("merged")) or str(value.get("state", "")).lower() == "merged"
+    state = str(value.get("state", "")).lower()
+    return (
+        bool(value.get("merged"))
+        or state == "merged"
+        or (state == "closed" and value.get("merged_at") is not None)
+    )
 
 
 class Publisher:
@@ -1225,7 +1298,7 @@ def _rpc_with_fd(socket_path: str, request: Mapping[str, object], descriptor: in
         raise PublicationError("bundle descriptor is unavailable") from error
     connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:
-        connection.settimeout(180)
+        connection.settimeout(RPC_TIMEOUT_SECONDS)
         connection.connect(socket_path)
         payload = _json_bytes(request) + b"\n"
         rights = array.array("i", [descriptor])

@@ -49,15 +49,32 @@ def pull_request(
     repository: str = REPOSITORY,
     number: int = 7,
     merged: bool = False,
+    merged_at: str | None = None,
 ) -> dict[str, object]:
     return {
         "number": number,
         "state": state,
         "merged": merged,
+        "merged_at": merged_at,
         "html_url": f"https://github.com/{repository}/pull/{number}",
         "head": {"ref": HEAD, "sha": sha, "repo": {"full_name": repository}},
         "base": {"ref": BASE, "repo": {"full_name": repository}},
     }
+
+
+class FakeHTTPResponse:
+    def __init__(self, status: int, payload: object) -> None:
+        self.status = status
+        self.payload = payload
+
+    def __enter__(self) -> "FakeHTTPResponse":
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        return None
+
+    def read(self, _limit: int) -> bytes:
+        return MODULE.json.dumps(self.payload).encode("utf-8")
 
 
 class FakeGit:
@@ -228,7 +245,12 @@ class PublisherFixture(unittest.TestCase):
 
         self.temporary.cleanup()
         self.setUp()
-        self.github.matches = [pull_request(state="closed", merged=True)]
+        self.github.matches = [
+            pull_request(
+                state="closed",
+                merged_at="2026-08-10T12:00:00Z",
+            )
+        ]
         result = self.publish()
         self.assertEqual(result["pr_url"], "https://github.com/acme/project/pull/7")
         self.assertEqual(self.git.pushes, [])
@@ -494,6 +516,166 @@ class PublisherFixture(unittest.TestCase):
                 mutating=True,
             )
         self.assertEqual(ambiguous_error.exception.retry_after, 4.0)
+
+    def test_github_installation_token_refreshes_before_expiration(self) -> None:
+        requests: list[MODULE.urllib.request.Request] = []
+        responses = [
+            FakeHTTPResponse(
+                201,
+                {
+                    "token": "first-token",
+                    "expires_at": "1970-01-02T00:00:00Z",
+                },
+            ),
+            FakeHTTPResponse(
+                201,
+                {
+                    "token": "second-token",
+                    "expires_at": "1970-01-03T00:00:00Z",
+                },
+            ),
+        ]
+
+        def opener(request: MODULE.urllib.request.Request, timeout: float) -> FakeHTTPResponse:
+            self.assertEqual(timeout, 20)
+            requests.append(request)
+            return responses.pop(0)
+
+        api = MODULE.GitHubAPI(
+            app_id="7",
+            installation_id="42",
+            private_key_path="/dev/null",
+            opener=opener,
+        )
+        with patch.object(api, "_jwt", side_effect=["jwt-1", "jwt-2"]), patch.object(
+            MODULE.time,
+            "time",
+            side_effect=[0.0, 86_350.0],
+        ):
+            self.assertEqual(api.installation_token(), "first-token")
+            self.assertEqual(api.installation_token(), "second-token")
+        self.assertEqual(len(requests), 2)
+        self.assertEqual(api._installation_token_expires_at, 172_800.0)
+
+    def test_github_auth_failure_forces_one_refresh_and_retries_once(self) -> None:
+        requests: list[MODULE.urllib.request.Request] = []
+        responses = [
+            FakeHTTPResponse(
+                201,
+                {
+                    "token": "first-token",
+                    "expires_at": "2099-01-02T00:00:00Z",
+                },
+            ),
+            FakeHTTPResponse(401, {"message": "Bad credentials"}),
+            FakeHTTPResponse(
+                201,
+                {
+                    "token": "second-token",
+                    "expires_at": "2099-01-03T00:00:00Z",
+                },
+            ),
+            FakeHTTPResponse(200, {"full_name": REPOSITORY}),
+        ]
+
+        def opener(request: MODULE.urllib.request.Request, timeout: float) -> FakeHTTPResponse:
+            self.assertEqual(timeout, 20)
+            requests.append(request)
+            return responses.pop(0)
+
+        api = MODULE.GitHubAPI(
+            app_id="7",
+            installation_id="42",
+            private_key_path="/dev/null",
+            opener=opener,
+        )
+        with patch.object(api, "_jwt", side_effect=["jwt-1", "jwt-2"]):
+            result = api.request("GET", f"/repos/{REPOSITORY}")
+        self.assertEqual(result, {"full_name": REPOSITORY})
+        self.assertEqual(len(requests), 4)
+        self.assertEqual(requests[1].headers["Authorization"], "token first-token")
+        self.assertEqual(requests[3].headers["Authorization"], "token second-token")
+
+    def test_github_auth_failure_does_not_force_refresh_again(self) -> None:
+        requests: list[MODULE.urllib.request.Request] = []
+        responses = [
+            FakeHTTPResponse(
+                201,
+                {
+                    "token": "first-token",
+                    "expires_at": "2099-01-02T00:00:00Z",
+                },
+            ),
+            FakeHTTPResponse(401, {}),
+            FakeHTTPResponse(
+                201,
+                {
+                    "token": "second-token",
+                    "expires_at": "2099-01-03T00:00:00Z",
+                },
+            ),
+            FakeHTTPResponse(401, {}),
+        ]
+
+        def opener(request: MODULE.urllib.request.Request, timeout: float) -> FakeHTTPResponse:
+            self.assertEqual(timeout, 20)
+            requests.append(request)
+            return responses.pop(0)
+
+        api = MODULE.GitHubAPI(
+            app_id="7",
+            installation_id="42",
+            private_key_path="/dev/null",
+            opener=opener,
+        )
+        with patch.object(api, "_jwt", side_effect=["jwt-1", "jwt-2"]):
+            with self.assertRaises(MODULE.PublicationError):
+                api.request("GET", f"/repos/{REPOSITORY}")
+        self.assertEqual(len(requests), 4)
+        self.assertEqual(
+            sum(request.headers.get("Authorization", "").startswith("Bearer ") for request in requests),
+            2,
+        )
+
+    def test_publisher_rpc_timeout_covers_the_bounded_provider_budget(self) -> None:
+        class FakeSocket:
+            def __init__(self) -> None:
+                self.timeout: float | None = None
+                self.closed = False
+
+            def settimeout(self, timeout: float) -> None:
+                self.timeout = timeout
+
+            def connect(self, _path: str) -> None:
+                return None
+
+            def sendmsg(self, buffers: list[bytes], _ancillary: list[object]) -> int:
+                return len(buffers[0])
+
+            def recv(self, _limit: int) -> bytes:
+                return b'{"ok":true,"result":{}}\n'
+
+            def sendall(self, _payload: bytes) -> None:
+                return None
+
+            def close(self) -> None:
+                self.closed = True
+
+        connection = FakeSocket()
+        with tempfile.TemporaryFile() as bundle:
+            with patch.object(MODULE.socket, "socket", return_value=connection):
+                result = MODULE._rpc_with_fd(
+                    "/run/gascity-contributor/publisher.sock",
+                    {"operation": "publish"},
+                    bundle.fileno(),
+                )
+        self.assertEqual(result, {"ok": True, "result": {}})
+        self.assertEqual(connection.timeout, MODULE.RPC_TIMEOUT_SECONDS)
+        self.assertGreaterEqual(
+            MODULE.RPC_TIMEOUT_SECONDS,
+            MODULE.PUBLISHER_OPERATION_BUDGET_SECONDS,
+        )
+        self.assertTrue(connection.closed)
 
     def test_real_unlinked_bundle_imports_one_exact_head_into_bare_clone(self) -> None:
         git = shutil.which("git")
