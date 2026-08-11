@@ -1,0 +1,246 @@
+# Source of truth for model-backed role bindings.
+#
+# A role occurs exactly once below.  The city generator consumes these rows
+# when emitting the sanitized provider/session assignments.  Control helpers
+# (gc.run-operator and gc.publisher) intentionally do not occur here: they are
+# deterministic non-model subprocess helpers and inherit the city session
+# runtime.
+
+schema = 1
+city_session = "subprocess"
+
+[profiles.planning]
+provider = "copilot-planning"
+session = "acp"
+model = "gpt-5.6-sol"
+context = "long_context"
+effort = "xhigh"
+fallback = "none"
+tool_policy = "planning-artifacts"
+
+[profiles.review]
+provider = "copilot-review"
+session = "acp"
+model = "gpt-5.6-sol"
+context = "long_context"
+effort = "xhigh"
+fallback = "copilot-review-fallback"
+tool_policy = "read-only-review"
+
+[profiles.coding]
+provider = "copilot-coding"
+session = "acp"
+model = "gpt-5.6-luna"
+context = "default"
+effort = "max"
+fallback = "none"
+tool_policy = "worktree-edit-check"
+
+[profiles.review-fallback]
+provider = "copilot-review-fallback"
+session = "acp"
+model = "gpt-5.6-luna"
+context = "long_context"
+effort = "max"
+fallback = "none"
+tool_policy = "read-only-review"
+
+[[roles]]
+name = "gc.requirements-planner"
+class = "planning"
+profile = "planning"
+
+[[roles]]
+name = "gc.design-author"
+class = "planning"
+profile = "planning"
+
+[[roles]]
+name = "gc.task-decomposer"
+class = "planning"
+profile = "planning"
+
+[[roles]]
+name = "gc.design-implementation-reviewer"
+class = "review"
+profile = "review"
+
+[[roles]]
+name = "gc.design-test-risk-reviewer"
+class = "review"
+profile = "review"
+
+[[roles]]
+name = "gc.gap-analyst"
+class = "review"
+profile = "review"
+
+[[roles]]
+name = "gc.implementation-reviewer"
+class = "review"
+profile = "review"
+
+[[roles]]
+name = "gc.issue-triager"
+class = "review"
+profile = "review"
+
+[[roles]]
+name = "gc.review-synthesizer"
+class = "review"
+profile = "review"
+
+[[roles]]
+name = "gc.implementation-worker"
+class = "coding"
+profile = "coding"
+
+[[roles]]
+name = "compound-engineering.ce-brainstorm"
+class = "planning"
+profile = "planning"
+
+[[roles]]
+name = "compound-engineering.ce-plan"
+class = "planning"
+profile = "planning"
+
+[[roles]]
+name = "compound-engineering.ce-plan-review-synthesizer"
+class = "planning"
+profile = "planning"
+
+[[roles]]
+name = "compound-engineering.ce-architecture-strategist"
+class = "planning"
+profile = "planning"
+
+[[roles]]
+name = "compound-engineering.ce-coherence-reviewer"
+class = "planning"
+profile = "planning"
+
+[[roles]]
+name = "compound-engineering.ce-feasibility-reviewer"
+class = "planning"
+profile = "planning"
+
+[[roles]]
+name = "compound-engineering.ce-scope-guardian-reviewer"
+class = "planning"
+profile = "planning"
+
+[[roles]]
+name = "compound-engineering.ce-adversarial-reviewer"
+class = "review"
+profile = "review"
+
+[[roles]]
+name = "compound-engineering.ce-agent-native-reviewer"
+class = "review"
+profile = "review"
+
+[[roles]]
+name = "compound-engineering.ce-api-contract-reviewer"
+class = "review"
+profile = "review"
+
+[[roles]]
+name = "compound-engineering.ce-code-review-selector"
+class = "review"
+profile = "review"
+
+[[roles]]
+name = "compound-engineering.ce-code-review-synthesizer"
+class = "review"
+profile = "review"
+
+[[roles]]
+name = "compound-engineering.ce-compound"
+class = "review"
+profile = "review"
+
+[[roles]]
+name = "compound-engineering.ce-correctness-reviewer"
+class = "review"
+profile = "review"
+
+[[roles]]
+name = "compound-engineering.ce-data-migration-reviewer"
+class = "review"
+profile = "review"
+
+[[roles]]
+name = "compound-engineering.ce-deployment-verification-agent"
+class = "review"
+profile = "review"
+
+[[roles]]
+name = "compound-engineering.ce-julik-frontend-races-reviewer"
+class = "review"
+profile = "review"
+
+[[roles]]
+name = "compound-engineering.ce-learnings-researcher"
+class = "review"
+profile = "review"
+
+[[roles]]
+name = "compound-engineering.ce-maintainability-reviewer"
+class = "review"
+profile = "review"
+
+[[roles]]
+name = "compound-engineering.ce-performance-reviewer"
+class = "review"
+profile = "review"
+
+[[roles]]
+name = "compound-engineering.ce-pr-comment-resolver"
+class = "review"
+profile = "review"
+
+[[roles]]
+name = "compound-engineering.ce-previous-comments-reviewer"
+class = "review"
+profile = "review"
+
+[[roles]]
+name = "compound-engineering.ce-project-standards-reviewer"
+class = "review"
+profile = "review"
+
+[[roles]]
+name = "compound-engineering.ce-reliability-reviewer"
+class = "review"
+profile = "review"
+
+[[roles]]
+name = "compound-engineering.ce-security-reviewer"
+class = "review"
+profile = "review"
+
+[[roles]]
+name = "compound-engineering.ce-swift-ios-reviewer"
+class = "review"
+profile = "review"
+
+[[roles]]
+name = "compound-engineering.ce-testing-reviewer"
+class = "review"
+profile = "review"
+
+[[roles]]
+name = "compound-engineering.ce-work"
+class = "coding"
+profile = "coding"
+
+[[roles]]
+name = "contributor.d2b-pr-comment-judge"
+class = "review"
+profile = "review"
+
+[[roles]]
+name = "contributor.d2b-pr-comment-verifier"
+class = "review"
+profile = "review"

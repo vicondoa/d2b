@@ -1,0 +1,3 @@
+description = "Review-only judgment over pull-request comments and requested changes"
+scope = "rig"
+fallback = true

@@ -1,0 +1,370 @@
+# Immutable Gas City contributor city.
+#
+# The four imports are deliberate peer imports.  The Compound pack keeps its
+# own ../gascity dependency, so the Nix asset builder places the upstream
+# trees beside one another instead of copying one pack into another.
+
+[workspace]
+name = "d2b-contributor"
+provider = "copilot-coding"
+max_active_sessions = 2
+global_fragments = ["d2b-managed-contributor"]
+
+[session]
+# Control-plane, dispatcher, and non-model helper processes use the headless
+# local runtime.  Model-backed agents opt into ACP below.
+provider = "subprocess"
+
+[imports.gc]
+source = "../packs/gascity"
+
+[imports.compound-engineering]
+source = "../packs/compound-engineering"
+
+[imports.discord]
+source = "../packs/discord"
+
+[imports.contributor]
+source = "../pack"
+
+# These provider presets are the only Copilot launch surface used by the
+# generated role bindings.  Model and context selection is supplied by the
+# immutable profile homes owned by the ACP launcher; the role matrix records
+# the effective profile expected at readiness.
+
+[providers.copilot-planning]
+base = "builtin:copilot"
+command = "copilot"
+acp_command = "copilot"
+args = []
+supports_acp = true
+acp_args = [
+  "--acp",
+  "--no-custom-instructions",
+  "--no-auto-update",
+  "--disable-builtin-mcps",
+  "--no-remote",
+  "--no-remote-export",
+  "--available-tools", "view,search,apply_patch",
+  "--deny-tool", "shell(gh)",
+  "--deny-tool", "shell(gh *)",
+  "--deny-tool", "shell(git push)",
+  "--deny-tool", "shell(git push *)",
+  "--deny-tool", "shell(discord)",
+  "--deny-tool", "shell(discord *)",
+]
+env = { COPILOT_HOME = "${GC_COPILOT_HOME}", COPILOT_CUSTOM_INSTRUCTIONS_DIRS = "" }
+
+[providers.copilot-review]
+base = "builtin:copilot"
+command = "copilot"
+acp_command = "copilot"
+args = []
+supports_acp = true
+acp_args = [
+  "--acp",
+  "--no-custom-instructions",
+  "--no-auto-update",
+  "--disable-builtin-mcps",
+  "--no-remote",
+  "--no-remote-export",
+  "--available-tools", "view,search",
+  "--deny-tool", "shell(gh)",
+  "--deny-tool", "shell(gh *)",
+  "--deny-tool", "shell(git push)",
+  "--deny-tool", "shell(git push *)",
+  "--deny-tool", "shell(discord)",
+  "--deny-tool", "shell(discord *)",
+]
+env = { COPILOT_HOME = "${GC_COPILOT_HOME}", COPILOT_CUSTOM_INSTRUCTIONS_DIRS = "" }
+
+[providers.copilot-review-fallback]
+base = "builtin:copilot"
+command = "copilot"
+acp_command = "copilot"
+args = []
+supports_acp = true
+acp_args = [
+  "--acp",
+  "--no-custom-instructions",
+  "--no-auto-update",
+  "--disable-builtin-mcps",
+  "--no-remote",
+  "--no-remote-export",
+  "--available-tools", "view,search",
+  "--deny-tool", "shell(gh)",
+  "--deny-tool", "shell(gh *)",
+  "--deny-tool", "shell(git push)",
+  "--deny-tool", "shell(git push *)",
+  "--deny-tool", "shell(discord)",
+  "--deny-tool", "shell(discord *)",
+]
+env = { COPILOT_HOME = "${GC_COPILOT_HOME}", COPILOT_CUSTOM_INSTRUCTIONS_DIRS = "" }
+
+[providers.copilot-coding]
+base = "builtin:copilot"
+command = "copilot"
+acp_command = "copilot"
+args = []
+supports_acp = true
+acp_args = [
+  "--acp",
+  "--no-custom-instructions",
+  "--no-auto-update",
+  "--disable-builtin-mcps",
+  "--no-remote",
+  "--no-remote-export",
+  "--available-tools", "bash,view,search,apply_patch",
+  "--deny-tool", "shell(gh)",
+  "--deny-tool", "shell(gh *)",
+  "--deny-tool", "shell(git push)",
+  "--deny-tool", "shell(git push *)",
+  "--deny-tool", "shell(discord)",
+  "--deny-tool", "shell(discord *)",
+]
+env = { COPILOT_HOME = "${GC_COPILOT_HOME}", COPILOT_CUSTOM_INSTRUCTIONS_DIRS = "" }
+
+# The following assignments are generated from city/agent-role-matrix.toml.
+# Keep this block mechanically boring: one imported agent, one provider, and
+# one ACP transport per model-backed role.  In particular, do not replace a
+# provider with an implicit selector or add an implicit fallback.
+
+[[patches.agent]]
+dir = ""
+name = "gc.requirements-planner"
+provider = "copilot-planning"
+session = "acp"
+
+[[patches.agent]]
+dir = ""
+name = "gc.design-author"
+provider = "copilot-planning"
+session = "acp"
+
+[[patches.agent]]
+dir = ""
+name = "gc.task-decomposer"
+provider = "copilot-planning"
+session = "acp"
+
+[[patches.agent]]
+dir = ""
+name = "gc.design-implementation-reviewer"
+provider = "copilot-review"
+session = "acp"
+
+[[patches.agent]]
+dir = ""
+name = "gc.design-test-risk-reviewer"
+provider = "copilot-review"
+session = "acp"
+
+[[patches.agent]]
+dir = ""
+name = "gc.gap-analyst"
+provider = "copilot-review"
+session = "acp"
+
+[[patches.agent]]
+dir = ""
+name = "gc.implementation-reviewer"
+provider = "copilot-review"
+session = "acp"
+
+[[patches.agent]]
+dir = ""
+name = "gc.issue-triager"
+provider = "copilot-review"
+session = "acp"
+
+[[patches.agent]]
+dir = ""
+name = "gc.review-synthesizer"
+provider = "copilot-review"
+session = "acp"
+
+[[patches.agent]]
+dir = ""
+name = "gc.implementation-worker"
+provider = "copilot-coding"
+session = "acp"
+
+[[patches.agent]]
+dir = ""
+name = "compound-engineering.ce-adversarial-reviewer"
+provider = "copilot-review"
+session = "acp"
+
+[[patches.agent]]
+dir = ""
+name = "compound-engineering.ce-agent-native-reviewer"
+provider = "copilot-review"
+session = "acp"
+
+[[patches.agent]]
+dir = ""
+name = "compound-engineering.ce-api-contract-reviewer"
+provider = "copilot-review"
+session = "acp"
+
+[[patches.agent]]
+dir = ""
+name = "compound-engineering.ce-architecture-strategist"
+provider = "copilot-planning"
+session = "acp"
+
+[[patches.agent]]
+dir = ""
+name = "compound-engineering.ce-brainstorm"
+provider = "copilot-planning"
+session = "acp"
+
+[[patches.agent]]
+dir = ""
+name = "compound-engineering.ce-code-review-selector"
+provider = "copilot-review"
+session = "acp"
+
+[[patches.agent]]
+dir = ""
+name = "compound-engineering.ce-code-review-synthesizer"
+provider = "copilot-review"
+session = "acp"
+
+[[patches.agent]]
+dir = ""
+name = "compound-engineering.ce-coherence-reviewer"
+provider = "copilot-planning"
+session = "acp"
+
+[[patches.agent]]
+dir = ""
+name = "compound-engineering.ce-compound"
+provider = "copilot-review"
+session = "acp"
+
+[[patches.agent]]
+dir = ""
+name = "compound-engineering.ce-correctness-reviewer"
+provider = "copilot-review"
+session = "acp"
+
+[[patches.agent]]
+dir = ""
+name = "compound-engineering.ce-data-migration-reviewer"
+provider = "copilot-review"
+session = "acp"
+
+[[patches.agent]]
+dir = ""
+name = "compound-engineering.ce-deployment-verification-agent"
+provider = "copilot-review"
+session = "acp"
+
+[[patches.agent]]
+dir = ""
+name = "compound-engineering.ce-feasibility-reviewer"
+provider = "copilot-planning"
+session = "acp"
+
+[[patches.agent]]
+dir = ""
+name = "compound-engineering.ce-julik-frontend-races-reviewer"
+provider = "copilot-review"
+session = "acp"
+
+[[patches.agent]]
+dir = ""
+name = "compound-engineering.ce-learnings-researcher"
+provider = "copilot-review"
+session = "acp"
+
+[[patches.agent]]
+dir = ""
+name = "compound-engineering.ce-maintainability-reviewer"
+provider = "copilot-review"
+session = "acp"
+
+[[patches.agent]]
+dir = ""
+name = "compound-engineering.ce-performance-reviewer"
+provider = "copilot-review"
+session = "acp"
+
+[[patches.agent]]
+dir = ""
+name = "compound-engineering.ce-plan"
+provider = "copilot-planning"
+session = "acp"
+
+[[patches.agent]]
+dir = ""
+name = "compound-engineering.ce-plan-review-synthesizer"
+provider = "copilot-planning"
+session = "acp"
+
+[[patches.agent]]
+dir = ""
+name = "compound-engineering.ce-pr-comment-resolver"
+provider = "copilot-review"
+session = "acp"
+
+[[patches.agent]]
+dir = ""
+name = "compound-engineering.ce-previous-comments-reviewer"
+provider = "copilot-review"
+session = "acp"
+
+[[patches.agent]]
+dir = ""
+name = "compound-engineering.ce-project-standards-reviewer"
+provider = "copilot-review"
+session = "acp"
+
+[[patches.agent]]
+dir = ""
+name = "compound-engineering.ce-reliability-reviewer"
+provider = "copilot-review"
+session = "acp"
+
+[[patches.agent]]
+dir = ""
+name = "compound-engineering.ce-scope-guardian-reviewer"
+provider = "copilot-planning"
+session = "acp"
+
+[[patches.agent]]
+dir = ""
+name = "compound-engineering.ce-security-reviewer"
+provider = "copilot-review"
+session = "acp"
+
+[[patches.agent]]
+dir = ""
+name = "compound-engineering.ce-swift-ios-reviewer"
+provider = "copilot-review"
+session = "acp"
+
+[[patches.agent]]
+dir = ""
+name = "compound-engineering.ce-testing-reviewer"
+provider = "copilot-review"
+session = "acp"
+
+[[patches.agent]]
+dir = ""
+name = "compound-engineering.ce-work"
+provider = "copilot-coding"
+session = "acp"
+
+[[patches.agent]]
+dir = ""
+name = "contributor.d2b-pr-comment-judge"
+provider = "copilot-review"
+session = "acp"
+
+[[patches.agent]]
+dir = ""
+name = "contributor.d2b-pr-comment-verifier"
+provider = "copilot-review"
+session = "acp"

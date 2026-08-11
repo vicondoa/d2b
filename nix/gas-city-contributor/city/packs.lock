@@ -1,0 +1,12 @@
+# The city imports only immutable local siblings.  Local path imports are
+# intentionally absent from the remote-pack lock table; Gas City does not
+# cache or re-fetch them.  Nix pins the upstream revisions while assembling
+# those siblings:
+#   gastownhall/gascity         6e0399fb970190a35c3e3d5d272a02becec55ffe
+#   gastownhall/gascity-packs   f3826035bb7de7c34621c2fdcd8620ab5a18bb08
+#
+# Keep this file present so an accidental remote import cannot be silently
+# accepted without a lock entry.
+schema = 1
+
+[packs]
