@@ -33,6 +33,9 @@ pkgs.buildGoModule rec {
 
   nativeBuildInputs = [ pkgs.pkg-config ];
   buildInputs = [ pkgs.icu ];
+  postPatch = ''
+    patchShebangs scripts
+  '';
 
   ldflags = [
     "-X main.version=${version}"
