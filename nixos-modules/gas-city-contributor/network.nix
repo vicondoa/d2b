@@ -75,7 +75,8 @@ in
       before = [ "gas-city-contributor.service" ];
       unitConfig = {
         PartOf = "gas-city-contributor.service";
-        BindsTo = "gas-city-contributor.service";
+        StartLimitIntervalSec = 60;
+        StartLimitBurst = 5;
       };
       serviceConfig = {
         Type = "exec";
@@ -127,8 +128,6 @@ in
         ExecStart = egressStart;
         Restart = "on-failure";
         RestartSec = "2s";
-        StartLimitIntervalSec = 60;
-        StartLimitBurst = 5;
       };
     };
   };

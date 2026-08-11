@@ -85,8 +85,6 @@ let
     ];
     Restart = "on-failure";
     RestartSec = "2s";
-    StartLimitIntervalSec = 60;
-    StartLimitBurst = 5;
     KillMode = "control-group";
   };
 
@@ -281,8 +279,9 @@ let
   sidecarUnit = {
     unitConfig = {
       PartOf = "gas-city-contributor.service";
-      BindsTo = "gas-city-contributor.service";
       Before = "gas-city-contributor.service";
+      StartLimitIntervalSec = 60;
+      StartLimitBurst = 5;
     };
     serviceConfig = sharedServiceConfig;
   };
@@ -305,6 +304,10 @@ in
         gas-city-contributor = {
           description = "Gas City contributor lifecycle supervisor";
           wantedBy = [ "multi-user.target" ];
+          unitConfig = {
+            StartLimitIntervalSec = 60;
+            StartLimitBurst = 5;
+          };
           requires = [
             "gascity-agent.service"
             "gascity-discord.service"
@@ -458,7 +461,8 @@ in
           after = [ "gas-city-contributor.service" ];
           unitConfig = {
             PartOf = "gas-city-contributor.service";
-            BindsTo = "gas-city-contributor.service";
+            StartLimitIntervalSec = 60;
+            StartLimitBurst = 5;
           };
           serviceConfig = sharedServiceConfig // {
             Type = "exec";
