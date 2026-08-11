@@ -39,20 +39,21 @@ struct Scratch {
 
 impl Scratch {
     fn new() -> Self {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .and_then(Path::parent)
-            .expect("repository root");
+        let root = std::env::temp_dir();
+        let pid = std::process::id();
         for _ in 0..32 {
-            let mut random = [0u8; 2];
+            let mut random = [0u8; 4];
             getrandom::getrandom(&mut random).unwrap();
-            let path = root.join(format!("i{:02x}{:02x}", random[0], random[1]));
+            let path = root.join(format!(
+                "d2b-shell-{pid}-{:02x}{:02x}{:02x}{:02x}",
+                random[0], random[1], random[2], random[3]
+            ));
             if fs::create_dir(&path).is_ok() {
                 fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
                 return Self { path };
             }
         }
-        panic!("could not reserve repository-local integration directory");
+        panic!("could not reserve private temporary integration directory");
     }
 
     fn socket(&self) -> PathBuf {
