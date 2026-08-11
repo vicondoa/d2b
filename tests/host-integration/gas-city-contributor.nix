@@ -1069,7 +1069,10 @@ pkgs.testers.runNixOSTest {
       };
     };
 
-    systemd.services.gascity-egress.serviceConfig.ExecStart = lib.mkForce fakeEgress;
+    systemd.services.gascity-egress.serviceConfig = {
+      ExecStartPre = [ "${credentialProbe} egress none" ];
+      ExecStart = lib.mkForce fakeEgress;
+    };
     systemd.services.gascity-discord.serviceConfig.ExecStartPre =
       [ "${credentialProbe} discord discord-bot-token" ];
     systemd.services.gascity-discord.serviceConfig.ExecStart =
