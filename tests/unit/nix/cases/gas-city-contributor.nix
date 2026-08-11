@@ -147,7 +147,7 @@ in
     expected = {
       identities = true;
       mainSlice = "gascity-contributor.slice";
-      mainGroup = "gascity-agent-channel";
+      mainGroup = "gascity-contributor";
       discordUid = 45102;
       publisherUid = 45103;
       killMode = "control-group";

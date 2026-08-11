@@ -469,7 +469,7 @@ in
           serviceConfig = sharedServiceConfig // {
             Type = "exec";
             User = "gascity";
-            Group = "gascity-agent-channel";
+            Group = "gascity-contributor";
             SupplementaryGroups = [
               "gascity-contributor"
               "gascity-agent-channel"
