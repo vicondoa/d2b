@@ -1356,7 +1356,7 @@ pkgs.testers.runNixOSTest {
         "'import socket; "
         "s=socket.socket(socket.AF_UNIX); "
         "s.connect(\"/run/gascity-contributor/agent.sock\"); "
-        "assert s.recv(64) == b\"fixture-agent/1\\\\n\"; s.close()'"
+        "assert s.recv(64) == b\"fixture-agent/1\\n\"; s.close()'"
     )
     machine.succeed(f"runuser -u gascity -- {public_owner_probe}")
     machine.succeed(f"! runuser -u alice -- {public_owner_probe}")
