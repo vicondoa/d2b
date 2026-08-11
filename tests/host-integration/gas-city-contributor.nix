@@ -803,6 +803,7 @@ let
       import time
 
       proxy = "${contributorScripts}/fdproxy.py"
+      port = int(sys.argv[1]) if len(sys.argv) > 1 else 18999
       channel = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
       channel.connect("/run/gascity-contributor/egress.sock")
       descriptor = channel.fileno()
@@ -813,7 +814,7 @@ let
               "--channel-fd",
               str(descriptor),
               "--listen",
-              "127.0.0.1:18999",
+              f"127.0.0.1:{port}",
           ],
           pass_fds=(descriptor,),
           close_fds=True,
@@ -822,7 +823,7 @@ let
           client = None
           for _attempt in range(50):
               try:
-                  client = socket.create_connection(("127.0.0.1", 18999), timeout=1)
+                  client = socket.create_connection(("127.0.0.1", port), timeout=1)
                   break
               except OSError:
                   time.sleep(0.05)
@@ -840,7 +841,7 @@ let
               body = client.recv(4096)
               if b"fixture egress api.github.com" not in body:
                   raise SystemExit("fixture egress response was not relayed")
-          denied = socket.create_connection(("127.0.0.1", 18999), timeout=1)
+          denied = socket.create_connection(("127.0.0.1", port), timeout=1)
           with denied:
               denied.sendall(
                   b"CONNECT 169.254.169.254:80 HTTP/1.1\r\n"
@@ -1370,15 +1371,16 @@ pkgs.testers.runNixOSTest {
             f"'import socket; socket.create_connection((\"{host}\",{port}),0.4)'"
         )
         machine.succeed(f"! runuser -u gascity-egress -- {direct_probe}")
-    for identity in [
+    for index, identity in enumerate([
         "gascity-agent",
         "gascity-discord",
         "gascity-publisher",
         "gascity-check",
         "gascity-buildbuddy-proxy",
-    ]:
+    ]):
         machine.succeed(
-            f"runuser -u {identity} -- env GC_FDPROXY_AUTH={auth} {proxy_fixture}"
+            f"runuser -u {identity} -- env GC_FDPROXY_AUTH={auth} "
+            f"{proxy_fixture} {18999 + index}"
         )
     machine.wait_until_succeeds(
         "test -s /run/gascity-contributor/test/egress-allow"
