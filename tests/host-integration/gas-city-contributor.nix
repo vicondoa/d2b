@@ -1217,7 +1217,9 @@ pkgs.testers.runNixOSTest {
         f"awk -F: '$1 == 0 {{print $3}}' /proc/{child_pid}/cgroup"
     ).strip()
     assert child_cgroup == agent_cgroup
-    assert child_cgroup.startswith("/gascity-contributor.slice/")
+    assert child_cgroup.startswith(
+        "/gascity.slice/gascity-contributor.slice/"
+    )
     machine.succeed(
         f"test \"$(readlink /proc/{child_pid}/ns/net)\" != \"$(readlink /proc/1/ns/net)\""
     )
