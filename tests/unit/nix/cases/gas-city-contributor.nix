@@ -49,6 +49,39 @@ let
   slice = enabled.systemd.slices.gascity-contributor.sliceConfig;
   firewall = enabled.networking.nftables.ruleset;
   users = enabled.users.users;
+
+  invalidPath = mkEval {
+    override = {
+      imports = [ namedModule ];
+      services.gasCityContributor = validConfig.services.gasCityContributor // {
+        credentials.copilotTokenFile = "relative/copilot";
+      };
+    };
+  };
+
+  invalidProjection = mkEval {
+    override = {
+      imports = [ namedModule ];
+      services.gasCityContributor = validConfig.services.gasCityContributor // {
+        hostReadOnlyPaths = [ "/" ];
+      };
+    };
+  };
+
+  invalidQuota = mkEval {
+    override = {
+      imports = [ namedModule ];
+      services.gasCityContributor = validConfig.services.gasCityContributor // {
+        storage.totalQuotaBytes = 1;
+      };
+    };
+  };
+
+  hasFailure = needle: assertions:
+    lib.any (
+      assertion:
+      !assertion.assertion && lib.hasInfix needle assertion.message
+    ) assertions;
 in
 {
   "gas-city-contributor/disabled-inert" = {
@@ -203,40 +236,6 @@ in
     ];
   };
 
-  invalidPath = mkEval {
-    override = {
-      imports = [ namedModule ];
-      services.gasCityContributor = validConfig.services.gasCityContributor // {
-        credentials.copilotTokenFile = "relative/copilot";
-      };
-    };
-  };
-
-  invalidProjection = mkEval {
-    override = {
-      imports = [ namedModule ];
-      services.gasCityContributor = validConfig.services.gasCityContributor // {
-        hostReadOnlyPaths = [ "/" ];
-      };
-    };
-  };
-
-  invalidQuota = mkEval {
-    override = {
-      imports = [ namedModule ];
-      services.gasCityContributor = validConfig.services.gasCityContributor // {
-        storage.totalQuotaBytes = 1;
-      };
-    };
-  };
-
-  hasFailure = needle: assertions:
-    lib.any (
-      assertion:
-      !assertion.assertion && lib.hasInfix needle assertion.message
-    ) assertions;
-in
-{
   "gas-city-contributor/relative-credential-rejected" = {
     expr = hasFailure "credentials.copilotTokenFile" invalidPath.config.assertions;
     expected = true;
