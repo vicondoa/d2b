@@ -49,6 +49,8 @@ case_names() {
       cases = import '"$ROOT"'/tests/unit/nix {
         lib = pkgs.lib; inherit pkgs; system = "'"$sys"'";
         flakeRoot = '"$ROOT"';
+        nixpkgsFlake = f.inputs.nixpkgs;
+        inherit d2bModule;
         d2bLib = import '"$ROOT"'/nixos-modules/lib.nix { lib = pkgs.lib; };
         inherit mkEval;
       };
