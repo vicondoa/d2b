@@ -1370,9 +1370,16 @@ pkgs.testers.runNixOSTest {
             f"'import socket; socket.create_connection((\"{host}\",{port}),0.4)'"
         )
         machine.succeed(f"! runuser -u gascity-egress -- {direct_probe}")
-    machine.succeed(
-        f"runuser -u gascity-agent -- env GC_FDPROXY_AUTH={auth} {proxy_fixture}"
-    )
+    for identity in [
+        "gascity-agent",
+        "gascity-discord",
+        "gascity-publisher",
+        "gascity-check",
+        "gascity-buildbuddy-proxy",
+    ]:
+        machine.succeed(
+            f"runuser -u {identity} -- env GC_FDPROXY_AUTH={auth} {proxy_fixture}"
+        )
     machine.wait_until_succeeds(
         "test -s /run/gascity-contributor/test/egress-allow"
     )
