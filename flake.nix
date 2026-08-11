@@ -18,7 +18,6 @@
     };
     llm-agents = {
       url = "github:numtide/llm-agents.nix/387989ee56d550d86d46d9458ad68a55b9e0ca3b";
-      flake = false;
     };
     # This input is deliberately package-only: the repository's main
     # nixpkgs input remains the source of all existing d2b outputs.
@@ -54,12 +53,6 @@
       nixpkgsFor = forAllSystems (system: import nixpkgs { inherit system; });
       gasCityNixpkgsFor =
         forAllSystems (system: import nixpkgs-gas-city { inherit system; });
-      copilotNixpkgsFor = forAllSystems (system:
-        import nixpkgs-gas-city {
-          inherit system;
-          config.allowUnfreePredicate =
-            pkg: nixpkgs.lib.getName pkg == "copilot-cli";
-        });
 
       # The current Gas City source and the package-only nixpkgs input both
       # require Go 1.26.5. Keep the package set explicit so a future update
@@ -77,25 +70,7 @@
         import ./pkgs/beads {
           pkgs = gasCityNixpkgsFor.${system};
         };
-      copilotFor = system:
-        let
-          pkgs = copilotNixpkgsFor.${system};
-          platformSource = import "${llm-agents}/lib/platform-source.nix" {
-            inherit (pkgs) stdenv fetchurl;
-          };
-        in
-        import "${llm-agents}/packages/copilot-cli/package.nix" {
-          inherit (pkgs)
-            lib
-            stdenv
-            makeWrapper
-            patchelf
-            cacert
-            versionCheckHook
-            versionCheckHomeHook;
-          flake = { lib = pkgs.lib; };
-          inherit platformSource;
-        };
+      copilotFor = system: llm-agents.packages.${system}.copilot-cli;
 
       gasCityContributorFor = system:
         import ./nix/gas-city-contributor {
