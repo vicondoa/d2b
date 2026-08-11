@@ -1032,6 +1032,8 @@ pkgs.testers.runNixOSTest {
     generation = "${generation}"
     auth = "${relayAuth}"
     fake_agent = "${fakeAgent}"
+    launcher_probe = "${launcherProbe}"
+    proxy_fixture = "${proxyFixture}"
 
     start_all()
 
@@ -1194,11 +1196,11 @@ pkgs.testers.runNixOSTest {
     # The real launcher lease rejects a second active run, and the compatible
     # generation has already produced the first child.
     machine.succeed(
-        f"runuser -u gascity-agent -- {launcherProbe} {generation} "
+        f"runuser -u gascity-agent -- {launcher_probe} {generation} "
         "second-run 'concurrency cap'"
     )
     machine.succeed(
-        f"runuser -u gascity-agent -- {launcherProbe} incompatible-generation "
+        f"runuser -u gascity-agent -- {launcher_probe} incompatible-generation "
         "probe-run stale"
     )
 
@@ -1297,7 +1299,7 @@ pkgs.testers.runNixOSTest {
         )
         machine.succeed(f"! runuser -u gascity-egress -- {direct_probe}")
     machine.succeed(
-        f"runuser -u gascity-agent -- env GC_FDPROXY_AUTH={auth} {proxyFixture}"
+        f"runuser -u gascity-agent -- env GC_FDPROXY_AUTH={auth} {proxy_fixture}"
     )
     machine.wait_until_succeeds(
         "test -s /run/gascity-contributor/test/egress-allow"
