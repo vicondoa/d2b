@@ -957,18 +957,19 @@ class LauncherLifecycleTests(unittest.TestCase):
                             else ""
                         )
                         self.fail(f"launcher client exited before drain: {stderr}")
-                    try:
-                        probe = LAUNCHER.ConcurrencyLease.acquire(
-                            root / "leases",
-                            run_id="probe-run",
-                            max_agents=2,
-                            max_active_runs=2,
+                    slots = self._active_run_slots(root)
+                    if (
+                        len(slots) == 2
+                        and {
+                            record.get("run_id") for record in slots.values()
+                        }
+                        == {"run-0", "run-1"}
+                        and all(
+                            record.get("refcount") == 1
+                            for record in slots.values()
                         )
-                    except LAUNCHER.LeaseBusy:
-                        if len(self._active_run_slots(root)) == 2:
-                            break
-                    else:
-                        probe.release()
+                    ):
+                        break
                     if time.monotonic() >= deadline:
                         self.fail("concurrent launcher sessions did not acquire both leases")
                     time.sleep(0.01)
