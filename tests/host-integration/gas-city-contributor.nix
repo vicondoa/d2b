@@ -963,6 +963,9 @@ pkgs.testers.runNixOSTest {
     environment.etc."gascity-fixtures" = {
       source = fixtureSource;
     };
+    environment.etc."gascity-module-fixtures" = {
+      source = ../../nixos-modules/gas-city-contributor;
+    };
 
     systemd.tmpfiles.rules = [
       "d /var/lib/gascity-contributor/state/fixture 0770 gascity-agent gascity-contributor -"
@@ -1118,6 +1121,9 @@ pkgs.testers.runNixOSTest {
         "mkdir -p /tmp/gascity-fixtures/tests/fixtures/gas-city && "
         "cp -rL /etc/gascity-fixtures/. "
         "/tmp/gascity-fixtures/tests/fixtures/gas-city/ && "
+        "mkdir -p /tmp/gascity-fixtures/nixos-modules/gas-city-contributor && "
+        "cp -rL /etc/gascity-module-fixtures/. "
+        "/tmp/gascity-fixtures/nixos-modules/gas-city-contributor/ && "
         "mkdir -p /tmp/gascity-fixtures/nix /tmp/gascity-fixtures/tests/nix && "
         "ln -s ${contributor}/share/gas-city-contributor "
         "/tmp/gascity-fixtures/nix/gas-city-contributor && "
