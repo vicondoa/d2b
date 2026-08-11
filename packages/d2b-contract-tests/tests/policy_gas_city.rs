@@ -1,6 +1,6 @@
 //! Structural policy for the immutable Gas City contributor city.
 //!
-//! This is intentionally a bounded source scan over the U2 asset set.  It
+//! This is intentionally a bounded source scan over the U2-U5 asset set.  It
 //! does not inspect the unrelated repository worktree and it does not resolve
 //! or launch Gas City; U6 owns test-lane registration and wiring.
 
@@ -13,8 +13,21 @@ const CITY: &str = "nix/gas-city-contributor/city/city.toml";
 const MATRIX: &str = "nix/gas-city-contributor/city/agent-role-matrix.toml";
 const INSTRUCTIONS: &str = "nix/gas-city-contributor/copilot/instructions.md";
 const LOCAL_PACK: &str = "nix/gas-city-contributor/pack/pack.toml";
+const SERVICE_MODULE: &str = "nixos-modules/gas-city-contributor/service.nix";
+const NETWORK_MODULE: &str = "nixos-modules/gas-city-contributor/network.nix";
+const OPTIONS_MODULE: &str = "nixos-modules/gas-city-contributor/options.nix";
+const INTEGRATIONS_MODULE: &str = "nixos-modules/gas-city-contributor/integrations.nix";
+const ACTIVATION_SCRIPT: &str =
+    "nix/gas-city-contributor/pack/scripts/service-activation.py";
+const FDPROXY_SCRIPT: &str = "nix/gas-city-contributor/pack/scripts/fdproxy.py";
+const DISCORD_SCRIPT: &str =
+    "nix/gas-city-contributor/pack/scripts/discord-decision.py";
+const PUBLISHER_SCRIPT: &str = "nix/gas-city-contributor/pack/scripts/publish-pr.py";
 const WORKFLOW_ASSETS: &[&str] = &[
     "nix/gas-city-contributor/pack/assets/workflows/d2b-contributor-build/finalize.md",
+    "nix/gas-city-contributor/pack/assets/workflows/d2b-contributor-build/publish.md",
+    "nix/gas-city-contributor/pack/assets/workflows/d2b-decision/request.md",
+    "nix/gas-city-contributor/pack/assets/workflows/d2b-decision/wait.md",
     "nix/gas-city-contributor/pack/assets/workflows/d2b-compound-resolution/{target}.md",
     "nix/gas-city-contributor/pack/assets/workflows/d2b-compound-resolution/{target}.apply-comment-fixes.md",
     "nix/gas-city-contributor/pack/assets/workflows/d2b-compound-resolution/{target}.inventory-artifacts.md",
@@ -300,9 +313,12 @@ fn gas_city_preserves_native_compound_and_splits_comment_resolution() {
     );
 
     assert!(build.contains("extends = [\"compound-build\"]"));
-    assert_eq!(build.matches("[[steps]]").count(), 1);
+    assert_eq!(build.matches("[[steps]]").count(), 2);
     assert!(build.contains("id = \"finalize\""));
     assert!(build.contains("expand = \"d2b-compound-resolution\""));
+    assert!(build.contains("id = \"publish\""));
+    assert!(build.contains("gc.publisher.helper"));
+    assert!(build.contains("gc.publisher.merge = \"forbidden\""));
     assert!(
         !build.contains("id = \"requirements\"")
             && !build.contains("id = \"plan\"")
@@ -476,4 +492,63 @@ fn planted_repository_instruction_cannot_relax_copilot_launch() {
     assert!(city.contains("\"shell(git push *)\""));
     assert!(!city.contains("--allow-all"));
     assert!(!city.contains("--yolo"));
+}
+
+#[test]
+fn gas_city_sidecars_are_private_and_use_the_authenticated_egress_proxy() {
+    let service = owned_asset(SERVICE_MODULE);
+    let network = owned_asset(NETWORK_MODULE);
+    let options = owned_asset(OPTIONS_MODULE);
+    let integrations = owned_asset(INTEGRATIONS_MODULE);
+    let activation = owned_asset(ACTIVATION_SCRIPT);
+    let fdproxy = owned_asset(FDPROXY_SCRIPT);
+    let discord = owned_asset(DISCORD_SCRIPT);
+    let publisher = owned_asset(PUBLISHER_SCRIPT);
+
+    assert!(!service.contains("PrivateNetwork = false"));
+    assert_eq!(service.matches("fdproxy-sidecar").count(), 2);
+    for required in [
+        "PrivateNetwork = true",
+        "StateDirectoryQuota = toString cfg.storage.discordQuotaBytes",
+        "HTTP_PROXY=http://127.0.0.1:3128",
+        "HTTPS_PROXY=http://127.0.0.1:3128",
+        "GC_FDPROXY_AUTH",
+        "gascity-egress-channel",
+    ] {
+        assert!(service.contains(required), "service module missing {required}");
+    }
+    for required in [
+        "45102",
+        "45103",
+        "discord.com",
+        "gateway.discord.gg",
+        "api.github.com",
+        "github.com",
+    ] {
+        assert!(
+            network.contains(required),
+            "egress module missing required integration value {required}"
+        );
+    }
+    assert!(options.contains("discordQuotaBytes"));
+    assert!(options.contains("+ cfg.storage.discordQuotaBytes"));
+    assert!(integrations.contains("uid = 45102"));
+    assert!(integrations.contains("uid = 45103"));
+    assert!(integrations.contains("gascity-egress-channel"));
+    assert!(!integrations.contains("v /var/lib/gascity-discord"));
+
+    assert!(activation.contains("pass_fds=(channel_fd,)"));
+    assert!(activation.contains("close_fds=True"));
+    assert!(fdproxy.contains("close_fds=True"));
+    assert!(fdproxy.contains("HTTPS_PROXY"));
+    assert!(fdproxy.contains("NO_PROXY"));
+    assert!(fdproxy.contains("\"GC_FDPROXY_SOCKET\""));
+    assert!(fdproxy.contains("\"GC_EGRESS_SOCKET\""));
+    assert!(!discord.contains("ProxyHandler({})"));
+    assert!(!discord.contains("socket.create_connection((parsed.hostname"));
+    assert!(!publisher.contains("ProxyHandler({})"));
+    assert!(!publisher.contains("\"http.proxy\": \"\""));
+    assert!(!publisher.contains("\"https.proxy\": \"\""));
+    assert!(!publisher.contains("\"http.proxy=\""));
+    assert!(!publisher.contains("\"https.proxy=\""));
 }

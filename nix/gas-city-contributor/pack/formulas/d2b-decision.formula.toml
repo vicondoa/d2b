@@ -1,0 +1,60 @@
+description = """
+Durable product-decision gate for the Gas City contributor workflow.
+
+The Discord sidecar owns only outbound delivery and correlation.  The gate
+bead owns the first-answer transition through conditional beads updates.
+"""
+formula = "d2b-decision"
+version = 1
+contract = "graph.v2"
+target_required = true
+
+[vars]
+[vars.run_id]
+description = "Durable Gas City run identifier."
+required = true
+
+[vars.bead_id]
+description = "Gate bead that remains authoritative for the answer."
+required = true
+
+[vars.decision_id]
+description = "Stable decision identifier."
+required = true
+
+[vars.prompt_nonce]
+description = "Opaque prompt nonce persisted with the gate."
+required = true
+
+[vars.assignee]
+description = "Beads assignee used by the gate compare-and-set."
+required = true
+
+[vars.guild_id]
+description = "Fixed Discord guild identifier."
+required = true
+
+[vars.channel_id]
+description = "Fixed Discord decision channel identifier."
+required = true
+
+[vars.message]
+description = "Bounded operator-facing question."
+required = true
+
+[vars.choices]
+description = "Declared finite choice set."
+required = true
+
+[[steps]]
+id = "request"
+title = "Request a correlated Discord decision"
+metadata = { "gc.run_target" = "gc.run-operator", "gc.decision.helper" = "discord-decision.py", "gc.decision.transport" = "outbound-sidecar", "gc.decision.authority" = "gate-bead" }
+description_file = "../assets/workflows/d2b-decision/request.md"
+
+[[steps]]
+id = "wait"
+title = "Wait for and atomically record the first decision"
+needs = ["request"]
+metadata = { "gc.run_target" = "gc.run-operator", "gc.decision.conditional_update" = "bd update --if-assignee --if-status", "gc.decision.restart_reconcile" = "answered-open-gates" }
+description_file = "../assets/workflows/d2b-decision/wait.md"

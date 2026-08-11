@@ -7,6 +7,8 @@ let
   package = cfg.package;
   python = "${package}/bin/python3";
   activation = "${package}/share/gas-city-contributor/pack/scripts/service-activation.py";
+  discordDecision = "${package}/share/gas-city-contributor/pack/scripts/discord-decision.py";
+  publisher = "${package}/share/gas-city-contributor/pack/scripts/publish-pr.py";
   launcher = "${package}/share/gas-city-contributor/pack/scripts/agent-launcher.py";
   sandbox = "${package}/share/gas-city-contributor/pack/scripts/agent-sandbox.py";
   fdproxy = "${package}/share/gas-city-contributor/pack/scripts/fdproxy.py";
@@ -14,6 +16,9 @@ let
   bwrap = "${package}/bin/bwrap";
   serviceRoot = "/var/lib/gascity-contributor";
   stateRoot = "${serviceRoot}/state";
+  cancellationRoot = "${stateRoot}/cancellations";
+  discordStateRoot = "/var/lib/gascity-discord";
+  publisherStateRoot = "/var/lib/gascity-publisher";
   cacheRoot = "/var/cache/gascity-contributor";
   runtimeRoot = "/run/gascity-contributor";
   readinessPath = "${runtimeRoot}/readiness.json";
@@ -25,6 +30,14 @@ let
   generation = builtins.substring 0 32 (builtins.hashString "sha256" (toString package));
   relayAuth = builtins.hashString "sha256"
     "gascity-fdproxy:${cfg.repository.githubSlug}:${cfg.repository.rigName}";
+  sidecarProxyEnvironment = [
+    "HTTP_PROXY=http://127.0.0.1:3128"
+    "HTTPS_PROXY=http://127.0.0.1:3128"
+    "http_proxy=http://127.0.0.1:3128"
+    "https_proxy=http://127.0.0.1:3128"
+    "NO_PROXY="
+    "no_proxy="
+  ];
   projectionArgs = lib.concatMapStringsSep " " (
     path: "--projection ${lib.escapeShellArg path}"
   ) cfg.hostReadOnlyPaths;
@@ -44,6 +57,105 @@ let
   materialize = "+${python} ${activation} materialize-assets"
     + " --source ${lib.escapeShellArg "${package}/share/gas-city-contributor"}"
     + " --destination ${lib.escapeShellArg "${serviceRoot}/managed"}";
+  prepareCancellation = pkgs.writeShellScript "gascity-prepare-cancellation" ''
+    set -euo pipefail
+    ${pkgs.coreutils}/bin/install -d -m 0770 ${lib.escapeShellArg cancellationRoot}
+    ${pkgs.coreutils}/bin/chgrp gascity-contributor ${lib.escapeShellArg cancellationRoot}
+  '';
+  decisionReconcile = pkgs.writeShellScript "gascity-decision-reconcile" ''
+    set -euo pipefail
+    reconcile="$(${python} ${discordDecision} reconcile \
+      --socket ${lib.escapeShellArg discordSocket})"
+    ${pkgs.jq}/bin/jq -c \
+      '.[] | select(.state == "answered" or .state == "answer-pending")' \
+      <<<"$reconcile" \
+      | while IFS= read -r record; do
+        bead_id="$(${pkgs.jq}/bin/jq -r '.bead_id' <<<"$record")"
+        run_id="$(${pkgs.jq}/bin/jq -r '.run_id' <<<"$record")"
+        decision_id="$(${pkgs.jq}/bin/jq -r '.decision_id' <<<"$record")"
+        nonce="$(${pkgs.jq}/bin/jq -r '.prompt_nonce' <<<"$record")"
+        message_id="$(${pkgs.jq}/bin/jq -r '.message_id' <<<"$record")"
+        state="$(${pkgs.jq}/bin/jq -r '.state' <<<"$record")"
+        assignee="$(${pkgs.jq}/bin/jq -r '.assignee // ""' <<<"$record")"
+        if test "$state" = answer-pending; then
+          event_id="$(${pkgs.jq}/bin/jq -r '.pending_answer.event_id' <<<"$record")"
+          choice="$(${pkgs.jq}/bin/jq -r '.pending_answer.choice' <<<"$record")"
+        else
+          event_id="$(${pkgs.jq}/bin/jq -r '.event_id' <<<"$record")"
+          choice="$(${pkgs.jq}/bin/jq -r '.answer' <<<"$record")"
+        fi
+        bead="$(${package}/bin/bd show "$bead_id" --json)"
+        if ! ${pkgs.jq}/bin/jq -e \
+          --arg run "$run_id" \
+          --arg decision "$decision_id" \
+          --arg nonce "$nonce" \
+          --arg message "$message_id" \
+          --arg event "$event_id" \
+          --arg choice "$choice" '
+            (if type == "array" then .[0] else . end) as $bead
+            | (($bead.metadata // {}) as $metadata
+              | ($metadata.decision_run_id // "") == $run
+              and ($metadata.decision_id // "") == $decision
+              and ($metadata.decision_nonce // "") == $nonce
+              and ($metadata.decision_message_id // "") == $message
+              and ($metadata.decision_event_id // "") == $event
+              and ($metadata.decision_choice // "") == $choice)
+          ' <<<"$bead" >/dev/null; then
+          pending_status="$(${pkgs.jq}/bin/jq -r \
+            '(if type == "array" then .[0] else . end).status // ""' <<<"$bead")"
+          if test "$state" = answer-pending && test "$pending_status" = blocked; then
+            continue
+          fi
+          echo "decision gate metadata diverged: $bead_id" >&2
+          exit 1
+        fi
+        status="$(${pkgs.jq}/bin/jq -r \
+          '(if type == "array" then .[0] else . end).status // ""' <<<"$bead")"
+        if test "$status" = in_progress; then
+          assignee_args=()
+          if test -n "$assignee"; then
+            assignee_args=(--if-assignee "$assignee")
+          fi
+          set +e
+          ${package}/bin/bd update "$bead_id" \
+            "''${assignee_args[@]}" \
+            --if-status in_progress \
+            --status closed
+          close_status="$?"
+          set -e
+          if test "$close_status" -ne 0 && test "$close_status" -ne 13; then
+            exit "$close_status"
+          fi
+          if test "$close_status" -eq 13; then
+            bead="$(${package}/bin/bd show "$bead_id" --json)"
+            if ! ${pkgs.jq}/bin/jq -e \
+              '(if type == "array" then .[0] else . end).status == "closed"' \
+              <<<"$bead" >/dev/null; then
+              echo "decision gate close precondition was lost: $bead_id" >&2
+              exit 13
+            fi
+          fi
+        elif test "$status" != closed; then
+          echo "answered decision gate is not open or closed: $bead_id" >&2
+          exit 1
+        fi
+        if test "$state" = answer-pending; then
+          ${python} ${discordDecision} ack \
+            --socket ${lib.escapeShellArg discordSocket} \
+            --run-id "$run_id" \
+            --decision-id "$decision_id" \
+            --event-id "$event_id" \
+            --choice "$choice" \
+            --accepted
+        fi
+        ${python} ${discordDecision} close \
+          --socket ${lib.escapeShellArg discordSocket} \
+          --run-id "$run_id" \
+          --decision-id "$decision_id" \
+          --event-id "$event_id" \
+          --choice "$choice"
+      done
+  '';
 
   commonServiceConfig = {
     Slice = "gascity-contributor.slice";
@@ -97,7 +209,9 @@ let
     set -euo pipefail
     for _ in $(${pkgs.coreutils}/bin/seq 1 600); do
       if test -s ${lib.escapeShellArg readinessPath} \
-        && test -S ${lib.escapeShellArg agentSocket}; then
+        && test -S ${lib.escapeShellArg agentSocket} \
+        && test -S ${lib.escapeShellArg discordSocket} \
+        && test -S ${lib.escapeShellArg publisherSocket}; then
         exit 0
       fi
       sleep 0.5
@@ -223,24 +337,44 @@ let
   discordStart = pkgs.writeShellScript "gascity-discord-start" ''
     set -euo pipefail
     test -s "$CREDENTIALS_DIRECTORY/discord-bot-token"
-    exec ${python} ${activation} sidecar \
-      --role discord \
-      --socket ${lib.escapeShellArg discordSocket} \
-      --socket-group gascity-discord-channel \
-      --credential "$CREDENTIALS_DIRECTORY/discord-bot-token" \
-      --operator-user-id ${lib.concatStringsSep " --operator-user-id "
-        (map lib.escapeShellArg cfg.discord.operatorUserIds)}
+    exec ${python} ${activation} fdproxy-sidecar \
+      --egress-socket ${lib.escapeShellArg egressSocket} \
+      --fdproxy ${lib.escapeShellArg fdproxy} \
+      --listen 127.0.0.1:3128 \
+      -- \
+      ${python} ${discordDecision} serve \
+        --socket ${lib.escapeShellArg discordSocket} \
+        --socket-group gascity-discord-channel \
+        --credential "$CREDENTIALS_DIRECTORY/discord-bot-token" \
+        --state-root ${lib.escapeShellArg discordStateRoot} \
+        --guild-id ${lib.escapeShellArg cfg.discord.guildId} \
+        --channel-id ${lib.escapeShellArg cfg.discord.channelId} \
+        --operator-user-id ${lib.concatStringsSep " --operator-user-id "
+          (map lib.escapeShellArg cfg.discord.operatorUserIds)} \
+        --api-base https://discord.com/api/v10 \
+        --gateway-url ${lib.escapeShellArg "wss://gateway.discord.gg/?v=10&encoding=json"}
   '';
 
   publisherStart = pkgs.writeShellScript "gascity-publisher-start" ''
     set -euo pipefail
     test -s "$CREDENTIALS_DIRECTORY/github-app-private-key"
-    exec ${python} ${activation} sidecar \
-      --role publisher \
-      --socket ${lib.escapeShellArg publisherSocket} \
-      --socket-group gascity-publisher-channel \
-      --credential "$CREDENTIALS_DIRECTORY/github-app-private-key" \
-      --repository ${lib.escapeShellArg cfg.repository.githubSlug}
+    exec ${python} ${activation} fdproxy-sidecar \
+      --egress-socket ${lib.escapeShellArg egressSocket} \
+      --fdproxy ${lib.escapeShellArg fdproxy} \
+      --listen 127.0.0.1:3128 \
+      -- \
+      ${python} ${publisher} serve \
+        --socket ${lib.escapeShellArg publisherSocket} \
+        --socket-group gascity-publisher-channel \
+        --credential "$CREDENTIALS_DIRECTORY/github-app-private-key" \
+        --state-root ${lib.escapeShellArg publisherStateRoot} \
+        --repository ${lib.escapeShellArg cfg.repository.githubSlug} \
+        --base-branch ${lib.escapeShellArg cfg.repository.baseBranch} \
+        --branch-namespace gascity/ \
+        --app-id ${lib.escapeShellArg cfg.github.appId} \
+        --installation-id ${lib.escapeShellArg cfg.github.installationId} \
+        --api-base https://api.github.com \
+        --cancellation-root ${lib.escapeShellArg cancellationRoot}
   '';
 
   mainEnvironment = [
@@ -250,9 +384,14 @@ let
     "XDG_CACHE_HOME=${cacheRoot}"
     "XDG_RUNTIME_DIR=${runtimeRoot}"
     "GC_HOME=${serviceRoot}/gc"
+    "GC_CONTRIBUTOR_ROOT=${package}/share/gas-city-contributor"
     "GC_RIG_NAME=${cfg.repository.rigName}"
     "GC_REPOSITORY=${cfg.repository.githubSlug}"
     "GC_BASE_BRANCH=${cfg.repository.baseBranch}"
+    "GC_GITHUB_APP_ID=${cfg.github.appId}"
+    "GC_GITHUB_INSTALLATION_ID=${cfg.github.installationId}"
+    "GC_DISCORD_GUILD_ID=${cfg.discord.guildId}"
+    "GC_DISCORD_CHANNEL_ID=${cfg.discord.channelId}"
     "GC_SUPERVISOR_SYSTEMD_UNIT=gas-city-contributor.service"
     "GC_SUPERVISOR_SYSTEMD_SCOPE=system"
     "GC_DISABLE_BINARY_DRIFT_RESTART=1"
@@ -264,6 +403,7 @@ let
     "GC_AGENT_LAUNCHER_SOCKET=${agentSocket}"
     "GC_DISCORD_CHANNEL_SOCKET=${discordSocket}"
     "GC_PUBLISHER_CHANNEL_SOCKET=${publisherSocket}"
+    "GC_CANCEL_ROOT=${cancellationRoot}"
     "GC_EGRESS_SOCKET=${egressSocket}"
     "GC_FDPROXY_AUTH=${relayAuth}"
     "GC_PROJECT_QUOTA_REQUIRED=1"
@@ -364,8 +504,10 @@ in
               "${pkgs.coreutils}/bin/install -d -m 0700 ${lib.escapeShellArg "${serviceRoot}/home/.config"}"
               "${pkgs.coreutils}/bin/install -d -m 0700 ${lib.escapeShellArg "${serviceRoot}/home/.local/state"}"
               "${pkgs.coreutils}/bin/install -d -m 0700 ${lib.escapeShellArg "${stateRoot}/rigs/${cfg.repository.rigName}"}"
+              prepareCancellation
             ];
             ExecStart = mainExec;
+            ExecStartPost = decisionReconcile;
             TimeoutStartSec = "5min";
             TimeoutStopSec = "2min";
           };
@@ -391,6 +533,10 @@ in
               "${runtimeRoot}/agent"
               runtimeRoot
             ];
+            InaccessiblePaths = commonServiceConfig.InaccessiblePaths ++ [
+              discordSocket
+              publisherSocket
+            ];
             ReadOnlyPaths = [ "${package}/share/gas-city-contributor" ];
             LoadCredential = [
               "copilot-token:${cfg.credentials.copilotTokenFile}"
@@ -408,21 +554,37 @@ in
 
         gascity-discord = {
           description = "Gas City Discord integration boundary";
+          requires = [ "gascity-egress.service" ];
+          after = [ "gascity-egress.service" ];
           inherit (sidecarUnit) unitConfig;
           serviceConfig = sharedServiceConfig // {
             Type = "exec";
             User = "gascity-discord";
             Group = "gascity-discord";
-            SupplementaryGroups = [ "gascity-contributor" "gascity-discord-channel" ];
+            SupplementaryGroups = [
+              "gascity-contributor"
+              "gascity-discord-channel"
+              "gascity-egress-channel"
+            ];
             PrivateNetwork = true;
+            StateDirectory = "gascity-discord";
+            StateDirectoryMode = "0700";
+            StateDirectoryQuota = toString cfg.storage.discordQuotaBytes;
             LoadCredential = [
               "discord-bot-token:${cfg.credentials.discordBotTokenFile}"
             ];
-            Environment = [
-              "GC_DISCORD_APPLICATION_ID=${cfg.discord.applicationId}"
-              "GC_DISCORD_GUILD_ID=${cfg.discord.guildId}"
-              "GC_DISCORD_CHANNEL_ID=${cfg.discord.channelId}"
-            ];
+            Environment =
+              [
+                "GC_DISCORD_APPLICATION_ID=${cfg.discord.applicationId}"
+                "GC_DISCORD_GUILD_ID=${cfg.discord.guildId}"
+                "GC_DISCORD_CHANNEL_ID=${cfg.discord.channelId}"
+                "GC_EGRESS_SOCKET=${egressSocket}"
+                "GC_FDPROXY_SOCKET=${egressSocket}"
+                "GC_FDPROXY_AUTH=${relayAuth}"
+                "SSL_CERT_FILE=${package}/etc/ssl/certs/ca-bundle.crt"
+              ]
+              ++ sidecarProxyEnvironment;
+            ReadWritePaths = [ discordStateRoot runtimeRoot ];
             ReadOnlyPaths = [ "${package}/share/gas-city-contributor" ];
             ExecStart = discordStart;
           };
@@ -430,12 +592,18 @@ in
 
         gascity-publisher = {
           description = "Gas City GitHub publication boundary";
+          requires = [ "gascity-egress.service" ];
+          after = [ "gascity-egress.service" ];
           inherit (sidecarUnit) unitConfig;
           serviceConfig = sharedServiceConfig // {
             Type = "exec";
             User = "gascity-publisher";
             Group = "gascity-publisher";
-            SupplementaryGroups = [ "gascity-contributor" "gascity-publisher-channel" ];
+            SupplementaryGroups = [
+              "gascity-contributor"
+              "gascity-publisher-channel"
+              "gascity-egress-channel"
+            ];
             PrivateNetwork = true;
             StateDirectory = "gascity-publisher";
             StateDirectoryMode = "0700";
@@ -448,9 +616,16 @@ in
               "GC_GITHUB_INSTALLATION_ID=${cfg.github.installationId}"
               "GC_REPOSITORY=${cfg.repository.githubSlug}"
               "GC_PUBLISHER_CHANNEL_SOCKET=${publisherSocket}"
+              "GC_EGRESS_SOCKET=${egressSocket}"
+              "GC_FDPROXY_SOCKET=${egressSocket}"
+              "GC_FDPROXY_AUTH=${relayAuth}"
+              "SSL_CERT_FILE=${package}/etc/ssl/certs/ca-bundle.crt"
+            ]
+            ++ sidecarProxyEnvironment;
+            ReadWritePaths = [ publisherStateRoot cancellationRoot runtimeRoot ];
+            ReadOnlyPaths = [
+              "${package}/share/gas-city-contributor"
             ];
-            ReadWritePaths = [ "/var/lib/gascity-publisher" runtimeRoot ];
-            ReadOnlyPaths = [ "${package}/share/gas-city-contributor" ];
             ExecStart = publisherStart;
           };
         };

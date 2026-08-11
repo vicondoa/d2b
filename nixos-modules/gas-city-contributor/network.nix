@@ -11,13 +11,19 @@ let
   egressSocket = "${runtimeRoot}/egress.sock";
   relayAuth = builtins.hashString "sha256"
     "gascity-fdproxy:${cfg.repository.githubSlug}:${cfg.repository.rigName}";
+  requiredIntegrationDomains = [
+    "api.github.com"
+    "discord.com"
+    "gateway.discord.gg"
+    "github.com"
+  ];
   domainArgs = lib.concatMapStringsSep " " (
     domain: "--allowed-domain ${lib.escapeShellArg domain}"
-  ) (cfg.network.allowedDomains
+  ) (lib.unique (cfg.network.allowedDomains ++ requiredIntegrationDomains)
     ++ lib.optional cfg.check.enable "cache.nixos.org"
     ++ lib.optional buildBuddyEnabled "remote.buildbuddy.io");
   egressUids =
-    [ 45101 ]
+    [ 45101 45102 45103 ]
     ++ lib.optional cfg.check.enable 45105
     ++ lib.optional buildBuddyEnabled 45106;
   uidArgs = lib.concatMapStringsSep " " (uid: "--allowed-uid ${toString uid}") egressUids;

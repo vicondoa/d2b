@@ -77,6 +77,12 @@ pkgs.runCommand "gas-city-package-smoke" {
     ${gasCityContributor}/bin/gc lint .
   )
   test ! -e "$root/packs/github"
+  test -x "${gasCityContributor}/bin/gascity-discord-decision"
+  test -x "${gasCityContributor}/bin/gascity-publish-pr"
+  test -f "$root/pack/formulas/d2b-decision.formula.toml"
+  test -f "$root/pack/assets/workflows/d2b-decision/request.md"
+  test -f "$root/pack/assets/workflows/d2b-decision/wait.md"
+  test -f "$root/pack/assets/workflows/d2b-contributor-build/publish.md"
 
   discord_pack="$root/packs/discord/pack.toml"
   grep -F 'name = "discord-gateway"' "$discord_pack"
@@ -89,6 +95,13 @@ pkgs.runCommand "gas-city-package-smoke" {
     PYTHONPYCACHEPREFIX="$TMPDIR/pycache" \
       ${gasCityContributor}/bin/python3 -m py_compile "$script"
   done < <(find "$root/packs" -type f -name "*.py" -print0)
+  for script in \
+    "$root/pack/scripts/discord-decision.py" \
+    "$root/pack/scripts/publish-pr.py"
+  do
+    PYTHONPYCACHEPREFIX="$TMPDIR/pycache" \
+      ${gasCityContributor}/bin/python3 -m py_compile "$script"
+  done
 
   jq -e \
     --arg gascity "${gascityRevision}" \

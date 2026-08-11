@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import array
+import errno
 import fcntl
 import grp
 import ipaddress
@@ -104,7 +105,6 @@ class BoundaryError(ActivationError):
     """Raised when an activation or egress boundary is unsafe."""
 
 
-MAX_SIDECHANNEL_BYTES = 1024 * 1024
 FDPROXY_PROTOCOL = "fdproxy/1"
 DEFAULT_ALLOWED_PORT = 443
 PRIVATE_NETWORKS = (
@@ -357,63 +357,59 @@ def _open_private_listener(path_value: str, *, socket_group: str | None = None) 
     return listener
 
 
-def serve_sidecar(
+def run_fdproxy_sidecar(
     *,
-    role: str,
-    socket_path: str,
-    credential_path: str,
-    socket_group: str,
-    repository: str | None = None,
-    operator_user_ids: Sequence[str] = (),
-) -> None:
-    """Hold an integration credential and expose a U5-owned channel stub."""
+    egress_socket: str,
+    fdproxy_script: str,
+    listen: str,
+    command: Sequence[str],
+) -> int:
+    """Connect one sidecar to egress, then pass only that channel to fdproxy."""
 
-    if role not in {"discord", "publisher"}:
-        raise BoundaryError("unknown sidecar role")
-    credential = validate_credential_source(
-        credential_path,
-        label=f"{role} credential",
-        allow_service_owner=True,
-    )
-    descriptor = os.open(credential, os.O_RDONLY | os.O_CLOEXEC)
-    os.set_inheritable(descriptor, False)
-    listener = _open_private_listener(socket_path, socket_group=socket_group)
+    socket_path = _absolute_normalized_path(egress_socket, "egress socket")
+    proxy_path = _absolute_normalized_path(fdproxy_script, "fdproxy script")
+    if not proxy_path.is_file() or proxy_path.is_symlink():
+        raise BoundaryError("fdproxy script is unavailable or is a symlink")
+    if not command:
+        raise BoundaryError("fdproxy sidecar command must not be empty")
+
+    channel_fd = -1
+    deadline = time.monotonic() + 15.0
+    while True:
+        channel = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            channel.settimeout(2.0)
+            channel.connect(str(socket_path))
+            channel_fd = channel.detach()
+            break
+        except OSError as error:
+            channel.close()
+            if error.errno not in {errno.ENOENT, errno.ECONNREFUSED} or time.monotonic() >= deadline:
+                raise BoundaryError("egress channel is unavailable") from error
+            time.sleep(0.05)
+
+    os.set_inheritable(channel_fd, False)
+    proxy_command = [
+        sys.executable,
+        str(proxy_path),
+        "--channel-fd",
+        str(channel_fd),
+        "--listen",
+        listen,
+        "--",
+        *command,
+    ]
     try:
-        while True:
-            try:
-                client, _address = listener.accept()
-            except socket.timeout:
-                continue
-            try:
-                frame = _read_bounded_line(client, MAX_SIDECHANNEL_BYTES)
-                request = json.loads(frame)
-                if not isinstance(request, dict) or request.get("role") != role:
-                    raise BoundaryError("sidecar request role is malformed")
-                # U5 owns publication and decision state machines.  Keeping a
-                # real authenticated channel here prevents the main service or
-                # ACP workers from inheriting the credential in the meantime.
-                response = {
-                    "ok": False,
-                    "role": role,
-                    "error": "u5-channel-not-installed",
-                    "repository": repository,
-                    "operator_user_ids": list(operator_user_ids),
-                }
-                client.sendall(
-                    json.dumps(response, sort_keys=True, separators=(",", ":")).encode()
-                    + b"\n"
-                )
-            except (BoundaryError, OSError, json.JSONDecodeError):
-                try:
-                    client.sendall(b'{"ok":false,"error":"malformed-request"}\n')
-                except OSError:
-                    pass
-            finally:
-                client.close()
+        child = subprocess.Popen(
+            proxy_command,
+            close_fds=True,
+            pass_fds=(channel_fd,),
+            env=dict(os.environ),
+        )
     finally:
-        listener.close()
-        pathlib.Path(socket_path).unlink(missing_ok=True)
-        os.close(descriptor)
+        os.close(channel_fd)
+        channel_fd = -1
+    return child.wait()
 
 
 def serve_agent_relay(
@@ -561,7 +557,7 @@ def serve_egress_peer(
     allowed_domains: Sequence[str],
     allowed_uids: Sequence[int],
 ) -> None:
-    """Serve fdproxy/1 requests, with one DNS decision per connected socket."""
+    """Serve authenticated fdproxy/1 requests over persistent channels."""
 
     if not auth_token or len(auth_token.encode()) > 512:
         raise BoundaryError("egress authentication token is malformed")
@@ -569,53 +565,72 @@ def serve_egress_peer(
     allowed_uid_set = set(allowed_uids)
 
     def serve_one(connection: socket.socket) -> None:
-        upstream: socket.socket | None = None
-        request: object = {}
         try:
             if _peer_uid(connection) not in allowed_uid_set:
-                raise BoundaryError("egress peer uid is not authorized")
-            request = json.loads(_read_bounded_line(connection, 8192))
-            if (
-                not isinstance(request, dict)
-                or set(request) != {"version", "operation", "request_id", "auth", "host", "port"}
-                or request.get("version") != FDPROXY_PROTOCOL
-                or request.get("operation") != "connect"
-                or request.get("auth") != auth_token
-                or not isinstance(request.get("request_id"), str)
-                or not isinstance(request.get("host"), str)
-                or type(request.get("port")) is not int
-            ):
-                raise BoundaryError("egress request is malformed or unauthorized")
-            upstream = _connect_allowlisted(
-                request["host"],
-                request["port"],
-                allowed_domains=allowed_domains,
-            )
-            _send_fdproxy_response(
-                connection,
-                {
-                    "version": FDPROXY_PROTOCOL,
-                    "request_id": request["request_id"],
-                    "ok": True,
-                },
-                upstream.fileno(),
-            )
-        except (BoundaryError, OSError, json.JSONDecodeError):
-            try:
-                request_id = request.get("request_id", "") if isinstance(request, dict) else ""
-                _send_fdproxy_response(
-                    connection,
-                    {
-                        "version": FDPROXY_PROTOCOL,
-                        "request_id": request_id,
-                        "ok": False,
-                    },
-                )
-            except OSError:
-                pass
+                return
+            while True:
+                request: object = {}
+                try:
+                    request = json.loads(_read_bounded_line(connection, 8192))
+                    if (
+                        not isinstance(request, dict)
+                        or set(request)
+                        != {
+                            "version",
+                            "operation",
+                            "request_id",
+                            "auth",
+                            "host",
+                            "port",
+                        }
+                        or request.get("version") != FDPROXY_PROTOCOL
+                        or request.get("operation") != "connect"
+                        or request.get("auth") != auth_token
+                        or not isinstance(request.get("request_id"), str)
+                        or not isinstance(request.get("host"), str)
+                        or type(request.get("port")) is not int
+                    ):
+                        raise BoundaryError("egress request is malformed or unauthorized")
+                except BoundaryError as error:
+                    if str(error) == "sidecar channel closed before a complete frame":
+                        return
+                    return
+                except (OSError, json.JSONDecodeError):
+                    return
+
+                request_id = request["request_id"]
+                upstream: socket.socket | None = None
+                try:
+                    upstream = _connect_allowlisted(
+                        request["host"],
+                        request["port"],
+                        allowed_domains=allowed_domains,
+                    )
+                    _send_fdproxy_response(
+                        connection,
+                        {
+                            "version": FDPROXY_PROTOCOL,
+                            "request_id": request_id,
+                            "ok": True,
+                        },
+                        upstream.fileno(),
+                    )
+                except (BoundaryError, OSError):
+                    try:
+                        _send_fdproxy_response(
+                            connection,
+                            {
+                                "version": FDPROXY_PROTOCOL,
+                                "request_id": request_id,
+                                "ok": False,
+                            },
+                        )
+                    except OSError:
+                        return
+                finally:
+                    if upstream is not None:
+                        upstream.close()
         finally:
-            if upstream is not None:
-                upstream.close()
             connection.close()
 
     try:
@@ -1256,14 +1271,6 @@ def _parse_args() -> argparse.Namespace:
     monitor_parser.add_argument("--interval", type=float, default=30.0)
     monitor_parser.add_argument("--once", action="store_true")
 
-    sidecar_parser = subparsers.add_parser("sidecar")
-    sidecar_parser.add_argument("--role", choices=("discord", "publisher"), required=True)
-    sidecar_parser.add_argument("--socket", required=True)
-    sidecar_parser.add_argument("--socket-group", required=True)
-    sidecar_parser.add_argument("--credential", required=True)
-    sidecar_parser.add_argument("--repository")
-    sidecar_parser.add_argument("--operator-user-id", action="append", default=[])
-
     egress_parser = subparsers.add_parser("egress-peer")
     egress_parser.add_argument("--socket", required=True)
     egress_parser.add_argument("--socket-group", required=True)
@@ -1277,6 +1284,12 @@ def _parse_args() -> argparse.Namespace:
     relay_parser.add_argument("--private-socket", required=True)
     relay_parser.add_argument("--socket-group", required=True)
     relay_parser.add_argument("--allowed-uid", type=int, required=True)
+
+    fdproxy_parser = subparsers.add_parser("fdproxy-sidecar")
+    fdproxy_parser.add_argument("--egress-socket", required=True)
+    fdproxy_parser.add_argument("--fdproxy", required=True)
+    fdproxy_parser.add_argument("--listen", default="127.0.0.1:3128")
+    fdproxy_parser.add_argument("wrapped", nargs=argparse.REMAINDER)
 
     activate_parser = subparsers.add_parser("activate")
     activate_parser.add_argument("--status-path", required=True)
@@ -1329,16 +1342,6 @@ def main() -> int:
             if args.once:
                 return 0
             time.sleep(max(0.1, args.interval))
-    if args.command == "sidecar":
-        serve_sidecar(
-            role=args.role,
-            socket_path=args.socket,
-            credential_path=args.credential,
-            socket_group=args.socket_group,
-            repository=args.repository,
-            operator_user_ids=args.operator_user_id,
-        )
-        return 0
     if args.command == "egress-peer":
         if args.allowed_port != DEFAULT_ALLOWED_PORT:
             raise BoundaryError("only HTTPS egress on port 443 is supported")
@@ -1359,6 +1362,16 @@ def main() -> int:
             allowed_uid=args.allowed_uid,
         )
         return 0
+    if args.command == "fdproxy-sidecar":
+        command = list(args.wrapped)
+        if command[:1] == ["--"]:
+            command = command[1:]
+        return run_fdproxy_sidecar(
+            egress_socket=args.egress_socket,
+            fdproxy_script=args.fdproxy,
+            listen=args.listen,
+            command=command,
+        )
     if args.command == "activate":
         def probe(profile: str) -> ProbeResult:
             proxy_channel: socket.socket | None = None

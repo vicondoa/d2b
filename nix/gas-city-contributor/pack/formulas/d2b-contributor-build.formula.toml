@@ -16,6 +16,13 @@ description = "Native Compound Engineering build with separated comment judgment
 id = "finalize"
 title = "Finalize separated Compound Engineering resolution"
 needs = ["review"]
-metadata = { "gc.run_target" = "compound-engineering.ce-compound", "gc.build.artifact_schema" = "gc.build.final-report.v1", "gc.build.artifact_path_keys" = "gc.build.final_report_path" }
+metadata = { "gc.run_target" = "compound-engineering.ce-compound", "gc.build.artifact_schema" = "gc.build.final-report.v1", "gc.build.artifact_path_keys" = "gc.build.final_report_path", "gc.decision_formula" = "d2b-decision" }
 expand = "d2b-compound-resolution"
 description_file = "../assets/workflows/d2b-contributor-build/finalize.md"
+
+[[steps]]
+id = "publish"
+title = "Publish the exact committed branch as a reviewable pull request"
+needs = ["finalize"]
+metadata = { "gc.run_target" = "gc.publisher", "gc.publisher.helper" = "publish-pr.py", "gc.publisher.transport" = "bundle-fd-v1", "gc.publisher.ref_update" = "non-force-exact", "gc.publisher.merge" = "forbidden", "gc.publisher.notify" = "discord-after-url" }
+description_file = "../assets/workflows/d2b-contributor-build/publish.md"

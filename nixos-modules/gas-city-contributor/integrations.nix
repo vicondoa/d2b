@@ -52,8 +52,8 @@ let
       ++ {
         gascity = [ "gascity-agent-channel" "gascity-discord-channel" "gascity-publisher-channel" ];
         gascity-agent = [ "gascity-agent-channel" "gascity-egress-channel" ];
-        gascity-discord = [ "gascity-discord-channel" ];
-        gascity-publisher = [ "gascity-publisher-channel" ];
+        gascity-discord = [ "gascity-discord-channel" "gascity-egress-channel" ];
+        gascity-publisher = [ "gascity-publisher-channel" "gascity-egress-channel" ];
         gascity-egress = [ "gascity-egress-channel" ];
         gascity-check = [ "gascity-egress-channel" ];
         gascity-buildbuddy-proxy = [ "gascity-egress-channel" ];

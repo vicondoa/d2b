@@ -414,7 +414,7 @@ def run_with_command(
     progress_fd: int | None = None,
     auth_token: str | None = None,
 ) -> int:
-    """Run the Copilot child beside the local multiplexed proxy."""
+    """Run a wrapped child beside the local multiplexed proxy."""
 
     if not command:
         raise FDProxyError("proxy command must not be empty")
@@ -438,7 +438,19 @@ def run_with_command(
     proxy_thread.start()
     try:
         child_environment = dict(os.environ)
-        child_environment.pop(AUTH_ENVIRONMENT, None)
+        for variable in (
+            AUTH_ENVIRONMENT,
+            "GC_FDPROXY_SOCKET",
+            "GC_FDPROXY_FD",
+            "GC_EGRESS_SOCKET",
+        ):
+            child_environment.pop(variable, None)
+        for variable in ("NO_PROXY", "no_proxy", "ALL_PROXY", "all_proxy"):
+            child_environment.pop(variable, None)
+        proxy_host = f"[{host}]" if ":" in host else host
+        proxy_url = f"http://{proxy_host}:{port}"
+        for variable in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
+            child_environment[variable] = proxy_url
         child = subprocess.Popen(
             command,
             close_fds=True,

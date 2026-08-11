@@ -204,6 +204,10 @@ let
       "$out/bin/gascity-check-runner"
     install -m 0555 ${contributorRoot}/pack/scripts/buildbuddy-proxy.py \
       "$out/bin/gascity-buildbuddy-proxy"
+    install -m 0555 ${contributorRoot}/pack/scripts/discord-decision.py \
+      "$out/bin/gascity-discord-decision"
+    install -m 0555 ${contributorRoot}/pack/scripts/publish-pr.py \
+      "$out/bin/gascity-publish-pr"
   '';
 in
 pkgs.symlinkJoin {

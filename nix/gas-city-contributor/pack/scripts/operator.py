@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
 import os
 import pathlib
@@ -16,6 +17,12 @@ from typing import Any
 
 MAX_REQUEST_BYTES = 64 * 1024
 GASCITY_UID = 45100
+CANCEL_ROOT = pathlib.Path(
+    os.environ.get(
+        "GC_CANCEL_ROOT",
+        "/var/lib/gascity-contributor/state/cancellations",
+    )
+)
 IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 SAFE_REQUEST_KEYS = {
     "submit": {"run_id", "bead_id", "summary", "base_branch", "repository"},
@@ -103,6 +110,15 @@ def _request_directory() -> pathlib.Path:
 
 
 def write_request(operation: str, request: dict[str, object]) -> pathlib.Path:
+    if operation == "cancel":
+        # The durable marker is written before the operator request is
+        # advertised to Gas City.  The publisher checks this namespace before
+        # every external mutation, so a cancellation that wins this write
+        # cannot be followed by a later publication for the same run.
+        mark_cancelled(
+            _identifier(request.get("run_id"), "run_id"),
+            str(request.get("reason", "")),
+        )
     directory = _request_directory()
     run_id = _identifier(request.get("run_id"), "run_id")
     target = directory / f"{run_id}.{operation}.json"
@@ -126,6 +142,54 @@ def write_request(operation: str, request: dict[str, object]) -> pathlib.Path:
     finally:
         os.close(descriptor)
     return target
+
+
+def mark_cancelled(run_id: str, reason: str) -> pathlib.Path:
+    run_id = _identifier(run_id, "run_id")
+    if not isinstance(reason, str) or len(reason.encode("utf-8")) > 4096:
+        raise OperatorError("cancel reason is malformed")
+    root = CANCEL_ROOT
+    root.mkdir(mode=0o770, parents=True, exist_ok=True)
+    lock_path = root / ".lock"
+    descriptor = os.open(
+        lock_path,
+        os.O_RDWR | os.O_CREAT | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0),
+        0o660,
+    )
+    try:
+        os.fchmod(descriptor, 0o660)
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        target = root / f"{run_id}.json"
+        if target.is_symlink():
+            raise OperatorError("cancellation marker is an unsafe symlink")
+        if target.exists():
+            return target
+        marker = {
+            "schema": 1,
+            "run_id": run_id,
+            "reason": reason,
+            "cancelled": True,
+        }
+        encoded = json.dumps(marker, sort_keys=True, separators=(",", ":")).encode("utf-8") + b"\n"
+        marker_fd = os.open(
+            target,
+            os.O_WRONLY
+            | os.O_CREAT
+            | os.O_EXCL
+            | os.O_CLOEXEC
+            | getattr(os, "O_NOFOLLOW", 0),
+            0o660,
+        )
+        try:
+            os.fchmod(marker_fd, 0o660)
+            os.write(marker_fd, encoded)
+            os.fsync(marker_fd)
+        finally:
+            os.close(marker_fd)
+        return target
+    finally:
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+        os.close(descriptor)
 
 
 def _systemctl(*arguments: str) -> subprocess.CompletedProcess[str]:

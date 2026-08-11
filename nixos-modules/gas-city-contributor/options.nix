@@ -78,6 +78,8 @@ let
     "api.github.com"
     "api.githubcopilot.com"
     "copilot-proxy.githubusercontent.com"
+    "discord.com"
+    "gateway.discord.gg"
     "github.com"
   ];
 in
@@ -249,7 +251,7 @@ in
     storage = {
       totalQuotaBytes = mkOption {
         type = byteCount;
-        default = 250 * 1024 * 1024 * 1024;
+        default = 250 * 1024 * 1024 * 1024 + 512 * 1024 * 1024;
         description = "Aggregate persistent contributor quota.";
       };
       stateQuotaBytes = mkOption {
@@ -266,6 +268,11 @@ in
         type = byteCount;
         default = 5 * 1024 * 1024 * 1024;
         description = "Publisher clone quota.";
+      };
+      discordQuotaBytes = mkOption {
+        type = byteCount;
+        default = 512 * 1024 * 1024;
+        description = "Discord decision state quota.";
       };
       checkQuotaBytes = mkOption {
         type = byteCount;
@@ -331,6 +338,7 @@ in
         cfg.storage.stateQuotaBytes
         + cfg.storage.cacheQuotaBytes
         + cfg.storage.publisherQuotaBytes
+        + cfg.storage.discordQuotaBytes
         + cfg.storage.checkQuotaBytes;
 
       requiredString = label: value: {

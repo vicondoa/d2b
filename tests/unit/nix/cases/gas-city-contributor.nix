@@ -46,13 +46,21 @@ let
   enabled = (evalWith validConfig).config;
   main = enabled.systemd.services.gas-city-contributor.serviceConfig;
   agent = enabled.systemd.services.gascity-agent.serviceConfig;
+  discordUnit = enabled.systemd.services.gascity-discord;
   discord = enabled.systemd.services.gascity-discord.serviceConfig;
+  publisherUnit = enabled.systemd.services.gascity-publisher;
   publisher = enabled.systemd.services.gascity-publisher.serviceConfig;
+  egress = enabled.systemd.services.gascity-egress.serviceConfig;
   check = enabled.systemd.services.gascity-check.serviceConfig;
   proxy = enabled.systemd.services.gascity-buildbuddy-proxy.serviceConfig;
   slice = enabled.systemd.slices.gascity-contributor.sliceConfig;
   firewall = enabled.networking.nftables.ruleset;
   users = enabled.users.users;
+  textValue = value:
+    if builtins.isList value then lib.concatStringsSep "\n" value else value;
+  discordStartText = textValue discord.ExecStart;
+  publisherStartText = textValue publisher.ExecStart;
+  egressStartText = textValue egress.ExecStart;
 
   invalidPath = evalWith {
       services.gasCityContributor = validConfig.services.gasCityContributor // {
@@ -68,7 +76,7 @@ let
 
   invalidQuota = evalWith {
       services.gasCityContributor = validConfig.services.gasCityContributor // {
-        storage.totalQuotaBytes = 1;
+        storage.totalQuotaBytes = 230 * 1024 * 1024 * 1024;
       };
   };
 
@@ -128,6 +136,8 @@ in
       ];
       mainSlice = main.Slice;
       mainGroup = main.Group;
+      discordUid = users.gascity-discord.uid;
+      publisherUid = users.gascity-publisher.uid;
       killMode = main.KillMode;
       cpu = slice.CPUQuota;
       memoryHigh = slice.MemoryHigh;
@@ -138,6 +148,8 @@ in
       identities = true;
       mainSlice = "gascity-contributor.slice";
       mainGroup = "gascity-agent-channel";
+      discordUid = 45102;
+      publisherUid = 45103;
       killMode = "control-group";
       cpu = "100%";
       memoryHigh = "25%";
@@ -173,6 +185,12 @@ in
         main.Environment;
       stateQuota = main.StateDirectoryQuota;
       cacheQuota = main.CacheDirectoryQuota;
+      totalQuota = enabled.services.gasCityContributor.storage.totalQuotaBytes;
+      discordQuota = discord.StateDirectoryQuota;
+      discordStateDirectory = discord.StateDirectory;
+      discordDestructiveCleanup = lib.any
+        (rule: lib.hasInfix "v /var/lib/gascity-discord" rule)
+        enabled.systemd.tmpfiles.rules;
       checkQuota = check.StateDirectoryQuota;
       localStore = lib.hasInfix "local?root=/var/lib/gascity-check/nix-root" (lib.concatStringsSep "\n" check.Environment);
     };
@@ -181,6 +199,10 @@ in
       xdg = true;
       stateQuota = "107374182400";
       cacheQuota = "26843545600";
+      totalQuota = 250 * 1024 * 1024 * 1024 + 512 * 1024 * 1024;
+      discordQuota = "536870912";
+      discordStateDirectory = "gascity-discord";
+      discordDestructiveCleanup = false;
       checkQuota = "107374182400";
       localStore = true;
     };
@@ -193,8 +215,38 @@ in
       loopbackSupervisor = lib.hasInfix "8372" (lib.concatStringsSep "\n" main.Environment);
       loopbackDolt = lib.hasInfix "3307" (lib.concatStringsSep "\n" main.Environment);
       agentPrivateNetwork = agent.PrivateNetwork;
+      discordPrivateNetwork = discord.PrivateNetwork;
+      publisherPrivateNetwork = publisher.PrivateNetwork;
       proxyPrivateNetwork = proxy.PrivateNetwork;
       checkPrivateNetwork = check.PrivateNetwork;
+      discordRequiresEgress = builtins.elem
+        "gascity-egress.service"
+        (discordUnit.requires or [ ]);
+      publisherRequiresEgress = builtins.elem
+        "gascity-egress.service"
+        (publisherUnit.requires or [ ]);
+      discordEgressGroup = builtins.elem
+        "gascity-egress-channel"
+        discord.SupplementaryGroups;
+      publisherEgressGroup = builtins.elem
+        "gascity-egress-channel"
+        publisher.SupplementaryGroups;
+      discordProxy = builtins.elem
+        "HTTPS_PROXY=http://127.0.0.1:3128"
+        discord.Environment;
+      publisherProxy = builtins.elem
+        "HTTPS_PROXY=http://127.0.0.1:3128"
+        publisher.Environment;
+      discordStartWrapper = lib.hasInfix "gascity-discord-start" discordStartText;
+      publisherStartWrapper = lib.hasInfix "gascity-publisher-start" publisherStartText;
+      allowedDiscordUid = lib.hasInfix "--allowed-uid 45102" egressStartText;
+      allowedPublisherUid = lib.hasInfix "--allowed-uid 45103" egressStartText;
+      allowedDiscordDomains =
+        lib.hasInfix "discord.com" egressStartText
+        && lib.hasInfix "gateway.discord.gg" egressStartText;
+      allowedGithubDomains =
+        lib.hasInfix "api.github.com" egressStartText
+        && lib.hasInfix "github.com" egressStartText;
     };
     expected = {
       nftTable = true;
@@ -202,8 +254,22 @@ in
       loopbackSupervisor = true;
       loopbackDolt = true;
       agentPrivateNetwork = true;
+      discordPrivateNetwork = true;
+      publisherPrivateNetwork = true;
       proxyPrivateNetwork = true;
       checkPrivateNetwork = true;
+      discordRequiresEgress = true;
+      publisherRequiresEgress = true;
+      discordEgressGroup = true;
+      publisherEgressGroup = true;
+      discordProxy = true;
+      publisherProxy = true;
+      discordStartWrapper = true;
+      publisherStartWrapper = true;
+      allowedDiscordUid = true;
+      allowedPublisherUid = true;
+      allowedDiscordDomains = true;
+      allowedGithubDomains = true;
     };
   };
 
