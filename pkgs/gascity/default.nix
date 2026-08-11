@@ -21,7 +21,7 @@ pkgs.buildGoModule rec {
   src = if source == null then fetchedSource else source;
 
   subPackages = [ "cmd/gc" ];
-  vendorHash = "sha256-EoyoPo1QhGNAT0dd+m/3W+WmSpbGUCT4AyZ/iGzFeVA=";
+  vendorHash = "sha256-05Ch0dn0W8OKZaGFq04VQS7QzLkgo//chz0WBjjefrQ=";
   proxyVendor = true;
 
   # Gas City embeds the Dolt-backed beads provider.  Keep CGO enabled while
