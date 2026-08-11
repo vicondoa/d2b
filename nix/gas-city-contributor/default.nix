@@ -42,6 +42,7 @@ let
   # part of this closure.  Keeping the sibling layout is required by
   # compound-engineering/pack.toml's ../gascity import.
   patchedPacks = pkgs.applyPatches {
+    name = "gascity-packs-patched";
     src = gascityPacksSrc;
     patches = [ ./patches/discord-outbound-only.patch ];
   };
