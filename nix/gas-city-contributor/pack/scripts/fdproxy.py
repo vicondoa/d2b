@@ -387,6 +387,10 @@ def _serve_listener(
             client, _address = listener.accept()
         except socket.timeout:
             continue
+        except OSError as error:
+            if stop_event is not None and stop_event.is_set():
+                return
+            raise
         thread = threading.Thread(
             target=serve_one,
             args=(client,),

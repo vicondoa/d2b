@@ -378,7 +378,7 @@ class LauncherServerHarness:
             str(FAKE_ACP),
         ]
         for value in self.extra:
-            command.extend(["--fixture-child-arg", value])
+            command.append(f"--fixture-child-arg={value}")
         environment = dict(os.environ)
         environment["GC_TEST_MODE"] = "1"
         self.process = subprocess.Popen(
@@ -485,9 +485,19 @@ class LauncherLifecycleTests(unittest.TestCase):
                     b'{"jsonrpc":"2.0","id":3,"method":"session/prompt",'
                     b'"params":{"sessionId":"fake-session","prompt":[]}}\n'
                 )
-                stdout, _stderr = process.communicate(diagnostic, timeout=5)
+                self.assertIsNotNone(process.stdin)
+                process.stdin.write(diagnostic)
+                process.stdin.flush()
+                self.assertIsNotNone(process.stdout)
+                messages = [
+                    json.loads(process.stdout.readline()),
+                    json.loads(process.stdout.readline()),
+                    json.loads(process.stdout.readline()),
+                    json.loads(process.stdout.readline()),
+                ]
+                process.stdin.close()
+                process.wait(timeout=5)
                 self.assertEqual(process.returncode, 0)
-                messages = [json.loads(line) for line in stdout.splitlines()]
                 self.assertTrue(any(message.get("method") == "session/update" for message in messages))
                 self.assertTrue(
                     any(
