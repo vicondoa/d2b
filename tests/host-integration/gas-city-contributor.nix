@@ -1260,7 +1260,7 @@ pkgs.testers.runNixOSTest {
     ).strip()
     check_env = machine.succeed(f"xargs -0 -n1 </proc/{check_pid}/environ")
     assert "NIX_REMOTE=local?root=/var/lib/gascity-check/nix-root" in check_env
-    assert "max-jobs = 1" in check_env and "cores = 2" in check_env
+    assert "max-jobs = 1" in check_exec and "cores = 2" in check_exec
 
     # The real launcher lease rejects a second active run, and the compatible
     # generation has already produced the first child.
