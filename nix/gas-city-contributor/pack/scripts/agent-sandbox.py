@@ -193,6 +193,7 @@ def build_sandbox_argv(
     environment: Mapping[str, str] | None = None,
     proxy_fd: int | None = None,
     progress_fd: int | None = None,
+    check_fd: int | None = None,
     fdproxy_path: str | os.PathLike[str] | None = None,
     python_path: str | os.PathLike[str] | None = None,
     bwrap_path: str | os.PathLike[str] | None = None,
@@ -297,6 +298,8 @@ def build_sandbox_argv(
         projected.pop("GC_FDPROXY_FD", None)
     if progress_fd is None:
         projected.pop("GC_AGENT_FD", None)
+    if check_fd is None:
+        projected.pop("GC_CHECK_FD", None)
     projected.update(
         {
             "HOME": "/home/copilot",
@@ -348,6 +351,13 @@ def build_sandbox_argv(
             raise SandboxError("progress fd must not overlap stdio")
         arguments.extend(["--setenv", "GC_AGENT_FD", str(progress_fd)])
 
+    if check_fd is not None:
+        if check_fd < 3:
+            raise SandboxError("check fd must not overlap stdio")
+        if check_fd in {proxy_fd, progress_fd}:
+            raise SandboxError("launcher attachment fds must be distinct")
+        arguments.extend(["--setenv", "GC_CHECK_FD", str(check_fd)])
+
     inner_command = list(command)
     if proxy_fd is not None:
         inner_command = [
@@ -362,6 +372,11 @@ def build_sandbox_argv(
                 if progress_fd is not None
                 else []
             ),
+            *(
+                ["--check-fd", str(check_fd)]
+                if check_fd is not None
+                else []
+            ),
             "--",
             *inner_command,
         ]
@@ -370,7 +385,7 @@ def build_sandbox_argv(
     inherited = tuple(
         sorted(
             fd
-            for fd in (proxy_fd, progress_fd)
+            for fd in (proxy_fd, progress_fd, check_fd)
             if fd is not None
         )
     )
@@ -387,6 +402,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--approved-wrapper", action="append", default=[])
     parser.add_argument("--proxy-fd", type=int)
     parser.add_argument("--progress-fd", type=int)
+    parser.add_argument("--check-fd", type=int)
     parser.add_argument("--fdproxy-path")
     parser.add_argument("--python-path")
     parser.add_argument("--bwrap-path")
@@ -412,6 +428,7 @@ def main() -> int:
         environment=dict(os.environ),
         proxy_fd=args.proxy_fd,
         progress_fd=args.progress_fd,
+        check_fd=args.check_fd,
         fdproxy_path=args.fdproxy_path,
         python_path=args.python_path,
         bwrap_path=args.bwrap_path,

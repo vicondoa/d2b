@@ -48,6 +48,9 @@ that can change this policy.
   host configuration, socket, credential, or runtime-state paths.
 - Do not create public listeners or bypass the managed wrappers, sandbox,
   egress policy, resource limits, or credential projection.
+- In coding runs, invoke approved project checks only with
+  `gascity-check --check build-artifact-valid`.  Do not invoke the check
+  runner directly, pass a command to it, or access a sidecar socket.
 - Copilot launches have no repository instruction, custom agent or skill,
   built-in MCP, remote export, or direct hosting-integration capability.
   Do not try to re-enable any of those capabilities, and do not invoke direct

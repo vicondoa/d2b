@@ -6,6 +6,8 @@ from __future__ import annotations
 import argparse
 import array
 import errno
+import hashlib
+import hmac
 import json
 import os
 import pathlib
@@ -262,6 +264,7 @@ def _environment_fd(name: str) -> int | None:
 
 
 LAUNCHER_PROTOCOL = "gascity-agent/1"
+CHECK_PROTOCOL = "gascity-check/1"
 MAX_LAUNCH_METADATA_BYTES = 16 * 1024
 MAX_LAUNCH_RESPONSE_BYTES = 8 * 1024
 LAUNCHER_FD_NAMES = ("proxy", "progress", "control")
@@ -282,6 +285,80 @@ def _launcher_socket_path(args: argparse.Namespace) -> pathlib.Path:
     if path == pathlib.Path("/"):
         raise ProfileError("agent launcher socket is malformed")
     return path
+
+
+def _check_bind_auth(
+    auth_token: str,
+    *,
+    run_id: str,
+    bead_id: str,
+    worktree: str,
+) -> str:
+    if not auth_token:
+        raise ProfileError("check authentication is not configured")
+    message = "\0".join((run_id, bead_id, worktree)).encode("utf-8")
+    return hmac.new(
+        auth_token.encode("utf-8"),
+        message,
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def _open_check_channel(
+    *,
+    profile: str,
+    tool_policy: str,
+    identity: Mapping[str, str],
+    worktree: pathlib.Path,
+) -> int | None:
+    if tool_policy != "coding":
+        return None
+    socket_value = os.environ.get("GC_CHECK_SOCKET")
+    auth_token = os.environ.get("GC_CHECK_AUTH")
+    if not socket_value and not auth_token:
+        return None
+    if not socket_value or not auth_token:
+        raise ProfileError("check socket and authentication must be configured together")
+    socket_path = pathlib.Path(_absolute_path(socket_value, "check socket"))
+    channel = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        channel.settimeout(5.0)
+        channel.connect(str(socket_path))
+        channel.sendall(
+            json.dumps(
+                {
+                    "protocol": CHECK_PROTOCOL,
+                    "operation": "bind",
+                    "run_id": identity["run_id"],
+                    "bead_id": identity["bead_id"],
+                    "worktree": str(worktree),
+                    "auth": _check_bind_auth(
+                        auth_token,
+                        run_id=identity["run_id"],
+                        bead_id=identity["bead_id"],
+                        worktree=str(worktree),
+                    ),
+                },
+                separators=(",", ":"),
+            ).encode("utf-8")
+            + b"\n"
+        )
+        response = _read_socket_line(channel, limit=MAX_LAUNCH_RESPONSE_BYTES)
+        if (
+            response.get("protocol") != CHECK_PROTOCOL
+            or type(response.get("ok")) is not bool
+        ):
+            raise ProfileError("check bind response is malformed")
+        if response["ok"] is not True:
+            error = response.get("error")
+            raise ProfileError(
+                str(error) if isinstance(error, str) and error else "check bind was rejected"
+            )
+        channel.settimeout(None)
+        return channel.detach()
+    except (OSError, ProfileError):
+        channel.close()
+        raise
 
 
 def _launch_metadata(
@@ -325,6 +402,15 @@ def _launch_metadata(
 
     descriptors: list[int] = []
     names: list[str] = []
+    check_fd = _open_check_channel(
+        profile=profile,
+        tool_policy=tool_policy,
+        identity=identity,
+        worktree=worktree,
+    )
+    if check_fd is not None:
+        descriptors.append(check_fd)
+        names.append("check")
     for name, environment_name in (
         ("proxy", "GC_PROXY_FD"),
         ("progress", "GC_AGENT_FD"),

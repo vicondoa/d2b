@@ -33,6 +33,8 @@ let
       discord.operatorUserIds = [ "1004" ];
       hostReadOnlyPaths = [ "/etc/hostname" ];
       check.enable = true;
+      resources.maxHeavyChecks = 2;
+      resources.checkTimeoutSeconds = 17;
       buildBuddy.enable = true;
     };
   };
@@ -193,6 +195,12 @@ in
         enabled.systemd.tmpfiles.rules;
       checkQuota = check.StateDirectoryQuota;
       localStore = lib.hasInfix "local?root=/var/lib/gascity-check/nix-root" (lib.concatStringsSep "\n" check.Environment);
+      checkTimeout = lib.hasInfix "--timeout-seconds 17" (textValue check.ExecStart);
+      checkConcurrency = lib.hasInfix "--max-heavy-checks 2" (textValue check.ExecStart);
+      checkSocket = lib.hasInfix "--socket /run/gascity-contributor/check.sock" (textValue check.ExecStart);
+      mainCheckSocket = lib.hasInfix
+        "GC_CHECK_SOCKET=/run/gascity-contributor/check.sock"
+        (lib.concatStringsSep "\n" main.Environment);
     };
     expected = {
       home = true;
@@ -205,6 +213,10 @@ in
       discordDestructiveCleanup = false;
       checkQuota = "107374182400";
       localStore = true;
+      checkTimeout = true;
+      checkConcurrency = true;
+      checkSocket = true;
+      mainCheckSocket = true;
     };
   };
 
@@ -219,6 +231,13 @@ in
       publisherPrivateNetwork = publisher.PrivateNetwork;
       proxyPrivateNetwork = proxy.PrivateNetwork;
       checkPrivateNetwork = check.PrivateNetwork;
+      checkGroup = check.Group;
+      checkChannelGroup = builtins.elem
+        "gascity-check-channel"
+        check.SupplementaryGroups;
+      mainCheckChannelGroup = builtins.elem
+        "gascity-check-channel"
+        main.SupplementaryGroups;
       discordRequiresEgress = builtins.elem
         "gascity-egress.service"
         (discordUnit.requires or [ ]);
@@ -258,6 +277,9 @@ in
       publisherPrivateNetwork = true;
       proxyPrivateNetwork = true;
       checkPrivateNetwork = true;
+      checkGroup = "gascity-check-channel";
+      checkChannelGroup = true;
+      mainCheckChannelGroup = true;
       discordRequiresEgress = true;
       publisherRequiresEgress = true;
       discordEgressGroup = true;

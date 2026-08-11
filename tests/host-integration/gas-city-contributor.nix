@@ -1037,6 +1037,7 @@ pkgs.testers.runNixOSTest {
         maxConcurrentAgents = 1;
         maxActiveRuns = 1;
         maxHeavyChecks = 1;
+        checkTimeoutSeconds = 7;
         nixMaxJobs = 1;
         nixBuildCores = 2;
       };
@@ -1268,6 +1269,9 @@ pkgs.testers.runNixOSTest {
     )
     check_exec = machine.succeed("systemctl cat gascity-check.service")
     assert "--max-heavy-checks 1" in check_exec
+    assert "--timeout-seconds 7" in check_exec
+    assert "--socket /run/gascity-contributor/check.sock" in check_exec
+    assert "--approved-check build-artifact-valid=.gc/scripts/checks/build-artifact-valid.sh" in check_exec
     assert "/nix/var/nix/daemon-socket/socket" in check_exec
     check_pid = machine.succeed(
         "systemctl show -P MainPID gascity-check.service"
@@ -1275,6 +1279,11 @@ pkgs.testers.runNixOSTest {
     check_env = machine.succeed(f"xargs -0 -n1 </proc/{check_pid}/environ")
     assert "NIX_REMOTE=local?root=/var/lib/gascity-check/nix-root" in check_env
     assert "max-jobs = 1" in check_exec and "cores = 2" in check_exec
+    machine.succeed("test -S /run/gascity-contributor/check.sock")
+    machine.succeed(
+        "systemctl show -P SupplementaryGroups gas-city-contributor.service "
+        "| grep -qw gascity-check-channel"
+    )
 
     # The real launcher lease rejects a second active run, and the compatible
     # generation has already produced the first child.

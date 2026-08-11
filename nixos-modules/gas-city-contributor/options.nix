@@ -236,6 +236,11 @@ in
         default = 1;
         description = "Maximum concurrent heavy checks.";
       };
+      checkTimeoutSeconds = mkOption {
+        type = types.ints.between 1 86400;
+        default = 300;
+        description = "Maximum runtime for one approved check.";
+      };
       nixMaxJobs = mkOption {
         type = types.ints.positive;
         default = 1;

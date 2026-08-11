@@ -5,6 +5,7 @@ let
   buildBuddyEnabled =
     cfg.buildBuddy.enable || cfg.credentials.buildBuddyApiKeyFile != null;
   sharedGroup = "gascity-contributor";
+  checkChannelGroup = "gascity-check-channel";
   allServiceUsers = {
     gascity = {
       uid = 45100;
@@ -50,12 +51,16 @@ let
     extraGroups =
       [ sharedGroup ]
       ++ {
-        gascity = [ "gascity-agent-channel" "gascity-discord-channel" "gascity-publisher-channel" ];
+        gascity = [
+          "gascity-agent-channel"
+          "gascity-discord-channel"
+          "gascity-publisher-channel"
+        ] ++ lib.optional cfg.check.enable checkChannelGroup;
         gascity-agent = [ "gascity-agent-channel" "gascity-egress-channel" ];
         gascity-discord = [ "gascity-discord-channel" "gascity-egress-channel" ];
         gascity-publisher = [ "gascity-publisher-channel" "gascity-egress-channel" ];
         gascity-egress = [ "gascity-egress-channel" ];
-        gascity-check = [ "gascity-egress-channel" ];
+        gascity-check = [ "gascity-egress-channel" checkChannelGroup ];
         gascity-buildbuddy-proxy = [ "gascity-egress-channel" ];
       }.${name};
     inherit (details) description home;
@@ -89,6 +94,7 @@ in
     }
     // lib.optionalAttrs cfg.check.enable {
       gascity-check = { };
+      ${checkChannelGroup} = { };
     }
     // lib.optionalAttrs buildBuddyEnabled {
       gascity-buildbuddy-proxy = { };

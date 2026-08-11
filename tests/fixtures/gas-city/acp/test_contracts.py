@@ -18,6 +18,7 @@ import time
 import tomllib
 import unittest
 from concurrent.futures import ThreadPoolExecutor
+from unittest import mock
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[4]
@@ -46,6 +47,7 @@ SANDBOX = load_script("agent-sandbox.py")
 ACTIVATION = load_script("service-activation.py")
 FDPROXY = load_script("fdproxy.py")
 GC_AGENT = load_script("gc-agent.py")
+CHECK_RUNNER = load_script("check-runner.py")
 
 
 def successful_probe(profile: str) -> dict[str, object]:
@@ -997,6 +999,443 @@ class LauncherLifecycleTests(unittest.TestCase):
                         client.kill()
                         client.wait()
                 server.stop()
+
+
+class CheckRunnerHarness:
+    def __init__(
+        self,
+        root: pathlib.Path,
+        *,
+        approved: tuple[str, ...] = ("smoke=smoke.sh",),
+        timeout: float = 2.0,
+        max_heavy_checks: int = 1,
+    ):
+        self.root = root
+        self.snapshot = root / "snapshot"
+        self.worktree = self.snapshot / "run-1"
+        self.worktree.mkdir(parents=True)
+        self.output = root / "output"
+        self.store = root / "store"
+        self.socket_path = root / "check.sock"
+        self.egress_socket = root / "egress.sock"
+        self.process: subprocess.Popen[bytes] | None = None
+        self.approved = approved
+        self.timeout = timeout
+        self.max_heavy_checks = max_heavy_checks
+
+    def write_check(self, name: str, body: str) -> None:
+        path = self.worktree / name
+        path.write_text(body, encoding="utf-8")
+        path.chmod(0o700)
+
+    def start(self) -> None:
+        command = [
+            sys.executable,
+            str(SCRIPT_ROOT / "check-runner.py"),
+            "server",
+            "--socket",
+            str(self.socket_path),
+            "--snapshot-root",
+            str(self.snapshot),
+            "--store-root",
+            str(self.store),
+            "--output-root",
+            str(self.output),
+            "--proxy",
+            "http://127.0.0.1:3129",
+            "--listen-port",
+            "3129",
+            "--egress-socket",
+            str(self.egress_socket),
+            "--auth-token-env",
+            "GC_CHECK_AUTH",
+            "--allowed-uid",
+            str(os.geteuid()),
+            "--timeout-seconds",
+            str(self.timeout),
+            "--term-grace",
+            "0.05",
+            "--kill-grace",
+            "0.05",
+            "--max-heavy-checks",
+            str(self.max_heavy_checks),
+        ]
+        for check in self.approved:
+            command.extend(["--approved-check", check])
+        environment = dict(os.environ)
+        environment["GC_CHECK_AUTH"] = "fixture-check-auth"
+        self.process = subprocess.Popen(
+            command,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=environment,
+        )
+        deadline = time.monotonic() + 5
+        while not self.socket_path.exists():
+            if self.process.poll() is not None:
+                stderr = (
+                    self.process.stderr.read().decode("utf-8", errors="replace")
+                    if self.process.stderr is not None
+                    else ""
+                )
+                raise AssertionError(f"check runner exited before binding: {stderr}")
+            if time.monotonic() >= deadline:
+                raise AssertionError("check runner did not bind")
+            time.sleep(0.01)
+
+    def bind(self, *, auth: str = "fixture-check-auth") -> socket.socket:
+        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        client.connect(str(self.socket_path))
+        request = {
+            "protocol": CHECK_RUNNER.CHECK_PROTOCOL,
+            "operation": "bind",
+            "run_id": "run-1",
+            "bead_id": "bead-1",
+            "worktree": str(self.worktree),
+            "auth": CHECK_RUNNER.bind_auth_token(
+                auth,
+                run_id="run-1",
+                bead_id="bead-1",
+                worktree=str(self.worktree),
+            ),
+        }
+        client.sendall(json.dumps(request, separators=(",", ":")).encode() + b"\n")
+        response = self.read_line(client)
+        if response.get("ok") is not True:
+            client.close()
+            raise AssertionError(response)
+        return client
+
+    @staticmethod
+    def read_line(client: socket.socket) -> dict[str, object]:
+        data = bytearray()
+        while not data.endswith(b"\n"):
+            chunk = client.recv(4096)
+            if not chunk:
+                raise AssertionError("check runner channel closed")
+            data.extend(chunk)
+        return json.loads(bytes(data))
+
+    def run(self, client: socket.socket, check: str) -> dict[str, object]:
+        client.sendall(
+            json.dumps(
+                {
+                    "protocol": CHECK_RUNNER.CHECK_PROTOCOL,
+                    "operation": "run",
+                    "request_id": f"request-{time.monotonic_ns()}",
+                    "check": check,
+                },
+                separators=(",", ":"),
+            ).encode()
+            + b"\n"
+        )
+        return self.read_line(client)
+
+    def stop(self) -> None:
+        if self.process is None:
+            return
+        if self.process.poll() is None:
+            self.process.send_signal(signal.SIGTERM)
+            self.process.wait(timeout=5)
+        if self.process.stdout is not None:
+            self.process.stdout.close()
+        if self.process.stderr is not None:
+            self.process.stderr.close()
+
+
+class CheckRunnerContractTests(unittest.TestCase):
+    def test_graceful_process_exit_does_not_receive_group_kill(self) -> None:
+        process = mock.Mock()
+        process.pid = 1234
+        process.wait.return_value = 0
+        with mock.patch.object(CHECK_RUNNER.os, "killpg") as killpg:
+            CHECK_RUNNER._terminate_process_group(
+                process,
+                term_grace=0.05,
+                kill_grace=0.05,
+            )
+        killpg.assert_called_once_with(process.pid, signal.SIGTERM)
+        process.wait.assert_called_once_with(timeout=0.05)
+
+    def test_authorized_and_unauthorized_socket_requests(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="gascity-check-") as raw:
+            root = pathlib.Path(raw)
+            server = CheckRunnerHarness(root)
+            server.write_check("smoke.sh", "#!/bin/sh\nexit 0\n")
+            server.start()
+            try:
+                authorized = server.bind()
+                try:
+                    self.assertTrue(server.run(authorized, "smoke")["ok"])
+                finally:
+                    authorized.close()
+                denied = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                denied.connect(str(server.socket_path))
+                request = {
+                    "protocol": CHECK_RUNNER.CHECK_PROTOCOL,
+                    "operation": "bind",
+                    "run_id": "run-1",
+                    "bead_id": "bead-1",
+                    "worktree": str(server.worktree),
+                    "auth": CHECK_RUNNER.bind_auth_token(
+                        "wrong-auth",
+                        run_id="run-1",
+                        bead_id="bead-1",
+                        worktree=str(server.worktree),
+                    ),
+                }
+                denied.sendall(json.dumps(request).encode() + b"\n")
+                response = server.read_line(denied)
+                self.assertFalse(response["ok"])
+                self.assertEqual(response["error_code"], "unauthorized")
+                denied.close()
+            finally:
+                server.stop()
+
+    def test_malformed_socket_requests_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="gascity-check-malformed-") as raw:
+            root = pathlib.Path(raw)
+            server = CheckRunnerHarness(root)
+            server.write_check("smoke.sh", "#!/bin/sh\nexit 0\n")
+            server.start()
+            try:
+                client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                client.connect(str(server.socket_path))
+                client.sendall(b"not-json\n")
+                response = server.read_line(client)
+                self.assertFalse(response["ok"])
+                self.assertEqual(response["error_code"], "malformed_request")
+                client.close()
+            finally:
+                server.stop()
+
+    def test_real_approved_command_dispatch(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="gascity-check-dispatch-") as raw:
+            root = pathlib.Path(raw)
+            server = CheckRunnerHarness(root)
+            server.write_check(
+                "smoke.sh",
+                "#!/bin/sh\nprintf dispatched > \"$GC_CHECK_OUTPUT_ROOT/result\"\n",
+            )
+            server.start()
+            try:
+                client = server.bind()
+                try:
+                    response = server.run(client, "smoke")
+                    request_code = CHECK_RUNNER.request_check(
+                        fd=client.fileno(),
+                        check_name="smoke",
+                    )
+                finally:
+                    client.close()
+                self.assertEqual(
+                    response,
+                    {
+                        "ok": True,
+                        "returncode": 0,
+                        "protocol": CHECK_RUNNER.CHECK_PROTOCOL,
+                    },
+                )
+                self.assertEqual(request_code, 0)
+                self.assertEqual((server.output / "result").read_text(), "dispatched")
+            finally:
+                server.stop()
+
+    def test_request_client_deadline_covers_long_configured_check(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="gascity-check-client-deadline-") as raw:
+            root = pathlib.Path(raw)
+            server = CheckRunnerHarness(root, timeout=31.0)
+            server.write_check("smoke.sh", "#!/bin/sh\nexit 0\n")
+            server.start()
+            client = server.bind()
+            try:
+                real_socket = socket.socket
+                timeouts: list[float | None] = []
+
+                class RecordingSocket:
+                    def __init__(self, *, fileno: int):
+                        self._socket = real_socket(fileno=fileno)
+
+                    def settimeout(self, value: float | None) -> None:
+                        timeouts.append(value)
+                        self._socket.settimeout(value)
+
+                    def sendall(self, data: bytes) -> None:
+                        self._socket.sendall(data)
+
+                    def recv(self, size: int) -> bytes:
+                        return self._socket.recv(size)
+
+                    def close(self) -> None:
+                        self._socket.close()
+
+                with mock.patch.object(CHECK_RUNNER.socket, "socket", RecordingSocket):
+                    self.assertEqual(
+                        CHECK_RUNNER.request_check(
+                            fd=client.fileno(),
+                            check_name="smoke",
+                        ),
+                        0,
+                    )
+                self.assertEqual(
+                    timeouts,
+                    [CHECK_RUNNER.CHECK_CLIENT_TIMEOUT_SECONDS],
+                )
+                self.assertGreater(timeouts[0], server.timeout)
+            finally:
+                client.close()
+                server.stop()
+
+    def test_timeout_kills_exact_process_group_and_releases_slot(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="gascity-check-timeout-") as raw:
+            root = pathlib.Path(raw)
+            server = CheckRunnerHarness(
+                root,
+                approved=("timeout=timeout.sh", "smoke=smoke.sh"),
+                timeout=0.2,
+            )
+            server.write_check(
+                "timeout.sh",
+                "#!/bin/sh\n"
+                "trap '' TERM\n"
+                "(sleep 30) &\n"
+                "printf '%s' \"$!\" > \"$GC_CHECK_OUTPUT_ROOT/child.pid\"\n"
+                "wait\n",
+            )
+            server.write_check("smoke.sh", "#!/bin/sh\nexit 0\n")
+            server.start()
+            try:
+                client = server.bind()
+                try:
+                    response = server.run(client, "timeout")
+                    self.assertFalse(response["ok"])
+                    self.assertEqual(response["error_code"], "timeout")
+                    child_pid = int((server.output / "child.pid").read_text())
+                    deadline = time.monotonic() + 2
+                    while pathlib.Path(f"/proc/{child_pid}").exists():
+                        if time.monotonic() >= deadline:
+                            self.fail("timed-out check child remained alive")
+                        time.sleep(0.02)
+                    self.assertTrue(server.run(client, "smoke")["ok"])
+                finally:
+                    client.close()
+            finally:
+                server.stop()
+
+    def test_configured_max_heavy_checks_serializes_requests(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="gascity-check-concurrency-") as raw:
+            root = pathlib.Path(raw)
+            server = CheckRunnerHarness(
+                root,
+                approved=("heavy=heavy.sh",),
+                timeout=2,
+                max_heavy_checks=1,
+            )
+            server.write_check(
+                "heavy.sh",
+                "#!/bin/sh\n"
+                "if ! mkdir \"$GC_CHECK_OUTPUT_ROOT/active\"; then\n"
+                "  printf overlap > \"$GC_CHECK_OUTPUT_ROOT/overlap\"\n"
+                "fi\n"
+                "trap 'rmdir \"$GC_CHECK_OUTPUT_ROOT/active\" 2>/dev/null || true' EXIT\n"
+                "sleep 0.2\n",
+            )
+            server.start()
+            clients = [server.bind(), server.bind()]
+            try:
+                with ThreadPoolExecutor(max_workers=2) as executor:
+                    responses = list(
+                        executor.map(lambda client: server.run(client, "heavy"), clients)
+                    )
+                self.assertEqual([response["returncode"] for response in responses], [0, 0])
+                self.assertFalse((server.output / "overlap").exists())
+            finally:
+                for client in clients:
+                    client.close()
+                server.stop()
+
+
+class CheckChannelLaunchContractTests(unittest.TestCase):
+    def test_only_coding_launches_receive_authenticated_check_fd(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="gascity-check-launch-") as raw:
+            root = pathlib.Path(raw)
+            socket_path = root / "check.sock"
+            listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            listener.bind(str(socket_path))
+            listener.listen(1)
+            received: list[dict[str, object]] = []
+            ready = threading.Event()
+
+            def serve_bind() -> None:
+                ready.set()
+                client, _address = listener.accept()
+                try:
+                    received.append(CheckRunnerHarness.read_line(client))
+                    client.sendall(
+                        json.dumps(
+                            {
+                                "protocol": PROFILE.CHECK_PROTOCOL,
+                                "ok": True,
+                                "operation": "bind",
+                            }
+                        ).encode()
+                        + b"\n"
+                    )
+                    client.recv(1)
+                finally:
+                    client.close()
+
+            thread = threading.Thread(target=serve_bind, daemon=True)
+            thread.start()
+            ready.wait(timeout=1)
+            args = PROFILE._default_namespace("code-luna", "coding")
+            args.run_id = "run-1"
+            args.bead_id = "bead-1"
+            args.generation = "g1"
+            args.state_schema = "1"
+            args.worktree = str(root)
+            old_socket = os.environ.get("GC_CHECK_SOCKET")
+            old_auth = os.environ.get("GC_CHECK_AUTH")
+            os.environ["GC_CHECK_SOCKET"] = str(socket_path)
+            os.environ["GC_CHECK_AUTH"] = "fixture-check-auth"
+            try:
+                metadata, descriptors = PROFILE._launch_metadata(
+                    args,
+                    profile="code-luna",
+                    tool_policy="coding",
+                )
+                self.assertIn("check", metadata["fds"])
+                self.assertEqual(len(descriptors), 1)
+                os.close(descriptors.pop())
+                thread.join(timeout=2)
+                self.assertEqual(received[0]["operation"], "bind")
+                self.assertEqual(received[0]["run_id"], "run-1")
+            finally:
+                if old_socket is None:
+                    os.environ.pop("GC_CHECK_SOCKET", None)
+                else:
+                    os.environ["GC_CHECK_SOCKET"] = old_socket
+                if old_auth is None:
+                    os.environ.pop("GC_CHECK_AUTH", None)
+                else:
+                    os.environ["GC_CHECK_AUTH"] = old_auth
+                listener.close()
+                thread.join(timeout=2)
+
+            review_args = PROFILE._default_namespace("review-luna", "review")
+            review_args.run_id = "run-2"
+            review_args.bead_id = "bead-2"
+            review_args.generation = "g1"
+            review_args.state_schema = "1"
+            review_args.worktree = str(root)
+            metadata, descriptors = PROFILE._launch_metadata(
+                review_args,
+                profile="review-luna",
+                tool_policy="review",
+            )
+            self.assertNotIn("check", metadata["fds"])
+            self.assertEqual(descriptors, [])
 
 
 class FDProxyContractTests(unittest.TestCase):

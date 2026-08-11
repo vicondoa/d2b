@@ -72,6 +72,8 @@ pkgs.runCommand "gas-city-package-smoke" {
   test ! -e "$root/packs/github"
   test -x "${gasCityContributor}/bin/gascity-discord-decision"
   test -x "${gasCityContributor}/bin/gascity-publish-pr"
+  test -x "${gasCityContributor}/bin/gascity-check"
+  test -x "${gasCityContributor}/bin/gascity-check-runner"
   test -f "$root/pack/formulas/d2b-decision.formula.toml"
   test -f "$root/pack/assets/workflows/d2b-decision/request.md"
   test -f "$root/pack/assets/workflows/d2b-decision/wait.md"
@@ -90,7 +92,12 @@ pkgs.runCommand "gas-city-package-smoke" {
   done < <(find "$root/packs" -type f -name "*.py" -print0)
   for script in \
     "$root/pack/scripts/discord-decision.py" \
-    "$root/pack/scripts/publish-pr.py"
+    "$root/pack/scripts/publish-pr.py" \
+    "$root/pack/scripts/check-runner.py" \
+    "$root/pack/scripts/copilot-profile.py" \
+    "$root/pack/scripts/agent-launcher.py" \
+    "$root/pack/scripts/agent-sandbox.py" \
+    "$root/pack/scripts/fdproxy.py"
   do
     PYTHONPYCACHEPREFIX="$TMPDIR/pycache" \
       ${gasCityContributor}/bin/python3 -m py_compile "$script"

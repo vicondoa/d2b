@@ -418,6 +418,7 @@ def run_with_command(
     host: str = "127.0.0.1",
     port: int = 3128,
     progress_fd: int | None = None,
+    check_fd: int | None = None,
     auth_token: str | None = None,
 ) -> int:
     """Run a wrapped child beside the local multiplexed proxy."""
@@ -428,6 +429,10 @@ def run_with_command(
         raise FDProxyError("progress fd must not overlap stdio")
     if progress_fd == channel_fd:
         raise FDProxyError("proxy and progress fds must be distinct")
+    if check_fd is not None and check_fd < 3:
+        raise FDProxyError("check fd must not overlap stdio")
+    if check_fd is not None and check_fd in {channel_fd, progress_fd}:
+        raise FDProxyError("proxy, progress, and check fds must be distinct")
     token = _auth_token(auth_token)
     listener = _listen(host, port)
     stop_event = threading.Event()
@@ -460,11 +465,14 @@ def run_with_command(
         child = subprocess.Popen(
             command,
             close_fds=True,
-            pass_fds=(progress_fd,) if progress_fd is not None else (),
+            pass_fds=tuple(
+                fd for fd in (progress_fd, check_fd) if fd is not None
+            ),
             env=child_environment,
         )
-        if progress_fd is not None:
-            os.close(progress_fd)
+        for descriptor in (progress_fd, check_fd):
+            if descriptor is not None:
+                os.close(descriptor)
         return child.wait()
     finally:
         stop_event.set()
@@ -480,6 +488,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--once", action="store_true")
     parser.add_argument("--print-contract", action="store_true")
     parser.add_argument("--progress-fd", type=int)
+    parser.add_argument("--check-fd", type=int)
     parser.add_argument("--auth-token")
     parser.add_argument("command", nargs=argparse.REMAINDER)
     return parser.parse_args()
@@ -519,6 +528,7 @@ def main() -> int:
             host=host,
             port=port,
             progress_fd=args.progress_fd,
+            check_fd=args.check_fd,
             auth_token=args.auth_token,
         )
     serve(

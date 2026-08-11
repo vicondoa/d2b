@@ -22,6 +22,7 @@ const OPTIONS_MODULE: &str = "nixos-modules/gas-city-contributor/options.nix";
 const INTEGRATIONS_MODULE: &str = "nixos-modules/gas-city-contributor/integrations.nix";
 const ACTIVATION_SCRIPT: &str = "nix/gas-city-contributor/pack/scripts/service-activation.py";
 const FDPROXY_SCRIPT: &str = "nix/gas-city-contributor/pack/scripts/fdproxy.py";
+const CHECK_RUNNER_SCRIPT: &str = "nix/gas-city-contributor/pack/scripts/check-runner.py";
 const DISCORD_SCRIPT: &str = "nix/gas-city-contributor/pack/scripts/discord-decision.py";
 const PUBLISHER_SCRIPT: &str = "nix/gas-city-contributor/pack/scripts/publish-pr.py";
 const WORKFLOW_ASSETS: &[&str] = &[
@@ -640,6 +641,7 @@ fn gas_city_sidecars_are_private_and_use_the_authenticated_egress_proxy() {
     let integrations = owned_asset(INTEGRATIONS_MODULE);
     let activation = owned_asset(ACTIVATION_SCRIPT);
     let fdproxy = owned_asset(FDPROXY_SCRIPT);
+    let check_runner = owned_asset(CHECK_RUNNER_SCRIPT);
     let discord = owned_asset(DISCORD_SCRIPT);
     let publisher = owned_asset(PUBLISHER_SCRIPT);
 
@@ -684,8 +686,8 @@ fn gas_city_sidecars_are_private_and_use_the_authenticated_egress_proxy() {
     );
     assert_eq!(
         service.matches("config.users.users.gascity.uid").count(),
-        1,
-        "service module must bind the agent relay to gascity"
+        2,
+        "service module must bind the agent relay and check channel to gascity"
     );
     for required in [
         "discord.com",
@@ -712,6 +714,20 @@ fn gas_city_sidecars_are_private_and_use_the_authenticated_egress_proxy() {
     assert!(fdproxy.contains("NO_PROXY"));
     assert!(fdproxy.contains("\"GC_FDPROXY_SOCKET\""));
     assert!(fdproxy.contains("\"GC_EGRESS_SOCKET\""));
+    for required in [
+        "CHECK_PROTOCOL = \"gascity-check/1\"",
+        "start_new_session=True",
+        "_terminate_process_group",
+        "--max-heavy-checks",
+        "--approved-check",
+        "--socket",
+        "error_code = \"timeout\"",
+    ] {
+        assert!(
+            check_runner.contains(required),
+            "check runner missing {required}"
+        );
+    }
     assert!(!discord.contains("ProxyHandler({})"));
     assert!(!discord.contains("socket.create_connection((parsed.hostname"));
     assert!(!publisher.contains("ProxyHandler({})"));

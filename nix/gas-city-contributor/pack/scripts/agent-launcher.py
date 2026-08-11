@@ -70,7 +70,7 @@ LAUNCHER_PROTOCOL = "gascity-agent/1"
 MAX_LAUNCH_METADATA_BYTES = 16 * 1024
 MAX_LAUNCH_RESPONSE_BYTES = 8 * 1024
 MAX_RELAY_BUFFER_BYTES = 1024 * 1024
-LAUNCHER_FD_NAMES = ("proxy", "progress", "control")
+LAUNCHER_FD_NAMES = ("proxy", "progress", "control", "check")
 IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 FORBIDDEN_CHILD_FLAGS = frozenset(
     {
@@ -1775,6 +1775,9 @@ def _serve_client(
         proxy_fd = attachments.get("proxy")
         progress_fd = attachments.get("progress")
         control_fd = attachments.get("control")
+        check_fd = attachments.get("check")
+        if check_fd is not None and tool_policy != "coding":
+            raise LauncherError("check channel is available only to coding launches")
         if proxy_fd is None:
             for proxy_name in ("ALL_PROXY", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"):
                 environment.pop(proxy_name, None)
@@ -1799,8 +1802,9 @@ def _serve_client(
             args=args,
             proxy_fd=proxy_fd,
             progress_fd=progress_fd,
+            check_fd=check_fd,
         )
-        for descriptor in (proxy_fd, progress_fd):
+        for descriptor in (proxy_fd, progress_fd, check_fd):
             if descriptor is not None:
                 try:
                     descriptors.remove(descriptor)
@@ -2028,6 +2032,7 @@ def _spawn_child(
     args: argparse.Namespace,
     proxy_fd: int | None,
     progress_fd: int | None,
+    check_fd: int | None,
 ) -> Child:
     sandbox_module = None
     if not args.skip_sandbox:
@@ -2043,7 +2048,7 @@ def _spawn_child(
     else:
         command = [copilot, *validated_arguments]
     inherited_fds = tuple(
-        sorted(fd for fd in (proxy_fd, progress_fd) if fd is not None)
+        sorted(fd for fd in (proxy_fd, progress_fd, check_fd) if fd is not None)
     )
     if sandbox_module is not None:
         sandbox_argv, inherited_fds = sandbox_module.build_sandbox_argv(
@@ -2057,6 +2062,7 @@ def _spawn_child(
             environment=environment,
             proxy_fd=proxy_fd,
             progress_fd=progress_fd,
+            check_fd=check_fd,
             fdproxy_path=args.fdproxy_script,
             python_path=args.sandbox_python,
             bwrap_path=args.bwrap_path,
@@ -2127,6 +2133,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--proxy-fd", type=int)
     parser.add_argument("--progress-fd", type=int)
     parser.add_argument("--control-fd", type=int)
+    parser.add_argument("--check-fd", type=int)
     parser.add_argument("--proxy-port", type=int, default=3128)
     parser.add_argument("--max-agents", type=int)
     parser.add_argument("--max-active-runs", type=int)
@@ -2181,11 +2188,22 @@ def run(args: argparse.Namespace) -> int:
         ("proxy", args.proxy_fd),
         ("progress", args.progress_fd),
         ("control", args.control_fd),
+        ("check", args.check_fd),
     ):
         if descriptor is not None and descriptor < 3:
             raise LauncherError(f"{name} fd must not overlap stdio")
-    if args.proxy_fd is not None and args.proxy_fd == args.progress_fd:
-        raise LauncherError("proxy and progress fds must be distinct")
+    descriptors = [
+        descriptor
+        for descriptor in (
+            args.proxy_fd,
+            args.progress_fd,
+            args.control_fd,
+            args.check_fd,
+        )
+        if descriptor is not None
+    ]
+    if len(set(descriptors)) != len(descriptors):
+        raise LauncherError("launcher attachment fds must be distinct")
     skip_sandbox = args.allow_unsafe_fixture
     args.skip_sandbox = skip_sandbox
     if not args.allow_unsafe_fixture and not args.probe:
@@ -2281,6 +2299,7 @@ def run(args: argparse.Namespace) -> int:
                 args=args,
                 proxy_fd=args.proxy_fd,
                 progress_fd=args.progress_fd,
+                check_fd=args.check_fd,
             )
             relay = ChildRelay(
                 child,

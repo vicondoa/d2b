@@ -25,11 +25,14 @@ let
   egressSocket = "${runtimeRoot}/egress.sock";
   discordSocket = "${runtimeRoot}/discord.sock";
   publisherSocket = "${runtimeRoot}/publisher.sock";
+  checkSocket = "${runtimeRoot}/check.sock";
   agentSocket = "${runtimeRoot}/agent.sock";
   agentPrivateSocket = "/run/gascity-agent/agent.sock";
   generation = builtins.substring 0 32 (builtins.hashString "sha256" (toString package));
   relayAuth = builtins.hashString "sha256"
     "gascity-fdproxy:${cfg.repository.githubSlug}:${cfg.repository.rigName}";
+  checkAuth = builtins.hashString "sha256"
+    "gascity-check:${cfg.repository.githubSlug}:${cfg.repository.rigName}";
   sidecarProxyEnvironment = [
     "HTTP_PROXY=http://127.0.0.1:3128"
     "HTTPS_PROXY=http://127.0.0.1:3128"
@@ -207,7 +210,9 @@ let
       if test -s ${lib.escapeShellArg readinessPath} \
         && test -S ${lib.escapeShellArg agentSocket} \
         && test -S ${lib.escapeShellArg discordSocket} \
-        && test -S ${lib.escapeShellArg publisherSocket}; then
+        && test -S ${lib.escapeShellArg publisherSocket} \
+        ${lib.optionalString cfg.check.enable
+          "&& test -S ${lib.escapeShellArg checkSocket}"}; then
         exit 0
       fi
       sleep 0.5
@@ -404,6 +409,9 @@ let
     "GC_FDPROXY_AUTH=${relayAuth}"
     "GC_PROJECT_QUOTA_REQUIRED=1"
     "GC_MANUAL_CLEANUP_ONLY=1"
+  ] ++ lib.optionals cfg.check.enable [
+    "GC_CHECK_SOCKET=${checkSocket}"
+    "GC_CHECK_AUTH=${checkAuth}"
   ];
 
   mainExec = lib.concatStringsSep " " [
@@ -470,7 +478,7 @@ in
               "gascity-agent-channel"
               "gascity-discord-channel"
               "gascity-publisher-channel"
-            ];
+            ] ++ lib.optional cfg.check.enable "gascity-check-channel";
             WorkingDirectory = serviceRoot;
             StateDirectory = "gascity-contributor";
             StateDirectoryMode = "0710";
@@ -540,6 +548,7 @@ in
               "GC_FDPROXY_AUTH=${relayAuth}"
               "GC_AGENT_LAUNCHER_SOCKET=${agentPrivateSocket}"
               "GC_REQUIRE_READINESS=1"
+              "PATH=${package}/bin:/run/current-system/sw/bin"
               "SSL_CERT_FILE=${package}/etc/ssl/certs/ca-bundle.crt"
             ];
             ExecStart = agentStart;
@@ -658,8 +667,13 @@ in
           serviceConfig = sharedServiceConfig // {
             Type = "exec";
             User = "gascity-check";
-            Group = "gascity-check";
-            SupplementaryGroups = [ "gascity-contributor" "gascity-egress-channel" ];
+            Group = "gascity-check-channel";
+            SupplementaryGroups = [
+              "gascity-contributor"
+              "gascity-check"
+              "gascity-check-channel"
+              "gascity-egress-channel"
+            ];
             PrivateNetwork = true;
             JoinsNamespaceOf = lib.optional buildBuddyEnabled "gascity-buildbuddy-proxy.service";
             StateDirectory = "gascity-check";
@@ -681,6 +695,7 @@ in
               "NIX_REMOTE=local?root=/var/lib/gascity-check/nix-root"
               "GC_FDPROXY_SOCKET=${egressSocket}"
               "GC_FDPROXY_AUTH=${relayAuth}"
+              "GC_CHECK_AUTH=${checkAuth}"
               "NIX_CONFIG=connect-timeout = 5\nmax-jobs = ${toString cfg.resources.nixMaxJobs}\ncores = ${toString cfg.resources.nixBuildCores}\nhttp-proxy = http://127.0.0.1:3128\nsubstituters = https://cache.nixos.org\ntrusted-public-keys = cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY="
             ];
             ExecStart = "${python} ${package}/share/gas-city-contributor/pack/scripts/check-runner.py"
@@ -689,9 +704,18 @@ in
               + " --output-root /var/lib/gascity-check/output"
               + " --proxy http://127.0.0.1:3128"
               + " --egress-socket ${lib.escapeShellArg egressSocket}"
+              + " --socket ${lib.escapeShellArg checkSocket}"
+              + " --allowed-uid ${toString config.users.users.gascity.uid}"
+              + " --check-auth-token-env GC_CHECK_AUTH"
+              + " --approved-check ${lib.escapeShellArg
+                "build-artifact-valid=.gc/scripts/checks/build-artifact-valid.sh"}"
               + " --max-jobs ${toString cfg.resources.nixMaxJobs}"
               + " --build-cores ${toString cfg.resources.nixBuildCores}"
-              + " --max-heavy-checks ${toString cfg.resources.maxHeavyChecks}";
+              + " --max-heavy-checks ${toString cfg.resources.maxHeavyChecks}"
+              + " --timeout-seconds ${toString cfg.resources.checkTimeoutSeconds}"
+              + " --term-grace 2"
+              + " --kill-grace 1";
+            TimeoutStopSec = "2min";
           };
         };
       }

@@ -199,6 +199,8 @@ let
       "$out/bin/gascity-cancel"
     install -m 0555 ${contributorRoot}/pack/scripts/check-runner.py \
       "$out/bin/gascity-check-runner"
+    install -m 0555 ${contributorRoot}/pack/scripts/check-runner.py \
+      "$out/bin/gascity-check"
     install -m 0555 ${contributorRoot}/pack/scripts/buildbuddy-proxy.py \
       "$out/bin/gascity-buildbuddy-proxy"
     install -m 0555 ${contributorRoot}/pack/scripts/discord-decision.py \
