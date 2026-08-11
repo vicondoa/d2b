@@ -249,8 +249,8 @@ let
           stopping = True
 
       def peer_uid(connection):
-          raw = connection.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED)
-          return int.from_bytes(raw[0:4], byteorder=sys.byteorder, signed=True)
+          raw = connection.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12)
+          return int.from_bytes(raw[4:8], byteorder=sys.byteorder, signed=True)
 
       def serve_fixture(connection, host):
           try:
@@ -448,8 +448,8 @@ let
               except socket.timeout:
                   continue
               try:
-                  raw = client.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED)
-                  uid = int.from_bytes(raw[0:4], byteorder=sys.byteorder, signed=True)
+                  raw = client.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12)
+                  uid = int.from_bytes(raw[4:8], byteorder=sys.byteorder, signed=True)
                   if uid == 45100:
                       client.sendall(b"fixture-agent/1\n")
               except OSError:
