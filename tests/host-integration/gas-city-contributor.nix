@@ -465,8 +465,7 @@ let
           raise SystemExit("fixture Copilot credential is empty")
       FIXTURE.mkdir(mode=0o770, parents=True, exist_ok=True)
       WORKTREE.mkdir(mode=0o770, parents=True, exist_ok=True)
-      os.chown(WORKTREE, -1, grp.getgrnam("gascity-contributor").gr_gid)
-      os.chmod(WORKTREE, 0o770)
+      os.chmod(WORKTREE, 0o700)
       for private_root in (LEASE_ROOT, AGENT_RUNTIME):
           private_root.mkdir(mode=0o700, parents=True, exist_ok=True)
           os.chmod(private_root, 0o700)

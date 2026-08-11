@@ -133,7 +133,11 @@ def _private_directory(path: str | os.PathLike[str], label: str) -> pathlib.Path
     value.mkdir(mode=0o700, parents=True, exist_ok=True)
     stat_result = value.stat()
     if stat_result.st_uid != os.geteuid() or stat_result.st_mode & 0o077:
-        raise LauncherError(f"{label} is not a private service-owned directory")
+        raise LauncherError(
+            f"{label} is not a private service-owned directory "
+            f"(owner={stat_result.st_uid}, expected={os.geteuid()}, "
+            f"mode={stat.S_IMODE(stat_result.st_mode):04o})"
+        )
     return value
 
 
