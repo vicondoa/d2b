@@ -1024,8 +1024,6 @@ pkgs.testers.runNixOSTest {
 
   testScript = ''
     import json
-    import os
-    import re
 
     package = "${contributor}"
     python = "${contributorPython}"
