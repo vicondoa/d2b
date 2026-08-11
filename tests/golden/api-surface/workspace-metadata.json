@@ -337,6 +337,54 @@
       "public_json_file": "d2b_provider_aca.json"
     },
     {
+      "crate_name": "d2b_provider_activation_nixos",
+      "private_census": {
+        "external_crates": 19,
+        "index_items": 1,
+        "path_items": 2323
+      },
+      "private_hidden_items": 0,
+      "private_json_file": "d2b_provider_activation_nixos.json",
+      "public_census": {
+        "external_crates": 19,
+        "index_items": 1,
+        "path_items": 2304
+      },
+      "public_json_file": "d2b_provider_activation_nixos.json"
+    },
+    {
+      "crate_name": "d2b_provider_audio_pipewire",
+      "private_census": {
+        "external_crates": 19,
+        "index_items": 1,
+        "path_items": 2323
+      },
+      "private_hidden_items": 0,
+      "private_json_file": "d2b_provider_audio_pipewire.json",
+      "public_census": {
+        "external_crates": 19,
+        "index_items": 1,
+        "path_items": 2304
+      },
+      "public_json_file": "d2b_provider_audio_pipewire.json"
+    },
+    {
+      "crate_name": "d2b_provider_clipboard_wayland",
+      "private_census": {
+        "external_crates": 19,
+        "index_items": 1,
+        "path_items": 2323
+      },
+      "private_hidden_items": 0,
+      "private_json_file": "d2b_provider_clipboard_wayland.json",
+      "public_census": {
+        "external_crates": 19,
+        "index_items": 1,
+        "path_items": 2304
+      },
+      "public_json_file": "d2b_provider_clipboard_wayland.json"
+    },
+    {
       "crate_name": "d2b_provider_credential_entra",
       "private_census": {
         "external_crates": 56,
@@ -449,6 +497,22 @@
       "public_json_file": "d2b_provider_device_usbip.json"
     },
     {
+      "crate_name": "d2b_provider_display_wayland",
+      "private_census": {
+        "external_crates": 19,
+        "index_items": 1,
+        "path_items": 2323
+      },
+      "private_hidden_items": 0,
+      "private_json_file": "d2b_provider_display_wayland.json",
+      "public_census": {
+        "external_crates": 19,
+        "index_items": 1,
+        "path_items": 2304
+      },
+      "public_json_file": "d2b_provider_display_wayland.json"
+    },
+    {
       "crate_name": "d2b_provider_network_local",
       "private_census": {
         "external_crates": 56,
@@ -463,6 +527,22 @@
         "path_items": 10545
       },
       "public_json_file": "d2b_provider_network_local.json"
+    },
+    {
+      "crate_name": "d2b_provider_notification_desktop",
+      "private_census": {
+        "external_crates": 19,
+        "index_items": 1,
+        "path_items": 2323
+      },
+      "private_hidden_items": 0,
+      "private_json_file": "d2b_provider_notification_desktop.json",
+      "public_census": {
+        "external_crates": 19,
+        "index_items": 1,
+        "path_items": 2304
+      },
+      "public_json_file": "d2b_provider_notification_desktop.json"
     },
     {
       "crate_name": "d2b_provider_observability_otel",
@@ -495,6 +575,86 @@
         "path_items": 7014
       },
       "public_json_file": "d2b_provider_relay.json"
+    },
+    {
+      "crate_name": "d2b_provider_runtime_azure_container_apps",
+      "private_census": {
+        "external_crates": 19,
+        "index_items": 1,
+        "path_items": 2323
+      },
+      "private_hidden_items": 0,
+      "private_json_file": "d2b_provider_runtime_azure_container_apps.json",
+      "public_census": {
+        "external_crates": 19,
+        "index_items": 1,
+        "path_items": 2304
+      },
+      "public_json_file": "d2b_provider_runtime_azure_container_apps.json"
+    },
+    {
+      "crate_name": "d2b_provider_runtime_azure_virtual_machine",
+      "private_census": {
+        "external_crates": 19,
+        "index_items": 1,
+        "path_items": 2323
+      },
+      "private_hidden_items": 0,
+      "private_json_file": "d2b_provider_runtime_azure_virtual_machine.json",
+      "public_census": {
+        "external_crates": 19,
+        "index_items": 1,
+        "path_items": 2304
+      },
+      "public_json_file": "d2b_provider_runtime_azure_virtual_machine.json"
+    },
+    {
+      "crate_name": "d2b_provider_runtime_cloud_hypervisor",
+      "private_census": {
+        "external_crates": 19,
+        "index_items": 1,
+        "path_items": 2323
+      },
+      "private_hidden_items": 0,
+      "private_json_file": "d2b_provider_runtime_cloud_hypervisor.json",
+      "public_census": {
+        "external_crates": 19,
+        "index_items": 1,
+        "path_items": 2304
+      },
+      "public_json_file": "d2b_provider_runtime_cloud_hypervisor.json"
+    },
+    {
+      "crate_name": "d2b_provider_runtime_qemu_media",
+      "private_census": {
+        "external_crates": 19,
+        "index_items": 1,
+        "path_items": 2323
+      },
+      "private_hidden_items": 0,
+      "private_json_file": "d2b_provider_runtime_qemu_media.json",
+      "public_census": {
+        "external_crates": 19,
+        "index_items": 1,
+        "path_items": 2304
+      },
+      "public_json_file": "d2b_provider_runtime_qemu_media.json"
+    },
+    {
+      "crate_name": "d2b_provider_shell_terminal",
+      "private_census": {
+        "external_crates": 19,
+        "index_items": 1,
+        "path_items": 2323
+      },
+      "private_hidden_items": 0,
+      "private_json_file": "d2b_provider_shell_terminal.json",
+      "public_census": {
+        "external_crates": 19,
+        "index_items": 1,
+        "path_items": 2304
+      },
+      "public_json_file": "d2b_provider_shell_terminal.json"
     },
     {
       "crate_name": "d2b_provider_supervisor",
@@ -575,6 +735,54 @@
         "path_items": 13289
       },
       "public_json_file": "d2b_provider_toolkit.json"
+    },
+    {
+      "crate_name": "d2b_provider_transport_azure_relay",
+      "private_census": {
+        "external_crates": 19,
+        "index_items": 1,
+        "path_items": 2323
+      },
+      "private_hidden_items": 0,
+      "private_json_file": "d2b_provider_transport_azure_relay.json",
+      "public_census": {
+        "external_crates": 19,
+        "index_items": 1,
+        "path_items": 2304
+      },
+      "public_json_file": "d2b_provider_transport_azure_relay.json"
+    },
+    {
+      "crate_name": "d2b_provider_transport_unix",
+      "private_census": {
+        "external_crates": 19,
+        "index_items": 1,
+        "path_items": 2323
+      },
+      "private_hidden_items": 0,
+      "private_json_file": "d2b_provider_transport_unix.json",
+      "public_census": {
+        "external_crates": 19,
+        "index_items": 1,
+        "path_items": 2304
+      },
+      "public_json_file": "d2b_provider_transport_unix.json"
+    },
+    {
+      "crate_name": "d2b_provider_transport_vsock",
+      "private_census": {
+        "external_crates": 19,
+        "index_items": 1,
+        "path_items": 2323
+      },
+      "private_hidden_items": 0,
+      "private_json_file": "d2b_provider_transport_vsock.json",
+      "public_census": {
+        "external_crates": 19,
+        "index_items": 1,
+        "path_items": 2304
+      },
+      "public_json_file": "d2b_provider_transport_vsock.json"
     },
     {
       "crate_name": "d2b_provider_volume_local",
