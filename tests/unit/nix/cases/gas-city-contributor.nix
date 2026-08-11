@@ -13,7 +13,6 @@ let
   };
 
   validConfig = {
-    imports = [ namedModule ];
     services.gasCityContributor = {
       enable = true;
       repository.githubSlug = "vicondoa/d2b";
@@ -38,8 +37,13 @@ let
     };
   };
 
-  disabled = (mkEval { override = { imports = [ namedModule ]; }; }).config;
-  enabled = (mkEval { override = validConfig; }).config;
+  evalWith = override: mkEval [
+    namedModule
+    ({ ... }: override)
+  ];
+
+  disabled = (mkEval [ namedModule ]).config;
+  enabled = (evalWith validConfig).config;
   main = enabled.systemd.services.gas-city-contributor.serviceConfig;
   agent = enabled.systemd.services.gascity-agent.serviceConfig;
   discord = enabled.systemd.services.gascity-discord.serviceConfig;
@@ -50,31 +54,22 @@ let
   firewall = enabled.networking.nftables.ruleset;
   users = enabled.users.users;
 
-  invalidPath = mkEval {
-    override = {
-      imports = [ namedModule ];
+  invalidPath = evalWith {
       services.gasCityContributor = validConfig.services.gasCityContributor // {
         credentials.copilotTokenFile = "relative/copilot";
       };
-    };
   };
 
-  invalidProjection = mkEval {
-    override = {
-      imports = [ namedModule ];
+  invalidProjection = evalWith {
       services.gasCityContributor = validConfig.services.gasCityContributor // {
         hostReadOnlyPaths = [ "/" ];
       };
-    };
   };
 
-  invalidQuota = mkEval {
-    override = {
-      imports = [ namedModule ];
+  invalidQuota = evalWith {
       services.gasCityContributor = validConfig.services.gasCityContributor // {
         storage.totalQuotaBytes = 1;
       };
-    };
   };
 
   hasFailure = needle: assertions:
