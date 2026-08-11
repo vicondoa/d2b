@@ -1596,7 +1596,7 @@ pkgs.testers.runNixOSTest {
         "test \"$(systemctl is-active gas-city-contributor.service || true)\" "
         "= inactive"
     )
-    machine.succeed(f"test ! -d /proc/{final_child}")
+    machine.wait_until_succeeds(f"test ! -d /proc/{final_child}")
     for unit in [
         "gascity-agent.service",
         "gascity-discord.service",
