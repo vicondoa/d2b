@@ -52,14 +52,14 @@
       systems = [ "x86_64-linux" "aarch64-linux" ];
       forAllSystems = nixpkgs.lib.genAttrs systems;
       nixpkgsFor = forAllSystems (system: import nixpkgs { inherit system; });
+      gasCityNixpkgsFor =
+        forAllSystems (system: import nixpkgs-gas-city { inherit system; });
       copilotNixpkgsFor = forAllSystems (system:
-        import nixpkgs {
+        import nixpkgs-gas-city {
           inherit system;
           config.allowUnfreePredicate =
             pkg: nixpkgs.lib.getName pkg == "copilot-cli";
         });
-      gasCityNixpkgsFor =
-        forAllSystems (system: import nixpkgs-gas-city { inherit system; });
 
       # The current Gas City source and the package-only nixpkgs input both
       # require Go 1.26.5. Keep the package set explicit so a future update
