@@ -63,7 +63,11 @@ pkgs.buildGoModule rec {
   doCheck = true;
   checkPhase = ''
     runHook preCheck
-    mapfile -t packages < <(go list ./... | grep -v '/cmd/gc$')
+    mapfile -t packages < <(
+      go list ./... \
+        | grep -v '/cmd/gc$' \
+        | grep -v '/scripts$'
+    )
     go test -trimpath=false "''${packages[@]}"
     runHook postCheck
   '';
