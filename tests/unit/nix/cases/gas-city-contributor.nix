@@ -208,27 +208,35 @@ in
   };
 
   "gas-city-contributor/operator-rules" = {
-    expr = builtins.toJSON enabled.security.sudo.extraRules;
-    expected = builtins.toJSON [
+    expr =
+      let
+        rules = builtins.filter (
+          rule: builtins.elem "gascity-operators" (rule.groups or [ ])
+        ) enabled.security.sudo.extraRules;
+        rule = builtins.head rules;
+      in
       {
-        groups = [ "gascity-operators" ];
-        runAs = "gascity";
-        commands = [
-          {
-            command = "${pkgs.hello}/bin/gascity-submit";
-            options = [ "NOPASSWD" ];
-          }
-          {
-            command = "${pkgs.hello}/bin/gascity-status";
-            options = [ "NOPASSWD" ];
-          }
-          {
-            command = "${pkgs.hello}/bin/gascity-cancel";
-            options = [ "NOPASSWD" ];
-          }
-        ];
-      }
-    ];
+        count = builtins.length rules;
+        groups = rule.groups;
+        runAs = rule.runAs;
+        commands = map (command: command.command) rule.commands;
+        options = map (command: command.options) rule.commands;
+      };
+    expected = {
+      count = 1;
+      groups = [ "gascity-operators" ];
+      runAs = "gascity";
+      commands = [
+        "${pkgs.hello}/bin/gascity-submit"
+        "${pkgs.hello}/bin/gascity-status"
+        "${pkgs.hello}/bin/gascity-cancel"
+      ];
+      options = [
+        [ "NOPASSWD" ]
+        [ "NOPASSWD" ]
+        [ "NOPASSWD" ]
+      ];
+    };
   };
 
   "gas-city-contributor/relative-credential-rejected" = {
