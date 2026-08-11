@@ -390,6 +390,22 @@
               fi
             '';
           };
+        # The canonical Provider package surface is present before semantic
+        # Provider artifacts are implemented. These outputs compile each
+        # Provider crate and publish only a scaffold marker; owning Provider
+        # units replace the marker with their signed artifact layout.
+        providerScaffoldPackage = packageName:
+          rustWorkspace {
+            pname = packageName;
+            cargoBuildFlags = [ "--package" packageName ];
+            doCheck = false;
+            installPhase = ''
+              runHook preInstall
+              mkdir -p "$out/share/d2b/provider"
+              printf '%s\n' "${packageName}" > "$out/share/d2b/provider/scaffold"
+              runHook postInstall
+            '';
+          };
       in {
         manpages = pkgs.runCommand "d2b-manpages" { } ''
           install -Dm644 ${./docs/manpages/d2b.1} "$out/share/man/man1/d2b.1"
@@ -440,6 +456,32 @@
           doCheck = false;
           meta.mainProgram = "d2b-resource-compiler";
         };
+        d2b-provider-activation-nixos =
+          providerScaffoldPackage "d2b-provider-activation-nixos";
+        d2b-provider-audio-pipewire =
+          providerScaffoldPackage "d2b-provider-audio-pipewire";
+        d2b-provider-clipboard-wayland =
+          providerScaffoldPackage "d2b-provider-clipboard-wayland";
+        d2b-provider-display-wayland =
+          providerScaffoldPackage "d2b-provider-display-wayland";
+        d2b-provider-notification-desktop =
+          providerScaffoldPackage "d2b-provider-notification-desktop";
+        d2b-provider-runtime-azure-container-apps =
+          providerScaffoldPackage "d2b-provider-runtime-azure-container-apps";
+        d2b-provider-runtime-azure-virtual-machine =
+          providerScaffoldPackage "d2b-provider-runtime-azure-virtual-machine";
+        d2b-provider-runtime-cloud-hypervisor =
+          providerScaffoldPackage "d2b-provider-runtime-cloud-hypervisor";
+        d2b-provider-runtime-qemu-media =
+          providerScaffoldPackage "d2b-provider-runtime-qemu-media";
+        d2b-provider-shell-terminal =
+          providerScaffoldPackage "d2b-provider-shell-terminal";
+        d2b-provider-transport-azure-relay =
+          providerScaffoldPackage "d2b-provider-transport-azure-relay";
+        d2b-provider-transport-unix =
+          providerScaffoldPackage "d2b-provider-transport-unix";
+        d2b-provider-transport-vsock =
+          providerScaffoldPackage "d2b-provider-transport-vsock";
 
         signoz = import ./pkgs/signoz { inherit pkgs; };
         signozOtelCollector = import ./pkgs/signoz-otel-collector { inherit pkgs; };

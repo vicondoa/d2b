@@ -1110,40 +1110,21 @@ fn every_provider_crate_has_a_dossier_declaring_the_same_identity() {
     assert_clean(violations);
 }
 
-/// The asymmetry, on the real tree: the catalog holds more dossiers than the
-/// workspace holds crates, and that is not a violation. The Providers whose
-/// crates land in later waves already have their normative dossiers.
+/// The frozen catalog and workspace now have one canonical crate for every
+/// Provider dossier. The crate-side parity check above proves that every crate
+/// points at a dossier; this reverse check prevents a dossier from silently
+/// losing its package surface.
 #[test]
-fn a_dossier_without_a_crate_is_not_a_violation() {
+fn every_provider_dossier_has_exactly_one_canonical_crate() {
     let dossiers = repo_root().join(DOSSIER_DIR);
     let with_dossiers = dossier_identities(&dossiers);
     let with_crates: BTreeSet<String> = provider_crates()
         .into_iter()
         .filter_map(|(name, _)| provider_identity(&name))
         .collect();
-    let unimplemented: BTreeSet<&String> = with_dossiers.difference(&with_crates).collect();
-    assert!(
-        !unimplemented.is_empty(),
-        "expected at least one dossier whose crate is not yet implemented; without one this \
-         assertion proves nothing"
-    );
-    // The checker is crate-driven, so those dossiers are reported by nobody.
-    let mut violations = Vec::new();
-    for (name, _) in provider_crates() {
-        violations.extend(check_dossier_parity(&name, &dossiers));
-    }
-    assert_clean(violations);
-
-    // And a synthetic directory holding only unimplemented dossiers is clean
-    // for a crate that has its own, which pins the direction rather than
-    // relying on the real tree's current contents.
-    let fixture = DossierFixture::empty("asymmetric");
-    fixture.write("fixture-example", Some("ADR-046-provider-fixture-example"));
-    fixture.write("fixture-unbuilt", Some("ADR-046-provider-fixture-unbuilt"));
     assert_eq!(
-        check_dossier_parity("d2b-provider-fixture-example", fixture.path()),
-        Vec::<Violation>::new(),
-        "a dossier with no crate must not be reported"
+        with_crates, with_dossiers,
+        "the frozen Provider catalog must resolve to exactly one canonical crate per dossier"
     );
 }
 
