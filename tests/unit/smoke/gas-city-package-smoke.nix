@@ -158,8 +158,9 @@ pkgs.runCommand "gas-city-package-smoke" {
     ${gasCityContributor}/bin/bazel \
       --batch \
       --output_user_root="$TMPDIR/bazel-user-root" \
+      build \
       --repository_cache="$TMPDIR/bazel-repository-cache" \
-      build //...
+      //...
     test "$(${pkgs.coreutils}/bin/cat bazel-bin/round_trip_payload.txt)" \
       = "gascity-buildbuddy-bazel-8.7.0"
   )
