@@ -6,7 +6,7 @@
 
 [workspace]
 name = "d2b-contributor"
-provider = "copilot-coding"
+provider = "copilot-code-luna"
 max_active_sessions = 2
 global_fragments = ["d2b-managed-contributor"]
 
@@ -32,97 +32,57 @@ source = "../pack"
 # immutable profile homes owned by the ACP launcher; the role matrix records
 # the effective profile expected at readiness.
 
-[providers.copilot-planning]
+[providers.copilot-planning-sol]
 base = "builtin:copilot"
-command = "copilot"
-acp_command = "copilot"
+command = "exec python3 \"$GC_CONTRIBUTOR_ROOT/pack/scripts/copilot-profile.py\""
+acp_command = "exec python3 \"$GC_CONTRIBUTOR_ROOT/pack/scripts/copilot-profile.py\""
+path_check = "python3"
 args = []
 supports_acp = true
 acp_args = [
-  "--acp",
-  "--no-custom-instructions",
-  "--no-auto-update",
-  "--disable-builtin-mcps",
-  "--no-remote",
-  "--no-remote-export",
-  "--available-tools", "view,search,apply_patch",
-  "--deny-tool", "shell(gh)",
-  "--deny-tool", "shell(gh *)",
-  "--deny-tool", "shell(git push)",
-  "--deny-tool", "shell(git push *)",
-  "--deny-tool", "shell(discord)",
-  "--deny-tool", "shell(discord *)",
+  "--profile", "review-sol",
+  "--tool-policy", "planning",
 ]
-env = { COPILOT_HOME = "${GC_COPILOT_HOME}", COPILOT_CUSTOM_INSTRUCTIONS_DIRS = "" }
+env = { COPILOT_CUSTOM_INSTRUCTIONS_DIRS = "" }
 
-[providers.copilot-review]
+[providers.copilot-review-sol]
 base = "builtin:copilot"
-command = "copilot"
-acp_command = "copilot"
+command = "exec python3 \"$GC_CONTRIBUTOR_ROOT/pack/scripts/copilot-profile.py\""
+acp_command = "exec python3 \"$GC_CONTRIBUTOR_ROOT/pack/scripts/copilot-profile.py\""
+path_check = "python3"
 args = []
 supports_acp = true
 acp_args = [
-  "--acp",
-  "--no-custom-instructions",
-  "--no-auto-update",
-  "--disable-builtin-mcps",
-  "--no-remote",
-  "--no-remote-export",
-  "--available-tools", "view,search",
-  "--deny-tool", "shell(gh)",
-  "--deny-tool", "shell(gh *)",
-  "--deny-tool", "shell(git push)",
-  "--deny-tool", "shell(git push *)",
-  "--deny-tool", "shell(discord)",
-  "--deny-tool", "shell(discord *)",
+  "--profile", "review-sol",
+  "--tool-policy", "review",
 ]
-env = { COPILOT_HOME = "${GC_COPILOT_HOME}", COPILOT_CUSTOM_INSTRUCTIONS_DIRS = "" }
+env = { COPILOT_CUSTOM_INSTRUCTIONS_DIRS = "" }
 
-[providers.copilot-review-fallback]
+[providers.copilot-review-luna]
 base = "builtin:copilot"
-command = "copilot"
-acp_command = "copilot"
+command = "exec python3 \"$GC_CONTRIBUTOR_ROOT/pack/scripts/copilot-profile.py\""
+acp_command = "exec python3 \"$GC_CONTRIBUTOR_ROOT/pack/scripts/copilot-profile.py\""
+path_check = "python3"
 args = []
 supports_acp = true
 acp_args = [
-  "--acp",
-  "--no-custom-instructions",
-  "--no-auto-update",
-  "--disable-builtin-mcps",
-  "--no-remote",
-  "--no-remote-export",
-  "--available-tools", "view,search",
-  "--deny-tool", "shell(gh)",
-  "--deny-tool", "shell(gh *)",
-  "--deny-tool", "shell(git push)",
-  "--deny-tool", "shell(git push *)",
-  "--deny-tool", "shell(discord)",
-  "--deny-tool", "shell(discord *)",
+  "--profile", "review-luna",
+  "--tool-policy", "review",
 ]
-env = { COPILOT_HOME = "${GC_COPILOT_HOME}", COPILOT_CUSTOM_INSTRUCTIONS_DIRS = "" }
+env = { COPILOT_CUSTOM_INSTRUCTIONS_DIRS = "" }
 
-[providers.copilot-coding]
+[providers.copilot-code-luna]
 base = "builtin:copilot"
-command = "copilot"
-acp_command = "copilot"
+command = "exec python3 \"$GC_CONTRIBUTOR_ROOT/pack/scripts/copilot-profile.py\""
+acp_command = "exec python3 \"$GC_CONTRIBUTOR_ROOT/pack/scripts/copilot-profile.py\""
+path_check = "python3"
 args = []
 supports_acp = true
 acp_args = [
-  "--acp",
-  "--no-custom-instructions",
-  "--no-auto-update",
-  "--disable-builtin-mcps",
-  "--no-remote",
-  "--no-remote-export",
-  "--available-tools", "bash,view,search,apply_patch",
-  "--deny-tool", "shell(gh)",
-  "--deny-tool", "shell(gh *)",
-  "--deny-tool", "shell(git push)",
-  "--deny-tool", "shell(git push *)",
-  "--deny-tool", "shell(discord)",
-  "--deny-tool", "shell(discord *)",
+  "--profile", "code-luna",
+  "--tool-policy", "coding",
 ]
-env = { COPILOT_HOME = "${GC_COPILOT_HOME}", COPILOT_CUSTOM_INSTRUCTIONS_DIRS = "" }
+env = { COPILOT_CUSTOM_INSTRUCTIONS_DIRS = "" }
 
 # The following assignments are generated from city/agent-role-matrix.toml.
 # Keep this block mechanically boring: one imported agent, one provider, and
@@ -132,239 +92,239 @@ env = { COPILOT_HOME = "${GC_COPILOT_HOME}", COPILOT_CUSTOM_INSTRUCTIONS_DIRS = 
 [[patches.agent]]
 dir = ""
 name = "gc.requirements-planner"
-provider = "copilot-planning"
+provider = "copilot-planning-sol"
 session = "acp"
 
 [[patches.agent]]
 dir = ""
 name = "gc.design-author"
-provider = "copilot-planning"
+provider = "copilot-planning-sol"
 session = "acp"
 
 [[patches.agent]]
 dir = ""
 name = "gc.task-decomposer"
-provider = "copilot-planning"
+provider = "copilot-planning-sol"
 session = "acp"
 
 [[patches.agent]]
 dir = ""
 name = "gc.design-implementation-reviewer"
-provider = "copilot-review"
+provider = "copilot-review-sol"
 session = "acp"
 
 [[patches.agent]]
 dir = ""
 name = "gc.design-test-risk-reviewer"
-provider = "copilot-review"
+provider = "copilot-review-sol"
 session = "acp"
 
 [[patches.agent]]
 dir = ""
 name = "gc.gap-analyst"
-provider = "copilot-review"
+provider = "copilot-review-sol"
 session = "acp"
 
 [[patches.agent]]
 dir = ""
 name = "gc.implementation-reviewer"
-provider = "copilot-review"
+provider = "copilot-review-sol"
 session = "acp"
 
 [[patches.agent]]
 dir = ""
 name = "gc.issue-triager"
-provider = "copilot-review"
+provider = "copilot-review-sol"
 session = "acp"
 
 [[patches.agent]]
 dir = ""
 name = "gc.review-synthesizer"
-provider = "copilot-review"
+provider = "copilot-review-sol"
 session = "acp"
 
 [[patches.agent]]
 dir = ""
 name = "gc.implementation-worker"
-provider = "copilot-coding"
+provider = "copilot-code-luna"
 session = "acp"
 
 [[patches.agent]]
 dir = ""
 name = "compound-engineering.ce-adversarial-reviewer"
-provider = "copilot-review"
+provider = "copilot-review-sol"
 session = "acp"
 
 [[patches.agent]]
 dir = ""
 name = "compound-engineering.ce-agent-native-reviewer"
-provider = "copilot-review"
+provider = "copilot-review-sol"
 session = "acp"
 
 [[patches.agent]]
 dir = ""
 name = "compound-engineering.ce-api-contract-reviewer"
-provider = "copilot-review"
+provider = "copilot-review-sol"
 session = "acp"
 
 [[patches.agent]]
 dir = ""
 name = "compound-engineering.ce-architecture-strategist"
-provider = "copilot-planning"
+provider = "copilot-planning-sol"
 session = "acp"
 
 [[patches.agent]]
 dir = ""
 name = "compound-engineering.ce-brainstorm"
-provider = "copilot-planning"
+provider = "copilot-planning-sol"
 session = "acp"
 
 [[patches.agent]]
 dir = ""
 name = "compound-engineering.ce-code-review-selector"
-provider = "copilot-review"
+provider = "copilot-review-sol"
 session = "acp"
 
 [[patches.agent]]
 dir = ""
 name = "compound-engineering.ce-code-review-synthesizer"
-provider = "copilot-review"
+provider = "copilot-review-sol"
 session = "acp"
 
 [[patches.agent]]
 dir = ""
 name = "compound-engineering.ce-coherence-reviewer"
-provider = "copilot-planning"
+provider = "copilot-planning-sol"
 session = "acp"
 
 [[patches.agent]]
 dir = ""
 name = "compound-engineering.ce-compound"
-provider = "copilot-review"
+provider = "copilot-review-sol"
 session = "acp"
 
 [[patches.agent]]
 dir = ""
 name = "compound-engineering.ce-correctness-reviewer"
-provider = "copilot-review"
+provider = "copilot-review-sol"
 session = "acp"
 
 [[patches.agent]]
 dir = ""
 name = "compound-engineering.ce-data-migration-reviewer"
-provider = "copilot-review"
+provider = "copilot-review-sol"
 session = "acp"
 
 [[patches.agent]]
 dir = ""
 name = "compound-engineering.ce-deployment-verification-agent"
-provider = "copilot-review"
+provider = "copilot-review-sol"
 session = "acp"
 
 [[patches.agent]]
 dir = ""
 name = "compound-engineering.ce-feasibility-reviewer"
-provider = "copilot-planning"
+provider = "copilot-planning-sol"
 session = "acp"
 
 [[patches.agent]]
 dir = ""
 name = "compound-engineering.ce-julik-frontend-races-reviewer"
-provider = "copilot-review"
+provider = "copilot-review-sol"
 session = "acp"
 
 [[patches.agent]]
 dir = ""
 name = "compound-engineering.ce-learnings-researcher"
-provider = "copilot-review"
+provider = "copilot-review-sol"
 session = "acp"
 
 [[patches.agent]]
 dir = ""
 name = "compound-engineering.ce-maintainability-reviewer"
-provider = "copilot-review"
+provider = "copilot-review-sol"
 session = "acp"
 
 [[patches.agent]]
 dir = ""
 name = "compound-engineering.ce-performance-reviewer"
-provider = "copilot-review"
+provider = "copilot-review-sol"
 session = "acp"
 
 [[patches.agent]]
 dir = ""
 name = "compound-engineering.ce-plan"
-provider = "copilot-planning"
+provider = "copilot-planning-sol"
 session = "acp"
 
 [[patches.agent]]
 dir = ""
 name = "compound-engineering.ce-plan-review-synthesizer"
-provider = "copilot-planning"
+provider = "copilot-planning-sol"
 session = "acp"
 
 [[patches.agent]]
 dir = ""
 name = "compound-engineering.ce-pr-comment-resolver"
-provider = "copilot-review"
+provider = "copilot-review-sol"
 session = "acp"
 
 [[patches.agent]]
 dir = ""
 name = "compound-engineering.ce-previous-comments-reviewer"
-provider = "copilot-review"
+provider = "copilot-review-sol"
 session = "acp"
 
 [[patches.agent]]
 dir = ""
 name = "compound-engineering.ce-project-standards-reviewer"
-provider = "copilot-review"
+provider = "copilot-review-sol"
 session = "acp"
 
 [[patches.agent]]
 dir = ""
 name = "compound-engineering.ce-reliability-reviewer"
-provider = "copilot-review"
+provider = "copilot-review-sol"
 session = "acp"
 
 [[patches.agent]]
 dir = ""
 name = "compound-engineering.ce-scope-guardian-reviewer"
-provider = "copilot-planning"
+provider = "copilot-planning-sol"
 session = "acp"
 
 [[patches.agent]]
 dir = ""
 name = "compound-engineering.ce-security-reviewer"
-provider = "copilot-review"
+provider = "copilot-review-sol"
 session = "acp"
 
 [[patches.agent]]
 dir = ""
 name = "compound-engineering.ce-swift-ios-reviewer"
-provider = "copilot-review"
+provider = "copilot-review-sol"
 session = "acp"
 
 [[patches.agent]]
 dir = ""
 name = "compound-engineering.ce-testing-reviewer"
-provider = "copilot-review"
+provider = "copilot-review-sol"
 session = "acp"
 
 [[patches.agent]]
 dir = ""
 name = "compound-engineering.ce-work"
-provider = "copilot-coding"
+provider = "copilot-code-luna"
 session = "acp"
 
 [[patches.agent]]
 dir = ""
 name = "contributor.d2b-pr-comment-judge"
-provider = "copilot-review"
+provider = "copilot-review-sol"
 session = "acp"
 
 [[patches.agent]]
 dir = ""
 name = "contributor.d2b-pr-comment-verifier"
-provider = "copilot-review"
+provider = "copilot-review-sol"
 session = "acp"
