@@ -18,7 +18,7 @@ pkgs.buildGoModule rec {
 
   subPackages = [ "cmd/bd" ];
   tags = [ "gms_pure_go" ];
-  vendorHash = "sha256-xAcHSR9iMwrfXNG+CDsHxb0kV0tPHBXbEC6izcX89Xo=";
+  vendorHash = "sha256-CW+ba1KYpmBZ1UXHCr2B/EHOr8LDi494BuEDGHABLbk=";
   proxyVendor = true;
   doCheck = false;
 
