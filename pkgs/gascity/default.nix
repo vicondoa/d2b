@@ -54,7 +54,7 @@ pkgs.buildGoModule rec {
   checkPhase = ''
     runHook preCheck
     mapfile -t packages < <(go list ./... | grep -v '/cmd/gc$')
-    go test "''${packages[@]}"
+    go test -trimpath=false "''${packages[@]}"
     runHook postCheck
   '';
 
