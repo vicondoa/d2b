@@ -41,7 +41,7 @@ class BuildBuddyRoundTripTests(unittest.TestCase):
             return response.read()
 
     def test_cache_upload_and_download_round_trip(self) -> None:
-        payload = b"bazel-8.7.0-cache-payload"
+        payload = b"bazel-9.1.1-cache-payload"
         self.request("PUT", "/cache/action-1", payload)
         self.assertEqual(self.request("GET", "/cache/action-1"), payload)
 

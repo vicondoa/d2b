@@ -1,6 +1,6 @@
 # Gas City BuildBuddy fixture
 
-This fixture is pinned to Bazel **8.7.0** by `.bazelversion`.  It is a
+This fixture is pinned to Bazel **9.1.1** by `.bazelversion`.  It is a
 hermetic contract fixture, not a live BuildBuddy endpoint:
 
 - `fake_upstream.py` accepts only the proxy-injected

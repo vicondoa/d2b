@@ -81,7 +81,7 @@
           beads = beadsFor system;
           copilot = copilotFor system;
           go = (gasCityNixpkgsFor.${system}).go_1_26;
-          bazel = (gasCityNixpkgsFor.${system}).bazel_8;
+          bazel = (gasCityNixpkgsFor.${system}).bazel_9;
           gascityRevision =
             "6e0399fb970190a35c3e3d5d272a02becec55ffe";
           gascityPacksRevision =
@@ -101,7 +101,7 @@
           copilot = copilotFor system;
           gasCityContributor = gasCityContributorFor system;
           go = gasCityNixpkgsFor.${system}.go_1_26;
-          bazel = gasCityNixpkgsFor.${system}.bazel_8;
+          bazel = gasCityNixpkgsFor.${system}.bazel_9;
         in
         import ./tests/unit/smoke/gas-city-package-smoke.nix {
           pkgs = nixpkgsFor.${system};

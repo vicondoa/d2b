@@ -1,5 +1,5 @@
 genrule(
     name = "round_trip_payload",
     outs = ["round_trip_payload.txt"],
-    cmd = "printf '%s\n' 'gascity-buildbuddy-bazel-8.7.0' > $@",
+    cmd = "printf '%s\n' 'gascity-buildbuddy-bazel-9.1.1' > $@",
 )

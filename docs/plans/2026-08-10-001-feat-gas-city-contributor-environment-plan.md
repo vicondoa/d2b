@@ -249,7 +249,7 @@ No other product scope changed.
 
 ### Key Technical Decisions
 
-- KTD1. **Pin current executable inputs only.** Add non-flake inputs for Gas City at `6e0399fb970190a35c3e3d5d272a02becec55ffe` and gascity-packs at `f3826035bb7de7c34621c2fdcd8620ab5a18bb08`. Use `llm-agents.nix` at `387989ee56d550d86d46d9458ad68a55b9e0ca3b` for Copilot CLI 1.0.79. Use a package-only nixpkgs input at `f13ff45afd1bb73e640eaa08a7066dbed07e3238` for Go 1.26.5 and Bazel 8.7.0 without changing the repo's main nixpkgs input. Package Dolt 2.1.7 and source-build beads at `bf97b73749ac3ef2fca2365b54537ac041ad4293`.
+- KTD1. **Pin current executable inputs only.** Add non-flake inputs for Gas City at `6e0399fb970190a35c3e3d5d272a02becec55ffe` and gascity-packs at `f3826035bb7de7c34621c2fdcd8620ab5a18bb08`. Use `llm-agents.nix` at `387989ee56d550d86d46d9458ad68a55b9e0ca3b` for Copilot CLI 1.0.79. Use a package-only nixpkgs input at `f13ff45afd1bb73e640eaa08a7066dbed07e3238` for Go 1.26.5 and Bazel 9.1.1 without changing the repo's main nixpkgs input. Package Dolt 2.1.7 and source-build beads at `bf97b73749ac3ef2fca2365b54537ac041ad4293`.
 - KTD2. **Export a separate flake surface.** (session-settled: user-directed - chosen over reusable policy authored in `/etc/nixos`: the repo flake must own the module and sandbox policy) Export `nixosModules.gasCityContributor`, `packages.<system>.gascity`, `packages.<system>.gas-city-contributor`, and `devShells.<system>.gas-city`. Do not alter `nixosModules.default` or add an overlay.
 - KTD3. **Build current Gas City from source.** Use `buildGoModule`, exact revision metadata, and upstream checks. Document only check exclusions that cannot run hermetically in the Nix sandbox.
 - KTD4. **Keep immutable configuration separate from mutable state.** Build the city definition, sanitized upstream packs, local pack, provider profiles, scripts, and managed instructions into the Nix store. Keep `.gc`, Dolt, beads, rigs, branches, worktrees, caches, and runtime status in service-owned directories.
@@ -278,7 +278,7 @@ No other product scope changed.
 | `gastownhall/gascity` | `6e0399fb970190a35c3e3d5d272a02becec55ffe` | Supervisor delegation, ACP providers, configuration, and workflow engine |
 | `gastownhall/gascity-packs` | `f3826035bb7de7c34621c2fdcd8620ab5a18bb08` | Compound Engineering, Discord, GitHub, and base Gas City packs |
 | `numtide/llm-agents.nix` | `387989ee56d550d86d46d9458ad68a55b9e0ca3b` | Copilot CLI 1.0.79 package |
-| `NixOS/nixpkgs` package input | `f13ff45afd1bb73e640eaa08a7066dbed07e3238` | Go 1.26.5 and Bazel 8.7.0 only |
+| `NixOS/nixpkgs` package input | `f13ff45afd1bb73e640eaa08a7066dbed07e3238` | Go 1.26.5 and Bazel 9.1.1 only |
 | Dolt | `2.1.7` | Gas City storage requirement |
 | beads | `bf97b73749ac3ef2fca2365b54537ac041ad4293` | Conditional workflow-state updates required by Gas City |
 
@@ -754,7 +754,7 @@ flowchart LR
 2. Build Gas City with Go 1.26.5, exact metadata, and upstream checks.
 3. Import Copilot CLI 1.0.79 from `llm-agents.nix`.
 4. Package Dolt 2.1.7 and source-build beads at the KTD1 commit.
-5. Include Bazel 8.7.0 for the pre-merge REAPI fixture.
+5. Include Bazel 9.1.1 for the pre-merge REAPI fixture.
 6. Assemble a fixed runtime closure without ambient host PATH dependencies.
 7. Derive the Discord gateway-only pack and include the local publisher dependencies.
 8. Export the package, dev shell, and realized smoke check.
@@ -767,7 +767,7 @@ flowchart LR
 
 - `gc version` reports the pinned revision.
 - Go reports 1.26.5 and builds the pinned Gas City source.
-- Bazel reports 8.7.0.
+- Bazel reports 9.1.1.
 - Copilot reports 1.0.79.
 - Dolt reports 2.1.7 and beads reports the conditional-write-capable source revision.
 - Beads exposes the conditional assignment and status update flags used by decision compare-and-set.
@@ -982,7 +982,7 @@ flowchart LR
 - The proxy injects the required gRPC header, uses HTTP/2 and upstream TLS, rejects other upstreams, and never writes the key to persistent state.
 - Wrong CA, SNI, SAN, upstream host, or local client identity fails closed.
 - Only `gascity-check` can reach the proxy's private loopback listener.
-- The Bazel 8.7.0 fixture completes authenticated cache and remote-execution operations without exposing the key to the runner.
+- The Bazel 9.1.1 fixture completes authenticated cache and remote-execution operations without exposing the key to the runner.
 - The host Nix daemon and host store remain unchanged.
 - Submission and heavy stages stop before the reserve is consumed; the documented manual cleanup excludes active and open-PR runs.
 - A running workload that crosses the reserve is cancelled before the host filesystem is exhausted.
@@ -1235,7 +1235,7 @@ It uses fake services and no real external credential.
 After the implementation PR opens and before a human merges it, deploy the PR revision with temporary scoped credentials against a disposable acceptance repository.
 Run one bounded request through real Copilot ACP, one Discord decision, service restart, non-force push, and pull-request creation.
 Repeat publication and confirm the same pull request returns.
-Run the pinned Bazel 8.7.0 fixture through one authenticated BuildBuddy cache and remote-execution round trip using the credential proxy and uncredentialed runner.
+Run the pinned Bazel 9.1.1 fixture through one authenticated BuildBuddy cache and remote-execution round trip using the credential proxy and uncredentialed runner.
 This smoke does not block ce-work from opening the implementation PR.
 Provisioning the scoped smoke credentials and passing the smoke are mandatory before human merge.
 
