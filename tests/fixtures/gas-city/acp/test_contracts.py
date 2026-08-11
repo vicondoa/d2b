@@ -636,14 +636,43 @@ class LauncherLifecycleTests(unittest.TestCase):
                             env=dict(os.environ),
                         )
                     )
-                time.sleep(0.1)
+                deadline = time.monotonic() + 5
+                while True:
+                    exited = next((client for client in clients if client.poll() is not None), None)
+                    if exited is not None:
+                        stderr = (
+                            exited.stderr.read().decode("utf-8", errors="replace")
+                            if exited.stderr is not None
+                            else ""
+                        )
+                        self.fail(f"launcher client exited before drain: {stderr}")
+                    try:
+                        probe = LAUNCHER.ConcurrencyLease.acquire(
+                            root / "leases",
+                            run_id="probe-run",
+                            max_agents=2,
+                            max_active_runs=2,
+                        )
+                    except LAUNCHER.LeaseBusy:
+                        break
+                    else:
+                        probe.release()
+                    if time.monotonic() >= deadline:
+                        self.fail("concurrent launcher sessions did not acquire both leases")
+                    time.sleep(0.01)
                 server.process.send_signal(signal.SIGTERM)
                 server.process.wait(timeout=5)
                 for client in clients:
                     if client.stdin is not None:
                         client.stdin.close()
                     client.wait(timeout=5)
-                    self.assertEqual(client.returncode, 0)
+                    if client.returncode != 0:
+                        stderr = (
+                            client.stderr.read().decode("utf-8", errors="replace")
+                            if client.stderr is not None
+                            else ""
+                        )
+                        self.fail(f"launcher client failed during drain: {stderr}")
                 for index in range(2):
                     lease = LAUNCHER.ConcurrencyLease.acquire(
                         root / "leases",
