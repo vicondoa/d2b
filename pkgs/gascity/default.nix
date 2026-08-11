@@ -32,6 +32,13 @@ pkgs.buildGoModule rec {
   env.GOTOOLCHAIN = "local";
 
   nativeBuildInputs = [ pkgs.pkg-config ];
+  nativeCheckInputs = [
+    pkgs.bash
+    pkgs.coreutils
+    pkgs.git
+    pkgs.gnumake
+    pkgs.jq
+  ];
   buildInputs = [ pkgs.icu ];
   postPatch = ''
     patchShebangs scripts
