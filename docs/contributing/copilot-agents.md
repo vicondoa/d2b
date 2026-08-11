@@ -33,6 +33,19 @@ Either the spec cites a merged ADR, or the work did not need one. A run that
 discovers mid-flight that it needs an architectural decision parks and records
 it, like any other blocker.
 
+## Optional Gas City boundary
+
+The optional [Gas City contributor environment](./gas-city.md) is a separate
+host-native contributor surface. It uses native Compound Engineering, its own
+ACP profiles, durable Gas City state, credential sidecars, and a pull-request
+publisher. The standalone d2b panel, selected-roster signoff, wave delivery,
+sealing, attestation, receipts, merge-eligibility, and bespoke evidence-pinning
+hardening do not govern Gas City runs.
+
+This document's Copilot, Spec Kit, panel, and wave contracts remain binding for
+standalone d2b contributors. Gas City does not replace those contracts, and
+those contracts do not govern Gas City.
+
 ## Authoring a feature
 
 Interactive, because this is where judgment belongs. Track A, the full path:
@@ -111,9 +124,10 @@ chain, or artifact-state file is introduced.
 ## Prompt corpus
 
 The checked-in manifest is an exact membership list for 35 files: three
-`AGENTS.md` files, all eight `docs/contributing/*.md` files, all sixteen
+`AGENTS.md` files, all eight core `docs/contributing/*.md` files, all sixteen
 `.github/agents/*.agent.md` files, and all eight `.github/skills/d2b-*/SKILL.md`
-files. `prompt-corpus.mjs` verifies frontmatter, headings, fenced blocks, inline code,
+files. The optional `gas-city.md` operator guide is deliberately outside the
+agent prompt corpus. `prompt-corpus.mjs` verifies frontmatter, headings, fenced blocks, inline code,
 links and URLs, list hierarchy and count, table shape, literals, normative
 operators and negations, and exact JSON or output examples. It does not grade
 style or token reduction. Imported `speckit-*` prose stays uncompressed except

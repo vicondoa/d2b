@@ -40,6 +40,7 @@ row, then read it.
 | Do anything security-relevant | "Don'ts" below - that section is exhaustive and binding |
 | Run ADR, panel round, or autopilot wave | [copilot-agents.md](./docs/contributing/copilot-agents.md) - agents, skills, model binding, wave ids |
 | Change feature artifact after its first write | `d2b-spec-edit` owns batch; read [copilot-agents.md](./docs/contributing/copilot-agents.md) |
+| Operate optional Gas City contributor infrastructure | [gas-city.md](./docs/contributing/gas-city.md) - host deployment and recovery; it is separate from the d2b panel, wave, and signoff path |
 
 Two rules override everything else:
 

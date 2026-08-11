@@ -18,6 +18,7 @@ disagrees with committed, passing code, code wins.
 | [critical-subsystems.md](./critical-subsystems.md) | Invariants for every AGENTS.md critical index subsystem, plus cgroup naming and ownership-marker conventions. |
 | [copilot-agents.md](./copilot-agents.md) | Copilot agents and skills, role agents, panel seats, autopilot and memory skills, model-binding, wave identifiers, and spec-kit coexistence. |
 | [architecture.md](./architecture.md) | Eval-time naming, sibling flake boundaries, daemon-supervised VM lifecycle, and per-VM behavior. |
+| [gas-city.md](./gas-city.md) | Optional host-native Gas City contributor infrastructure: module deployment, credentials, ACP profiles, sidecars, lifecycle, publication, diagnostics, and live acceptance. It does not use the standalone d2b panel or wave-delivery path. |
 
 These files are deliberately **not** auto-loaded by agent harnesses. Loading
 them into every session made AGENTS.md 122KB in the first place. Link to them;
