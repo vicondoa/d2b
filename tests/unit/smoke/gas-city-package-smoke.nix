@@ -40,7 +40,7 @@ pkgs.runCommand "gas-city-package-smoke" {
   # Every executable used by the contributor boundary must come from the
   # immutable closure, not from the evaluator's or operator's ambient PATH.
   for tool in \
-    gc bd dolt copilot go bazel bwrap nft tinyproxy envoy python3 \
+    gc bd dolt copilot go bazel bwrap nft tinyproxy python3 \
     git gh openssl jq ps lsof flock nix
   do
     toolPath="${gasCityContributor}/bin/$tool"
@@ -124,7 +124,7 @@ pkgs.runCommand "gas-city-package-smoke" {
      and .runtime.certificateBundle == "etc/ssl/certs/ca-bundle.crt"
      and .runtime.requiredExecutables == [
        "gc", "bd", "dolt", "copilot", "go", "bazel", "bwrap",
-       "nft", "tinyproxy", "envoy", "python3", "git", "gh", "openssl",
+       "nft", "tinyproxy", "python3", "git", "gh", "openssl",
        "jq", "ps", "lsof", "flock", "nix"
      ]' \
     "$root/sources.json" >/dev/null

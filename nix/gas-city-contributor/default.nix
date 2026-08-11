@@ -26,7 +26,6 @@ let
     "bwrap"
     "nft"
     "tinyproxy"
-    "envoy"
     "python3"
     "git"
     "gh"
@@ -57,7 +56,6 @@ let
     pkgs.bubblewrap
     pkgs.nftables
     pkgs.tinyproxy
-    pkgs.envoy
     pkgs.cacert
     pkgs.openssl
     pkgs.procps
