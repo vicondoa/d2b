@@ -189,7 +189,7 @@ class ActivationContractTests(unittest.TestCase):
 
         status = ACTIVATION.select_profiles(probe, generation="g1", state_schema="1")
         self.assertFalse(status["ready"])
-        self.assertEqual(status["error_code"], "review-sol-unsupported")
+        self.assertEqual(status["error_code"], "review-luna-unsupported")
 
     def test_generation_bound_readiness_rejects_work_before_ready(self) -> None:
         with tempfile.TemporaryDirectory(prefix="gascity-readiness-") as raw:
@@ -391,7 +391,14 @@ class LauncherServerHarness:
         deadline = time.monotonic() + 5
         while not self.socket_path.exists():
             if self.process.poll() is not None:
-                raise AssertionError("launcher server exited before binding")
+                stderr = (
+                    self.process.stderr.read().decode("utf-8", errors="replace")
+                    if self.process.stderr is not None
+                    else ""
+                )
+                raise AssertionError(
+                    f"launcher server exited before binding: {stderr}"
+                )
             if time.monotonic() >= deadline:
                 raise AssertionError("launcher server did not bind")
             time.sleep(0.01)
