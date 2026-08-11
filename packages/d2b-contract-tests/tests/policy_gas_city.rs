@@ -528,15 +528,42 @@ fn gas_city_sidecars_are_private_and_use_the_authenticated_egress_proxy() {
         "HTTPS_PROXY=http://127.0.0.1:3128",
         "GC_FDPROXY_AUTH",
         "gascity-egress-channel",
+        "config.users.users.gascity-agent.uid",
+        "config.users.users.gascity.uid",
     ] {
         assert!(
             service.contains(required),
             "service module missing {required}"
         );
     }
+    for (identity, expected_count) in [
+        ("config.users.users.gascity-agent.uid", 1),
+        ("config.users.users.gascity-discord.uid", 1),
+        ("config.users.users.gascity-publisher.uid", 1),
+        ("config.users.users.gascity-check.uid", 1),
+        ("config.users.users.gascity-buildbuddy-proxy.uid", 1),
+        ("config.users.users.gascity.uid", 2),
+        ("config.users.users.gascity-egress.uid", 10),
+    ] {
+        assert_eq!(
+            network.matches(identity).count(),
+            expected_count,
+            "egress module must bind {expected_count} rule(s) to {identity}"
+        );
+    }
+    assert_eq!(
+        service
+            .matches("config.users.users.gascity-agent.uid")
+            .count(),
+        2,
+        "service module must bind both agent launcher paths to gascity-agent"
+    );
+    assert_eq!(
+        service.matches("config.users.users.gascity.uid").count(),
+        1,
+        "service module must bind the agent relay to gascity"
+    );
     for required in [
-        "45102",
-        "45103",
         "discord.com",
         "gateway.discord.gg",
         "api.github.com",
