@@ -14,6 +14,8 @@ const MATRIX: &str = "nix/gas-city-contributor/city/agent-role-matrix.toml";
 const INSTRUCTIONS: &str = "nix/gas-city-contributor/copilot/instructions.md";
 const COPILOT_PROFILE: &str =
     "nix/gas-city-contributor/pack/scripts/copilot-profile.py";
+const AGENT_SANDBOX: &str =
+    "nix/gas-city-contributor/pack/scripts/agent-sandbox.py";
 const LOCAL_PACK: &str = "nix/gas-city-contributor/pack/pack.toml";
 const SERVICE_MODULE: &str = "nixos-modules/gas-city-contributor/service.nix";
 const NETWORK_MODULE: &str = "nixos-modules/gas-city-contributor/network.nix";
@@ -385,19 +387,20 @@ fn gas_city_managed_instruction_boundary_is_single_global_fragment() {
 fn gas_city_copilot_launches_are_isolated_and_integration_denied() {
     let city = owned_asset(CITY);
     let profile = owned_asset(COPILOT_PROFILE);
+    let sandbox = owned_asset(AGENT_SANDBOX);
     for required in [
         "--no-custom-instructions",
         "--disable-builtin-mcps",
         "--no-remote",
         "--no-remote-export",
-        "COPILOT_HOME",
-        "COPILOT_CUSTOM_INSTRUCTIONS_DIRS",
     ] {
         assert!(
             profile.contains(required),
             "Copilot restriction missing {required}"
         );
     }
+    assert!(sandbox.contains("COPILOT_HOME"));
+    assert!(city.contains("COPILOT_CUSTOM_INSTRUCTIONS_DIRS"));
     assert_eq!(city.matches("supports_acp = true").count(), 4);
     assert_eq!(
         city.matches("args = []").count(),
