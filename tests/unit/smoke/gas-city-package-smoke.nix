@@ -159,6 +159,7 @@ pkgs.runCommand "gas-city-package-smoke" {
       --batch \
       --output_user_root="$TMPDIR/bazel-user-root" \
       build \
+      --enable_bzlmod=false \
       --repository_cache="$TMPDIR/bazel-repository-cache" \
       //...
     test "$(${pkgs.coreutils}/bin/cat bazel-bin/round_trip_payload.txt)" \
