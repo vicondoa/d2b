@@ -1470,7 +1470,9 @@ pkgs.testers.runNixOSTest {
     # Closing the authenticated launcher client is the fixture cancellation
     # path.  It stops the exact child and does not create a replacement.
     machine.succeed("touch /run/gascity-contributor/test/cancel")
-    machine.wait_for_file("/run/gascity-contributor/test/cancelled")
+    machine.wait_for_file(
+        "/var/lib/gascity-contributor/state/fixture/cancelled"
+    )
     machine.wait_until_succeeds(
         "test ! -d /proc/$(cat /var/lib/gascity-contributor/state/fixture/acp-current.pid)"
     )
