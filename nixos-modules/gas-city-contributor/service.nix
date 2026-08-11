@@ -57,11 +57,6 @@ let
   materialize = "+${python} ${activation} materialize-assets"
     + " --source ${lib.escapeShellArg "${package}/share/gas-city-contributor"}"
     + " --destination ${lib.escapeShellArg "${serviceRoot}/managed"}";
-  prepareCancellation = pkgs.writeShellScript "gascity-prepare-cancellation" ''
-    set -euo pipefail
-    ${pkgs.coreutils}/bin/install -d -m 0770 ${lib.escapeShellArg cancellationRoot}
-    ${pkgs.coreutils}/bin/chgrp gascity-contributor ${lib.escapeShellArg cancellationRoot}
-  '';
   decisionReconcile = pkgs.writeShellScript "gascity-decision-reconcile" ''
     set -euo pipefail
     reconcile="$(${python} ${discordDecision} reconcile \
@@ -505,7 +500,6 @@ in
               "${pkgs.coreutils}/bin/install -d -m 0700 ${lib.escapeShellArg "${serviceRoot}/home/.config"}"
               "${pkgs.coreutils}/bin/install -d -m 0700 ${lib.escapeShellArg "${serviceRoot}/home/.local/state"}"
               "${pkgs.coreutils}/bin/install -d -m 0700 ${lib.escapeShellArg "${stateRoot}/rigs/${cfg.repository.rigName}"}"
-              prepareCancellation
             ];
             ExecStart = mainExec;
             ExecStartPost = decisionReconcile;
