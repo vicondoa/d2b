@@ -207,14 +207,14 @@ function checkCurrentPromptShape(dir) {
   );
   const membership = manifest.membership ?? [];
   if (
-    membership.length !== 35 ||
+    membership.length !== 36 ||
     membership.filter((path) => path.startsWith(".github/agents/")).length !== 16 ||
     membership.some((path) => path.endsWith("panel-rust.agent.md")) ||
     !membership.some((path) => path.endsWith("panel-build.agent.md"))
   ) {
     failures += 1;
     console.error(
-      `FAIL current prompt corpus shape: expected 35 files and sixteen agent files with build and without current rust`,
+      `FAIL current prompt corpus shape: expected 36 files and sixteen agent files with build and without current rust`,
     );
   }
 }
