@@ -180,14 +180,14 @@ let
     UMask = "0077";
     RestrictAddressFamilies = [ "AF_UNIX" "AF_INET" "AF_INET6" ];
     InaccessiblePaths = [
-      "/etc/shadow"
-      "/etc/gshadow"
-      "/etc/ssh"
-      "/run/systemd"
-      "/nix/var/nix/daemon-socket/socket"
-      "/proc/kcore"
-      "/proc/keys"
-      "/proc/latency_stats"
+      "-/etc/shadow"
+      "-/etc/gshadow"
+      "-/etc/ssh"
+      "-/run/systemd"
+      "-/nix/var/nix/daemon-socket/socket"
+      "-/proc/kcore"
+      "-/proc/keys"
+      "-/proc/latency_stats"
     ];
     SystemCallFilter = [
       "@system-service"
@@ -679,7 +679,7 @@ in
               "${package}/share/gas-city-contributor"
               "${stateRoot}/worktrees"
             ];
-            InaccessiblePaths = [ "/nix/var/nix/daemon-socket/socket" ];
+            InaccessiblePaths = [ "-/nix/var/nix/daemon-socket/socket" ];
             Environment = [
               "GC_CHECK_PROXY=http://127.0.0.1:3128"
               "GC_CHECK_OUTPUT_ROOT=/var/lib/gascity-check/output"

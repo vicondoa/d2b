@@ -113,12 +113,12 @@ in
         RestrictAddressFamilies = [ "AF_UNIX" "AF_INET" "AF_INET6" ];
         ReadWritePaths = [ runtimeRoot ];
         InaccessiblePaths = [
-          "/etc/shadow"
-          "/etc/gshadow"
-          "/run/systemd"
-          "/nix/var/nix/daemon-socket/socket"
-          "/proc/kcore"
-          "/proc/keys"
+          "-/etc/shadow"
+          "-/etc/gshadow"
+          "-/run/systemd"
+          "-/nix/var/nix/daemon-socket/socket"
+          "-/proc/kcore"
+          "-/proc/keys"
         ];
         SystemCallFilter = [
           "@system-service"
