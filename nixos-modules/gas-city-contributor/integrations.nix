@@ -134,6 +134,7 @@ in
       "d /var/lib/gascity-contributor/state/worktrees 0770 gascity-agent ${sharedGroup} -"
       "d /var/lib/gascity-contributor/state/leases 0700 gascity-agent gascity-agent -"
       "d /var/lib/gascity-contributor/state/agent-state 0700 gascity-agent gascity-agent -"
+      "d /var/lib/gascity-contributor/state/cancellations 0770 gascity ${sharedGroup} -"
       "d /var/lib/gascity-publisher 0700 gascity-publisher gascity-publisher -"
       "d /var/cache/gascity-contributor 0700 gascity gascity -"
       "d /run/gascity-contributor 0770 root ${sharedGroup} -"

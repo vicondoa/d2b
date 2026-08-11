@@ -896,6 +896,7 @@ pkgs.testers.runNixOSTest {
 
     systemd.tmpfiles.rules = [
       "d /var/lib/gascity-contributor/state/fixture 0770 gascity-agent gascity-contributor -"
+      "d /run/gascity-contributor/test 0770 root gascity-contributor -"
     ];
 
     system.activationScripts.gasCityTestSources = {

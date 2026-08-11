@@ -125,6 +125,7 @@ in
           "~@privileged"
           "~@mount"
           "~@raw-io"
+          "chown"
         ];
         Environment = [
           "GC_FDPROXY_AUTH=${relayAuth}"

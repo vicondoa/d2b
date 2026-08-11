@@ -194,6 +194,7 @@ let
       "~@privileged"
       "~@mount"
       "~@raw-io"
+      "chown"
     ];
     Restart = "on-failure";
     RestartSec = "2s";
@@ -530,12 +531,11 @@ in
             StateDirectoryMode = "0700";
             ReadWritePaths = [
               stateRoot
-              "${runtimeRoot}/agent"
               runtimeRoot
             ];
             InaccessiblePaths = commonServiceConfig.InaccessiblePaths ++ [
-              discordSocket
-              publisherSocket
+              "-${discordSocket}"
+              "-${publisherSocket}"
             ];
             ReadOnlyPaths = [ "${package}/share/gas-city-contributor" ];
             LoadCredential = [
