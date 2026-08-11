@@ -60,13 +60,74 @@ let
     chmod 0640 "$marker"
   '';
 
-  fakeSidecar = pkgs.writeShellScript "gascity-host-fake-sidecar" ''
-    set -eu
-    trap 'exit 0' TERM INT
-    while :; do
-      sleep 1
-    done
-  '';
+  fakeSidecar = pkgs.writeTextFile {
+    name = "gascity-host-fake-sidecar";
+    executable = true;
+    text = ''
+      #!${contributorPython}
+      import grp
+      import json
+      import os
+      import pathlib
+      import signal
+      import socket
+      import sys
+      import time
+
+      path = pathlib.Path(sys.argv[1]) if len(sys.argv) > 1 else None
+      group = sys.argv[2] if len(sys.argv) > 2 else None
+      response_kind = sys.argv[3] if len(sys.argv) > 3 else None
+      stopping = False
+
+      def stop(_signum, _frame):
+          global stopping
+          stopping = True
+
+      signal.signal(signal.SIGTERM, stop)
+      signal.signal(signal.SIGINT, stop)
+      listener = None
+      if path is not None:
+          path.parent.mkdir(mode=0o770, parents=True, exist_ok=True)
+          path.unlink(missing_ok=True)
+          listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+          listener.bind(str(path))
+          os.chmod(path, 0o660)
+          if group is not None:
+              os.chown(path, -1, grp.getgrnam(group).gr_gid)
+          listener.listen(8)
+          listener.settimeout(0.2)
+      try:
+          while not stopping:
+              if listener is None:
+                  time.sleep(0.2)
+                  continue
+              try:
+                  connection, _address = listener.accept()
+              except socket.timeout:
+                  continue
+              try:
+                  if response_kind == "discord":
+                      connection.recv(8192)
+                      connection.sendall(
+                          json.dumps(
+                              {
+                                  "protocol": "gascity-decision/1",
+                                  "ok": True,
+                                  "result": [],
+                              },
+                              separators=(",", ":"),
+                          ).encode("ascii")
+                          + b"\n"
+                      )
+              finally:
+                  connection.close()
+      finally:
+          if listener is not None:
+              listener.close()
+          if path is not None:
+              path.unlink(missing_ok=True)
+    '';
+  };
 
   fakeAcp = pkgs.writeTextFile {
     name = "gascity-host-fake-acp";
@@ -333,6 +394,8 @@ let
       RUNTIME = pathlib.Path("/run/gascity-contributor");
       FIXTURE = pathlib.Path("/var/lib/gascity-contributor/state/fixture");
       WORKTREE = pathlib.Path("/var/lib/gascity-contributor/state/worktrees/test-run");
+      LEASE_ROOT = pathlib.Path("/var/lib/gascity-contributor/state/leases");
+      AGENT_RUNTIME = pathlib.Path("/run/gascity-contributor/agent");
       PRIVATE_SOCKET = pathlib.Path("/run/gascity-agent/agent.sock");
       PUBLIC_SOCKET = RUNTIME / "agent.sock";
       READINESS = RUNTIME / "readiness.json";
@@ -402,8 +465,11 @@ let
           raise SystemExit("fixture Copilot credential is empty")
       FIXTURE.mkdir(mode=0o770, parents=True, exist_ok=True)
       WORKTREE.mkdir(mode=0o770, parents=True, exist_ok=True)
-      os.chown(WORKTREE, os.getuid(), grp.getgrnam("gascity-contributor").gr_gid)
+      os.chown(WORKTREE, -1, grp.getgrnam("gascity-contributor").gr_gid)
       os.chmod(WORKTREE, 0o770)
+      for private_root in (LEASE_ROOT, AGENT_RUNTIME):
+          private_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+          os.chmod(private_root, 0o700)
       context = WORKTREE / "durable-context.json"
       if not context.exists():
           context.write_text(
@@ -1008,11 +1074,13 @@ pkgs.testers.runNixOSTest {
     systemd.services.gascity-discord.serviceConfig.ExecStartPre =
       [ "${credentialProbe} discord discord-bot-token" ];
     systemd.services.gascity-discord.serviceConfig.ExecStart =
-      lib.mkForce fakeSidecar;
+      lib.mkForce
+        "${fakeSidecar} /run/gascity-contributor/discord.sock gascity-discord-channel discord";
     systemd.services.gascity-publisher.serviceConfig.ExecStartPre =
       [ "${credentialProbe} publisher github-app-private-key" ];
     systemd.services.gascity-publisher.serviceConfig.ExecStart =
-      lib.mkForce fakeSidecar;
+      lib.mkForce
+        "${fakeSidecar} /run/gascity-contributor/publisher.sock gascity-publisher-channel";
     systemd.services.gascity-check.serviceConfig.ExecStartPre =
       [ "${credentialProbe} check none" ];
     systemd.services.gascity-check.serviceConfig.ExecStart =
