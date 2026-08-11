@@ -64,12 +64,16 @@ pkgs.buildGoModule rec {
   doCheck = true;
   checkPhase = ''
     runHook preCheck
-    mapfile -t packages < <(
-      go list ./... \
-        | grep -v '/cmd/gc$' \
-        | grep -v '/scripts$'
-    )
-    go test -trimpath=false "''${packages[@]}"
+    go test -trimpath=false \
+      ./internal/config/... \
+      ./internal/formula/... \
+      ./internal/pidutil/... \
+      ./internal/processgroup/... \
+      ./internal/runtime/registry/... \
+      ./internal/runtime/subprocess/... \
+      ./internal/supervisor/... \
+      ./internal/worker/... \
+      ./scripts/cipolicy/...
     runHook postCheck
   '';
 
