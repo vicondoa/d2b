@@ -868,10 +868,12 @@ let
       #!${contributorPython}
       import importlib.util
       import pathlib
+      import sys
 
       path = pathlib.Path("${contributorScripts}/service-activation.py")
       spec = importlib.util.spec_from_file_location("activation", path)
       module = importlib.util.module_from_spec(spec)
+      sys.modules[spec.name] = module
       spec.loader.exec_module(module)
       module._mount_has_project_quota = lambda _path: False
       try:
@@ -890,11 +892,13 @@ let
       #!${contributorPython}
       import importlib.util
       import pathlib
+      import sys
       import types
 
       path = pathlib.Path("${contributorScripts}/service-activation.py")
       spec = importlib.util.spec_from_file_location("activation", path)
       module = importlib.util.module_from_spec(spec)
+      sys.modules[spec.name] = module
       spec.loader.exec_module(module)
       module.os.statvfs = lambda _path: types.SimpleNamespace(f_bavail=0, f_frsize=4096)
       try:
