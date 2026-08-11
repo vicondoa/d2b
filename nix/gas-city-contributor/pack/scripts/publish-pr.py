@@ -1471,7 +1471,6 @@ def create_unlinked_bundle(
                 "create",
                 str(bundle_path),
                 f"refs/heads/{head}",
-                f"^{base_sha}",
             ],
             env={**GitRunner.environment(), "GIT_ALLOW_PROTOCOL": "file"},
             capture_output=True,
