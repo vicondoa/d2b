@@ -52,6 +52,12 @@
       systems = [ "x86_64-linux" "aarch64-linux" ];
       forAllSystems = nixpkgs.lib.genAttrs systems;
       nixpkgsFor = forAllSystems (system: import nixpkgs { inherit system; });
+      copilotNixpkgsFor = forAllSystems (system:
+        import nixpkgs {
+          inherit system;
+          config.allowUnfreePredicate =
+            pkg: nixpkgs.lib.getName pkg == "copilot-cli";
+        });
       gasCityNixpkgsFor =
         forAllSystems (system: import nixpkgs-gas-city { inherit system; });
 
@@ -73,7 +79,7 @@
         };
       copilotFor = system:
         let
-          pkgs = nixpkgsFor.${system};
+          pkgs = copilotNixpkgsFor.${system};
           platformSource = import "${llm-agents}/lib/platform-source.nix" {
             inherit (pkgs) stdenv fetchurl;
           };
