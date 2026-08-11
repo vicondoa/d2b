@@ -12,20 +12,16 @@ use regex::Regex;
 const CITY: &str = "nix/gas-city-contributor/city/city.toml";
 const MATRIX: &str = "nix/gas-city-contributor/city/agent-role-matrix.toml";
 const INSTRUCTIONS: &str = "nix/gas-city-contributor/copilot/instructions.md";
-const COPILOT_PROFILE: &str =
-    "nix/gas-city-contributor/pack/scripts/copilot-profile.py";
-const AGENT_SANDBOX: &str =
-    "nix/gas-city-contributor/pack/scripts/agent-sandbox.py";
+const COPILOT_PROFILE: &str = "nix/gas-city-contributor/pack/scripts/copilot-profile.py";
+const AGENT_SANDBOX: &str = "nix/gas-city-contributor/pack/scripts/agent-sandbox.py";
 const LOCAL_PACK: &str = "nix/gas-city-contributor/pack/pack.toml";
 const SERVICE_MODULE: &str = "nixos-modules/gas-city-contributor/service.nix";
 const NETWORK_MODULE: &str = "nixos-modules/gas-city-contributor/network.nix";
 const OPTIONS_MODULE: &str = "nixos-modules/gas-city-contributor/options.nix";
 const INTEGRATIONS_MODULE: &str = "nixos-modules/gas-city-contributor/integrations.nix";
-const ACTIVATION_SCRIPT: &str =
-    "nix/gas-city-contributor/pack/scripts/service-activation.py";
+const ACTIVATION_SCRIPT: &str = "nix/gas-city-contributor/pack/scripts/service-activation.py";
 const FDPROXY_SCRIPT: &str = "nix/gas-city-contributor/pack/scripts/fdproxy.py";
-const DISCORD_SCRIPT: &str =
-    "nix/gas-city-contributor/pack/scripts/discord-decision.py";
+const DISCORD_SCRIPT: &str = "nix/gas-city-contributor/pack/scripts/discord-decision.py";
 const PUBLISHER_SCRIPT: &str = "nix/gas-city-contributor/pack/scripts/publish-pr.py";
 const WORKFLOW_ASSETS: &[&str] = &[
     "nix/gas-city-contributor/pack/assets/workflows/d2b-contributor-build/finalize.md",
@@ -90,7 +86,10 @@ const LOCAL_MODEL_ROLES: &[&str] = &[
 ];
 
 fn owned_asset(path: &str) -> String {
-    assert!(repo_path_exists(path), "missing owned Gas City asset: {path}");
+    assert!(
+        repo_path_exists(path),
+        "missing owned Gas City asset: {path}"
+    );
     read_repo_file(path)
 }
 
@@ -143,7 +142,9 @@ fn validate_sibling_imports(city: &str, local_pack: &str) -> Result<(), String> 
         let table = format!("[imports.{binding}]");
         let source_line = format!("source = \"{source}\"");
         if !city.contains(&table) || !city.contains(&source_line) {
-            return Err(format!("missing canonical sibling import {binding} -> {source}"));
+            return Err(format!(
+                "missing canonical sibling import {binding} -> {source}"
+            ));
         }
     }
     if city.contains("[imports.github]") || city.contains("../packs/github") {
@@ -235,14 +236,10 @@ fn validate_role_routes(matrix: &str, city: &str) -> Result<(), String> {
 
     for helper in ["gc.run-operator", "gc.publisher"] {
         if city.contains(&format!("name = \"{helper}\"")) {
-            return Err(format!(
-                "deterministic {helper} must inherit subprocess"
-            ));
+            return Err(format!("deterministic {helper} must inherit subprocess"));
         }
     }
-    if !city.contains("[session]\n# Control-plane")
-        || !city.contains("provider = \"subprocess\"")
-    {
+    if !city.contains("[session]\n# Control-plane") || !city.contains("provider = \"subprocess\"") {
         return Err("city default session runtime must be subprocess".to_owned());
     }
     Ok(())
@@ -272,7 +269,9 @@ fn validate_managed_graph(city: &str, instructions: &str, assets: &[&str]) -> Re
     {
         for &needle in &forbidden {
             if text.contains(needle) {
-                return Err(format!("{label} contains forbidden delivery reference {needle}"));
+                return Err(format!(
+                    "{label} contains forbidden delivery reference {needle}"
+                ));
             }
         }
     }
@@ -284,7 +283,12 @@ fn gas_city_uses_four_immutable_sibling_imports() {
     let city = owned_asset(CITY);
     let local_pack = owned_asset(LOCAL_PACK);
     validate_sibling_imports(&city, &local_pack).unwrap();
-    assert_eq!(owned_asset("nix/gas-city-contributor/city/packs.lock").matches("schema = 1").count(), 1);
+    assert_eq!(
+        owned_asset("nix/gas-city-contributor/city/packs.lock")
+            .matches("schema = 1")
+            .count(),
+        1
+    );
     assert!(
         !owned_asset("nix/gas-city-contributor/city/packs.lock").contains("https://"),
         "local sibling imports must not create remote lock entries"
@@ -312,12 +316,10 @@ fn gas_city_role_matrix_is_complete_and_executable() {
 
 #[test]
 fn gas_city_preserves_native_compound_and_splits_comment_resolution() {
-    let build = owned_asset(
-        "nix/gas-city-contributor/pack/formulas/d2b-contributor-build.formula.toml",
-    );
-    let resolution = owned_asset(
-        "nix/gas-city-contributor/pack/formulas/d2b-compound-resolution.formula.toml",
-    );
+    let build =
+        owned_asset("nix/gas-city-contributor/pack/formulas/d2b-contributor-build.formula.toml");
+    let resolution =
+        owned_asset("nix/gas-city-contributor/pack/formulas/d2b-compound-resolution.formula.toml");
 
     assert!(build.contains("extends = [\"compound-build\"]"));
     assert_eq!(build.matches("[[steps]]").count(), 2);
@@ -363,8 +365,10 @@ fn gas_city_managed_instruction_boundary_is_single_global_fragment() {
     let shared = owned_asset(
         "nix/gas-city-contributor/pack/template-fragments/d2b-managed-contributor.template.md",
     );
-    let workflow_assets: Vec<String> =
-        WORKFLOW_ASSETS.iter().map(|path| owned_asset(path)).collect();
+    let workflow_assets: Vec<String> = WORKFLOW_ASSETS
+        .iter()
+        .map(|path| owned_asset(path))
+        .collect();
     let workflow_refs: Vec<&str> = workflow_assets.iter().map(String::as_str).collect();
     let managed_refs = std::iter::once(shared.as_str())
         .chain(workflow_refs.iter().copied())
@@ -375,9 +379,7 @@ fn gas_city_managed_instruction_boundary_is_single_global_fragment() {
         1
     );
     assert_eq!(
-        shared
-            .matches("define \"d2b-managed-contributor\"")
-            .count(),
+        shared.matches("define \"d2b-managed-contributor\"").count(),
         1
     );
     for required in ["scope", "test-rust", "advisory", "credentials", "security"] {
@@ -527,7 +529,10 @@ fn gas_city_sidecars_are_private_and_use_the_authenticated_egress_proxy() {
         "GC_FDPROXY_AUTH",
         "gascity-egress-channel",
     ] {
-        assert!(service.contains(required), "service module missing {required}");
+        assert!(
+            service.contains(required),
+            "service module missing {required}"
+        );
     }
     for required in [
         "45102",
