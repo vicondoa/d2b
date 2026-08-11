@@ -1,5 +1,39 @@
 {
   "nodes": {
+    "gascity": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1786398062,
+        "narHash": "sha256-Gdrk4f1ViW1abdCqL3Jm2vvoyHy3Sj6pe6BNeKVUjgY=",
+        "owner": "gastownhall",
+        "repo": "gascity",
+        "rev": "6e0399fb970190a35c3e3d5d272a02becec55ffe",
+        "type": "github"
+      },
+      "original": {
+        "owner": "gastownhall",
+        "repo": "gascity",
+        "rev": "6e0399fb970190a35c3e3d5d272a02becec55ffe",
+        "type": "github"
+      }
+    },
+    "gascity-packs": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1786159078,
+        "narHash": "sha256-UXCpa453WX2SuEO/pV9fHsOE6FBVkfyLQx/kvrQQYe0=",
+        "owner": "gastownhall",
+        "repo": "gascity-packs",
+        "rev": "f3826035bb7de7c34621c2fdcd8620ab5a18bb08",
+        "type": "github"
+      },
+      "original": {
+        "owner": "gastownhall",
+        "repo": "gascity-packs",
+        "rev": "f3826035bb7de7c34621c2fdcd8620ab5a18bb08",
+        "type": "github"
+      }
+    },
     "home-manager": {
       "inputs": {
         "nixpkgs": [
@@ -20,6 +54,23 @@
         "type": "github"
       }
     },
+    "llm-agents": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1786398103,
+        "narHash": "sha256-1YE1xiDTvSuYAmuZdGXyMGYuqg7v7PEI1OxIohc4u8E=",
+        "owner": "numtide",
+        "repo": "llm-agents.nix",
+        "rev": "387989ee56d550d86d46d9458ad68a55b9e0ca3b",
+        "type": "github"
+      },
+      "original": {
+        "owner": "numtide",
+        "repo": "llm-agents.nix",
+        "rev": "387989ee56d550d86d46d9458ad68a55b9e0ca3b",
+        "type": "github"
+      }
+    },
     "nixpkgs": {
       "locked": {
         "lastModified": 1779560665,
@@ -36,10 +87,30 @@
         "type": "github"
       }
     },
+    "nixpkgs-gas-city": {
+      "locked": {
+        "lastModified": 1786106723,
+        "narHash": "sha256-zDSUbpoeo/9ZmD2+wXnzxoo1+uhL8vxc0b8yuYMKYq0=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "f13ff45afd1bb73e640eaa08a7066dbed07e3238",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "f13ff45afd1bb73e640eaa08a7066dbed07e3238",
+        "type": "github"
+      }
+    },
     "root": {
       "inputs": {
+        "gascity": "gascity",
+        "gascity-packs": "gascity-packs",
         "home-manager": "home-manager",
-        "nixpkgs": "nixpkgs"
+        "llm-agents": "llm-agents",
+        "nixpkgs": "nixpkgs",
+        "nixpkgs-gas-city": "nixpkgs-gas-city"
       }
     }
   },
