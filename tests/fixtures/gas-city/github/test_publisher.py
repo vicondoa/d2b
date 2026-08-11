@@ -541,12 +541,9 @@ class PublisherFixture(unittest.TestCase):
             expected_sha=head_sha,
         )
         self.assertEqual(imported, head_sha)
-        heads = subprocess.run(
-            [git, "-C", str(publisher_repo), "show-ref", f"refs/heads/{HEAD}"],
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout
+        heads = runner.checked(
+            ["-C", str(publisher_repo), "show-ref", f"refs/heads/{HEAD}"]
+        )
         self.assertIn(head_sha, heads)
 
 
