@@ -38,6 +38,7 @@ pkgs.buildGoModule rec {
     pkgs.git
     pkgs.gnumake
     pkgs.jq
+    pkgs.procps
   ];
   buildInputs = [ pkgs.icu ];
   postPatch = ''
