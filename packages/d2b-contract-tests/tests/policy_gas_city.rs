@@ -156,7 +156,7 @@ fn validate_role_routes(matrix: &str, city: &str) -> Result<(), String> {
     }
     let mut seen = BTreeSet::new();
     for (name, class, profile) in &roles {
-        if !seen.insert(name) {
+        if !seen.insert(name.clone()) {
             return Err(format!("duplicate role matrix entry: {name}"));
         }
         let expected_profile = match class.as_str() {
