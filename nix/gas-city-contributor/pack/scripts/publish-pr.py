@@ -37,7 +37,7 @@ import urllib.parse
 import urllib.request
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, BinaryIO
 
 
 PROTOCOL = "gc-publisher/1"
@@ -1432,7 +1432,7 @@ def create_unlinked_bundle(
     base: str,
     branch_namespace: str = DEFAULT_BRANCH_NAMESPACE,
     git: str = "git",
-) -> tuple[tempfile._TemporaryFileWrapper, str]:
+) -> tuple[BinaryIO, str]:
     """Create an unlinked bundle for one exact committed branch."""
 
     branch_namespace = _string(branch_namespace, "branch namespace", max_bytes=64)
@@ -1451,51 +1451,53 @@ def create_unlinked_bundle(
     base_sha = _git_output(git, worktree_path, "rev-parse", "--verify", f"refs/remotes/origin/{base}")
     if head_sha == base_sha:
         raise PublicationError("head commit must differ from base commit")
-    bundle = tempfile.TemporaryFile(mode="w+b")
-    descriptor = bundle.fileno()
-    os.set_inheritable(descriptor, False)
-    bundle_path = f"/proc/self/fd/{descriptor}"
-    result = subprocess.run(
-        [
-            git,
-            "-c",
-            "core.hooksPath=/dev/null",
-            "-c",
-            "core.fsmonitor=false",
-            "-c",
-            "credential.helper=",
-            "-c",
-            "protocol.ext.allow=never",
-            "-C",
-            worktree_path,
-            "bundle",
-            "create",
-            bundle_path,
-            f"refs/heads/{head}",
-            f"^{base_sha}",
-        ],
-        env={**GitRunner.environment(), "GIT_ALLOW_PROTOCOL": "file"},
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=120,
-        pass_fds=(descriptor,),
-    )
-    if result.returncode != 0:
-        bundle.close()
-        detail = (result.stderr or result.stdout or "").strip()[-1024:]
-        raise PublicationError(f"git bundle creation failed: {detail or result.returncode}")
-    bundle.flush()
+    temporary_directory = tempfile.mkdtemp(prefix="gascity-bundle-")
+    bundle_path = pathlib.Path(temporary_directory) / "branch.bundle"
     try:
+        result = subprocess.run(
+            [
+                git,
+                "-c",
+                "core.hooksPath=/dev/null",
+                "-c",
+                "core.fsmonitor=false",
+                "-c",
+                "credential.helper=",
+                "-c",
+                "protocol.ext.allow=never",
+                "-C",
+                worktree_path,
+                "bundle",
+                "create",
+                str(bundle_path),
+                f"refs/heads/{head}",
+                f"^{base_sha}",
+            ],
+            env={**GitRunner.environment(), "GIT_ALLOW_PROTOCOL": "file"},
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=120,
+        )
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout or "").strip()[-1024:]
+            raise PublicationError(
+                f"git bundle creation failed: {detail or result.returncode}"
+            )
+        descriptor = os.open(
+            bundle_path,
+            os.O_RDONLY | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0),
+        )
+        bundle = os.fdopen(descriptor, "rb")
+        bundle_path.unlink()
         bundle_size = os.fstat(descriptor).st_size
-    except OSError as error:
-        bundle.close()
-        raise PublicationError("created bundle is unreadable") from error
-    if bundle_size <= 0 or bundle_size > MAX_BUNDLE_BYTES:
-        bundle.close()
-        raise PublicationError("created bundle exceeds the size limit")
-    bundle.seek(0)
-    return bundle, head_sha
+        if bundle_size <= 0 or bundle_size > MAX_BUNDLE_BYTES:
+            bundle.close()
+            raise PublicationError("created bundle exceeds the size limit")
+        return bundle, head_sha
+    finally:
+        bundle_path.unlink(missing_ok=True)
+        pathlib.Path(temporary_directory).rmdir()
 
 
 def _rpc_response(response: Mapping[str, object]) -> dict[str, object]:
