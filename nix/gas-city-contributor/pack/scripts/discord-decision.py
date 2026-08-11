@@ -48,6 +48,9 @@ MAX_CHOICES = 32
 MAX_CHOICE_BYTES = 128
 MAX_DELIVERY_ATTEMPTS = 3
 DEFAULT_API_BASE = "https://discord.com/api/v10"
+MAX_WAIT_SECONDS = 3600.0
+RPC_TIMEOUT_SECONDS = 30.0
+WAIT_RPC_GRACE_SECONDS = RPC_TIMEOUT_SECONDS
 IDLE_WAIT_SECONDS = 0.25
 IDENTIFIER_ALPHABET = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"
 
@@ -105,6 +108,18 @@ class ConflictError(DecisionError):
 
 class PeerError(DecisionError):
     """Raised when a caller is not the main Gas City service."""
+
+
+def _wait_timeout(value: object) -> float:
+    if isinstance(value, bool):
+        raise DecisionError("decision wait timeout is malformed")
+    try:
+        timeout = float(value)
+    except (TypeError, ValueError) as error:
+        raise DecisionError("decision wait timeout is malformed") from error
+    if not math.isfinite(timeout) or timeout < 0 or timeout > MAX_WAIT_SECONDS:
+        raise DecisionError("decision wait timeout is outside the allowed bound")
+    return timeout
 
 
 def _string(value: object, label: str, *, max_bytes: int = 512, required: bool = True) -> str:
@@ -703,7 +718,9 @@ class DiscordREST:
                 ) from error
             raise DecisionError(f"Discord returned permanent HTTP {error.code}") from error
         except (urllib.error.URLError, TimeoutError, socket.timeout, OSError) as error:
-            raise AmbiguousSend("Discord request outcome is ambiguous") from error
+            if method == "POST":
+                raise AmbiguousSend("Discord request outcome is ambiguous") from error
+            raise RetryableDiscordError("Discord lookup outcome is retryable") from error
 
 
 def _retry_after(headers: Mapping[str, str] | None) -> float:
@@ -757,8 +774,12 @@ class DiscordTransport:
     def find_prompt(self, record: Mapping[str, object]) -> dict[str, object] | None:
         channel = urllib.parse.quote(str(record["channel_id"]), safe="")
         status, response = self.rest.request_once("GET", f"/channels/{channel}/messages?limit=100")
-        if status < 200 or status >= 300 or not isinstance(response, list):
-            return None
+        if status < 200 or status >= 300:
+            if status == 429 or status >= 500:
+                raise RetryableDiscordError(f"Discord prompt lookup returned HTTP {status}")
+            raise DecisionError(f"Discord prompt lookup returned permanent HTTP {status}")
+        if not isinstance(response, list):
+            raise DecisionError("Discord prompt lookup returned an invalid response")
         marker = _prompt_marker(record)
         for message in response:
             if not isinstance(message, dict):
@@ -813,23 +834,53 @@ class DecisionRouter:
             raise DecisionError("configured operator allowlist is empty")
         self.sleep = sleep
 
+    def _reconcile_prompt(self, record: Mapping[str, object]) -> dict[str, object] | None:
+        for lookup_attempt in range(1, MAX_DELIVERY_ATTEMPTS + 1):
+            try:
+                reconciled = self.transport.find_prompt(record)
+            except (RetryableDiscordError, AmbiguousSend) as error:
+                if lookup_attempt == MAX_DELIVERY_ATTEMPTS:
+                    raise RetryableDiscordError(
+                        "Discord prompt reconciliation retry ceiling reached",
+                        retry_after=error.retry_after,
+                    ) from error
+                self.sleep(error.retry_after)
+                continue
+            if reconciled is None:
+                return None
+            if not isinstance(reconciled, Mapping):
+                raise DecisionError("Discord prompt reconciliation returned an invalid result")
+            message_id = reconciled.get("message_id")
+            if not isinstance(message_id, str) or not message_id.isdigit():
+                raise DecisionError(
+                    "Discord prompt reconciliation returned an invalid message id"
+                )
+            return dict(reconciled)
+        raise AssertionError("prompt reconciliation exhausted without a result")
+
+    def _reconcile_or_fail(self, record: dict[str, object]) -> dict[str, object] | None:
+        try:
+            return self._reconcile_prompt(record)
+        except RetryableDiscordError as error:
+            record["state"] = "delivery-failed"
+            record["delivery_error"] = "reconciliation-retry-ceiling"
+            self.store.update(record)
+            raise DecisionError("Discord prompt reconciliation retry ceiling reached") from error
+        except DecisionError:
+            record["state"] = "delivery-failed"
+            record["delivery_error"] = "permanent-reconciliation-failure"
+            self.store.update(record)
+            raise
+
     def _deliver(self, record: dict[str, object]) -> dict[str, object]:
         completed_attempts = int(record.get("delivery_attempts", 0) or 0)
         if completed_attempts:
-            try:
-                reconciled = self.transport.find_prompt(record)
-            except RetryableDiscordError as error:
-                self.sleep(error.retry_after)
-                reconciled = None
-            except DecisionError:
-                reconciled = None
+            reconciled = self._reconcile_or_fail(record)
             if reconciled is not None:
-                message_id = str(reconciled.get("message_id", ""))
-                if message_id.isdigit():
-                    record["message_id"] = message_id
-                    record["state"] = "waiting"
-                    record["delivery_error"] = ""
-                    return self.store.update(record)
+                record["message_id"] = reconciled["message_id"]
+                record["state"] = "waiting"
+                record["delivery_error"] = ""
+                return self.store.update(record)
         if completed_attempts >= MAX_DELIVERY_ATTEMPTS:
             record["state"] = "delivery-failed"
             record["delivery_error"] = "retry-ceiling"
@@ -849,20 +900,12 @@ class DecisionRouter:
                 return self.store.update(record)
             except AmbiguousSend as error:
                 retry_after = error.retry_after
-                try:
-                    reconciled = self.transport.find_prompt(record)
-                except RetryableDiscordError as reconcile_error:
-                    retry_after = max(retry_after, reconcile_error.retry_after)
-                    reconciled = None
-                except DecisionError:
-                    reconciled = None
+                reconciled = self._reconcile_or_fail(record)
                 if reconciled is not None:
-                    message_id = str(reconciled.get("message_id", ""))
-                    if message_id.isdigit():
-                        record["message_id"] = message_id
-                        record["state"] = "waiting"
-                        record["delivery_error"] = ""
-                        return self.store.update(record)
+                    record["message_id"] = reconciled["message_id"]
+                    record["state"] = "waiting"
+                    record["delivery_error"] = ""
+                    return self.store.update(record)
                 if attempt == MAX_DELIVERY_ATTEMPTS:
                     record["state"] = "delivery-failed"
                     record["delivery_error"] = "ambiguous-send-unreconciled"
@@ -930,7 +973,8 @@ class DecisionRouter:
     def wait(self, run_id: str, decision_id: str, *, timeout: float = 0.0) -> dict[str, object]:
         run_id = _identifier(run_id, "run_id")
         decision_id = _identifier(decision_id, "decision_id")
-        deadline = time.monotonic() + max(0.0, timeout)
+        timeout = _wait_timeout(timeout)
+        deadline = time.monotonic() + timeout
         while True:
             record = self.store.get(run_id, decision_id)
             if record is None:
@@ -1090,10 +1134,17 @@ def _write_frame(connection: socket.socket, value: Mapping[str, object]) -> None
     connection.sendall(_json_bytes(value) + b"\n")
 
 
-def _rpc(socket_path: str, request: Mapping[str, object]) -> dict[str, object]:
+def _rpc(
+    socket_path: str,
+    request: Mapping[str, object],
+    *,
+    timeout: float = RPC_TIMEOUT_SECONDS,
+) -> dict[str, object]:
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise DecisionError("decision channel timeout is malformed")
     connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:
-        connection.settimeout(30)
+        connection.settimeout(timeout)
         connection.connect(socket_path)
         _write_frame(connection, request)
         return _read_frame(connection)
@@ -1356,9 +1407,7 @@ class DecisionServer:
         if operation == "answer":
             return {"protocol": PROTOCOL, "ok": True, "result": self.router.answer(request.get("event"))}
         if operation == "wait":
-            timeout = float(request.get("timeout", 0.0))
-            if not math.isfinite(timeout) or timeout < 0 or timeout > 3600:
-                raise DecisionError("decision wait timeout is outside the allowed bound")
+            timeout = _wait_timeout(request.get("timeout", 0.0))
             return {
                 "protocol": PROTOCOL,
                 "ok": True,
@@ -1541,6 +1590,7 @@ def main(argv: list[str] | None = None) -> int:
         request = {key: value for key, value in request.items() if value is not None}
         response = _rpc(args.socket, {"protocol": PROTOCOL, "operation": "request", "request": request})
     elif args.operation == "wait":
+        timeout = _wait_timeout(args.timeout)
         response = _rpc(
             args.socket,
             {
@@ -1548,8 +1598,9 @@ def main(argv: list[str] | None = None) -> int:
                 "operation": "wait",
                 "run_id": args.run_id,
                 "decision_id": args.decision_id,
-                "timeout": args.timeout,
+                "timeout": timeout,
             },
+            timeout=timeout + WAIT_RPC_GRACE_SECONDS,
         )
     elif args.operation == "ack":
         response = _rpc(

@@ -245,6 +245,54 @@ class DiscordRouterFixture(unittest.TestCase):
             self.router.request(prompt())
         self.assertEqual(len(self.transport.sent), 3)
 
+    def test_prior_delivery_reconciliation_failure_does_not_send_a_duplicate(self) -> None:
+        record = self.store.ensure_prompt(prompt())
+        record["delivery_attempts"] = 1
+        self.store.update(record)
+        self.transport.find_plan = [MODULE.DecisionError("lookup failed")]
+
+        with self.assertRaises(MODULE.DecisionError):
+            self.router.request(prompt())
+
+        self.assertEqual(self.transport.sent, [])
+        record = self.store.get("run-u5", "decision-u5")
+        self.assertEqual(record["state"], "delivery-failed")
+        self.assertEqual(record["delivery_error"], "permanent-reconciliation-failure")
+
+    def test_reconciliation_retries_until_absence_before_resending(self) -> None:
+        record = self.store.ensure_prompt(prompt())
+        record["delivery_attempts"] = 1
+        self.store.update(record)
+        self.transport.find_plan = [
+            MODULE.RetryableDiscordError("lookup unavailable", retry_after=1.25),
+            None,
+        ]
+        self.transport.send_plan = [{"message_id": "779"}]
+
+        result = self.router.request(prompt())
+
+        self.assertEqual(result["message_id"], "779")
+        self.assertEqual(len(self.transport.sent), 1)
+        self.assertEqual(self.sleeps, [1.25])
+
+    def test_reconciliation_retry_ceiling_does_not_resend(self) -> None:
+        record = self.store.ensure_prompt(prompt())
+        record["delivery_attempts"] = 1
+        self.store.update(record)
+        self.transport.find_plan = [
+            MODULE.RetryableDiscordError("lookup unavailable", retry_after=1.0),
+            MODULE.RetryableDiscordError("lookup unavailable", retry_after=2.0),
+            MODULE.RetryableDiscordError("lookup unavailable", retry_after=3.0),
+        ]
+
+        with self.assertRaises(MODULE.DecisionError):
+            self.router.request(prompt())
+
+        self.assertEqual(self.transport.sent, [])
+        self.assertEqual(self.sleeps, [1.0, 2.0])
+        record = self.store.get("run-u5", "decision-u5")
+        self.assertEqual(record["delivery_error"], "reconciliation-retry-ceiling")
+
     def test_ambiguous_send_reconciles_before_retrying(self) -> None:
         self.transport.send_plan = [
             MODULE.AmbiguousSend("connection reset", retry_after=4.0),
@@ -254,6 +302,20 @@ class DiscordRouterFixture(unittest.TestCase):
         self.assertEqual(result["message_id"], "777")
         self.assertEqual(len(self.transport.sent), 1)
         self.assertEqual(self.sleeps, [])
+
+    def test_ambiguous_reconciliation_failure_does_not_send_a_duplicate(self) -> None:
+        self.transport.send_plan = [
+            MODULE.AmbiguousSend("connection reset", retry_after=4.0),
+        ]
+        self.transport.find_plan = [MODULE.DecisionError("lookup failed")]
+
+        with self.assertRaises(MODULE.DecisionError):
+            self.router.request(prompt())
+
+        self.assertEqual(len(self.transport.sent), 1)
+        record = self.store.get("run-u5", "decision-u5")
+        self.assertEqual(record["state"], "delivery-failed")
+        self.assertEqual(record["delivery_error"], "permanent-reconciliation-failure")
 
     def test_ambiguous_send_retries_after_exact_reconciliation_miss(self) -> None:
         self.transport.send_plan = [
@@ -265,6 +327,47 @@ class DiscordRouterFixture(unittest.TestCase):
         self.assertEqual(result["message_id"], "778")
         self.assertEqual(len(self.transport.sent), 2)
         self.assertEqual(self.sleeps, [4.0])
+
+    def test_wait_timeout_contract_rejects_malformed_and_out_of_range_values(self) -> None:
+        for value in ("not-a-number", None, True, float("nan"), -1.0, 3600.1):
+            with self.subTest(value=value):
+                with self.assertRaises(MODULE.DecisionError):
+                    MODULE._wait_timeout(value)
+        self.assertEqual(MODULE._wait_timeout(3600), 3600.0)
+
+    def test_wait_rpc_timeout_exceeds_wait_without_sleeping_for_the_wait(self) -> None:
+        captured: dict[str, object] = {}
+
+        def fake_rpc(
+            _socket_path: str,
+            request: dict[str, object],
+            *,
+            timeout: float,
+        ) -> dict[str, object]:
+            captured["request"] = request
+            captured["timeout"] = timeout
+            return {"protocol": MODULE.PROTOCOL, "ok": True, "result": {"router_status": "waiting"}}
+
+        with patch.object(MODULE, "_rpc", side_effect=fake_rpc):
+            self.assertEqual(
+                MODULE.main(
+                    [
+                        "wait",
+                        "--socket",
+                        "unused",
+                        "--run-id",
+                        "run-u5",
+                        "--decision-id",
+                        "decision-u5",
+                        "--timeout",
+                        "31",
+                    ]
+                ),
+                0,
+            )
+
+        self.assertEqual(captured["request"]["timeout"], 31.0)
+        self.assertEqual(captured["timeout"], 31.0 + MODULE.WAIT_RPC_GRACE_SECONDS)
 
     def test_restart_returns_answered_open_prompt_without_resending(self) -> None:
         self.request()
