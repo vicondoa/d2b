@@ -12,6 +12,8 @@ use regex::Regex;
 const CITY: &str = "nix/gas-city-contributor/city/city.toml";
 const MATRIX: &str = "nix/gas-city-contributor/city/agent-role-matrix.toml";
 const INSTRUCTIONS: &str = "nix/gas-city-contributor/copilot/instructions.md";
+const COPILOT_PROFILE: &str =
+    "nix/gas-city-contributor/pack/scripts/copilot-profile.py";
 const LOCAL_PACK: &str = "nix/gas-city-contributor/pack/pack.toml";
 const SERVICE_MODULE: &str = "nixos-modules/gas-city-contributor/service.nix";
 const NETWORK_MODULE: &str = "nixos-modules/gas-city-contributor/network.nix";
@@ -173,9 +175,9 @@ fn validate_role_routes(matrix: &str, city: &str) -> Result<(), String> {
             return Err(format!("duplicate role matrix entry: {name}"));
         }
         let expected_profile = match class.as_str() {
-            "planning" => "planning",
-            "review" => "review",
-            "coding" => "coding",
+            "planning" => "planning-sol",
+            "review" => "review-sol",
+            "coding" => "code-luna",
             other => return Err(format!("unknown role class {other} for {name}")),
         };
         if profile != expected_profile {
@@ -194,9 +196,9 @@ fn validate_role_routes(matrix: &str, city: &str) -> Result<(), String> {
     }
 
     let provider_for_class = BTreeMap::from([
-        ("planning", "copilot-planning"),
-        ("review", "copilot-review"),
-        ("coding", "copilot-coding"),
+        ("planning", "copilot-planning-sol"),
+        ("review", "copilot-review-sol"),
+        ("coding", "copilot-code-luna"),
     ]);
     let blocks = patch_blocks(city);
     if blocks.len() != roles.len() {
@@ -287,7 +289,7 @@ fn gas_city_role_matrix_is_complete_and_executable() {
     let city = owned_asset(CITY);
     validate_role_routes(&matrix, &city).unwrap();
 
-    for profile in ["planning", "review", "coding", "review-fallback"] {
+    for profile in ["planning-sol", "review-sol", "review-luna", "code-luna"] {
         assert!(
             matrix.contains(&format!("[profiles.{profile}]")),
             "missing provider profile {profile}"
@@ -297,10 +299,7 @@ fn gas_city_role_matrix_is_complete_and_executable() {
             "all model-backed profiles must use ACP"
         );
     }
-    assert!(
-        matrix.contains("fallback = \"copilot-review-fallback\""),
-        "review fallback must be explicit and bounded"
-    );
+    assert!(matrix.contains("fallback = \"review-luna\""));
 }
 
 #[test]
@@ -318,7 +317,7 @@ fn gas_city_preserves_native_compound_and_splits_comment_resolution() {
     assert!(build.contains("expand = \"d2b-compound-resolution\""));
     assert!(build.contains("id = \"publish\""));
     assert!(build.contains("gc.publisher.helper"));
-    assert!(build.contains("gc.publisher.merge = \"forbidden\""));
+    assert!(build.contains("\"gc.publisher.merge\" = \"forbidden\""));
     assert!(
         !build.contains("id = \"requirements\"")
             && !build.contains("id = \"plan\"")
@@ -385,6 +384,7 @@ fn gas_city_managed_instruction_boundary_is_single_global_fragment() {
 #[test]
 fn gas_city_copilot_launches_are_isolated_and_integration_denied() {
     let city = owned_asset(CITY);
+    let profile = owned_asset(COPILOT_PROFILE);
     for required in [
         "--no-custom-instructions",
         "--disable-builtin-mcps",
@@ -393,7 +393,10 @@ fn gas_city_copilot_launches_are_isolated_and_integration_denied() {
         "COPILOT_HOME",
         "COPILOT_CUSTOM_INSTRUCTIONS_DIRS",
     ] {
-        assert!(city.contains(required), "Copilot restriction missing {required}");
+        assert!(
+            profile.contains(required),
+            "Copilot restriction missing {required}"
+        );
     }
     assert_eq!(city.matches("supports_acp = true").count(), 4);
     assert_eq!(
@@ -410,9 +413,9 @@ fn gas_city_copilot_launches_are_isolated_and_integration_denied() {
         "\"shell(discord *)\"",
     ] {
         assert_eq!(
-            city.matches(denied).count(),
-            4,
-            "all Copilot profiles must deny {denied}"
+            profile.matches(denied).count(),
+            1,
+            "Copilot profile authority must deny {denied}"
         );
     }
     for forbidden in [
@@ -426,7 +429,7 @@ fn gas_city_copilot_launches_are_isolated_and_integration_denied() {
         "--remote-export\"",
     ] {
         assert!(
-            !city.contains(forbidden),
+            !profile.contains(forbidden),
             "Copilot launch must not enable {forbidden}"
         );
     }
@@ -485,13 +488,13 @@ fn planted_repository_instruction_cannot_relax_copilot_launch() {
     assert!(malicious.contains("--allow-all"));
     assert!(malicious.contains("gh pr create"));
 
-    let city = owned_asset(CITY);
-    assert!(city.contains("--no-custom-instructions"));
-    assert!(city.contains("--disable-builtin-mcps"));
-    assert!(city.contains("\"shell(gh *)\""));
-    assert!(city.contains("\"shell(git push *)\""));
-    assert!(!city.contains("--allow-all"));
-    assert!(!city.contains("--yolo"));
+    let profile = owned_asset(COPILOT_PROFILE);
+    assert!(profile.contains("--no-custom-instructions"));
+    assert!(profile.contains("--disable-builtin-mcps"));
+    assert!(profile.contains("\"shell(gh *)\""));
+    assert!(profile.contains("\"shell(git push *)\""));
+    assert!(!profile.contains("--allow-all"));
+    assert!(!profile.contains("--yolo"));
 }
 
 #[test]
