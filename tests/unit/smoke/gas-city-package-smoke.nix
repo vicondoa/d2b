@@ -1,12 +1,5 @@
-{ system
-, pkgs
-, gascity
-, dolt
-, beads
-, copilot
+{ pkgs
 , gasCityContributor
-, go
-, bazel
 , gascityRevision
 , gascityVersion
 , gascityPacksRevision

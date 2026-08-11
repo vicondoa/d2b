@@ -10,8 +10,6 @@ to the child is therefore an explicit mount.
 from __future__ import annotations
 
 import argparse
-import ctypes
-import errno
 import json
 import os
 import pathlib
@@ -67,14 +65,6 @@ def _existing(path: str | os.PathLike[str], label: str) -> pathlib.Path:
     return value.resolve()
 
 
-def _is_within(path: pathlib.Path, parent: pathlib.Path) -> bool:
-    try:
-        path.relative_to(parent)
-    except ValueError:
-        return False
-    return True
-
-
 def _validate_worktree(worktree: str | os.PathLike[str], state_root: str | None) -> pathlib.Path:
     assigned = _existing(worktree, "assigned worktree")
     if not assigned.is_dir():
@@ -83,7 +73,7 @@ def _validate_worktree(worktree: str | os.PathLike[str], state_root: str | None)
         raise SandboxError("the root directory cannot be an assigned worktree")
     if state_root is not None:
         state = _existing(state_root, "state root")
-        if _is_within(assigned, state) or _is_within(state, assigned):
+        if assigned.is_relative_to(state) or state.is_relative_to(assigned):
             raise SandboxError("state root and assigned worktree must be disjoint")
     return assigned
 
@@ -166,38 +156,6 @@ def _safe_environment(environment: Mapping[str, str]) -> dict[str, str]:
         }:
             projected[name] = value
     return projected
-
-
-def set_nondumpable() -> None:
-    """Set PR_SET_DUMPABLE=0 before bwrap execs the Copilot process."""
-
-    libc = ctypes.CDLL(None, use_errno=True)
-    pr_set_dumpable = 4
-    result = libc.prctl(pr_set_dumpable, 0, 0, 0, 0)
-    if result != 0:
-        error_number = ctypes.get_errno()
-        raise OSError(error_number, os.strerror(error_number))
-
-
-def close_unapproved_fds(keep: Sequence[int]) -> None:
-    """Close inherited descriptors except stdio and explicitly approved fds."""
-
-    keep_set = set(keep)
-    try:
-        entries = os.listdir("/proc/self/fd")
-    except FileNotFoundError:
-        entries = [str(fd) for fd in range(3, 256)]
-    for entry in entries:
-        if not entry.isdigit():
-            continue
-        fd = int(entry)
-        if fd in keep_set:
-            continue
-        try:
-            os.close(fd)
-        except OSError as error:
-            if error.errno != errno.EBADF:
-                raise
 
 
 def build_sandbox_argv(

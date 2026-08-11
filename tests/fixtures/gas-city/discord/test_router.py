@@ -421,8 +421,8 @@ class DiscordRouterFixture(unittest.TestCase):
             (ROOT / "nixos-modules/gas-city-contributor/options.nix").read_text(),
         )
         for required in (
-            "45102",
-            "45103",
+            "config.users.users.gascity-discord.uid",
+            "config.users.users.gascity-publisher.uid",
             "discord.com",
             "gateway.discord.gg",
             "api.github.com",

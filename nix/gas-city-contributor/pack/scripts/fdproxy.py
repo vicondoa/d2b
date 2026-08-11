@@ -370,7 +370,8 @@ def _serve_listener(
         on_bound(listener.getsockname()[1])
     if stop_event is not None:
         listener.settimeout(0.2)
-    threads: list[threading.Thread] = []
+    threads: set[threading.Thread] = set()
+    threads_lock = threading.Lock()
 
     def serve_one(client: socket.socket) -> None:
         try:
@@ -381,6 +382,8 @@ def _serve_listener(
                 print(f"fdproxy request rejected: {error}", file=sys.stderr)
         finally:
             client.close()
+            with threads_lock:
+                threads.discard(threading.current_thread())
 
     while stop_event is None or not stop_event.is_set():
         try:
@@ -397,11 +400,14 @@ def _serve_listener(
             name="fdproxy-connect",
             daemon=True,
         )
-        threads.append(thread)
+        with threads_lock:
+            threads.add(thread)
         thread.start()
         if once:
             break
-    for thread in threads:
+    with threads_lock:
+        active_threads = tuple(threads)
+    for thread in active_threads:
         thread.join(timeout=1.0)
 
 

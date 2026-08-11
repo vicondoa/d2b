@@ -435,11 +435,7 @@ def _load_sandbox_module(path: str | os.PathLike[str]) -> ModuleType:
 
 
 def _install_nondumpable_and_fd_policy(keep_fds: Sequence[int]) -> None:
-    libc = ctypes.CDLL(None, use_errno=True)
-    result = libc.prctl(4, 0, 0, 0, 0)
-    if result != 0:
-        error_number = ctypes.get_errno()
-        raise OSError(error_number, os.strerror(error_number))
+    _set_nondumpable()
     keep = set(keep_fds)
     try:
         entries = os.listdir("/proc/self/fd")
@@ -1365,6 +1361,13 @@ class ActiveConnections:
         with self._lock:
             self._threads.append(thread)
 
+    def remove_thread(self, thread: threading.Thread) -> None:
+        with self._lock:
+            try:
+                self._threads.remove(thread)
+            except ValueError:
+                pass
+
     def remove(self, relay: SocketChildRelay) -> None:
         with self._lock:
             self._relays.pop(id(relay), None)
@@ -1599,6 +1602,7 @@ def _serve_client(
             client.close()
         except OSError:
             pass
+        connections.remove_thread(threading.current_thread())
 
 
 def _write_json_line(channel: socket.socket, value: Mapping[str, object]) -> None:
@@ -1696,11 +1700,6 @@ def serve_server(args: argparse.Namespace) -> int:
         signal.signal(signal.SIGTERM, previous_term)
         signal.signal(signal.SIGINT, previous_int)
     return 0
-
-
-def _readiness_required() -> bool:
-    return os.environ.get("GC_REQUIRE_READINESS", "") == "1"
-
 
 def require_readiness(
     path: str | os.PathLike[str],

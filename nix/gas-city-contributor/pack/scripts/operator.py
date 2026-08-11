@@ -122,13 +122,18 @@ def write_request(operation: str, request: dict[str, object]) -> pathlib.Path:
     directory = _request_directory()
     run_id = _identifier(request.get("run_id"), "run_id")
     target = directory / f"{run_id}.{operation}.json"
-    if target.exists() or target.is_symlink():
-        raise OperatorError("an operator request for this run already exists")
-    descriptor = os.open(
-        target,
-        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0),
-        0o660,
-    )
+    try:
+        descriptor = os.open(
+            target,
+            os.O_WRONLY
+            | os.O_CREAT
+            | os.O_EXCL
+            | os.O_CLOEXEC
+            | getattr(os, "O_NOFOLLOW", 0),
+            0o660,
+        )
+    except FileExistsError as error:
+        raise OperatorError("an operator request for this run already exists") from error
     try:
         os.fchmod(descriptor, 0o660)
         encoded = json.dumps(

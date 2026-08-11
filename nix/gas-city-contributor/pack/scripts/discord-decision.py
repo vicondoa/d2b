@@ -26,6 +26,7 @@ import pathlib
 import secrets
 import socket
 import ssl
+import stat
 import struct
 import subprocess
 import sys
@@ -36,7 +37,6 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
 from typing import Any
 
 
@@ -105,11 +105,6 @@ class ConflictError(DecisionError):
 
 class PeerError(DecisionError):
     """Raised when a caller is not the main Gas City service."""
-
-
-@dataclass(frozen=True)
-class RetryHint:
-    seconds: float = 0.0
 
 
 def _string(value: object, label: str, *, max_bytes: int = 512, required: bool = True) -> str:
@@ -1055,7 +1050,7 @@ def _open_listener(path: str, group: str) -> socket.socket:
     target.parent.mkdir(mode=0o770, parents=True, exist_ok=True)
     if os.path.lexists(target):
         info = os.lstat(target)
-        if not stat_is_socket(info.st_mode):
+        if not stat.S_ISSOCK(info.st_mode):
             raise DecisionError("decision socket is occupied by a non-socket")
         target.unlink()
     listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -1071,10 +1066,6 @@ def _open_listener(path: str, group: str) -> socket.socket:
         raise DecisionError("decision socket group is unavailable") from error
     listener.listen(32)
     return listener
-
-
-def stat_is_socket(mode: int) -> bool:
-    return (mode & 0o170000) == 0o140000
 
 
 def _read_frame(connection: socket.socket) -> dict[str, object]:
@@ -1316,11 +1307,9 @@ class DecisionServer:
         self.credential_path = credential_path
         self.allowed_uid = allowed_uid
         self.gateway_url = gateway_url
-        self.listener: socket.socket | None = None
 
     def serve(self) -> None:
         listener = _open_listener(self.socket_path, self.socket_group)
-        self.listener = listener
         gateway: DiscordGateway | None = None
         if self.gateway_url:
             gateway = DiscordGateway(

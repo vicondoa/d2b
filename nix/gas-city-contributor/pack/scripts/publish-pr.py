@@ -36,7 +36,6 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
 from typing import Any, BinaryIO
 
 
@@ -76,11 +75,6 @@ class AmbiguousMutation(PublicationError):
 
 class CancelledPublication(PublicationError):
     """Raised when an atomic cancellation marker wins before publication."""
-
-
-@dataclass(frozen=True)
-class RetryHint:
-    seconds: float = 0.0
 
 
 def _string(value: object, label: str, *, max_bytes: int = 512, required: bool = True) -> str:

@@ -105,15 +105,7 @@
         in
         import ./tests/unit/smoke/gas-city-package-smoke.nix {
           pkgs = nixpkgsFor.${system};
-          inherit
-            system
-            gascity
-            dolt
-            beads
-            copilot
-            gasCityContributor
-            go
-            bazel;
+          inherit gasCityContributor;
           gascityRevision =
             "6e0399fb970190a35c3e3d5d272a02becec55ffe";
           gascityPacksRevision =

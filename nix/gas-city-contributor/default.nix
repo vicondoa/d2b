@@ -94,14 +94,11 @@ let
     ignoreCollisions = true;
   };
 
-  # U2-U5 add immutable city, pack, profile, and integration files below this
-  # directory.  The closure is intentionally forward-compatible with those
-  # files while U1 remains independently evaluable.
   managedTree = name:
     let
       source = contributorRoot + "/${name}";
     in
-    lib.optionalString (builtins.pathExists source) ''
+    ''
       cp -R ${source} "$managedRoot/${name}"
     '';
 

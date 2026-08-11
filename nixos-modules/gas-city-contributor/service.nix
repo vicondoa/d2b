@@ -261,7 +261,7 @@ let
       --bwrap-path ${lib.escapeShellArg bwrap} \
       --max-agents ${toString cfg.resources.maxConcurrentAgents} \
       --max-active-runs ${toString cfg.resources.maxActiveRuns} \
-      --client-uid 45101 \
+      --client-uid ${toString config.users.users.gascity-agent.uid} \
       --generation ${lib.escapeShellArg generation} \
       --state-schema 1 &
     bootstrap_pid="$!"
@@ -309,7 +309,7 @@ let
       --bwrap-path ${lib.escapeShellArg bwrap} \
       --max-agents ${toString cfg.resources.maxConcurrentAgents} \
       --max-active-runs ${toString cfg.resources.maxActiveRuns} \
-      --client-uid 45101 \
+      --client-uid ${toString config.users.users.gascity-agent.uid} \
       --generation ${lib.escapeShellArg generation} \
       --state-schema 1 \
       --require-ready \
@@ -325,7 +325,7 @@ let
       --public-socket ${lib.escapeShellArg agentSocket} \
       --private-socket ${lib.escapeShellArg agentPrivateSocket} \
       --socket-group gascity-agent-channel \
-      --allowed-uid 45100 &
+      --allowed-uid ${toString config.users.users.gascity.uid} &
     relay_pid="$!"
     wait "$launcher_pid"
   '';
