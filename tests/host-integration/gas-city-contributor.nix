@@ -1041,7 +1041,7 @@ pkgs.testers.runNixOSTest {
     # anything from the test runner's host checkout.
     machine.succeed(
         "rm -rf /tmp/gascity-fixtures && "
-        "mkdir -p /tmp/gascity-fixtures/tests/fixtures/gas-city "
+        "mkdir -p /tmp/gascity-fixtures/tests/fixtures/gas-city && "
         "cp -rL /etc/gascity-fixtures/. "
         "/tmp/gascity-fixtures/tests/fixtures/gas-city/ && "
         "mkdir -p /tmp/gascity-fixtures/nix /tmp/gascity-fixtures/tests/nix && "
