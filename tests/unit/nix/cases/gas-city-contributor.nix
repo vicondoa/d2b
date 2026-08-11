@@ -197,9 +197,40 @@ in
       localStore = lib.hasInfix "local?root=/var/lib/gascity-check/nix-root" (lib.concatStringsSep "\n" check.Environment);
       checkTimeout = lib.hasInfix "--timeout-seconds 17" (textValue check.ExecStart);
       checkConcurrency = lib.hasInfix "--max-heavy-checks 2" (textValue check.ExecStart);
-      checkSocket = lib.hasInfix "--socket /run/gascity-contributor/check.sock" (textValue check.ExecStart);
+      checkSocket = lib.hasInfix "--socket /run/gascity-check/check.sock" (textValue check.ExecStart);
       mainCheckSocket = lib.hasInfix
-        "GC_CHECK_SOCKET=/run/gascity-contributor/check.sock"
+        "GC_CHECK_SOCKET=/run/gascity-check/check.sock"
+        (lib.concatStringsSep "\n" main.Environment);
+      mainAgentSocket = lib.hasInfix
+        "GC_AGENT_LAUNCHER_SOCKET=/run/gascity-agent/agent.sock"
+        (lib.concatStringsSep "\n" main.Environment);
+      mainDiscordSocket = lib.hasInfix
+        "GC_DISCORD_CHANNEL_SOCKET=/run/gascity-discord/discord.sock"
+        (lib.concatStringsSep "\n" main.Environment);
+      mainPublisherSocket = lib.hasInfix
+        "GC_PUBLISHER_CHANNEL_SOCKET=/run/gascity-publisher/publisher.sock"
+        (lib.concatStringsSep "\n" main.Environment);
+      mainEgressSocket = lib.hasInfix
+        "GC_EGRESS_SOCKET=/run/gascity-egress/egress.sock"
+        (lib.concatStringsSep "\n" main.Environment);
+      mainGeneration = lib.any
+        (entry: lib.hasPrefix "GC_CITY_GENERATION=" entry)
+        main.Environment;
+      mainStateSchema = builtins.elem "GC_STATE_SCHEMA=1" main.Environment;
+      agentStateMode = builtins.elem
+        "d /var/lib/gascity-contributor/state/agent-state 0710 gascity-agent gascity-contributor -"
+        enabled.systemd.tmpfiles.rules;
+      terminalStateMode = builtins.elem
+        "d /var/lib/gascity-contributor/state/agent-state/terminal 0750 gascity gascity-contributor -"
+        enabled.systemd.tmpfiles.rules;
+      gcRootMode = builtins.elem
+        "d /nix/var/nix/gcroots/gascity-contributor 0700 gascity-agent gascity-agent -"
+        enabled.systemd.tmpfiles.rules;
+      gcRootWrite = builtins.elem
+        "/nix/var/nix/gcroots/gascity-contributor"
+        agent.ReadWritePaths;
+      agentServerUid = lib.hasInfix
+        "GC_AGENT_SERVER_UID=45101"
         (lib.concatStringsSep "\n" main.Environment);
     };
     expected = {
@@ -217,6 +248,17 @@ in
       checkConcurrency = true;
       checkSocket = true;
       mainCheckSocket = true;
+      mainAgentSocket = true;
+      mainDiscordSocket = true;
+      mainPublisherSocket = true;
+      mainEgressSocket = true;
+      mainGeneration = true;
+      mainStateSchema = true;
+      agentStateMode = true;
+      terminalStateMode = true;
+      gcRootMode = true;
+      gcRootWrite = true;
+      agentServerUid = true;
     };
   };
 
@@ -244,6 +286,12 @@ in
       publisherRequiresEgress = builtins.elem
         "gascity-egress.service"
         (publisherUnit.requires or [ ]);
+      monitorRequiresMain = builtins.elem
+        "gascity-free-space-monitor.service"
+        (enabled.systemd.services.gas-city-contributor.requires or [ ]);
+      monitorBeforeMain = builtins.elem
+        "gas-city-contributor.service"
+        (enabled.systemd.services.gascity-free-space-monitor.before or [ ]);
       discordEgressGroup = builtins.elem
         "gascity-egress-channel"
         discord.SupplementaryGroups;
@@ -280,6 +328,8 @@ in
       checkGroup = "gascity-check-channel";
       checkChannelGroup = true;
       mainCheckChannelGroup = true;
+      monitorRequiresMain = true;
+      monitorBeforeMain = true;
       discordRequiresEgress = true;
       publisherRequiresEgress = true;
       discordEgressGroup = true;

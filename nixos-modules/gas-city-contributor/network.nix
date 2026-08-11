@@ -7,8 +7,8 @@ let
   package = cfg.package;
   python = "${package}/bin/python3";
   activation = "${package}/share/gas-city-contributor/pack/scripts/service-activation.py";
-  runtimeRoot = "/run/gascity-contributor";
-  egressSocket = "${runtimeRoot}/egress.sock";
+  egressDirectory = "/run/gascity-egress";
+  egressSocket = "${egressDirectory}/egress.sock";
   relayAuth = builtins.hashString "sha256"
     "gascity-fdproxy:${cfg.repository.githubSlug}:${cfg.repository.rigName}";
   requiredIntegrationDomains = [
@@ -83,6 +83,9 @@ in
     systemd.services.gascity-egress = {
       description = "Gas City allowlisting egress sidecar";
       before = [ "gas-city-contributor.service" ];
+      requires = [ "gascity-free-space-monitor.service" ];
+      bindsTo = [ "gascity-free-space-monitor.service" ];
+      after = [ "gascity-free-space-monitor.service" ];
       unitConfig = {
         PartOf = "gas-city-contributor.service";
         StartLimitIntervalSec = 60;
@@ -92,8 +95,8 @@ in
         Type = "exec";
         Slice = "gascity-contributor.slice";
         User = "gascity-egress";
-        Group = "gascity-egress";
-        SupplementaryGroups = [ "gascity-contributor" "gascity-egress-channel" ];
+        Group = "gascity-egress-channel";
+        SupplementaryGroups = [ "gascity-contributor" "gascity-egress" ];
         PrivateTmp = true;
         PrivateDevices = true;
         ProtectSystem = "strict";
@@ -114,8 +117,10 @@ in
         LockPersonality = true;
         UMask = "0077";
         KillMode = "control-group";
+        RuntimeDirectory = "gascity-egress";
+        RuntimeDirectoryMode = "0750";
         RestrictAddressFamilies = [ "AF_UNIX" "AF_INET" "AF_INET6" ];
-        ReadWritePaths = [ runtimeRoot ];
+        ReadWritePaths = [ egressDirectory ];
         InaccessiblePaths = [
           "-/etc/shadow"
           "-/etc/gshadow"

@@ -13,6 +13,7 @@ import re
 import selectors
 import socket
 import stat
+import struct
 import subprocess
 import sys
 import tempfile
@@ -110,7 +111,7 @@ def render_config(
     api_key: str,
     ca_bundle: str = "/etc/ssl/certs/ca-bundle.crt",
     upstream_ip: str = UPSTREAM_HOST,
-    egress_pipe: str = "/run/gascity-contributor/buildbuddy-upstream.sock",
+    egress_pipe: str = "/run/gascity-buildbuddy/buildbuddy-upstream.sock",
 ) -> str:
     template = _absolute(template_path, "Envoy template")
     if not api_key or "\x00" in api_key or "\r" in api_key or "\n" in api_key:
@@ -177,6 +178,20 @@ def _open_egress_socket(socket_path: str, auth_token: str, request_id: str) -> s
     channel = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:
         channel.connect(socket_path)
+        expected = os.environ.get("GC_EGRESS_SERVER_UID")
+        if expected is not None:
+            try:
+                expected_uid = int(expected, 10)
+            except ValueError as error:
+                raise BuildBuddyProxyError("egress server uid is malformed") from error
+            raw = channel.getsockopt(
+                socket.SOL_SOCKET,
+                socket.SO_PEERCRED,
+                12,
+            )
+            _pid, uid, _gid = struct.unpack("3i", raw)
+            if uid != expected_uid:
+                raise BuildBuddyProxyError("egress server identity is unauthorized")
         channel.sendall(
             json.dumps(
                 {
@@ -341,7 +356,7 @@ def main(argv: list[str] | None = None) -> int:
     serve_parser.add_argument("--envoy", required=True)
     serve_parser.add_argument("--listen", default="127.0.0.1:19801")
     serve_parser.add_argument("--ca", required=True)
-    serve_parser.add_argument("--runtime-dir", default="/run/gascity-contributor/buildbuddy")
+    serve_parser.add_argument("--runtime-dir", default="/run/gascity-buildbuddy")
     serve_parser.add_argument("--upstream", default=f"{UPSTREAM_HOST}:{UPSTREAM_PORT}")
     serve_parser.add_argument("--egress-socket", required=True)
     serve_parser.add_argument("--auth-token-env", default="GC_FDPROXY_AUTH")

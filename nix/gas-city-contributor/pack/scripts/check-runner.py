@@ -208,10 +208,13 @@ def _connect_egress(
     host: str,
     port: int,
     request_id: str,
+    server_uid: int | None = None,
 ) -> socket.socket | None:
     channel = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:
         channel.connect(socket_path)
+        if server_uid is not None and _peer_uid(channel) != server_uid:
+            raise CheckRunnerError("egress server identity is unauthorized")
         channel.sendall(
             json.dumps(
                 {
@@ -252,6 +255,7 @@ def serve_local_proxy(
     auth_token: str,
     listen_port: int,
     stop: threading.Event,
+    egress_server_uid: int | None = None,
 ) -> None:
     """Provide the runner's local HTTP CONNECT side of fdproxy/1."""
 
@@ -265,7 +269,14 @@ def serve_local_proxy(
         upstream: socket.socket | None = None
         try:
             host, port = _read_headers(client)
-            upstream = _connect_egress(socket_path, auth_token, host, port, request_id)
+            upstream = _connect_egress(
+                socket_path,
+                auth_token,
+                host,
+                port,
+                request_id,
+                server_uid=egress_server_uid,
+            )
             if upstream is None:
                 client.sendall(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n")
                 return
@@ -758,11 +769,21 @@ def serve(args: argparse.Namespace) -> int:
             "auth_token": os.environ.get(args.auth_token_env, ""),
             "listen_port": args.listen_port,
             "stop": stop_proxy,
+            "egress_server_uid": args.egress_server_uid,
         },
         daemon=True,
     )
     proxy_thread.start()
     socket_path = _path(args.socket, "check socket")
+    socket_path.parent.mkdir(mode=0o750, parents=True, exist_ok=True)
+    parent_info = os.lstat(socket_path.parent)
+    if (
+        stat.S_ISLNK(parent_info.st_mode)
+        or not stat.S_ISDIR(parent_info.st_mode)
+        or parent_info.st_uid != os.geteuid()
+        or parent_info.st_mode & 0o022
+    ):
+        raise CheckRunnerError("check socket directory is not server-owned and non-writable")
     if os.path.lexists(socket_path):
         if not stat.S_ISSOCK(os.lstat(socket_path).st_mode):
             raise CheckRunnerError("check socket path is occupied")
@@ -899,6 +920,11 @@ def main(argv: list[str] | None = None) -> int:
     server_parser.add_argument("--output-root", required=True)
     server_parser.add_argument("--proxy", required=True)
     server_parser.add_argument("--egress-socket", required=True)
+    server_parser.add_argument(
+        "--egress-server-uid",
+        type=int,
+        default=None,
+    )
     server_parser.add_argument("--auth-token-env", default="GC_FDPROXY_AUTH")
     server_parser.add_argument("--check-auth-token-env", default="GC_CHECK_AUTH")
     server_parser.add_argument("--allowed-uid", action="append", type=int, default=[])

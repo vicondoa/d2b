@@ -1246,7 +1246,15 @@ def _open_listener(path: str, group: str) -> socket.socket:
         if ancestor.is_symlink():
             raise PublicationError("publisher socket path has a symlinked ancestor")
     target = target.absolute()
-    target.parent.mkdir(mode=0o770, parents=True, exist_ok=True)
+    target.parent.mkdir(mode=0o750, parents=True, exist_ok=True)
+    parent_info = os.lstat(target.parent)
+    if (
+        stat.S_ISLNK(parent_info.st_mode)
+        or not stat.S_ISDIR(parent_info.st_mode)
+        or parent_info.st_uid != os.geteuid()
+        or parent_info.st_mode & 0o022
+    ):
+        raise PublicationError("publisher socket directory is not server-owned and non-writable")
     if os.path.lexists(target):
         info = os.lstat(target)
         if not stat.S_ISSOCK(info.st_mode):
@@ -1300,6 +1308,14 @@ def _rpc_with_fd(socket_path: str, request: Mapping[str, object], descriptor: in
     try:
         connection.settimeout(RPC_TIMEOUT_SECONDS)
         connection.connect(socket_path)
+        expected = os.environ.get("GC_PUBLISHER_SERVER_UID")
+        if expected is not None:
+            try:
+                expected_uid = int(expected, 10)
+            except ValueError as error:
+                raise PublicationError("publisher server uid is malformed") from error
+            if _peer_uid(connection) != expected_uid:
+                raise PublicationError("publisher server identity is unauthorized")
         payload = _json_bytes(request) + b"\n"
         rights = array.array("i", [descriptor])
         sent = connection.sendmsg([payload], [(socket.SOL_SOCKET, socket.SCM_RIGHTS, rights)])
@@ -1624,6 +1640,14 @@ def _notify_discord(socket_path: str, body: str) -> dict[str, object] | None:
     try:
         connection.settimeout(30)
         connection.connect(socket_path)
+        expected = os.environ.get("GC_DISCORD_SERVER_UID")
+        if expected is not None:
+            try:
+                expected_uid = int(expected, 10)
+            except ValueError as error:
+                raise PublicationError("Discord server uid is malformed") from error
+            if _peer_uid(connection) != expected_uid:
+                raise PublicationError("Discord server identity is unauthorized")
         connection.sendall(
             _json.dumps(
                 {

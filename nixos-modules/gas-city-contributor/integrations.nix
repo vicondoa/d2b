@@ -58,7 +58,11 @@ let
         ] ++ lib.optional cfg.check.enable checkChannelGroup;
         gascity-agent = [ "gascity-agent-channel" "gascity-egress-channel" ];
         gascity-discord = [ "gascity-discord-channel" "gascity-egress-channel" ];
-        gascity-publisher = [ "gascity-publisher-channel" "gascity-egress-channel" ];
+        gascity-publisher = [
+          "gascity-publisher-channel"
+          "gascity-egress-channel"
+          "gascity-discord-channel"
+        ];
         gascity-egress = [ "gascity-egress-channel" ];
         gascity-check = [ "gascity-egress-channel" checkChannelGroup ];
         gascity-buildbuddy-proxy = [ "gascity-egress-channel" ];
@@ -139,16 +143,25 @@ in
       "d /var/lib/gascity-contributor/state/rigs 0700 gascity gascity -"
       "d /var/lib/gascity-contributor/state/worktrees 0770 gascity-agent ${sharedGroup} -"
       "d /var/lib/gascity-contributor/state/leases 0700 gascity-agent gascity-agent -"
-      "d /var/lib/gascity-contributor/state/agent-state 0700 gascity-agent gascity-agent -"
+      "d /var/lib/gascity-contributor/state/agent-state 0710 gascity-agent ${sharedGroup} -"
+      "d /var/lib/gascity-contributor/state/agent-state/terminal 0750 gascity ${sharedGroup} -"
+      "d /nix/var/nix/gcroots/gascity-contributor 0700 gascity-agent gascity-agent -"
       "d /var/lib/gascity-contributor/state/cancellations 0770 gascity ${sharedGroup} -"
       "d /var/lib/gascity-publisher 0700 gascity-publisher gascity-publisher -"
       "d /var/cache/gascity-contributor 0700 gascity gascity -"
       "d /run/gascity-contributor 0770 root ${sharedGroup} -"
       "d /run/gascity-contributor/operator-requests 2770 root ${sharedGroup} -"
-      "d /run/gascity-agent 0700 gascity-agent gascity-agent-channel -"
+      "d /run/gascity-agent 0750 gascity-agent gascity-agent-channel -"
+      "d /run/gascity-egress 0750 gascity-egress gascity-egress-channel -"
+      "d /run/gascity-discord 0750 gascity-discord gascity-discord-channel -"
+      "d /run/gascity-publisher 0750 gascity-publisher gascity-publisher-channel -"
     ]
     ++ lib.optionals cfg.check.enable [
+      "d /run/gascity-check 0750 gascity-check gascity-check-channel -"
       "d /var/lib/gascity-check 0700 gascity-check gascity-check -"
+    ]
+    ++ lib.optionals buildBuddyEnabled [
+      "d /run/gascity-buildbuddy 0700 gascity-buildbuddy-proxy gascity-buildbuddy-proxy -"
     ];
   };
 }

@@ -71,6 +71,7 @@ MAX_LAUNCH_METADATA_BYTES = 16 * 1024
 MAX_LAUNCH_RESPONSE_BYTES = 8 * 1024
 MAX_RELAY_BUFFER_BYTES = 1024 * 1024
 LAUNCHER_FD_NAMES = ("proxy", "progress", "control", "check")
+GC_ROOT_NAMES = ("package", "city", "pack", "profiles", "instructions")
 IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 FORBIDDEN_CHILD_FLAGS = frozenset(
     {
@@ -149,6 +150,117 @@ def _parse_positive(value: str | int, label: str) -> int:
     if number < 1:
         raise LauncherError(f"{label} must be a positive integer")
     return number
+
+
+def _load_activation_module(path: str | os.PathLike[str]) -> ModuleType:
+    activation_path = _absolute_existing(path, "service activation script")
+    specification = importlib.util.spec_from_file_location(
+        "gascity_service_activation",
+        activation_path,
+    )
+    if specification is None or specification.loader is None:
+        raise LauncherError("service activation module could not be loaded")
+    module = importlib.util.module_from_spec(specification)
+    sys.modules[specification.name] = module
+    specification.loader.exec_module(module)
+    return module
+
+
+def _create_active_run_roots(
+    args: argparse.Namespace,
+    *,
+    run_id: str,
+    bead_id: str,
+    generation: str,
+    state_schema: str,
+    terminal_state_path: str | None = None,
+):
+    if not args.gc_root_directory or run_id == "readiness":
+        return None
+    required = {
+        "activation_script": args.activation_script,
+        "package_path": args.package_path,
+        "city_path": args.city_path,
+        "pack_path": args.pack_path,
+        "profiles_path": args.profiles_path,
+        "instructions_path": args.instructions_path,
+    }
+    if any(value is None for value in required.values()):
+        raise LauncherError("active-run GC-root configuration is incomplete")
+    activation = _load_activation_module(args.activation_script)
+    try:
+        root_class = activation.ActiveRunGCRoots
+        root_names = activation.GC_ROOT_NAMES
+    except AttributeError as error:
+        raise LauncherError("service activation lacks active-run GC-root support") from error
+    if tuple(root_names) != GC_ROOT_NAMES:
+        raise LauncherError("active-run GC-root shape is incompatible")
+    prefixes = tuple(args.gc_root_prefix or ["/nix/store/"])
+    root_directory = pathlib.Path(args.gc_root_directory)
+    run_directory = root_directory / run_id
+    if terminal_state_path is None:
+        terminal_root = root_directory.parent / "terminal"
+        terminal_state = terminal_root / f"{run_id}.json"
+    else:
+        terminal_state = pathlib.Path(terminal_state_path)
+    if (
+        not run_directory.exists()
+        and not run_directory.is_symlink()
+        and terminal_state.exists()
+    ):
+        activation._terminal_state_root_from_path(
+            terminal_state,
+            run_id=run_id,
+        )
+        activation._validate_terminal_root(terminal_state.parent, create=False)
+        activation._read_terminal_record(
+            terminal_state,
+            run_id=run_id,
+            bead_id=bead_id,
+            generation=generation,
+            state_schema=state_schema,
+        )
+        return None
+    return root_class.create(
+        args.gc_root_directory,
+        run_id=run_id,
+        bead_id=bead_id,
+        generation_paths={
+            "package": args.package_path,
+            "city": args.city_path,
+            "pack": args.pack_path,
+            "profiles": args.profiles_path,
+            "instructions": args.instructions_path,
+        },
+        allowed_prefixes=prefixes,
+        generation=generation,
+        state_schema=state_schema,
+        terminal_state_path=terminal_state,
+    )
+
+
+def _cleanup_active_run_roots(active_roots, terminal_state_path: str) -> None:
+    try:
+        active_roots.cleanup(state_path=terminal_state_path)
+    except (OSError, RuntimeError) as error:
+        print(
+            f"active-run GC-root cleanup deferred: {error}",
+            file=sys.stderr,
+        )
+
+
+def _validate_gc_root_configuration(args: argparse.Namespace) -> None:
+    values = (
+        args.gc_root_directory,
+        args.activation_script,
+        args.package_path,
+        args.city_path,
+        args.pack_path,
+        args.profiles_path,
+        args.instructions_path,
+    )
+    if any(value is not None for value in values) and not all(value is not None for value in values):
+        raise LauncherError("active-run GC-root configuration is incomplete")
 
 
 class _ActiveRunMembership:
@@ -1523,7 +1635,7 @@ def _validate_launch_metadata(
         "worktree",
         "fds",
     }
-    optional = {"auth", "require_ready", "state_root"}
+    optional = {"auth", "require_ready", "state_root", "terminal_state_path"}
     if set(value) - required - optional or not required.issubset(value):
         raise LauncherError("launcher metadata has an unauthorized shape")
     if value.get("protocol") != LAUNCHER_PROTOCOL or value.get("operation") != "launch":
@@ -1539,9 +1651,9 @@ def _validate_launch_metadata(
         if not isinstance(candidate, str):
             raise LauncherError(f"launcher {key} is malformed")
         _validate_identifier(candidate, key.replace("_", " "))
-    for key in ("worktree", "state_root"):
+    for key in ("worktree", "state_root", "terminal_state_path"):
         candidate = value.get(key)
-        if candidate is None and key == "state_root":
+        if candidate is None and key in {"state_root", "terminal_state_path"}:
             continue
         if not isinstance(candidate, str):
             raise LauncherError(f"launcher {key} is malformed")
@@ -1694,6 +1806,7 @@ def _serve_client(
     relay: SocketChildRelay | None = None
     home: pathlib.Path | None = None
     lease: ConcurrencyLease | None = None
+    active_roots = None
     relay_started = False
     acknowledged = False
     try:
@@ -1717,12 +1830,29 @@ def _serve_client(
         bead_id = str(metadata["bead_id"])
         generation = str(metadata["generation"])
         state_schema = str(metadata["state_schema"])
+        if args.generation and generation != args.generation:
+            raise LauncherError("launch generation does not match the service generation")
+        if args.state_schema and state_schema != str(args.state_schema):
+            raise LauncherError("launch state schema does not match the service schema")
         profile = str(metadata["profile"])
         tool_policy = str(metadata["tool_policy"])
         worktree = _absolute_existing(str(metadata["worktree"]), "assigned worktree")
         if not worktree.is_dir():
             raise LauncherError("assigned worktree is not a directory")
         state_root = _server_state_root(args, metadata)
+        terminal_state_path = metadata.get("terminal_state_path")
+        if terminal_state_path is not None:
+            terminal_path = _socket_path(
+                str(terminal_state_path),
+                "terminal workflow state",
+            )
+            if state_root is not None:
+                try:
+                    terminal_path.relative_to(state_root)
+                except ValueError as error:
+                    raise LauncherError(
+                        "terminal workflow state is outside the assigned state root"
+                    ) from error
         if state_root is not None:
             try:
                 worktree.relative_to(state_root)
@@ -1756,6 +1886,18 @@ def _serve_client(
             bead_id=bead_id,
             max_agents=args.max_agents,
             max_active_runs=args.max_active_runs,
+        )
+        active_roots = _create_active_run_roots(
+            args,
+            run_id=run_id,
+            bead_id=bead_id,
+            generation=generation,
+            state_schema=state_schema,
+            terminal_state_path=(
+                str(terminal_state_path)
+                if terminal_state_path is not None
+                else None
+            ),
         )
         home = materialize_copilot_home(
             settings,
@@ -1842,6 +1984,8 @@ def _serve_client(
         acknowledged = True
         relay_started = True
         relay.run()
+        if active_roots is not None and isinstance(terminal_state_path, str):
+            _cleanup_active_run_roots(active_roots, terminal_state_path)
     except (OSError, LauncherError) as error:
         if not acknowledged:
             try:
@@ -1891,10 +2035,10 @@ def _write_json_line(channel: socket.socket, value: Mapping[str, object]) -> Non
 
 
 def _bind_server_socket(path: pathlib.Path) -> socket.socket:
-    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    path.parent.mkdir(mode=0o750, parents=True, exist_ok=True)
     parent_stat = path.parent.stat()
-    if parent_stat.st_uid != os.geteuid() or parent_stat.st_mode & 0o077:
-        raise LauncherError("launcher socket parent is not private")
+    if parent_stat.st_uid != os.geteuid() or parent_stat.st_mode & 0o022:
+        raise LauncherError("launcher socket parent is not service-owned")
     if path.exists() or path.is_symlink():
         path_stat = path.lstat()
         if not stat.S_ISSOCK(path_stat.st_mode) or path_stat.st_uid != os.geteuid():
@@ -1903,7 +2047,7 @@ def _bind_server_socket(path: pathlib.Path) -> socket.socket:
     listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:
         listener.bind(str(path))
-        os.chmod(path, 0o600)
+        os.chmod(path, 0o660)
         listener.listen(16)
         listener.settimeout(0.2)
         return listener
@@ -1914,6 +2058,7 @@ def _bind_server_socket(path: pathlib.Path) -> socket.socket:
 
 def serve_server(args: argparse.Namespace) -> int:
     _set_nondumpable()
+    _validate_gc_root_configuration(args)
     if not args.socket:
         raise LauncherError("launcher server socket is required")
     if args.max_agents is None or args.max_active_runs is None:
@@ -2122,6 +2267,15 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--state-schema", default="1")
     parser.add_argument("--worktree", default=os.getcwd())
     parser.add_argument("--state-root")
+    parser.add_argument("--terminal-state-path")
+    parser.add_argument("--activation-script")
+    parser.add_argument("--gc-root-directory")
+    parser.add_argument("--gc-root-prefix", action="append", default=[])
+    parser.add_argument("--package-path")
+    parser.add_argument("--city-path")
+    parser.add_argument("--pack-path")
+    parser.add_argument("--profiles-path")
+    parser.add_argument("--instructions-path")
     parser.add_argument("--lease-root", required=True)
     parser.add_argument("--runtime-root", required=True)
     parser.add_argument("--runtime-path", action="append", default=[])
@@ -2164,6 +2318,7 @@ def _child_args(args: argparse.Namespace) -> list[str]:
 
 def run(args: argparse.Namespace) -> int:
     _set_nondumpable()
+    _validate_gc_root_configuration(args)
     if not args.allow_unsafe_fixture or os.environ.get("GC_TEST_MODE") != "1":
         raise LauncherError(
             "single-child launcher mode is restricted to explicit GC_TEST_MODE fixtures"
@@ -2221,6 +2376,18 @@ def run(args: argparse.Namespace) -> int:
     state_root = (
         _absolute_existing(args.state_root, "state root") if args.state_root else None
     )
+    terminal_state_path = (
+        _socket_path(args.terminal_state_path, "terminal workflow state")
+        if args.terminal_state_path
+        else None
+    )
+    if terminal_state_path is not None and state_root is not None:
+        try:
+            terminal_state_path.relative_to(state_root)
+        except ValueError as error:
+            raise LauncherError(
+                "terminal workflow state is outside the assigned state root"
+            ) from error
     if state_root is not None:
         try:
             worktree.relative_to(state_root)
@@ -2278,6 +2445,7 @@ def run(args: argparse.Namespace) -> int:
         signal.SIGINT, lambda signum, frame: _signal_flag(signal_state, signum, frame)
     )
     child: Child | None = None
+    active_roots = None
     try:
         with ConcurrencyLease.acquire(
             args.lease_root,
@@ -2286,6 +2454,18 @@ def run(args: argparse.Namespace) -> int:
             max_agents=max_agents,
             max_active_runs=max_active_runs,
         ):
+            active_roots = _create_active_run_roots(
+                args,
+                run_id=run_id,
+                bead_id=bead_id,
+                generation=generation,
+                state_schema=state_schema,
+                terminal_state_path=(
+                    str(terminal_state_path)
+                    if terminal_state_path is not None
+                    else None
+                ),
+            )
             child = _spawn_child(
                 profile=args.profile,
                 tool_policy=args.tool_policy,
@@ -2311,7 +2491,10 @@ def run(args: argparse.Namespace) -> int:
             )
             if signal_state["stop"]:
                 relay.request_stop("launcher-signal")
-            return relay.run()
+            result = relay.run()
+            if active_roots is not None and terminal_state_path is not None:
+                _cleanup_active_run_roots(active_roots, str(terminal_state_path))
+            return result
     finally:
         signal.signal(signal.SIGTERM, previous_term)
         signal.signal(signal.SIGINT, previous_int)

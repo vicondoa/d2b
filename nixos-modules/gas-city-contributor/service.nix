@@ -22,12 +22,34 @@ let
   cacheRoot = "/var/cache/gascity-contributor";
   runtimeRoot = "/run/gascity-contributor";
   readinessPath = "${runtimeRoot}/readiness.json";
-  egressSocket = "${runtimeRoot}/egress.sock";
-  discordSocket = "${runtimeRoot}/discord.sock";
-  publisherSocket = "${runtimeRoot}/publisher.sock";
-  checkSocket = "${runtimeRoot}/check.sock";
-  agentSocket = "${runtimeRoot}/agent.sock";
-  agentPrivateSocket = "/run/gascity-agent/agent.sock";
+  egressDirectory = "/run/gascity-egress";
+  discordDirectory = "/run/gascity-discord";
+  publisherDirectory = "/run/gascity-publisher";
+  checkDirectory = "/run/gascity-check";
+  agentDirectory = "/run/gascity-agent";
+  buildBuddyDirectory = "/run/gascity-buildbuddy";
+  agentRuntimeRoot = "${agentDirectory}/runtime";
+  egressSocket = "${egressDirectory}/egress.sock";
+  discordSocket = "${discordDirectory}/discord.sock";
+  publisherSocket = "${publisherDirectory}/publisher.sock";
+  checkSocket = "${checkDirectory}/check.sock";
+  agentSocket = "${agentDirectory}/agent.sock";
+  agentPrivateSocket = "${agentDirectory}/private.sock";
+  # Nix only treats links below its gcroots hierarchy as roots.  Keep the
+  # run-owned subtree separate from terminal state, which remains service
+  # state because the lifecycle writer and launcher have different owners.
+  activeRunGCRootDirectory = "/nix/var/nix/gcroots/gascity-contributor";
+  terminalStateRoot = "${stateRoot}/agent-state/terminal";
+  packageAssetRoot = "${package}/share/gas-city-contributor";
+  cityPath = "${packageAssetRoot}/city";
+  packPath = "${packageAssetRoot}/pack";
+  profilesPath = "${packageAssetRoot}/copilot";
+  instructionsPath = "${profilesPath}/instructions.md";
+  agentUid = lib.attrByPath [ "users" "users" "gascity-agent" "uid" ] 0 config;
+  egressUid = config.users.users.gascity-egress.uid;
+  discordUid = config.users.users.gascity-discord.uid;
+  publisherUid = config.users.users.gascity-publisher.uid;
+  checkUid = lib.attrByPath [ "users" "users" "gascity-check" "uid" ] 0 config;
   generation = builtins.substring 0 32 (builtins.hashString "sha256" (toString package));
   relayAuth = builtins.hashString "sha256"
     "gascity-fdproxy:${cfg.repository.githubSlug}:${cfg.repository.rigName}";
@@ -201,7 +223,7 @@ let
 
   sharedServiceConfig = commonServiceConfig // {
     SupplementaryGroups = [ "gascity-contributor" ];
-    ReadWritePaths = [ runtimeRoot ];
+    ReadWritePaths = [ ];
   };
 
   waitReadiness = pkgs.writeShellScript "gascity-wait-readiness" ''
@@ -240,7 +262,7 @@ let
       done
     }
     trap cleanup EXIT TERM INT
-    ${pkgs.coreutils}/bin/install -d -m 0700 ${lib.escapeShellArg "${runtimeRoot}/agent"}
+    ${pkgs.coreutils}/bin/install -d -m 0700 ${lib.escapeShellArg agentRuntimeRoot}
     token="$CREDENTIALS_DIRECTORY/copilot-token"
     test -s "$token"
     export COPILOT_GITHUB_TOKEN="$(<"$token")"
@@ -257,13 +279,21 @@ let
       --state-root ${lib.escapeShellArg "${stateRoot}/agent-state"} \
       --worktree ${lib.escapeShellArg "${stateRoot}/worktrees"} \
       --lease-root ${lib.escapeShellArg "${stateRoot}/leases"} \
-      --runtime-root ${lib.escapeShellArg "${runtimeRoot}/agent"} \
+      --runtime-root ${lib.escapeShellArg agentRuntimeRoot} \
       --runtime-path ${lib.escapeShellArg "${package}/bin"} \
       --runtime-path ${lib.escapeShellArg "${package}/share/gas-city-contributor"} \
       --sandbox-script ${lib.escapeShellArg sandbox} \
       --fdproxy-script ${lib.escapeShellArg fdproxy} \
       --sandbox-python ${lib.escapeShellArg python} \
       --bwrap-path ${lib.escapeShellArg bwrap} \
+      --activation-script ${lib.escapeShellArg activation} \
+      --gc-root-directory ${lib.escapeShellArg activeRunGCRootDirectory} \
+      --gc-root-prefix /nix/store/ \
+      --package-path ${lib.escapeShellArg package} \
+      --city-path ${lib.escapeShellArg cityPath} \
+      --pack-path ${lib.escapeShellArg packPath} \
+      --profiles-path ${lib.escapeShellArg profilesPath} \
+      --instructions-path ${lib.escapeShellArg instructionsPath} \
       --max-agents ${toString cfg.resources.maxConcurrentAgents} \
       --max-active-runs ${toString cfg.resources.maxActiveRuns} \
       --client-uid ${toString config.users.users.gascity-agent.uid} \
@@ -287,8 +317,9 @@ let
       --bead-id readiness \
       --worktree ${lib.escapeShellArg "${stateRoot}/worktrees/readiness"} \
       --lease-root ${lib.escapeShellArg "${stateRoot}/leases"} \
-      --runtime-root ${lib.escapeShellArg "${runtimeRoot}/agent"} \
-      --egress-socket ${lib.escapeShellArg egressSocket}
+      --runtime-root ${lib.escapeShellArg agentRuntimeRoot} \
+      --egress-socket ${lib.escapeShellArg egressSocket} \
+      --egress-server-uid ${toString egressUid}
     kill "$bootstrap_pid" 2>/dev/null || true
     wait "$bootstrap_pid" 2>/dev/null || true
     bootstrap_pid=""
@@ -305,13 +336,21 @@ let
       --state-root ${lib.escapeShellArg "${stateRoot}/agent-state"} \
       --worktree ${lib.escapeShellArg "${stateRoot}/worktrees"} \
       --lease-root ${lib.escapeShellArg "${stateRoot}/leases"} \
-      --runtime-root ${lib.escapeShellArg "${runtimeRoot}/agent"} \
+      --runtime-root ${lib.escapeShellArg agentRuntimeRoot} \
       --runtime-path ${lib.escapeShellArg "${package}/bin"} \
       --runtime-path ${lib.escapeShellArg "${package}/share/gas-city-contributor"} \
       --sandbox-script ${lib.escapeShellArg sandbox} \
       --fdproxy-script ${lib.escapeShellArg fdproxy} \
       --sandbox-python ${lib.escapeShellArg python} \
       --bwrap-path ${lib.escapeShellArg bwrap} \
+      --activation-script ${lib.escapeShellArg activation} \
+      --gc-root-directory ${lib.escapeShellArg activeRunGCRootDirectory} \
+      --gc-root-prefix /nix/store/ \
+      --package-path ${lib.escapeShellArg package} \
+      --city-path ${lib.escapeShellArg cityPath} \
+      --pack-path ${lib.escapeShellArg packPath} \
+      --profiles-path ${lib.escapeShellArg profilesPath} \
+      --instructions-path ${lib.escapeShellArg instructionsPath} \
       --max-agents ${toString cfg.resources.maxConcurrentAgents} \
       --max-active-runs ${toString cfg.resources.maxActiveRuns} \
       --client-uid ${toString config.users.users.gascity-agent.uid} \
@@ -342,6 +381,7 @@ let
       --egress-socket ${lib.escapeShellArg egressSocket} \
       --fdproxy ${lib.escapeShellArg fdproxy} \
       --listen 127.0.0.1:3128 \
+      --server-uid ${toString egressUid} \
       -- \
       ${python} ${discordDecision} serve \
         --socket ${lib.escapeShellArg discordSocket} \
@@ -363,6 +403,7 @@ let
       --egress-socket ${lib.escapeShellArg egressSocket} \
       --fdproxy ${lib.escapeShellArg fdproxy} \
       --listen 127.0.0.1:3128 \
+      --server-uid ${toString egressUid} \
       -- \
       ${python} ${publisher} serve \
         --socket ${lib.escapeShellArg publisherSocket} \
@@ -402,16 +443,24 @@ let
     "GC_DOLT_BIND=127.0.0.1:${toString cfg.ports.dolt}"
     "GC_DOLT_PORT=${toString cfg.ports.dolt}"
     "GC_AGENT_LAUNCHER_SOCKET=${agentSocket}"
+    "GC_TERMINAL_STATE_ROOT=${terminalStateRoot}"
+    "GC_CITY_GENERATION=${generation}"
+    "GC_STATE_SCHEMA=1"
+    "GC_AGENT_SERVER_UID=${toString agentUid}"
     "GC_DISCORD_CHANNEL_SOCKET=${discordSocket}"
+    "GC_DISCORD_SERVER_UID=${toString discordUid}"
     "GC_PUBLISHER_CHANNEL_SOCKET=${publisherSocket}"
+    "GC_PUBLISHER_SERVER_UID=${toString publisherUid}"
     "GC_CANCEL_ROOT=${cancellationRoot}"
     "GC_EGRESS_SOCKET=${egressSocket}"
+    "GC_EGRESS_SERVER_UID=${toString egressUid}"
     "GC_FDPROXY_AUTH=${relayAuth}"
     "GC_PROJECT_QUOTA_REQUIRED=1"
     "GC_MANUAL_CLEANUP_ONLY=1"
   ] ++ lib.optionals cfg.check.enable [
     "GC_CHECK_SOCKET=${checkSocket}"
     "GC_CHECK_AUTH=${checkAuth}"
+    "GC_CHECK_SERVER_UID=${toString checkUid}"
   ];
 
   mainExec = lib.concatStringsSep " " [
@@ -461,7 +510,9 @@ in
           ]
           ++ lib.optional cfg.check.enable "gascity-check.service"
           ++ lib.optional buildBuddyEnabled "gascity-buildbuddy-proxy.service";
+          bindsTo = [ "gascity-free-space-monitor.service" ];
           after = [
+            "gascity-free-space-monitor.service"
             "gascity-agent.service"
             "gascity-discord.service"
             "gascity-publisher.service"
@@ -492,7 +543,13 @@ in
               cacheRoot
               runtimeRoot
             ];
-            ReadOnlyPaths = [ "${package}/share/gas-city-contributor" ];
+            ReadOnlyPaths = [
+              "${package}/share/gas-city-contributor"
+              agentDirectory
+              egressDirectory
+              discordDirectory
+              publisherDirectory
+            ] ++ lib.optional cfg.check.enable checkDirectory;
             BindReadOnlyPaths = map (
               path:
               "${path}:/run/gascity-contributor/host/${builtins.baseNameOf path}"
@@ -518,8 +575,15 @@ in
 
         gascity-agent = {
           description = "Gas City ACP launcher";
-          requires = [ "gascity-egress.service" ];
-          after = [ "gascity-egress.service" ];
+          requires = [
+            "gascity-egress.service"
+            "gascity-free-space-monitor.service"
+          ];
+          bindsTo = [ "gascity-free-space-monitor.service" ];
+          after = [
+            "gascity-egress.service"
+            "gascity-free-space-monitor.service"
+          ];
           inherit (sidecarUnit) unitConfig;
           serviceConfig = sharedServiceConfig // {
             Type = "exec";
@@ -528,25 +592,33 @@ in
             SupplementaryGroups = [ "gascity-contributor" "gascity-egress-channel" "gascity-agent-channel" ];
             PrivateNetwork = true;
             RuntimeDirectory = "gascity-agent";
-            RuntimeDirectoryMode = "0700";
+            RuntimeDirectoryMode = "0750";
             StateDirectory = "gascity-agent";
             StateDirectoryMode = "0700";
             ReadWritePaths = [
               stateRoot
+              agentDirectory
               runtimeRoot
+              activeRunGCRootDirectory
             ];
-            InaccessiblePaths = commonServiceConfig.InaccessiblePaths ++ [
-              "-${discordSocket}"
-              "-${publisherSocket}"
+            InaccessiblePaths = commonServiceConfig.InaccessiblePaths
+              ++ [
+                "-${discordDirectory}"
+                "-${publisherDirectory}"
+              ] ++ lib.optional cfg.check.enable "-${checkDirectory}";
+            ReadOnlyPaths = [
+              "${package}/share/gas-city-contributor"
+              egressDirectory
             ];
-            ReadOnlyPaths = [ "${package}/share/gas-city-contributor" ];
             LoadCredential = [
               "copilot-token:${cfg.credentials.copilotTokenFile}"
             ];
             Environment = [
               "GC_FDPROXY_SOCKET=${egressSocket}"
               "GC_FDPROXY_AUTH=${relayAuth}"
+              "GC_EGRESS_SERVER_UID=${toString egressUid}"
               "GC_AGENT_LAUNCHER_SOCKET=${agentPrivateSocket}"
+              "GC_TERMINAL_STATE_ROOT=${terminalStateRoot}"
               "GC_REQUIRE_READINESS=1"
               "PATH=${package}/bin:/run/current-system/sw/bin"
               "SSL_CERT_FILE=${package}/etc/ssl/certs/ca-bundle.crt"
@@ -557,15 +629,23 @@ in
 
         gascity-discord = {
           description = "Gas City Discord integration boundary";
-          requires = [ "gascity-egress.service" ];
-          after = [ "gascity-egress.service" ];
+          requires = [
+            "gascity-egress.service"
+            "gascity-free-space-monitor.service"
+          ];
+          bindsTo = [ "gascity-free-space-monitor.service" ];
+          after = [
+            "gascity-egress.service"
+            "gascity-free-space-monitor.service"
+          ];
           inherit (sidecarUnit) unitConfig;
           serviceConfig = sharedServiceConfig // {
             Type = "exec";
             User = "gascity-discord";
-            Group = "gascity-discord";
+            Group = "gascity-discord-channel";
             SupplementaryGroups = [
               "gascity-contributor"
+              "gascity-discord"
               "gascity-discord-channel"
               "gascity-egress-channel"
             ];
@@ -573,6 +653,8 @@ in
             StateDirectory = "gascity-discord";
             StateDirectoryMode = "0700";
             StateDirectoryQuota = toString cfg.storage.discordQuotaBytes;
+            RuntimeDirectory = "gascity-discord";
+            RuntimeDirectoryMode = "0750";
             LoadCredential = [
               "discord-bot-token:${cfg.credentials.discordBotTokenFile}"
             ];
@@ -587,30 +669,49 @@ in
                 "SSL_CERT_FILE=${package}/etc/ssl/certs/ca-bundle.crt"
               ]
               ++ sidecarProxyEnvironment;
-            ReadWritePaths = [ discordStateRoot runtimeRoot ];
-            ReadOnlyPaths = [ "${package}/share/gas-city-contributor" ];
+            ReadWritePaths = [ discordStateRoot discordDirectory ];
+            ReadOnlyPaths = [
+              "${package}/share/gas-city-contributor"
+              egressDirectory
+            ];
+            InaccessiblePaths = commonServiceConfig.InaccessiblePaths ++ [
+              "-${runtimeRoot}"
+              "-${agentDirectory}"
+              "-${publisherDirectory}"
+            ] ++ lib.optional cfg.check.enable "-${checkDirectory}";
             ExecStart = discordStart;
           };
         };
 
         gascity-publisher = {
           description = "Gas City GitHub publication boundary";
-          requires = [ "gascity-egress.service" ];
-          after = [ "gascity-egress.service" ];
+          requires = [
+            "gascity-egress.service"
+            "gascity-free-space-monitor.service"
+          ];
+          bindsTo = [ "gascity-free-space-monitor.service" ];
+          after = [
+            "gascity-egress.service"
+            "gascity-free-space-monitor.service"
+          ];
           inherit (sidecarUnit) unitConfig;
           serviceConfig = sharedServiceConfig // {
             Type = "exec";
             User = "gascity-publisher";
-            Group = "gascity-publisher";
+            Group = "gascity-publisher-channel";
             SupplementaryGroups = [
               "gascity-contributor"
+              "gascity-publisher"
               "gascity-publisher-channel"
               "gascity-egress-channel"
+              "gascity-discord-channel"
             ];
             PrivateNetwork = true;
             StateDirectory = "gascity-publisher";
             StateDirectoryMode = "0700";
             StateDirectoryQuota = toString cfg.storage.publisherQuotaBytes;
+            RuntimeDirectory = "gascity-publisher";
+            RuntimeDirectoryMode = "0750";
             LoadCredential = [
               "github-app-private-key:${cfg.credentials.githubPrivateKeyFile}"
             ];
@@ -619,24 +720,35 @@ in
               "GC_GITHUB_INSTALLATION_ID=${cfg.github.installationId}"
               "GC_REPOSITORY=${cfg.repository.githubSlug}"
               "GC_PUBLISHER_CHANNEL_SOCKET=${publisherSocket}"
+              "GC_PUBLISHER_SERVER_UID=${toString publisherUid}"
+              "GC_DISCORD_SERVER_UID=${toString discordUid}"
               "GC_EGRESS_SOCKET=${egressSocket}"
               "GC_FDPROXY_SOCKET=${egressSocket}"
               "GC_FDPROXY_AUTH=${relayAuth}"
               "SSL_CERT_FILE=${package}/etc/ssl/certs/ca-bundle.crt"
             ]
             ++ sidecarProxyEnvironment;
-            ReadWritePaths = [ publisherStateRoot cancellationRoot runtimeRoot ];
+            ReadWritePaths = [
+              publisherStateRoot
+              cancellationRoot
+              publisherDirectory
+            ];
             ReadOnlyPaths = [
               "${package}/share/gas-city-contributor"
+              egressDirectory
+              discordDirectory
             ];
+            InaccessiblePaths = commonServiceConfig.InaccessiblePaths ++ [
+              "-${runtimeRoot}"
+              "-${agentDirectory}"
+            ] ++ lib.optional cfg.check.enable "-${checkDirectory}";
             ExecStart = publisherStart;
           };
         };
 
         gascity-free-space-monitor = {
           description = "Gas City contributor free-space reserve monitor";
-          requires = [ "gas-city-contributor.service" ];
-          after = [ "gas-city-contributor.service" ];
+          before = [ "gas-city-contributor.service" ];
           unitConfig = {
             PartOf = "gas-city-contributor.service";
             StartLimitIntervalSec = 60;
@@ -647,10 +759,15 @@ in
             User = "gascity";
             Group = "gascity";
             SupplementaryGroups = [ "gascity-contributor" ];
+            ReadWritePaths = [ runtimeRoot ];
             ExecStart = "${python} ${activation} free-space-monitor"
               + " --path ${lib.escapeShellArg serviceRoot}"
               + " --reserve-bytes ${toString cfg.storage.minFreeBytes}"
+              + " --status-path ${lib.escapeShellArg readinessPath}"
+              + " --generation ${lib.escapeShellArg generation}"
+              + " --state-schema 1"
               + " --interval 30";
+            Restart = "no";
           };
         };
       }
@@ -658,10 +775,17 @@ in
         gascity-check = {
           description = "Gas City uncredentialed local Nix check runner";
           requires =
-            [ "gascity-egress.service" ]
+            [
+              "gascity-egress.service"
+              "gascity-free-space-monitor.service"
+            ]
             ++ lib.optional buildBuddyEnabled "gascity-buildbuddy-proxy.service";
+          bindsTo = [ "gascity-free-space-monitor.service" ];
           after =
-            [ "gascity-egress.service" ]
+            [
+              "gascity-egress.service"
+              "gascity-free-space-monitor.service"
+            ]
             ++ lib.optional buildBuddyEnabled "gascity-buildbuddy-proxy.service";
           inherit (sidecarUnit) unitConfig;
           serviceConfig = sharedServiceConfig // {
@@ -679,13 +803,16 @@ in
             StateDirectory = "gascity-check";
             StateDirectoryMode = "0700";
             StateDirectoryQuota = toString cfg.storage.checkQuotaBytes;
+            RuntimeDirectory = "gascity-check";
+            RuntimeDirectoryMode = "0750";
             ReadWritePaths = [
               "/var/lib/gascity-check"
-              runtimeRoot
+              checkDirectory
             ];
             ReadOnlyPaths = [
               "${package}/share/gas-city-contributor"
               "${stateRoot}/worktrees"
+              egressDirectory
             ];
             InaccessiblePaths = [ "-/nix/var/nix/daemon-socket/socket" ];
             Environment = [
@@ -695,6 +822,7 @@ in
               "NIX_REMOTE=local?root=/var/lib/gascity-check/nix-root"
               "GC_FDPROXY_SOCKET=${egressSocket}"
               "GC_FDPROXY_AUTH=${relayAuth}"
+              "GC_EGRESS_SERVER_UID=${toString egressUid}"
               "GC_CHECK_AUTH=${checkAuth}"
               "NIX_CONFIG=connect-timeout = 5\nmax-jobs = ${toString cfg.resources.nixMaxJobs}\ncores = ${toString cfg.resources.nixBuildCores}\nhttp-proxy = http://127.0.0.1:3128\nsubstituters = https://cache.nixos.org\ntrusted-public-keys = cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY="
             ];
@@ -704,6 +832,7 @@ in
               + " --output-root /var/lib/gascity-check/output"
               + " --proxy http://127.0.0.1:3128"
               + " --egress-socket ${lib.escapeShellArg egressSocket}"
+              + " --egress-server-uid ${toString egressUid}"
               + " --socket ${lib.escapeShellArg checkSocket}"
               + " --allowed-uid ${toString config.users.users.gascity.uid}"
               + " --check-auth-token-env GC_CHECK_AUTH"
@@ -722,14 +851,23 @@ in
       // lib.optionalAttrs buildBuddyEnabled {
         gascity-buildbuddy-proxy = {
           description = "Gas City BuildBuddy credential proxy";
-          requires = [ "gascity-egress.service" ];
-          after = [ "gascity-egress.service" ];
+          requires = [
+            "gascity-egress.service"
+            "gascity-free-space-monitor.service"
+          ];
+          bindsTo = [ "gascity-free-space-monitor.service" ];
+          after = [
+            "gascity-egress.service"
+            "gascity-free-space-monitor.service"
+          ];
           inherit (sidecarUnit) unitConfig;
           serviceConfig = sharedServiceConfig // {
             Type = "exec";
             User = "gascity-buildbuddy-proxy";
             Group = "gascity-buildbuddy-proxy";
             SupplementaryGroups = [ "gascity-contributor" "gascity-egress-channel" ];
+            RuntimeDirectory = "gascity-buildbuddy";
+            RuntimeDirectoryMode = "0700";
             PrivateNetwork = true;
             LoadCredential = [
               "buildbuddy-api-key:${cfg.credentials.buildBuddyApiKeyFile}"
@@ -738,12 +876,13 @@ in
               "${package}/share/gas-city-contributor"
               "${package}/etc/ssl/certs/ca-bundle.crt"
             ];
-            ReadWritePaths = [ runtimeRoot ];
+            ReadWritePaths = [ buildBuddyDirectory ];
             Environment = [
               "SSL_CERT_FILE=${package}/etc/ssl/certs/ca-bundle.crt"
               "GC_BUILDBUDDY_UPSTREAM=remote.buildbuddy.io:443"
               "GC_FDPROXY_SOCKET=${egressSocket}"
               "GC_FDPROXY_AUTH=${relayAuth}"
+              "GC_EGRESS_SERVER_UID=${toString egressUid}"
             ];
             ExecStart = "${python} ${package}/share/gas-city-contributor/pack/scripts/buildbuddy-proxy.py"
               + " serve"
@@ -751,6 +890,7 @@ in
               + " --credential %d/buildbuddy-api-key"
               + " --envoy ${lib.escapeShellArg "${package}/bin/envoy"}"
               + " --listen 127.0.0.1:19801"
+              + " --runtime-dir ${lib.escapeShellArg buildBuddyDirectory}"
               + " --egress-socket ${lib.escapeShellArg egressSocket}"
               + " --ca ${lib.escapeShellArg "${package}/etc/ssl/certs/ca-bundle.crt"}";
           };

@@ -5,5 +5,9 @@ Compound Engineering review artifact and all upstream build-stage artifacts
 available to the expansion.  Finalization may record the structured final
 report only after the verifier and native `ce-compound` synthesis complete.
 
+The expanded deterministic operator stage also performs the terminal-state
+handoff for active-run GC roots.  It must query the authoritative root bead
+and never create terminal JSON from model output.
+
 Do not post comments, push a branch, merge a pull request, or invoke a hosting
 integration from this stage.

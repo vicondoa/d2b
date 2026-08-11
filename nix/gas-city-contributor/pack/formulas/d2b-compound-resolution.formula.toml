@@ -48,7 +48,7 @@ description_file = "../assets/workflows/d2b-compound-resolution/{target}.synthes
 id = "{target}"
 title = "Finalize separated Compound Engineering resolution"
 needs = ["{target}.synthesize-resolution"]
-metadata = { "gc.run_target" = "gc.run-operator", "gc.build.artifact_schema" = "gc.build.final-report.v1", "gc.build.artifact_path_keys" = "gc.build.final_report_path" }
+metadata = { "gc.run_target" = "gc.run-operator", "gc.build.artifact_schema" = "gc.build.final-report.v1", "gc.build.artifact_path_keys" = "gc.build.final_report_path", "gc.build.terminal_state_writer" = "service-activation.py write-terminal-state" }
 description_file = "../assets/workflows/d2b-compound-resolution/{target}.md"
 
 [template.check]

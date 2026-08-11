@@ -17,6 +17,9 @@ from typing import Any
 
 MAX_REQUEST_BYTES = 64 * 1024
 GASCITY_UID = 45100
+READINESS_PATH = pathlib.Path(
+    os.environ.get("GC_READINESS_PATH", "/run/gascity-contributor/readiness.json")
+)
 CANCEL_ROOT = pathlib.Path(
     os.environ.get(
         "GC_CANCEL_ROOT",
@@ -197,6 +200,34 @@ def mark_cancelled(run_id: str, reason: str) -> pathlib.Path:
         os.close(descriptor)
 
 
+def require_submission_readiness() -> dict[str, object]:
+    try:
+        with READINESS_PATH.open("r", encoding="utf-8") as stream:
+            value = json.load(stream)
+    except (OSError, json.JSONDecodeError) as error:
+        raise OperatorError("submissions are blocked: readiness is unavailable") from error
+    if not isinstance(value, dict) or set(value) != {
+        "generation",
+        "state_schema",
+        "ready",
+        "effective_profiles",
+        "error_code",
+    }:
+        raise OperatorError("submissions are blocked: readiness is malformed")
+    if value.get("ready") is not True or value.get("error_code") is not None:
+        code = value.get("error_code")
+        error_code = code if isinstance(code, str) and code else "not-ready"
+        raise OperatorError(f"submissions are blocked: {error_code}")
+    profiles = value.get("effective_profiles")
+    if (
+        not isinstance(profiles, dict)
+        or profiles.get("coding") != "code-luna"
+        or profiles.get("review") not in {"review-sol", "review-luna"}
+    ):
+        raise OperatorError("submissions are blocked: readiness is malformed")
+    return value
+
+
 def _systemctl(*arguments: str) -> subprocess.CompletedProcess[str]:
     command = "/run/current-system/sw/bin/systemctl"
     return subprocess.run(
@@ -254,6 +285,8 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(status(), sort_keys=True, separators=(",", ":")))
         return 0
     request = validate_request(operation, _bounded_json(sys.stdin))
+    if operation == "submit":
+        require_submission_readiness()
     path = write_request(operation, request)
     print(
         json.dumps(

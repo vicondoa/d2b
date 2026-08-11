@@ -665,7 +665,7 @@ class PublisherFixture(unittest.TestCase):
         with tempfile.TemporaryFile() as bundle:
             with patch.object(MODULE.socket, "socket", return_value=connection):
                 result = MODULE._rpc_with_fd(
-                    "/run/gascity-contributor/publisher.sock",
+                    "/run/gascity-publisher/publisher.sock",
                     {"operation": "publish"},
                     bundle.fileno(),
                 )

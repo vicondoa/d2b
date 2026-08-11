@@ -49,6 +49,7 @@ PROFILE = load_script("copilot-profile.py")
 LAUNCHER = load_script("agent-launcher.py")
 SANDBOX = load_script("agent-sandbox.py")
 ACTIVATION = load_script("service-activation.py")
+OPERATOR = load_script("operator.py")
 FDPROXY = load_script("fdproxy.py")
 GC_AGENT = load_script("gc-agent.py")
 CHECK_RUNNER = load_script("check-runner.py")
@@ -245,6 +246,39 @@ class ActivationContractTests(unittest.TestCase):
                     state_schema="1",
                     profile="code-luna",
                 )
+
+
+class ReserveReadinessContractTests(unittest.TestCase):
+    def test_reserve_breach_blocks_before_zero_and_stays_submission_gated(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="gascity-reserve-") as raw:
+            status_path = pathlib.Path(raw) / "status.json"
+            ACTIVATION.write_status(
+                status_path,
+                ACTIVATION._ready_status("g1", "1", review_profile="review-sol"),
+            )
+            with mock.patch.object(
+                ACTIVATION,
+                "check_free_space",
+                side_effect=ACTIVATION.BoundaryError("free-space-reserve"),
+            ):
+                with self.assertRaises(ACTIVATION.BoundaryError) as failure:
+                    ACTIVATION.monitor_free_space_once(
+                        path=raw,
+                        reserve_bytes=1,
+                        status_path=status_path,
+                        generation="g1",
+                        state_schema="1",
+                    )
+            self.assertEqual(str(failure.exception), "free-space-reserve")
+            blocked = ACTIVATION.read_status(
+                status_path,
+                generation="g1",
+                state_schema="1",
+            )
+            self.assertEqual(blocked["error_code"], "free-space-reserve")
+            with mock.patch.object(OPERATOR, "READINESS_PATH", status_path):
+                with self.assertRaises(OPERATOR.OperatorError):
+                    OPERATOR.require_submission_readiness()
 
 
 class HostProjectionContractTests(unittest.TestCase):
@@ -803,24 +837,501 @@ class DurableStateContractTests(unittest.TestCase):
                     state_schema="1",
                 )
 
-    def test_gc_root_lifecycle_removes_only_terminal_run_roots(self) -> None:
+    def _gc_targets(self, raw: str) -> dict[str, pathlib.Path]:
+        targets = {}
+        for name in ACTIVATION.GC_ROOT_NAMES:
+            target = pathlib.Path(raw) / name
+            target.mkdir()
+            targets[name] = target
+        return targets
+
+    def _closed_bead(self, bead_id: str = "bead-1") -> mock._patch:
+        return mock.patch.object(
+            ACTIVATION.subprocess,
+            "run",
+            return_value=subprocess.CompletedProcess(
+                ["bd", "show", bead_id, "--json"],
+                0,
+                stdout=json.dumps(
+                    [{"id": bead_id, "status": "closed", "metadata": {}}]
+                ),
+                stderr="",
+            ),
+        )
+
+    def test_terminal_writer_then_cleanup_is_atomic_and_idempotent(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="gascity-gcroots-writer-") as raw:
+            root = pathlib.Path(raw) / "roots"
+            terminal_root = pathlib.Path(raw) / "terminal"
+            targets = self._gc_targets(raw)
+            roots = ACTIVATION.ActiveRunGCRoots.create(
+                root,
+                run_id="run-1",
+                bead_id="bead-1",
+                generation_paths=targets,
+                allowed_prefixes=(f"{raw}/",),
+                generation="g1",
+                state_schema="1",
+            )
+            with self._closed_bead():
+                first = ACTIVATION.record_terminal_state(
+                    terminal_root,
+                    run_id="run-1",
+                    bead_id="bead-1",
+                    generation="g1",
+                    state_schema="1",
+                    bd_path="bd",
+                )
+                second = ACTIVATION.record_terminal_state(
+                    terminal_root,
+                    run_id="run-1",
+                    bead_id="bead-1",
+                    generation="g1",
+                    state_schema="1",
+                    bd_path="bd",
+                )
+            self.assertTrue(first["recorded"])
+            self.assertTrue(second["recorded"])
+            state_path = terminal_root / "run-1.json"
+            self.assertEqual(
+                set(json.loads(state_path.read_text(encoding="utf-8"))),
+                {
+                    "schema",
+                    "run_id",
+                    "bead_id",
+                    "generation",
+                    "state_schema",
+                    "terminal_status",
+                },
+            )
+            roots.cleanup(state_path=state_path)
+            roots.cleanup(state_path=state_path)
+            self.assertFalse((root / "run-1").exists())
+            with self._closed_bead():
+                restarted = ACTIVATION.record_terminal_state(
+                    terminal_root,
+                    run_id="run-1",
+                    bead_id="bead-1",
+                    generation="g1",
+                    state_schema="1",
+                    bd_path="bd",
+                )
+            self.assertTrue(restarted["recorded"])
+
+    def test_terminal_writer_retains_cancelled_open_pr_and_nonterminal_runs(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="gascity-gcroots-retain-") as raw:
+            root = pathlib.Path(raw) / "roots"
+            terminal_root = pathlib.Path(raw) / "terminal"
+            cancellation_root = pathlib.Path(raw) / "cancellations"
+            targets = self._gc_targets(raw)
+            for run_id, bead in (
+                ("cancelled", {"id": "bead-1", "status": "closed", "metadata": {}}),
+                (
+                    "open-pr",
+                    {
+                        "id": "bead-2",
+                        "status": "closed",
+                        "metadata": {"pull_request_url": "https://example.invalid/pr/1"},
+                    },
+                ),
+                ("open", {"id": "bead-3", "status": "in_progress", "metadata": {}}),
+            ):
+                ACTIVATION.ActiveRunGCRoots.create(
+                    root,
+                    run_id=run_id,
+                    bead_id=bead["id"],
+                    generation_paths=targets,
+                    allowed_prefixes=(f"{raw}/",),
+                    generation="g1",
+                    state_schema="1",
+                )
+                if run_id == "cancelled":
+                    cancellation_root.mkdir()
+                    (cancellation_root / f"{run_id}.json").write_text(
+                        json.dumps(
+                            {
+                                "schema": 1,
+                                "run_id": run_id,
+                                "reason": "operator requested cancellation",
+                                "cancelled": True,
+                            }
+                        ),
+                        encoding="utf-8",
+                    )
+                with mock.patch.dict(
+                    os.environ,
+                    {
+                        "GC_PUBLISH_ENABLED": "1" if run_id == "open-pr" else "0",
+                        "GC_PUBLISH_OPEN_PR": "1" if run_id == "open-pr" else "0",
+                    },
+                    clear=False,
+                ), mock.patch.object(
+                    ACTIVATION.subprocess,
+                    "run",
+                    return_value=subprocess.CompletedProcess(
+                        ["bd", "show", bead["id"], "--json"],
+                        0,
+                        stdout=json.dumps([bead]),
+                        stderr="",
+                    ),
+                ):
+                    result = ACTIVATION.record_terminal_state(
+                        terminal_root,
+                        run_id=run_id,
+                        bead_id=bead["id"],
+                        generation="g1",
+                        state_schema="1",
+                        bd_path="bd",
+                        cancellation_root=cancellation_root,
+                    )
+                self.assertFalse(result["recorded"])
+                self.assertTrue(result["retained"])
+                self.assertFalse((terminal_root / f"{run_id}.json").exists())
+                self.assertTrue((root / run_id).is_dir())
+
+    def test_terminal_writer_rejects_stale_or_forged_record(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="gascity-gcroots-stale-") as raw:
+            terminal_root = pathlib.Path(raw) / "terminal"
+            terminal_root.mkdir()
+            state_path = terminal_root / "run-1.json"
+            state_path.write_text(
+                json.dumps(
+                    {
+                        "schema": ACTIVATION.TERMINAL_RECORD_SCHEMA,
+                        "run_id": "run-1",
+                        "bead_id": "bead-1",
+                        "generation": "old-generation",
+                        "state_schema": "1",
+                        "terminal_status": "closed",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with self._closed_bead(), self.assertRaises(
+                ACTIVATION.RootLifecycleError
+            ):
+                ACTIVATION.record_terminal_state(
+                    terminal_root,
+                    run_id="run-1",
+                    bead_id="bead-1",
+                    generation="g1",
+                    state_schema="1",
+                    bd_path="bd",
+                )
+            self.assertIn("old-generation", state_path.read_text(encoding="utf-8"))
+
+    def test_gc_root_links_are_valid_store_paths(self) -> None:
+        nix_store = shutil.which("nix-store")
+        if nix_store is None:
+            self.skipTest("a valid Nix store path is unavailable")
+        store_target = pathlib.Path("/run/current-system").resolve()
+        if not str(store_target).startswith("/nix/store/"):
+            store_target = pathlib.Path(nix_store).resolve()
+        if not str(store_target).startswith("/nix/store/"):
+            self.skipTest("a valid Nix store path is unavailable")
+        if not store_target.exists():
+            self.skipTest("the current system store path is unavailable")
+        probe = subprocess.run(
+            [nix_store, "--query", "--deriver", str(store_target)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if probe.returncode != 0:
+            self.skipTest(
+                "Nix store query is unavailable in this environment: "
+                + probe.stderr.strip()
+            )
+        with tempfile.TemporaryDirectory(prefix="gascity-gcroots-store-") as raw:
+            root = pathlib.Path(raw) / "roots"
+            targets = {
+                name: store_target for name in ACTIVATION.GC_ROOT_NAMES
+            }
+            ACTIVATION.ActiveRunGCRoots.create(
+                root,
+                run_id="run-1",
+                bead_id="bead-1",
+                generation_paths=targets,
+                generation="g1",
+                state_schema="1",
+            )
+            for name in ACTIVATION.GC_ROOT_NAMES:
+                link = root / "run-1" / name
+                self.assertEqual(os.readlink(link), str(store_target))
+                result = subprocess.run(
+                    [nix_store, "--query", "--deriver", os.readlink(link)],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+            registrations = []
+            try:
+                registration_root = root / "registered"
+                registration_root.mkdir()
+                for name in ACTIVATION.GC_ROOT_NAMES:
+                    registration = registration_root / name
+                    result = subprocess.run(
+                        [
+                            nix_store,
+                            "--add-root",
+                            str(registration),
+                            "--indirect",
+                            "--realise",
+                            str(root / "run-1" / name),
+                        ],
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                    )
+                    if result.returncode != 0:
+                        self.skipTest(
+                            "Nix GC-root registration is unavailable: "
+                            + result.stderr.strip()
+                        )
+                    registrations.append(registration)
+                roots = subprocess.run(
+                    [nix_store, "--gc", "--print-roots"],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                if roots.returncode != 0:
+                    self.skipTest(
+                        "Nix GC-root query is unavailable: "
+                        + roots.stderr.strip()
+                    )
+                for registration in registrations:
+                    self.assertTrue(
+                        any(
+                            candidate in roots.stdout
+                            for candidate in (
+                                f"{registration} -> {store_target}",
+                                f'"{registration}" -> {store_target}',
+                            )
+                        ),
+                        roots.stdout,
+                    )
+            finally:
+                for registration in registrations:
+                    registration.unlink(missing_ok=True)
+                subprocess.run(
+                    [nix_store, "--gc", "--print-roots"],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+
+    def test_gc_root_links_are_visible_to_nix_gc_root_query(self) -> None:
+        nix_store = shutil.which("nix-store")
+        if nix_store is None:
+            self.skipTest("nix-store is unavailable")
+        store_target = pathlib.Path("/run/current-system").resolve()
+        if (
+            not str(store_target).startswith("/nix/store/")
+            or not store_target.exists()
+        ):
+            self.skipTest("a valid Nix store path is unavailable")
+        root_parent = pathlib.Path("/nix/var/nix/gcroots")
+        if not root_parent.is_dir() or not os.access(root_parent, os.W_OK):
+            self.skipTest("the production Nix GC-root hierarchy is not writable")
+        root = root_parent / f".gascity-contract-{os.getpid()}"
+        terminal_root = root_parent / f".gascity-terminal-{os.getpid()}"
+        try:
+            root.mkdir(mode=0o700)
+            targets = {
+                name: store_target for name in ACTIVATION.GC_ROOT_NAMES
+            }
+            ACTIVATION.ActiveRunGCRoots.create(
+                root,
+                run_id="run-1",
+                bead_id="bead-1",
+                generation_paths=targets,
+                generation="g1",
+                state_schema="1",
+                terminal_state_path=terminal_root / "run-1.json",
+            )
+            roots = subprocess.run(
+                [nix_store, "--gc", "--print-roots"],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            if roots.returncode != 0:
+                self.skipTest(
+                    "Nix GC-root query is unavailable: " + roots.stderr.strip()
+                )
+            for name in ACTIVATION.GC_ROOT_NAMES:
+                link = root / "run-1" / name
+                self.assertTrue(
+                    any(
+                        candidate in roots.stdout
+                        for candidate in (
+                            f"{link} -> {store_target}",
+                            f'"{link}" -> {store_target}',
+                        )
+                    ),
+                    roots.stdout,
+                )
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+            shutil.rmtree(terminal_root, ignore_errors=True)
+
+    def test_gc_root_lifecycle_requires_durable_terminal_state(self) -> None:
         with tempfile.TemporaryDirectory(prefix="gascity-gcroots-") as raw:
+            root = pathlib.Path(raw) / "roots"
+            targets = self._gc_targets(raw)
+            roots = ACTIVATION.ActiveRunGCRoots.create(
+                root,
+                run_id="run-1",
+                bead_id="bead-1",
+                generation_paths=targets,
+                allowed_prefixes=(f"{raw}/",),
+                generation="g1",
+                state_schema="1",
+            )
+            with self.assertRaises(ACTIVATION.RootLifecycleError):
+                roots.cleanup(terminal=False)
+            state_path = pathlib.Path(raw) / "terminal" / "run-1.json"
+            state_path.parent.mkdir(mode=0o700)
+            state_path.write_text(
+                json.dumps(
+                    {
+                        "schema": ACTIVATION.TERMINAL_RECORD_SCHEMA,
+                        "run_id": "run-1",
+                        "bead_id": "bead-1",
+                        "generation": "g1",
+                        "state_schema": "1",
+                        "terminal_status": "open",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaises(ACTIVATION.RootLifecycleError):
+                roots.cleanup(state_path=state_path)
+            state_path.write_text(
+                json.dumps(
+                    {
+                        "schema": ACTIVATION.TERMINAL_RECORD_SCHEMA,
+                        "run_id": "run-1",
+                        "bead_id": "bead-1",
+                        "generation": "g1",
+                        "state_schema": "1",
+                        "terminal_status": "completed",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            roots.cleanup(state_path=state_path)
+            self.assertFalse((root / "run-1").exists())
+
+    def test_gc_root_lifecycle_reuses_immutable_symlinks_across_restart(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="gascity-gcroots-restart-") as raw:
+            root = pathlib.Path(raw) / "roots"
+            targets = self._gc_targets(raw)
+            first = ACTIVATION.ActiveRunGCRoots.create(
+                root,
+                run_id="run-1",
+                bead_id="bead-1",
+                generation_paths=targets,
+                allowed_prefixes=(f"{raw}/",),
+                generation="g1",
+                state_schema="1",
+            )
+            first_links = {
+                name: os.readlink(root / "run-1" / name)
+                for name in ACTIVATION.GC_ROOT_NAMES
+            }
+            restarted = ACTIVATION.ActiveRunGCRoots.create(
+                root,
+                run_id="run-1",
+                bead_id="bead-1",
+                generation_paths=targets,
+                allowed_prefixes=(f"{raw}/",),
+                generation="g1",
+                state_schema="1",
+            )
+            self.assertFalse(restarted.terminal)
+            self.assertEqual(
+                first_links,
+                {
+                    name: os.readlink(root / "run-1" / name)
+                    for name in ACTIVATION.GC_ROOT_NAMES
+                },
+            )
+
+    def test_gc_root_lifecycle_rejects_incompatible_generation(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="gascity-gcroots-upgrade-") as raw:
             root = pathlib.Path(raw) / "roots"
             targets = {}
             for name in ACTIVATION.GC_ROOT_NAMES:
                 target = pathlib.Path(raw) / name
                 target.mkdir()
                 targets[name] = target
-            roots = ACTIVATION.ActiveRunGCRoots.create(
+            ACTIVATION.ActiveRunGCRoots.create(
                 root,
                 run_id="run-1",
+                bead_id="bead-1",
                 generation_paths=targets,
                 allowed_prefixes=(f"{raw}/",),
+                generation="g1",
+                state_schema="1",
             )
             with self.assertRaises(ACTIVATION.RootLifecycleError):
-                roots.cleanup(terminal=False)
-            roots.cleanup(terminal=True)
-            self.assertFalse((root / "run-1").exists())
+                ACTIVATION.ActiveRunGCRoots.create(
+                    root,
+                    run_id="run-1",
+                    bead_id="bead-1",
+                    generation_paths=targets,
+                    allowed_prefixes=(f"{raw}/",),
+                    generation="g2",
+                    state_schema="1",
+                )
+
+    def test_gc_root_lifecycle_retains_cancelled_and_open_pr_runs(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="gascity-gcroots-terminal-") as raw:
+            root = pathlib.Path(raw) / "roots"
+            targets = {}
+            for name in ACTIVATION.GC_ROOT_NAMES:
+                target = pathlib.Path(raw) / name
+                target.mkdir()
+                targets[name] = target
+            for index, state in enumerate(
+                (
+                    {"workflow_state": "cancelled", "cancelled": True},
+                    {"workflow_state": "completed", "open_pr": True},
+                ),
+                start=1,
+            ):
+                run_id = f"run-{index}"
+                roots = ACTIVATION.ActiveRunGCRoots.create(
+                    root,
+                    run_id=run_id,
+                    bead_id=f"bead-{index}",
+                    generation_paths=targets,
+                    allowed_prefixes=(f"{raw}/",),
+                    generation="g1",
+                    state_schema="1",
+                )
+                state_path = pathlib.Path(raw) / "terminal" / f"{run_id}.json"
+                state_path.parent.mkdir(exist_ok=True)
+                state_path.write_text(
+                    json.dumps(
+                        {
+                            "schema": ACTIVATION.TERMINAL_RECORD_SCHEMA,
+                            "run_id": run_id,
+                            "bead_id": f"bead-{index}",
+                            "generation": "g1",
+                            "state_schema": "1",
+                            "terminal_status": "closed",
+                            **state,
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                with self.assertRaises(ACTIVATION.RootLifecycleError):
+                    roots.cleanup(state_path=state_path)
+                self.assertTrue((root / run_id).is_dir())
 
     def test_progress_helper_rejects_decision_operations(self) -> None:
         environment = {
@@ -842,6 +1353,7 @@ class LauncherServerHarness:
         root: pathlib.Path,
         *,
         extra: tuple[str, ...] = (),
+        gc_root_args: tuple[str, ...] = (),
         max_agents: int = 2,
         max_active_runs: int = 2,
     ):
@@ -851,6 +1363,7 @@ class LauncherServerHarness:
         self.socket_path = root / "agent.sock"
         self.process: subprocess.Popen[bytes] | None = None
         self.extra = extra
+        self.gc_root_args = gc_root_args
         self.max_agents = max_agents
         self.max_active_runs = max_active_runs
 
@@ -887,6 +1400,7 @@ class LauncherServerHarness:
         ]
         for value in self.extra:
             command.append(f"--fixture-child-arg={value}")
+        command.extend(self.gc_root_args)
         environment = dict(os.environ)
         environment["GC_TEST_MODE"] = "1"
         self.process = subprocess.Popen(
@@ -918,6 +1432,7 @@ class LauncherServerHarness:
         run_id: str = "run-1",
         bead_id: str = "bead-1",
         control_fd: int | None = None,
+        terminal_state_path: pathlib.Path | None = None,
     ) -> list[str]:
         command = [
             sys.executable,
@@ -941,6 +1456,8 @@ class LauncherServerHarness:
         ]
         if control_fd is not None:
             command.extend(["--control-fd", str(control_fd)])
+        if terminal_state_path is not None:
+            command.extend(["--terminal-state-path", str(terminal_state_path)])
         return command
 
     def stop(self) -> None:
@@ -1023,6 +1540,150 @@ class LauncherLifecycleTests(unittest.TestCase):
                     )
                 )
                 self._assert_lease_available(root, "run-1")
+            finally:
+                server.stop()
+
+    def test_production_admission_creates_and_reuses_gc_roots_across_restart(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="gascity-launcher-gcroots-") as raw:
+            root = pathlib.Path(raw)
+            targets = {}
+            for name in ACTIVATION.GC_ROOT_NAMES:
+                target = root / "targets" / name
+                target.mkdir(parents=True)
+                targets[name] = target
+            gc_root_directory = root / "gc-roots"
+            gc_args = (
+                "--generation",
+                "g1",
+                "--activation-script",
+                str(SCRIPT_ROOT / "service-activation.py"),
+                "--gc-root-directory",
+                str(gc_root_directory),
+                "--gc-root-prefix",
+                f"{root}/",
+                "--package-path",
+                str(targets["package"]),
+                "--city-path",
+                str(targets["city"]),
+                "--pack-path",
+                str(targets["pack"]),
+                "--profiles-path",
+                str(targets["profiles"]),
+                "--instructions-path",
+                str(targets["instructions"]),
+            )
+            server = LauncherServerHarness(root, gc_root_args=gc_args)
+            terminal_state_path = root / "terminal" / "run-1.json"
+            terminal_state_path.parent.mkdir(mode=0o700)
+            for _restart in range(2):
+                server.start()
+                try:
+                    process = subprocess.Popen(
+                        server.client_command(
+                            terminal_state_path=terminal_state_path,
+                        ),
+                        stdin=subprocess.PIPE,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        env=dict(os.environ),
+                    )
+                    self.assertIsNotNone(process.stdin)
+                    process.stdin.write(
+                        b'{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}\n'
+                    )
+                    process.stdin.flush()
+                    root_path = gc_root_directory / "run-1"
+                    deadline = time.monotonic() + 5
+                    while not root_path.exists() and time.monotonic() < deadline:
+                        time.sleep(0.01)
+                    if not root_path.exists():
+                        process.stdin.close()
+                        process.wait(timeout=5)
+                        stderr = (
+                            process.stderr.read().decode("utf-8", errors="replace")
+                            if process.stderr is not None
+                            else ""
+                        )
+                        self.fail(
+                            f"active-run GC roots were not created "
+                            f"(returncode={process.returncode}, stderr={stderr})"
+                        )
+                    self.assertTrue(root_path.is_dir())
+                    for name, target in targets.items():
+                        self.assertTrue((root_path / name).is_symlink())
+                        self.assertEqual(os.readlink(root_path / name), str(target))
+                    process.stdin.close()
+                    process.wait(timeout=5)
+                    self.assertEqual(process.returncode, 0)
+                finally:
+                    server.stop()
+            self.assertTrue((gc_root_directory / "run-1").is_dir())
+
+    def test_production_terminal_state_cleans_gc_roots(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="gascity-launcher-terminal-") as raw:
+            root = pathlib.Path(raw)
+            targets = {}
+            for name in ACTIVATION.GC_ROOT_NAMES:
+                target = root / "targets" / name
+                target.mkdir(parents=True)
+                targets[name] = target
+            gc_root_directory = root / "gc-roots"
+            gc_args = (
+                "--generation",
+                "g1",
+                "--activation-script",
+                str(SCRIPT_ROOT / "service-activation.py"),
+                "--gc-root-directory",
+                str(gc_root_directory),
+                "--gc-root-prefix",
+                f"{root}/",
+                "--package-path",
+                str(targets["package"]),
+                "--city-path",
+                str(targets["city"]),
+                "--pack-path",
+                str(targets["pack"]),
+                "--profiles-path",
+                str(targets["profiles"]),
+                "--instructions-path",
+                str(targets["instructions"]),
+            )
+            terminal_state_path = root / "terminal" / "run-1.json"
+            terminal_state_path.parent.mkdir(mode=0o700)
+            terminal_state_path.write_text(
+                json.dumps(
+                    {
+                        "schema": ACTIVATION.TERMINAL_RECORD_SCHEMA,
+                        "run_id": "run-1",
+                        "bead_id": "bead-1",
+                        "generation": "g1",
+                        "state_schema": "1",
+                        "terminal_status": "completed",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            server = LauncherServerHarness(root, gc_root_args=gc_args)
+            server.start()
+            try:
+                process = subprocess.Popen(
+                    server.client_command(
+                        terminal_state_path=terminal_state_path,
+                    ),
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    env=dict(os.environ),
+                )
+                self.assertIsNotNone(process.stdin)
+                process.stdin.close()
+                process.wait(timeout=5)
+                self.assertEqual(process.returncode, 0)
+                deadline = time.monotonic() + 2
+                root_path = gc_root_directory / "run-1"
+                while root_path.exists() and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                self.assertFalse(root_path.exists())
             finally:
                 server.stop()
 
@@ -1167,26 +1828,24 @@ class LauncherLifecycleTests(unittest.TestCase):
                             else ""
                         )
                         self.fail(f"same-run client exited early: {stderr}")
-                    try:
-                        probe = LAUNCHER.ConcurrencyLease.acquire(
-                            root / "leases",
-                            run_id="other-run",
-                            bead_id="other-bead",
-                            max_agents=3,
-                            max_active_runs=1,
-                        )
-                    except LAUNCHER.LeaseBusy:
-                        slots = self._active_run_slots(root)
-                        if (
-                            slots.get("0", {}).get("run_id") == "shared-run"
-                            and slots.get("0", {}).get("refcount") == 2
-                        ):
-                            break
-                    else:
-                        probe.release()
+                    slots = self._active_run_slots(root)
+                    if (
+                        slots.get("0", {}).get("run_id") == "shared-run"
+                        and slots.get("0", {}).get("refcount") == 2
+                    ):
+                        break
                     if time.monotonic() >= deadline:
                         self.fail("same-run clients did not hold the active-run lease")
                     time.sleep(0.01)
+
+                with self.assertRaises(LAUNCHER.LeaseBusy):
+                    LAUNCHER.ConcurrencyLease.acquire(
+                        root / "leases",
+                        run_id="other-run",
+                        bead_id="other-bead",
+                        max_agents=3,
+                        max_active_runs=1,
+                    )
 
                 server.process.send_signal(signal.SIGTERM)
                 server.process.wait(timeout=5)

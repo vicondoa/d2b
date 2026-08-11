@@ -153,6 +153,23 @@ AGENT_RELAY_CHUNK_BYTES = 64 * 1024
 AGENT_RELAY_MAX_ATTACHMENTS = 4
 AGENT_RELAY_METADATA_BYTES = 16 * 1024
 AGENT_RELAY_RESPONSE_BYTES = 8 * 1024
+GC_ROOT_METADATA_SCHEMA = 1
+TERMINAL_RECORD_SCHEMA = 1
+TERMINAL_RECORD_KEYS = frozenset(
+    {
+        "schema",
+        "run_id",
+        "bead_id",
+        "generation",
+        "state_schema",
+        "terminal_status",
+    }
+)
+TERMINAL_WORKFLOW_STATES = frozenset(
+    {"closed", "complete", "completed", "failed", "succeeded", "terminal"}
+)
+MAX_TERMINAL_RECORD_BYTES = 16 * 1024
+MAX_BEAD_STATE_BYTES = 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -302,10 +319,46 @@ def check_free_space(path_value: str, reserve_bytes: int) -> int:
         raise BoundaryError("free-space path is unavailable") from error
     available = usage.f_bavail * usage.f_frsize
     if available < reserve_bytes:
-        raise BoundaryError(
-            f"free-space reserve is below the configured minimum ({available} < {reserve_bytes})"
-        )
+        raise BoundaryError("free-space-reserve")
     return available
+
+
+def publish_reserve_breach(
+    status_path: str | os.PathLike[str],
+    *,
+    generation: str,
+    state_schema: str,
+) -> pathlib.Path:
+    """Atomically block all readiness-gated work after reserve exhaustion."""
+
+    if not generation or not state_schema:
+        raise BoundaryError("free-space reserve breach lacks generation metadata")
+    return write_status(
+        status_path,
+        _blocked_status(generation, state_schema, "free-space-reserve"),
+    )
+
+
+def monitor_free_space_once(
+    *,
+    path: str,
+    reserve_bytes: int,
+    status_path: str,
+    generation: str,
+    state_schema: str,
+) -> int:
+    """Publish the blocking status before returning a failed monitor result."""
+
+    try:
+        return check_free_space(path, reserve_bytes)
+    except BoundaryError as error:
+        if str(error) == "free-space-reserve":
+            publish_reserve_breach(
+                status_path,
+                generation=generation,
+                state_schema=state_schema,
+            )
+        raise
 
 
 def materialize_assets(source_value: str, destination_value: str) -> pathlib.Path:
@@ -349,7 +402,15 @@ def _read_bounded_line(stream: socket.socket, limit: int) -> bytes:
 
 def _open_private_listener(path_value: str, *, socket_group: str | None = None) -> socket.socket:
     path = _absolute_normalized_path(path_value, "sidecar socket")
-    path.parent.mkdir(mode=0o770, parents=True, exist_ok=True)
+    path.parent.mkdir(mode=0o750, parents=True, exist_ok=True)
+    parent_info = os.lstat(path.parent)
+    if (
+        stat.S_ISLNK(parent_info.st_mode)
+        or not stat.S_ISDIR(parent_info.st_mode)
+        or parent_info.st_uid != os.geteuid()
+        or parent_info.st_mode & 0o022
+    ):
+        raise BoundaryError("sidecar socket directory is not server-owned and non-writable")
     if os.path.lexists(path):
         info = os.lstat(path)
         if not stat.S_ISSOCK(info.st_mode):
@@ -377,6 +438,7 @@ def run_fdproxy_sidecar(
     fdproxy_script: str,
     listen: str,
     command: Sequence[str],
+    server_uid: int | None = None,
 ) -> int:
     """Connect one sidecar to egress, then pass only that channel to fdproxy."""
 
@@ -394,6 +456,8 @@ def run_fdproxy_sidecar(
         try:
             channel.settimeout(2.0)
             channel.connect(str(socket_path))
+            if server_uid is not None and _peer_uid(channel) != server_uid:
+                raise BoundaryError("egress server uid is unauthorized")
             channel_fd = channel.detach()
             break
         except OSError as error:
@@ -1236,6 +1300,399 @@ def increment_retry_counter(
         os.close(descriptor)
 
 
+def _terminal_root_path(
+    root_directory: str | os.PathLike[str],
+) -> pathlib.Path:
+    root = _absolute_normalized_path(str(root_directory), "GC-root directory")
+    return root.parent / "terminal"
+
+
+def _validate_terminal_root(
+    root_directory: str | os.PathLike[str],
+    *,
+    create: bool,
+) -> pathlib.Path:
+    root = _absolute_normalized_path(str(root_directory), "terminal state root")
+    if create:
+        try:
+            root.mkdir(mode=0o750, parents=False, exist_ok=True)
+        except OSError as error:
+            raise RootLifecycleError("terminal state root is unavailable") from error
+    try:
+        info = os.lstat(root)
+    except OSError as error:
+        raise RootLifecycleError("terminal state root is unavailable") from error
+    if (
+        stat.S_ISLNK(info.st_mode)
+        or not stat.S_ISDIR(info.st_mode)
+        or (create and info.st_uid != os.geteuid())
+        or info.st_mode & 0o027
+    ):
+        raise RootLifecycleError("terminal state root has unsafe ownership or mode")
+    return root
+
+
+def _terminal_state_path(
+    terminal_root: str | os.PathLike[str],
+    run_id: str,
+) -> pathlib.Path:
+    _identifier(run_id, "run id")
+    root = _validate_terminal_root(terminal_root, create=False)
+    return root / f"{run_id}.json"
+
+
+def _terminal_state_root_from_path(
+    state_path: str | os.PathLike[str],
+    *,
+    run_id: str,
+) -> pathlib.Path:
+    path = pathlib.Path(state_path)
+    if (
+        not path.is_absolute()
+        or any(part == ".." for part in path.parts)
+        or os.path.normpath(str(path)) != str(path)
+        or path.name != f"{run_id}.json"
+    ):
+        raise RootLifecycleError("terminal workflow state path is malformed")
+    return path.parent
+
+
+def _read_json_file(
+    path: pathlib.Path,
+    *,
+    label: str,
+    limit: int,
+    require_unwritable: bool = True,
+) -> object:
+    try:
+        descriptor = os.open(
+            path,
+            os.O_RDONLY
+            | os.O_CLOEXEC
+            | getattr(os, "O_NOFOLLOW", 0),
+        )
+    except OSError as error:
+        raise RootLifecycleError(f"{label} is unreadable") from error
+    try:
+        info = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or (require_unwritable and info.st_mode & 0o022)
+        ):
+            raise RootLifecycleError(f"{label} has unsafe ownership or mode")
+        payload = os.read(descriptor, limit + 1)
+    except OSError as error:
+        raise RootLifecycleError(f"{label} is unreadable") from error
+    finally:
+        os.close(descriptor)
+    if len(payload) > limit:
+        raise RootLifecycleError(f"{label} exceeds the size limit")
+    try:
+        return json.loads(payload.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise RootLifecycleError(f"{label} is malformed") from error
+
+
+def _read_terminal_record(
+    path: pathlib.Path,
+    *,
+    run_id: str,
+    bead_id: str | None,
+    generation: str,
+    state_schema: str,
+) -> dict[str, object]:
+    value = _read_json_file(
+        path,
+        label="terminal workflow state",
+        limit=MAX_TERMINAL_RECORD_BYTES,
+    )
+    if (
+        not isinstance(value, dict)
+        or set(value) != TERMINAL_RECORD_KEYS
+        or value.get("schema") != TERMINAL_RECORD_SCHEMA
+        or value.get("run_id") != run_id
+        or (bead_id is not None and value.get("bead_id") != bead_id)
+        or value.get("generation") != generation
+        or value.get("state_schema") != state_schema
+        or not isinstance(value.get("terminal_status"), str)
+        or value.get("terminal_status") not in TERMINAL_WORKFLOW_STATES
+    ):
+        raise RootLifecycleError("terminal workflow state is stale or forged")
+    return value
+
+
+def _read_cancel_marker(
+    cancellation_root: str | os.PathLike[str] | None,
+    *,
+    run_id: str,
+) -> bool:
+    if cancellation_root is None:
+        return False
+    root = _absolute_normalized_path(
+        str(cancellation_root),
+        "cancellation root",
+    )
+    if not root.exists():
+        return False
+    try:
+        info = os.lstat(root)
+    except OSError as error:
+        raise RootLifecycleError("cancellation root is unavailable") from error
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+        raise RootLifecycleError("cancellation root is unsafe")
+    marker = root / f"{run_id}.json"
+    if not marker.exists():
+        return False
+    value = _read_json_file(
+        marker,
+        label="cancellation marker",
+        limit=MAX_TERMINAL_RECORD_BYTES,
+    )
+    if (
+        not isinstance(value, dict)
+        or set(value) != {"schema", "run_id", "reason", "cancelled"}
+        or value.get("schema") != 1
+        or value.get("run_id") != run_id
+        or value.get("cancelled") is not True
+        or not isinstance(value.get("reason"), str)
+    ):
+        raise RootLifecycleError("cancellation marker is stale or forged")
+    return True
+
+
+def _read_authoritative_bead(
+    bd_path: str,
+    *,
+    bead_id: str,
+) -> dict[str, object]:
+    if not bd_path or "\x00" in bd_path:
+        raise RootLifecycleError("bd executable is malformed")
+    command = [bd_path, "show", bead_id, "--json"]
+    environment = dict(os.environ)
+    environment.update({"LANG": "C", "LC_ALL": "C"})
+    for name in (
+        "COPILOT_GITHUB_TOKEN",
+        "GITHUB_TOKEN",
+        "GH_TOKEN",
+        "DISCORD_TOKEN",
+        "BUILD_BUDDY_API_KEY",
+    ):
+        environment.pop(name, None)
+    try:
+        completed = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            env=environment,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        raise RootLifecycleError("authoritative root bead is unreadable") from error
+    if completed.returncode != 0:
+        raise RootLifecycleError("authoritative root bead query failed")
+    if len(completed.stdout.encode("utf-8")) > MAX_BEAD_STATE_BYTES:
+        raise RootLifecycleError("authoritative root bead is too large")
+    try:
+        value = json.loads(completed.stdout)
+    except json.JSONDecodeError as error:
+        raise RootLifecycleError("authoritative root bead is malformed") from error
+    if isinstance(value, list):
+        if len(value) != 1:
+            raise RootLifecycleError("authoritative root bead is ambiguous")
+        value = value[0]
+    if not isinstance(value, dict):
+        raise RootLifecycleError("authoritative root bead is malformed")
+    if value.get("id", value.get("bead_id")) != bead_id:
+        raise RootLifecycleError("authoritative root bead identity does not match")
+    metadata = value.get("metadata", {})
+    if metadata is None:
+        metadata = {}
+    if not isinstance(metadata, dict):
+        raise RootLifecycleError("authoritative root bead metadata is malformed")
+    value["metadata"] = metadata
+    return value
+
+
+def _bead_retention_reason(
+    bead: Mapping[str, object],
+    *,
+    cancellation: bool,
+) -> str | None:
+    if cancellation:
+        return "cancelled"
+    metadata = bead["metadata"]
+    assert isinstance(metadata, dict)
+    for container in (bead, metadata):
+        if container.get("open_pr") is True:
+            return "open-pr"
+        for key in ("pull_request_url", "pr_url"):
+            value = container.get(key)
+            if isinstance(value, str) and value.strip():
+                return "open-pr"
+        state = container.get("pull_request_state")
+        if isinstance(state, str) and state.lower() in {"open", "draft"}:
+            return "open-pr"
+    return None
+
+
+def record_terminal_state(
+    terminal_root: str | os.PathLike[str],
+    *,
+    run_id: str,
+    bead_id: str,
+    generation: str,
+    state_schema: str,
+    bd_path: str = "bd",
+    cancellation_root: str | os.PathLike[str] | None = None,
+) -> dict[str, object]:
+    """Record terminal state only after the durable root bead is terminal."""
+
+    _identifier(run_id, "run id")
+    _identifier(bead_id, "bead id")
+    if not generation or not state_schema:
+        raise RootLifecycleError("terminal state generation and schema are required")
+    root = _validate_terminal_root(terminal_root, create=True)
+    bead = _read_authoritative_bead(bd_path, bead_id=bead_id)
+    metadata = bead["metadata"]
+    assert isinstance(metadata, dict)
+    for key, expected in (
+        ("run_id", run_id),
+        ("generation", generation),
+        ("state_schema", state_schema),
+    ):
+        if key in metadata and metadata[key] != expected:
+            raise RootLifecycleError("authoritative root bead metadata is stale")
+    status = bead.get("status")
+    if not isinstance(status, str):
+        raise RootLifecycleError("authoritative root bead status is malformed")
+    status = status.strip().lower()
+    open_pr_intent = (
+        os.environ.get("GC_PUBLISH_ENABLED") == "1"
+        and os.environ.get("GC_PUBLISH_OPEN_PR") == "1"
+    )
+    retention_reason = (
+        "open-pr"
+        if open_pr_intent
+        else _bead_retention_reason(
+            bead,
+            cancellation=_read_cancel_marker(
+                cancellation_root,
+                run_id=run_id,
+            ),
+        )
+    )
+    if retention_reason is not None:
+        return {
+            "recorded": False,
+            "retained": True,
+            "reason": retention_reason,
+            "run_id": run_id,
+        }
+    if status not in TERMINAL_WORKFLOW_STATES:
+        return {
+            "recorded": False,
+            "retained": True,
+            "reason": "nonterminal",
+            "run_id": run_id,
+            "status": status,
+        }
+    record = {
+        "schema": TERMINAL_RECORD_SCHEMA,
+        "run_id": run_id,
+        "bead_id": bead_id,
+        "generation": generation,
+        "state_schema": state_schema,
+        "terminal_status": status,
+    }
+    target = root / f"{run_id}.json"
+    lock_path = root / ".lock"
+    try:
+        lock_fd = os.open(
+            lock_path,
+            os.O_RDWR
+            | os.O_CREAT
+            | os.O_CLOEXEC
+            | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+        )
+    except OSError as error:
+        raise RootLifecycleError("terminal state lock is unavailable") from error
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        if target.exists() or target.is_symlink():
+            if target.is_symlink():
+                raise RootLifecycleError("terminal workflow state is an unsafe symlink")
+            existing = _read_terminal_record(
+                target,
+                run_id=run_id,
+                bead_id=bead_id,
+                generation=generation,
+                state_schema=state_schema,
+            )
+            if existing != record:
+                raise RootLifecycleError("terminal workflow state is stale or forged")
+            return {
+                "recorded": True,
+                "retained": False,
+                "idempotent": True,
+                "run_id": run_id,
+                "terminal_status": status,
+            }
+        temporary = root / f".{run_id}.json.tmp"
+        if temporary.exists() or temporary.is_symlink():
+            if temporary.is_symlink():
+                raise RootLifecycleError("terminal state temporary file is unsafe")
+            temporary.unlink()
+        descriptor = os.open(
+            temporary,
+            os.O_WRONLY
+            | os.O_CREAT
+            | os.O_EXCL
+            | os.O_CLOEXEC
+            | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+        )
+        try:
+            encoded = (
+                json.dumps(record, sort_keys=True, separators=(",", ":"))
+                + "\n"
+            ).encode("utf-8")
+            offset = 0
+            while offset < len(encoded):
+                offset += os.write(descriptor, encoded[offset:])
+            os.fsync(descriptor)
+            os.fchmod(descriptor, 0o640)
+        finally:
+            os.close(descriptor)
+        os.replace(temporary, target)
+        directory_fd = os.open(
+            root,
+            os.O_RDONLY
+            | os.O_CLOEXEC
+            | getattr(os, "O_DIRECTORY", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+        )
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+        return {
+            "recorded": True,
+            "retained": False,
+            "idempotent": False,
+            "run_id": run_id,
+            "terminal_status": status,
+        }
+    finally:
+        try:
+            temporary.unlink(missing_ok=True)
+        except UnboundLocalError:
+            pass
+        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        os.close(lock_fd)
+
+
 class ActiveRunGCRoots:
     """Create and remove only this run's immutable Nix GC-root symlinks."""
 
@@ -1244,14 +1701,203 @@ class ActiveRunGCRoots:
         directory: pathlib.Path,
         names: Sequence[str],
         *,
+        bead_id: str | None = None,
         generation: str | None = None,
         state_schema: str | None = None,
+        terminal_state_root: pathlib.Path | None = None,
+        allowed_prefixes: Sequence[str] = ("/nix/store/",),
     ):
         self.directory = directory
         self.names = tuple(names)
+        self.bead_id = bead_id
         self.generation = generation
         self.state_schema = state_schema
+        self.terminal_state_root = terminal_state_root
+        self.allowed_prefixes = tuple(allowed_prefixes)
         self.terminal = False
+
+    @staticmethod
+    def _validate_root_directory(path: pathlib.Path) -> pathlib.Path:
+        if not path.is_absolute() or any(part == ".." for part in path.parts):
+            raise RootLifecycleError("GC-root directory must be absolute and normalized")
+        if path.exists() and (path.is_symlink() or not path.is_dir()):
+            raise RootLifecycleError("GC-root directory is not a directory")
+        path.mkdir(mode=0o700, parents=True, exist_ok=True)
+        info = os.lstat(path)
+        if (
+            stat.S_ISLNK(info.st_mode)
+            or not stat.S_ISDIR(info.st_mode)
+            or info.st_uid != os.geteuid()
+            or info.st_mode & 0o077
+        ):
+            raise RootLifecycleError("GC-root directory is not service-owned")
+        return path
+
+    @staticmethod
+    def _validate_existing_directory(path: pathlib.Path) -> pathlib.Path:
+        if not path.is_absolute() or any(part == ".." for part in path.parts):
+            raise RootLifecycleError("GC-root directory must be absolute and normalized")
+        try:
+            info = os.lstat(path)
+        except OSError as error:
+            raise RootLifecycleError("active-run GC-root directory is unavailable") from error
+        if (
+            stat.S_ISLNK(info.st_mode)
+            or not stat.S_ISDIR(info.st_mode)
+            or info.st_uid != os.geteuid()
+            or info.st_mode & 0o077
+        ):
+            raise RootLifecycleError("active-run GC-root directory is not service-owned")
+        return path
+
+    @staticmethod
+    def _target(
+        value: str | os.PathLike[str],
+        *,
+        name: str,
+        allowed_prefixes: Sequence[str],
+    ) -> pathlib.Path:
+        if not isinstance(value, (str, os.PathLike)):
+            raise RootLifecycleError(f"GC target is malformed for {name}")
+        target = pathlib.Path(value)
+        target_text = str(target)
+        if (
+            not target.is_absolute()
+            or any(part == ".." for part in target.parts)
+            or os.path.normpath(target_text) != target_text
+        ):
+            raise RootLifecycleError(f"GC target is malformed: {target}")
+        try:
+            approved = any(
+                os.path.commonpath((target_text, str(prefix))) == str(prefix).rstrip("/")
+                for prefix in allowed_prefixes
+            )
+        except ValueError:
+            approved = False
+        if not approved:
+            raise RootLifecycleError(f"GC target is outside the approved store: {target}")
+        if not target.exists():
+            raise RootLifecycleError(f"GC target does not exist: {target}")
+        return target
+
+    @staticmethod
+    def _metadata_path(directory: pathlib.Path) -> pathlib.Path:
+        return directory / "metadata.json"
+
+    @classmethod
+    def _read_existing(
+        cls,
+        directory: pathlib.Path,
+        *,
+        run_id: str,
+        bead_id: str | None,
+        generation: str,
+        state_schema: str,
+        terminal_state_root: pathlib.Path | None,
+        allowed_prefixes: Sequence[str],
+    ) -> "ActiveRunGCRoots":
+        cls._validate_existing_directory(directory)
+        metadata_path = cls._metadata_path(directory)
+        try:
+            with metadata_path.open("r", encoding="utf-8") as stream:
+                metadata = json.load(stream)
+        except (OSError, json.JSONDecodeError) as error:
+            raise RootLifecycleError("active-run GC-root metadata is unreadable") from error
+        try:
+            metadata_info = os.lstat(metadata_path)
+        except OSError as error:
+            raise RootLifecycleError("active-run GC-root metadata is unavailable") from error
+        if (
+            not stat.S_ISREG(metadata_info.st_mode)
+            or metadata_info.st_uid != os.geteuid()
+            or metadata_info.st_mode & 0o077
+        ):
+            raise RootLifecycleError("active-run GC-root metadata is not service-owned")
+        if (
+            not isinstance(metadata, dict)
+            or set(metadata)
+            != {
+                "schema",
+                "run_id",
+                "bead_id",
+                "generation",
+                "state_schema",
+                "targets",
+            }
+            or metadata.get("schema") != GC_ROOT_METADATA_SCHEMA
+            or metadata.get("run_id") != run_id
+            or (bead_id is not None and metadata.get("bead_id") != bead_id)
+            or metadata.get("generation") != generation
+            or metadata.get("state_schema") != state_schema
+            or not isinstance(metadata.get("targets"), dict)
+            or set(metadata["targets"]) != set(GC_ROOT_NAMES)
+        ):
+            raise RootLifecycleError("active-run GC roots belong to an incompatible generation")
+        try:
+            entries = {entry.name for entry in directory.iterdir()}
+        except OSError as error:
+            raise RootLifecycleError("active-run GC-root directory is unreadable") from error
+        if entries != set(GC_ROOT_NAMES) | {"metadata.json"}:
+            raise RootLifecycleError("active-run GC-root directory has an incompatible shape")
+        targets = {
+            name: cls._target(
+                metadata["targets"][name],
+                name=name,
+                allowed_prefixes=allowed_prefixes,
+            )
+            for name in GC_ROOT_NAMES
+        }
+        for name, target in targets.items():
+            link = directory / name
+            try:
+                if not link.is_symlink() or os.readlink(link) != str(target):
+                    raise RootLifecycleError(f"active-run GC root is not pinned: {link}")
+            except OSError as error:
+                raise RootLifecycleError(f"active-run GC root is unavailable: {link}") from error
+        return cls(
+            directory,
+            GC_ROOT_NAMES,
+            bead_id=str(metadata["bead_id"]),
+            generation=generation,
+            state_schema=state_schema,
+            terminal_state_root=terminal_state_root,
+            allowed_prefixes=allowed_prefixes,
+        )
+
+    @staticmethod
+    def _write_metadata(
+        path: pathlib.Path,
+        *,
+        run_id: str,
+        bead_id: str,
+        generation: str,
+        state_schema: str,
+        targets: Mapping[str, pathlib.Path],
+    ) -> None:
+        metadata = {
+            "schema": GC_ROOT_METADATA_SCHEMA,
+            "run_id": run_id,
+            "bead_id": bead_id,
+            "generation": generation,
+            "state_schema": state_schema,
+            "targets": {name: str(targets[name]) for name in GC_ROOT_NAMES},
+        }
+        temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+        try:
+            with temporary.open("x", encoding="utf-8") as stream:
+                json.dump(metadata, stream, sort_keys=True, separators=(",", ":"))
+                stream.write("\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.chmod(temporary, 0o600)
+            os.replace(temporary, path)
+            directory = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+        finally:
+            temporary.unlink(missing_ok=True)
 
     @classmethod
     def create(
@@ -1259,66 +1905,204 @@ class ActiveRunGCRoots:
         root_directory: str | os.PathLike[str],
         *,
         run_id: str,
+        bead_id: str | None = None,
         generation_paths: Mapping[str, str | os.PathLike[str]],
         allowed_prefixes: Sequence[str] = ("/nix/store/",),
         generation: str | None = None,
         state_schema: str | None = None,
+        terminal_state_path: str | os.PathLike[str] | None = None,
     ) -> "ActiveRunGCRoots":
         _identifier(run_id, "run id")
-        if generation is not None and not generation:
-            raise RootLifecycleError("GC-root generation is empty")
-        if state_schema is not None and not state_schema:
-            raise RootLifecycleError("GC-root state schema is empty")
+        bead_id = bead_id or run_id
+        _identifier(bead_id, "bead id")
+        if not generation or not state_schema:
+            raise RootLifecycleError("GC-root generation and state schema are required")
         if set(generation_paths) != set(GC_ROOT_NAMES):
             raise RootLifecycleError("active-run GC roots have an incomplete shape")
-        root = pathlib.Path(root_directory)
-        if not root.is_absolute() or any(part == ".." for part in root.parts):
-            raise RootLifecycleError("GC-root directory must be absolute and normalized")
+        terminal_state_root = None
+        if terminal_state_path is not None:
+            terminal_state_root = _terminal_state_root_from_path(
+                terminal_state_path,
+                run_id=run_id,
+            )
+        root = cls._validate_root_directory(pathlib.Path(root_directory))
         directory = root / run_id
-        directory.mkdir(mode=0o700, parents=True, exist_ok=False)
-        directory_stat = directory.stat()
-        if directory_stat.st_uid != os.geteuid() or directory_stat.st_mode & 0o077:
-            directory.rmdir()
-            raise RootLifecycleError("GC-root directory is not service-owned")
+        lock_path = root / ".lock"
+        lock_fd = os.open(
+            lock_path,
+            os.O_RDWR | os.O_CREAT | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+        )
         created: list[pathlib.Path] = []
+        created_directory = False
         try:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX)
+            if directory.exists():
+                if directory.is_symlink() or not directory.is_dir():
+                    raise RootLifecycleError("active-run GC-root path is not a directory")
+                return cls._read_existing(
+                    directory,
+                    run_id=run_id,
+                    bead_id=bead_id,
+                    generation=generation,
+                    state_schema=state_schema,
+                    terminal_state_root=terminal_state_root,
+                    allowed_prefixes=allowed_prefixes,
+                )
+            directory.mkdir(mode=0o700)
+            created_directory = True
+            directory_stat = os.lstat(directory)
+            if (
+                directory_stat.st_uid != os.geteuid()
+                or directory_stat.st_mode & 0o077
+            ):
+                raise RootLifecycleError("GC-root directory is not service-owned")
+            targets = {
+                name: cls._target(
+                    generation_paths[name],
+                    name=name,
+                    allowed_prefixes=allowed_prefixes,
+                )
+                for name in GC_ROOT_NAMES
+            }
             for name in GC_ROOT_NAMES:
-                target = pathlib.Path(generation_paths[name])
-                target_text = str(target)
-                if not target.is_absolute() or any(part == ".." for part in target.parts):
-                    raise RootLifecycleError(f"GC target is malformed: {target}")
-                if not any(target_text.startswith(prefix) for prefix in allowed_prefixes):
-                    raise RootLifecycleError(f"GC target is outside the approved store: {target}")
-                if not target.exists():
-                    raise RootLifecycleError(f"GC target does not exist: {target}")
                 link = directory / name
-                os.symlink(target_text, link)
+                os.symlink(str(targets[name]), link)
                 created.append(link)
+            cls._write_metadata(
+                cls._metadata_path(directory),
+                run_id=run_id,
+                bead_id=bead_id,
+                generation=generation,
+                state_schema=state_schema,
+                targets=targets,
+            )
+        except FileExistsError:
+            return cls._read_existing(
+                directory,
+                run_id=run_id,
+                bead_id=bead_id,
+                generation=generation,
+                state_schema=state_schema,
+                terminal_state_root=terminal_state_root,
+                allowed_prefixes=allowed_prefixes,
+            )
         except (OSError, RootLifecycleError):
-            for link in reversed(created):
-                link.unlink(missing_ok=True)
-            directory.rmdir()
+            if created_directory:
+                for link in reversed(created):
+                    link.unlink(missing_ok=True)
+                cls._metadata_path(directory).unlink(missing_ok=True)
+                directory.rmdir()
             raise
+        finally:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            os.close(lock_fd)
         return cls(
             directory,
             GC_ROOT_NAMES,
+            bead_id=bead_id,
+            generation=generation,
+            state_schema=state_schema,
+            terminal_state_root=terminal_state_root,
+            allowed_prefixes=allowed_prefixes,
+        )
+
+    def _read_terminal_state(
+        self,
+        state_path: str | os.PathLike[str],
+        *,
+        run_id: str,
+        bead_id: str | None,
+        generation: str,
+        state_schema: str,
+    ) -> dict[str, object]:
+        path = pathlib.Path(state_path)
+        expected_root = self.terminal_state_root
+        if expected_root is None:
+            expected_root = self.directory.parent.parent / "terminal"
+        else:
+            supplied_root = _terminal_state_root_from_path(
+                state_path,
+                run_id=self.directory.name,
+            )
+            if supplied_root != expected_root:
+                raise RootLifecycleError(
+                    "terminal workflow state path is not run-bound"
+                )
+        if not path.is_absolute() or any(part == ".." for part in path.parts):
+            raise RootLifecycleError("terminal workflow state path is malformed")
+        if path != expected_root / f"{run_id}.json":
+            raise RootLifecycleError("terminal workflow state path is not run-bound")
+        _validate_terminal_root(expected_root, create=False)
+        return _read_terminal_record(
+            path,
+            run_id=run_id,
+            bead_id=bead_id,
             generation=generation,
             state_schema=state_schema,
         )
 
-    def cleanup(self, *, terminal: bool) -> None:
+    def cleanup(
+        self,
+        *,
+        state_path: str | os.PathLike[str] | None = None,
+        terminal: bool = False,
+    ) -> None:
         if self.terminal:
-            raise RootLifecycleError("active-run GC roots were already cleaned")
-        if not terminal:
-            raise RootLifecycleError("active-run GC roots may be removed only at terminal cleanup")
-        for name in self.names:
-            link = self.directory / name
-            if link.is_symlink():
-                link.unlink()
-            elif link.exists():
-                raise RootLifecycleError(f"GC-root path is not a symlink: {link}")
-        self.directory.rmdir()
-        self.terminal = True
+            return
+        if terminal or state_path is None:
+            raise RootLifecycleError("durable terminal workflow state is required")
+        lock_path = self.directory.parent / ".lock"
+        try:
+            lock_fd = os.open(
+                lock_path,
+                os.O_RDWR | os.O_CREAT | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0),
+                0o600,
+            )
+        except OSError as error:
+            raise RootLifecycleError("active-run GC-root lock is unavailable") from error
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX)
+            if self.directory.is_symlink():
+                raise RootLifecycleError("active-run GC-root directory is an unsafe symlink")
+            if not self.directory.exists():
+                self._read_terminal_state(
+                    state_path,
+                    run_id=self.directory.name,
+                    bead_id=self.bead_id,
+                    generation=self.generation or "",
+                    state_schema=self.state_schema or "",
+                )
+                self.terminal = True
+                return
+            self._read_terminal_state(
+                state_path,
+                run_id=self.directory.name,
+                bead_id=self.bead_id,
+                generation=self.generation or "",
+                state_schema=self.state_schema or "",
+            )
+            self._read_existing(
+                self.directory,
+                run_id=self.directory.name,
+                bead_id=self.bead_id,
+                generation=self.generation or "",
+                state_schema=self.state_schema or "",
+                terminal_state_root=self.terminal_state_root,
+                allowed_prefixes=self.allowed_prefixes,
+            )
+            for name in self.names:
+                link = self.directory / name
+                if link.is_symlink():
+                    link.unlink()
+                elif link.exists():
+                    raise RootLifecycleError(f"GC-root path is not a symlink: {link}")
+            self._metadata_path(self.directory).unlink()
+            self.directory.rmdir()
+            self.terminal = True
+        finally:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            os.close(lock_fd)
 
 
 def _probe_environment(proxy_fd: int | None = None) -> dict[str, str]:
@@ -1453,6 +2237,9 @@ def _parse_args() -> argparse.Namespace:
     monitor_parser = subparsers.add_parser("free-space-monitor")
     monitor_parser.add_argument("--path", required=True)
     monitor_parser.add_argument("--reserve-bytes", type=int, required=True)
+    monitor_parser.add_argument("--status-path", required=True)
+    monitor_parser.add_argument("--generation", required=True)
+    monitor_parser.add_argument("--state-schema", required=True)
     monitor_parser.add_argument("--interval", type=float, default=30.0)
     monitor_parser.add_argument("--once", action="store_true")
 
@@ -1474,6 +2261,7 @@ def _parse_args() -> argparse.Namespace:
     fdproxy_parser.add_argument("--egress-socket", required=True)
     fdproxy_parser.add_argument("--fdproxy", required=True)
     fdproxy_parser.add_argument("--listen", default="127.0.0.1:3128")
+    fdproxy_parser.add_argument("--server-uid", type=int, required=True)
     fdproxy_parser.add_argument("wrapped", nargs=argparse.REMAINDER)
 
     activate_parser = subparsers.add_parser("activate")
@@ -1487,6 +2275,7 @@ def _parse_args() -> argparse.Namespace:
     activate_parser.add_argument("--lease-root", required=True)
     activate_parser.add_argument("--runtime-root", required=True)
     activate_parser.add_argument("--egress-socket")
+    activate_parser.add_argument("--egress-server-uid", type=int)
     activate_parser.add_argument("--timeout", type=float, default=20.0)
 
     prompt_parser = subparsers.add_parser("reconstruct-prompt")
@@ -1494,10 +2283,23 @@ def _parse_args() -> argparse.Namespace:
     prompt_parser.add_argument("--generation", required=True)
     prompt_parser.add_argument("--state-schema", required=True)
 
+    terminal_parser = subparsers.add_parser("write-terminal-state")
+    terminal_parser.add_argument("--terminal-state-root", required=True)
+    terminal_parser.add_argument("--run-id", required=True)
+    terminal_parser.add_argument("--bead-id", required=True)
+    terminal_parser.add_argument("--generation", required=True)
+    terminal_parser.add_argument("--state-schema", required=True)
+    terminal_parser.add_argument("--bd-path", default="bd")
+    terminal_parser.add_argument("--cancellation-root")
+
     roots_parser = subparsers.add_parser("gc-root-cleanup")
     roots_parser.add_argument("--root-directory", required=True)
     roots_parser.add_argument("--run-id", required=True)
-    roots_parser.add_argument("--terminal", action="store_true")
+    roots_parser.add_argument("--bead-id")
+    roots_parser.add_argument("--generation", required=True)
+    roots_parser.add_argument("--state-schema", required=True)
+    roots_parser.add_argument("--state-path", required=True)
+    roots_parser.add_argument("--allowed-prefix", action="append", default=["/nix/store/"])
     return parser.parse_args()
 
 
@@ -1520,7 +2322,13 @@ def main() -> int:
     if args.command == "free-space-monitor":
         while True:
             try:
-                check_free_space(args.path, args.reserve_bytes)
+                monitor_free_space_once(
+                    path=args.path,
+                    reserve_bytes=args.reserve_bytes,
+                    status_path=args.status_path,
+                    generation=args.generation,
+                    state_schema=args.state_schema,
+                )
             except BoundaryError as error:
                 print(str(error), file=sys.stderr)
                 return 1
@@ -1556,6 +2364,7 @@ def main() -> int:
             fdproxy_script=args.fdproxy,
             listen=args.listen,
             command=command,
+            server_uid=args.server_uid,
         )
     if args.command == "activate":
         def probe(profile: str) -> ProbeResult:
@@ -1564,6 +2373,11 @@ def main() -> int:
                 if args.egress_socket:
                     proxy_channel = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
                     proxy_channel.connect(args.egress_socket)
+                    if (
+                        args.egress_server_uid is not None
+                        and _peer_uid(proxy_channel) != args.egress_server_uid
+                    ):
+                        raise ActivationError("egress server uid is unauthorized")
                 return run_profile_probe(
                     args.profile_script,
                     profile=profile,
@@ -1604,6 +2418,19 @@ def main() -> int:
             )
         )
         return 0
+    if args.command == "write-terminal-state":
+        result = record_terminal_state(
+            args.terminal_state_root,
+            run_id=args.run_id,
+            bead_id=args.bead_id,
+            generation=args.generation,
+            state_schema=args.state_schema,
+            bd_path=args.bd_path,
+            cancellation_root=args.cancellation_root,
+        )
+        json.dump(result, sys.stdout, sort_keys=True, separators=(",", ":"))
+        sys.stdout.write("\n")
+        return 0
     if args.command == "gc-root-cleanup":
         _identifier(args.run_id, "run id")
         root_directory = pathlib.Path(args.root_directory)
@@ -1612,8 +2439,35 @@ def main() -> int:
         ):
             raise RootLifecycleError("GC-root directory must be absolute and normalized")
         directory = root_directory / args.run_id
-        roots = ActiveRunGCRoots(directory, GC_ROOT_NAMES)
-        roots.cleanup(terminal=args.terminal)
+        if directory.exists() and directory.is_symlink():
+            raise RootLifecycleError("active-run GC-root path is an unsafe symlink")
+        if directory.exists():
+            roots = ActiveRunGCRoots._read_existing(
+                directory,
+                run_id=args.run_id,
+                bead_id=args.bead_id,
+                generation=args.generation,
+                state_schema=args.state_schema,
+                terminal_state_root=_terminal_state_root_from_path(
+                    args.state_path,
+                    run_id=args.run_id,
+                ),
+                allowed_prefixes=tuple(args.allowed_prefix),
+            )
+        else:
+            roots = ActiveRunGCRoots(
+                directory,
+                GC_ROOT_NAMES,
+                bead_id=args.bead_id,
+                generation=args.generation,
+                state_schema=args.state_schema,
+                terminal_state_root=_terminal_state_root_from_path(
+                    args.state_path,
+                    run_id=args.run_id,
+                ),
+                allowed_prefixes=tuple(args.allowed_prefix),
+            )
+        roots.cleanup(state_path=args.state_path)
         return 0
     raise ActivationError("unknown activation command")
 

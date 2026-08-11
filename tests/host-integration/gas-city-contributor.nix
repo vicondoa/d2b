@@ -21,7 +21,16 @@ let
     set -eu
     role="$1"
     expected="$2"
-    root=/run/gascity-contributor/test
+    case "$role" in
+      main) root=/run/gascity-contributor/test ;;
+      agent) root=/run/gascity-agent/test ;;
+      discord) root=/run/gascity-discord/test ;;
+      publisher) root=/run/gascity-publisher/test ;;
+      egress) root=/run/gascity-egress/test ;;
+      check) root=/run/gascity-check/test ;;
+      buildbuddy) root=/run/gascity-buildbuddy/test ;;
+      *) exit 2 ;;
+    esac
     install -d -m 0770 "$root"
     marker="$root/credentials-$role"
     credential_dir="''${CREDENTIALS_DIRECTORY-}"
@@ -224,8 +233,8 @@ let
       import sys
       import threading
 
-      SOCKET = pathlib.Path("/run/gascity-contributor/egress.sock")
-      MARKERS = pathlib.Path("/run/gascity-contributor/test")
+      SOCKET = pathlib.Path("/run/gascity-egress/egress.sock")
+      MARKERS = pathlib.Path("/run/gascity-egress/test")
       ALLOWED_UIDS = {45101, 45102, 45103, 45105, 45106}
       ALLOWED_HOSTS = {
           "api.github.com",
@@ -395,9 +404,9 @@ let
       FIXTURE = pathlib.Path("/var/lib/gascity-contributor/state/fixture");
       WORKTREE = pathlib.Path("/var/lib/gascity-contributor/state/worktrees/test-run");
       LEASE_ROOT = pathlib.Path("/var/lib/gascity-contributor/state/leases");
-      AGENT_RUNTIME = pathlib.Path("/run/gascity-contributor/agent");
-      PRIVATE_SOCKET = pathlib.Path("/run/gascity-agent/agent.sock");
-      PUBLIC_SOCKET = RUNTIME / "agent.sock";
+      AGENT_RUNTIME = pathlib.Path("/run/gascity-agent/runtime");
+      PRIVATE_SOCKET = pathlib.Path("/run/gascity-agent/private.sock");
+      PUBLIC_SOCKET = pathlib.Path("/run/gascity-agent/agent.sock");
       READINESS = RUNTIME / "readiness.json";
       GENERATION = os.environ["GC_FIXTURE_GENERATION"];
       stopping = False
@@ -526,7 +535,7 @@ let
               "--lease-root",
               "/var/lib/gascity-contributor/state/leases",
               "--runtime-root",
-              "/run/gascity-contributor/agent",
+              "/run/gascity-agent/runtime",
               "--runtime-path",
               "${contributor}/bin",
               "--runtime-path",
@@ -549,6 +558,22 @@ let
               GENERATION,
               "--state-schema",
               "1",
+              "--activation-script",
+              "${contributorScripts}/service-activation.py",
+              "--gc-root-directory",
+              "/nix/var/nix/gcroots/gascity-contributor",
+              "--gc-root-prefix",
+              "${contributor}/",
+              "--package-path",
+              "${contributor}",
+              "--city-path",
+              "${contributor}/share/gas-city-contributor/city",
+              "--pack-path",
+              "${contributor}/share/gas-city-contributor/pack",
+              "--profiles-path",
+              "${contributor}/share/gas-city-contributor/copilot",
+              "--instructions-path",
+              "${contributor}/share/gas-city-contributor/copilot/instructions.md",
               "--allow-unsafe-fixture",
               "--fixture-child-script",
               FAKE_ACP,
@@ -759,7 +784,7 @@ let
       worktree.mkdir(mode=0o770, parents=True, exist_ok=True)
       connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
       connection.settimeout(3)
-      connection.connect("/run/gascity-agent/agent.sock")
+      connection.connect("/run/gascity-agent/private.sock")
       request = {
           "protocol": "gascity-agent/1",
           "operation": "launch",
@@ -805,7 +830,7 @@ let
       proxy = "${contributorScripts}/fdproxy.py"
       port = int(sys.argv[1]) if len(sys.argv) > 1 else 18999
       channel = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-      channel.connect("/run/gascity-contributor/egress.sock")
+      channel.connect("/run/gascity-egress/egress.sock")
       descriptor = channel.fileno()
       process = subprocess.Popen(
           [
@@ -908,6 +933,38 @@ let
       else:
           raise SystemExit("free-space fixture unexpectedly passed")
   '';
+  };
+
+  reserveBreachFixture = pkgs.writeTextFile {
+    name = "gascity-host-reserve-breach-fixture";
+    executable = true;
+    text = ''
+      #!${contributorPython}
+      import importlib.util
+      import pathlib
+      import sys
+      import time
+
+      path = pathlib.Path("${contributorScripts}/service-activation.py")
+      spec = importlib.util.spec_from_file_location("activation", path)
+      module = importlib.util.module_from_spec(spec)
+      sys.modules[spec.name] = module
+      spec.loader.exec_module(module)
+      trigger = pathlib.Path("/run/gascity-contributor/test/reserve-breach")
+      status = pathlib.Path("/run/gascity-contributor/readiness.json")
+      while not trigger.exists():
+          time.sleep(0.05)
+      (trigger.parent / "reserve-breach-observed").write_text(
+          "available=4096\n",
+          encoding="utf-8",
+      )
+      module.publish_reserve_breach(
+          status,
+          generation="${generation}",
+          state_schema="1",
+      )
+      raise SystemExit(1)
+    '';
   };
 
   taskFixture = pkgs.writeTextFile {
@@ -1082,16 +1139,18 @@ pkgs.testers.runNixOSTest {
       ExecStartPre = [ "${credentialProbe} egress none" ];
       ExecStart = lib.mkForce fakeEgress;
     };
+    systemd.services.gascity-free-space-monitor.serviceConfig.ExecStart =
+      lib.mkForce reserveBreachFixture;
     systemd.services.gascity-discord.serviceConfig.ExecStartPre =
       [ "${credentialProbe} discord discord-bot-token" ];
     systemd.services.gascity-discord.serviceConfig.ExecStart =
       lib.mkForce
-        "${fakeSidecar} /run/gascity-contributor/discord.sock gascity-discord-channel discord";
+        "${fakeSidecar} /run/gascity-discord/discord.sock gascity-discord-channel discord";
     systemd.services.gascity-publisher.serviceConfig.ExecStartPre =
       [ "${credentialProbe} publisher github-app-private-key" ];
     systemd.services.gascity-publisher.serviceConfig.ExecStart =
       lib.mkForce
-        "${fakeSidecar} /run/gascity-contributor/publisher.sock gascity-publisher-channel";
+        "${fakeSidecar} /run/gascity-publisher/publisher.sock gascity-publisher-channel";
     systemd.services.gascity-check.serviceConfig.ExecStartPre =
       [ "${credentialProbe} check none" ];
     systemd.services.gascity-buildbuddy-proxy.serviceConfig.ExecStartPre =
@@ -1147,10 +1206,10 @@ pkgs.testers.runNixOSTest {
         machine.wait_for_unit(unit)
 
     for path in [
-        "/run/gascity-contributor/egress.sock",
-        "/run/gascity-contributor/agent.sock",
-        "/run/gascity-contributor/discord.sock",
-        "/run/gascity-contributor/publisher.sock",
+        "/run/gascity-egress/egress.sock",
+        "/run/gascity-agent/agent.sock",
+        "/run/gascity-discord/discord.sock",
+        "/run/gascity-publisher/publisher.sock",
         "/run/gascity-contributor/readiness.json",
         "/run/gascity-contributor/test/main-ready",
         "/var/lib/gascity-contributor/state/fixture/acp-current.pid",
@@ -1270,8 +1329,11 @@ pkgs.testers.runNixOSTest {
     check_exec = machine.succeed("systemctl cat gascity-check.service")
     assert "--max-heavy-checks 1" in check_exec
     assert "--timeout-seconds 7" in check_exec
-    assert "--socket /run/gascity-contributor/check.sock" in check_exec
-    assert "--approved-check build-artifact-valid=.gc/scripts/checks/build-artifact-valid.sh" in check_exec
+    assert "--socket /run/gascity-check/check.sock" in check_exec
+    assert (
+        "--approved-check 'build-artifact-valid=.gc/scripts/checks/build-artifact-valid.sh'"
+        in check_exec
+    )
     assert "/nix/var/nix/daemon-socket/socket" in check_exec
     check_pid = machine.succeed(
         "systemctl show -P MainPID gascity-check.service"
@@ -1279,7 +1341,7 @@ pkgs.testers.runNixOSTest {
     check_env = machine.succeed(f"xargs -0 -n1 </proc/{check_pid}/environ")
     assert "NIX_REMOTE=local?root=/var/lib/gascity-check/nix-root" in check_env
     assert "max-jobs = 1" in check_exec and "cores = 2" in check_exec
-    machine.succeed("test -S /run/gascity-contributor/check.sock")
+    machine.succeed("test -S /run/gascity-check/check.sock")
     machine.succeed(
         "systemctl show -P SupplementaryGroups gas-city-contributor.service "
         "| grep -qw gascity-check-channel"
@@ -1293,7 +1355,7 @@ pkgs.testers.runNixOSTest {
     )
     machine.succeed(
         f"runuser -u gascity-agent -- {launcher_probe} incompatible-generation "
-        "probe-run stale"
+        "probe-run generation"
     )
 
     # Credential projections are service-local.  Source files remain
@@ -1308,7 +1370,16 @@ pkgs.testers.runNixOSTest {
         ("check", "none"),
         ("buildbuddy", "buildbuddy-api-key"),
     ]:
-        marker = f"/run/gascity-contributor/test/credentials-{role}"
+        marker_root = {
+            "main": "/run/gascity-contributor/test",
+            "agent": "/run/gascity-agent/test",
+            "discord": "/run/gascity-discord/test",
+            "publisher": "/run/gascity-publisher/test",
+            "egress": "/run/gascity-egress/test",
+            "check": "/run/gascity-check/test",
+            "buildbuddy": "/run/gascity-buildbuddy/test",
+        }[role]
+        marker = f"{marker_root}/credentials-{role}"
         machine.wait_for_file(marker)
         text = machine.succeed(f"cat {marker}")
         assert f"expected={expected}" in text
@@ -1327,7 +1398,7 @@ pkgs.testers.runNixOSTest {
         assert "github-key=readable" not in text
         assert "buildbuddy-key=readable" not in text
     assert "nix-daemon=hidden" in machine.succeed(
-        "cat /run/gascity-contributor/test/credentials-check"
+        "cat /run/gascity-check/test/credentials-check"
     )
 
     boundary = json.loads(
@@ -1375,7 +1446,7 @@ pkgs.testers.runNixOSTest {
         f"{python} -c "
         "'import socket; "
         "s=socket.socket(socket.AF_UNIX); "
-        "s.connect(\"/run/gascity-contributor/agent.sock\"); "
+        "s.connect(\"/run/gascity-agent/agent.sock\"); "
         "assert s.recv(64) == b\"fixture-agent/1\\n\"; s.close()'"
     )
     machine.succeed(f"runuser -u gascity -- {public_owner_probe}")
@@ -1402,15 +1473,15 @@ pkgs.testers.runNixOSTest {
             f"{proxy_fixture} {18999 + index}"
         )
     machine.wait_until_succeeds(
-        "test -s /run/gascity-contributor/test/egress-allow"
+        "test -s /run/gascity-egress/test/egress-allow"
     )
     for uid in ["45102", "45103", "45105", "45106"]:
         machine.succeed(
-            f"grep -qx '{uid}' /run/gascity-contributor/test/egress-peer"
+            f"grep -qx '{uid}' /run/gascity-egress/test/egress-peer"
         )
     machine.succeed(
         "grep -q '169.254.169.254:80' "
-        "/run/gascity-contributor/test/egress-denied"
+        "/run/gascity-egress/test/egress-denied"
     )
 
     listener_lines = machine.succeed("ss -H -ltn").splitlines()
@@ -1422,16 +1493,18 @@ pkgs.testers.runNixOSTest {
     unix_listeners = set(
         machine.succeed(
             "find /run/gascity-contributor /run/gascity-agent "
+            "/run/gascity-egress /run/gascity-discord /run/gascity-publisher "
+            "/run/gascity-check /run/gascity-buildbuddy "
             "-type s -printf '%p\n'"
         ).splitlines()
     )
     allowed_unix = {
-        "/run/gascity-contributor/egress.sock",
-        "/run/gascity-contributor/agent.sock",
-        "/run/gascity-contributor/discord.sock",
-        "/run/gascity-contributor/publisher.sock",
         "/run/gascity-agent/agent.sock",
-        "/run/gascity-contributor/buildbuddy/buildbuddy-upstream.sock",
+        "/run/gascity-agent/private.sock",
+        "/run/gascity-egress/egress.sock",
+        "/run/gascity-discord/discord.sock",
+        "/run/gascity-publisher/publisher.sock",
+        "/run/gascity-check/check.sock",
     }
     assert unix_listeners <= allowed_unix, (
         f"undeclared contributor Unix listener(s): {unix_listeners - allowed_unix}"
@@ -1624,5 +1697,50 @@ pkgs.testers.runNixOSTest {
     machine.succeed(
         "test -s /var/lib/gascity-contributor/state/worktrees/test-run/durable-context.json"
     )
+
+    # A reserve breach publishes the fail-closed readiness state first, then
+    # systemd dependency propagation stops the active ACP writer and check
+    # runner.  The fixture records a synthetic positive free-space amount, so
+    # this proves the stop happens before the filesystem reaches zero.
+    breach_child = machine.succeed(
+        "cat /var/lib/gascity-contributor/state/fixture/acp-current.pid"
+    ).strip()
+    breach_check = machine.succeed(
+        "systemctl show -P MainPID gascity-check.service"
+    ).strip()
+    machine.succeed("touch /run/gascity-contributor/test/reserve-breach")
+    machine.wait_for_file("/run/gascity-contributor/test/reserve-breach-observed")
+    machine.succeed(
+        "grep -qx 'available=4096' "
+        "/run/gascity-contributor/test/reserve-breach-observed"
+    )
+    machine.wait_until_succeeds(
+        "test \"$(systemctl is-active gascity-free-space-monitor.service || true)\" "
+        "= failed"
+    )
+    machine.wait_until_succeeds(
+        f"test ! -d /proc/{breach_child} && ! -d /proc/{breach_check}"
+    )
+    for unit in [
+        "gas-city-contributor.service",
+        "gascity-agent.service",
+        "gascity-discord.service",
+        "gascity-publisher.service",
+        "gascity-egress.service",
+        "gascity-check.service",
+        "gascity-buildbuddy-proxy.service",
+    ]:
+        machine.wait_until_succeeds(
+            f"test \"$(systemctl is-active {unit} || true)\" != active"
+        )
+    blocked_submit_status, blocked_submit_output = machine.execute(
+        "runuser -u alice -- sudo -n -u gascity "
+        f"{package}/bin/gascity-submit 2>&1 <<'EOF'\n"
+        '{"run_id":"blocked-run","bead_id":"blocked-bead",'
+        '"summary":"blocked","base_branch":"v3","repository":"acme/project"}\n'
+        "EOF"
+    )
+    assert blocked_submit_status != 0
+    assert "free-space-reserve" in blocked_submit_output
   '';
 }

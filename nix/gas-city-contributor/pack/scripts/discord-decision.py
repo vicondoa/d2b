@@ -1091,7 +1091,15 @@ def _open_listener(path: str, group: str) -> socket.socket:
         if ancestor.is_symlink():
             raise DecisionError("decision socket path has a symlinked ancestor")
     target = target.absolute()
-    target.parent.mkdir(mode=0o770, parents=True, exist_ok=True)
+    target.parent.mkdir(mode=0o750, parents=True, exist_ok=True)
+    parent_info = os.lstat(target.parent)
+    if (
+        stat.S_ISLNK(parent_info.st_mode)
+        or not stat.S_ISDIR(parent_info.st_mode)
+        or parent_info.st_uid != os.geteuid()
+        or parent_info.st_mode & 0o022
+    ):
+        raise DecisionError("decision socket directory is not server-owned and non-writable")
     if os.path.lexists(target):
         info = os.lstat(target)
         if not stat.S_ISSOCK(info.st_mode):
@@ -1146,6 +1154,14 @@ def _rpc(
     try:
         connection.settimeout(timeout)
         connection.connect(socket_path)
+        expected = os.environ.get("GC_DISCORD_SERVER_UID")
+        if expected is not None:
+            try:
+                expected_uid = int(expected, 10)
+            except ValueError as error:
+                raise DecisionError("Discord server uid is malformed") from error
+            if _peer_uid(connection) != expected_uid:
+                raise PeerError("Discord server identity is unauthorized")
         _write_frame(connection, request)
         return _read_frame(connection)
     finally:

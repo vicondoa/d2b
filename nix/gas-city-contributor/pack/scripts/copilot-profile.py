@@ -16,6 +16,7 @@ import select
 import signal
 import socket
 import shutil
+import struct
 import subprocess
 import sys
 import threading
@@ -277,6 +278,37 @@ def _absolute_path(value: str | os.PathLike[str], label: str) -> str:
     return str(path)
 
 
+def _configured_server_uid(environment_name: str, label: str) -> int | None:
+    value = os.environ.get(environment_name)
+    if value is None:
+        return None
+    try:
+        uid = int(value, 10)
+    except ValueError as error:
+        raise ProfileError(f"{label} is malformed") from error
+    if uid < 0:
+        raise ProfileError(f"{label} is malformed")
+    return uid
+
+
+def _check_server_uid(
+    channel: socket.socket,
+    *,
+    environment_name: str,
+    label: str,
+) -> None:
+    expected = _configured_server_uid(environment_name, label)
+    if expected is None:
+        return
+    try:
+        raw = channel.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i"))
+        _pid, uid, _gid = struct.unpack("3i", raw)
+    except OSError as error:
+        raise ProfileError(f"{label} credentials are unavailable") from error
+    if uid != expected:
+        raise ProfileError(f"{label} identity is unauthorized")
+
+
 def _launcher_socket_path(args: argparse.Namespace) -> pathlib.Path:
     configured = args.launcher_socket or os.environ.get("GC_AGENT_LAUNCHER_SOCKET")
     if not configured:
@@ -324,6 +356,11 @@ def _open_check_channel(
     try:
         channel.settimeout(5.0)
         channel.connect(str(socket_path))
+        _check_server_uid(
+            channel,
+            environment_name="GC_CHECK_SERVER_UID",
+            label="check server",
+        )
         channel.sendall(
             json.dumps(
                 {
@@ -390,6 +427,15 @@ def _launch_metadata(
     state_root = args.state_root or os.environ.get("GC_STATE_ROOT")
     if state_root:
         metadata["state_root"] = _absolute_path(state_root, "state root")
+    terminal_state_root = os.environ.get("GC_TERMINAL_STATE_ROOT")
+    terminal_state_path = args.terminal_state_path
+    if terminal_state_path is None and terminal_state_root:
+        terminal_state_path = os.path.join(terminal_state_root, f"{identity['run_id']}.json")
+    if terminal_state_path:
+        metadata["terminal_state_path"] = _absolute_path(
+            terminal_state_path,
+            "terminal workflow state",
+        )
     if args.require_ready or os.environ.get("GC_REQUIRE_READINESS") == "1":
         metadata["require_ready"] = True
     token = os.environ.get("GC_AGENT_LAUNCHER_TOKEN")
@@ -482,6 +528,11 @@ def _connect_launcher(
     channel = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:
         channel.connect(str(_launcher_socket_path(args)))
+        _check_server_uid(
+            channel,
+            environment_name="GC_AGENT_SERVER_UID",
+            label="agent server",
+        )
         if descriptors:
             sent = channel.sendmsg(
                 [encoded],
@@ -634,6 +685,15 @@ def _launcher_argv(
     ]
     if args.state_root or os.environ.get("GC_STATE_ROOT"):
         command.extend(["--state-root", args.state_root or os.environ["GC_STATE_ROOT"]])
+    terminal_state_path = args.terminal_state_path
+    terminal_state_root = os.environ.get("GC_TERMINAL_STATE_ROOT")
+    if terminal_state_path is None and terminal_state_root:
+        terminal_state_path = os.path.join(
+            terminal_state_root,
+            f"{metadata['run_id']}.json",
+        )
+    if terminal_state_path:
+        command.extend(["--terminal-state-path", terminal_state_path])
     if args.readiness_status or os.environ.get("GC_READINESS_STATUS"):
         command.extend(
             [
@@ -732,6 +792,7 @@ def _default_namespace(profile: str, tool_policy: str) -> argparse.Namespace:
         state_schema=None,
         worktree=None,
         state_root=None,
+        terminal_state_path=None,
         lease_root=None,
         runtime_root=None,
         sandbox_script=None,
@@ -1130,6 +1191,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--state-schema")
     parser.add_argument("--worktree")
     parser.add_argument("--state-root")
+    parser.add_argument("--terminal-state-path")
     parser.add_argument("--launcher-socket")
     parser.add_argument("--lease-root")
     parser.add_argument("--runtime-root")

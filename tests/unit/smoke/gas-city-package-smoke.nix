@@ -72,12 +72,15 @@ pkgs.runCommand "gas-city-package-smoke" {
   test ! -e "$root/packs/github"
   test -x "${gasCityContributor}/bin/gascity-discord-decision"
   test -x "${gasCityContributor}/bin/gascity-publish-pr"
+  test -x "${gasCityContributor}/bin/gascity-service-activation"
   test -x "${gasCityContributor}/bin/gascity-check"
   test -x "${gasCityContributor}/bin/gascity-check-runner"
   test -f "$root/pack/formulas/d2b-decision.formula.toml"
   test -f "$root/pack/assets/workflows/d2b-decision/request.md"
   test -f "$root/pack/assets/workflows/d2b-decision/wait.md"
   test -f "$root/pack/assets/workflows/d2b-contributor-build/publish.md"
+  grep -F 'write-terminal-state' \
+    "$root/pack/assets/workflows/d2b-compound-resolution/{target}.md"
 
   discord_pack="$root/packs/discord/pack.toml"
   grep -F 'name = "discord-gateway"' "$discord_pack"
@@ -97,7 +100,8 @@ pkgs.runCommand "gas-city-package-smoke" {
     "$root/pack/scripts/copilot-profile.py" \
     "$root/pack/scripts/agent-launcher.py" \
     "$root/pack/scripts/agent-sandbox.py" \
-    "$root/pack/scripts/fdproxy.py"
+    "$root/pack/scripts/fdproxy.py" \
+    "$root/pack/scripts/service-activation.py"
   do
     PYTHONPYCACHEPREFIX="$TMPDIR/pycache" \
       ${gasCityContributor}/bin/python3 -m py_compile "$script"
