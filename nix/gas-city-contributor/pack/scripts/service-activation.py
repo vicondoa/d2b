@@ -4,13 +4,21 @@
 from __future__ import annotations
 
 import argparse
+import array
 import fcntl
+import grp
+import ipaddress
 import json
 import os
 import pathlib
 import re
+import selectors
+import socket
+import stat
 import subprocess
 import sys
+import threading
+import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 
@@ -92,6 +100,55 @@ class RootLifecycleError(ActivationError):
     """Raised when active-run GC-root cleanup violates lifecycle ownership."""
 
 
+class BoundaryError(ActivationError):
+    """Raised when an activation or egress boundary is unsafe."""
+
+
+MAX_SIDECHANNEL_BYTES = 1024 * 1024
+FDPROXY_PROTOCOL = "fdproxy/1"
+DEFAULT_ALLOWED_PORT = 443
+PRIVATE_NETWORKS = (
+    ipaddress.ip_network("0.0.0.0/8"),
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("100.64.0.0/10"),
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("169.254.0.0/16"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.0.0.0/24"),
+    ipaddress.ip_network("192.0.2.0/24"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("198.18.0.0/15"),
+    ipaddress.ip_network("198.51.100.0/24"),
+    ipaddress.ip_network("203.0.113.0/24"),
+    ipaddress.ip_network("224.0.0.0/4"),
+    ipaddress.ip_network("240.0.0.0/4"),
+    ipaddress.ip_network("::/128"),
+    ipaddress.ip_network("::1/128"),
+    ipaddress.ip_network("fc00::/7"),
+    ipaddress.ip_network("fe80::/10"),
+    ipaddress.ip_network("ff00::/8"),
+    ipaddress.ip_network("2001:db8::/32"),
+)
+FORBIDDEN_PROJECTION_ROOTS = tuple(
+    pathlib.Path(value)
+    for value in (
+        "/root",
+        "/etc/shadow",
+        "/etc/gshadow",
+        "/etc/ssh",
+        "/etc/nixos",
+        "/tmp",
+        "/proc",
+        "/sys",
+        "/dev",
+        "/var/cache",
+        "/var/run",
+        "/var/lib",
+        "/run",
+    )
+)
+
+
 @dataclass(frozen=True)
 class ProbeResult:
     profile: str
@@ -101,6 +158,477 @@ class ProbeResult:
     effort: str | None = None
     error_code: str | None = None
     error: str | None = None
+
+
+def _absolute_normalized_path(value: str, label: str) -> pathlib.Path:
+    if not value or "\x00" in value:
+        raise BoundaryError(f"{label} is empty or contains NUL")
+    path = pathlib.Path(value)
+    if not path.is_absolute() or any(part == ".." for part in path.parts):
+        raise BoundaryError(f"{label} must be absolute and normalized")
+    if os.path.normpath(value) != value:
+        raise BoundaryError(f"{label} is not canonical")
+    return path
+
+
+def _check_ancestor_chain(path: pathlib.Path, label: str) -> None:
+    """Reject symlinked or writable ancestors before following a path."""
+
+    ancestors = list(path.parents)
+    for ancestor in reversed(ancestors):
+        try:
+            info = os.lstat(ancestor)
+        except OSError as error:
+            raise BoundaryError(f"{label} ancestor is unavailable: {ancestor}") from error
+        if stat.S_ISLNK(info.st_mode):
+            raise BoundaryError(f"{label} has a symlinked ancestor: {ancestor}")
+        if not stat.S_ISDIR(info.st_mode):
+            raise BoundaryError(f"{label} ancestor is not a directory: {ancestor}")
+        if info.st_mode & 0o022:
+            raise BoundaryError(f"{label} ancestor is writable by group or other")
+
+
+def validate_credential_source(
+    path_value: str,
+    *,
+    label: str = "credential",
+    allow_service_owner: bool = False,
+) -> pathlib.Path:
+    """Validate a root-owned, non-link, private regular credential file."""
+
+    path = _absolute_normalized_path(path_value, label)
+    if path == pathlib.Path("/nix/store") or pathlib.Path("/nix/store") in path.parents:
+        raise BoundaryError(f"{label} must not come from /nix/store")
+    _check_ancestor_chain(path, label)
+    try:
+        info = os.lstat(path)
+    except OSError as error:
+        raise BoundaryError(f"{label} is unavailable") from error
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+        raise BoundaryError(f"{label} must be a regular non-symlink file")
+    if info.st_uid != 0 and not (allow_service_owner and info.st_uid == os.geteuid()):
+        raise BoundaryError(f"{label} must be root-owned")
+    if info.st_mode & 0o022 or info.st_mode & 0o111:
+        raise BoundaryError(f"{label} has unsafe ownership or mode")
+    if info.st_mode & 0o007:
+        raise BoundaryError(f"{label} must not be world-readable")
+    return path
+
+
+def validate_host_projection(path_value: str, *, label: str = "host projection") -> pathlib.Path:
+    """Validate a root-owned regular file or directory for read-only binding."""
+
+    path = _absolute_normalized_path(path_value, label)
+    if path == pathlib.Path("/") or pathlib.Path("/home") in path.parents or path == pathlib.Path("/home"):
+        raise BoundaryError(f"{label} is broader than the declared projection boundary")
+    if any(path == root or root in path.parents for root in FORBIDDEN_PROJECTION_ROOTS):
+        raise BoundaryError(f"{label} is broader than the safe host projection boundary")
+    _check_ancestor_chain(path, label)
+    try:
+        info = os.lstat(path)
+    except OSError as error:
+        raise BoundaryError(f"{label} is unavailable") from error
+    if stat.S_ISLNK(info.st_mode) or not (
+        stat.S_ISREG(info.st_mode) or stat.S_ISDIR(info.st_mode)
+    ):
+        raise BoundaryError(f"{label} must be a regular file or directory")
+    if info.st_uid != 0 or info.st_mode & 0o022:
+        raise BoundaryError(f"{label} must be root-owned and not group/world writable")
+    return path
+
+
+def _mount_has_project_quota(path: pathlib.Path) -> bool:
+    """Read mount metadata without changing quota state or invoking a daemon."""
+
+    if os.environ.get("GC_PROJECT_QUOTA_SUPPORTED") == "1":
+        return True
+    try:
+        mountinfo = pathlib.Path("/proc/self/mountinfo").read_text(encoding="utf-8")
+    except OSError:
+        return False
+    candidate = str(path)
+    best_mount = ""
+    best_options = ""
+    for line in mountinfo.splitlines():
+        fields = line.split(" - ", 1)
+        if len(fields) != 2:
+            continue
+        pre, post = fields
+        pre_fields = pre.split()
+        if len(pre_fields) < 6:
+            continue
+        mountpoint = pre_fields[4].replace("\\040", " ").replace("\\011", "\t")
+        if candidate != mountpoint and not candidate.startswith(mountpoint.rstrip("/") + "/"):
+            continue
+        if len(mountpoint) >= len(best_mount):
+            best_mount = mountpoint
+            best_options = ",".join((pre_fields[5], post))
+    return any(
+        option in best_options.split(",")
+        for option in ("prjquota", "pquota", "project_quota")
+    )
+
+
+def require_project_quota(path_value: str) -> pathlib.Path:
+    path = _absolute_normalized_path(path_value, "project-quota path")
+    if not path.exists() or not path.is_dir():
+        raise BoundaryError("project-quota path must be an existing directory")
+    if not _mount_has_project_quota(path):
+        raise BoundaryError("project-quota support is required for contributor readiness")
+    return path
+
+
+def check_free_space(path_value: str, reserve_bytes: int) -> int:
+    path = _absolute_normalized_path(path_value, "free-space path")
+    if reserve_bytes < 0:
+        raise BoundaryError("free-space reserve must not be negative")
+    try:
+        usage = os.statvfs(path)
+    except OSError as error:
+        raise BoundaryError("free-space path is unavailable") from error
+    available = usage.f_bavail * usage.f_frsize
+    if available < reserve_bytes:
+        raise BoundaryError(
+            f"free-space reserve is below the configured minimum ({available} < {reserve_bytes})"
+        )
+    return available
+
+
+def materialize_assets(source_value: str, destination_value: str) -> pathlib.Path:
+    """Create only missing managed links; never replace durable state."""
+
+    source = _absolute_normalized_path(source_value, "managed asset source")
+    destination = _absolute_normalized_path(destination_value, "managed asset destination")
+    if not source.is_dir():
+        raise BoundaryError("managed asset source must be a directory")
+    _check_ancestor_chain(destination, "managed asset destination")
+    destination.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if destination.is_symlink() or not destination.is_dir():
+        raise BoundaryError("managed asset destination is not a private directory")
+    for name in ("city", "pack", "copilot", "buildbuddy"):
+        source_path = source / name
+        target = destination / name
+        if not source_path.exists() or source_path.is_symlink():
+            raise BoundaryError(f"managed asset source is incomplete: {source_path}")
+        if os.path.lexists(target):
+            if not target.is_symlink() or os.readlink(target) != str(source_path):
+                raise BoundaryError(f"durable managed asset would be replaced: {target}")
+            continue
+        os.symlink(str(source_path), str(target))
+    return destination
+
+
+def _read_bounded_line(stream: socket.socket, limit: int) -> bytes:
+    data = bytearray()
+    while b"\n" not in data:
+        chunk = stream.recv(min(4096, limit - len(data)))
+        if not chunk:
+            raise BoundaryError("sidecar channel closed before a complete frame")
+        data.extend(chunk)
+        if len(data) >= limit:
+            raise BoundaryError("sidecar frame exceeds the size limit")
+    line, remainder = bytes(data).split(b"\n", 1)
+    if remainder:
+        raise BoundaryError("sidecar channel pipelined multiple frames")
+    return line
+
+
+def _open_private_listener(path_value: str, *, socket_group: str | None = None) -> socket.socket:
+    path = _absolute_normalized_path(path_value, "sidecar socket")
+    path.parent.mkdir(mode=0o770, parents=True, exist_ok=True)
+    if os.path.lexists(path):
+        info = os.lstat(path)
+        if not stat.S_ISSOCK(info.st_mode):
+            raise BoundaryError("sidecar socket path is occupied by a non-socket")
+        path.unlink()
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    listener.bind(str(path))
+    os.chmod(path, 0o660)
+    if socket_group is not None:
+        try:
+            group_id = grp.getgrnam(socket_group).gr_gid
+            os.chown(path, -1, group_id)
+        except (KeyError, OSError) as error:
+            listener.close()
+            pathlib.Path(path).unlink(missing_ok=True)
+            raise BoundaryError("sidecar socket group is unavailable") from error
+    listener.listen(32)
+    listener.settimeout(0.5)
+    return listener
+
+
+def serve_sidecar(
+    *,
+    role: str,
+    socket_path: str,
+    credential_path: str,
+    socket_group: str,
+    repository: str | None = None,
+    operator_user_ids: Sequence[str] = (),
+) -> None:
+    """Hold an integration credential and expose a U5-owned channel stub."""
+
+    if role not in {"discord", "publisher"}:
+        raise BoundaryError("unknown sidecar role")
+    credential = validate_credential_source(
+        credential_path,
+        label=f"{role} credential",
+        allow_service_owner=True,
+    )
+    descriptor = os.open(credential, os.O_RDONLY | os.O_CLOEXEC)
+    os.set_inheritable(descriptor, False)
+    listener = _open_private_listener(socket_path, socket_group=socket_group)
+    try:
+        while True:
+            try:
+                client, _address = listener.accept()
+            except socket.timeout:
+                continue
+            try:
+                frame = _read_bounded_line(client, MAX_SIDECHANNEL_BYTES)
+                request = json.loads(frame)
+                if not isinstance(request, dict) or request.get("role") != role:
+                    raise BoundaryError("sidecar request role is malformed")
+                # U5 owns publication and decision state machines.  Keeping a
+                # real authenticated channel here prevents the main service or
+                # ACP workers from inheriting the credential in the meantime.
+                response = {
+                    "ok": False,
+                    "role": role,
+                    "error": "u5-channel-not-installed",
+                    "repository": repository,
+                    "operator_user_ids": list(operator_user_ids),
+                }
+                client.sendall(
+                    json.dumps(response, sort_keys=True, separators=(",", ":")).encode()
+                    + b"\n"
+                )
+            except (BoundaryError, OSError, json.JSONDecodeError):
+                try:
+                    client.sendall(b'{"ok":false,"error":"malformed-request"}\n')
+                except OSError:
+                    pass
+            finally:
+                client.close()
+    finally:
+        listener.close()
+        pathlib.Path(socket_path).unlink(missing_ok=True)
+        os.close(descriptor)
+
+
+def serve_agent_relay(
+    *,
+    public_socket: str,
+    private_socket: str,
+    socket_group: str,
+    allowed_uid: int,
+) -> None:
+    """Expose only the launcher wire protocol, without inheriting its token."""
+
+    listener = _open_private_listener(public_socket, socket_group=socket_group)
+
+    def relay(client: socket.socket) -> None:
+        upstream: socket.socket | None = None
+        try:
+            uid = _peer_uid(client)
+            if uid != allowed_uid:
+                raise BoundaryError("agent relay client uid is unauthorized")
+            upstream = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            upstream.connect(private_socket)
+            selector = selectors.DefaultSelector()
+            selector.register(client, selectors.EVENT_READ, upstream)
+            selector.register(upstream, selectors.EVENT_READ, client)
+            while selector.get_map():
+                for key, _mask in selector.select():
+                    source = key.fileobj
+                    destination = key.data
+                    data = source.recv(64 * 1024)
+                    if not data:
+                        return
+                    destination.sendall(data)
+            selector.close()
+        except (BoundaryError, OSError):
+            pass
+        finally:
+            if upstream is not None:
+                upstream.close()
+            client.close()
+
+    try:
+        while True:
+            try:
+                client, _address = listener.accept()
+            except socket.timeout:
+                continue
+            threading.Thread(target=relay, args=(client,), daemon=True).start()
+    finally:
+        listener.close()
+        pathlib.Path(public_socket).unlink(missing_ok=True)
+
+
+def _peer_uid(connection: socket.socket) -> int:
+    credentials = connection.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12)
+    return int.from_bytes(credentials[0:4], byteorder=sys.byteorder, signed=True)
+
+
+def _domain_matches(host: str, allowed_domains: Sequence[str]) -> bool:
+    normalized = host.rstrip(".").lower()
+    if not normalized or len(normalized) > 253:
+        return False
+    try:
+        ipaddress.ip_address(normalized)
+    except ValueError:
+        pass
+    else:
+        return False
+    return any(
+        normalized == domain.lower()
+        or (domain.startswith("*.") and normalized.endswith(domain[1:].lower()))
+        for domain in allowed_domains
+    )
+
+
+def _public_addresses(host: str, port: int) -> list[tuple[int, int, int, str, tuple[object, ...]]]:
+    try:
+        resolved = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except OSError as error:
+        raise BoundaryError("egress DNS resolution failed") from error
+    addresses: list[tuple[int, int, int, str, tuple[object, ...]]] = []
+    seen: set[tuple[int, str]] = set()
+    for family, kind, protocol, _canonname, sockaddr in resolved:
+        address = ipaddress.ip_address(str(sockaddr[0]))
+        if any(address in network for network in PRIVATE_NETWORKS) or (
+            not address.is_global
+        ):
+            raise BoundaryError("egress DNS result is not a permitted public address")
+        key = (family, str(address))
+        if key not in seen:
+            seen.add(key)
+            addresses.append((family, kind, protocol, "", sockaddr))
+    if not addresses:
+        raise BoundaryError("egress DNS returned no usable address")
+    return addresses
+
+
+def _connect_allowlisted(
+    host: str,
+    port: int,
+    *,
+    allowed_domains: Sequence[str],
+) -> socket.socket:
+    if port != DEFAULT_ALLOWED_PORT or not _domain_matches(host, allowed_domains):
+        raise BoundaryError("egress destination is not allowlisted")
+    candidates = _public_addresses(host, port)
+    last_error: OSError | None = None
+    for family, kind, protocol, _canonname, sockaddr in candidates:
+        upstream = socket.socket(family, kind, protocol)
+        upstream.settimeout(10.0)
+        try:
+            upstream.connect(sockaddr)
+            peer = ipaddress.ip_address(str(upstream.getpeername()[0]))
+            if any(peer in network for network in PRIVATE_NETWORKS) or not peer.is_global:
+                raise BoundaryError("connected egress peer failed address validation")
+            upstream.settimeout(None)
+            os.set_inheritable(upstream.fileno(), False)
+            return upstream
+        except (BoundaryError, OSError) as error:
+            last_error = error if isinstance(error, OSError) else OSError(str(error))
+            upstream.close()
+    raise BoundaryError("allowlisted egress connection failed") from last_error
+
+
+def _send_fdproxy_response(
+    connection: socket.socket,
+    response: Mapping[str, object],
+    descriptor: int | None = None,
+) -> None:
+    payload = json.dumps(dict(response), sort_keys=True, separators=(",", ":")).encode() + b"\n"
+    if descriptor is None:
+        connection.sendall(payload)
+        return
+    descriptors = array.array("i", [descriptor])
+    connection.sendmsg(
+        [payload],
+        [(socket.SOL_SOCKET, socket.SCM_RIGHTS, descriptors.tobytes())],
+    )
+
+
+def serve_egress_peer(
+    *,
+    socket_path: str,
+    socket_group: str,
+    auth_token: str,
+    allowed_domains: Sequence[str],
+    allowed_uids: Sequence[int],
+) -> None:
+    """Serve fdproxy/1 requests, with one DNS decision per connected socket."""
+
+    if not auth_token or len(auth_token.encode()) > 512:
+        raise BoundaryError("egress authentication token is malformed")
+    listener = _open_private_listener(socket_path, socket_group=socket_group)
+    allowed_uid_set = set(allowed_uids)
+
+    def serve_one(connection: socket.socket) -> None:
+        upstream: socket.socket | None = None
+        request: object = {}
+        try:
+            if _peer_uid(connection) not in allowed_uid_set:
+                raise BoundaryError("egress peer uid is not authorized")
+            request = json.loads(_read_bounded_line(connection, 8192))
+            if (
+                not isinstance(request, dict)
+                or set(request) != {"version", "operation", "request_id", "auth", "host", "port"}
+                or request.get("version") != FDPROXY_PROTOCOL
+                or request.get("operation") != "connect"
+                or request.get("auth") != auth_token
+                or not isinstance(request.get("request_id"), str)
+                or not isinstance(request.get("host"), str)
+                or type(request.get("port")) is not int
+            ):
+                raise BoundaryError("egress request is malformed or unauthorized")
+            upstream = _connect_allowlisted(
+                request["host"],
+                request["port"],
+                allowed_domains=allowed_domains,
+            )
+            _send_fdproxy_response(
+                connection,
+                {
+                    "version": FDPROXY_PROTOCOL,
+                    "request_id": request["request_id"],
+                    "ok": True,
+                },
+                upstream.fileno(),
+            )
+        except (BoundaryError, OSError, json.JSONDecodeError):
+            try:
+                request_id = request.get("request_id", "") if isinstance(request, dict) else ""
+                _send_fdproxy_response(
+                    connection,
+                    {
+                        "version": FDPROXY_PROTOCOL,
+                        "request_id": request_id,
+                        "ok": False,
+                    },
+                )
+            except OSError:
+                pass
+        finally:
+            if upstream is not None:
+                upstream.close()
+            connection.close()
+
+    try:
+        while True:
+            try:
+                connection, _address = listener.accept()
+            except socket.timeout:
+                continue
+            thread = threading.Thread(target=serve_one, args=(connection,), daemon=True)
+            thread.start()
+    finally:
+        listener.close()
+        pathlib.Path(socket_path).unlink(missing_ok=True)
 
 
 def _identifier(value: str, label: str) -> str:
@@ -593,7 +1121,7 @@ class ActiveRunGCRoots:
         self.terminal = True
 
 
-def _probe_environment() -> dict[str, str]:
+def _probe_environment(proxy_fd: int | None = None) -> dict[str, str]:
     result: dict[str, str] = {}
     for name, value in os.environ.items():
         if name == "COPILOT_GITHUB_TOKEN" or name in {
@@ -608,6 +1136,11 @@ def _probe_environment() -> dict[str, str]:
             "GC_AGENT_LAUNCHER_TOKEN",
         }:
             result[name] = value
+    if proxy_fd is not None:
+        if proxy_fd < 3:
+            raise ActivationError("probe proxy fd must not overlap standard descriptors")
+        result["GC_PROXY_FD"] = str(proxy_fd)
+        os.set_inheritable(proxy_fd, True)
     return result
 
 
@@ -623,6 +1156,7 @@ def run_profile_probe(
     lease_root: str,
     runtime_root: str,
     timeout: float,
+    proxy_fd: int | None = None,
 ) -> ProbeResult:
     tool_policy = "coding" if profile == "code-luna" else "review"
     command = [
@@ -652,11 +1186,12 @@ def run_profile_probe(
         completed = subprocess.run(
             command,
             cwd=worktree,
-            env=_probe_environment(),
+            env=_probe_environment(proxy_fd),
             capture_output=True,
             text=True,
             timeout=timeout,
             check=False,
+            pass_fds=(proxy_fd,) if proxy_fd is not None else (),
         )
     except subprocess.TimeoutExpired:
         return ProbeResult(profile=profile, ok=False, error_code="network")
@@ -701,6 +1236,48 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
 
+    validate_parser = subparsers.add_parser("validate-paths")
+    validate_parser.add_argument("--credential", action="append", default=[])
+    validate_parser.add_argument("--projection", action="append", default=[])
+    validate_parser.add_argument("--project-root", required=True)
+    validate_parser.add_argument("--require-project-quota", action="store_true")
+
+    reserve_parser = subparsers.add_parser("check-free-space")
+    reserve_parser.add_argument("--path", required=True)
+    reserve_parser.add_argument("--reserve-bytes", type=int, required=True)
+
+    materialize_parser = subparsers.add_parser("materialize-assets")
+    materialize_parser.add_argument("--source", required=True)
+    materialize_parser.add_argument("--destination", required=True)
+
+    monitor_parser = subparsers.add_parser("free-space-monitor")
+    monitor_parser.add_argument("--path", required=True)
+    monitor_parser.add_argument("--reserve-bytes", type=int, required=True)
+    monitor_parser.add_argument("--interval", type=float, default=30.0)
+    monitor_parser.add_argument("--once", action="store_true")
+
+    sidecar_parser = subparsers.add_parser("sidecar")
+    sidecar_parser.add_argument("--role", choices=("discord", "publisher"), required=True)
+    sidecar_parser.add_argument("--socket", required=True)
+    sidecar_parser.add_argument("--socket-group", required=True)
+    sidecar_parser.add_argument("--credential", required=True)
+    sidecar_parser.add_argument("--repository")
+    sidecar_parser.add_argument("--operator-user-id", action="append", default=[])
+
+    egress_parser = subparsers.add_parser("egress-peer")
+    egress_parser.add_argument("--socket", required=True)
+    egress_parser.add_argument("--socket-group", required=True)
+    egress_parser.add_argument("--auth-token-env", default="GC_FDPROXY_AUTH")
+    egress_parser.add_argument("--allowed-domain", action="append", default=[])
+    egress_parser.add_argument("--allowed-port", type=int, default=DEFAULT_ALLOWED_PORT)
+    egress_parser.add_argument("--allowed-uid", action="append", type=int, default=[])
+
+    relay_parser = subparsers.add_parser("agent-relay")
+    relay_parser.add_argument("--public-socket", required=True)
+    relay_parser.add_argument("--private-socket", required=True)
+    relay_parser.add_argument("--socket-group", required=True)
+    relay_parser.add_argument("--allowed-uid", type=int, required=True)
+
     activate_parser = subparsers.add_parser("activate")
     activate_parser.add_argument("--status-path", required=True)
     activate_parser.add_argument("--generation", required=True)
@@ -711,6 +1288,7 @@ def _parse_args() -> argparse.Namespace:
     activate_parser.add_argument("--worktree", required=True)
     activate_parser.add_argument("--lease-root", required=True)
     activate_parser.add_argument("--runtime-root", required=True)
+    activate_parser.add_argument("--egress-socket")
     activate_parser.add_argument("--timeout", type=float, default=20.0)
 
     prompt_parser = subparsers.add_parser("reconstruct-prompt")
@@ -727,20 +1305,83 @@ def _parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = _parse_args()
+    if args.command == "validate-paths":
+        for index, path in enumerate(args.credential):
+            validate_credential_source(path, label=f"credential[{index}]")
+        for index, path in enumerate(args.projection):
+            validate_host_projection(path, label=f"projection[{index}]")
+        if args.require_project_quota:
+            require_project_quota(args.project_root)
+        return 0
+    if args.command == "check-free-space":
+        print(check_free_space(args.path, args.reserve_bytes))
+        return 0
+    if args.command == "materialize-assets":
+        materialize_assets(args.source, args.destination)
+        return 0
+    if args.command == "free-space-monitor":
+        while True:
+            try:
+                check_free_space(args.path, args.reserve_bytes)
+            except BoundaryError as error:
+                print(str(error), file=sys.stderr)
+                return 1
+            if args.once:
+                return 0
+            time.sleep(max(0.1, args.interval))
+    if args.command == "sidecar":
+        serve_sidecar(
+            role=args.role,
+            socket_path=args.socket,
+            credential_path=args.credential,
+            socket_group=args.socket_group,
+            repository=args.repository,
+            operator_user_ids=args.operator_user_id,
+        )
+        return 0
+    if args.command == "egress-peer":
+        if args.allowed_port != DEFAULT_ALLOWED_PORT:
+            raise BoundaryError("only HTTPS egress on port 443 is supported")
+        token = os.environ.get(args.auth_token_env, "")
+        serve_egress_peer(
+            socket_path=args.socket,
+            socket_group=args.socket_group,
+            auth_token=token,
+            allowed_domains=args.allowed_domain,
+            allowed_uids=args.allowed_uid,
+        )
+        return 0
+    if args.command == "agent-relay":
+        serve_agent_relay(
+            public_socket=args.public_socket,
+            private_socket=args.private_socket,
+            socket_group=args.socket_group,
+            allowed_uid=args.allowed_uid,
+        )
+        return 0
     if args.command == "activate":
         def probe(profile: str) -> ProbeResult:
-            return run_profile_probe(
-                args.profile_script,
-                profile=profile,
-                generation=args.generation,
-                state_schema=args.state_schema,
-                run_id=args.run_id,
-                bead_id=args.bead_id,
-                worktree=args.worktree,
-                lease_root=args.lease_root,
-                runtime_root=args.runtime_root,
-                timeout=args.timeout,
-            )
+            proxy_channel: socket.socket | None = None
+            try:
+                if args.egress_socket:
+                    proxy_channel = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                    proxy_channel.connect(args.egress_socket)
+                return run_profile_probe(
+                    args.profile_script,
+                    profile=profile,
+                    generation=args.generation,
+                    state_schema=args.state_schema,
+                    run_id=args.run_id,
+                    bead_id=args.bead_id,
+                    worktree=args.worktree,
+                    lease_root=args.lease_root,
+                    runtime_root=args.runtime_root,
+                    timeout=args.timeout,
+                    proxy_fd=proxy_channel.fileno() if proxy_channel is not None else None,
+                )
+            finally:
+                if proxy_channel is not None:
+                    proxy_channel.close()
 
         status = activate(
             status_path=args.status_path,

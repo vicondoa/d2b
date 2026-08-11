@@ -348,10 +348,12 @@
       #   lib                  - re-exported helpers (subnetIp, mkMac, …)
       #   overlays.default     - adds vhostDeviceSound, crosvmPatched, …
       nixosModules.default = import ./nixos-modules { inherit inputs; };
-      # U4 owns the named contributor module.  Keep the name as an inert
-      # placeholder in U1 rather than importing a later-owned path; the
-      # default consumer module remains unchanged.
-      nixosModules.gasCityContributor = { };
+      # U4's contributor environment is a separate consumer module.  The
+      # generic framework module above remains unchanged.
+      nixosModules.gasCityContributor =
+        import ./nixos-modules/gas-city-contributor {
+          packageFor = gasCityContributorFor;
+        };
 
       # Developer shell: everything the Layer-1 gates need, in one place.
       #

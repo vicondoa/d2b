@@ -16,6 +16,7 @@
 let
   inherit (pkgs) lib;
   contributorRoot = ./.;
+  envoyBin = pkgs.envoy-bin;
   requiredExecutables = [
     "gc"
     "bd"
@@ -26,6 +27,7 @@ let
     "bwrap"
     "nft"
     "tinyproxy"
+    "envoy"
     "python3"
     "git"
     "gh"
@@ -51,6 +53,7 @@ let
     dolt
     beads
     copilot
+    envoyBin
     go
     bazel
     pkgs.bubblewrap
@@ -142,6 +145,11 @@ let
       certificateBundle = "etc/ssl/certs/ca-bundle.crt";
       inherit requiredExecutables;
     };
+    buildBuddy = {
+      proxy = "nixpkgs:envoy-bin";
+      protocol = "http2";
+      upstream = "remote.buildbuddy.io:443";
+    };
   };
 
   managedAssets = pkgs.runCommand "gas-city-contributor-assets" { } ''
@@ -164,12 +172,46 @@ let
       'Runtime state belongs below the service-owned state root.' \
       > "$managedRoot/README"
   '';
+
+  # Keep the U3/U4 protocol helpers in an immutable executable namespace as
+  # well as in the source-shaped share tree.  The sudo rules point at these
+  # stable names, while service units use the share paths so the ownership of
+  # each helper remains visible in the unit.
+  runtimeScripts = pkgs.runCommand "gas-city-contributor-scripts" { } ''
+    set -euo pipefail
+    mkdir -p "$out/bin"
+    install -m 0555 ${contributorRoot}/pack/scripts/service-activation.py \
+      "$out/bin/gascity-service-activation"
+    install -m 0555 ${contributorRoot}/pack/scripts/agent-launcher.py \
+      "$out/bin/gascity-agent-launcher"
+    install -m 0555 ${contributorRoot}/pack/scripts/agent-sandbox.py \
+      "$out/bin/gascity-agent-sandbox"
+    install -m 0555 ${contributorRoot}/pack/scripts/copilot-profile.py \
+      "$out/bin/gascity-copilot-profile"
+    install -m 0555 ${contributorRoot}/pack/scripts/fdproxy.py \
+      "$out/bin/gascity-fdproxy"
+    install -m 0555 ${contributorRoot}/pack/scripts/gc-agent.py \
+      "$out/bin/gascity-gc-agent"
+    install -m 0555 ${contributorRoot}/pack/scripts/operator.py \
+      "$out/bin/gascity-operator"
+    install -m 0555 ${contributorRoot}/pack/scripts/operator.py \
+      "$out/bin/gascity-submit"
+    install -m 0555 ${contributorRoot}/pack/scripts/operator.py \
+      "$out/bin/gascity-status"
+    install -m 0555 ${contributorRoot}/pack/scripts/operator.py \
+      "$out/bin/gascity-cancel"
+    install -m 0555 ${contributorRoot}/pack/scripts/check-runner.py \
+      "$out/bin/gascity-check-runner"
+    install -m 0555 ${contributorRoot}/pack/scripts/buildbuddy-proxy.py \
+      "$out/bin/gascity-buildbuddy-proxy"
+  '';
 in
 pkgs.symlinkJoin {
   name = "gas-city-contributor";
   paths = [
     runtimeEnvironment
     managedAssets
+    runtimeScripts
   ];
   passthru = {
     inherit
@@ -183,6 +225,7 @@ pkgs.symlinkJoin {
       runtimeEnvironment
       requiredExecutables
       patchedPacks;
+    envoy = envoyBin;
     revisions = {
       inherit
         gascityRevision
