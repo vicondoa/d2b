@@ -103,6 +103,67 @@ pkgs.runCommand "gas-city-package-smoke" {
       ${gasCityContributor}/bin/python3 -m py_compile "$script"
   done
 
+  # The committed fixture suites derive their repository root from their
+  # filesystem layout.  Preserve that layout in a writable temporary tree so
+  # they execute against the contributor source and package scripts rather
+  # than against the evaluator's checkout.
+  fixtureRepo="$TMPDIR/gas-city-fixture-repo"
+  mkdir -p "$fixtureRepo/tests/fixtures" "$fixtureRepo/nix" \
+    "$fixtureRepo/nixos-modules"
+  cp -R ${../../fixtures/gas-city} "$fixtureRepo/tests/fixtures/gas-city"
+  cp -R ${../../../nix/gas-city-contributor} \
+    "$fixtureRepo/nix/gas-city-contributor"
+  cp -R ${../../../nixos-modules/gas-city-contributor} \
+    "$fixtureRepo/nixos-modules/gas-city-contributor"
+  ${pkgs.coreutils}/bin/chmod -R u+w "$fixtureRepo"
+
+  export PYTHONNOUSERSITE=1
+  export PYTHONPYCACHEPREFIX="$TMPDIR/pycache"
+  export XDG_CONFIG_HOME="$TMPDIR/config"
+  export XDG_CACHE_HOME="$TMPDIR/cache"
+  unset COPILOT_GITHUB_TOKEN GITHUB_TOKEN DISCORD_TOKEN BUILD_BUDDY_API_KEY \
+    GC_AGENT_LAUNCHER_TOKEN GC_FDPROXY_AUTH
+  unset HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy
+  export GIT_CONFIG_NOSYSTEM=1
+  export GIT_CONFIG_GLOBAL=/dev/null
+  export GIT_CONFIG_SYSTEM=/dev/null
+  export GIT_TERMINAL_PROMPT=0
+  export GIT_SSH_COMMAND=/bin/false
+  export GIT_PROXY_COMMAND=/bin/false
+  export GIT_ALLOW_PROTOCOL=https:file
+
+  (
+    cd "$fixtureRepo"
+    GC_TEST_MODE=1 \
+      ${gasCityContributor}/bin/python3 \
+      tests/fixtures/gas-city/acp/run.py
+  )
+  (
+    cd "$fixtureRepo"
+    ${gasCityContributor}/bin/python3 \
+      tests/fixtures/gas-city/discord/test_router.py
+  )
+  (
+    cd "$fixtureRepo"
+    ${gasCityContributor}/bin/python3 \
+      tests/fixtures/gas-city/github/test_publisher.py
+  )
+  (
+    cd "$fixtureRepo"
+    ${gasCityContributor}/bin/python3 \
+      tests/fixtures/gas-city/buildbuddy/run.py
+  )
+  (
+    cd "$fixtureRepo/tests/fixtures/gas-city/buildbuddy"
+    ${gasCityContributor}/bin/bazel \
+      --batch \
+      --output_user_root="$TMPDIR/bazel-user-root" \
+      --repository_cache="$TMPDIR/bazel-repository-cache" \
+      build //...
+    test "$(${pkgs.coreutils}/bin/cat bazel-bin/round_trip_payload.txt)" \
+      = "gascity-buildbuddy-bazel-8.7.0"
+  )
+
   jq -e \
     --arg gascity "${gascityRevision}" \
     --arg gascityVersion "${gascityVersion}" \

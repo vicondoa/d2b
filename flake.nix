@@ -270,6 +270,7 @@
           "assertions-3.nix"
           "autostart-wiring.nix"
           "examples-with-observability.nix"
+          "gas-city-contributor.nix"
           "ifname-nix-rust-parity.nix"
           "observability.nix"
           "observability-guest.nix"
