@@ -1582,8 +1582,7 @@ pkgs.testers.runNixOSTest {
         "/var/lib/gascity-buildbuddy-proxy",
     ]:
         machine.succeed(
-            f"! find {root} -type f -print0 | "
-            f"xargs -0 -r grep -I -E -i '{forbidden}' 2>/dev/null"
+            f"! grep -r -I -E -i '{forbidden}' {root} 2>/dev/null"
         )
 
     # PartOf plus KillMode=control-group is verified with the live child, not
