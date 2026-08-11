@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import array
+import fcntl
 import importlib.util
 import json
 import os
@@ -10,6 +11,8 @@ import pathlib
 import signal
 import shutil
 import socket
+import stat
+import struct
 import subprocess
 import sys
 import tempfile
@@ -18,6 +21,7 @@ import time
 import tomllib
 import unittest
 from concurrent.futures import ThreadPoolExecutor
+from types import SimpleNamespace
 from unittest import mock
 
 
@@ -241,6 +245,339 @@ class ActivationContractTests(unittest.TestCase):
                     state_schema="1",
                     profile="code-luna",
                 )
+
+
+class HostProjectionContractTests(unittest.TestCase):
+    @staticmethod
+    def _fake_lstat(
+        final_path: pathlib.Path,
+        *,
+        final_mode: int,
+        final_uid: int = 0,
+        ancestor_modes: dict[pathlib.Path, int] | None = None,
+    ):
+        ancestor_modes = ancestor_modes or {}
+
+        def fake_lstat(candidate: pathlib.Path) -> SimpleNamespace:
+            if candidate == final_path:
+                return SimpleNamespace(st_mode=final_mode, st_uid=final_uid)
+            return SimpleNamespace(
+                st_mode=ancestor_modes.get(candidate, stat.S_IFDIR | 0o755),
+                st_uid=0,
+            )
+
+        return fake_lstat
+
+    def test_selected_root_owned_regular_file_below_etc_nixos_is_allowed(self) -> None:
+        path = pathlib.Path("/etc/nixos/fixture-configuration.nix")
+        with mock.patch.object(
+            ACTIVATION.os,
+            "lstat",
+            side_effect=self._fake_lstat(
+                path,
+                final_mode=stat.S_IFREG | 0o644,
+            ),
+        ):
+            self.assertEqual(ACTIVATION.validate_host_projection(str(path)), path)
+
+    def test_etc_nixos_projection_rejects_root_directory_and_unsafe_descendants(self) -> None:
+        cases = (
+            (
+                pathlib.Path("/etc/nixos"),
+                None,
+                {},
+            ),
+            (
+                pathlib.Path("/etc/nixos/fixture-directory"),
+                stat.S_IFDIR | 0o755,
+                {},
+            ),
+            (
+                pathlib.Path("/etc/nixos/fixture-link"),
+                stat.S_IFLNK | 0o777,
+                {},
+            ),
+            (
+                pathlib.Path("/etc/nixos/fixture-device"),
+                stat.S_IFIFO | 0o600,
+                {},
+            ),
+            (
+                pathlib.Path("/etc/nixos/fixture-user-owned.nix"),
+                stat.S_IFREG | 0o600,
+                {},
+            ),
+            (
+                pathlib.Path("/etc/nixos/fixture-writable.nix"),
+                stat.S_IFREG | 0o666,
+                {},
+            ),
+            (
+                pathlib.Path("/etc/nixos/fixture-symlinked/configuration.nix"),
+                stat.S_IFREG | 0o644,
+                {pathlib.Path("/etc/nixos/fixture-symlinked"): stat.S_IFLNK | 0o777},
+            ),
+            (
+                pathlib.Path("/etc/nixos/fixture-writable/configuration.nix"),
+                stat.S_IFREG | 0o644,
+                {pathlib.Path("/etc/nixos/fixture-writable"): stat.S_IFDIR | 0o777},
+            ),
+            (
+                pathlib.Path("/etc/ssh/fixture-key"),
+                None,
+                {},
+            ),
+            (
+                pathlib.Path("/etc/shadow"),
+                None,
+                {},
+            ),
+        )
+        for path, final_mode, ancestor_modes in cases:
+            with self.subTest(path=path):
+                if final_mode is None:
+                    with self.assertRaises(ACTIVATION.BoundaryError):
+                        ACTIVATION.validate_host_projection(str(path))
+                    continue
+                with mock.patch.object(
+                    ACTIVATION.os,
+                    "lstat",
+                    side_effect=self._fake_lstat(
+                        path,
+                        final_mode=final_mode,
+                        final_uid=1000 if "user-owned" in path.name else 0,
+                        ancestor_modes=ancestor_modes,
+                    ),
+                ):
+                    with self.assertRaises(ACTIVATION.BoundaryError):
+                        ACTIVATION.validate_host_projection(str(path))
+
+
+class AgentRelayContractTests(unittest.TestCase):
+    @staticmethod
+    def _private_listener(root: pathlib.Path) -> tuple[socket.socket, pathlib.Path]:
+        path = root / "private.sock"
+        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        listener.bind(str(path))
+        listener.listen(1)
+        listener.settimeout(2)
+        return listener, path
+
+    @staticmethod
+    def _fd_count() -> int:
+        return len(list(pathlib.Path("/proc/self/fd").iterdir()))
+
+    @staticmethod
+    def _received_fds(ancillary: list[tuple[int, int, bytes]]) -> list[int]:
+        descriptors: list[int] = []
+        item_size = array.array("i").itemsize
+        for level, kind, data in ancillary:
+            if level == socket.SOL_SOCKET and kind == socket.SCM_RIGHTS:
+                if len(data) % item_size:
+                    raise AssertionError("received malformed SCM_RIGHTS data")
+                values = array.array("i")
+                values.frombytes(data)
+                descriptors.extend(int(value) for value in values)
+        return descriptors
+
+    def test_peer_uid_uses_uid_field_not_process_id(self) -> None:
+        left, right = socket.socketpair()
+        try:
+            raw = left.getsockopt(
+                socket.SOL_SOCKET,
+                socket.SO_PEERCRED,
+                struct.calcsize("3i"),
+            )
+            peer_pid, peer_uid, _peer_gid = struct.unpack("3i", raw)
+            self.assertNotEqual(peer_pid, peer_uid)
+            self.assertEqual(ACTIVATION._peer_uid(left), peer_uid)
+            self.assertEqual(ACTIVATION._peer_uid(left), os.geteuid())
+        finally:
+            left.close()
+            right.close()
+
+    def test_peer_uid_rejects_truncated_or_malformed_credentials(self) -> None:
+        connection = mock.Mock()
+        for value in (b"\x00" * 8, b"malformed-data"):
+            with self.subTest(value=value):
+                connection.getsockopt.return_value = value
+                with self.assertRaises(ACTIVATION.BoundaryError):
+                    ACTIVATION._peer_uid(connection)
+
+    def test_authorized_relay_forwards_all_launcher_fds_once(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="gascity-agent-relay-") as raw:
+            root = pathlib.Path(raw)
+            listener, private_path = self._private_listener(root)
+            relay_peer, public_client = socket.socketpair()
+            upstream: socket.socket | None = None
+            passed: list[socket.socket] = []
+            passed_peers: list[socket.socket] = []
+            received: list[int] = []
+            thread = threading.Thread(
+                target=ACTIVATION._relay_agent_connection,
+                args=(relay_peer,),
+                kwargs={
+                    "private_socket": str(private_path),
+                    "allowed_uid": os.geteuid(),
+                },
+                daemon=True,
+            )
+            try:
+                thread.start()
+                upstream, _ = listener.accept()
+                upstream.settimeout(2)
+                for _ in range(4):
+                    sender, peer = socket.socketpair()
+                    passed.append(sender)
+                    passed_peers.append(peer)
+                metadata = (
+                    b'{"protocol":"gascity-agent/1","operation":"launch",'
+                    b'"fds":["proxy","progress","control","check"]}\n'
+                )
+                sent = public_client.sendmsg(
+                    [metadata],
+                    [
+                        (
+                            socket.SOL_SOCKET,
+                            socket.SCM_RIGHTS,
+                            array.array("i", [sock.fileno() for sock in passed]).tobytes(),
+                        )
+                    ],
+                )
+                self.assertEqual(sent, len(metadata))
+                for sock in passed:
+                    sock.close()
+                for sock in passed_peers:
+                    sock.close()
+                passed.clear()
+                passed_peers.clear()
+
+                data, ancillary, flags, _address = upstream.recvmsg(
+                    4096,
+                    socket.CMSG_SPACE(array.array("i").itemsize * 4),
+                    getattr(socket, "MSG_CMSG_CLOEXEC", 0),
+                )
+                self.assertFalse(flags & getattr(socket, "MSG_CTRUNC", 0))
+                self.assertEqual(data, metadata)
+                received = self._received_fds(ancillary)
+                self.assertEqual(len(received), 4)
+                for descriptor in received:
+                    self.assertTrue(
+                        fcntl.fcntl(descriptor, fcntl.F_GETFD) & fcntl.FD_CLOEXEC
+                    )
+
+                acknowledgement = b'{"protocol":"gascity-agent/1","ok":true}\n'
+                upstream.sendall(acknowledgement)
+                self.assertEqual(public_client.recv(len(acknowledgement)), acknowledgement)
+
+                public_client.sendall(b'{"jsonrpc":"2.0","method":"session/new"}\n')
+                data, ancillary, _flags, _address = upstream.recvmsg(
+                    4096,
+                    socket.CMSG_SPACE(array.array("i").itemsize * 4),
+                )
+                self.assertEqual(data, b'{"jsonrpc":"2.0","method":"session/new"}\n')
+                self.assertEqual(self._received_fds(ancillary), [])
+            finally:
+                for descriptor in received:
+                    try:
+                        os.close(descriptor)
+                    except OSError:
+                        pass
+                for sock in passed:
+                    sock.close()
+                for sock in passed_peers:
+                    sock.close()
+                public_client.close()
+                if upstream is not None:
+                    upstream.close()
+                listener.close()
+                thread.join(timeout=2)
+                self.assertFalse(thread.is_alive())
+
+    def test_unauthorized_relay_peer_is_closed_before_private_connect(self) -> None:
+        relay_peer, public_client = socket.socketpair()
+        thread = threading.Thread(
+            target=ACTIVATION._relay_agent_connection,
+            args=(relay_peer,),
+            kwargs={
+                "private_socket": "/run/gascity-nonexistent.sock",
+                "allowed_uid": os.geteuid() + 1,
+            },
+            daemon=True,
+        )
+        try:
+            thread.start()
+            self.assertEqual(public_client.recv(1), b"")
+        finally:
+            public_client.close()
+            thread.join(timeout=2)
+            self.assertFalse(thread.is_alive())
+
+    def test_malformed_ancillary_data_is_rejected_and_descriptors_are_closed(self) -> None:
+        with self.assertRaises(ACTIVATION.BoundaryError):
+            ACTIVATION._extract_relay_descriptors(
+                [
+                    (
+                        socket.SOL_SOCKET,
+                        socket.SCM_RIGHTS,
+                        b"\x00",
+                    )
+                ]
+            )
+
+        with tempfile.TemporaryDirectory(prefix="gascity-agent-relay-truncated-") as raw:
+            root = pathlib.Path(raw)
+            listener, private_path = self._private_listener(root)
+            relay_peer, public_client = socket.socketpair()
+            upstream: socket.socket | None = None
+            passed: list[socket.socket] = []
+            passed_peers: list[socket.socket] = []
+            for _ in range(5):
+                sender, peer = socket.socketpair()
+                passed.append(sender)
+                passed_peers.append(peer)
+            before = self._fd_count()
+            thread = threading.Thread(
+                target=ACTIVATION._relay_agent_connection,
+                args=(relay_peer,),
+                kwargs={
+                    "private_socket": str(private_path),
+                    "allowed_uid": os.geteuid(),
+                },
+                daemon=True,
+            )
+            try:
+                thread.start()
+                upstream, _ = listener.accept()
+                public_client.sendmsg(
+                    [b'{"fds":[]}\n'],
+                    [
+                        (
+                            socket.SOL_SOCKET,
+                            socket.SCM_RIGHTS,
+                            array.array("i", [sock.fileno() for sock in passed]).tobytes(),
+                        )
+                    ],
+                )
+                for sock in passed:
+                    sock.close()
+                for sock in passed_peers:
+                    sock.close()
+                passed.clear()
+                passed_peers.clear()
+                self.assertEqual(public_client.recv(1), b"")
+            finally:
+                for sock in passed:
+                    sock.close()
+                for sock in passed_peers:
+                    sock.close()
+                public_client.close()
+                if upstream is not None:
+                    upstream.close()
+                listener.close()
+                thread.join(timeout=2)
+                self.assertFalse(thread.is_alive())
+            self.assertLessEqual(self._fd_count(), before)
 
 
 class SandboxContractTests(unittest.TestCase):

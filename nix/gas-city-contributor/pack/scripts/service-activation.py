@@ -16,6 +16,7 @@ import re
 import selectors
 import socket
 import stat
+import struct
 import subprocess
 import sys
 import threading
@@ -147,6 +148,11 @@ FORBIDDEN_PROJECTION_ROOTS = tuple(
         "/run",
     )
 )
+NIXOS_PROJECTION_ROOT = pathlib.Path("/etc/nixos")
+AGENT_RELAY_CHUNK_BYTES = 64 * 1024
+AGENT_RELAY_MAX_ATTACHMENTS = 4
+AGENT_RELAY_METADATA_BYTES = 16 * 1024
+AGENT_RELAY_RESPONSE_BYTES = 8 * 1024
 
 
 @dataclass(frozen=True)
@@ -221,13 +227,21 @@ def validate_host_projection(path_value: str, *, label: str = "host projection")
     path = _absolute_normalized_path(path_value, label)
     if path == pathlib.Path("/") or pathlib.Path("/home") in path.parents or path == pathlib.Path("/home"):
         raise BoundaryError(f"{label} is broader than the declared projection boundary")
-    if any(path == root or root in path.parents for root in FORBIDDEN_PROJECTION_ROOTS):
+    if path == NIXOS_PROJECTION_ROOT:
+        raise BoundaryError(f"{label} is broader than the safe host projection boundary")
+    if any(
+        path == root or root in path.parents
+        for root in FORBIDDEN_PROJECTION_ROOTS
+        if root != NIXOS_PROJECTION_ROOT
+    ):
         raise BoundaryError(f"{label} is broader than the safe host projection boundary")
     _check_ancestor_chain(path, label)
     try:
         info = os.lstat(path)
     except OSError as error:
         raise BoundaryError(f"{label} is unavailable") from error
+    if NIXOS_PROJECTION_ROOT in path.parents and not stat.S_ISREG(info.st_mode):
+        raise BoundaryError(f"{label} below /etc/nixos must be a regular file")
     if stat.S_ISLNK(info.st_mode) or not (
         stat.S_ISREG(info.st_mode) or stat.S_ISDIR(info.st_mode)
     ):
@@ -412,6 +426,184 @@ def run_fdproxy_sidecar(
     return child.wait()
 
 
+def _close_relay_descriptors(descriptors: list[int]) -> None:
+    while descriptors:
+        descriptor = descriptors.pop()
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
+
+
+def _extract_relay_descriptors(
+    ancillary: Sequence[tuple[int, int, bytes]],
+    *,
+    max_descriptors: int = AGENT_RELAY_MAX_ATTACHMENTS,
+) -> list[int]:
+    """Validate and make received relay descriptors close-on-exec."""
+
+    descriptors: list[int] = []
+    malformed = False
+    item_size = array.array("i").itemsize
+    for level, kind, data in ancillary:
+        if level != socket.SOL_SOCKET or kind != socket.SCM_RIGHTS or not data:
+            malformed = True
+            continue
+        complete = len(data) - (len(data) % item_size)
+        if complete != len(data):
+            malformed = True
+        values = array.array("i")
+        if complete:
+            values.frombytes(data[:complete])
+            descriptors.extend(int(value) for value in values)
+    if len(descriptors) > max_descriptors:
+        malformed = True
+    if malformed:
+        _close_relay_descriptors(descriptors)
+        raise BoundaryError("agent relay ancillary data is malformed or unauthorized")
+    try:
+        for descriptor in descriptors:
+            flags = fcntl.fcntl(descriptor, fcntl.F_GETFD)
+            fcntl.fcntl(descriptor, fcntl.F_SETFD, flags | fcntl.FD_CLOEXEC)
+    except OSError as error:
+        _close_relay_descriptors(descriptors)
+        raise BoundaryError("agent relay attachment fd is invalid") from error
+    return descriptors
+
+
+def _recv_relay_message(
+    source: socket.socket,
+    *,
+    allow_descriptors: bool,
+    max_descriptors: int,
+) -> tuple[bytes, list[int]]:
+    descriptors: list[int] = []
+    try:
+        data, ancillary, flags, _address = source.recvmsg(
+            AGENT_RELAY_CHUNK_BYTES,
+            socket.CMSG_SPACE(array.array("i").itemsize * AGENT_RELAY_MAX_ATTACHMENTS),
+            getattr(socket, "MSG_CMSG_CLOEXEC", 0),
+        )
+        descriptors = _extract_relay_descriptors(
+            ancillary,
+            max_descriptors=max_descriptors,
+        )
+        if flags & getattr(socket, "MSG_CTRUNC", 0):
+            raise BoundaryError("agent relay ancillary data was truncated")
+        if descriptors and not allow_descriptors:
+            raise BoundaryError("agent relay received unauthorized descriptors")
+        if not data and descriptors:
+            raise BoundaryError("agent relay descriptors were sent without a frame")
+        return data, descriptors
+    except BaseException:
+        _close_relay_descriptors(descriptors)
+        raise
+
+
+def _send_relay_message(
+    destination: socket.socket,
+    data: bytes,
+    descriptors: list[int],
+) -> None:
+    try:
+        ancillary = []
+        if descriptors:
+            rights = array.array("i", descriptors).tobytes()
+            ancillary = [(socket.SOL_SOCKET, socket.SCM_RIGHTS, rights)]
+        offset = 0
+        while offset < len(data):
+            sent = destination.sendmsg([data[offset:]], ancillary)
+            if sent <= 0:
+                raise BoundaryError("agent relay did not forward a frame")
+            offset += sent
+            ancillary = []
+    finally:
+        _close_relay_descriptors(descriptors)
+
+
+def _track_relay_frame(
+    data: bytes,
+    *,
+    frame_bytes: int,
+    complete: bool,
+    limit: int,
+) -> tuple[int, bool]:
+    if complete:
+        return frame_bytes, complete
+    newline = data.find(b"\n")
+    frame_bytes += len(data) if newline < 0 else newline + 1
+    if frame_bytes > limit:
+        raise BoundaryError("agent relay frame exceeds the size limit")
+    return frame_bytes, newline >= 0
+
+
+def _relay_agent_connection(
+    client: socket.socket,
+    *,
+    private_socket: str,
+    allowed_uid: int,
+) -> None:
+    upstream: socket.socket | None = None
+    selector: selectors.BaseSelector | None = None
+    try:
+        if _peer_uid(client) != allowed_uid:
+            raise BoundaryError("agent relay client uid is unauthorized")
+        upstream = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        upstream.connect(private_socket)
+        selector = selectors.DefaultSelector()
+        selector.register(client, selectors.EVENT_READ, (upstream, True))
+        selector.register(upstream, selectors.EVENT_READ, (client, False))
+        client_frame_bytes = 0
+        client_frame_complete = False
+        client_attachment_count = 0
+        upstream_frame_bytes = 0
+        upstream_frame_complete = False
+        while selector.get_map():
+            for key, _mask in selector.select():
+                source = key.fileobj
+                destination, client_to_upstream = key.data
+                data, descriptors = _recv_relay_message(
+                    source,
+                    allow_descriptors=client_to_upstream and not client_frame_complete,
+                    max_descriptors=(
+                        AGENT_RELAY_MAX_ATTACHMENTS - client_attachment_count
+                        if client_to_upstream and not client_frame_complete
+                        else 0
+                    ),
+                )
+                try:
+                    if not data:
+                        _close_relay_descriptors(descriptors)
+                        return
+                    if client_to_upstream:
+                        client_frame_bytes, client_frame_complete = _track_relay_frame(
+                            data,
+                            frame_bytes=client_frame_bytes,
+                            complete=client_frame_complete,
+                            limit=AGENT_RELAY_METADATA_BYTES,
+                        )
+                        client_attachment_count += len(descriptors)
+                    else:
+                        upstream_frame_bytes, upstream_frame_complete = _track_relay_frame(
+                            data,
+                            frame_bytes=upstream_frame_bytes,
+                            complete=upstream_frame_complete,
+                            limit=AGENT_RELAY_RESPONSE_BYTES,
+                        )
+                    _send_relay_message(destination, data, descriptors)
+                except BaseException:
+                    _close_relay_descriptors(descriptors)
+                    raise
+    except (BoundaryError, OSError):
+        pass
+    finally:
+        if selector is not None:
+            selector.close()
+        if upstream is not None:
+            upstream.close()
+        client.close()
+
+
 def serve_agent_relay(
     *,
     public_socket: str,
@@ -424,31 +616,11 @@ def serve_agent_relay(
     listener = _open_private_listener(public_socket, socket_group=socket_group)
 
     def relay(client: socket.socket) -> None:
-        upstream: socket.socket | None = None
-        try:
-            uid = _peer_uid(client)
-            if uid != allowed_uid:
-                raise BoundaryError("agent relay client uid is unauthorized")
-            upstream = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            upstream.connect(private_socket)
-            selector = selectors.DefaultSelector()
-            selector.register(client, selectors.EVENT_READ, upstream)
-            selector.register(upstream, selectors.EVENT_READ, client)
-            while selector.get_map():
-                for key, _mask in selector.select():
-                    source = key.fileobj
-                    destination = key.data
-                    data = source.recv(64 * 1024)
-                    if not data:
-                        return
-                    destination.sendall(data)
-            selector.close()
-        except (BoundaryError, OSError):
-            pass
-        finally:
-            if upstream is not None:
-                upstream.close()
-            client.close()
+        _relay_agent_connection(
+            client,
+            private_socket=private_socket,
+            allowed_uid=allowed_uid,
+        )
 
     try:
         while True:
@@ -463,8 +635,21 @@ def serve_agent_relay(
 
 
 def _peer_uid(connection: socket.socket) -> int:
-    credentials = connection.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12)
-    return int.from_bytes(credentials[0:4], byteorder=sys.byteorder, signed=True)
+    credential_size = struct.calcsize("3i")
+    try:
+        credentials = connection.getsockopt(
+            socket.SOL_SOCKET,
+            socket.SO_PEERCRED,
+            credential_size,
+        )
+        if not isinstance(credentials, bytes) or len(credentials) != credential_size:
+            raise BoundaryError("peer credentials are truncated or malformed")
+        _pid, uid, _gid = struct.unpack("3i", credentials)
+    except (OSError, struct.error) as error:
+        raise BoundaryError("peer credentials are truncated or malformed") from error
+    if uid < 0:
+        raise BoundaryError("peer credentials contain an invalid uid")
+    return uid
 
 
 def _domain_matches(host: str, allowed_domains: Sequence[str]) -> bool:

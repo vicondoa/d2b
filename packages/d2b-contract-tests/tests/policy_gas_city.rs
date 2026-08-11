@@ -736,3 +736,59 @@ fn gas_city_sidecars_are_private_and_use_the_authenticated_egress_proxy() {
     assert!(!publisher.contains("\"http.proxy=\""));
     assert!(!publisher.contains("\"https.proxy=\""));
 }
+
+#[test]
+fn gas_city_agent_relay_is_authenticated_bounded_and_fd_preserving() {
+    let activation = owned_asset(ACTIVATION_SCRIPT);
+    let relay = activation
+        .split_once("def _extract_relay_descriptors(")
+        .and_then(|(_, rest)| {
+            rest.split_once("def _domain_matches(")
+                .map(|(relay, _)| relay)
+        })
+        .expect("agent relay helpers must remain a contiguous source boundary");
+
+    for required in [
+        "AGENT_RELAY_MAX_ATTACHMENTS = 4",
+        "AGENT_RELAY_METADATA_BYTES = 16 * 1024",
+        "AGENT_RELAY_RESPONSE_BYTES = 8 * 1024",
+        "source.recvmsg(",
+        "destination.sendmsg(",
+        "socket.SCM_RIGHTS",
+        "\"MSG_CTRUNC\"",
+        "\"MSG_CMSG_CLOEXEC\"",
+        "fcntl.FD_CLOEXEC",
+        "_close_relay_descriptors(descriptors)",
+        "client_attachment_count",
+        "max_descriptors=max_descriptors",
+        "if _peer_uid(client) != allowed_uid",
+    ] {
+        assert!(
+            activation.contains(required),
+            "relay policy missing {required}"
+        );
+    }
+    assert!(!relay.contains(".recv("));
+    assert!(!relay.contains(".sendall("));
+    assert!(activation.contains("struct.unpack(\"3i\", credentials)"));
+    assert!(activation.contains("_pid, uid, _gid ="));
+    assert!(activation.contains("len(credentials) != credential_size"));
+}
+
+#[test]
+fn gas_city_host_projection_exception_is_regular_file_only() {
+    let activation = owned_asset(ACTIVATION_SCRIPT);
+    for required in [
+        "NIXOS_PROJECTION_ROOT = pathlib.Path(\"/etc/nixos\")",
+        "if path == NIXOS_PROJECTION_ROOT",
+        "if root != NIXOS_PROJECTION_ROOT",
+        "if NIXOS_PROJECTION_ROOT in path.parents and not stat.S_ISREG(info.st_mode)",
+        "if info.st_uid != 0 or info.st_mode & 0o022",
+        "_check_ancestor_chain(path, label)",
+    ] {
+        assert!(
+            activation.contains(required),
+            "host projection policy missing {required}"
+        );
+    }
+}
