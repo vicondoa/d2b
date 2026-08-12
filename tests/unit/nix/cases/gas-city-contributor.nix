@@ -309,6 +309,8 @@ in
       publisherProxy = builtins.elem
         "HTTPS_PROXY=http://127.0.0.1:3128"
         publisher.Environment;
+      mainSystemCallFilter = main.SystemCallFilter;
+      proxySystemCallFilter = proxy.SystemCallFilter;
       discordStartWrapper = lib.hasInfix "gascity-discord-start" discordStartText;
       publisherStartWrapper = lib.hasInfix "gascity-publisher-start" publisherStartText;
       allowedDiscordUid = lib.hasInfix "--allowed-uid 45102" egressStartText;
@@ -341,6 +343,21 @@ in
       publisherEgressGroup = true;
       discordProxy = true;
       publisherProxy = true;
+      mainSystemCallFilter = [
+        "@system-service"
+        "~@privileged"
+        "~@mount"
+        "~@raw-io"
+        "chown"
+      ];
+      proxySystemCallFilter = [
+        "@system-service"
+        "~@privileged"
+        "~@mount"
+        "~@raw-io"
+        "chown"
+        "mincore"
+      ];
       discordStartWrapper = true;
       publisherStartWrapper = true;
       allowedDiscordUid = true;

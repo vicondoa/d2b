@@ -929,6 +929,8 @@ in
               "${package}/etc/ssl/certs/ca-bundle.crt"
             ];
             ReadWritePaths = [ buildBuddyDirectory ];
+            SystemCallFilter =
+              sharedServiceConfig.SystemCallFilter ++ [ "mincore" ];
             Environment = [
               "SSL_CERT_FILE=${package}/etc/ssl/certs/ca-bundle.crt"
               "GC_BUILDBUDDY_UPSTREAM=remote.buildbuddy.io:443"

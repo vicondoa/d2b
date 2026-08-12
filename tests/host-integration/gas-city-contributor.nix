@@ -1346,6 +1346,31 @@ pkgs.testers.runNixOSTest {
       [ "${credentialProbe} buildbuddy buildbuddy-api-key" ];
     systemd.services.gascity-buildbuddy-proxy.serviceConfig.ExecStart =
       lib.mkForce fakeSidecar;
+    # The production proxy is replaced with a fixture sidecar above so the
+    # broader host test stays credential- and network-free.  Start the real
+    # packaged proxy separately with the production unit's effective syscall
+    # filter, and fail rather than restart if Envoy is killed during startup.
+    systemd.services.gascity-buildbuddy-envoy-syscall-smoke = {
+      serviceConfig =
+        config.systemd.services.gascity-buildbuddy-proxy.serviceConfig
+        // {
+          ExecStartPre = [ ];
+          RuntimeDirectory = "gascity-buildbuddy-envoy-smoke";
+          ReadWritePaths = [ "/run/gascity-buildbuddy-envoy-smoke" ];
+          SystemCallFilter =
+            config.systemd.services.gascity-buildbuddy-proxy.serviceConfig.SystemCallFilter;
+          ExecStart = "${testPackagePython} ${testPackageScripts}/buildbuddy-proxy.py"
+            + " serve"
+            + " --template ${testPackage}/share/gas-city-contributor/buildbuddy/envoy.yaml.tmpl"
+            + " --credential %d/buildbuddy-api-key"
+            + " --envoy ${testPackage}/bin/envoy"
+            + " --listen 127.0.0.1:19802"
+            + " --runtime-dir /run/gascity-buildbuddy-envoy-smoke"
+            + " --egress-socket /run/gascity-egress/egress.sock"
+            + " --ca ${testPackage}/etc/ssl/certs/ca-bundle.crt";
+          Restart = "no";
+        };
+    };
   };
 
   testScript = ''
@@ -1408,6 +1433,19 @@ pkgs.testers.runNixOSTest {
         "/var/lib/gascity-contributor/state/worktrees/planning-run/docs/plans/acp-observation-planning-run.json",
     ]:
         machine.wait_for_file(path)
+
+    machine.succeed(
+        "systemctl start gascity-buildbuddy-envoy-syscall-smoke.service"
+    )
+    machine.wait_for_unit("gascity-buildbuddy-envoy-syscall-smoke.service")
+    machine.succeed("sleep 2")
+    machine.succeed(
+        "test \"$(systemctl is-active gascity-buildbuddy-envoy-syscall-smoke.service)\" "
+        "= active"
+    )
+    machine.succeed(
+        "systemctl stop gascity-buildbuddy-envoy-syscall-smoke.service"
+    )
 
     # Static identities and the single contributor slice are live, not merely
     # rendered option values.
