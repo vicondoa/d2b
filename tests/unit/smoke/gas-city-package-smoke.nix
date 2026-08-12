@@ -15,6 +15,16 @@
 
 let
   runtimeScripts = gasCityContributor.passthru.runtimeScripts;
+  managedAssetsFor = generation:
+    pkgs.runCommand "gas-city-managed-assets-${generation}" { } ''
+      set -euo pipefail
+      for name in city pack copilot buildbuddy; do
+        mkdir -p "$out/$name"
+        printf '%s\n' "${generation}-$name" > "$out/$name/fixture"
+      done
+    '';
+  oldManagedAssets = managedAssetsFor "old-generation";
+  newManagedAssets = managedAssetsFor "new-generation";
 in
 pkgs.runCommand "gas-city-package-smoke" {
   nativeBuildInputs = [
@@ -128,11 +138,18 @@ pkgs.runCommand "gas-city-package-smoke" {
   cp -R ${../../../nixos-modules/gas-city-contributor} \
     "$fixtureRepo/nixos-modules/gas-city-contributor"
   ${pkgs.coreutils}/bin/chmod -R u+w "$fixtureRepo"
+  mkdir -p "$fixtureRepo/.scratch"
+  ${gasCityContributor}/bin/python3 \
+    "$root/pack/scripts/service-activation.py" materialize-assets \
+    --source "$root" \
+    --destination "$fixtureRepo/.scratch/managed-package"
 
   export PYTHONNOUSERSITE=1
   export PYTHONPYCACHEPREFIX="$TMPDIR/pycache"
   export XDG_CONFIG_HOME="$TMPDIR/config"
   export XDG_CACHE_HOME="$TMPDIR/cache"
+  export GC_MANAGED_ASSET_OLD="${oldManagedAssets}"
+  export GC_MANAGED_ASSET_NEW="${newManagedAssets}"
   unset COPILOT_GITHUB_TOKEN GITHUB_TOKEN DISCORD_TOKEN BUILD_BUDDY_API_KEY \
     GC_AGENT_LAUNCHER_TOKEN GC_FDPROXY_AUTH
   unset HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy

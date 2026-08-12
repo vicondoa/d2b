@@ -87,6 +87,8 @@ GC_ROOT_NAMES = (
     "profiles",
     "instructions",
 )
+MANAGED_ASSET_NAMES = ("city", "pack", "copilot", "buildbuddy")
+NIX_STORE_ROOT = pathlib.Path("/nix/store")
 IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 
 
@@ -209,6 +211,68 @@ def _check_ancestor_chain(path: pathlib.Path, label: str) -> None:
             raise BoundaryError(f"{label} ancestor is not a directory: {ancestor}")
         if info.st_mode & 0o022:
             raise BoundaryError(f"{label} ancestor is writable by group or other")
+
+
+def _check_store_ancestor_chain(path: pathlib.Path, label: str) -> None:
+    """Reject foreign ancestors while allowing the Nix store's standard mode."""
+
+    for ancestor in reversed(path.parents):
+        try:
+            info = os.lstat(ancestor)
+        except OSError as error:
+            raise BoundaryError(f"{label} ancestor is unavailable: {ancestor}") from error
+        if stat.S_ISLNK(info.st_mode):
+            raise BoundaryError(f"{label} has a symlinked ancestor: {ancestor}")
+        if not stat.S_ISDIR(info.st_mode):
+            raise BoundaryError(f"{label} ancestor is not a directory: {ancestor}")
+        if ancestor != NIX_STORE_ROOT and info.st_mode & 0o022:
+            raise BoundaryError(f"{label} ancestor is writable by group or other")
+
+
+def _validated_store_path(
+    value: str | os.PathLike[str],
+    label: str,
+    *,
+    expected_basename: str | None = None,
+    require_directory: bool = False,
+    require_existing: bool = False,
+) -> pathlib.Path:
+    """Validate an immutable path below /nix/store."""
+
+    try:
+        raw_value = os.fspath(value)
+    except TypeError as error:
+        raise BoundaryError(f"{label} is not a path") from error
+    if not isinstance(raw_value, str):
+        raise BoundaryError(f"{label} is not a text path")
+    path = _absolute_normalized_path(raw_value, label)
+    try:
+        path.relative_to(NIX_STORE_ROOT)
+    except ValueError as error:
+        raise BoundaryError(f"{label} must be below /nix/store") from error
+    if path == NIX_STORE_ROOT:
+        raise BoundaryError(f"{label} must name an immutable store asset")
+    if expected_basename is not None and path.name != expected_basename:
+        raise BoundaryError(
+            f"{label} must have basename {expected_basename}"
+        )
+    if require_existing or path.exists():
+        _check_store_ancestor_chain(path, label)
+    try:
+        info = os.lstat(path)
+    except FileNotFoundError as error:
+        if require_existing:
+            raise BoundaryError(f"{label} is unavailable") from error
+        return path
+    except OSError as error:
+        raise BoundaryError(f"{label} is unavailable") from error
+    if stat.S_ISLNK(info.st_mode):
+        raise BoundaryError(f"{label} must not be a symlink")
+    if info.st_mode & 0o022:
+        raise BoundaryError(f"{label} must not be writable by group or other")
+    if require_directory and not stat.S_ISDIR(info.st_mode):
+        raise BoundaryError(f"{label} must be a directory")
+    return path
 
 
 def validate_credential_source(
@@ -361,27 +425,141 @@ def monitor_free_space_once(
         raise
 
 
-def materialize_assets(source_value: str, destination_value: str) -> pathlib.Path:
-    """Create only missing managed links; never replace durable state."""
+def _managed_asset_needs_rotation(
+    target: pathlib.Path,
+    source_path: pathlib.Path,
+    name: str,
+) -> bool:
+    try:
+        info = os.lstat(target)
+    except FileNotFoundError:
+        return True
+    except OSError as error:
+        raise BoundaryError(f"managed asset target is unavailable: {target}") from error
+    if not stat.S_ISLNK(info.st_mode):
+        raise BoundaryError(f"durable managed asset would be replaced: {target}")
+    try:
+        current_value = os.readlink(target)
+    except OSError as error:
+        raise BoundaryError(f"managed asset target is unreadable: {target}") from error
+    if current_value == str(source_path):
+        return False
+    try:
+        _validated_store_path(
+            current_value,
+            f"existing managed asset target {name}",
+            expected_basename=name,
+            require_directory=True,
+        )
+    except BoundaryError as error:
+        raise BoundaryError(f"durable managed asset would be replaced: {target}") from error
+    return True
 
-    source = _absolute_normalized_path(source_value, "managed asset source")
-    destination = _absolute_normalized_path(destination_value, "managed asset destination")
-    if not source.is_dir():
-        raise BoundaryError("managed asset source must be a directory")
-    _check_ancestor_chain(destination, "managed asset destination")
-    destination.mkdir(mode=0o700, parents=True, exist_ok=True)
-    if destination.is_symlink() or not destination.is_dir():
-        raise BoundaryError("managed asset destination is not a private directory")
-    for name in ("city", "pack", "copilot", "buildbuddy"):
-        source_path = source / name
-        target = destination / name
-        if not source_path.exists() or source_path.is_symlink():
-            raise BoundaryError(f"managed asset source is incomplete: {source_path}")
-        if os.path.lexists(target):
-            if not target.is_symlink() or os.readlink(target) != str(source_path):
-                raise BoundaryError(f"durable managed asset would be replaced: {target}")
+
+def _replace_managed_link_atomically(
+    destination: pathlib.Path,
+    target: pathlib.Path,
+    source_path: pathlib.Path,
+    name: str,
+) -> None:
+    for attempt in range(32):
+        temporary = destination / (
+            f".{name}.{os.getpid()}.{time.time_ns()}.{attempt}.tmp"
+        )
+        try:
+            os.symlink(str(source_path), temporary)
+        except FileExistsError:
             continue
-        os.symlink(str(source_path), str(target))
+        except OSError as error:
+            raise BoundaryError(
+                f"managed asset temporary link could not be created: {temporary}"
+            ) from error
+        try:
+            os.replace(temporary, target)
+        except OSError as error:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError as cleanup_error:
+                raise BoundaryError(
+                    f"managed asset temporary link could not be cleaned up: {temporary}"
+                ) from cleanup_error
+            raise BoundaryError(f"managed asset link rotation failed: {target}") from error
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError as error:
+            raise BoundaryError(
+                f"managed asset temporary link could not be cleaned up: {temporary}"
+            ) from error
+        return
+    raise BoundaryError("managed asset temporary link name is unavailable")
+
+
+def _fsync_managed_directory(destination: pathlib.Path) -> None:
+    flags = (
+        os.O_RDONLY
+        | os.O_CLOEXEC
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    try:
+        directory_fd = os.open(destination, flags)
+    except OSError as error:
+        raise BoundaryError("managed asset directory is unavailable for sync") from error
+    try:
+        os.fsync(directory_fd)
+    except OSError as error:
+        raise BoundaryError("managed asset directory could not be synced") from error
+    finally:
+        os.close(directory_fd)
+
+
+def materialize_assets(source_value: str, destination_value: str) -> pathlib.Path:
+    """Materialize immutable managed links and safely rotate package generations."""
+
+    source = _validated_store_path(
+        source_value,
+        "managed asset source",
+        require_directory=True,
+        require_existing=True,
+    )
+    destination = _absolute_normalized_path(destination_value, "managed asset destination")
+    _check_ancestor_chain(destination, "managed asset destination")
+    try:
+        destination.mkdir(mode=0o700, parents=True, exist_ok=True)
+        destination_info = os.lstat(destination)
+    except OSError as error:
+        raise BoundaryError("managed asset destination is unavailable") from error
+    if stat.S_ISLNK(destination_info.st_mode) or not stat.S_ISDIR(
+        destination_info.st_mode
+    ):
+        raise BoundaryError("managed asset destination is not a private directory")
+    assets = {}
+    for name in MANAGED_ASSET_NAMES:
+        source_path = source / name
+        assets[name] = _validated_store_path(
+            source_path,
+            f"managed asset source {name}",
+            expected_basename=name,
+            require_directory=True,
+            require_existing=True,
+        )
+    pending = []
+    for name, source_path in assets.items():
+        target = destination / name
+        if _managed_asset_needs_rotation(target, source_path, name):
+            pending.append((name, source_path, target))
+    for name, source_path, target in pending:
+        # Re-check immediately before the rename so a durable non-symlink
+        # state observed after the preflight is still fail-closed.
+        if _managed_asset_needs_rotation(target, source_path, name):
+            _replace_managed_link_atomically(
+                destination,
+                target,
+                source_path,
+                name,
+            )
+    if pending:
+        _fsync_managed_directory(destination)
     return destination
 
 

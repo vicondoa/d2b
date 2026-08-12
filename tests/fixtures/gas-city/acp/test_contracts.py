@@ -346,6 +346,142 @@ class ActivationContractTests(unittest.TestCase):
                 )
 
 
+class ManagedAssetRotationContractTests(unittest.TestCase):
+    def setUp(self) -> None:
+        old_value = os.environ.get("GC_MANAGED_ASSET_OLD")
+        new_value = os.environ.get("GC_MANAGED_ASSET_NEW")
+        if not old_value or not new_value:
+            self.skipTest("realized managed-asset fixtures are unavailable")
+        self.old = pathlib.Path(old_value)
+        self.new = pathlib.Path(new_value)
+        for generation in (self.old, self.new):
+            self.assertTrue(
+                str(generation).startswith("/nix/store/"),
+                f"managed fixture is not a store path: {generation}",
+            )
+            for name in ACTIVATION.MANAGED_ASSET_NAMES:
+                self.assertTrue((generation / name).is_dir())
+
+    def _temporary_destination(self) -> tempfile.TemporaryDirectory[str]:
+        scratch = ROOT / ".scratch"
+        scratch.mkdir(mode=0o700, exist_ok=True)
+        return tempfile.TemporaryDirectory(
+            prefix="gascity-managed-assets-",
+            dir=scratch,
+        )
+
+    @staticmethod
+    def _materialize(source: pathlib.Path, destination: pathlib.Path) -> None:
+        ACTIVATION.materialize_assets(str(source), str(destination))
+
+    @staticmethod
+    def _links(destination: pathlib.Path) -> dict[str, str]:
+        return {
+            name: os.readlink(destination / name)
+            for name in ACTIVATION.MANAGED_ASSET_NAMES
+        }
+
+    @staticmethod
+    def _temporary_entries(destination: pathlib.Path) -> list[pathlib.Path]:
+        return sorted(
+            entry
+            for entry in destination.iterdir()
+            if entry.name.startswith(".") and entry.name.endswith(".tmp")
+        )
+
+    def test_same_generation_is_idempotent(self) -> None:
+        with self._temporary_destination() as raw:
+            destination = pathlib.Path(raw) / "managed"
+            self._materialize(self.old, destination)
+            before = {
+                name: os.lstat(destination / name).st_ino
+                for name in ACTIVATION.MANAGED_ASSET_NAMES
+            }
+            with mock.patch.object(
+                ACTIVATION.os,
+                "replace",
+                side_effect=AssertionError("same-generation materialization rotated"),
+            ):
+                self._materialize(self.old, destination)
+            self.assertEqual(
+                before,
+                {
+                    name: os.lstat(destination / name).st_ino
+                    for name in ACTIVATION.MANAGED_ASSET_NAMES
+                },
+            )
+            self.assertEqual(self._links(destination), {
+                name: str(self.old / name)
+                for name in ACTIVATION.MANAGED_ASSET_NAMES
+            })
+            self.assertEqual(self._temporary_entries(destination), [])
+
+    def test_package_generation_rotation_replaces_only_managed_links(self) -> None:
+        with self._temporary_destination() as raw:
+            destination = pathlib.Path(raw) / "managed"
+            self._materialize(self.old, destination)
+            old_links = self._links(destination)
+            self._materialize(self.new, destination)
+            self.assertNotEqual(old_links, self._links(destination))
+            self.assertEqual(self._links(destination), {
+                name: str(self.new / name)
+                for name in ACTIVATION.MANAGED_ASSET_NAMES
+            })
+            self.assertEqual(self._temporary_entries(destination), [])
+
+    def test_changed_foreign_relative_wrong_basename_and_non_symlinks_are_refused(
+        self,
+    ) -> None:
+        invalid_targets = (
+            ("foreign", lambda target: os.symlink("/tmp/foreign/city", target)),
+            ("relative", lambda target: os.symlink("../old/city", target)),
+            (
+                "wrong-basename",
+                lambda target: os.symlink(str(self.old / "pack"), target),
+            ),
+            ("file", lambda target: target.write_text("durable\n", encoding="utf-8")),
+            ("directory", lambda target: target.mkdir()),
+        )
+        for label, install in invalid_targets:
+            with self.subTest(target=label), self._temporary_destination() as raw:
+                destination = pathlib.Path(raw) / "managed"
+                self._materialize(self.old, destination)
+                target = destination / "city"
+                target.unlink()
+                install(target)
+                before = os.lstat(target)
+                before_link = os.readlink(target) if target.is_symlink() else None
+                with self.assertRaises(ACTIVATION.BoundaryError):
+                    self._materialize(self.new, destination)
+                after = os.lstat(target)
+                self.assertEqual(before.st_ino, after.st_ino)
+                self.assertEqual(before.st_mode, after.st_mode)
+                if before_link is not None:
+                    self.assertEqual(os.readlink(target), before_link)
+                self.assertEqual(self._temporary_entries(destination), [])
+
+    def test_replace_failure_cleans_private_temporary_link(self) -> None:
+        with self._temporary_destination() as raw:
+            destination = pathlib.Path(raw) / "managed"
+            self._materialize(self.old, destination)
+            with mock.patch.object(
+                ACTIVATION.os,
+                "replace",
+                side_effect=OSError("injected managed-link replace failure"),
+            ) as replace:
+                with self.assertRaises(ACTIVATION.BoundaryError):
+                    self._materialize(self.new, destination)
+            replace.assert_called_once()
+            self.assertEqual(
+                self._links(destination),
+                {
+                    name: str(self.old / name)
+                    for name in ACTIVATION.MANAGED_ASSET_NAMES
+                },
+            )
+            self.assertEqual(self._temporary_entries(destination), [])
+
+
 class ReserveReadinessContractTests(unittest.TestCase):
     def test_reserve_breach_blocks_before_zero_and_stays_submission_gated(self) -> None:
         with tempfile.TemporaryDirectory(prefix="gascity-reserve-") as raw:
