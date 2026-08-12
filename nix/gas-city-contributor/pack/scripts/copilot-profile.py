@@ -1392,10 +1392,15 @@ def _run_direct_probe(
             os.killpg(process.pid, signal.SIGKILL)
             process.wait()
         text = f"{error}\n{bytes(stderr_buffer).decode('utf-8', errors='replace')}".strip()
+        error_code = (
+            _probe_error_code(error)
+            if isinstance(error, ACPMalformed)
+            else _probe_error_code(text)
+        )
         return {
             "ok": False,
             "profile": profile,
-            "error_code": _probe_error_code(error),
+            "error_code": error_code,
             "error": text,
         }
     finally:

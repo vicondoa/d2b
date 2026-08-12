@@ -3428,6 +3428,73 @@ class LauncherLifecycleTests(unittest.TestCase):
             self.assertEqual(result["ok"], True, result)
             self.assertEqual(result["model"], "gpt-5.6-luna")
 
+    def test_direct_probe_classifies_exception_with_stderr(self) -> None:
+        cases = (
+            (BrokenPipeError("write failed"), "model unavailable", "unavailable"),
+            (PROFILE.ProfileError("probe failed"), "unknown model", "unsupported"),
+            (
+                PROFILE.ACPMalformed("typed ACP failure"),
+                "model unavailable",
+                "malformed",
+            ),
+        )
+
+        class SynchronousThread:
+            def __init__(self, target, name):
+                self.target = target
+
+            def start(self) -> None:
+                self.target()
+
+            def join(self, timeout: float | None = None) -> None:
+                return None
+
+        for error, stderr, expected_code in cases:
+            with self.subTest(error=type(error).__name__, stderr=stderr):
+                with tempfile.TemporaryDirectory(
+                    prefix="gascity-direct-probe-error-"
+                ) as raw:
+                    root = pathlib.Path(raw)
+                    worktree = root / "worktree"
+                    worktree.mkdir()
+                    child = (
+                        "import sys\n"
+                        f"sys.stderr.write({stderr!r})\n"
+                    )
+                    args = PROFILE._default_namespace("code-luna", "coding")
+                    args.fixture_direct = True
+                    args.launcher = None
+                    args.copilot = None
+                    args.worktree = str(worktree)
+                    with (
+                        mock.patch.dict(os.environ, {"GC_TEST_MODE": "1"}),
+                        mock.patch.object(
+                            PROFILE,
+                            "build_launch_argv",
+                            return_value=[sys.executable, "-c", child],
+                        ),
+                        mock.patch.object(
+                            PROFILE.threading,
+                            "Thread",
+                            SynchronousThread,
+                        ),
+                        mock.patch.object(
+                            PROFILE,
+                            "_probe_exchange",
+                            side_effect=error,
+                        ),
+                    ):
+                        result = PROFILE.run_probe(
+                            "code-luna",
+                            tool_policy="coding",
+                            args=args,
+                            timeout=1,
+                        )
+
+                self.assertFalse(result["ok"])
+                self.assertEqual(result["error_code"], expected_code)
+                self.assertIn(stderr, result["error"])
+
     def test_client_eof_stops_child_and_releases_lease(self) -> None:
         with tempfile.TemporaryDirectory(prefix="gascity-eof-") as raw:
             root = pathlib.Path(raw)
