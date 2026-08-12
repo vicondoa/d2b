@@ -1233,6 +1233,7 @@ class DiscordGateway:
             raw.close()
             raise
         context = ssl.create_default_context()
+        context.minimum_version = ssl.TLSVersion.TLSv1_2
         connection = context.wrap_socket(raw, server_hostname=parsed.hostname)
         try:
             key = base64.b64encode(os.urandom(16)).decode("ascii")

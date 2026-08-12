@@ -511,6 +511,15 @@ class DiscordRouterFixture(unittest.TestCase):
             with self.assertRaises(MODULE.DecisionError):
                 MODULE.DiscordREST("fixture-token")
 
+    def test_gateway_source_requires_tls_12(self) -> None:
+        script = SCRIPT.read_text()
+        self.assertIn(
+            "context = ssl.create_default_context()\n"
+            "        context.minimum_version = ssl.TLSVersion.TLSv1_2\n"
+            "        connection = context.wrap_socket",
+            script,
+        )
+
     def test_sidecar_source_has_no_direct_network_fallback(self) -> None:
         service = (ROOT / "nixos-modules/gas-city-contributor/service.nix").read_text()
         network = (ROOT / "nixos-modules/gas-city-contributor/network.nix").read_text()
