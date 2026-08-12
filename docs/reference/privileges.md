@@ -41,16 +41,16 @@ are denied (`defaultForUnknown: deny`).
 >    here. The filesystem-permissions gate (group ownership + mode)
 >    requires the connecting user to be in the `d2b`
 >    Linux SYSTEM GROUP. At `accept(2)` time, `d2bd` reads the
->    peer's pid/uid/gid via `SO_PEERCRED` (`man 7 unix` - the Linux
->    SO_PEERCRED primitive returns ONLY pid+uid+gid, NOT
->    supplementary groups), then classifies the peer's uid via lookup
->    against the `launcherUsers` / `adminUsers` arrays in
->    `/etc/d2b/daemon-config.json` to produce one of three
->    authz-class outcomes: `d2b-launcher`, `d2b-admin`, or
->    `deny`. Membership in the `d2b` Linux system group
->    is the conventional way operators add users to `launcherUsers`;
->    the system group's mode-0660 connect gate is the filesystem-level
->    deny-by-default protection before `accept(2)` runs.
+>    peer's pid/uid/gid via `SO_PEERCRED` (`man 7 unix`), resolves the local
+>    account and supplementary groups, and applies the configured local
+>    classifier. A group-derived launcher grant is accepted only for the
+>    configured `publicSocketGroup` lifecycle group; unconfigured or
+>    unrelated groups grant nothing, and a failed account or group lookup
+>    denies the peer. The `launcherUsers` / `adminUsers` arrays still
+>    classify configured local users. The result is one of three authz-class
+>    outcomes: `d2b-launcher`, `d2b-admin`, or `deny`. The system group's
+>    mode-0660 connect gate remains the filesystem-level deny-by-default
+>    protection before `accept(2)` runs.
 >
 > 2. **Broker private socket** at `/run/d2b/priv.sock` (owned
 >    `root:d2bd` mode `0660` per `nixos-modules/host-broker.nix`).
@@ -66,8 +66,9 @@ are denied (`defaultForUnknown: deny`).
 > SYSTEM GROUP `d2b` on the host: the system
 > group gates **connect(2) reachability** to the daemon's public socket
 > at the filesystem layer; the authz classes are the classification
-> outputs the daemon produces by `launcherUsers`/`adminUsers` uid
-> lookup and forwards to the broker. The authz-class name
+>    outputs the daemon produces from kernel credentials, the configured
+>    lifecycle group, and `launcherUsers`/`adminUsers` classification, then
+>    forwards to the broker. The authz-class name
 > `d2b-launcher` shares a similar spelling for historical reasons,
 > but it is an authz classification identifier, NOT a Linux group.
 

@@ -312,9 +312,10 @@ Pretending otherwise would be dishonest.
   `auth status`, `keys list`/`keys show`), and - because the per-VM
   SSH keys are group-readable - read every per-VM SSH private key.
   The v1.0 authorisation surface ([§4](#4-defenses-in-depth)) is
-  `SO_PEERCRED` at `/run/d2b/public.sock` accept time: the
-  `d2b` group plus `launcherUsers` is the *connection* gate, and
-  the daemon's per-verb authorisation table is the *role* gate. The
+  `SO_PEERCRED` at `/run/d2b/public.sock` accept time: the configured
+  lifecycle group and local user classifier are the *connection* gate, and
+  the daemon's per-verb authorisation table is the *role* gate. Unknown
+  groups and failed account or group lookups are denied. The
   legacy polkit per-VM allowlist that previously narrowed which unit
   names launchers could start was retired in v1.0 (per ADR 0015).
   Every mutating verb - lifecycle (`vm start`/`vm stop`/`vm restart`/

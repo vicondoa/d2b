@@ -3431,20 +3431,15 @@ fn dispatch_request(
     request: wire::Request,
 ) -> Result<Value, TypedError> {
     let verb = request.verb_name();
-    if verb_requires_admin(verb) && !matches!(peer.role, PeerRole::Admin) {
-        // HostShutdown is permitted for the vmStop allowlist only; all
-        // other admin-only verbs are denied even from uid 0.
-        if matches!(peer.role, PeerRole::HostShutdown) {
-            if !verb_allowed_for_host_shutdown(verb) {
-                return Err(TypedError::AuthzNotAdmin {
-                    verb: verb.to_owned(),
-                });
-            }
-        } else {
-            return Err(TypedError::AuthzNotAdmin {
-                verb: verb.to_owned(),
-            });
-        }
+    if matches!(peer.role, PeerRole::HostShutdown) && !verb_allowed_for_host_shutdown(verb) {
+        return Err(TypedError::AuthzNotAdmin {
+            verb: verb.to_owned(),
+        });
+    }
+    if verb_requires_admin(verb) && !matches!(peer.role, PeerRole::Admin | PeerRole::HostShutdown) {
+        return Err(TypedError::AuthzNotAdmin {
+            verb: verb.to_owned(),
+        });
     }
     match &request {
         wire::Request::VmStop(lifecycle) | wire::Request::VmRestart(lifecycle)
@@ -24751,6 +24746,45 @@ mod accept_loop_concurrency_tests {
             });
             Self { _lock: lock }
         }
+
+        fn unresolved() -> Self {
+            let lock = TEST_PEER_OVERRIDE_LOCK
+                .lock()
+                .unwrap_or_else(|p| p.into_inner());
+            *TEST_PEER_OVERRIDE.lock().unwrap_or_else(|p| p.into_inner()) = Some(PeerOverride {
+                uid: 9998,
+                gid: 9998,
+                username: None,
+                groups: None,
+            });
+            Self { _lock: lock }
+        }
+
+        fn daemon_uid() -> Self {
+            let lock = TEST_PEER_OVERRIDE_LOCK
+                .lock()
+                .unwrap_or_else(|p| p.into_inner());
+            *TEST_PEER_OVERRIDE.lock().unwrap_or_else(|p| p.into_inner()) = Some(PeerOverride {
+                uid: 0,
+                gid: 0,
+                username: Some("should-not-be-looked-up".to_owned()),
+                groups: Some(vec!["should-not-be-looked-up".to_owned()]),
+            });
+            Self { _lock: lock }
+        }
+
+        fn host_shutdown() -> Self {
+            let lock = TEST_PEER_OVERRIDE_LOCK
+                .lock()
+                .unwrap_or_else(|p| p.into_inner());
+            *TEST_PEER_OVERRIDE.lock().unwrap_or_else(|p| p.into_inner()) = Some(PeerOverride {
+                uid: 0,
+                gid: 0,
+                username: None,
+                groups: None,
+            });
+            Self { _lock: lock }
+        }
     }
 
     impl Drop for PeerOverrideEnv {
@@ -25056,6 +25090,48 @@ mod accept_loop_concurrency_tests {
         drop(client);
     }
 
+    #[test]
+    fn unresolved_peer_identity_is_rejected_without_caller_fallback() {
+        let _env = PeerOverrideEnv::unresolved();
+        let (state, _state_dir) = admin_exec_state();
+        let (server, client) = seqpacket_pair();
+        let result = handle_connection(server, &state, None);
+        assert!(matches!(
+            result,
+            Err(TypedError::AuthzNotALauncher { peer_uid: 9998 })
+        ));
+        let frame = read_frame(&client).expect("client reads rejection frame");
+        let value: serde_json::Value =
+            serde_json::from_slice(&frame).expect("rejection frame is JSON");
+        assert_eq!(value["type"], "helloRejected");
+        drop(client);
+    }
+
+    #[test]
+    fn daemon_uid_precedes_nss_lookup_in_peer_classification() {
+        let _env = PeerOverrideEnv::daemon_uid();
+        let (state, _state_dir) = admin_exec_state();
+        let (server, client) = seqpacket_pair();
+        let result = authorize_peer(&server, &state);
+        assert!(matches!(
+            result,
+            Err(TypedError::AuthzNotALauncher { peer_uid: 0 })
+        ));
+        drop(client);
+    }
+
+    #[test]
+    fn uid_zero_classifies_as_host_shutdown_after_daemon_uid_check() {
+        let _env = PeerOverrideEnv::host_shutdown();
+        let (mut state, _state_dir) = admin_exec_state();
+        state.daemon_uid = 4242;
+        let (server, client) = seqpacket_pair();
+        let peer = authorize_peer(&server, &state).expect("uid 0 HostShutdown classification");
+        assert_eq!(peer.role, PeerRole::HostShutdown);
+        assert_eq!(peer.uid, 0);
+        drop(client);
+    }
+
     /// fix2b: the admission permit moved into a handler is released when the
     /// handler returns, on BOTH the success path (clean EOF) and the error
     /// path (malformed hello). After each handler returns the in-flight count
@@ -25191,6 +25267,7 @@ mod broker_dispatch_tests {
         SignalRunnerResponse, SpawnRunnerResponse,
     };
     use d2b_contracts::guest_proto as pb;
+    use d2b_contracts::public_wire;
     use d2b_contracts::public_wire::{
         ActivationRequest, GcRequest, HostDestroyRequest, HostInstallRequest, HostPrepareRequest,
         KeysRotateRequest, MigrateRequest, MutationFlags, RotateKnownHostRequest,
@@ -25216,6 +25293,8 @@ mod broker_dispatch_tests {
         FilesystemSnapshotStore, PidfdOpener, ProcReader, RunnerSnapshotRecord, SnapshotStore,
         parse_proc_stat_starttime,
     };
+    use super::typed_error::TypedError;
+    use super::wire;
     use super::{
         ArtifactPaths, DaemonConfig, HostActivationMarkerState, PeerIdentity, PeerRole,
         ProviderGracefulInputs, QemuBrokerShutdownProvider, ServerState,
@@ -26754,6 +26833,44 @@ mod broker_dispatch_tests {
             assert!(
                 matches!(err, super::typed_error::TypedError::AuthzNotAdmin { .. }),
                 "HostShutdown denial of {verb} must be AuthzNotAdmin, got {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn host_shutdown_peer_is_denied_for_read_only_and_gateway_display_requests() {
+        let state =
+            test_state_with_broker_socket(unreachable_broker_socket_path("host-shutdown-read"));
+        let peer = host_shutdown_peer();
+        let requests = [
+            (
+                "list",
+                wire::Request::List(public_wire::ListRequest {
+                    env: None,
+                    vm: None,
+                }),
+            ),
+            (
+                "status",
+                wire::Request::Status(public_wire::StatusRequest {
+                    check_bridges: false,
+                    vm: None,
+                }),
+            ),
+            ("authStatus", wire::Request::AuthStatus),
+            (
+                "gatewayDisplay",
+                wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::List(
+                    public_wire::GatewayDisplayListArgs { target: None },
+                )),
+            ),
+        ];
+        for (expected_verb, request) in requests {
+            let err = dispatch_request(&state, &peer, request)
+                .expect_err("HostShutdown must not bypass its vmStop-only boundary");
+            assert!(
+                matches!(err, TypedError::AuthzNotAdmin { .. }),
+                "HostShutdown denial of {expected_verb} must preserve AuthzNotAdmin: {err:?}"
             );
         }
     }
