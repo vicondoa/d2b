@@ -139,7 +139,7 @@ in
       "d /var/lib/gascity-contributor/cache 0700 gascity gascity -"
       "d /var/lib/gascity-contributor/home 0700 gascity gascity -"
       "d /var/lib/gascity-contributor/gc 0700 gascity gascity -"
-      "d /var/lib/gascity-contributor/managed 0700 gascity gascity -"
+      "d /var/lib/gascity-contributor/managed 0700 root root -"
       "d /var/lib/gascity-contributor/state/rigs 0700 gascity gascity -"
       "d /var/lib/gascity-contributor/state/worktrees 0770 gascity-agent ${sharedGroup} -"
       "d /var/lib/gascity-contributor/state/leases 0700 gascity-agent gascity-agent -"

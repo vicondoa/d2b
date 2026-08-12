@@ -228,6 +228,9 @@ in
       terminalStateMode = builtins.elem
         "d /var/lib/gascity-contributor/state/agent-state/terminal 0750 gascity gascity-contributor -"
         enabled.systemd.tmpfiles.rules;
+      managedAssetDirectory = builtins.elem
+        "d /var/lib/gascity-contributor/managed 0700 root root -"
+        enabled.systemd.tmpfiles.rules;
       gcRootMode = builtins.elem
         "d /nix/var/nix/gcroots/gascity-contributor 0700 gascity-agent gascity-agent -"
         enabled.systemd.tmpfiles.rules;
@@ -261,6 +264,7 @@ in
       mainStateSchema = true;
       agentStateMode = true;
       terminalStateMode = true;
+      managedAssetDirectory = true;
       gcRootMode = true;
       gcRootWrite = true;
       agentServerUid = true;

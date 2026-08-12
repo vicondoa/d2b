@@ -346,6 +346,36 @@ class ActivationContractTests(unittest.TestCase):
                 )
 
 
+class ManagedStorePathValidationContractTests(unittest.TestCase):
+    def test_missing_gc_store_object_with_expected_asset_name_is_valid(self) -> None:
+        path = pathlib.Path(
+            "/nix/store/0123456789abcdfghijklmnpqrsvwxyz-retired-generation/city"
+        )
+        self.assertEqual(
+            ACTIVATION._validated_store_path(
+                path,
+                "old managed asset target",
+                expected_basename="city",
+                require_directory=True,
+            ),
+            path,
+        )
+
+    def test_missing_malformed_pseudo_store_object_is_rejected(self) -> None:
+        for object_name in (
+            "not-a-store-object",
+            "0123456789abcdfghijklmnpqrsvwxyze-retired-generation",
+        ):
+            with self.subTest(object_name=object_name):
+                with self.assertRaises(ACTIVATION.BoundaryError):
+                    ACTIVATION._validated_store_path(
+                        f"/nix/store/{object_name}/city",
+                        "old managed asset target",
+                        expected_basename="city",
+                        require_directory=True,
+                    )
+
+
 class ManagedAssetRotationContractTests(unittest.TestCase):
     def setUp(self) -> None:
         old_value = os.environ.get("GC_MANAGED_ASSET_OLD")
@@ -389,6 +419,32 @@ class ManagedAssetRotationContractTests(unittest.TestCase):
             if entry.name.startswith(".") and entry.name.endswith(".tmp")
         )
 
+    @staticmethod
+    def _destination_fstat_override(
+        destination: pathlib.Path,
+        *,
+        uid: int,
+        mode: int,
+    ):
+        real_fstat = ACTIVATION.os.fstat
+        destination_info = os.stat(destination, follow_symlinks=False)
+
+        def fake_fstat(fd: int):
+            info = real_fstat(fd)
+            if (
+                info.st_dev == destination_info.st_dev
+                and info.st_ino == destination_info.st_ino
+            ):
+                return SimpleNamespace(
+                    st_dev=info.st_dev,
+                    st_ino=info.st_ino,
+                    st_mode=stat.S_IFDIR | mode,
+                    st_uid=uid,
+                )
+            return info
+
+        return fake_fstat
+
     def test_same_generation_is_idempotent(self) -> None:
         with self._temporary_destination() as raw:
             destination = pathlib.Path(raw) / "managed"
@@ -416,6 +472,141 @@ class ManagedAssetRotationContractTests(unittest.TestCase):
             })
             self.assertEqual(self._temporary_entries(destination), [])
 
+    def test_destination_requires_root_private_owner_and_mode(self) -> None:
+        cases = (
+            ("non-root owner", 1000, 0o700),
+            ("group-readable", 0, 0o740),
+            ("other-writable", 0, 0o702),
+            ("owner-not-searchable", 0, 0o600),
+        )
+        for label, uid, mode in cases:
+            with self.subTest(destination=label), self._temporary_destination() as raw:
+                destination = pathlib.Path(raw) / "managed"
+                destination.mkdir(mode=0o700)
+                fake_fstat = self._destination_fstat_override(
+                    destination,
+                    uid=uid,
+                    mode=mode,
+                )
+                with mock.patch.object(ACTIVATION.os, "geteuid", return_value=0):
+                    with mock.patch.object(
+                        ACTIVATION.os,
+                        "fstat",
+                        side_effect=fake_fstat,
+                    ):
+                        with self.assertRaises(ACTIVATION.BoundaryError):
+                            self._materialize(self.old, destination)
+
+    def test_materialization_anchors_link_operations_to_one_directory_fd(self) -> None:
+        with self._temporary_destination() as raw:
+            destination = pathlib.Path(raw) / "managed"
+            lstat_fds: list[int | None] = []
+            readlink_fds: list[int | None] = []
+            symlink_fds: list[int | None] = []
+            replace_fds: list[tuple[int | None, int | None]] = []
+            fsync_fds: list[int] = []
+            open_calls: list[tuple[object, int, int | None]] = []
+            required_directory_flags = (
+                os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+            )
+            real_open = ACTIVATION.os.open
+            real_lstat = ACTIVATION.os.lstat
+            real_readlink = ACTIVATION.os.readlink
+            real_symlink = ACTIVATION.os.symlink
+            real_replace = ACTIVATION.os.replace
+            real_fsync = ACTIVATION.os.fsync
+
+            def record_open(path, flags, mode=0o777, *, dir_fd=None):
+                open_calls.append((path, flags, dir_fd))
+                return real_open(path, flags, mode, dir_fd=dir_fd)
+
+            def record_lstat(path, *args, **kwargs):
+                if path in ACTIVATION.MANAGED_ASSET_NAMES:
+                    lstat_fds.append(kwargs.get("dir_fd"))
+                return real_lstat(path, *args, **kwargs)
+
+            def record_readlink(path, *args, **kwargs):
+                if path in ACTIVATION.MANAGED_ASSET_NAMES:
+                    readlink_fds.append(kwargs.get("dir_fd"))
+                return real_readlink(path, *args, **kwargs)
+
+            def record_symlink(source, target, *args, **kwargs):
+                symlink_fds.append(kwargs.get("dir_fd"))
+                return real_symlink(source, target, *args, **kwargs)
+
+            def record_replace(source, target, *args, **kwargs):
+                replace_fds.append(
+                    (kwargs.get("src_dir_fd"), kwargs.get("dst_dir_fd"))
+                )
+                return real_replace(source, target, *args, **kwargs)
+
+            def record_fsync(fd: int):
+                fsync_fds.append(fd)
+                return real_fsync(fd)
+
+            with mock.patch.object(
+                ACTIVATION.os,
+                "open",
+                side_effect=record_open,
+            ), mock.patch.object(
+                ACTIVATION.os,
+                "lstat",
+                side_effect=record_lstat,
+            ), mock.patch.object(
+                ACTIVATION.os,
+                "readlink",
+                side_effect=record_readlink,
+            ), mock.patch.object(
+                ACTIVATION.os,
+                "symlink",
+                side_effect=record_symlink,
+            ), mock.patch.object(
+                ACTIVATION.os,
+                "replace",
+                side_effect=record_replace,
+            ), mock.patch.object(
+                ACTIVATION.os,
+                "fsync",
+                side_effect=record_fsync,
+            ):
+                self._materialize(self.old, destination)
+                self._materialize(self.new, destination)
+
+            directory_fds = set(lstat_fds + readlink_fds + symlink_fds + fsync_fds)
+            directory_fds.update(
+                fd
+                for pair in replace_fds
+                for fd in pair
+            )
+            self.assertEqual(len(directory_fds), 1)
+            directory_fd = next(iter(directory_fds))
+            self.assertIsNotNone(directory_fd)
+            self.assertTrue(lstat_fds)
+            self.assertTrue(readlink_fds)
+            self.assertTrue(symlink_fds)
+            self.assertTrue(replace_fds)
+            self.assertTrue(fsync_fds)
+            destination_opens = [
+                flags
+                for path, flags, dir_fd in open_calls
+                if path == destination.name and dir_fd is not None
+            ]
+            self.assertTrue(destination_opens)
+            self.assertTrue(
+                all(flags & required_directory_flags == required_directory_flags
+                    for flags in destination_opens)
+            )
+            self.assertTrue(all(fd == directory_fd for fd in lstat_fds))
+            self.assertTrue(all(fd == directory_fd for fd in readlink_fds))
+            self.assertTrue(all(fd == directory_fd for fd in symlink_fds))
+            self.assertTrue(
+                all(
+                    src_fd == directory_fd and dst_fd == directory_fd
+                    for src_fd, dst_fd in replace_fds
+                )
+            )
+            self.assertTrue(all(fd == directory_fd for fd in fsync_fds))
+
     def test_package_generation_rotation_replaces_only_managed_links(self) -> None:
         with self._temporary_destination() as raw:
             destination = pathlib.Path(raw) / "managed"
@@ -429,12 +620,63 @@ class ManagedAssetRotationContractTests(unittest.TestCase):
             })
             self.assertEqual(self._temporary_entries(destination), [])
 
+    def test_gc_removed_valid_store_target_can_be_rotated(self) -> None:
+        with self._temporary_destination() as raw:
+            destination = pathlib.Path(raw) / "managed"
+            self._materialize(self.old, destination)
+            target = destination / "city"
+            target.unlink()
+            os.symlink(
+                "/nix/store/0123456789abcdfghijklmnpqrsvwxyz-removed-generation/city",
+                target,
+            )
+            self._materialize(self.new, destination)
+            self.assertEqual(os.readlink(target), str(self.new / "city"))
+            self.assertEqual(self._temporary_entries(destination), [])
+
+    def test_directory_replacement_after_open_is_refused(self) -> None:
+        with self._temporary_destination() as raw:
+            destination = pathlib.Path(raw) / "managed"
+            self._materialize(self.old, destination)
+            real_open = ACTIVATION.os.open
+            replaced = False
+
+            def swap_after_open(path, flags, mode=0o777, *, dir_fd=None):
+                nonlocal replaced
+                fd = real_open(path, flags, mode, dir_fd=dir_fd)
+                if path == destination.name and dir_fd is not None and not replaced:
+                    replacement = destination.with_name("managed-replaced")
+                    destination.rename(replacement)
+                    destination.mkdir(mode=0o700)
+                    replaced = True
+                return fd
+
+            with mock.patch.object(
+                ACTIVATION.os,
+                "open",
+                side_effect=swap_after_open,
+            ):
+                with self.assertRaisesRegex(
+                    ACTIVATION.BoundaryError,
+                    "destination was replaced",
+                ):
+                    self._materialize(self.new, destination)
+            self.assertTrue(replaced)
+            self.assertEqual(list(destination.iterdir()), [])
+
     def test_changed_foreign_relative_wrong_basename_and_non_symlinks_are_refused(
         self,
     ) -> None:
         invalid_targets = (
             ("foreign", lambda target: os.symlink("/tmp/foreign/city", target)),
             ("relative", lambda target: os.symlink("../old/city", target)),
+            (
+                "missing-pseudo-store",
+                lambda target: os.symlink(
+                    "/nix/store/not-a-store-object/city",
+                    target,
+                ),
+            ),
             (
                 "wrong-basename",
                 lambda target: os.symlink(str(self.old / "pack"), target),
@@ -459,6 +701,94 @@ class ManagedAssetRotationContractTests(unittest.TestCase):
                 if before_link is not None:
                     self.assertEqual(os.readlink(target), before_link)
                 self.assertEqual(self._temporary_entries(destination), [])
+
+    def test_same_generation_retry_fsyncs_after_injected_failure(self) -> None:
+        with self._temporary_destination() as raw:
+            destination = pathlib.Path(raw) / "managed"
+            real_fsync = ACTIVATION.os.fsync
+            calls = 0
+
+            def fail_once(fd: int):
+                nonlocal calls
+                calls += 1
+                if calls == 1:
+                    raise OSError("injected managed-directory fsync failure")
+                return real_fsync(fd)
+
+            with mock.patch.object(
+                ACTIVATION.os,
+                "fsync",
+                side_effect=fail_once,
+            ):
+                with self.assertRaises(ACTIVATION.BoundaryError):
+                    self._materialize(self.old, destination)
+            self.assertEqual(calls, 1)
+            self.assertEqual(
+                self._links(destination),
+                {
+                    name: str(self.old / name)
+                    for name in ACTIVATION.MANAGED_ASSET_NAMES
+                },
+            )
+
+            with mock.patch.object(
+                ACTIVATION.os,
+                "fsync",
+                wraps=real_fsync,
+            ) as fsync:
+                self._materialize(self.old, destination)
+            fsync.assert_called_once()
+
+    def test_partial_rotation_fsyncs_successful_changes_and_preserves_failure(
+        self,
+    ) -> None:
+        with self._temporary_destination() as raw:
+            destination = pathlib.Path(raw) / "managed"
+            self._materialize(self.old, destination)
+            real_replace = ACTIVATION.os.replace
+            real_fsync = ACTIVATION.os.fsync
+            replace_calls = 0
+            fsync_calls: list[int] = []
+
+            def replace_with_failure(source, target, *args, **kwargs):
+                nonlocal replace_calls
+                replace_calls += 1
+                if replace_calls == 2:
+                    raise OSError("injected second managed-link replace failure")
+                return real_replace(source, target, *args, **kwargs)
+
+            def record_fsync(fd: int):
+                fsync_calls.append(fd)
+                return real_fsync(fd)
+
+            with mock.patch.object(
+                ACTIVATION.os,
+                "replace",
+                side_effect=replace_with_failure,
+            ), mock.patch.object(
+                ACTIVATION.os,
+                "fsync",
+                side_effect=record_fsync,
+            ):
+                with self.assertRaises(ACTIVATION.BoundaryError) as failure:
+                    self._materialize(self.new, destination)
+
+            self.assertEqual(replace_calls, 2)
+            self.assertEqual(len(fsync_calls), 1)
+            self.assertIsInstance(failure.exception.__cause__, OSError)
+            self.assertIn(
+                "injected second managed-link replace failure",
+                str(failure.exception.__cause__),
+            )
+            self.assertEqual(
+                os.readlink(destination / "city"),
+                str(self.new / "city"),
+            )
+            self.assertEqual(
+                os.readlink(destination / "pack"),
+                str(self.old / "pack"),
+            )
+            self.assertEqual(self._temporary_entries(destination), [])
 
     def test_replace_failure_cleans_private_temporary_link(self) -> None:
         with self._temporary_destination() as raw:

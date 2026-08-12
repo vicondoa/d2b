@@ -89,6 +89,9 @@ GC_ROOT_NAMES = (
 )
 MANAGED_ASSET_NAMES = ("city", "pack", "copilot", "buildbuddy")
 NIX_STORE_ROOT = pathlib.Path("/nix/store")
+NIX_STORE_OBJECT_PATTERN = re.compile(
+    r"^[0123456789abcdfghijklmnpqrsvwxyz]{32}-[A-Za-z0-9+._?=-]+$"
+)
 IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 
 
@@ -229,6 +232,15 @@ def _check_store_ancestor_chain(path: pathlib.Path, label: str) -> None:
             raise BoundaryError(f"{label} ancestor is writable by group or other")
 
 
+def _validate_store_object_component(path: pathlib.Path, label: str) -> None:
+    """Require the first component below /nix/store to have Nix's store shape."""
+
+    relative = path.relative_to(NIX_STORE_ROOT)
+    if not relative.parts or NIX_STORE_OBJECT_PATTERN.fullmatch(relative.parts[0]):
+        return
+    raise BoundaryError(f"{label} must name a valid Nix store object")
+
+
 def _validated_store_path(
     value: str | os.PathLike[str],
     label: str,
@@ -252,6 +264,7 @@ def _validated_store_path(
         raise BoundaryError(f"{label} must be below /nix/store") from error
     if path == NIX_STORE_ROOT:
         raise BoundaryError(f"{label} must name an immutable store asset")
+    _validate_store_object_component(path, label)
     if expected_basename is not None and path.name != expected_basename:
         raise BoundaryError(
             f"{label} must have basename {expected_basename}"
@@ -425,13 +438,170 @@ def monitor_free_space_once(
         raise
 
 
+def _same_file(left: os.stat_result, right: os.stat_result) -> bool:
+    return left.st_dev == right.st_dev and left.st_ino == right.st_ino
+
+
+def _managed_asset_directory_flags() -> int:
+    return (
+        os.O_RDONLY
+        | os.O_CLOEXEC
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+
+
+def _validate_managed_destination_info(info: os.stat_result) -> None:
+    if not stat.S_ISDIR(info.st_mode):
+        raise BoundaryError("managed asset destination is not a directory")
+    # The production materializer is the privileged (+) ExecStartPre and
+    # therefore requires root ownership.  An unprivileged package/fixture
+    # invocation cannot create a root-owned directory, so it validates the
+    # equivalent owner boundary for that non-privileged execution.
+    effective_uid = os.geteuid()
+    required_uid = 0 if effective_uid == 0 else effective_uid
+    if info.st_uid != required_uid:
+        raise BoundaryError("managed asset destination must be root-owned")
+    if info.st_mode & 0o077 or info.st_mode & 0o700 != 0o700:
+        raise BoundaryError("managed asset destination must be private")
+
+
+def _validate_managed_parent_binding(
+    parent: pathlib.Path,
+    parent_fd: int,
+    *,
+    expected: os.stat_result | None = None,
+) -> None:
+    try:
+        path_info = os.lstat(parent)
+        fd_info = os.fstat(parent_fd)
+    except OSError as error:
+        raise BoundaryError("managed asset destination parent is unavailable") from error
+    if not stat.S_ISDIR(path_info.st_mode) or path_info.st_mode & 0o022:
+        raise BoundaryError(
+            "managed asset destination parent is not a private directory"
+        )
+    if not _same_file(path_info, fd_info) or (
+        expected is not None and not _same_file(path_info, expected)
+    ):
+        raise BoundaryError("managed asset destination parent was replaced")
+
+
+def _validate_managed_destination_binding(
+    destination_name: str,
+    parent_fd: int,
+    destination_fd: int,
+    *,
+    expected: os.stat_result | None = None,
+) -> None:
+    try:
+        path_info = os.lstat(destination_name, dir_fd=parent_fd)
+        fd_info = os.fstat(destination_fd)
+    except OSError as error:
+        raise BoundaryError("managed asset destination was replaced") from error
+    if (
+        not stat.S_ISDIR(path_info.st_mode)
+        or not _same_file(path_info, fd_info)
+        or (expected is not None and not _same_file(path_info, expected))
+    ):
+        raise BoundaryError("managed asset destination was replaced")
+
+
+def _open_managed_asset_directory(destination: pathlib.Path) -> tuple[int, int]:
+    """Open and validate the destination while retaining its parent binding."""
+
+    if destination == pathlib.Path("/") or not destination.name:
+        raise BoundaryError("managed asset destination must name a directory")
+    parent = destination.parent
+    _check_ancestor_chain(parent, "managed asset destination")
+    try:
+        expected_parent = os.lstat(parent)
+    except OSError as error:
+        raise BoundaryError("managed asset destination parent is unavailable") from error
+    flags = _managed_asset_directory_flags()
+    try:
+        parent_fd = os.open(parent, flags)
+    except OSError as error:
+        raise BoundaryError("managed asset destination parent is unavailable") from error
+
+    destination_fd = -1
+    try:
+        _validate_managed_parent_binding(
+            parent,
+            parent_fd,
+            expected=expected_parent,
+        )
+        try:
+            expected_destination = os.lstat(
+                destination.name,
+                dir_fd=parent_fd,
+            )
+        except FileNotFoundError:
+            expected_destination = None
+        except OSError as error:
+            raise BoundaryError(
+                "managed asset destination is unavailable"
+            ) from error
+        try:
+            destination_fd = os.open(destination.name, flags, dir_fd=parent_fd)
+        except FileNotFoundError:
+            try:
+                os.mkdir(destination.name, mode=0o700, dir_fd=parent_fd)
+            except FileExistsError:
+                pass
+            except OSError as error:
+                raise BoundaryError(
+                    "managed asset destination could not be created"
+                ) from error
+            try:
+                destination_fd = os.open(
+                    destination.name,
+                    flags,
+                    dir_fd=parent_fd,
+                )
+            except OSError as error:
+                raise BoundaryError(
+                    "managed asset destination is unavailable"
+                ) from error
+        except OSError as error:
+            raise BoundaryError("managed asset destination is unavailable") from error
+        info = os.fstat(destination_fd)
+        _validate_managed_destination_info(info)
+        _validate_managed_destination_binding(
+            destination.name,
+            parent_fd,
+            destination_fd,
+            expected=expected_destination,
+        )
+        return parent_fd, destination_fd
+    except BaseException:
+        if destination_fd >= 0:
+            try:
+                os.close(destination_fd)
+            except OSError:
+                pass
+        try:
+            os.close(parent_fd)
+        except OSError:
+            pass
+        raise
+
+
+class _ManagedAssetMutationError(BoundaryError):
+    def __init__(self, message: str, *, changed: bool) -> None:
+        super().__init__(message)
+        self.changed = changed
+
+
 def _managed_asset_needs_rotation(
-    target: pathlib.Path,
+    destination_fd: int,
+    destination: pathlib.Path,
     source_path: pathlib.Path,
     name: str,
 ) -> bool:
+    target = destination / name
     try:
-        info = os.lstat(target)
+        info = os.lstat(name, dir_fd=destination_fd)
     except FileNotFoundError:
         return True
     except OSError as error:
@@ -439,7 +609,7 @@ def _managed_asset_needs_rotation(
     if not stat.S_ISLNK(info.st_mode):
         raise BoundaryError(f"durable managed asset would be replaced: {target}")
     try:
-        current_value = os.readlink(target)
+        current_value = os.readlink(name, dir_fd=destination_fd)
     except OSError as error:
         raise BoundaryError(f"managed asset target is unreadable: {target}") from error
     if current_value == str(source_path):
@@ -457,17 +627,23 @@ def _managed_asset_needs_rotation(
 
 
 def _replace_managed_link_atomically(
+    destination_fd: int,
     destination: pathlib.Path,
-    target: pathlib.Path,
     source_path: pathlib.Path,
     name: str,
 ) -> None:
+    target = destination / name
     for attempt in range(32):
-        temporary = destination / (
+        temporary = (
             f".{name}.{os.getpid()}.{time.time_ns()}.{attempt}.tmp"
         )
         try:
-            os.symlink(str(source_path), temporary)
+            os.symlink(
+                str(source_path),
+                temporary,
+                target_is_directory=True,
+                dir_fd=destination_fd,
+            )
         except FileExistsError:
             continue
         except OSError as error:
@@ -475,42 +651,41 @@ def _replace_managed_link_atomically(
                 f"managed asset temporary link could not be created: {temporary}"
             ) from error
         try:
-            os.replace(temporary, target)
+            os.replace(
+                temporary,
+                name,
+                src_dir_fd=destination_fd,
+                dst_dir_fd=destination_fd,
+            )
         except OSError as error:
             try:
-                temporary.unlink(missing_ok=True)
+                os.unlink(temporary, dir_fd=destination_fd)
+            except FileNotFoundError:
+                pass
             except OSError as cleanup_error:
                 raise BoundaryError(
-                    f"managed asset temporary link could not be cleaned up: {temporary}"
+                    f"managed asset temporary link could not be cleaned up: "
+                    f"{destination / temporary}"
                 ) from cleanup_error
             raise BoundaryError(f"managed asset link rotation failed: {target}") from error
         try:
-            temporary.unlink(missing_ok=True)
+            os.unlink(temporary, dir_fd=destination_fd)
+        except FileNotFoundError:
+            pass
         except OSError as error:
-            raise BoundaryError(
-                f"managed asset temporary link could not be cleaned up: {temporary}"
+            raise _ManagedAssetMutationError(
+                f"managed asset temporary link could not be cleaned up: {destination / temporary}",
+                changed=True,
             ) from error
         return
     raise BoundaryError("managed asset temporary link name is unavailable")
 
 
-def _fsync_managed_directory(destination: pathlib.Path) -> None:
-    flags = (
-        os.O_RDONLY
-        | os.O_CLOEXEC
-        | getattr(os, "O_DIRECTORY", 0)
-        | getattr(os, "O_NOFOLLOW", 0)
-    )
+def _fsync_managed_directory(destination_fd: int) -> None:
     try:
-        directory_fd = os.open(destination, flags)
-    except OSError as error:
-        raise BoundaryError("managed asset directory is unavailable for sync") from error
-    try:
-        os.fsync(directory_fd)
+        os.fsync(destination_fd)
     except OSError as error:
         raise BoundaryError("managed asset directory could not be synced") from error
-    finally:
-        os.close(directory_fd)
 
 
 def materialize_assets(source_value: str, destination_value: str) -> pathlib.Path:
@@ -522,17 +697,10 @@ def materialize_assets(source_value: str, destination_value: str) -> pathlib.Pat
         require_directory=True,
         require_existing=True,
     )
-    destination = _absolute_normalized_path(destination_value, "managed asset destination")
-    _check_ancestor_chain(destination, "managed asset destination")
-    try:
-        destination.mkdir(mode=0o700, parents=True, exist_ok=True)
-        destination_info = os.lstat(destination)
-    except OSError as error:
-        raise BoundaryError("managed asset destination is unavailable") from error
-    if stat.S_ISLNK(destination_info.st_mode) or not stat.S_ISDIR(
-        destination_info.st_mode
-    ):
-        raise BoundaryError("managed asset destination is not a private directory")
+    destination = _absolute_normalized_path(
+        destination_value,
+        "managed asset destination",
+    )
     assets = {}
     for name in MANAGED_ASSET_NAMES:
         source_path = source / name
@@ -543,24 +711,65 @@ def materialize_assets(source_value: str, destination_value: str) -> pathlib.Pat
             require_directory=True,
             require_existing=True,
         )
-    pending = []
-    for name, source_path in assets.items():
-        target = destination / name
-        if _managed_asset_needs_rotation(target, source_path, name):
-            pending.append((name, source_path, target))
-    for name, source_path, target in pending:
-        # Re-check immediately before the rename so a durable non-symlink
-        # state observed after the preflight is still fail-closed.
-        if _managed_asset_needs_rotation(target, source_path, name):
-            _replace_managed_link_atomically(
+    parent_fd, destination_fd = _open_managed_asset_directory(destination)
+    try:
+        pending = []
+        for name, source_path in assets.items():
+            if _managed_asset_needs_rotation(
+                destination_fd,
                 destination,
-                target,
                 source_path,
                 name,
-            )
-    if pending:
-        _fsync_managed_directory(destination)
-    return destination
+            ):
+                pending.append((name, source_path))
+
+        changed = False
+        try:
+            for name, source_path in pending:
+                # Re-check immediately before the rename so a durable
+                # non-symlink state observed after the preflight is still
+                # fail-closed.
+                if _managed_asset_needs_rotation(
+                    destination_fd,
+                    destination,
+                    source_path,
+                    name,
+                ):
+                    _replace_managed_link_atomically(
+                        destination_fd,
+                        destination,
+                        source_path,
+                        name,
+                    )
+                    changed = True
+        except BoundaryError as error:
+            if changed or getattr(error, "changed", False):
+                try:
+                    _fsync_managed_directory(destination_fd)
+                except BoundaryError:
+                    pass
+            raise
+
+        # A successful invocation must sync even when all links already point
+        # at this generation.  This also repairs a prior sync failure.
+        _fsync_managed_directory(destination_fd)
+        _validate_managed_destination_info(os.fstat(destination_fd))
+        _validate_managed_parent_binding(destination.parent, parent_fd)
+        _validate_managed_destination_binding(
+            destination.name,
+            parent_fd,
+            destination_fd,
+        )
+        return destination
+    finally:
+        try:
+            os.close(destination_fd)
+        except OSError:
+            pass
+        try:
+            os.close(parent_fd)
+        except OSError:
+            pass
 
 
 def _read_bounded_line(stream: socket.socket, limit: int) -> bytes:
