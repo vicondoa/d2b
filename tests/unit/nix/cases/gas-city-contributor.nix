@@ -15,7 +15,7 @@ let
   validConfig = {
     services.gasCityContributor = {
       enable = true;
-      repository.githubSlug = "vicondoa/d2b";
+      repository.githubSlug = "acme/project";
       repository.baseBranch = "v3";
       repository.rigName = "d2b";
       operators.users = [ "alice" ];

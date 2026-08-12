@@ -123,14 +123,14 @@ chain, or artifact-state file is introduced.
 
 ## Prompt corpus
 
-The checked-in manifest is an exact membership list for 35 files: three
-`AGENTS.md` files, all eight core `docs/contributing/*.md` files, all sixteen
-`.github/agents/*.agent.md` files, and all eight `.github/skills/d2b-*/SKILL.md`
-files. The optional `gas-city.md` operator guide is deliberately outside the
-agent prompt corpus. `prompt-corpus.mjs` verifies frontmatter, headings, fenced blocks, inline code,
-links and URLs, list hierarchy and count, table shape, literals, normative
-operators and negations, and exact JSON or output examples. It does not grade
-style or token reduction. Imported `speckit-*` prose stays uncompressed except
+The checked-in manifest is an exact membership list for 36 files: three
+`AGENTS.md` files, all nine `docs/contributing/*.md` files including
+`gas-city.md`, all sixteen `.github/agents/*.agent.md` files, and all eight
+`.github/skills/d2b-*/SKILL.md` files. `prompt-corpus.mjs` verifies
+frontmatter, headings, fenced blocks, inline code, links and URLs, list
+hierarchy and count, table shape, literals, normative operators and
+negations, and exact JSON or output examples. It does not grade style or
+token reduction. Imported `speckit-*` prose stays uncompressed except
 for routing edits.
 
 ## Executing it

@@ -1,4 +1,4 @@
-# Type-G runNixOSTest: the Gas City contributor module under real systemd.
+# Type 10 runNixOSTest: the Gas City contributor module under real systemd.
 #
 # The module and ACP launcher are production paths under test.  The test
 # package changes only the external Copilot executable to the deterministic ACP
