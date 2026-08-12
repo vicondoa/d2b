@@ -45,6 +45,10 @@ let
   packPath = "${packageAssetRoot}/pack";
   profilesPath = "${packageAssetRoot}/copilot";
   instructionsPath = "${profilesPath}/instructions.md";
+  runtimeClosure = pkgs.closureInfo {
+    rootPaths = [ package ];
+  };
+  runtimeClosurePath = "${runtimeClosure}/store-paths";
   agentUid = lib.attrByPath [ "users" "users" "gascity-agent" "uid" ] 0 config;
   egressUid = config.users.users.gascity-egress.uid;
   discordUid = config.users.users.gascity-discord.uid;
@@ -271,6 +275,12 @@ let
       sleep 0.05
     done
     test -S ${lib.escapeShellArg egressSocket}
+    runtime_paths=()
+    while IFS= read -r runtime_path; do
+      if test -n "$runtime_path"; then
+        runtime_paths+=(--runtime-path "$runtime_path")
+      fi
+    done < ${lib.escapeShellArg runtimeClosurePath}
     ${python} ${launcher} \
       --server \
       --socket ${lib.escapeShellArg agentPrivateSocket} \
@@ -280,8 +290,7 @@ let
       --worktree ${lib.escapeShellArg "${stateRoot}/worktrees"} \
       --lease-root ${lib.escapeShellArg "${stateRoot}/leases"} \
       --runtime-root ${lib.escapeShellArg agentRuntimeRoot} \
-      --runtime-path ${lib.escapeShellArg "${package}/bin"} \
-      --runtime-path ${lib.escapeShellArg "${package}/share/gas-city-contributor"} \
+      "''${runtime_paths[@]}" \
       --sandbox-script ${lib.escapeShellArg sandbox} \
       --fdproxy-script ${lib.escapeShellArg fdproxy} \
       --sandbox-python ${lib.escapeShellArg python} \
@@ -337,8 +346,7 @@ let
       --worktree ${lib.escapeShellArg "${stateRoot}/worktrees"} \
       --lease-root ${lib.escapeShellArg "${stateRoot}/leases"} \
       --runtime-root ${lib.escapeShellArg agentRuntimeRoot} \
-      --runtime-path ${lib.escapeShellArg "${package}/bin"} \
-      --runtime-path ${lib.escapeShellArg "${package}/share/gas-city-contributor"} \
+      "''${runtime_paths[@]}" \
       --sandbox-script ${lib.escapeShellArg sandbox} \
       --fdproxy-script ${lib.escapeShellArg fdproxy} \
       --sandbox-python ${lib.escapeShellArg python} \
@@ -591,6 +599,33 @@ in
             Group = "gascity-agent-channel";
             SupplementaryGroups = [ "gascity-contributor" "gascity-egress-channel" "gascity-agent-channel" ];
             PrivateNetwork = true;
+            # bubblewrap mounts a fresh proc filesystem for the child PID
+            # namespace. Keep the outer proc unfiltered so bubblewrap can read
+            # its overflow IDs before entering the child namespace.
+            ProtectProc = null;
+            ProcSubset = "all";
+            # ProtectKernelLogs masks /proc/kmsg in the outer procfs. That
+            # mask also makes bubblewrap's fresh procfs mount too revealing.
+            ProtectKernelLogs = false;
+            # ProtectHostname masks /proc/sys/kernel/hostname and domainname
+            # in the outer procfs, which has the same nested-mount effect.
+            ProtectHostname = false;
+            ProtectControlGroups = true;
+            # The launcher deliberately creates the child mount namespace.
+            # Keep the service syscall allow-list, adding only bubblewrap's
+            # namespace setup group and retaining the raw-I/O denial.
+            SystemCallFilter = [
+              "@system-service"
+              "@mount"
+              "~@raw-io"
+              "chown"
+            ];
+            RestrictAddressFamilies = [
+              "AF_UNIX"
+              "AF_INET"
+              "AF_INET6"
+              "AF_NETLINK"
+            ];
             RuntimeDirectory = "gascity-agent";
             RuntimeDirectoryMode = "0750";
             StateDirectory = "gascity-agent";
@@ -601,7 +636,17 @@ in
               runtimeRoot
               activeRunGCRootDirectory
             ];
-            InaccessiblePaths = commonServiceConfig.InaccessiblePaths
+            # A nested proc mount is rejected by the kernel when the outer
+            # namespace masks proc entries. The child bubblewrap namespace
+            # applies its own proc policy, so retain the common masks except
+            # for those proc paths.
+            ProtectKernelTunables = false;
+            InaccessiblePaths = (lib.filter (
+              path:
+              path != "-/proc/kcore"
+              && path != "-/proc/keys"
+              && path != "-/proc/latency_stats"
+            ) commonServiceConfig.InaccessiblePaths)
               ++ [
                 "-${discordDirectory}"
                 "-${publisherDirectory}"

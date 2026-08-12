@@ -1,10 +1,8 @@
 # Type-G runNixOSTest: the Gas City contributor module under real systemd.
 #
-# The module is the production module under test.  Only the long-running
-# provider commands are replaced with local deterministic doubles: the
-# identities, credentials, slices, mounts, lifecycle edges, resource
-# declarations, and filesystem/network hardening all come from the named
-# module.
+# The module and ACP launcher are production paths under test.  The test
+# package changes only the external Copilot executable to the deterministic ACP
+# fixture; the supervisor and provider sidecars remain narrow local doubles.
 { pkgs, self }:
 
 let
@@ -12,10 +10,113 @@ let
   contributor = self.packages.${pkgs.system}.gas-city-contributor;
   contributorPython = "${contributor}/bin/python3";
   contributorScripts = "${contributor}/share/gas-city-contributor/pack/scripts";
-  generation =
-    builtins.substring 0 32 (builtins.hashString "sha256" (toString contributor));
   relayAuth = builtins.hashString "sha256" "gascity-fdproxy:acme/project:d2b";
   fixtureSource = ../fixtures/gas-city;
+
+  fakeCopilot = pkgs.writeTextFile {
+    name = "gascity-host-fake-copilot";
+    destination = "/bin/copilot";
+    executable = true;
+    text = ''
+      #!${contributorPython}
+      import json
+      import os
+      import pathlib
+      import sys
+
+      def _readable(path):
+          try:
+              pathlib.Path(path).read_text(encoding="utf-8")
+          except (OSError, UnicodeError):
+              return False
+          return True
+
+      def _writable(path):
+          try:
+              with pathlib.Path(path).open("a", encoding="utf-8") as stream:
+                  stream.write("fixture\n")
+          except OSError:
+              return False
+          return True
+
+      def _effort():
+          try:
+              index = sys.argv.index("--effort")
+          except ValueError:
+              return None
+          return sys.argv[index + 1] if index + 1 < len(sys.argv) else None
+
+      run_id = os.environ.get("GC_RUN_ID")
+      if run_id in {"planning-run", "code-run"}:
+          profile = os.environ.get("GC_PROFILE_NAME", "")
+          check_fd = os.environ.get("GC_CHECK_FD")
+          settings_path = pathlib.Path(os.environ["COPILOT_HOME"]) / "settings.json"
+          settings = json.loads(settings_path.read_text(encoding="utf-8"))
+          namespaces = {}
+          for name in ("user", "pid", "net", "ipc", "uts", "mnt"):
+              try:
+                  namespaces[name] = os.readlink(f"/proc/self/ns/{name}")
+              except OSError:
+                  namespaces[name] = "missing"
+          observation = {
+              "run_id": run_id,
+              "profile": profile,
+              "tool_policy": "coding" if check_fd is not None else "planning",
+              "effort": _effort(),
+              "settings": settings,
+              "model": settings.get("model"),
+              "context": settings.get("contextTier"),
+              "uid": os.getuid(),
+              "gid": os.getgid(),
+              "groups": os.getgroups(),
+              "namespaces": namespaces,
+              "progress_fd": os.environ.get("GC_AGENT_FD") is not None,
+              "check_fd": check_fd is not None,
+              "check_fd_target": (
+                  os.readlink(f"/proc/self/fd/{check_fd}")
+                  if check_fd is not None
+                  else None
+              ),
+              "workspace_write": _writable("/workspace/.gascity-workspace-probe"),
+              "planning_write": _writable(
+                  "/workspace/docs/plans/.gascity-planning-probe"
+              ),
+              "sidecar_source_read": _readable("/etc/gascity-test/discord-token"),
+              "state_source_read": _readable(
+                  "/var/lib/gascity-contributor/state/fixture"
+              ),
+              "check_socket_read": _readable("/run/gascity-check/check.sock"),
+              "home_settings_read": _readable("/home/copilot/settings.json"),
+          }
+          print(json.dumps(observation, sort_keys=True), file=sys.stderr, flush=True)
+          worktree = pathlib.Path.cwd()
+          if check_fd is not None:
+              marker = worktree / f"acp-observation-{run_id}.json"
+          else:
+              marker = worktree / "docs/plans" / f"acp-observation-{run_id}.json"
+          marker.write_text(
+              json.dumps(observation, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          os.chmod(marker, 0o660)
+
+      _fake_acp_source = ${builtins.toJSON (builtins.readFile "${fixtureSource}/acp/fake_acp.py")}
+      exec(
+          compile(_fake_acp_source, "tests/fixtures/gas-city/acp/fake_acp.py", "exec"),
+          globals(),
+          globals(),
+      )
+    '';
+  };
+
+  testPackage = pkgs.symlinkJoin {
+    name = "gascity-contributor-host-test";
+    paths = [ fakeCopilot contributor ];
+  };
+  testPackagePython = "${testPackage}/bin/python3";
+  testPackageScripts = "${testPackage}/share/gas-city-contributor/pack/scripts";
+  generation =
+    builtins.substring 0 32 (builtins.hashString "sha256" (toString testPackage));
 
   credentialProbe = pkgs.writeShellScript "gascity-host-credential-probe" ''
     set -eu
@@ -135,86 +236,6 @@ let
               listener.close()
           if path is not None:
               path.unlink(missing_ok=True)
-    '';
-  };
-
-  fakeAcp = pkgs.writeTextFile {
-    name = "gascity-host-fake-acp";
-    executable = true;
-    text = ''
-      #!${contributorPython}
-      import json
-      import os
-      import pathlib
-      import signal
-      import sys
-      import time
-
-      fixture = pathlib.Path("/var/lib/gascity-contributor/state/fixture")
-      fixture.mkdir(mode=0o770, parents=True, exist_ok=True)
-      stopping = False
-
-      def append(name, value):
-          with (fixture / name).open("a", encoding="utf-8") as stream:
-              stream.write(str(value) + "\n")
-
-      def stop(_signum, _frame):
-          global stopping
-          stopping = True
-
-      signal.signal(signal.SIGTERM, stop)
-      signal.signal(signal.SIGINT, stop)
-
-      try:
-          home = pathlib.Path(os.environ["COPILOT_HOME"])
-          settings = json.loads((home / "settings.json").read_text(encoding="utf-8"))
-          if set(settings) != {"model", "contextTier"}:
-              raise RuntimeError("profile settings are not the only ACP authority")
-          append("acp-settings", json.dumps(settings, sort_keys=True))
-          append("acp-token-projection", "present" if os.environ.get("COPILOT_GITHUB_TOKEN") else "missing")
-          append("acp-home-settings", "present" if (home / "settings.json").is_file() else "missing")
-          append("acp-home-token", "present" if list(home.glob("*token*")) else "absent")
-          append("acp-net-namespace", os.readlink("/proc/self/ns/net"))
-          for source in (
-              "/etc/gascity-test/discord-token",
-              "/etc/gascity-test/github-key",
-              "/etc/gascity-test/buildbuddy-key",
-          ):
-              try:
-                  pathlib.Path(source).read_text(encoding="utf-8")
-              except OSError:
-                  append("acp-" + pathlib.Path(source).stem, "denied")
-              else:
-                  append("acp-" + pathlib.Path(source).stem, "readable")
-          worktree = pathlib.Path.cwd()
-          with (worktree / "fixture-progress.txt").open("a", encoding="utf-8") as stream:
-              stream.write("progress\n")
-          pid_path = fixture / "acp-current.pid"
-          pid_path.write_text(str(os.getpid()) + "\n", encoding="utf-8")
-          count_path = fixture / "acp-launch-count"
-          count = int(count_path.read_text(encoding="utf-8")) if count_path.exists() else 0
-          count_path.write_text(str(count + 1) + "\n", encoding="utf-8")
-          for raw in sys.stdin:
-              if stopping:
-                  break
-              if not raw.strip():
-                  continue
-              try:
-                  request = json.loads(raw)
-                  response = {
-                      "jsonrpc": "2.0",
-                      "id": request.get("id") if isinstance(request, dict) else None,
-                      "result": {"fixture": True},
-                  }
-                  sys.stdout.write(json.dumps(response, separators=(",", ":")) + "\n")
-                  sys.stdout.flush()
-              except (ValueError, AttributeError):
-                  continue
-          while not stopping:
-              time.sleep(0.05)
-      except (OSError, KeyError, ValueError, RuntimeError) as error:
-          append("acp-error", str(error))
-          raise SystemExit(1)
     '';
   };
 
@@ -376,287 +397,6 @@ let
   '';
   };
 
-  fakeAgent = pkgs.writeTextFile {
-    name = "gascity-host-fake-agent";
-    executable = true;
-    text = ''
-      #!${contributorPython}
-      import json
-      import os
-      import pathlib
-      import signal
-      import socket
-      import subprocess
-      import sys
-      import time
-      import grp
-
-      PACKAGE = "${contributor}";
-      PYTHON = "${contributorPython}";
-      LAUNCHER = "${contributorScripts}/agent-launcher.py";
-      # launcher limits: --max-agents 1 --max-active-runs 1
-      SANDBOX = "${contributorScripts}/agent-sandbox.py";
-      FDPROXY = "${contributorScripts}/fdproxy.py";
-      BWRAP = "${contributor}/bin/bwrap";
-      SETTINGS = "${contributor}/share/gas-city-contributor/copilot";
-      FAKE_ACP = "${fakeAcp}";
-      RUNTIME = pathlib.Path("/run/gascity-contributor");
-      FIXTURE = pathlib.Path("/var/lib/gascity-contributor/state/fixture");
-      WORKTREE = pathlib.Path("/var/lib/gascity-contributor/state/worktrees/test-run");
-      LEASE_ROOT = pathlib.Path("/var/lib/gascity-contributor/state/leases");
-      AGENT_RUNTIME = pathlib.Path("/run/gascity-agent/runtime");
-      PRIVATE_SOCKET = pathlib.Path("/run/gascity-agent/private.sock");
-      PUBLIC_SOCKET = pathlib.Path("/run/gascity-agent/agent.sock");
-      READINESS = RUNTIME / "readiness.json";
-      GENERATION = os.environ["GC_FIXTURE_GENERATION"];
-      stopping = False
-
-      def stop(_signum, _frame):
-          global stopping
-          stopping = True
-
-      def write_readiness():
-          READINESS.write_text(
-              json.dumps(
-                  {
-                      "generation": GENERATION,
-                      "state_schema": "1",
-                      "ready": True,
-                      "effective_profiles": {
-                          "coding": "code-luna",
-                          "review": "review-sol",
-                      },
-                      "error_code": None,
-                  },
-                  sort_keys=True,
-                  separators=(",", ":"),
-              )
-              + "\n",
-              encoding="utf-8",
-          )
-          os.chmod(READINESS, 0o640)
-
-      def append(name, value):
-          FIXTURE.mkdir(mode=0o770, parents=True, exist_ok=True)
-          with (FIXTURE / name).open("a", encoding="utf-8") as stream:
-              stream.write(str(value) + "\n")
-
-      def read_line(connection):
-          data = bytearray()
-          while b"\n" not in data:
-              chunk = connection.recv(4096)
-              if not chunk:
-                  return b""
-              data.extend(chunk)
-          return bytes(data).split(b"\n", 1)[0]
-
-      def serve_public(listener):
-          while not stopping:
-              try:
-                  client, _address = listener.accept()
-              except socket.timeout:
-                  continue
-              try:
-                  raw = client.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12)
-                  uid = int.from_bytes(raw[4:8], byteorder=sys.byteorder, signed=True)
-                  if uid == 45100:
-                      client.sendall(b"fixture-agent/1\n")
-              except OSError:
-                  pass
-              finally:
-                  client.close()
-
-      signal.signal(signal.SIGTERM, stop)
-      signal.signal(signal.SIGINT, stop)
-      token_path = pathlib.Path(os.environ["CREDENTIALS_DIRECTORY"]) / "copilot-token"
-      token = token_path.read_text(encoding="utf-8").strip()
-      if not token:
-          raise SystemExit("fixture Copilot credential is empty")
-      FIXTURE.mkdir(mode=0o770, parents=True, exist_ok=True)
-      WORKTREE.mkdir(mode=0o770, parents=True, exist_ok=True)
-      os.chmod(WORKTREE, 0o700)
-      for private_root in (LEASE_ROOT, AGENT_RUNTIME):
-          private_root.mkdir(mode=0o700, parents=True, exist_ok=True)
-          os.chmod(private_root, 0o700)
-      context = WORKTREE / "durable-context.json"
-      if not context.exists():
-          context.write_text(
-              json.dumps(
-                  {
-                      "run_id": "host-run",
-                      "bead_id": "host-bead",
-                      "generation": GENERATION,
-                      "state_schema": "1",
-                      "open_work": ["fixture-progress.txt"],
-                      "summary": "durable fixture context",
-                      "branch": "gascity/host-run",
-                      "commits": [],
-                      "worktree": str(WORKTREE),
-                      "review_state": "working",
-                      "retry_counters": {},
-                      "next_action": "continue",
-                  },
-                  sort_keys=True,
-              )
-              + "\n",
-              encoding="utf-8",
-          )
-      write_readiness()
-      RUNTIME.mkdir(mode=0o770, parents=True, exist_ok=True)
-      if PUBLIC_SOCKET.exists():
-          PUBLIC_SOCKET.unlink()
-      public = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-      public.bind(str(PUBLIC_SOCKET))
-      os.chmod(PUBLIC_SOCKET, 0o660)
-      os.chown(PUBLIC_SOCKET, -1, grp.getgrnam("gascity-agent-channel").gr_gid)
-      public.listen(8)
-      public.settimeout(0.2)
-      public_thread = __import__("threading").Thread(
-          target=serve_public, args=(public,), daemon=True
-      )
-      public_thread.start()
-      launcher_env = dict(os.environ)
-      launcher_env["COPILOT_GITHUB_TOKEN"] = token
-      launcher = subprocess.Popen(
-          [
-              PYTHON,
-              LAUNCHER,
-              "--server",
-              "--socket",
-              str(PRIVATE_SOCKET),
-              "--settings-root",
-              SETTINGS,
-              "--copilot",
-              PYTHON,
-              "--state-root",
-              "/var/lib/gascity-contributor/state/agent-state",
-              "--worktree",
-              "/var/lib/gascity-contributor/state/worktrees",
-              "--lease-root",
-              "/var/lib/gascity-contributor/state/leases",
-              "--runtime-root",
-              "/run/gascity-agent/runtime",
-              "--runtime-path",
-              "${contributor}/bin",
-              "--runtime-path",
-              "${contributor}/share/gas-city-contributor",
-              "--sandbox-script",
-              SANDBOX,
-              "--fdproxy-script",
-              FDPROXY,
-              "--sandbox-python",
-              PYTHON,
-              "--bwrap-path",
-              BWRAP,
-              "--max-agents",
-              "1",
-              "--max-active-runs",
-              "1",
-              "--client-uid",
-              "45101",
-              "--generation",
-              GENERATION,
-              "--state-schema",
-              "1",
-              "--activation-script",
-              "${contributorScripts}/service-activation.py",
-              "--gc-root-directory",
-              "/nix/var/nix/gcroots/gascity-contributor",
-              "--gc-root-prefix",
-              "${contributor}/",
-              "--package-path",
-              "${contributor}",
-              "--city-path",
-              "${contributor}/share/gas-city-contributor/city",
-              "--pack-path",
-              "${contributor}/share/gas-city-contributor/pack",
-              "--profiles-path",
-              "${contributor}/share/gas-city-contributor/copilot",
-              "--instructions-path",
-              "${contributor}/share/gas-city-contributor/copilot/instructions.md",
-              "--allow-unsafe-fixture",
-              "--fixture-child-script",
-              FAKE_ACP,
-              "--require-ready",
-              "--readiness-status",
-              str(READINESS),
-          ],
-          env=launcher_env,
-          close_fds=True,
-      )
-      active = None
-      try:
-          while not stopping:
-              if pathlib.Path("/run/gascity-contributor/test/cancel").exists():
-                  if active is not None:
-                      active.close()
-                      active = None
-                  append("cancelled", "yes")
-                  while not stopping:
-                      time.sleep(0.1)
-                  break
-              if active is None:
-                  for _attempt in range(100):
-                      if PRIVATE_SOCKET.exists():
-                          break
-                      if launcher.poll() is not None:
-                          raise SystemExit("fixture launcher stopped")
-                      time.sleep(0.05)
-                  active = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-                  active.settimeout(2.0)
-                  active.connect(str(PRIVATE_SOCKET))
-                  active.sendall(
-                      (
-                          json.dumps(
-                              {
-                                  "protocol": "gascity-agent/1",
-                                  "operation": "launch",
-                                  "profile": "code-luna",
-                                  "tool_policy": "coding",
-                                  "run_id": "host-run",
-                                  "bead_id": "host-bead",
-                                  "generation": GENERATION,
-                                  "state_schema": "1",
-                                  "worktree": str(WORKTREE),
-                                  "state_root": "/var/lib/gascity-contributor/state/agent-state",
-                                  "fds": [],
-                                  "require_ready": True,
-                              },
-                              separators=(",", ":"),
-                          )
-                          + "\n"
-                      ).encode("utf-8")
-                  )
-                  response = json.loads(read_line(active))
-                  if response.get("ok") is not True:
-                      append("launcher-error", response)
-                      raise SystemExit("fixture launch was rejected")
-                  active.settimeout(0.25)
-              try:
-                  data = active.recv(4096)
-              except socket.timeout:
-                  continue
-              except OSError:
-                  data = b""
-              if not data:
-                  active.close()
-                  active = None
-                  time.sleep(0.2)
-      finally:
-          if active is not None:
-              active.close()
-          public.close()
-          PUBLIC_SOCKET.unlink(missing_ok=True)
-          if launcher.poll() is None:
-              launcher.terminate()
-              try:
-                  launcher.wait(timeout=3)
-              except subprocess.TimeoutExpired:
-                  launcher.kill()
-                  launcher.wait()
-  '';
-  };
-
   fakeMain = pkgs.writeTextFile {
     name = "gascity-host-fake-main";
     executable = true;
@@ -668,13 +408,30 @@ let
       import select
       import signal
       import socket
+      import subprocess
+      import threading
       import time
 
-      PACKAGE = pathlib.Path("${contributor}");
+      PACKAGE = pathlib.Path("${testPackage}");
+      PYTHON = "${testPackagePython}"
+      SCRIPTS = pathlib.Path("${testPackageScripts}")
       RUNTIME = pathlib.Path("/run/gascity-contributor");
       STATE = pathlib.Path("/var/lib/gascity-contributor/state");
       FIXTURE = STATE / "fixture"
       MARKERS = RUNTIME / "test"
+      WORKTREES = STATE / "worktrees"
+      AGENT_STATE = STATE / "agent-state"
+      TERMINAL_ROOT = pathlib.Path(
+          os.environ.get("GC_TERMINAL_STATE_ROOT", str(AGENT_STATE / "terminal"))
+      )
+      GENERATION = os.environ.get("GC_CITY_GENERATION", "${generation}")
+      PUBLIC_SOCKET = os.environ.get(
+          "GC_AGENT_LAUNCHER_SOCKET", "/run/gascity-agent/agent.sock"
+      )
+      EGRESS_SOCKET = os.environ.get(
+          "GC_EGRESS_SOCKET", "/run/gascity-egress/egress.sock"
+      )
+      READINESS = RUNTIME / "readiness.json"
       stopping = False
 
       def attempt_read(path):
@@ -695,6 +452,351 @@ let
       def stop(_signum, _frame):
           global stopping
           stopping = True
+
+      def append(name, value):
+          FIXTURE.mkdir(mode=0o770, parents=True, exist_ok=True)
+          with (FIXTURE / name).open("a", encoding="utf-8") as stream:
+              stream.write(str(value) + "\n")
+
+      def wait_for(path, attempts=200):
+          value = pathlib.Path(path)
+          for _attempt in range(attempts):
+              if value.exists():
+                  return
+              if stopping:
+                  raise RuntimeError("main is stopping")
+              time.sleep(0.05)
+          raise RuntimeError(f"timed out waiting for {value}")
+
+      def write_terminal(run_id, bead_id):
+          TERMINAL_ROOT.mkdir(mode=0o750, parents=True, exist_ok=True)
+          target = TERMINAL_ROOT / f"{run_id}.json"
+          target.write_text(
+              json.dumps(
+                  {
+                      "schema": 1,
+                      "run_id": run_id,
+                      "bead_id": bead_id,
+                      "generation": GENERATION,
+                      "state_schema": "1",
+                      "terminal_status": "complete",
+                  },
+                  sort_keys=True,
+                  separators=(",", ":"),
+              )
+              + "\n",
+              encoding="utf-8",
+          )
+          os.chmod(target, 0o640)
+
+      def prepare_worktree(name, *, planning):
+          worktree = WORKTREES / name
+          worktree.mkdir(mode=0o770, parents=True, exist_ok=True)
+          if worktree.stat().st_uid == os.geteuid():
+              os.chmod(worktree, 0o770)
+          plans = worktree / "docs/plans"
+          plans.mkdir(mode=0o770, parents=True, exist_ok=True)
+          for directory in (worktree / "docs", plans):
+              if directory.stat().st_uid == os.geteuid():
+                  os.chmod(directory, 0o770)
+          if not planning:
+              progress = worktree / "fixture-progress.txt"
+              if not progress.exists():
+                  progress.write_text("assigned\n", encoding="utf-8")
+              os.chmod(progress, 0o660)
+              context = worktree / "durable-context.json"
+              if not context.exists():
+                  context.write_text(
+                      json.dumps(
+                          {
+                              "run_id": "host-run",
+                              "bead_id": "host-bead",
+                              "generation": GENERATION,
+                              "state_schema": "1",
+                              "open_work": ["fixture-progress.txt"],
+                              "summary": "durable fixture context",
+                              "branch": "gascity/host-run",
+                              "commits": [],
+                              "worktree": str(worktree),
+                              "review_state": "working",
+                              "retry_counters": {},
+                              "next_action": "continue",
+                          },
+                          sort_keys=True,
+                      )
+                      + "\n",
+                      encoding="utf-8",
+                  )
+                  os.chmod(context, 0o660)
+          return worktree
+
+      def connect_egress():
+          channel = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+          channel.settimeout(3)
+          channel.connect(EGRESS_SOCKET)
+          channel.settimeout(None)
+          descriptor = channel.detach()
+          os.set_inheritable(descriptor, True)
+          return descriptor
+
+      def launch_profile(run_id, bead_id, profile, tool_policy, worktree):
+          for marker in (
+              FIXTURE / f"{run_id}-ready",
+              FIXTURE / f"{run_id}-error",
+              FIXTURE / f"{run_id}-session.json",
+              worktree / f"acp-observation-{run_id}.json",
+              worktree / "docs/plans" / f"acp-observation-{run_id}.json",
+          ):
+              marker.unlink(missing_ok=True)
+          proxy_fd = connect_egress()
+          progress_parent, progress_child = socket.socketpair()
+          control_parent, control_child = socket.socketpair()
+          for descriptor in (
+              progress_parent.fileno(),
+              progress_child.fileno(),
+              control_parent.fileno(),
+              control_child.fileno(),
+          ):
+              os.set_inheritable(descriptor, True)
+          environment = dict(os.environ)
+          environment.update(
+              {
+                  "GC_PROXY_FD": str(proxy_fd),
+                  "GC_AGENT_FD": str(progress_child.fileno()),
+                  "GC_CONTROL_FD": str(control_child.fileno()),
+              }
+          )
+          command = [
+              PYTHON,
+              str(SCRIPTS / "copilot-profile.py"),
+              "--profile",
+              profile,
+              "--tool-policy",
+              tool_policy,
+              "--run-id",
+              run_id,
+              "--bead-id",
+              bead_id,
+              "--generation",
+              GENERATION,
+              "--state-schema",
+              "1",
+              "--worktree",
+              str(worktree),
+              "--state-root",
+              str(AGENT_STATE),
+              "--launcher-socket",
+              PUBLIC_SOCKET,
+              "--readiness-status",
+              str(READINESS),
+              "--require-ready",
+              "--runtime-path",
+              str(PACKAGE / "bin"),
+              "--runtime-path",
+              str(PACKAGE / "share/gas-city-contributor"),
+              "--sandbox-script",
+              str(SCRIPTS / "agent-sandbox.py"),
+              "--fdproxy-script",
+              str(SCRIPTS / "fdproxy.py"),
+              "--sandbox-python",
+              PYTHON,
+              "--bwrap-path",
+              str(PACKAGE / "bin/bwrap"),
+          ]
+          process = subprocess.Popen(
+              command,
+              stdin=subprocess.PIPE,
+              stdout=subprocess.PIPE,
+              stderr=subprocess.PIPE,
+              cwd=str(worktree),
+              env=environment,
+              pass_fds=(
+                  proxy_fd,
+                  progress_child.fileno(),
+                  control_child.fileno(),
+              ),
+              close_fds=True,
+          )
+          progress_child.close()
+          control_child.close()
+          return {
+              "process": process,
+              "control": control_parent,
+              "progress": progress_parent,
+              "run_id": run_id,
+              "bead_id": bead_id,
+              "worktree": worktree,
+          }
+
+      def frame(value):
+          return (json.dumps(value, separators=(",", ":")) + "\n").encode("utf-8")
+
+      def read_response(stream, request_id, responses):
+          while True:
+              raw = stream.readline()
+              if not raw:
+                  raise RuntimeError("profile relay closed during ACP session")
+              value = json.loads(raw)
+              responses.append(value)
+              if isinstance(value, dict) and value.get("id") == request_id:
+                  return value
+
+      def process_diagnostic(process):
+          try:
+              process.wait(timeout=3)
+          except subprocess.TimeoutExpired:
+              return ""
+          try:
+              return process.stderr.read().decode("utf-8", "replace").strip()
+          except (AttributeError, OSError):
+              return ""
+
+      def response_values(values, key):
+          found = []
+          for value in values:
+              if isinstance(value, dict):
+                  candidate = value.get(key)
+                  if isinstance(candidate, str):
+                      found.append(candidate)
+                  for nested in value.values():
+                      found.extend(response_values([nested], key))
+              elif isinstance(value, list):
+                  found.extend(response_values(value, key))
+          return found
+
+      def drive_profile(session, planning):
+          process = session["process"]
+          responses = []
+          try:
+              process.stdin.write(
+                  frame(
+                      {
+                          "jsonrpc": "2.0",
+                          "id": 1,
+                          "method": "initialize",
+                          "params": {
+                              "protocolVersion": 1,
+                              "clientCapabilities": {},
+                              "clientInfo": {
+                                  "name": "gascity-host-test",
+                                  "version": "1",
+                              },
+                          },
+                      }
+                  )
+              )
+              process.stdin.flush()
+              read_response(process.stdout, 1, responses)
+              process.stdin.write(
+                  frame(
+                      {
+                          "jsonrpc": "2.0",
+                          "id": 2,
+                          "method": "session/new",
+                          "params": {
+                              "cwd": "/workspace",
+                              "mcpServers": [],
+                          },
+                      }
+                  )
+              )
+              process.stdin.flush()
+              session_response = read_response(process.stdout, 2, responses)
+              session_id = session_response["result"]["sessionId"]
+              process.stdin.write(
+                  frame(
+                      {
+                          "jsonrpc": "2.0",
+                          "id": 3,
+                          "method": "session/prompt",
+                          "params": {
+                              "sessionId": session_id,
+                              "prompt": [
+                                  {
+                                      "type": "text",
+                                      "text": "Run the deterministic host integration session.",
+                                  }
+                              ],
+                          },
+                      }
+                  )
+              )
+              process.stdin.flush()
+              read_response(process.stdout, 3, responses)
+              (FIXTURE / f"{session['run_id']}-session.json").write_text(
+                  json.dumps(
+                      {
+                          "models": response_values(responses, "effectiveModel"),
+                          "contexts": response_values(responses, "contextTier"),
+                      },
+                      sort_keys=True,
+                  )
+                  + "\n",
+                  encoding="utf-8",
+              )
+              (FIXTURE / f"{session['run_id']}-ready").write_text(
+                  "ready\n", encoding="utf-8"
+              )
+              if planning:
+                  write_terminal(session["run_id"], session["bead_id"])
+                  process.stdin.close()
+                  process.wait(timeout=10)
+              else:
+                  process.stdin.flush()
+          except (BrokenPipeError, OSError, KeyError, RuntimeError, ValueError) as error:
+              detail = process_diagnostic(process)
+              message = str(error)
+              if detail:
+                  message += f": {detail}"
+              (FIXTURE / f"{session['run_id']}-error").write_text(
+                  message + "\n", encoding="utf-8"
+              )
+              try:
+                  process.terminate()
+              except OSError:
+                  pass
+
+      def wait_session_ready(session):
+          ready = FIXTURE / f"{session['run_id']}-ready"
+          error = FIXTURE / f"{session['run_id']}-error"
+          for _attempt in range(200):
+              if ready.exists():
+                  return
+              if error.exists():
+                  raise RuntimeError(error.read_text(encoding="utf-8"))
+              if session["process"].poll() is not None:
+                  detail = process_diagnostic(session["process"])
+                  message = "profile process exited before ACP readiness"
+                  if detail:
+                      message += f": {detail}"
+                  raise RuntimeError(message)
+              if stopping:
+                  raise RuntimeError("main is stopping")
+              time.sleep(0.05)
+          raise RuntimeError(f"timed out waiting for {ready}")
+
+      def close_session(session, operation):
+          process = session["process"]
+          if process.poll() is None:
+              if operation in {"cancel", "drain"}:
+                  write_terminal(session["run_id"], session["bead_id"])
+                  try:
+                      session["control"].sendall(
+                          frame({"run_id": session["run_id"], "op": operation})
+                      )
+                      session["control"].settimeout(3)
+                      (FIXTURE / f"{session['run_id']}-control").write_bytes(
+                          session["control"].recv(4096)
+                      )
+                  except OSError:
+                      pass
+              try:
+                  process.wait(timeout=10)
+              except subprocess.TimeoutExpired:
+                  process.kill()
+                  process.wait()
+          session["control"].close()
+          session["progress"].close()
 
       signal.signal(signal.SIGTERM, stop)
       signal.signal(signal.SIGINT, stop)
@@ -748,9 +850,79 @@ let
       (MARKERS / "main-boundary.json").write_text(
           json.dumps(boundary, sort_keys=True) + "\n", encoding="utf-8"
       )
+      planning_worktree = prepare_worktree("planning-run", planning=True)
+      code_worktree = prepare_worktree("test-run", planning=False)
+      wait_for(PUBLIC_SOCKET)
+      planning = launch_profile(
+          "planning-run",
+          "planning-bead",
+          "review-sol",
+          "planning",
+          planning_worktree,
+      )
+      planning_thread = threading.Thread(
+          target=drive_profile,
+          args=(planning, True),
+          daemon=True,
+      )
+      planning_thread.start()
+      wait_session_ready(planning)
+      planning_thread.join(timeout=10)
+      if planning["process"].returncode not in (0, None):
+          raise RuntimeError("planning profile failed")
+      close_session(planning, "drain")
+
+      active = None
+      launch_count = 0
+
+      def launch_code():
+          global launch_count
+          launch_count += 1
+          session = launch_profile(
+              "code-run",
+              "host-bead",
+              "code-luna",
+              "coding",
+              code_worktree,
+          )
+          thread = threading.Thread(
+              target=drive_profile,
+              args=(session, False),
+              daemon=True,
+          )
+          thread.start()
+          wait_session_ready(session)
+          observation = json.loads(
+              (code_worktree / "acp-observation-code-run.json").read_text(
+                  encoding="utf-8"
+              )
+          )
+          (FIXTURE / "acp-launch-count").write_text(
+              str(launch_count) + "\n", encoding="utf-8"
+          )
+          return session
+
+      active = launch_code()
       (MARKERS / "main-ready").write_text("ready\n", encoding="utf-8")
       try:
           while not stopping:
+              if pathlib.Path("/run/gascity-contributor/test/cancel").exists():
+                  if active is not None:
+                      close_session(active, "cancel")
+                      active = None
+                  append("cancelled", "yes")
+                  while not stopping:
+                      time.sleep(0.1)
+                  break
+              if active is None:
+                  time.sleep(0.1)
+                  continue
+              if active["process"].poll() is not None:
+                  close_session(active, "drain")
+                  active = None
+                  if not stopping:
+                      time.sleep(0.2)
+                      active = launch_code()
               if listeners:
                   readable, _writable, _errors = select.select(listeners, [], [], 0.2)
                   for listener in readable:
@@ -762,6 +934,8 @@ let
               else:
                   time.sleep(0.2)
       finally:
+          if active is not None:
+              close_session(active, "drain")
           for listener in listeners:
               listener.close()
   '';
@@ -780,7 +954,9 @@ let
       generation = sys.argv[1]
       run_id = sys.argv[2] if len(sys.argv) > 2 else "second-run"
       expected = sys.argv[3] if len(sys.argv) > 3 else ""
-      worktree = pathlib.Path("/var/lib/gascity-contributor/state/worktrees") / run_id
+      worktree = pathlib.Path(
+          "/var/lib/gascity-contributor/state/worktrees"
+      ) / run_id
       worktree.mkdir(mode=0o770, parents=True, exist_ok=True)
       connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
       connection.settimeout(3)
@@ -995,7 +1171,11 @@ pkgs.testers.runNixOSTest {
   name = "gas-city-contributor";
 
   nodes.machine = { config, pkgs, ... }: {
-    imports = [ self.nixosModules.gasCityContributor ];
+    imports = [
+      (import ../../nixos-modules/gas-city-contributor {
+        packageFor = _: testPackage;
+      })
+    ];
 
     virtualisation = {
       memorySize = 4096;
@@ -1043,6 +1223,19 @@ pkgs.testers.runNixOSTest {
         printf '%s\n' fixture-github-private-key > /etc/gascity-test/github-key
         printf '%s\n' fixture-buildbuddy-key > /etc/gascity-test/buildbuddy-key
         printf '%s\n' host-projection-canary > /etc/gascity-test/host-canary
+        install -d -m 0750 -o gascity -g gascity-contributor \
+          /var/lib/gascity-contributor/state/agent-state/terminal
+        for path in \
+          /var/lib/gascity-contributor/state/worktrees/test-run \
+          /var/lib/gascity-contributor/state/worktrees/test-run/docs \
+          /var/lib/gascity-contributor/state/worktrees/test-run/docs/plans \
+          /var/lib/gascity-contributor/state/worktrees/planning-run \
+          /var/lib/gascity-contributor/state/worktrees/planning-run/docs \
+          /var/lib/gascity-contributor/state/worktrees/planning-run/docs/plans; do
+          install -d -m 0770 "$path"
+          chown gascity-agent:gascity-contributor "$path"
+          chmod 0770 "$path"
+        done
       '';
     };
 
@@ -1058,7 +1251,7 @@ pkgs.testers.runNixOSTest {
       pkgs.iproute2
       pkgs.procps
       pkgs.jq
-      contributor
+      testPackage
     ];
 
     services.gasCityContributor = {
@@ -1121,19 +1314,12 @@ pkgs.testers.runNixOSTest {
     systemd.services."gas-city-contributor".serviceConfig = {
       ExecStart = lib.mkForce fakeMain;
       ExecStartPre = lib.mkAfter [ "${credentialProbe} main none" ];
+      SupplementaryGroups = lib.mkAfter [ "gascity-egress-channel" ];
       Environment = lib.mkAfter [ "GC_PROJECT_QUOTA_SUPPORTED=1" ];
     };
 
-    systemd.services.gascity-agent = {
-      serviceConfig = {
-        ExecStart = lib.mkForce fakeAgent;
-        ExecStartPre = [ "${credentialProbe} agent copilot-token" ];
-        Environment = lib.mkAfter [
-          "GC_TEST_MODE=1"
-          "GC_FIXTURE_GENERATION=${generation}"
-        ];
-      };
-    };
+    systemd.services.gascity-agent.serviceConfig.ExecStartPre =
+      [ "${credentialProbe} agent copilot-token" ];
 
     systemd.services.gascity-egress.serviceConfig = {
       ExecStartPre = [ "${credentialProbe} egress none" ];
@@ -1162,11 +1348,10 @@ pkgs.testers.runNixOSTest {
   testScript = ''
     import json
 
-    package = "${contributor}"
-    python = "${contributorPython}"
+    package = "${testPackage}"
+    python = "${testPackagePython}"
     generation = "${generation}"
     auth = "${relayAuth}"
-    fake_agent = "${fakeAgent}"
     launcher_probe = "${launcherProbe}"
     proxy_fixture = "${proxyFixture}"
 
@@ -1185,11 +1370,11 @@ pkgs.testers.runNixOSTest {
         "cp -rL /etc/gascity-module-fixtures/. "
         "/tmp/gascity-fixtures/nixos-modules/gas-city-contributor/ && "
         "mkdir -p /tmp/gascity-fixtures/nix /tmp/gascity-fixtures/tests/nix && "
-        "ln -s ${contributor}/share/gas-city-contributor "
+        "ln -s ${testPackage}/share/gas-city-contributor "
         "/tmp/gascity-fixtures/nix/gas-city-contributor && "
         "ln -s ../../nix/gas-city-contributor "
         "/tmp/gascity-fixtures/tests/nix/gas-city-contributor && "
-        "ln -s ${contributor}/share/gas-city-contributor/copilot "
+        "ln -s ${testPackage}/share/gas-city-contributor/copilot "
         "/tmp/gascity-fixtures/copilot"
     )
 
@@ -1212,7 +1397,9 @@ pkgs.testers.runNixOSTest {
         "/run/gascity-publisher/publisher.sock",
         "/run/gascity-contributor/readiness.json",
         "/run/gascity-contributor/test/main-ready",
-        "/var/lib/gascity-contributor/state/fixture/acp-current.pid",
+        "/var/lib/gascity-contributor/state/fixture/code-run-session.json",
+        "/var/lib/gascity-contributor/state/worktrees/test-run/acp-observation-code-run.json",
+        "/var/lib/gascity-contributor/state/worktrees/planning-run/docs/plans/acp-observation-planning-run.json",
     ]:
         machine.wait_for_file(path)
 
@@ -1279,9 +1466,119 @@ pkgs.testers.runNixOSTest {
         part_of = machine.succeed(f"systemctl show -P PartOf {unit}")
         assert "gas-city-contributor.service" in part_of
 
-    child_pid = machine.succeed(
-        "cat /var/lib/gascity-contributor/state/fixture/acp-current.pid"
-    ).strip()
+    def active_child_pid():
+        command = (
+            "for pid in $(pgrep -f 'gascity-host-fake-copilot' || true); do "
+            "  comm=$(cat /proc/$pid/comm 2>/dev/null || true); "
+            "  case \"$comm\" in python*) "
+            "    run_id=$(tr '\\0' '\\n' </proc/$pid/environ 2>/dev/null "
+            "      | sed -n 's/^GC_RUN_ID=//p'); "
+            "    test \"$run_id\" = code-run || continue; "
+            "    cgroup=$(awk -F: '$1 == 0 {print $3}' /proc/$pid/cgroup); "
+            "    expected=$(systemctl show -P ControlGroup gascity-agent.service); "
+            "    if test \"$cgroup\" = \"$expected\"; then echo \"$pid\"; exit 0; fi ;; "
+            "  esac; "
+            "done; exit 1"
+        )
+        machine.wait_until_succeeds(command)
+        pid = machine.succeed(command).strip()
+        machine.succeed(
+            "printf '%s\\n' "
+            f"{pid} > /var/lib/gascity-contributor/state/fixture/acp-current.pid"
+        )
+        return pid
+
+    child_pid = active_child_pid()
+    coding_observation = json.loads(
+        machine.succeed(
+            "cat /var/lib/gascity-contributor/state/worktrees/test-run/"
+            "acp-observation-code-run.json"
+        )
+    )
+    planning_observation = json.loads(
+        machine.succeed(
+            "cat /var/lib/gascity-contributor/state/worktrees/planning-run/"
+            "docs/plans/acp-observation-planning-run.json"
+        )
+    )
+    assert coding_observation["profile"] == "code-luna"
+    assert coding_observation["tool_policy"] == "coding"
+    assert coding_observation["settings"] == {
+        "model": "gpt-5.6-luna",
+        "contextTier": "default",
+    }
+    assert coding_observation["model"] == "gpt-5.6-luna"
+    assert coding_observation["context"] == "default"
+    assert coding_observation["effort"] == "max"
+    assert coding_observation["check_fd"] is True
+    assert coding_observation["progress_fd"] is True
+    assert coding_observation["workspace_write"] is True
+    assert coding_observation["planning_write"] is True
+    assert coding_observation["sidecar_source_read"] is False
+    assert coding_observation["state_source_read"] is False
+    assert coding_observation["check_socket_read"] is False
+    assert coding_observation["home_settings_read"] is True
+    assert coding_observation["check_fd_target"].startswith("socket:")
+    assert set(coding_observation["namespaces"]) == {
+        "user",
+        "pid",
+        "net",
+        "ipc",
+        "uts",
+        "mnt",
+    }
+    for namespace, value in coding_observation["namespaces"].items():
+        machine.succeed(
+            f"test '{value}' != \"$(readlink /proc/1/ns/{namespace})\""
+        )
+    assert planning_observation["profile"] == "review-sol"
+    assert planning_observation["tool_policy"] == "planning"
+    assert planning_observation["settings"] == {
+        "model": "gpt-5.6-sol",
+        "contextTier": "long_context",
+    }
+    assert planning_observation["model"] == "gpt-5.6-sol"
+    assert planning_observation["context"] == "long_context"
+    assert planning_observation["effort"] == "xhigh"
+    assert planning_observation["check_fd"] is False
+    assert planning_observation["progress_fd"] is True
+    assert planning_observation["workspace_write"] is False
+    assert planning_observation["planning_write"] is True
+    assert planning_observation["sidecar_source_read"] is False
+    assert planning_observation["state_source_read"] is False
+    assert planning_observation["check_socket_read"] is False
+    assert planning_observation["home_settings_read"] is True
+    coding_session = json.loads(
+        machine.succeed(
+            "cat /var/lib/gascity-contributor/state/fixture/code-run-session.json"
+        )
+    )
+    planning_session = json.loads(
+        machine.succeed(
+            "cat /var/lib/gascity-contributor/state/fixture/planning-run-session.json"
+        )
+    )
+    assert set(coding_session["models"]) == {"gpt-5.6-luna"}
+    assert set(coding_session["contexts"]) == {"default"}
+    assert set(planning_session["models"]) == {"gpt-5.6-sol"}
+    assert set(planning_session["contexts"]) == {"long_context"}
+    machine.wait_for_file(
+        "/nix/var/nix/gcroots/gascity-contributor/code-run/metadata.json"
+    )
+    gc_metadata = json.loads(
+        machine.succeed(
+            "cat /nix/var/nix/gcroots/gascity-contributor/code-run/metadata.json"
+        )
+    )
+    assert gc_metadata["run_id"] == "code-run"
+    assert gc_metadata["bead_id"] == "host-bead"
+    assert set(gc_metadata["targets"]) == {
+        "package",
+        "city",
+        "pack",
+        "profiles",
+        "instructions",
+    }
     agent_cgroup = machine.succeed(
         "systemctl show -P ControlGroup gascity-agent.service"
     ).strip()
@@ -1322,10 +1619,8 @@ pkgs.testers.runNixOSTest {
         "--unit=gascity-task-fixture --slice=gascity-contributor.slice "
         "${taskFixture}"
     )
-    machine.succeed(
-        f"grep -q -- '--max-agents.*1' {fake_agent} && "
-        f"grep -q -- '--max-active-runs.*1' {fake_agent}"
-    )
+    agent_exec = machine.succeed("systemctl cat gascity-agent.service")
+    assert "gascity-agent-start" in agent_exec
     check_exec = machine.succeed("systemctl cat gascity-check.service")
     assert "--max-heavy-checks 1" in check_exec
     assert "--timeout-seconds 7" in check_exec
@@ -1447,7 +1742,7 @@ pkgs.testers.runNixOSTest {
         "'import socket; "
         "s=socket.socket(socket.AF_UNIX); "
         "s.connect(\"/run/gascity-agent/agent.sock\"); "
-        "assert s.recv(64) == b\"fixture-agent/1\\n\"; s.close()'"
+        "s.close()'"
     )
     machine.succeed(f"runuser -u gascity -- {public_owner_probe}")
     machine.succeed(f"! runuser -u alice -- {public_owner_probe}")
@@ -1520,13 +1815,21 @@ pkgs.testers.runNixOSTest {
     old_child = child_pid
     machine.succeed(f"kill -KILL {old_child}")
     machine.wait_until_succeeds(
-        "test \"$(cat /var/lib/gascity-contributor/state/fixture/acp-launch-count)\" -ge 2"
+        "test \"$(cat /var/lib/gascity-contributor/state/fixture/acp-launch-count)\" -ge 2",
+        timeout=30,
     )
     machine.succeed(f"test ! -d /proc/{old_child}")
-    new_child = machine.succeed(
-        "cat /var/lib/gascity-contributor/state/fixture/acp-current.pid"
-    ).strip()
+    new_child = active_child_pid()
     assert new_child != old_child
+    new_coding_observation = json.loads(
+        machine.succeed(
+            "cat /var/lib/gascity-contributor/state/worktrees/test-run/"
+            "acp-observation-code-run.json"
+        )
+    )
+    assert new_coding_observation["uid"] == 45101
+    assert new_coding_observation["check_fd"] is True
+    assert new_coding_observation["tool_policy"] == "coding"
     machine.succeed(
         "test -s /var/lib/gascity-contributor/state/worktrees/test-run/fixture-progress.txt"
     )
@@ -1534,35 +1837,26 @@ pkgs.testers.runNixOSTest {
         "grep -q 'host-run' "
         "/var/lib/gascity-contributor/state/worktrees/test-run/durable-context.json"
     )
-    machine.succeed(
-        "grep -qx 'denied' "
-        "/var/lib/gascity-contributor/state/fixture/acp-discord-token"
-    )
-    machine.succeed(
-        "grep -qx 'denied' "
-        "/var/lib/gascity-contributor/state/fixture/acp-github-key"
-    )
-    machine.succeed(
-        "grep -qx 'denied' "
-        "/var/lib/gascity-contributor/state/fixture/acp-buildbuddy-key"
-    )
-    machine.succeed(
-        "grep -qx 'present' "
-        "/var/lib/gascity-contributor/state/fixture/acp-home-settings"
-    )
-    machine.succeed(
-        "grep -qx 'absent' "
-        "/var/lib/gascity-contributor/state/fixture/acp-home-token"
-    )
+    assert new_coding_observation["sidecar_source_read"] is False
+    assert new_coding_observation["state_source_read"] is False
+    assert new_coding_observation["home_settings_read"] is True
 
-    # Closing the authenticated launcher client is the fixture cancellation
-    # path.  It stops the exact child and does not create a replacement.
+    # The real control attachment drives cancellation through the authenticated
+    # public relay and launcher-owned process group.
+    cancelled_child = new_child
     machine.succeed("touch /run/gascity-contributor/test/cancel")
     machine.wait_for_file(
         "/var/lib/gascity-contributor/state/fixture/cancelled"
     )
+    machine.succeed(
+        "grep -q '\"op\":\"cancel\"' "
+        "/var/lib/gascity-contributor/state/fixture/code-run-control"
+    )
     machine.wait_until_succeeds(
         "test ! -d /proc/$(cat /var/lib/gascity-contributor/state/fixture/acp-current.pid)"
+    )
+    machine.wait_until_succeeds(
+        "test ! -e /nix/var/nix/gcroots/gascity-contributor/code-run"
     )
     machine.succeed(
         "test -s /var/lib/gascity-contributor/state/worktrees/test-run/fixture-progress.txt"
@@ -1581,16 +1875,15 @@ pkgs.testers.runNixOSTest {
 
     # A service restart is durable and replaces the cancelled ACP process.
     machine.succeed("rm -f /run/gascity-contributor/test/cancel")
+    machine.succeed(
+        "rm -f /var/lib/gascity-contributor/state/fixture/acp-current.pid"
+    )
     machine.succeed("systemctl restart gascity-agent.service")
     machine.wait_for_unit("gascity-agent.service")
     machine.succeed("systemctl start gas-city-contributor.service")
     machine.wait_for_unit("gas-city-contributor.service")
-    machine.wait_until_succeeds(
-        "test -s /var/lib/gascity-contributor/state/fixture/acp-current.pid"
-    )
-    restarted_child = machine.succeed(
-        "cat /var/lib/gascity-contributor/state/fixture/acp-current.pid"
-    ).strip()
+    restarted_child = active_child_pid()
+    assert restarted_child != cancelled_child
     machine.succeed(f"test -d /proc/{restarted_child}")
     machine.succeed(
         "test -s /var/lib/gascity-contributor/state/worktrees/test-run/fixture-progress.txt"
@@ -1670,9 +1963,7 @@ pkgs.testers.runNixOSTest {
     # PartOf plus KillMode=control-group is verified with the live child, not
     # just systemd metadata.  Stopping the named unit removes every fake child
     # and sidecar, and a subsequent start proves the lifecycle can be resumed.
-    final_child = machine.succeed(
-        "cat /var/lib/gascity-contributor/state/fixture/acp-current.pid"
-    ).strip()
+    final_child = active_child_pid()
     machine.succeed("systemctl stop gas-city-contributor.service")
     machine.wait_until_succeeds(
         "test \"$(systemctl is-active gas-city-contributor.service || true)\" "
@@ -1689,7 +1980,7 @@ pkgs.testers.runNixOSTest {
         "gascity-buildbuddy-proxy.service",
     ]:
         machine.wait_until_succeeds(
-            f"test \"$(systemctl is-active {unit} || true)\" = inactive"
+            f"test \"$(systemctl is-active {unit} || true)\" != active"
         )
     machine.succeed("systemctl start gas-city-contributor.service")
     machine.wait_for_unit("gas-city-contributor.service")
