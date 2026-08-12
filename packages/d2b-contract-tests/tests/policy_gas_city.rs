@@ -391,7 +391,22 @@ fn validate_managed_graph(city: &str, instructions: &str, assets: &[&str]) -> Re
 fn gas_city_uses_four_immutable_sibling_imports() {
     let city = owned_asset(CITY);
     let local_pack = owned_asset(LOCAL_PACK);
+    let service = owned_asset(SERVICE_MODULE);
     validate_sibling_imports(&city, &local_pack).unwrap();
+    for required in [
+        "configuredAssetRoot = pkgs.runCommand",
+        "test \"$(grep -c '^dir = \"d2b\"$' \"$city\")\" -eq 40",
+        "'name = \"${cfg.repository.rigName}\"'",
+        "'path = \"/var/lib/gascity-contributor/state/rigs/${cfg.repository.rigName}\"'",
+        "'dir = \"${cfg.repository.rigName}\"'",
+        "rootPaths = [ package configuredAssetRoot ];",
+        "GC_CONTRIBUTOR_ROOT=${configuredAssetRoot}",
+    ] {
+        assert!(
+            service.contains(required),
+            "service module must derive the deployed city from repository.rigName: {required}"
+        );
+    }
     assert_eq!(
         owned_asset("nix/gas-city-contributor/city/packs.lock")
             .matches("schema = 1")
