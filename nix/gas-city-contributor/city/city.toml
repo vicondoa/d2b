@@ -16,7 +16,7 @@ global_fragments = ["d2b-managed-contributor"]
 provider = "subprocess"
 
 [imports.gc]
-source = "../packs/gascity"
+source = "../packs/gascity/roles"
 
 [imports.compound-engineering]
 source = "../packs/compound-engineering"

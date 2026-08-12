@@ -100,6 +100,11 @@ pkgs.runCommand "gas-city-package-smoke" {
     cd "$root/packs"
     ${gasCityContributor}/bin/gc lint .
   )
+  ${gasCityContributor}/bin/gc \
+    --city "$root/city" \
+    config show > "$TMPDIR/resolved-city.toml"
+  grep -F 'requirements-planner' "$TMPDIR/resolved-city.toml"
+  grep -F 'compound-engineering.ce-work' "$TMPDIR/resolved-city.toml"
   test ! -e "$root/packs/github"
   test -x "${gasCityContributor}/bin/gascity-discord-decision"
   test -x "${gasCityContributor}/bin/gascity-publish-pr"
