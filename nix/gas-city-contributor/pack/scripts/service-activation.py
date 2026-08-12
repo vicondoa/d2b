@@ -595,6 +595,7 @@ def _open_managed_asset_directory(
             raise BoundaryError("managed asset destination is unavailable") from error
         if created_destination:
             try:
+                os.fchown(destination_fd, expected_uid, expected_gid)
                 os.fchmod(destination_fd, 0o750)
             except OSError as error:
                 raise BoundaryError(

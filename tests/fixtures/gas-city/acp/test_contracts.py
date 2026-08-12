@@ -5,6 +5,7 @@ from __future__ import annotations
 import array
 import fcntl
 import importlib.util
+import io
 import json
 import os
 import pathlib
@@ -324,6 +325,129 @@ class ProfileContractTests(unittest.TestCase):
         self.assertEqual(rewritten["params"]["cwd"], PROFILE.SANDBOX_WORKSPACE)
 
 
+class ProxyStdioContractTests(unittest.TestCase):
+    channel_fd = 91
+
+    class PollHarness:
+        def __init__(self, batches: list[list[tuple[int, int]]]):
+            self.batches = iter(batches)
+
+        def register(self, _descriptor: int, _events: int) -> None:
+            return None
+
+        def unregister(self, _descriptor: int) -> None:
+            return None
+
+        def poll(self, _timeout: int) -> list[tuple[int, int]]:
+            try:
+                return next(self.batches)
+            except StopIteration as error:
+                raise AssertionError("proxy polled after the channel closed") from error
+
+    def _run_proxy(
+        self,
+        data: bytes,
+        *,
+        events: int,
+    ) -> tuple[int, mock.Mock, str]:
+        poller = self.PollHarness(
+            [
+                [(0, events), (self.channel_fd, PROFILE.select.POLLHUP)],
+            ]
+        )
+        channel = mock.Mock()
+        channel.fileno.return_value = self.channel_fd
+        channel.recv.return_value = b""
+        reads = iter((data, b""))
+        diagnostic = io.StringIO()
+        with mock.patch.object(
+            PROFILE.select,
+            "poll",
+            return_value=poller,
+        ), mock.patch.object(
+            PROFILE.os,
+            "read",
+            side_effect=lambda _fd, _limit: next(reads),
+        ), mock.patch.object(
+            PROFILE.sys,
+            "stderr",
+            diagnostic,
+        ):
+            result = PROFILE._proxy_stdio(channel)
+        return result, channel, diagnostic.getvalue()
+
+    def test_pollin_hup_same_event_rewrites_final_newline_terminated_session(self) -> None:
+        frame = (
+            b'{"jsonrpc":"2.0","id":1,"method":"session/new",'
+            b'"params":{"cwd":"/host/worktree"}}\n'
+        )
+        result, channel, diagnostic = self._run_proxy(
+            frame,
+            events=PROFILE.select.POLLIN | PROFILE.select.POLLHUP,
+        )
+        self.assertEqual(result, 0)
+        self.assertEqual(
+            channel.sendall.call_args_list,
+            [mock.call(PROFILE._sandbox_session_message(frame))],
+        )
+        self.assertEqual(diagnostic, "")
+
+    def test_multiple_lines_are_framed_and_partial_final_is_dropped(self) -> None:
+        initialize = b'{"jsonrpc":"2.0","id":1,"method":"initialize"}\n'
+        session = (
+            b'{"jsonrpc":"2.0","id":2,"method":"session/new",'
+            b'"params":{"cwd":"/host/worktree"}}\n'
+        )
+        partial = (
+            b'{"jsonrpc":"2.0","id":3,"method":"session/new",'
+            b'"params":{"cwd":"/host/worktree/partial"}'
+        )
+        result, channel, diagnostic = self._run_proxy(
+            initialize + session + partial,
+            events=PROFILE.select.POLLIN | PROFILE.select.POLLHUP,
+        )
+        forwarded = b"".join(
+            call.args[0] for call in channel.sendall.call_args_list
+        )
+        self.assertEqual(
+            forwarded,
+            initialize + PROFILE._sandbox_session_message(session),
+        )
+        self.assertEqual(result, 1)
+        self.assertIn("unterminated", diagnostic)
+        self.assertNotIn(
+            b"/host/worktree/partial",
+            forwarded + diagnostic.encode(),
+        )
+
+    def test_non_session_final_frame_is_preserved_byte_for_byte(self) -> None:
+        frame = (
+            b'{"jsonrpc":"2.0","id":7,"method":"session/prompt",'
+            b'"params":{"cwd":"/host/worktree"}}\n'
+        )
+        result, channel, diagnostic = self._run_proxy(
+            frame,
+            events=PROFILE.select.POLLIN | PROFILE.select.POLLHUP,
+        )
+        self.assertEqual(result, 0)
+        self.assertEqual(channel.sendall.call_args_list, [mock.call(frame)])
+        self.assertEqual(diagnostic, "")
+
+    def test_unterminated_session_new_is_rejected_without_host_path_leak(self) -> None:
+        partial = (
+            b'{"jsonrpc":"2.0","id":8,"method":"session/new",'
+            b'"params":{"cwd":"/host/worktree/secret"}'
+        )
+        result, channel, diagnostic = self._run_proxy(
+            partial,
+            events=PROFILE.select.POLLIN | PROFILE.select.POLLHUP,
+        )
+        self.assertEqual(result, 1)
+        self.assertEqual(channel.sendall.call_args_list, [])
+        self.assertIn("unterminated ACP frame", diagnostic)
+        self.assertNotIn("/host/worktree/secret", diagnostic)
+
+
 class RoleRoutingContractTests(unittest.TestCase):
     def test_matrix_tool_policies_match_city_and_launcher_mappings(self) -> None:
         matrix = tomllib.loads(ROLE_MATRIX.read_text(encoding="utf-8"))
@@ -519,6 +643,103 @@ class ManagedStorePathValidationContractTests(unittest.TestCase):
                         expected_basename="city",
                         require_directory=True,
                     )
+
+
+class ManagedAssetDirectoryContractTests(unittest.TestCase):
+    def test_missing_destination_sets_expected_metadata_on_anchored_fd(self) -> None:
+        scratch = ROOT / ".scratch"
+        scratch.mkdir(mode=0o700, exist_ok=True)
+        with tempfile.TemporaryDirectory(
+            prefix="gascity-managed-directory-",
+            dir=scratch,
+        ) as raw:
+            destination = pathlib.Path(raw) / "managed"
+            expected_uid = 0
+            expected_gid = max(os.getgid(), 0) + 12345
+            self.assertNotEqual(expected_gid, os.getgid())
+            destination_fds: list[int] = []
+            metadata_calls: list[tuple[object, ...]] = []
+            real_open = ACTIVATION.os.open
+            real_fstat = ACTIVATION.os.fstat
+
+            def record_open(path, flags, mode=0o777, *, dir_fd=None):
+                descriptor = real_open(path, flags, mode, dir_fd=dir_fd)
+                if path == destination.name and dir_fd is not None:
+                    destination_fds.append(descriptor)
+                return descriptor
+
+            def fake_fstat(fd: int):
+                info = real_fstat(fd)
+                if destination.exists():
+                    destination_info = os.lstat(destination)
+                    if (
+                        info.st_dev == destination_info.st_dev
+                        and info.st_ino == destination_info.st_ino
+                    ):
+                        return SimpleNamespace(
+                            st_dev=info.st_dev,
+                            st_ino=info.st_ino,
+                            st_mode=stat.S_IFDIR | 0o750,
+                            st_uid=expected_uid,
+                            st_gid=expected_gid,
+                        )
+                return info
+
+            def record_fchown(fd: int, uid: int, gid: int) -> None:
+                metadata_calls.append(("fchown", fd, uid, gid))
+
+            def record_fchmod(fd: int, mode: int) -> None:
+                metadata_calls.append(("fchmod", fd, mode))
+
+            parent_fd = -1
+            destination_fd = -1
+            with mock.patch.object(
+                ACTIVATION.os,
+                "open",
+                side_effect=record_open,
+            ), mock.patch.object(
+                ACTIVATION.os,
+                "fstat",
+                side_effect=fake_fstat,
+            ), mock.patch.object(
+                ACTIVATION.os,
+                "fchown",
+                side_effect=record_fchown,
+            ), mock.patch.object(
+                ACTIVATION.os,
+                "fchmod",
+                side_effect=record_fchmod,
+            ), mock.patch.object(
+                ACTIVATION.os,
+                "chown",
+            ) as path_chown, mock.patch.object(
+                ACTIVATION.os,
+                "chmod",
+            ) as path_chmod:
+                parent_fd, destination_fd = ACTIVATION._open_managed_asset_directory(
+                    destination,
+                    expected_uid=expected_uid,
+                    expected_gid=expected_gid,
+                )
+                path_chown.assert_not_called()
+                path_chmod.assert_not_called()
+
+            try:
+                self.assertEqual(len(destination_fds), 1)
+                anchored_fd = destination_fds[0]
+                self.assertEqual(
+                    metadata_calls,
+                    [
+                        ("fchown", anchored_fd, expected_uid, expected_gid),
+                        ("fchmod", anchored_fd, 0o750),
+                    ],
+                )
+                self.assertEqual(destination_fd, anchored_fd)
+            finally:
+                if destination_fd >= 0:
+                    os.close(destination_fd)
+                if parent_fd >= 0:
+                    os.close(parent_fd)
 
 
 class ManagedAssetRotationContractTests(unittest.TestCase):

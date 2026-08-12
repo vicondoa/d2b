@@ -608,64 +608,83 @@ def _proxy_stdio(channel: socket.socket) -> int:
     stdin_open = True
     socket_open = True
     stdin_buffer = bytearray()
+    exit_code = 0
+    channel_fd = channel.fileno()
     selector.register(0, select.POLLIN | select.POLLHUP | select.POLLERR)
-    selector.register(channel.fileno(), select.POLLIN | select.POLLHUP | select.POLLERR)
+    selector.register(channel_fd, select.POLLIN | select.POLLHUP | select.POLLERR)
+
+    def consume_stdin(data: bytes) -> None:
+        stdin_buffer.extend(data)
+        while True:
+            newline = stdin_buffer.find(b"\n")
+            if newline < 0:
+                return
+            line = bytes(stdin_buffer[: newline + 1])
+            del stdin_buffer[: newline + 1]
+            channel.sendall(_sandbox_session_message(line))
+
+    def close_stdin() -> None:
+        nonlocal exit_code, stdin_open
+        if not stdin_open:
+            return
+        if stdin_buffer:
+            stdin_buffer.clear()
+            print(
+                "gascity-copilot-profile: rejected unterminated ACP frame "
+                "at stdin EOF/HUP",
+                file=sys.stderr,
+            )
+            exit_code = 1
+        stdin_open = False
+        try:
+            channel.shutdown(socket.SHUT_WR)
+        except OSError:
+            pass
+        selector.unregister(0)
+
     try:
         while socket_open:
             for descriptor, events in selector.poll(100):
                 if descriptor == 0:
                     if not stdin_open:
                         continue
-                    if events & (select.POLLHUP | select.POLLERR):
-                        stdin_open = False
-                        try:
-                            if stdin_buffer:
-                                channel.sendall(bytes(stdin_buffer))
-                                stdin_buffer.clear()
-                            channel.shutdown(socket.SHUT_WR)
-                        except OSError:
-                            pass
-                        selector.unregister(0)
-                        continue
-                    try:
-                        data = os.read(0, 64 * 1024)
-                    except OSError as error:
-                        if error.errno in {errno.EBADF, errno.EIO}:
-                            data = b""
-                        else:
-                            raise
-                    if not data:
-                        stdin_open = False
-                        try:
-                            if stdin_buffer:
-                                channel.sendall(bytes(stdin_buffer))
-                                stdin_buffer.clear()
-                            channel.shutdown(socket.SHUT_WR)
-                        except OSError:
-                            pass
-                        selector.unregister(0)
-                    else:
-                        stdin_buffer.extend(data)
-                        while b"\n" in stdin_buffer:
-                            line, _, remainder = stdin_buffer.partition(b"\n")
-                            stdin_buffer = bytearray(remainder)
-                            channel.sendall(_sandbox_session_message(line + b"\n"))
-                elif descriptor == channel.fileno():
+                    stdin_eof = False
+                    if events & (select.POLLIN | select.POLLHUP):
+                        while True:
+                            try:
+                                data = os.read(0, 64 * 1024)
+                            except OSError as error:
+                                if error.errno in {errno.EBADF, errno.EIO}:
+                                    data = b""
+                                else:
+                                    raise
+                            if not data:
+                                stdin_eof = True
+                                break
+                            consume_stdin(data)
+                            if not events & select.POLLHUP:
+                                break
+                    if stdin_eof or events & (select.POLLHUP | select.POLLERR):
+                        close_stdin()
+                elif descriptor == channel_fd:
+                    if events & (select.POLLIN | select.POLLHUP):
+                        while True:
+                            data = channel.recv(64 * 1024)
+                            if not data:
+                                socket_open = False
+                                break
+                            offset = 0
+                            while offset < len(data):
+                                offset += os.write(1, data[offset:])
+                            if not events & select.POLLHUP:
+                                break
                     if events & (select.POLLHUP | select.POLLERR):
                         socket_open = False
-                        continue
-                    data = channel.recv(64 * 1024)
-                    if not data:
-                        socket_open = False
-                    else:
-                        offset = 0
-                        while offset < len(data):
-                            offset += os.write(1, data[offset:])
     except (BrokenPipeError, ConnectionError):
-        return 0
+        return exit_code
     finally:
         channel.close()
-    return 0
+    return exit_code
 
 
 def _launcher_argv(
