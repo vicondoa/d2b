@@ -155,6 +155,17 @@ fn validate_sibling_imports(city: &str, local_pack: &str) -> Result<(), String> 
     if city.matches("[imports.").count() != imports.len() {
         return Err("city imports must contain exactly four sibling tables".to_owned());
     }
+    for required in [
+        "[[rigs]]",
+        "name = \"d2b\"",
+        "path = \"/var/lib/gascity-contributor/state/rigs/d2b\"",
+        "[rigs.imports.gc]",
+        "source = \"../packs/gascity/roles\"",
+    ] {
+        if !city.contains(required) {
+            return Err(format!("missing canonical d2b rig role import: {required}"));
+        }
+    }
     if local_pack.contains("[imports.") {
         return Err("local contributor pack must not nest an upstream pack".to_owned());
     }
@@ -317,6 +328,9 @@ fn validate_role_routes(matrix: &str, city: &str, launcher: &str) -> Result<(), 
             ));
         }
         let block = matches[0];
+        if assignment_value(block, "dir").as_deref() != Some("d2b") {
+            return Err(format!("role {name} must be patched on the d2b rig"));
+        }
         let expected_provider = provider_for_class[class.as_str()];
         if assignment_value(block, "provider").as_deref() != Some(expected_provider) {
             return Err(format!(

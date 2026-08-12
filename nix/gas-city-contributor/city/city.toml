@@ -1,8 +1,9 @@
 # Immutable Gas City contributor city.
 #
-# The four imports are deliberate peer imports.  The Compound pack keeps its
-# own ../gascity dependency, so the Nix asset builder places the upstream
-# trees beside one another instead of copying one pack into another.
+# The four city imports are deliberate peers.  The Compound pack keeps its own
+# ../gascity dependency, so the Nix asset builder places the upstream trees
+# beside one another instead of copying one pack into another.  Gas City roles
+# are separately rig-scoped below, as required by the upstream pack contract.
 
 [workspace]
 name = "d2b-contributor"
@@ -16,7 +17,7 @@ global_fragments = ["d2b-managed-contributor"]
 provider = "subprocess"
 
 [imports.gc]
-source = "../packs/gascity/roles"
+source = "../packs/gascity"
 
 [imports.compound-engineering]
 source = "../packs/compound-engineering"
@@ -26,6 +27,13 @@ source = "../packs/discord"
 
 [imports.contributor]
 source = "../pack"
+
+[[rigs]]
+name = "d2b"
+path = "/var/lib/gascity-contributor/state/rigs/d2b"
+
+[rigs.imports.gc]
+source = "../packs/gascity/roles"
 
 # These provider presets are the only Copilot launch surface used by the
 # generated role bindings.  Model and context selection is supplied by the
@@ -90,241 +98,241 @@ env = { COPILOT_CUSTOM_INSTRUCTIONS_DIRS = "" }
 # provider with an implicit selector or add an implicit fallback.
 
 [[patches.agent]]
-dir = ""
+dir = "d2b"
 name = "gc.requirements-planner"
 provider = "copilot-planning-sol"
 session = "acp"
 
 [[patches.agent]]
-dir = ""
+dir = "d2b"
 name = "gc.design-author"
 provider = "copilot-planning-sol"
 session = "acp"
 
 [[patches.agent]]
-dir = ""
+dir = "d2b"
 name = "gc.task-decomposer"
 provider = "copilot-planning-sol"
 session = "acp"
 
 [[patches.agent]]
-dir = ""
+dir = "d2b"
 name = "gc.design-implementation-reviewer"
 provider = "copilot-review-sol"
 session = "acp"
 
 [[patches.agent]]
-dir = ""
+dir = "d2b"
 name = "gc.design-test-risk-reviewer"
 provider = "copilot-review-sol"
 session = "acp"
 
 [[patches.agent]]
-dir = ""
+dir = "d2b"
 name = "gc.gap-analyst"
 provider = "copilot-review-sol"
 session = "acp"
 
 [[patches.agent]]
-dir = ""
+dir = "d2b"
 name = "gc.implementation-reviewer"
 provider = "copilot-review-sol"
 session = "acp"
 
 [[patches.agent]]
-dir = ""
+dir = "d2b"
 name = "gc.issue-triager"
 provider = "copilot-review-sol"
 session = "acp"
 
 [[patches.agent]]
-dir = ""
+dir = "d2b"
 name = "gc.review-synthesizer"
 provider = "copilot-review-sol"
 session = "acp"
 
 [[patches.agent]]
-dir = ""
+dir = "d2b"
 name = "gc.implementation-worker"
 provider = "copilot-code-luna"
 session = "acp"
 
 [[patches.agent]]
-dir = ""
+dir = "d2b"
 name = "compound-engineering.ce-adversarial-reviewer"
 provider = "copilot-review-sol"
 session = "acp"
 
 [[patches.agent]]
-dir = ""
+dir = "d2b"
 name = "compound-engineering.ce-agent-native-reviewer"
 provider = "copilot-review-sol"
 session = "acp"
 
 [[patches.agent]]
-dir = ""
+dir = "d2b"
 name = "compound-engineering.ce-api-contract-reviewer"
 provider = "copilot-review-sol"
 session = "acp"
 
 [[patches.agent]]
-dir = ""
+dir = "d2b"
 name = "compound-engineering.ce-architecture-strategist"
 provider = "copilot-planning-sol"
 session = "acp"
 
 [[patches.agent]]
-dir = ""
+dir = "d2b"
 name = "compound-engineering.ce-brainstorm"
 provider = "copilot-planning-sol"
 session = "acp"
 
 [[patches.agent]]
-dir = ""
+dir = "d2b"
 name = "compound-engineering.ce-code-review-selector"
 provider = "copilot-review-sol"
 session = "acp"
 
 [[patches.agent]]
-dir = ""
+dir = "d2b"
 name = "compound-engineering.ce-code-review-synthesizer"
 provider = "copilot-review-sol"
 session = "acp"
 
 [[patches.agent]]
-dir = ""
+dir = "d2b"
 name = "compound-engineering.ce-coherence-reviewer"
 provider = "copilot-planning-sol"
 session = "acp"
 
 [[patches.agent]]
-dir = ""
+dir = "d2b"
 name = "compound-engineering.ce-compound"
 provider = "copilot-review-sol"
 session = "acp"
 
 [[patches.agent]]
-dir = ""
+dir = "d2b"
 name = "compound-engineering.ce-correctness-reviewer"
 provider = "copilot-review-sol"
 session = "acp"
 
 [[patches.agent]]
-dir = ""
+dir = "d2b"
 name = "compound-engineering.ce-data-migration-reviewer"
 provider = "copilot-review-sol"
 session = "acp"
 
 [[patches.agent]]
-dir = ""
+dir = "d2b"
 name = "compound-engineering.ce-deployment-verification-agent"
 provider = "copilot-review-sol"
 session = "acp"
 
 [[patches.agent]]
-dir = ""
+dir = "d2b"
 name = "compound-engineering.ce-feasibility-reviewer"
 provider = "copilot-planning-sol"
 session = "acp"
 
 [[patches.agent]]
-dir = ""
+dir = "d2b"
 name = "compound-engineering.ce-julik-frontend-races-reviewer"
 provider = "copilot-review-sol"
 session = "acp"
 
 [[patches.agent]]
-dir = ""
+dir = "d2b"
 name = "compound-engineering.ce-learnings-researcher"
 provider = "copilot-review-sol"
 session = "acp"
 
 [[patches.agent]]
-dir = ""
+dir = "d2b"
 name = "compound-engineering.ce-maintainability-reviewer"
 provider = "copilot-review-sol"
 session = "acp"
 
 [[patches.agent]]
-dir = ""
+dir = "d2b"
 name = "compound-engineering.ce-performance-reviewer"
 provider = "copilot-review-sol"
 session = "acp"
 
 [[patches.agent]]
-dir = ""
+dir = "d2b"
 name = "compound-engineering.ce-plan"
 provider = "copilot-planning-sol"
 session = "acp"
 
 [[patches.agent]]
-dir = ""
+dir = "d2b"
 name = "compound-engineering.ce-plan-review-synthesizer"
 provider = "copilot-planning-sol"
 session = "acp"
 
 [[patches.agent]]
-dir = ""
+dir = "d2b"
 name = "compound-engineering.ce-pr-comment-resolver"
 provider = "copilot-review-sol"
 session = "acp"
 
 [[patches.agent]]
-dir = ""
+dir = "d2b"
 name = "compound-engineering.ce-previous-comments-reviewer"
 provider = "copilot-review-sol"
 session = "acp"
 
 [[patches.agent]]
-dir = ""
+dir = "d2b"
 name = "compound-engineering.ce-project-standards-reviewer"
 provider = "copilot-review-sol"
 session = "acp"
 
 [[patches.agent]]
-dir = ""
+dir = "d2b"
 name = "compound-engineering.ce-reliability-reviewer"
 provider = "copilot-review-sol"
 session = "acp"
 
 [[patches.agent]]
-dir = ""
+dir = "d2b"
 name = "compound-engineering.ce-scope-guardian-reviewer"
 provider = "copilot-planning-sol"
 session = "acp"
 
 [[patches.agent]]
-dir = ""
+dir = "d2b"
 name = "compound-engineering.ce-security-reviewer"
 provider = "copilot-review-sol"
 session = "acp"
 
 [[patches.agent]]
-dir = ""
+dir = "d2b"
 name = "compound-engineering.ce-swift-ios-reviewer"
 provider = "copilot-review-sol"
 session = "acp"
 
 [[patches.agent]]
-dir = ""
+dir = "d2b"
 name = "compound-engineering.ce-testing-reviewer"
 provider = "copilot-review-sol"
 session = "acp"
 
 [[patches.agent]]
-dir = ""
+dir = "d2b"
 name = "compound-engineering.ce-work"
 provider = "copilot-code-luna"
 session = "acp"
 
 [[patches.agent]]
-dir = ""
+dir = "d2b"
 name = "contributor.d2b-pr-comment-judge"
 provider = "copilot-review-sol"
 session = "acp"
 
 [[patches.agent]]
-dir = ""
+dir = "d2b"
 name = "contributor.d2b-pr-comment-verifier"
 provider = "copilot-review-sol"
 session = "acp"
