@@ -222,7 +222,7 @@ class ProfileContractTests(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertEqual(result["error_code"], "malformed")
 
-    def test_response_for_rejects_unsupported_server_requests(self) -> None:
+    def test_response_for_rejects_server_requests(self) -> None:
         class Reader:
             def read(self, _timeout: float) -> dict[str, object]:
                 return {
@@ -240,6 +240,38 @@ class ProfileContractTests(unittest.TestCase):
                 observations=[],
                 phase="initialize",
             )
+
+    def test_socket_probe_classifies_server_requests_as_malformed(self) -> None:
+        client, server = socket.socketpair()
+        server.sendall(
+            PROFILE._frame(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "server/request",
+                    "params": {},
+                }
+            )
+        )
+        server.shutdown(socket.SHUT_WR)
+        args = PROFILE._default_namespace("code-luna", "coding")
+        try:
+            with mock.patch.object(
+                PROFILE,
+                "_connect_launcher",
+                return_value=client,
+            ):
+                result = PROFILE._run_socket_probe(
+                    "code-luna",
+                    tool_policy="coding",
+                    args=args,
+                    timeout=1.0,
+                )
+        finally:
+            server.close()
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error_code"], "malformed")
 
     def test_probe_rejects_malformed_idless_messages(self) -> None:
         malformed = (
@@ -765,18 +797,48 @@ class ActivationContractTests(unittest.TestCase):
         self.assertEqual(calls, ["code-luna", "review-sol"])
 
     def test_only_unsupported_or_unavailable_sol_failures_fallback(self) -> None:
+        for failure_code in ("unsupported", "unavailable"):
+            with self.subTest(failure_code=failure_code):
+                calls: list[str] = []
+
+                def probe(profile: str):
+                    calls.append(profile)
+                    if profile == "review-sol":
+                        return {
+                            "profile": profile,
+                            "ok": False,
+                            "error_code": failure_code,
+                        }
+                    return successful_probe(profile)
+
+                status = ACTIVATION.select_profiles(
+                    probe,
+                    generation="g1",
+                    state_schema="1",
+                )
+                self.assertTrue(status["ready"])
+                self.assertEqual(status["effective_profiles"]["review"], "review-luna")
+                self.assertEqual(calls, ["code-luna", "review-sol", "review-luna"])
+
+    def test_sol_server_request_blocks_without_luna_fallback(self) -> None:
         calls: list[str] = []
+        server_request = {
+            "profile": "review-sol",
+            "ok": False,
+            "error_code": "malformed",
+            "error": "ACP server requests are malformed in preflight",
+        }
 
         def probe(profile: str):
             calls.append(profile)
             if profile == "review-sol":
-                return {"profile": profile, "ok": False, "error_code": "unavailable"}
+                return server_request
             return successful_probe(profile)
 
         status = ACTIVATION.select_profiles(probe, generation="g1", state_schema="1")
-        self.assertTrue(status["ready"])
-        self.assertEqual(status["effective_profiles"]["review"], "review-luna")
-        self.assertEqual(calls, ["code-luna", "review-sol", "review-luna"])
+        self.assertFalse(status["ready"])
+        self.assertEqual(status["error_code"], "review-sol-malformed")
+        self.assertEqual(calls, ["code-luna", "review-sol"])
 
     def test_sol_closed_failure_does_not_fallback(self) -> None:
         self.assertEqual(ACTIVATION.classify_failure("ACP process closed EOF"), "closed")

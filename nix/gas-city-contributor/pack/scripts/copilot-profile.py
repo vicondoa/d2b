@@ -891,6 +891,10 @@ class ACPClosed(ProfileError):
     """Raised when the ACP server closes stdout before a response arrives."""
 
 
+class ACPMalformed(ProfileError):
+    """Raised when ACP preflight receives a malformed protocol message."""
+
+
 ACP_STOP_REASONS = frozenset(
     {
         "end_turn",
@@ -988,7 +992,7 @@ def _validate_acp_message(
     if has_method and has_id:
         if has_result or has_error:
             raise ProfileError("ACP server request/response hybrid is malformed")
-        raise ProfileError("ACP server requests are unsupported in preflight")
+        raise ACPMalformed("ACP server requests are malformed in preflight")
 
     if has_method:
         method = value["method"]
@@ -1156,8 +1160,10 @@ def _session_cwd(args: argparse.Namespace) -> str:
     return SANDBOX_WORKSPACE
 
 
-def _probe_error_code(text: str) -> str:
-    lowered = text.lower()
+def _probe_error_code(value: object) -> str:
+    if isinstance(value, ACPMalformed):
+        return "malformed"
+    lowered = str(value).lower()
     if any(marker in lowered for marker in ("closed", "eof", "end of file")):
         return "closed"
     if any(marker in lowered for marker in ("authentication", "unauthorized", "invalid token", "401", "403")):
@@ -1282,7 +1288,7 @@ def _run_socket_probe(
         return {
             "ok": False,
             "profile": profile,
-            "error_code": _probe_error_code(text),
+            "error_code": _probe_error_code(error),
             "error": text,
         }
     try:
@@ -1305,7 +1311,7 @@ def _run_socket_probe(
         return {
             "ok": False,
             "profile": profile,
-            "error_code": _probe_error_code(text),
+            "error_code": _probe_error_code(error),
             "error": text,
         }
     finally:
@@ -1389,7 +1395,7 @@ def _run_direct_probe(
         return {
             "ok": False,
             "profile": profile,
-            "error_code": _probe_error_code(text),
+            "error_code": _probe_error_code(error),
             "error": text,
         }
     finally:
