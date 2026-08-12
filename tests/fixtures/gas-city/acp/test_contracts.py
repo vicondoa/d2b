@@ -156,6 +156,41 @@ class RoleRoutingContractTests(unittest.TestCase):
 
 
 class ActivationContractTests(unittest.TestCase):
+    def test_fdproxy_sidecar_accepts_real_runtime_executable(self) -> None:
+        fdproxy_value = os.environ.get("GAS_CITY_FDPROXY")
+        if not fdproxy_value:
+            self.skipTest("GAS_CITY_FDPROXY is only set by the packaged smoke")
+        fdproxy = pathlib.Path(fdproxy_value)
+        self.assertTrue(fdproxy.is_file())
+        self.assertFalse(fdproxy.is_symlink())
+
+        with tempfile.TemporaryDirectory(prefix="gascity-fdproxy-sidecar-") as raw:
+            socket_path = pathlib.Path(raw) / "egress.sock"
+            listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            listener.bind(str(socket_path))
+            listener.listen(1)
+            child = mock.Mock()
+            child.wait.return_value = 0
+            try:
+                with mock.patch.object(
+                    ACTIVATION.subprocess,
+                    "Popen",
+                    return_value=child,
+                ) as popen:
+                    result = ACTIVATION.run_fdproxy_sidecar(
+                        egress_socket=str(socket_path),
+                        fdproxy_script=str(fdproxy),
+                        listen="127.0.0.1:3128",
+                        command=["wrapped-sidecar"],
+                        server_uid=os.getuid(),
+                    )
+            finally:
+                listener.close()
+
+        self.assertEqual(result, 0)
+        argv = popen.call_args.args[0]
+        self.assertEqual(argv[1], str(fdproxy))
+
     def test_sol_success_selects_sol_without_fallback_probe(self) -> None:
         calls: list[str] = []
 

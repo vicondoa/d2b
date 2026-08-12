@@ -112,6 +112,9 @@ let
   testPackage = pkgs.symlinkJoin {
     name = "gascity-contributor-host-test";
     paths = [ fakeCopilot contributor ];
+    passthru = {
+      runtimeScripts = contributor.passthru.runtimeScripts;
+    };
   };
   testPackagePython = "${testPackage}/bin/python3";
   testPackageScripts = "${testPackage}/share/gas-city-contributor/pack/scripts";
@@ -1350,6 +1353,9 @@ pkgs.testers.runNixOSTest {
 
     package = "${testPackage}"
     python = "${testPackagePython}"
+    fdproxy = "${testPackage.passthru.runtimeScripts}/bin/gascity-fdproxy"
+    envoy = "${testPackage}/bin/envoy"
+    ca_bundle = "${testPackage}/etc/ssl/certs/ca-bundle.crt"
     generation = "${generation}"
     auth = "${relayAuth}"
     launcher_probe = "${launcherProbe}"
@@ -1925,8 +1931,8 @@ pkgs.testers.runNixOSTest {
     # BuildBuddy doubles from inside the VM.  They cover CAS/restart/duplicate/
     # cancellation behavior without a network or provider credential.
     machine.succeed(
-        "cd /tmp/gascity-fixtures/tests/fixtures/gas-city && "
-        f"{python} acp/run.py"
+        f"cd /tmp/gascity-fixtures/tests/fixtures/gas-city && "
+        f"GAS_CITY_FDPROXY={fdproxy} {python} acp/run.py"
     )
     machine.succeed(
         f"{python} /tmp/gascity-fixtures/tests/fixtures/gas-city/discord/test_router.py"
@@ -1935,6 +1941,7 @@ pkgs.testers.runNixOSTest {
         f"{python} /tmp/gascity-fixtures/tests/fixtures/gas-city/github/test_publisher.py"
     )
     machine.succeed(
+        f"GAS_CITY_ENVOY={envoy} GAS_CITY_CA_BUNDLE={ca_bundle} "
         f"{python} /tmp/gascity-fixtures/tests/fixtures/gas-city/buildbuddy/run.py"
     )
     machine.succeed(f"{package}/bin/bazel --version | grep -F 'bazel 9.1.1'")

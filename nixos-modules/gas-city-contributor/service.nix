@@ -5,13 +5,20 @@ let
   buildBuddyEnabled =
     cfg.buildBuddy.enable || cfg.credentials.buildBuddyApiKeyFile != null;
   package = cfg.package;
+  runtimeScripts =
+    if package ? passthru && package.passthru ? runtimeScripts then
+      package.passthru.runtimeScripts
+    else
+      throw "Gas City contributor package must expose passthru.runtimeScripts";
   python = "${package}/bin/python3";
   activation = "${package}/share/gas-city-contributor/pack/scripts/service-activation.py";
   discordDecision = "${package}/share/gas-city-contributor/pack/scripts/discord-decision.py";
   publisher = "${package}/share/gas-city-contributor/pack/scripts/publish-pr.py";
   launcher = "${package}/share/gas-city-contributor/pack/scripts/agent-launcher.py";
   sandbox = "${package}/share/gas-city-contributor/pack/scripts/agent-sandbox.py";
-  fdproxy = "${package}/share/gas-city-contributor/pack/scripts/fdproxy.py";
+  # symlinkJoin exposes package files as links; the activation boundary
+  # requires the immutable runtimeScripts file itself.
+  fdproxy = "${runtimeScripts}/bin/gascity-fdproxy";
   copilot = "${package}/bin/copilot";
   bwrap = "${package}/bin/bwrap";
   serviceRoot = "/var/lib/gascity-contributor";

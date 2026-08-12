@@ -25,11 +25,11 @@ static_resources:
                             cluster: buildbuddy_remote
                             timeout: 0s
                             host_rewrite_literal: remote.buildbuddy.io
-                            request_headers_to_add:
-                              - header:
-                                  key: x-buildbuddy-api-key
-                                  value: __BUILDBUDDY_API_KEY_JSON__
-                                append_action: OVERWRITE_IF_EXISTS_OR_ADD
+                          request_headers_to_add:
+                            - header:
+                                key: x-buildbuddy-api-key
+                                value: __BUILDBUDDY_API_KEY_JSON__
+                              append_action: OVERWRITE_IF_EXISTS_OR_ADD
                 http_filters:
                   - name: envoy.filters.http.router
                     typed_config:

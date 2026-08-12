@@ -13,6 +13,9 @@
 , doltVersion
 }:
 
+let
+  runtimeScripts = gasCityContributor.passthru.runtimeScripts;
+in
 pkgs.runCommand "gas-city-package-smoke" {
   nativeBuildInputs = [
     pkgs.coreutils
@@ -29,6 +32,11 @@ pkgs.runCommand "gas-city-package-smoke" {
   mkdir -p "$HOME"
 
   root="${gasCityContributor}/share/gas-city-contributor"
+  fdproxy="${runtimeScripts}/bin/gascity-fdproxy"
+  test -L "${gasCityContributor}/bin/gascity-fdproxy"
+  test "$(readlink "${gasCityContributor}/bin/gascity-fdproxy")" = "$fdproxy"
+  test -x "$fdproxy"
+  test ! -L "$fdproxy"
 
   # Every executable used by the contributor boundary must come from the
   # immutable closure, not from the evaluator's or operator's ambient PATH.
@@ -138,7 +146,8 @@ pkgs.runCommand "gas-city-package-smoke" {
 
   (
     cd "$fixtureRepo"
-    GC_TEST_MODE=1 \
+    GAS_CITY_FDPROXY="$fdproxy" \
+      GC_TEST_MODE=1 \
       ${gasCityContributor}/bin/python3 \
       tests/fixtures/gas-city/acp/run.py
   )
@@ -154,7 +163,9 @@ pkgs.runCommand "gas-city-package-smoke" {
   )
   (
     cd "$fixtureRepo"
-    ${gasCityContributor}/bin/python3 \
+    GAS_CITY_ENVOY="${gasCityContributor}/bin/envoy" \
+      GAS_CITY_CA_BUNDLE="${gasCityContributor}/etc/ssl/certs/ca-bundle.crt" \
+      ${gasCityContributor}/bin/python3 \
       tests/fixtures/gas-city/buildbuddy/run.py
   )
   jq -e \

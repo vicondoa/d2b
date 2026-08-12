@@ -226,6 +226,7 @@ pkgs.symlinkJoin {
       bazel
       runtimePackages
       runtimeEnvironment
+      runtimeScripts
       requiredExecutables
       patchedPacks;
     envoy = envoyBin;

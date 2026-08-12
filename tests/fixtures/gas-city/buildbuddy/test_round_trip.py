@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import pathlib
+import subprocess
+import tempfile
 import unittest
 import urllib.request
 
@@ -67,8 +70,43 @@ class BuildBuddyRoundTripTests(unittest.TestCase):
         self.assertIn("fixture-key", config)
         self.assertIn("remote.buildbuddy.io", config)
         self.assertIn("http2_protocol_options", config)
+        self.assertIn("OVERWRITE_IF_EXISTS_OR_ADD", config)
         with self.assertRaises(PROXY.BuildBuddyProxyError):
             PROXY.validate_upstream("attacker.example:443")
+
+    def test_rendered_config_is_accepted_by_packaged_envoy(self) -> None:
+        envoy = os.environ.get("GAS_CITY_ENVOY")
+        ca_bundle = os.environ.get("GAS_CITY_CA_BUNDLE")
+        self.assertTrue(envoy, "GAS_CITY_ENVOY must name the packaged Envoy")
+        self.assertTrue(
+            ca_bundle,
+            "GAS_CITY_CA_BUNDLE must name the packaged certificate bundle",
+        )
+        config = PROXY.render_config(
+            str(REPOSITORY_ROOT / "nix/gas-city-contributor/buildbuddy/envoy.yaml.tmpl"),
+            "fixture-key",
+            ca_bundle=ca_bundle,
+        )
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            suffix=".yaml",
+        ) as rendered:
+            rendered.write(config)
+            rendered.flush()
+            result = subprocess.run(
+                [
+                    envoy,
+                    "--mode",
+                    "validate",
+                    "--config-path",
+                    rendered.name,
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        self.assertEqual(result.returncode, 0, result.stderr)
 
 
 if __name__ == "__main__":

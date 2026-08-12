@@ -8,8 +8,13 @@
 { mkEval, lib, pkgs, flakeRoot, ... }:
 
 let
+  testPackage = pkgs.hello // {
+    passthru = (pkgs.hello.passthru or { }) // {
+      runtimeScripts = pkgs.hello;
+    };
+  };
   namedModule = import (flakeRoot + "/nixos-modules/gas-city-contributor") {
-    packageFor = _: pkgs.hello;
+    packageFor = _: testPackage;
   };
 
   validConfig = {
