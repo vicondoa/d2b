@@ -106,7 +106,7 @@ pkgs.runCommand "gas-city-package-smoke" {
   grep -F '/var/lib/gascity-contributor/state/rigs/d2b' \
     "$TMPDIR/resolved-city.toml"
   grep -F 'requirements-planner' "$TMPDIR/resolved-city.toml"
-  grep -F 'compound-engineering.ce-work' "$TMPDIR/resolved-city.toml"
+  grep -F 'name = "ce-work"' "$TMPDIR/resolved-city.toml"
   test ! -e "$root/packs/github"
   test -x "${gasCityContributor}/bin/gascity-discord-decision"
   test -x "${gasCityContributor}/bin/gascity-publish-pr"
