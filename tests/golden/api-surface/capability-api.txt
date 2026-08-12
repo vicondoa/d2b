@@ -4174,17 +4174,14 @@ d2b_controller_toolkit	pub trait d2b_controller_toolkit::runner::ResourceReconci
 d2b_controller_toolkit	pub type d2b_controller_toolkit::ResourceReconciler::Error: core::error::Error + core::marker::Send + core::marker::Sync + 'static
 d2b_controller_toolkit	pub type d2b_controller_toolkit::runner::ResourceReconciler::Error: core::error::Error + core::marker::Send + core::marker::Sync + 'static
 d2b_core_controller	impl !core::marker::Freeze for d2b_core_controller::authority::HostGlobalAuthorityIndex
-d2b_core_controller	impl !core::marker::Freeze for d2b_core_controller::authority_persistence::RedbAuthorityPersistence
 d2b_core_controller	impl !core::marker::Freeze for d2b_core_controller::rbac::PositiveDecisionCache
 d2b_core_controller	impl !core::marker::Freeze for d2b_core_controller::user_session_authority::AuthorityIndex
 d2b_core_controller	impl !core::panic::unwind_safe::RefUnwindSafe for d2b_core_controller::authority::AuthorityReservation
 d2b_core_controller	impl !core::panic::unwind_safe::RefUnwindSafe for d2b_core_controller::authority::ExternalNicReservation
 d2b_core_controller	impl !core::panic::unwind_safe::RefUnwindSafe for d2b_core_controller::authority_persistence::AuthorityRecoveryCoordinator
-d2b_core_controller	impl !core::panic::unwind_safe::RefUnwindSafe for d2b_core_controller::authority_persistence::RedbAuthorityPersistence
 d2b_core_controller	impl !core::panic::unwind_safe::UnwindSafe for d2b_core_controller::authority::AuthorityReservation
 d2b_core_controller	impl !core::panic::unwind_safe::UnwindSafe for d2b_core_controller::authority::ExternalNicReservation
 d2b_core_controller	impl !core::panic::unwind_safe::UnwindSafe for d2b_core_controller::authority_persistence::AuthorityRecoveryCoordinator
-d2b_core_controller	impl !core::panic::unwind_safe::UnwindSafe for d2b_core_controller::authority_persistence::RedbAuthorityPersistence
 d2b_core_controller	impl core::clone::Clone for d2b_core_controller::api_catalog::CatalogEntry
 d2b_core_controller	impl core::clone::Clone for d2b_core_controller::api_catalog::StagedApiCatalog
 d2b_core_controller	impl core::clone::Clone for d2b_core_controller::authority::AuthorityOwnerProof
@@ -4360,7 +4357,6 @@ d2b_core_controller	impl core::fmt::Debug for d2b_core_controller::authority::Ho
 d2b_core_controller	impl core::fmt::Debug for d2b_core_controller::authority::emergency_policy::EmergencyPolicyAuthority
 d2b_core_controller	impl core::fmt::Debug for d2b_core_controller::authority::quota::QuotaAuthority
 d2b_core_controller	impl core::fmt::Debug for d2b_core_controller::authority_persistence::AuthorityRecoveryCoordinator
-d2b_core_controller	impl core::fmt::Debug for d2b_core_controller::authority_persistence::RedbAuthorityPersistence
 d2b_core_controller	impl core::fmt::Debug for d2b_core_controller::authz::AuthorizationHandler
 d2b_core_controller	impl core::fmt::Debug for d2b_core_controller::authz::CoreAuthorizationSubject<'_>
 d2b_core_controller	impl core::fmt::Debug for d2b_core_controller::authz::SubjectPolicy
@@ -4435,6 +4431,7 @@ d2b_core_controller	impl core::marker::Freeze for d2b_core_controller::authority
 d2b_core_controller	impl core::marker::Freeze for d2b_core_controller::authority::emergency_policy::EmergencyPolicyAuthority
 d2b_core_controller	impl core::marker::Freeze for d2b_core_controller::authority::quota::QuotaAuthority
 d2b_core_controller	impl core::marker::Freeze for d2b_core_controller::authority_persistence::AuthorityRecoveryCoordinator
+d2b_core_controller	impl core::marker::Freeze for d2b_core_controller::authority_persistence::AuthorityRecoveryData
 d2b_core_controller	impl core::marker::Freeze for d2b_core_controller::authz::AuthorizationHandler
 d2b_core_controller	impl core::marker::Freeze for d2b_core_controller::authz::SubjectPolicy
 d2b_core_controller	impl core::marker::Freeze for d2b_core_controller::budgets::BudgetHandler
@@ -4515,7 +4512,7 @@ d2b_core_controller	impl core::marker::Send for d2b_core_controller::authority::
 d2b_core_controller	impl core::marker::Send for d2b_core_controller::authority::emergency_policy::EmergencyPolicyAuthority
 d2b_core_controller	impl core::marker::Send for d2b_core_controller::authority::quota::QuotaAuthority
 d2b_core_controller	impl core::marker::Send for d2b_core_controller::authority_persistence::AuthorityRecoveryCoordinator
-d2b_core_controller	impl core::marker::Send for d2b_core_controller::authority_persistence::RedbAuthorityPersistence
+d2b_core_controller	impl core::marker::Send for d2b_core_controller::authority_persistence::AuthorityRecoveryData
 d2b_core_controller	impl core::marker::Send for d2b_core_controller::authz::AuthorizationHandler
 d2b_core_controller	impl core::marker::Send for d2b_core_controller::authz::SubjectPolicy
 d2b_core_controller	impl core::marker::Send for d2b_core_controller::budgets::BudgetHandler
@@ -4643,7 +4640,7 @@ d2b_core_controller	impl core::marker::Sync for d2b_core_controller::authority::
 d2b_core_controller	impl core::marker::Sync for d2b_core_controller::authority::emergency_policy::EmergencyPolicyAuthority
 d2b_core_controller	impl core::marker::Sync for d2b_core_controller::authority::quota::QuotaAuthority
 d2b_core_controller	impl core::marker::Sync for d2b_core_controller::authority_persistence::AuthorityRecoveryCoordinator
-d2b_core_controller	impl core::marker::Sync for d2b_core_controller::authority_persistence::RedbAuthorityPersistence
+d2b_core_controller	impl core::marker::Sync for d2b_core_controller::authority_persistence::AuthorityRecoveryData
 d2b_core_controller	impl core::marker::Sync for d2b_core_controller::authz::AuthorizationHandler
 d2b_core_controller	impl core::marker::Sync for d2b_core_controller::authz::SubjectPolicy
 d2b_core_controller	impl core::marker::Sync for d2b_core_controller::budgets::BudgetHandler
@@ -4726,7 +4723,7 @@ d2b_core_controller	impl core::marker::Unpin for d2b_core_controller::authority:
 d2b_core_controller	impl core::marker::Unpin for d2b_core_controller::authority::emergency_policy::EmergencyPolicyAuthority
 d2b_core_controller	impl core::marker::Unpin for d2b_core_controller::authority::quota::QuotaAuthority
 d2b_core_controller	impl core::marker::Unpin for d2b_core_controller::authority_persistence::AuthorityRecoveryCoordinator
-d2b_core_controller	impl core::marker::Unpin for d2b_core_controller::authority_persistence::RedbAuthorityPersistence
+d2b_core_controller	impl core::marker::Unpin for d2b_core_controller::authority_persistence::AuthorityRecoveryData
 d2b_core_controller	impl core::marker::Unpin for d2b_core_controller::authz::AuthorizationHandler
 d2b_core_controller	impl core::marker::Unpin for d2b_core_controller::authz::SubjectPolicy
 d2b_core_controller	impl core::marker::Unpin for d2b_core_controller::budgets::BudgetHandler
@@ -4809,7 +4806,7 @@ d2b_core_controller	impl core::marker::UnsafeUnpin for d2b_core_controller::auth
 d2b_core_controller	impl core::marker::UnsafeUnpin for d2b_core_controller::authority::emergency_policy::EmergencyPolicyAuthority
 d2b_core_controller	impl core::marker::UnsafeUnpin for d2b_core_controller::authority::quota::QuotaAuthority
 d2b_core_controller	impl core::marker::UnsafeUnpin for d2b_core_controller::authority_persistence::AuthorityRecoveryCoordinator
-d2b_core_controller	impl core::marker::UnsafeUnpin for d2b_core_controller::authority_persistence::RedbAuthorityPersistence
+d2b_core_controller	impl core::marker::UnsafeUnpin for d2b_core_controller::authority_persistence::AuthorityRecoveryData
 d2b_core_controller	impl core::marker::UnsafeUnpin for d2b_core_controller::authz::AuthorizationHandler
 d2b_core_controller	impl core::marker::UnsafeUnpin for d2b_core_controller::authz::SubjectPolicy
 d2b_core_controller	impl core::marker::UnsafeUnpin for d2b_core_controller::budgets::BudgetHandler
@@ -4890,6 +4887,7 @@ d2b_core_controller	impl core::panic::unwind_safe::RefUnwindSafe for d2b_core_co
 d2b_core_controller	impl core::panic::unwind_safe::RefUnwindSafe for d2b_core_controller::authority::HostGlobalAuthorityIndex
 d2b_core_controller	impl core::panic::unwind_safe::RefUnwindSafe for d2b_core_controller::authority::emergency_policy::EmergencyPolicyAuthority
 d2b_core_controller	impl core::panic::unwind_safe::RefUnwindSafe for d2b_core_controller::authority::quota::QuotaAuthority
+d2b_core_controller	impl core::panic::unwind_safe::RefUnwindSafe for d2b_core_controller::authority_persistence::AuthorityRecoveryData
 d2b_core_controller	impl core::panic::unwind_safe::RefUnwindSafe for d2b_core_controller::authz::AuthorizationHandler
 d2b_core_controller	impl core::panic::unwind_safe::RefUnwindSafe for d2b_core_controller::authz::SubjectPolicy
 d2b_core_controller	impl core::panic::unwind_safe::RefUnwindSafe for d2b_core_controller::budgets::BudgetHandler
@@ -4969,6 +4967,7 @@ d2b_core_controller	impl core::panic::unwind_safe::UnwindSafe for d2b_core_contr
 d2b_core_controller	impl core::panic::unwind_safe::UnwindSafe for d2b_core_controller::authority::HostGlobalAuthorityIndex
 d2b_core_controller	impl core::panic::unwind_safe::UnwindSafe for d2b_core_controller::authority::emergency_policy::EmergencyPolicyAuthority
 d2b_core_controller	impl core::panic::unwind_safe::UnwindSafe for d2b_core_controller::authority::quota::QuotaAuthority
+d2b_core_controller	impl core::panic::unwind_safe::UnwindSafe for d2b_core_controller::authority_persistence::AuthorityRecoveryData
 d2b_core_controller	impl core::panic::unwind_safe::UnwindSafe for d2b_core_controller::authz::AuthorizationHandler
 d2b_core_controller	impl core::panic::unwind_safe::UnwindSafe for d2b_core_controller::authz::SubjectPolicy
 d2b_core_controller	impl core::panic::unwind_safe::UnwindSafe for d2b_core_controller::budgets::BudgetHandler
@@ -5041,10 +5040,8 @@ d2b_core_controller	impl d2b_core_controller::authority::ExternalNicReservation
 d2b_core_controller	impl d2b_core_controller::authority::HostGlobalAuthorityIndex
 d2b_core_controller	impl d2b_core_controller::authority::emergency_policy::EmergencyPolicyAuthority
 d2b_core_controller	impl d2b_core_controller::authority::quota::QuotaAuthority
-d2b_core_controller	impl d2b_core_controller::authority_persistence::AuthorityPersistence for d2b_core_controller::authority_persistence::RedbAuthorityPersistence
 d2b_core_controller	impl d2b_core_controller::authority_persistence::AuthorityRecoveryCoordinator
-d2b_core_controller	impl d2b_core_controller::authority_persistence::AuthorityRecoveryProvenance for d2b_core_controller::authority_persistence::RedbAuthorityPersistence
-d2b_core_controller	impl d2b_core_controller::authority_persistence::RedbAuthorityPersistence
+d2b_core_controller	impl d2b_core_controller::authority_persistence::AuthorityRecoveryData
 d2b_core_controller	impl d2b_core_controller::authz::AuthorizationHandler
 d2b_core_controller	impl d2b_core_controller::authz::SubjectPolicy
 d2b_core_controller	impl d2b_core_controller::budgets::BudgetHandler
@@ -5150,7 +5147,7 @@ d2b_core_controller	impl<T, U> core::convert::Into<U> for d2b_core_controller::a
 d2b_core_controller	impl<T, U> core::convert::Into<U> for d2b_core_controller::authority::emergency_policy::EmergencyPolicyAuthority where U: core::convert::From<T>
 d2b_core_controller	impl<T, U> core::convert::Into<U> for d2b_core_controller::authority::quota::QuotaAuthority where U: core::convert::From<T>
 d2b_core_controller	impl<T, U> core::convert::Into<U> for d2b_core_controller::authority_persistence::AuthorityRecoveryCoordinator where U: core::convert::From<T>
-d2b_core_controller	impl<T, U> core::convert::Into<U> for d2b_core_controller::authority_persistence::RedbAuthorityPersistence where U: core::convert::From<T>
+d2b_core_controller	impl<T, U> core::convert::Into<U> for d2b_core_controller::authority_persistence::AuthorityRecoveryData where U: core::convert::From<T>
 d2b_core_controller	impl<T, U> core::convert::Into<U> for d2b_core_controller::authz::AuthorizationHandler where U: core::convert::From<T>
 d2b_core_controller	impl<T, U> core::convert::Into<U> for d2b_core_controller::authz::CoreAuthorizationSubject<'a> where U: core::convert::From<T>
 d2b_core_controller	impl<T, U> core::convert::Into<U> for d2b_core_controller::authz::SubjectPolicy where U: core::convert::From<T>
@@ -5235,7 +5232,7 @@ d2b_core_controller	impl<T, U> core::convert::TryFrom<U> for d2b_core_controller
 d2b_core_controller	impl<T, U> core::convert::TryFrom<U> for d2b_core_controller::authority::emergency_policy::EmergencyPolicyAuthority where U: core::convert::Into<T>
 d2b_core_controller	impl<T, U> core::convert::TryFrom<U> for d2b_core_controller::authority::quota::QuotaAuthority where U: core::convert::Into<T>
 d2b_core_controller	impl<T, U> core::convert::TryFrom<U> for d2b_core_controller::authority_persistence::AuthorityRecoveryCoordinator where U: core::convert::Into<T>
-d2b_core_controller	impl<T, U> core::convert::TryFrom<U> for d2b_core_controller::authority_persistence::RedbAuthorityPersistence where U: core::convert::Into<T>
+d2b_core_controller	impl<T, U> core::convert::TryFrom<U> for d2b_core_controller::authority_persistence::AuthorityRecoveryData where U: core::convert::Into<T>
 d2b_core_controller	impl<T, U> core::convert::TryFrom<U> for d2b_core_controller::authz::AuthorizationHandler where U: core::convert::Into<T>
 d2b_core_controller	impl<T, U> core::convert::TryFrom<U> for d2b_core_controller::authz::CoreAuthorizationSubject<'a> where U: core::convert::Into<T>
 d2b_core_controller	impl<T, U> core::convert::TryFrom<U> for d2b_core_controller::authz::SubjectPolicy where U: core::convert::Into<T>
@@ -5320,7 +5317,7 @@ d2b_core_controller	impl<T, U> core::convert::TryInto<U> for d2b_core_controller
 d2b_core_controller	impl<T, U> core::convert::TryInto<U> for d2b_core_controller::authority::emergency_policy::EmergencyPolicyAuthority where U: core::convert::TryFrom<T>
 d2b_core_controller	impl<T, U> core::convert::TryInto<U> for d2b_core_controller::authority::quota::QuotaAuthority where U: core::convert::TryFrom<T>
 d2b_core_controller	impl<T, U> core::convert::TryInto<U> for d2b_core_controller::authority_persistence::AuthorityRecoveryCoordinator where U: core::convert::TryFrom<T>
-d2b_core_controller	impl<T, U> core::convert::TryInto<U> for d2b_core_controller::authority_persistence::RedbAuthorityPersistence where U: core::convert::TryFrom<T>
+d2b_core_controller	impl<T, U> core::convert::TryInto<U> for d2b_core_controller::authority_persistence::AuthorityRecoveryData where U: core::convert::TryFrom<T>
 d2b_core_controller	impl<T, U> core::convert::TryInto<U> for d2b_core_controller::authz::AuthorizationHandler where U: core::convert::TryFrom<T>
 d2b_core_controller	impl<T, U> core::convert::TryInto<U> for d2b_core_controller::authz::CoreAuthorizationSubject<'a> where U: core::convert::TryFrom<T>
 d2b_core_controller	impl<T, U> core::convert::TryInto<U> for d2b_core_controller::authz::SubjectPolicy where U: core::convert::TryFrom<T>
@@ -5454,7 +5451,7 @@ d2b_core_controller	impl<T> core::any::Any for d2b_core_controller::authority::H
 d2b_core_controller	impl<T> core::any::Any for d2b_core_controller::authority::emergency_policy::EmergencyPolicyAuthority where T: 'static + ?core::marker::Sized
 d2b_core_controller	impl<T> core::any::Any for d2b_core_controller::authority::quota::QuotaAuthority where T: 'static + ?core::marker::Sized
 d2b_core_controller	impl<T> core::any::Any for d2b_core_controller::authority_persistence::AuthorityRecoveryCoordinator where T: 'static + ?core::marker::Sized
-d2b_core_controller	impl<T> core::any::Any for d2b_core_controller::authority_persistence::RedbAuthorityPersistence where T: 'static + ?core::marker::Sized
+d2b_core_controller	impl<T> core::any::Any for d2b_core_controller::authority_persistence::AuthorityRecoveryData where T: 'static + ?core::marker::Sized
 d2b_core_controller	impl<T> core::any::Any for d2b_core_controller::authz::AuthorizationHandler where T: 'static + ?core::marker::Sized
 d2b_core_controller	impl<T> core::any::Any for d2b_core_controller::authz::CoreAuthorizationSubject<'a> where T: 'static + ?core::marker::Sized
 d2b_core_controller	impl<T> core::any::Any for d2b_core_controller::authz::SubjectPolicy where T: 'static + ?core::marker::Sized
@@ -5539,7 +5536,7 @@ d2b_core_controller	impl<T> core::borrow::Borrow<T> for d2b_core_controller::aut
 d2b_core_controller	impl<T> core::borrow::Borrow<T> for d2b_core_controller::authority::emergency_policy::EmergencyPolicyAuthority where T: ?core::marker::Sized
 d2b_core_controller	impl<T> core::borrow::Borrow<T> for d2b_core_controller::authority::quota::QuotaAuthority where T: ?core::marker::Sized
 d2b_core_controller	impl<T> core::borrow::Borrow<T> for d2b_core_controller::authority_persistence::AuthorityRecoveryCoordinator where T: ?core::marker::Sized
-d2b_core_controller	impl<T> core::borrow::Borrow<T> for d2b_core_controller::authority_persistence::RedbAuthorityPersistence where T: ?core::marker::Sized
+d2b_core_controller	impl<T> core::borrow::Borrow<T> for d2b_core_controller::authority_persistence::AuthorityRecoveryData where T: ?core::marker::Sized
 d2b_core_controller	impl<T> core::borrow::Borrow<T> for d2b_core_controller::authz::AuthorizationHandler where T: ?core::marker::Sized
 d2b_core_controller	impl<T> core::borrow::Borrow<T> for d2b_core_controller::authz::CoreAuthorizationSubject<'a> where T: ?core::marker::Sized
 d2b_core_controller	impl<T> core::borrow::Borrow<T> for d2b_core_controller::authz::SubjectPolicy where T: ?core::marker::Sized
@@ -5624,7 +5621,7 @@ d2b_core_controller	impl<T> core::borrow::BorrowMut<T> for d2b_core_controller::
 d2b_core_controller	impl<T> core::borrow::BorrowMut<T> for d2b_core_controller::authority::emergency_policy::EmergencyPolicyAuthority where T: ?core::marker::Sized
 d2b_core_controller	impl<T> core::borrow::BorrowMut<T> for d2b_core_controller::authority::quota::QuotaAuthority where T: ?core::marker::Sized
 d2b_core_controller	impl<T> core::borrow::BorrowMut<T> for d2b_core_controller::authority_persistence::AuthorityRecoveryCoordinator where T: ?core::marker::Sized
-d2b_core_controller	impl<T> core::borrow::BorrowMut<T> for d2b_core_controller::authority_persistence::RedbAuthorityPersistence where T: ?core::marker::Sized
+d2b_core_controller	impl<T> core::borrow::BorrowMut<T> for d2b_core_controller::authority_persistence::AuthorityRecoveryData where T: ?core::marker::Sized
 d2b_core_controller	impl<T> core::borrow::BorrowMut<T> for d2b_core_controller::authz::AuthorizationHandler where T: ?core::marker::Sized
 d2b_core_controller	impl<T> core::borrow::BorrowMut<T> for d2b_core_controller::authz::CoreAuthorizationSubject<'a> where T: ?core::marker::Sized
 d2b_core_controller	impl<T> core::borrow::BorrowMut<T> for d2b_core_controller::authz::SubjectPolicy where T: ?core::marker::Sized
@@ -5758,7 +5755,7 @@ d2b_core_controller	impl<T> core::convert::From<T> for d2b_core_controller::auth
 d2b_core_controller	impl<T> core::convert::From<T> for d2b_core_controller::authority::emergency_policy::EmergencyPolicyAuthority
 d2b_core_controller	impl<T> core::convert::From<T> for d2b_core_controller::authority::quota::QuotaAuthority
 d2b_core_controller	impl<T> core::convert::From<T> for d2b_core_controller::authority_persistence::AuthorityRecoveryCoordinator
-d2b_core_controller	impl<T> core::convert::From<T> for d2b_core_controller::authority_persistence::RedbAuthorityPersistence
+d2b_core_controller	impl<T> core::convert::From<T> for d2b_core_controller::authority_persistence::AuthorityRecoveryData
 d2b_core_controller	impl<T> core::convert::From<T> for d2b_core_controller::authz::AuthorizationHandler
 d2b_core_controller	impl<T> core::convert::From<T> for d2b_core_controller::authz::CoreAuthorizationSubject<'a>
 d2b_core_controller	impl<T> core::convert::From<T> for d2b_core_controller::authz::SubjectPolicy
@@ -5898,7 +5895,7 @@ d2b_core_controller	impl<T> typenum::type_operators::Same for d2b_core_controlle
 d2b_core_controller	impl<T> typenum::type_operators::Same for d2b_core_controller::authority::emergency_policy::EmergencyPolicyAuthority
 d2b_core_controller	impl<T> typenum::type_operators::Same for d2b_core_controller::authority::quota::QuotaAuthority
 d2b_core_controller	impl<T> typenum::type_operators::Same for d2b_core_controller::authority_persistence::AuthorityRecoveryCoordinator
-d2b_core_controller	impl<T> typenum::type_operators::Same for d2b_core_controller::authority_persistence::RedbAuthorityPersistence
+d2b_core_controller	impl<T> typenum::type_operators::Same for d2b_core_controller::authority_persistence::AuthorityRecoveryData
 d2b_core_controller	impl<T> typenum::type_operators::Same for d2b_core_controller::authz::AuthorizationHandler
 d2b_core_controller	impl<T> typenum::type_operators::Same for d2b_core_controller::authz::CoreAuthorizationSubject<'a>
 d2b_core_controller	impl<T> typenum::type_operators::Same for d2b_core_controller::authz::SubjectPolicy
@@ -5963,7 +5960,7 @@ d2b_core_controller	pub async fn d2b_core_controller::authority::AuthorityReserv
 d2b_core_controller	pub async fn d2b_core_controller::authority::ExternalNicReservation::dispatch<F, Fut, E>(&mut self, F) -> core::result::Result<d2b_core_controller::authority::ExternalNicEffectOutcome, d2b_core_controller::authority::AuthorityReservationError<E>> where F: core::ops::function::FnOnce(&d2b_core_controller::authority::ExternalNicLease) -> Fut, Fut: core::future::future::Future<Output = core::result::Result<d2b_core_controller::authority::ExternalNicEffectOutcome, E>>
 d2b_core_controller	pub async fn d2b_core_controller::authority::ExternalNicReservation::reserve_durable(alloc::sync::Arc<tokio::sync::mutex::Mutex<d2b_core_controller::authority::HostGlobalAuthorityIndex>>, alloc::sync::Arc<dyn d2b_core_controller::authority_persistence::AuthorityPersistence>, impl core::convert::Into<alloc::string::String>, d2b_core_controller::authority::ExternalNicClaimRequest) -> core::result::Result<Self, d2b_core_controller::authority::AuthorityReservationError<d2b_core_controller::authority::AuthorityError>>
 d2b_core_controller	pub async fn d2b_core_controller::authority_persistence::AuthorityRecoveryCoordinator::recover_with_provenance(alloc::sync::Arc<dyn d2b_core_controller::authority_persistence::AuthorityPersistence>, &dyn d2b_core_controller::authority_persistence::AuthorityRecoveryProvenance) -> core::result::Result<Self, d2b_core_controller::authority_persistence::AuthorityPersistenceError>
-d2b_core_controller	pub async fn d2b_core_controller::authority_persistence::rehydrate_from_persistence(&dyn d2b_core_controller::authority_persistence::AuthorityPersistence) -> core::result::Result<d2b_core_controller::authority::HostGlobalAuthorityIndex, d2b_core_controller::authority_persistence::AuthorityPersistenceError>
+d2b_core_controller	pub async fn d2b_core_controller::authority_persistence::rehydrate_from_persistence(&dyn d2b_core_controller::authority_persistence::AuthorityPersistence, &dyn d2b_core_controller::authority_persistence::AuthorityRecoveryProvenance) -> core::result::Result<d2b_core_controller::authority::HostGlobalAuthorityIndex, d2b_core_controller::authority_persistence::AuthorityPersistenceError>
 d2b_core_controller	pub async fn d2b_core_controller::runtime::CoreControllerSource<A>::await_expedited_commit(&self, &d2b_controller_toolkit::context::ReconcileContext) -> core::result::Result<d2b_controller_toolkit::runner::CommitDecision, d2b_controller_toolkit::runner::SourceError>
 d2b_core_controller	pub async fn d2b_core_controller::runtime::CoreControllerSource<A>::receive_watch(&self) -> core::result::Result<d2b_controller_toolkit::runner::WatchEvent, d2b_controller_toolkit::runner::WatchFailure>
 d2b_core_controller	pub async fn d2b_core_controller::runtime::CoreResourceReconciler::plan(&self, &d2b_controller_toolkit::context::ReconcileContext, &d2b_controller_toolkit::context::ResourceSnapshot, &[d2b_controller_toolkit::context::DependencySnapshot]) -> core::result::Result<d2b_controller_toolkit::result::ReconcilePlan, Self::Error>
@@ -6301,18 +6298,14 @@ d2b_core_controller	pub fn d2b_core_controller::authority::quota::QuotaAuthority
 d2b_core_controller	pub fn d2b_core_controller::authority::quota::QuotaAuthority::admit_resource(&mut self, d2b_contracts::v3::resource_ref::ResourceRef, d2b_contracts::v3::identity::ResourceTypeName, d2b_core_controller::authority::quota::QuotaResourceRequest, bool) -> core::result::Result<d2b_core_controller::authority::quota::QuotaAdmission, d2b_core_controller::authority::quota::QuotaError>
 d2b_core_controller	pub fn d2b_core_controller::authority::quota::QuotaAuthority::complete_delete(&mut self, &mut d2b_core_controller::authority::HostGlobalAuthorityIndex) -> core::result::Result<(), d2b_core_controller::authority::quota::QuotaError>
 d2b_core_controller	pub fn d2b_core_controller::authority::quota::QuotaAuthority::release_resource(&mut self, &d2b_contracts::v3::resource_ref::ResourceRef) -> core::result::Result<(), d2b_core_controller::authority::quota::QuotaError>
-d2b_core_controller	pub fn d2b_core_controller::authority_persistence::AuthorityPersistence::prepare<'a>(&'a self, &'a str, &'a d2b_core_controller::authority::AuthorityStorageClaim) -> d2b_core_controller::authority_persistence::AuthorityFuture<'a, d2b_core_controller::authority_persistence::AuthorityOperationCapability>
+d2b_core_controller	pub fn d2b_core_controller::authority_persistence::AuthorityPersistence::prepare<'a>(&'a self, &'a str, &'a d2b_core_controller::authority::AuthorityStorageClaim) -> d2b_core_controller::authority_persistence::AuthorityFuture<'a, d2b_core_controller::authority_persistence::PreparedAuthorityOperation>
 d2b_core_controller	pub fn d2b_core_controller::authority_persistence::AuthorityPersistence::record_close<'a>(&'a self, &'a d2b_core_controller::authority_persistence::AuthorityOperationCapability) -> d2b_core_controller::authority_persistence::AuthorityFuture<'a, ()>
 d2b_core_controller	pub fn d2b_core_controller::authority_persistence::AuthorityPersistence::record_effect<'a>(&'a self, &'a d2b_core_controller::authority_persistence::AuthorityOperationCapability, d2b_core_controller::authority::AuthorityOperationState) -> d2b_core_controller::authority_persistence::AuthorityFuture<'a, ()>
-d2b_core_controller	pub fn d2b_core_controller::authority_persistence::AuthorityPersistence::recover<'a>(&'a self) -> d2b_core_controller::authority_persistence::AuthorityFuture<'a, d2b_core_controller::authority::AuthorityRecoveryReceipt>
+d2b_core_controller	pub fn d2b_core_controller::authority_persistence::AuthorityPersistence::recover<'a>(&'a self) -> d2b_core_controller::authority_persistence::AuthorityFuture<'a, d2b_core_controller::authority_persistence::AuthorityRecoveryData>
 d2b_core_controller	pub fn d2b_core_controller::authority_persistence::AuthorityPersistence::release<'a>(&'a self, &'a d2b_core_controller::authority_persistence::AuthorityOperationCapability) -> d2b_core_controller::authority_persistence::AuthorityFuture<'a, ()>
 d2b_core_controller	pub fn d2b_core_controller::authority_persistence::AuthorityRecoveryCoordinator::index(&self) -> alloc::sync::Arc<tokio::sync::mutex::Mutex<d2b_core_controller::authority::HostGlobalAuthorityIndex>>
+d2b_core_controller	pub fn d2b_core_controller::authority_persistence::AuthorityRecoveryData::new(alloc::vec::Vec<d2b_core_controller::authority::AuthorityStorageOperation>, alloc::collections::btree::map::BTreeMap<alloc::string::String, d2b_core_controller::authority_persistence::PreparedAuthorityOperation>) -> Self
 d2b_core_controller	pub fn d2b_core_controller::authority_persistence::AuthorityRecoveryProvenance::validate<'a>(&'a self, &'a d2b_core_controller::authority::AuthorityStorageOperation) -> d2b_core_controller::authority_persistence::AuthorityFuture<'a, ()>
-d2b_core_controller	pub fn d2b_core_controller::authority_persistence::RedbAuthorityPersistence::new(alloc::sync::Arc<d2b_resource_store_redb::RedbResourceStore>) -> Self
-d2b_core_controller	pub fn d2b_core_controller::authority_persistence::RedbAuthorityPersistence::prepare<'a>(&'a self, &'a str, &'a d2b_core_controller::authority::AuthorityStorageClaim) -> d2b_core_controller::authority_persistence::AuthorityFuture<'a, d2b_core_controller::authority_persistence::AuthorityOperationCapability>
-d2b_core_controller	pub fn d2b_core_controller::authority_persistence::RedbAuthorityPersistence::recover<'a>(&'a self) -> d2b_core_controller::authority_persistence::AuthorityFuture<'a, d2b_core_controller::authority::AuthorityRecoveryReceipt>
-d2b_core_controller	pub fn d2b_core_controller::authority_persistence::RedbAuthorityPersistence::validate<'a>(&'a self, &'a d2b_core_controller::authority::AuthorityStorageOperation) -> d2b_core_controller::authority_persistence::AuthorityFuture<'a, ()>
-d2b_core_controller	pub fn d2b_core_controller::authority_persistence::RedbAuthorityPersistence::with_external_inventory(self, alloc::sync::Arc<dyn d2b_core_controller::authority::ExternalNicRecoveryInventory>) -> Self
 d2b_core_controller	pub fn d2b_core_controller::authz::AuthorizationHandler::authorize(&self, &d2b_core_controller::authz::CoreAuthorizationSubject<'_>, u64, &d2b_core_controller::authz::AuthorizationRequest) -> core::result::Result<(), d2b_core_controller::authz::AuthorizationError>
 d2b_core_controller	pub fn d2b_core_controller::authz::AuthorizationHandler::default() -> d2b_core_controller::authz::AuthorizationHandler
 d2b_core_controller	pub fn d2b_core_controller::authz::AuthorizationHandler::publish_after_commit(&mut self, u64, impl core::iter::traits::collect::IntoIterator<Item = d2b_core_controller::authz::SubjectPolicy>) -> core::result::Result<(), d2b_core_controller::authz::AuthorizationError>
@@ -6573,7 +6566,7 @@ d2b_core_controller	pub struct d2b_core_controller::authority::HostGlobalAuthori
 d2b_core_controller	pub struct d2b_core_controller::authority::emergency_policy::EmergencyPolicyAuthority
 d2b_core_controller	pub struct d2b_core_controller::authority::quota::QuotaAuthority
 d2b_core_controller	pub struct d2b_core_controller::authority_persistence::AuthorityRecoveryCoordinator
-d2b_core_controller	pub struct d2b_core_controller::authority_persistence::RedbAuthorityPersistence
+d2b_core_controller	pub struct d2b_core_controller::authority_persistence::AuthorityRecoveryData
 d2b_core_controller	pub struct d2b_core_controller::authz::AuthorizationHandler
 d2b_core_controller	pub struct d2b_core_controller::authz::CoreAuthorizationSubject<'a>
 d2b_core_controller	pub struct d2b_core_controller::authz::SubjectPolicy
@@ -6633,7 +6626,7 @@ d2b_core_controller	pub struct d2b_core_controller::zonelink::ZoneLinkStatus
 d2b_core_controller	pub trait d2b_core_controller::RegisteredControllerApi: d2b_core_controller::runtime::registered_api::Sealed + core::marker::Send + core::marker::Sync + 'static
 d2b_core_controller	pub trait d2b_core_controller::authority::ExternalNicRecoveryInventory: core::marker::Send + core::marker::Sync
 d2b_core_controller	pub trait d2b_core_controller::authority_persistence::AuthorityPersistence: core::marker::Send + core::marker::Sync
-d2b_core_controller	pub trait d2b_core_controller::authority_persistence::AuthorityRecoveryProvenance: d2b_core_controller::authority_persistence::sealed::RecoveryProvenance + core::marker::Send + core::marker::Sync
+d2b_core_controller	pub trait d2b_core_controller::authority_persistence::AuthorityRecoveryProvenance: core::marker::Send + core::marker::Sync
 d2b_core_controller	pub trait d2b_core_controller::runtime::RegisteredControllerApi: d2b_core_controller::runtime::registered_api::Sealed + core::marker::Send + core::marker::Sync + 'static
 d2b_core_controller	pub type d2b_core_controller::authority::emergency_policy::EmergencyPolicyHandler = d2b_core_controller::authority::emergency_policy::EmergencyPolicyAuthority
 d2b_core_controller	pub type d2b_core_controller::authority::quota::QuotaHandler = d2b_core_controller::authority::quota::QuotaAuthority

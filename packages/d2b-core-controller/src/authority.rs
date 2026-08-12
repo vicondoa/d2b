@@ -676,15 +676,18 @@ impl DurableAuthorityOwnerProof {
         }
     }
 
-    pub(crate) fn resource_ref(&self) -> Option<&ResourceRef> {
+    #[doc(hidden)]
+    pub fn resource_ref(&self) -> Option<&ResourceRef> {
         self.resource_ref.as_ref()
     }
 
-    pub(crate) fn resource_uid(&self) -> &ResourceUid {
+    #[doc(hidden)]
+    pub fn resource_uid(&self) -> &ResourceUid {
         &self.resource_uid
     }
 
-    pub(crate) const fn generation(&self) -> ResourceGeneration {
+    #[doc(hidden)]
+    pub const fn generation(&self) -> ResourceGeneration {
         self.generation
     }
 }
@@ -715,7 +718,8 @@ pub struct DurableAuthorityClaim {
 }
 
 impl DurableAuthorityClaim {
-    pub(crate) fn owner_proof(&self) -> &DurableAuthorityOwnerProof {
+    #[doc(hidden)]
+    pub fn owner_proof(&self) -> &DurableAuthorityOwnerProof {
         &self.owner_proof
     }
 
@@ -774,15 +778,18 @@ impl core::fmt::Debug for DurableExternalNicClaim {
 }
 
 impl DurableExternalNicClaim {
-    pub(crate) fn owner_proof(&self) -> &DurableAuthorityOwnerProof {
+    #[doc(hidden)]
+    pub fn owner_proof(&self) -> &DurableAuthorityOwnerProof {
         &self.owner_proof
     }
 
-    pub(crate) fn host_uid(&self) -> &ResourceUid {
+    #[doc(hidden)]
+    pub fn host_uid(&self) -> &ResourceUid {
         &self.host_uid
     }
 
-    pub(crate) fn identity_digest(&self) -> &str {
+    #[doc(hidden)]
+    pub fn identity_digest(&self) -> &str {
         &self.identity_digest
     }
 
@@ -888,12 +895,6 @@ impl core::fmt::Debug for AuthorityRecoveryReceipt {
     }
 }
 
-impl AuthorityRecoveryReceipt {
-    pub(crate) fn operations(&self) -> &[AuthorityStorageOperation] {
-        &self.operations
-    }
-}
-
 impl core::fmt::Debug for DurableAuthorityClaim {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -945,7 +946,8 @@ fn valid_authority_digest(value: &str) -> bool {
     })
 }
 
-pub(crate) fn claim_digest(claim: &AuthorityStorageClaim) -> Result<String, AuthorityError> {
+#[doc(hidden)]
+pub fn claim_digest(claim: &AuthorityStorageClaim) -> Result<String, AuthorityError> {
     let bytes = serde_json::to_vec(claim).map_err(|_| AuthorityError::InvalidAuthorityRequest)?;
     let canonical =
         CanonicalJsonValue::parse(&bytes).map_err(|_| AuthorityError::InvalidAuthorityRequest)?;
@@ -1853,15 +1855,23 @@ impl HostGlobalAuthorityIndex {
                 store_binding_digest: digest,
             });
         }
-        Self::validate_recovery_operations(&operations, None)?;
-        Ok(AuthorityRecoveryReceipt {
-            seen_operation_ids: operations
-                .iter()
-                .map(|operation| operation.operation_id.clone())
-                .collect(),
-            operations,
-            capabilities: BTreeMap::new(),
-        })
+        let prepared = operations
+            .iter()
+            .map(|operation| {
+                Ok((
+                    operation.operation_id.clone(),
+                    crate::authority_persistence::PreparedAuthorityOperation::new(
+                        operation.operation_id.clone(),
+                        operation.store_binding_digest.clone(),
+                        1,
+                    )
+                    .map_err(|_| AuthorityError::InvalidAuthorityRequest)?,
+                ))
+            })
+            .collect::<Result<BTreeMap<_, _>, AuthorityError>>()?;
+        Self::recovery_receipt_from_operations_with_prepared_capabilities(
+            operations, None, prepared,
+        )
     }
 
     fn validate_recovery_operations(
@@ -2021,26 +2031,82 @@ impl HostGlobalAuthorityIndex {
         operations: Vec<AuthorityStorageOperation>,
         expected_store_binding_digest: Option<&str>,
     ) -> Result<AuthorityRecoveryReceipt, AuthorityError> {
-        Self::recovery_receipt_from_operations_with_capabilities(
+        let prepared = operations
+            .iter()
+            .filter(|operation| {
+                !matches!(
+                    operation.state,
+                    AuthorityOperationState::Closed | AuthorityOperationState::Released
+                )
+            })
+            .map(|operation| {
+                Ok((
+                    operation.operation_id.clone(),
+                    crate::authority_persistence::PreparedAuthorityOperation::new(
+                        operation.operation_id.clone(),
+                        operation.store_binding_digest.clone(),
+                        1,
+                    )
+                    .map_err(|_| AuthorityError::InvalidAuthorityRequest)?,
+                ))
+            })
+            .collect::<Result<BTreeMap<_, _>, AuthorityError>>()?;
+        Self::recovery_receipt_from_operations_with_prepared_capabilities(
             operations,
             expected_store_binding_digest,
-            BTreeMap::new(),
+            prepared,
         )
     }
 
-    pub(crate) fn recovery_receipt_from_operations_with_capabilities(
+    pub(crate) fn recovery_receipt_from_operations_with_prepared_capabilities(
         operations: Vec<AuthorityStorageOperation>,
         expected_store_binding_digest: Option<&str>,
-        capabilities: BTreeMap<String, crate::authority_persistence::AuthorityOperationCapability>,
+        prepared_operations: BTreeMap<
+            String,
+            crate::authority_persistence::PreparedAuthorityOperation,
+        >,
     ) -> Result<AuthorityRecoveryReceipt, AuthorityError> {
         Self::validate_recovery_operations(&operations, expected_store_binding_digest)?;
-        if capabilities.keys().any(|operation_id| {
+        let active_operation_ids = operations
+            .iter()
+            .filter(|operation| {
+                !matches!(
+                    operation.state,
+                    AuthorityOperationState::Closed | AuthorityOperationState::Released
+                )
+            })
+            .map(|operation| operation.operation_id.clone())
+            .collect::<BTreeSet<_>>();
+        if prepared_operations.keys().any(|operation_id| {
             !operations
                 .iter()
                 .any(|operation| &operation.operation_id == operation_id)
-        }) {
+        }) || prepared_operations.len() != active_operation_ids.len()
+            || !active_operation_ids
+                .iter()
+                .all(|operation_id| prepared_operations.contains_key(operation_id))
+        {
             return Err(AuthorityError::InvalidAuthorityRequest);
         }
+        let capabilities = prepared_operations
+            .into_iter()
+            .map(|(operation_id, prepared)| {
+                let operation = operations
+                    .iter()
+                    .find(|operation| operation.operation_id == operation_id)
+                    .ok_or(AuthorityError::InvalidAuthorityRequest)?;
+                if !prepared.matches_operation(operation) {
+                    return Err(AuthorityError::InvalidAuthorityRequest);
+                }
+                let capability =
+                    crate::authority_persistence::AuthorityOperationCapability::from_prepared(
+                        &operation_id,
+                        prepared,
+                    )
+                    .map_err(|_| AuthorityError::InvalidAuthorityRequest)?;
+                Ok((operation_id, capability))
+            })
+            .collect::<Result<BTreeMap<_, _>, AuthorityError>>()?;
         Ok(AuthorityRecoveryReceipt {
             seen_operation_ids: operations
                 .iter()
@@ -2727,11 +2793,11 @@ impl ExternalNicReservation {
                 .admit_with_operation_id(request, Some(operation_id.clone()))
                 .map_err(AuthorityReservationError::Effect)?
         };
-        let capability = match persistence
+        let prepared = match persistence
             .prepare(&operation_id, &AuthorityStorageClaim::ExternalNic(claim))
             .await
         {
-            Ok(capability) => capability,
+            Ok(prepared) => prepared,
             Err(error @ crate::authority_persistence::AuthorityPersistenceError::CommitUnknown) => {
                 index.lock().await.quarantine_operation_id(&operation_id);
                 return Err(AuthorityReservationError::Persistence(error));
@@ -2741,6 +2807,17 @@ impl ExternalNicReservation {
                 return Err(AuthorityReservationError::Persistence(error));
             }
         };
+        let capability =
+            match crate::authority_persistence::AuthorityOperationCapability::from_prepared(
+                &operation_id,
+                prepared,
+            ) {
+                Ok(capability) => capability,
+                Err(error) => {
+                    let _ = index.lock().await.release(&lease);
+                    return Err(AuthorityReservationError::Persistence(error));
+                }
+            };
         Ok(Self {
             index,
             lease: Some(lease),
@@ -2849,8 +2926,8 @@ impl AuthorityReservation {
                 .map_err(AuthorityReservationError::Effect)?
         };
         let claim = AuthorityStorageClaim::Generic(request.durable_claim());
-        let capability = match persistence.prepare(&operation_id, &claim).await {
-            Ok(capability) => capability,
+        let prepared = match persistence.prepare(&operation_id, &claim).await {
+            Ok(prepared) => prepared,
             Err(error @ crate::authority_persistence::AuthorityPersistenceError::CommitUnknown) => {
                 index.lock().await.quarantine_operation_id(&operation_id);
                 return Err(AuthorityReservationError::Persistence(error));
@@ -2860,6 +2937,17 @@ impl AuthorityReservation {
                 return Err(AuthorityReservationError::Persistence(error));
             }
         };
+        let capability =
+            match crate::authority_persistence::AuthorityOperationCapability::from_prepared(
+                &operation_id,
+                prepared,
+            ) {
+                Ok(capability) => capability,
+                Err(error) => {
+                    let _ = index.lock().await.release_authority(&lease);
+                    return Err(AuthorityReservationError::Persistence(error));
+                }
+            };
         Ok(Self {
             index,
             lease: Some(lease),
@@ -2984,7 +3072,7 @@ impl core::fmt::Debug for HostGlobalAuthorityIndex {
 mod tests {
     use super::*;
     use crate::authority_persistence::{
-        AuthorityFuture, AuthorityPersistence, AuthorityPersistenceError,
+        AuthorityFuture, AuthorityPersistence, AuthorityRecoveryData, PreparedAuthorityOperation,
     };
     use std::sync::Mutex;
 
@@ -3035,19 +3123,18 @@ mod tests {
     impl AuthorityPersistence for RecordingPersistence {
         fn prepare<'a>(
             &'a self,
-            _operation_id: &'a str,
+            operation_id: &'a str,
             _claim: &'a AuthorityStorageClaim,
-        ) -> AuthorityFuture<'a, crate::authority_persistence::AuthorityOperationCapability>
-        {
+        ) -> AuthorityFuture<'a, PreparedAuthorityOperation> {
             self.states
                 .lock()
                 .unwrap()
                 .push(AuthorityOperationState::Pending);
             Box::pin(async {
-                crate::authority_persistence::AuthorityOperationCapability::new(
-                    "test-operation".to_owned(),
+                PreparedAuthorityOperation::new(
+                    operation_id.to_owned(),
                     "sha256:".to_owned() + &"1".repeat(64),
-                    0,
+                    1,
                 )
             })
         }
@@ -3083,13 +3170,8 @@ mod tests {
             Box::pin(async { Ok(()) })
         }
 
-        fn recover<'a>(
-            &'a self,
-        ) -> AuthorityFuture<'a, crate::authority::AuthorityRecoveryReceipt> {
-            Box::pin(async {
-                HostGlobalAuthorityIndex::recovery_receipt_from_rows(Vec::new(), Vec::new())
-                    .map_err(|_| AuthorityPersistenceError::RowInvalid)
-            })
+        fn recover<'a>(&'a self) -> AuthorityFuture<'a, AuthorityRecoveryData> {
+            Box::pin(async { Ok(AuthorityRecoveryData::new(Vec::new(), BTreeMap::new())) })
         }
     }
 

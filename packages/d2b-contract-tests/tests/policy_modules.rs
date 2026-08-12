@@ -286,6 +286,47 @@ fn static_rust_dependency_direction() {
 }
 
 #[test]
+fn authority_capability_is_not_downstream_mintable() {
+    let core = read_repo_file_opt("packages/d2b-core-controller/src/authority_persistence.rs")
+        .expect("read core authority persistence");
+    let capability_block = core
+        .split_once("pub struct AuthorityOperationCapability")
+        .and_then(|(_, tail)| tail.split_once("/// Typed persistence port"))
+        .map(|(block, _)| block)
+        .expect("authority capability block");
+    let public_constructor =
+        Regex::new(r"\bpub(?:\([^)]*\))?\s+fn\s+new\s*\(").expect("constructor regex");
+    assert!(
+        !public_constructor.is_match(capability_block),
+        "AuthorityOperationCapability must not expose a public constructor"
+    );
+    assert!(
+        !capability_block.contains("Default"),
+        "AuthorityOperationCapability must not implement Default"
+    );
+    assert!(
+        !capability_block.contains("Deserialize"),
+        "AuthorityOperationCapability must not be deserializable"
+    );
+    let api = read_repo_file_opt("tests/golden/api-surface/hidden-public-api.txt")
+        .expect("read hidden API snapshot");
+    assert!(
+        !api.contains("AuthorityOperationCapability::new"),
+        "capability constructor must not appear in the downstream API snapshot"
+    );
+    let adapter = read_repo_file_opt("packages/d2bd/src/authority_persistence.rs")
+        .expect("read d2bd adapter");
+    assert!(
+        adapter.contains("PreparedAuthorityOperation") && adapter.contains("AuthorityRecoveryData"),
+        "d2bd must return non-authorizing prepared/recovery data"
+    );
+    assert!(
+        !adapter.contains("AuthorityOperationCapability::new"),
+        "d2bd must not mint core capabilities directly"
+    );
+}
+
+#[test]
 fn providers_and_controllers_use_closed_effect_ports() {
     let crates = provider_controller_crates();
     let forbidden_internal = [

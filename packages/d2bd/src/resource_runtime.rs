@@ -15,6 +15,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use crate::authority_persistence::RedbAuthorityPersistence;
 #[cfg(test)]
 use d2b_contracts::v3::{
     DEFAULT_LIST_PAGE_SIZE, MAX_FILTER_VALUES, MAX_LIST_FILTERS, MAX_LIST_PAGE_SIZE,
@@ -33,9 +34,7 @@ use d2b_core_controller::authority::{
     AuthorityRequest, AuthorityReservation, ExternalNicClaimRequest, ExternalNicRecoveryInventory,
     ExternalNicReservation, HostGlobalAuthorityIndex, TrustedExternalNicInventory,
 };
-use d2b_core_controller::authority_persistence::{
-    AuthorityRecoveryCoordinator, RedbAuthorityPersistence,
-};
+use d2b_core_controller::authority_persistence::AuthorityRecoveryCoordinator;
 use d2b_core_controller::main::{
     CoreProcess, RecoverySnapshot, RuntimeReadiness as CoreRuntimeReadiness, StartupError,
     StartupStage,

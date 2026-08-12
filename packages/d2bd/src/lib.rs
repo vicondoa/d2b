@@ -220,6 +220,7 @@ pub mod provider_shutdown;
 // v3 Provider composition and descriptor-bound lifecycle effects. The
 // modules reuse the shared Provider registry and the typed broker lifecycle
 // path; they are initialized below after the trusted host bundle loads.
+mod authority_persistence;
 pub mod provider_effects;
 pub mod provider_registry;
 pub mod resource_runtime;
