@@ -90,7 +90,7 @@ GC_ROOT_NAMES = (
 MANAGED_ASSET_NAMES = ("city", "pack", "copilot", "buildbuddy")
 NIX_STORE_ROOT = pathlib.Path("/nix/store")
 NIX_STORE_OBJECT_PATTERN = re.compile(
-    r"^[0123456789abcdfghijklmnpqrsvwxyz]{32}-[A-Za-z0-9+._?=-]+$"
+    r"^[0123456789abcdfghijklmnpqrsvwxyz]{32}-(?!\.\.?$)[A-Za-z0-9+._?=-]+$"
 )
 IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 
@@ -593,6 +593,29 @@ class _ManagedAssetMutationError(BoundaryError):
         self.changed = changed
 
 
+def _exception_detail(error: BaseException) -> str:
+    cause = error.__cause__
+    if cause is None:
+        return str(error)
+    return f"{error} (cause: {cause})"
+
+
+class _ManagedAssetDurabilityError(BoundaryError):
+    def __init__(
+        self,
+        mutation_error: BoundaryError,
+        durability_error: BoundaryError,
+    ) -> None:
+        self.mutation_error = mutation_error
+        self.durability_error = durability_error
+        super().__init__(
+            "managed asset rotation failed after a mutation and directory "
+            "durability could not be established: "
+            f"mutation={_exception_detail(mutation_error)}; "
+            f"durability={_exception_detail(durability_error)}"
+        )
+
+
 def _managed_asset_needs_rotation(
     destination_fd: int,
     destination: pathlib.Path,
@@ -663,11 +686,15 @@ def _replace_managed_link_atomically(
             except FileNotFoundError:
                 pass
             except OSError as cleanup_error:
-                raise BoundaryError(
+                raise _ManagedAssetMutationError(
                     f"managed asset temporary link could not be cleaned up: "
-                    f"{destination / temporary}"
+                    f"{destination / temporary}",
+                    changed=True,
                 ) from cleanup_error
-            raise BoundaryError(f"managed asset link rotation failed: {target}") from error
+            raise _ManagedAssetMutationError(
+                f"managed asset link rotation failed: {target}",
+                changed=True,
+            ) from error
         try:
             os.unlink(temporary, dir_fd=destination_fd)
         except FileNotFoundError:
@@ -713,6 +740,10 @@ def materialize_assets(source_value: str, destination_value: str) -> pathlib.Pat
         )
     parent_fd, destination_fd = _open_managed_asset_directory(destination)
     try:
+        # Repair any directory metadata left unsynced by a killed or failed
+        # invocation before inspecting targets or attempting another rotation.
+        _fsync_managed_directory(destination_fd)
+
         pending = []
         for name, source_path in assets.items():
             if _managed_asset_needs_rotation(
@@ -746,13 +777,15 @@ def materialize_assets(source_value: str, destination_value: str) -> pathlib.Pat
             if changed or getattr(error, "changed", False):
                 try:
                     _fsync_managed_directory(destination_fd)
-                except BoundaryError:
-                    pass
+                except BoundaryError as durability_error:
+                    raise _ManagedAssetDurabilityError(
+                        error,
+                        durability_error,
+                    ) from error
             raise
 
-        # A successful invocation must sync even when all links already point
-        # at this generation.  This also repairs a prior sync failure.
-        _fsync_managed_directory(destination_fd)
+        if changed:
+            _fsync_managed_directory(destination_fd)
         _validate_managed_destination_info(os.fstat(destination_fd))
         _validate_managed_parent_binding(destination.parent, parent_fd)
         _validate_managed_destination_binding(

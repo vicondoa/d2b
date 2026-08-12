@@ -347,24 +347,29 @@ class ActivationContractTests(unittest.TestCase):
 
 
 class ManagedStorePathValidationContractTests(unittest.TestCase):
-    def test_missing_gc_store_object_with_expected_asset_name_is_valid(self) -> None:
-        path = pathlib.Path(
-            "/nix/store/0123456789abcdfghijklmnpqrsvwxyz-retired-generation/city"
-        )
-        self.assertEqual(
-            ACTIVATION._validated_store_path(
-                path,
-                "old managed asset target",
-                expected_basename="city",
-                require_directory=True,
-            ),
-            path,
-        )
+    def test_missing_valid_store_objects_with_expected_asset_name_are_valid(self) -> None:
+        for object_name in (
+            "0123456789abcdfghijklmnpqrsvwxyz-retired-generation",
+            "0123456789abcdfghijklmnpqrsvwxyz-name+with._?=-punctuation",
+        ):
+            with self.subTest(object_name=object_name):
+                path = pathlib.Path(f"/nix/store/{object_name}/city")
+                self.assertEqual(
+                    ACTIVATION._validated_store_path(
+                        path,
+                        "old managed asset target",
+                        expected_basename="city",
+                        require_directory=True,
+                    ),
+                    path,
+                )
 
     def test_missing_malformed_pseudo_store_object_is_rejected(self) -> None:
         for object_name in (
             "not-a-store-object",
             "0123456789abcdfghijklmnpqrsvwxyze-retired-generation",
+            "0123456789abcdfghijklmnpqrsvwxyz-.",
+            "0123456789abcdfghijklmnpqrsvwxyz-..",
         ):
             with self.subTest(object_name=object_name):
                 with self.assertRaises(ACTIVATION.BoundaryError):
@@ -711,7 +716,7 @@ class ManagedAssetRotationContractTests(unittest.TestCase):
             def fail_once(fd: int):
                 nonlocal calls
                 calls += 1
-                if calls == 1:
+                if calls == 2:
                     raise OSError("injected managed-directory fsync failure")
                 return real_fsync(fd)
 
@@ -722,7 +727,7 @@ class ManagedAssetRotationContractTests(unittest.TestCase):
             ):
                 with self.assertRaises(ACTIVATION.BoundaryError):
                     self._materialize(self.old, destination)
-            self.assertEqual(calls, 1)
+            self.assertEqual(calls, 2)
             self.assertEqual(
                 self._links(destination),
                 {
@@ -774,7 +779,7 @@ class ManagedAssetRotationContractTests(unittest.TestCase):
                     self._materialize(self.new, destination)
 
             self.assertEqual(replace_calls, 2)
-            self.assertEqual(len(fsync_calls), 1)
+            self.assertEqual(len(fsync_calls), 2)
             self.assertIsInstance(failure.exception.__cause__, OSError)
             self.assertIn(
                 "injected second managed-link replace failure",
@@ -789,6 +794,88 @@ class ManagedAssetRotationContractTests(unittest.TestCase):
                 str(self.old / "pack"),
             )
             self.assertEqual(self._temporary_entries(destination), [])
+
+    def test_partial_rotation_sync_failure_is_retried_before_validation(self) -> None:
+        with self._temporary_destination() as raw:
+            destination = pathlib.Path(raw) / "managed"
+            self._materialize(self.old, destination)
+            real_replace = ACTIVATION.os.replace
+            real_fsync = ACTIVATION.os.fsync
+            replace_calls = 0
+            fsync_calls = 0
+
+            def replace_with_failure(source, target, *args, **kwargs):
+                nonlocal replace_calls
+                replace_calls += 1
+                if replace_calls == 2:
+                    raise OSError("injected partial-rotation failure")
+                return real_replace(source, target, *args, **kwargs)
+
+            def fsync_with_failure(fd: int):
+                nonlocal fsync_calls
+                fsync_calls += 1
+                if fsync_calls == 2:
+                    raise OSError("injected post-rotation fsync failure")
+                return real_fsync(fd)
+
+            with mock.patch.object(
+                ACTIVATION.os,
+                "replace",
+                side_effect=replace_with_failure,
+            ), mock.patch.object(
+                ACTIVATION.os,
+                "fsync",
+                side_effect=fsync_with_failure,
+            ):
+                with self.assertRaises(ACTIVATION.BoundaryError) as failure:
+                    self._materialize(self.new, destination)
+
+            self.assertEqual(replace_calls, 2)
+            self.assertEqual(fsync_calls, 2)
+            self.assertIn("injected partial-rotation failure", str(failure.exception))
+            self.assertIn("injected post-rotation fsync failure", str(failure.exception))
+            mutation_error = failure.exception.mutation_error
+            durability_error = failure.exception.durability_error
+            self.assertIsInstance(mutation_error, ACTIVATION.BoundaryError)
+            self.assertIsInstance(durability_error, ACTIVATION.BoundaryError)
+            self.assertIs(failure.exception.__cause__, mutation_error)
+            self.assertIsInstance(mutation_error.__cause__, OSError)
+            self.assertIsInstance(durability_error.__cause__, OSError)
+            self.assertEqual(
+                os.readlink(destination / "city"),
+                str(self.new / "city"),
+            )
+
+            invalid_target = destination / "pack"
+            invalid_target.unlink()
+            invalid_target.write_text("durable\n", encoding="utf-8")
+            repair_fsyncs: list[int] = []
+
+            def record_repair_fsync(fd: int):
+                repair_fsyncs.append(fd)
+                return real_fsync(fd)
+
+            with mock.patch.object(
+                ACTIVATION.os,
+                "replace",
+                side_effect=AssertionError("retry rotated before validation"),
+            ), mock.patch.object(
+                ACTIVATION.os,
+                "fsync",
+                side_effect=record_repair_fsync,
+            ):
+                with self.assertRaisesRegex(
+                    ACTIVATION.BoundaryError,
+                    "durable managed asset would be replaced",
+                ):
+                    self._materialize(self.new, destination)
+
+            self.assertEqual(len(repair_fsyncs), 1)
+            self.assertTrue(invalid_target.is_file())
+            self.assertEqual(
+                os.readlink(destination / "city"),
+                str(self.new / "city"),
+            )
 
     def test_replace_failure_cleans_private_temporary_link(self) -> None:
         with self._temporary_destination() as raw:
