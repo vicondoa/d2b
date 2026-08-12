@@ -938,10 +938,20 @@ def _response_for(
     while True:
         response = reader.read(timeout)
         observations.append(response)
-        if response.get("id") == request_id:
-            if "error" in response:
-                raise ProfileError(f"ACP request failed: {response['error']}")
-            return response
+        if "id" not in response:
+            if "result" in response or "error" in response:
+                raise ProfileError("ACP response is malformed: missing response id")
+            continue
+        response_id = response["id"]
+        if type(response_id) is not int:
+            raise ProfileError("ACP response is malformed: invalid response id")
+        if response_id != request_id:
+            raise ProfileError("ACP response is malformed: unexpected response id")
+        if "error" in response:
+            raise ProfileError(f"ACP request failed: {response['error']}")
+        if not isinstance(response.get("result"), dict):
+            raise ProfileError("ACP response is malformed: result is not an object")
+        return response
 
 
 def _find_values(value: object, keys: Sequence[str]) -> list[str]:
@@ -964,20 +974,88 @@ def _find_value(value: object, keys: Sequence[str]) -> str | None:
     return values[0] if values else None
 
 
+def _active_model_observations(value: object) -> tuple[bool, bool, list[str]]:
+    present = False
+    invalid = False
+    values: list[str] = []
+    if isinstance(value, dict):
+        for key in ACTIVE_MODEL_KEYS:
+            if key not in value:
+                continue
+            present = True
+            candidate = value[key]
+            if isinstance(candidate, str) and candidate:
+                values.append(candidate)
+            else:
+                invalid = True
+        for nested in value.values():
+            nested_present, nested_invalid, nested_values = _active_model_observations(
+                nested
+            )
+            present = present or nested_present
+            invalid = invalid or nested_invalid
+            values.extend(nested_values)
+    elif isinstance(value, list):
+        for nested in value:
+            nested_present, nested_invalid, nested_values = _active_model_observations(
+                nested
+            )
+            present = present or nested_present
+            invalid = invalid or nested_invalid
+            values.extend(nested_values)
+    return present, invalid, values
+
+
+def _validated_probe_responses(
+    response_values: Sequence[object],
+) -> dict[int, dict[str, object]] | None:
+    responses: dict[int, dict[str, object]] = {}
+    expected_ids = {1, 2, 3}
+    for value in response_values:
+        if not isinstance(value, dict):
+            return None
+        if "id" not in value:
+            if "result" in value or "error" in value:
+                return None
+            continue
+        response_id = value["id"]
+        if type(response_id) is not int or response_id not in expected_ids:
+            return None
+        if response_id in responses:
+            return None
+        responses[response_id] = value
+    if set(responses) != expected_ids:
+        return None
+    for response in responses.values():
+        if "error" in response or not isinstance(response.get("result"), dict):
+            return None
+    session_result = responses[2]["result"]
+    if not _find_value(session_result, ("sessionId", "session_id")):
+        return None
+    return responses
+
+
 def _probe_result(profile: str, response_values: Sequence[object]) -> dict[str, object]:
     expected = PROFILE_SETTINGS[profile]
     reported_models: list[str] = []
     reported_contexts: list[str] = []
+    active_model_present = False
+    active_model_invalid = False
     for value in response_values:
-        reported_models.extend(
-            _find_values(value, ACTIVE_MODEL_KEYS)
-        )
+        present, invalid, models = _active_model_observations(value)
+        active_model_present = active_model_present or present
+        active_model_invalid = active_model_invalid or invalid
+        reported_models.extend(models)
         reported_contexts.extend(
             _find_values(value, ("contextTier", "context_tier"))
         )
     reported_model = reported_models[0] if reported_models else None
     reported_context = reported_contexts[0] if reported_contexts else None
-    if reported_models and set(reported_models) != {expected["model"]}:
+    if (
+        _validated_probe_responses(response_values) is None
+        or active_model_invalid
+        or (active_model_present and set(reported_models) != {expected["model"]})
+    ):
         return {
             "ok": False,
             "profile": profile,
@@ -1054,9 +1132,10 @@ def _probe_exchange(
     }
     send_message(_frame(new_session))
     session_response = _response_for(reader, 2, timeout, observations=values)
-    session_id = _find_value(session_response, ("sessionId", "session_id"))
+    session_result = session_response["result"]
+    session_id = _find_value(session_result, ("sessionId", "session_id"))
     if not session_id:
-        raise ProfileError("ACP session/new response has no session id")
+        raise ProfileError("ACP session/new response is malformed: no session id")
     prompt = {
         "jsonrpc": "2.0",
         "id": 3,

@@ -68,6 +68,29 @@ def successful_probe(profile: str) -> dict[str, object]:
     }
 
 
+def complete_probe_exchange(
+    models: dict[str, object] | None = None,
+) -> list[dict[str, object]]:
+    model_result = models or {}
+    return [
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {"models": model_result},
+        },
+        {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "result": {"sessionId": "fake-session", "models": model_result},
+        },
+        {
+            "jsonrpc": "2.0",
+            "id": 3,
+            "result": {"models": model_result},
+        },
+    ]
+
+
 class ProfileContractTests(unittest.TestCase):
     def test_settings_have_only_persistent_authority(self) -> None:
         for profile in ("review-sol", "review-luna", "code-luna"):
@@ -129,88 +152,118 @@ class ProfileContractTests(unittest.TestCase):
             ],
         )
 
-    def test_probe_accepts_current_model_without_context_metadata(self) -> None:
-        expected = PROFILE.PROFILE_SETTINGS["code-luna"]
+    def test_probe_accepts_valid_silent_full_exchange(self) -> None:
         result = PROFILE._probe_result(
             "code-luna",
-            [{"result": {"models": {"currentModelId": expected["model"]}}}],
+            complete_probe_exchange(),
         )
         self.assertEqual(
             result,
             {
                 "ok": True,
                 "profile": "code-luna",
-                "model": expected["model"],
-                "context": expected["contextTier"],
+                "model": "gpt-5.6-luna",
+                "context": "default",
                 "effort": PROFILE.PROFILE_EFFORT["code-luna"],
             },
         )
 
-    def test_probe_accepts_missing_active_model_with_realistic_catalog(self) -> None:
+    def test_probe_accepts_expected_active_model_in_full_exchange(self) -> None:
         expected = PROFILE.PROFILE_SETTINGS["code-luna"]
         result = PROFILE._probe_result(
             "code-luna",
-            [
-                {
-                    "result": {
-                        "models": {
-                            "availableModels": [
-                                {
-                                    "modelId": "gpt-5.6-sol",
-                                    "name": "GPT-5.6 Sol",
-                                },
-                                {
-                                    "model_id": "gpt-4.1",
-                                    "name": "GPT-4.1",
-                                },
-                                {
-                                    "modelId": expected["model"],
-                                    "name": "GPT-5.6 Luna",
-                                },
-                            ]
-                        }
-                    }
-                }
-            ],
+            complete_probe_exchange({"currentModelId": expected["model"]}),
         )
-        self.assertEqual(
-            result,
-            {
-                "ok": True,
-                "profile": "code-luna",
-                "model": expected["model"],
-                "context": expected["contextTier"],
-                "effort": PROFILE.PROFILE_EFFORT["code-luna"],
-            },
-        )
+        self.assertEqual(result["ok"], True)
+        self.assertEqual(result["model"], expected["model"])
 
-    def test_probe_rejects_mismatched_or_conflicting_active_model(self) -> None:
-        cases = (
-            ({"result": {"models": {"currentModelId": "gpt-5.6-sol"}}},),
-            (
-                {
-                    "result": {
-                        "models": {
-                            "currentModelId": "gpt-5.6-luna",
-                            "effectiveModel": "gpt-5.6-sol",
-                        }
-                    }
-                },
-            ),
-            (
-                {
-                    "result": {
-                        "models": {
-                            "current_model_id": "gpt-5.6-luna",
-                            "effective_model": "gpt-5.6-sol",
-                        }
-                    }
-                },
-            ),
-        )
-        for observations in cases:
+    def test_probe_rejects_empty_observations(self) -> None:
+        result = PROFILE._probe_result("code-luna", [])
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error_code"], "malformed")
+
+    def test_probe_rejects_missing_response_id_or_result(self) -> None:
+        complete = complete_probe_exchange()
+        missing_id = [complete[0], dict(complete[1]), complete[2]]
+        missing_id[1].pop("id")
+        missing_result = [complete[0], {"jsonrpc": "2.0", "id": 2}, complete[2]]
+        for observations in (missing_id, missing_result):
             with self.subTest(observations=observations):
                 result = PROFILE._probe_result("code-luna", observations)
+                self.assertFalse(result["ok"])
+                self.assertEqual(result["error_code"], "malformed")
+
+    def test_probe_rejects_id_only_responses(self) -> None:
+        result = PROFILE._probe_result(
+            "code-luna",
+            [{"jsonrpc": "2.0", "id": request_id} for request_id in (1, 2, 3)],
+        )
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error_code"], "malformed")
+
+    def test_probe_accepts_catalog_only_full_exchange(self) -> None:
+        expected = PROFILE.PROFILE_SETTINGS["code-luna"]
+        result = PROFILE._probe_result(
+            "code-luna",
+            complete_probe_exchange(
+                {
+                    "availableModels": [
+                        {"modelId": "gpt-5.6-sol", "name": "GPT-5.6 Sol"},
+                        {"model_id": "gpt-4.1", "name": "GPT-4.1"},
+                        {
+                            "modelId": expected["model"],
+                            "name": "GPT-5.6 Luna",
+                        },
+                    ]
+                },
+            ),
+        )
+        self.assertEqual(
+            result,
+            {
+                "ok": True,
+                "profile": "code-luna",
+                "model": expected["model"],
+                "context": expected["contextTier"],
+                "effort": PROFILE.PROFILE_EFFORT["code-luna"],
+            },
+        )
+
+    def test_probe_rejects_null_empty_or_non_string_active_model_values(self) -> None:
+        cases = (
+            ("currentModelId", None),
+            ("current_model_id", ""),
+            ("effectiveModel", 42),
+            ("effective_model", False),
+        )
+        for key, value in cases:
+            with self.subTest(key=key, value=value):
+                result = PROFILE._probe_result(
+                    "code-luna",
+                    complete_probe_exchange({key: value}),
+                )
+                self.assertFalse(result["ok"])
+                self.assertEqual(result["error_code"], "malformed")
+
+    def test_probe_rejects_mismatched_or_conflicting_active_model(self) -> None:
+        expected = PROFILE.PROFILE_SETTINGS["code-luna"]
+        cases = (
+            {"currentModelId": "gpt-5.6-sol"},
+            {
+                "currentModelId": expected["model"],
+                "effectiveModel": "gpt-5.6-sol",
+            },
+            {
+                "current_model_id": expected["model"],
+                "effective_model": "gpt-5.6-sol",
+            },
+        )
+        for models in cases:
+            with self.subTest(models=models):
+                result = PROFILE._probe_result(
+                    "code-luna",
+                    complete_probe_exchange(models),
+                )
                 self.assertFalse(result["ok"])
                 self.assertEqual(result["error_code"], "malformed")
 
@@ -533,19 +586,15 @@ class ActivationContractTests(unittest.TestCase):
             calls.append(profile)
             return PROFILE._probe_result(
                 profile,
-                [
+                complete_probe_exchange(
                     {
-                        "result": {
-                            "models": {
-                                "availableModels": [
-                                    {"modelId": "gpt-5.6-sol"},
-                                    {"modelId": "gpt-5.6-luna"},
-                                    {"modelId": "gpt-4.1"},
-                                ]
-                            }
-                        }
-                    }
-                ],
+                        "availableModels": [
+                            {"modelId": "gpt-5.6-sol"},
+                            {"modelId": "gpt-5.6-luna"},
+                            {"modelId": "gpt-4.1"},
+                        ]
+                    },
+                ),
             )
 
         status = ACTIVATION.select_profiles(probe, generation="g1", state_schema="1")
