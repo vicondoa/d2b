@@ -12,10 +12,16 @@
   classification, profiles, deterministic roster mechanics, pinned reviewer
   identity, and candidate-bound evidence remain; ADR 0055's thirteen-seat
   pool, optional `build`, shared ledger, and discover-fix-verify lifecycle are
-  authoritative. Gas City remains unimplemented and must eventually consume
-  the same selection table and artifact formats. The classification of Gas
-  City as contributor infrastructure and unrelated orchestration and
-  publication decisions remain.
+  authoritative for standalone d2b panel runs.
+- Partially superseded by: [ADR 0056](0056-gas-city-contributor-environment.md).
+  It supersedes this record's former unimplemented Gas City shape, its
+  requirement that Gas City consume the d2b selection table and panel
+  artifacts, and its bespoke d2b delivery hardening for the implemented
+  optional environment. ADR 0056's host-native environment, native Compound
+  workflow, ACP profiles, credential sidecars, and pull-request-only publisher
+  are authoritative for that environment.
+  The classification of Gas City as contributor infrastructure and the
+  measured upstream facts in this record remain.
 - Amended: 2026-08-04. The panel roster changes from a closed ten-role set to
   a **selected subset of a twelve-role pool**: seven mandatory seats plus
   every optional seat a deterministic trigger table selects, under a
@@ -55,11 +61,12 @@
   the two wire positions required for an unresolved prior finding are duplicate
   judgements, and that the internal verdict may store resolved and superseding
   dispositions in independent collections.
-  Except for the portions superseded by ADR 0055 above, every other decision
-  in this record stands unchanged. None of this is implemented yet; the
-  committed code still carries the ten-role roster, `PanelRole::Rust`
-  included, re-measured on the
-  amendment date. Supporting source and prompt-construction material lives in
+  Except for the portions superseded by ADR 0055 and ADR 0056 above, every
+  other decision in this record stands unchanged. The implementation status
+  and architecture of the optional Gas City environment are now governed by
+  ADR 0056; the standalone d2b panel status is governed by ADR 0055 and the
+  committed panel implementation. Supporting source and prompt-construction
+  material lives in
   [`specs/0053-panel-prompt-sources.md`](specs/0053-panel-prompt-sources.md).
 - Related: [ADR 0015](0015-daemon-only-clean-break.md) (daemon-only clean
   break), [ADR 0035](0035-efficiency-and-simplification-roadmap.md),
@@ -75,6 +82,18 @@
   mechanisms that prototypes P0 through P8 must settle first.
 - Unblocks: the prototype program below, then a follow-on specification in
   `docs/contributing/`.
+
+## Partial supersession by ADR 0056
+
+The numbered decisions, prototype gates, acceptance items, consequences, and
+alternatives below are retained as the historical record of the upstream
+measurements and the earlier design discussion. They are not an assertion that
+the old prototype is the implemented environment. ADR 0056 is authoritative
+where this record prescribes a not-yet-implemented Gas City shape, requires
+Gas City to reproduce the standalone d2b panel or its lifecycle artifacts, or
+requires bespoke d2b delivery hardening. The classification of Gas City as
+optional contributor infrastructure and the measured upstream facts remain
+authoritative.
 
 ## Context
 

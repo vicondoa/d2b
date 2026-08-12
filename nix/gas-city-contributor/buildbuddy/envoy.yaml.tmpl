@@ -1,0 +1,65 @@
+static_resources:
+  listeners:
+    - name: buildbuddy_loopback
+      address:
+        socket_address:
+          address: 127.0.0.1
+          port_value: 19801
+      filter_chains:
+        - filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                stat_prefix: gascity_buildbuddy
+                codec_type: AUTO
+                http2_protocol_options: {}
+                route_config:
+                  name: buildbuddy_route
+                  virtual_hosts:
+                    - name: buildbuddy_upstream
+                      domains: ["*"]
+                      routes:
+                        - match:
+                            prefix: /
+                          route:
+                            cluster: buildbuddy_remote
+                            timeout: 0s
+                            host_rewrite_literal: remote.buildbuddy.io
+                          request_headers_to_add:
+                            - header:
+                                key: x-buildbuddy-api-key
+                                value: __BUILDBUDDY_API_KEY_JSON__
+                              append_action: OVERWRITE_IF_EXISTS_OR_ADD
+                http_filters:
+                  - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+  clusters:
+    - name: buildbuddy_remote
+      type: STATIC
+      connect_timeout: 5s
+      lb_policy: ROUND_ROBIN
+      http2_protocol_options: {}
+      metadata:
+        filter_metadata:
+          gascity:
+            upstream: remote.buildbuddy.io:443
+      load_assignment:
+        cluster_name: buildbuddy_remote
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    pipe:
+                      path: __BUILDBUDDY_EGRESS_PIPE_JSON__
+      transport_socket:
+        name: envoy.transport_sockets.tls
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
+          sni: remote.buildbuddy.io
+          common_tls_context:
+            validation_context:
+              trusted_ca:
+                filename: __CA_BUNDLE_JSON__
+              match_subject_alt_names:
+                - exact: remote.buildbuddy.io

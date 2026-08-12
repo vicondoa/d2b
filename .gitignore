@@ -113,3 +113,7 @@ panel-*/
 .scratch/
 .worktrees/
 __pycache__/
+
+# Optional Gas City contributor runtime in a repository-local checkout.
+# Host deployments keep the real state below /var/lib and /run.
+.gc/

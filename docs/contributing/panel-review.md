@@ -421,10 +421,10 @@ you do otherwise.
 
 Escape hatches are narrow:
 
-- **Future Gas City orchestration** may drive the gate only after it consumes
-  the same selection table and lifecycle artifacts and produces the same
-  selected-roster result. No smaller council substitutes for the current
-  standard Copilot implementation.
+- **Gas City is separate.** The optional Gas City environment uses native
+  Compound Engineering and its own ACP and lifecycle path; this standalone
+  d2b panel, selection table, and delivery contract do not govern it.
+  Standalone d2b contributors remain governed by this panel process.
 - **Trivial fixes** (typo, one-line, no semantic change) may skip the
   panel gate.
 - **Time-critical hotfixes** (production breakage) may skip the
@@ -496,15 +496,19 @@ Host-local roster files under `/etc/nixos/scripts/` are operator
 configuration and are out of scope for this repository; keep repo docs
 focused on the review contract rather than paydro-specific files.
 
-## Future Gas City parity
+## Gas City boundary
 
-Gas City panel orchestration is not implemented in this repository. A future
-producer may replace the standard Copilot dispatcher only if it consumes the
-same versioned selection table and lifecycle artifacts, produces the same
-ordered roster for the same inputs, requires one explicit complete result per
-selected seat, and emits the same ledger, response, verification, and delivery
-record formats. A five-seat council or other compressed roster is not
-equivalent and cannot satisfy the gate.
+The optional [Gas City contributor environment](./gas-city.md) is implemented
+as a separate host-native workflow. It uses native Compound Engineering and
+its own ACP, state, decision, and pull-request publication path. It does not
+consume this selection table or lifecycle artifacts and does not produce the
+selected-roster ledger or d2b delivery records.
+
+This standalone d2b panel contract does not govern Gas City. In particular,
+Gas City does not use d2b panel signoff, wave delivery, sealing, attestation,
+receipts, merge-eligibility, or bespoke evidence-pinning hardening. The
+standalone Copilot panel and wave contracts remain unchanged for ordinary d2b
+contributors.
 
 ## Commit-tag mapping
 

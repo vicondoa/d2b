@@ -1,0 +1,37 @@
+diff --git a/discord/pack.toml b/discord/pack.toml
+index c24a921..3aecb15 100644
+--- a/discord/pack.toml
++++ b/discord/pack.toml
+@@ -3,32 +3,6 @@ name = "discord"
+ version = "0.1.0"
+ schema = 2
+ 
+-[[service]]
+-name = "discord-interactions"
+-kind = "proxy_process"
+-state_root = ".gc/services/discord"
+-
+-[service.publication]
+-visibility = "public"
+-hostname = "discord"
+-
+-[service.process]
+-command = ["python3", "-u", "scripts/discord_intake_service.py"]
+-health_path = "/healthz"
+-
+-[[service]]
+-name = "discord-admin"
+-kind = "proxy_process"
+-state_root = ".gc/services/discord"
+-
+-[service.publication]
+-visibility = "tenant"
+-hostname = "discord-admin"
+-
+-[service.process]
+-command = ["python3", "-u", "scripts/discord_intake_service.py"]
+-health_path = "/healthz"
+-
+ [[service]]
+ name = "discord-gateway"
+ kind = "proxy_process"

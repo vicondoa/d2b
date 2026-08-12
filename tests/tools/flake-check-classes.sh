@@ -21,6 +21,7 @@
 # Checks whose shard must realize the derivation. Keep this list minimal: each
 # entry costs a full build on every PR.
 D2B_FLAKE_REALIZED_CHECKS="video-binary-contract"
+D2B_FLAKE_REALIZED_CHECKS+=" gas-city-package-smoke"
 
 d2b_flake_check_is_realized() {
   local candidate=$1 name
