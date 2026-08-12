@@ -500,6 +500,20 @@ let
               return False
           return True
 
+      def _managed_parent_replace():
+          replacement = MANAGED.parent / (
+              f".main-managed-parent-replace-{os.getuid()}-{os.getpid()}"
+          )
+          try:
+              os.replace(MANAGED, replacement)
+          except OSError:
+              return False
+          try:
+              os.replace(replacement, MANAGED)
+          except OSError:
+              return True
+          return True
+
       def stop(_signum, _frame):
           global stopping
           stopping = True
@@ -902,6 +916,7 @@ let
           "managed-create": _managed_create(),
           "managed-replace": _managed_replace(),
           "managed-unlink": _managed_unlink(),
+          "managed-parent-replace": _managed_parent_replace(),
           "loopback-supervisor": True,
           "loopback-dolt": True,
       }
@@ -1009,6 +1024,7 @@ let
       import pathlib
 
       root = pathlib.Path("/var/lib/gascity-contributor/managed")
+      parent = root.parent
       files = {
           "city": "city.toml",
           "pack": "pack.toml",
@@ -1062,6 +1078,31 @@ let
           "unlink",
           lambda: os.unlink(root / ".service-unlink-probe"),
       )
+
+      def expect_parent_rename_denied(name):
+          source = parent / name
+          replacement = parent / (
+              f".service-parent-replace-{name}-{os.getuid()}-{os.getpid()}"
+          )
+          try:
+              os.replace(source, replacement)
+          except OSError as error:
+              if error.errno not in (errno.EACCES, errno.EPERM):
+                  raise SystemExit(
+                      f"managed parent {name} rename failed unexpectedly: "
+                      f"{error}"
+                  )
+              return
+          try:
+              os.replace(replacement, source)
+          except OSError as error:
+              raise SystemExit(
+                  f"managed parent {name} rename could not be restored: {error}"
+              )
+          raise SystemExit(f"managed parent {name} rename was writable")
+
+      for name in ("managed", "state", "home", "gc", "cache"):
+          expect_parent_rename_denied(name)
     '';
   };
 
@@ -1329,6 +1370,7 @@ pkgs.testers.runNixOSTest {
     };
 
     systemd.tmpfiles.rules = [
+      "d /var/lib/gascity-fixture-scratch 0700 root root -"
       "d /var/lib/gascity-contributor/state/fixture 0770 gascity-agent gascity-contributor -"
       "d /run/gascity-contributor/test 0770 root gascity-contributor -"
     ];
@@ -1868,6 +1910,29 @@ pkgs.testers.runNixOSTest {
     boundary = json.loads(
         machine.succeed("cat /run/gascity-contributor/test/main-boundary.json")
     )
+    parent_stat = machine.succeed(
+        "stat -c '%u %g %a' /var/lib/gascity-contributor"
+    ).strip().split()
+    assert parent_stat[0] == "0"
+    assert parent_stat[1] == machine.succeed(
+        "getent group gascity-contributor | cut -d: -f3"
+    ).strip()
+    assert parent_stat[2] == "750"
+    main_unit = machine.succeed("systemctl cat gas-city-contributor.service")
+    assert "StateDirectory=gascity-contributor/state" in main_unit
+    assert "StateDirectoryQuota=33554432" in main_unit
+    assert "CacheDirectory=gascity-contributor" in main_unit
+    read_write_paths = [
+        line.split("=", 1)[1]
+        for line in main_unit.splitlines()
+        if line.startswith("ReadWritePaths=")
+    ]
+    assert read_write_paths == [
+        "/var/lib/gascity-contributor/state",
+        "/var/lib/gascity-contributor/home",
+        "/var/lib/gascity-contributor/gc",
+        "/run/gascity-contributor",
+    ]
     managed_stat = machine.succeed(
         "stat -c '%u %g %a' /var/lib/gascity-contributor/managed"
     ).strip().split()
@@ -1902,6 +1967,7 @@ pkgs.testers.runNixOSTest {
         "managed-create",
         "managed-replace",
         "managed-unlink",
+        "managed-parent-replace",
     ]:
         assert boundary[key] is False, f"host boundary was readable/writable: {key}"
     for identity in [
@@ -2121,8 +2187,15 @@ pkgs.testers.runNixOSTest {
     # BuildBuddy doubles from inside the VM.  They cover CAS/restart/duplicate/
     # cancellation behavior without a network or provider credential.
     machine.succeed(
+        "test -d /var/lib/gascity-fixture-scratch && "
+        "test \"$(stat -c '%u %g %a' /var/lib/gascity-fixture-scratch)\" "
+        "= '0 0 700'"
+    )
+    machine.succeed(
         f"cd /tmp/gascity-fixtures/tests/fixtures/gas-city && "
-        f"GAS_CITY_FDPROXY={fdproxy} {python} acp/run.py"
+        f"GAS_CITY_FDPROXY={fdproxy} "
+        "GC_MANAGED_ASSET_SCRATCH_ROOT=/var/lib/gascity-fixture-scratch "
+        f"{python} acp/run.py"
     )
     machine.succeed(
         f"{python} /tmp/gascity-fixtures/tests/fixtures/gas-city/discord/test_router.py"

@@ -664,7 +664,9 @@ def _proxy_stdio(channel: socket.socket) -> int:
                             consume_stdin(data)
                             if not events & select.POLLHUP:
                                 break
-                    if stdin_eof or events & (select.POLLHUP | select.POLLERR):
+                    if stdin_eof or events & (
+                        select.POLLHUP | select.POLLERR | select.POLLNVAL
+                    ):
                         close_stdin()
                 elif descriptor == channel_fd:
                     if events & (select.POLLIN | select.POLLHUP):

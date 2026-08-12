@@ -191,7 +191,10 @@ in
         "XDG_CACHE_HOME=/var/cache/gascity-contributor"
         main.Environment;
       stateQuota = main.StateDirectoryQuota;
+      stateDirectory = main.StateDirectory;
       cacheQuota = main.CacheDirectoryQuota;
+      cacheDirectory = main.CacheDirectory;
+      mainReadWritePaths = main.ReadWritePaths;
       totalQuota = enabled.services.gasCityContributor.storage.totalQuotaBytes;
       discordQuota = discord.StateDirectoryQuota;
       discordStateDirectory = discord.StateDirectory;
@@ -231,6 +234,9 @@ in
       managedAssetDirectory = builtins.elem
         "d /var/lib/gascity-contributor/managed 0750 root gascity-contributor -"
         enabled.systemd.tmpfiles.rules;
+      managedParentDirectory = builtins.elem
+        "d /var/lib/gascity-contributor 0750 root gascity-contributor -"
+        enabled.systemd.tmpfiles.rules;
       materializeExpectedUid = lib.any
         (entry: lib.hasInfix "--uid 0" entry)
         main.ExecStartPre;
@@ -259,7 +265,15 @@ in
       home = true;
       xdg = true;
       stateQuota = "107374182400";
+      stateDirectory = "gascity-contributor/state";
       cacheQuota = "26843545600";
+      cacheDirectory = "gascity-contributor";
+      mainReadWritePaths = [
+        "/var/lib/gascity-contributor/state"
+        "/var/lib/gascity-contributor/home"
+        "/var/lib/gascity-contributor/gc"
+        "/run/gascity-contributor"
+      ];
       totalQuota = 250 * 1024 * 1024 * 1024 + 512 * 1024 * 1024;
       discordQuota = "536870912";
       discordStateDirectory = "gascity-discord";
@@ -279,6 +293,7 @@ in
       agentStateMode = true;
       terminalStateMode = true;
       managedAssetDirectory = true;
+      managedParentDirectory = true;
       materializeExpectedUid = true;
       materializeExpectedGroup = true;
       serviceManagedGroup = true;

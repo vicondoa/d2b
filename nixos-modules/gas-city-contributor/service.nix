@@ -23,6 +23,8 @@ let
   bwrap = "${package}/bin/bwrap";
   serviceRoot = "/var/lib/gascity-contributor";
   stateRoot = "${serviceRoot}/state";
+  homeRoot = "${serviceRoot}/home";
+  gcRoot = "${serviceRoot}/gc";
   cancellationRoot = "${stateRoot}/cancellations";
   discordStateRoot = "/var/lib/gascity-discord";
   publisherStateRoot = "/var/lib/gascity-publisher";
@@ -549,16 +551,16 @@ in
               "gascity-publisher-channel"
             ] ++ lib.optional cfg.check.enable "gascity-check-channel";
             WorkingDirectory = serviceRoot;
-            StateDirectory = "gascity-contributor";
+            StateDirectory = "gascity-contributor/state";
             StateDirectoryMode = "0710";
             StateDirectoryQuota = toString cfg.storage.stateQuotaBytes;
             CacheDirectory = "gascity-contributor";
             CacheDirectoryMode = "0700";
             CacheDirectoryQuota = toString cfg.storage.cacheQuotaBytes;
             ReadWritePaths = [
-              serviceRoot
               stateRoot
-              cacheRoot
+              homeRoot
+              gcRoot
               runtimeRoot
             ];
             ReadOnlyPaths = [
@@ -580,8 +582,8 @@ in
               checkReserve
               materialize
               waitReadiness
-              "${pkgs.coreutils}/bin/install -d -m 0700 ${lib.escapeShellArg "${serviceRoot}/home/.config"}"
-              "${pkgs.coreutils}/bin/install -d -m 0700 ${lib.escapeShellArg "${serviceRoot}/home/.local/state"}"
+              "${pkgs.coreutils}/bin/install -d -m 0700 ${lib.escapeShellArg "${homeRoot}/.config"}"
+              "${pkgs.coreutils}/bin/install -d -m 0700 ${lib.escapeShellArg "${homeRoot}/.local/state"}"
               "${pkgs.coreutils}/bin/install -d -m 0700 ${lib.escapeShellArg "${stateRoot}/rigs/${cfg.repository.rigName}"}"
             ];
             ExecStart = mainExec;

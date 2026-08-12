@@ -32,6 +32,7 @@ COPILOT_ROOT = ROOT / "nix/gas-city-contributor/copilot"
 FAKE_ACP = pathlib.Path(__file__).with_name("fake_acp.py")
 CITY = ROOT / "nix/gas-city-contributor/city/city.toml"
 ROLE_MATRIX = ROOT / "nix/gas-city-contributor/city/agent-role-matrix.toml"
+MANAGED_ASSET_SCRATCH_ROOT_ENV = "GC_MANAGED_ASSET_SCRATCH_ROOT"
 
 
 def load_script(name: str):
@@ -331,14 +332,17 @@ class ProxyStdioContractTests(unittest.TestCase):
     class PollHarness:
         def __init__(self, batches: list[list[tuple[int, int]]]):
             self.batches = iter(batches)
+            self.calls = 0
+            self.unregistered: list[int] = []
 
         def register(self, _descriptor: int, _events: int) -> None:
             return None
 
-        def unregister(self, _descriptor: int) -> None:
-            return None
+        def unregister(self, descriptor: int) -> None:
+            self.unregistered.append(descriptor)
 
         def poll(self, _timeout: int) -> list[tuple[int, int]]:
+            self.calls += 1
             try:
                 return next(self.batches)
             except StopIteration as error:
@@ -446,6 +450,37 @@ class ProxyStdioContractTests(unittest.TestCase):
         self.assertEqual(channel.sendall.call_args_list, [])
         self.assertIn("unterminated ACP frame", diagnostic)
         self.assertNotIn("/host/worktree/secret", diagnostic)
+
+    def test_pollnval_stdin_closes_write_side_without_poll_spin(self) -> None:
+        poller = self.PollHarness(
+            [
+                [
+                    (0, PROFILE.select.POLLNVAL),
+                    (self.channel_fd, PROFILE.select.POLLHUP),
+                ]
+            ]
+        )
+        channel = mock.Mock()
+        channel.fileno.return_value = self.channel_fd
+        channel.recv.return_value = b""
+        read = mock.Mock(side_effect=AssertionError("POLLNVAL read from stdin"))
+        with mock.patch.object(
+            PROFILE.select,
+            "poll",
+            return_value=poller,
+        ), mock.patch.object(
+            PROFILE.os,
+            "read",
+            read,
+        ):
+            result = PROFILE._proxy_stdio(channel)
+
+        self.assertEqual(result, 0)
+        self.assertEqual(poller.calls, 1)
+        self.assertEqual(poller.unregistered, [0])
+        read.assert_not_called()
+        channel.shutdown.assert_called_once_with(socket.SHUT_WR)
+        channel.close.assert_called_once_with()
 
 
 class RoleRoutingContractTests(unittest.TestCase):
@@ -647,7 +682,7 @@ class ManagedStorePathValidationContractTests(unittest.TestCase):
 
 class ManagedAssetDirectoryContractTests(unittest.TestCase):
     def test_missing_destination_sets_expected_metadata_on_anchored_fd(self) -> None:
-        scratch = ROOT / ".scratch"
+        scratch = _managed_asset_scratch_root()
         scratch.mkdir(mode=0o700, exist_ok=True)
         with tempfile.TemporaryDirectory(
             prefix="gascity-managed-directory-",
@@ -742,6 +777,60 @@ class ManagedAssetDirectoryContractTests(unittest.TestCase):
                     os.close(parent_fd)
 
 
+def _managed_asset_scratch_root() -> pathlib.Path:
+    raw_value = os.environ.get(MANAGED_ASSET_SCRATCH_ROOT_ENV)
+    if raw_value is None:
+        return ROOT / ".scratch"
+    try:
+        path = ACTIVATION._absolute_normalized_path(
+            raw_value,
+            "managed asset scratch root",
+        )
+    except ACTIVATION.BoundaryError as error:
+        raise ValueError(
+            "managed asset scratch root must be an absolute canonical path"
+        ) from error
+    if path == pathlib.Path("/"):
+        raise ValueError("managed asset scratch root must not be the filesystem root")
+    try:
+        ACTIVATION._check_ancestor_chain(path, "managed asset scratch root")
+    except ACTIVATION.BoundaryError as error:
+        raise ValueError(
+            "managed asset scratch root has an unsafe ancestor"
+        ) from error
+    try:
+        info = os.lstat(path)
+    except FileNotFoundError:
+        return path
+    except OSError as error:
+        raise ValueError("managed asset scratch root is unavailable") from error
+    if (
+        stat.S_ISLNK(info.st_mode)
+        or not stat.S_ISDIR(info.st_mode)
+        or info.st_mode & 0o022
+    ):
+        raise ValueError(
+            "managed asset scratch root must be a private directory"
+        )
+    return path
+
+
+class ManagedAssetScratchRootContractTests(unittest.TestCase):
+    def test_default_uses_repository_scratch(self) -> None:
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop(MANAGED_ASSET_SCRATCH_ROOT_ENV, None)
+            self.assertEqual(_managed_asset_scratch_root(), ROOT / ".scratch")
+
+    def test_override_rejects_nonabsolute_or_unsafe_values(self) -> None:
+        for value in ("relative-scratch", "/tmp", "/tmp/gascity-fixtures/.scratch"):
+            with self.subTest(value=value), mock.patch.dict(
+                os.environ,
+                {MANAGED_ASSET_SCRATCH_ROOT_ENV: value},
+            ):
+                with self.assertRaises(ValueError):
+                    _managed_asset_scratch_root()
+
+
 class ManagedAssetRotationContractTests(unittest.TestCase):
     def setUp(self) -> None:
         old_value = os.environ.get("GC_MANAGED_ASSET_OLD")
@@ -759,7 +848,7 @@ class ManagedAssetRotationContractTests(unittest.TestCase):
                 self.assertTrue((generation / name).is_dir())
 
     def _temporary_destination(self) -> tempfile.TemporaryDirectory[str]:
-        scratch = ROOT / ".scratch"
+        scratch = _managed_asset_scratch_root()
         scratch.mkdir(mode=0o700, exist_ok=True)
         return tempfile.TemporaryDirectory(
             prefix="gascity-managed-assets-",

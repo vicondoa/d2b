@@ -134,7 +134,7 @@ in
     environment.systemPackages = [ cfg.package ];
 
     systemd.tmpfiles.rules = [
-      "d /var/lib/gascity-contributor 0710 gascity ${sharedGroup} -"
+      "d /var/lib/gascity-contributor 0750 root ${sharedGroup} -"
       "d /var/lib/gascity-contributor/state 0710 gascity ${sharedGroup} -"
       "d /var/lib/gascity-contributor/cache 0700 gascity gascity -"
       "d /var/lib/gascity-contributor/home 0700 gascity gascity -"
