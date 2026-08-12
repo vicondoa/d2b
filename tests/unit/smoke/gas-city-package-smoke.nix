@@ -100,11 +100,34 @@ pkgs.runCommand "gas-city-package-smoke" {
     cd "$root/packs"
     ${gasCityContributor}/bin/gc lint .
   )
-  ${gasCityContributor}/bin/gc \
-    --city "$root/city" \
-    config show > "$TMPDIR/resolved-city.toml"
-  grep -F '/var/lib/gascity-contributor/state/rigs/d2b' \
-    "$TMPDIR/resolved-city.toml"
+  runtimeRoot="$TMPDIR/runtime-assets"
+  runtimeCity="$runtimeRoot/city"
+  runtimeRig="$TMPDIR/rig"
+  mkdir -p "$runtimeCity" "$runtimeRig"
+  ln -s "$root/packs" "$runtimeRoot/packs"
+  ln -s "$root/pack" "$runtimeRoot/pack"
+  sed \
+    "s#/var/lib/gascity-contributor/state/rigs/d2b#$runtimeRig#" \
+    "$root/city/city.toml" > "$TMPDIR/city.toml"
+  DOLT_ROOT_PATH="$HOME" \
+    ${gasCityContributor}/bin/dolt config --global --add user.name "Gas City"
+  DOLT_ROOT_PATH="$HOME" \
+    ${gasCityContributor}/bin/dolt config --global --add \
+      user.email "gascity@localhost"
+  DOLT_ROOT_PATH="$HOME" \
+    ${gasCityContributor}/bin/gc init \
+      --file "$TMPDIR/city.toml" \
+      --preserve-existing \
+      --no-start \
+      --name d2b-contributor \
+      "$runtimeCity"
+  DOLT_ROOT_PATH="$HOME" \
+    ${gasCityContributor}/bin/gc \
+      --city "$runtimeCity" \
+      config show > "$TMPDIR/resolved-city.toml"
+  grep -F "$runtimeRig" "$TMPDIR/resolved-city.toml"
+  grep -F 'name = "dog"' "$TMPDIR/resolved-city.toml"
+  grep -F 'suspended = true' "$TMPDIR/resolved-city.toml"
   grep -F 'requirements-planner' "$TMPDIR/resolved-city.toml"
   grep -F 'name = "ce-work"' "$TMPDIR/resolved-city.toml"
   test ! -e "$root/packs/github"
