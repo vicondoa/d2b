@@ -71,23 +71,22 @@ def successful_probe(profile: str) -> dict[str, object]:
 def complete_probe_exchange(
     models: dict[str, object] | None = None,
 ) -> list[dict[str, object]]:
-    model_result = models or {}
+    initialize_result: dict[str, object] = {
+        "protocolVersion": 1,
+        "agentCapabilities": {},
+        "agentInfo": {"name": "fake-copilot", "version": "1.0.79"},
+        "authMethods": [],
+    }
+    session_result: dict[str, object] = {"sessionId": "fake-session"}
+    prompt_result: dict[str, object] = {"stopReason": "end_turn", "usage": {}}
+    if models is not None:
+        initialize_result["models"] = models
+        session_result["models"] = models
+        prompt_result["models"] = models
     return [
-        {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "result": {"models": model_result},
-        },
-        {
-            "jsonrpc": "2.0",
-            "id": 2,
-            "result": {"sessionId": "fake-session", "models": model_result},
-        },
-        {
-            "jsonrpc": "2.0",
-            "id": 3,
-            "result": {"models": model_result},
-        },
+        {"jsonrpc": "2.0", "id": 1, "result": initialize_result},
+        {"jsonrpc": "2.0", "id": 2, "result": session_result},
+        {"jsonrpc": "2.0", "id": 3, "result": prompt_result},
     ]
 
 
@@ -168,6 +167,16 @@ class ProfileContractTests(unittest.TestCase):
             },
         )
 
+    def test_probe_accepts_actual_copilot_response_shapes(self) -> None:
+        exchange = complete_probe_exchange()
+        self.assertEqual(exchange[0]["result"]["protocolVersion"], 1)
+        self.assertEqual(exchange[1]["result"]["sessionId"], "fake-session")
+        self.assertEqual(exchange[2]["result"]["stopReason"], "end_turn")
+        self.assertEqual(
+            set(PROFILE._validated_probe_responses(exchange)),
+            {1, 2, 3},
+        )
+
     def test_probe_accepts_expected_active_model_in_full_exchange(self) -> None:
         expected = PROFILE.PROFILE_SETTINGS["code-luna"]
         result = PROFILE._probe_result(
@@ -181,6 +190,167 @@ class ProfileContractTests(unittest.TestCase):
         result = PROFILE._probe_result("code-luna", [])
         self.assertFalse(result["ok"])
         self.assertEqual(result["error_code"], "malformed")
+
+    def test_probe_rejects_missing_or_wrong_jsonrpc(self) -> None:
+        for position in range(3):
+            for version in (None, "1.0"):
+                with self.subTest(position=position, version=version):
+                    exchange = complete_probe_exchange()
+                    if version is None:
+                        exchange[position].pop("jsonrpc")
+                    else:
+                        exchange[position]["jsonrpc"] = version
+                    result = PROFILE._probe_result("code-luna", exchange)
+                    self.assertFalse(result["ok"])
+                    self.assertEqual(result["error_code"], "malformed")
+
+        for notification in (
+            {"method": "session/update"},
+            {"jsonrpc": "1.0", "method": "session/update"},
+        ):
+            with self.subTest(notification=notification):
+                exchange = complete_probe_exchange()
+                exchange.insert(1, notification)
+                result = PROFILE._probe_result("code-luna", exchange)
+                self.assertFalse(result["ok"])
+                self.assertEqual(result["error_code"], "malformed")
+
+    def test_probe_rejects_method_result_hybrids(self) -> None:
+        exchange = complete_probe_exchange()
+        exchange[0]["method"] = "server/request"
+        result = PROFILE._probe_result("code-luna", exchange)
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error_code"], "malformed")
+
+    def test_response_for_rejects_unsupported_server_requests(self) -> None:
+        class Reader:
+            def read(self, _timeout: float) -> dict[str, object]:
+                return {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "server/request",
+                    "params": {},
+                }
+
+        with self.assertRaisesRegex(PROFILE.ProfileError, "server requests"):
+            PROFILE._response_for(
+                Reader(),
+                1,
+                1,
+                observations=[],
+                phase="initialize",
+            )
+
+    def test_probe_rejects_malformed_idless_messages(self) -> None:
+        malformed = (
+            {"jsonrpc": "2.0"},
+            {"jsonrpc": "2.0", "params": {}},
+            {"jsonrpc": "2.0", "method": ""},
+            {"jsonrpc": "2.0", "method": "session/update", "params": []},
+            {
+                "jsonrpc": "2.0",
+                "method": "session/update",
+                "params": {},
+                "result": {},
+            },
+            {
+                "jsonrpc": "2.0",
+                "method": "session/update",
+                "params": {},
+                "error": {},
+            },
+        )
+        for value in malformed:
+            with self.subTest(value=value):
+                exchange = complete_probe_exchange()
+                exchange.insert(1, value)
+                result = PROFILE._probe_result("code-luna", exchange)
+                self.assertFalse(result["ok"])
+                self.assertEqual(result["error_code"], "malformed")
+
+    def test_probe_accepts_notifications_between_responses(self) -> None:
+        expected_model = PROFILE.PROFILE_SETTINGS["code-luna"]["model"]
+        notification = {
+            "jsonrpc": "2.0",
+            "method": "session/update",
+            "params": {
+                "sessionId": "fake-session",
+                "update": {"models": {"currentModelId": expected_model}},
+            },
+        }
+        exchange = complete_probe_exchange()
+        exchange.insert(1, notification)
+        exchange.insert(3, {"jsonrpc": "2.0", "method": "progress"})
+        result = PROFILE._probe_result("code-luna", exchange)
+        self.assertTrue(result["ok"])
+        self.assertEqual(
+            set(PROFILE._validated_probe_responses(exchange)),
+            {1, 2, 3},
+        )
+
+    def test_probe_rejects_unexpected_or_out_of_order_response_ids(self) -> None:
+        cases: list[list[dict[str, object]]] = []
+        swapped = complete_probe_exchange()
+        swapped[0], swapped[1] = swapped[1], swapped[0]
+        cases.append(swapped)
+        unexpected = complete_probe_exchange()
+        unexpected[1]["id"] = 9
+        cases.append(unexpected)
+        duplicate = complete_probe_exchange()
+        duplicate[1]["id"] = 1
+        cases.append(duplicate)
+        for exchange in cases:
+            with self.subTest(exchange=exchange):
+                result = PROFILE._probe_result("code-luna", exchange)
+                self.assertFalse(result["ok"])
+                self.assertEqual(result["error_code"], "malformed")
+
+    def test_probe_rejects_initialize_protocol_version_mismatch_or_missing(self) -> None:
+        cases = []
+        missing = complete_probe_exchange()
+        missing[0]["result"].pop("protocolVersion")
+        cases.append(missing)
+        mismatch = complete_probe_exchange()
+        mismatch[0]["result"]["protocolVersion"] = 2
+        cases.append(mismatch)
+        non_integer = complete_probe_exchange()
+        non_integer[0]["result"]["protocolVersion"] = True
+        cases.append(non_integer)
+        for exchange in cases:
+            with self.subTest(exchange=exchange):
+                result = PROFILE._probe_result("code-luna", exchange)
+                self.assertFalse(result["ok"])
+                self.assertEqual(result["error_code"], "malformed")
+
+    def test_probe_rejects_nested_or_snake_case_session_ids(self) -> None:
+        for session_result in (
+            {"session": {"sessionId": "fake-session"}},
+            {"session_id": "fake-session"},
+            {"data": {"sessionId": "fake-session"}},
+        ):
+            with self.subTest(session_result=session_result):
+                exchange = complete_probe_exchange()
+                exchange[1]["result"] = session_result
+                result = PROFILE._probe_result("code-luna", exchange)
+                self.assertFalse(result["ok"])
+                self.assertEqual(result["error_code"], "malformed")
+
+    def test_probe_rejects_missing_unknown_or_non_string_stop_reason(self) -> None:
+        cases = []
+        missing = complete_probe_exchange()
+        missing[2]["result"].pop("stopReason")
+        cases.append(missing)
+        unknown = complete_probe_exchange()
+        unknown[2]["result"]["stopReason"] = "still_working"
+        cases.append(unknown)
+        non_string = complete_probe_exchange()
+        non_string[2]["result"]["stopReason"] = 1
+        cases.append(non_string)
+        for exchange in cases:
+            with self.subTest(exchange=exchange):
+                result = PROFILE._probe_result("code-luna", exchange)
+                self.assertFalse(result["ok"])
+                self.assertEqual(result["error_code"], "malformed")
 
     def test_probe_rejects_missing_response_id_or_result(self) -> None:
         complete = complete_probe_exchange()
@@ -311,27 +481,8 @@ class ProfileContractTests(unittest.TestCase):
                     args.fixture_direct = fixture_direct
                     args.worktree = str(worktree)
                     responses = iter(
-                        (
-                            {
-                                "id": 1,
-                                "result": {
-                                    "models": {
-                                        "currentModelId": expected_model,
-                                    }
-                                },
-                            },
-                            {
-                                "id": 2,
-                                "result": {"sessionId": "fixture-session"},
-                            },
-                            {
-                                "id": 3,
-                                "result": {
-                                    "models": {
-                                        "currentModelId": expected_model,
-                                    }
-                                },
-                            },
+                        complete_probe_exchange(
+                            {"currentModelId": expected_model}
                         )
                     )
                     sent: list[bytes] = []

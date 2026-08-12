@@ -891,6 +891,22 @@ class ACPClosed(ProfileError):
     """Raised when the ACP server closes stdout before a response arrives."""
 
 
+ACP_STOP_REASONS = frozenset(
+    {
+        "end_turn",
+        "max_tokens",
+        "max_turn_requests",
+        "refusal",
+        "cancelled",
+    }
+)
+_PROBE_RESPONSE_PHASES = (
+    (1, "initialize"),
+    (2, "session/new"),
+    (3, "session/prompt"),
+)
+
+
 class _ACPReader:
     def __init__(self, fd: int):
         self.fd = fd
@@ -934,24 +950,92 @@ def _response_for(
     timeout: float,
     *,
     observations: list[object],
+    phase: str | None = None,
 ) -> dict[str, object]:
+    if phase is None:
+        phase = dict(_PROBE_RESPONSE_PHASES).get(request_id, "response")
     while True:
-        response = reader.read(timeout)
-        observations.append(response)
-        if "id" not in response:
-            if "result" in response or "error" in response:
-                raise ProfileError("ACP response is malformed: missing response id")
+        value = reader.read(timeout)
+        observations.append(value)
+        response = _validate_acp_message(
+            value,
+            expected_id=request_id,
+            phase=phase,
+        )
+        if response is None:
             continue
-        response_id = response["id"]
-        if type(response_id) is not int:
-            raise ProfileError("ACP response is malformed: invalid response id")
-        if response_id != request_id:
-            raise ProfileError("ACP response is malformed: unexpected response id")
         if "error" in response:
             raise ProfileError(f"ACP request failed: {response['error']}")
-        if not isinstance(response.get("result"), dict):
-            raise ProfileError("ACP response is malformed: result is not an object")
         return response
+
+
+def _validate_acp_message(
+    value: object,
+    *,
+    expected_id: int,
+    phase: str,
+) -> dict[str, object] | None:
+    if not isinstance(value, dict):
+        raise ProfileError("ACP message is not an object")
+    if value.get("jsonrpc") != "2.0":
+        raise ProfileError("ACP message has an invalid JSON-RPC version")
+
+    has_method = "method" in value
+    has_id = "id" in value
+    has_result = "result" in value
+    has_error = "error" in value
+
+    if has_method and has_id:
+        if has_result or has_error:
+            raise ProfileError("ACP server request/response hybrid is malformed")
+        raise ProfileError("ACP server requests are unsupported in preflight")
+
+    if has_method:
+        method = value["method"]
+        if not isinstance(method, str) or not method:
+            raise ProfileError("ACP notification has a malformed method")
+        if has_result or has_error:
+            raise ProfileError("ACP notification must not contain result or error")
+        if "params" in value and not isinstance(value["params"], dict):
+            raise ProfileError("ACP notification params are malformed")
+        return None
+
+    if not has_id:
+        if has_result or has_error:
+            raise ProfileError("ACP response is malformed: missing response id")
+        raise ProfileError("ACP message is a malformed ID-less notification")
+
+    response_id = value["id"]
+    if type(response_id) is not int:
+        raise ProfileError("ACP response is malformed: invalid response id")
+    if response_id != expected_id:
+        raise ProfileError("ACP response is malformed: unexpected response id")
+    if has_result == has_error:
+        raise ProfileError("ACP response must contain exactly one of result or error")
+    if has_error:
+        if not isinstance(value["error"], dict):
+            raise ProfileError("ACP error response is malformed")
+        return value
+
+    result = value["result"]
+    if not isinstance(result, dict):
+        raise ProfileError("ACP response is malformed: result is not an object")
+    if phase == "initialize":
+        if type(result.get("protocolVersion")) is not int or result["protocolVersion"] != 1:
+            raise ProfileError("ACP initialize response has an invalid protocol version")
+    elif phase == "session/new":
+        session_id = result.get("sessionId")
+        if not isinstance(session_id, str) or not session_id:
+            raise ProfileError("ACP session/new response is malformed: no session id")
+    elif phase == "session/prompt":
+        stop_reason = result.get("stopReason")
+        if (
+            not isinstance(stop_reason, str)
+            or not stop_reason
+            or stop_reason not in ACP_STOP_REASONS
+        ):
+            raise ProfileError("ACP session/prompt response has an invalid stop reason")
+    return value
 
 
 def _find_values(value: object, keys: Sequence[str]) -> list[str]:
@@ -967,11 +1051,6 @@ def _find_values(value: object, keys: Sequence[str]) -> list[str]:
         for nested in value:
             found.extend(_find_values(nested, keys))
     return found
-
-
-def _find_value(value: object, keys: Sequence[str]) -> str | None:
-    values = _find_values(value, keys)
-    return values[0] if values else None
 
 
 def _active_model_observations(value: object) -> tuple[bool, bool, list[str]]:
@@ -1010,27 +1089,26 @@ def _validated_probe_responses(
     response_values: Sequence[object],
 ) -> dict[int, dict[str, object]] | None:
     responses: dict[int, dict[str, object]] = {}
-    expected_ids = {1, 2, 3}
+    phase_index = 0
     for value in response_values:
-        if not isinstance(value, dict):
+        if phase_index >= len(_PROBE_RESPONSE_PHASES):
             return None
-        if "id" not in value:
-            if "result" in value or "error" in value:
-                return None
+        expected_id, phase = _PROBE_RESPONSE_PHASES[phase_index]
+        try:
+            response = _validate_acp_message(
+                value,
+                expected_id=expected_id,
+                phase=phase,
+            )
+        except ProfileError:
+            return None
+        if response is None:
             continue
-        response_id = value["id"]
-        if type(response_id) is not int or response_id not in expected_ids:
+        if "error" in response:
             return None
-        if response_id in responses:
-            return None
-        responses[response_id] = value
-    if set(responses) != expected_ids:
-        return None
-    for response in responses.values():
-        if "error" in response or not isinstance(response.get("result"), dict):
-            return None
-    session_result = responses[2]["result"]
-    if not _find_value(session_result, ("sessionId", "session_id")):
+        responses[expected_id] = response
+        phase_index += 1
+    if phase_index != len(_PROBE_RESPONSE_PHASES):
         return None
     return responses
 
@@ -1120,7 +1198,13 @@ def _probe_exchange(
         },
     }
     send_message(_frame(initialize))
-    _response_for(reader, 1, timeout, observations=values)
+    _response_for(
+        reader,
+        1,
+        timeout,
+        observations=values,
+        phase="initialize",
+    )
     new_session = {
         "jsonrpc": "2.0",
         "id": 2,
@@ -1131,10 +1215,20 @@ def _probe_exchange(
         },
     }
     send_message(_frame(new_session))
-    session_response = _response_for(reader, 2, timeout, observations=values)
+    session_response = _response_for(
+        reader,
+        2,
+        timeout,
+        observations=values,
+        phase="session/new",
+    )
     session_result = session_response["result"]
-    session_id = _find_value(session_result, ("sessionId", "session_id"))
-    if not session_id:
+    session_id = (
+        session_result.get("sessionId")
+        if isinstance(session_result, dict)
+        else None
+    )
+    if not isinstance(session_id, str) or not session_id:
         raise ProfileError("ACP session/new response is malformed: no session id")
     prompt = {
         "jsonrpc": "2.0",
@@ -1151,7 +1245,13 @@ def _probe_exchange(
         },
     }
     send_message(_frame(prompt))
-    _response_for(reader, 3, timeout, observations=values)
+    _response_for(
+        reader,
+        3,
+        timeout,
+        observations=values,
+        phase="session/prompt",
+    )
     return _probe_result(profile, values)
 
 
