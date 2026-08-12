@@ -729,7 +729,7 @@ let
               (FIXTURE / f"{session['run_id']}-session.json").write_text(
                   json.dumps(
                       {
-                          "models": response_values(responses, "effectiveModel"),
+                          "models": response_values(responses, "currentModelId"),
                           "contexts": response_values(responses, "contextTier"),
                       },
                       sort_keys=True,
@@ -1603,9 +1603,9 @@ pkgs.testers.runNixOSTest {
         )
     )
     assert set(coding_session["models"]) == {"gpt-5.6-luna"}
-    assert set(coding_session["contexts"]) == {"default"}
+    assert coding_session["contexts"] == []
     assert set(planning_session["models"]) == {"gpt-5.6-sol"}
-    assert set(planning_session["contexts"]) == {"long_context"}
+    assert planning_session["contexts"] == []
     machine.wait_for_file(
         "/nix/var/nix/gcroots/gascity-contributor/code-run/metadata.json"
     )

@@ -74,34 +74,86 @@ class ProfileContractTests(unittest.TestCase):
             self.assertEqual(set(value), {"model", "contextTier"})
             self.assertEqual(PROFILE.load_profile(profile), value)
 
-    def test_effort_is_an_acp_startup_argument(self) -> None:
-        expected = {
-            "review-sol": "xhigh",
-            "review-luna": "max",
-            "code-luna": "max",
-        }
-        for profile, effort in expected.items():
+    def test_model_context_and_effort_are_acp_startup_arguments(self) -> None:
+        for profile, expected in PROFILE.PROFILE_SETTINGS.items():
             argv = PROFILE.child_argv(
                 profile,
                 tool_policy="coding" if profile == "code-luna" else "review",
             )
-            effort_index = argv.index("--effort")
-            self.assertEqual(argv[effort_index + 1], effort)
-            self.assertNotIn("--model", argv)
-            self.assertNotIn("--context", argv)
+            self.assertEqual(argv[argv.index("--model") + 1], expected["model"])
+            self.assertEqual(
+                argv[argv.index("--context") + 1],
+                expected["contextTier"],
+            )
+            self.assertEqual(
+                argv[argv.index("--effort") + 1],
+                PROFILE.PROFILE_EFFORT[profile],
+            )
+            self.assertEqual(argv.count("--model"), 1)
+            self.assertEqual(argv.count("--context"), 1)
+            self.assertEqual(argv.count("--effort"), 1)
 
-    def test_model_override_is_rejected_and_effort_must_match(self) -> None:
+    def test_profile_owned_startup_arguments_reject_overrides(self) -> None:
         with self.assertRaises(LAUNCHER.LauncherError):
-            LAUNCHER.validate_child_arguments(["--acp", "--model", "gpt-4"])
+            LAUNCHER.validate_child_arguments(
+                ["--acp", "--model", "gpt-4"],
+                profile="code-luna",
+            )
+        with self.assertRaises(LAUNCHER.LauncherError):
+            LAUNCHER.validate_child_arguments(
+                [
+                    "--acp",
+                    "--model",
+                    "gpt-5.6-luna",
+                    "--context",
+                    "long_context",
+                ],
+                profile="code-luna",
+            )
         with self.assertRaises(LAUNCHER.LauncherError):
             LAUNCHER.validate_child_arguments(
                 ["--acp", "--effort", "xhigh"],
                 profile="code-luna",
             )
         self.assertEqual(
-            LAUNCHER.validate_child_arguments(["--acp"], profile="code-luna")[-2:],
-            ["--effort", "max"],
+            LAUNCHER.validate_child_arguments(["--acp"], profile="code-luna")[-6:],
+            [
+                "--model",
+                "gpt-5.6-luna",
+                "--context",
+                "default",
+                "--effort",
+                "max",
+            ],
         )
+
+    def test_probe_accepts_current_model_without_context_metadata(self) -> None:
+        expected = PROFILE.PROFILE_SETTINGS["code-luna"]
+        result = PROFILE._probe_result(
+            "code-luna",
+            [{"result": {"models": {"currentModelId": expected["model"]}}}],
+        )
+        self.assertEqual(
+            result,
+            {
+                "ok": True,
+                "profile": "code-luna",
+                "model": expected["model"],
+                "context": expected["contextTier"],
+                "effort": PROFILE.PROFILE_EFFORT["code-luna"],
+            },
+        )
+
+    def test_probe_rejects_missing_or_mismatched_model(self) -> None:
+        cases = (
+            (),
+            ({"result": {"models": {"currentModelId": "gpt-5.6-sol"}}},),
+        )
+        for observations in cases:
+            with self.subTest(observations=observations):
+                result = PROFILE._probe_result("code-luna", observations)
+                self.assertFalse(result["ok"])
+                self.assertEqual(result["error_code"], "malformed")
 
     def test_only_copilot_auth_survives_environment_projection(self) -> None:
         projected = PROFILE.scrub_environment(
@@ -199,8 +251,19 @@ class ActivationContractTests(unittest.TestCase):
             return successful_probe(profile)
 
         status = ACTIVATION.select_profiles(probe, generation="g1", state_schema="1")
-        self.assertTrue(status["ready"])
-        self.assertEqual(status["effective_profiles"]["review"], "review-sol")
+        self.assertEqual(
+            status,
+            {
+                "generation": "g1",
+                "state_schema": "1",
+                "ready": True,
+                "effective_profiles": {
+                    "coding": "code-luna",
+                    "review": "review-sol",
+                },
+                "error_code": None,
+            },
+        )
         self.assertEqual(calls, ["code-luna", "review-sol"])
 
     def test_only_unsupported_or_unavailable_sol_failures_fallback(self) -> None:
@@ -1569,7 +1632,10 @@ class LauncherLifecycleTests(unittest.TestCase):
                 self.assertTrue(any(message.get("method") == "session/update" for message in messages))
                 self.assertTrue(
                     any(
-                        message.get("result", {}).get("effectiveModel") == "gpt-5.6-luna"
+                        message.get("result", {}).get("models", {}).get(
+                            "currentModelId"
+                        )
+                        == "gpt-5.6-luna"
                         for message in messages
                         if isinstance(message.get("result"), dict)
                     )

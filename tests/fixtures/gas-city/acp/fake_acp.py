@@ -47,7 +47,8 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--acp", action="store_true")
     parser.add_argument("--effort", required=True)
-    parser.add_argument("--model")
+    parser.add_argument("--model", required=True)
+    parser.add_argument("--context", required=True)
     parser.add_argument("--ignore-eof", action="store_true")
     parser.add_argument("--close-after-initialize", action="store_true")
     args, _unknown = parser.parse_known_args()
@@ -57,8 +58,10 @@ def main() -> int:
     expected_effort = "xhigh" if settings["model"] == "gpt-5.6-sol" else "max"
     if args.effort != expected_effort:
         raise RuntimeError("ACP effort does not match the immutable profile")
-    # Deliberately ignore --model: Copilot 1.0.79 obtains model authority from
-    # COPILOT_HOME, not from the empirically ignored command-line selector.
+    if args.model != settings["model"]:
+        raise RuntimeError("ACP model does not match the immutable profile")
+    if args.context != settings["contextTier"]:
+        raise RuntimeError("ACP context does not match the immutable profile")
     session_id = "fake-session"
     for raw_line in sys.stdin:
         if not raw_line.strip():
@@ -90,8 +93,7 @@ def main() -> int:
                             "name": "fake-copilot",
                             "version": "1.0.79",
                         },
-                        "effectiveModel": settings["model"],
-                        "contextTier": settings["contextTier"],
+                        "models": {"currentModelId": settings["model"]},
                     },
                 }
             )
@@ -104,8 +106,7 @@ def main() -> int:
                     "id": request.get("id"),
                     "result": {
                         "sessionId": session_id,
-                        "effectiveModel": settings["model"],
-                        "contextTier": settings["contextTier"],
+                        "models": {"currentModelId": settings["model"]},
                     },
                 }
             )
@@ -124,13 +125,9 @@ def main() -> int:
                             "sessionUpdate": "agent_message_chunk",
                             "content": {
                                 "type": "text",
-                                "text": (
-                                    f"effective model: {settings['model']}; "
-                                    f"context tier: {settings['contextTier']}"
-                                ),
+                                "text": f"effective model: {settings['model']}",
                             },
-                            "effectiveModel": settings["model"],
-                            "contextTier": settings["contextTier"],
+                            "models": {"currentModelId": settings["model"]},
                         },
                     },
                 }
@@ -141,8 +138,7 @@ def main() -> int:
                     "id": request.get("id"),
                     "result": {
                         "stopReason": "end_turn",
-                        "effectiveModel": settings["model"],
-                        "contextTier": settings["contextTier"],
+                        "models": {"currentModelId": settings["model"]},
                     },
                 }
             )

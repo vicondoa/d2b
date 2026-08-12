@@ -75,13 +75,16 @@ GC_ROOT_NAMES = ("package", "city", "pack", "profiles", "instructions")
 IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 FORBIDDEN_CHILD_FLAGS = frozenset(
     {
-        "--context",
-        "--model",
         "--reasoning-effort",
         "--reasoning_summary",
         "--reasoning-summary",
     }
 )
+PROFILE_VALUE_FLAGS = {
+    "--model": "model",
+    "--context": "contextTier",
+    "--effort": "effort",
+}
 SECRET_ENV_NAMES = frozenset(
     {
         "AWS_ACCESS_KEY_ID",
@@ -743,32 +746,44 @@ def validate_child_arguments(
     profile: str | None = None,
 ) -> list[str]:
     values = list(arguments)
-    efforts: list[str] = []
+    observed: dict[str, list[str]] = {
+        flag: [] for flag in PROFILE_VALUE_FLAGS
+    }
     index = 0
     while index < len(values):
         argument = values[index]
         flag = argument.split("=", 1)[0]
         if flag in FORBIDDEN_CHILD_FLAGS:
             raise LauncherError(
-                f"model, effort, and context are profile-owned; override rejected: {flag}"
+                f"unsupported Copilot child flag: {flag}"
             )
-        if flag == "--effort":
+        if flag in PROFILE_VALUE_FLAGS:
+            if profile is None and flag != "--effort":
+                raise LauncherError(f"{flag} requires a Copilot profile")
             if "=" in argument:
-                efforts.append(argument.split("=", 1)[1])
+                value = argument.split("=", 1)[1]
             elif index + 1 >= len(values):
-                raise LauncherError("Copilot effort flag has no value")
+                raise LauncherError(f"Copilot {flag} has no value")
             else:
-                efforts.append(values[index + 1])
+                value = values[index + 1]
                 index += 1
+            observed[flag].append(value)
         index += 1
     if profile is not None:
-        if profile not in PROFILE_EFFORT:
+        if profile not in PROFILE_SETTINGS:
             raise LauncherError(f"unknown Copilot profile: {profile}")
-        expected = PROFILE_EFFORT[profile]
-        if efforts and efforts != [expected]:
-            raise LauncherError("Copilot effort does not match the immutable profile")
-        if not efforts:
-            values.extend(["--effort", expected])
+        expected = {
+            "--model": PROFILE_SETTINGS[profile]["model"],
+            "--context": PROFILE_SETTINGS[profile]["contextTier"],
+            "--effort": PROFILE_EFFORT[profile],
+        }
+        for flag, expected_value in expected.items():
+            if observed[flag] and observed[flag] != [expected_value]:
+                raise LauncherError(
+                    f"Copilot {flag} does not match the immutable profile"
+                )
+            if not observed[flag]:
+                values.extend([flag, expected_value])
     return values
 
 
@@ -1697,6 +1712,10 @@ def _profile_child_arguments(
         raise LauncherError(f"unknown tool policy: {tool_policy}")
     values = [
         "--acp",
+        "--model",
+        PROFILE_SETTINGS[profile]["model"],
+        "--context",
+        PROFILE_SETTINGS[profile]["contextTier"],
         "--effort",
         PROFILE_EFFORT[profile],
         "--no-custom-instructions",

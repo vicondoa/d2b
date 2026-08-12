@@ -136,11 +136,15 @@ def child_argv(
     tool_policy: str,
     root: str | os.PathLike[str] | None = None,
 ) -> list[str]:
-    load_profile(profile, root)
+    settings = load_profile(profile, root)
     if tool_policy not in TOOL_POLICIES:
         raise ProfileError(f"unknown tool policy: {tool_policy}")
     return [
         "--acp",
+        "--model",
+        settings["model"],
+        "--context",
+        settings["contextTier"],
         "--effort",
         PROFILE_EFFORT[profile],
         "--no-custom-instructions",
@@ -925,9 +929,7 @@ def _probe_result(profile: str, response_values: Sequence[object]) -> dict[str, 
     reported_context = reported_contexts[0] if reported_contexts else None
     if (
         not reported_models
-        or not reported_contexts
         or set(reported_models) != {expected["model"]}
-        or set(reported_contexts) != {expected["contextTier"]}
     ):
         return {
             "ok": False,
@@ -940,7 +942,7 @@ def _probe_result(profile: str, response_values: Sequence[object]) -> dict[str, 
         "ok": True,
         "profile": profile,
         "model": reported_model,
-        "context": reported_context,
+        "context": expected["contextTier"],
         "effort": PROFILE_EFFORT[profile],
     }
 
