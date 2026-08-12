@@ -6,3 +6,8 @@
   registered.
 - Add typed system-core Host and User handler contracts without publishing
   fabricated readiness.
+
+### Fixed
+
+- Keep shell socket tests within AF_UNIX path limits using private short-lived
+  temporary roots.
