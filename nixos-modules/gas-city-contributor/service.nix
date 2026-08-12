@@ -28,6 +28,7 @@ let
   publisherStateRoot = "/var/lib/gascity-publisher";
   cacheRoot = "/var/cache/gascity-contributor";
   runtimeRoot = "/run/gascity-contributor";
+  managedAssetGroup = "gascity-contributor";
   readinessPath = "${runtimeRoot}/readiness.json";
   egressDirectory = "/run/gascity-egress";
   discordDirectory = "/run/gascity-discord";
@@ -91,6 +92,8 @@ let
     + " --path ${lib.escapeShellArg serviceRoot}"
     + " --reserve-bytes ${toString cfg.storage.minFreeBytes}";
   materialize = "+${python} ${activation} materialize-assets"
+    + " --uid 0"
+    + " --group ${lib.escapeShellArg managedAssetGroup}"
     + " --source ${lib.escapeShellArg "${package}/share/gas-city-contributor"}"
     + " --destination ${lib.escapeShellArg "${serviceRoot}/managed"}";
   decisionReconcile = pkgs.writeShellScript "gascity-decision-reconcile" ''

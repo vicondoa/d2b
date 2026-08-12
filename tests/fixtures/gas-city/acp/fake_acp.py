@@ -11,6 +11,9 @@ import sys
 import time
 
 
+SANDBOX_WORKSPACE = "/workspace"
+
+
 def _settings() -> dict[str, str]:
     home = os.environ.get("COPILOT_HOME")
     if not home:
@@ -60,6 +63,7 @@ def main() -> int:
     parser.add_argument("--effort", required=True)
     parser.add_argument("--model", required=True)
     parser.add_argument("--context", required=True)
+    parser.add_argument("--fixture-direct-cwd")
     parser.add_argument("--ignore-eof", action="store_true")
     parser.add_argument("--close-after-initialize", action="store_true")
     args, _unknown = parser.parse_known_args()
@@ -74,6 +78,7 @@ def main() -> int:
     if args.context != settings["contextTier"]:
         raise RuntimeError("ACP context does not match the immutable profile")
     session_id = "fake-session"
+    expected_cwd = args.fixture_direct_cwd or SANDBOX_WORKSPACE
     models = _models(settings["model"])
     for raw_line in sys.stdin:
         if not raw_line.strip():
@@ -112,6 +117,10 @@ def main() -> int:
             if args.close_after_initialize:
                 return 0
         elif method == "session/new":
+            params = request.get("params")
+            if not isinstance(params, dict) or params.get("cwd") != expected_cwd:
+                _error(request, f"session/new cwd must be {expected_cwd}")
+                continue
             _write(
                 {
                     "jsonrpc": "2.0",

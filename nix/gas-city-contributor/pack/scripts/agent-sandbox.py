@@ -37,6 +37,7 @@ HIDDEN_ENV_NAMES = frozenset(
 )
 TOOL_POLICIES = frozenset({"review", "planning", "coding"})
 PLANNING_ARTIFACT_ROOTS = ("docs/plans",)
+SANDBOX_WORKSPACE = "/workspace"
 ALLOWED_GC_ENV_NAMES = frozenset(
     {
         "GC_AGENT_FD",
@@ -97,7 +98,7 @@ def _planning_artifact_roots(worktree: pathlib.Path) -> list[tuple[pathlib.Path,
             ) from error
         if not resolved.is_dir():
             raise SandboxError(f"planning artifact root is not a directory: {candidate}")
-        roots.append((resolved, f"/workspace/{relative}"))
+        roots.append((resolved, f"{SANDBOX_WORKSPACE}/{relative}"))
     return roots
 
 
@@ -268,12 +269,12 @@ def build_sandbox_argv(
     for path in runtime:
         _bind_read_only(arguments, path, str(path), known_dirs)
 
-    arguments.extend(["--dir", "/workspace"])
-    known_dirs.add("/workspace")
+    arguments.extend(["--dir", SANDBOX_WORKSPACE])
+    known_dirs.add(SANDBOX_WORKSPACE)
     if tool_policy == "coding":
-        _bind_writable(arguments, assigned, "/workspace", known_dirs)
+        _bind_writable(arguments, assigned, SANDBOX_WORKSPACE, known_dirs)
     else:
-        _bind_read_only(arguments, assigned, "/workspace", known_dirs)
+        _bind_read_only(arguments, assigned, SANDBOX_WORKSPACE, known_dirs)
         if tool_policy == "planning":
             for source, destination in _planning_artifact_roots(assigned):
                 _bind_writable(arguments, source, destination, known_dirs)
@@ -304,7 +305,7 @@ def build_sandbox_argv(
         {
             "HOME": "/home/copilot",
             "COPILOT_HOME": "/home/copilot",
-            "PWD": "/workspace",
+            "PWD": SANDBOX_WORKSPACE,
             "TMPDIR": "/tmp",
             "XDG_RUNTIME_DIR": "/run",
             "PATH": projected.get("PATH", "/wrappers:/runtime/bin"),
@@ -381,7 +382,7 @@ def build_sandbox_argv(
             *inner_command,
         ]
 
-    arguments.extend(["--chdir", "/workspace", "--", *inner_command])
+    arguments.extend(["--chdir", SANDBOX_WORKSPACE, "--", *inner_command])
     inherited = tuple(
         sorted(
             fd

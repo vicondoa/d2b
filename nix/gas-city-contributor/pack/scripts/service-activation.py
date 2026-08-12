@@ -451,19 +451,40 @@ def _managed_asset_directory_flags() -> int:
     )
 
 
-def _validate_managed_destination_info(info: os.stat_result) -> None:
+def _validate_managed_destination_info(
+    info: os.stat_result,
+    *,
+    expected_uid: int,
+    expected_gid: int,
+) -> None:
     if not stat.S_ISDIR(info.st_mode):
         raise BoundaryError("managed asset destination is not a directory")
-    # The production materializer is the privileged (+) ExecStartPre and
-    # therefore requires root ownership.  An unprivileged package/fixture
-    # invocation cannot create a root-owned directory, so it validates the
-    # equivalent owner boundary for that non-privileged execution.
-    effective_uid = os.geteuid()
-    required_uid = 0 if effective_uid == 0 else effective_uid
-    if info.st_uid != required_uid:
-        raise BoundaryError("managed asset destination must be root-owned")
-    if info.st_mode & 0o077 or info.st_mode & 0o700 != 0o700:
-        raise BoundaryError("managed asset destination must be private")
+    if info.st_uid != expected_uid:
+        raise BoundaryError(
+            "managed asset destination has an unexpected owner uid"
+        )
+    if info.st_gid != expected_gid:
+        raise BoundaryError(
+            "managed asset destination has an unexpected group gid"
+        )
+    if stat.S_IMODE(info.st_mode) != 0o750:
+        raise BoundaryError(
+            "managed asset destination must have mode 0750 "
+            "(owner rwx, group r-x, other none)"
+        )
+
+
+def _resolve_group_gid(group_value: str) -> int:
+    if not group_value:
+        raise BoundaryError("managed asset group is required")
+    try:
+        if re.fullmatch(r"[0-9]+", group_value):
+            gid = int(group_value, 10)
+            grp.getgrgid(gid)
+            return gid
+        return grp.getgrnam(group_value).gr_gid
+    except (KeyError, ValueError, OverflowError) as error:
+        raise BoundaryError("managed asset group is unavailable") from error
 
 
 def _validate_managed_parent_binding(
@@ -507,7 +528,12 @@ def _validate_managed_destination_binding(
         raise BoundaryError("managed asset destination was replaced")
 
 
-def _open_managed_asset_directory(destination: pathlib.Path) -> tuple[int, int]:
+def _open_managed_asset_directory(
+    destination: pathlib.Path,
+    *,
+    expected_uid: int,
+    expected_gid: int,
+) -> tuple[int, int]:
     """Open and validate the destination while retaining its parent binding."""
 
     if destination == pathlib.Path("/") or not destination.name:
@@ -525,6 +551,7 @@ def _open_managed_asset_directory(destination: pathlib.Path) -> tuple[int, int]:
         raise BoundaryError("managed asset destination parent is unavailable") from error
 
     destination_fd = -1
+    created_destination = False
     try:
         _validate_managed_parent_binding(
             parent,
@@ -546,7 +573,8 @@ def _open_managed_asset_directory(destination: pathlib.Path) -> tuple[int, int]:
             destination_fd = os.open(destination.name, flags, dir_fd=parent_fd)
         except FileNotFoundError:
             try:
-                os.mkdir(destination.name, mode=0o700, dir_fd=parent_fd)
+                os.mkdir(destination.name, mode=0o750, dir_fd=parent_fd)
+                created_destination = True
             except FileExistsError:
                 pass
             except OSError as error:
@@ -565,8 +593,19 @@ def _open_managed_asset_directory(destination: pathlib.Path) -> tuple[int, int]:
                 ) from error
         except OSError as error:
             raise BoundaryError("managed asset destination is unavailable") from error
+        if created_destination:
+            try:
+                os.fchmod(destination_fd, 0o750)
+            except OSError as error:
+                raise BoundaryError(
+                    "managed asset destination metadata could not be set"
+                ) from error
         info = os.fstat(destination_fd)
-        _validate_managed_destination_info(info)
+        _validate_managed_destination_info(
+            info,
+            expected_uid=expected_uid,
+            expected_gid=expected_gid,
+        )
         _validate_managed_destination_binding(
             destination.name,
             parent_fd,
@@ -715,9 +754,19 @@ def _fsync_managed_directory(destination_fd: int) -> None:
         raise BoundaryError("managed asset directory could not be synced") from error
 
 
-def materialize_assets(source_value: str, destination_value: str) -> pathlib.Path:
+def materialize_assets(
+    source_value: str,
+    destination_value: str,
+    *,
+    expected_uid: int = 0,
+    expected_gid: int | None = None,
+) -> pathlib.Path:
     """Materialize immutable managed links and safely rotate package generations."""
 
+    if expected_uid < 0:
+        raise BoundaryError("managed asset expected owner uid is invalid")
+    if expected_gid is None or expected_gid < 0:
+        raise BoundaryError("managed asset expected group gid is required")
     source = _validated_store_path(
         source_value,
         "managed asset source",
@@ -738,7 +787,11 @@ def materialize_assets(source_value: str, destination_value: str) -> pathlib.Pat
             require_directory=True,
             require_existing=True,
         )
-    parent_fd, destination_fd = _open_managed_asset_directory(destination)
+    parent_fd, destination_fd = _open_managed_asset_directory(
+        destination,
+        expected_uid=expected_uid,
+        expected_gid=expected_gid,
+    )
     try:
         # Repair any directory metadata left unsynced by a killed or failed
         # invocation before inspecting targets or attempting another rotation.
@@ -786,7 +839,11 @@ def materialize_assets(source_value: str, destination_value: str) -> pathlib.Pat
 
         if changed:
             _fsync_managed_directory(destination_fd)
-        _validate_managed_destination_info(os.fstat(destination_fd))
+        _validate_managed_destination_info(
+            os.fstat(destination_fd),
+            expected_uid=expected_uid,
+            expected_gid=expected_gid,
+        )
         _validate_managed_parent_binding(destination.parent, parent_fd)
         _validate_managed_destination_binding(
             destination.name,
@@ -2653,6 +2710,8 @@ def _parse_args() -> argparse.Namespace:
     materialize_parser = subparsers.add_parser("materialize-assets")
     materialize_parser.add_argument("--source", required=True)
     materialize_parser.add_argument("--destination", required=True)
+    materialize_parser.add_argument("--uid", type=int, default=0)
+    materialize_parser.add_argument("--group", required=True)
 
     monitor_parser = subparsers.add_parser("free-space-monitor")
     monitor_parser.add_argument("--path", required=True)
@@ -2737,7 +2796,12 @@ def main() -> int:
         print(check_free_space(args.path, args.reserve_bytes))
         return 0
     if args.command == "materialize-assets":
-        materialize_assets(args.source, args.destination)
+        materialize_assets(
+            args.source,
+            args.destination,
+            expected_uid=args.uid,
+            expected_gid=_resolve_group_gid(args.group),
+        )
         return 0
     if args.command == "free-space-monitor":
         while True:

@@ -229,8 +229,22 @@ in
         "d /var/lib/gascity-contributor/state/agent-state/terminal 0750 gascity gascity-contributor -"
         enabled.systemd.tmpfiles.rules;
       managedAssetDirectory = builtins.elem
-        "d /var/lib/gascity-contributor/managed 0700 root root -"
+        "d /var/lib/gascity-contributor/managed 0750 root gascity-contributor -"
         enabled.systemd.tmpfiles.rules;
+      materializeExpectedUid = lib.any
+        (entry: lib.hasInfix "--uid 0" entry)
+        main.ExecStartPre;
+      materializeExpectedGroup = lib.any
+        (entry:
+          lib.hasInfix "--group" entry
+          && lib.hasInfix "gascity-contributor" entry)
+        main.ExecStartPre;
+      serviceManagedGroup = builtins.all
+        (unit:
+          builtins.elem
+            "gascity-contributor"
+            (unit.SupplementaryGroups or [ ]))
+        [ main agent discord publisher egress check proxy ];
       gcRootMode = builtins.elem
         "d /nix/var/nix/gcroots/gascity-contributor 0700 gascity-agent gascity-agent -"
         enabled.systemd.tmpfiles.rules;
@@ -265,6 +279,9 @@ in
       agentStateMode = true;
       terminalStateMode = true;
       managedAssetDirectory = true;
+      materializeExpectedUid = true;
+      materializeExpectedGroup = true;
+      serviceManagedGroup = true;
       gcRootMode = true;
       gcRootWrite = true;
       agentServerUid = true;

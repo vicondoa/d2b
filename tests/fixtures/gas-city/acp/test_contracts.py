@@ -256,6 +256,73 @@ class ProfileContractTests(unittest.TestCase):
         )
         self.assertNotIn("Content-Length:", FAKE_ACP.read_text(encoding="utf-8"))
 
+    def test_probe_uses_sandbox_cwd_for_socket_and_host_cwd_for_direct_fixture(self) -> None:
+        self.assertEqual(SANDBOX.SANDBOX_WORKSPACE, PROFILE.SANDBOX_WORKSPACE)
+        with tempfile.TemporaryDirectory(prefix="gascity-probe-cwd-") as raw:
+            worktree = pathlib.Path(raw) / "fixture-worktree"
+            worktree.mkdir()
+            expected_model = PROFILE.PROFILE_SETTINGS["code-luna"]["model"]
+
+            for fixture_direct, expected_cwd in (
+                (False, PROFILE.SANDBOX_WORKSPACE),
+                (True, str(worktree)),
+            ):
+                with self.subTest(fixture_direct=fixture_direct):
+                    args = PROFILE._default_namespace("code-luna", "coding")
+                    args.fixture_direct = fixture_direct
+                    args.worktree = str(worktree)
+                    responses = iter(
+                        (
+                            {
+                                "id": 1,
+                                "result": {
+                                    "models": {
+                                        "currentModelId": expected_model,
+                                    }
+                                },
+                            },
+                            {
+                                "id": 2,
+                                "result": {"sessionId": "fixture-session"},
+                            },
+                            {
+                                "id": 3,
+                                "result": {
+                                    "models": {
+                                        "currentModelId": expected_model,
+                                    }
+                                },
+                            },
+                        )
+                    )
+                    sent: list[bytes] = []
+
+                    class Reader:
+                        def read(self, _timeout: float) -> dict[str, object]:
+                            return next(responses)
+
+                    result = PROFILE._probe_exchange(
+                        Reader(),
+                        sent.append,
+                        profile="code-luna",
+                        args=args,
+                        timeout=1,
+                    )
+
+                    self.assertTrue(result["ok"])
+                    self.assertEqual(
+                        json.loads(sent[1].decode("utf-8"))["params"]["cwd"],
+                        expected_cwd,
+                    )
+
+    def test_normal_socket_sessions_rewrite_host_cwd_to_sandbox_cwd(self) -> None:
+        message = (
+            b'{"jsonrpc":"2.0","id":2,"method":"session/new",'
+            b'"params":{"cwd":"/host/worktree","mcpServers":[]}}\n'
+        )
+        rewritten = json.loads(PROFILE._sandbox_session_message(message))
+        self.assertEqual(rewritten["params"]["cwd"], PROFILE.SANDBOX_WORKSPACE)
+
 
 class RoleRoutingContractTests(unittest.TestCase):
     def test_matrix_tool_policies_match_city_and_launcher_mappings(self) -> None:
@@ -480,7 +547,12 @@ class ManagedAssetRotationContractTests(unittest.TestCase):
 
     @staticmethod
     def _materialize(source: pathlib.Path, destination: pathlib.Path) -> None:
-        ACTIVATION.materialize_assets(str(source), str(destination))
+        ACTIVATION.materialize_assets(
+            str(source),
+            str(destination),
+            expected_uid=os.geteuid(),
+            expected_gid=os.getgid(),
+        )
 
     @staticmethod
     def _links(destination: pathlib.Path) -> dict[str, str]:
@@ -502,6 +574,7 @@ class ManagedAssetRotationContractTests(unittest.TestCase):
         destination: pathlib.Path,
         *,
         uid: int,
+        gid: int,
         mode: int,
     ):
         real_fstat = ACTIVATION.os.fstat
@@ -518,6 +591,7 @@ class ManagedAssetRotationContractTests(unittest.TestCase):
                     st_ino=info.st_ino,
                     st_mode=stat.S_IFDIR | mode,
                     st_uid=uid,
+                    st_gid=gid,
                 )
             return info
 
@@ -550,20 +624,48 @@ class ManagedAssetRotationContractTests(unittest.TestCase):
             })
             self.assertEqual(self._temporary_entries(destination), [])
 
-    def test_destination_requires_root_private_owner_and_mode(self) -> None:
+    def test_destination_uses_fixture_identity_and_shared_read_mode(self) -> None:
+        with self._temporary_destination() as raw:
+            destination = pathlib.Path(raw) / "managed"
+            self._materialize(self.old, destination)
+            info = os.stat(destination, follow_symlinks=False)
+            self.assertEqual(info.st_uid, os.geteuid())
+            self.assertEqual(info.st_gid, os.getgid())
+            self.assertEqual(stat.S_IMODE(info.st_mode), 0o750)
+
+    def test_materializer_requires_explicit_expected_group(self) -> None:
+        with self._temporary_destination() as raw:
+            destination = pathlib.Path(raw) / "managed"
+            with self.assertRaises(ACTIVATION.BoundaryError):
+                ACTIVATION.materialize_assets(
+                    str(self.old),
+                    str(destination),
+                    expected_uid=os.geteuid(),
+                )
+
+    def test_group_contract_resolves_name_and_numeric_fixture_gid(self) -> None:
+        gid = os.getgid()
+        group = ACTIVATION.grp.getgrgid(gid).gr_name
+        self.assertEqual(ACTIVATION._resolve_group_gid(group), gid)
+        self.assertEqual(ACTIVATION._resolve_group_gid(str(gid)), gid)
+
+    def test_destination_requires_expected_owner_group_and_mode(self) -> None:
+        expected_gid = os.getgid()
         cases = (
-            ("non-root owner", 1000, 0o700),
-            ("group-readable", 0, 0o740),
-            ("other-writable", 0, 0o702),
-            ("owner-not-searchable", 0, 0o600),
+            ("non-root owner", 1000, expected_gid, 0o750),
+            ("unexpected group", 0, expected_gid + 1, 0o750),
+            ("group-writable", 0, expected_gid, 0o760),
+            ("other-readable", 0, expected_gid, 0o751),
+            ("owner-not-searchable", 0, expected_gid, 0o650),
         )
-        for label, uid, mode in cases:
+        for label, uid, gid, mode in cases:
             with self.subTest(destination=label), self._temporary_destination() as raw:
                 destination = pathlib.Path(raw) / "managed"
                 destination.mkdir(mode=0o700)
                 fake_fstat = self._destination_fstat_override(
                     destination,
                     uid=uid,
+                    gid=gid,
                     mode=mode,
                 )
                 with mock.patch.object(ACTIVATION.os, "geteuid", return_value=0):
@@ -573,7 +675,12 @@ class ManagedAssetRotationContractTests(unittest.TestCase):
                         side_effect=fake_fstat,
                     ):
                         with self.assertRaises(ACTIVATION.BoundaryError):
-                            self._materialize(self.old, destination)
+                            ACTIVATION.materialize_assets(
+                                str(self.old),
+                                str(destination),
+                                expected_uid=0,
+                                expected_gid=expected_gid,
+                            )
 
     def test_materialization_anchors_link_operations_to_one_directory_fd(self) -> None:
         with self._temporary_destination() as raw:
@@ -2238,7 +2345,7 @@ class LauncherLifecycleTests(unittest.TestCase):
                 )
                 diagnostic = (
                     b'{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}\n'
-                    b'{"jsonrpc":"2.0","id":2,"method":"session/new","params":{}}\n'
+                    b'{"jsonrpc":"2.0","id":2,"method":"session/new","params":{"cwd":"/host/worktree"}}\n'
                     b'{"jsonrpc":"2.0","id":3,"method":"session/prompt",'
                     b'"params":{"sessionId":"fake-session","prompt":[]}}\n'
                 )
@@ -2439,6 +2546,39 @@ class LauncherLifecycleTests(unittest.TestCase):
                 self.assertEqual(result["effort"], "max")
             finally:
                 server.stop()
+
+    def test_direct_fixture_probe_accepts_the_host_worktree_cwd(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="gascity-direct-probe-") as raw:
+            root = pathlib.Path(raw)
+            worktree = root / "worktree"
+            worktree.mkdir()
+            copilot = root / "copilot"
+            copilot.write_text(
+                f"#!{sys.executable}\n"
+                f"import runpy\nrunpy.run_path({str(FAKE_ACP)!r}, run_name=\"__main__\")\n",
+                encoding="utf-8",
+            )
+            copilot.chmod(0o755)
+            args = PROFILE._default_namespace("code-luna", "coding")
+            args.fixture_direct = True
+            args.launcher = str(SCRIPT_ROOT / "agent-launcher.py")
+            args.copilot = str(copilot)
+            args.run_id = "direct-run"
+            args.bead_id = "direct-bead"
+            args.generation = "g1"
+            args.state_schema = "1"
+            args.worktree = str(worktree)
+            args.lease_root = str(root / "leases")
+            args.runtime_root = str(root / "runtime")
+            with mock.patch.dict(os.environ, {"GC_TEST_MODE": "1"}):
+                result = PROFILE.run_probe(
+                    "code-luna",
+                    tool_policy="coding",
+                    args=args,
+                    timeout=5,
+                )
+            self.assertEqual(result["ok"], True, result)
+            self.assertEqual(result["model"], "gpt-5.6-luna")
 
     def test_client_eof_stops_child_and_releases_lease(self) -> None:
         with tempfile.TemporaryDirectory(prefix="gascity-eof-") as raw:

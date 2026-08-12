@@ -142,7 +142,20 @@ pkgs.runCommand "gas-city-package-smoke" {
   ${gasCityContributor}/bin/python3 \
     "$root/pack/scripts/service-activation.py" materialize-assets \
     --source "$root" \
-    --destination "$fixtureRepo/.scratch/managed-package"
+    --destination "$fixtureRepo/.scratch/managed-package" \
+    --uid "$(${pkgs.coreutils}/bin/id -u)" \
+    --group "$(${pkgs.coreutils}/bin/id -g)"
+
+  managedPackage="$fixtureRepo/.scratch/managed-package"
+  test "$(${pkgs.coreutils}/bin/stat -c %u "$managedPackage")" = \
+    "$(${pkgs.coreutils}/bin/id -u)"
+  test "$(${pkgs.coreutils}/bin/stat -c %g "$managedPackage")" = \
+    "$(${pkgs.coreutils}/bin/id -g)"
+  test "$(${pkgs.coreutils}/bin/stat -c %a "$managedPackage")" = 750
+  test -r "$managedPackage/city/city.toml"
+  test -r "$managedPackage/pack/pack.toml"
+  test -r "$managedPackage/copilot/code-luna/settings.json"
+  test -r "$managedPackage/buildbuddy/envoy.yaml.tmpl"
 
   export PYTHONNOUSERSITE=1
   export PYTHONPYCACHEPREFIX="$TMPDIR/pycache"

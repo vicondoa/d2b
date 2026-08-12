@@ -43,6 +43,7 @@ PROFILE_EFFORT = {
     "review-luna": "max",
     "code-luna": "max",
 }
+SANDBOX_WORKSPACE = "/workspace"
 ACTIVE_MODEL_KEYS = (
     "currentModelId",
     "current_model_id",
@@ -583,12 +584,30 @@ def _connect_launcher(
         raise
 
 
+def _sandbox_session_message(message: bytes) -> bytes:
+    try:
+        value = json.loads(message)
+    except json.JSONDecodeError:
+        return message
+    if not isinstance(value, dict) or value.get("method") != "session/new":
+        return message
+    params = value.get("params")
+    if not isinstance(params, dict):
+        return message
+    rewritten = dict(value)
+    rewritten_params = dict(params)
+    rewritten_params["cwd"] = SANDBOX_WORKSPACE
+    rewritten["params"] = rewritten_params
+    return _frame(rewritten)
+
+
 def _proxy_stdio(channel: socket.socket) -> int:
     """Proxy the caller's stdio to the authenticated launcher connection."""
 
     selector = select.poll()
     stdin_open = True
     socket_open = True
+    stdin_buffer = bytearray()
     selector.register(0, select.POLLIN | select.POLLHUP | select.POLLERR)
     selector.register(channel.fileno(), select.POLLIN | select.POLLHUP | select.POLLERR)
     try:
@@ -600,6 +619,9 @@ def _proxy_stdio(channel: socket.socket) -> int:
                     if events & (select.POLLHUP | select.POLLERR):
                         stdin_open = False
                         try:
+                            if stdin_buffer:
+                                channel.sendall(bytes(stdin_buffer))
+                                stdin_buffer.clear()
                             channel.shutdown(socket.SHUT_WR)
                         except OSError:
                             pass
@@ -615,12 +637,19 @@ def _proxy_stdio(channel: socket.socket) -> int:
                     if not data:
                         stdin_open = False
                         try:
+                            if stdin_buffer:
+                                channel.sendall(bytes(stdin_buffer))
+                                stdin_buffer.clear()
                             channel.shutdown(socket.SHUT_WR)
                         except OSError:
                             pass
                         selector.unregister(0)
                     else:
-                        channel.sendall(data)
+                        stdin_buffer.extend(data)
+                        while b"\n" in stdin_buffer:
+                            line, _, remainder = stdin_buffer.partition(b"\n")
+                            stdin_buffer = bytearray(remainder)
+                            channel.sendall(_sandbox_session_message(line + b"\n"))
                 elif descriptor == channel.fileno():
                     if events & (select.POLLHUP | select.POLLERR):
                         socket_open = False
@@ -744,7 +773,10 @@ def _launcher_argv(
         command.extend(["--bwrap-path", args.bwrap_path])
     if args.sandbox_python:
         command.extend(["--sandbox-python", args.sandbox_python])
-    command.extend(["--", *child_argv(profile, tool_policy=tool_policy, root=root)])
+    child_arguments = child_argv(profile, tool_policy=tool_policy, root=root)
+    if args.fixture_direct:
+        child_arguments.append(f"--fixture-direct-cwd={worktree}")
+    command.extend(["--", *child_arguments])
     return command
 
 
@@ -944,6 +976,12 @@ def _probe_result(profile: str, response_values: Sequence[object]) -> dict[str, 
     }
 
 
+def _session_cwd(args: argparse.Namespace) -> str:
+    if args.fixture_direct:
+        return args.worktree or os.getcwd()
+    return SANDBOX_WORKSPACE
+
+
 def _probe_error_code(text: str) -> str:
     lowered = text.lower()
     if any(marker in lowered for marker in ("closed", "eof", "end of file")):
@@ -992,7 +1030,7 @@ def _probe_exchange(
         "id": 2,
         "method": "session/new",
         "params": {
-            "cwd": args.worktree or os.getcwd(),
+            "cwd": _session_cwd(args),
             "mcpServers": [],
         },
     }
@@ -1086,8 +1124,15 @@ def _run_direct_probe(
 ) -> dict[str, object]:
     if os.environ.get("GC_TEST_MODE") != "1":
         raise ProfileError("direct ACP probe mode requires GC_TEST_MODE=1")
-    command = build_launch_argv(profile, tool_policy=tool_policy, args=args)
+    command = build_launch_argv(
+        profile,
+        tool_policy=tool_policy,
+        launcher=args.launcher,
+        copilot=args.copilot,
+        args=args,
+    )
     environment = scrub_environment()
+    environment["GC_TEST_MODE"] = "1"
     process = subprocess.Popen(
         command,
         stdin=subprocess.PIPE,
@@ -1253,6 +1298,7 @@ def main() -> int:
             args=args,
         )
         environment = scrub_environment()
+        environment["GC_TEST_MODE"] = "1"
         os.execve(command[0], command, environment)
         return 0
     effective_profile = _effective_profile(

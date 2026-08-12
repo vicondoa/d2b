@@ -420,6 +420,13 @@ let
       SCRIPTS = pathlib.Path("${testPackageScripts}")
       RUNTIME = pathlib.Path("/run/gascity-contributor");
       STATE = pathlib.Path("/var/lib/gascity-contributor/state");
+      MANAGED = pathlib.Path("/var/lib/gascity-contributor/managed");
+      MANAGED_FILES = {
+          "city": "city.toml",
+          "pack": "pack.toml",
+          "copilot": "code-luna/settings.json",
+          "buildbuddy": "envoy.yaml.tmpl",
+      }
       FIXTURE = STATE / "fixture"
       MARKERS = RUNTIME / "test"
       WORKTREES = STATE / "worktrees"
@@ -448,6 +455,47 @@ let
           try:
               with pathlib.Path(path).open("a", encoding="utf-8") as stream:
                   stream.write("unexpected\n")
+          except OSError:
+              return False
+          return True
+
+      def _managed_readable(name):
+          try:
+              (MANAGED / name / MANAGED_FILES[name]).read_bytes()
+          except OSError:
+              return False
+          return True
+
+      def _managed_create():
+          candidate = MANAGED / ".main-create-probe"
+          try:
+              descriptor = os.open(
+                  candidate,
+                  os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                  0o600,
+              )
+              os.close(descriptor)
+          except OSError:
+              return False
+          try:
+              candidate.unlink()
+          except OSError:
+              pass
+          return True
+
+      def _managed_replace():
+          source = FIXTURE / ".main-replace-source"
+          source.write_text("fixture\n", encoding="utf-8")
+          try:
+              os.replace(source, MANAGED / "city")
+          except OSError:
+              source.unlink(missing_ok=True)
+              return False
+          return True
+
+      def _managed_unlink():
+          try:
+              os.unlink(MANAGED / ".service-unlink-probe")
           except OSError:
               return False
           return True
@@ -847,6 +895,13 @@ let
           "store-executable": os.access(str(PACKAGE / "bin/gc"), os.X_OK),
           "managed-city-link": (pathlib.Path("/var/lib/gascity-contributor/managed/city").is_symlink()),
           "managed-pack-link": (pathlib.Path("/var/lib/gascity-contributor/managed/pack").is_symlink()),
+          "managed-city-read": _managed_readable("city"),
+          "managed-pack-read": _managed_readable("pack"),
+          "managed-copilot-read": _managed_readable("copilot"),
+          "managed-buildbuddy-read": _managed_readable("buildbuddy"),
+          "managed-create": _managed_create(),
+          "managed-replace": _managed_replace(),
+          "managed-unlink": _managed_unlink(),
           "loopback-supervisor": True,
           "loopback-dolt": True,
       }
@@ -942,6 +997,72 @@ let
           for listener in listeners:
               listener.close()
   '';
+  };
+
+  managedAccessProbe = pkgs.writeTextFile {
+    name = "gascity-host-managed-access-probe";
+    executable = true;
+    text = ''
+      #!${contributorPython}
+      import errno
+      import os
+      import pathlib
+
+      root = pathlib.Path("/var/lib/gascity-contributor/managed")
+      files = {
+          "city": "city.toml",
+          "pack": "pack.toml",
+          "copilot": "code-luna/settings.json",
+          "buildbuddy": "envoy.yaml.tmpl",
+      }
+
+      for name, relative in files.items():
+          try:
+              (root / name / relative).read_bytes()
+          except OSError as error:
+              raise SystemExit(
+                  f"managed asset {name} was not readable: {error}"
+              )
+
+      def expect_denied(label, operation):
+          try:
+              operation()
+          except OSError as error:
+              if error.errno not in (errno.EACCES, errno.EPERM):
+                  raise SystemExit(
+                      f"managed asset {label} failed for an unexpected reason: "
+                      f"{error}"
+                  )
+          else:
+              raise SystemExit(f"managed asset {label} was writable")
+
+      def create_entry():
+          path = root / ".service-create-probe"
+          descriptor = os.open(
+              path,
+              os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+              0o600,
+          )
+          os.close(descriptor)
+
+      def replace_entry():
+          source = pathlib.Path(
+              f"/tmp/gascity-managed-replace-{os.getuid()}-{os.getpid()}"
+          )
+          source.write_text("fixture\n", encoding="utf-8")
+          try:
+              os.replace(source, root / "city")
+          except OSError:
+              source.unlink(missing_ok=True)
+              raise
+
+      expect_denied("create", create_entry)
+      expect_denied("replace", replace_entry)
+      expect_denied(
+          "unlink",
+          lambda: os.unlink(root / ".service-unlink-probe"),
+      )
+    '';
   };
 
   launcherProbe = pkgs.writeTextFile {
@@ -1387,6 +1508,10 @@ pkgs.testers.runNixOSTest {
     proxy_fixture = "${proxyFixture}"
 
     start_all()
+    machine.succeed(
+        "install -m 0440 -o root -g gascity-contributor /dev/null "
+        "/var/lib/gascity-contributor/managed/.service-unlink-probe"
+    )
 
     # Copy the repository-relative fixture layout into a disposable tree.  The
     # fixture modules deliberately resolve their package scripts from that
@@ -1743,12 +1868,24 @@ pkgs.testers.runNixOSTest {
     boundary = json.loads(
         machine.succeed("cat /run/gascity-contributor/test/main-boundary.json")
     )
+    managed_stat = machine.succeed(
+        "stat -c '%u %g %a' /var/lib/gascity-contributor/managed"
+    ).strip().split()
+    assert managed_stat[0] == "0"
+    assert managed_stat[1] == machine.succeed(
+        "getent group gascity-contributor | cut -d: -f3"
+    ).strip()
+    assert managed_stat[2] == "750"
     for key in [
         "projection-read",
         "store-visible",
         "store-executable",
         "managed-city-link",
         "managed-pack-link",
+        "managed-city-read",
+        "managed-pack-read",
+        "managed-copilot-read",
+        "managed-buildbuddy-read",
         "loopback-supervisor",
         "loopback-dolt",
     ]:
@@ -1762,8 +1899,23 @@ pkgs.testers.runNixOSTest {
         "buildbuddy-source-read",
         "daemon-socket-read",
         "systemd-socket-read",
+        "managed-create",
+        "managed-replace",
+        "managed-unlink",
     ]:
         assert boundary[key] is False, f"host boundary was readable/writable: {key}"
+    for identity in [
+        "gascity",
+        "gascity-agent",
+        "gascity-discord",
+        "gascity-publisher",
+        "gascity-egress",
+        "gascity-check",
+        "gascity-buildbuddy-proxy",
+    ]:
+        machine.succeed(
+            f"runuser -u {identity} -- ${managedAccessProbe}"
+        )
     machine.succeed("test ! -e /etc/gascity-test/unrelated-host-write")
     machine.succeed(
         f"test -x {package}/bin/gc && test -d /var/lib/gascity-check/nix-root"
