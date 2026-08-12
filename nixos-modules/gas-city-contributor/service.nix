@@ -56,7 +56,7 @@ let
   configuredAssetRoot = pkgs.runCommand "gas-city-contributor-configured-assets" { } ''
     set -euo pipefail
     mkdir -p "$out"
-    cp -R ${packageAssetRoot}/. "$out/"
+    cp -RL ${packageAssetRoot}/. "$out/"
     chmod -R u+w "$out/city"
 
     city="$out/city/city.toml"
