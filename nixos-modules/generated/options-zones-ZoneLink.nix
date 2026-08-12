@@ -19,7 +19,7 @@ let
     { path = [ "limits" "reconnectMaxAttempts" ]; required = false; kind = "positiveInt"; constraint = "must be a positive integer"; }
     { path = [ "limits" "reconnectWindowSecs" ]; required = false; kind = "positiveInt"; constraint = "must be a positive integer"; }
     { path = [ "transportCredentials" ]; required = false; kind = "stringList"; pattern = "^Credential/[a-z][a-z0-9-]{0,62}\$"; maxItems = 8; constraint = "must be a list of at most 8 strings matching ^Credential/[a-z][a-z0-9-]{0,62}\$"; }
-    { path = [ "transportProviderRef" ]; required = true; kind = "string"; pattern = "^Provider/transport-[a-z][a-z0-9-]*\$"; constraint = "must be a string matching ^Provider/transport-[a-z][a-z0-9-]*\$"; }
+    { path = [ "transportProviderRef" ]; required = true; kind = "string"; pattern = "^Provider/transport-[a-z][a-z0-9-]{0,52}\$"; constraint = "must be a string matching ^Provider/transport-[a-z][a-z0-9-]{0,52}\$"; }
     { path = [ "transportSettings" ]; required = false; kind = "object"; closed = false; constraint = "must be an attribute set"; }
   ];
 

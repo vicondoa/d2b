@@ -58,6 +58,7 @@ pub enum W3BrokerOperation {
     GuestControlSign,
     ModprobeIfAllowed,
     UsbipBindFirewallRule,
+    MigrateLegacySwtpmState,
     /// Open the FIDO/CTAP hidraw node for the broker-configured device
     /// selector. Typed stub until the live host-broker handler is implemented.
     SecurityKeyOpenDevice,
@@ -97,6 +98,7 @@ impl W3BrokerOperation {
             Self::GuestControlSign => "GuestControlSign",
             Self::ModprobeIfAllowed => "ModprobeIfAllowed",
             Self::UsbipBindFirewallRule => "UsbipBindFirewallRule",
+            Self::MigrateLegacySwtpmState => "MigrateLegacySwtpmState",
             Self::SecurityKeyOpenDevice => "SecurityKeyOpenDevice",
             Self::SecurityKeyApplyUdevRules => "SecurityKeyApplyUdevRules",
         }
@@ -132,6 +134,7 @@ impl W3BrokerOperation {
             Self::GuestControlSign,
             Self::ModprobeIfAllowed,
             Self::UsbipBindFirewallRule,
+            Self::MigrateLegacySwtpmState,
             Self::SecurityKeyOpenDevice,
             Self::SecurityKeyApplyUdevRules,
         ]
@@ -198,6 +201,11 @@ impl W3BrokerOperation {
             Self::UsbipBindFirewallRule => W3OperationFlags {
                 audit: true,
                 destructive: false,
+                secret_access: false,
+            },
+            Self::MigrateLegacySwtpmState => W3OperationFlags {
+                audit: true,
+                destructive: true,
                 secret_access: false,
             },
             // SecurityKeyOpenDevice: opens a single FIDO hidraw fd; read-only

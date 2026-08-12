@@ -64,6 +64,7 @@ const BINDING_SPEC_ALLOWED: &[&str] = &[
     "updatePolicy",
     "serviceRef",
     "grants",
+    "targetRef",
     "guestUsers",
     "suspendOnGuestAbsent",
 ];
