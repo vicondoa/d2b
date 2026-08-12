@@ -395,6 +395,7 @@ fn gas_city_uses_four_immutable_sibling_imports() {
     validate_sibling_imports(&city, &local_pack).unwrap();
     for required in [
         "configuredAssetRoot = pkgs.runCommand",
+        "cp -RL ${packageAssetRoot}/. \"$out/\"",
         "test \"$(grep -c '^dir = \"d2b\"$' \"$city\")\" -eq 40",
         "'name = \"${cfg.repository.rigName}\"'",
         "'path = \"/var/lib/gascity-contributor/state/rigs/${cfg.repository.rigName}\"'",
