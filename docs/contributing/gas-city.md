@@ -235,20 +235,20 @@ Submit a bounded request with no credential fields:
 ```sh
 printf '%s\n' \
   '{"run_id":"demo-001","bead_id":"demo-001","summary":"Bounded contributor smoke","repository":"OWNER/REPOSITORY","base_branch":"v3"}' |
-  sudo -n "$GC_SUBMIT"
+  sudo -n -u gascity "$GC_SUBMIT"
 ```
 
 Inspect the lifecycle service:
 
 ```sh
-sudo -n "$GC_STATUS"
+sudo -n -u gascity "$GC_STATUS"
 ```
 
 Cancel a run before publication:
 
 ```sh
 printf '%s\n' '{"run_id":"demo-001","reason":"operator requested cancellation"}' |
-  sudo -n "$GC_CANCEL"
+  sudo -n -u gascity "$GC_CANCEL"
 ```
 
 Identifiers and request size are bounded. A cancellation marker is durable
@@ -311,7 +311,7 @@ sudo systemctl status gas-city-contributor.service
 sudo journalctl -u gas-city-contributor.service -u gascity-agent.service \
   -u gascity-discord.service -u gascity-publisher.service --since today
 sudo cat /run/gascity-contributor/readiness.json
-sudo -n "$GC_STATUS"
+sudo -n -u gascity "$GC_STATUS"
 ```
 
 Inspect the sidecars and slice when a dependency is not ready:
