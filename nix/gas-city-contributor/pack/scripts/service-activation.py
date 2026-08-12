@@ -1472,6 +1472,13 @@ def _identifier(value: str, label: str) -> str:
     return value
 
 
+def readiness_bead_id(base_bead_id: str, profile: str) -> str:
+    if profile not in PROFILE_SETTINGS:
+        raise ActivationError(f"unknown profile: {profile}")
+    base = _identifier(base_bead_id, "bead id")
+    return _identifier(f"{base}-{profile}", "readiness bead id")
+
+
 def classify_failure(value: object) -> str:
     """Map a probe failure into the closed fallback classification."""
 
@@ -2962,7 +2969,7 @@ def main() -> int:
                     generation=args.generation,
                     state_schema=args.state_schema,
                     run_id=args.run_id,
-                    bead_id=args.bead_id,
+                    bead_id=readiness_bead_id(args.bead_id, profile),
                     worktree=args.worktree,
                     lease_root=args.lease_root,
                     runtime_root=args.runtime_root,

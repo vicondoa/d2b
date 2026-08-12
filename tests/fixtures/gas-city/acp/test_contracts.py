@@ -855,6 +855,113 @@ class ActivationContractTests(unittest.TestCase):
         self.assertEqual(status["error_code"], "review-sol-closed")
         self.assertEqual(calls, ["code-luna", "review-sol"])
 
+    def test_readiness_bead_ids_are_stable_and_identifier_bounded(self) -> None:
+        for profile in ("code-luna", "review-sol", "review-luna"):
+            with self.subTest(profile=profile):
+                bead_id = ACTIVATION.readiness_bead_id("readiness", profile)
+                self.assertEqual(
+                    bead_id,
+                    ACTIVATION.readiness_bead_id("readiness", profile),
+                )
+                self.assertTrue(ACTIVATION.IDENTIFIER_PATTERN.fullmatch(bead_id))
+
+        self.assertEqual(
+            len(ACTIVATION.readiness_bead_id("a" * 118, "code-luna")),
+            128,
+        )
+        with self.assertRaises(ACTIVATION.ActivationError):
+            ACTIVATION.readiness_bead_id("a" * 119, "code-luna")
+        with self.assertRaises(ACTIVATION.ActivationError):
+            ACTIVATION.readiness_bead_id("bad..bead", "code-luna")
+
+    def test_activation_qualifies_probe_beads_without_changing_readiness_run(self) -> None:
+        scenarios = (
+            (
+                "review-sol",
+                [
+                    ("code-luna", "readiness", "readiness-code-luna"),
+                    ("review-sol", "readiness", "readiness-review-sol"),
+                ],
+            ),
+            (
+                "review-luna",
+                [
+                    ("code-luna", "readiness", "readiness-code-luna"),
+                    ("review-sol", "readiness", "readiness-review-sol"),
+                    ("review-luna", "readiness", "readiness-review-luna"),
+                ],
+            ),
+        )
+        for selected_review, expected_calls in scenarios:
+            with self.subTest(selected_review=selected_review):
+                with tempfile.TemporaryDirectory(prefix="gascity-readiness-probes-") as raw:
+                    root = pathlib.Path(raw)
+                    worktree = root / "worktree"
+                    worktree.mkdir()
+                    status_path = root / "readiness.json"
+                    calls: list[tuple[str, str, str]] = []
+
+                    def fake_run_profile_probe(_script: str, **kwargs):
+                        profile = kwargs["profile"]
+                        calls.append(
+                            (
+                                profile,
+                                kwargs["run_id"],
+                                kwargs["bead_id"],
+                            )
+                        )
+                        if profile == "review-sol" and selected_review == "review-luna":
+                            return {
+                                "profile": profile,
+                                "ok": False,
+                                "error_code": "unsupported",
+                            }
+                        return successful_probe(profile)
+
+                    argv = [
+                        "service-activation.py",
+                        "activate",
+                        "--status-path",
+                        str(status_path),
+                        "--generation",
+                        "g1",
+                        "--state-schema",
+                        "1",
+                        "--profile-script",
+                        str(root / "copilot-profile.py"),
+                        "--run-id",
+                        "readiness",
+                        "--bead-id",
+                        "readiness",
+                        "--worktree",
+                        str(worktree),
+                        "--lease-root",
+                        str(root / "leases"),
+                        "--runtime-root",
+                        str(root / "runtime"),
+                    ]
+                    output = io.StringIO()
+                    with mock.patch.object(
+                        ACTIVATION,
+                        "run_profile_probe",
+                        side_effect=fake_run_profile_probe,
+                    ), mock.patch.object(ACTIVATION.sys, "argv", argv), mock.patch.object(
+                        ACTIVATION.sys,
+                        "stdout",
+                        output,
+                    ):
+                        self.assertEqual(ACTIVATION.main(), 0)
+
+                    self.assertEqual(calls, expected_calls)
+                    status = json.loads(status_path.read_text(encoding="utf-8"))
+                    self.assertEqual(
+                        status["effective_profiles"],
+                        {
+                            "coding": "code-luna",
+                            "review": selected_review,
+                        },
+                    )
+
     def test_sol_auth_network_quota_malformed_and_unknown_block(self) -> None:
         for code in ("authentication", "network", "quota", "malformed", "unknown"):
             calls: list[str] = []
@@ -904,6 +1011,97 @@ class ActivationContractTests(unittest.TestCase):
                     state_schema="1",
                     profile="code-luna",
                 )
+
+
+class ReadinessIsolationContractTests(unittest.TestCase):
+    @staticmethod
+    def _bead_lock(lease) -> pathlib.Path:
+        return next(path for path in lease.paths if path.parent.name == "bead-locks")
+
+    def test_profiles_use_distinct_homes_and_bead_locks_with_shared_run_membership(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory(prefix="gascity-readiness-isolation-") as raw:
+            root = pathlib.Path(raw)
+            runtime_root = root / "runtime"
+            lease_root = root / "leases"
+            code_bead = ACTIVATION.readiness_bead_id("readiness", "code-luna")
+            review_bead = ACTIVATION.readiness_bead_id("readiness", "review-sol")
+            code_home = LAUNCHER.materialize_copilot_home(
+                COPILOT_ROOT / "code-luna" / "settings.json",
+                profile="code-luna",
+                runtime_root=runtime_root,
+                run_id="readiness",
+                bead_id=code_bead,
+            )
+            review_home = LAUNCHER.materialize_copilot_home(
+                COPILOT_ROOT / "review-sol" / "settings.json",
+                profile="review-sol",
+                runtime_root=runtime_root,
+                run_id="readiness",
+                bead_id=review_bead,
+            )
+            self.assertNotEqual(code_home, review_home)
+            self.assertEqual(
+                code_home.name,
+                "readiness.readiness-code-luna.copilot-home",
+            )
+            self.assertEqual(
+                review_home.name,
+                "readiness.readiness-review-sol.copilot-home",
+            )
+
+            try:
+                with LAUNCHER.ConcurrencyLease.acquire(
+                    lease_root,
+                    run_id="readiness",
+                    bead_id=code_bead,
+                    max_agents=3,
+                    max_active_runs=1,
+                ) as code_lease:
+                    with LAUNCHER.ConcurrencyLease.acquire(
+                        lease_root,
+                        run_id="readiness",
+                        bead_id=review_bead,
+                        max_agents=3,
+                        max_active_runs=1,
+                    ) as review_lease:
+                        code_lock = self._bead_lock(code_lease)
+                        review_lock = self._bead_lock(review_lease)
+                        self.assertNotEqual(code_lock, review_lock)
+                        self.assertEqual(code_lock.name, f"{code_bead}.lock")
+                        self.assertEqual(review_lock.name, f"{review_bead}.lock")
+                        with self.assertRaises(LAUNCHER.LeaseBusy):
+                            LAUNCHER.ConcurrencyLease.acquire(
+                                lease_root,
+                                run_id="readiness",
+                                bead_id=code_bead,
+                                max_agents=3,
+                                max_active_runs=1,
+                            )
+
+                with LAUNCHER.ConcurrencyLease.acquire(
+                    lease_root,
+                    run_id="readiness",
+                    bead_id=code_bead,
+                    max_agents=3,
+                    max_active_runs=1,
+                ):
+                    pass
+
+                shutil.rmtree(code_home)
+                retried_code_home = LAUNCHER.materialize_copilot_home(
+                    COPILOT_ROOT / "code-luna" / "settings.json",
+                    profile="code-luna",
+                    runtime_root=runtime_root,
+                    run_id="readiness",
+                    bead_id=code_bead,
+                )
+                self.assertEqual(retried_code_home, code_home)
+            finally:
+                for home in (code_home, review_home):
+                    if home.is_dir() and not home.is_symlink():
+                        shutil.rmtree(home)
 
 
 class ManagedStorePathValidationContractTests(unittest.TestCase):
