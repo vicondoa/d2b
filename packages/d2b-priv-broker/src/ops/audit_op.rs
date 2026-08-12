@@ -223,6 +223,10 @@ pub enum OperationFields {
         owner_gid: u32,
         mode: u32,
     },
+    MigrateLegacySwtpmState {
+        vm_id: String,
+        outcome: String,
+    },
     /// Terminal audit fields for the swtpm-dir first-run hardening
     /// step (issue #64). Emitted as a `SpawnRunner` side-effect for the
     /// long-lived `Swtpm` runner: the broker provisions and hardens ONLY
@@ -613,6 +617,10 @@ impl OperationFields {
                 owner_uid: u32,
                 owner_gid: u32,
                 mode: u32,
+            }),
+            "MigrateLegacySwtpmState" => parse_fields!(value => MigrateLegacySwtpmState {
+                vm_id: String,
+                outcome: String,
             }),
             "PrepareSwtpmDir" => Ok(Self::PrepareSwtpmDir(serde_json::from_value(value)?)),
             "PrepareStoreView" => parse_fields!(value => PrepareStoreView {

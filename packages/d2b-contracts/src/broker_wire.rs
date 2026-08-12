@@ -139,6 +139,8 @@ pub enum BrokerRequest {
     PollChildReaped,
     PrepareRuntimeDir(PrepareDirRequest),
     PrepareStateDir(PrepareDirRequest),
+    /// Adopt a known legacy swtpm state through the broker-owned journal.
+    MigrateLegacySwtpmState(MigrateLegacySwtpmStateRequest),
     ReconcileStorageScope(ReconcileStorageScopeRequest),
     ValidateLockSpec(ValidateLockSpecRequest),
     PrepareStoreView(PrepareStoreViewRequest),
@@ -312,6 +314,7 @@ impl BrokerRequest {
             Self::PollChildReaped => "PollChildReaped",
             Self::PrepareRuntimeDir(_) => "PrepareRuntimeDir",
             Self::PrepareStateDir(_) => "PrepareStateDir",
+            Self::MigrateLegacySwtpmState(_) => "MigrateLegacySwtpmState",
             Self::ReconcileStorageScope(_) => "ReconcileStorageScope",
             Self::ValidateLockSpec(_) => "ValidateLockSpec",
             Self::PrepareStoreView(_) => "PrepareStoreView",
@@ -593,6 +596,7 @@ pub enum BrokerResponse {
     /// Drain response for `BrokerRequest::PollChildReaped`.
     PollChildReaped(PollChildReapedResponse),
     ReconcileStorageScope(ReconcileStorageScopeResponse),
+    MigrateLegacySwtpmState(MigrateLegacySwtpmStateResponse),
     SetBridgePortFlags(BridgePortFlagsResponse),
     SignalRunner(SignalRunnerResponse),
     DeregisterRunnerPidfd(DeregisterRunnerPidfdResponse),
@@ -1309,6 +1313,48 @@ pub struct PrepareDirRequest {
     pub path_class: PathClass,
     #[serde(default)]
     pub tracing_span_id: Option<TracingSpanId>,
+}
+
+/// Opaque request for one trusted legacy swtpm migration.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MigrateLegacySwtpmStateRequest {
+    pub bundle_legacy_swtpm_intent_ref: BundleOpId,
+    pub vm_id: VmId,
+    #[serde(default)]
+    pub tracing_span_id: Option<TracingSpanId>,
+}
+
+/// Closed migration outcome returned by the broker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum LegacySwtpmMigrationOutcome {
+    Migrated,
+    AlreadyMigrated,
+    NotApplicable,
+    Pending,
+    Failed,
+    Ambiguous,
+}
+
+impl LegacySwtpmMigrationOutcome {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Migrated => "migrated",
+            Self::AlreadyMigrated => "already-migrated",
+            Self::NotApplicable => "not-applicable",
+            Self::Pending => "pending",
+            Self::Failed => "failed",
+            Self::Ambiguous => "ambiguous",
+        }
+    }
+}
+
+/// Result of one broker-owned legacy swtpm migration attempt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MigrateLegacySwtpmStateResponse {
+    pub outcome: LegacySwtpmMigrationOutcome,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

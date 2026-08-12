@@ -1,0 +1,92 @@
+{
+  "$id": "https://d2bus.org/schemas/v3/audio.d2bus.org.AudioService",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Qualified semantic ResourceType envelope generated from the frozen catalog.",
+  "properties": {
+    "apiVersion": {
+      "const": "resources.d2bus.org/v3"
+    },
+    "metadata": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "pattern": "^[a-z][a-z0-9-]{0,62}$",
+          "type": "string"
+        },
+        "ownerRef": {
+          "pattern": "^(?:[A-Z][A-Za-z0-9]{0,62}|[a-z][a-z0-9-]{0,62}\\.d2bus\\.org\\.[A-Z][A-Za-z0-9]{0,62})/[a-z][a-z0-9-]{0,62}$",
+          "type": "string",
+          "x-d2b-allowed-ref-types": [],
+          "x-d2b-reference-kind": "ResourceRef",
+          "x-d2b-reference-scope": "same-zone"
+        },
+        "zone": {
+          "pattern": "^[a-z][a-z0-9-]{0,62}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "zone"
+      ],
+      "type": "object"
+    },
+    "spec": {
+      "$id": "https://d2bus.org/schemas/v3/audio.d2bus.org/AudioService/spec",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "Qualified semantic resource spec.",
+      "properties": {
+        "authority": {},
+        "implementationEndpointRefs": {
+          "items": {
+            "pattern": "^(?:Endpoint)/[a-z][a-z0-9-]{0,62}$",
+            "type": "string",
+            "x-d2b-allowed-ref-types": [
+              "Endpoint"
+            ],
+            "x-d2b-reference-kind": "ResourceRef",
+            "x-d2b-reference-scope": "same-zone"
+          },
+          "type": "array"
+        },
+        "operations": {},
+        "providerRef": {
+          "pattern": "^Provider/[a-z][a-z0-9-]{0,62}$",
+          "type": "string",
+          "x-d2b-allowed-ref-types": [
+            "Provider"
+          ],
+          "x-d2b-reference-kind": "ResourceRef",
+          "x-d2b-reference-scope": "same-zone"
+        },
+        "serviceRole": {},
+        "updatePolicy": {}
+      },
+      "required": [
+        "implementationEndpointRefs",
+        "operations",
+        "providerRef",
+        "serviceRole"
+      ],
+      "title": "audio.d2bus.org/AudioService/spec",
+      "type": "object",
+      "x-d2b-resource-type": "audio.d2bus.org.AudioService",
+      "x-d2b-schema-fingerprint": "sha256:c68e98abb4e124fce0cebcbb9bc6552513a198a979c787193a0e5b95f468dfcb",
+      "x-d2b-schema-version": "1.0"
+    },
+    "type": {
+      "const": "audio.d2bus.org.AudioService"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "metadata",
+    "spec",
+    "type"
+  ],
+  "title": "audio.d2bus.org.AudioService",
+  "type": "object",
+  "x-d2b-resource-type": "audio.d2bus.org.AudioService"
+}

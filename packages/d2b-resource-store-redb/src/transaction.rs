@@ -53,7 +53,7 @@ pub(crate) const ALL_TABLES: [TableDefinition<'static, &[u8], &[u8]>; 10] = [
     ZONE_LINK_CURSORS,
 ];
 
-pub(crate) const PHYSICAL_SCHEMA_VERSION: u32 = 1;
+pub(crate) const PHYSICAL_SCHEMA_VERSION: u32 = 2;
 const STANDARD_SCHEMA_VERSION: &str = "1.0";
 const RESOURCE_SCHEMA_DOMAIN_TAG: &str = "d2b:v3:resource-schema";
 
@@ -117,6 +117,17 @@ pub(crate) struct OperationRecord {
     /// after the corresponding audit records have reached their sink.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audit_outbox: Option<AuditOutboxRecord>,
+    /// A typed Core authority lifecycle row stored in the same operation
+    /// ledger. The payload is opaque to redb and validated by Core.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authority: Option<AuthorityOperationStorage>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct AuthorityOperationStorage {
+    pub payload: Vec<u8>,
+    pub state: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -826,6 +837,33 @@ pub(crate) fn validate_consistency(database: &Database) -> Result<(), StoreError
         if let Some(outbox) = &operation.audit_outbox {
             validate_audit_outbox(outbox, &operation_id, &meta)?;
         }
+        if let Some(authority) = &operation.authority {
+            validate_authority_operation(authority)?;
+            if !operation.resources.is_empty() || !operation.resource_uids.is_empty() {
+                return Err(integrity("authority-operation-resource-mix"));
+            }
+        }
+    }
+
+    fn validate_authority_operation(
+        authority: &AuthorityOperationStorage,
+    ) -> Result<(), StoreError> {
+        if authority.payload.is_empty() || authority.payload.len() > 64 * 1024 {
+            return Err(integrity("authority-operation-payload-invalid"));
+        }
+        if !matches!(
+            authority.state.as_str(),
+            "pending"
+                | "effect-confirmed"
+                | "effect-retryable"
+                | "effect-terminal"
+                | "closing"
+                | "closed"
+                | "released"
+        ) {
+            return Err(integrity("authority-operation-state-invalid"));
+        }
+        Ok(())
     }
     validate_api_schemas(&read, &meta)?;
     validate_zone_link_cursors(&read, &meta)?;
@@ -1203,6 +1241,163 @@ pub(crate) fn current_meta(database: &Database) -> Result<StoreMeta, StoreError>
     read_meta(&read)
 }
 
+pub(crate) fn authority_prepare(
+    database: &Database,
+    operation_id: &str,
+    payload: Vec<u8>,
+) -> Result<(), StoreError> {
+    if operation_id.is_empty() || operation_id.len() > 512 {
+        return Err(integrity("authority-operation-id-invalid"));
+    }
+    if payload.is_empty() || payload.len() > 64 * 1024 {
+        return Err(integrity("authority-operation-payload-invalid"));
+    }
+    let request_digest = canonical_digest("d2b:authority-operation/v1", &payload);
+    let key = operation_key(operation_id)?;
+    let mut write = database.begin_write().map_err(integrity)?;
+    set_full_durability(&mut write)?;
+    let current_revision = read_meta_in_write(&write)?.current_revision;
+    let existing = {
+        let table = write.open_table(OPERATIONS).map_err(integrity)?;
+        table
+            .get(key.as_slice())
+            .map_err(integrity)?
+            .map(|value| decode::<OperationRecord>(ValueKind::OperationRecord, value.value()))
+            .transpose()?
+    };
+    if let Some(existing) = existing {
+        let _ = existing;
+        return Err(conflict(
+            current_revision,
+            0,
+            "authority-operation-id-reused",
+        ));
+    }
+    let operation = OperationRecord {
+        request_digest,
+        resource_uids: Vec::new(),
+        resources: Vec::new(),
+        outcome: "committed".to_owned(),
+        accepted_revision: current_revision,
+        finished_revision: current_revision,
+        audit_outbox: None,
+        authority: Some(AuthorityOperationStorage {
+            payload,
+            state: "pending".to_owned(),
+        }),
+    };
+    let value = encode(ValueKind::OperationRecord, &operation)?;
+    write
+        .open_table(OPERATIONS)
+        .map_err(integrity)?
+        .insert(key.as_slice(), value.as_slice())
+        .map_err(integrity)?;
+    write.commit().map_err(integrity)
+}
+
+pub(crate) fn authority_update(
+    database: &Database,
+    operation_id: &str,
+    state: &str,
+) -> Result<(), StoreError> {
+    if !matches!(
+        state,
+        "pending"
+            | "effect-confirmed"
+            | "effect-retryable"
+            | "effect-terminal"
+            | "closing"
+            | "closed"
+            | "released"
+    ) {
+        return Err(integrity("authority-operation-state-invalid"));
+    }
+    let key = operation_key(operation_id)?;
+    let mut write = database.begin_write().map_err(integrity)?;
+    set_full_durability(&mut write)?;
+    let mut operation = {
+        let table = write.open_table(OPERATIONS).map_err(integrity)?;
+        let value = table
+            .get(key.as_slice())
+            .map_err(integrity)?
+            .ok_or_else(|| integrity("authority-operation-missing"))?;
+        decode::<OperationRecord>(ValueKind::OperationRecord, value.value())?
+    };
+    let authority = operation
+        .authority
+        .as_mut()
+        .ok_or_else(|| integrity("authority-operation-missing"))?;
+    if !authority_state_transition_allowed(&authority.state, state) {
+        return Err(integrity("authority-operation-state-transition-invalid"));
+    }
+    if authority.state == state {
+        write.abort().map_err(integrity)?;
+        return Ok(());
+    }
+    authority.state = state.to_owned();
+    if let Ok(mut payload) = serde_json::from_slice::<serde_json::Value>(&authority.payload)
+        && let Some(object) = payload.as_object_mut()
+        && object.contains_key("state")
+    {
+        object.insert(
+            "state".to_owned(),
+            serde_json::Value::String(state.to_owned()),
+        );
+        authority.payload = serde_json::to_vec(&payload)
+            .map_err(|_| integrity("authority-operation-payload-invalid"))?;
+        operation.request_digest =
+            canonical_digest("d2b:authority-operation/v1", &authority.payload);
+    }
+    let value = encode(ValueKind::OperationRecord, &operation)?;
+    write
+        .open_table(OPERATIONS)
+        .map_err(integrity)?
+        .insert(key.as_slice(), value.as_slice())
+        .map_err(integrity)?;
+    write.commit().map_err(integrity)
+}
+
+fn authority_state_transition_allowed(current: &str, next: &str) -> bool {
+    if current == next {
+        return true;
+    }
+    matches!(
+        (current, next),
+        (
+            "pending",
+            "effect-confirmed" | "effect-retryable" | "effect-terminal" | "closing"
+        ) | (
+            "effect-confirmed" | "effect-retryable" | "effect-terminal",
+            "effect-confirmed" | "effect-retryable" | "effect-terminal" | "closing"
+        ) | ("closing", "closed" | "released")
+            | ("closed", "released")
+    )
+}
+
+pub(crate) fn authority_operations(
+    database: &Database,
+) -> Result<Vec<(String, Vec<u8>, String)>, StoreError> {
+    let read = database.begin_read().map_err(integrity)?;
+    let table = read.open_table(OPERATIONS).map_err(integrity)?;
+    table
+        .iter()
+        .map_err(integrity)?
+        .map(|row| {
+            let (key, value) = row.map_err(integrity)?;
+            let operation_id = operation_id_from_key(key.value())?;
+            let operation: OperationRecord = decode(ValueKind::OperationRecord, value.value())?;
+            Ok(operation
+                .authority
+                .map(|authority| (operation_id, authority.payload, authority.state)))
+        })
+        .filter_map(|row| match row {
+            Ok(Some(value)) => Some(Ok(value)),
+            Ok(None) => None,
+            Err(error) => Some(Err(error)),
+        })
+        .collect()
+}
+
 /// Return committed operations whose audit record has not been acknowledged
 /// by the durable sink.
 pub(crate) fn pending_audit_outboxes(
@@ -1443,6 +1638,7 @@ pub(crate) fn apply_group_with_hook(
             accepted_revision: revision,
             finished_revision: revision,
             audit_outbox: Some(audit_outbox_for(&verified, &group_resources, revision)?),
+            authority: None,
         };
         let operation_value = encode(ValueKind::OperationRecord, &operation)?;
         write

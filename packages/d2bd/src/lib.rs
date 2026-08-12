@@ -36,6 +36,7 @@ use d2b_contracts::{
         ApplyRouteRequest as BrokerApplyRouteRequest,
         ApplySysctlRequest as BrokerApplySysctlRequest, BrokerCallerRole, BrokerErrorResponse,
         BrokerRequest, BrokerRequestEnvelope, BrokerResponse, DeregisterRunnerPidfdRequest,
+        HelloRequest, LegacySwtpmMigrationOutcome, MigrateLegacySwtpmStateRequest,
         OpenPidfdRequest as BrokerOpenPidfdRequest,
         OpenZoneStoreRequest as BrokerOpenZoneStoreRequest,
         QemuMediaBootRequest as BrokerQemuMediaBootRequest,
@@ -187,6 +188,7 @@ pub mod net_route_preflight;
 pub mod pidfs_probe;
 // ADR 0034 startup contract check for generated storage/restart/sync artifacts.
 pub mod storage_lifecycle;
+pub mod tpm_effect_port;
 // Contract for bringing autostart VMs up on daemon startup (net VMs
 // first, concurrency cap, degraded-mode tolerant, idempotent). See
 // docs/reference/daemon-autostart.md.
@@ -12347,6 +12349,59 @@ mod exec_owner_io_tests {
     }
 }
 
+/// Dispatch the typed legacy swtpm migration operation through the production
+/// broker socket. The Provider effect adapter consumes only this closed
+/// outcome and never receives a host path or journal byte.
+#[allow(dead_code)]
+pub(crate) fn dispatch_broker_legacy_tpm_migration(
+    state: &ServerState,
+    vm_id: VmId,
+    intent_ref: BundleOpId,
+) -> Result<LegacySwtpmMigrationOutcome, TypedError> {
+    let caller_role = BrokerCallerRole::AdminUid {
+        uid: state.daemon_uid,
+    };
+    match dispatch_broker_request_as(
+        state,
+        BrokerRequest::Hello(HelloRequest {
+            client_version: d2b_contracts::PROTOCOL_VERSION.to_string(),
+            supported_features: vec!["MigrateLegacySwtpmState".to_owned()],
+        }),
+        caller_role.clone(),
+    )? {
+        BrokerResponse::Hello(response)
+            if response
+                .capabilities
+                .iter()
+                .any(|capability| capability == "MigrateLegacySwtpmState") => {}
+        _ => {
+            return Err(TypedError::InternalBrokerUnavailable {
+                path: broker_socket_path(state),
+                detail: "broker did not advertise legacy TPM migration".to_owned(),
+            });
+        }
+    }
+    match dispatch_broker_request_as(
+        state,
+        BrokerRequest::MigrateLegacySwtpmState(MigrateLegacySwtpmStateRequest {
+            bundle_legacy_swtpm_intent_ref: intent_ref,
+            vm_id,
+            tracing_span_id: None,
+        }),
+        caller_role,
+    )? {
+        BrokerResponse::MigrateLegacySwtpmState(response) => Ok(response.outcome),
+        BrokerResponse::Error(error) => Err(TypedError::InternalBrokerUnavailable {
+            path: broker_socket_path(state),
+            detail: error.message,
+        }),
+        _ => Err(TypedError::InternalBrokerUnavailable {
+            path: broker_socket_path(state),
+            detail: "legacy TPM migration response mismatch".to_owned(),
+        }),
+    }
+}
+
 fn dispatch_broker_request(
     state: &ServerState,
     request: BrokerRequest,
@@ -12922,6 +12977,7 @@ fn open_zone_store_from_broker(
             Ok(resource_runtime::OpenedZoneStore {
                 response,
                 database_fd: fd,
+                external_inventory: None,
             })
         }
         BrokerResponse::Error(error) => Err(TypedError::InternalBrokerUnavailable {

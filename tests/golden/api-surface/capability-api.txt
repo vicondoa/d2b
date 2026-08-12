@@ -2705,6 +2705,7 @@ d2b_contracts	pub d2b_contracts::broker_wire::BrokerRequest::GuestControlSign(d2
 d2b_contracts	pub d2b_contracts::broker_wire::BrokerRequest::Hello(d2b_contracts::broker_wire::HelloRequest)
 d2b_contracts	pub d2b_contracts::broker_wire::BrokerRequest::InjectSecretById(d2b_contracts::broker_wire::SecretByIdRequest)
 d2b_contracts	pub d2b_contracts::broker_wire::BrokerRequest::LaunchMinijailChild(d2b_contracts::broker_wire::LaunchMinijailChildRequest)
+d2b_contracts	pub d2b_contracts::broker_wire::BrokerRequest::MigrateLegacySwtpmState(d2b_contracts::broker_wire::MigrateLegacySwtpmStateRequest)
 d2b_contracts	pub d2b_contracts::broker_wire::BrokerRequest::ModprobeIfAllowed(d2b_contracts::broker_wire::ModprobeIfAllowedRequest)
 d2b_contracts	pub d2b_contracts::broker_wire::BrokerRequest::OpenCgroupDir(d2b_contracts::broker_wire::OpenCgroupDirRequest)
 d2b_contracts	pub d2b_contracts::broker_wire::BrokerRequest::OpenDevice(d2b_contracts::broker_wire::OpenDeviceRequest)
@@ -4172,13 +4173,28 @@ d2b_controller_toolkit	pub trait d2b_controller_toolkit::runner::ControllerSourc
 d2b_controller_toolkit	pub trait d2b_controller_toolkit::runner::ResourceReconciler: core::marker::Send + core::marker::Sync + 'static
 d2b_controller_toolkit	pub type d2b_controller_toolkit::ResourceReconciler::Error: core::error::Error + core::marker::Send + core::marker::Sync + 'static
 d2b_controller_toolkit	pub type d2b_controller_toolkit::runner::ResourceReconciler::Error: core::error::Error + core::marker::Send + core::marker::Sync + 'static
+d2b_core_controller	impl !core::marker::Freeze for d2b_core_controller::authority::HostGlobalAuthorityIndex
+d2b_core_controller	impl !core::marker::Freeze for d2b_core_controller::authority_persistence::RedbAuthorityPersistence
 d2b_core_controller	impl !core::marker::Freeze for d2b_core_controller::rbac::PositiveDecisionCache
 d2b_core_controller	impl !core::marker::Freeze for d2b_core_controller::user_session_authority::AuthorityIndex
+d2b_core_controller	impl !core::panic::unwind_safe::RefUnwindSafe for d2b_core_controller::authority::AuthorityReservation
+d2b_core_controller	impl !core::panic::unwind_safe::RefUnwindSafe for d2b_core_controller::authority::ExternalNicReservation
+d2b_core_controller	impl !core::panic::unwind_safe::RefUnwindSafe for d2b_core_controller::authority_persistence::AuthorityRecoveryCoordinator
+d2b_core_controller	impl !core::panic::unwind_safe::RefUnwindSafe for d2b_core_controller::authority_persistence::RedbAuthorityPersistence
+d2b_core_controller	impl !core::panic::unwind_safe::UnwindSafe for d2b_core_controller::authority::AuthorityReservation
+d2b_core_controller	impl !core::panic::unwind_safe::UnwindSafe for d2b_core_controller::authority::ExternalNicReservation
+d2b_core_controller	impl !core::panic::unwind_safe::UnwindSafe for d2b_core_controller::authority_persistence::AuthorityRecoveryCoordinator
+d2b_core_controller	impl !core::panic::unwind_safe::UnwindSafe for d2b_core_controller::authority_persistence::RedbAuthorityPersistence
 d2b_core_controller	impl core::clone::Clone for d2b_core_controller::api_catalog::CatalogEntry
 d2b_core_controller	impl core::clone::Clone for d2b_core_controller::api_catalog::StagedApiCatalog
 d2b_core_controller	impl core::clone::Clone for d2b_core_controller::authority::AuthorityOwnerProof
 d2b_core_controller	impl core::clone::Clone for d2b_core_controller::authority::AuthorityRequest
 d2b_core_controller	impl core::clone::Clone for d2b_core_controller::authority::AuthorityScope
+d2b_core_controller	impl core::clone::Clone for d2b_core_controller::authority::AuthorityStorageClaim
+d2b_core_controller	impl core::clone::Clone for d2b_core_controller::authority::AuthorityStorageOperation
+d2b_core_controller	impl core::clone::Clone for d2b_core_controller::authority::DurableAuthorityClaim
+d2b_core_controller	impl core::clone::Clone for d2b_core_controller::authority::DurableAuthorityOwnerProof
+d2b_core_controller	impl core::clone::Clone for d2b_core_controller::authority::DurableExternalNicClaim
 d2b_core_controller	impl core::clone::Clone for d2b_core_controller::authority::ExternalNicOwnerProof
 d2b_core_controller	impl core::clone::Clone for d2b_core_controller::authz::SubjectPolicy
 d2b_core_controller	impl core::clone::Clone for d2b_core_controller::configuration::ActivationResult
@@ -4222,6 +4238,11 @@ d2b_core_controller	impl core::cmp::Eq for d2b_core_controller::api_catalog::Cat
 d2b_core_controller	impl core::cmp::Eq for d2b_core_controller::authority::AuthorityOwnerProof
 d2b_core_controller	impl core::cmp::Eq for d2b_core_controller::authority::AuthorityRequest
 d2b_core_controller	impl core::cmp::Eq for d2b_core_controller::authority::AuthorityScope
+d2b_core_controller	impl core::cmp::Eq for d2b_core_controller::authority::AuthorityStorageClaim
+d2b_core_controller	impl core::cmp::Eq for d2b_core_controller::authority::AuthorityStorageOperation
+d2b_core_controller	impl core::cmp::Eq for d2b_core_controller::authority::DurableAuthorityClaim
+d2b_core_controller	impl core::cmp::Eq for d2b_core_controller::authority::DurableAuthorityOwnerProof
+d2b_core_controller	impl core::cmp::Eq for d2b_core_controller::authority::DurableExternalNicClaim
 d2b_core_controller	impl core::cmp::Eq for d2b_core_controller::authority::ExternalNicOwnerProof
 d2b_core_controller	impl core::cmp::Eq for d2b_core_controller::authz::SubjectPolicy
 d2b_core_controller	impl core::cmp::Eq for d2b_core_controller::configuration::ActivationResult
@@ -4265,6 +4286,11 @@ d2b_core_controller	impl core::cmp::PartialEq for d2b_core_controller::api_catal
 d2b_core_controller	impl core::cmp::PartialEq for d2b_core_controller::authority::AuthorityOwnerProof
 d2b_core_controller	impl core::cmp::PartialEq for d2b_core_controller::authority::AuthorityRequest
 d2b_core_controller	impl core::cmp::PartialEq for d2b_core_controller::authority::AuthorityScope
+d2b_core_controller	impl core::cmp::PartialEq for d2b_core_controller::authority::AuthorityStorageClaim
+d2b_core_controller	impl core::cmp::PartialEq for d2b_core_controller::authority::AuthorityStorageOperation
+d2b_core_controller	impl core::cmp::PartialEq for d2b_core_controller::authority::DurableAuthorityClaim
+d2b_core_controller	impl core::cmp::PartialEq for d2b_core_controller::authority::DurableAuthorityOwnerProof
+d2b_core_controller	impl core::cmp::PartialEq for d2b_core_controller::authority::DurableExternalNicClaim
 d2b_core_controller	impl core::cmp::PartialEq for d2b_core_controller::authority::ExternalNicOwnerProof
 d2b_core_controller	impl core::cmp::PartialEq for d2b_core_controller::authz::SubjectPolicy
 d2b_core_controller	impl core::cmp::PartialEq for d2b_core_controller::configuration::ActivationResult
@@ -4316,8 +4342,15 @@ d2b_core_controller	impl core::fmt::Debug for d2b_core_controller::authority::Au
 d2b_core_controller	impl core::fmt::Debug for d2b_core_controller::authority::AuthorityEffectGate
 d2b_core_controller	impl core::fmt::Debug for d2b_core_controller::authority::AuthorityLease
 d2b_core_controller	impl core::fmt::Debug for d2b_core_controller::authority::AuthorityOwnerProof
+d2b_core_controller	impl core::fmt::Debug for d2b_core_controller::authority::AuthorityRecoveryReceipt
 d2b_core_controller	impl core::fmt::Debug for d2b_core_controller::authority::AuthorityRequest
+d2b_core_controller	impl core::fmt::Debug for d2b_core_controller::authority::AuthorityReservation
 d2b_core_controller	impl core::fmt::Debug for d2b_core_controller::authority::AuthorityScope
+d2b_core_controller	impl core::fmt::Debug for d2b_core_controller::authority::AuthorityStorageClaim
+d2b_core_controller	impl core::fmt::Debug for d2b_core_controller::authority::AuthorityStorageOperation
+d2b_core_controller	impl core::fmt::Debug for d2b_core_controller::authority::DurableAuthorityClaim
+d2b_core_controller	impl core::fmt::Debug for d2b_core_controller::authority::DurableAuthorityOwnerProof
+d2b_core_controller	impl core::fmt::Debug for d2b_core_controller::authority::DurableExternalNicClaim
 d2b_core_controller	impl core::fmt::Debug for d2b_core_controller::authority::ExternalNicAdoption
 d2b_core_controller	impl core::fmt::Debug for d2b_core_controller::authority::ExternalNicClaimRequest
 d2b_core_controller	impl core::fmt::Debug for d2b_core_controller::authority::ExternalNicEffectGate
@@ -4326,6 +4359,8 @@ d2b_core_controller	impl core::fmt::Debug for d2b_core_controller::authority::Ex
 d2b_core_controller	impl core::fmt::Debug for d2b_core_controller::authority::HostGlobalAuthorityIndex
 d2b_core_controller	impl core::fmt::Debug for d2b_core_controller::authority::emergency_policy::EmergencyPolicyAuthority
 d2b_core_controller	impl core::fmt::Debug for d2b_core_controller::authority::quota::QuotaAuthority
+d2b_core_controller	impl core::fmt::Debug for d2b_core_controller::authority_persistence::AuthorityRecoveryCoordinator
+d2b_core_controller	impl core::fmt::Debug for d2b_core_controller::authority_persistence::RedbAuthorityPersistence
 d2b_core_controller	impl core::fmt::Debug for d2b_core_controller::authz::AuthorizationHandler
 d2b_core_controller	impl core::fmt::Debug for d2b_core_controller::authz::CoreAuthorizationSubject<'_>
 d2b_core_controller	impl core::fmt::Debug for d2b_core_controller::authz::SubjectPolicy
@@ -4382,16 +4417,24 @@ d2b_core_controller	impl core::marker::Freeze for d2b_core_controller::authority
 d2b_core_controller	impl core::marker::Freeze for d2b_core_controller::authority::AuthorityEffectGate
 d2b_core_controller	impl core::marker::Freeze for d2b_core_controller::authority::AuthorityLease
 d2b_core_controller	impl core::marker::Freeze for d2b_core_controller::authority::AuthorityOwnerProof
+d2b_core_controller	impl core::marker::Freeze for d2b_core_controller::authority::AuthorityRecoveryReceipt
 d2b_core_controller	impl core::marker::Freeze for d2b_core_controller::authority::AuthorityRequest
+d2b_core_controller	impl core::marker::Freeze for d2b_core_controller::authority::AuthorityReservation
 d2b_core_controller	impl core::marker::Freeze for d2b_core_controller::authority::AuthorityScope
+d2b_core_controller	impl core::marker::Freeze for d2b_core_controller::authority::AuthorityStorageClaim
+d2b_core_controller	impl core::marker::Freeze for d2b_core_controller::authority::AuthorityStorageOperation
+d2b_core_controller	impl core::marker::Freeze for d2b_core_controller::authority::DurableAuthorityClaim
+d2b_core_controller	impl core::marker::Freeze for d2b_core_controller::authority::DurableAuthorityOwnerProof
+d2b_core_controller	impl core::marker::Freeze for d2b_core_controller::authority::DurableExternalNicClaim
 d2b_core_controller	impl core::marker::Freeze for d2b_core_controller::authority::ExternalNicAdoption
 d2b_core_controller	impl core::marker::Freeze for d2b_core_controller::authority::ExternalNicClaimRequest
 d2b_core_controller	impl core::marker::Freeze for d2b_core_controller::authority::ExternalNicEffectGate
 d2b_core_controller	impl core::marker::Freeze for d2b_core_controller::authority::ExternalNicLease
 d2b_core_controller	impl core::marker::Freeze for d2b_core_controller::authority::ExternalNicOwnerProof
-d2b_core_controller	impl core::marker::Freeze for d2b_core_controller::authority::HostGlobalAuthorityIndex
+d2b_core_controller	impl core::marker::Freeze for d2b_core_controller::authority::ExternalNicReservation
 d2b_core_controller	impl core::marker::Freeze for d2b_core_controller::authority::emergency_policy::EmergencyPolicyAuthority
 d2b_core_controller	impl core::marker::Freeze for d2b_core_controller::authority::quota::QuotaAuthority
+d2b_core_controller	impl core::marker::Freeze for d2b_core_controller::authority_persistence::AuthorityRecoveryCoordinator
 d2b_core_controller	impl core::marker::Freeze for d2b_core_controller::authz::AuthorizationHandler
 d2b_core_controller	impl core::marker::Freeze for d2b_core_controller::authz::SubjectPolicy
 d2b_core_controller	impl core::marker::Freeze for d2b_core_controller::budgets::BudgetHandler
@@ -4453,16 +4496,26 @@ d2b_core_controller	impl core::marker::Send for d2b_core_controller::authority::
 d2b_core_controller	impl core::marker::Send for d2b_core_controller::authority::AuthorityEffectGate
 d2b_core_controller	impl core::marker::Send for d2b_core_controller::authority::AuthorityLease
 d2b_core_controller	impl core::marker::Send for d2b_core_controller::authority::AuthorityOwnerProof
+d2b_core_controller	impl core::marker::Send for d2b_core_controller::authority::AuthorityRecoveryReceipt
 d2b_core_controller	impl core::marker::Send for d2b_core_controller::authority::AuthorityRequest
+d2b_core_controller	impl core::marker::Send for d2b_core_controller::authority::AuthorityReservation
 d2b_core_controller	impl core::marker::Send for d2b_core_controller::authority::AuthorityScope
+d2b_core_controller	impl core::marker::Send for d2b_core_controller::authority::AuthorityStorageClaim
+d2b_core_controller	impl core::marker::Send for d2b_core_controller::authority::AuthorityStorageOperation
+d2b_core_controller	impl core::marker::Send for d2b_core_controller::authority::DurableAuthorityClaim
+d2b_core_controller	impl core::marker::Send for d2b_core_controller::authority::DurableAuthorityOwnerProof
+d2b_core_controller	impl core::marker::Send for d2b_core_controller::authority::DurableExternalNicClaim
 d2b_core_controller	impl core::marker::Send for d2b_core_controller::authority::ExternalNicAdoption
 d2b_core_controller	impl core::marker::Send for d2b_core_controller::authority::ExternalNicClaimRequest
 d2b_core_controller	impl core::marker::Send for d2b_core_controller::authority::ExternalNicEffectGate
 d2b_core_controller	impl core::marker::Send for d2b_core_controller::authority::ExternalNicLease
 d2b_core_controller	impl core::marker::Send for d2b_core_controller::authority::ExternalNicOwnerProof
+d2b_core_controller	impl core::marker::Send for d2b_core_controller::authority::ExternalNicReservation
 d2b_core_controller	impl core::marker::Send for d2b_core_controller::authority::HostGlobalAuthorityIndex
 d2b_core_controller	impl core::marker::Send for d2b_core_controller::authority::emergency_policy::EmergencyPolicyAuthority
 d2b_core_controller	impl core::marker::Send for d2b_core_controller::authority::quota::QuotaAuthority
+d2b_core_controller	impl core::marker::Send for d2b_core_controller::authority_persistence::AuthorityRecoveryCoordinator
+d2b_core_controller	impl core::marker::Send for d2b_core_controller::authority_persistence::RedbAuthorityPersistence
 d2b_core_controller	impl core::marker::Send for d2b_core_controller::authz::AuthorizationHandler
 d2b_core_controller	impl core::marker::Send for d2b_core_controller::authz::SubjectPolicy
 d2b_core_controller	impl core::marker::Send for d2b_core_controller::budgets::BudgetHandler
@@ -4523,6 +4576,11 @@ d2b_core_controller	impl core::marker::StructuralPartialEq for d2b_core_controll
 d2b_core_controller	impl core::marker::StructuralPartialEq for d2b_core_controller::authority::AuthorityOwnerProof
 d2b_core_controller	impl core::marker::StructuralPartialEq for d2b_core_controller::authority::AuthorityRequest
 d2b_core_controller	impl core::marker::StructuralPartialEq for d2b_core_controller::authority::AuthorityScope
+d2b_core_controller	impl core::marker::StructuralPartialEq for d2b_core_controller::authority::AuthorityStorageClaim
+d2b_core_controller	impl core::marker::StructuralPartialEq for d2b_core_controller::authority::AuthorityStorageOperation
+d2b_core_controller	impl core::marker::StructuralPartialEq for d2b_core_controller::authority::DurableAuthorityClaim
+d2b_core_controller	impl core::marker::StructuralPartialEq for d2b_core_controller::authority::DurableAuthorityOwnerProof
+d2b_core_controller	impl core::marker::StructuralPartialEq for d2b_core_controller::authority::DurableExternalNicClaim
 d2b_core_controller	impl core::marker::StructuralPartialEq for d2b_core_controller::authority::ExternalNicOwnerProof
 d2b_core_controller	impl core::marker::StructuralPartialEq for d2b_core_controller::authz::SubjectPolicy
 d2b_core_controller	impl core::marker::StructuralPartialEq for d2b_core_controller::configuration::ActivationResult
@@ -4566,16 +4624,26 @@ d2b_core_controller	impl core::marker::Sync for d2b_core_controller::authority::
 d2b_core_controller	impl core::marker::Sync for d2b_core_controller::authority::AuthorityEffectGate
 d2b_core_controller	impl core::marker::Sync for d2b_core_controller::authority::AuthorityLease
 d2b_core_controller	impl core::marker::Sync for d2b_core_controller::authority::AuthorityOwnerProof
+d2b_core_controller	impl core::marker::Sync for d2b_core_controller::authority::AuthorityRecoveryReceipt
 d2b_core_controller	impl core::marker::Sync for d2b_core_controller::authority::AuthorityRequest
+d2b_core_controller	impl core::marker::Sync for d2b_core_controller::authority::AuthorityReservation
 d2b_core_controller	impl core::marker::Sync for d2b_core_controller::authority::AuthorityScope
+d2b_core_controller	impl core::marker::Sync for d2b_core_controller::authority::AuthorityStorageClaim
+d2b_core_controller	impl core::marker::Sync for d2b_core_controller::authority::AuthorityStorageOperation
+d2b_core_controller	impl core::marker::Sync for d2b_core_controller::authority::DurableAuthorityClaim
+d2b_core_controller	impl core::marker::Sync for d2b_core_controller::authority::DurableAuthorityOwnerProof
+d2b_core_controller	impl core::marker::Sync for d2b_core_controller::authority::DurableExternalNicClaim
 d2b_core_controller	impl core::marker::Sync for d2b_core_controller::authority::ExternalNicAdoption
 d2b_core_controller	impl core::marker::Sync for d2b_core_controller::authority::ExternalNicClaimRequest
 d2b_core_controller	impl core::marker::Sync for d2b_core_controller::authority::ExternalNicEffectGate
 d2b_core_controller	impl core::marker::Sync for d2b_core_controller::authority::ExternalNicLease
 d2b_core_controller	impl core::marker::Sync for d2b_core_controller::authority::ExternalNicOwnerProof
+d2b_core_controller	impl core::marker::Sync for d2b_core_controller::authority::ExternalNicReservation
 d2b_core_controller	impl core::marker::Sync for d2b_core_controller::authority::HostGlobalAuthorityIndex
 d2b_core_controller	impl core::marker::Sync for d2b_core_controller::authority::emergency_policy::EmergencyPolicyAuthority
 d2b_core_controller	impl core::marker::Sync for d2b_core_controller::authority::quota::QuotaAuthority
+d2b_core_controller	impl core::marker::Sync for d2b_core_controller::authority_persistence::AuthorityRecoveryCoordinator
+d2b_core_controller	impl core::marker::Sync for d2b_core_controller::authority_persistence::RedbAuthorityPersistence
 d2b_core_controller	impl core::marker::Sync for d2b_core_controller::authz::AuthorizationHandler
 d2b_core_controller	impl core::marker::Sync for d2b_core_controller::authz::SubjectPolicy
 d2b_core_controller	impl core::marker::Sync for d2b_core_controller::budgets::BudgetHandler
@@ -4639,16 +4707,26 @@ d2b_core_controller	impl core::marker::Unpin for d2b_core_controller::authority:
 d2b_core_controller	impl core::marker::Unpin for d2b_core_controller::authority::AuthorityEffectGate
 d2b_core_controller	impl core::marker::Unpin for d2b_core_controller::authority::AuthorityLease
 d2b_core_controller	impl core::marker::Unpin for d2b_core_controller::authority::AuthorityOwnerProof
+d2b_core_controller	impl core::marker::Unpin for d2b_core_controller::authority::AuthorityRecoveryReceipt
 d2b_core_controller	impl core::marker::Unpin for d2b_core_controller::authority::AuthorityRequest
+d2b_core_controller	impl core::marker::Unpin for d2b_core_controller::authority::AuthorityReservation
 d2b_core_controller	impl core::marker::Unpin for d2b_core_controller::authority::AuthorityScope
+d2b_core_controller	impl core::marker::Unpin for d2b_core_controller::authority::AuthorityStorageClaim
+d2b_core_controller	impl core::marker::Unpin for d2b_core_controller::authority::AuthorityStorageOperation
+d2b_core_controller	impl core::marker::Unpin for d2b_core_controller::authority::DurableAuthorityClaim
+d2b_core_controller	impl core::marker::Unpin for d2b_core_controller::authority::DurableAuthorityOwnerProof
+d2b_core_controller	impl core::marker::Unpin for d2b_core_controller::authority::DurableExternalNicClaim
 d2b_core_controller	impl core::marker::Unpin for d2b_core_controller::authority::ExternalNicAdoption
 d2b_core_controller	impl core::marker::Unpin for d2b_core_controller::authority::ExternalNicClaimRequest
 d2b_core_controller	impl core::marker::Unpin for d2b_core_controller::authority::ExternalNicEffectGate
 d2b_core_controller	impl core::marker::Unpin for d2b_core_controller::authority::ExternalNicLease
 d2b_core_controller	impl core::marker::Unpin for d2b_core_controller::authority::ExternalNicOwnerProof
+d2b_core_controller	impl core::marker::Unpin for d2b_core_controller::authority::ExternalNicReservation
 d2b_core_controller	impl core::marker::Unpin for d2b_core_controller::authority::HostGlobalAuthorityIndex
 d2b_core_controller	impl core::marker::Unpin for d2b_core_controller::authority::emergency_policy::EmergencyPolicyAuthority
 d2b_core_controller	impl core::marker::Unpin for d2b_core_controller::authority::quota::QuotaAuthority
+d2b_core_controller	impl core::marker::Unpin for d2b_core_controller::authority_persistence::AuthorityRecoveryCoordinator
+d2b_core_controller	impl core::marker::Unpin for d2b_core_controller::authority_persistence::RedbAuthorityPersistence
 d2b_core_controller	impl core::marker::Unpin for d2b_core_controller::authz::AuthorizationHandler
 d2b_core_controller	impl core::marker::Unpin for d2b_core_controller::authz::SubjectPolicy
 d2b_core_controller	impl core::marker::Unpin for d2b_core_controller::budgets::BudgetHandler
@@ -4712,16 +4790,26 @@ d2b_core_controller	impl core::marker::UnsafeUnpin for d2b_core_controller::auth
 d2b_core_controller	impl core::marker::UnsafeUnpin for d2b_core_controller::authority::AuthorityEffectGate
 d2b_core_controller	impl core::marker::UnsafeUnpin for d2b_core_controller::authority::AuthorityLease
 d2b_core_controller	impl core::marker::UnsafeUnpin for d2b_core_controller::authority::AuthorityOwnerProof
+d2b_core_controller	impl core::marker::UnsafeUnpin for d2b_core_controller::authority::AuthorityRecoveryReceipt
 d2b_core_controller	impl core::marker::UnsafeUnpin for d2b_core_controller::authority::AuthorityRequest
+d2b_core_controller	impl core::marker::UnsafeUnpin for d2b_core_controller::authority::AuthorityReservation
 d2b_core_controller	impl core::marker::UnsafeUnpin for d2b_core_controller::authority::AuthorityScope
+d2b_core_controller	impl core::marker::UnsafeUnpin for d2b_core_controller::authority::AuthorityStorageClaim
+d2b_core_controller	impl core::marker::UnsafeUnpin for d2b_core_controller::authority::AuthorityStorageOperation
+d2b_core_controller	impl core::marker::UnsafeUnpin for d2b_core_controller::authority::DurableAuthorityClaim
+d2b_core_controller	impl core::marker::UnsafeUnpin for d2b_core_controller::authority::DurableAuthorityOwnerProof
+d2b_core_controller	impl core::marker::UnsafeUnpin for d2b_core_controller::authority::DurableExternalNicClaim
 d2b_core_controller	impl core::marker::UnsafeUnpin for d2b_core_controller::authority::ExternalNicAdoption
 d2b_core_controller	impl core::marker::UnsafeUnpin for d2b_core_controller::authority::ExternalNicClaimRequest
 d2b_core_controller	impl core::marker::UnsafeUnpin for d2b_core_controller::authority::ExternalNicEffectGate
 d2b_core_controller	impl core::marker::UnsafeUnpin for d2b_core_controller::authority::ExternalNicLease
 d2b_core_controller	impl core::marker::UnsafeUnpin for d2b_core_controller::authority::ExternalNicOwnerProof
+d2b_core_controller	impl core::marker::UnsafeUnpin for d2b_core_controller::authority::ExternalNicReservation
 d2b_core_controller	impl core::marker::UnsafeUnpin for d2b_core_controller::authority::HostGlobalAuthorityIndex
 d2b_core_controller	impl core::marker::UnsafeUnpin for d2b_core_controller::authority::emergency_policy::EmergencyPolicyAuthority
 d2b_core_controller	impl core::marker::UnsafeUnpin for d2b_core_controller::authority::quota::QuotaAuthority
+d2b_core_controller	impl core::marker::UnsafeUnpin for d2b_core_controller::authority_persistence::AuthorityRecoveryCoordinator
+d2b_core_controller	impl core::marker::UnsafeUnpin for d2b_core_controller::authority_persistence::RedbAuthorityPersistence
 d2b_core_controller	impl core::marker::UnsafeUnpin for d2b_core_controller::authz::AuthorizationHandler
 d2b_core_controller	impl core::marker::UnsafeUnpin for d2b_core_controller::authz::SubjectPolicy
 d2b_core_controller	impl core::marker::UnsafeUnpin for d2b_core_controller::budgets::BudgetHandler
@@ -4786,8 +4874,14 @@ d2b_core_controller	impl core::panic::unwind_safe::RefUnwindSafe for d2b_core_co
 d2b_core_controller	impl core::panic::unwind_safe::RefUnwindSafe for d2b_core_controller::authority::AuthorityEffectGate
 d2b_core_controller	impl core::panic::unwind_safe::RefUnwindSafe for d2b_core_controller::authority::AuthorityLease
 d2b_core_controller	impl core::panic::unwind_safe::RefUnwindSafe for d2b_core_controller::authority::AuthorityOwnerProof
+d2b_core_controller	impl core::panic::unwind_safe::RefUnwindSafe for d2b_core_controller::authority::AuthorityRecoveryReceipt
 d2b_core_controller	impl core::panic::unwind_safe::RefUnwindSafe for d2b_core_controller::authority::AuthorityRequest
 d2b_core_controller	impl core::panic::unwind_safe::RefUnwindSafe for d2b_core_controller::authority::AuthorityScope
+d2b_core_controller	impl core::panic::unwind_safe::RefUnwindSafe for d2b_core_controller::authority::AuthorityStorageClaim
+d2b_core_controller	impl core::panic::unwind_safe::RefUnwindSafe for d2b_core_controller::authority::AuthorityStorageOperation
+d2b_core_controller	impl core::panic::unwind_safe::RefUnwindSafe for d2b_core_controller::authority::DurableAuthorityClaim
+d2b_core_controller	impl core::panic::unwind_safe::RefUnwindSafe for d2b_core_controller::authority::DurableAuthorityOwnerProof
+d2b_core_controller	impl core::panic::unwind_safe::RefUnwindSafe for d2b_core_controller::authority::DurableExternalNicClaim
 d2b_core_controller	impl core::panic::unwind_safe::RefUnwindSafe for d2b_core_controller::authority::ExternalNicAdoption
 d2b_core_controller	impl core::panic::unwind_safe::RefUnwindSafe for d2b_core_controller::authority::ExternalNicClaimRequest
 d2b_core_controller	impl core::panic::unwind_safe::RefUnwindSafe for d2b_core_controller::authority::ExternalNicEffectGate
@@ -4859,8 +4953,14 @@ d2b_core_controller	impl core::panic::unwind_safe::UnwindSafe for d2b_core_contr
 d2b_core_controller	impl core::panic::unwind_safe::UnwindSafe for d2b_core_controller::authority::AuthorityEffectGate
 d2b_core_controller	impl core::panic::unwind_safe::UnwindSafe for d2b_core_controller::authority::AuthorityLease
 d2b_core_controller	impl core::panic::unwind_safe::UnwindSafe for d2b_core_controller::authority::AuthorityOwnerProof
+d2b_core_controller	impl core::panic::unwind_safe::UnwindSafe for d2b_core_controller::authority::AuthorityRecoveryReceipt
 d2b_core_controller	impl core::panic::unwind_safe::UnwindSafe for d2b_core_controller::authority::AuthorityRequest
 d2b_core_controller	impl core::panic::unwind_safe::UnwindSafe for d2b_core_controller::authority::AuthorityScope
+d2b_core_controller	impl core::panic::unwind_safe::UnwindSafe for d2b_core_controller::authority::AuthorityStorageClaim
+d2b_core_controller	impl core::panic::unwind_safe::UnwindSafe for d2b_core_controller::authority::AuthorityStorageOperation
+d2b_core_controller	impl core::panic::unwind_safe::UnwindSafe for d2b_core_controller::authority::DurableAuthorityClaim
+d2b_core_controller	impl core::panic::unwind_safe::UnwindSafe for d2b_core_controller::authority::DurableAuthorityOwnerProof
+d2b_core_controller	impl core::panic::unwind_safe::UnwindSafe for d2b_core_controller::authority::DurableExternalNicClaim
 d2b_core_controller	impl core::panic::unwind_safe::UnwindSafe for d2b_core_controller::authority::ExternalNicAdoption
 d2b_core_controller	impl core::panic::unwind_safe::UnwindSafe for d2b_core_controller::authority::ExternalNicClaimRequest
 d2b_core_controller	impl core::panic::unwind_safe::UnwindSafe for d2b_core_controller::authority::ExternalNicEffectGate
@@ -4933,12 +5033,18 @@ d2b_core_controller	impl d2b_core_controller::authority::AuthorityEffectGate
 d2b_core_controller	impl d2b_core_controller::authority::AuthorityLease
 d2b_core_controller	impl d2b_core_controller::authority::AuthorityOwnerProof
 d2b_core_controller	impl d2b_core_controller::authority::AuthorityRequest
+d2b_core_controller	impl d2b_core_controller::authority::AuthorityReservation
 d2b_core_controller	impl d2b_core_controller::authority::ExternalNicClaimRequest
 d2b_core_controller	impl d2b_core_controller::authority::ExternalNicEffectGate
-d2b_core_controller	impl d2b_core_controller::authority::ExternalNicOwnerProof
+d2b_core_controller	impl d2b_core_controller::authority::ExternalNicRecoveryInventory for d2b_core_controller::authority::TrustedExternalNicInventory
+d2b_core_controller	impl d2b_core_controller::authority::ExternalNicReservation
 d2b_core_controller	impl d2b_core_controller::authority::HostGlobalAuthorityIndex
 d2b_core_controller	impl d2b_core_controller::authority::emergency_policy::EmergencyPolicyAuthority
 d2b_core_controller	impl d2b_core_controller::authority::quota::QuotaAuthority
+d2b_core_controller	impl d2b_core_controller::authority_persistence::AuthorityPersistence for d2b_core_controller::authority_persistence::RedbAuthorityPersistence
+d2b_core_controller	impl d2b_core_controller::authority_persistence::AuthorityRecoveryCoordinator
+d2b_core_controller	impl d2b_core_controller::authority_persistence::AuthorityRecoveryProvenance for d2b_core_controller::authority_persistence::RedbAuthorityPersistence
+d2b_core_controller	impl d2b_core_controller::authority_persistence::RedbAuthorityPersistence
 d2b_core_controller	impl d2b_core_controller::authz::AuthorizationHandler
 d2b_core_controller	impl d2b_core_controller::authz::SubjectPolicy
 d2b_core_controller	impl d2b_core_controller::budgets::BudgetHandler
@@ -4990,6 +5096,12 @@ d2b_core_controller	impl d2b_core_controller::zone_links::ZoneLinkPass
 d2b_core_controller	impl d2b_core_controller::zone_links::ZoneLinkRecord
 d2b_core_controller	impl d2b_core_controller::zone_links::ZoneLinkStatus
 d2b_core_controller	impl d2b_core_controller::zonelink::ZoneLinkController
+d2b_core_controller	impl serde_core::ser::Serialize for d2b_core_controller::authority::AuthorityScope
+d2b_core_controller	impl serde_core::ser::Serialize for d2b_core_controller::authority::AuthorityStorageClaim
+d2b_core_controller	impl serde_core::ser::Serialize for d2b_core_controller::authority::AuthorityStorageOperation
+d2b_core_controller	impl serde_core::ser::Serialize for d2b_core_controller::authority::DurableAuthorityClaim
+d2b_core_controller	impl serde_core::ser::Serialize for d2b_core_controller::authority::DurableAuthorityOwnerProof
+d2b_core_controller	impl serde_core::ser::Serialize for d2b_core_controller::authority::DurableExternalNicClaim
 d2b_core_controller	impl<'a> core::marker::Freeze for d2b_core_controller::authz::CoreAuthorizationSubject<'a>
 d2b_core_controller	impl<'a> core::marker::Send for d2b_core_controller::authz::CoreAuthorizationSubject<'a>
 d2b_core_controller	impl<'a> core::marker::Sync for d2b_core_controller::authz::CoreAuthorizationSubject<'a>
@@ -4997,6 +5109,12 @@ d2b_core_controller	impl<'a> core::marker::Unpin for d2b_core_controller::authz:
 d2b_core_controller	impl<'a> core::marker::UnsafeUnpin for d2b_core_controller::authz::CoreAuthorizationSubject<'a>
 d2b_core_controller	impl<'a> core::panic::unwind_safe::RefUnwindSafe for d2b_core_controller::authz::CoreAuthorizationSubject<'a>
 d2b_core_controller	impl<'a> core::panic::unwind_safe::UnwindSafe for d2b_core_controller::authz::CoreAuthorizationSubject<'a>
+d2b_core_controller	impl<'de> serde_core::de::Deserialize<'de> for d2b_core_controller::authority::AuthorityScope
+d2b_core_controller	impl<'de> serde_core::de::Deserialize<'de> for d2b_core_controller::authority::AuthorityStorageClaim
+d2b_core_controller	impl<'de> serde_core::de::Deserialize<'de> for d2b_core_controller::authority::AuthorityStorageOperation
+d2b_core_controller	impl<'de> serde_core::de::Deserialize<'de> for d2b_core_controller::authority::DurableAuthorityClaim
+d2b_core_controller	impl<'de> serde_core::de::Deserialize<'de> for d2b_core_controller::authority::DurableAuthorityOwnerProof
+d2b_core_controller	impl<'de> serde_core::de::Deserialize<'de> for d2b_core_controller::authority::DurableExternalNicClaim
 d2b_core_controller	impl<A> !core::marker::Freeze for d2b_core_controller::runtime::CoreControllerSource<A>
 d2b_core_controller	impl<A> !core::panic::unwind_safe::RefUnwindSafe for d2b_core_controller::runtime::CoreControllerSource<A>
 d2b_core_controller	impl<A> core::marker::Send for d2b_core_controller::runtime::CoreControllerSource<A> where A: core::marker::Sync + core::marker::Send
@@ -5013,16 +5131,26 @@ d2b_core_controller	impl<T, U> core::convert::Into<U> for d2b_core_controller::a
 d2b_core_controller	impl<T, U> core::convert::Into<U> for d2b_core_controller::authority::AuthorityEffectGate where U: core::convert::From<T>
 d2b_core_controller	impl<T, U> core::convert::Into<U> for d2b_core_controller::authority::AuthorityLease where U: core::convert::From<T>
 d2b_core_controller	impl<T, U> core::convert::Into<U> for d2b_core_controller::authority::AuthorityOwnerProof where U: core::convert::From<T>
+d2b_core_controller	impl<T, U> core::convert::Into<U> for d2b_core_controller::authority::AuthorityRecoveryReceipt where U: core::convert::From<T>
 d2b_core_controller	impl<T, U> core::convert::Into<U> for d2b_core_controller::authority::AuthorityRequest where U: core::convert::From<T>
+d2b_core_controller	impl<T, U> core::convert::Into<U> for d2b_core_controller::authority::AuthorityReservation where U: core::convert::From<T>
 d2b_core_controller	impl<T, U> core::convert::Into<U> for d2b_core_controller::authority::AuthorityScope where U: core::convert::From<T>
+d2b_core_controller	impl<T, U> core::convert::Into<U> for d2b_core_controller::authority::AuthorityStorageClaim where U: core::convert::From<T>
+d2b_core_controller	impl<T, U> core::convert::Into<U> for d2b_core_controller::authority::AuthorityStorageOperation where U: core::convert::From<T>
+d2b_core_controller	impl<T, U> core::convert::Into<U> for d2b_core_controller::authority::DurableAuthorityClaim where U: core::convert::From<T>
+d2b_core_controller	impl<T, U> core::convert::Into<U> for d2b_core_controller::authority::DurableAuthorityOwnerProof where U: core::convert::From<T>
+d2b_core_controller	impl<T, U> core::convert::Into<U> for d2b_core_controller::authority::DurableExternalNicClaim where U: core::convert::From<T>
 d2b_core_controller	impl<T, U> core::convert::Into<U> for d2b_core_controller::authority::ExternalNicAdoption where U: core::convert::From<T>
 d2b_core_controller	impl<T, U> core::convert::Into<U> for d2b_core_controller::authority::ExternalNicClaimRequest where U: core::convert::From<T>
 d2b_core_controller	impl<T, U> core::convert::Into<U> for d2b_core_controller::authority::ExternalNicEffectGate where U: core::convert::From<T>
 d2b_core_controller	impl<T, U> core::convert::Into<U> for d2b_core_controller::authority::ExternalNicLease where U: core::convert::From<T>
 d2b_core_controller	impl<T, U> core::convert::Into<U> for d2b_core_controller::authority::ExternalNicOwnerProof where U: core::convert::From<T>
+d2b_core_controller	impl<T, U> core::convert::Into<U> for d2b_core_controller::authority::ExternalNicReservation where U: core::convert::From<T>
 d2b_core_controller	impl<T, U> core::convert::Into<U> for d2b_core_controller::authority::HostGlobalAuthorityIndex where U: core::convert::From<T>
 d2b_core_controller	impl<T, U> core::convert::Into<U> for d2b_core_controller::authority::emergency_policy::EmergencyPolicyAuthority where U: core::convert::From<T>
 d2b_core_controller	impl<T, U> core::convert::Into<U> for d2b_core_controller::authority::quota::QuotaAuthority where U: core::convert::From<T>
+d2b_core_controller	impl<T, U> core::convert::Into<U> for d2b_core_controller::authority_persistence::AuthorityRecoveryCoordinator where U: core::convert::From<T>
+d2b_core_controller	impl<T, U> core::convert::Into<U> for d2b_core_controller::authority_persistence::RedbAuthorityPersistence where U: core::convert::From<T>
 d2b_core_controller	impl<T, U> core::convert::Into<U> for d2b_core_controller::authz::AuthorizationHandler where U: core::convert::From<T>
 d2b_core_controller	impl<T, U> core::convert::Into<U> for d2b_core_controller::authz::CoreAuthorizationSubject<'a> where U: core::convert::From<T>
 d2b_core_controller	impl<T, U> core::convert::Into<U> for d2b_core_controller::authz::SubjectPolicy where U: core::convert::From<T>
@@ -5088,16 +5216,26 @@ d2b_core_controller	impl<T, U> core::convert::TryFrom<U> for d2b_core_controller
 d2b_core_controller	impl<T, U> core::convert::TryFrom<U> for d2b_core_controller::authority::AuthorityEffectGate where U: core::convert::Into<T>
 d2b_core_controller	impl<T, U> core::convert::TryFrom<U> for d2b_core_controller::authority::AuthorityLease where U: core::convert::Into<T>
 d2b_core_controller	impl<T, U> core::convert::TryFrom<U> for d2b_core_controller::authority::AuthorityOwnerProof where U: core::convert::Into<T>
+d2b_core_controller	impl<T, U> core::convert::TryFrom<U> for d2b_core_controller::authority::AuthorityRecoveryReceipt where U: core::convert::Into<T>
 d2b_core_controller	impl<T, U> core::convert::TryFrom<U> for d2b_core_controller::authority::AuthorityRequest where U: core::convert::Into<T>
+d2b_core_controller	impl<T, U> core::convert::TryFrom<U> for d2b_core_controller::authority::AuthorityReservation where U: core::convert::Into<T>
 d2b_core_controller	impl<T, U> core::convert::TryFrom<U> for d2b_core_controller::authority::AuthorityScope where U: core::convert::Into<T>
+d2b_core_controller	impl<T, U> core::convert::TryFrom<U> for d2b_core_controller::authority::AuthorityStorageClaim where U: core::convert::Into<T>
+d2b_core_controller	impl<T, U> core::convert::TryFrom<U> for d2b_core_controller::authority::AuthorityStorageOperation where U: core::convert::Into<T>
+d2b_core_controller	impl<T, U> core::convert::TryFrom<U> for d2b_core_controller::authority::DurableAuthorityClaim where U: core::convert::Into<T>
+d2b_core_controller	impl<T, U> core::convert::TryFrom<U> for d2b_core_controller::authority::DurableAuthorityOwnerProof where U: core::convert::Into<T>
+d2b_core_controller	impl<T, U> core::convert::TryFrom<U> for d2b_core_controller::authority::DurableExternalNicClaim where U: core::convert::Into<T>
 d2b_core_controller	impl<T, U> core::convert::TryFrom<U> for d2b_core_controller::authority::ExternalNicAdoption where U: core::convert::Into<T>
 d2b_core_controller	impl<T, U> core::convert::TryFrom<U> for d2b_core_controller::authority::ExternalNicClaimRequest where U: core::convert::Into<T>
 d2b_core_controller	impl<T, U> core::convert::TryFrom<U> for d2b_core_controller::authority::ExternalNicEffectGate where U: core::convert::Into<T>
 d2b_core_controller	impl<T, U> core::convert::TryFrom<U> for d2b_core_controller::authority::ExternalNicLease where U: core::convert::Into<T>
 d2b_core_controller	impl<T, U> core::convert::TryFrom<U> for d2b_core_controller::authority::ExternalNicOwnerProof where U: core::convert::Into<T>
+d2b_core_controller	impl<T, U> core::convert::TryFrom<U> for d2b_core_controller::authority::ExternalNicReservation where U: core::convert::Into<T>
 d2b_core_controller	impl<T, U> core::convert::TryFrom<U> for d2b_core_controller::authority::HostGlobalAuthorityIndex where U: core::convert::Into<T>
 d2b_core_controller	impl<T, U> core::convert::TryFrom<U> for d2b_core_controller::authority::emergency_policy::EmergencyPolicyAuthority where U: core::convert::Into<T>
 d2b_core_controller	impl<T, U> core::convert::TryFrom<U> for d2b_core_controller::authority::quota::QuotaAuthority where U: core::convert::Into<T>
+d2b_core_controller	impl<T, U> core::convert::TryFrom<U> for d2b_core_controller::authority_persistence::AuthorityRecoveryCoordinator where U: core::convert::Into<T>
+d2b_core_controller	impl<T, U> core::convert::TryFrom<U> for d2b_core_controller::authority_persistence::RedbAuthorityPersistence where U: core::convert::Into<T>
 d2b_core_controller	impl<T, U> core::convert::TryFrom<U> for d2b_core_controller::authz::AuthorizationHandler where U: core::convert::Into<T>
 d2b_core_controller	impl<T, U> core::convert::TryFrom<U> for d2b_core_controller::authz::CoreAuthorizationSubject<'a> where U: core::convert::Into<T>
 d2b_core_controller	impl<T, U> core::convert::TryFrom<U> for d2b_core_controller::authz::SubjectPolicy where U: core::convert::Into<T>
@@ -5163,16 +5301,26 @@ d2b_core_controller	impl<T, U> core::convert::TryInto<U> for d2b_core_controller
 d2b_core_controller	impl<T, U> core::convert::TryInto<U> for d2b_core_controller::authority::AuthorityEffectGate where U: core::convert::TryFrom<T>
 d2b_core_controller	impl<T, U> core::convert::TryInto<U> for d2b_core_controller::authority::AuthorityLease where U: core::convert::TryFrom<T>
 d2b_core_controller	impl<T, U> core::convert::TryInto<U> for d2b_core_controller::authority::AuthorityOwnerProof where U: core::convert::TryFrom<T>
+d2b_core_controller	impl<T, U> core::convert::TryInto<U> for d2b_core_controller::authority::AuthorityRecoveryReceipt where U: core::convert::TryFrom<T>
 d2b_core_controller	impl<T, U> core::convert::TryInto<U> for d2b_core_controller::authority::AuthorityRequest where U: core::convert::TryFrom<T>
+d2b_core_controller	impl<T, U> core::convert::TryInto<U> for d2b_core_controller::authority::AuthorityReservation where U: core::convert::TryFrom<T>
 d2b_core_controller	impl<T, U> core::convert::TryInto<U> for d2b_core_controller::authority::AuthorityScope where U: core::convert::TryFrom<T>
+d2b_core_controller	impl<T, U> core::convert::TryInto<U> for d2b_core_controller::authority::AuthorityStorageClaim where U: core::convert::TryFrom<T>
+d2b_core_controller	impl<T, U> core::convert::TryInto<U> for d2b_core_controller::authority::AuthorityStorageOperation where U: core::convert::TryFrom<T>
+d2b_core_controller	impl<T, U> core::convert::TryInto<U> for d2b_core_controller::authority::DurableAuthorityClaim where U: core::convert::TryFrom<T>
+d2b_core_controller	impl<T, U> core::convert::TryInto<U> for d2b_core_controller::authority::DurableAuthorityOwnerProof where U: core::convert::TryFrom<T>
+d2b_core_controller	impl<T, U> core::convert::TryInto<U> for d2b_core_controller::authority::DurableExternalNicClaim where U: core::convert::TryFrom<T>
 d2b_core_controller	impl<T, U> core::convert::TryInto<U> for d2b_core_controller::authority::ExternalNicAdoption where U: core::convert::TryFrom<T>
 d2b_core_controller	impl<T, U> core::convert::TryInto<U> for d2b_core_controller::authority::ExternalNicClaimRequest where U: core::convert::TryFrom<T>
 d2b_core_controller	impl<T, U> core::convert::TryInto<U> for d2b_core_controller::authority::ExternalNicEffectGate where U: core::convert::TryFrom<T>
 d2b_core_controller	impl<T, U> core::convert::TryInto<U> for d2b_core_controller::authority::ExternalNicLease where U: core::convert::TryFrom<T>
 d2b_core_controller	impl<T, U> core::convert::TryInto<U> for d2b_core_controller::authority::ExternalNicOwnerProof where U: core::convert::TryFrom<T>
+d2b_core_controller	impl<T, U> core::convert::TryInto<U> for d2b_core_controller::authority::ExternalNicReservation where U: core::convert::TryFrom<T>
 d2b_core_controller	impl<T, U> core::convert::TryInto<U> for d2b_core_controller::authority::HostGlobalAuthorityIndex where U: core::convert::TryFrom<T>
 d2b_core_controller	impl<T, U> core::convert::TryInto<U> for d2b_core_controller::authority::emergency_policy::EmergencyPolicyAuthority where U: core::convert::TryFrom<T>
 d2b_core_controller	impl<T, U> core::convert::TryInto<U> for d2b_core_controller::authority::quota::QuotaAuthority where U: core::convert::TryFrom<T>
+d2b_core_controller	impl<T, U> core::convert::TryInto<U> for d2b_core_controller::authority_persistence::AuthorityRecoveryCoordinator where U: core::convert::TryFrom<T>
+d2b_core_controller	impl<T, U> core::convert::TryInto<U> for d2b_core_controller::authority_persistence::RedbAuthorityPersistence where U: core::convert::TryFrom<T>
 d2b_core_controller	impl<T, U> core::convert::TryInto<U> for d2b_core_controller::authz::AuthorizationHandler where U: core::convert::TryFrom<T>
 d2b_core_controller	impl<T, U> core::convert::TryInto<U> for d2b_core_controller::authz::CoreAuthorizationSubject<'a> where U: core::convert::TryFrom<T>
 d2b_core_controller	impl<T, U> core::convert::TryInto<U> for d2b_core_controller::authz::SubjectPolicy where U: core::convert::TryFrom<T>
@@ -5236,6 +5384,11 @@ d2b_core_controller	impl<T> alloc::borrow::ToOwned for d2b_core_controller::api_
 d2b_core_controller	impl<T> alloc::borrow::ToOwned for d2b_core_controller::authority::AuthorityOwnerProof where T: core::clone::Clone
 d2b_core_controller	impl<T> alloc::borrow::ToOwned for d2b_core_controller::authority::AuthorityRequest where T: core::clone::Clone
 d2b_core_controller	impl<T> alloc::borrow::ToOwned for d2b_core_controller::authority::AuthorityScope where T: core::clone::Clone
+d2b_core_controller	impl<T> alloc::borrow::ToOwned for d2b_core_controller::authority::AuthorityStorageClaim where T: core::clone::Clone
+d2b_core_controller	impl<T> alloc::borrow::ToOwned for d2b_core_controller::authority::AuthorityStorageOperation where T: core::clone::Clone
+d2b_core_controller	impl<T> alloc::borrow::ToOwned for d2b_core_controller::authority::DurableAuthorityClaim where T: core::clone::Clone
+d2b_core_controller	impl<T> alloc::borrow::ToOwned for d2b_core_controller::authority::DurableAuthorityOwnerProof where T: core::clone::Clone
+d2b_core_controller	impl<T> alloc::borrow::ToOwned for d2b_core_controller::authority::DurableExternalNicClaim where T: core::clone::Clone
 d2b_core_controller	impl<T> alloc::borrow::ToOwned for d2b_core_controller::authority::ExternalNicOwnerProof where T: core::clone::Clone
 d2b_core_controller	impl<T> alloc::borrow::ToOwned for d2b_core_controller::authz::SubjectPolicy where T: core::clone::Clone
 d2b_core_controller	impl<T> alloc::borrow::ToOwned for d2b_core_controller::configuration::ActivationResult where T: core::clone::Clone
@@ -5282,16 +5435,26 @@ d2b_core_controller	impl<T> core::any::Any for d2b_core_controller::authority::A
 d2b_core_controller	impl<T> core::any::Any for d2b_core_controller::authority::AuthorityEffectGate where T: 'static + ?core::marker::Sized
 d2b_core_controller	impl<T> core::any::Any for d2b_core_controller::authority::AuthorityLease where T: 'static + ?core::marker::Sized
 d2b_core_controller	impl<T> core::any::Any for d2b_core_controller::authority::AuthorityOwnerProof where T: 'static + ?core::marker::Sized
+d2b_core_controller	impl<T> core::any::Any for d2b_core_controller::authority::AuthorityRecoveryReceipt where T: 'static + ?core::marker::Sized
 d2b_core_controller	impl<T> core::any::Any for d2b_core_controller::authority::AuthorityRequest where T: 'static + ?core::marker::Sized
+d2b_core_controller	impl<T> core::any::Any for d2b_core_controller::authority::AuthorityReservation where T: 'static + ?core::marker::Sized
 d2b_core_controller	impl<T> core::any::Any for d2b_core_controller::authority::AuthorityScope where T: 'static + ?core::marker::Sized
+d2b_core_controller	impl<T> core::any::Any for d2b_core_controller::authority::AuthorityStorageClaim where T: 'static + ?core::marker::Sized
+d2b_core_controller	impl<T> core::any::Any for d2b_core_controller::authority::AuthorityStorageOperation where T: 'static + ?core::marker::Sized
+d2b_core_controller	impl<T> core::any::Any for d2b_core_controller::authority::DurableAuthorityClaim where T: 'static + ?core::marker::Sized
+d2b_core_controller	impl<T> core::any::Any for d2b_core_controller::authority::DurableAuthorityOwnerProof where T: 'static + ?core::marker::Sized
+d2b_core_controller	impl<T> core::any::Any for d2b_core_controller::authority::DurableExternalNicClaim where T: 'static + ?core::marker::Sized
 d2b_core_controller	impl<T> core::any::Any for d2b_core_controller::authority::ExternalNicAdoption where T: 'static + ?core::marker::Sized
 d2b_core_controller	impl<T> core::any::Any for d2b_core_controller::authority::ExternalNicClaimRequest where T: 'static + ?core::marker::Sized
 d2b_core_controller	impl<T> core::any::Any for d2b_core_controller::authority::ExternalNicEffectGate where T: 'static + ?core::marker::Sized
 d2b_core_controller	impl<T> core::any::Any for d2b_core_controller::authority::ExternalNicLease where T: 'static + ?core::marker::Sized
 d2b_core_controller	impl<T> core::any::Any for d2b_core_controller::authority::ExternalNicOwnerProof where T: 'static + ?core::marker::Sized
+d2b_core_controller	impl<T> core::any::Any for d2b_core_controller::authority::ExternalNicReservation where T: 'static + ?core::marker::Sized
 d2b_core_controller	impl<T> core::any::Any for d2b_core_controller::authority::HostGlobalAuthorityIndex where T: 'static + ?core::marker::Sized
 d2b_core_controller	impl<T> core::any::Any for d2b_core_controller::authority::emergency_policy::EmergencyPolicyAuthority where T: 'static + ?core::marker::Sized
 d2b_core_controller	impl<T> core::any::Any for d2b_core_controller::authority::quota::QuotaAuthority where T: 'static + ?core::marker::Sized
+d2b_core_controller	impl<T> core::any::Any for d2b_core_controller::authority_persistence::AuthorityRecoveryCoordinator where T: 'static + ?core::marker::Sized
+d2b_core_controller	impl<T> core::any::Any for d2b_core_controller::authority_persistence::RedbAuthorityPersistence where T: 'static + ?core::marker::Sized
 d2b_core_controller	impl<T> core::any::Any for d2b_core_controller::authz::AuthorizationHandler where T: 'static + ?core::marker::Sized
 d2b_core_controller	impl<T> core::any::Any for d2b_core_controller::authz::CoreAuthorizationSubject<'a> where T: 'static + ?core::marker::Sized
 d2b_core_controller	impl<T> core::any::Any for d2b_core_controller::authz::SubjectPolicy where T: 'static + ?core::marker::Sized
@@ -5357,16 +5520,26 @@ d2b_core_controller	impl<T> core::borrow::Borrow<T> for d2b_core_controller::aut
 d2b_core_controller	impl<T> core::borrow::Borrow<T> for d2b_core_controller::authority::AuthorityEffectGate where T: ?core::marker::Sized
 d2b_core_controller	impl<T> core::borrow::Borrow<T> for d2b_core_controller::authority::AuthorityLease where T: ?core::marker::Sized
 d2b_core_controller	impl<T> core::borrow::Borrow<T> for d2b_core_controller::authority::AuthorityOwnerProof where T: ?core::marker::Sized
+d2b_core_controller	impl<T> core::borrow::Borrow<T> for d2b_core_controller::authority::AuthorityRecoveryReceipt where T: ?core::marker::Sized
 d2b_core_controller	impl<T> core::borrow::Borrow<T> for d2b_core_controller::authority::AuthorityRequest where T: ?core::marker::Sized
+d2b_core_controller	impl<T> core::borrow::Borrow<T> for d2b_core_controller::authority::AuthorityReservation where T: ?core::marker::Sized
 d2b_core_controller	impl<T> core::borrow::Borrow<T> for d2b_core_controller::authority::AuthorityScope where T: ?core::marker::Sized
+d2b_core_controller	impl<T> core::borrow::Borrow<T> for d2b_core_controller::authority::AuthorityStorageClaim where T: ?core::marker::Sized
+d2b_core_controller	impl<T> core::borrow::Borrow<T> for d2b_core_controller::authority::AuthorityStorageOperation where T: ?core::marker::Sized
+d2b_core_controller	impl<T> core::borrow::Borrow<T> for d2b_core_controller::authority::DurableAuthorityClaim where T: ?core::marker::Sized
+d2b_core_controller	impl<T> core::borrow::Borrow<T> for d2b_core_controller::authority::DurableAuthorityOwnerProof where T: ?core::marker::Sized
+d2b_core_controller	impl<T> core::borrow::Borrow<T> for d2b_core_controller::authority::DurableExternalNicClaim where T: ?core::marker::Sized
 d2b_core_controller	impl<T> core::borrow::Borrow<T> for d2b_core_controller::authority::ExternalNicAdoption where T: ?core::marker::Sized
 d2b_core_controller	impl<T> core::borrow::Borrow<T> for d2b_core_controller::authority::ExternalNicClaimRequest where T: ?core::marker::Sized
 d2b_core_controller	impl<T> core::borrow::Borrow<T> for d2b_core_controller::authority::ExternalNicEffectGate where T: ?core::marker::Sized
 d2b_core_controller	impl<T> core::borrow::Borrow<T> for d2b_core_controller::authority::ExternalNicLease where T: ?core::marker::Sized
 d2b_core_controller	impl<T> core::borrow::Borrow<T> for d2b_core_controller::authority::ExternalNicOwnerProof where T: ?core::marker::Sized
+d2b_core_controller	impl<T> core::borrow::Borrow<T> for d2b_core_controller::authority::ExternalNicReservation where T: ?core::marker::Sized
 d2b_core_controller	impl<T> core::borrow::Borrow<T> for d2b_core_controller::authority::HostGlobalAuthorityIndex where T: ?core::marker::Sized
 d2b_core_controller	impl<T> core::borrow::Borrow<T> for d2b_core_controller::authority::emergency_policy::EmergencyPolicyAuthority where T: ?core::marker::Sized
 d2b_core_controller	impl<T> core::borrow::Borrow<T> for d2b_core_controller::authority::quota::QuotaAuthority where T: ?core::marker::Sized
+d2b_core_controller	impl<T> core::borrow::Borrow<T> for d2b_core_controller::authority_persistence::AuthorityRecoveryCoordinator where T: ?core::marker::Sized
+d2b_core_controller	impl<T> core::borrow::Borrow<T> for d2b_core_controller::authority_persistence::RedbAuthorityPersistence where T: ?core::marker::Sized
 d2b_core_controller	impl<T> core::borrow::Borrow<T> for d2b_core_controller::authz::AuthorizationHandler where T: ?core::marker::Sized
 d2b_core_controller	impl<T> core::borrow::Borrow<T> for d2b_core_controller::authz::CoreAuthorizationSubject<'a> where T: ?core::marker::Sized
 d2b_core_controller	impl<T> core::borrow::Borrow<T> for d2b_core_controller::authz::SubjectPolicy where T: ?core::marker::Sized
@@ -5432,16 +5605,26 @@ d2b_core_controller	impl<T> core::borrow::BorrowMut<T> for d2b_core_controller::
 d2b_core_controller	impl<T> core::borrow::BorrowMut<T> for d2b_core_controller::authority::AuthorityEffectGate where T: ?core::marker::Sized
 d2b_core_controller	impl<T> core::borrow::BorrowMut<T> for d2b_core_controller::authority::AuthorityLease where T: ?core::marker::Sized
 d2b_core_controller	impl<T> core::borrow::BorrowMut<T> for d2b_core_controller::authority::AuthorityOwnerProof where T: ?core::marker::Sized
+d2b_core_controller	impl<T> core::borrow::BorrowMut<T> for d2b_core_controller::authority::AuthorityRecoveryReceipt where T: ?core::marker::Sized
 d2b_core_controller	impl<T> core::borrow::BorrowMut<T> for d2b_core_controller::authority::AuthorityRequest where T: ?core::marker::Sized
+d2b_core_controller	impl<T> core::borrow::BorrowMut<T> for d2b_core_controller::authority::AuthorityReservation where T: ?core::marker::Sized
 d2b_core_controller	impl<T> core::borrow::BorrowMut<T> for d2b_core_controller::authority::AuthorityScope where T: ?core::marker::Sized
+d2b_core_controller	impl<T> core::borrow::BorrowMut<T> for d2b_core_controller::authority::AuthorityStorageClaim where T: ?core::marker::Sized
+d2b_core_controller	impl<T> core::borrow::BorrowMut<T> for d2b_core_controller::authority::AuthorityStorageOperation where T: ?core::marker::Sized
+d2b_core_controller	impl<T> core::borrow::BorrowMut<T> for d2b_core_controller::authority::DurableAuthorityClaim where T: ?core::marker::Sized
+d2b_core_controller	impl<T> core::borrow::BorrowMut<T> for d2b_core_controller::authority::DurableAuthorityOwnerProof where T: ?core::marker::Sized
+d2b_core_controller	impl<T> core::borrow::BorrowMut<T> for d2b_core_controller::authority::DurableExternalNicClaim where T: ?core::marker::Sized
 d2b_core_controller	impl<T> core::borrow::BorrowMut<T> for d2b_core_controller::authority::ExternalNicAdoption where T: ?core::marker::Sized
 d2b_core_controller	impl<T> core::borrow::BorrowMut<T> for d2b_core_controller::authority::ExternalNicClaimRequest where T: ?core::marker::Sized
 d2b_core_controller	impl<T> core::borrow::BorrowMut<T> for d2b_core_controller::authority::ExternalNicEffectGate where T: ?core::marker::Sized
 d2b_core_controller	impl<T> core::borrow::BorrowMut<T> for d2b_core_controller::authority::ExternalNicLease where T: ?core::marker::Sized
 d2b_core_controller	impl<T> core::borrow::BorrowMut<T> for d2b_core_controller::authority::ExternalNicOwnerProof where T: ?core::marker::Sized
+d2b_core_controller	impl<T> core::borrow::BorrowMut<T> for d2b_core_controller::authority::ExternalNicReservation where T: ?core::marker::Sized
 d2b_core_controller	impl<T> core::borrow::BorrowMut<T> for d2b_core_controller::authority::HostGlobalAuthorityIndex where T: ?core::marker::Sized
 d2b_core_controller	impl<T> core::borrow::BorrowMut<T> for d2b_core_controller::authority::emergency_policy::EmergencyPolicyAuthority where T: ?core::marker::Sized
 d2b_core_controller	impl<T> core::borrow::BorrowMut<T> for d2b_core_controller::authority::quota::QuotaAuthority where T: ?core::marker::Sized
+d2b_core_controller	impl<T> core::borrow::BorrowMut<T> for d2b_core_controller::authority_persistence::AuthorityRecoveryCoordinator where T: ?core::marker::Sized
+d2b_core_controller	impl<T> core::borrow::BorrowMut<T> for d2b_core_controller::authority_persistence::RedbAuthorityPersistence where T: ?core::marker::Sized
 d2b_core_controller	impl<T> core::borrow::BorrowMut<T> for d2b_core_controller::authz::AuthorizationHandler where T: ?core::marker::Sized
 d2b_core_controller	impl<T> core::borrow::BorrowMut<T> for d2b_core_controller::authz::CoreAuthorizationSubject<'a> where T: ?core::marker::Sized
 d2b_core_controller	impl<T> core::borrow::BorrowMut<T> for d2b_core_controller::authz::SubjectPolicy where T: ?core::marker::Sized
@@ -5505,6 +5688,11 @@ d2b_core_controller	impl<T> core::clone::CloneToUninit for d2b_core_controller::
 d2b_core_controller	impl<T> core::clone::CloneToUninit for d2b_core_controller::authority::AuthorityOwnerProof where T: core::clone::Clone
 d2b_core_controller	impl<T> core::clone::CloneToUninit for d2b_core_controller::authority::AuthorityRequest where T: core::clone::Clone
 d2b_core_controller	impl<T> core::clone::CloneToUninit for d2b_core_controller::authority::AuthorityScope where T: core::clone::Clone
+d2b_core_controller	impl<T> core::clone::CloneToUninit for d2b_core_controller::authority::AuthorityStorageClaim where T: core::clone::Clone
+d2b_core_controller	impl<T> core::clone::CloneToUninit for d2b_core_controller::authority::AuthorityStorageOperation where T: core::clone::Clone
+d2b_core_controller	impl<T> core::clone::CloneToUninit for d2b_core_controller::authority::DurableAuthorityClaim where T: core::clone::Clone
+d2b_core_controller	impl<T> core::clone::CloneToUninit for d2b_core_controller::authority::DurableAuthorityOwnerProof where T: core::clone::Clone
+d2b_core_controller	impl<T> core::clone::CloneToUninit for d2b_core_controller::authority::DurableExternalNicClaim where T: core::clone::Clone
 d2b_core_controller	impl<T> core::clone::CloneToUninit for d2b_core_controller::authority::ExternalNicOwnerProof where T: core::clone::Clone
 d2b_core_controller	impl<T> core::clone::CloneToUninit for d2b_core_controller::authz::SubjectPolicy where T: core::clone::Clone
 d2b_core_controller	impl<T> core::clone::CloneToUninit for d2b_core_controller::configuration::ActivationResult where T: core::clone::Clone
@@ -5551,16 +5739,26 @@ d2b_core_controller	impl<T> core::convert::From<T> for d2b_core_controller::auth
 d2b_core_controller	impl<T> core::convert::From<T> for d2b_core_controller::authority::AuthorityEffectGate
 d2b_core_controller	impl<T> core::convert::From<T> for d2b_core_controller::authority::AuthorityLease
 d2b_core_controller	impl<T> core::convert::From<T> for d2b_core_controller::authority::AuthorityOwnerProof
+d2b_core_controller	impl<T> core::convert::From<T> for d2b_core_controller::authority::AuthorityRecoveryReceipt
 d2b_core_controller	impl<T> core::convert::From<T> for d2b_core_controller::authority::AuthorityRequest
+d2b_core_controller	impl<T> core::convert::From<T> for d2b_core_controller::authority::AuthorityReservation
 d2b_core_controller	impl<T> core::convert::From<T> for d2b_core_controller::authority::AuthorityScope
+d2b_core_controller	impl<T> core::convert::From<T> for d2b_core_controller::authority::AuthorityStorageClaim
+d2b_core_controller	impl<T> core::convert::From<T> for d2b_core_controller::authority::AuthorityStorageOperation
+d2b_core_controller	impl<T> core::convert::From<T> for d2b_core_controller::authority::DurableAuthorityClaim
+d2b_core_controller	impl<T> core::convert::From<T> for d2b_core_controller::authority::DurableAuthorityOwnerProof
+d2b_core_controller	impl<T> core::convert::From<T> for d2b_core_controller::authority::DurableExternalNicClaim
 d2b_core_controller	impl<T> core::convert::From<T> for d2b_core_controller::authority::ExternalNicAdoption
 d2b_core_controller	impl<T> core::convert::From<T> for d2b_core_controller::authority::ExternalNicClaimRequest
 d2b_core_controller	impl<T> core::convert::From<T> for d2b_core_controller::authority::ExternalNicEffectGate
 d2b_core_controller	impl<T> core::convert::From<T> for d2b_core_controller::authority::ExternalNicLease
 d2b_core_controller	impl<T> core::convert::From<T> for d2b_core_controller::authority::ExternalNicOwnerProof
+d2b_core_controller	impl<T> core::convert::From<T> for d2b_core_controller::authority::ExternalNicReservation
 d2b_core_controller	impl<T> core::convert::From<T> for d2b_core_controller::authority::HostGlobalAuthorityIndex
 d2b_core_controller	impl<T> core::convert::From<T> for d2b_core_controller::authority::emergency_policy::EmergencyPolicyAuthority
 d2b_core_controller	impl<T> core::convert::From<T> for d2b_core_controller::authority::quota::QuotaAuthority
+d2b_core_controller	impl<T> core::convert::From<T> for d2b_core_controller::authority_persistence::AuthorityRecoveryCoordinator
+d2b_core_controller	impl<T> core::convert::From<T> for d2b_core_controller::authority_persistence::RedbAuthorityPersistence
 d2b_core_controller	impl<T> core::convert::From<T> for d2b_core_controller::authz::AuthorizationHandler
 d2b_core_controller	impl<T> core::convert::From<T> for d2b_core_controller::authz::CoreAuthorizationSubject<'a>
 d2b_core_controller	impl<T> core::convert::From<T> for d2b_core_controller::authz::SubjectPolicy
@@ -5624,6 +5822,11 @@ d2b_core_controller	impl<T> dyn_clone::DynClone for d2b_core_controller::api_cat
 d2b_core_controller	impl<T> dyn_clone::DynClone for d2b_core_controller::authority::AuthorityOwnerProof where T: core::clone::Clone
 d2b_core_controller	impl<T> dyn_clone::DynClone for d2b_core_controller::authority::AuthorityRequest where T: core::clone::Clone
 d2b_core_controller	impl<T> dyn_clone::DynClone for d2b_core_controller::authority::AuthorityScope where T: core::clone::Clone
+d2b_core_controller	impl<T> dyn_clone::DynClone for d2b_core_controller::authority::AuthorityStorageClaim where T: core::clone::Clone
+d2b_core_controller	impl<T> dyn_clone::DynClone for d2b_core_controller::authority::AuthorityStorageOperation where T: core::clone::Clone
+d2b_core_controller	impl<T> dyn_clone::DynClone for d2b_core_controller::authority::DurableAuthorityClaim where T: core::clone::Clone
+d2b_core_controller	impl<T> dyn_clone::DynClone for d2b_core_controller::authority::DurableAuthorityOwnerProof where T: core::clone::Clone
+d2b_core_controller	impl<T> dyn_clone::DynClone for d2b_core_controller::authority::DurableExternalNicClaim where T: core::clone::Clone
 d2b_core_controller	impl<T> dyn_clone::DynClone for d2b_core_controller::authority::ExternalNicOwnerProof where T: core::clone::Clone
 d2b_core_controller	impl<T> dyn_clone::DynClone for d2b_core_controller::authz::SubjectPolicy where T: core::clone::Clone
 d2b_core_controller	impl<T> dyn_clone::DynClone for d2b_core_controller::configuration::ActivationResult where T: core::clone::Clone
@@ -5663,6 +5866,12 @@ d2b_core_controller	impl<T> dyn_clone::DynClone for d2b_core_controller::zone_li
 d2b_core_controller	impl<T> dyn_clone::DynClone for d2b_core_controller::zone_links::ZoneLinkEvent where T: core::clone::Clone
 d2b_core_controller	impl<T> dyn_clone::DynClone for d2b_core_controller::zone_links::ZoneLinkRecord where T: core::clone::Clone
 d2b_core_controller	impl<T> dyn_clone::DynClone for d2b_core_controller::zone_links::ZoneLinkStatus where T: core::clone::Clone
+d2b_core_controller	impl<T> serde_core::de::DeserializeOwned for d2b_core_controller::authority::AuthorityScope where T: for<'de> serde_core::de::Deserialize<'de>
+d2b_core_controller	impl<T> serde_core::de::DeserializeOwned for d2b_core_controller::authority::AuthorityStorageClaim where T: for<'de> serde_core::de::Deserialize<'de>
+d2b_core_controller	impl<T> serde_core::de::DeserializeOwned for d2b_core_controller::authority::AuthorityStorageOperation where T: for<'de> serde_core::de::Deserialize<'de>
+d2b_core_controller	impl<T> serde_core::de::DeserializeOwned for d2b_core_controller::authority::DurableAuthorityClaim where T: for<'de> serde_core::de::Deserialize<'de>
+d2b_core_controller	impl<T> serde_core::de::DeserializeOwned for d2b_core_controller::authority::DurableAuthorityOwnerProof where T: for<'de> serde_core::de::Deserialize<'de>
+d2b_core_controller	impl<T> serde_core::de::DeserializeOwned for d2b_core_controller::authority::DurableExternalNicClaim where T: for<'de> serde_core::de::Deserialize<'de>
 d2b_core_controller	impl<T> typenum::type_operators::Same for d2b_core_controller::api_catalog::ApiCatalogHandler
 d2b_core_controller	impl<T> typenum::type_operators::Same for d2b_core_controller::api_catalog::CatalogEntry
 d2b_core_controller	impl<T> typenum::type_operators::Same for d2b_core_controller::api_catalog::StagedApiCatalog
@@ -5670,16 +5879,26 @@ d2b_core_controller	impl<T> typenum::type_operators::Same for d2b_core_controlle
 d2b_core_controller	impl<T> typenum::type_operators::Same for d2b_core_controller::authority::AuthorityEffectGate
 d2b_core_controller	impl<T> typenum::type_operators::Same for d2b_core_controller::authority::AuthorityLease
 d2b_core_controller	impl<T> typenum::type_operators::Same for d2b_core_controller::authority::AuthorityOwnerProof
+d2b_core_controller	impl<T> typenum::type_operators::Same for d2b_core_controller::authority::AuthorityRecoveryReceipt
 d2b_core_controller	impl<T> typenum::type_operators::Same for d2b_core_controller::authority::AuthorityRequest
+d2b_core_controller	impl<T> typenum::type_operators::Same for d2b_core_controller::authority::AuthorityReservation
 d2b_core_controller	impl<T> typenum::type_operators::Same for d2b_core_controller::authority::AuthorityScope
+d2b_core_controller	impl<T> typenum::type_operators::Same for d2b_core_controller::authority::AuthorityStorageClaim
+d2b_core_controller	impl<T> typenum::type_operators::Same for d2b_core_controller::authority::AuthorityStorageOperation
+d2b_core_controller	impl<T> typenum::type_operators::Same for d2b_core_controller::authority::DurableAuthorityClaim
+d2b_core_controller	impl<T> typenum::type_operators::Same for d2b_core_controller::authority::DurableAuthorityOwnerProof
+d2b_core_controller	impl<T> typenum::type_operators::Same for d2b_core_controller::authority::DurableExternalNicClaim
 d2b_core_controller	impl<T> typenum::type_operators::Same for d2b_core_controller::authority::ExternalNicAdoption
 d2b_core_controller	impl<T> typenum::type_operators::Same for d2b_core_controller::authority::ExternalNicClaimRequest
 d2b_core_controller	impl<T> typenum::type_operators::Same for d2b_core_controller::authority::ExternalNicEffectGate
 d2b_core_controller	impl<T> typenum::type_operators::Same for d2b_core_controller::authority::ExternalNicLease
 d2b_core_controller	impl<T> typenum::type_operators::Same for d2b_core_controller::authority::ExternalNicOwnerProof
+d2b_core_controller	impl<T> typenum::type_operators::Same for d2b_core_controller::authority::ExternalNicReservation
 d2b_core_controller	impl<T> typenum::type_operators::Same for d2b_core_controller::authority::HostGlobalAuthorityIndex
 d2b_core_controller	impl<T> typenum::type_operators::Same for d2b_core_controller::authority::emergency_policy::EmergencyPolicyAuthority
 d2b_core_controller	impl<T> typenum::type_operators::Same for d2b_core_controller::authority::quota::QuotaAuthority
+d2b_core_controller	impl<T> typenum::type_operators::Same for d2b_core_controller::authority_persistence::AuthorityRecoveryCoordinator
+d2b_core_controller	impl<T> typenum::type_operators::Same for d2b_core_controller::authority_persistence::RedbAuthorityPersistence
 d2b_core_controller	impl<T> typenum::type_operators::Same for d2b_core_controller::authz::AuthorizationHandler
 d2b_core_controller	impl<T> typenum::type_operators::Same for d2b_core_controller::authz::CoreAuthorizationSubject<'a>
 d2b_core_controller	impl<T> typenum::type_operators::Same for d2b_core_controller::authz::SubjectPolicy
@@ -5738,12 +5957,17 @@ d2b_core_controller	impl<T> typenum::type_operators::Same for d2b_core_controlle
 d2b_core_controller	impl<T> typenum::type_operators::Same for d2b_core_controller::zone_links::ZoneLinkRecord
 d2b_core_controller	impl<T> typenum::type_operators::Same for d2b_core_controller::zone_links::ZoneLinkStatus
 d2b_core_controller	impl<T> typenum::type_operators::Same for d2b_core_controller::zonelink::ZoneLinkController
+d2b_core_controller	pub async fn d2b_core_controller::authority::AuthorityReservation::dispatch<F, Fut, E>(&mut self, F) -> core::result::Result<d2b_core_controller::authority::AuthorityEffectOutcome, d2b_core_controller::authority::AuthorityReservationError<E>> where F: core::ops::function::FnOnce(&d2b_core_controller::authority::AuthorityLease) -> Fut, Fut: core::future::future::Future<Output = core::result::Result<d2b_core_controller::authority::AuthorityEffectOutcome, E>>
+d2b_core_controller	pub async fn d2b_core_controller::authority::AuthorityReservation::reserve(alloc::sync::Arc<tokio::sync::mutex::Mutex<d2b_core_controller::authority::HostGlobalAuthorityIndex>>, d2b_core_controller::authority::AuthorityRequest) -> core::result::Result<Self, d2b_core_controller::authority::AuthorityError>
+d2b_core_controller	pub async fn d2b_core_controller::authority::AuthorityReservation::reserve_durable(alloc::sync::Arc<tokio::sync::mutex::Mutex<d2b_core_controller::authority::HostGlobalAuthorityIndex>>, alloc::sync::Arc<dyn d2b_core_controller::authority_persistence::AuthorityPersistence>, impl core::convert::Into<alloc::string::String>, d2b_core_controller::authority::AuthorityRequest) -> core::result::Result<Self, d2b_core_controller::authority::AuthorityReservationError<d2b_core_controller::authority::AuthorityError>>
+d2b_core_controller	pub async fn d2b_core_controller::authority::ExternalNicReservation::dispatch<F, Fut, E>(&mut self, F) -> core::result::Result<d2b_core_controller::authority::ExternalNicEffectOutcome, d2b_core_controller::authority::AuthorityReservationError<E>> where F: core::ops::function::FnOnce(&d2b_core_controller::authority::ExternalNicLease) -> Fut, Fut: core::future::future::Future<Output = core::result::Result<d2b_core_controller::authority::ExternalNicEffectOutcome, E>>
+d2b_core_controller	pub async fn d2b_core_controller::authority::ExternalNicReservation::reserve_durable(alloc::sync::Arc<tokio::sync::mutex::Mutex<d2b_core_controller::authority::HostGlobalAuthorityIndex>>, alloc::sync::Arc<dyn d2b_core_controller::authority_persistence::AuthorityPersistence>, impl core::convert::Into<alloc::string::String>, d2b_core_controller::authority::ExternalNicClaimRequest) -> core::result::Result<Self, d2b_core_controller::authority::AuthorityReservationError<d2b_core_controller::authority::AuthorityError>>
+d2b_core_controller	pub async fn d2b_core_controller::authority_persistence::AuthorityRecoveryCoordinator::recover_with_provenance(alloc::sync::Arc<dyn d2b_core_controller::authority_persistence::AuthorityPersistence>, &dyn d2b_core_controller::authority_persistence::AuthorityRecoveryProvenance) -> core::result::Result<Self, d2b_core_controller::authority_persistence::AuthorityPersistenceError>
+d2b_core_controller	pub async fn d2b_core_controller::authority_persistence::rehydrate_from_persistence(&dyn d2b_core_controller::authority_persistence::AuthorityPersistence) -> core::result::Result<d2b_core_controller::authority::HostGlobalAuthorityIndex, d2b_core_controller::authority_persistence::AuthorityPersistenceError>
 d2b_core_controller	pub async fn d2b_core_controller::runtime::CoreControllerSource<A>::await_expedited_commit(&self, &d2b_controller_toolkit::context::ReconcileContext) -> core::result::Result<d2b_controller_toolkit::runner::CommitDecision, d2b_controller_toolkit::runner::SourceError>
 d2b_core_controller	pub async fn d2b_core_controller::runtime::CoreControllerSource<A>::receive_watch(&self) -> core::result::Result<d2b_controller_toolkit::runner::WatchEvent, d2b_controller_toolkit::runner::WatchFailure>
 d2b_core_controller	pub async fn d2b_core_controller::runtime::CoreResourceReconciler::plan(&self, &d2b_controller_toolkit::context::ReconcileContext, &d2b_controller_toolkit::context::ResourceSnapshot, &[d2b_controller_toolkit::context::DependencySnapshot]) -> core::result::Result<d2b_controller_toolkit::result::ReconcilePlan, Self::Error>
 d2b_core_controller	pub const fn d2b_core_controller::api_catalog::CatalogEntry::provider_ref(&self) -> &d2b_contracts::v3::resource_ref::ResourceRef
-d2b_core_controller	pub const fn d2b_core_controller::authority::AuthorityOwnerProof::new(d2b_contracts::v3::identity::ResourceUid, d2b_contracts::v3::identity::ResourceGeneration) -> Self
-d2b_core_controller	pub const fn d2b_core_controller::authority::ExternalNicOwnerProof::new(d2b_contracts::v3::identity::ResourceUid, d2b_contracts::v3::identity::ResourceGeneration) -> Self
 d2b_core_controller	pub const fn d2b_core_controller::authority::emergency_policy::EmergencyPolicyAuthority::zone_uid(&self) -> &d2b_contracts::v3::identity::ResourceUid
 d2b_core_controller	pub const fn d2b_core_controller::authority::quota::QuotaAuthority::zone_uid(&self) -> &d2b_contracts::v3::identity::ResourceUid
 d2b_core_controller	pub const fn d2b_core_controller::budgets::BudgetHandler::execution_ref(&self) -> &d2b_contracts::v3::resource_ref::ResourceRef
@@ -5840,6 +6064,13 @@ d2b_core_controller	pub d2b_core_controller::authority::AuthorityAdoption::Missi
 d2b_core_controller	pub d2b_core_controller::authority::AuthorityAdoption::QuarantinedAmbiguous
 d2b_core_controller	pub d2b_core_controller::authority::AuthorityScope::Host(d2b_contracts::v3::identity::ResourceUid)
 d2b_core_controller	pub d2b_core_controller::authority::AuthorityScope::Zone(d2b_contracts::v3::identity::ResourceUid)
+d2b_core_controller	pub d2b_core_controller::authority::AuthorityStorageClaim::ExternalNic(d2b_core_controller::authority::DurableExternalNicClaim)
+d2b_core_controller	pub d2b_core_controller::authority::AuthorityStorageClaim::Generic(d2b_core_controller::authority::DurableAuthorityClaim)
+d2b_core_controller	pub d2b_core_controller::authority::AuthorityStorageOperation::claim: d2b_core_controller::authority::AuthorityStorageClaim
+d2b_core_controller	pub d2b_core_controller::authority::AuthorityStorageOperation::claim_digest: alloc::string::String
+d2b_core_controller	pub d2b_core_controller::authority::AuthorityStorageOperation::operation_id: alloc::string::String
+d2b_core_controller	pub d2b_core_controller::authority::AuthorityStorageOperation::state: d2b_core_controller::authority::AuthorityOperationState
+d2b_core_controller	pub d2b_core_controller::authority::AuthorityStorageOperation::store_binding_digest: alloc::string::String
 d2b_core_controller	pub d2b_core_controller::authority::ExternalNicAdoption::Adopted(d2b_core_controller::authority::ExternalNicLease)
 d2b_core_controller	pub d2b_core_controller::authority::ExternalNicAdoption::Missing
 d2b_core_controller	pub d2b_core_controller::authority::ExternalNicAdoption::QuarantinedAmbiguous
@@ -5969,6 +6200,7 @@ d2b_core_controller	pub enum d2b_core_controller::OwnerMutation
 d2b_core_controller	pub enum d2b_core_controller::ProjectionAction
 d2b_core_controller	pub enum d2b_core_controller::authority::AuthorityAdoption
 d2b_core_controller	pub enum d2b_core_controller::authority::AuthorityScope
+d2b_core_controller	pub enum d2b_core_controller::authority::AuthorityStorageClaim
 d2b_core_controller	pub enum d2b_core_controller::authority::ExternalNicAdoption
 d2b_core_controller	pub enum d2b_core_controller::configuration::bundle_apply::BundleApplyEffect
 d2b_core_controller	pub enum d2b_core_controller::configuration::bundle_apply::BundleApplyOutcome
@@ -6001,6 +6233,7 @@ d2b_core_controller	pub fn d2b_core_controller::authority::AuthorityEffectGate::
 d2b_core_controller	pub fn d2b_core_controller::authority::AuthorityOwnerProof::clone(&self) -> d2b_core_controller::authority::AuthorityOwnerProof
 d2b_core_controller	pub fn d2b_core_controller::authority::AuthorityOwnerProof::eq(&self, &d2b_core_controller::authority::AuthorityOwnerProof) -> bool
 d2b_core_controller	pub fn d2b_core_controller::authority::AuthorityRequest::clone(&self) -> d2b_core_controller::authority::AuthorityRequest
+d2b_core_controller	pub fn d2b_core_controller::authority::AuthorityRequest::durable_claim(&self) -> d2b_core_controller::authority::DurableAuthorityClaim
 d2b_core_controller	pub fn d2b_core_controller::authority::AuthorityRequest::emergency_policy(d2b_contracts::v3::identity::ResourceUid, d2b_core_controller::authority::AuthorityOwnerProof) -> core::result::Result<Self, d2b_core_controller::authority::AuthorityError>
 d2b_core_controller	pub fn d2b_core_controller::authority::AuthorityRequest::eq(&self, &d2b_core_controller::authority::AuthorityRequest) -> bool
 d2b_core_controller	pub fn d2b_core_controller::authority::AuthorityRequest::fixed_listener_port(d2b_contracts::v3::identity::ResourceUid, u16, d2b_contracts::v3::process::PortProtocol, d2b_core_controller::authority::AuthorityOwnerProof) -> core::result::Result<Self, d2b_core_controller::authority::AuthorityError>
@@ -6024,24 +6257,39 @@ d2b_core_controller	pub fn d2b_core_controller::authority::AuthorityScope::clone
 d2b_core_controller	pub fn d2b_core_controller::authority::AuthorityScope::cmp(&self, &d2b_core_controller::authority::AuthorityScope) -> core::cmp::Ordering
 d2b_core_controller	pub fn d2b_core_controller::authority::AuthorityScope::eq(&self, &d2b_core_controller::authority::AuthorityScope) -> bool
 d2b_core_controller	pub fn d2b_core_controller::authority::AuthorityScope::partial_cmp(&self, &d2b_core_controller::authority::AuthorityScope) -> core::option::Option<core::cmp::Ordering>
+d2b_core_controller	pub fn d2b_core_controller::authority::AuthorityStorageClaim::clone(&self) -> d2b_core_controller::authority::AuthorityStorageClaim
+d2b_core_controller	pub fn d2b_core_controller::authority::AuthorityStorageClaim::eq(&self, &d2b_core_controller::authority::AuthorityStorageClaim) -> bool
+d2b_core_controller	pub fn d2b_core_controller::authority::AuthorityStorageOperation::clone(&self) -> d2b_core_controller::authority::AuthorityStorageOperation
+d2b_core_controller	pub fn d2b_core_controller::authority::AuthorityStorageOperation::eq(&self, &d2b_core_controller::authority::AuthorityStorageOperation) -> bool
+d2b_core_controller	pub fn d2b_core_controller::authority::DurableAuthorityClaim::clone(&self) -> d2b_core_controller::authority::DurableAuthorityClaim
+d2b_core_controller	pub fn d2b_core_controller::authority::DurableAuthorityClaim::eq(&self, &d2b_core_controller::authority::DurableAuthorityClaim) -> bool
+d2b_core_controller	pub fn d2b_core_controller::authority::DurableAuthorityOwnerProof::clone(&self) -> d2b_core_controller::authority::DurableAuthorityOwnerProof
+d2b_core_controller	pub fn d2b_core_controller::authority::DurableAuthorityOwnerProof::eq(&self, &d2b_core_controller::authority::DurableAuthorityOwnerProof) -> bool
+d2b_core_controller	pub fn d2b_core_controller::authority::DurableExternalNicClaim::clone(&self) -> d2b_core_controller::authority::DurableExternalNicClaim
+d2b_core_controller	pub fn d2b_core_controller::authority::DurableExternalNicClaim::eq(&self, &d2b_core_controller::authority::DurableExternalNicClaim) -> bool
+d2b_core_controller	pub fn d2b_core_controller::authority::ExternalNicClaimRequest::durable_claim(&self) -> d2b_core_controller::authority::DurableExternalNicClaim
 d2b_core_controller	pub fn d2b_core_controller::authority::ExternalNicClaimRequest::new(d2b_contracts::v3::identity::ResourceUid, d2b_core_controller::authority::ResolvedExternalNicIdentity, d2b_contracts::v3::network::ExternalNicClaim, d2b_core_controller::authority::ExternalNicOwnerProof, usize) -> core::result::Result<Self, d2b_core_controller::authority::AuthorityError>
 d2b_core_controller	pub fn d2b_core_controller::authority::ExternalNicEffectGate::into_lease(self) -> d2b_core_controller::authority::ExternalNicLease
 d2b_core_controller	pub fn d2b_core_controller::authority::ExternalNicOwnerProof::clone(&self) -> d2b_core_controller::authority::ExternalNicOwnerProof
 d2b_core_controller	pub fn d2b_core_controller::authority::ExternalNicOwnerProof::eq(&self, &d2b_core_controller::authority::ExternalNicOwnerProof) -> bool
+d2b_core_controller	pub fn d2b_core_controller::authority::ExternalNicRecoveryInventory::contains_identity(&self, &d2b_contracts::v3::identity::ResourceUid, &str) -> bool
 d2b_core_controller	pub fn d2b_core_controller::authority::HostGlobalAuthorityIndex::admit_authority(&mut self, d2b_core_controller::authority::AuthorityRequest) -> core::result::Result<d2b_core_controller::authority::AuthorityLease, d2b_core_controller::authority::AuthorityError>
 d2b_core_controller	pub fn d2b_core_controller::authority::HostGlobalAuthorityIndex::admit_authority_before_effect(&mut self, d2b_core_controller::authority::AuthorityRequest, impl core::ops::function::FnOnce(&d2b_core_controller::authority::AuthorityLease) -> d2b_core_controller::authority::AuthorityEffectOutcome) -> core::result::Result<d2b_core_controller::authority::AuthorityEffectGate, d2b_core_controller::authority::AuthorityError>
 d2b_core_controller	pub fn d2b_core_controller::authority::HostGlobalAuthorityIndex::admit_before_effect(&mut self, d2b_core_controller::authority::ExternalNicClaimRequest, impl core::ops::function::FnOnce(&d2b_core_controller::authority::ExternalNicLease) -> d2b_core_controller::authority::ExternalNicEffectOutcome) -> core::result::Result<d2b_core_controller::authority::ExternalNicEffectGate, d2b_core_controller::authority::AuthorityError>
 d2b_core_controller	pub fn d2b_core_controller::authority::HostGlobalAuthorityIndex::adopt(&self, d2b_contracts::v3::identity::ResourceUid, &d2b_core_controller::authority::ResolvedExternalNicIdentity, &d2b_core_controller::authority::ExternalNicOwnerProof, &[d2b_core_controller::authority::ExternalNicOwnerProof]) -> d2b_core_controller::authority::ExternalNicAdoption
 d2b_core_controller	pub fn d2b_core_controller::authority::HostGlobalAuthorityIndex::adopt_authority(&self, &d2b_core_controller::authority::AuthorityRequest, &[d2b_core_controller::authority::AuthorityOwnerProof]) -> d2b_core_controller::authority::AuthorityAdoption
 d2b_core_controller	pub fn d2b_core_controller::authority::HostGlobalAuthorityIndex::authority_status(&self, &d2b_core_controller::authority::AuthorityRequest) -> core::option::Option<d2b_core_controller::authority::AuthorityStatus>
+d2b_core_controller	pub fn d2b_core_controller::authority::HostGlobalAuthorityIndex::close_then_drain_guest(&mut self, &d2b_contracts::v3::identity::ResourceUid, &d2b_contracts::v3::identity::ResourceUid, impl core::ops::function::FnMut(&d2b_core_controller::authority::AuthorityLease) -> d2b_core_controller::authority::AuthorityCloseOutcome) -> core::result::Result<usize, d2b_core_controller::authority::AuthorityError>
 d2b_core_controller	pub fn d2b_core_controller::authority::HostGlobalAuthorityIndex::close_then_release(&mut self, &d2b_core_controller::authority::ExternalNicLease, impl core::ops::function::FnOnce() -> d2b_core_controller::authority::ExternalNicCloseOutcome) -> core::result::Result<(), d2b_core_controller::authority::AuthorityError>
 d2b_core_controller	pub fn d2b_core_controller::authority::HostGlobalAuthorityIndex::close_then_release_authority(&mut self, &d2b_core_controller::authority::AuthorityLease, impl core::ops::function::FnOnce() -> d2b_core_controller::authority::AuthorityCloseOutcome) -> core::result::Result<(), d2b_core_controller::authority::AuthorityError>
-d2b_core_controller	pub fn d2b_core_controller::authority::HostGlobalAuthorityIndex::default() -> d2b_core_controller::authority::HostGlobalAuthorityIndex
-d2b_core_controller	pub fn d2b_core_controller::authority::HostGlobalAuthorityIndex::drain_guest(&mut self, &d2b_contracts::v3::identity::ResourceUid, &d2b_contracts::v3::identity::ResourceUid) -> usize
+d2b_core_controller	pub fn d2b_core_controller::authority::HostGlobalAuthorityIndex::durable_claims(&self) -> alloc::vec::Vec<d2b_core_controller::authority::DurableAuthorityClaim>
+d2b_core_controller	pub fn d2b_core_controller::authority::HostGlobalAuthorityIndex::durable_external_nic_claims(&self) -> alloc::vec::Vec<d2b_core_controller::authority::DurableExternalNicClaim>
 d2b_core_controller	pub fn d2b_core_controller::authority::HostGlobalAuthorityIndex::external_nic_status(&self, d2b_contracts::v3::identity::ResourceUid, &d2b_core_controller::authority::ResolvedExternalNicIdentity) -> core::option::Option<d2b_contracts::v3::network::ExternalNicAuthorityStatus>
+d2b_core_controller	pub fn d2b_core_controller::authority::HostGlobalAuthorityIndex::rehydrate(d2b_core_controller::authority::AuthorityRecoveryReceipt) -> core::result::Result<Self, d2b_core_controller::authority::AuthorityError>
 d2b_core_controller	pub fn d2b_core_controller::authority::HostGlobalAuthorityIndex::release_authority(&mut self, &d2b_core_controller::authority::AuthorityLease) -> core::result::Result<(), d2b_core_controller::authority::AuthorityError>
 d2b_core_controller	pub fn d2b_core_controller::authority::HostGlobalAuthorityIndex::replace_after_close(&mut self, &d2b_core_controller::authority::ExternalNicLease, d2b_core_controller::authority::ExternalNicClaimRequest, impl core::ops::function::FnOnce() -> d2b_core_controller::authority::ExternalNicCloseOutcome) -> core::result::Result<d2b_core_controller::authority::ExternalNicLease, d2b_core_controller::authority::AuthorityError>
 d2b_core_controller	pub fn d2b_core_controller::authority::HostGlobalAuthorityIndex::replace_authority_after_close(&mut self, &d2b_core_controller::authority::AuthorityLease, d2b_core_controller::authority::AuthorityRequest, impl core::ops::function::FnOnce() -> d2b_core_controller::authority::AuthorityCloseOutcome) -> core::result::Result<d2b_core_controller::authority::AuthorityLease, d2b_core_controller::authority::AuthorityError>
+d2b_core_controller	pub fn d2b_core_controller::authority::TrustedExternalNicInventory::contains_identity(&self, &d2b_contracts::v3::identity::ResourceUid, &str) -> bool
 d2b_core_controller	pub fn d2b_core_controller::authority::emergency_policy::EmergencyPolicyAuthority::admit(&mut d2b_core_controller::authority::HostGlobalAuthorityIndex, d2b_contracts::v3::identity::ResourceUid, d2b_contracts::v3::identity::ResourceUid, d2b_contracts::v3::emergency_policy::EmergencyPolicySpec, d2b_core_controller::authority::AuthorityOwnerProof) -> core::result::Result<Self, d2b_core_controller::authority::emergency_policy::EmergencyPolicyError>
 d2b_core_controller	pub fn d2b_core_controller::authority::emergency_policy::EmergencyPolicyAuthority::complete_delete(&mut self, &mut d2b_core_controller::authority::HostGlobalAuthorityIndex) -> core::result::Result<(), d2b_core_controller::authority::emergency_policy::EmergencyPolicyError>
 d2b_core_controller	pub fn d2b_core_controller::authority::emergency_policy::EmergencyPolicyAuthority::install_policy(&mut self, d2b_contracts::v3::identity::ResourceUid, d2b_contracts::v3::emergency_policy::EmergencyPolicySpec) -> core::result::Result<(), d2b_core_controller::authority::emergency_policy::EmergencyPolicyError>
@@ -6053,6 +6301,18 @@ d2b_core_controller	pub fn d2b_core_controller::authority::quota::QuotaAuthority
 d2b_core_controller	pub fn d2b_core_controller::authority::quota::QuotaAuthority::admit_resource(&mut self, d2b_contracts::v3::resource_ref::ResourceRef, d2b_contracts::v3::identity::ResourceTypeName, d2b_core_controller::authority::quota::QuotaResourceRequest, bool) -> core::result::Result<d2b_core_controller::authority::quota::QuotaAdmission, d2b_core_controller::authority::quota::QuotaError>
 d2b_core_controller	pub fn d2b_core_controller::authority::quota::QuotaAuthority::complete_delete(&mut self, &mut d2b_core_controller::authority::HostGlobalAuthorityIndex) -> core::result::Result<(), d2b_core_controller::authority::quota::QuotaError>
 d2b_core_controller	pub fn d2b_core_controller::authority::quota::QuotaAuthority::release_resource(&mut self, &d2b_contracts::v3::resource_ref::ResourceRef) -> core::result::Result<(), d2b_core_controller::authority::quota::QuotaError>
+d2b_core_controller	pub fn d2b_core_controller::authority_persistence::AuthorityPersistence::prepare<'a>(&'a self, &'a str, &'a d2b_core_controller::authority::AuthorityStorageClaim) -> d2b_core_controller::authority_persistence::AuthorityFuture<'a, d2b_core_controller::authority_persistence::AuthorityOperationCapability>
+d2b_core_controller	pub fn d2b_core_controller::authority_persistence::AuthorityPersistence::record_close<'a>(&'a self, &'a d2b_core_controller::authority_persistence::AuthorityOperationCapability) -> d2b_core_controller::authority_persistence::AuthorityFuture<'a, ()>
+d2b_core_controller	pub fn d2b_core_controller::authority_persistence::AuthorityPersistence::record_effect<'a>(&'a self, &'a d2b_core_controller::authority_persistence::AuthorityOperationCapability, d2b_core_controller::authority::AuthorityOperationState) -> d2b_core_controller::authority_persistence::AuthorityFuture<'a, ()>
+d2b_core_controller	pub fn d2b_core_controller::authority_persistence::AuthorityPersistence::recover<'a>(&'a self) -> d2b_core_controller::authority_persistence::AuthorityFuture<'a, d2b_core_controller::authority::AuthorityRecoveryReceipt>
+d2b_core_controller	pub fn d2b_core_controller::authority_persistence::AuthorityPersistence::release<'a>(&'a self, &'a d2b_core_controller::authority_persistence::AuthorityOperationCapability) -> d2b_core_controller::authority_persistence::AuthorityFuture<'a, ()>
+d2b_core_controller	pub fn d2b_core_controller::authority_persistence::AuthorityRecoveryCoordinator::index(&self) -> alloc::sync::Arc<tokio::sync::mutex::Mutex<d2b_core_controller::authority::HostGlobalAuthorityIndex>>
+d2b_core_controller	pub fn d2b_core_controller::authority_persistence::AuthorityRecoveryProvenance::validate<'a>(&'a self, &'a d2b_core_controller::authority::AuthorityStorageOperation) -> d2b_core_controller::authority_persistence::AuthorityFuture<'a, ()>
+d2b_core_controller	pub fn d2b_core_controller::authority_persistence::RedbAuthorityPersistence::new(alloc::sync::Arc<d2b_resource_store_redb::RedbResourceStore>) -> Self
+d2b_core_controller	pub fn d2b_core_controller::authority_persistence::RedbAuthorityPersistence::prepare<'a>(&'a self, &'a str, &'a d2b_core_controller::authority::AuthorityStorageClaim) -> d2b_core_controller::authority_persistence::AuthorityFuture<'a, d2b_core_controller::authority_persistence::AuthorityOperationCapability>
+d2b_core_controller	pub fn d2b_core_controller::authority_persistence::RedbAuthorityPersistence::recover<'a>(&'a self) -> d2b_core_controller::authority_persistence::AuthorityFuture<'a, d2b_core_controller::authority::AuthorityRecoveryReceipt>
+d2b_core_controller	pub fn d2b_core_controller::authority_persistence::RedbAuthorityPersistence::validate<'a>(&'a self, &'a d2b_core_controller::authority::AuthorityStorageOperation) -> d2b_core_controller::authority_persistence::AuthorityFuture<'a, ()>
+d2b_core_controller	pub fn d2b_core_controller::authority_persistence::RedbAuthorityPersistence::with_external_inventory(self, alloc::sync::Arc<dyn d2b_core_controller::authority::ExternalNicRecoveryInventory>) -> Self
 d2b_core_controller	pub fn d2b_core_controller::authz::AuthorizationHandler::authorize(&self, &d2b_core_controller::authz::CoreAuthorizationSubject<'_>, u64, &d2b_core_controller::authz::AuthorizationRequest) -> core::result::Result<(), d2b_core_controller::authz::AuthorizationError>
 d2b_core_controller	pub fn d2b_core_controller::authz::AuthorizationHandler::default() -> d2b_core_controller::authz::AuthorizationHandler
 d2b_core_controller	pub fn d2b_core_controller::authz::AuthorizationHandler::publish_after_commit(&mut self, u64, impl core::iter::traits::collect::IntoIterator<Item = d2b_core_controller::authz::SubjectPolicy>) -> core::result::Result<(), d2b_core_controller::authz::AuthorizationError>
@@ -6160,6 +6420,9 @@ d2b_core_controller	pub fn d2b_core_controller::hints::WatchRegistry::register(&
 d2b_core_controller	pub fn d2b_core_controller::hints::WatchRegistry::renew(&mut self, &d2b_core_controller::hints::ControllerLeaseKey, d2b_contracts::v3::identity::ControllerGeneration, u64, u64) -> core::result::Result<(), d2b_core_controller::hints::WatchPlanError>
 d2b_core_controller	pub fn d2b_core_controller::hints::WatchRegistry::withdraw(&mut self, &d2b_core_controller::hints::ControllerLeaseKey, d2b_contracts::v3::identity::ControllerGeneration) -> bool
 d2b_core_controller	pub fn d2b_core_controller::hints::WatchRegistry::withdraw_expired(&mut self, u64) -> alloc::vec::Vec<d2b_core_controller::hints::ControllerLeaseKey>
+d2b_core_controller	pub fn d2b_core_controller::main::CoreProcess::recover(&mut self, d2b_core_controller::main::RecoverySnapshot, &d2b_core_controller::authority::HostGlobalAuthorityIndex) -> core::result::Result<(), d2b_core_controller::main::StartupError>
+d2b_core_controller	pub fn d2b_core_controller::main::CoreProcess::restart_with_authority(&mut self, &mut d2b_core_controller::authority::HostGlobalAuthorityIndex)
+d2b_core_controller	pub fn d2b_core_controller::main::CoreProcess::start_production(&mut self, d2b_core_controller::main::RuntimeReadiness, d2b_core_controller::main::RecoverySnapshot, &d2b_core_controller::authority::HostGlobalAuthorityIndex) -> core::result::Result<d2b_core_controller::main::StartupStage, d2b_core_controller::main::StartupError>
 d2b_core_controller	pub fn d2b_core_controller::owner_reconcile::DesiredChild::clone(&self) -> d2b_core_controller::owner_reconcile::DesiredChild
 d2b_core_controller	pub fn d2b_core_controller::owner_reconcile::DesiredChild::eq(&self, &d2b_core_controller::owner_reconcile::DesiredChild) -> bool
 d2b_core_controller	pub fn d2b_core_controller::owner_reconcile::DesiredChild::new(d2b_contracts::v3::resource_ref::ResourceRef, alloc::vec::Vec<u8>, impl core::convert::Into<alloc::string::String>) -> core::result::Result<Self, d2b_core_controller::owner_reconcile::OwnerReconcileError>
@@ -6294,14 +6557,23 @@ d2b_core_controller	pub struct d2b_core_controller::api_catalog::StagedApiCatalo
 d2b_core_controller	pub struct d2b_core_controller::authority::AuthorityEffectGate
 d2b_core_controller	pub struct d2b_core_controller::authority::AuthorityLease
 d2b_core_controller	pub struct d2b_core_controller::authority::AuthorityOwnerProof
+d2b_core_controller	pub struct d2b_core_controller::authority::AuthorityRecoveryReceipt
 d2b_core_controller	pub struct d2b_core_controller::authority::AuthorityRequest
+d2b_core_controller	pub struct d2b_core_controller::authority::AuthorityReservation
+d2b_core_controller	pub struct d2b_core_controller::authority::AuthorityStorageOperation
+d2b_core_controller	pub struct d2b_core_controller::authority::DurableAuthorityClaim
+d2b_core_controller	pub struct d2b_core_controller::authority::DurableAuthorityOwnerProof
+d2b_core_controller	pub struct d2b_core_controller::authority::DurableExternalNicClaim
 d2b_core_controller	pub struct d2b_core_controller::authority::ExternalNicClaimRequest
 d2b_core_controller	pub struct d2b_core_controller::authority::ExternalNicEffectGate
 d2b_core_controller	pub struct d2b_core_controller::authority::ExternalNicLease
 d2b_core_controller	pub struct d2b_core_controller::authority::ExternalNicOwnerProof
+d2b_core_controller	pub struct d2b_core_controller::authority::ExternalNicReservation
 d2b_core_controller	pub struct d2b_core_controller::authority::HostGlobalAuthorityIndex
 d2b_core_controller	pub struct d2b_core_controller::authority::emergency_policy::EmergencyPolicyAuthority
 d2b_core_controller	pub struct d2b_core_controller::authority::quota::QuotaAuthority
+d2b_core_controller	pub struct d2b_core_controller::authority_persistence::AuthorityRecoveryCoordinator
+d2b_core_controller	pub struct d2b_core_controller::authority_persistence::RedbAuthorityPersistence
 d2b_core_controller	pub struct d2b_core_controller::authz::AuthorizationHandler
 d2b_core_controller	pub struct d2b_core_controller::authz::CoreAuthorizationSubject<'a>
 d2b_core_controller	pub struct d2b_core_controller::authz::SubjectPolicy
@@ -6359,6 +6631,9 @@ d2b_core_controller	pub struct d2b_core_controller::zonelink::ZoneLinkHandler
 d2b_core_controller	pub struct d2b_core_controller::zonelink::ZoneLinkRecord
 d2b_core_controller	pub struct d2b_core_controller::zonelink::ZoneLinkStatus
 d2b_core_controller	pub trait d2b_core_controller::RegisteredControllerApi: d2b_core_controller::runtime::registered_api::Sealed + core::marker::Send + core::marker::Sync + 'static
+d2b_core_controller	pub trait d2b_core_controller::authority::ExternalNicRecoveryInventory: core::marker::Send + core::marker::Sync
+d2b_core_controller	pub trait d2b_core_controller::authority_persistence::AuthorityPersistence: core::marker::Send + core::marker::Sync
+d2b_core_controller	pub trait d2b_core_controller::authority_persistence::AuthorityRecoveryProvenance: d2b_core_controller::authority_persistence::sealed::RecoveryProvenance + core::marker::Send + core::marker::Sync
 d2b_core_controller	pub trait d2b_core_controller::runtime::RegisteredControllerApi: d2b_core_controller::runtime::registered_api::Sealed + core::marker::Send + core::marker::Sync + 'static
 d2b_core_controller	pub type d2b_core_controller::authority::emergency_policy::EmergencyPolicyHandler = d2b_core_controller::authority::emergency_policy::EmergencyPolicyAuthority
 d2b_core_controller	pub type d2b_core_controller::authority::quota::QuotaHandler = d2b_core_controller::authority::quota::QuotaAuthority
@@ -11041,7 +11316,9 @@ d2b_resource_store	pub struct d2b_resource_store::mutation_seal::OpenedMutation
 d2b_resource_store	pub struct d2b_resource_store::mutation_seal::SealedMutation
 d2b_resource_store	pub struct d2b_resource_store::mutation_seal::StoreSealIdentity
 d2b_resource_store_redb	impl !core::marker::Freeze for d2b_resource_store_redb::RedbResourceStore
+d2b_resource_store_redb	impl !core::panic::unwind_safe::RefUnwindSafe for d2b_resource_store_redb::AuthorityOperationCapability
 d2b_resource_store_redb	impl !core::panic::unwind_safe::RefUnwindSafe for d2b_resource_store_redb::RedbResourceStore
+d2b_resource_store_redb	impl !core::panic::unwind_safe::UnwindSafe for d2b_resource_store_redb::AuthorityOperationCapability
 d2b_resource_store_redb	impl !core::panic::unwind_safe::UnwindSafe for d2b_resource_store_redb::RedbResourceStore
 d2b_resource_store_redb	impl core::clone::Clone for d2b_resource_store_redb::ChangeBatch
 d2b_resource_store_redb	impl core::clone::Clone for d2b_resource_store_redb::ChangeEntry
@@ -11067,6 +11344,7 @@ d2b_resource_store_redb	impl core::cmp::PartialEq for d2b_resource_store_redb::o
 d2b_resource_store_redb	impl core::cmp::PartialEq for d2b_resource_store_redb::ownership::ReverseOwnerEntry
 d2b_resource_store_redb	impl core::default::Default for d2b_resource_store_redb::ownership::OwnerIndex
 d2b_resource_store_redb	impl core::default::Default for d2b_resource_store_redb::revision_log::WatchCoordinator
+d2b_resource_store_redb	impl core::fmt::Debug for d2b_resource_store_redb::AuthorityOperationCapability
 d2b_resource_store_redb	impl core::fmt::Debug for d2b_resource_store_redb::ChangeBatch
 d2b_resource_store_redb	impl core::fmt::Debug for d2b_resource_store_redb::ChangeEntry
 d2b_resource_store_redb	impl core::fmt::Debug for d2b_resource_store_redb::RedbResourceStore
@@ -11078,6 +11356,7 @@ d2b_resource_store_redb	impl core::fmt::Debug for d2b_resource_store_redb::owner
 d2b_resource_store_redb	impl core::fmt::Debug for d2b_resource_store_redb::ownership::ReverseOwnerEntry
 d2b_resource_store_redb	impl core::fmt::Debug for d2b_resource_store_redb::revision_log::WatchCoordinator
 d2b_resource_store_redb	impl core::fmt::Debug for d2b_resource_store_redb::revision_log::WatchStream
+d2b_resource_store_redb	impl core::marker::Freeze for d2b_resource_store_redb::AuthorityOperationCapability
 d2b_resource_store_redb	impl core::marker::Freeze for d2b_resource_store_redb::ChangeBatch
 d2b_resource_store_redb	impl core::marker::Freeze for d2b_resource_store_redb::ChangeEntry
 d2b_resource_store_redb	impl core::marker::Freeze for d2b_resource_store_redb::StoreIdentity
@@ -11088,6 +11367,7 @@ d2b_resource_store_redb	impl core::marker::Freeze for d2b_resource_store_redb::o
 d2b_resource_store_redb	impl core::marker::Freeze for d2b_resource_store_redb::ownership::ReverseOwnerEntry
 d2b_resource_store_redb	impl core::marker::Freeze for d2b_resource_store_redb::revision_log::WatchCoordinator
 d2b_resource_store_redb	impl core::marker::Freeze for d2b_resource_store_redb::revision_log::WatchStream
+d2b_resource_store_redb	impl core::marker::Send for d2b_resource_store_redb::AuthorityOperationCapability
 d2b_resource_store_redb	impl core::marker::Send for d2b_resource_store_redb::ChangeBatch
 d2b_resource_store_redb	impl core::marker::Send for d2b_resource_store_redb::ChangeEntry
 d2b_resource_store_redb	impl core::marker::Send for d2b_resource_store_redb::RedbResourceStore
@@ -11106,6 +11386,7 @@ d2b_resource_store_redb	impl core::marker::StructuralPartialEq for d2b_resource_
 d2b_resource_store_redb	impl core::marker::StructuralPartialEq for d2b_resource_store_redb::ownership::OwnerIndex
 d2b_resource_store_redb	impl core::marker::StructuralPartialEq for d2b_resource_store_redb::ownership::OwnerIndexMutation
 d2b_resource_store_redb	impl core::marker::StructuralPartialEq for d2b_resource_store_redb::ownership::ReverseOwnerEntry
+d2b_resource_store_redb	impl core::marker::Sync for d2b_resource_store_redb::AuthorityOperationCapability
 d2b_resource_store_redb	impl core::marker::Sync for d2b_resource_store_redb::ChangeBatch
 d2b_resource_store_redb	impl core::marker::Sync for d2b_resource_store_redb::ChangeEntry
 d2b_resource_store_redb	impl core::marker::Sync for d2b_resource_store_redb::RedbResourceStore
@@ -11117,6 +11398,7 @@ d2b_resource_store_redb	impl core::marker::Sync for d2b_resource_store_redb::own
 d2b_resource_store_redb	impl core::marker::Sync for d2b_resource_store_redb::ownership::ReverseOwnerEntry
 d2b_resource_store_redb	impl core::marker::Sync for d2b_resource_store_redb::revision_log::WatchCoordinator
 d2b_resource_store_redb	impl core::marker::Sync for d2b_resource_store_redb::revision_log::WatchStream
+d2b_resource_store_redb	impl core::marker::Unpin for d2b_resource_store_redb::AuthorityOperationCapability
 d2b_resource_store_redb	impl core::marker::Unpin for d2b_resource_store_redb::ChangeBatch
 d2b_resource_store_redb	impl core::marker::Unpin for d2b_resource_store_redb::ChangeEntry
 d2b_resource_store_redb	impl core::marker::Unpin for d2b_resource_store_redb::RedbResourceStore
@@ -11128,6 +11410,7 @@ d2b_resource_store_redb	impl core::marker::Unpin for d2b_resource_store_redb::ow
 d2b_resource_store_redb	impl core::marker::Unpin for d2b_resource_store_redb::ownership::ReverseOwnerEntry
 d2b_resource_store_redb	impl core::marker::Unpin for d2b_resource_store_redb::revision_log::WatchCoordinator
 d2b_resource_store_redb	impl core::marker::Unpin for d2b_resource_store_redb::revision_log::WatchStream
+d2b_resource_store_redb	impl core::marker::UnsafeUnpin for d2b_resource_store_redb::AuthorityOperationCapability
 d2b_resource_store_redb	impl core::marker::UnsafeUnpin for d2b_resource_store_redb::ChangeBatch
 d2b_resource_store_redb	impl core::marker::UnsafeUnpin for d2b_resource_store_redb::ChangeEntry
 d2b_resource_store_redb	impl core::marker::UnsafeUnpin for d2b_resource_store_redb::RedbResourceStore
@@ -11159,6 +11442,7 @@ d2b_resource_store_redb	impl core::panic::unwind_safe::UnwindSafe for d2b_resour
 d2b_resource_store_redb	impl core::panic::unwind_safe::UnwindSafe for d2b_resource_store_redb::ownership::ReverseOwnerEntry
 d2b_resource_store_redb	impl core::panic::unwind_safe::UnwindSafe for d2b_resource_store_redb::revision_log::WatchCoordinator
 d2b_resource_store_redb	impl core::panic::unwind_safe::UnwindSafe for d2b_resource_store_redb::revision_log::WatchStream
+d2b_resource_store_redb	impl d2b_resource_store_redb::AuthorityOperationCapability
 d2b_resource_store_redb	impl d2b_resource_store_redb::ChangeBatch
 d2b_resource_store_redb	impl d2b_resource_store_redb::ChangeEntry
 d2b_resource_store_redb	impl d2b_resource_store_redb::RedbResourceStore
@@ -11174,6 +11458,7 @@ d2b_resource_store_redb	impl serde_core::ser::Serialize for d2b_resource_store_r
 d2b_resource_store_redb	impl serde_core::ser::Serialize for d2b_resource_store_redb::ChangeEntry
 d2b_resource_store_redb	impl<'de> serde_core::de::Deserialize<'de> for d2b_resource_store_redb::ChangeBatch
 d2b_resource_store_redb	impl<'de> serde_core::de::Deserialize<'de> for d2b_resource_store_redb::ChangeEntry
+d2b_resource_store_redb	impl<T, U> core::convert::Into<U> for d2b_resource_store_redb::AuthorityOperationCapability where U: core::convert::From<T>
 d2b_resource_store_redb	impl<T, U> core::convert::Into<U> for d2b_resource_store_redb::ChangeBatch where U: core::convert::From<T>
 d2b_resource_store_redb	impl<T, U> core::convert::Into<U> for d2b_resource_store_redb::ChangeEntry where U: core::convert::From<T>
 d2b_resource_store_redb	impl<T, U> core::convert::Into<U> for d2b_resource_store_redb::RedbResourceStore where U: core::convert::From<T>
@@ -11185,6 +11470,7 @@ d2b_resource_store_redb	impl<T, U> core::convert::Into<U> for d2b_resource_store
 d2b_resource_store_redb	impl<T, U> core::convert::Into<U> for d2b_resource_store_redb::ownership::ReverseOwnerEntry where U: core::convert::From<T>
 d2b_resource_store_redb	impl<T, U> core::convert::Into<U> for d2b_resource_store_redb::revision_log::WatchCoordinator where U: core::convert::From<T>
 d2b_resource_store_redb	impl<T, U> core::convert::Into<U> for d2b_resource_store_redb::revision_log::WatchStream where U: core::convert::From<T>
+d2b_resource_store_redb	impl<T, U> core::convert::TryFrom<U> for d2b_resource_store_redb::AuthorityOperationCapability where U: core::convert::Into<T>
 d2b_resource_store_redb	impl<T, U> core::convert::TryFrom<U> for d2b_resource_store_redb::ChangeBatch where U: core::convert::Into<T>
 d2b_resource_store_redb	impl<T, U> core::convert::TryFrom<U> for d2b_resource_store_redb::ChangeEntry where U: core::convert::Into<T>
 d2b_resource_store_redb	impl<T, U> core::convert::TryFrom<U> for d2b_resource_store_redb::RedbResourceStore where U: core::convert::Into<T>
@@ -11196,6 +11482,7 @@ d2b_resource_store_redb	impl<T, U> core::convert::TryFrom<U> for d2b_resource_st
 d2b_resource_store_redb	impl<T, U> core::convert::TryFrom<U> for d2b_resource_store_redb::ownership::ReverseOwnerEntry where U: core::convert::Into<T>
 d2b_resource_store_redb	impl<T, U> core::convert::TryFrom<U> for d2b_resource_store_redb::revision_log::WatchCoordinator where U: core::convert::Into<T>
 d2b_resource_store_redb	impl<T, U> core::convert::TryFrom<U> for d2b_resource_store_redb::revision_log::WatchStream where U: core::convert::Into<T>
+d2b_resource_store_redb	impl<T, U> core::convert::TryInto<U> for d2b_resource_store_redb::AuthorityOperationCapability where U: core::convert::TryFrom<T>
 d2b_resource_store_redb	impl<T, U> core::convert::TryInto<U> for d2b_resource_store_redb::ChangeBatch where U: core::convert::TryFrom<T>
 d2b_resource_store_redb	impl<T, U> core::convert::TryInto<U> for d2b_resource_store_redb::ChangeEntry where U: core::convert::TryFrom<T>
 d2b_resource_store_redb	impl<T, U> core::convert::TryInto<U> for d2b_resource_store_redb::RedbResourceStore where U: core::convert::TryFrom<T>
@@ -11215,6 +11502,7 @@ d2b_resource_store_redb	impl<T> alloc::borrow::ToOwned for d2b_resource_store_re
 d2b_resource_store_redb	impl<T> alloc::borrow::ToOwned for d2b_resource_store_redb::ownership::OwnerIndex where T: core::clone::Clone
 d2b_resource_store_redb	impl<T> alloc::borrow::ToOwned for d2b_resource_store_redb::ownership::OwnerIndexMutation where T: core::clone::Clone
 d2b_resource_store_redb	impl<T> alloc::borrow::ToOwned for d2b_resource_store_redb::ownership::ReverseOwnerEntry where T: core::clone::Clone
+d2b_resource_store_redb	impl<T> core::any::Any for d2b_resource_store_redb::AuthorityOperationCapability where T: 'static + ?core::marker::Sized
 d2b_resource_store_redb	impl<T> core::any::Any for d2b_resource_store_redb::ChangeBatch where T: 'static + ?core::marker::Sized
 d2b_resource_store_redb	impl<T> core::any::Any for d2b_resource_store_redb::ChangeEntry where T: 'static + ?core::marker::Sized
 d2b_resource_store_redb	impl<T> core::any::Any for d2b_resource_store_redb::RedbResourceStore where T: 'static + ?core::marker::Sized
@@ -11226,6 +11514,7 @@ d2b_resource_store_redb	impl<T> core::any::Any for d2b_resource_store_redb::owne
 d2b_resource_store_redb	impl<T> core::any::Any for d2b_resource_store_redb::ownership::ReverseOwnerEntry where T: 'static + ?core::marker::Sized
 d2b_resource_store_redb	impl<T> core::any::Any for d2b_resource_store_redb::revision_log::WatchCoordinator where T: 'static + ?core::marker::Sized
 d2b_resource_store_redb	impl<T> core::any::Any for d2b_resource_store_redb::revision_log::WatchStream where T: 'static + ?core::marker::Sized
+d2b_resource_store_redb	impl<T> core::borrow::Borrow<T> for d2b_resource_store_redb::AuthorityOperationCapability where T: ?core::marker::Sized
 d2b_resource_store_redb	impl<T> core::borrow::Borrow<T> for d2b_resource_store_redb::ChangeBatch where T: ?core::marker::Sized
 d2b_resource_store_redb	impl<T> core::borrow::Borrow<T> for d2b_resource_store_redb::ChangeEntry where T: ?core::marker::Sized
 d2b_resource_store_redb	impl<T> core::borrow::Borrow<T> for d2b_resource_store_redb::RedbResourceStore where T: ?core::marker::Sized
@@ -11237,6 +11526,7 @@ d2b_resource_store_redb	impl<T> core::borrow::Borrow<T> for d2b_resource_store_r
 d2b_resource_store_redb	impl<T> core::borrow::Borrow<T> for d2b_resource_store_redb::ownership::ReverseOwnerEntry where T: ?core::marker::Sized
 d2b_resource_store_redb	impl<T> core::borrow::Borrow<T> for d2b_resource_store_redb::revision_log::WatchCoordinator where T: ?core::marker::Sized
 d2b_resource_store_redb	impl<T> core::borrow::Borrow<T> for d2b_resource_store_redb::revision_log::WatchStream where T: ?core::marker::Sized
+d2b_resource_store_redb	impl<T> core::borrow::BorrowMut<T> for d2b_resource_store_redb::AuthorityOperationCapability where T: ?core::marker::Sized
 d2b_resource_store_redb	impl<T> core::borrow::BorrowMut<T> for d2b_resource_store_redb::ChangeBatch where T: ?core::marker::Sized
 d2b_resource_store_redb	impl<T> core::borrow::BorrowMut<T> for d2b_resource_store_redb::ChangeEntry where T: ?core::marker::Sized
 d2b_resource_store_redb	impl<T> core::borrow::BorrowMut<T> for d2b_resource_store_redb::RedbResourceStore where T: ?core::marker::Sized
@@ -11256,6 +11546,7 @@ d2b_resource_store_redb	impl<T> core::clone::CloneToUninit for d2b_resource_stor
 d2b_resource_store_redb	impl<T> core::clone::CloneToUninit for d2b_resource_store_redb::ownership::OwnerIndex where T: core::clone::Clone
 d2b_resource_store_redb	impl<T> core::clone::CloneToUninit for d2b_resource_store_redb::ownership::OwnerIndexMutation where T: core::clone::Clone
 d2b_resource_store_redb	impl<T> core::clone::CloneToUninit for d2b_resource_store_redb::ownership::ReverseOwnerEntry where T: core::clone::Clone
+d2b_resource_store_redb	impl<T> core::convert::From<T> for d2b_resource_store_redb::AuthorityOperationCapability
 d2b_resource_store_redb	impl<T> core::convert::From<T> for d2b_resource_store_redb::ChangeBatch
 d2b_resource_store_redb	impl<T> core::convert::From<T> for d2b_resource_store_redb::ChangeEntry
 d2b_resource_store_redb	impl<T> core::convert::From<T> for d2b_resource_store_redb::RedbResourceStore
@@ -11277,6 +11568,7 @@ d2b_resource_store_redb	impl<T> dyn_clone::DynClone for d2b_resource_store_redb:
 d2b_resource_store_redb	impl<T> dyn_clone::DynClone for d2b_resource_store_redb::ownership::ReverseOwnerEntry where T: core::clone::Clone
 d2b_resource_store_redb	impl<T> serde_core::de::DeserializeOwned for d2b_resource_store_redb::ChangeBatch where T: for<'de> serde_core::de::Deserialize<'de>
 d2b_resource_store_redb	impl<T> serde_core::de::DeserializeOwned for d2b_resource_store_redb::ChangeEntry where T: for<'de> serde_core::de::Deserialize<'de>
+d2b_resource_store_redb	impl<T> typenum::type_operators::Same for d2b_resource_store_redb::AuthorityOperationCapability
 d2b_resource_store_redb	impl<T> typenum::type_operators::Same for d2b_resource_store_redb::ChangeBatch
 d2b_resource_store_redb	impl<T> typenum::type_operators::Same for d2b_resource_store_redb::ChangeEntry
 d2b_resource_store_redb	impl<T> typenum::type_operators::Same for d2b_resource_store_redb::RedbResourceStore
@@ -11292,10 +11584,12 @@ d2b_resource_store_redb	pub async fn d2b_resource_store_redb::RedbResourceStore:
 d2b_resource_store_redb	pub async fn d2b_resource_store_redb::RedbResourceStore::get(&self, d2b_resource_store::StoreGetRequest) -> core::result::Result<d2b_resource_store::StoredResource, d2b_resource_store::error::StoreError>
 d2b_resource_store_redb	pub async fn d2b_resource_store_redb::RedbResourceStore::list(&self, d2b_resource_store::StoreListRequest) -> core::result::Result<d2b_resource_store::StoreListResult, d2b_resource_store::error::StoreError>
 d2b_resource_store_redb	pub async fn d2b_resource_store_redb::RedbResourceStore::open_owned(std::fs::File, d2b_resource_store_redb::StoreIdentity, d2b_resource_store::mutation_seal::MutationSealAcceptor) -> core::result::Result<Self, d2b_resource_store::error::StoreError>
+d2b_resource_store_redb	pub async fn d2b_resource_store_redb::RedbResourceStore::prepare_authority_operation(&alloc::sync::Arc<Self>, alloc::string::String, alloc::vec::Vec<u8>, &str) -> core::result::Result<d2b_resource_store_redb::AuthorityOperationCapability, d2b_resource_store::error::StoreError>
 d2b_resource_store_redb	pub async fn d2b_resource_store_redb::RedbResourceStore::provision_owned(std::fs::File, std::fs::File, d2b_resource_store_redb::StoreIdentity, d2b_resource_store::mutation_seal::MutationSealAcceptor) -> core::result::Result<Self, d2b_resource_store::error::StoreError>
 d2b_resource_store_redb	pub async fn d2b_resource_store_redb::RedbResourceStore::replay_backend(&self, u64, impl core::iter::traits::collect::IntoIterator<Item = d2b_contracts::v3::identity::ResourceTypeName>, impl core::ops::function::FnMut(d2b_resource_store_redb::actor::SharedChangeBatch) -> core::result::Result<(), d2b_resource_store::error::StoreError> + core::marker::Send + 'static) -> core::result::Result<d2b_contracts::v3::identity::ZoneRevision, d2b_resource_store::error::StoreError>
 d2b_resource_store_redb	pub async fn d2b_resource_store_redb::RedbResourceStore::resolve_ref(&self, d2b_resource_store::StoreResolveRequest) -> core::result::Result<d2b_resource_store::StoreResolvedIdentity, d2b_resource_store::error::StoreError>
 d2b_resource_store_redb	pub async fn d2b_resource_store_redb::RedbResourceStore::restore_owned(std::fs::File, std::fs::File, d2b_resource_store_redb::backup::LogicalBackup, d2b_resource_store_redb::StoreIdentity, d2b_resource_store::mutation_seal::MutationSealAcceptor) -> core::result::Result<Self, d2b_resource_store::error::StoreError>
+d2b_resource_store_redb	pub async fn d2b_resource_store_redb::RedbResourceStore::resume_authority_operation(&alloc::sync::Arc<Self>, alloc::string::String, &str) -> core::result::Result<d2b_resource_store_redb::AuthorityOperationCapability, d2b_resource_store::error::StoreError>
 d2b_resource_store_redb	pub async fn d2b_resource_store_redb::RedbResourceStore::watch_stream(&self, d2b_resource_store::StoreWatchRequest) -> core::result::Result<(d2b_resource_store::StoreWatchReceipt, d2b_resource_store_redb::revision_log::WatchStream), d2b_resource_store::error::StoreError>
 d2b_resource_store_redb	pub async fn d2b_resource_store_redb::revision_log::WatchStream::recv(&mut self) -> core::option::Option<d2b_resource_store_redb::actor::SharedChangeBatch>
 d2b_resource_store_redb	pub const fn d2b_resource_store_redb::RedbResourceStore::identity(&self) -> &d2b_resource_store_redb::StoreIdentity
@@ -11355,6 +11649,7 @@ d2b_resource_store_redb	pub fn d2b_resource_store_redb::revision_log::WatchCoord
 d2b_resource_store_redb	pub fn d2b_resource_store_redb::revision_log::WatchCoordinator::register_and_replay(&mut self, &redb::db::Database, d2b_contracts::v3::identity::ZoneRevision, d2b_resource_store_redb::revision_log::WatchSelector, u32) -> core::result::Result<(d2b_resource_store_redb::revision_log::WatchStream, d2b_contracts::v3::identity::ZoneRevision), d2b_resource_store::error::StoreError>
 d2b_resource_store_redb	pub fn d2b_resource_store_redb::upgrade_owned(&std::fs::File, &mut std::fs::File, &d2b_resource_store_redb::StoreIdentity) -> core::result::Result<d2b_resource_store_redb::migration::MigrationOutcome, d2b_resource_store::error::StoreError>
 d2b_resource_store_redb	pub fn d2b_resource_store_redb::write_provisioning_marker(&mut std::fs::File, &d2b_resource_store_redb::StoreIdentity) -> core::result::Result<(), d2b_resource_store::error::StoreError>
+d2b_resource_store_redb	pub struct d2b_resource_store_redb::AuthorityOperationCapability
 d2b_resource_store_redb	pub struct d2b_resource_store_redb::ChangeBatch
 d2b_resource_store_redb	pub struct d2b_resource_store_redb::ChangeEntry
 d2b_resource_store_redb	pub struct d2b_resource_store_redb::OwnerBinding
@@ -11795,8 +12090,10 @@ d2b_zone_routing	pub struct d2b_zone_routing::router::ZoneOperationRouter
 d2bd	impl !core::marker::Freeze for d2bd::provider_effects::ProviderLifecycleDispatch
 d2bd	impl !core::marker::Freeze for d2bd::provider_registry::ProviderRuntime
 d2bd	impl !core::marker::Freeze for d2bd::resource_runtime::ZoneResourceRuntime
+d2bd	impl !core::panic::unwind_safe::RefUnwindSafe for d2bd::resource_runtime::OpenedZoneStore
 d2bd	impl !core::panic::unwind_safe::RefUnwindSafe for d2bd::resource_runtime::ResourcePlane
 d2bd	impl !core::panic::unwind_safe::RefUnwindSafe for d2bd::resource_runtime::ZoneResourceRuntime
+d2bd	impl !core::panic::unwind_safe::UnwindSafe for d2bd::resource_runtime::OpenedZoneStore
 d2bd	impl !core::panic::unwind_safe::UnwindSafe for d2bd::resource_runtime::ResourcePlane
 d2bd	impl !core::panic::unwind_safe::UnwindSafe for d2bd::resource_runtime::ZoneResourceRuntime
 d2bd	impl core::clone::Clone for d2bd::provider_effects::GuestLifecycleRequest
@@ -11811,15 +12108,18 @@ d2bd	impl core::fmt::Debug for d2bd::provider_effects::GuestLifecycleRequest
 d2bd	impl core::fmt::Debug for d2bd::provider_effects::ProviderLifecycleDispatch
 d2bd	impl core::fmt::Debug for d2bd::provider_registry::ProviderBinding
 d2bd	impl core::fmt::Debug for d2bd::provider_registry::ProviderRuntime
+d2bd	impl core::fmt::Debug for d2bd::resource_runtime::OpenedZoneStore
 d2bd	impl core::fmt::Debug for d2bd::resource_runtime::ResourcePlane
 d2bd	impl core::fmt::Debug for d2bd::resource_runtime::ZoneResourceRuntime
 d2bd	impl core::marker::Freeze for d2bd::provider_effects::GuestLifecycleRequest
 d2bd	impl core::marker::Freeze for d2bd::provider_registry::ProviderBinding
+d2bd	impl core::marker::Freeze for d2bd::resource_runtime::OpenedZoneStore
 d2bd	impl core::marker::Freeze for d2bd::resource_runtime::ResourcePlane
 d2bd	impl core::marker::Send for d2bd::provider_effects::GuestLifecycleRequest
 d2bd	impl core::marker::Send for d2bd::provider_effects::ProviderLifecycleDispatch
 d2bd	impl core::marker::Send for d2bd::provider_registry::ProviderBinding
 d2bd	impl core::marker::Send for d2bd::provider_registry::ProviderRuntime
+d2bd	impl core::marker::Send for d2bd::resource_runtime::OpenedZoneStore
 d2bd	impl core::marker::Send for d2bd::resource_runtime::ResourcePlane
 d2bd	impl core::marker::Send for d2bd::resource_runtime::ZoneResourceRuntime
 d2bd	impl core::marker::StructuralPartialEq for d2bd::provider_effects::GuestLifecycleRequest
@@ -11828,18 +12128,21 @@ d2bd	impl core::marker::Sync for d2bd::provider_effects::GuestLifecycleRequest
 d2bd	impl core::marker::Sync for d2bd::provider_effects::ProviderLifecycleDispatch
 d2bd	impl core::marker::Sync for d2bd::provider_registry::ProviderBinding
 d2bd	impl core::marker::Sync for d2bd::provider_registry::ProviderRuntime
+d2bd	impl core::marker::Sync for d2bd::resource_runtime::OpenedZoneStore
 d2bd	impl core::marker::Sync for d2bd::resource_runtime::ResourcePlane
 d2bd	impl core::marker::Sync for d2bd::resource_runtime::ZoneResourceRuntime
 d2bd	impl core::marker::Unpin for d2bd::provider_effects::GuestLifecycleRequest
 d2bd	impl core::marker::Unpin for d2bd::provider_effects::ProviderLifecycleDispatch
 d2bd	impl core::marker::Unpin for d2bd::provider_registry::ProviderBinding
 d2bd	impl core::marker::Unpin for d2bd::provider_registry::ProviderRuntime
+d2bd	impl core::marker::Unpin for d2bd::resource_runtime::OpenedZoneStore
 d2bd	impl core::marker::Unpin for d2bd::resource_runtime::ResourcePlane
 d2bd	impl core::marker::Unpin for d2bd::resource_runtime::ZoneResourceRuntime
 d2bd	impl core::marker::UnsafeUnpin for d2bd::provider_effects::GuestLifecycleRequest
 d2bd	impl core::marker::UnsafeUnpin for d2bd::provider_effects::ProviderLifecycleDispatch
 d2bd	impl core::marker::UnsafeUnpin for d2bd::provider_registry::ProviderBinding
 d2bd	impl core::marker::UnsafeUnpin for d2bd::provider_registry::ProviderRuntime
+d2bd	impl core::marker::UnsafeUnpin for d2bd::resource_runtime::OpenedZoneStore
 d2bd	impl core::marker::UnsafeUnpin for d2bd::resource_runtime::ResourcePlane
 d2bd	impl core::marker::UnsafeUnpin for d2bd::resource_runtime::ZoneResourceRuntime
 d2bd	impl core::panic::unwind_safe::RefUnwindSafe for d2bd::provider_effects::GuestLifecycleRequest
@@ -11860,30 +12163,35 @@ d2bd	impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::point
 d2bd	impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for d2bd::provider_effects::ProviderLifecycleDispatch where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 d2bd	impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for d2bd::provider_registry::ProviderBinding where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 d2bd	impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for d2bd::provider_registry::ProviderRuntime where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+d2bd	impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for d2bd::resource_runtime::OpenedZoneStore where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 d2bd	impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for d2bd::resource_runtime::ResourcePlane where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 d2bd	impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for d2bd::resource_runtime::ZoneResourceRuntime where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 d2bd	impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for d2bd::provider_effects::GuestLifecycleRequest where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 d2bd	impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for d2bd::provider_effects::ProviderLifecycleDispatch where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 d2bd	impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for d2bd::provider_registry::ProviderBinding where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 d2bd	impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for d2bd::provider_registry::ProviderRuntime where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+d2bd	impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for d2bd::resource_runtime::OpenedZoneStore where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 d2bd	impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for d2bd::resource_runtime::ResourcePlane where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 d2bd	impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for d2bd::resource_runtime::ZoneResourceRuntime where ST: ?core::marker::Sized, DT: ?core::marker::Sized
 d2bd	impl<T, U> core::convert::Into<U> for d2bd::provider_effects::GuestLifecycleRequest where U: core::convert::From<T>
 d2bd	impl<T, U> core::convert::Into<U> for d2bd::provider_effects::ProviderLifecycleDispatch where U: core::convert::From<T>
 d2bd	impl<T, U> core::convert::Into<U> for d2bd::provider_registry::ProviderBinding where U: core::convert::From<T>
 d2bd	impl<T, U> core::convert::Into<U> for d2bd::provider_registry::ProviderRuntime where U: core::convert::From<T>
+d2bd	impl<T, U> core::convert::Into<U> for d2bd::resource_runtime::OpenedZoneStore where U: core::convert::From<T>
 d2bd	impl<T, U> core::convert::Into<U> for d2bd::resource_runtime::ResourcePlane where U: core::convert::From<T>
 d2bd	impl<T, U> core::convert::Into<U> for d2bd::resource_runtime::ZoneResourceRuntime where U: core::convert::From<T>
 d2bd	impl<T, U> core::convert::TryFrom<U> for d2bd::provider_effects::GuestLifecycleRequest where U: core::convert::Into<T>
 d2bd	impl<T, U> core::convert::TryFrom<U> for d2bd::provider_effects::ProviderLifecycleDispatch where U: core::convert::Into<T>
 d2bd	impl<T, U> core::convert::TryFrom<U> for d2bd::provider_registry::ProviderBinding where U: core::convert::Into<T>
 d2bd	impl<T, U> core::convert::TryFrom<U> for d2bd::provider_registry::ProviderRuntime where U: core::convert::Into<T>
+d2bd	impl<T, U> core::convert::TryFrom<U> for d2bd::resource_runtime::OpenedZoneStore where U: core::convert::Into<T>
 d2bd	impl<T, U> core::convert::TryFrom<U> for d2bd::resource_runtime::ResourcePlane where U: core::convert::Into<T>
 d2bd	impl<T, U> core::convert::TryFrom<U> for d2bd::resource_runtime::ZoneResourceRuntime where U: core::convert::Into<T>
 d2bd	impl<T, U> core::convert::TryInto<U> for d2bd::provider_effects::GuestLifecycleRequest where U: core::convert::TryFrom<T>
 d2bd	impl<T, U> core::convert::TryInto<U> for d2bd::provider_effects::ProviderLifecycleDispatch where U: core::convert::TryFrom<T>
 d2bd	impl<T, U> core::convert::TryInto<U> for d2bd::provider_registry::ProviderBinding where U: core::convert::TryFrom<T>
 d2bd	impl<T, U> core::convert::TryInto<U> for d2bd::provider_registry::ProviderRuntime where U: core::convert::TryFrom<T>
+d2bd	impl<T, U> core::convert::TryInto<U> for d2bd::resource_runtime::OpenedZoneStore where U: core::convert::TryFrom<T>
 d2bd	impl<T, U> core::convert::TryInto<U> for d2bd::resource_runtime::ResourcePlane where U: core::convert::TryFrom<T>
 d2bd	impl<T, U> core::convert::TryInto<U> for d2bd::resource_runtime::ZoneResourceRuntime where U: core::convert::TryFrom<T>
 d2bd	impl<T> alloc::borrow::ToOwned for d2bd::provider_effects::GuestLifecycleRequest where T: core::clone::Clone
@@ -11892,18 +12200,21 @@ d2bd	impl<T> core::any::Any for d2bd::provider_effects::GuestLifecycleRequest wh
 d2bd	impl<T> core::any::Any for d2bd::provider_effects::ProviderLifecycleDispatch where T: 'static + ?core::marker::Sized
 d2bd	impl<T> core::any::Any for d2bd::provider_registry::ProviderBinding where T: 'static + ?core::marker::Sized
 d2bd	impl<T> core::any::Any for d2bd::provider_registry::ProviderRuntime where T: 'static + ?core::marker::Sized
+d2bd	impl<T> core::any::Any for d2bd::resource_runtime::OpenedZoneStore where T: 'static + ?core::marker::Sized
 d2bd	impl<T> core::any::Any for d2bd::resource_runtime::ResourcePlane where T: 'static + ?core::marker::Sized
 d2bd	impl<T> core::any::Any for d2bd::resource_runtime::ZoneResourceRuntime where T: 'static + ?core::marker::Sized
 d2bd	impl<T> core::borrow::Borrow<T> for d2bd::provider_effects::GuestLifecycleRequest where T: ?core::marker::Sized
 d2bd	impl<T> core::borrow::Borrow<T> for d2bd::provider_effects::ProviderLifecycleDispatch where T: ?core::marker::Sized
 d2bd	impl<T> core::borrow::Borrow<T> for d2bd::provider_registry::ProviderBinding where T: ?core::marker::Sized
 d2bd	impl<T> core::borrow::Borrow<T> for d2bd::provider_registry::ProviderRuntime where T: ?core::marker::Sized
+d2bd	impl<T> core::borrow::Borrow<T> for d2bd::resource_runtime::OpenedZoneStore where T: ?core::marker::Sized
 d2bd	impl<T> core::borrow::Borrow<T> for d2bd::resource_runtime::ResourcePlane where T: ?core::marker::Sized
 d2bd	impl<T> core::borrow::Borrow<T> for d2bd::resource_runtime::ZoneResourceRuntime where T: ?core::marker::Sized
 d2bd	impl<T> core::borrow::BorrowMut<T> for d2bd::provider_effects::GuestLifecycleRequest where T: ?core::marker::Sized
 d2bd	impl<T> core::borrow::BorrowMut<T> for d2bd::provider_effects::ProviderLifecycleDispatch where T: ?core::marker::Sized
 d2bd	impl<T> core::borrow::BorrowMut<T> for d2bd::provider_registry::ProviderBinding where T: ?core::marker::Sized
 d2bd	impl<T> core::borrow::BorrowMut<T> for d2bd::provider_registry::ProviderRuntime where T: ?core::marker::Sized
+d2bd	impl<T> core::borrow::BorrowMut<T> for d2bd::resource_runtime::OpenedZoneStore where T: ?core::marker::Sized
 d2bd	impl<T> core::borrow::BorrowMut<T> for d2bd::resource_runtime::ResourcePlane where T: ?core::marker::Sized
 d2bd	impl<T> core::borrow::BorrowMut<T> for d2bd::resource_runtime::ZoneResourceRuntime where T: ?core::marker::Sized
 d2bd	impl<T> core::clone::CloneToUninit for d2bd::provider_effects::GuestLifecycleRequest where T: core::clone::Clone
@@ -11912,12 +12223,14 @@ d2bd	impl<T> core::convert::From<T> for d2bd::provider_effects::GuestLifecycleRe
 d2bd	impl<T> core::convert::From<T> for d2bd::provider_effects::ProviderLifecycleDispatch
 d2bd	impl<T> core::convert::From<T> for d2bd::provider_registry::ProviderBinding
 d2bd	impl<T> core::convert::From<T> for d2bd::provider_registry::ProviderRuntime
+d2bd	impl<T> core::convert::From<T> for d2bd::resource_runtime::OpenedZoneStore
 d2bd	impl<T> core::convert::From<T> for d2bd::resource_runtime::ResourcePlane
 d2bd	impl<T> core::convert::From<T> for d2bd::resource_runtime::ZoneResourceRuntime
 d2bd	impl<T> crossbeam_epoch::atomic::Pointable for d2bd::provider_effects::GuestLifecycleRequest
 d2bd	impl<T> crossbeam_epoch::atomic::Pointable for d2bd::provider_effects::ProviderLifecycleDispatch
 d2bd	impl<T> crossbeam_epoch::atomic::Pointable for d2bd::provider_registry::ProviderBinding
 d2bd	impl<T> crossbeam_epoch::atomic::Pointable for d2bd::provider_registry::ProviderRuntime
+d2bd	impl<T> crossbeam_epoch::atomic::Pointable for d2bd::resource_runtime::OpenedZoneStore
 d2bd	impl<T> crossbeam_epoch::atomic::Pointable for d2bd::resource_runtime::ResourcePlane
 d2bd	impl<T> crossbeam_epoch::atomic::Pointable for d2bd::resource_runtime::ZoneResourceRuntime
 d2bd	impl<T> dyn_clone::DynClone for d2bd::provider_effects::GuestLifecycleRequest where T: core::clone::Clone
@@ -11926,41 +12239,54 @@ d2bd	impl<T> tower_http::follow_redirect::policy::PolicyExt for d2bd::provider_e
 d2bd	impl<T> tower_http::follow_redirect::policy::PolicyExt for d2bd::provider_effects::ProviderLifecycleDispatch where T: ?core::marker::Sized
 d2bd	impl<T> tower_http::follow_redirect::policy::PolicyExt for d2bd::provider_registry::ProviderBinding where T: ?core::marker::Sized
 d2bd	impl<T> tower_http::follow_redirect::policy::PolicyExt for d2bd::provider_registry::ProviderRuntime where T: ?core::marker::Sized
+d2bd	impl<T> tower_http::follow_redirect::policy::PolicyExt for d2bd::resource_runtime::OpenedZoneStore where T: ?core::marker::Sized
 d2bd	impl<T> tower_http::follow_redirect::policy::PolicyExt for d2bd::resource_runtime::ResourcePlane where T: ?core::marker::Sized
 d2bd	impl<T> tower_http::follow_redirect::policy::PolicyExt for d2bd::resource_runtime::ZoneResourceRuntime where T: ?core::marker::Sized
 d2bd	impl<T> tracing::instrument::Instrument for d2bd::provider_effects::GuestLifecycleRequest
 d2bd	impl<T> tracing::instrument::Instrument for d2bd::provider_effects::ProviderLifecycleDispatch
 d2bd	impl<T> tracing::instrument::Instrument for d2bd::provider_registry::ProviderBinding
 d2bd	impl<T> tracing::instrument::Instrument for d2bd::provider_registry::ProviderRuntime
+d2bd	impl<T> tracing::instrument::Instrument for d2bd::resource_runtime::OpenedZoneStore
 d2bd	impl<T> tracing::instrument::Instrument for d2bd::resource_runtime::ResourcePlane
 d2bd	impl<T> tracing::instrument::Instrument for d2bd::resource_runtime::ZoneResourceRuntime
 d2bd	impl<T> tracing::instrument::WithSubscriber for d2bd::provider_effects::GuestLifecycleRequest
 d2bd	impl<T> tracing::instrument::WithSubscriber for d2bd::provider_effects::ProviderLifecycleDispatch
 d2bd	impl<T> tracing::instrument::WithSubscriber for d2bd::provider_registry::ProviderBinding
 d2bd	impl<T> tracing::instrument::WithSubscriber for d2bd::provider_registry::ProviderRuntime
+d2bd	impl<T> tracing::instrument::WithSubscriber for d2bd::resource_runtime::OpenedZoneStore
 d2bd	impl<T> tracing::instrument::WithSubscriber for d2bd::resource_runtime::ResourcePlane
 d2bd	impl<T> tracing::instrument::WithSubscriber for d2bd::resource_runtime::ZoneResourceRuntime
 d2bd	impl<T> typenum::type_operators::Same for d2bd::provider_effects::GuestLifecycleRequest
 d2bd	impl<T> typenum::type_operators::Same for d2bd::provider_effects::ProviderLifecycleDispatch
 d2bd	impl<T> typenum::type_operators::Same for d2bd::provider_registry::ProviderBinding
 d2bd	impl<T> typenum::type_operators::Same for d2bd::provider_registry::ProviderRuntime
+d2bd	impl<T> typenum::type_operators::Same for d2bd::resource_runtime::OpenedZoneStore
 d2bd	impl<T> typenum::type_operators::Same for d2bd::resource_runtime::ResourcePlane
 d2bd	impl<T> typenum::type_operators::Same for d2bd::resource_runtime::ZoneResourceRuntime
 d2bd	impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for d2bd::provider_effects::GuestLifecycleRequest where T: ?core::marker::Sized
 d2bd	impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for d2bd::provider_effects::ProviderLifecycleDispatch where T: ?core::marker::Sized
 d2bd	impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for d2bd::provider_registry::ProviderBinding where T: ?core::marker::Sized
 d2bd	impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for d2bd::provider_registry::ProviderRuntime where T: ?core::marker::Sized
+d2bd	impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for d2bd::resource_runtime::OpenedZoneStore where T: ?core::marker::Sized
 d2bd	impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for d2bd::resource_runtime::ResourcePlane where T: ?core::marker::Sized
 d2bd	impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for d2bd::resource_runtime::ZoneResourceRuntime where T: ?core::marker::Sized
 d2bd	impl<V, T> ppv_lite86::types::VZip<V> for d2bd::provider_effects::GuestLifecycleRequest where V: ppv_lite86::types::MultiLane<T>
 d2bd	impl<V, T> ppv_lite86::types::VZip<V> for d2bd::provider_effects::ProviderLifecycleDispatch where V: ppv_lite86::types::MultiLane<T>
 d2bd	impl<V, T> ppv_lite86::types::VZip<V> for d2bd::provider_registry::ProviderBinding where V: ppv_lite86::types::MultiLane<T>
 d2bd	impl<V, T> ppv_lite86::types::VZip<V> for d2bd::provider_registry::ProviderRuntime where V: ppv_lite86::types::MultiLane<T>
+d2bd	impl<V, T> ppv_lite86::types::VZip<V> for d2bd::resource_runtime::OpenedZoneStore where V: ppv_lite86::types::MultiLane<T>
 d2bd	impl<V, T> ppv_lite86::types::VZip<V> for d2bd::resource_runtime::ResourcePlane where V: ppv_lite86::types::MultiLane<T>
 d2bd	impl<V, T> ppv_lite86::types::VZip<V> for d2bd::resource_runtime::ZoneResourceRuntime where V: ppv_lite86::types::MultiLane<T>
 d2bd	pub async fn d2bd::resource_runtime::ZoneResourceRuntime::get(&self, d2b_contracts::v3::resource_ref::ResourceRef, &str) -> core::result::Result<serde_json::value::Value, d2bd::resource_runtime::ResourceRuntimeError>
+d2bd	pub async fn d2bd::resource_runtime::ZoneResourceRuntime::open(d2b_contracts::v3::identity::ZoneId, d2bd::resource_runtime::OpenedZoneStore) -> core::result::Result<Self, d2bd::resource_runtime::ResourceRuntimeError>
+d2bd	pub async fn d2bd::resource_runtime::ZoneResourceRuntime::open_with_external_inventory(d2b_contracts::v3::identity::ZoneId, d2bd::resource_runtime::OpenedZoneStore, alloc::sync::Arc<dyn d2b_core_controller::authority::ExternalNicRecoveryInventory>) -> core::result::Result<Self, d2bd::resource_runtime::ResourceRuntimeError>
+d2bd	pub async fn d2bd::resource_runtime::ZoneResourceRuntime::reserve_authority(&self, impl core::convert::Into<alloc::string::String>, d2b_core_controller::authority::AuthorityRequest) -> core::result::Result<d2b_core_controller::authority::AuthorityReservation, d2b_core_controller::authority::AuthorityReservationError<d2b_core_controller::authority::AuthorityError>>
+d2bd	pub async fn d2bd::resource_runtime::ZoneResourceRuntime::reserve_external_nic(&self, impl core::convert::Into<alloc::string::String>, d2b_core_controller::authority::ExternalNicClaimRequest) -> core::result::Result<d2b_core_controller::authority::ExternalNicReservation, d2b_core_controller::authority::AuthorityReservationError<d2b_core_controller::authority::AuthorityError>>
 d2bd	pub const fn d2bd::provider_effects::GuestLifecycleRequest::guest(&self) -> &d2b_contracts::v3::resource_ref::ResourceRef
 d2bd	pub const fn d2bd::provider_registry::ProviderBinding::resource(&self) -> &d2b_contracts::v3::resource_ref::ResourceRef
+d2bd	pub d2bd::resource_runtime::OpenedZoneStore::database_fd: std::os::fd::owned::OwnedFd
+d2bd	pub d2bd::resource_runtime::OpenedZoneStore::external_inventory: core::option::Option<alloc::sync::Arc<dyn d2b_core_controller::authority::ExternalNicRecoveryInventory>>
+d2bd	pub d2bd::resource_runtime::OpenedZoneStore::response: d2b_contracts::broker_wire::OpenZoneStoreResponse
 d2bd	pub fn d2bd::provider_effects::GuestLifecycleRequest::clone(&self) -> d2bd::provider_effects::GuestLifecycleRequest
 d2bd	pub fn d2bd::provider_effects::GuestLifecycleRequest::eq(&self, &d2bd::provider_effects::GuestLifecycleRequest) -> bool
 d2bd	pub fn d2bd::provider_effects::GuestLifecycleRequest::new(d2b_contracts::v3::identity::ZoneId, d2b_contracts::v3::resource_ref::ResourceRef, d2bd::provider_effects::GuestLifecycleOperation, impl core::convert::Into<alloc::string::String>) -> core::result::Result<Self, d2bd::provider_effects::ProviderEffectError>
@@ -11980,6 +12306,7 @@ d2bd	pub struct d2bd::provider_effects::GuestLifecycleRequest
 d2bd	pub struct d2bd::provider_effects::ProviderLifecycleDispatch
 d2bd	pub struct d2bd::provider_registry::ProviderBinding
 d2bd	pub struct d2bd::provider_registry::ProviderRuntime
+d2bd	pub struct d2bd::resource_runtime::OpenedZoneStore
 d2bd	pub struct d2bd::resource_runtime::ResourcePlane
 d2bd	pub struct d2bd::resource_runtime::ZoneResourceRuntime
 d2bd	pub trait d2bd::provider_effects::ProviderLifecycleEffectPort

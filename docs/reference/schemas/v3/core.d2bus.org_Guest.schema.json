@@ -132,7 +132,9 @@
       "description": "One Device made available to Processes under an execution target.",
       "properties": {
         "deviceRef": {
-          "$ref": "#/definitions/ResourceRef"
+          "$ref": "#/definitions/ResourceRef",
+          "x-d2b-reference-kind": "ResourceRef",
+          "x-d2b-reference-scope": "same-zone"
         },
         "exclusive": {
           "type": "boolean"
@@ -191,7 +193,9 @@
           "type": "boolean"
         },
         "networkRef": {
-          "$ref": "#/definitions/ResourceRef"
+          "$ref": "#/definitions/ResourceRef",
+          "x-d2b-reference-kind": "ResourceRef",
+          "x-d2b-reference-scope": "same-zone"
         }
       },
       "required": [
@@ -214,7 +218,9 @@
           "pattern": "^[a-z][a-z0-9-]{0,62}\\.d2bus\\.org\\.[A-Z][A-Za-z0-9]{0,62}/[a-z][a-z0-9-]{0,62}$",
           "type": "string"
         }
-      ]
+      ],
+      "x-d2b-reference-kind": "ResourceRef",
+      "x-d2b-reference-scope": "same-zone"
     }
   },
   "description": "VM, sandbox, cloud, or remote execution parent.",
@@ -246,8 +252,11 @@
         },
         "ownerRef": {
           "description": "Optional same-Zone ref of the owning resource.",
-          "pattern": "^[A-Z][A-Za-z0-9]{0,62}/[a-z][a-z0-9-]{0,62}$",
-          "type": "string"
+          "pattern": "^(?:[A-Z][A-Za-z0-9]{0,62}|[a-z][a-z0-9-]{0,62}\\.d2bus\\.org\\.[A-Z][A-Za-z0-9]{0,62})/[a-z][a-z0-9-]{0,62}$",
+          "type": "string",
+          "x-d2b-allowed-ref-types": [],
+          "x-d2b-reference-kind": "ResourceRef",
+          "x-d2b-reference-scope": "same-zone"
         },
         "zone": {
           "description": "Name of the Zone this resource is local to.",
@@ -280,12 +289,16 @@
         "defaultUserRef": {
           "anyOf": [
             {
-              "$ref": "#/definitions/ResourceRef"
+              "$ref": "#/definitions/ResourceRef",
+              "x-d2b-reference-kind": "ResourceRef",
+              "x-d2b-reference-scope": "same-zone"
             },
             {
               "type": "null"
             }
-          ]
+          ],
+          "x-d2b-reference-kind": "ResourceRef",
+          "x-d2b-reference-scope": "same-zone"
         },
         "deviceAttachments": {
           "items": {
@@ -324,8 +337,13 @@
           "type": "object"
         },
         "providerRef": {
-          "pattern": "^[A-Z][A-Za-z0-9]{0,62}/[a-z][a-z0-9-]{0,62}$",
-          "type": "string"
+          "pattern": "^Provider/[a-z][a-z0-9-]{0,62}$",
+          "type": "string",
+          "x-d2b-allowed-ref-types": [
+            "Provider"
+          ],
+          "x-d2b-reference-kind": "ResourceRef",
+          "x-d2b-reference-scope": "same-zone"
         },
         "systemArtifactId": {
           "anyOf": [
@@ -381,5 +399,6 @@
     "type"
   ],
   "title": "Guest",
-  "type": "object"
+  "type": "object",
+  "x-d2b-resource-type": "Guest"
 }

@@ -26,9 +26,9 @@ use crate::revision_log::{WatchCoordinator, WatchRegistrationId, WatchSelector, 
 use crate::tracing::{STORE_READ_SPAN, STORE_WRITE_SPAN};
 use crate::transaction::{
     API_SCHEMAS, AuditOutboxRecord, ChangeBatch, CommittedGroup, RESOURCES, ResourceRecord,
-    StoreMeta, VerifiedWrite, apply_group_with_hook, audit_outbox_pending, backpressure,
-    current_meta, decode, mark_audit_outbox_complete, pending_audit_outboxes, resource_key,
-    stored_resource, timeout,
+    StoreMeta, VerifiedWrite, apply_group_with_hook, audit_outbox_pending, authority_operations,
+    authority_prepare, authority_update, backpressure, current_meta, decode,
+    mark_audit_outbox_complete, pending_audit_outboxes, resource_key, stored_resource, timeout,
 };
 use d2b_resource_store::mutation_seal::OpenedMutation;
 
@@ -395,6 +395,48 @@ impl WriterHandle {
         }
     }
 
+    pub(crate) async fn authority_prepare(
+        &self,
+        operation_id: String,
+        payload: Vec<u8>,
+    ) -> Result<(), StoreError> {
+        let (response, receiver) = oneshot::channel();
+        self.sender
+            .as_ref()
+            .ok_or_else(|| crate::transaction::integrity("writer-closed"))?
+            .send(WriterCommand::AuthorityPrepare {
+                operation_id,
+                payload,
+                response,
+            })
+            .await
+            .map_err(|_| crate::transaction::integrity("writer-closed"))?;
+        receiver
+            .await
+            .map_err(|_| crate::transaction::integrity("authority-response-closed"))?
+    }
+
+    pub(crate) async fn authority_update(
+        &self,
+        operation_id: String,
+        state: crate::AuthorityOperationState,
+    ) -> Result<(), StoreError> {
+        let (response, receiver) = oneshot::channel();
+        self.sender
+            .as_ref()
+            .ok_or_else(|| crate::transaction::integrity("writer-closed"))?
+            .send(WriterCommand::AuthorityUpdate {
+                operation_id,
+                state: authority_state_name(state),
+                response,
+            })
+            .await
+            .map_err(|_| crate::transaction::integrity("writer-closed"))?;
+        receiver
+            .await
+            .map_err(|_| crate::transaction::integrity("authority-response-closed"))?
+    }
+
     pub(crate) async fn replay(
         &self,
         after_revision: u64,
@@ -583,6 +625,16 @@ enum WriterCommand {
     Backup {
         identity: crate::StoreIdentity,
         response: oneshot::Sender<Result<LogicalBackup, StoreError>>,
+    },
+    AuthorityPrepare {
+        operation_id: String,
+        payload: Vec<u8>,
+        response: oneshot::Sender<Result<(), StoreError>>,
+    },
+    AuthorityUpdate {
+        operation_id: String,
+        state: String,
+        response: oneshot::Sender<Result<(), StoreError>>,
     },
     Shutdown {
         response: oneshot::Sender<Result<(), StoreError>>,
@@ -870,6 +922,32 @@ impl WriterActor {
                         self.quarantine(error.clone());
                     }
                     let _ = response.send(backup);
+                }
+                WriterCommand::AuthorityPrepare {
+                    operation_id,
+                    payload,
+                    response,
+                } => {
+                    let result = authority_prepare(&self.database, &operation_id, payload);
+                    if let Err(error) = &result
+                        && error.kind() == d2b_resource_store::StoreErrorKind::StoreIntegrityFailure
+                    {
+                        self.quarantine(error.clone());
+                    }
+                    let _ = response.send(result);
+                }
+                WriterCommand::AuthorityUpdate {
+                    operation_id,
+                    state,
+                    response,
+                } => {
+                    let result = authority_update(&self.database, &operation_id, &state);
+                    if let Err(error) = &result
+                        && error.kind() == d2b_resource_store::StoreErrorKind::StoreIntegrityFailure
+                    {
+                        self.quarantine(error.clone());
+                    }
+                    let _ = response.send(result);
                 }
                 WriterCommand::Shutdown { response } => {
                     let result = if self.quarantined.load(Ordering::Acquire) {
@@ -1251,6 +1329,12 @@ impl WriterActor {
                 WriterCommand::Backup { response, .. } => {
                     let _ = response.send(Err(crate::transaction::quarantined()));
                 }
+                WriterCommand::AuthorityPrepare { response, .. } => {
+                    let _ = response.send(Err(crate::transaction::quarantined()));
+                }
+                WriterCommand::AuthorityUpdate { response, .. } => {
+                    let _ = response.send(Err(crate::transaction::quarantined()));
+                }
                 WriterCommand::Shutdown { response } => {
                     let _ = response.send(Err(error.clone()));
                 }
@@ -1329,6 +1413,34 @@ fn commit_kind(request_count: usize) -> &'static str {
         "single"
     } else {
         "group"
+    }
+}
+
+fn authority_state_name(state: crate::AuthorityOperationState) -> String {
+    match state {
+        crate::AuthorityOperationState::Pending => "pending",
+        crate::AuthorityOperationState::EffectConfirmed => "effect-confirmed",
+        crate::AuthorityOperationState::EffectRetryable => "effect-retryable",
+        crate::AuthorityOperationState::EffectTerminal => "effect-terminal",
+        crate::AuthorityOperationState::Closing => "closing",
+        crate::AuthorityOperationState::Closed => "closed",
+        crate::AuthorityOperationState::Released => "released",
+    }
+    .to_owned()
+}
+
+fn parse_authority_state(state: &str) -> Result<crate::AuthorityOperationState, StoreError> {
+    match state {
+        "pending" => Ok(crate::AuthorityOperationState::Pending),
+        "effect-confirmed" => Ok(crate::AuthorityOperationState::EffectConfirmed),
+        "effect-retryable" => Ok(crate::AuthorityOperationState::EffectRetryable),
+        "effect-terminal" => Ok(crate::AuthorityOperationState::EffectTerminal),
+        "closing" => Ok(crate::AuthorityOperationState::Closing),
+        "closed" => Ok(crate::AuthorityOperationState::Closed),
+        "released" => Ok(crate::AuthorityOperationState::Released),
+        _ => Err(crate::transaction::integrity(
+            "authority-operation-state-invalid",
+        )),
     }
 }
 
@@ -1549,6 +1661,15 @@ impl ReadPool {
             .await
     }
 
+    pub(crate) async fn authority_operations(
+        &self,
+    ) -> Result<Vec<crate::AuthorityOperation>, StoreError> {
+        self.submit("scan", |response| ReadCommand::AuthorityOperations {
+            response,
+        })
+        .await
+    }
+
     fn validate_zone(&self, zone: &ZoneId) -> Result<(), StoreError> {
         if zone != &self.zone {
             return Err(crate::transaction::integrity("request-zone-mismatch"));
@@ -1639,6 +1760,9 @@ enum ReadCommand {
     Meta {
         response: oneshot::Sender<Result<StoreMeta, StoreError>>,
     },
+    AuthorityOperations {
+        response: oneshot::Sender<Result<Vec<crate::AuthorityOperation>, StoreError>>,
+    },
     #[cfg(test)]
     NeverRespond {
         response: oneshot::Sender<Result<(), StoreError>>,
@@ -1709,6 +1833,20 @@ fn read_worker(database: Arc<Database>, receiver: std::sync::mpsc::Receiver<Read
                 };
                 let _ = response.send(result);
             }
+            ReadCommand::AuthorityOperations { response } => {
+                let result = authority_operations(&database).and_then(|rows| {
+                    rows.into_iter()
+                        .map(|(operation_id, payload, state)| {
+                            Ok(crate::AuthorityOperation {
+                                operation_id,
+                                payload,
+                                state: parse_authority_state(&state)?,
+                            })
+                        })
+                        .collect()
+                });
+                let _ = response.send(result);
+            }
             #[cfg(test)]
             ReadCommand::NeverRespond { response } => {
                 if let Some(hold) = hold {
@@ -1744,6 +1882,9 @@ fn send_read_result(command: ReadCommand, result: Result<(), StoreError>) {
             let _ = response.send(Err(result.unwrap_err()));
         }
         ReadCommand::Meta { response } => {
+            let _ = response.send(Err(result.unwrap_err()));
+        }
+        ReadCommand::AuthorityOperations { response } => {
             let _ = response.send(Err(result.unwrap_err()));
         }
         #[cfg(test)]

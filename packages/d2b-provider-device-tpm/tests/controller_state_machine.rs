@@ -1,17 +1,28 @@
 use d2b_provider_device_tpm::{
-    BinaryKind, FlushLaunchTicket, SignedBinaryRef, StateDirIntent, StateDirectoryToken,
-    StateOwnerToken, SwtpmSettings, SwtpmStartLaunchTicket, TpmController, TpmEffectError,
-    TpmEffectPort, TpmPhase, TpmStateObservation, TpmStateObservationKind,
-    TpmStatePreparationResult,
+    BinaryKind, FlushLaunchTicket, LegacyMigrationOutcome, LegacyTpmStateId, SignedBinaryRef,
+    StateDirIntent, StateDirectoryToken, StateOwnerToken, SwtpmSettings, SwtpmStartLaunchTicket,
+    TpmController, TpmEffectError, TpmEffectPort, TpmPhase, TpmStateObservation,
+    TpmStateObservationKind, TpmStatePreparationResult,
 };
 
 #[derive(Default)]
 struct FakePort {
     calls: Vec<&'static str>,
     stop_calls: usize,
+    migration: Option<LegacyMigrationOutcome>,
 }
 
 impl TpmEffectPort for FakePort {
+    fn migrate_legacy_state(
+        &mut self,
+        _: &LegacyTpmStateId,
+    ) -> Result<LegacyMigrationOutcome, TpmEffectError> {
+        self.calls.push("migrate");
+        Ok(self
+            .migration
+            .unwrap_or(LegacyMigrationOutcome::NotApplicable))
+    }
+
     fn prepare_state_dir(
         &mut self,
         _: &StateDirIntent,
@@ -47,7 +58,7 @@ impl TpmEffectPort for FakePort {
 }
 
 fn controller() -> TpmController {
-    TpmController::new(
+    TpmController::new_for_tests(
         StateDirIntent::new(
             StateDirectoryToken::from_core([3; 32]),
             d2b_provider_device_tpm::TamperMarkerToken::from_core([4; 32]),

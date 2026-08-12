@@ -17,6 +17,7 @@ use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{Read as _, Seek as _, SeekFrom, Write as _};
 use std::os::fd::{AsFd, OwnedFd};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use actor::{ReadPool, SignalCounters, WriterHandle};
@@ -26,7 +27,7 @@ use d2b_audit::{
 };
 use d2b_contracts::v3::{
     ConfigurationGeneration, ControllerGeneration, ResourceUid, Timestamp, ZoneId, ZoneRevision,
-    identity::STANDARD_RESOURCE_TYPES,
+    canonical_digest, identity::STANDARD_RESOURCE_TYPES,
 };
 use d2b_resource_store::mutation_seal::{MutationSealAcceptor, SealedMutation};
 use d2b_resource_store::{
@@ -224,6 +225,50 @@ pub struct StoreRuntimeMetadata {
     pub policy_snapshot: PolicySnapshot,
 }
 
+/// Durable lifecycle state for an authority operation row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuthorityOperationState {
+    Pending,
+    EffectConfirmed,
+    EffectRetryable,
+    EffectTerminal,
+    Closing,
+    Closed,
+    Released,
+}
+
+/// Opaque authority operation row returned by the Zone store.
+///
+/// The payload is typed and validated by the Core authority adapter. The
+/// redb layer only persists it in the existing operation ledger and never
+/// interprets it as an authorization proof.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthorityOperation {
+    pub operation_id: String,
+    pub payload: Vec<u8>,
+    pub state: AuthorityOperationState,
+}
+
+static NEXT_AUTHORITY_CAPABILITY_NONCE: AtomicU64 = AtomicU64::new(1);
+
+/// Opaque lifecycle authority for one prepared operation and one opened store.
+///
+/// The operation id is private and every transition is selected from this
+/// capability. There is no public store-wide or bare-operation-id mutation
+/// method.
+pub struct AuthorityOperationCapability {
+    store: Arc<RedbResourceStore>,
+    nonce: u64,
+    operation_id: String,
+    binding_digest: String,
+}
+
+impl core::fmt::Debug for AuthorityOperationCapability {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("AuthorityOperationCapability(<store-bound>)")
+    }
+}
+
 impl StoreIdentity {
     pub fn new(
         slot: StoreSlot,
@@ -276,6 +321,7 @@ impl core::fmt::Debug for StoreIdentity {
 /// One concrete backend whose mutation authority is instance-bound.
 pub struct RedbResourceStore {
     identity: StoreIdentity,
+    authority_capability_nonce: u64,
     recovered_after_crash: bool,
     writer: WriterHandle,
     reads: ReadPool,
@@ -465,6 +511,8 @@ impl RedbResourceStore {
         )?;
         Ok(Self {
             identity,
+            authority_capability_nonce: NEXT_AUTHORITY_CAPABILITY_NONCE
+                .fetch_add(1, Ordering::Relaxed),
             recovered_after_crash,
             writer,
             reads,
@@ -524,6 +572,93 @@ impl RedbResourceStore {
         })
     }
 
+    /// Derive the store-bound digest used to validate authority rows.
+    pub fn authority_binding_digest(&self, claim_digest: &str) -> String {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(self.identity.store_uuid.to_canonical_string().as_bytes());
+        bytes.extend_from_slice(self.identity.zone_uid.to_canonical_string().as_bytes());
+        bytes.extend_from_slice(claim_digest.as_bytes());
+        canonical_digest("d2b:authority-store-binding/v1", &bytes)
+    }
+
+    /// Read authority rows before new admission on restart.
+    pub async fn authority_operations(&self) -> Result<Vec<AuthorityOperation>, StoreError> {
+        self.reads.authority_operations().await
+    }
+
+    /// Prepare one Core-validated authority operation and return its
+    /// operation-specific store-bound capability.
+    pub async fn prepare_authority_operation(
+        self: &Arc<Self>,
+        operation_id: String,
+        payload: Vec<u8>,
+        claim_digest: &str,
+    ) -> Result<AuthorityOperationCapability, StoreError> {
+        let expected_binding = self.authority_binding_digest(claim_digest);
+        let envelope: serde_json::Value = serde_json::from_slice(&payload)
+            .map_err(|_| transaction::integrity("authority-operation-payload-invalid"))?;
+        if envelope
+            .get("claimDigest")
+            .and_then(serde_json::Value::as_str)
+            != Some(claim_digest)
+            || envelope
+                .get("storeBindingDigest")
+                .and_then(serde_json::Value::as_str)
+                != Some(expected_binding.as_str())
+        {
+            return Err(transaction::integrity(
+                "authority-operation-claim-envelope-invalid",
+            ));
+        }
+        self.writer
+            .authority_prepare(operation_id.clone(), payload)
+            .await?;
+        Ok(AuthorityOperationCapability {
+            store: Arc::clone(self),
+            nonce: self.authority_capability_nonce,
+            operation_id,
+            binding_digest: expected_binding,
+        })
+    }
+
+    /// Resume a non-terminal operation with a capability bound to its
+    /// committed row and store instance.
+    pub async fn resume_authority_operation(
+        self: &Arc<Self>,
+        operation_id: String,
+        binding_digest: &str,
+    ) -> Result<AuthorityOperationCapability, StoreError> {
+        let row = self
+            .authority_operations()
+            .await?
+            .into_iter()
+            .find(|row| row.operation_id == operation_id)
+            .ok_or_else(|| transaction::integrity("authority-operation-missing"))?;
+        if matches!(
+            row.state,
+            AuthorityOperationState::Released | AuthorityOperationState::Closed
+        ) {
+            return Err(transaction::integrity("authority-operation-terminal"));
+        }
+        let payload: serde_json::Value = serde_json::from_slice(&row.payload)
+            .map_err(|_| transaction::integrity("authority-operation-payload-invalid"))?;
+        if payload
+            .get("storeBindingDigest")
+            .and_then(serde_json::Value::as_str)
+            != Some(binding_digest)
+        {
+            return Err(transaction::integrity(
+                "authority-operation-capability-mismatch",
+            ));
+        }
+        Ok(AuthorityOperationCapability {
+            store: Arc::clone(self),
+            nonce: self.authority_capability_nonce,
+            operation_id,
+            binding_digest: binding_digest.to_owned(),
+        })
+    }
+
     /// Persist a clean-shutdown marker and join the owned worker threads.
     pub async fn shutdown(mut self) -> Result<(), StoreError> {
         if let Ok(mut streams) = self.retained_watch_streams.lock() {
@@ -573,6 +708,37 @@ impl RedbResourceStore {
                 .map_err(|error| error.with_store_slot(slot))?;
         Self::start(database, identity, false, acceptor, ports)
             .map_err(|error| error.with_store_slot(slot))
+    }
+}
+
+impl AuthorityOperationCapability {
+    pub async fn record_effect(&self, state: AuthorityOperationState) -> Result<(), StoreError> {
+        self.store
+            .writer
+            .authority_update(self.operation_id.clone(), state)
+            .await
+    }
+
+    pub async fn record_close(&self) -> Result<(), StoreError> {
+        self.store
+            .writer
+            .authority_update(self.operation_id.clone(), AuthorityOperationState::Closing)
+            .await
+    }
+
+    pub async fn release(&self) -> Result<(), StoreError> {
+        self.store
+            .writer
+            .authority_update(self.operation_id.clone(), AuthorityOperationState::Released)
+            .await
+    }
+
+    pub const fn nonce(&self) -> u64 {
+        self.nonce
+    }
+
+    pub fn matches_binding_digest(&self, binding_digest: &str) -> bool {
+        self.binding_digest == binding_digest
     }
 }
 

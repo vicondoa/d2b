@@ -83,7 +83,12 @@ const DEFAULT_BUNDLE_PATH: &str = "/var/lib/d2b/current-bundle/manifest.json";
 const DEFAULT_REALM_CONTROLLERS_PATH: &str = "/etc/d2b/realm-controllers.json";
 const DEFAULT_REALM_IDENTITY_PATH: &str = "/etc/d2b/realm-identity.json";
 const DEFAULT_STATE_DIR: &str = "/var/lib/d2b";
-const CAPABILITIES: &[&str] = &["Hello", "ValidateBundle", "ExportBrokerAudit"];
+const CAPABILITIES: &[&str] = &[
+    "Hello",
+    "ValidateBundle",
+    "ExportBrokerAudit",
+    "MigrateLegacySwtpmState",
+];
 const DEFAULT_IPC_REQUESTS_PER_UID_PER_SECOND: u32 = 512;
 const IPC_RATE_LIMIT_WINDOW: Duration = Duration::from_secs(1);
 const DEFAULT_IPC_RATE_LIMIT_MAX_BUCKETS: usize = 4096;
@@ -1316,6 +1321,14 @@ fn validate_broker_request(request: &BrokerRequest) -> Result<(), BrokerError> {
                 operation: "UsbipExplicitFirewallRule",
                 reason,
             }),
+        BrokerRequest::MigrateLegacySwtpmState(req) => {
+            validate_bundle_op_id(req.bundle_legacy_swtpm_intent_ref.as_str()).map_err(|reason| {
+                BrokerError::RequestValidation {
+                    operation: "MigrateLegacySwtpmState",
+                    reason,
+                }
+            })
+        }
         _ => Ok(()),
     }
 }
@@ -3304,6 +3317,74 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                 },
             )?;
             Ok(DispatchResult::no_fds(ack_response("PrepareStateDir")))
+        }
+        RealBrokerRequest::MigrateLegacySwtpmState(req) => {
+            if !caller_role_is_admin(&caller_role) {
+                return Err(BrokerError::AuditRequiresAdmin);
+            }
+            let resolver = require_resolver(resolver)?;
+            let intent = resolver
+                .resolve_legacy_swtpm_intent(req.vm_id.as_str())
+                .filter(|intent| intent.intent_id == req.bundle_legacy_swtpm_intent_ref.as_str())
+                .ok_or_else(|| BrokerError::BundleIntentMissing {
+                    kind: "legacy-swtpm",
+                    intent_id: req.bundle_legacy_swtpm_intent_ref.as_str().to_owned(),
+                })?;
+            let paths = crate::ops::swtpm_migration::LegacyMigrationPaths::new(
+                intent.source.clone(),
+                intent.destination.clone(),
+                intent.journal.clone(),
+                intent.marker.clone(),
+                (intent.owner_uid, intent.owner_gid),
+            )
+            .map_err(|error| BrokerError::LiveHandler(error.to_string()))?;
+            let outcome = match crate::ops::swtpm_migration::migrate(&paths) {
+                Ok(outcome) => outcome,
+                Err(_) => crate::ops::swtpm_migration::LegacyMigrationOutcome::Failed,
+            };
+            let wire_outcome = match outcome {
+                crate::ops::swtpm_migration::LegacyMigrationOutcome::Migrated => {
+                    d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::Migrated
+                }
+                crate::ops::swtpm_migration::LegacyMigrationOutcome::AlreadyMigrated => {
+                    d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::AlreadyMigrated
+                }
+                crate::ops::swtpm_migration::LegacyMigrationOutcome::NotApplicable => {
+                    d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::NotApplicable
+                }
+                crate::ops::swtpm_migration::LegacyMigrationOutcome::Pending => {
+                    d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::Pending
+                }
+                crate::ops::swtpm_migration::LegacyMigrationOutcome::Failed => {
+                    d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::Failed
+                }
+                crate::ops::swtpm_migration::LegacyMigrationOutcome::Ambiguous => {
+                    d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::Ambiguous
+                }
+            };
+            write_success_op_record!(
+                audit_log,
+                bundle_metadata,
+                "MigrateLegacySwtpmState",
+                req.vm_id.as_str(),
+                caller_uid,
+                caller_gid,
+                &caller_role,
+                req.vm_id.as_str(),
+                req.vm_id.as_str(),
+                tracing_span_id_str(req.tracing_span_id.as_ref()),
+                OperationFields::MigrateLegacySwtpmState {
+                    vm_id: req.vm_id.as_str().to_owned(),
+                    outcome: wire_outcome.as_str().to_owned(),
+                },
+            )?;
+            Ok(DispatchResult::no_fds(
+                BrokerResponse::MigrateLegacySwtpmState(
+                    d2b_contracts::broker_wire::MigrateLegacySwtpmStateResponse {
+                        outcome: wire_outcome,
+                    },
+                ),
+            ))
         }
         RealBrokerRequest::PrepareStoreView(req) => {
             let resolver = require_resolver(resolver)?;

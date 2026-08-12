@@ -162,6 +162,7 @@
             "Hello",
             "InjectSecretById",
             "LaunchMinijailChild",
+            "MigrateLegacySwtpmState",
             "ModprobeIfAllowed",
             "OpenCgroupDir",
             "OpenDevice",

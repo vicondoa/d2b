@@ -996,6 +996,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml_ng",
+ "syn 2.0.118",
 ]
 
 [[package]]
@@ -1056,7 +1057,10 @@ dependencies = [
  "d2b-audit",
  "d2b-contracts",
  "d2b-controller-toolkit",
+ "d2b-resource-store",
+ "d2b-resource-store-redb",
  "d2b-telemetry",
+ "serde",
  "serde_json",
  "sha2",
  "tokio",
@@ -1269,6 +1273,7 @@ name = "d2b-provider-device-tpm"
 version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts",
+ "d2b-core-controller",
  "serde",
  "serde_json",
 ]
@@ -1531,6 +1536,7 @@ dependencies = [
  "base64",
  "d2b-contracts",
  "d2b-core",
+ "regex",
  "ring",
  "rustix 0.38.44",
  "serde",
@@ -1683,6 +1689,7 @@ dependencies = [
  "d2b-host",
  "d2b-provider",
  "d2b-provider-aca",
+ "d2b-provider-device-tpm",
  "d2b-provider-relay",
  "d2b-realm-core",
  "d2b-realm-provider",

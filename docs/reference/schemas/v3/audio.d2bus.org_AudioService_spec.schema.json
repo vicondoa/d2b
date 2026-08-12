@@ -5,9 +5,28 @@
   "description": "Frozen provider-neutral base spec layer. Every conformant implementation binds this exact version and fingerprint, accepts the canonical minimal base without spec.provider, and adds only its own strict extension schema.",
   "properties": {
     "authority": {},
-    "implementationEndpointRefs": {},
+    "implementationEndpointRefs": {
+      "items": {
+        "pattern": "^(?:Endpoint)/[a-z][a-z0-9-]{0,62}$",
+        "type": "string",
+        "x-d2b-allowed-ref-types": [
+          "Endpoint"
+        ],
+        "x-d2b-reference-kind": "ResourceRef",
+        "x-d2b-reference-scope": "same-zone"
+      },
+      "type": "array"
+    },
     "operations": {},
-    "providerRef": {},
+    "providerRef": {
+      "pattern": "^Provider/[a-z][a-z0-9-]{0,62}$",
+      "type": "string",
+      "x-d2b-allowed-ref-types": [
+        "Provider"
+      ],
+      "x-d2b-reference-kind": "ResourceRef",
+      "x-d2b-reference-scope": "same-zone"
+    },
     "serviceRole": {},
     "updatePolicy": {}
   },

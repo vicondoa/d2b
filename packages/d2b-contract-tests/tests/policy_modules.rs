@@ -12,7 +12,7 @@
 //!   * tests/vm-submodule-cutover-eval.sh      -> vm_submodule_cutover
 //!   * tests/static-rust-dependency-direction.sh -> static_rust_dependency_direction
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::process::Command;
 
 use d2b_contract_tests::repo_root;
@@ -286,6 +286,368 @@ fn static_rust_dependency_direction() {
 }
 
 #[test]
+fn providers_and_controllers_use_closed_effect_ports() {
+    let crates = provider_controller_crates();
+    let forbidden_internal = [
+        "d2b-priv-broker",
+        "d2bd",
+        "d2b-resource-store",
+        "d2b-resource-api",
+    ];
+    let allowed_internal = [
+        "d2b-audit",
+        "d2b-contracts",
+        "d2b-controller-toolkit",
+        "d2b-core",
+        "d2b-core-controller",
+        "d2b-process",
+        "d2b-process-conformance",
+        "d2b-provider",
+        "d2b-provider-system-minijail",
+        "d2b-provider-system-systemd",
+        "d2b-provider-toolkit",
+        "d2b-realm-codec-protobuf",
+        "d2b-realm-core",
+        "d2b-realm-provider",
+        "d2b-realm-transport",
+        "d2b-session",
+        "d2b-telemetry",
+        "d2b-resource-store-redb",
+    ];
+    let mut violations = Vec::new();
+    for (crate_name, manifest_dir, src_root) in crates {
+        let manifest = read_repo_file_opt(&format!("{manifest_dir}/Cargo.toml"))
+            .unwrap_or_else(|| panic!("read {crate_name} manifest"));
+        for dependency in internal_deps(&manifest) {
+            if forbidden_internal.contains(&dependency.as_str())
+                || (dependency == "d2b-resource-store-redb" && crate_name != "d2b-core-controller")
+            {
+                violations.push(format!(
+                    "{crate_name}: direct dependency {dependency} bypasses the effect port"
+                ));
+            }
+            if dependency.starts_with("d2b-")
+                && !forbidden_internal.contains(&dependency.as_str())
+                && !allowed_internal.contains(&dependency.as_str())
+            {
+                violations.push(format!(
+                    "{crate_name}: direct dependency {dependency} is outside the Provider/controller allowlist"
+                ));
+            }
+        }
+        for rel in git_listed_files(&[&src_root]) {
+            if !rel.ends_with(".rs") {
+                continue;
+            }
+            if rel == "packages/d2b-provider-observability-otel/src/emitter_socket.rs"
+                || rel == "packages/d2b-provider-supervisor/src/broker.rs"
+                || rel == "packages/d2b-provider-supervisor/src/lib.rs"
+                || rel.starts_with("packages/d2b-provider-relay/")
+                || rel.starts_with("packages/d2b-provider-aca/")
+            {
+                continue;
+            }
+            let Some(content) = read_repo_file_opt(&rel) else {
+                continue;
+            };
+            let Ok(file) = syn::parse_file(&content) else {
+                violations.push(format!("{rel}: Rust source did not parse"));
+                continue;
+            };
+            let mut visitor = HostEffectVisitor::default();
+            syn::visit::Visit::visit_file(&mut visitor, &file);
+            for effect in visitor.forbidden {
+                violations.push(format!("{rel}: prohibited host effect API {effect}"));
+            }
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "provider/controller code must route host effects through typed ports:\n{}",
+        violations.join("\n")
+    );
+
+    assert!(
+        read_repo_file_opt("packages/d2b-provider-device-tpm/src/lib.rs")
+            .expect("read device-tpm lib.rs")
+            .contains("TpmEffectPort"),
+        "device-tpm must expose its closed effect port"
+    );
+    let volume = read_repo_file_opt("packages/d2b-provider-volume-local/src/lib.rs")
+        .expect("read volume-local lib.rs");
+    assert!(
+        volume.contains("VolumeLayoutEffectPort") && volume.contains("VolumeSourceEffectPort"),
+        "volume-local must expose typed layout/source effect ports"
+    );
+    let runtime =
+        read_repo_file_opt("packages/d2bd/src/resource_runtime.rs").expect("read resource runtime");
+    let runtime_file = syn::parse_file(&runtime).expect("resource runtime parses");
+    let mut runtime_visitor = AuthorityBoundaryVisitor::default();
+    syn::visit::Visit::visit_file(&mut runtime_visitor, &runtime_file);
+    assert!(
+        runtime_visitor.saw_durable_reservation,
+        "production Zone runtime must call AuthorityReservation::reserve_durable"
+    );
+}
+
+fn provider_controller_crates() -> Vec<(String, String, String)> {
+    let output = Command::new("cargo")
+        .current_dir(repo_root())
+        .args([
+            "metadata",
+            "--manifest-path",
+            "packages/Cargo.toml",
+            "--format-version",
+            "1",
+            "--no-deps",
+        ])
+        .output()
+        .expect("run cargo metadata");
+    assert!(
+        output.status.success(),
+        "cargo metadata failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let metadata: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("cargo metadata JSON");
+    let mut crates = Vec::new();
+    for package in metadata["packages"].as_array().expect("metadata packages") {
+        let name = package["name"].as_str().expect("package name");
+        if name != "d2b-core-controller"
+            && (!name.starts_with("d2b-provider-") || name == "d2b-provider-toolkit")
+        {
+            continue;
+        }
+        let manifest = package["manifest_path"].as_str().expect("manifest path");
+        let manifest = manifest
+            .strip_prefix(&format!("{}/", repo_root().display()))
+            .unwrap_or(manifest)
+            .to_owned();
+        let manifest_dir = manifest
+            .strip_suffix("/Cargo.toml")
+            .unwrap_or(manifest.as_str())
+            .to_owned();
+        crates.push((
+            name.to_owned(),
+            manifest_dir.clone(),
+            format!("{manifest_dir}/src"),
+        ));
+    }
+    crates.sort();
+    assert!(
+        crates
+            .iter()
+            .any(|(name, _, _)| name == "d2b-core-controller"),
+        "Cargo metadata must include d2b-core-controller"
+    );
+    assert!(
+        crates
+            .iter()
+            .any(|(name, _, _)| name == "d2b-provider-device-tpm"),
+        "Cargo metadata must include device-tpm Provider"
+    );
+    crates
+}
+
+#[derive(Default)]
+struct HostEffectVisitor {
+    forbidden: Vec<String>,
+    aliases: BTreeMap<String, String>,
+}
+
+impl<'ast> syn::visit::Visit<'ast> for HostEffectVisitor {
+    fn visit_file(&mut self, file: &'ast syn::File) {
+        for item in &file.items {
+            if let syn::Item::Use(item) = item {
+                collect_aliases(&item.tree, &mut Vec::new(), &mut self.aliases);
+            }
+        }
+        syn::visit::visit_file(self, file);
+    }
+
+    fn visit_item_use(&mut self, item: &'ast syn::ItemUse) {
+        collect_aliases(&item.tree, &mut Vec::new(), &mut self.aliases);
+        collect_use_tree(&item.tree, &mut Vec::new(), &mut self.forbidden);
+        syn::visit::visit_item_use(self, item);
+    }
+
+    fn visit_path(&mut self, path: &'ast syn::Path) {
+        let segments = path
+            .segments
+            .iter()
+            .map(|segment| segment.ident.to_string())
+            .collect::<Vec<_>>();
+        let joined = segments.join("::");
+        let resolved = self
+            .aliases
+            .get(segments.first().map(String::as_str).unwrap_or_default())
+            .map(|alias| {
+                if segments.len() == 1 {
+                    alias.clone()
+                } else {
+                    format!("{alias}::{}", segments[1..].join("::"))
+                }
+            })
+            .unwrap_or_else(|| joined.clone());
+        let forbidden = [
+            "std::fs",
+            "std::net",
+            "std::path",
+            "std::process::Command",
+            "std::process::Stdio",
+            "std::os::unix::net",
+            "tokio::net",
+            "systemd",
+            "d2b_priv_broker",
+        ];
+        if forbidden
+            .iter()
+            .any(|prefix| resolved == *prefix || resolved.starts_with(&format!("{prefix}::")))
+            || segments
+                .iter()
+                .any(|segment| matches!(segment.as_str(), "TcpStream" | "UdpSocket"))
+        {
+            if !self.forbidden.contains(&resolved) {
+                self.forbidden.push(resolved);
+            }
+        }
+
+        syn::visit::visit_path(self, path);
+    }
+}
+
+fn collect_aliases(
+    tree: &syn::UseTree,
+    prefix: &mut Vec<String>,
+    aliases: &mut BTreeMap<String, String>,
+) {
+    match tree {
+        syn::UseTree::Path(path) => {
+            prefix.push(path.ident.to_string());
+            collect_aliases(&path.tree, prefix, aliases);
+            prefix.pop();
+        }
+        syn::UseTree::Name(name) => {
+            let mut full_parts = prefix.clone();
+            full_parts.push(name.ident.to_string());
+            let full = full_parts.join("::");
+            aliases.insert(name.ident.to_string(), full);
+        }
+        syn::UseTree::Rename(rename) => {
+            let mut full_parts = prefix.clone();
+            full_parts.push(rename.ident.to_string());
+            let full = full_parts.join("::");
+            aliases.insert(rename.rename.to_string(), full);
+        }
+        syn::UseTree::Group(group) => {
+            for item in &group.items {
+                collect_aliases(item, prefix, aliases);
+            }
+        }
+        syn::UseTree::Glob(_) => {}
+    }
+}
+
+fn collect_use_tree(tree: &syn::UseTree, prefix: &mut Vec<String>, forbidden: &mut Vec<String>) {
+    match tree {
+        syn::UseTree::Path(path) => {
+            prefix.push(path.ident.to_string());
+            collect_use_tree(&path.tree, prefix, forbidden);
+            prefix.pop();
+        }
+        syn::UseTree::Name(name) => {
+            let mut path = prefix.clone();
+            path.push(name.ident.to_string());
+            record_forbidden_use(path, forbidden);
+        }
+        syn::UseTree::Rename(rename) => {
+            let mut path = prefix.clone();
+            path.push(rename.ident.to_string());
+            record_forbidden_use(path, forbidden);
+        }
+        syn::UseTree::Group(group) => {
+            for item in &group.items {
+                collect_use_tree(item, prefix, forbidden);
+            }
+        }
+        syn::UseTree::Glob(_) => record_forbidden_use(prefix.clone(), forbidden),
+    }
+}
+
+fn record_forbidden_use(path: Vec<String>, forbidden: &mut Vec<String>) {
+    let joined = path.join("::");
+    if [
+        "std::fs",
+        "std::net",
+        "std::path",
+        "std::process::Command",
+        "std::process::Stdio",
+        "std::os::unix::net",
+        "tokio::net",
+        "systemd",
+        "d2b_priv_broker",
+    ]
+    .iter()
+    .any(|prefix| joined == *prefix || joined.starts_with(&format!("{prefix}::")))
+    {
+        forbidden.push(joined);
+    }
+}
+
+#[derive(Default)]
+struct AuthorityBoundaryVisitor {
+    saw_durable_reservation: bool,
+}
+
+impl<'ast> syn::visit::Visit<'ast> for AuthorityBoundaryVisitor {
+    fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
+        if call.method == "reserve_durable" {
+            self.saw_durable_reservation = true;
+        }
+        syn::visit::visit_expr_method_call(self, call);
+    }
+
+    fn visit_expr_path(&mut self, expression: &'ast syn::ExprPath) {
+        let path = expression
+            .path
+            .segments
+            .iter()
+            .map(|segment| segment.ident.to_string())
+            .collect::<Vec<_>>();
+        if path.windows(2).any(|pair| {
+            pair == ["AuthorityReservation", "reserve_durable"]
+                || pair == ["ExternalNicReservation", "reserve_durable"]
+        }) {
+            self.saw_durable_reservation = true;
+        }
+        syn::visit::visit_expr_path(self, expression);
+    }
+}
+
+#[test]
+fn host_effect_ast_policy_ignores_comments_and_strings_but_catches_aliases() {
+    let source = r#"
+        // std::fs::remove_file("/host")
+        const TEXT: &str = "tokio::net::TcpStream";
+        use std::fs as host_fs;
+        fn mutate() { let _ = host_fs::remove_file("owned"); }
+    "#;
+    let file = syn::parse_file(source).expect("fixture parses");
+    let mut visitor = HostEffectVisitor::default();
+    syn::visit::Visit::visit_file(&mut visitor, &file);
+    assert!(
+        visitor
+            .forbidden
+            .iter()
+            .any(|path| path.starts_with("std::fs"))
+    );
+    assert!(
+        !visitor.forbidden.is_empty() && visitor.forbidden.len() <= 2,
+        "AST visitor should report the aliased import and call once each"
+    );
+}
+
+#[test]
 fn cli_output_contracts_live_in_contract_crate() {
     let cli = read_repo_file_opt("packages/d2b/src/lib.rs").expect("read d2b lib.rs");
     let ipc = read_repo_file_opt("packages/d2b-contracts/src/cli_output.rs")
@@ -467,28 +829,54 @@ fn internal_deps(toml: &str) -> BTreeSet<String> {
         Regex::new(r"^\[(dependencies|dev-dependencies|build-dependencies)\]").unwrap();
     let target_dep_section = Regex::new(r"^\[target\..*\.dependencies\]").unwrap();
     let other_section = Regex::new(r"^\[").unwrap();
-    let dep_entry = Regex::new(r"^[a-zA-Z0-9_-]+").unwrap();
+    let dep_entry = Regex::new(r"^([a-zA-Z0-9_-]+)\s*=").unwrap();
+    let package_entry = Regex::new(r#"package\s*=\s*"([a-zA-Z0-9_-]+)""#).unwrap();
 
     let mut in_deps = false;
     let mut deps: BTreeSet<String> = BTreeSet::new();
+    let mut pending_alias: Option<String> = None;
+    let mut pending_package: Option<String> = None;
+    let finish = |deps: &mut BTreeSet<String>,
+                  pending_alias: &mut Option<String>,
+                  pending_package: &mut Option<String>| {
+        if let Some(alias) = pending_alias.take() {
+            deps.insert(pending_package.take().unwrap_or(alias));
+        }
+    };
     for line in toml.lines() {
         if dep_section.is_match(line) || target_dep_section.is_match(line) {
+            finish(&mut deps, &mut pending_alias, &mut pending_package);
             in_deps = true;
             continue;
         }
         if other_section.is_match(line) {
+            finish(&mut deps, &mut pending_alias, &mut pending_package);
             in_deps = false;
             continue;
         }
-        if in_deps && dep_entry.is_match(line) {
-            let mut name = line.split_whitespace().next().unwrap_or("");
-            if let Some(eq) = name.find('=') {
-                name = &name[..eq];
+        if !in_deps {
+            continue;
+        }
+        let trimmed = line.trim();
+        if let Some(captures) = dep_entry.captures(trimmed) {
+            finish(&mut deps, &mut pending_alias, &mut pending_package);
+            let alias = captures[1].to_owned();
+            if let Some(package) = package_entry.captures(trimmed) {
+                deps.insert(package[1].to_owned());
+            } else if trimmed.contains('{') {
+                pending_alias = Some(alias);
+            } else {
+                deps.insert(alias);
             }
-            if !name.is_empty() {
-                deps.insert(name.to_string());
+        } else if pending_alias.is_some() {
+            if let Some(package) = package_entry.captures(trimmed) {
+                pending_package = Some(package[1].to_owned());
+            }
+            if trimmed == "}" || trimmed.ends_with("},") {
+                finish(&mut deps, &mut pending_alias, &mut pending_package);
             }
         }
     }
+    finish(&mut deps, &mut pending_alias, &mut pending_package);
     deps
 }

@@ -10,24 +10,36 @@ let
   cfg = config.d2b;
   validationEnabled = cfg._resourceSchemaValidation.enable;
   standardResourceTypes = import ./generated/resource-types.nix;
-  coreSchemaFileName = resourceType: "core.d2bus.org_${resourceType}.schema.json";
+  qualifiedResourceTypes = import ./generated/semantic-resource-types.nix;
+  qualifiedSchemaFileName = resourceType:
+    let parts = lib.splitString "." resourceType;
+    in "${lib.concatStringsSep "." (lib.init parts)}_${lib.last parts}.schema.json";
+  schemaFileName = resourceType:
+    if builtins.elem resourceType standardResourceTypes
+    then "core.d2bus.org_${resourceType}.schema.json"
+    else if builtins.elem resourceType qualifiedResourceTypes
+    then qualifiedSchemaFileName resourceType
+    else null;
   schemaFarm =
     if builtins.hasAttr "d2b-resource-schemas" pkgs
     then pkgs."d2b-resource-schemas"
     else pkgs.linkFarm "d2b-resource-schemas" (map
       (resourceType: {
-        name = coreSchemaFileName resourceType;
-        path = ../docs/reference/schemas/v3 + "/${coreSchemaFileName resourceType}";
+        name = schemaFileName resourceType;
+        path = ../docs/reference/schemas/v3 + "/${schemaFileName resourceType}";
       })
-      standardResourceTypes);
+      (standardResourceTypes ++ qualifiedResourceTypes));
 
   # Evaluation-time checks must not depend on realizing a schema farm
   # derivation.  The committed schemas are the source of truth for Nix
   # assertions; the farm is retained as an explicit build input below so a
   # Provider package can replace it for the derivation-time round trip.
   schemaFor = resourceType:
-    let path = ../docs/reference/schemas/v3 + "/${coreSchemaFileName resourceType}";
-    in if builtins.pathExists path
+    let fileName = schemaFileName resourceType;
+        path = if fileName == null
+          then null
+          else ../docs/reference/schemas/v3 + "/${fileName}";
+    in if path != null && builtins.pathExists path
     then builtins.fromJSON (builtins.readFile path)
     else null;
 
@@ -191,7 +203,7 @@ let
         else null;
       spec = emittedSpec row.resource.type (row.resource.spec or { });
     in
-    if !(builtins.elem row.resource.type standardResourceTypes)
+    if !(builtins.elem row.resource.type (standardResourceTypes ++ qualifiedResourceTypes))
     then [ ]
     else if specSchema == null
     then [ "${row.path}: no committed ResourceType schema is installed" ]

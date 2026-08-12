@@ -2370,3 +2370,69 @@ async fn commit_fixture_resource(
         .await
         .expect("production fixture mutation")
 }
+
+#[tokio::test]
+async fn authority_operation_lifecycle_is_durable_and_restart_visible() {
+    let (directory, file, marker) = provisioned_store();
+    let identity = identity();
+    let store = std::sync::Arc::new(
+        provision_store(file, marker, identity.clone())
+            .await
+            .unwrap(),
+    );
+    let claim_digest = "sha256:".to_owned() + &"0".repeat(64);
+    let binding_digest = store.authority_binding_digest(&claim_digest);
+    let payload = serde_json::to_vec(&serde_json::json!({
+        "operationId": "authority-owner",
+        "claim": "opaque",
+        "state": "pending",
+        "claimDigest": claim_digest.clone(),
+        "storeBindingDigest": binding_digest,
+    }))
+    .unwrap();
+    let capability = store
+        .prepare_authority_operation("authority-owner".to_owned(), payload, &claim_digest)
+        .await
+        .unwrap();
+    capability
+        .record_effect(AuthorityOperationState::EffectConfirmed)
+        .await
+        .unwrap();
+    drop(capability);
+    std::sync::Arc::try_unwrap(store)
+        .unwrap()
+        .shutdown()
+        .await
+        .unwrap();
+
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(directory.path().join("store.redb"))
+        .unwrap();
+    let reopened = std::sync::Arc::new(open_store(file, identity).await.unwrap());
+    let rows = reopened.authority_operations().await.unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].operation_id, "authority-owner");
+    let payload: serde_json::Value = serde_json::from_slice(&rows[0].payload).unwrap();
+    assert_eq!(
+        payload.get("state").and_then(serde_json::Value::as_str),
+        Some("effect-confirmed")
+    );
+    assert_eq!(rows[0].state, AuthorityOperationState::EffectConfirmed);
+
+    let capability = reopened
+        .resume_authority_operation("authority-owner".to_owned(), &binding_digest)
+        .await
+        .unwrap();
+    capability.record_close().await.unwrap();
+    capability.release().await.unwrap();
+    let released = reopened.authority_operations().await.unwrap();
+    assert_eq!(released[0].state, AuthorityOperationState::Released);
+    drop(capability);
+    std::sync::Arc::try_unwrap(reopened)
+        .unwrap()
+        .shutdown()
+        .await
+        .unwrap();
+}

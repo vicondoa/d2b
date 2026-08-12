@@ -27,6 +27,9 @@ pub mod state_dir;
 pub mod storage_contract;
 // Per-VM swtpm state-dir first-run hardening (issue #64).
 pub mod swtpm_dir;
+// Broker-owned legacy swtpm adoption journal. The wire/bundle adapter remains
+// fail-closed until a trusted LegacyTpmState inventory contract is available.
+pub mod swtpm_migration;
 pub mod sysctl;
 pub mod tap;
 // Nftables + USBIP firewall skeleton ops.

@@ -29,6 +29,13 @@ use d2b_contracts::{
         ZoneId,
     },
 };
+use d2b_core_controller::authority::{
+    AuthorityRequest, AuthorityReservation, ExternalNicClaimRequest, ExternalNicRecoveryInventory,
+    ExternalNicReservation, HostGlobalAuthorityIndex, TrustedExternalNicInventory,
+};
+use d2b_core_controller::authority_persistence::{
+    AuthorityRecoveryCoordinator, RedbAuthorityPersistence,
+};
 use d2b_core_controller::main::{
     CoreProcess, RecoverySnapshot, RuntimeReadiness as CoreRuntimeReadiness, StartupError,
     StartupStage,
@@ -90,6 +97,9 @@ pub enum ResourceRuntimeError {
     AuthenticationUnavailable,
     /// The store watch/recovery admission is not available.
     WatchUnavailable,
+    /// Durable Host-global authority proofs have not crossed the startup
+    /// barrier.
+    AuthorityUnavailable,
     /// The fixed core handlers have not converged.
     HandlerNotReady,
     /// The provider path has not completed startup.
@@ -126,6 +136,7 @@ impl ResourceRuntimeError {
             }
             Self::AuthenticationUnavailable => "resource-runtime-authentication-unavailable",
             Self::WatchUnavailable => "resource-runtime-watch-unavailable",
+            Self::AuthorityUnavailable => "resource-runtime-authority-unavailable",
             Self::HandlerNotReady => "resource-runtime-handler-not-ready",
             Self::ProviderPathUnavailable => "resource-runtime-provider-path-unavailable",
             Self::LiveRequestOwners => "resource-runtime-live-request-owners",
@@ -144,12 +155,23 @@ impl core::fmt::Display for ResourceRuntimeError {
 impl std::error::Error for ResourceRuntimeError {}
 
 /// Broker client result required by [`ZoneResourceRuntime::open`].
-#[derive(Debug)]
 pub struct OpenedZoneStore {
     /// Opaque broker response metadata.
     pub response: OpenZoneStoreResponse,
     /// The one owned database descriptor received from the broker.
     pub database_fd: OwnedFd,
+    /// Host/bundle-owned trusted external-NIC inventory, when available.
+    pub external_inventory: Option<Arc<dyn ExternalNicRecoveryInventory>>,
+}
+
+impl core::fmt::Debug for OpenedZoneStore {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("OpenedZoneStore")
+            .field("response", &self.response)
+            .field("has_external_inventory", &self.external_inventory.is_some())
+            .finish()
+    }
 }
 
 /// Readiness projection for one Zone runtime.
@@ -159,6 +181,7 @@ pub struct ZoneRuntimeReadiness {
     pub resource_api_ready: bool,
     pub local_session_ready: bool,
     pub provider_path_ready: bool,
+    pub authority_ready: bool,
     pub core_stage: StartupStage,
 }
 
@@ -169,6 +192,7 @@ impl ZoneRuntimeReadiness {
             && self.resource_api_ready
             && self.local_session_ready
             && self.provider_path_ready
+            && self.authority_ready
             && matches!(self.core_stage, StartupStage::Ready)
     }
 }
@@ -186,6 +210,9 @@ pub struct ZoneResourceRuntime {
     policy_installed: bool,
     controller_endpoint_registered: bool,
     watch_admitted: bool,
+    authority_index: Arc<tokio::sync::Mutex<HostGlobalAuthorityIndex>>,
+    authority_persistence: Arc<RedbAuthorityPersistence>,
+    authority_recovery: Arc<AuthorityRecoveryCoordinator>,
 }
 
 impl core::fmt::Debug for ZoneResourceRuntime {
@@ -203,6 +230,19 @@ impl core::fmt::Debug for ZoneResourceRuntime {
 impl ZoneResourceRuntime {
     /// Open one Zone from a broker-owned descriptor.
     pub async fn open(zone: ZoneId, opened: OpenedZoneStore) -> Result<Self, ResourceRuntimeError> {
+        let external_inventory = opened.external_inventory.clone().unwrap_or_else(|| {
+            Arc::new(TrustedExternalNicInventory::default())
+                as Arc<dyn ExternalNicRecoveryInventory>
+        });
+        Self::open_with_external_inventory(zone, opened, external_inventory).await
+    }
+
+    /// Open one Zone with the host/bundle-owned physical-NIC inventory port.
+    pub async fn open_with_external_inventory(
+        zone: ZoneId,
+        opened: OpenedZoneStore,
+        external_inventory: Arc<dyn ExternalNicRecoveryInventory>,
+    ) -> Result<Self, ResourceRuntimeError> {
         let expected_store_id = format!("zone-store-{}", zone.as_str());
         if opened.response.zone_store_id.as_str() != expected_store_id {
             return Err(ResourceRuntimeError::BrokerResponseMismatch);
@@ -238,6 +278,19 @@ impl ZoneResourceRuntime {
         }
         .map_err(|_| ResourceRuntimeError::StoreOpenFailed)?;
         let store = Arc::new(store);
+        let authority_persistence = Arc::new(
+            RedbAuthorityPersistence::new(Arc::clone(&store))
+                .with_external_inventory(external_inventory),
+        );
+        let authority_recovery = Arc::new(
+            AuthorityRecoveryCoordinator::recover_with_provenance(
+                authority_persistence.clone(),
+                authority_persistence.as_ref(),
+            )
+            .await
+            .map_err(|_| ResourceRuntimeError::AuthorityUnavailable)?,
+        );
+        let authority_index = authority_recovery.index();
         let store_metadata = store
             .runtime_metadata()
             .await
@@ -249,27 +302,32 @@ impl ZoneResourceRuntime {
         );
 
         let mut core = CoreProcess::new();
-        let _ = drive_core_startup(
-            &mut core,
-            CoreRuntimeReadiness {
-                store_ready: true,
-                resource_api_ready: false,
-                local_bus_ready: false,
-                controller_endpoint_registered: false,
-                authenticated_system_core_session: false,
-            },
-            RecoverySnapshot {
-                checkpoint_revision: 0,
-                active_configuration_revision: store_metadata
-                    .policy_snapshot
-                    .active_configuration_revision
-                    .get(),
-                provider_lease_count: 0,
-                controller_lease_count: 0,
-                ambiguous_operation_count: 0,
-                watch_admitted: false,
-            },
-        );
+        {
+            let recovered_authority = authority_index.lock().await;
+            let _ = drive_core_startup(
+                &mut core,
+                CoreRuntimeReadiness {
+                    store_ready: true,
+                    resource_api_ready: false,
+                    local_bus_ready: false,
+                    controller_endpoint_registered: false,
+                    authenticated_system_core_session: false,
+                },
+                RecoverySnapshot {
+                    startup_epoch: 0,
+                    checkpoint_revision: 0,
+                    active_configuration_revision: store_metadata
+                        .policy_snapshot
+                        .active_configuration_revision
+                        .get(),
+                    provider_lease_count: 0,
+                    controller_lease_count: 0,
+                    ambiguous_operation_count: 0,
+                    watch_admitted: false,
+                },
+                &recovered_authority,
+            );
+        }
         let stage = core.stage();
         Ok(Self {
             zone,
@@ -284,11 +342,15 @@ impl ZoneResourceRuntime {
                 resource_api_ready: false,
                 local_session_ready: false,
                 provider_path_ready: false,
+                authority_ready: true,
                 core_stage: stage,
             },
             policy_installed: false,
             controller_endpoint_registered: false,
             watch_admitted: false,
+            authority_index,
+            authority_persistence,
+            authority_recovery,
         })
     }
 
@@ -323,6 +385,92 @@ impl ZoneResourceRuntime {
         self.readiness.provider_path_ready = ready;
     }
 
+    /// Reserve a Host-global claim through the Zone's durable redb owner.
+    pub async fn reserve_authority(
+        &self,
+        operation_id: impl Into<String>,
+        request: AuthorityRequest,
+    ) -> Result<
+        AuthorityReservation,
+        d2b_core_controller::authority::AuthorityReservationError<
+            d2b_core_controller::authority::AuthorityError,
+        >,
+    > {
+        if !self.authority_index.lock().await.is_ready_for_readiness() {
+            return Err(
+                d2b_core_controller::authority::AuthorityReservationError::Effect(
+                    d2b_core_controller::authority::AuthorityError::StartupRehydrationRequired,
+                ),
+            );
+        }
+        AuthorityReservation::reserve_durable(
+            Arc::clone(&self.authority_index),
+            self.authority_persistence.clone(),
+            operation_id,
+            request,
+        )
+        .await
+    }
+
+    /// Reserve an external physical-NIC claim through the same durable
+    /// startup-barrier owner as generic Host-global claims.
+    pub async fn reserve_external_nic(
+        &self,
+        operation_id: impl Into<String>,
+        request: ExternalNicClaimRequest,
+    ) -> Result<
+        ExternalNicReservation,
+        d2b_core_controller::authority::AuthorityReservationError<
+            d2b_core_controller::authority::AuthorityError,
+        >,
+    > {
+        if !self.authority_index.lock().await.is_ready_for_readiness() {
+            return Err(
+                d2b_core_controller::authority::AuthorityReservationError::Effect(
+                    d2b_core_controller::authority::AuthorityError::StartupRehydrationRequired,
+                ),
+            );
+        }
+        ExternalNicReservation::reserve_durable(
+            Arc::clone(&self.authority_index),
+            self.authority_persistence.clone(),
+            operation_id,
+            request,
+        )
+        .await
+    }
+
+    /// Resolve one recovered authority after the authoritative effect is
+    /// observed closed. Persistence must complete before the holder is
+    /// removed from the in-memory index.
+    pub async fn resolve_recovered_authority_closed(
+        &self,
+        operation_id: &str,
+    ) -> Result<(), d2b_core_controller::authority_persistence::AuthorityPersistenceError> {
+        self.authority_recovery
+            .resolve_observed_closed(operation_id)
+            .await
+    }
+
+    /// Mark one recovered operation observed and adopted without releasing
+    /// its authority holder.
+    pub async fn resolve_recovered_authority_adopted(
+        &self,
+        operation_id: &str,
+    ) -> Result<(), d2b_core_controller::authority_persistence::AuthorityPersistenceError> {
+        self.authority_recovery
+            .resolve_observed_and_adopted(operation_id)
+            .await
+    }
+
+    /// Quarantine one recovered operation when observation is ambiguous.
+    pub async fn quarantine_recovered_authority(
+        &self,
+        operation_id: &str,
+    ) -> Result<(), d2b_core_controller::authority_persistence::AuthorityPersistenceError> {
+        self.authority_recovery.quarantine(operation_id).await
+    }
+
     /// Return the first startup gate that prevents publication.
     pub fn readiness_error(&self) -> Option<ResourceRuntimeError> {
         if !self.policy_installed {
@@ -342,6 +490,15 @@ impl ZoneResourceRuntime {
         }
         if !self.watch_admitted {
             return Some(ResourceRuntimeError::WatchUnavailable);
+        }
+        if !self.readiness.authority_ready
+            || self
+                .authority_index
+                .try_lock()
+                .map(|index| !index.is_ready_for_readiness())
+                .unwrap_or(true)
+        {
+            return Some(ResourceRuntimeError::AuthorityUnavailable);
         }
         if !self.readiness.provider_path_ready {
             return Some(ResourceRuntimeError::ProviderPathUnavailable);
@@ -429,10 +586,14 @@ impl ZoneResourceRuntime {
             store,
             backend,
             api,
+            authority_persistence,
+            authority_recovery,
             ..
         } = self;
         drop(api);
         drop(backend);
+        drop(authority_persistence);
+        drop(authority_recovery);
         let store = Arc::try_unwrap(store).map_err(|_| ResourceRuntimeError::CoreStartupFailed)?;
         store
             .shutdown()
@@ -866,8 +1027,9 @@ fn drive_core_startup(
     core: &mut CoreProcess,
     readiness: CoreRuntimeReadiness,
     recovery: RecoverySnapshot,
+    authority_index: &HostGlobalAuthorityIndex,
 ) -> Result<StartupStage, ResourceRuntimeError> {
-    core.start_production(readiness, recovery)
+    core.start_production(readiness, recovery, authority_index)
         .map_err(map_startup_error)?;
     core.publish_readiness().map_err(map_startup_error)
 }
@@ -879,6 +1041,7 @@ fn map_startup_error(error: StartupError) -> ResourceRuntimeError {
         }
         StartupError::AuthenticationUnavailable => ResourceRuntimeError::AuthenticationUnavailable,
         StartupError::WatchAdmissionUnavailable => ResourceRuntimeError::WatchUnavailable,
+        StartupError::AuthorityRehydrationUnavailable => ResourceRuntimeError::AuthorityUnavailable,
         StartupError::MandatoryHandlerNotReady => ResourceRuntimeError::HandlerNotReady,
         StartupError::RuntimeNotReady | StartupError::InvalidRecoverySnapshot => {
             ResourceRuntimeError::CoreStartupFailed
@@ -908,7 +1071,9 @@ fn readiness_resource_error(error: ResourceRuntimeError) -> ResourceError {
             RetryClass::AfterDelay,
             "registered Resource API endpoint is unavailable",
         ),
-        ResourceRuntimeError::WatchUnavailable | ResourceRuntimeError::HandlerNotReady => (
+        ResourceRuntimeError::WatchUnavailable
+        | ResourceRuntimeError::AuthorityUnavailable
+        | ResourceRuntimeError::HandlerNotReady => (
             ResourceErrorKind::ResourcePlaneUnavailable,
             RetryClass::AfterDelay,
             "zone resource runtime is still converging",
@@ -1229,6 +1394,7 @@ mod tests {
     #[test]
     fn core_progression_reaches_handler_gate_before_readiness_check() {
         let mut core = CoreProcess::new();
+        let authority = HostGlobalAuthorityIndex::new_for_tests_ready();
         let result = drive_core_startup(
             &mut core,
             CoreRuntimeReadiness {
@@ -1239,6 +1405,7 @@ mod tests {
                 authenticated_system_core_session: true,
             },
             RecoverySnapshot {
+                startup_epoch: 0,
                 checkpoint_revision: 0,
                 active_configuration_revision: 1,
                 provider_lease_count: 0,
@@ -1246,6 +1413,7 @@ mod tests {
                 ambiguous_operation_count: 0,
                 watch_admitted: true,
             },
+            &authority,
         );
         assert_eq!(result, Err(ResourceRuntimeError::HandlerNotReady));
         assert_eq!(core.stage(), StartupStage::ReconcilingSystemCore);
@@ -1424,6 +1592,7 @@ mod tests {
                     fd_index: 0,
                 },
                 database_fd: database.into(),
+                external_inventory: None,
             },
         )
         .await
@@ -1508,6 +1677,7 @@ mod tests {
                     fd_index: 0,
                 },
                 database_fd: database.into(),
+                external_inventory: None,
             },
         )
         .await
@@ -1582,6 +1752,7 @@ mod tests {
                     fd_index: 0,
                 },
                 database_fd: database.into(),
+                external_inventory: None,
             },
         )
         .await;
@@ -1651,6 +1822,7 @@ mod tests {
                     fd_index: 0,
                 },
                 database_fd: database.into(),
+                external_inventory: None,
             },
         )
         .await

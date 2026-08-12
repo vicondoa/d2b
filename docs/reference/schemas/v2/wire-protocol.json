@@ -1802,6 +1802,25 @@
           }
         },
         {
+          "description": "Adopt a known legacy swtpm state through the broker-owned journal.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "MigrateLegacySwtpmState"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/MigrateLegacySwtpmStateRequest"
+            }
+          }
+        },
+        {
           "type": "object",
           "required": [
             "kind",
@@ -2949,6 +2968,24 @@
             },
             "payload": {
               "$ref": "#/definitions/ReconcileStorageScopeResponse"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "MigrateLegacySwtpmState"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/MigrateLegacySwtpmStateResponse"
             }
           }
         },
@@ -6795,6 +6832,18 @@
       },
       "additionalProperties": false
     },
+    "LegacySwtpmMigrationOutcome": {
+      "description": "Closed migration outcome returned by the broker.",
+      "type": "string",
+      "enum": [
+        "migrated",
+        "already-migrated",
+        "not-applicable",
+        "pending",
+        "failed",
+        "ambiguous"
+      ]
+    },
     "LevelPercent": {
       "description": "Audio level in the range 0..=100.",
       "type": "integer",
@@ -6957,6 +7006,43 @@
           "items": {
             "$ref": "#/definitions/ListEntry"
           }
+        }
+      },
+      "additionalProperties": false
+    },
+    "MigrateLegacySwtpmStateRequest": {
+      "description": "Opaque request for one trusted legacy swtpm migration.",
+      "type": "object",
+      "required": [
+        "bundleLegacySwtpmIntentRef",
+        "vmId"
+      ],
+      "properties": {
+        "bundleLegacySwtpmIntentRef": {
+          "type": "string"
+        },
+        "tracingSpanId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "vmId": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "MigrateLegacySwtpmStateResponse": {
+      "description": "Result of one broker-owned legacy swtpm migration attempt.",
+      "type": "object",
+      "required": [
+        "outcome"
+      ],
+      "properties": {
+        "outcome": {
+          "$ref": "#/definitions/LegacySwtpmMigrationOutcome"
         }
       },
       "additionalProperties": false

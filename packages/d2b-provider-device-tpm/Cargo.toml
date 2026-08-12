@@ -5,12 +5,27 @@ edition = "2024"
 publish = false
 license.workspace = true
 
+[features]
+test-support = []
+
 [lints]
 workspace = true
 
 [dependencies]
+d2b-core-controller = { path = "../d2b-core-controller", version = "0.0.0-bootstrap" }
 d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
 serde.workspace = true
 
 [dev-dependencies]
+d2b-core-controller = { path = "../d2b-core-controller", version = "0.0.0-bootstrap", features = ["test-support"] }
 serde_json.workspace = true
+
+[[test]]
+name = "controller_state_machine"
+path = "tests/controller_state_machine.rs"
+required-features = ["test-support"]
+
+[[test]]
+name = "fault_swtpm_missing"
+path = "tests/fault_swtpm_missing.rs"
+required-features = ["test-support"]

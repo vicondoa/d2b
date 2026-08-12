@@ -5,7 +5,15 @@
   "description": "Strict deny-unknown semantic base schema for a Core-generated projection Service. It carries only providerRef, the semantic base and import fields, and ResourceImport ownership; spec.provider is forbidden.",
   "properties": {
     "policy": {},
-    "providerRef": {},
+    "providerRef": {
+      "pattern": "^Provider/[a-z][a-z0-9-]{0,62}$",
+      "type": "string",
+      "x-d2b-allowed-ref-types": [
+        "Provider"
+      ],
+      "x-d2b-reference-kind": "ResourceRef",
+      "x-d2b-reference-scope": "same-zone"
+    },
     "quota": {},
     "serviceRole": {},
     "signals": {}

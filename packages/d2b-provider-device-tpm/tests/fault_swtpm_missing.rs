@@ -1,13 +1,20 @@
 use d2b_provider_device_tpm::{
-    BinaryKind, FlushLaunchTicket, SignedBinaryRef, StateDirIntent, StateDirectoryToken,
-    StateOwnerToken, SwtpmSettings, SwtpmStartLaunchTicket, TpmController, TpmEffectError,
-    TpmEffectPort, TpmPhase, TpmStateObservation, TpmStateObservationKind,
-    TpmStatePreparationResult,
+    BinaryKind, FlushLaunchTicket, LegacyMigrationOutcome, LegacyTpmStateId, SignedBinaryRef,
+    StateDirIntent, StateDirectoryToken, StateOwnerToken, SwtpmSettings, SwtpmStartLaunchTicket,
+    TpmController, TpmEffectError, TpmEffectPort, TpmPhase, TpmStateObservation,
+    TpmStateObservationKind, TpmStatePreparationResult,
 };
 
 struct MissingSwtpm;
 
 impl TpmEffectPort for MissingSwtpm {
+    fn migrate_legacy_state(
+        &mut self,
+        _: &LegacyTpmStateId,
+    ) -> Result<LegacyMigrationOutcome, TpmEffectError> {
+        Ok(LegacyMigrationOutcome::NotApplicable)
+    }
+
     fn prepare_state_dir(
         &mut self,
         _: &StateDirIntent,
@@ -41,7 +48,7 @@ impl TpmEffectPort for MissingSwtpm {
 
 #[test]
 fn missing_swtpm_never_reports_ready() {
-    let mut controller = TpmController::new(
+    let mut controller = TpmController::new_for_tests(
         StateDirIntent::new(
             StateDirectoryToken::from_core([3; 32]),
             d2b_provider_device_tpm::TamperMarkerToken::from_core([4; 32]),

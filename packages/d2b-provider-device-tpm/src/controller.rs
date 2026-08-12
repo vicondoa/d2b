@@ -4,6 +4,7 @@ use core::fmt;
 
 use crate::{
     DEVICE_TPM_FINALIZER,
+    migration::{LegacyMigrationOutcome, LegacyTpmMigrationDecision, LegacyTpmStateId},
     runner::{
         FlushLaunchTicket, SignedBinaryRef, SwtpmArgvError, SwtpmSettings, SwtpmStartLaunchTicket,
     },
@@ -27,6 +28,8 @@ pub enum TpmPhase {
     Degraded,
     /// The current generation failed closed.
     Failed,
+    /// Legacy swtpm state adoption is pending before first ensure.
+    MigratingLegacyState,
     /// Finalizer teardown is stopping the worker.
     Finalizing,
     /// Finalizer was cleared without deleting the Volume.
@@ -46,6 +49,8 @@ pub enum TpmEffectError {
     SpawnRejected,
     /// The operation may be retried without losing authority.
     Transient,
+    /// Legacy state adoption failed or was ambiguous.
+    LegacyMigration,
 }
 
 impl TpmEffectError {
@@ -57,6 +62,7 @@ impl TpmEffectError {
             Self::SwtpmMissing => "device-worker-failed",
             Self::SpawnRejected => "device-broker-inaccessible",
             Self::Transient => "transient",
+            Self::LegacyMigration => "legacy-state-migration-failed",
         }
     }
 }
@@ -71,6 +77,11 @@ impl std::error::Error for TpmEffectError {}
 
 /// Core effect port for TPM state hardening and worker launch.
 pub trait TpmEffectPort {
+    /// Complete or resume the broker-owned one-time legacy state adoption.
+    fn migrate_legacy_state(
+        &mut self,
+        state_id: &LegacyTpmStateId,
+    ) -> Result<LegacyMigrationOutcome, TpmEffectError>;
     /// Harden/reconcile the state directory and return opaque launch tickets.
     fn prepare_state_dir(
         &mut self,
@@ -117,6 +128,8 @@ pub enum TpmControllerError {
     StateValidation(TpmStateValidationError),
     /// A Core effect failed.
     Effect(TpmEffectError),
+    /// Legacy adoption was terminally refused.
+    LegacyMigration(LegacyMigrationOutcome),
 }
 
 impl fmt::Display for TpmControllerError {
@@ -126,6 +139,11 @@ impl fmt::Display for TpmControllerError {
             Self::InvalidState => formatter.write_str("tpm-invalid-state"),
             Self::StateValidation(error) => error.fmt(formatter),
             Self::Effect(error) => error.fmt(formatter),
+            Self::LegacyMigration(outcome) => formatter.write_str(match outcome {
+                LegacyMigrationOutcome::Failed => "legacy-state-migration-failed",
+                LegacyMigrationOutcome::Ambiguous => "legacy-state-migration-ambiguous",
+                _ => "legacy-state-migration-invalid",
+            }),
         }
     }
 }
@@ -159,6 +177,8 @@ pub struct TpmController {
     intent: StateDirIntent,
     settings: SwtpmSettings,
     binary: SignedBinaryRef,
+    migration_decision: LegacyTpmMigrationDecision,
+    migration_complete: bool,
     phase: TpmPhase,
     finalizer: bool,
     volume_preserved: bool,
@@ -167,16 +187,47 @@ pub struct TpmController {
 
 impl TpmController {
     /// Construct a controller with the state-preserving finalizer installed.
-    pub fn new(
+    #[allow(dead_code)]
+    pub(crate) fn new(
         intent: StateDirIntent,
         settings: SwtpmSettings,
         binary: SignedBinaryRef,
+        migration_decision: LegacyTpmMigrationDecision,
+    ) -> Result<Self, TpmControllerError> {
+        Self::new_inner(intent, settings, binary, migration_decision)
+    }
+
+    /// Construct the no-legacy test fixture. Production construction consumes
+    /// a Core-issued migration decision.
+    #[doc(hidden)]
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn new_for_tests(
+        intent: StateDirIntent,
+        settings: SwtpmSettings,
+        binary: SignedBinaryRef,
+    ) -> Result<Self, TpmControllerError> {
+        Self::new_inner(
+            intent,
+            settings,
+            binary,
+            LegacyTpmMigrationDecision::from_test_inventory(),
+        )
+    }
+
+    #[allow(dead_code)]
+    fn new_inner(
+        intent: StateDirIntent,
+        settings: SwtpmSettings,
+        binary: SignedBinaryRef,
+        migration_decision: LegacyTpmMigrationDecision,
     ) -> Result<Self, TpmControllerError> {
         settings.validate().map_err(TpmControllerError::Settings)?;
         Ok(Self {
             intent,
             settings,
             binary,
+            migration_complete: !migration_decision.requires_migration(),
+            migration_decision,
             phase: TpmPhase::Pending,
             finalizer: true,
             volume_preserved: true,
@@ -211,6 +262,32 @@ impl TpmController {
     ) -> Result<TpmReconcileOutcome, TpmControllerError> {
         if !self.finalizer || matches!(self.phase, TpmPhase::Finalizing | TpmPhase::Finalized) {
             return Err(TpmControllerError::InvalidState);
+        }
+        if !self.migration_complete {
+            self.phase = TpmPhase::MigratingLegacyState;
+            let state_id = self
+                .migration_decision
+                .state_id()
+                .ok_or(TpmControllerError::InvalidState)?;
+            match port
+                .migrate_legacy_state(state_id)
+                .map_err(TpmControllerError::Effect)?
+            {
+                outcome if outcome.permits_ensure() => {
+                    self.migration_complete = true;
+                }
+                LegacyMigrationOutcome::Pending => {
+                    return Ok(TpmReconcileOutcome::Transient);
+                }
+                outcome if outcome.is_terminal_failure() => {
+                    self.phase = TpmPhase::Failed;
+                    return Err(TpmControllerError::LegacyMigration(outcome));
+                }
+                _ => {
+                    self.phase = TpmPhase::Failed;
+                    return Err(TpmControllerError::InvalidState);
+                }
+            }
         }
         self.phase = TpmPhase::PreparingState;
         let prepared = match port.prepare_state_dir(&self.intent) {

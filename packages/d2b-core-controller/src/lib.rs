@@ -9,6 +9,7 @@
 pub mod api_catalog;
 pub mod audit;
 pub mod authority;
+pub mod authority_persistence;
 pub mod authz;
 pub mod authz_audit;
 pub mod budgets;
@@ -21,6 +22,7 @@ pub mod export_import;
 pub mod export_import_projection;
 pub mod hints;
 pub mod main;
+pub mod migration;
 pub mod metrics;
 pub mod optional_state_admission;
 pub mod owner_reconcile;

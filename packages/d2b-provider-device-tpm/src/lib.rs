@@ -8,6 +8,7 @@
 #![deny(missing_docs)]
 
 mod controller;
+mod migration;
 mod runner;
 mod state;
 
@@ -15,6 +16,7 @@ pub use controller::{
     TpmController, TpmControllerError, TpmEffectError, TpmEffectPort, TpmPhase,
     TpmReconcileDisposition, TpmReconcileOutcome, TpmStatePreparationResult,
 };
+pub use migration::{LegacyMigrationOutcome, LegacyTpmMigrationDecision, LegacyTpmStateId};
 pub use runner::{
     BinaryKind, FlushLaunchTicket, SignedBinaryRef, SwtpmArgv, SwtpmArgvError, SwtpmSettings,
     SwtpmStartLaunchTicket, validate_start_ticket,

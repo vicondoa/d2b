@@ -20,8 +20,8 @@ use rustix::io::{FdFlags, fcntl_getfd};
 
 use crate::backup::{self, LogicalBackup, PublicationState};
 use crate::transaction::{
-    ALL_TABLES, PHYSICAL_SCHEMA_VERSION, StoreMeta, decode, encode, integrity, meta_key,
-    validate_consistency,
+    ALL_TABLES, OperationRecord, PHYSICAL_SCHEMA_VERSION, StoreMeta, decode, encode, integrity,
+    meta_key, validate_consistency,
 };
 use crate::{REDB_CACHE_SIZE, StoreIdentity, ValueKind};
 
@@ -46,13 +46,20 @@ pub struct MigrationStep {
 /// The only registered physical-schema migration chain.
 ///
 /// Version zero is the pre-chain layout with the same table and value
-/// assignments but an unversioned metadata record.  The migration makes that
-/// version explicit before the normal current-schema validators run.
-pub const REGISTERED_MIGRATIONS: &[MigrationStep] = &[MigrationStep {
-    from: 0,
-    to: CURRENT_PHYSICAL_SCHEMA_VERSION,
-    name: "physical-schema-v0-to-v1",
-}];
+/// assignments but an unversioned metadata record. Version two adds the
+/// authority lifecycle row shape and its explicit closing state.
+pub const REGISTERED_MIGRATIONS: &[MigrationStep] = &[
+    MigrationStep {
+        from: 0,
+        to: 1,
+        name: "physical-schema-v0-to-v1",
+    },
+    MigrationStep {
+        from: 1,
+        to: 2,
+        name: "physical-schema-v1-to-v2-authority-lifecycle",
+    },
+];
 
 /// Result of a restore or upgrade request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -181,7 +188,7 @@ pub fn upgrade_owned(
     finalize_prior(parent, identity)?;
     let last = chain.last().expect("nonempty migration chain");
     Ok(MigrationOutcome::Upgraded {
-        from: last.from,
+        from: source_meta.schema_version,
         to: last.to,
     })
 }
@@ -328,12 +335,11 @@ fn copy_registered_step(
     from: u32,
     identity: &StoreIdentity,
 ) -> Result<(), StoreError> {
-    let step = REGISTERED_MIGRATIONS
-        .iter()
-        .find(|step| step.from == from && step.to == CURRENT_PHYSICAL_SCHEMA_VERSION)
-        .copied()
-        .ok_or_else(|| unsupported_version(from))?;
-    if step.name != "physical-schema-v0-to-v1" {
+    let chain = migration_chain(from)?;
+    if chain
+        .last()
+        .is_none_or(|step| step.to != CURRENT_PHYSICAL_SCHEMA_VERSION)
+    {
         return Err(unsupported_version(from));
     }
 
@@ -378,12 +384,74 @@ fn copy_registered_step(
                 value_bytes = encode(ValueKind::StoreMetaScalar, &meta)
                     .map_err(|_| quarantine(identity, "migration-staged-meta-invalid"))?;
             }
+            if from == 1 && table_index == 8 {
+                validate_v2_authority_payload(&value_bytes).map_err(|_| {
+                    quarantine(identity, "migration-authority-payload-incompatible")
+                })?;
+            }
             if target_table
                 .insert(key.value(), value_bytes.as_slice())
                 .map_err(|_| quarantine(identity, "migration-staged-row-invalid"))?
                 .is_some()
             {
                 return Err(quarantine(identity, "migration-staged-duplicate-key"));
+            }
+
+            fn validate_v2_authority_payload(bytes: &[u8]) -> Result<(), StoreError> {
+                let operation: OperationRecord = decode(ValueKind::OperationRecord, bytes)
+                    .map_err(|_| integrity("authority-operation-payload-invalid"))?;
+                let Some(authority) = operation.authority else {
+                    return Ok(());
+                };
+                let payload: serde_json::Value = serde_json::from_slice(&authority.payload)
+                    .map_err(|_| integrity("authority-operation-payload-invalid"))?;
+                let object = payload
+                    .as_object()
+                    .ok_or_else(|| integrity("authority-operation-payload-invalid"))?;
+                for key in [
+                    "operationId",
+                    "claim",
+                    "state",
+                    "claimDigest",
+                    "storeBindingDigest",
+                ] {
+                    if !object.contains_key(key) {
+                        return Err(integrity("authority-operation-payload-incompatible"));
+                    }
+                }
+                if !matches!(
+                    object.get("state").and_then(serde_json::Value::as_str),
+                    Some(
+                        "pending"
+                            | "effect-confirmed"
+                            | "effect-retryable"
+                            | "effect-terminal"
+                            | "closing"
+                            | "closed"
+                            | "released"
+                    )
+                ) {
+                    return Err(integrity("authority-operation-payload-incompatible"));
+                }
+                for key in ["claimDigest", "storeBindingDigest"] {
+                    if !object
+                        .get(key)
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(valid_digest_text)
+                    {
+                        return Err(integrity("authority-operation-payload-incompatible"));
+                    }
+                }
+                Ok(())
+            }
+
+            fn valid_digest_text(value: &str) -> bool {
+                value.strip_prefix("sha256:").is_some_and(|hex| {
+                    hex.len() == 64
+                        && hex
+                            .bytes()
+                            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+                })
             }
         }
     }
@@ -914,16 +982,40 @@ mod tests {
 
     #[test]
     fn registered_chain_is_explicit_and_unknown_versions_refuse() {
-        assert_eq!(REGISTERED_MIGRATIONS.len(), 1);
+        assert_eq!(REGISTERED_MIGRATIONS.len(), 2);
         assert_eq!(
             migration_chain(0).unwrap(),
-            vec![MigrationStep {
-                from: 0,
-                to: CURRENT_PHYSICAL_SCHEMA_VERSION,
-                name: "physical-schema-v0-to-v1",
-            }]
+            vec![
+                MigrationStep {
+                    from: 0,
+                    to: 1,
+                    name: "physical-schema-v0-to-v1",
+                },
+                MigrationStep {
+                    from: 1,
+                    to: 2,
+                    name: "physical-schema-v1-to-v2-authority-lifecycle",
+                },
+            ]
         );
-        assert!(migration_chain(2).unwrap_err().kind() == StoreErrorKind::UpgradeRequired);
+        assert!(migration_chain(3).unwrap_err().kind() == StoreErrorKind::UpgradeRequired);
+    }
+
+    #[test]
+    fn version_one_authority_shape_migrates_atomically_to_current() {
+        let (directory, parent_fd, mut marker) = parent();
+        create_current_file(&directory, DEFAULT_ACTIVE_FILE_NAME);
+        set_schema_version(&directory, 1);
+        let outcome = upgrade_owned(&parent_fd, &mut marker, &identity()).unwrap();
+        assert_eq!(
+            outcome,
+            MigrationOutcome::Upgraded {
+                from: 1,
+                to: CURRENT_PHYSICAL_SCHEMA_VERSION
+            }
+        );
+        let file = open_named_database(&parent_fd, DEFAULT_ACTIVE_FILE_NAME, &identity()).unwrap();
+        validate_database(&file, &identity(), Some(CURRENT_PHYSICAL_SCHEMA_VERSION)).unwrap();
     }
 
     #[test]

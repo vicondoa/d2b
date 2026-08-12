@@ -7,7 +7,18 @@
     "activeConsumerCount": {},
     "activeMicCaptureCount": {},
     "availability": {},
-    "implementationEndpointRefs": {},
+    "implementationEndpointRefs": {
+      "items": {
+        "pattern": "^(?:Endpoint)/[a-z][a-z0-9-]{0,62}$",
+        "type": "string",
+        "x-d2b-allowed-ref-types": [
+          "Endpoint"
+        ],
+        "x-d2b-reference-kind": "ResourceRef",
+        "x-d2b-reference-scope": "same-zone"
+      },
+      "type": "array"
+    },
     "pendingMicRequestCount": {},
     "pendingMicZoneCount": {},
     "routeState": {},

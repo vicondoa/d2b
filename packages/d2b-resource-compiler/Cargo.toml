@@ -11,6 +11,7 @@ d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
 d2b-core = { path = "../d2b-core", version = "0.0.0-bootstrap" }
 ring.workspace = true
 rustix = { workspace = true, features = ["runtime"] }
+regex = "1"
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

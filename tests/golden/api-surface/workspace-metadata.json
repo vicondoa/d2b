@@ -5,14 +5,14 @@
       "private_census": {
         "external_crates": 95,
         "index_items": 19209,
-        "path_items": 13117
+        "path_items": 13130
       },
       "private_hidden_items": 65,
       "private_json_file": "d2b.json",
       "public_census": {
         "external_crates": 95,
         "index_items": 4,
-        "path_items": 11657
+        "path_items": 11670
       },
       "public_json_file": "d2b.json"
     },
@@ -37,14 +37,14 @@
       "private_census": {
         "external_crates": 57,
         "index_items": 1417,
-        "path_items": 10497
+        "path_items": 10510
       },
       "private_hidden_items": 24,
       "private_json_file": "d2b_audit.json",
       "public_census": {
         "external_crates": 57,
         "index_items": 844,
-        "path_items": 10438
+        "path_items": 10451
       },
       "public_json_file": "d2b_audit.json"
     },
@@ -53,14 +53,14 @@
       "private_census": {
         "external_crates": 131,
         "index_items": 9102,
-        "path_items": 14088
+        "path_items": 14158
       },
       "private_hidden_items": 146,
       "private_json_file": "d2b_bus.json",
       "public_census": {
         "external_crates": 131,
         "index_items": 4205,
-        "path_items": 13917
+        "path_items": 13987
       },
       "public_json_file": "d2b_bus.json"
     },
@@ -69,14 +69,14 @@
       "private_census": {
         "external_crates": 118,
         "index_items": 4504,
-        "path_items": 9753
+        "path_items": 9754
       },
       "private_hidden_items": 64,
       "private_json_file": "d2b_clipd.json",
       "public_census": {
         "external_crates": 118,
         "index_items": 2676,
-        "path_items": 9660
+        "path_items": 9661
       },
       "public_json_file": "d2b_clipd.json"
     },
@@ -85,14 +85,14 @@
       "private_census": {
         "external_crates": 47,
         "index_items": 13,
-        "path_items": 6053
+        "path_items": 6054
       },
       "private_hidden_items": 0,
       "private_json_file": "d2b_contract_tests.json",
       "public_census": {
         "external_crates": 47,
         "index_items": 8,
-        "path_items": 6010
+        "path_items": 6011
       },
       "public_json_file": "d2b_contract_tests.json"
     },
@@ -100,15 +100,15 @@
       "crate_name": "d2b_contracts",
       "private_census": {
         "external_crates": 55,
-        "index_items": 84712,
-        "path_items": 10716
+        "index_items": 84905,
+        "path_items": 10728
       },
-      "private_hidden_items": 1541,
+      "private_hidden_items": 1546,
       "private_json_file": "d2b_contracts.json",
       "public_census": {
         "external_crates": 55,
-        "index_items": 55614,
-        "path_items": 10382
+        "index_items": 55740,
+        "path_items": 10394
       },
       "public_json_file": "d2b_contracts.json"
     },
@@ -117,14 +117,14 @@
       "private_census": {
         "external_crates": 64,
         "index_items": 5172,
-        "path_items": 11220
+        "path_items": 11233
       },
       "private_hidden_items": 110,
       "private_json_file": "d2b_controller_toolkit.json",
       "public_census": {
         "external_crates": 64,
         "index_items": 2721,
-        "path_items": 11135
+        "path_items": 11148
       },
       "public_json_file": "d2b_controller_toolkit.json"
     },
@@ -132,31 +132,31 @@
       "crate_name": "d2b_core",
       "private_census": {
         "external_crates": 46,
-        "index_items": 20681,
-        "path_items": 6052
+        "index_items": 20741,
+        "path_items": 6056
       },
-      "private_hidden_items": 393,
+      "private_hidden_items": 394,
       "private_json_file": "d2b_core.json",
       "public_census": {
         "external_crates": 46,
-        "index_items": 13238,
-        "path_items": 5874
+        "index_items": 13277,
+        "path_items": 5878
       },
       "public_json_file": "d2b_core.json"
     },
     {
       "crate_name": "d2b_core_controller",
       "private_census": {
-        "external_crates": 67,
-        "index_items": 16839,
-        "path_items": 12087
+        "external_crates": 70,
+        "index_items": 17867,
+        "path_items": 12411
       },
-      "private_hidden_items": 355,
+      "private_hidden_items": 369,
       "private_json_file": "d2b_core_controller.json",
       "public_census": {
-        "external_crates": 67,
-        "index_items": 9406,
-        "path_items": 11998
+        "external_crates": 70,
+        "index_items": 9916,
+        "path_items": 12313
       },
       "public_json_file": "d2b_core_controller.json"
     },
@@ -165,14 +165,14 @@
       "private_census": {
         "external_crates": 56,
         "index_items": 151,
-        "path_items": 10383
+        "path_items": 10396
       },
       "private_hidden_items": 0,
       "private_json_file": "d2b_credential_service.json",
       "public_census": {
         "external_crates": 56,
         "index_items": 71,
-        "path_items": 10339
+        "path_items": 10352
       },
       "public_json_file": "d2b_credential_service.json"
     },
@@ -229,14 +229,14 @@
       "private_census": {
         "external_crates": 96,
         "index_items": 7748,
-        "path_items": 12564
+        "path_items": 12577
       },
       "private_hidden_items": 81,
       "private_json_file": "d2b_guestd.json",
       "public_census": {
         "external_crates": 96,
         "index_items": 2664,
-        "path_items": 12235
+        "path_items": 12248
       },
       "public_json_file": "d2b_guestd.json"
     },
@@ -245,14 +245,14 @@
       "private_census": {
         "external_crates": 60,
         "index_items": 10120,
-        "path_items": 11326
+        "path_items": 11339
       },
       "private_hidden_items": 196,
       "private_json_file": "d2b_host.json",
       "public_census": {
         "external_crates": 60,
         "index_items": 6369,
-        "path_items": 11201
+        "path_items": 11214
       },
       "public_json_file": "d2b_host.json"
     },
@@ -277,14 +277,14 @@
       "private_census": {
         "external_crates": 57,
         "index_items": 353,
-        "path_items": 10436
+        "path_items": 10449
       },
       "private_hidden_items": 5,
       "private_json_file": "d2b_process.json",
       "public_census": {
         "external_crates": 57,
         "index_items": 199,
-        "path_items": 10391
+        "path_items": 10404
       },
       "public_json_file": "d2b_process.json"
     },
@@ -293,14 +293,14 @@
       "private_census": {
         "external_crates": 56,
         "index_items": 2109,
-        "path_items": 10503
+        "path_items": 10516
       },
       "private_hidden_items": 46,
       "private_json_file": "d2b_process_conformance.json",
       "public_census": {
         "external_crates": 56,
         "index_items": 1273,
-        "path_items": 10445
+        "path_items": 10458
       },
       "public_json_file": "d2b_process_conformance.json"
     },
@@ -309,14 +309,14 @@
       "private_census": {
         "external_crates": 65,
         "index_items": 2528,
-        "path_items": 11084
+        "path_items": 11097
       },
       "private_hidden_items": 43,
       "private_json_file": "d2b_provider.json",
       "public_census": {
         "external_crates": 65,
         "index_items": 1429,
-        "path_items": 11023
+        "path_items": 11036
       },
       "public_json_file": "d2b_provider.json"
     },
@@ -389,14 +389,14 @@
       "private_census": {
         "external_crates": 56,
         "index_items": 999,
-        "path_items": 10431
+        "path_items": 10444
       },
       "private_hidden_items": 18,
       "private_json_file": "d2b_provider_credential_entra.json",
       "public_census": {
         "external_crates": 56,
         "index_items": 523,
-        "path_items": 10377
+        "path_items": 10390
       },
       "public_json_file": "d2b_provider_credential_entra.json"
     },
@@ -405,14 +405,14 @@
       "private_census": {
         "external_crates": 56,
         "index_items": 1533,
-        "path_items": 10471
+        "path_items": 10484
       },
       "private_hidden_items": 32,
       "private_json_file": "d2b_provider_credential_managed_identity.json",
       "public_census": {
         "external_crates": 56,
         "index_items": 835,
-        "path_items": 10416
+        "path_items": 10429
       },
       "public_json_file": "d2b_provider_credential_managed_identity.json"
     },
@@ -421,14 +421,14 @@
       "private_census": {
         "external_crates": 56,
         "index_items": 1040,
-        "path_items": 10435
+        "path_items": 10448
       },
       "private_hidden_items": 21,
       "private_json_file": "d2b_provider_credential_secret_service.json",
       "public_census": {
         "external_crates": 56,
         "index_items": 546,
-        "path_items": 10382
+        "path_items": 10395
       },
       "public_json_file": "d2b_provider_credential_secret_service.json"
     },
@@ -437,14 +437,14 @@
       "private_census": {
         "external_crates": 56,
         "index_items": 962,
-        "path_items": 10442
+        "path_items": 10455
       },
       "private_hidden_items": 23,
       "private_json_file": "d2b_provider_device_gpu.json",
       "public_census": {
         "external_crates": 56,
         "index_items": 563,
-        "path_items": 10392
+        "path_items": 10405
       },
       "public_json_file": "d2b_provider_device_gpu.json"
     },
@@ -453,30 +453,30 @@
       "private_census": {
         "external_crates": 56,
         "index_items": 1523,
-        "path_items": 10458
+        "path_items": 10471
       },
       "private_hidden_items": 36,
       "private_json_file": "d2b_provider_device_security_key.json",
       "public_census": {
         "external_crates": 56,
         "index_items": 884,
-        "path_items": 10406
+        "path_items": 10419
       },
       "public_json_file": "d2b_provider_device_security_key.json"
     },
     {
       "crate_name": "d2b_provider_device_tpm",
       "private_census": {
-        "external_crates": 22,
-        "index_items": 809,
-        "path_items": 2658
+        "external_crates": 71,
+        "index_items": 1392,
+        "path_items": 11747
       },
-      "private_hidden_items": 32,
+      "private_hidden_items": 34,
       "private_json_file": "d2b_provider_device_tpm.json",
       "public_census": {
-        "external_crates": 22,
-        "index_items": 720,
-        "path_items": 2631
+        "external_crates": 71,
+        "index_items": 811,
+        "path_items": 11697
       },
       "public_json_file": "d2b_provider_device_tpm.json"
     },
@@ -485,14 +485,14 @@
       "private_census": {
         "external_crates": 56,
         "index_items": 1927,
-        "path_items": 10466
+        "path_items": 10479
       },
       "private_hidden_items": 46,
       "private_json_file": "d2b_provider_device_usbip.json",
       "public_census": {
         "external_crates": 56,
         "index_items": 1086,
-        "path_items": 10415
+        "path_items": 10428
       },
       "public_json_file": "d2b_provider_device_usbip.json"
     },
@@ -517,14 +517,14 @@
       "private_census": {
         "external_crates": 56,
         "index_items": 3046,
-        "path_items": 10602
+        "path_items": 10615
       },
       "private_hidden_items": 74,
       "private_json_file": "d2b_provider_network_local.json",
       "public_census": {
         "external_crates": 56,
         "index_items": 1728,
-        "path_items": 10545
+        "path_items": 10558
       },
       "public_json_file": "d2b_provider_network_local.json"
     },
@@ -549,14 +549,14 @@
       "private_census": {
         "external_crates": 127,
         "index_items": 1257,
-        "path_items": 13362
+        "path_items": 13432
       },
       "private_hidden_items": 23,
       "private_json_file": "d2b_provider_observability_otel.json",
       "public_census": {
         "external_crates": 127,
         "index_items": 712,
-        "path_items": 13297
+        "path_items": 13367
       },
       "public_json_file": "d2b_provider_observability_otel.json"
     },
@@ -661,14 +661,14 @@
       "private_census": {
         "external_crates": 60,
         "index_items": 1111,
-        "path_items": 10539
+        "path_items": 10552
       },
       "private_hidden_items": 7,
       "private_json_file": "d2b_provider_supervisor.json",
       "public_census": {
         "external_crates": 60,
         "index_items": 254,
-        "path_items": 10447
+        "path_items": 10460
       },
       "public_json_file": "d2b_provider_supervisor.json"
     },
@@ -677,14 +677,14 @@
       "private_census": {
         "external_crates": 56,
         "index_items": 2119,
-        "path_items": 10525
+        "path_items": 10538
       },
       "private_hidden_items": 48,
       "private_json_file": "d2b_provider_system_core.json",
       "public_census": {
         "external_crates": 56,
         "index_items": 978,
-        "path_items": 10433
+        "path_items": 10446
       },
       "public_json_file": "d2b_provider_system_core.json"
     },
@@ -693,14 +693,14 @@
       "private_census": {
         "external_crates": 57,
         "index_items": 421,
-        "path_items": 10432
+        "path_items": 10445
       },
       "private_hidden_items": 7,
       "private_json_file": "d2b_provider_system_minijail.json",
       "public_census": {
         "external_crates": 57,
         "index_items": 225,
-        "path_items": 10388
+        "path_items": 10401
       },
       "public_json_file": "d2b_provider_system_minijail.json"
     },
@@ -709,14 +709,14 @@
       "private_census": {
         "external_crates": 128,
         "index_items": 580,
-        "path_items": 13345
+        "path_items": 13415
       },
       "private_hidden_items": 8,
       "private_json_file": "d2b_provider_system_systemd.json",
       "public_census": {
         "external_crates": 128,
         "index_items": 331,
-        "path_items": 13285
+        "path_items": 13355
       },
       "public_json_file": "d2b_provider_system_systemd.json"
     },
@@ -725,14 +725,14 @@
       "private_census": {
         "external_crates": 126,
         "index_items": 2670,
-        "path_items": 13372
+        "path_items": 13442
       },
       "private_hidden_items": 37,
       "private_json_file": "d2b_provider_toolkit.json",
       "public_census": {
         "external_crates": 126,
         "index_items": 1516,
-        "path_items": 13290
+        "path_items": 13360
       },
       "public_json_file": "d2b_provider_toolkit.json"
     },
@@ -789,14 +789,14 @@
       "private_census": {
         "external_crates": 56,
         "index_items": 6996,
-        "path_items": 10909
+        "path_items": 10922
       },
       "private_hidden_items": 172,
       "private_json_file": "d2b_provider_volume_local.json",
       "public_census": {
         "external_crates": 56,
         "index_items": 4194,
-        "path_items": 10831
+        "path_items": 10844
       },
       "public_json_file": "d2b_provider_volume_local.json"
     },
@@ -805,14 +805,14 @@
       "private_census": {
         "external_crates": 56,
         "index_items": 1522,
-        "path_items": 10480
+        "path_items": 10493
       },
       "private_hidden_items": 34,
       "private_json_file": "d2b_provider_volume_virtiofs.json",
       "public_census": {
         "external_crates": 56,
         "index_items": 875,
-        "path_items": 10423
+        "path_items": 10436
       },
       "public_json_file": "d2b_provider_volume_virtiofs.json"
     },
@@ -821,14 +821,14 @@
       "private_census": {
         "external_crates": 71,
         "index_items": 1512,
-        "path_items": 11300
+        "path_items": 11313
       },
       "private_hidden_items": 1,
       "private_json_file": "d2b_realm_codec_protobuf.json",
       "public_census": {
         "external_crates": 71,
         "index_items": 53,
-        "path_items": 11140
+        "path_items": 11153
       },
       "public_json_file": "d2b_realm_codec_protobuf.json"
     },
@@ -901,14 +901,14 @@
       "private_census": {
         "external_crates": 101,
         "index_items": 4560,
-        "path_items": 12943
+        "path_items": 13013
       },
       "private_hidden_items": 64,
       "private_json_file": "d2b_resource_api.json",
       "public_census": {
         "external_crates": 101,
         "index_items": 1989,
-        "path_items": 12778
+        "path_items": 12848
       },
       "public_json_file": "d2b_resource_api.json"
     },
@@ -917,14 +917,14 @@
       "private_census": {
         "external_crates": 64,
         "index_items": 2226,
-        "path_items": 11022
+        "path_items": 11035
       },
       "private_hidden_items": 35,
       "private_json_file": "d2b_resource_client.json",
       "public_census": {
         "external_crates": 64,
         "index_items": 1268,
-        "path_items": 10960
+        "path_items": 10973
       },
       "public_json_file": "d2b_resource_client.json"
     },
@@ -933,14 +933,14 @@
       "private_census": {
         "external_crates": 59,
         "index_items": 657,
-        "path_items": 10642
+        "path_items": 10655
       },
       "private_hidden_items": 7,
       "private_json_file": "d2b_resource_compiler.json",
       "public_census": {
         "external_crates": 59,
         "index_items": 334,
-        "path_items": 10551
+        "path_items": 10564
       },
       "public_json_file": "d2b_resource_compiler.json"
     },
@@ -949,14 +949,14 @@
       "private_census": {
         "external_crates": 56,
         "index_items": 1994,
-        "path_items": 10475
+        "path_items": 10488
       },
       "private_hidden_items": 39,
       "private_json_file": "d2b_resource_store.json",
       "public_census": {
         "external_crates": 56,
         "index_items": 1137,
-        "path_items": 10427
+        "path_items": 10440
       },
       "public_json_file": "d2b_resource_store.json"
     },
@@ -964,15 +964,15 @@
       "crate_name": "d2b_resource_store_redb",
       "private_census": {
         "external_crates": 69,
-        "index_items": 4729,
-        "path_items": 11650
+        "index_items": 4967,
+        "path_items": 11684
       },
-      "private_hidden_items": 70,
+      "private_hidden_items": 74,
       "private_json_file": "d2b_resource_store_redb.json",
       "public_census": {
         "external_crates": 69,
-        "index_items": 1627,
-        "path_items": 11359
+        "index_items": 1720,
+        "path_items": 11382
       },
       "public_json_file": "d2b_resource_store_redb.json"
     },
@@ -981,14 +981,14 @@
       "private_census": {
         "external_crates": 123,
         "index_items": 4555,
-        "path_items": 13434
+        "path_items": 13504
       },
       "private_hidden_items": 38,
       "private_json_file": "d2b_session.json",
       "public_census": {
         "external_crates": 123,
         "index_items": 1816,
-        "path_items": 13208
+        "path_items": 13278
       },
       "public_json_file": "d2b_session.json"
     },
@@ -997,14 +997,14 @@
       "private_census": {
         "external_crates": 130,
         "index_items": 3092,
-        "path_items": 13625
+        "path_items": 13695
       },
       "private_hidden_items": 35,
       "private_json_file": "d2b_session_unix.json",
       "public_census": {
         "external_crates": 130,
         "index_items": 1335,
-        "path_items": 13494
+        "path_items": 13564
       },
       "public_json_file": "d2b_session_unix.json"
     },
@@ -1013,14 +1013,14 @@
       "private_census": {
         "external_crates": 56,
         "index_items": 1523,
-        "path_items": 10471
+        "path_items": 10484
       },
       "private_hidden_items": 27,
       "private_json_file": "d2b_telemetry.json",
       "public_census": {
         "external_crates": 56,
         "index_items": 827,
-        "path_items": 10418
+        "path_items": 10431
       },
       "public_json_file": "d2b_telemetry.json"
     },
@@ -1029,14 +1029,14 @@
       "private_census": {
         "external_crates": 136,
         "index_items": 2936,
-        "path_items": 14325
+        "path_items": 14338
       },
       "private_hidden_items": 31,
       "private_json_file": "d2b_unsafe_local_helper.json",
       "public_census": {
         "external_crates": 136,
         "index_items": 481,
-        "path_items": 14042
+        "path_items": 14055
       },
       "public_json_file": "d2b_unsafe_local_helper.json"
     },
@@ -1045,14 +1045,14 @@
       "private_census": {
         "external_crates": 70,
         "index_items": 6069,
-        "path_items": 7581
+        "path_items": 7582
       },
       "private_hidden_items": 82,
       "private_json_file": "d2b_wayland_proxy.json",
       "public_census": {
         "external_crates": 70,
         "index_items": 1912,
-        "path_items": 7371
+        "path_items": 7372
       },
       "public_json_file": "d2b_wayland_proxy.json"
     },
@@ -1061,30 +1061,30 @@
       "private_census": {
         "external_crates": 56,
         "index_items": 2064,
-        "path_items": 10489
+        "path_items": 10502
       },
       "private_hidden_items": 43,
       "private_json_file": "d2b_zone_routing.json",
       "public_census": {
         "external_crates": 56,
         "index_items": 1064,
-        "path_items": 10427
+        "path_items": 10440
       },
       "public_json_file": "d2b_zone_routing.json"
     },
     {
       "crate_name": "d2bd",
       "private_census": {
-        "external_crates": 240,
-        "index_items": 41115,
-        "path_items": 21134
+        "external_crates": 241,
+        "index_items": 41217,
+        "path_items": 21241
       },
       "private_hidden_items": 356,
       "private_json_file": "d2bd.json",
       "public_census": {
-        "external_crates": 240,
-        "index_items": 14373,
-        "path_items": 19910
+        "external_crates": 241,
+        "index_items": 14388,
+        "path_items": 20015
       },
       "public_json_file": "d2bd.json"
     }

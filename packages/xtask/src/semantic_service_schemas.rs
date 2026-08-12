@@ -29,13 +29,99 @@ use serde_json::{Value, json};
 /// The subdirectory the committed artifacts live in.
 const OUT_DIR: &str = "docs/reference/schemas/v3";
 
+fn resource_ref_schema(pattern: String, allowed_types: &[String]) -> Value {
+    json!({
+        "type": "string",
+        "pattern": pattern,
+        "x-d2b-reference-kind": "ResourceRef",
+        "x-d2b-reference-scope": "same-zone",
+        "x-d2b-allowed-ref-types": allowed_types,
+    })
+}
+
+fn provider_ref_schema() -> Value {
+    resource_ref_schema(
+        r"^Provider/[a-z][a-z0-9-]{0,62}$".to_owned(),
+        &[String::from("Provider")],
+    )
+}
+
+fn service_ref_schema(service_type: &str) -> Value {
+    resource_ref_schema(
+        format!(
+            "^{}\\/[a-z][a-z0-9-]{{0,62}}$",
+            service_type.replace('.', "\\.")
+        ),
+        &[service_type.to_owned()],
+    )
+}
+
+fn generic_resource_ref_schema(allowed_types: &[&str]) -> Value {
+    let pattern = if allowed_types.is_empty() {
+        "^(?:[A-Z][A-Za-z0-9]{0,62}|[a-z][a-z0-9-]{0,62}\\.d2bus\\.org\\.[A-Z][A-Za-z0-9]{0,62})/[a-z][a-z0-9-]{0,62}$".to_owned()
+    } else {
+        let alternatives = allowed_types
+            .iter()
+            .map(|value| value.replace('.', "\\."))
+            .collect::<Vec<_>>()
+            .join("|");
+        format!("^(?:{alternatives})/[a-z][a-z0-9-]{{0,62}}$")
+    };
+    resource_ref_schema(
+        pattern,
+        &allowed_types
+            .iter()
+            .map(|value| (*value).to_owned())
+            .collect::<Vec<_>>(),
+    )
+}
+
 /// Render one frozen base layer as a strict deny-unknown JSON Schema.
-fn layer_schema(resource_type: &str, layer: &SemanticLayerSchema, description: &str) -> Value {
+fn layer_schema(
+    resource_type: &str,
+    service_type: Option<&str>,
+    layer: &SemanticLayerSchema,
+    description: &str,
+) -> Value {
     let schema_id = layer.schema_id().to_canonical_string();
     let mut properties = serde_json::Map::new();
     for name in layer.allowed_names() {
-        properties.insert(name.to_owned(), json!({}));
+        let property = match name {
+            "providerRef" => provider_ref_schema(),
+            "serviceRef" => {
+                service_ref_schema(service_type.expect("binding schema has a service type"))
+            }
+            "guestRef" => generic_resource_ref_schema(&["Guest"]),
+            "targetRef" => generic_resource_ref_schema(&["Guest"]),
+            "backingDeviceRef" => generic_resource_ref_schema(&["Device"]),
+            "producerRef" => generic_resource_ref_schema(&["Guest", "Zone"]),
+            "observedServiceRef" => {
+                generic_resource_ref_schema(&[service_type.unwrap_or(resource_type)])
+            }
+            "implementationEndpointRefs" | "ingestEndpointRefs" | "realizationRefs" => {
+                json!({
+                    "type": "array",
+                    "items": generic_resource_ref_schema(&["Endpoint"]),
+                })
+            }
+            "guestUsers" => json!({
+                "type": "array",
+                "items": generic_resource_ref_schema(&["User"]),
+            }),
+            "target" if resource_type.ends_with(".SecurityKeyBinding") => json!({
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["guestRef", "userRef"],
+                "properties": {
+                    "guestRef": generic_resource_ref_schema(&["Guest"]),
+                    "userRef": generic_resource_ref_schema(&["User"]),
+                },
+            }),
+            _ => json!({}),
+        };
+        properties.insert(name.to_owned(), property);
     }
+
     json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "$id": format!("https://d2bus.org/schemas/v3/{schema_id}"),
@@ -51,6 +137,56 @@ fn layer_schema(resource_type: &str, layer: &SemanticLayerSchema, description: &
     })
 }
 
+fn metadata_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "zone"],
+        "properties": {
+            "name": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9-]{0,62}$",
+            },
+            "zone": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9-]{0,62}$",
+            },
+            "ownerRef": resource_ref_schema(
+                "^(?:[A-Z][A-Za-z0-9]{0,62}|[a-z][a-z0-9-]{0,62}\\.d2bus\\.org\\.[A-Z][A-Za-z0-9]{0,62})/[a-z][a-z0-9-]{0,62}$".to_owned(),
+                &[],
+            ),
+        },
+    })
+}
+
+fn resource_envelope_schema(
+    resource_type: &str,
+    service_type: Option<&str>,
+    layer: &SemanticLayerSchema,
+) -> Value {
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": format!("https://d2bus.org/schemas/v3/{resource_type}"),
+        "title": resource_type,
+        "description": "Qualified semantic ResourceType envelope generated from the frozen catalog.",
+        "x-d2b-resource-type": resource_type,
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["apiVersion", "metadata", "spec", "type"],
+        "properties": {
+            "apiVersion": {"const": "resources.d2bus.org/v3"},
+            "metadata": metadata_schema(),
+            "spec": layer_schema(
+                resource_type,
+                service_type,
+                layer,
+                "Qualified semantic resource spec.",
+            ),
+            "type": {"const": resource_type},
+        },
+    })
+}
+
 /// Render the strict projection schema of one family.
 fn projection_schema(pair: &SemanticPairContract) -> Value {
     let projection = pair.projection();
@@ -60,7 +196,11 @@ fn projection_schema(pair: &SemanticPairContract) -> Value {
     let service_type = projection.service_type().to_canonical_string();
     let mut properties = serde_json::Map::new();
     for name in projection.projection_allowed_names() {
-        properties.insert(name.to_owned(), json!({}));
+        let property = match name {
+            "providerRef" => provider_ref_schema(),
+            _ => json!({}),
+        };
+        properties.insert(name.to_owned(), property);
     }
     json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -102,6 +242,7 @@ fn write(out_dir: &Path, name: &str, value: &Value) -> Result<PathBuf, Box<dyn s
 fn member_artifacts(
     out_dir: &Path,
     member: &SemanticTypeContract,
+    service_type: &str,
     written: &mut Vec<PathBuf>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let resource_type = member.resource_type().to_canonical_string();
@@ -119,10 +260,39 @@ fn member_artifacts(
         written.push(write(
             out_dir,
             &name,
-            &layer_schema(&resource_type, layer, description),
+            &layer_schema(&resource_type, Some(service_type), layer, description),
         )?);
     }
+    let envelope_name = qualified_artifact_name(&resource_type);
+    written.push(write(
+        out_dir,
+        &envelope_name,
+        &resource_envelope_schema(&resource_type, Some(service_type), member.spec()),
+    )?);
     Ok(())
+}
+
+fn qualified_artifact_name(resource_type: &str) -> String {
+    let (namespace, type_segment) = resource_type
+        .rsplit_once('.')
+        .expect("catalog ResourceType is qualified");
+    format!("{namespace}_{type_segment}.schema.json")
+}
+
+fn semantic_resource_types_module() -> String {
+    let mut out = String::from(
+        "# Generated by `cargo run --manifest-path packages/Cargo.toml -p xtask -- gen-semantic-service-schemas`.\n\
+         # Do not hand-edit: the semantic catalog is the source of truth.\n[\n",
+    );
+    for pair in catalog() {
+        out.push_str(&format!(
+            "  \"{}\"\n  \"{}\"\n",
+            pair.service().resource_type().to_canonical_string(),
+            pair.binding().resource_type().to_canonical_string()
+        ));
+    }
+    out.push_str("]\n");
+    out
 }
 
 /// Generate the committed schema artifacts for the semantic Service and
@@ -132,11 +302,14 @@ pub fn gen_semantic_service_schemas(
 ) -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     let out_dir = repo_root.join(OUT_DIR);
     fs::create_dir_all(&out_dir)?;
+    let generated_dir = repo_root.join("nixos-modules/generated");
+    fs::create_dir_all(&generated_dir)?;
 
     let mut written = Vec::new();
     for pair in catalog() {
-        member_artifacts(&out_dir, pair.service(), &mut written)?;
-        member_artifacts(&out_dir, pair.binding(), &mut written)?;
+        let service_type = pair.service().resource_type().to_canonical_string();
+        member_artifacts(&out_dir, pair.service(), &service_type, &mut written)?;
+        member_artifacts(&out_dir, pair.binding(), &service_type, &mut written)?;
         let name = artifact_name(&format!("{}/projection/spec", pair.family().namespace()));
         written.push(write(&out_dir, &name, &projection_schema(pair))?);
     }
@@ -146,6 +319,9 @@ pub fn gen_semantic_service_schemas(
         // conclude the artifacts are current.
         return Err("gen-semantic-service-schemas produced no artifacts".into());
     }
+    let generated_types = generated_dir.join("semantic-resource-types.nix");
+    fs::write(generated_types, semantic_resource_types_module())?;
+    written.push(generated_dir.join("semantic-resource-types.nix"));
     Ok(written)
 }
 
@@ -176,6 +352,7 @@ mod tests {
         let pair = catalog()[0];
         let rendered = layer_schema(
             &pair.service().resource_type().to_canonical_string(),
+            None,
             pair.service().spec(),
             "test",
         );
@@ -191,6 +368,10 @@ mod tests {
             rendered["x-d2b-resource-type"],
             json!("audio.d2bus.org.AudioService")
         );
+        assert_eq!(
+            rendered["properties"]["providerRef"]["x-d2b-reference-kind"],
+            json!("ResourceRef")
+        );
     }
 
     #[test]
@@ -200,6 +381,24 @@ mod tests {
             assert_eq!(rendered["additionalProperties"], json!(false));
             assert!(rendered["properties"].get("provider").is_none());
         }
+    }
+
+    #[test]
+    fn binding_service_ref_is_schema_identified_and_type_scoped() {
+        let rendered = layer_schema(
+            "audio.d2bus.org.AudioBinding",
+            Some("audio.d2bus.org.AudioService"),
+            catalog()[0].binding().spec(),
+            "test",
+        );
+        assert_eq!(
+            rendered["properties"]["serviceRef"]["x-d2b-reference-kind"],
+            json!("ResourceRef")
+        );
+        assert_eq!(
+            rendered["properties"]["serviceRef"]["x-d2b-allowed-ref-types"],
+            json!(["audio.d2bus.org.AudioService"])
+        );
     }
 
     #[test]
@@ -249,6 +448,33 @@ mod tests {
             ];
             for (key, value) in expected {
                 assert_eq!(rendered[key], value, "generator drifted for {key}");
+            }
+        }
+    }
+
+    #[test]
+    fn committed_qualified_envelopes_match_the_generator() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .nth(2)
+            .expect("repository root");
+        for pair in catalog() {
+            let service_type = pair.service().resource_type().to_canonical_string();
+            for member in [pair.service(), pair.binding()] {
+                let resource_type = member.resource_type().to_canonical_string();
+                let expected =
+                    resource_envelope_schema(&resource_type, Some(&service_type), member.spec());
+                let mut expected = serde_json::to_string_pretty(&expected).unwrap();
+                expected.push('\n');
+                let path = root
+                    .join("docs/reference/schemas/v3")
+                    .join(qualified_artifact_name(&resource_type));
+                assert_eq!(
+                    std::fs::read_to_string(&path).unwrap(),
+                    expected,
+                    "{} drifted",
+                    path.display()
+                );
             }
         }
     }
