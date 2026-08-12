@@ -11,6 +11,7 @@ let
     else
       throw "Gas City contributor package must expose passthru.runtimeScripts";
   python = "${package}/bin/python3";
+  openssl = "${package}/bin/openssl";
   activation = "${package}/share/gas-city-contributor/pack/scripts/service-activation.py";
   discordDecision = "${package}/share/gas-city-contributor/pack/scripts/discord-decision.py";
   publisher = "${package}/share/gas-city-contributor/pack/scripts/publish-pr.py";
@@ -429,6 +430,7 @@ let
         --socket ${lib.escapeShellArg publisherSocket} \
         --socket-group gascity-publisher-channel \
         --credential "$CREDENTIALS_DIRECTORY/github-app-private-key" \
+        --openssl "$GC_PUBLISHER_OPENSSL" \
         --state-root ${lib.escapeShellArg publisherStateRoot} \
         --repository ${lib.escapeShellArg cfg.repository.githubSlug} \
         --base-branch ${lib.escapeShellArg cfg.repository.baseBranch} \
@@ -784,6 +786,7 @@ in
               "GC_EGRESS_SOCKET=${egressSocket}"
               "GC_FDPROXY_SOCKET=${egressSocket}"
               "GC_FDPROXY_AUTH=${relayAuth}"
+              "GC_PUBLISHER_OPENSSL=${openssl}"
               "SSL_CERT_FILE=${package}/etc/ssl/certs/ca-bundle.crt"
             ]
             ++ sidecarProxyEnvironment;

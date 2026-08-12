@@ -28,6 +28,7 @@ from unittest.mock import patch
 
 ROOT = pathlib.Path(__file__).resolve().parents[4]
 SCRIPT = ROOT / "nix/gas-city-contributor/pack/scripts/publish-pr.py"
+FIXTURE_PRIVATE_KEY = pathlib.Path(__file__).with_name("fixture-private-key.pem")
 SPEC = importlib.util.spec_from_file_location("gascity_publish_pr", SCRIPT)
 if SPEC is None or SPEC.loader is None:
     raise RuntimeError(f"cannot load {SCRIPT}")
@@ -463,6 +464,89 @@ class PublisherFixture(unittest.TestCase):
         self.assertGreaterEqual(service.count("fdproxy-sidecar"), 2)
         self.assertIn("HTTPS_PROXY=http://127.0.0.1:3128", service)
         self.assertIn("gascity-egress-channel", service)
+
+    def test_github_api_signs_jwt_with_packaged_openssl_under_restricted_path(self) -> None:
+        openssl = os.environ.get("GC_TEST_OPENSSL") or shutil.which("openssl")
+        if openssl is None:
+            self.skipTest("openssl is unavailable")
+        try:
+            validated_openssl = MODULE._validate_openssl_path(openssl)
+        except MODULE.PublicationError as error:
+            self.skipTest(f"openssl is not an immutable executable fixture: {error}")
+
+        captured: dict[str, object] = {}
+        real_run = MODULE.subprocess.run
+
+        def capture_run(*args: object, **kwargs: object) -> object:
+            captured["environment"] = dict(kwargs["env"])
+            return real_run(*args, **kwargs)
+
+        with patch.dict(os.environ, {"PATH": "/definitely-not-a-command-path"}, clear=False):
+            with patch.object(MODULE.subprocess, "run", side_effect=capture_run):
+                api = MODULE.GitHubAPI(
+                    app_id="7",
+                    installation_id="42",
+                    private_key_path=str(FIXTURE_PRIVATE_KEY),
+                    openssl=openssl,
+                )
+                token = api._jwt()
+
+        header, claims, signature = token.split(".")
+        decode = lambda value: MODULE.base64.urlsafe_b64decode(
+            value + "=" * (-len(value) % 4)
+        )
+        self.assertEqual(
+            MODULE.json.loads(decode(header)),
+            {"alg": "RS256", "typ": "JWT"},
+        )
+        self.assertIn("iss", MODULE.json.loads(decode(claims)))
+        self.assertGreater(len(decode(signature)), 0)
+        environment = captured["environment"]
+        self.assertIsInstance(environment, dict)
+        self.assertEqual(environment["PATH"], str(pathlib.Path(validated_openssl).parent))
+        self.assertNotIn("GITHUB_TOKEN", environment)
+        self.assertNotIn("GH_TOKEN", environment)
+
+    def test_publisher_serve_requires_an_explicit_openssl_argument(self) -> None:
+        with self.assertRaises(SystemExit):
+            MODULE._parse_args(
+                [
+                    "serve",
+                    "--socket",
+                    "/run/gascity-publisher/publisher.sock",
+                    "--credential",
+                    str(FIXTURE_PRIVATE_KEY),
+                    "--state-root",
+                    "/var/lib/gascity-publisher",
+                    "--repository",
+                    REPOSITORY,
+                    "--base-branch",
+                    BASE,
+                    "--app-id",
+                    "7",
+                    "--installation-id",
+                    "42",
+                ]
+            )
+
+    def test_openssl_rejects_untrusted_symlink_and_accepts_immutable_package_link(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            target = root / "openssl"
+            target.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            target.chmod(0o755)
+            link = root / "openssl-link"
+            link.symlink_to(target)
+            with self.assertRaises(MODULE.PublicationError):
+                MODULE._validate_openssl_path(str(link))
+
+        openssl = os.environ.get("GC_TEST_OPENSSL") or shutil.which("openssl")
+        if openssl is None:
+            self.skipTest("openssl is unavailable")
+        validated = MODULE._validate_openssl_path(openssl)
+        self.assertTrue(pathlib.Path(validated).is_absolute())
+        self.assertTrue(pathlib.Path(validated).is_file())
+        self.assertTrue(os.access(validated, os.X_OK))
 
     def test_github_rate_limit_permanent_and_ambiguous_responses_are_bounded(self) -> None:
         def opener(_request: object, timeout: float) -> object:

@@ -306,6 +306,7 @@ gas-city-contributor/disabled-inert
 gas-city-contributor/identities-and-slice
 gas-city-contributor/network-and-firewall
 gas-city-contributor/operator-rules
+gas-city-contributor/publisher-openssl-wiring
 gas-city-contributor/quota-overflow-rejected
 gas-city-contributor/relative-credential-rejected
 gas-city-contributor/roots-and-quotas

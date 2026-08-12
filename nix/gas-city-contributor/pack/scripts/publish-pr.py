@@ -104,6 +104,33 @@ def _string(value: object, label: str, *, max_bytes: int = 512, required: bool =
     return value
 
 
+def _is_immutable_store_path(path: pathlib.Path) -> bool:
+    return len(path.parts) > 3 and path.parts[:3] == ("/", "nix", "store")
+
+
+def _validate_openssl_path(value: object, *, require_immutable: bool = False) -> str:
+    path_text = _string(value, "OpenSSL path", max_bytes=512)
+    path = pathlib.Path(path_text)
+    if (
+        not path.is_absolute()
+        or path_text.startswith("//")
+        or os.path.normpath(path_text) != path_text
+    ):
+        raise PublicationError("OpenSSL path must be absolute and normalized")
+    try:
+        resolved = path.resolve(strict=True)
+        info = resolved.stat()
+    except OSError as error:
+        raise PublicationError("OpenSSL path is unavailable") from error
+    if not stat.S_ISREG(info.st_mode) or not info.st_mode & 0o111:
+        raise PublicationError("OpenSSL path is not an executable regular file")
+    if path != resolved and not _is_immutable_store_path(resolved):
+        raise PublicationError("OpenSSL path has an untrusted symlink")
+    if require_immutable and not _is_immutable_store_path(resolved):
+        raise PublicationError("OpenSSL path is outside the immutable closure")
+    return str(resolved)
+
+
 def _identifier(value: object, label: str) -> str:
     value = _string(value, label, max_bytes=128)
     if not IDENTIFIER_PATTERN.fullmatch(value) or ".." in value:
@@ -631,7 +658,9 @@ class GitHubAPI:
         api_base: str = DEFAULT_API_BASE,
         opener: Callable[..., Any] | None = None,
         sleep: Callable[[float], None] = time.sleep,
-        openssl: str = "openssl",
+        # API-only fixture tests may replace _jwt and omit this path.  The
+        # serving boundary always supplies and validates it explicitly.
+        openssl: str | None = None,
     ) -> None:
         self.app_id = _string(app_id, "GitHub app id", max_bytes=64)
         self.installation_id = _string(installation_id, "GitHub installation id", max_bytes=64)
@@ -651,11 +680,13 @@ class GitHubAPI:
             urllib.request.ProxyHandler()
         ).open
         self.sleep = sleep
-        self.openssl = openssl
+        self.openssl = _validate_openssl_path(openssl) if openssl is not None else None
         self._installation_token = ""
         self._installation_token_expires_at = 0.0
 
     def _jwt(self) -> str:
+        if self.openssl is None:
+            raise PublicationError("GitHub OpenSSL path is required")
         now = int(time.time())
         header = _base64url(json.dumps({"alg": "RS256", "typ": "JWT"}, separators=(",", ":")).encode())
         claims = _base64url(
@@ -672,7 +703,7 @@ class GitHubAPI:
             check=False,
             timeout=10,
             env={
-                "PATH": os.environ.get("PATH", ""),
+                "PATH": str(pathlib.Path(self.openssl).parent),
                 "HOME": "/var/lib/gascity-publisher/home",
                 "LANG": "C",
                 "LC_ALL": "C",
@@ -1341,11 +1372,13 @@ class PublisherServer:
         branch_namespace: str,
         app_id: str,
         installation_id: str,
+        openssl: str,
         cancellation_root: str | os.PathLike[str] | None,
         allowed_uid: int = 45100,
         api_base: str = DEFAULT_API_BASE,
     ) -> None:
         _validate_private_key_path(credential_path)
+        openssl_path = _validate_openssl_path(openssl, require_immutable=True)
         self.socket_path = socket_path
         self.socket_group = socket_group
         self.allowed_uid = allowed_uid
@@ -1357,6 +1390,7 @@ class PublisherServer:
                 installation_id=installation_id,
                 private_key_path=credential_path,
                 api_base=api_base,
+                openssl=openssl_path,
             ),
             repository=repository,
             base_branch=base_branch,
@@ -1599,6 +1633,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     serve.add_argument("--socket", required=True)
     serve.add_argument("--socket-group", default="gascity-publisher-channel")
     serve.add_argument("--credential", required=True)
+    serve.add_argument("--openssl", required=True)
     serve.add_argument("--state-root", required=True)
     serve.add_argument("--repository", required=True)
     serve.add_argument("--base-branch", required=True)
@@ -1690,6 +1725,7 @@ def main(argv: list[str] | None = None) -> int:
             branch_namespace=args.branch_namespace,
             app_id=args.app_id,
             installation_id=args.installation_id,
+            openssl=args.openssl,
             cancellation_root=cancellation_root,
             allowed_uid=args.allowed_uid,
             api_base=args.api_base,

@@ -58,6 +58,13 @@ pkgs.runCommand "gas-city-package-smoke" {
     test -x "$toolPath"
     test "$(command -v "$tool")" = "$toolPath"
   done
+  test -L "${gasCityContributor}/bin/openssl"
+  opensslTarget="$(${pkgs.coreutils}/bin/readlink -f \
+    "${gasCityContributor}/bin/openssl")"
+  case "$opensslTarget" in
+    /nix/store/*) ;;
+    *) echo "OpenSSL is outside the immutable closure" >&2; exit 1 ;;
+  esac
   test -r "${gasCityContributor}/etc/ssl/certs/ca-bundle.crt"
 
   gc_version="$(${gasCityContributor}/bin/gc version --long)"
@@ -190,6 +197,14 @@ pkgs.runCommand "gas-city-package-smoke" {
     cd "$fixtureRepo"
     ${gasCityContributor}/bin/python3 \
       tests/fixtures/gas-city/github/test_publisher.py
+  )
+  (
+    cd "$fixtureRepo"
+    PATH=/definitely-not-a-command-path \
+      GC_TEST_OPENSSL="${gasCityContributor}/bin/openssl" \
+      ${gasCityContributor}/bin/python3 \
+      tests/fixtures/gas-city/github/test_publisher.py \
+      PublisherFixture.test_github_api_signs_jwt_with_packaged_openssl_under_restricted_path
   )
   (
     cd "$fixtureRepo"

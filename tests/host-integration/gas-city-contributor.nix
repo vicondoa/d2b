@@ -1437,7 +1437,8 @@ pkgs.testers.runNixOSTest {
         install -m 0644 /dev/null /etc/gascity-test/host-canary
         printf '%s\n' fixture-copilot-token > /etc/gascity-test/copilot-token
         printf '%s\n' fixture-discord-token > /etc/gascity-test/discord-token
-        printf '%s\n' fixture-github-private-key > /etc/gascity-test/github-key
+        cp /etc/gascity-fixtures/github/fixture-private-key.pem \
+          /etc/gascity-test/github-key
         printf '%s\n' fixture-buildbuddy-key > /etc/gascity-test/buildbuddy-key
         printf '%s\n' host-projection-canary > /etc/gascity-test/host-canary
         install -d -m 0750 -o gascity -g gascity-contributor \
@@ -2442,6 +2443,13 @@ pkgs.testers.runNixOSTest {
     )
     machine.succeed(
         f"{python} /tmp/gascity-fixtures/tests/fixtures/gas-city/github/test_publisher.py"
+    )
+    machine.succeed(
+        "cd /tmp/gascity-fixtures/tests/fixtures/gas-city && "
+        f"PATH=/definitely-not-a-command-path "
+        "GC_TEST_OPENSSL=${testPackage}/bin/openssl "
+        f"{python} github/test_publisher.py "
+        "PublisherFixture.test_github_api_signs_jwt_with_packaged_openssl_under_restricted_path"
     )
     machine.succeed(
         f"GAS_CITY_ENVOY={envoy} GAS_CITY_CA_BUNDLE={ca_bundle} "

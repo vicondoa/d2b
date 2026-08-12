@@ -72,6 +72,18 @@ let
   discordStartText = textValue discord.ExecStart;
   publisherStartText = textValue publisher.ExecStart;
   egressStartText = textValue egress.ExecStart;
+  publisherOpenSSL = "GC_PUBLISHER_OPENSSL=${testPackage}/bin/openssl";
+  publisherOpenSSLEnvironment = builtins.filter
+    (entry: lib.hasPrefix "GC_PUBLISHER_OPENSSL=" entry)
+    publisher.Environment;
+  publisherAmbientOpenSSL = builtins.filter
+    (entry: lib.hasPrefix "OPENSSL=" entry)
+    publisher.Environment;
+  publisherBareOpenSSL = builtins.filter
+    (entry:
+      lib.hasPrefix "GC_PUBLISHER_OPENSSL=" entry
+      && entry != publisherOpenSSL)
+    publisher.Environment;
 
   withoutBuildBuddy = (evalWith {
     services.gasCityContributor =
@@ -156,6 +168,19 @@ in
       holder = true;
       proxy = true;
       monitor = true;
+    };
+  };
+
+  "gas-city-contributor/publisher-openssl-wiring" = {
+    expr = {
+      environment = publisherOpenSSLEnvironment;
+      ambientFallback = publisherAmbientOpenSSL;
+      bareFallback = publisherBareOpenSSL;
+    };
+    expected = {
+      environment = [ publisherOpenSSL ];
+      ambientFallback = [ ];
+      bareFallback = [ ];
     };
   };
 
