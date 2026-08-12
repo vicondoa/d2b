@@ -1391,12 +1391,18 @@ def _run_direct_probe(
         except subprocess.TimeoutExpired:
             os.killpg(process.pid, signal.SIGKILL)
             process.wait()
-        text = f"{error}\n{bytes(stderr_buffer).decode('utf-8', errors='replace')}".strip()
-        error_code = (
-            _probe_error_code(error)
-            if isinstance(error, ACPMalformed)
-            else _probe_error_code(text)
-        )
+        stderr_thread.join()
+        stderr_text = bytes(stderr_buffer).decode("utf-8", errors="replace")
+        text = f"{error}\n{stderr_text}".strip()
+        if isinstance(error, ACPMalformed):
+            error_code = "malformed"
+        else:
+            stderr_code = _probe_error_code(stderr_text)
+            error_code = (
+                stderr_code
+                if stderr_code != "unknown"
+                else _probe_error_code(text)
+            )
         return {
             "ok": False,
             "profile": profile,

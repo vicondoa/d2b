@@ -3434,7 +3434,7 @@ class LauncherLifecycleTests(unittest.TestCase):
             (PROFILE.ProfileError("probe failed"), "unknown model", "unsupported"),
             (
                 PROFILE.ACPMalformed("typed ACP failure"),
-                "model unavailable",
+                "unsupported",
                 "malformed",
             ),
         )
@@ -3489,6 +3489,53 @@ class LauncherLifecycleTests(unittest.TestCase):
                             tool_policy="coding",
                             args=args,
                             timeout=1,
+                        )
+
+                self.assertFalse(result["ok"])
+                self.assertEqual(result["error_code"], expected_code)
+                self.assertIn(stderr, result["error"])
+
+    def test_direct_probe_classifies_real_child_provider_stderr_after_stdout_close(
+        self,
+    ) -> None:
+        cases = (
+            ("unknown model", "unsupported"),
+            ("model unavailable", "unavailable"),
+        )
+        for stderr, expected_code in cases:
+            with self.subTest(stderr=stderr):
+                with tempfile.TemporaryDirectory(
+                    prefix="gascity-direct-probe-child-"
+                ) as raw:
+                    root = pathlib.Path(raw)
+                    worktree = root / "worktree"
+                    worktree.mkdir()
+                    stderr_line = stderr + "\n"
+                    child = (
+                        "import sys\n"
+                        f"sys.stderr.write({stderr_line!r})\n"
+                        "sys.stderr.flush()\n"
+                        "sys.stdout.close()\n"
+                        "sys.stdin.buffer.read()\n"
+                    )
+                    args = PROFILE._default_namespace("code-luna", "coding")
+                    args.fixture_direct = True
+                    args.launcher = None
+                    args.copilot = None
+                    args.worktree = str(worktree)
+                    with (
+                        mock.patch.dict(os.environ, {"GC_TEST_MODE": "1"}),
+                        mock.patch.object(
+                            PROFILE,
+                            "build_launch_argv",
+                            return_value=[sys.executable, "-c", child],
+                        ),
+                    ):
+                        result = PROFILE.run_probe(
+                            "code-luna",
+                            tool_policy="coding",
+                            args=args,
+                            timeout=2,
                         )
 
                 self.assertFalse(result["ok"])
