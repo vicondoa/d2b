@@ -402,6 +402,9 @@ fn gas_city_uses_four_immutable_sibling_imports() {
         "'dir = \"${cfg.repository.rigName}\"'",
         "rootPaths = [ package configuredAssetRoot ];",
         "GC_CONTRIBUTOR_ROOT=${configuredAssetRoot}",
+        "DOLT_ROOT_PATH=${homeRoot}",
+        "GIT_CONFIG_GLOBAL=${homeRoot}/.gitconfig",
+        "PATH=${package}/bin:/run/current-system/sw/bin",
     ] {
         assert!(
             service.contains(required),
