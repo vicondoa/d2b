@@ -4,4 +4,6 @@
   upstream role pack at rig scope so configured agent patches resolve and
   submitted work can start, while safely materializing writable configured
   assets from the package's immutable symlink tree and exposing the managed
-  Dolt identity and packaged lifecycle tools to the supervisor.
+  Dolt identity and packaged lifecycle tools to the supervisor. The optional
+  bd maintenance dog remains suspended because it has no workflow identity for
+  the authenticated ACP launcher.

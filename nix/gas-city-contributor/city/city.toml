@@ -92,6 +92,14 @@ acp_args = [
 ]
 env = { COPILOT_CUSTOM_INSTRUCTIONS_DIRS = "" }
 
+# The implicit bd maintenance dog has no workflow run/bead identity and cannot
+# cross the authenticated ACP launcher boundary. Managed Dolt remains owned by
+# the controller; explicit maintenance can use the operator surface.
+[[patches.agent]]
+dir = ""
+name = "bd.dog"
+suspended = true
+
 # The following assignments are generated from city/agent-role-matrix.toml.
 # Keep this block mechanically boring: one imported agent, one provider, and
 # one ACP transport per model-backed role.  In particular, do not replace a

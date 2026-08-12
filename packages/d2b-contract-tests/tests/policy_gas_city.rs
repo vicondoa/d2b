@@ -309,12 +309,23 @@ fn validate_role_routes(matrix: &str, city: &str, launcher: &str) -> Result<(), 
         ("coding", "copilot-code-luna"),
     ]);
     let blocks = patch_blocks(city);
-    if blocks.len() != roles.len() {
+    if blocks.len() != roles.len() + 1 {
         return Err(format!(
-            "expected one executable patch for each model-backed role: {} roles, {} patches",
+            "expected one maintenance patch plus one executable patch for each model-backed role: {} roles, {} patches",
             roles.len(),
             blocks.len()
         ));
+    }
+    let maintenance: Vec<&str> = blocks
+        .iter()
+        .copied()
+        .filter(|block| assignment_value(block, "name").as_deref() == Some("bd.dog"))
+        .collect();
+    if maintenance.len() != 1
+        || assignment_value(maintenance[0], "dir").as_deref() != Some("")
+        || assignment_value(maintenance[0], "suspended").as_deref() != Some("true")
+    {
+        return Err("bd.dog must have exactly one suspended city patch".to_owned());
     }
     for (name, class, _) in roles {
         let matches: Vec<&str> = blocks
