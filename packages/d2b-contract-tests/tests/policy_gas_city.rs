@@ -162,10 +162,8 @@ fn validate_sibling_imports(city: &str, local_pack: &str) -> Result<(), String> 
 }
 
 fn profile_tool_policies(matrix: &str) -> Result<BTreeMap<String, String>, String> {
-    let profile = Regex::new(
-        r#"(?ms)^\[profiles\.([^\]]+)\]\s.*?^tool_policy = "([^"]+)""#,
-    )
-    .expect("valid profile tool-policy regex");
+    let profile = Regex::new(r#"(?ms)^\[profiles\.([^\]]+)\]\s.*?^tool_policy = "([^"]+)""#)
+        .expect("valid profile tool-policy regex");
     let mut policies = BTreeMap::new();
     for capture in profile.captures_iter(matrix) {
         if policies
@@ -338,12 +336,7 @@ fn validate_role_routes(matrix: &str, city: &str, launcher: &str) -> Result<(), 
     if !city.contains("[session]\n# Control-plane") || !city.contains("provider = \"subprocess\"") {
         return Err("city default session runtime must be subprocess".to_owned());
     }
-    validate_tool_policies(
-        matrix,
-        city,
-        launcher,
-        &owned_asset(COPILOT_PROFILE),
-    )?;
+    validate_tool_policies(matrix, city, launcher, &owned_asset(COPILOT_PROFILE))?;
     Ok(())
 }
 
@@ -581,12 +574,7 @@ profile = "coding"
 fallback = "auto"
 "#;
     assert!(
-        validate_role_routes(
-            planted,
-            &owned_asset(CITY),
-            &owned_asset(AGENT_LAUNCHER),
-        )
-        .is_err(),
+        validate_role_routes(planted, &owned_asset(CITY), &owned_asset(AGENT_LAUNCHER),).is_err(),
         "a planted auto fallback must fail the role policy"
     );
 }
@@ -598,12 +586,7 @@ fn planted_tool_policy_drift_fails_closed() {
         "tool_policy = \"read-only-review\"",
     );
     assert!(
-        validate_role_routes(
-            &matrix,
-            &owned_asset(CITY),
-            &owned_asset(AGENT_LAUNCHER),
-        )
-        .is_err(),
+        validate_role_routes(&matrix, &owned_asset(CITY), &owned_asset(AGENT_LAUNCHER),).is_err(),
         "a planning/review tool-policy reversal must fail the role policy"
     );
 }
