@@ -38,6 +38,8 @@ pub enum ZoneContractError {
     UidMismatch,
     /// A condition or handler projection exceeded its bound.
     BoundExceeded,
+    /// The mandatory system-core Host/User handler pair was not exact.
+    SystemCoreHandlerSetInvalid,
 }
 
 impl core::fmt::Display for ZoneContractError {
@@ -50,6 +52,7 @@ impl core::fmt::Display for ZoneContractError {
             Self::CardinalityExceeded => "zone-cardinality-exceeded",
             Self::UidMismatch => "zone-uid-mismatch",
             Self::BoundExceeded => "zone-bound-exceeded",
+            Self::SystemCoreHandlerSetInvalid => "zone-system-core-handler-set-invalid",
         })
     }
 }
@@ -115,6 +118,10 @@ pub enum ZoneHandlerName {
     ApiCatalog,
     /// Provider lifecycle.
     ProviderLifecycle,
+    /// The fixed system-core Host handler.
+    SystemCoreHost,
+    /// The fixed system-core User handler.
+    SystemCoreUser,
     /// ZoneLink maintenance.
     ZoneLink,
     /// Backup cleanup.
@@ -222,6 +229,19 @@ impl ZoneStatusResource {
         {
             return Err(ZoneContractError::BoundExceeded);
         }
+        for required in [
+            ZoneHandlerName::SystemCoreHost,
+            ZoneHandlerName::SystemCoreUser,
+        ] {
+            if handlers
+                .iter()
+                .filter(|handler| handler.name() == required)
+                .count()
+                != 1
+            {
+                return Err(ZoneContractError::SystemCoreHandlerSetInvalid);
+            }
+        }
         Ok(Self {
             api_catalog_revision,
             policy_revision,
@@ -260,6 +280,20 @@ impl ZoneStatusResource {
     /// Borrow bounded handler observations.
     pub fn handlers(&self) -> &[ZoneHandlerStatus] {
         &self.handlers
+    }
+
+    /// Whether both mandatory system-core handlers are ready with the
+    /// aggregate Zone phase.
+    pub fn mandatory_handlers_ready(&self) -> bool {
+        self.core_controller_phase == ResourcePhase::Ready
+            && self.handlers.iter().any(|handler| {
+                handler.name() == ZoneHandlerName::SystemCoreHost
+                    && handler.phase() == ZoneHandlerPhase::Ready
+            })
+            && self.handlers.iter().any(|handler| {
+                handler.name() == ZoneHandlerName::SystemCoreUser
+                    && handler.phase() == ZoneHandlerPhase::Ready
+            })
     }
 
     /// Return the number of installed Providers.
@@ -441,6 +475,16 @@ mod tests {
                     ZoneHandlerPhase::Ready,
                     None,
                 ),
+                ZoneHandlerStatus::new(
+                    ZoneHandlerName::SystemCoreHost,
+                    ZoneHandlerPhase::Ready,
+                    None,
+                ),
+                ZoneHandlerStatus::new(
+                    ZoneHandlerName::SystemCoreUser,
+                    ZoneHandlerPhase::Ready,
+                    None,
+                ),
             ],
             2,
             1,
@@ -451,5 +495,120 @@ mod tests {
         )
         .unwrap();
         assert_eq!(status.handlers()[0].name(), ZoneHandlerName::Authorization);
+        assert!(status.mandatory_handlers_ready());
+        let pending = ZoneStatusResource::new(
+            1,
+            1,
+            1,
+            ResourcePhase::Pending,
+            vec![
+                ZoneHandlerStatus::new(
+                    ZoneHandlerName::SystemCoreHost,
+                    ZoneHandlerPhase::Pending,
+                    None,
+                ),
+                ZoneHandlerStatus::new(
+                    ZoneHandlerName::SystemCoreUser,
+                    ZoneHandlerPhase::Ready,
+                    None,
+                ),
+            ],
+            0,
+            0,
+            0,
+            1,
+            false,
+            0,
+        )
+        .unwrap();
+        assert!(!pending.mandatory_handlers_ready());
+    }
+
+    #[test]
+    fn system_core_handler_names_use_exact_hyphenated_wire_values() {
+        assert_eq!(
+            serde_json::to_string(&ZoneHandlerName::SystemCoreHost).unwrap(),
+            r#""system-core-host""#
+        );
+        assert_eq!(
+            serde_json::to_string(&ZoneHandlerName::SystemCoreUser).unwrap(),
+            r#""system-core-user""#
+        );
+        assert!(serde_json::from_str::<ZoneHandlerName>(r#""system_core_host""#).is_err());
+        assert!(serde_json::from_str::<ZoneHandlerName>(r#""system_core_user""#).is_err());
+    }
+
+    #[test]
+    fn system_core_handler_pair_is_mandatory_and_unique() {
+        let base = vec![
+            ZoneHandlerStatus::new(
+                ZoneHandlerName::SystemCoreHost,
+                ZoneHandlerPhase::Ready,
+                None,
+            ),
+            ZoneHandlerStatus::new(
+                ZoneHandlerName::SystemCoreUser,
+                ZoneHandlerPhase::Ready,
+                None,
+            ),
+        ];
+        assert!(
+            ZoneStatusResource::new(
+                1,
+                1,
+                1,
+                ResourcePhase::Ready,
+                base.clone(),
+                0,
+                0,
+                0,
+                1,
+                false,
+                0,
+            )
+            .is_ok()
+        );
+        assert_eq!(
+            ZoneStatusResource::new(
+                1,
+                1,
+                1,
+                ResourcePhase::Ready,
+                vec![base[0].clone()],
+                0,
+                0,
+                0,
+                1,
+                false,
+                0,
+            )
+            .unwrap_err(),
+            ZoneContractError::SystemCoreHandlerSetInvalid
+        );
+        assert_eq!(
+            ZoneStatusResource::new(
+                1,
+                1,
+                1,
+                ResourcePhase::Ready,
+                vec![
+                    base[0].clone(),
+                    base[1].clone(),
+                    ZoneHandlerStatus::new(
+                        ZoneHandlerName::SystemCoreHost,
+                        ZoneHandlerPhase::Ready,
+                        None,
+                    ),
+                ],
+                0,
+                0,
+                0,
+                1,
+                false,
+                0,
+            )
+            .unwrap_err(),
+            ZoneContractError::BoundExceeded
+        );
     }
 }

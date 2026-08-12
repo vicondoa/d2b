@@ -35,6 +35,7 @@
 
 mod bootstrap;
 mod error;
+pub mod handler_status;
 mod host;
 mod host_process_audit;
 mod host_reconciler;
@@ -47,6 +48,10 @@ pub mod testing;
 
 pub use bootstrap::{BootstrapCapability, BootstrapError, BootstrapSequence, BootstrapStage};
 pub use error::SystemCoreError;
+pub use handler_status::{
+    HandlerReadinessError, SYSTEM_CORE_HOST_HANDLER, SYSTEM_CORE_USER_HANDLER, emit_handler_status,
+    require_ready_handlers,
+};
 pub use host::{
     BudgetReservation, HostCapabilityClass, HostObservationReport, HostProbeEffectPort,
     HostProbeMetadata, HostProbeSnapshot, HostReconciler, HostStatusReport,
