@@ -548,6 +548,348 @@ class PublisherFixture(unittest.TestCase):
         self.assertTrue(pathlib.Path(validated).is_file())
         self.assertTrue(os.access(validated, os.X_OK))
 
+    def test_github_installation_identity_uses_app_jwt_without_installation_token(self) -> None:
+        requests: list[MODULE.urllib.request.Request] = []
+
+        def opener(request: MODULE.urllib.request.Request, timeout: float) -> FakeHTTPResponse:
+            self.assertEqual(timeout, 20)
+            requests.append(request)
+            return FakeHTTPResponse(200, {"id": 42})
+
+        api = MODULE.GitHubAPI(
+            app_id="7",
+            installation_id="42",
+            private_key_path="/dev/null",
+            opener=opener,
+        )
+        with patch.object(api, "_jwt", return_value="app-jwt") as jwt, patch.object(
+            api,
+            "installation_token",
+            side_effect=AssertionError("installation authentication is not allowed"),
+        ) as installation_token:
+            result = api.installation_identity(REPOSITORY)
+
+        self.assertEqual(result, {"id": 42})
+        self.assertEqual(
+            requests[0].full_url,
+            "https://api.github.com/repos/acme/project/installation",
+        )
+        self.assertEqual(requests[0].headers["Authorization"], "Bearer app-jwt")
+        jwt.assert_called_once_with()
+        installation_token.assert_not_called()
+
+    def test_github_installation_identity_retries_rate_limited_403_and_succeeds(self) -> None:
+        requests: list[MODULE.urllib.request.Request] = []
+        outcomes: list[object] = [
+            urllib.error.HTTPError(
+                "https://api.github.com/repos/acme/project/installation",
+                403,
+                "rate limited",
+                {"Retry-After": "1.5"},
+                None,
+            ),
+            FakeHTTPResponse(200, {"id": 42}),
+        ]
+        sleeps: list[float] = []
+
+        def opener(
+            request: MODULE.urllib.request.Request,
+            timeout: float,
+        ) -> FakeHTTPResponse:
+            self.assertEqual(timeout, 20)
+            requests.append(request)
+            outcome = outcomes.pop(0)
+            if isinstance(outcome, BaseException):
+                raise outcome
+            self.assertIsInstance(outcome, FakeHTTPResponse)
+            return outcome
+
+        api = MODULE.GitHubAPI(
+            app_id="7",
+            installation_id="42",
+            private_key_path="/dev/null",
+            opener=opener,
+            sleep=sleeps.append,
+        )
+        with patch.object(api, "_jwt", return_value="app-jwt") as jwt, patch.object(
+            api,
+            "installation_token",
+            side_effect=AssertionError("installation authentication is not allowed"),
+        ) as installation_token:
+            self.assertEqual(api.installation_identity(REPOSITORY), {"id": 42})
+
+        self.assertEqual(len(requests), 2)
+        self.assertEqual(sleeps, [1.5])
+        self.assertTrue(
+            all(
+                request.headers["Authorization"].startswith("Bearer ")
+                for request in requests
+            )
+        )
+        self.assertEqual(jwt.call_count, 2)
+        installation_token.assert_not_called()
+
+    def test_github_installation_identity_rate_limited_403_retry_ceiling_is_bounded(self) -> None:
+        outcomes: list[object] = [
+            urllib.error.HTTPError(
+                "https://api.github.com/repos/acme/project/installation",
+                403,
+                "rate limited",
+                {"Retry-After": "1"},
+                None,
+            ),
+            urllib.error.HTTPError(
+                "https://api.github.com/repos/acme/project/installation",
+                403,
+                "rate limited",
+                {"Retry-After": "2"},
+                None,
+            ),
+            urllib.error.HTTPError(
+                "https://api.github.com/repos/acme/project/installation",
+                403,
+                "rate limited",
+                {"Retry-After": "3"},
+                None,
+            ),
+        ]
+        requests: list[MODULE.urllib.request.Request] = []
+        sleeps: list[float] = []
+
+        def opener(request: MODULE.urllib.request.Request, timeout: float) -> object:
+            self.assertEqual(timeout, 20)
+            requests.append(request)
+            outcome = outcomes.pop(0)
+            if isinstance(outcome, BaseException):
+                raise outcome
+            return outcome
+
+        api = MODULE.GitHubAPI(
+            app_id="7",
+            installation_id="42",
+            private_key_path="/dev/null",
+            opener=opener,
+            sleep=sleeps.append,
+        )
+        with patch.object(api, "_jwt", return_value="app-jwt") as jwt, patch.object(
+            api,
+            "installation_token",
+            side_effect=AssertionError("installation authentication is not allowed"),
+        ) as installation_token:
+            with self.assertRaisesRegex(
+                MODULE.PublicationError,
+                r"\AGitHub retry ceiling reached\Z",
+            ):
+                api.installation_identity(REPOSITORY)
+
+        self.assertEqual(len(requests), MODULE.MAX_ATTEMPTS)
+        self.assertEqual(sleeps, [1.0, 2.0])
+        self.assertEqual(jwt.call_count, MODULE.MAX_ATTEMPTS)
+        self.assertTrue(
+            all(
+                request.headers["Authorization"].startswith("Bearer ")
+                for request in requests
+            )
+        )
+        installation_token.assert_not_called()
+
+    def test_github_installation_identity_401_does_not_refresh_installation_token(self) -> None:
+        requests: list[MODULE.urllib.request.Request] = []
+
+        def opener(request: MODULE.urllib.request.Request, timeout: float) -> FakeHTTPResponse:
+            self.assertEqual(timeout, 20)
+            requests.append(request)
+            return FakeHTTPResponse(401, {"message": "Bad credentials"})
+
+        api = MODULE.GitHubAPI(
+            app_id="7",
+            installation_id="42",
+            private_key_path="/dev/null",
+            opener=opener,
+            sleep=self.sleeps.append,
+        )
+        with patch.object(api, "_jwt", return_value="app-jwt"), patch.object(
+            api,
+            "installation_token",
+            side_effect=AssertionError("installation authentication is not allowed"),
+        ) as installation_token:
+            with self.assertRaisesRegex(
+                MODULE.PublicationError,
+                r"\AGitHub authentication failed\Z",
+            ):
+                api.installation_identity(REPOSITORY)
+
+        self.assertEqual(len(requests), 1)
+        self.assertEqual(requests[0].headers["Authorization"], "Bearer app-jwt")
+        self.assertEqual(self.sleeps, [])
+        installation_token.assert_not_called()
+
+    def test_github_installation_identity_retries_transient_read_failures(self) -> None:
+        transient_errors: tuple[BaseException, ...] = (
+            urllib.error.HTTPError(
+                "https://api.github.com/repos/acme/project/installation",
+                429,
+                "rate limited",
+                {"Retry-After": "1.5"},
+                None,
+            ),
+            urllib.error.HTTPError(
+                "https://api.github.com/repos/acme/project/installation",
+                503,
+                "upstream",
+                {"Retry-After": "2.5"},
+                None,
+            ),
+            urllib.error.URLError("connection reset"),
+        )
+
+        for transient_error in transient_errors:
+            with self.subTest(error=type(transient_error).__name__):
+                requests: list[MODULE.urllib.request.Request] = []
+                outcomes: list[object] = [
+                    transient_error,
+                    FakeHTTPResponse(200, {"id": 42}),
+                ]
+                sleeps: list[float] = []
+
+                def opener(
+                    request: MODULE.urllib.request.Request,
+                    timeout: float,
+                ) -> FakeHTTPResponse:
+                    self.assertEqual(timeout, 20)
+                    requests.append(request)
+                    outcome = outcomes.pop(0)
+                    if isinstance(outcome, BaseException):
+                        raise outcome
+                    self.assertIsInstance(outcome, FakeHTTPResponse)
+                    return outcome
+
+                api = MODULE.GitHubAPI(
+                    app_id="7",
+                    installation_id="42",
+                    private_key_path="/dev/null",
+                    opener=opener,
+                    sleep=sleeps.append,
+                )
+                with patch.object(api, "_jwt", return_value="app-jwt"), patch.object(
+                    api,
+                    "installation_token",
+                    side_effect=AssertionError(
+                        "installation authentication is not allowed"
+                    ),
+                ) as installation_token:
+                    self.assertEqual(
+                        api.installation_identity(REPOSITORY),
+                        {"id": 42},
+                    )
+
+                self.assertEqual(len(requests), 2)
+                self.assertEqual(len(sleeps), 1)
+                self.assertTrue(
+                    all(
+                        request.headers["Authorization"] == "Bearer app-jwt"
+                        for request in requests
+                    )
+                )
+                installation_token.assert_not_called()
+
+    def test_github_installation_identity_retry_ceiling_is_bounded(self) -> None:
+        outcomes: list[object] = [
+            urllib.error.HTTPError(
+                "https://api.github.com/repos/acme/project/installation",
+                429,
+                "rate limited",
+                {"Retry-After": "1"},
+                None,
+            ),
+            urllib.error.HTTPError(
+                "https://api.github.com/repos/acme/project/installation",
+                503,
+                "upstream",
+                {"Retry-After": "2"},
+                None,
+            ),
+            urllib.error.URLError("connection reset"),
+        ]
+        requests: list[MODULE.urllib.request.Request] = []
+
+        def opener(request: MODULE.urllib.request.Request, timeout: float) -> object:
+            self.assertEqual(timeout, 20)
+            requests.append(request)
+            outcome = outcomes.pop(0)
+            if isinstance(outcome, BaseException):
+                raise outcome
+            return outcome
+
+        api = MODULE.GitHubAPI(
+            app_id="7",
+            installation_id="42",
+            private_key_path="/dev/null",
+            opener=opener,
+            sleep=self.sleeps.append,
+        )
+        with patch.object(api, "_jwt", return_value="app-jwt"), patch.object(
+            api,
+            "installation_token",
+            side_effect=AssertionError("installation authentication is not allowed"),
+        ) as installation_token:
+            with self.assertRaisesRegex(
+                MODULE.PublicationError,
+                r"\AGitHub read retry ceiling reached\Z",
+            ):
+                api.installation_identity(REPOSITORY)
+
+        self.assertEqual(len(requests), MODULE.MAX_ATTEMPTS)
+        self.assertEqual(self.sleeps, [1.0, 2.0])
+        self.assertTrue(
+            all(
+                request.headers["Authorization"] == "Bearer app-jwt"
+                for request in requests
+            )
+        )
+        installation_token.assert_not_called()
+
+    def test_repository_and_pull_reads_keep_installation_token_authentication(self) -> None:
+        requests: list[MODULE.urllib.request.Request] = []
+
+        def opener(request: MODULE.urllib.request.Request, timeout: float) -> FakeHTTPResponse:
+            self.assertEqual(timeout, 20)
+            requests.append(request)
+            if request.full_url.endswith("/repos/acme/project"):
+                return FakeHTTPResponse(200, {"full_name": REPOSITORY})
+            self.assertIn("/repos/acme/project/pulls?", request.full_url)
+            return FakeHTTPResponse(200, [pull_request()])
+
+        api = MODULE.GitHubAPI(
+            app_id="7",
+            installation_id="42",
+            private_key_path="/dev/null",
+            opener=opener,
+        )
+        with patch.object(
+            api,
+            "_jwt",
+            side_effect=AssertionError("repository reads must not use App JWT"),
+        ), patch.object(
+            api,
+            "installation_token",
+            return_value="installation-token",
+        ) as installation_token:
+            self.assertEqual(
+                api.repository_identity(REPOSITORY),
+                {"full_name": REPOSITORY},
+            )
+            self.assertEqual(
+                api.find_pull_requests(REPOSITORY, head=HEAD, base=BASE),
+                [pull_request()],
+            )
+
+        self.assertEqual(installation_token.call_count, 2)
+        self.assertEqual(
+            [request.headers["Authorization"] for request in requests],
+            ["token installation-token", "token installation-token"],
+        )
+
     def test_github_rate_limit_permanent_and_ambiguous_responses_are_bounded(self) -> None:
         def opener(_request: object, timeout: float) -> object:
             raise urllib.error.HTTPError(
@@ -569,7 +911,11 @@ class PublisherFixture(unittest.TestCase):
             api._request_once("GET", "/repos/acme/project")
         self.assertEqual(rate_error.exception.retry_after, 1.75)
 
+        permanent_requests: list[MODULE.urllib.request.Request] = []
+        permanent_sleeps: list[float] = []
+
         def permanent(_request: object, timeout: float) -> object:
+            permanent_requests.append(_request)
             raise urllib.error.HTTPError(
                 "https://api.github.com/repos/acme/project",
                 403,
@@ -579,8 +925,34 @@ class PublisherFixture(unittest.TestCase):
             )
 
         api.opener = permanent
-        with self.assertRaises(MODULE.PublicationError):
-            api._request_once("GET", "/repos/acme/project")
+        api.sleep = permanent_sleeps.append
+        with patch.object(api, "_jwt", return_value="app-jwt"):
+            with self.assertRaisesRegex(
+                MODULE.PublicationError,
+                r"\AGitHub returned permanent HTTP 403\Z",
+            ):
+                api._request_with_app_jwt("GET", "/repos/acme/project")
+        self.assertEqual(len(permanent_requests), 1)
+        self.assertEqual(permanent_sleeps, [])
+
+        def rate_limited_mutation(_request: object, timeout: float) -> object:
+            raise urllib.error.HTTPError(
+                "https://api.github.com/repos/acme/project/pulls",
+                403,
+                "rate limited",
+                {"Retry-After": "2"},
+                None,
+            )
+
+        api.opener = rate_limited_mutation
+        with self.assertRaises(MODULE.RetryableGitHubError) as mutation_rate_error:
+            api._request_once(
+                "POST",
+                "/repos/acme/project/pulls",
+                payload={"head": HEAD, "base": BASE},
+                mutating=True,
+            )
+        self.assertEqual(mutation_rate_error.exception.retry_after, 2.0)
 
         def ambiguous(_request: object, timeout: float) -> object:
             raise urllib.error.HTTPError(
@@ -600,6 +972,30 @@ class PublisherFixture(unittest.TestCase):
                 mutating=True,
             )
         self.assertEqual(ambiguous_error.exception.retry_after, 4.0)
+
+    def test_github_rate_limited_403_uses_bounded_reset_hint(self) -> None:
+        def opener(_request: object, timeout: float) -> object:
+            raise urllib.error.HTTPError(
+                "https://api.github.com/repos/acme/project",
+                403,
+                "rate limited",
+                {
+                    "X-RateLimit-Remaining": "0",
+                    "X-RateLimit-Reset": "450",
+                },
+                None,
+            )
+
+        api = MODULE.GitHubAPI(
+            app_id="7",
+            installation_id="42",
+            private_key_path="/dev/null",
+            opener=opener,
+        )
+        with patch.object(MODULE.time, "time", return_value=100.0):
+            with self.assertRaises(MODULE.RetryableGitHubError) as rate_error:
+                api._request_once("GET", "/repos/acme/project")
+        self.assertEqual(rate_error.exception.retry_after, MODULE.MAX_RETRY_AFTER_SECONDS)
 
     def test_github_installation_token_refreshes_before_expiration(self) -> None:
         requests: list[MODULE.urllib.request.Request] = []

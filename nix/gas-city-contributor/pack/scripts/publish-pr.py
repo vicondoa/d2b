@@ -23,6 +23,7 @@ import datetime
 import fcntl
 import hashlib
 import json
+import math
 import os
 import pathlib
 import re
@@ -245,18 +246,56 @@ def _retry_after(headers: Mapping[str, str] | None) -> float:
     if headers is None:
         return 0.0
     value = headers.get("Retry-After") or headers.get("retry-after")
-    if value:
+    if value is not None:
         try:
-            return max(0.0, min(MAX_RETRY_AFTER_SECONDS, float(value)))
-        except (TypeError, ValueError):
+            delay = float(value)
+        except (TypeError, ValueError, OverflowError):
             pass
+        else:
+            if math.isfinite(delay):
+                return max(0.0, min(MAX_RETRY_AFTER_SECONDS, delay))
     reset = headers.get("X-RateLimit-Reset") or headers.get("x-ratelimit-reset")
-    if reset:
+    if reset is not None:
         try:
-            return max(0.0, min(MAX_RETRY_AFTER_SECONDS, float(reset) - time.time()))
-        except (TypeError, ValueError):
+            reset_at = float(reset)
+        except (TypeError, ValueError, OverflowError):
             pass
+        else:
+            if math.isfinite(reset_at):
+                delay = reset_at - time.time()
+                if math.isfinite(delay):
+                    return max(0.0, min(MAX_RETRY_AFTER_SECONDS, delay))
     return 0.0
+
+
+def _rate_limited_403_retry_after(headers: Mapping[str, str] | None) -> float | None:
+    """Return a bounded delay only when 403 headers prove rate limiting."""
+
+    if headers is None:
+        return None
+    retry_after = headers.get("Retry-After") or headers.get("retry-after")
+    if retry_after is not None:
+        try:
+            delay = float(retry_after)
+        except (TypeError, ValueError, OverflowError):
+            delay = None
+        if delay is not None and math.isfinite(delay):
+            return max(0.0, min(MAX_RETRY_AFTER_SECONDS, delay))
+
+    remaining = headers.get("X-RateLimit-Remaining") or headers.get("x-ratelimit-remaining")
+    reset = headers.get("X-RateLimit-Reset") or headers.get("x-ratelimit-reset")
+    if remaining is None or remaining.strip() != "0" or reset is None:
+        return None
+    try:
+        reset_at = float(reset)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not math.isfinite(reset_at):
+        return None
+    delay = reset_at - time.time()
+    if not math.isfinite(delay):
+        return None
+    return max(0.0, min(MAX_RETRY_AFTER_SECONDS, delay))
 
 
 def _github_timestamp(value: object, label: str) -> float:
@@ -751,6 +790,15 @@ class GitHubAPI:
                         "GitHub authentication failed",
                         refreshable=not bearer and bool(token),
                     )
+                if status == 403:
+                    retry_after = _rate_limited_403_retry_after(
+                        getattr(response, "headers", None)
+                    )
+                    if retry_after is not None:
+                        raise RetryableGitHubError(
+                            "GitHub returned rate-limited HTTP 403",
+                            retry_after=retry_after,
+                        )
                 raw = response.read(MAX_FRAME_BYTES + 1)
                 if len(raw) > MAX_FRAME_BYTES:
                     raise PublicationError("GitHub response exceeds the size limit")
@@ -766,6 +814,13 @@ class GitHubAPI:
                     "GitHub authentication failed",
                     refreshable=not bearer and bool(token),
                 ) from error
+            if error.code == 403:
+                retry_after = _rate_limited_403_retry_after(error.headers)
+                if retry_after is not None:
+                    raise RetryableGitHubError(
+                        "GitHub returned rate-limited HTTP 403",
+                        retry_after=retry_after,
+                    ) from error
             if error.code == 429 or error.code >= 500:
                 if mutating and error.code >= 500:
                     raise AmbiguousMutation(
@@ -856,6 +911,37 @@ class GitHubAPI:
                 self.sleep(error.retry_after)
         raise AssertionError("GitHub request loop exhausted")
 
+    def _request_with_app_jwt(
+        self,
+        method: str,
+        path: str,
+        *,
+        payload: Mapping[str, object] | None = None,
+    ) -> dict[str, object] | list[object]:
+        for attempt in range(1, MAX_ATTEMPTS + 1):
+            try:
+                status, response = self._request_once(
+                    method,
+                    path,
+                    payload=payload,
+                    token=self._jwt(),
+                    bearer=True,
+                )
+                if status < 200 or status >= 300:
+                    raise PublicationError(f"GitHub returned unexpected HTTP {status}")
+                return response
+            except GitHubAuthenticationError as error:
+                raise PublicationError("GitHub authentication failed") from error
+            except RetryableGitHubError as error:
+                if attempt == MAX_ATTEMPTS:
+                    raise PublicationError("GitHub retry ceiling reached") from error
+                self.sleep(error.retry_after)
+            except AmbiguousMutation as error:
+                if attempt == MAX_ATTEMPTS:
+                    raise PublicationError("GitHub read retry ceiling reached") from error
+                self.sleep(error.retry_after)
+        raise AssertionError("GitHub App request loop exhausted")
+
     def repository_identity(self, repository: str) -> dict[str, object]:
         value = self.request("GET", f"/repos/{urllib.parse.quote(repository, safe='/')}")
         if not isinstance(value, dict):
@@ -865,7 +951,7 @@ class GitHubAPI:
         return value
 
     def installation_identity(self, repository: str) -> dict[str, object]:
-        value = self.request(
+        value = self._request_with_app_jwt(
             "GET",
             f"/repos/{urllib.parse.quote(repository, safe='/')}/installation",
         )
