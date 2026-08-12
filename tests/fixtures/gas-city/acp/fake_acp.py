@@ -36,8 +36,8 @@ def _write(value: dict[str, object]) -> None:
     sys.stdout.flush()
 
 
-def _models(current_model: str) -> dict[str, object]:
-    return {
+def _models(current_model: str, *, include_current: bool = True) -> dict[str, object]:
+    models: dict[str, object] = {
         "currentModelId": current_model,
         "availableModels": [
             {"modelId": "gpt-5.6-sol", "name": "GPT-5.6 Sol"},
@@ -45,6 +45,9 @@ def _models(current_model: str) -> dict[str, object]:
             {"modelId": "gpt-4.1", "name": "GPT-4.1"},
         ],
     }
+    if not include_current:
+        models.pop("currentModelId")
+    return models
 
 
 def _error(request: dict[str, object], message: str) -> None:
@@ -63,6 +66,7 @@ def main() -> int:
     parser.add_argument("--effort", required=True)
     parser.add_argument("--model", required=True)
     parser.add_argument("--context", required=True)
+    parser.add_argument("--silent-metadata", action="store_true")
     parser.add_argument("--fixture-direct-cwd")
     parser.add_argument("--ignore-eof", action="store_true")
     parser.add_argument("--close-after-initialize", action="store_true")
@@ -79,7 +83,10 @@ def main() -> int:
         raise RuntimeError("ACP context does not match the immutable profile")
     session_id = "fake-session"
     expected_cwd = args.fixture_direct_cwd or SANDBOX_WORKSPACE
-    models = _models(settings["model"])
+    models = _models(
+        settings["model"],
+        include_current=not args.silent_metadata,
+    )
     for raw_line in sys.stdin:
         if not raw_line.strip():
             _error({}, "empty NDJSON line")

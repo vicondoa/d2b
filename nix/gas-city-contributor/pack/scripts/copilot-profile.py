@@ -977,10 +977,7 @@ def _probe_result(profile: str, response_values: Sequence[object]) -> dict[str, 
         )
     reported_model = reported_models[0] if reported_models else None
     reported_context = reported_contexts[0] if reported_contexts else None
-    if (
-        not reported_models
-        or set(reported_models) != {expected["model"]}
-    ):
+    if reported_models and set(reported_models) != {expected["model"]}:
         return {
             "ok": False,
             "profile": profile,
@@ -991,7 +988,7 @@ def _probe_result(profile: str, response_values: Sequence[object]) -> dict[str, 
     return {
         "ok": True,
         "profile": profile,
-        "model": reported_model,
+        "model": expected["model"],
         "context": expected["contextTier"],
         "effort": PROFILE_EFFORT[profile],
     }

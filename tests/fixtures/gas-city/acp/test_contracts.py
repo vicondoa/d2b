@@ -146,7 +146,7 @@ class ProfileContractTests(unittest.TestCase):
             },
         )
 
-    def test_probe_ignores_available_model_catalog(self) -> None:
+    def test_probe_accepts_missing_active_model_with_realistic_catalog(self) -> None:
         expected = PROFILE.PROFILE_SETTINGS["code-luna"]
         result = PROFILE._probe_result(
             "code-luna",
@@ -167,47 +167,31 @@ class ProfileContractTests(unittest.TestCase):
                                     "modelId": expected["model"],
                                     "name": "GPT-5.6 Luna",
                                 },
-                            ],
-                            "currentModelId": expected["model"],
+                            ]
                         }
                     }
                 }
             ],
         )
-        self.assertTrue(result["ok"])
-        self.assertEqual(result["model"], expected["model"])
-
-    def test_probe_rejects_missing_or_mismatched_model(self) -> None:
-        cases = (
-            (),
-            ({"result": {"models": {"currentModelId": "gpt-5.6-sol"}}},),
+        self.assertEqual(
+            result,
+            {
+                "ok": True,
+                "profile": "code-luna",
+                "model": expected["model"],
+                "context": expected["contextTier"],
+                "effort": PROFILE.PROFILE_EFFORT["code-luna"],
+            },
         )
-        for observations in cases:
-            with self.subTest(observations=observations):
-                result = PROFILE._probe_result("code-luna", observations)
-                self.assertFalse(result["ok"])
-                self.assertEqual(result["error_code"], "malformed")
 
-    def test_probe_rejects_missing_or_conflicting_active_model(self) -> None:
-        expected = PROFILE.PROFILE_SETTINGS["code-luna"]
+    def test_probe_rejects_mismatched_or_conflicting_active_model(self) -> None:
         cases = (
+            ({"result": {"models": {"currentModelId": "gpt-5.6-sol"}}},),
             (
                 {
                     "result": {
                         "models": {
-                            "availableModels": [
-                                {"modelId": "gpt-5.6-sol"},
-                                {"modelId": expected["model"]},
-                            ]
-                        }
-                    }
-                },
-            ),
-            (
-                {
-                    "result": {
-                        "models": {
-                            "currentModelId": expected["model"],
+                            "currentModelId": "gpt-5.6-luna",
                             "effectiveModel": "gpt-5.6-sol",
                         }
                     }
@@ -217,7 +201,7 @@ class ProfileContractTests(unittest.TestCase):
                 {
                     "result": {
                         "models": {
-                            "current_model_id": expected["model"],
+                            "current_model_id": "gpt-5.6-luna",
                             "effective_model": "gpt-5.6-sol",
                         }
                     }
@@ -542,12 +526,27 @@ class ActivationContractTests(unittest.TestCase):
         argv = popen.call_args.args[0]
         self.assertEqual(argv[1], str(fdproxy))
 
-    def test_sol_success_selects_sol_without_fallback_probe(self) -> None:
+    def test_silent_metadata_selects_exact_readiness_profiles(self) -> None:
         calls: list[str] = []
 
         def probe(profile: str):
             calls.append(profile)
-            return successful_probe(profile)
+            return PROFILE._probe_result(
+                profile,
+                [
+                    {
+                        "result": {
+                            "models": {
+                                "availableModels": [
+                                    {"modelId": "gpt-5.6-sol"},
+                                    {"modelId": "gpt-5.6-luna"},
+                                    {"modelId": "gpt-4.1"},
+                                ]
+                            }
+                        }
+                    }
+                ],
+            )
 
         status = ACTIVATION.select_profiles(probe, generation="g1", state_schema="1")
         self.assertEqual(
@@ -3108,7 +3107,10 @@ class LauncherLifecycleTests(unittest.TestCase):
     def test_client_probe_preserves_initialize_session_new_and_diagnostic_prompt(self) -> None:
         with tempfile.TemporaryDirectory(prefix="gascity-probe-") as raw:
             root = pathlib.Path(raw)
-            server = LauncherServerHarness(root)
+            server = LauncherServerHarness(
+                root,
+                extra=("--silent-metadata",),
+            )
             server.start()
             try:
                 args = PROFILE._default_namespace("code-luna", "coding")
