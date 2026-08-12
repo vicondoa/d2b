@@ -111,6 +111,7 @@ panel-*/
 # reached the tree this way: a stray src/bin probe that broke the build, and
 # a 21 MB crate complete with its target directory.
 .scratch/
+.worktrees/
 __pycache__/
 
 # Optional Gas City contributor runtime in a repository-local checkout.
