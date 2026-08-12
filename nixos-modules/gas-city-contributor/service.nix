@@ -842,7 +842,9 @@ in
               "gascity-free-space-monitor.service"
             ]
             ++ lib.optional buildBuddyEnabled "gascity-buildbuddy-proxy.service";
-          inherit (sidecarUnit) unitConfig;
+          unitConfig = sidecarUnit.unitConfig // lib.optionalAttrs buildBuddyEnabled {
+            JoinsNamespaceOf = [ "gascity-buildbuddy-proxy.service" ];
+          };
           serviceConfig = sharedServiceConfig // {
             Type = "exec";
             User = "gascity-check";
@@ -854,7 +856,6 @@ in
               "gascity-egress-channel"
             ];
             PrivateNetwork = true;
-            JoinsNamespaceOf = lib.optional buildBuddyEnabled "gascity-buildbuddy-proxy.service";
             StateDirectory = "gascity-check";
             StateDirectoryMode = "0700";
             StateDirectoryQuota = toString cfg.storage.checkQuotaBytes;

@@ -58,6 +58,7 @@ let
   publisherUnit = enabled.systemd.services.gascity-publisher;
   publisher = enabled.systemd.services.gascity-publisher.serviceConfig;
   egress = enabled.systemd.services.gascity-egress.serviceConfig;
+  checkUnit = enabled.systemd.services.gascity-check;
   check = enabled.systemd.services.gascity-check.serviceConfig;
   proxy = enabled.systemd.services.gascity-buildbuddy-proxy.serviceConfig;
   slice = enabled.systemd.slices.gascity-contributor.sliceConfig;
@@ -68,6 +69,25 @@ let
   discordStartText = textValue discord.ExecStart;
   publisherStartText = textValue publisher.ExecStart;
   egressStartText = textValue egress.ExecStart;
+
+  withoutBuildBuddy = (evalWith {
+    services.gasCityContributor =
+      validConfig.services.gasCityContributor
+      // {
+        credentials =
+          validConfig.services.gasCityContributor.credentials
+          // {
+            buildBuddyApiKeyFile = null;
+          };
+        buildBuddy =
+          validConfig.services.gasCityContributor.buildBuddy
+          // {
+            enable = false;
+          };
+      };
+  }).config;
+  checkWithoutBuildBuddyUnit = withoutBuildBuddy.systemd.services.gascity-check;
+  checkWithoutBuildBuddy = checkWithoutBuildBuddyUnit.serviceConfig;
 
   invalidPath = evalWith {
       services.gasCityContributor = validConfig.services.gasCityContributor // {
@@ -342,6 +362,25 @@ in
       publisherPrivateNetwork = publisher.PrivateNetwork;
       proxyPrivateNetwork = proxy.PrivateNetwork;
       checkPrivateNetwork = check.PrivateNetwork;
+      checkJoinsNamespaceOf = checkUnit.unitConfig.JoinsNamespaceOf or [ ];
+      checkServiceJoinsNamespaceOf = check ? JoinsNamespaceOf;
+      checkRequires = checkUnit.requires;
+      checkAfter = checkUnit.after;
+      checkBindsTo = checkUnit.bindsTo;
+      checkPartOf = checkUnit.unitConfig.PartOf;
+      checkBefore = checkUnit.unitConfig.Before;
+      checkProxy = lib.hasInfix
+        "--proxy http://127.0.0.1:3128"
+        (textValue check.ExecStart);
+      proxyListen = lib.hasInfix
+        "--listen 127.0.0.1:19801"
+        (textValue proxy.ExecStart);
+      checkWithoutBuildBuddyJoinsNamespaceOf =
+        checkWithoutBuildBuddyUnit.unitConfig ? JoinsNamespaceOf;
+      checkWithoutBuildBuddyServiceJoinsNamespaceOf =
+        checkWithoutBuildBuddy ? JoinsNamespaceOf;
+      buildBuddyDisabledProxy =
+        withoutBuildBuddy.systemd.services ? gascity-buildbuddy-proxy;
       checkGroup = check.Group;
       checkChannelGroup = builtins.elem
         "gascity-check-channel"
@@ -396,6 +435,26 @@ in
       publisherPrivateNetwork = true;
       proxyPrivateNetwork = true;
       checkPrivateNetwork = true;
+      checkJoinsNamespaceOf = [ "gascity-buildbuddy-proxy.service" ];
+      checkServiceJoinsNamespaceOf = false;
+      checkRequires = [
+        "gascity-egress.service"
+        "gascity-free-space-monitor.service"
+        "gascity-buildbuddy-proxy.service"
+      ];
+      checkAfter = [
+        "gascity-egress.service"
+        "gascity-free-space-monitor.service"
+        "gascity-buildbuddy-proxy.service"
+      ];
+      checkBindsTo = [ "gascity-free-space-monitor.service" ];
+      checkPartOf = "gas-city-contributor.service";
+      checkBefore = "gas-city-contributor.service";
+      checkProxy = true;
+      proxyListen = true;
+      checkWithoutBuildBuddyJoinsNamespaceOf = false;
+      checkWithoutBuildBuddyServiceJoinsNamespaceOf = false;
+      buildBuddyDisabledProxy = false;
       checkGroup = "gascity-check-channel";
       checkChannelGroup = true;
       mainCheckChannelGroup = true;

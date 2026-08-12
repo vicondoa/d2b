@@ -242,6 +242,39 @@ let
     '';
   };
 
+  fakeBuildBuddy = pkgs.writeTextFile {
+    name = "gascity-host-fake-buildbuddy";
+    executable = true;
+    text = ''
+      #!${contributorPython}
+      import signal
+      import socket
+
+      stopping = False
+
+      def stop(_signum, _frame):
+          global stopping
+          stopping = True
+
+      signal.signal(signal.SIGTERM, stop)
+      signal.signal(signal.SIGINT, stop)
+      listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+      listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 0)
+      listener.bind(("127.0.0.1", 19801))
+      listener.listen(8)
+      listener.settimeout(0.2)
+      try:
+          while not stopping:
+              try:
+                  connection, _address = listener.accept()
+              except socket.timeout:
+                  continue
+              connection.close()
+      finally:
+          listener.close()
+    '';
+  };
+
   fakeEgress = pkgs.writeTextFile {
     name = "gascity-host-fake-egress";
     executable = true;
@@ -1429,6 +1462,7 @@ pkgs.testers.runNixOSTest {
     environment.systemPackages = [
       pkgs.iproute2
       pkgs.procps
+      pkgs.util-linux
       pkgs.jq
       testPackage
     ];
@@ -1521,7 +1555,7 @@ pkgs.testers.runNixOSTest {
     systemd.services.gascity-buildbuddy-proxy.serviceConfig.ExecStartPre =
       [ "${credentialProbe} buildbuddy buildbuddy-api-key" ];
     systemd.services.gascity-buildbuddy-proxy.serviceConfig.ExecStart =
-      lib.mkForce fakeSidecar;
+      lib.mkForce fakeBuildBuddy;
     # The production proxy is replaced with a fixture sidecar above so the
     # broader host test stays credential- and network-free.  Start the real
     # packaged proxy separately with the production unit's effective syscall
@@ -1689,6 +1723,58 @@ pkgs.testers.runNixOSTest {
     ]:
         part_of = machine.succeed(f"systemctl show -P PartOf {unit}")
         assert "gas-city-contributor.service" in part_of
+
+    # BuildBuddy and the uncredentialed check runner share one private network
+    # namespace.  The loopback listeners must stay inside it, never appearing
+    # in the host namespace or from either service identity outside systemd.
+    joins_namespace = machine.succeed(
+        "systemctl show -P JoinsNamespaceOf gascity-check.service"
+    ).strip()
+    assert "gascity-buildbuddy-proxy.service" in joins_namespace
+    machine.succeed(
+        "systemctl show -P PrivateNetwork gascity-check.service | grep -qx yes"
+    )
+    machine.succeed(
+        "systemctl show -P PrivateNetwork gascity-buildbuddy-proxy.service "
+        "| grep -qx yes"
+    )
+    check_pid = machine.succeed(
+        "systemctl show -P MainPID gascity-check.service"
+    ).strip()
+    proxy_pid = machine.succeed(
+        "systemctl show -P MainPID gascity-buildbuddy-proxy.service"
+    ).strip()
+    check_namespace_inode = machine.succeed(
+        f"stat -Lc '%i' /proc/{check_pid}/ns/net"
+    ).strip()
+    proxy_namespace_inode = machine.succeed(
+        f"stat -Lc '%i' /proc/{proxy_pid}/ns/net"
+    ).strip()
+    host_namespace_inode = machine.succeed(
+        "stat -Lc '%i' /proc/1/ns/net"
+    ).strip()
+    assert check_namespace_inode == proxy_namespace_inode
+    assert check_namespace_inode != host_namespace_inode
+    shared_listeners = machine.succeed(
+        f"nsenter -t {check_pid} -n ss -H -ltn"
+    )
+    for listener in ["127.0.0.1:3128", "127.0.0.1:19801"]:
+        assert listener in shared_listeners, (
+            f"shared network namespace is missing listener {listener}: "
+            f"{shared_listeners}"
+        )
+    host_listeners = machine.succeed("ss -H -ltn")
+    for listener in ["127.0.0.1:3128", "127.0.0.1:19801"]:
+        assert listener not in host_listeners, (
+            f"private listener is host-visible: {listener}: {host_listeners}"
+        )
+    for identity in ["gascity-check", "gascity-buildbuddy-proxy"]:
+        for port in [3128, 19801]:
+            machine.succeed(
+                f"! runuser -u {identity} -- {python} -c "
+                f"'import socket; "
+                f"socket.create_connection((\"127.0.0.1\",{port}),0.4)'"
+            )
 
     def active_child_pid():
         command = (
