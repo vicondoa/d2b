@@ -613,6 +613,17 @@ pub(crate) fn validate_identity(
     database: &Database,
     identity: &crate::StoreIdentity,
 ) -> Result<StoreMeta, StoreError> {
+    let meta = validate_identity_for_open(database, identity)?;
+    if !revisions_match(&meta, identity.revisions) {
+        return Err(integrity("store-identity-mismatch"));
+    }
+    Ok(meta)
+}
+
+pub(crate) fn validate_identity_for_open(
+    database: &Database,
+    identity: &crate::StoreIdentity,
+) -> Result<StoreMeta, StoreError> {
     let read = database.begin_read().map_err(integrity)?;
     if read.list_tables().map_err(integrity)?.count() != ALL_TABLES.len() {
         return Err(integrity("physical-table-set-invalid"));
@@ -629,7 +640,6 @@ pub(crate) fn validate_identity(
         || meta.zone_uid != identity.zone_uid.as_str()
         || meta.created_at != identity.created_at
         || meta.compaction_floor > meta.current_revision
-        || !revisions_match(&meta, identity.revisions)
     {
         return Err(integrity("store-identity-mismatch"));
     }

@@ -24,7 +24,10 @@ use d2b_audit::{
     AuditHash, AuditRecord, AuditRecordError, AuditRecordFields, AuditSink, AuditWriteClass,
     AuditWriteOutcome,
 };
-use d2b_contracts::v3::{ResourceUid, Timestamp, ZoneId, identity::STANDARD_RESOURCE_TYPES};
+use d2b_contracts::v3::{
+    ConfigurationGeneration, ControllerGeneration, ResourceUid, Timestamp, ZoneId, ZoneRevision,
+    identity::STANDARD_RESOURCE_TYPES,
+};
 use d2b_resource_store::mutation_seal::{MutationSealAcceptor, SealedMutation};
 use d2b_resource_store::{
     PolicySnapshot, StoreCommitResult, StoreError, StoreGetRequest, StoreInspectSchemaRequest,
@@ -213,6 +216,14 @@ pub struct StoreIdentity {
     revisions: PolicySnapshot,
 }
 
+/// Mutable revision metadata rehydrated from one opened Zone store.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StoreRuntimeMetadata {
+    pub current_revision: ZoneRevision,
+    pub compaction_floor: ZoneRevision,
+    pub policy_snapshot: PolicySnapshot,
+}
+
 impl StoreIdentity {
     pub fn new(
         slot: StoreSlot,
@@ -242,6 +253,13 @@ impl StoreIdentity {
 
     pub const fn slot(&self) -> StoreSlot {
         self.slot
+    }
+
+    /// Replace only the mutable revision snapshot before provisioning a new
+    /// store. Existing stores rehydrate this value from durable metadata.
+    pub fn with_revisions(mut self, revisions: PolicySnapshot) -> Self {
+        self.revisions = revisions;
+        self
     }
 
     pub fn seal_identity(&self) -> StoreSealIdentity {
@@ -408,15 +426,17 @@ impl RedbResourceStore {
                 .create_with_backend(backend)
                 .map_err(transaction::integrity)?;
             transaction::backfill_schema_catalog(&database)?;
-            let meta = transaction::validate_identity(&database, &open_identity)?;
+            let meta = transaction::validate_identity_for_open(&database, &open_identity)?;
             transaction::validate_consistency(&database)?;
             let recovered_after_crash = !meta.clean_shutdown;
-            Ok::<_, StoreError>((database, recovered_after_crash))
+            let mut open_identity = open_identity;
+            open_identity.revisions = policy_snapshot_from_meta(&meta)?;
+            Ok::<_, StoreError>((database, recovered_after_crash, open_identity))
         })
         .await
         .map_err(|_| transaction::integrity("database-open-task-failed").with_store_slot(slot))?
         .map_err(|error| error.with_store_slot(slot))?;
-        let (database, recovered_after_crash) = database;
+        let (database, recovered_after_crash, identity) = database;
         Self::start(database, identity, recovered_after_crash, acceptor, ports)
             .map_err(|error| error.with_store_slot(slot))
     }
@@ -494,6 +514,16 @@ impl RedbResourceStore {
         self.recovered_after_crash
     }
 
+    /// Read the current durable revision snapshot after startup.
+    pub async fn runtime_metadata(&self) -> Result<StoreRuntimeMetadata, StoreError> {
+        let meta = self.reads.meta().await?;
+        Ok(StoreRuntimeMetadata {
+            current_revision: ZoneRevision::new(meta.current_revision),
+            compaction_floor: ZoneRevision::new(meta.compaction_floor),
+            policy_snapshot: policy_snapshot_from_meta(&meta)?,
+        })
+    }
+
     /// Persist a clean-shutdown marker and join the owned worker threads.
     pub async fn shutdown(mut self) -> Result<(), StoreError> {
         if let Ok(mut streams) = self.retained_watch_streams.lock() {
@@ -544,6 +574,22 @@ impl RedbResourceStore {
         Self::start(database, identity, false, acceptor, ports)
             .map_err(|error| error.with_store_slot(slot))
     }
+}
+
+fn policy_snapshot_from_meta(meta: &transaction::StoreMeta) -> Result<PolicySnapshot, StoreError> {
+    Ok(PolicySnapshot {
+        policy_revision: meta.policy_revision,
+        api_catalog_revision: meta.api_catalog_revision,
+        active_configuration_revision: ConfigurationGeneration::new(
+            meta.active_configuration_revision,
+        )
+        .map_err(|_| transaction::integrity("store-active-configuration-revision-invalid"))?,
+        controller_generation: meta
+            .controller_generation
+            .map(ControllerGeneration::new)
+            .transpose()
+            .map_err(|_| transaction::integrity("store-controller-generation-invalid"))?,
+    })
 }
 
 impl RedbResourceStore {
