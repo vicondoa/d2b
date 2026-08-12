@@ -1211,6 +1211,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "d2b-provider-activation-nixos"
+version = "0.0.0-bootstrap"
+
+[[package]]
+name = "d2b-provider-audio-pipewire"
+version = "0.0.0-bootstrap"
+
+[[package]]
+name = "d2b-provider-clipboard-wayland"
+version = "0.0.0-bootstrap"
+
+[[package]]
 name = "d2b-provider-credential-entra"
 version = "0.0.0-bootstrap"
 dependencies = [
@@ -1269,11 +1281,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "d2b-provider-display-wayland"
+version = "0.0.0-bootstrap"
+
+[[package]]
 name = "d2b-provider-network-local"
 version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts",
 ]
+
+[[package]]
+name = "d2b-provider-notification-desktop"
+version = "0.0.0-bootstrap"
 
 [[package]]
 name = "d2b-provider-observability-otel"
@@ -1307,6 +1327,26 @@ dependencies = [
  "urlencoding",
  "webpki-roots 0.26.11",
 ]
+
+[[package]]
+name = "d2b-provider-runtime-azure-container-apps"
+version = "0.0.0-bootstrap"
+
+[[package]]
+name = "d2b-provider-runtime-azure-virtual-machine"
+version = "0.0.0-bootstrap"
+
+[[package]]
+name = "d2b-provider-runtime-cloud-hypervisor"
+version = "0.0.0-bootstrap"
+
+[[package]]
+name = "d2b-provider-runtime-qemu-media"
+version = "0.0.0-bootstrap"
+
+[[package]]
+name = "d2b-provider-shell-terminal"
+version = "0.0.0-bootstrap"
 
 [[package]]
 name = "d2b-provider-supervisor"
@@ -1364,6 +1404,18 @@ dependencies = [
  "sha2",
  "tokio",
 ]
+
+[[package]]
+name = "d2b-provider-transport-azure-relay"
+version = "0.0.0-bootstrap"
+
+[[package]]
+name = "d2b-provider-transport-unix"
+version = "0.0.0-bootstrap"
+
+[[package]]
+name = "d2b-provider-transport-vsock"
+version = "0.0.0-bootstrap"
 
 [[package]]
 name = "d2b-provider-volume-local"
