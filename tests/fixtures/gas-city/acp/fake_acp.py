@@ -33,6 +33,17 @@ def _write(value: dict[str, object]) -> None:
     sys.stdout.flush()
 
 
+def _models(current_model: str) -> dict[str, object]:
+    return {
+        "currentModelId": current_model,
+        "availableModels": [
+            {"modelId": "gpt-5.6-sol", "name": "GPT-5.6 Sol"},
+            {"modelId": "gpt-5.6-luna", "name": "GPT-5.6 Luna"},
+            {"modelId": "gpt-4.1", "name": "GPT-4.1"},
+        ],
+    }
+
+
 def _error(request: dict[str, object], message: str) -> None:
     _write(
         {
@@ -63,6 +74,7 @@ def main() -> int:
     if args.context != settings["contextTier"]:
         raise RuntimeError("ACP context does not match the immutable profile")
     session_id = "fake-session"
+    models = _models(settings["model"])
     for raw_line in sys.stdin:
         if not raw_line.strip():
             _error({}, "empty NDJSON line")
@@ -93,7 +105,7 @@ def main() -> int:
                             "name": "fake-copilot",
                             "version": "1.0.79",
                         },
-                        "models": {"currentModelId": settings["model"]},
+                        "models": models,
                     },
                 }
             )
@@ -106,7 +118,7 @@ def main() -> int:
                     "id": request.get("id"),
                     "result": {
                         "sessionId": session_id,
-                        "models": {"currentModelId": settings["model"]},
+                        "models": models,
                     },
                 }
             )
@@ -127,7 +139,7 @@ def main() -> int:
                                 "type": "text",
                                 "text": f"effective model: {settings['model']}",
                             },
-                            "models": {"currentModelId": settings["model"]},
+                            "models": models,
                         },
                     },
                 }
@@ -138,7 +150,7 @@ def main() -> int:
                     "id": request.get("id"),
                     "result": {
                         "stopReason": "end_turn",
-                        "models": {"currentModelId": settings["model"]},
+                        "models": models,
                     },
                 }
             )

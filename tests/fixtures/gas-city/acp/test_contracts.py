@@ -144,10 +144,83 @@ class ProfileContractTests(unittest.TestCase):
             },
         )
 
+    def test_probe_ignores_available_model_catalog(self) -> None:
+        expected = PROFILE.PROFILE_SETTINGS["code-luna"]
+        result = PROFILE._probe_result(
+            "code-luna",
+            [
+                {
+                    "result": {
+                        "models": {
+                            "availableModels": [
+                                {
+                                    "modelId": "gpt-5.6-sol",
+                                    "name": "GPT-5.6 Sol",
+                                },
+                                {
+                                    "model_id": "gpt-4.1",
+                                    "name": "GPT-4.1",
+                                },
+                                {
+                                    "modelId": expected["model"],
+                                    "name": "GPT-5.6 Luna",
+                                },
+                            ],
+                            "currentModelId": expected["model"],
+                        }
+                    }
+                }
+            ],
+        )
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["model"], expected["model"])
+
     def test_probe_rejects_missing_or_mismatched_model(self) -> None:
         cases = (
             (),
             ({"result": {"models": {"currentModelId": "gpt-5.6-sol"}}},),
+        )
+        for observations in cases:
+            with self.subTest(observations=observations):
+                result = PROFILE._probe_result("code-luna", observations)
+                self.assertFalse(result["ok"])
+                self.assertEqual(result["error_code"], "malformed")
+
+    def test_probe_rejects_missing_or_conflicting_active_model(self) -> None:
+        expected = PROFILE.PROFILE_SETTINGS["code-luna"]
+        cases = (
+            (
+                {
+                    "result": {
+                        "models": {
+                            "availableModels": [
+                                {"modelId": "gpt-5.6-sol"},
+                                {"modelId": expected["model"]},
+                            ]
+                        }
+                    }
+                },
+            ),
+            (
+                {
+                    "result": {
+                        "models": {
+                            "currentModelId": expected["model"],
+                            "effectiveModel": "gpt-5.6-sol",
+                        }
+                    }
+                },
+            ),
+            (
+                {
+                    "result": {
+                        "models": {
+                            "current_model_id": expected["model"],
+                            "effective_model": "gpt-5.6-sol",
+                        }
+                    }
+                },
+            ),
         )
         for observations in cases:
             with self.subTest(observations=observations):

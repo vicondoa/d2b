@@ -43,6 +43,12 @@ PROFILE_EFFORT = {
     "review-luna": "max",
     "code-luna": "max",
 }
+ACTIVE_MODEL_KEYS = (
+    "currentModelId",
+    "current_model_id",
+    "effectiveModel",
+    "effective_model",
+)
 PROFILE_NAMES = frozenset(PROFILE_SETTINGS)
 TOOL_POLICIES = {
     "review": "view,search",
@@ -911,16 +917,7 @@ def _probe_result(profile: str, response_values: Sequence[object]) -> dict[str, 
     reported_contexts: list[str] = []
     for value in response_values:
         reported_models.extend(
-            _find_values(
-                value,
-                (
-                    "effectiveModel",
-                    "effective_model",
-                    "currentModelId",
-                    "modelId",
-                    "model_id",
-                ),
-            )
+            _find_values(value, ACTIVE_MODEL_KEYS)
         )
         reported_contexts.extend(
             _find_values(value, ("contextTier", "context_tier"))
