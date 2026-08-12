@@ -474,6 +474,36 @@ def _validate_managed_destination_info(
         )
 
 
+def _validate_recoverable_managed_destination(
+    info: os.stat_result,
+    destination_fd: int,
+    *,
+    expected_gid: int,
+) -> None:
+    if not stat.S_ISDIR(info.st_mode):
+        raise BoundaryError(
+            "managed asset destination metadata is not recoverable"
+        )
+    if info.st_uid != 0 or info.st_gid not in {0, expected_gid}:
+        raise BoundaryError(
+            "managed asset destination metadata is not recoverable"
+        )
+    if stat.S_IMODE(info.st_mode) not in {0o700, 0o750}:
+        raise BoundaryError(
+            "managed asset destination metadata is not recoverable"
+        )
+    try:
+        entries = os.listdir(destination_fd)
+    except OSError as error:
+        raise BoundaryError(
+            "managed asset destination contents are unavailable"
+        ) from error
+    if entries:
+        raise BoundaryError(
+            "managed asset destination metadata is not recoverable"
+        )
+
+
 def _resolve_group_gid(group_value: str) -> int:
     if not group_value:
         raise BoundaryError("managed asset group is required")
@@ -575,6 +605,12 @@ def _open_managed_asset_directory(
             try:
                 os.mkdir(destination.name, mode=0o750, dir_fd=parent_fd)
                 created_destination = True
+                _validate_managed_parent_binding(
+                    parent,
+                    parent_fd,
+                    expected=expected_parent,
+                )
+                _fsync_managed_parent(parent_fd)
             except FileExistsError:
                 pass
             except OSError as error:
@@ -593,19 +629,60 @@ def _open_managed_asset_directory(
                 ) from error
         except OSError as error:
             raise BoundaryError("managed asset destination is unavailable") from error
-        if created_destination:
+        if expected_destination is None:
+            try:
+                expected_destination = os.lstat(
+                    destination.name,
+                    dir_fd=parent_fd,
+                )
+            except OSError as error:
+                raise BoundaryError(
+                    "managed asset destination is unavailable"
+                ) from error
+        _validate_managed_parent_binding(
+            parent,
+            parent_fd,
+            expected=expected_parent,
+        )
+        _validate_managed_destination_binding(
+            destination.name,
+            parent_fd,
+            destination_fd,
+            expected=expected_destination,
+        )
+        info = os.fstat(destination_fd)
+        metadata_needs_setting = created_destination or (
+            info.st_uid != expected_uid
+            or info.st_gid != expected_gid
+            or stat.S_IMODE(info.st_mode) != 0o750
+        )
+        if metadata_needs_setting:
+            if not created_destination:
+                _validate_recoverable_managed_destination(
+                    info,
+                    destination_fd,
+                    expected_gid=expected_gid,
+                )
             try:
                 os.fchown(destination_fd, expected_uid, expected_gid)
                 os.fchmod(destination_fd, 0o750)
             except OSError as error:
+                _best_effort_fsync(destination_fd)
+                if created_destination:
+                    _best_effort_fsync(parent_fd)
                 raise BoundaryError(
                     "managed asset destination metadata could not be set"
                 ) from error
-        info = os.fstat(destination_fd)
+            _fsync_managed_directory(destination_fd)
         _validate_managed_destination_info(
-            info,
+            os.fstat(destination_fd),
             expected_uid=expected_uid,
             expected_gid=expected_gid,
+        )
+        _validate_managed_parent_binding(
+            parent,
+            parent_fd,
+            expected=expected_parent,
         )
         _validate_managed_destination_binding(
             destination.name,
@@ -753,6 +830,22 @@ def _fsync_managed_directory(destination_fd: int) -> None:
         os.fsync(destination_fd)
     except OSError as error:
         raise BoundaryError("managed asset directory could not be synced") from error
+
+
+def _fsync_managed_parent(parent_fd: int) -> None:
+    try:
+        os.fsync(parent_fd)
+    except OSError as error:
+        raise BoundaryError(
+            "managed asset destination parent could not be synced"
+        ) from error
+
+
+def _best_effort_fsync(descriptor: int) -> None:
+    try:
+        os.fsync(descriptor)
+    except OSError:
+        pass
 
 
 def materialize_assets(

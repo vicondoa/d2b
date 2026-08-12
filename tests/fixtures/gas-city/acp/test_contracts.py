@@ -907,6 +907,46 @@ class ManagedAssetRotationContractTests(unittest.TestCase):
 
         return fake_fstat
 
+    @staticmethod
+    def _destination_fstat_transition(
+        destination: pathlib.Path,
+        *,
+        initial_uid: int,
+        initial_gid: int,
+        initial_mode: int,
+        final_uid: int,
+        final_gid: int,
+        final_mode: int,
+    ):
+        real_fstat = ACTIVATION.os.fstat
+        destination_info = os.stat(destination, follow_symlinks=False)
+        repaired = False
+
+        def mark_repaired(*_args: object) -> None:
+            nonlocal repaired
+            repaired = True
+
+        def fake_fstat(fd: int):
+            info = real_fstat(fd)
+            if (
+                info.st_dev == destination_info.st_dev
+                and info.st_ino == destination_info.st_ino
+            ):
+                if repaired:
+                    uid, gid, mode = final_uid, final_gid, final_mode
+                else:
+                    uid, gid, mode = initial_uid, initial_gid, initial_mode
+                return SimpleNamespace(
+                    st_dev=info.st_dev,
+                    st_ino=info.st_ino,
+                    st_mode=stat.S_IFDIR | mode,
+                    st_uid=uid,
+                    st_gid=gid,
+                )
+            return info
+
+        return fake_fstat, mark_repaired
+
     def test_same_generation_is_idempotent(self) -> None:
         with self._temporary_destination() as raw:
             destination = pathlib.Path(raw) / "managed"
@@ -992,6 +1032,230 @@ class ManagedAssetRotationContractTests(unittest.TestCase):
                                 expected_gid=expected_gid,
                             )
 
+    def test_interrupted_metadata_failure_recovers_on_restart(self) -> None:
+        expected_uid = 0
+        expected_gid = os.getgid() + 12345
+        cases = (
+            (
+                "fchown",
+                0,
+                0o700,
+                OSError("injected fchown failure"),
+                None,
+            ),
+            (
+                "fchmod",
+                expected_gid,
+                0o700,
+                None,
+                OSError("injected fchmod failure"),
+            ),
+        )
+        for label, partial_gid, partial_mode, chown_failure, chmod_failure in cases:
+            with self.subTest(failure=label), self._temporary_destination() as raw:
+                destination = pathlib.Path(raw) / "managed"
+                destination.mkdir(mode=0o700)
+                partial_fstat = self._destination_fstat_override(
+                    destination,
+                    uid=0,
+                    gid=partial_gid,
+                    mode=partial_mode,
+                )
+                with mock.patch.object(
+                    ACTIVATION.os,
+                    "fstat",
+                    side_effect=partial_fstat,
+                ), mock.patch.object(
+                    ACTIVATION.os,
+                    "fchown",
+                    side_effect=chown_failure,
+                ) as fchown, mock.patch.object(
+                    ACTIVATION.os,
+                    "fchmod",
+                    side_effect=chmod_failure,
+                ) as fchmod:
+                    with self.assertRaisesRegex(
+                        ACTIVATION.BoundaryError,
+                        "metadata could not be set",
+                    ):
+                        ACTIVATION._open_managed_asset_directory(
+                            destination,
+                            expected_uid=expected_uid,
+                            expected_gid=expected_gid,
+                        )
+                fchown.assert_called_once()
+                if label == "fchown":
+                    fchmod.assert_not_called()
+                else:
+                    fchmod.assert_called_once()
+
+                recovery_fstat, mark_repaired = self._destination_fstat_transition(
+                    destination,
+                    initial_uid=0,
+                    initial_gid=partial_gid,
+                    initial_mode=partial_mode,
+                    final_uid=expected_uid,
+                    final_gid=expected_gid,
+                    final_mode=0o750,
+                )
+                metadata_calls: list[tuple[object, ...]] = []
+                parent_fd = -1
+                destination_fd = -1
+
+                def record_fchown(fd: int, uid: int, gid: int) -> None:
+                    metadata_calls.append(("fchown", fd, uid, gid))
+
+                def record_fchmod(fd: int, mode: int) -> None:
+                    metadata_calls.append(("fchmod", fd, mode))
+                    mark_repaired()
+
+                with mock.patch.object(
+                    ACTIVATION.os,
+                    "fstat",
+                    side_effect=recovery_fstat,
+                ), mock.patch.object(
+                    ACTIVATION.os,
+                    "fchown",
+                    side_effect=record_fchown,
+                ), mock.patch.object(
+                    ACTIVATION.os,
+                    "fchmod",
+                    side_effect=record_fchmod,
+                ), mock.patch.object(
+                    ACTIVATION.os,
+                    "chown",
+                ) as path_chown, mock.patch.object(
+                    ACTIVATION.os,
+                    "chmod",
+                ) as path_chmod:
+                    parent_fd, destination_fd = ACTIVATION._open_managed_asset_directory(
+                        destination,
+                        expected_uid=expected_uid,
+                        expected_gid=expected_gid,
+                    )
+                try:
+                    self.assertEqual(
+                        metadata_calls,
+                        [
+                            ("fchown", destination_fd, expected_uid, expected_gid),
+                            ("fchmod", destination_fd, 0o750),
+                        ],
+                    )
+                    path_chown.assert_not_called()
+                    path_chmod.assert_not_called()
+                finally:
+                    if destination_fd >= 0:
+                        os.close(destination_fd)
+                    if parent_fd >= 0:
+                        os.close(parent_fd)
+
+    def test_root_owned_empty_partial_modes_recover_after_interruption(self) -> None:
+        expected_uid = 0
+        expected_gid = os.getgid() + 12345
+        for partial_mode in (0o700, 0o750):
+            with self.subTest(mode=oct(partial_mode)), self._temporary_destination() as raw:
+                destination = pathlib.Path(raw) / "managed"
+                destination.mkdir(mode=0o700)
+                fake_fstat, mark_repaired = self._destination_fstat_transition(
+                    destination,
+                    initial_uid=0,
+                    initial_gid=0,
+                    initial_mode=partial_mode,
+                    final_uid=expected_uid,
+                    final_gid=expected_gid,
+                    final_mode=0o750,
+                )
+                parent_fd = -1
+                destination_fd = -1
+                with mock.patch.object(
+                    ACTIVATION.os,
+                    "fstat",
+                    side_effect=fake_fstat,
+                ), mock.patch.object(
+                    ACTIVATION.os,
+                    "fchown",
+                ) as fchown, mock.patch.object(
+                    ACTIVATION.os,
+                    "fchmod",
+                    side_effect=mark_repaired,
+                ) as fchmod:
+                    parent_fd, destination_fd = ACTIVATION._open_managed_asset_directory(
+                        destination,
+                        expected_uid=expected_uid,
+                        expected_gid=expected_gid,
+                    )
+                try:
+                    fchown.assert_called_once_with(
+                        destination_fd,
+                        expected_uid,
+                        expected_gid,
+                    )
+                    fchmod.assert_called_once_with(destination_fd, 0o750)
+                finally:
+                    if destination_fd >= 0:
+                        os.close(destination_fd)
+                    if parent_fd >= 0:
+                        os.close(parent_fd)
+
+    def test_partial_metadata_recovery_refuses_foreign_directories(self) -> None:
+        expected_uid = 0
+        expected_gid = os.getgid() + 12345
+        cases = (
+            (
+                "nonempty",
+                0,
+                0,
+                0o700,
+                lambda destination: (destination / "foreign").write_text(
+                    "foreign\n",
+                    encoding="utf-8",
+                ),
+            ),
+            (
+                "foreign-symlink-entry",
+                0,
+                0,
+                0o700,
+                lambda destination: os.symlink(
+                    "/tmp/foreign-managed-entry",
+                    destination / "foreign",
+                ),
+            ),
+            ("wrong-owner", 1000, 0, 0o700, None),
+            ("writable", 0, 0, 0o770, None),
+        )
+        for label, uid, gid, mode, install in cases:
+            with self.subTest(destination=label), self._temporary_destination() as raw:
+                destination = pathlib.Path(raw) / "managed"
+                destination.mkdir(mode=0o700)
+                if install is not None:
+                    install(destination)
+                fake_fstat = self._destination_fstat_override(
+                    destination,
+                    uid=uid,
+                    gid=gid,
+                    mode=mode,
+                )
+                with mock.patch.object(
+                    ACTIVATION.os,
+                    "fstat",
+                    side_effect=fake_fstat,
+                ), mock.patch.object(
+                    ACTIVATION.os,
+                    "fchown",
+                ) as fchown, mock.patch.object(
+                    ACTIVATION.os,
+                    "fchmod",
+                ) as fchmod:
+                    with self.assertRaises(ACTIVATION.BoundaryError):
+                        ACTIVATION._open_managed_asset_directory(
+                            destination,
+                            expected_uid=expected_uid,
+                            expected_gid=expected_gid,
+                        )
+                fchown.assert_not_called()
+                fchmod.assert_not_called()
+
     def test_materialization_anchors_link_operations_to_one_directory_fd(self) -> None:
         with self._temporary_destination() as raw:
             destination = pathlib.Path(raw) / "managed"
@@ -1001,6 +1265,7 @@ class ManagedAssetRotationContractTests(unittest.TestCase):
             replace_fds: list[tuple[int | None, int | None]] = []
             fsync_fds: list[int] = []
             open_calls: list[tuple[object, int, int | None]] = []
+            parent_open_fds: list[int] = []
             required_directory_flags = (
                 os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
             )
@@ -1013,7 +1278,10 @@ class ManagedAssetRotationContractTests(unittest.TestCase):
 
             def record_open(path, flags, mode=0o777, *, dir_fd=None):
                 open_calls.append((path, flags, dir_fd))
-                return real_open(path, flags, mode, dir_fd=dir_fd)
+                descriptor = real_open(path, flags, mode, dir_fd=dir_fd)
+                if path == destination.parent and dir_fd is None:
+                    parent_open_fds.append(descriptor)
+                return descriptor
 
             def record_lstat(path, *args, **kwargs):
                 if path in ACTIVATION.MANAGED_ASSET_NAMES:
@@ -1067,20 +1335,24 @@ class ManagedAssetRotationContractTests(unittest.TestCase):
                 self._materialize(self.old, destination)
                 self._materialize(self.new, destination)
 
-            directory_fds = set(lstat_fds + readlink_fds + symlink_fds + fsync_fds)
-            directory_fds.update(
+            destination_fds = set(lstat_fds + readlink_fds + symlink_fds)
+            destination_fds.update(
                 fd
                 for pair in replace_fds
                 for fd in pair
             )
-            self.assertEqual(len(directory_fds), 1)
-            directory_fd = next(iter(directory_fds))
+            self.assertEqual(len(destination_fds), 1)
+            directory_fd = next(iter(destination_fds))
             self.assertIsNotNone(directory_fd)
+            parent_fds = set(parent_open_fds)
+            self.assertTrue(parent_fds)
             self.assertTrue(lstat_fds)
             self.assertTrue(readlink_fds)
             self.assertTrue(symlink_fds)
             self.assertTrue(replace_fds)
             self.assertTrue(fsync_fds)
+            self.assertIn(directory_fd, fsync_fds)
+            self.assertTrue(parent_fds.intersection(fsync_fds))
             destination_opens = [
                 flags
                 for path, flags, dir_fd in open_calls
@@ -1100,7 +1372,9 @@ class ManagedAssetRotationContractTests(unittest.TestCase):
                     for src_fd, dst_fd in replace_fds
                 )
             )
-            self.assertTrue(all(fd == directory_fd for fd in fsync_fds))
+            self.assertTrue(
+                set(fsync_fds).issubset(parent_fds | {directory_fd})
+            )
 
     def test_package_generation_rotation_replaces_only_managed_links(self) -> None:
         with self._temporary_destination() as raw:
@@ -1206,7 +1480,7 @@ class ManagedAssetRotationContractTests(unittest.TestCase):
             def fail_once(fd: int):
                 nonlocal calls
                 calls += 1
-                if calls == 2:
+                if calls == 4:
                     raise OSError("injected managed-directory fsync failure")
                 return real_fsync(fd)
 
@@ -1217,7 +1491,7 @@ class ManagedAssetRotationContractTests(unittest.TestCase):
             ):
                 with self.assertRaises(ACTIVATION.BoundaryError):
                     self._materialize(self.old, destination)
-            self.assertEqual(calls, 2)
+            self.assertEqual(calls, 4)
             self.assertEqual(
                 self._links(destination),
                 {

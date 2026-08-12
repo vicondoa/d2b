@@ -5,12 +5,13 @@ let
   buildBuddyEnabled =
     cfg.buildBuddy.enable || cfg.credentials.buildBuddyApiKeyFile != null;
   sharedGroup = "gascity-contributor";
+  stateRoot = "/var/lib/gascity-contributor/state";
   checkChannelGroup = "gascity-check-channel";
   allServiceUsers = {
     gascity = {
       uid = 45100;
       description = "Gas City lifecycle owner";
-      home = "/var/lib/gascity-contributor/home";
+      home = "${stateRoot}/home";
     };
     gascity-agent = {
       uid = 45101;
@@ -137,9 +138,9 @@ in
       "d /var/lib/gascity-contributor 0750 root ${sharedGroup} -"
       "d /var/lib/gascity-contributor/state 0710 gascity ${sharedGroup} -"
       "d /var/lib/gascity-contributor/cache 0700 gascity gascity -"
-      "d /var/lib/gascity-contributor/home 0700 gascity gascity -"
-      "d /var/lib/gascity-contributor/gc 0700 gascity gascity -"
       "d /var/lib/gascity-contributor/managed 0750 root ${sharedGroup} -"
+      "d ${stateRoot}/home 0700 gascity gascity -"
+      "d ${stateRoot}/gc 0700 gascity gascity -"
       "d /var/lib/gascity-contributor/state/rigs 0700 gascity gascity -"
       "d /var/lib/gascity-contributor/state/worktrees 0770 gascity-agent ${sharedGroup} -"
       "d /var/lib/gascity-contributor/state/leases 0700 gascity-agent gascity-agent -"

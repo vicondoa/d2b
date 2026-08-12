@@ -328,6 +328,15 @@ The readiness `error_code` distinguishes profile, credential, network,
 quota, malformed, and provider failures. Do not copy secrets from
 `/run/credentials`, service homes, or sidecar state into a diagnostic.
 
+Persistent `HOME`, `XDG_CONFIG_HOME`, `XDG_STATE_HOME`, and `GC_HOME` live below
+`/var/lib/gascity-contributor/state`, which is the quota-backed state tree.
+On an existing deployment, `/var/lib/gascity-contributor/home` and
+`/var/lib/gascity-contributor/gc` are legacy locations. Stop the service and
+use a host deployment procedure to inspect and migrate their contents into
+`/var/lib/gascity-contributor/state/home` and
+`/var/lib/gascity-contributor/state/gc` before switching generations. The
+module does not delete or silently migrate those legacy paths.
+
 For a controlled restart:
 
 ```sh
@@ -354,8 +363,11 @@ systemd or filesystem administration.
 1. Stop `gas-city-contributor.service` and confirm all sidecars have stopped.
 2. Inspect active beads, branches, worktrees, cancellation markers, and open
    pull requests before removing anything.
-3. Preserve `/var/lib/gascity-contributor/state`, active worktrees,
-   `/var/lib/gascity-publisher`, and any state needed to reconcile an open PR.
+3. Preserve `/var/lib/gascity-contributor/state`, legacy
+   `/var/lib/gascity-contributor/home` and
+   `/var/lib/gascity-contributor/gc` paths until migration is verified,
+   active worktrees, `/var/lib/gascity-publisher`, and any state needed to
+   reconcile an open PR.
 4. Remove only an operator-confirmed stale cache or check output below
    `/var/cache/gascity-contributor` or `/var/lib/gascity-check/output`.
 5. Remove an active-run Nix root only through the terminal cleanup path after

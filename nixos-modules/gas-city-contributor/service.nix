@@ -23,8 +23,8 @@ let
   bwrap = "${package}/bin/bwrap";
   serviceRoot = "/var/lib/gascity-contributor";
   stateRoot = "${serviceRoot}/state";
-  homeRoot = "${serviceRoot}/home";
-  gcRoot = "${serviceRoot}/gc";
+  homeRoot = "${stateRoot}/home";
+  gcRoot = "${stateRoot}/gc";
   cancellationRoot = "${stateRoot}/cancellations";
   discordStateRoot = "/var/lib/gascity-discord";
   publisherStateRoot = "/var/lib/gascity-publisher";
@@ -440,12 +440,12 @@ let
   '';
 
   mainEnvironment = [
-    "HOME=${serviceRoot}/home"
-    "XDG_CONFIG_HOME=${serviceRoot}/home/.config"
-    "XDG_STATE_HOME=${serviceRoot}/home/.local/state"
+    "HOME=${homeRoot}"
+    "XDG_CONFIG_HOME=${homeRoot}/.config"
+    "XDG_STATE_HOME=${homeRoot}/.local/state"
     "XDG_CACHE_HOME=${cacheRoot}"
     "XDG_RUNTIME_DIR=${runtimeRoot}"
-    "GC_HOME=${serviceRoot}/gc"
+    "GC_HOME=${gcRoot}"
     "GC_CONTRIBUTOR_ROOT=${package}/share/gas-city-contributor"
     "GC_RIG_NAME=${cfg.repository.rigName}"
     "GC_REPOSITORY=${cfg.repository.githubSlug}"
@@ -559,8 +559,6 @@ in
             CacheDirectoryQuota = toString cfg.storage.cacheQuotaBytes;
             ReadWritePaths = [
               stateRoot
-              homeRoot
-              gcRoot
               runtimeRoot
             ];
             ReadOnlyPaths = [

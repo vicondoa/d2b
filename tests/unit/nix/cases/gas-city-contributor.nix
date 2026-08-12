@@ -186,7 +186,18 @@ in
 
   "gas-city-contributor/roots-and-quotas" = {
     expr = {
-      home = builtins.elem "HOME=/var/lib/gascity-contributor/home" main.Environment;
+      home = builtins.elem
+        "HOME=/var/lib/gascity-contributor/state/home"
+        main.Environment;
+      xdgConfig = builtins.elem
+        "XDG_CONFIG_HOME=/var/lib/gascity-contributor/state/home/.config"
+        main.Environment;
+      xdgState = builtins.elem
+        "XDG_STATE_HOME=/var/lib/gascity-contributor/state/home/.local/state"
+        main.Environment;
+      gcHome = builtins.elem
+        "GC_HOME=/var/lib/gascity-contributor/state/gc"
+        main.Environment;
       xdg = builtins.elem
         "XDG_CACHE_HOME=/var/cache/gascity-contributor"
         main.Environment;
@@ -237,6 +248,18 @@ in
       managedParentDirectory = builtins.elem
         "d /var/lib/gascity-contributor 0750 root gascity-contributor -"
         enabled.systemd.tmpfiles.rules;
+      stateHomeDirectory = builtins.elem
+        "d /var/lib/gascity-contributor/state/home 0700 gascity gascity -"
+        enabled.systemd.tmpfiles.rules;
+      stateGcDirectory = builtins.elem
+        "d /var/lib/gascity-contributor/state/gc 0700 gascity gascity -"
+        enabled.systemd.tmpfiles.rules;
+      obsoleteHomeDirectory = builtins.elem
+        "d /var/lib/gascity-contributor/home 0700 gascity gascity -"
+        enabled.systemd.tmpfiles.rules;
+      obsoleteGcDirectory = builtins.elem
+        "d /var/lib/gascity-contributor/gc 0700 gascity gascity -"
+        enabled.systemd.tmpfiles.rules;
       materializeExpectedUid = lib.any
         (entry: lib.hasInfix "--uid 0" entry)
         main.ExecStartPre;
@@ -263,6 +286,9 @@ in
     };
     expected = {
       home = true;
+      xdgConfig = true;
+      xdgState = true;
+      gcHome = true;
       xdg = true;
       stateQuota = "107374182400";
       stateDirectory = "gascity-contributor/state";
@@ -270,8 +296,6 @@ in
       cacheDirectory = "gascity-contributor";
       mainReadWritePaths = [
         "/var/lib/gascity-contributor/state"
-        "/var/lib/gascity-contributor/home"
-        "/var/lib/gascity-contributor/gc"
         "/run/gascity-contributor"
       ];
       totalQuota = 250 * 1024 * 1024 * 1024 + 512 * 1024 * 1024;
@@ -294,6 +318,10 @@ in
       terminalStateMode = true;
       managedAssetDirectory = true;
       managedParentDirectory = true;
+      stateHomeDirectory = true;
+      stateGcDirectory = true;
+      obsoleteHomeDirectory = false;
+      obsoleteGcDirectory = false;
       materializeExpectedUid = true;
       materializeExpectedGroup = true;
       serviceManagedGroup = true;

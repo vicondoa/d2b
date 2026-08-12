@@ -1079,11 +1079,13 @@ let
           lambda: os.unlink(root / ".service-unlink-probe"),
       )
 
-      def expect_parent_rename_denied(name):
-          source = parent / name
+      def expect_parent_rename_denied(source):
+          name = source.name
           replacement = parent / (
               f".service-parent-replace-{name}-{os.getuid()}-{os.getpid()}"
           )
+          if source.parent != parent:
+              replacement = source.parent / replacement.name
           try:
               os.replace(source, replacement)
           except OSError as error:
@@ -1101,8 +1103,14 @@ let
               )
           raise SystemExit(f"managed parent {name} rename was writable")
 
-      for name in ("managed", "state", "home", "gc", "cache"):
-          expect_parent_rename_denied(name)
+      for source in (
+          parent / "managed",
+          parent / "state",
+          parent / "home",
+          parent / "gc",
+          parent / "cache",
+      ):
+          expect_parent_rename_denied(source)
     '';
   };
 
@@ -1402,6 +1410,11 @@ pkgs.testers.runNixOSTest {
           chown gascity-agent:gascity-contributor "$path"
           chmod 0770 "$path"
         done
+        install -d -m 0700 -o gascity -g gascity \
+          /var/lib/gascity-contributor/home \
+          /var/lib/gascity-contributor/gc
+        printf '%s\n' legacy-home > /var/lib/gascity-contributor/home/legacy-marker
+        printf '%s\n' legacy-gc > /var/lib/gascity-contributor/gc/legacy-marker
       '';
     };
 
@@ -1918,6 +1931,12 @@ pkgs.testers.runNixOSTest {
         "getent group gascity-contributor | cut -d: -f3"
     ).strip()
     assert parent_stat[2] == "750"
+    machine.succeed(
+        "test -d /var/lib/gascity-contributor/state/home && "
+        "test -d /var/lib/gascity-contributor/state/gc && "
+        "test -s /var/lib/gascity-contributor/home/legacy-marker && "
+        "test -s /var/lib/gascity-contributor/gc/legacy-marker"
+    )
     main_unit = machine.succeed("systemctl cat gas-city-contributor.service")
     assert "StateDirectory=gascity-contributor/state" in main_unit
     assert "StateDirectoryQuota=33554432" in main_unit
@@ -1929,8 +1948,6 @@ pkgs.testers.runNixOSTest {
     ]
     assert read_write_paths == [
         "/var/lib/gascity-contributor/state",
-        "/var/lib/gascity-contributor/home",
-        "/var/lib/gascity-contributor/gc",
         "/run/gascity-contributor",
     ]
     managed_stat = machine.succeed(
