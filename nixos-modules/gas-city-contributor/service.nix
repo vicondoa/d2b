@@ -53,12 +53,31 @@ let
   activeRunGCRootDirectory = "/nix/var/nix/gcroots/gascity-contributor";
   terminalStateRoot = "${stateRoot}/agent-state/terminal";
   packageAssetRoot = "${package}/share/gas-city-contributor";
-  cityPath = "${packageAssetRoot}/city";
-  packPath = "${packageAssetRoot}/pack";
-  profilesPath = "${packageAssetRoot}/copilot";
+  configuredAssetRoot = pkgs.runCommand "gas-city-contributor-configured-assets" { } ''
+    set -euo pipefail
+    mkdir -p "$out"
+    cp -R ${packageAssetRoot}/. "$out/"
+    chmod -R u+w "$out/city"
+
+    city="$out/city/city.toml"
+    test "$(grep -c '^name = "d2b"$' "$city")" -eq 1
+    test "$(grep -c '^path = "/var/lib/gascity-contributor/state/rigs/d2b"$' "$city")" -eq 1
+    test "$(grep -c '^dir = "d2b"$' "$city")" -eq 40
+    substituteInPlace "$city" \
+      --replace-fail 'name = "d2b"' \
+        'name = "${cfg.repository.rigName}"' \
+      --replace-fail \
+        'path = "/var/lib/gascity-contributor/state/rigs/d2b"' \
+        'path = "/var/lib/gascity-contributor/state/rigs/${cfg.repository.rigName}"' \
+      --replace-fail 'dir = "d2b"' \
+        'dir = "${cfg.repository.rigName}"'
+  '';
+  cityPath = "${configuredAssetRoot}/city";
+  packPath = "${configuredAssetRoot}/pack";
+  profilesPath = "${configuredAssetRoot}/copilot";
   instructionsPath = "${profilesPath}/instructions.md";
   runtimeClosure = pkgs.closureInfo {
-    rootPaths = [ package ];
+    rootPaths = [ package configuredAssetRoot ];
   };
   runtimeClosurePath = "${runtimeClosure}/store-paths";
   agentUid = lib.attrByPath [ "users" "users" "gascity-agent" "uid" ] 0 config;
@@ -66,7 +85,9 @@ let
   discordUid = config.users.users.gascity-discord.uid;
   publisherUid = config.users.users.gascity-publisher.uid;
   checkUid = lib.attrByPath [ "users" "users" "gascity-check" "uid" ] 0 config;
-  generation = builtins.substring 0 32 (builtins.hashString "sha256" (toString package));
+  generation = builtins.substring 0 32 (
+    builtins.hashString "sha256" (toString configuredAssetRoot)
+  );
   relayAuth = builtins.hashString "sha256"
     "gascity-fdproxy:${cfg.repository.githubSlug}:${cfg.repository.rigName}";
   checkAuth = builtins.hashString "sha256"
@@ -98,7 +119,7 @@ let
   materialize = "+${python} ${activation} materialize-assets"
     + " --uid 0"
     + " --group ${lib.escapeShellArg managedAssetGroup}"
-    + " --source ${lib.escapeShellArg "${package}/share/gas-city-contributor"}"
+    + " --source ${lib.escapeShellArg configuredAssetRoot}"
     + " --destination ${lib.escapeShellArg "${serviceRoot}/managed"}";
   decisionReconcile = pkgs.writeShellScript "gascity-decision-reconcile" ''
     set -euo pipefail
@@ -298,7 +319,7 @@ let
     ${python} ${launcher} \
       --server \
       --socket ${lib.escapeShellArg agentPrivateSocket} \
-      --settings-root ${lib.escapeShellArg "${package}/share/gas-city-contributor/copilot"} \
+      --settings-root ${lib.escapeShellArg profilesPath} \
       --copilot ${lib.escapeShellArg copilot} \
       --state-root ${lib.escapeShellArg "${stateRoot}/agent-state"} \
       --worktree ${lib.escapeShellArg "${stateRoot}/worktrees"} \
@@ -335,7 +356,7 @@ let
       --status-path ${lib.escapeShellArg readinessPath} \
       --generation ${lib.escapeShellArg generation} \
       --state-schema 1 \
-      --profile-script ${lib.escapeShellArg "${package}/share/gas-city-contributor/pack/scripts/copilot-profile.py"} \
+      --profile-script ${lib.escapeShellArg "${packPath}/scripts/copilot-profile.py"} \
       --run-id readiness \
       --bead-id readiness \
       --worktree ${lib.escapeShellArg "${stateRoot}/worktrees/readiness"} \
@@ -354,7 +375,7 @@ let
     ${python} ${launcher} \
       --server \
       --socket ${lib.escapeShellArg agentPrivateSocket} \
-      --settings-root ${lib.escapeShellArg "${package}/share/gas-city-contributor/copilot"} \
+      --settings-root ${lib.escapeShellArg profilesPath} \
       --copilot ${lib.escapeShellArg copilot} \
       --state-root ${lib.escapeShellArg "${stateRoot}/agent-state"} \
       --worktree ${lib.escapeShellArg "${stateRoot}/worktrees"} \
@@ -450,7 +471,7 @@ let
     "XDG_CACHE_HOME=${cacheRoot}"
     "XDG_RUNTIME_DIR=${runtimeRoot}"
     "GC_HOME=${gcRoot}"
-    "GC_CONTRIBUTOR_ROOT=${package}/share/gas-city-contributor"
+    "GC_CONTRIBUTOR_ROOT=${configuredAssetRoot}"
     "GC_RIG_NAME=${cfg.repository.rigName}"
     "GC_REPOSITORY=${cfg.repository.githubSlug}"
     "GC_BASE_BRANCH=${cfg.repository.baseBranch}"
@@ -570,7 +591,7 @@ in
               runtimeRoot
             ];
             ReadOnlyPaths = [
-              "${package}/share/gas-city-contributor"
+              configuredAssetRoot
               agentDirectory
               egressDirectory
               discordDirectory
@@ -670,7 +691,7 @@ in
                 "-${publisherDirectory}"
               ] ++ lib.optional cfg.check.enable "-${checkDirectory}";
             ReadOnlyPaths = [
-              "${package}/share/gas-city-contributor"
+              configuredAssetRoot
               egressDirectory
             ];
             LoadCredential = [
