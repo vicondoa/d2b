@@ -247,6 +247,7 @@ let
     executable = true;
     text = ''
       #!${contributorPython}
+      import pathlib
       import signal
       import socket
 
@@ -258,6 +259,9 @@ let
 
       signal.signal(signal.SIGTERM, stop)
       signal.signal(signal.SIGINT, stop)
+      pathlib.Path("/tmp/gascity-buildbuddy-private-marker").write_text(
+          "buildbuddy\n", encoding="utf-8"
+      )
       listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
       listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 0)
       listener.bind(("127.0.0.1", 19801))
@@ -274,6 +278,12 @@ let
           listener.close()
     '';
   };
+
+  fakeCheck = pkgs.writeShellScript "gascity-host-fake-check" ''
+    set -eu
+    printf '%s\n' check > /tmp/gascity-check-private-marker
+    exec "$@"
+  '';
 
   fakeEgress = pkgs.writeTextFile {
     name = "gascity-host-fake-egress";
@@ -1552,8 +1562,33 @@ pkgs.testers.runNixOSTest {
         "${fakeSidecar} /run/gascity-publisher/publisher.sock gascity-publisher-channel";
     systemd.services.gascity-check.serviceConfig.ExecStartPre =
       [ "${credentialProbe} check none" ];
+    # Keep the production PrivateTmp boundary while giving this fixture a
+    # disconnected writable tmpfs for its live marker under ProtectSystem.
+    systemd.services.gascity-check.serviceConfig.PrivateTmp =
+      lib.mkForce "disconnected";
+    systemd.services.gascity-check.serviceConfig.ExecStart = lib.mkForce (
+      "${fakeCheck} ${testPackagePython} ${testPackageScripts}/check-runner.py"
+      + " server"
+      + " --store-root /var/lib/gascity-check/nix-root"
+      + " --output-root /var/lib/gascity-check/output"
+      + " --proxy http://127.0.0.1:3128"
+      + " --egress-socket /run/gascity-egress/egress.sock"
+      + " --egress-server-uid 45104"
+      + " --socket /run/gascity-check/check.sock"
+      + " --allowed-uid 45100"
+      + " --check-auth-token-env GC_CHECK_AUTH"
+      + " --approved-check 'build-artifact-valid=.gc/scripts/checks/build-artifact-valid.sh'"
+      + " --max-jobs 1"
+      + " --build-cores 2"
+      + " --max-heavy-checks 1"
+      + " --timeout-seconds 7"
+      + " --term-grace 2"
+      + " --kill-grace 1"
+    );
     systemd.services.gascity-buildbuddy-proxy.serviceConfig.ExecStartPre =
       [ "${credentialProbe} buildbuddy buildbuddy-api-key" ];
+    systemd.services.gascity-buildbuddy-proxy.serviceConfig.PrivateTmp =
+      lib.mkForce "disconnected";
     systemd.services.gascity-buildbuddy-proxy.serviceConfig.ExecStart =
       lib.mkForce fakeBuildBuddy;
     # The production proxy is replaced with a fixture sidecar above so the
@@ -1630,6 +1665,7 @@ pkgs.testers.runNixOSTest {
         "gascity-publisher.service",
         "gascity-free-space-monitor.service",
         "gascity-check.service",
+        "gascity-buildbuddy-netns.service",
         "gascity-buildbuddy-proxy.service",
         "gas-city-contributor.service",
     ]:
@@ -1682,6 +1718,7 @@ pkgs.testers.runNixOSTest {
         "gascity-egress.service",
         "gascity-free-space-monitor.service",
         "gascity-check.service",
+        "gascity-buildbuddy-netns.service",
         "gascity-buildbuddy-proxy.service",
     ]:
         machine.succeed(
@@ -1709,6 +1746,7 @@ pkgs.testers.runNixOSTest {
         "gascity-egress.service",
         "gascity-free-space-monitor.service",
         "gascity-check.service",
+        "gascity-buildbuddy-netns.service",
         "gascity-buildbuddy-proxy.service",
     ]:
         assert required in requires, f"missing Requires edge: {required}"
@@ -1719,18 +1757,78 @@ pkgs.testers.runNixOSTest {
         "gascity-egress.service",
         "gascity-free-space-monitor.service",
         "gascity-check.service",
+        "gascity-buildbuddy-netns.service",
         "gascity-buildbuddy-proxy.service",
     ]:
         part_of = machine.succeed(f"systemctl show -P PartOf {unit}")
         assert "gas-city-contributor.service" in part_of
 
     # BuildBuddy and the uncredentialed check runner share one private network
-    # namespace.  The loopback listeners must stay inside it, never appearing
-    # in the host namespace or from either service identity outside systemd.
+    # namespace through a credential-free holder.  The loopback listeners must
+    # stay inside it, never appearing in the host namespace or from either
+    # service identity outside systemd.
     joins_namespace = machine.succeed(
         "systemctl show -P JoinsNamespaceOf gascity-check.service"
     ).strip()
-    assert "gascity-buildbuddy-proxy.service" in joins_namespace
+    proxy_joins_namespace = machine.succeed(
+        "systemctl show -P JoinsNamespaceOf gascity-buildbuddy-proxy.service"
+    ).strip()
+    assert "gascity-buildbuddy-netns.service" in joins_namespace
+    assert "gascity-buildbuddy-netns.service" in proxy_joins_namespace
+    assert "gascity-buildbuddy-proxy.service" not in joins_namespace
+    machine.succeed(
+        "systemctl show -P Requires gascity-check.service "
+        "| tr ' ' '\\n' | grep -qx gascity-buildbuddy-netns.service"
+    )
+    machine.succeed(
+        "systemctl show -P After gascity-check.service "
+        "| tr ' ' '\\n' | grep -qx gascity-buildbuddy-netns.service"
+    )
+    machine.succeed(
+        "systemctl show -P Requires gascity-buildbuddy-proxy.service "
+        "| tr ' ' '\\n' | grep -qx gascity-buildbuddy-netns.service"
+    )
+    machine.succeed(
+        "systemctl show -P After gascity-buildbuddy-proxy.service "
+        "| tr ' ' '\\n' | grep -qx gascity-buildbuddy-netns.service"
+    )
+    machine.succeed(
+        "systemctl show -P Requires gas-city-contributor.service "
+        "| tr ' ' '\\n' | grep -qx gascity-buildbuddy-netns.service"
+    )
+    for property_name in [
+        "PrivateTmp",
+        "PrivateDevices",
+        "PrivateIPC",
+        "PrivateUsers",
+        "PrivateMounts",
+    ]:
+        machine.succeed(
+            f"systemctl show -P {property_name} gascity-buildbuddy-netns.service "
+            "| grep -qx no"
+        )
+    machine.succeed(
+        "systemctl show -P PrivateNetwork gascity-buildbuddy-netns.service "
+        "| grep -qx yes"
+    )
+    machine.succeed(
+        "systemctl show -P User gascity-buildbuddy-netns.service "
+        "| grep -qx gascity-egress"
+    )
+    for setting in [
+        "LoadCredential",
+        "StateDirectory",
+        "CacheDirectory",
+        "RuntimeDirectory",
+        "ReadWritePaths",
+    ]:
+        machine.succeed(
+            f"! systemctl cat gascity-buildbuddy-netns.service "
+            f"| grep -q '^{setting}='"
+        )
+    holder_pid = machine.succeed(
+        "systemctl show -P MainPID gascity-buildbuddy-netns.service"
+    ).strip()
     machine.succeed(
         "systemctl show -P PrivateNetwork gascity-check.service | grep -qx yes"
     )
@@ -1744,19 +1842,40 @@ pkgs.testers.runNixOSTest {
     proxy_pid = machine.succeed(
         "systemctl show -P MainPID gascity-buildbuddy-proxy.service"
     ).strip()
-    check_namespace_inode = machine.succeed(
-        f"stat -Lc '%i' /proc/{check_pid}/ns/net"
-    ).strip()
-    proxy_namespace_inode = machine.succeed(
-        f"stat -Lc '%i' /proc/{proxy_pid}/ns/net"
-    ).strip()
+    namespace_inodes = {
+        "holder": machine.succeed(
+            f"stat -Lc '%i' /proc/{holder_pid}/ns/net"
+        ).strip(),
+        "check": machine.succeed(
+            f"stat -Lc '%i' /proc/{check_pid}/ns/net"
+        ).strip(),
+        "proxy": machine.succeed(
+            f"stat -Lc '%i' /proc/{proxy_pid}/ns/net"
+        ).strip(),
+    }
     host_namespace_inode = machine.succeed(
         "stat -Lc '%i' /proc/1/ns/net"
     ).strip()
-    assert check_namespace_inode == proxy_namespace_inode
-    assert check_namespace_inode != host_namespace_inode
+    assert len(set(namespace_inodes.values())) == 1
+    assert namespace_inodes["holder"] != host_namespace_inode
+    mount_namespace_inodes = {
+        "holder": machine.succeed(
+            f"stat -Lc '%i' /proc/{holder_pid}/ns/mnt"
+        ).strip(),
+        "check": machine.succeed(
+            f"stat -Lc '%i' /proc/{check_pid}/ns/mnt"
+        ).strip(),
+        "proxy": machine.succeed(
+            f"stat -Lc '%i' /proc/{proxy_pid}/ns/mnt"
+        ).strip(),
+    }
+    assert len(set(mount_namespace_inodes.values())) == 3
+    holder_network_sockets = machine.succeed(
+        f"nsenter -t {holder_pid} -n ss -H -tnp"
+    )
+    assert f"pid={holder_pid}," not in holder_network_sockets
     shared_listeners = machine.succeed(
-        f"nsenter -t {check_pid} -n ss -H -ltn"
+        f"nsenter -t {holder_pid} -n ss -H -ltnp"
     )
     for listener in ["127.0.0.1:3128", "127.0.0.1:19801"]:
         assert listener in shared_listeners, (
@@ -1775,6 +1894,24 @@ pkgs.testers.runNixOSTest {
                 f"'import socket; "
                 f"socket.create_connection((\"127.0.0.1\",{port}),0.4)'"
             )
+
+    check_tmp_marker = "/tmp/gascity-check-private-marker"
+    proxy_tmp_marker = "/tmp/gascity-buildbuddy-private-marker"
+    machine.succeed(
+        f"nsenter -t {check_pid} -m -- test -s {check_tmp_marker}"
+    )
+    machine.succeed(
+        f"nsenter -t {proxy_pid} -m -- test ! -e {check_tmp_marker}"
+    )
+    machine.succeed(
+        f"nsenter -t {proxy_pid} -m -- test -s {proxy_tmp_marker}"
+    )
+    machine.succeed(
+        f"nsenter -t {check_pid} -m -- test ! -e {proxy_tmp_marker}"
+    )
+    machine.succeed(
+        f"test ! -e {check_tmp_marker} && test ! -e {proxy_tmp_marker}"
+    )
 
     def active_child_pid():
         command = (
@@ -2350,6 +2487,7 @@ pkgs.testers.runNixOSTest {
         "gascity-egress.service",
         "gascity-free-space-monitor.service",
         "gascity-check.service",
+        "gascity-buildbuddy-netns.service",
         "gascity-buildbuddy-proxy.service",
     ]:
         machine.wait_until_succeeds(
@@ -2392,6 +2530,7 @@ pkgs.testers.runNixOSTest {
         "gascity-publisher.service",
         "gascity-egress.service",
         "gascity-check.service",
+        "gascity-buildbuddy-netns.service",
         "gascity-buildbuddy-proxy.service",
     ]:
         machine.wait_until_succeeds(

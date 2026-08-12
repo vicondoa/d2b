@@ -58,8 +58,11 @@ let
   publisherUnit = enabled.systemd.services.gascity-publisher;
   publisher = enabled.systemd.services.gascity-publisher.serviceConfig;
   egress = enabled.systemd.services.gascity-egress.serviceConfig;
+  holderUnit = enabled.systemd.services.gascity-buildbuddy-netns;
+  holder = holderUnit.serviceConfig;
   checkUnit = enabled.systemd.services.gascity-check;
   check = enabled.systemd.services.gascity-check.serviceConfig;
+  proxyUnit = enabled.systemd.services.gascity-buildbuddy-proxy;
   proxy = enabled.systemd.services.gascity-buildbuddy-proxy.serviceConfig;
   slice = enabled.systemd.slices.gascity-contributor.sliceConfig;
   firewall = enabled.networking.nftables.ruleset;
@@ -88,6 +91,8 @@ let
   }).config;
   checkWithoutBuildBuddyUnit = withoutBuildBuddy.systemd.services.gascity-check;
   checkWithoutBuildBuddy = checkWithoutBuildBuddyUnit.serviceConfig;
+  holderWithoutBuildBuddy =
+    withoutBuildBuddy.systemd.services ? gascity-buildbuddy-netns;
 
   invalidPath = evalWith {
       services.gasCityContributor = validConfig.services.gasCityContributor // {
@@ -119,11 +124,13 @@ in
       service = disabled.systemd.services ? gas-city-contributor;
       users = disabled.users.users ? gascity;
       slice = disabled.systemd.slices ? gascity-contributor;
+      holder = disabled.systemd.services ? gascity-buildbuddy-netns;
     };
     expected = {
       service = false;
       users = false;
       slice = false;
+      holder = false;
     };
   };
 
@@ -135,6 +142,7 @@ in
       publisher = enabled.systemd.services ? gascity-publisher;
       egress = enabled.systemd.services ? gascity-egress;
       check = enabled.systemd.services ? gascity-check;
+      holder = enabled.systemd.services ? gascity-buildbuddy-netns;
       proxy = enabled.systemd.services ? gascity-buildbuddy-proxy;
       monitor = enabled.systemd.services ? gascity-free-space-monitor;
     };
@@ -145,6 +153,7 @@ in
       publisher = true;
       egress = true;
       check = true;
+      holder = true;
       proxy = true;
       monitor = true;
     };
@@ -191,6 +200,7 @@ in
       agent = agent.LoadCredential or [ ];
       discord = discord.LoadCredential or [ ];
       publisher = publisher.LoadCredential or [ ];
+      holder = holder.LoadCredential or [ ];
       proxy = proxy.LoadCredential or [ ];
       check = check.LoadCredential or [ ];
     };
@@ -199,6 +209,7 @@ in
       agent = [ "copilot-token:/run/secrets/gascity/copilot" ];
       discord = [ "discord-bot-token:/run/secrets/gascity/discord" ];
       publisher = [ "github-app-private-key:/run/secrets/gascity/github-app" ];
+      holder = [ ];
       proxy = [ "buildbuddy-api-key:/run/secrets/gascity/buildbuddy" ];
       check = [ ];
     };
@@ -360,8 +371,39 @@ in
       agentPrivateNetwork = agent.PrivateNetwork;
       discordPrivateNetwork = discord.PrivateNetwork;
       publisherPrivateNetwork = publisher.PrivateNetwork;
+      holderPrivateNetwork = holder.PrivateNetwork;
+      holderPrivateTmp = holder.PrivateTmp;
+      holderPrivateDevices = holder.PrivateDevices;
+      holderPrivateIPC = holder.PrivateIPC;
+      holderPrivateUsers = holder.PrivateUsers;
+      holderPrivateMounts = holder.PrivateMounts;
+      holderUser = holder.User;
+      holderGroup = holder.Group;
+      holderSupplementaryGroups = holder.SupplementaryGroups;
+      holderSlice = holder.Slice;
+      holderExecStart = lib.hasInfix
+        "/bin/sleep infinity"
+        (textValue holder.ExecStart);
+      holderRestrictFamilies = holder.RestrictAddressFamilies;
+      holderReadWritePaths = holder.ReadWritePaths or [ ];
+      holderStateDirectory = holder.StateDirectory or null;
+      holderCacheDirectory = holder.CacheDirectory or null;
+      holderRuntimeDirectory = holder.RuntimeDirectory or null;
+      holderEnvironment = holder.Environment or [ ];
+      holderRequires = holderUnit.requires;
+      holderAfter = holderUnit.after;
+      holderBindsTo = holderUnit.bindsTo;
+      holderPartOf = holderUnit.unitConfig.PartOf;
+      holderBefore = holderUnit.unitConfig.Before;
       proxyPrivateNetwork = proxy.PrivateNetwork;
+      proxyPrivateTmp = proxy.PrivateTmp;
+      proxyUser = proxy.User;
+      proxyJoinsNamespaceOf = proxyUnit.unitConfig.JoinsNamespaceOf or [ ];
+      proxyRequires = proxyUnit.requires;
+      proxyAfter = proxyUnit.after;
       checkPrivateNetwork = check.PrivateNetwork;
+      checkPrivateTmp = check.PrivateTmp;
+      checkUser = check.User;
       checkJoinsNamespaceOf = checkUnit.unitConfig.JoinsNamespaceOf or [ ];
       checkServiceJoinsNamespaceOf = check ? JoinsNamespaceOf;
       checkRequires = checkUnit.requires;
@@ -369,6 +411,11 @@ in
       checkBindsTo = checkUnit.bindsTo;
       checkPartOf = checkUnit.unitConfig.PartOf;
       checkBefore = checkUnit.unitConfig.Before;
+      mainRequires = enabled.systemd.services.gas-city-contributor.requires;
+      mainAfter = enabled.systemd.services.gas-city-contributor.after;
+      mainWithoutBuildBuddyRequiresHolder = builtins.elem
+        "gascity-buildbuddy-netns.service"
+        (withoutBuildBuddy.systemd.services.gas-city-contributor.requires or [ ]);
       checkProxy = lib.hasInfix
         "--proxy http://127.0.0.1:3128"
         (textValue check.ExecStart);
@@ -379,6 +426,8 @@ in
         checkWithoutBuildBuddyUnit.unitConfig ? JoinsNamespaceOf;
       checkWithoutBuildBuddyServiceJoinsNamespaceOf =
         checkWithoutBuildBuddy ? JoinsNamespaceOf;
+      holderWithoutBuildBuddy =
+        withoutBuildBuddy.systemd.services ? gascity-buildbuddy-netns;
       buildBuddyDisabledProxy =
         withoutBuildBuddy.systemd.services ? gascity-buildbuddy-proxy;
       checkGroup = check.Group;
@@ -433,27 +482,88 @@ in
       agentPrivateNetwork = true;
       discordPrivateNetwork = true;
       publisherPrivateNetwork = true;
+      holderPrivateNetwork = true;
+      holderPrivateTmp = false;
+      holderPrivateDevices = false;
+      holderPrivateIPC = false;
+      holderPrivateUsers = false;
+      holderPrivateMounts = false;
+      holderUser = "gascity-egress";
+      holderGroup = "gascity-egress";
+      holderSupplementaryGroups = [ ];
+      holderSlice = "gascity-contributor.slice";
+      holderExecStart = true;
+      holderRestrictFamilies = [ "AF_UNIX" ];
+      holderReadWritePaths = [ ];
+      holderStateDirectory = null;
+      holderCacheDirectory = null;
+      holderRuntimeDirectory = null;
+      holderEnvironment = [ ];
+      holderRequires = [ "gascity-free-space-monitor.service" ];
+      holderAfter = [ "gascity-free-space-monitor.service" ];
+      holderBindsTo = [ "gascity-free-space-monitor.service" ];
+      holderPartOf = "gas-city-contributor.service";
+      holderBefore = "gas-city-contributor.service";
+      mainRequires = [
+        "gascity-agent.service"
+        "gascity-discord.service"
+        "gascity-publisher.service"
+        "gascity-egress.service"
+        "gascity-free-space-monitor.service"
+        "gascity-check.service"
+        "gascity-buildbuddy-netns.service"
+        "gascity-buildbuddy-proxy.service"
+      ];
+      mainAfter = [
+        "gascity-free-space-monitor.service"
+        "gascity-agent.service"
+        "gascity-discord.service"
+        "gascity-publisher.service"
+        "gascity-egress.service"
+        "gascity-check.service"
+        "gascity-buildbuddy-netns.service"
+        "gascity-buildbuddy-proxy.service"
+      ];
       proxyPrivateNetwork = true;
+      proxyPrivateTmp = true;
+      proxyUser = "gascity-buildbuddy-proxy";
+      proxyJoinsNamespaceOf = [ "gascity-buildbuddy-netns.service" ];
+      proxyRequires = [
+        "gascity-egress.service"
+        "gascity-free-space-monitor.service"
+        "gascity-buildbuddy-netns.service"
+      ];
+      proxyAfter = [
+        "gascity-egress.service"
+        "gascity-free-space-monitor.service"
+        "gascity-buildbuddy-netns.service"
+      ];
       checkPrivateNetwork = true;
-      checkJoinsNamespaceOf = [ "gascity-buildbuddy-proxy.service" ];
+      checkPrivateTmp = true;
+      checkUser = "gascity-check";
+      checkJoinsNamespaceOf = [ "gascity-buildbuddy-netns.service" ];
       checkServiceJoinsNamespaceOf = false;
       checkRequires = [
         "gascity-egress.service"
         "gascity-free-space-monitor.service"
+        "gascity-buildbuddy-netns.service"
         "gascity-buildbuddy-proxy.service"
       ];
       checkAfter = [
         "gascity-egress.service"
         "gascity-free-space-monitor.service"
+        "gascity-buildbuddy-netns.service"
         "gascity-buildbuddy-proxy.service"
       ];
       checkBindsTo = [ "gascity-free-space-monitor.service" ];
       checkPartOf = "gas-city-contributor.service";
       checkBefore = "gas-city-contributor.service";
+      mainWithoutBuildBuddyRequiresHolder = false;
       checkProxy = true;
       proxyListen = true;
       checkWithoutBuildBuddyJoinsNamespaceOf = false;
       checkWithoutBuildBuddyServiceJoinsNamespaceOf = false;
+      holderWithoutBuildBuddy = false;
       buildBuddyDisabledProxy = false;
       checkGroup = "gascity-check-channel";
       checkChannelGroup = true;

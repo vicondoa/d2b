@@ -529,6 +529,7 @@ in
             "gascity-free-space-monitor.service"
           ]
           ++ lib.optional cfg.check.enable "gascity-check.service"
+          ++ lib.optional buildBuddyEnabled "gascity-buildbuddy-netns.service"
           ++ lib.optional buildBuddyEnabled "gascity-buildbuddy-proxy.service";
           bindsTo = [ "gascity-free-space-monitor.service" ];
           after = [
@@ -539,7 +540,10 @@ in
             "gascity-egress.service"
           ]
           ++ lib.optionals cfg.check.enable [ "gascity-check.service" ]
-          ++ lib.optionals buildBuddyEnabled [ "gascity-buildbuddy-proxy.service" ];
+          ++ lib.optionals buildBuddyEnabled [
+            "gascity-buildbuddy-netns.service"
+            "gascity-buildbuddy-proxy.service"
+          ];
           serviceConfig = sharedServiceConfig // {
             Type = "exec";
             User = "gascity";
@@ -834,16 +838,22 @@ in
               "gascity-egress.service"
               "gascity-free-space-monitor.service"
             ]
-            ++ lib.optional buildBuddyEnabled "gascity-buildbuddy-proxy.service";
+            ++ lib.optionals buildBuddyEnabled [
+              "gascity-buildbuddy-netns.service"
+              "gascity-buildbuddy-proxy.service"
+            ];
           bindsTo = [ "gascity-free-space-monitor.service" ];
           after =
             [
               "gascity-egress.service"
               "gascity-free-space-monitor.service"
             ]
-            ++ lib.optional buildBuddyEnabled "gascity-buildbuddy-proxy.service";
+            ++ lib.optionals buildBuddyEnabled [
+              "gascity-buildbuddy-netns.service"
+              "gascity-buildbuddy-proxy.service"
+            ];
           unitConfig = sidecarUnit.unitConfig // lib.optionalAttrs buildBuddyEnabled {
-            JoinsNamespaceOf = [ "gascity-buildbuddy-proxy.service" ];
+            JoinsNamespaceOf = [ "gascity-buildbuddy-netns.service" ];
           };
           serviceConfig = sharedServiceConfig // {
             Type = "exec";
@@ -905,18 +915,60 @@ in
         };
       }
       // lib.optionalAttrs buildBuddyEnabled {
+        gascity-buildbuddy-netns = {
+          description = "Gas City BuildBuddy network namespace holder";
+          requires = [ "gascity-free-space-monitor.service" ];
+          bindsTo = [ "gascity-free-space-monitor.service" ];
+          after = [ "gascity-free-space-monitor.service" ];
+          unitConfig = {
+            PartOf = "gas-city-contributor.service";
+            Before = "gas-city-contributor.service";
+            StartLimitIntervalSec = 60;
+            StartLimitBurst = 5;
+          };
+          serviceConfig = {
+            Type = "exec";
+            Slice = "gascity-contributor.slice";
+            User = "gascity-egress";
+            Group = "gascity-egress";
+            SupplementaryGroups = [ ];
+            NoNewPrivileges = true;
+            CapabilityBoundingSet = [ "" ];
+            AmbientCapabilities = [ "" ];
+            PrivateNetwork = true;
+            PrivateTmp = false;
+            PrivateDevices = false;
+            PrivateIPC = false;
+            PrivateUsers = false;
+            PrivateMounts = false;
+            RestrictAddressFamilies = [ "AF_UNIX" ];
+            RestrictSUIDSGID = true;
+            RestrictRealtime = true;
+            LockPersonality = true;
+            UMask = "0077";
+            KillMode = "control-group";
+            ExecStart = "${pkgs.coreutils}/bin/sleep infinity";
+            Restart = "on-failure";
+            RestartSec = "2s";
+          };
+        };
+
         gascity-buildbuddy-proxy = {
           description = "Gas City BuildBuddy credential proxy";
           requires = [
             "gascity-egress.service"
             "gascity-free-space-monitor.service"
+            "gascity-buildbuddy-netns.service"
           ];
           bindsTo = [ "gascity-free-space-monitor.service" ];
           after = [
             "gascity-egress.service"
             "gascity-free-space-monitor.service"
+            "gascity-buildbuddy-netns.service"
           ];
-          inherit (sidecarUnit) unitConfig;
+          unitConfig = sidecarUnit.unitConfig // {
+            JoinsNamespaceOf = [ "gascity-buildbuddy-netns.service" ];
+          };
           serviceConfig = sharedServiceConfig // {
             Type = "exec";
             User = "gascity-buildbuddy-proxy";
