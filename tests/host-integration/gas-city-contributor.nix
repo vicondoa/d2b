@@ -2448,8 +2448,16 @@ pkgs.testers.runNixOSTest {
         "cd /tmp/gascity-fixtures/tests/fixtures/gas-city && "
         f"PATH=/definitely-not-a-command-path "
         "GC_TEST_OPENSSL=${testPackage}/bin/openssl "
+        "GC_TEST_GIT=${testPackage}/bin/git "
         f"{python} github/test_publisher.py "
         "PublisherFixture.test_github_api_signs_jwt_with_packaged_openssl_under_restricted_path"
+    )
+    machine.succeed(
+        "cd /tmp/gascity-fixtures/tests/fixtures/gas-city && "
+        f"PATH=/definitely-not-a-command-path "
+        "GC_TEST_GIT=${testPackage}/bin/git "
+        f"{python} github/test_publisher.py "
+        "PublisherFixture.test_git_commands_use_explicit_executable_under_restricted_path_without_network"
     )
     machine.succeed(
         f"GAS_CITY_ENVOY={envoy} GAS_CITY_CA_BUNDLE={ca_bundle} "

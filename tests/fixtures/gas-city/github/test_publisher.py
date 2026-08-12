@@ -464,6 +464,8 @@ class PublisherFixture(unittest.TestCase):
         self.assertGreaterEqual(service.count("fdproxy-sidecar"), 2)
         self.assertIn("HTTPS_PROXY=http://127.0.0.1:3128", service)
         self.assertIn("gascity-egress-channel", service)
+        self.assertIn('--git "$GC_PUBLISHER_GIT"', service)
+        self.assertIn('"GC_PUBLISHER_GIT=${git}"', service)
 
     def test_github_api_signs_jwt_with_packaged_openssl_under_restricted_path(self) -> None:
         openssl = os.environ.get("GC_TEST_OPENSSL") or shutil.which("openssl")
@@ -507,29 +509,30 @@ class PublisherFixture(unittest.TestCase):
         self.assertNotIn("GITHUB_TOKEN", environment)
         self.assertNotIn("GH_TOKEN", environment)
 
-    def test_publisher_serve_requires_an_explicit_openssl_argument(self) -> None:
+    def test_publisher_serve_requires_explicit_git_and_openssl_arguments(self) -> None:
+        common = [
+            "serve",
+            "--socket",
+            "/run/gascity-publisher/publisher.sock",
+            "--credential",
+            str(FIXTURE_PRIVATE_KEY),
+            "--state-root",
+            "/var/lib/gascity-publisher",
+            "--repository",
+            REPOSITORY,
+            "--base-branch",
+            BASE,
+            "--app-id",
+            "7",
+            "--installation-id",
+            "42",
+        ]
         with self.assertRaises(SystemExit):
-            MODULE._parse_args(
-                [
-                    "serve",
-                    "--socket",
-                    "/run/gascity-publisher/publisher.sock",
-                    "--credential",
-                    str(FIXTURE_PRIVATE_KEY),
-                    "--state-root",
-                    "/var/lib/gascity-publisher",
-                    "--repository",
-                    REPOSITORY,
-                    "--base-branch",
-                    BASE,
-                    "--app-id",
-                    "7",
-                    "--installation-id",
-                    "42",
-                ]
-            )
+            MODULE._parse_args([*common, "--openssl", "/nix/store/openssl/bin/openssl"])
+        with self.assertRaises(SystemExit):
+            MODULE._parse_args([*common, "--git", "/nix/store/git/bin/git"])
 
-    def test_openssl_rejects_untrusted_symlink_and_accepts_immutable_package_link(self) -> None:
+    def test_executable_paths_reject_untrusted_symlinks_and_accept_package_links(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary)
             target = root / "openssl"
@@ -539,6 +542,8 @@ class PublisherFixture(unittest.TestCase):
             link.symlink_to(target)
             with self.assertRaises(MODULE.PublicationError):
                 MODULE._validate_openssl_path(str(link))
+            with self.assertRaises(MODULE.PublicationError):
+                MODULE._validate_git_path(str(link))
 
         openssl = os.environ.get("GC_TEST_OPENSSL") or shutil.which("openssl")
         if openssl is None:
@@ -547,6 +552,14 @@ class PublisherFixture(unittest.TestCase):
         self.assertTrue(pathlib.Path(validated).is_absolute())
         self.assertTrue(pathlib.Path(validated).is_file())
         self.assertTrue(os.access(validated, os.X_OK))
+
+        git = os.environ.get("GC_TEST_GIT") or shutil.which("git")
+        if git is None:
+            self.skipTest("git is unavailable")
+        validated_git = MODULE._validate_git_path(git)
+        self.assertTrue(pathlib.Path(validated_git).is_absolute())
+        self.assertTrue(pathlib.Path(validated_git).is_file())
+        self.assertTrue(os.access(validated_git, os.X_OK))
 
     def test_github_installation_identity_uses_app_jwt_without_installation_token(self) -> None:
         requests: list[MODULE.urllib.request.Request] = []
@@ -1194,7 +1207,7 @@ class PublisherFixture(unittest.TestCase):
             git=git,
         )
         self.addCleanup(bundle.close)
-        runner = MODULE.GitRunner()
+        runner = MODULE.GitRunner(git=git)
         runner.configure_bare(publisher_repo, "https://github.com/acme/project.git")
         imported = runner.import_bundle(
             publisher_repo,
@@ -1207,6 +1220,79 @@ class PublisherFixture(unittest.TestCase):
             ["-C", str(publisher_repo), "show-ref", f"refs/heads/{HEAD}"]
         )
         self.assertIn(head_sha, heads)
+
+    def test_git_commands_use_explicit_executable_under_restricted_path_without_network(
+        self,
+    ) -> None:
+        git = os.environ.get("GC_TEST_GIT") or shutil.which("git")
+        if git is None:
+            self.skipTest("git is unavailable")
+        git_path = MODULE._validate_git_path(git)
+        restricted_path = "/definitely-not-a-command-path"
+        root = pathlib.Path(self.temporary.name, "restricted-git")
+        remote = root / "remote.git"
+        worktree = root / "worktree"
+        publisher_repo = root / "publisher.git"
+        remote.parent.mkdir(parents=True)
+        run = lambda *arguments: subprocess.run(
+            [git_path, *arguments],
+            cwd=worktree if worktree.exists() else None,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        run("init", "--bare", str(remote))
+        run("init", str(worktree))
+        run("-C", str(worktree), "config", "user.email", "fixture@example.invalid")
+        run("-C", str(worktree), "config", "user.name", "Fixture")
+        (worktree / "README").write_text("base\n", encoding="utf-8")
+        run("-C", str(worktree), "add", "README")
+        run("-C", str(worktree), "commit", "-m", "base")
+        run("-C", str(worktree), "branch", "-M", BASE)
+        run("-C", str(worktree), "remote", "add", "origin", str(remote))
+        run("-C", str(worktree), "push", "origin", BASE)
+        run("-C", str(worktree), "checkout", "-b", HEAD)
+        (worktree / "README").write_text("feature\n", encoding="utf-8")
+        run("-C", str(worktree), "commit", "-am", "feature")
+
+        commands: list[list[str]] = []
+        environments: list[dict[str, str]] = []
+
+        def run_git(*args: object, **kwargs: object) -> object:
+            commands.append(list(args[0]))
+            environments.append(dict(kwargs["env"]))
+            return subprocess.run(*args, **kwargs)
+
+        with patch.dict(os.environ, {"PATH": restricted_path}, clear=False):
+            bundle, head_sha = MODULE.create_unlinked_bundle(
+                worktree=str(worktree),
+                head=HEAD,
+                base=BASE,
+                branch_namespace="gascity/",
+                git=git_path,
+            )
+            self.addCleanup(bundle.close)
+            runner = MODULE.GitRunner(git=git_path, subprocess_run=run_git)
+            runner.configure_bare(publisher_repo, str(remote))
+            imported = runner.import_bundle(
+                publisher_repo,
+                bundle.fileno(),
+                head=HEAD,
+                expected_sha=head_sha,
+            )
+            runner.push(publisher_repo, HEAD)
+            remote_heads = runner.checked(
+                ["--git-dir", str(remote), "show-ref", f"refs/heads/{HEAD}"]
+            )
+
+        self.assertEqual(imported, head_sha)
+        self.assertIn(head_sha, remote_heads)
+        self.assertTrue(commands)
+        self.assertTrue(all(command[0] == git_path for command in commands))
+        self.assertTrue(all(environment["PATH"] == restricted_path for environment in environments))
+        self.assertTrue(
+            all(environment["GIT_CONFIG_NOSYSTEM"] == "1" for environment in environments)
+        )
 
 
 if __name__ == "__main__":

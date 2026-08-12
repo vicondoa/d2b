@@ -109,27 +109,50 @@ def _is_immutable_store_path(path: pathlib.Path) -> bool:
     return len(path.parts) > 3 and path.parts[:3] == ("/", "nix", "store")
 
 
-def _validate_openssl_path(value: object, *, require_immutable: bool = False) -> str:
-    path_text = _string(value, "OpenSSL path", max_bytes=512)
+def _validate_executable_path(
+    value: object,
+    label: str,
+    *,
+    require_immutable: bool = False,
+) -> str:
+    path_text = _string(value, f"{label} path", max_bytes=512)
     path = pathlib.Path(path_text)
     if (
         not path.is_absolute()
         or path_text.startswith("//")
         or os.path.normpath(path_text) != path_text
     ):
-        raise PublicationError("OpenSSL path must be absolute and normalized")
+        raise PublicationError(f"{label} path must be absolute and normalized")
     try:
         resolved = path.resolve(strict=True)
         info = resolved.stat()
     except OSError as error:
-        raise PublicationError("OpenSSL path is unavailable") from error
+        raise PublicationError(f"{label} path is unavailable") from error
     if not stat.S_ISREG(info.st_mode) or not info.st_mode & 0o111:
-        raise PublicationError("OpenSSL path is not an executable regular file")
+        raise PublicationError(
+            f"{label} path is not an executable regular file"
+        )
     if path != resolved and not _is_immutable_store_path(resolved):
-        raise PublicationError("OpenSSL path has an untrusted symlink")
+        raise PublicationError(f"{label} path has an untrusted symlink")
     if require_immutable and not _is_immutable_store_path(resolved):
-        raise PublicationError("OpenSSL path is outside the immutable closure")
+        raise PublicationError(f"{label} path is outside the immutable closure")
     return str(resolved)
+
+
+def _validate_openssl_path(value: object, *, require_immutable: bool = False) -> str:
+    return _validate_executable_path(
+        value,
+        "OpenSSL",
+        require_immutable=require_immutable,
+    )
+
+
+def _validate_git_path(value: object, *, require_immutable: bool = False) -> str:
+    return _validate_executable_path(
+        value,
+        "Git",
+        require_immutable=require_immutable,
+    )
 
 
 def _identifier(value: object, label: str) -> str:
@@ -456,7 +479,7 @@ class GitRunner:
     def __init__(
         self,
         *,
-        git: str = "git",
+        git: str,
         subprocess_run: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
     ) -> None:
         self.git = git
@@ -1458,19 +1481,21 @@ class PublisherServer:
         branch_namespace: str,
         app_id: str,
         installation_id: str,
+        git: str,
         openssl: str,
         cancellation_root: str | os.PathLike[str] | None,
         allowed_uid: int = 45100,
         api_base: str = DEFAULT_API_BASE,
     ) -> None:
         _validate_private_key_path(credential_path)
+        git_path = _validate_git_path(git, require_immutable=True)
         openssl_path = _validate_openssl_path(openssl, require_immutable=True)
         self.socket_path = socket_path
         self.socket_group = socket_group
         self.allowed_uid = allowed_uid
         self.publisher = Publisher(
             state=PublicationStore(state_root),
-            git=GitRunner(),
+            git=GitRunner(git=git_path),
             github=GitHubAPI(
                 app_id=app_id,
                 installation_id=installation_id,
@@ -1719,6 +1744,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     serve.add_argument("--socket", required=True)
     serve.add_argument("--socket-group", default="gascity-publisher-channel")
     serve.add_argument("--credential", required=True)
+    serve.add_argument("--git", required=True)
     serve.add_argument("--openssl", required=True)
     serve.add_argument("--state-root", required=True)
     serve.add_argument("--repository", required=True)
@@ -1811,6 +1837,7 @@ def main(argv: list[str] | None = None) -> int:
             branch_namespace=args.branch_namespace,
             app_id=args.app_id,
             installation_id=args.installation_id,
+            git=args.git,
             openssl=args.openssl,
             cancellation_root=cancellation_root,
             allowed_uid=args.allowed_uid,

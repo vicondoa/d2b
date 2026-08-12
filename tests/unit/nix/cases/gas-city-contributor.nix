@@ -72,6 +72,18 @@ let
   discordStartText = textValue discord.ExecStart;
   publisherStartText = textValue publisher.ExecStart;
   egressStartText = textValue egress.ExecStart;
+  publisherGit = "GC_PUBLISHER_GIT=${testPackage}/bin/git";
+  publisherGitEnvironment = builtins.filter
+    (entry: lib.hasPrefix "GC_PUBLISHER_GIT=" entry)
+    publisher.Environment;
+  publisherAmbientGit = builtins.filter
+    (entry: lib.hasPrefix "GIT=" entry)
+    publisher.Environment;
+  publisherBareGit = builtins.filter
+    (entry:
+      lib.hasPrefix "GC_PUBLISHER_GIT=" entry
+      && entry != publisherGit)
+    publisher.Environment;
   publisherOpenSSL = "GC_PUBLISHER_OPENSSL=${testPackage}/bin/openssl";
   publisherOpenSSLEnvironment = builtins.filter
     (entry: lib.hasPrefix "GC_PUBLISHER_OPENSSL=" entry)
@@ -173,11 +185,17 @@ in
 
   "gas-city-contributor/publisher-openssl-wiring" = {
     expr = {
+      gitEnvironment = publisherGitEnvironment;
+      gitAmbientFallback = publisherAmbientGit;
+      gitBareFallback = publisherBareGit;
       environment = publisherOpenSSLEnvironment;
       ambientFallback = publisherAmbientOpenSSL;
       bareFallback = publisherBareOpenSSL;
     };
     expected = {
+      gitEnvironment = [ publisherGit ];
+      gitAmbientFallback = [ ];
+      gitBareFallback = [ ];
       environment = [ publisherOpenSSL ];
       ambientFallback = [ ];
       bareFallback = [ ];
