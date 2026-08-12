@@ -986,8 +986,17 @@ class GitHubAPI:
         return value
 
     def find_pull_requests(self, repository: str, *, head: str, base: str) -> list[dict[str, object]]:
+        repository = validate_repository(repository)
+        owner, _ = repository.split("/", 1)
+        head = validate_branch(head, "head branch")
+        base = validate_branch(base, "base branch")
         query = urllib.parse.urlencode(
-            {"state": "all", "base": base, "per_page": "100"}
+            {
+                "state": "all",
+                "base": base,
+                "head": f"{owner}:{head}",
+                "per_page": "10",
+            }
         )
         value = self.request(
             "GET",

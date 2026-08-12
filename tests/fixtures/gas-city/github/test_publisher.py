@@ -902,6 +902,11 @@ class PublisherFixture(unittest.TestCase):
             [request.headers["Authorization"] for request in requests],
             ["token installation-token", "token installation-token"],
         )
+        self.assertEqual(
+            requests[1].full_url,
+            "https://api.github.com/repos/acme/project/pulls?"
+            "state=all&base=main&head=acme%3Agascity%2Frun-u5&per_page=10",
+        )
 
     def test_github_rate_limit_permanent_and_ambiguous_responses_are_bounded(self) -> None:
         def opener(_request: object, timeout: float) -> object:
