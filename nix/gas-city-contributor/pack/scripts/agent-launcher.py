@@ -1650,7 +1650,13 @@ def _validate_launch_metadata(
         "worktree",
         "fds",
     }
-    optional = {"auth", "require_ready", "state_root", "terminal_state_path"}
+    optional = {
+        "auth",
+        "require_ready",
+        "root_bead_id",
+        "state_root",
+        "terminal_state_path",
+    }
     if set(value) - required - optional or not required.issubset(value):
         raise LauncherError("launcher metadata has an unauthorized shape")
     if value.get("protocol") != LAUNCHER_PROTOCOL or value.get("operation") != "launch":
@@ -1666,6 +1672,11 @@ def _validate_launch_metadata(
         if not isinstance(candidate, str):
             raise LauncherError(f"launcher {key} is malformed")
         _validate_identifier(candidate, key.replace("_", " "))
+    root_bead_id = value.get("root_bead_id")
+    if root_bead_id is not None:
+        if not isinstance(root_bead_id, str):
+            raise LauncherError("launcher root_bead_id is malformed")
+        _validate_identifier(root_bead_id, "root bead id")
     for key in ("worktree", "state_root", "terminal_state_path"):
         candidate = value.get(key)
         if candidate is None and key in {"state_root", "terminal_state_path"}:
@@ -1847,6 +1858,7 @@ def _serve_client(
         attachments = dict(zip(names, descriptors, strict=True))
         run_id = str(metadata["run_id"])
         bead_id = str(metadata["bead_id"])
+        root_bead_id = str(metadata.get("root_bead_id", run_id))
         generation = str(metadata["generation"])
         state_schema = str(metadata["state_schema"])
         if args.generation and generation != args.generation:
@@ -1909,7 +1921,7 @@ def _serve_client(
         active_roots = _create_active_run_roots(
             args,
             run_id=run_id,
-            bead_id=bead_id,
+            bead_id=root_bead_id,
             generation=generation,
             state_schema=state_schema,
             terminal_state_path=(

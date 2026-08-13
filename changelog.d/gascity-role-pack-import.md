@@ -10,4 +10,5 @@
   standard session bead identity at that boundary. Managed rig files use the
   dedicated lifecycle-agent-check worktree group so sandboxed agents can update
   their assigned checkout and the isolated check runner can validate it without
-  exposing repository contents to unrelated sidecars.
+  exposing repository contents to unrelated sidecars. Run-scoped GC roots bind
+  to the durable workflow root separately from transient agent session beads.

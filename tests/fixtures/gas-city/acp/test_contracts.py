@@ -113,6 +113,30 @@ class ProfileContractTests(unittest.TestCase):
                 },
             )
 
+    def test_launch_metadata_separates_session_and_root_beads(self) -> None:
+        args = PROFILE._default_namespace("code-luna", "coding")
+        with tempfile.TemporaryDirectory(prefix="gascity-root-bead-") as raw:
+            args.worktree = raw
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "GC_RUN_ID": "run-1",
+                    "GC_ROOT_BEAD_ID": "workflow-root-1",
+                    "GC_SESSION_ID": "session-bead-1",
+                    "GC_CITY_GENERATION": "generation-1",
+                },
+                clear=False,
+            ):
+                metadata, descriptors = PROFILE._launch_metadata(
+                    args,
+                    profile="code-luna",
+                    tool_policy="coding",
+                )
+        self.assertEqual(metadata["run_id"], "run-1")
+        self.assertEqual(metadata["root_bead_id"], "workflow-root-1")
+        self.assertEqual(metadata["bead_id"], "session-bead-1")
+        self.assertEqual(descriptors, [])
+
     def test_settings_have_only_persistent_authority(self) -> None:
         for profile in ("review-sol", "review-luna", "code-luna"):
             path = COPILOT_ROOT / profile / "settings.json"

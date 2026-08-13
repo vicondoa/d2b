@@ -436,6 +436,10 @@ def _launch_metadata(
         "profile": profile,
         "tool_policy": tool_policy,
         **identity,
+        "root_bead_id": _identifier(
+            os.environ.get("GC_ROOT_BEAD_ID", identity["run_id"]),
+            "root bead id",
+        ),
         "worktree": str(worktree),
         "fds": [],
     }
