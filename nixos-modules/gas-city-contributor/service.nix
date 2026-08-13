@@ -295,7 +295,7 @@ let
 
   agentStart = pkgs.writeShellScript "gascity-agent-start" ''
     set -euo pipefail
-    umask 077
+    umask 007
     bootstrap_pid=""
     launcher_pid=""
     relay_pid=""
@@ -626,7 +626,7 @@ in
               "${pkgs.coreutils}/bin/install -d -m 0700 ${lib.escapeShellArg "${homeRoot}/.config"}"
               "${pkgs.coreutils}/bin/install -d -m 0700 ${lib.escapeShellArg "${homeRoot}/.local/state"}"
               "${pkgs.coreutils}/bin/install -d -m 2770 -g gascity-agent-channel ${lib.escapeShellArg "${stateRoot}/rigs/${cfg.repository.rigName}"}"
-              prepareRigPermissions
+              "+${prepareRigPermissions}"
             ];
             ExecStart = mainExec;
             ExecStartPost = decisionReconcile;

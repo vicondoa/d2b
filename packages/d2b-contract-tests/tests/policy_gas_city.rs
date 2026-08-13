@@ -419,6 +419,8 @@ fn gas_city_uses_four_immutable_sibling_imports() {
         "gascity-prepare-rig-permissions",
         "find -P \"$rig\" -type d -exec chgrp gascity-agent-channel",
         "find -P \"$rig\" -type f -exec chgrp gascity-agent-channel",
+        "\"+${prepareRigPermissions}\"",
+        "umask 007",
         "UMask = \"0007\";",
     ] {
         assert!(
