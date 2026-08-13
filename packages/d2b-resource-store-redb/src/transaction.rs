@@ -58,6 +58,8 @@ pub(crate) const ALL_TABLES: [TableDefinition<'static, &[u8], &[u8]>; 10] = [
 pub(crate) const PHYSICAL_SCHEMA_VERSION: u32 = 2;
 const STANDARD_SCHEMA_VERSION: &str = "1.0";
 const RESOURCE_SCHEMA_DOMAIN_TAG: &str = "d2b:v3:resource-schema";
+pub(crate) const UNINTERPRETABLE_REQUEST_DIGEST_REASON: &str =
+    "operation-request-digest-uninterpretable";
 
 /// The standard ResourceType catalog bound by a freshly provisioned store.
 pub(crate) const STANDARD_SCHEMA_CATALOG: [&str; 19] = STANDARD_RESOURCE_TYPES;
@@ -805,7 +807,9 @@ pub(crate) fn backfill_schema_catalog(database: &Database) -> Result<(), StoreEr
 /// Old valid stores may contain a pending outbox without the typed operation
 /// identity or deterministic replay metadata. Missing values are derived from
 /// the durable operation key and persisted atomically. Any contradictory or
-/// malformed value remains a quarantine-worthy integrity failure.
+/// malformed value remains a quarantine-worthy integrity failure. An invalid
+/// request digest cannot be normalized because the authoritative request
+/// fields needed to prove replay equivalence are not persisted.
 pub(crate) fn normalize_audit_outboxes(database: &Database) -> Result<(), StoreError> {
     let read = database.begin_read().map_err(integrity)?;
     let meta = read_meta(&read)?;
@@ -815,18 +819,10 @@ pub(crate) fn normalize_audit_outboxes(database: &Database) -> Result<(), StoreE
         let (key, value) = row.map_err(integrity)?;
         let operation_id = operation_id_from_key(key.value())?;
         let mut operation: OperationRecord = decode(ValueKind::OperationRecord, value.value())?;
-        let mut operation_changed = false;
         if !valid_digest(&operation.request_digest) {
-            operation.request_digest = canonical_digest(
-                "d2b:resource-operation-request-legacy:v1",
-                operation.request_digest.as_bytes(),
-            );
-            operation_changed = true;
+            return Err(quarantined_reason(UNINTERPRETABLE_REQUEST_DIGEST_REASON));
         }
         let Some(outbox) = operation.audit_outbox.as_mut() else {
-            if operation_changed {
-                updates.push((key.value().to_vec(), operation));
-            }
             continue;
         };
         let expected_identity = OperationIdentity::derive(&operation_id)
@@ -852,7 +848,7 @@ pub(crate) fn normalize_audit_outboxes(database: &Database) -> Result<(), StoreE
         {
             return Err(integrity("audit-operation-identity-mismatch"));
         }
-        let mut changed = operation_changed || outbox.operation_identity.is_none();
+        let mut changed = outbox.operation_identity.is_none();
         outbox.operation_identity = Some(expected_identity);
         if !valid_digest(&outbox.subject_digest) {
             outbox.subject_digest = crate::audit::opaque_digest(&outbox.subject_digest);
@@ -4234,6 +4230,25 @@ mod tests {
         ResourceEnvelope::from_json(&record.canonical_json).unwrap()
     }
 
+    fn rewrite_request_digest(database: &Database, operation_id: &str, request_digest: String) {
+        let key = operation_key(operation_id).unwrap();
+        let mut write = database.begin_write().unwrap();
+        set_full_durability(&mut write).unwrap();
+        let mut operation = {
+            let table = write.open_table(OPERATIONS).unwrap();
+            let value = table.get(key.as_slice()).unwrap().unwrap();
+            decode::<OperationRecord>(ValueKind::OperationRecord, value.value()).unwrap()
+        };
+        operation.request_digest = request_digest;
+        let value = encode(ValueKind::OperationRecord, &operation).unwrap();
+        write
+            .open_table(OPERATIONS)
+            .unwrap()
+            .insert(key.as_slice(), value.as_slice())
+            .unwrap();
+        write.commit().unwrap();
+    }
+
     #[test]
     fn verified_write_atomically_updates_resource_indexes_revision_and_operation() {
         let (_directory, database, identity) = fixture();
@@ -4265,6 +4280,127 @@ mod tests {
         assert_eq!(
             validate_identity(&database, &identity).unwrap().zone_name,
             "dev"
+        );
+    }
+
+    #[test]
+    fn valid_pre_u4_digest_replays_original_terminal_outcomes_after_normalization() {
+        let (_directory, database, _identity) = fixture();
+
+        let committed_target = ResourceRef::parse("Host/host-system").unwrap();
+        let committed_uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
+        let committed = verified(
+            "legacy-committed",
+            create_mutation_with_uid(committed_target.clone(), &committed_uid),
+            committed_uid.clone(),
+        );
+        let committed_digest = legacy_operation_digest(&committed).unwrap();
+        let committed_result = apply_group(&database, vec![committed]).unwrap();
+        rewrite_request_digest(&database, "legacy-committed", committed_digest);
+
+        let mut denied = verified(
+            "legacy-denied",
+            create_mutation_with_uid(committed_target.clone(), &committed_uid),
+            committed_uid.clone(),
+        );
+        denied.policy_snapshot.policy_revision = 999;
+        let denied_digest = legacy_operation_digest(&denied).unwrap();
+        let denied_result = apply_group(&database, vec![denied]).unwrap();
+        rewrite_request_digest(&database, "legacy-denied", denied_digest);
+
+        let mut missing = create_mutation(ResourceRef::parse("Host/missing").unwrap());
+        missing.kind = ResourceMutationKind::Delete;
+        missing.canonical_resource = None;
+        let missing = verified(
+            "legacy-error",
+            missing,
+            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174001").unwrap(),
+        );
+        let missing_digest = legacy_operation_digest(&missing).unwrap();
+        let missing_result = apply_group(&database, vec![missing]).unwrap();
+        rewrite_request_digest(&database, "legacy-error", missing_digest);
+
+        normalize_audit_outboxes(&database).unwrap();
+
+        let committed_retry = verified(
+            "legacy-committed",
+            create_mutation_with_uid(
+                committed_target.clone(),
+                &ResourceUid::parse("123e4567-e89b-42d3-a456-426614174099").unwrap(),
+            ),
+            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174099").unwrap(),
+        );
+        let replayed_committed = apply_group(&database, vec![committed_retry]).unwrap();
+        assert_eq!(replayed_committed.results, committed_result.results);
+
+        let mut denied_retry = verified(
+            "legacy-denied",
+            create_mutation_with_uid(
+                committed_target.clone(),
+                &ResourceUid::parse("123e4567-e89b-42d3-a456-426614174099").unwrap(),
+            ),
+            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174099").unwrap(),
+        );
+        denied_retry.policy_snapshot.policy_revision = 999;
+        let replayed_denied = apply_group(&database, vec![denied_retry]).unwrap();
+        assert_eq!(
+            replayed_denied.results[0]
+                .as_ref()
+                .unwrap_err()
+                .reason_code(),
+            "operation-replayed-denied"
+        );
+        assert_eq!(
+            denied_result.results[0].as_ref().unwrap_err().reason_code(),
+            "store-generation-recheck-failed"
+        );
+
+        let mut missing_retry = create_mutation(ResourceRef::parse("Host/missing").unwrap());
+        missing_retry.kind = ResourceMutationKind::Delete;
+        missing_retry.canonical_resource = None;
+        let missing_retry = verified(
+            "legacy-error",
+            missing_retry,
+            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174001").unwrap(),
+        );
+        let replayed_error = apply_group(&database, vec![missing_retry]).unwrap();
+        assert_eq!(
+            replayed_error.results[0]
+                .as_ref()
+                .unwrap_err()
+                .reason_code(),
+            "resource-not-found"
+        );
+        assert_eq!(
+            missing_result.results[0]
+                .as_ref()
+                .unwrap_err()
+                .reason_code(),
+            "resource-not-found"
+        );
+
+        let mut mismatched = create_mutation_with_uid(
+            committed_target,
+            &ResourceUid::parse("123e4567-e89b-42d3-a456-426614174099").unwrap(),
+        );
+        mismatched.canonical_resource = Some(
+            String::from_utf8(mismatched.canonical_resource.take().unwrap())
+                .unwrap()
+                .replace(
+                    "\"nonDisruptive\":\"automatic\"",
+                    "\"nonDisruptive\":\"manual\"",
+                )
+                .into_bytes(),
+        );
+        let mismatched = verified(
+            "legacy-committed",
+            mismatched,
+            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174099").unwrap(),
+        );
+        let outcome = apply_group(&database, vec![mismatched]).unwrap();
+        assert_eq!(
+            outcome.results[0].as_ref().unwrap_err().reason_code(),
+            "operation-id-reused"
         );
     }
 

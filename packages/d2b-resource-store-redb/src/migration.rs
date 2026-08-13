@@ -314,8 +314,13 @@ fn prepare_upgrade_stage(
         // Normalize U4 outbox identity, mutation, and timestamp fields in
         // the staged copy before the strict current-schema validation runs.
         let staged_database = open_named_database(parent, DEFAULT_STAGED_FILE_NAME, identity)?;
-        crate::transaction::normalize_audit_outboxes(&staged_database)
-            .map_err(|_| quarantine(identity, "migration-audit-outbox-normalization-failed"))?;
+        crate::transaction::normalize_audit_outboxes(&staged_database).map_err(|error| {
+            if error.reason_code() == crate::transaction::UNINTERPRETABLE_REQUEST_DIGEST_REASON {
+                error.with_store_slot(identity.slot())
+            } else {
+                quarantine(identity, "migration-audit-outbox-normalization-failed")
+            }
+        })?;
         drop(staged_database);
         validate_named_current(parent, DEFAULT_STAGED_FILE_NAME, identity)?;
         sync_named_stage(parent, identity)
@@ -984,6 +989,43 @@ mod tests {
         write.commit().unwrap();
     }
 
+    fn insert_operation(directory: &tempfile::TempDir, operation_id: &str, request_digest: &str) {
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(directory.path().join(DEFAULT_ACTIVE_FILE_NAME))
+            .unwrap();
+        let database = Database::builder()
+            .set_cache_size(REDB_CACHE_SIZE)
+            .create_with_backend(FileBackend::new(file).unwrap())
+            .unwrap();
+        let operation = OperationRecord {
+            request_digest: request_digest.to_owned(),
+            resource_uids: Vec::new(),
+            resources: Vec::new(),
+            outcome: "committed".to_owned(),
+            error_code: None,
+            accepted_revision: 0,
+            finished_revision: 0,
+            audit_outbox: None,
+            authority: None,
+        };
+        let key = crate::keys::encode_key(
+            crate::keys::KeySpace::Operations,
+            &[crate::keys::KeyComponent::Text(operation_id)],
+        )
+        .unwrap();
+        let value = crate::transaction::encode(ValueKind::OperationRecord, &operation).unwrap();
+        let mut write = database.begin_write().unwrap();
+        write.set_durability(Durability::Immediate).unwrap();
+        write
+            .open_table(crate::transaction::OPERATIONS)
+            .unwrap()
+            .insert(key.as_bytes(), value.as_slice())
+            .unwrap();
+        write.commit().unwrap();
+    }
+
     fn create_staged_current(directory: &tempfile::TempDir) {
         create_current_file(directory, DEFAULT_STAGED_FILE_NAME);
         let parent = File::open(directory.path()).unwrap();
@@ -1031,6 +1073,56 @@ mod tests {
         );
         let file = open_named_database(&parent_fd, DEFAULT_ACTIVE_FILE_NAME, &identity()).unwrap();
         validate_database(&file, &identity(), Some(CURRENT_PHYSICAL_SCHEMA_VERSION)).unwrap();
+    }
+
+    #[test]
+    fn uninterpretable_legacy_request_digest_quarantines_before_publication() {
+        let (directory, parent_fd, mut marker) = parent();
+        create_current_file(&directory, DEFAULT_ACTIVE_FILE_NAME);
+        set_schema_version(&directory, 1);
+        insert_operation(&directory, "legacy-invalid-digest", "not-a-digest");
+
+        let error = upgrade_owned(&parent_fd, &mut marker, &identity()).unwrap_err();
+        assert_eq!(error.kind(), StoreErrorKind::StoreQuarantined);
+        assert_eq!(
+            error.reason_code(),
+            "operation-request-digest-uninterpretable"
+        );
+        assert_eq!(
+            backup::publication_state(
+                &parent_fd,
+                DEFAULT_STAGED_FILE_NAME,
+                DEFAULT_ACTIVE_FILE_NAME,
+                DEFAULT_PRIOR_FILE_NAME
+            )
+            .unwrap(),
+            PublicationState::ActiveOnly
+        );
+
+        let active =
+            open_named_database(&parent_fd, DEFAULT_ACTIVE_FILE_NAME, &identity()).unwrap();
+        let meta = read_meta(&active, &identity()).unwrap();
+        assert_eq!(meta.schema_version, 1);
+        let read = active.begin_read().unwrap();
+        let key = crate::keys::encode_key(
+            crate::keys::KeySpace::Operations,
+            &[crate::keys::KeyComponent::Text("legacy-invalid-digest")],
+        )
+        .unwrap();
+        let value = read
+            .open_table(crate::transaction::OPERATIONS)
+            .unwrap()
+            .get(key.as_bytes())
+            .unwrap()
+            .unwrap();
+        let operation: OperationRecord =
+            crate::transaction::decode(ValueKind::OperationRecord, value.value()).unwrap();
+        assert_eq!(operation.request_digest, "not-a-digest");
+        assert!(
+            entry_type(&parent_fd, DEFAULT_STAGED_FILE_NAME)
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
