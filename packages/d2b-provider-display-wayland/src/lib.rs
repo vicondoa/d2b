@@ -1,4 +1,50 @@
-//! Canonical crate root for `Provider/display-wayland`.
-//!
-//! The crate root is intentionally compile-safe and contains no semantic
-//! Provider implementation.
+//! Wayland display projection Provider.
+
+#![deny(missing_docs)]
+#![forbid(unsafe_code)]
+
+mod audit;
+mod controller;
+mod descriptor;
+mod metrics;
+mod policy;
+mod portal;
+mod principal;
+mod process;
+mod readiness;
+mod spec;
+
+pub use audit::{DisplayAuditKind, DisplayAuditOutcome, DisplayAuditRecord};
+pub use controller::{
+    DependencyState, DisplayController, FinalizationDecision, FinalizationInput, Phase,
+    ReconcileResult, SessionCondition, WaylandSessionStatus,
+};
+pub use descriptor::{DisplayDescriptorError, DisplayProviderDescriptor};
+pub use metrics::{DisplayTelemetryField, DisplayTelemetryFrame, MetricOutcome};
+pub use policy::{
+    CompiledWaylandPolicy, FilterInput, KNOWN_GLOBALS, PolicyCompileError, PolicyWarning,
+    WaylandPolicy,
+};
+pub use portal::{DisplayUserPortal, PortalError, PortalGrant};
+pub use principal::{PrincipalLease, PrincipalPool, PrincipalPoolError};
+pub use process::{
+    AttachmentGrantHandle, DisplayProcessRole, LaunchTicket, ProcessObservation,
+    ProxyProcessTemplate, ProxyReadinessFailure, ProxyReadinessStage, ProxyReadinessState,
+};
+pub use readiness::ProxyReadinessEvent;
+pub use spec::{DisplayIdentity, DisplayLabelPosition, WaylandSessionSpec, WaylandSpecError};
+
+/// Canonical Provider reference.
+pub const PROVIDER_REF: &str = "Provider/display-wayland";
+/// Canonical Provider artifact identifier.
+pub const ARTIFACT_ID: &str = "display-wayland";
+/// Canonical host proxy binary.
+pub const HOST_PROXY_BINARY: &str = "d2b-display-wayland-host-proxy";
+/// Canonical guest frontend binary.
+pub const GUEST_FRONTEND_BINARY: &str = "wl-cross-domain-proxy";
+/// Host clipboard service consumed by clipd-host.
+pub const HOST_CLIPBOARD_SERVICE: &str = "d2b.display.host-clipboard.v3";
+/// Internal bridge service consumed by the display proxy.
+pub const CLIPBOARD_BRIDGE_SERVICE: &str = "d2b.clipboard.bridge.v3";
+/// Display-session finalizer.
+pub const FINALIZER: &str = "display-wayland.d2bus.org/proxy-stopped";

@@ -7,3 +7,21 @@ license.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+
+[[bin]]
+name = "clipboard-controller"
+path = "src/bin/clipboard-controller.rs"
+
+[[bin]]
+name = "clipd-host"
+path = "src/bin/clipd-host.rs"
+
+[[bin]]
+name = "picker-session"
+path = "src/bin/picker-session.rs"

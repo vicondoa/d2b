@@ -7290,6 +7290,56 @@ d2b_provider	pub trait d2b_provider::rpc::AuthenticatedProviderRpc: core::marker
 d2b_provider	pub trait d2b_provider::share_adapter::ExportAdapter: core::marker::Send + core::marker::Sync
 d2b_provider	pub trait d2b_provider::share_adapter::ImportAdapter: core::marker::Send + core::marker::Sync
 d2b_provider	pub trait d2b_provider::share_adapter::ShareAdapter: d2b_provider::share_adapter::ExportAdapter + d2b_provider::share_adapter::ImportAdapter
+d2b_provider_clipboard_wayland	impl core::clone::Clone for d2b_provider_clipboard_wayland::ProcessPlan
+d2b_provider_clipboard_wayland	impl core::cmp::Eq for d2b_provider_clipboard_wayland::ProcessPlan
+d2b_provider_clipboard_wayland	impl core::cmp::PartialEq for d2b_provider_clipboard_wayland::ProcessPlan
+d2b_provider_clipboard_wayland	impl core::fmt::Debug for d2b_provider_clipboard_wayland::ClipboardController
+d2b_provider_clipboard_wayland	impl core::fmt::Debug for d2b_provider_clipboard_wayland::ProcessPlan
+d2b_provider_clipboard_wayland	impl core::marker::Freeze for d2b_provider_clipboard_wayland::ClipboardController
+d2b_provider_clipboard_wayland	impl core::marker::Freeze for d2b_provider_clipboard_wayland::ProcessPlan
+d2b_provider_clipboard_wayland	impl core::marker::Send for d2b_provider_clipboard_wayland::ClipboardController
+d2b_provider_clipboard_wayland	impl core::marker::Send for d2b_provider_clipboard_wayland::ProcessPlan
+d2b_provider_clipboard_wayland	impl core::marker::StructuralPartialEq for d2b_provider_clipboard_wayland::ProcessPlan
+d2b_provider_clipboard_wayland	impl core::marker::Sync for d2b_provider_clipboard_wayland::ClipboardController
+d2b_provider_clipboard_wayland	impl core::marker::Sync for d2b_provider_clipboard_wayland::ProcessPlan
+d2b_provider_clipboard_wayland	impl core::marker::Unpin for d2b_provider_clipboard_wayland::ClipboardController
+d2b_provider_clipboard_wayland	impl core::marker::Unpin for d2b_provider_clipboard_wayland::ProcessPlan
+d2b_provider_clipboard_wayland	impl core::marker::UnsafeUnpin for d2b_provider_clipboard_wayland::ClipboardController
+d2b_provider_clipboard_wayland	impl core::marker::UnsafeUnpin for d2b_provider_clipboard_wayland::ProcessPlan
+d2b_provider_clipboard_wayland	impl core::panic::unwind_safe::RefUnwindSafe for d2b_provider_clipboard_wayland::ClipboardController
+d2b_provider_clipboard_wayland	impl core::panic::unwind_safe::RefUnwindSafe for d2b_provider_clipboard_wayland::ProcessPlan
+d2b_provider_clipboard_wayland	impl core::panic::unwind_safe::UnwindSafe for d2b_provider_clipboard_wayland::ClipboardController
+d2b_provider_clipboard_wayland	impl core::panic::unwind_safe::UnwindSafe for d2b_provider_clipboard_wayland::ProcessPlan
+d2b_provider_clipboard_wayland	impl d2b_provider_clipboard_wayland::ClipboardController
+d2b_provider_clipboard_wayland	impl<T, U> core::convert::Into<U> for d2b_provider_clipboard_wayland::ClipboardController where U: core::convert::From<T>
+d2b_provider_clipboard_wayland	impl<T, U> core::convert::Into<U> for d2b_provider_clipboard_wayland::ProcessPlan where U: core::convert::From<T>
+d2b_provider_clipboard_wayland	impl<T, U> core::convert::TryFrom<U> for d2b_provider_clipboard_wayland::ClipboardController where U: core::convert::Into<T>
+d2b_provider_clipboard_wayland	impl<T, U> core::convert::TryFrom<U> for d2b_provider_clipboard_wayland::ProcessPlan where U: core::convert::Into<T>
+d2b_provider_clipboard_wayland	impl<T, U> core::convert::TryInto<U> for d2b_provider_clipboard_wayland::ClipboardController where U: core::convert::TryFrom<T>
+d2b_provider_clipboard_wayland	impl<T, U> core::convert::TryInto<U> for d2b_provider_clipboard_wayland::ProcessPlan where U: core::convert::TryFrom<T>
+d2b_provider_clipboard_wayland	impl<T> alloc::borrow::ToOwned for d2b_provider_clipboard_wayland::ProcessPlan where T: core::clone::Clone
+d2b_provider_clipboard_wayland	impl<T> core::any::Any for d2b_provider_clipboard_wayland::ClipboardController where T: 'static + ?core::marker::Sized
+d2b_provider_clipboard_wayland	impl<T> core::any::Any for d2b_provider_clipboard_wayland::ProcessPlan where T: 'static + ?core::marker::Sized
+d2b_provider_clipboard_wayland	impl<T> core::borrow::Borrow<T> for d2b_provider_clipboard_wayland::ClipboardController where T: ?core::marker::Sized
+d2b_provider_clipboard_wayland	impl<T> core::borrow::Borrow<T> for d2b_provider_clipboard_wayland::ProcessPlan where T: ?core::marker::Sized
+d2b_provider_clipboard_wayland	impl<T> core::borrow::BorrowMut<T> for d2b_provider_clipboard_wayland::ClipboardController where T: ?core::marker::Sized
+d2b_provider_clipboard_wayland	impl<T> core::borrow::BorrowMut<T> for d2b_provider_clipboard_wayland::ProcessPlan where T: ?core::marker::Sized
+d2b_provider_clipboard_wayland	impl<T> core::clone::CloneToUninit for d2b_provider_clipboard_wayland::ProcessPlan where T: core::clone::Clone
+d2b_provider_clipboard_wayland	impl<T> core::convert::From<T> for d2b_provider_clipboard_wayland::ClipboardController
+d2b_provider_clipboard_wayland	impl<T> core::convert::From<T> for d2b_provider_clipboard_wayland::ProcessPlan
+d2b_provider_clipboard_wayland	impl<T> dyn_clone::DynClone for d2b_provider_clipboard_wayland::ProcessPlan where T: core::clone::Clone
+d2b_provider_clipboard_wayland	impl<T> typenum::type_operators::Same for d2b_provider_clipboard_wayland::ClipboardController
+d2b_provider_clipboard_wayland	impl<T> typenum::type_operators::Same for d2b_provider_clipboard_wayland::ProcessPlan
+d2b_provider_clipboard_wayland	pub d2b_provider_clipboard_wayland::ProcessPlan::domain: &'static str
+d2b_provider_clipboard_wayland	pub d2b_provider_clipboard_wayland::ProcessPlan::execution_ref: d2b_contracts::v3::resource_ref::ResourceRef
+d2b_provider_clipboard_wayland	pub d2b_provider_clipboard_wayland::ProcessPlan::mounts_state_volume: bool
+d2b_provider_clipboard_wayland	pub d2b_provider_clipboard_wayland::ProcessPlan::template: &'static str
+d2b_provider_clipboard_wayland	pub d2b_provider_clipboard_wayland::ProcessPlan::user_ref: core::option::Option<d2b_contracts::v3::resource_ref::ResourceRef>
+d2b_provider_clipboard_wayland	pub fn d2b_provider_clipboard_wayland::ClipboardController::plan_processes(&self) -> alloc::vec::Vec<d2b_provider_clipboard_wayland::ProcessPlan>
+d2b_provider_clipboard_wayland	pub fn d2b_provider_clipboard_wayland::ProcessPlan::clone(&self) -> d2b_provider_clipboard_wayland::ProcessPlan
+d2b_provider_clipboard_wayland	pub fn d2b_provider_clipboard_wayland::ProcessPlan::eq(&self, &d2b_provider_clipboard_wayland::ProcessPlan) -> bool
+d2b_provider_clipboard_wayland	pub struct d2b_provider_clipboard_wayland::ClipboardController
+d2b_provider_clipboard_wayland	pub struct d2b_provider_clipboard_wayland::ProcessPlan
 d2b_provider_credential_entra	impl !core::marker::Freeze for d2b_provider_credential_entra::EntraController
 d2b_provider_credential_entra	impl !core::marker::Freeze for d2b_provider_credential_entra::EntraCredentialProvider
 d2b_provider_credential_entra	impl !core::panic::unwind_safe::RefUnwindSafe for d2b_provider_credential_entra::EntraCredentialProvider
@@ -8148,6 +8198,62 @@ d2b_provider_device_usbip	pub struct d2b_provider_device_usbip::UsbipArbitrator
 d2b_provider_device_usbip	pub struct d2b_provider_device_usbip::UsbipClaim
 d2b_provider_device_usbip	pub struct d2b_provider_device_usbip::UsbipController
 d2b_provider_device_usbip	pub trait d2b_provider_device_usbip::UsbipEffectPort
+d2b_provider_display_wayland	impl core::clone::Clone for d2b_provider_display_wayland::WaylandSessionSpec
+d2b_provider_display_wayland	impl core::cmp::Eq for d2b_provider_display_wayland::WaylandSessionSpec
+d2b_provider_display_wayland	impl core::cmp::PartialEq for d2b_provider_display_wayland::WaylandSessionSpec
+d2b_provider_display_wayland	impl core::fmt::Debug for d2b_provider_display_wayland::DisplayUserPortal
+d2b_provider_display_wayland	impl core::fmt::Debug for d2b_provider_display_wayland::WaylandSessionSpec
+d2b_provider_display_wayland	impl core::marker::Freeze for d2b_provider_display_wayland::DisplayUserPortal
+d2b_provider_display_wayland	impl core::marker::Freeze for d2b_provider_display_wayland::WaylandSessionSpec
+d2b_provider_display_wayland	impl core::marker::Send for d2b_provider_display_wayland::DisplayUserPortal
+d2b_provider_display_wayland	impl core::marker::Send for d2b_provider_display_wayland::WaylandSessionSpec
+d2b_provider_display_wayland	impl core::marker::StructuralPartialEq for d2b_provider_display_wayland::WaylandSessionSpec
+d2b_provider_display_wayland	impl core::marker::Sync for d2b_provider_display_wayland::DisplayUserPortal
+d2b_provider_display_wayland	impl core::marker::Sync for d2b_provider_display_wayland::WaylandSessionSpec
+d2b_provider_display_wayland	impl core::marker::Unpin for d2b_provider_display_wayland::DisplayUserPortal
+d2b_provider_display_wayland	impl core::marker::Unpin for d2b_provider_display_wayland::WaylandSessionSpec
+d2b_provider_display_wayland	impl core::marker::UnsafeUnpin for d2b_provider_display_wayland::DisplayUserPortal
+d2b_provider_display_wayland	impl core::marker::UnsafeUnpin for d2b_provider_display_wayland::WaylandSessionSpec
+d2b_provider_display_wayland	impl core::panic::unwind_safe::RefUnwindSafe for d2b_provider_display_wayland::DisplayUserPortal
+d2b_provider_display_wayland	impl core::panic::unwind_safe::RefUnwindSafe for d2b_provider_display_wayland::WaylandSessionSpec
+d2b_provider_display_wayland	impl core::panic::unwind_safe::UnwindSafe for d2b_provider_display_wayland::DisplayUserPortal
+d2b_provider_display_wayland	impl core::panic::unwind_safe::UnwindSafe for d2b_provider_display_wayland::WaylandSessionSpec
+d2b_provider_display_wayland	impl d2b_provider_display_wayland::DisplayUserPortal
+d2b_provider_display_wayland	impl d2b_provider_display_wayland::WaylandSessionSpec
+d2b_provider_display_wayland	impl serde_core::ser::Serialize for d2b_provider_display_wayland::WaylandSessionSpec
+d2b_provider_display_wayland	impl<'de> serde_core::de::Deserialize<'de> for d2b_provider_display_wayland::WaylandSessionSpec
+d2b_provider_display_wayland	impl<T, U> core::convert::Into<U> for d2b_provider_display_wayland::DisplayUserPortal where U: core::convert::From<T>
+d2b_provider_display_wayland	impl<T, U> core::convert::Into<U> for d2b_provider_display_wayland::WaylandSessionSpec where U: core::convert::From<T>
+d2b_provider_display_wayland	impl<T, U> core::convert::TryFrom<U> for d2b_provider_display_wayland::DisplayUserPortal where U: core::convert::Into<T>
+d2b_provider_display_wayland	impl<T, U> core::convert::TryFrom<U> for d2b_provider_display_wayland::WaylandSessionSpec where U: core::convert::Into<T>
+d2b_provider_display_wayland	impl<T, U> core::convert::TryInto<U> for d2b_provider_display_wayland::DisplayUserPortal where U: core::convert::TryFrom<T>
+d2b_provider_display_wayland	impl<T, U> core::convert::TryInto<U> for d2b_provider_display_wayland::WaylandSessionSpec where U: core::convert::TryFrom<T>
+d2b_provider_display_wayland	impl<T> alloc::borrow::ToOwned for d2b_provider_display_wayland::WaylandSessionSpec where T: core::clone::Clone
+d2b_provider_display_wayland	impl<T> core::any::Any for d2b_provider_display_wayland::DisplayUserPortal where T: 'static + ?core::marker::Sized
+d2b_provider_display_wayland	impl<T> core::any::Any for d2b_provider_display_wayland::WaylandSessionSpec where T: 'static + ?core::marker::Sized
+d2b_provider_display_wayland	impl<T> core::borrow::Borrow<T> for d2b_provider_display_wayland::DisplayUserPortal where T: ?core::marker::Sized
+d2b_provider_display_wayland	impl<T> core::borrow::Borrow<T> for d2b_provider_display_wayland::WaylandSessionSpec where T: ?core::marker::Sized
+d2b_provider_display_wayland	impl<T> core::borrow::BorrowMut<T> for d2b_provider_display_wayland::DisplayUserPortal where T: ?core::marker::Sized
+d2b_provider_display_wayland	impl<T> core::borrow::BorrowMut<T> for d2b_provider_display_wayland::WaylandSessionSpec where T: ?core::marker::Sized
+d2b_provider_display_wayland	impl<T> core::clone::CloneToUninit for d2b_provider_display_wayland::WaylandSessionSpec where T: core::clone::Clone
+d2b_provider_display_wayland	impl<T> core::convert::From<T> for d2b_provider_display_wayland::DisplayUserPortal
+d2b_provider_display_wayland	impl<T> core::convert::From<T> for d2b_provider_display_wayland::WaylandSessionSpec
+d2b_provider_display_wayland	impl<T> dyn_clone::DynClone for d2b_provider_display_wayland::WaylandSessionSpec where T: core::clone::Clone
+d2b_provider_display_wayland	impl<T> serde_core::de::DeserializeOwned for d2b_provider_display_wayland::WaylandSessionSpec where T: for<'de> serde_core::de::Deserialize<'de>
+d2b_provider_display_wayland	impl<T> typenum::type_operators::Same for d2b_provider_display_wayland::DisplayUserPortal
+d2b_provider_display_wayland	impl<T> typenum::type_operators::Same for d2b_provider_display_wayland::WaylandSessionSpec
+d2b_provider_display_wayland	pub const fn d2b_provider_display_wayland::WaylandSessionSpec::guest_ref(&self) -> &d2b_contracts::v3::resource_ref::ResourceRef
+d2b_provider_display_wayland	pub const fn d2b_provider_display_wayland::WaylandSessionSpec::host_ref(&self) -> &d2b_contracts::v3::resource_ref::ResourceRef
+d2b_provider_display_wayland	pub const fn d2b_provider_display_wayland::WaylandSessionSpec::policy_ref(&self) -> &d2b_contracts::v3::resource_ref::ResourceRef
+d2b_provider_display_wayland	pub const fn d2b_provider_display_wayland::WaylandSessionSpec::user_ref(&self) -> &d2b_contracts::v3::resource_ref::ResourceRef
+d2b_provider_display_wayland	pub fn d2b_provider_display_wayland::DisplayController::reconcile(&mut self, &d2b_provider_display_wayland::WaylandSessionSpec, d2b_provider_display_wayland::DependencyState, d2b_provider_display_wayland::ProcessObservation) -> core::result::Result<d2b_provider_display_wayland::ReconcileResult, d2b_provider_display_wayland::WaylandSpecError>
+d2b_provider_display_wayland	pub fn d2b_provider_display_wayland::DisplayUserPortal::issue_grant(&mut self, impl core::convert::Into<alloc::string::String>, &d2b_contracts::v3::resource_ref::ResourceRef, u32, d2b_provider_display_wayland::AttachmentGrantHandle) -> core::result::Result<d2b_provider_display_wayland::PortalGrant, d2b_provider_display_wayland::PortalError>
+d2b_provider_display_wayland	pub fn d2b_provider_display_wayland::DisplayUserPortal::new(d2b_contracts::v3::resource_ref::ResourceRef, u32, usize) -> core::result::Result<Self, d2b_provider_display_wayland::PortalError>
+d2b_provider_display_wayland	pub fn d2b_provider_display_wayland::WaylandSessionSpec::clone(&self) -> d2b_provider_display_wayland::WaylandSessionSpec
+d2b_provider_display_wayland	pub fn d2b_provider_display_wayland::WaylandSessionSpec::eq(&self, &d2b_provider_display_wayland::WaylandSessionSpec) -> bool
+d2b_provider_display_wayland	pub fn d2b_provider_display_wayland::WaylandSessionSpec::new(d2b_contracts::v3::resource_ref::ResourceRef, d2b_contracts::v3::resource_ref::ResourceRef, d2b_contracts::v3::resource_ref::ResourceRef, d2b_contracts::v3::resource_ref::ResourceRef, d2b_provider_display_wayland::DisplayIdentity, bool) -> core::result::Result<Self, d2b_provider_display_wayland::WaylandSpecError>
+d2b_provider_display_wayland	pub struct d2b_provider_display_wayland::DisplayUserPortal
+d2b_provider_display_wayland	pub struct d2b_provider_display_wayland::WaylandSessionSpec
 d2b_provider_network_local	impl core::clone::Clone for d2b_provider_network_local::controller::AttachmentRealization
 d2b_provider_network_local	impl core::clone::Clone for d2b_provider_network_local::controller::FirewallIntent
 d2b_provider_network_local	impl core::clone::Clone for d2b_provider_network_local::controller::ReconcileInput
@@ -8375,6 +8481,25 @@ d2b_provider_network_local	pub struct d2b_provider_network_local::nftables::Shar
 d2b_provider_network_local	pub trait d2b_provider_network_local::controller::NetworkEffectPort: core::marker::Send + core::marker::Sync
 d2b_provider_network_local	pub trait d2b_provider_network_local::controller::NetworkResourcePort: core::marker::Send + core::marker::Sync
 d2b_provider_network_local	pub use d2b_provider_network_local::ExternalNicClaim
+d2b_provider_notification_desktop	impl core::fmt::Debug for d2b_provider_notification_desktop::NotificationController
+d2b_provider_notification_desktop	impl core::marker::Freeze for d2b_provider_notification_desktop::NotificationController
+d2b_provider_notification_desktop	impl core::marker::Send for d2b_provider_notification_desktop::NotificationController
+d2b_provider_notification_desktop	impl core::marker::Sync for d2b_provider_notification_desktop::NotificationController
+d2b_provider_notification_desktop	impl core::marker::Unpin for d2b_provider_notification_desktop::NotificationController
+d2b_provider_notification_desktop	impl core::marker::UnsafeUnpin for d2b_provider_notification_desktop::NotificationController
+d2b_provider_notification_desktop	impl core::panic::unwind_safe::RefUnwindSafe for d2b_provider_notification_desktop::NotificationController
+d2b_provider_notification_desktop	impl core::panic::unwind_safe::UnwindSafe for d2b_provider_notification_desktop::NotificationController
+d2b_provider_notification_desktop	impl d2b_provider_notification_desktop::NotificationController
+d2b_provider_notification_desktop	impl<T, U> core::convert::Into<U> for d2b_provider_notification_desktop::NotificationController where U: core::convert::From<T>
+d2b_provider_notification_desktop	impl<T, U> core::convert::TryFrom<U> for d2b_provider_notification_desktop::NotificationController where U: core::convert::Into<T>
+d2b_provider_notification_desktop	impl<T, U> core::convert::TryInto<U> for d2b_provider_notification_desktop::NotificationController where U: core::convert::TryFrom<T>
+d2b_provider_notification_desktop	impl<T> core::any::Any for d2b_provider_notification_desktop::NotificationController where T: 'static + ?core::marker::Sized
+d2b_provider_notification_desktop	impl<T> core::borrow::Borrow<T> for d2b_provider_notification_desktop::NotificationController where T: ?core::marker::Sized
+d2b_provider_notification_desktop	impl<T> core::borrow::BorrowMut<T> for d2b_provider_notification_desktop::NotificationController where T: ?core::marker::Sized
+d2b_provider_notification_desktop	impl<T> core::convert::From<T> for d2b_provider_notification_desktop::NotificationController
+d2b_provider_notification_desktop	impl<T> typenum::type_operators::Same for d2b_provider_notification_desktop::NotificationController
+d2b_provider_notification_desktop	pub const fn d2b_provider_notification_desktop::NotificationController::provider_ref(&self) -> &d2b_contracts::v3::resource_ref::ResourceRef
+d2b_provider_notification_desktop	pub struct d2b_provider_notification_desktop::NotificationController
 d2b_provider_observability_otel	impl core::fmt::Debug for d2b_provider_observability_otel::agent::ProviderAgentProcess
 d2b_provider_observability_otel	impl core::marker::Freeze for d2b_provider_observability_otel::agent::ProviderAgentProcess
 d2b_provider_observability_otel	impl core::marker::Send for d2b_provider_observability_otel::agent::ProviderAgentProcess

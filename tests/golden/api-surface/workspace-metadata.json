@@ -371,16 +371,16 @@
     {
       "crate_name": "d2b_provider_clipboard_wayland",
       "private_census": {
-        "external_crates": 19,
-        "index_items": 1,
-        "path_items": 2323
+        "external_crates": 56,
+        "index_items": 1861,
+        "path_items": 10554
       },
-      "private_hidden_items": 0,
+      "private_hidden_items": 43,
       "private_json_file": "d2b_provider_clipboard_wayland.json",
       "public_census": {
-        "external_crates": 19,
-        "index_items": 1,
-        "path_items": 2304
+        "external_crates": 56,
+        "index_items": 1075,
+        "path_items": 10499
       },
       "public_json_file": "d2b_provider_clipboard_wayland.json"
     },
@@ -499,16 +499,16 @@
     {
       "crate_name": "d2b_provider_display_wayland",
       "private_census": {
-        "external_crates": 19,
-        "index_items": 1,
-        "path_items": 2323
+        "external_crates": 56,
+        "index_items": 2406,
+        "path_items": 10559
       },
-      "private_hidden_items": 0,
+      "private_hidden_items": 55,
       "private_json_file": "d2b_provider_display_wayland.json",
       "public_census": {
-        "external_crates": 19,
-        "index_items": 1,
-        "path_items": 2304
+        "external_crates": 56,
+        "index_items": 1406,
+        "path_items": 10495
       },
       "public_json_file": "d2b_provider_display_wayland.json"
     },
@@ -531,16 +531,16 @@
     {
       "crate_name": "d2b_provider_notification_desktop",
       "private_census": {
-        "external_crates": 19,
-        "index_items": 1,
-        "path_items": 2323
+        "external_crates": 56,
+        "index_items": 1742,
+        "path_items": 10551
       },
-      "private_hidden_items": 0,
+      "private_hidden_items": 35,
       "private_json_file": "d2b_provider_notification_desktop.json",
       "public_census": {
-        "external_crates": 19,
-        "index_items": 1,
-        "path_items": 2304
+        "external_crates": 56,
+        "index_items": 968,
+        "path_items": 10485
       },
       "public_json_file": "d2b_provider_notification_desktop.json"
     },

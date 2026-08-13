@@ -7,3 +7,21 @@ license.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+
+[[bin]]
+name = "d2b-display-wayland-controller"
+path = "src/bin/d2b-display-wayland-controller.rs"
+
+[[bin]]
+name = "d2b-display-wayland-user-portal"
+path = "src/bin/d2b-display-wayland-user-portal.rs"
+
+[[bin]]
+name = "wl-cross-domain-proxy"
+path = "src/bin/wl-cross-domain-proxy.rs"

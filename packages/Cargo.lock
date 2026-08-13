@@ -1224,6 +1224,12 @@ version = "0.0.0-bootstrap"
 [[package]]
 name = "d2b-provider-clipboard-wayland"
 version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-contracts",
+ "serde",
+ "serde_json",
+ "sha2",
+]
 
 [[package]]
 name = "d2b-provider-credential-entra"
@@ -1286,6 +1292,12 @@ dependencies = [
 [[package]]
 name = "d2b-provider-display-wayland"
 version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-contracts",
+ "serde",
+ "serde_json",
+ "sha2",
+]
 
 [[package]]
 name = "d2b-provider-network-local"
@@ -1297,6 +1309,13 @@ dependencies = [
 [[package]]
 name = "d2b-provider-notification-desktop"
 version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-contracts",
+ "getrandom 0.2.17",
+ "serde",
+ "serde_json",
+ "sha2",
+]
 
 [[package]]
 name = "d2b-provider-observability-otel"
