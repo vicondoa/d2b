@@ -4,6 +4,8 @@
 //! they must admit the same closed data domains. Keep the policy data here so
 //! neither side can silently grow a divergent fork.
 
+use std::collections::{BTreeMap, BTreeSet};
+
 /// Exact keys which can never be metric dimensions.
 pub const FORBIDDEN_LABEL_KEYS: &[&str] = &[
     "vm",
@@ -383,6 +385,312 @@ pub const METRIC_LABEL_POLICY: &[(&str, &[&str])] = &[
         &["none", "reload", "restart", "recycle", "replace"],
     ),
 ];
+
+/// A descriptor label and its closed value domain.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LabelDescriptor {
+    key: String,
+    values: BTreeSet<String>,
+}
+
+impl LabelDescriptor {
+    /// Construct a descriptor label.
+    pub fn new(
+        key: impl Into<String>,
+        values: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        Self {
+            key: key.into(),
+            values: values.into_iter().map(Into::into).collect(),
+        }
+    }
+
+    /// Borrow the label key.
+    pub fn key(&self) -> &str {
+        &self.key
+    }
+
+    /// Borrow the closed value domain.
+    pub fn values(&self) -> &BTreeSet<String> {
+        &self.values
+    }
+}
+
+/// Construct a descriptor label from a static value domain.
+pub fn label(key: impl Into<String>, values: &[&str]) -> LabelDescriptor {
+    LabelDescriptor::new(key, values.iter().copied())
+}
+
+/// A metric descriptor accepted by the structural policy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MetricDescriptor {
+    name: String,
+    labels: Vec<LabelDescriptor>,
+}
+
+impl MetricDescriptor {
+    /// Construct a metric descriptor.
+    pub fn new(name: impl Into<String>, labels: impl IntoIterator<Item = LabelDescriptor>) -> Self {
+        Self {
+            name: name.into(),
+            labels: labels.into_iter().collect(),
+        }
+    }
+
+    /// Borrow the metric name.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Borrow descriptor labels.
+    pub fn labels(&self) -> &[LabelDescriptor] {
+        &self.labels
+    }
+}
+
+/// Identity values which must not enter a metric data point.
+#[derive(Clone, Default, PartialEq, Eq)]
+pub struct IdentityCanaries {
+    names: BTreeSet<String>,
+    uids: BTreeSet<String>,
+    refs: BTreeSet<String>,
+}
+
+impl core::fmt::Debug for IdentityCanaries {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("IdentityCanaries")
+            .field("name_count", &self.names.len())
+            .field("uid_count", &self.uids.len())
+            .field("ref_count", &self.refs.len())
+            .finish()
+    }
+}
+
+impl IdentityCanaries {
+    /// Construct canaries from trusted resource observations.
+    pub fn new(
+        names: impl IntoIterator<Item = impl Into<String>>,
+        uids: impl IntoIterator<Item = impl Into<String>>,
+        refs: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        Self {
+            names: names.into_iter().map(Into::into).collect(),
+            uids: uids.into_iter().map(Into::into).collect(),
+            refs: refs.into_iter().map(Into::into).collect(),
+        }
+    }
+
+    fn contains(&self, value: &str) -> bool {
+        self.names.contains(value) || self.uids.contains(value) || self.refs.contains(value)
+    }
+}
+
+/// A metric policy failure. Variants deliberately contain no input text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MetricPolicyError {
+    /// A descriptor key is not in the policy.
+    KeyNotAllowlisted,
+    /// A descriptor key is unconditionally forbidden.
+    KeyForbidden,
+    /// A descriptor key has a forbidden identity suffix.
+    KeySuffixForbidden,
+    /// A data point key does not match its descriptor.
+    LabelSetMismatch,
+    /// A value is outside its closed domain.
+    ValueNotAllowlisted,
+    /// A value is a resource identity canary.
+    ValueIdentity,
+    /// A metric name is empty or malformed.
+    DescriptorMalformed,
+    /// A metric name is not in the canonical family registry.
+    DescriptorNotAllowlisted,
+}
+
+impl core::fmt::Display for MetricPolicyError {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str(match self {
+            Self::KeyNotAllowlisted => "metric-label-key-not-allowlisted",
+            Self::KeyForbidden => "metric-label-key-forbidden",
+            Self::KeySuffixForbidden => "metric-label-key-suffix-forbidden",
+            Self::LabelSetMismatch => "metric-label-set-mismatch",
+            Self::ValueNotAllowlisted => "metric-label-value-not-allowlisted",
+            Self::ValueIdentity => "metric-label-value-identity",
+            Self::DescriptorMalformed => "metric-descriptor-malformed",
+            Self::DescriptorNotAllowlisted => "metric-descriptor-not-allowlisted",
+        })
+    }
+}
+
+impl std::error::Error for MetricPolicyError {}
+
+/// Validate one metric descriptor against the closed registry.
+pub fn validate_descriptor(descriptor: &MetricDescriptor) -> Result<(), MetricPolicyError> {
+    if descriptor.name.is_empty()
+        || descriptor.name.len() > 128
+        || !descriptor
+            .name
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+    {
+        return Err(MetricPolicyError::DescriptorMalformed);
+    }
+    let Some(canonical) = canonical_descriptor(&descriptor.name) else {
+        return Err(MetricPolicyError::DescriptorNotAllowlisted);
+    };
+
+    let mut seen = BTreeSet::new();
+    if descriptor.labels.len() > 16 {
+        return Err(MetricPolicyError::DescriptorMalformed);
+    }
+    for label in &descriptor.labels {
+        if label.key.is_empty() || label.key.len() > 64 {
+            return Err(MetricPolicyError::DescriptorMalformed);
+        }
+        if !seen.insert(label.key.clone()) {
+            return Err(MetricPolicyError::DescriptorMalformed);
+        }
+        validate_label_key(&label.key)?;
+        let Some(allowed) = allowed_values(&label.key) else {
+            return Err(MetricPolicyError::KeyNotAllowlisted);
+        };
+        if label.values.is_empty()
+            || label
+                .values
+                .iter()
+                .any(|value| !allowed.iter().any(|candidate| candidate == value))
+        {
+            return Err(MetricPolicyError::ValueNotAllowlisted);
+        }
+    }
+    if descriptor.labels.len() != canonical.labels.len()
+        || !canonical
+            .labels
+            .iter()
+            .all(|expected| descriptor.labels.iter().any(|actual| actual == expected))
+    {
+        return Err(MetricPolicyError::DescriptorMalformed);
+    }
+    Ok(())
+}
+
+/// Resolve a metric family from the shared canonical contract registry.
+pub fn canonical_descriptor(name: &str) -> Option<MetricDescriptor> {
+    let descriptor = metric_descriptor(name)?;
+    let labels = descriptor
+        .labels
+        .iter()
+        .map(|(key, values)| label(*key, values))
+        .collect::<Vec<_>>();
+    Some(MetricDescriptor::new(name, labels))
+}
+
+/// Validate a label key before any value is considered.
+pub fn validate_label_key(key: &str) -> Result<(), MetricPolicyError> {
+    if FORBIDDEN_LABEL_KEYS.contains(&key) {
+        return Err(MetricPolicyError::KeyForbidden);
+    }
+    if FORBIDDEN_LABEL_SUFFIXES
+        .iter()
+        .any(|suffix| key.ends_with(suffix))
+    {
+        return Err(MetricPolicyError::KeySuffixForbidden);
+    }
+    if allowed_values(key).is_none() {
+        return Err(MetricPolicyError::KeyNotAllowlisted);
+    }
+    Ok(())
+}
+
+/// Validate one data point against its descriptor and identity canaries.
+pub fn validate_data_point(
+    descriptor: &MetricDescriptor,
+    labels: &BTreeMap<String, String>,
+    canaries: &IdentityCanaries,
+) -> Result<(), MetricPolicyError> {
+    validate_descriptor(descriptor)?;
+    validate_data_point_labels(descriptor, labels, canaries, true)
+}
+
+/// Validate a data point when the descriptor was resolved from the canonical
+/// registry by the caller.
+pub fn validate_canonical_data_point(
+    descriptor: &MetricDescriptor,
+    labels: &BTreeMap<String, String>,
+    canaries: &IdentityCanaries,
+) -> Result<(), MetricPolicyError> {
+    validate_labels(labels, canaries)?;
+    validate_data_point_labels(descriptor, labels, canaries, false)
+}
+
+/// Validate a data point without validating actual label keys before comparing
+/// them with the descriptor.
+pub fn validate_data_point_without_label_key_validation(
+    descriptor: &MetricDescriptor,
+    labels: &BTreeMap<String, String>,
+    canaries: &IdentityCanaries,
+) -> Result<(), MetricPolicyError> {
+    validate_descriptor(descriptor)?;
+    validate_data_point_labels(descriptor, labels, canaries, false)
+}
+
+/// Validate labels when a frame does not carry a full descriptor.
+pub fn validate_labels(
+    labels: &BTreeMap<String, String>,
+    canaries: &IdentityCanaries,
+) -> Result<(), MetricPolicyError> {
+    if labels.len() > 16 {
+        return Err(MetricPolicyError::DescriptorMalformed);
+    }
+
+    for (key, value) in labels {
+        validate_label_key(key)?;
+        let Some(allowed) = allowed_values(key) else {
+            return Err(MetricPolicyError::KeyNotAllowlisted);
+        };
+        if !allowed.iter().any(|candidate| candidate == value) {
+            return Err(MetricPolicyError::ValueNotAllowlisted);
+        }
+        if canaries.contains(value) {
+            return Err(MetricPolicyError::ValueIdentity);
+        }
+    }
+    Ok(())
+}
+
+fn validate_data_point_labels(
+    descriptor: &MetricDescriptor,
+    labels: &BTreeMap<String, String>,
+    canaries: &IdentityCanaries,
+    validate_label_keys: bool,
+) -> Result<(), MetricPolicyError> {
+    for key in labels.keys() {
+        if validate_label_keys {
+            validate_label_key(key)?;
+        }
+    }
+    let descriptor_keys = descriptor
+        .labels
+        .iter()
+        .map(|label| label.key.as_str())
+        .collect::<BTreeSet<_>>();
+    let actual_keys = labels.keys().map(String::as_str).collect::<BTreeSet<_>>();
+    if descriptor_keys != actual_keys {
+        return Err(MetricPolicyError::LabelSetMismatch);
+    }
+    for label in &descriptor.labels {
+        let value = labels
+            .get(label.key())
+            .ok_or(MetricPolicyError::LabelSetMismatch)?;
+        if !label.values.contains(value) {
+            return Err(MetricPolicyError::ValueNotAllowlisted);
+        }
+        if canaries.contains(value) {
+            return Err(MetricPolicyError::ValueIdentity);
+        }
+    }
+    Ok(())
+}
 
 /// One canonical metric family descriptor.
 ///

@@ -67,6 +67,13 @@ impl RetentionScanBudget {
     }
 }
 
+struct OwnedSegment {
+    name: String,
+    path: PathBuf,
+    // Keep the active path as a sort-order boundary without selecting it.
+    identity: Option<(u64, u64)>,
+}
+
 /// Deterministic fault injector for append and rotation tests.
 #[derive(Debug, Clone, Default)]
 pub struct FailureInjector {
@@ -339,7 +346,6 @@ impl SegmentWriter {
         }
         repair_pending_checkpoint(&self.directory, &self.directory_file)?;
         let floor = now_ms.saturating_sub(self.retention_days.saturating_mul(24 * 60 * 60 * 1000));
-        let mut candidates = Vec::new();
         let mut budget = RetentionScanBudget { lines: 0, bytes: 0 };
         if self
             .injector
@@ -352,39 +358,17 @@ impl SegmentWriter {
             .get(..8)
             .ok_or_else(|| io::Error::other("audit-retention-date-invalid"))?
             .to_owned();
-        let mut scanned = 0usize;
-        for entry in fs::read_dir(&self.directory)? {
-            scanned = scanned.saturating_add(1);
-            if scanned > MAX_SEGMENT_SCAN_ENTRIES {
-                return Err(io::Error::other("audit-retention-scan-limit"));
-            }
-            let entry = entry?;
-            let path = entry.path();
-            let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
-                continue;
-            };
-            if !crate::export::is_segment_name(name) || path == self.path {
-                continue;
-            }
-            let metadata = fs::symlink_metadata(&path)?;
-            if !metadata.is_file() || metadata.file_type().is_symlink() {
-                return Err(io::Error::other("audit-segment-identity-invalid"));
-            }
-            let segment_date = name
+        let inventory = owned_segment_inventory(&self.directory, &self.path)?;
+        let mut prefix = Vec::new();
+        for segment in inventory {
+            let segment_date = segment
+                .name
                 .get(6..14)
                 .ok_or_else(|| io::Error::other("audit-segment-name-invalid"))?;
-            if segment_date < cutoff_date.as_str() {
-                candidates.push((name.to_owned(), path));
-            }
-        }
-        candidates.sort_by(|left, right| left.0.cmp(&right.0));
-        let owned_names = owned_segment_names(&self.directory, &mut budget)?;
-        let mut prefix = Vec::new();
-        for (name, path) in candidates {
-            if owned_names.get(prefix.len()).map(String::as_str) != Some(name.as_str()) {
+            if segment.identity.is_none() || segment_date >= cutoff_date.as_str() {
                 break;
             }
-            prefix.push(path);
+            prefix.push(segment);
         }
         if prefix.is_empty() {
             return Ok(0);
@@ -393,17 +377,19 @@ impl SegmentWriter {
         let start_anchor = checkpoint_anchor(&self.directory)?;
         let mut anchor = start_anchor.clone();
         let mut checkpoint_segments = Vec::with_capacity(prefix.len());
-        for path in &prefix {
-            let metadata = fs::symlink_metadata(path)?;
+        for segment in &prefix {
+            let metadata = fs::symlink_metadata(&segment.path)?;
             validate_segment_metadata(&metadata)?;
+            let Some(identity) = segment.identity else {
+                return Err(io::Error::other("audit-segment-identity-invalid"));
+            };
+            if (metadata.dev(), metadata.ino()) != identity {
+                return Err(io::Error::other("audit-segment-identity-invalid"));
+            }
             let previous = anchor.clone();
-            let tail = segment_tail_hash(path, &previous, &mut budget)?;
-            let name = path
-                .file_name()
-                .and_then(|value| value.to_str())
-                .ok_or_else(|| io::Error::other("audit-segment-name-invalid"))?;
+            let tail = segment_tail_hash(&segment.path, &previous, &mut budget)?;
             checkpoint_segments.push(RetentionSegment {
-                name: name.to_owned(),
+                name: segment.name.clone(),
                 dev: metadata.dev(),
                 ino: metadata.ino(),
                 previous,
@@ -865,11 +851,8 @@ fn clear_checkpoint(directory: &Path, anchor: &AuditHash) -> io::Result<()> {
         .sync_all()
 }
 
-fn owned_segment_names(
-    directory: &Path,
-    _budget: &mut RetentionScanBudget,
-) -> io::Result<Vec<String>> {
-    let mut names = Vec::new();
+fn owned_segment_inventory(directory: &Path, active_path: &Path) -> io::Result<Vec<OwnedSegment>> {
+    let mut inventory = Vec::new();
     let mut scanned = 0usize;
     for entry in fs::read_dir(directory)? {
         scanned = scanned.saturating_add(1);
@@ -877,13 +860,30 @@ fn owned_segment_names(
             return Err(io::Error::other("audit-retention-scan-limit"));
         }
         let entry = entry?;
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if crate::export::is_segment_name(&name) {
-            names.push(name);
+        let file_name = entry.file_name();
+        let Some(name) = file_name.to_str() else {
+            continue;
+        };
+        if !crate::export::is_segment_name(name) {
+            continue;
         }
+        let name = name.to_owned();
+        let path = entry.path();
+        let identity = if path == active_path {
+            None
+        } else {
+            let metadata = fs::symlink_metadata(&path)?;
+            validate_segment_metadata(&metadata)?;
+            Some((metadata.dev(), metadata.ino()))
+        };
+        inventory.push(OwnedSegment {
+            name,
+            path,
+            identity,
+        });
     }
-    names.sort();
-    Ok(names)
+    inventory.sort_unstable_by(|left, right| left.name.cmp(&right.name));
+    Ok(inventory)
 }
 
 fn segment_tail_hash(
@@ -1073,6 +1073,84 @@ mod tests {
         let removed = writer.prune_old(1_900_000_000_000).unwrap();
         assert_eq!(removed, 0);
         assert!(unowned.exists());
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn pruning_rejects_invalid_owned_artifacts() {
+        for kind in ["directory", "symlink"] {
+            let directory = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("target")
+                .join(format!("d2b-audit-invalid-{kind}-{}", std::process::id()));
+            let _ = fs::remove_dir_all(&directory);
+            let writer = SegmentWriter::open_at(&directory, 1024, 1, 1_700_000_000_000).unwrap();
+            let invalid = directory.join("audit-19700101000000000000.jsonl");
+            match kind {
+                "directory" => fs::create_dir(&invalid).unwrap(),
+                "symlink" => std::os::unix::fs::symlink("missing", &invalid).unwrap(),
+                _ => unreachable!(),
+            }
+            let error = writer.prune_old(1_900_000_000_000).unwrap_err();
+            assert_eq!(error.to_string(), "audit-segment-identity-invalid");
+            let _ = fs::remove_dir_all(directory);
+        }
+    }
+
+    #[test]
+    fn pruning_excludes_the_active_segment() {
+        let directory = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join(format!("d2b-audit-active-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&directory);
+        let writer = SegmentWriter::open_at(&directory, 1024, 1, 1_700_000_000_000).unwrap();
+        let active = writer.path().to_path_buf();
+        let old = old_segment(&directory);
+
+        assert_eq!(writer.prune_old(1_900_000_000_000).unwrap(), 1);
+        assert!(active.exists());
+        assert!(!old.exists());
+        let later_old = directory.join("audit-20240101000000000000.jsonl");
+        fs::write(&later_old, b"").unwrap();
+        assert_eq!(writer.prune_old(1_900_000_000_000).unwrap(), 0);
+        assert!(later_old.exists());
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn pruning_stops_at_the_first_non_expired_segment() {
+        let directory = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join(format!("d2b-audit-prefix-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&directory);
+        let now_ms = 1_700_000_000_000 + 10 * 86_400_000;
+        let writer = SegmentWriter::open_at(&directory, 1024, 1, now_ms + 10 * 86_400_000).unwrap();
+        let old = old_segment(&directory);
+        let gap = directory.join(format!("audit-{}000000.jsonl", utc_stamp(now_ms)));
+        fs::write(&gap, b"").unwrap();
+
+        assert_eq!(writer.prune_old(now_ms).unwrap(), 1);
+        assert!(!old.exists());
+        assert!(gap.exists());
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn pruning_fails_closed_when_directory_scan_budget_is_exceeded() {
+        let directory = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join(format!("d2b-audit-scan-budget-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&directory);
+        let writer = SegmentWriter::open_at(&directory, 1024, 1, 1_700_000_000_000).unwrap();
+        for index in 0..=MAX_SEGMENT_SCAN_ENTRIES {
+            fs::write(
+                directory.join(format!("foreign-retention-artifact-{index}")),
+                b"foreign",
+            )
+            .unwrap();
+        }
+
+        let error = writer.prune_old(1_900_000_000_000).unwrap_err();
+        assert_eq!(error.to_string(), "audit-retention-scan-limit");
         let _ = fs::remove_dir_all(directory);
     }
 

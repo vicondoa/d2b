@@ -17451,24 +17451,11 @@ impl provider_effects::ProviderLifecycleEffectPort for DaemonProviderLifecycleEf
             .get("state")
             .and_then(Value::as_str)
             .ok_or(provider_effects::ProviderEffectError::StateUnavailable)?;
-        let requested_state_reached = match self.operation {
-            provider_effects::GuestLifecycleOperation::Start => lifecycle_state == "Running",
-            provider_effects::GuestLifecycleOperation::Stop => lifecycle_state == "Stopped",
-        };
-        Ok(match (self.operation, requested_state_reached) {
-            (provider_effects::GuestLifecycleOperation::Start, true) => {
-                provider_effects::GuestLifecycleState::Started
-            }
-            (provider_effects::GuestLifecycleOperation::Start, false) => {
-                provider_effects::GuestLifecycleState::Stopped
-            }
-            (provider_effects::GuestLifecycleOperation::Stop, true) => {
-                provider_effects::GuestLifecycleState::Stopped
-            }
-            (provider_effects::GuestLifecycleOperation::Stop, false) => {
-                provider_effects::GuestLifecycleState::Started
-            }
-        })
+        match lifecycle_state {
+            "Running" => Ok(provider_effects::GuestLifecycleState::Started),
+            "Stopped" => Ok(provider_effects::GuestLifecycleState::Stopped),
+            _ => Err(provider_effects::ProviderEffectError::StateUnavailable),
+        }
     }
 
     fn apply(
@@ -24003,6 +23990,99 @@ mod public_status_tests {
         let manifest_entry = manifest_entry();
         let lifecycle = public_vm_lifecycle(&state, "vm-a", &manifest_entry, None);
         assert_eq!(lifecycle_state(&lifecycle), "Starting");
+    }
+
+    #[test]
+    fn provider_lifecycle_reconciliation_refuses_nonterminal_states() {
+        use std::io::{Read, Write};
+
+        let root = tempfile::tempdir().expect("status artifacts");
+        let artifacts = write_public_status_artifacts(root.path());
+        let socket = root.path().join("vm-a.sock");
+        let mut manifest: Value =
+            serde_json::from_slice(&fs::read(&artifacts.public_manifest_path).expect("manifest"))
+                .expect("parse manifest");
+        manifest["vm-a"]["apiSocket"] = Value::String(socket.display().to_string());
+        fs::write(
+            &artifacts.public_manifest_path,
+            serde_json::to_vec(&manifest).expect("serialize manifest"),
+        )
+        .expect("write manifest");
+
+        let config = DaemonConfig {
+            artifacts,
+            ..DaemonConfig::default()
+        };
+        let (state, _state_dir) = test_state_with_config(config);
+        state
+            .pidfd_table
+            .register(
+                "vm-a".to_owned(),
+                "virtiofsd-ro-store".to_owned(),
+                current_process_entry(),
+            )
+            .expect("register sidecar");
+        let effect = DaemonProviderLifecycleEffect {
+            state: &state,
+            request: public_wire::VmLifecycleRequest {
+                vm: "vm-a".to_owned(),
+                flags: public_wire::MutationFlags::default(),
+                force: false,
+                no_wait_api: false,
+            },
+            caller_role: BrokerCallerRole::AdminUid { uid: 0 },
+            term_timeout: VM_STOP_TIMEOUT,
+            kill_timeout: VM_STOP_TIMEOUT,
+            operation: provider_effects::GuestLifecycleOperation::Start,
+        };
+        let lifecycle_request = provider_effects::GuestLifecycleRequest::new(
+            ZoneId::parse("work").expect("Zone"),
+            d2b_contracts::v3::ResourceRef::parse("Guest/vm-a").expect("Guest ref"),
+            provider_effects::GuestLifecycleOperation::Start,
+            "failed-state",
+        )
+        .expect("lifecycle request");
+
+        assert_eq!(
+            provider_effects::ProviderLifecycleEffectPort::actual_state(
+                &effect,
+                &lifecycle_request
+            ),
+            Err(provider_effects::ProviderEffectError::StateUnavailable)
+        );
+
+        let listener =
+            std::os::unix::net::UnixListener::bind(&socket).expect("bind provider status socket");
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept provider status request");
+            let mut request = [0_u8; 1024];
+            let _ = stream.read(&mut request);
+            let body = r#"{"state":"Created"}"#;
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{}",
+                body.len(),
+                body
+            )
+            .expect("write provider status response");
+        });
+        state
+            .pidfd_table
+            .register(
+                "vm-a".to_owned(),
+                VM_RUNNER_ROLE_ID.to_owned(),
+                current_process_entry(),
+            )
+            .expect("register runner");
+
+        assert_eq!(
+            provider_effects::ProviderLifecycleEffectPort::actual_state(
+                &effect,
+                &lifecycle_request
+            ),
+            Err(provider_effects::ProviderEffectError::StateUnavailable)
+        );
+        server.join().expect("status server");
     }
 }
 

@@ -495,7 +495,11 @@ impl ProviderLifecycleDispatch {
             GuestLifecycleOperation::Stop => GuestLifecycleOperation::Start,
         };
         mutations.retain(|_, mutation| {
-            mutation.guest != *request.guest() || mutation.operation != opposite
+            let is_applied_history =
+                mutation.status == LifecycleMutationStatus::Applied && !mutation.executing;
+            mutation.guest != *request.guest()
+                || mutation.operation != opposite
+                || !is_applied_history
         });
         if let Err(error) = self.persist_locked(&mutations) {
             *mutations = previous;
@@ -576,8 +580,9 @@ fn now_ms() -> u64 {
 mod tests {
     use super::*;
     use std::sync::{
-        Arc,
+        Arc, Barrier,
         atomic::{AtomicBool, AtomicUsize, Ordering},
+        mpsc::{Sender, channel},
     };
 
     struct RecordingEffect {
@@ -627,6 +632,68 @@ mod tests {
             self.reached.store(true, Ordering::Release);
             let _ = request;
             Ok(self.calls.fetch_add(1, Ordering::AcqRel) + 1)
+        }
+    }
+
+    struct UnavailableReconciliationEffect {
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl ProviderLifecycleEffectPort for UnavailableReconciliationEffect {
+        type Output = usize;
+
+        fn actual_state(
+            &self,
+            _request: &GuestLifecycleRequest,
+        ) -> Result<GuestLifecycleState, ProviderEffectError> {
+            Err(ProviderEffectError::StateUnavailable)
+        }
+
+        fn apply(
+            &self,
+            _request: &GuestLifecycleRequest,
+        ) -> Result<Self::Output, ProviderEffectError> {
+            Ok(self.calls.fetch_add(1, Ordering::AcqRel) + 1)
+        }
+    }
+
+    #[derive(Clone)]
+    struct ConcurrentEffect {
+        entered: Arc<Barrier>,
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl ProviderLifecycleEffectPort for ConcurrentEffect {
+        type Output = usize;
+
+        fn apply(
+            &self,
+            _request: &GuestLifecycleRequest,
+        ) -> Result<Self::Output, ProviderEffectError> {
+            let call = self.calls.fetch_add(1, Ordering::AcqRel) + 1;
+            self.entered.wait();
+            Ok(call)
+        }
+    }
+
+    #[derive(Clone)]
+    struct BlockingEffect {
+        entered: Sender<()>,
+        release: Arc<Barrier>,
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl ProviderLifecycleEffectPort for BlockingEffect {
+        type Output = usize;
+
+        fn apply(
+            &self,
+            _request: &GuestLifecycleRequest,
+        ) -> Result<Self::Output, ProviderEffectError> {
+            let call = self.calls.fetch_add(1, Ordering::AcqRel) + 1;
+            self.entered.send(()).expect("effect entered");
+            self.release.wait();
+            Ok(call)
         }
     }
 
@@ -858,6 +925,199 @@ mod tests {
         );
         assert_eq!(calls.load(Ordering::Acquire), 0);
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn persistent_pending_state_unavailable_keeps_retryable_admission() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join(format!(
+                "provider-lifecycle-pending-unavailable-{}",
+                std::process::id()
+            ));
+        let _ = std::fs::remove_dir_all(&root);
+        let path = root.join("lifecycle.json");
+        let zone = ZoneId::parse("work").expect("Zone");
+        let caller = BrokerCallerRole::AdminUid { uid: 1000 };
+        let request = request(&zone, GuestLifecycleOperation::Start, "pending-unavailable");
+        let admitted =
+            ProviderLifecycleDispatch::new_persistent(zone.clone(), &path).expect("open state");
+        assert_eq!(
+            admitted.admit(&caller, &request),
+            Ok(LifecycleDispatch::Dispatch)
+        );
+        drop(admitted);
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let unavailable = UnavailableReconciliationEffect {
+            calls: Arc::clone(&calls),
+        };
+        let restarted =
+            ProviderLifecycleDispatch::new_persistent(zone.clone(), &path).expect("restore state");
+        assert_eq!(
+            restarted.dispatch(&caller, &request, &unavailable),
+            Err(ProviderEffectError::StateUnavailable)
+        );
+        assert_eq!(calls.load(Ordering::Acquire), 0);
+        let pending: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).expect("read pending state"))
+                .expect("parse pending state");
+        assert_eq!(pending[0]["status"], "pending");
+
+        let retry = ReconciliationEffect {
+            calls: Arc::clone(&calls),
+            reached: AtomicBool::new(false),
+        };
+        assert_eq!(
+            restarted.dispatch(&caller, &request, &retry),
+            Ok(EffectDispatch::Dispatched(1))
+        );
+        assert_eq!(calls.load(Ordering::Acquire), 1);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn completing_operation_preserves_pending_opposite_admission() {
+        let zone = ZoneId::parse("work").expect("Zone");
+        let dispatch = ProviderLifecycleDispatch::new(zone.clone());
+        let caller = BrokerCallerRole::AdminUid { uid: 1000 };
+        let start = request(&zone, GuestLifecycleOperation::Start, "pending-start");
+        let stop = request(&zone, GuestLifecycleOperation::Stop, "completed-stop");
+        assert_eq!(
+            dispatch.admit(&caller, &start),
+            Ok(LifecycleDispatch::Dispatch)
+        );
+        let effect = RecordingEffect {
+            calls: Arc::new(AtomicUsize::new(0)),
+            reject: AtomicBool::new(false),
+        };
+        assert!(matches!(
+            dispatch.dispatch(&caller, &stop, &effect),
+            Ok(EffectDispatch::Dispatched(_))
+        ));
+        assert_eq!(
+            dispatch.admit(&caller, &start),
+            Ok(LifecycleDispatch::Pending)
+        );
+    }
+
+    #[test]
+    fn concurrent_opposite_requests_keep_in_flight_rows_until_both_complete() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join(format!(
+                "provider-lifecycle-concurrent-opposite-{}",
+                std::process::id()
+            ));
+        let _ = std::fs::remove_dir_all(&root);
+        let path = root.join("lifecycle.json");
+        let zone = ZoneId::parse("work").expect("Zone");
+        let dispatch = Arc::new(
+            ProviderLifecycleDispatch::new_persistent(zone.clone(), &path)
+                .expect("open persistent state"),
+        );
+        let calls = Arc::new(AtomicUsize::new(0));
+        let effect = ConcurrentEffect {
+            entered: Arc::new(Barrier::new(2)),
+            calls: Arc::clone(&calls),
+        };
+        let start_dispatch = Arc::clone(&dispatch);
+        let start_effect = effect.clone();
+        let start = request(&zone, GuestLifecycleOperation::Start, "concurrent-start");
+        let start_thread = std::thread::spawn(move || {
+            start_dispatch.dispatch(
+                &BrokerCallerRole::AdminUid { uid: 1000 },
+                &start,
+                &start_effect,
+            )
+        });
+        let stop_dispatch = Arc::clone(&dispatch);
+        let stop_effect = effect.clone();
+        let stop = request(&zone, GuestLifecycleOperation::Stop, "concurrent-stop");
+        let stop_thread = std::thread::spawn(move || {
+            stop_dispatch.dispatch(
+                &BrokerCallerRole::AdminUid { uid: 1000 },
+                &stop,
+                &stop_effect,
+            )
+        });
+
+        let start_result = start_thread.join().expect("start thread");
+        let stop_result = stop_thread.join().expect("stop thread");
+        assert!(matches!(start_result, Ok(EffectDispatch::Dispatched(_))));
+        assert!(matches!(stop_result, Ok(EffectDispatch::Dispatched(_))));
+        assert_eq!(calls.load(Ordering::Acquire), 2);
+
+        let persisted: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).expect("read settled state"))
+                .expect("parse settled state");
+        assert_eq!(
+            persisted.as_array().map(|entries| entries.len()),
+            Some(1),
+            "only the last settled opposite operation remains as applied history"
+        );
+        assert_eq!(persisted[0]["status"], "applied");
+        let applied_key = persisted[0]["key"].as_str().expect("applied key");
+        let (retry_operation, retry_key) = if applied_key == "concurrent-start" {
+            (GuestLifecycleOperation::Stop, "concurrent-stop")
+        } else {
+            (GuestLifecycleOperation::Start, "concurrent-start")
+        };
+        let retry_calls = Arc::new(AtomicUsize::new(0));
+        let retry_effect = RecordingEffect {
+            calls: Arc::clone(&retry_calls),
+            reject: AtomicBool::new(false),
+        };
+        let retry = request(&zone, retry_operation, retry_key);
+        assert!(matches!(
+            dispatch.dispatch(
+                &BrokerCallerRole::AdminUid { uid: 1000 },
+                &retry,
+                &retry_effect,
+            ),
+            Ok(EffectDispatch::Dispatched(_))
+        ));
+        assert_eq!(retry_calls.load(Ordering::Acquire), 1);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn same_operation_concurrency_still_runs_one_effect() {
+        let zone = ZoneId::parse("work").expect("Zone");
+        let dispatch = Arc::new(ProviderLifecycleDispatch::new(zone.clone()));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let (entered, entered_rx) = channel();
+        let effect = BlockingEffect {
+            entered,
+            release: Arc::new(Barrier::new(2)),
+            calls: Arc::clone(&calls),
+        };
+        let first_dispatch = Arc::clone(&dispatch);
+        let first_effect = effect.clone();
+        let first = request(&zone, GuestLifecycleOperation::Start, "same-operation");
+        let first_thread = std::thread::spawn(move || {
+            first_dispatch.dispatch(
+                &BrokerCallerRole::AdminUid { uid: 1000 },
+                &first,
+                &first_effect,
+            )
+        });
+        entered_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("first effect entered");
+
+        let second = request(&zone, GuestLifecycleOperation::Start, "same-operation");
+        assert_eq!(
+            dispatch.dispatch(&BrokerCallerRole::AdminUid { uid: 1000 }, &second, &effect,),
+            Err(ProviderEffectError::MutationPending)
+        );
+        assert_eq!(calls.load(Ordering::Acquire), 1);
+
+        effect.release.wait();
+        assert_eq!(
+            first_thread.join().expect("first thread"),
+            Ok(EffectDispatch::Dispatched(1))
+        );
     }
 
     #[test]

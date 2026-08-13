@@ -406,18 +406,14 @@ impl IngressPolicyGate {
                 )
             })
             .collect::<std::collections::BTreeSet<_>>();
+        let producer = producer_for(ingress, connection_id);
         let new_series = incoming
             .iter()
             .filter(|series| !self.series.contains_key(*series))
             .count();
-        let producer = producer_for(ingress, connection_id);
         let producer_new_series = producer
             .map(|producer| {
-                incoming
-                    .iter()
-                    .filter(|series| !self.series.contains_key(*series))
-                    .count()
-                    .saturating_add(*self.producer_series.get(&producer).unwrap_or(&0))
+                new_series.saturating_add(*self.producer_series.get(&producer).unwrap_or(&0))
             })
             .unwrap_or(0);
         if self.series.len().saturating_add(new_series) > self.max_provider_series

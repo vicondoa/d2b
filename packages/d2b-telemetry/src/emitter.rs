@@ -15,7 +15,7 @@ use std::{
 
 use crate::metric_label_policy::{
     IdentityCanaries, MetricDescriptor, MetricPolicyError, canonical_descriptor,
-    validate_data_point, validate_labels,
+    validate_canonical_data_point, validate_data_point,
 };
 use d2b_contracts::v3::{
     TelemetryFrame, TelemetryFrameError, TelemetrySignal, parse_raw_frame, redact_parsed_frame,
@@ -531,9 +531,8 @@ fn validate_metric_frame(frame: &TelemetryFrame) -> Result<(), EmitterError> {
                 ))
         })
         .collect::<Result<BTreeMap<_, _>, _>>()?;
-    let canaries = IdentityCanaries::default();
-    validate_labels(&labels, &canaries).map_err(EmitterError::MetricPolicy)?;
-    validate_data_point(&descriptor, &labels, &canaries).map_err(EmitterError::MetricPolicy)
+    validate_canonical_data_point(&descriptor, &labels, &IdentityCanaries::default())
+        .map_err(EmitterError::MetricPolicy)
 }
 
 #[cfg(test)]
@@ -649,6 +648,40 @@ mod tests {
         assert_eq!(
             emitter.emit(Signal::Metric, &frame).unwrap_err(),
             EmitterError::MetricPolicy(MetricPolicyError::KeyForbidden)
+        );
+        assert_eq!(emitter.buffered_frames().unwrap(), 0);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn raw_metric_frames_preserve_the_max_label_guard() {
+        let path = socket_path("max-labels");
+        let emitter = BoundedEmitter::new(&path, 512).unwrap();
+        let labels = d2b_contracts::v3::telemetry_policy::METRIC_LABEL_POLICY
+            .iter()
+            .take(17)
+            .map(|(key, values)| {
+                (
+                    (*key).to_owned(),
+                    serde_json::Value::String(values[0].to_owned()),
+                )
+            })
+            .collect::<serde_json::Map<_, _>>();
+        let frame = encode_frame(
+            Signal::Metric,
+            &serde_json::json!({
+                "name": "d2b_api_request_total",
+                "labels": labels,
+                "value": 1,
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(
+            emitter.emit(Signal::Metric, &frame),
+            Err(EmitterError::MetricPolicy(
+                MetricPolicyError::DescriptorMalformed
+            ))
         );
         assert_eq!(emitter.buffered_frames().unwrap(), 0);
         let _ = fs::remove_file(path);
