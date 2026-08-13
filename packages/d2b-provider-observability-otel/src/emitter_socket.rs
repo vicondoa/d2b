@@ -1,7 +1,7 @@
 //! Per-Zone Unix datagram receiver for bounded telemetry frames.
 
 use crate::ingress_policy::{Ingress, IngressOutcome, IngressPolicyGate};
-use d2b_contracts::v3::redact_frame as redact_shared_frame;
+use d2b_contracts::v3::{redact_parsed_frame, validate_raw_frame};
 use rustix::fs::{Mode, fchmod, fstat};
 use std::{
     collections::VecDeque,
@@ -132,9 +132,20 @@ impl EmitterSocket {
                         continue;
                     }
                     bytes.truncate(size);
+                    let frame = match validate_raw_frame(&bytes) {
+                        Ok(frame) => frame,
+                        Err(_) => {
+                            self.dropped = self.dropped.saturating_add(1);
+                            drained += 1;
+                            continue;
+                        }
+                    };
+                    // Unix datagrams do not carry a stable per-sender
+                    // connection identity. The shared socket scope is
+                    // intentionally accounted as connection id zero.
                     if !matches!(
                         self.policy_gate
-                            .admit_raw(Ingress::EmitterUnix, 0, &bytes)
+                            .admit_parsed(Ingress::EmitterUnix, 0, &frame, bytes.len())
                             .0,
                         IngressOutcome::Accepted
                     ) {
@@ -142,7 +153,7 @@ impl EmitterSocket {
                         drained += 1;
                         continue;
                     }
-                    let Some(bytes) = redact_frame(&bytes) else {
+                    let Some(bytes) = redact_parsed_frame(frame).ok() else {
                         self.dropped = self.dropped.saturating_add(1);
                         drained += 1;
                         continue;
@@ -309,10 +320,6 @@ fn validate_socket_parent(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
-fn redact_frame(bytes: &[u8]) -> Option<Vec<u8>> {
-    redact_shared_frame(bytes).ok()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -336,7 +343,7 @@ mod tests {
         let sender = UnixDatagram::unbound().unwrap();
         sender
             .send_to(
-                br#"{"signal":"metric","value":{"name":"d2b_test_total","labels":{"outcome":"ok"},"value":1}}"#,
+                br#"{"signal":"metric","value":{"name":"d2b_otel_ingress_policy_total","labels":{"ingress":"emitter_unix","outcome":"accepted","error_class":"none"},"value":1}}"#,
                 &path,
             )
             .unwrap();
@@ -348,9 +355,45 @@ mod tests {
                 .and_then(|frame| String::from_utf8(frame).ok())
                 .as_deref(),
             Some(
-                r#"{"signal":"metric","value":{"labels":{"outcome":"ok"},"name":"d2b_test_total","value":1}}"#,
+                r#"{"signal":"metric","value":{"labels":{"error_class":"none","ingress":"emitter_unix","outcome":"accepted"},"name":"d2b_otel_ingress_policy_total","value":1}}"#,
             )
         );
+    }
+
+    #[test]
+    fn receiver_uses_closed_descriptor_accounting_before_queue_insertion() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .nth(2)
+            .unwrap()
+            .join(format!("registry-{nonce}.sock"));
+        let mut receiver = EmitterSocket::bind(&path, 512).unwrap();
+        let sender = UnixDatagram::unbound().unwrap();
+        sender
+            .send_to(
+                br#"{"signal":"metric","value":{"name":"d2b_unregistered_total","labels":{"outcome":"ok"},"value":1}}"#,
+                &path,
+            )
+            .unwrap();
+        sender
+            .send_to(
+                br#"{"signal":"metric","value":{"name":"d2b_otel_ingress_policy_total","labels":{"ingress":"emitter_unix","outcome":"accepted","error_class":"none"},"value":1}}"#,
+                &path,
+            )
+            .unwrap();
+
+        assert_eq!(receiver.drain_once().unwrap(), 2);
+        assert_eq!(receiver.queued(), 1);
+        assert!(
+            String::from_utf8(receiver.pop().unwrap())
+                .unwrap()
+                .contains("d2b_otel_ingress_policy_total")
+        );
+        assert_eq!(receiver.dropped(), 1);
     }
 
     #[test]

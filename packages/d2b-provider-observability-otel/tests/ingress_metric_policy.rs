@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use d2b_provider_observability_otel::ingress_policy::QUARANTINE_VIOLATION_THRESHOLD;
 use d2b_provider_observability_otel::{
     IdentityCanaries, Ingress, IngressErrorClass, IngressOutcome, IngressPolicyGate,
-    MetricDescriptor, MetricFrame, MetricPoint, label,
+    MetricDescriptor, MetricFrame, MetricPoint, canonical_descriptor, label,
 };
 
 const ALL_INGRESSES: [Ingress; 4] = [
@@ -90,7 +90,7 @@ impl PolicyCase {
             Self::ValueIdentity => (
                 valid_frame(),
                 IdentityCanaries::new(
-                    ["ok"],
+                    ["accepted"],
                     std::iter::empty::<&str>(),
                     std::iter::empty::<&str>(),
                 ),
@@ -109,51 +109,24 @@ fn valid_resource_attributes() -> BTreeMap<String, String> {
 
 fn valid_point() -> MetricPoint {
     MetricPoint {
-        descriptor: MetricDescriptor::new("d2b_test_total", [label("outcome", &["ok", "error"])]),
-        labels: BTreeMap::from([("outcome".to_owned(), "ok".to_owned())]),
+        descriptor: canonical_descriptor("d2b_otel_ingress_policy_total").unwrap(),
+        labels: BTreeMap::from([
+            ("ingress".to_owned(), "emitter_unix".to_owned()),
+            ("outcome".to_owned(), "accepted".to_owned()),
+            ("error_class".to_owned(), "none".to_owned()),
+        ]),
         value: 1.0,
     }
 }
 
 fn oversize_point() -> MetricPoint {
-    let labels = [
-        label("service", &["resource-api"]),
-        label("direction", &["local"]),
-        label("outcome", &["ok"]),
-        label("resource_type", &["Host"]),
-        label("verb", &["get"]),
-        label("profile", &["NN"]),
-        label("purpose_class", &["local"]),
-        label("transport", &["unix"]),
-        label("kind", &["control"]),
-        label("handler", &["provider"]),
-        label("provider", &["observability-otel"]),
-        label("domain", &["user"]),
-        label("operation", &["read"]),
-        label("record_class", &["process-effect"]),
-        label("provider_class", &["observability-otel"]),
-        label("phase", &["ready"]),
-    ];
     let values = BTreeMap::from([
-        ("service".to_owned(), "resource-api".to_owned()),
-        ("direction".to_owned(), "local".to_owned()),
-        ("outcome".to_owned(), "ok".to_owned()),
-        ("resource_type".to_owned(), "Host".to_owned()),
         ("verb".to_owned(), "get".to_owned()),
-        ("profile".to_owned(), "NN".to_owned()),
-        ("purpose_class".to_owned(), "local".to_owned()),
-        ("transport".to_owned(), "unix".to_owned()),
-        ("kind".to_owned(), "control".to_owned()),
-        ("handler".to_owned(), "provider".to_owned()),
-        ("provider".to_owned(), "observability-otel".to_owned()),
-        ("domain".to_owned(), "user".to_owned()),
-        ("operation".to_owned(), "read".to_owned()),
-        ("record_class".to_owned(), "process-effect".to_owned()),
-        ("provider_class".to_owned(), "observability-otel".to_owned()),
-        ("phase".to_owned(), "ready".to_owned()),
+        ("resource_type".to_owned(), "Host".to_owned()),
+        ("outcome".to_owned(), "ok".to_owned()),
     ]);
     MetricPoint {
-        descriptor: MetricDescriptor::new("d2b_test_total", labels),
+        descriptor: canonical_descriptor("d2b_api_request_total").unwrap(),
         labels: values,
         value: 1.0,
     }
@@ -167,7 +140,10 @@ fn frame_with_label(key: &str, values: &[&str], value: &str) -> MetricFrame {
     MetricFrame::new(
         64,
         [MetricPoint {
-            descriptor: MetricDescriptor::new("d2b_test_total", [label(key, values)]),
+            descriptor: MetricDescriptor::new(
+                "d2b_otel_ingress_policy_total",
+                [label(key, values)],
+            ),
             labels: BTreeMap::from([(key.to_owned(), value.to_owned())]),
             value: 1.0,
         }],

@@ -131,6 +131,8 @@ pub enum MetricPolicyError {
     ValueIdentity,
     /// A metric name is empty or malformed.
     DescriptorMalformed,
+    /// A metric name is not in the canonical family registry.
+    DescriptorNotAllowlisted,
 }
 
 impl core::fmt::Display for MetricPolicyError {
@@ -143,6 +145,7 @@ impl core::fmt::Display for MetricPolicyError {
             Self::ValueNotAllowlisted => "metric-label-value-not-allowlisted",
             Self::ValueIdentity => "metric-label-value-identity",
             Self::DescriptorMalformed => "metric-descriptor-malformed",
+            Self::DescriptorNotAllowlisted => "metric-descriptor-not-allowlisted",
         })
     }
 }
@@ -160,6 +163,9 @@ pub fn validate_descriptor(descriptor: &MetricDescriptor) -> Result<(), MetricPo
     {
         return Err(MetricPolicyError::DescriptorMalformed);
     }
+    let Some(canonical) = canonical_descriptor(&descriptor.name) else {
+        return Err(MetricPolicyError::DescriptorNotAllowlisted);
+    };
 
     let mut seen = BTreeSet::new();
     if descriptor.labels.len() > 16 {
@@ -185,7 +191,26 @@ pub fn validate_descriptor(descriptor: &MetricDescriptor) -> Result<(), MetricPo
             return Err(MetricPolicyError::ValueNotAllowlisted);
         }
     }
+    if descriptor.labels.len() != canonical.labels.len()
+        || !canonical
+            .labels
+            .iter()
+            .all(|expected| descriptor.labels.iter().any(|actual| actual == expected))
+    {
+        return Err(MetricPolicyError::DescriptorMalformed);
+    }
     Ok(())
+}
+
+/// Resolve a metric family from the canonical contract registry.
+pub fn canonical_descriptor(name: &str) -> Option<MetricDescriptor> {
+    let descriptor = d2b_contracts::v3::metric_descriptor(name)?;
+    let labels = descriptor
+        .labels
+        .iter()
+        .map(|(key, values)| label(*key, values))
+        .collect::<Vec<_>>();
+    Some(MetricDescriptor::new(name, labels))
 }
 
 /// Validate a label key before considering any value.
@@ -317,9 +342,12 @@ mod tests {
     #[test]
     fn descriptor_validation_rejects_identity_canaries() {
         let descriptor =
-            MetricDescriptor::new("d2b_store_write_total", [label("outcome", &["ok"])]);
+            canonical_descriptor("d2b_store_write_duration_seconds").expect("store descriptor");
         let canaries = IdentityCanaries::new(["resource-name"], ["uid-value"], ["Process/name"]);
-        let labels = BTreeMap::from([("outcome".to_owned(), "resource-name".to_owned())]);
+        let labels = BTreeMap::from([
+            ("kind".to_owned(), "single".to_owned()),
+            ("outcome".to_owned(), "resource-name".to_owned()),
+        ]);
         assert_eq!(
             validate_data_point(&descriptor, &labels, &canaries),
             Err(MetricPolicyError::ValueNotAllowlisted)

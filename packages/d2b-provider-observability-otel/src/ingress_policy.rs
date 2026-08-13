@@ -24,9 +24,13 @@ pub const QUARANTINE_VIOLATION_THRESHOLD: u8 = 3;
 pub const QUARANTINE_DURATION_SECONDS: u64 = 30;
 /// Idle connection state is reclaimed on the same bounded horizon.
 pub const CONNECTION_IDLE_SECONDS: u64 = 30;
-/// Provider-wide cap on retained metric series. Existing series are never
-/// evicted to admit a new one.
+/// Idle metric series are reclaimed on the same monotonic horizon.
+pub const SERIES_IDLE_SECONDS: u64 = CONNECTION_IDLE_SECONDS;
+/// Provider-wide cap on retained metric series. Existing active series are
+/// never evicted to admit a new one.
 pub const MAX_PROVIDER_SERIES: usize = 4096;
+/// Fair quota for one identified producer's distinct metric series.
+pub const MAX_SERIES_PER_PRODUCER: usize = MAX_PROVIDER_SERIES / 4;
 
 /// Telemetry ingress adapter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -196,8 +200,25 @@ impl MetricFrame {
 pub struct IngressPolicyGate {
     connections: BTreeMap<(Ingress, u64), ConnectionState>,
     quarantined_connections: usize,
-    series: std::collections::BTreeSet<(String, Vec<(String, String)>)>,
+    series: BTreeMap<SeriesKey, SeriesState>,
+    producer_series: BTreeMap<ProducerKey, usize>,
+    max_provider_series: usize,
+    max_series_per_producer: usize,
     clock: Arc<dyn IngressClock>,
+}
+
+type SeriesKey = (String, Vec<(String, String)>);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct ProducerKey {
+    ingress: Ingress,
+    connection_id: u64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SeriesState {
+    last_seen_ms: u64,
+    owner: Option<ProducerKey>,
 }
 
 #[derive(Debug, Default)]
@@ -215,6 +236,7 @@ impl core::fmt::Debug for IngressPolicyGate {
             .field("tracked_connections", &self.connections.len())
             .field("quarantined_connections", &self.quarantined_connections)
             .field("series", &self.series.len())
+            .field("producer_series", &self.producer_series.len())
             .finish()
     }
 }
@@ -241,8 +263,33 @@ impl IngressPolicyGate {
             Ok(frame) => frame,
             Err(_) => return self.reject(ingress, connection_id, IngressErrorClass::Malformed),
         };
+        self.admit_parsed_inner(ingress, connection_id, &frame, bytes.len())
+    }
+
+    /// Admit one previously parsed and validated shared frame.
+    pub fn admit_parsed(
+        &mut self,
+        ingress: Ingress,
+        connection_id: u64,
+        frame: &TelemetryFrame,
+        encoded_bytes: usize,
+    ) -> (IngressOutcome, IngressErrorClass) {
+        self.prune_expired();
+        self.admit_parsed_inner(ingress, connection_id, frame, encoded_bytes)
+    }
+
+    fn admit_parsed_inner(
+        &mut self,
+        ingress: Ingress,
+        connection_id: u64,
+        frame: &TelemetryFrame,
+        encoded_bytes: usize,
+    ) -> (IngressOutcome, IngressErrorClass) {
+        if encoded_bytes > MAX_INGRESS_FRAME_BYTES {
+            return self.reject(ingress, connection_id, IngressErrorClass::Oversize);
+        }
         if frame.signal == TelemetrySignal::Metric {
-            let Some(metric) = metric_frame_from_raw(&frame, bytes.len()) else {
+            let Some(metric) = metric_frame_from_raw(frame, encoded_bytes) else {
                 return self.reject(ingress, connection_id, IngressErrorClass::Malformed);
             };
             return self.admit_for_connection(
@@ -258,10 +305,30 @@ impl IngressPolicyGate {
 
     /// Construct a policy gate with an injected clock.
     pub fn with_clock(clock: Arc<dyn IngressClock>) -> Self {
+        Self::from_limits(clock, MAX_PROVIDER_SERIES, MAX_SERIES_PER_PRODUCER)
+    }
+
+    #[cfg(test)]
+    fn with_clock_and_limits(
+        clock: Arc<dyn IngressClock>,
+        max_provider_series: usize,
+        max_series_per_producer: usize,
+    ) -> Self {
+        Self::from_limits(clock, max_provider_series, max_series_per_producer)
+    }
+
+    fn from_limits(
+        clock: Arc<dyn IngressClock>,
+        max_provider_series: usize,
+        max_series_per_producer: usize,
+    ) -> Self {
         Self {
             connections: BTreeMap::new(),
             quarantined_connections: 0,
-            series: std::collections::BTreeSet::new(),
+            series: BTreeMap::new(),
+            producer_series: BTreeMap::new(),
+            max_provider_series: max_provider_series.max(1),
+            max_series_per_producer: max_series_per_producer.max(1),
             clock,
         }
     }
@@ -279,9 +346,11 @@ impl IngressPolicyGate {
 
     /// Admit a frame for one opaque stream connection.
     ///
-    /// Datagram ingress uses the legacy connection id `0` and is never
-    /// quarantined. Stream callers should provide their own bounded opaque
-    /// connection id so one noisy producer cannot quarantine its peers.
+    /// A Unix datagram receiver is one shared socket: it has no stable
+    /// per-datagram peer identity, so connection id `0` is the shared
+    /// no-identity scope. Stream callers should provide their own bounded
+    /// opaque connection id so one noisy producer cannot quarantine or fill
+    /// the series budget of its peers.
     pub fn admit_for_connection(
         &mut self,
         ingress: Ingress,
@@ -339,18 +408,52 @@ impl IngressPolicyGate {
             .collect::<std::collections::BTreeSet<_>>();
         let new_series = incoming
             .iter()
-            .filter(|series| !self.series.contains(*series))
+            .filter(|series| !self.series.contains_key(*series))
             .count();
-        if self.series.len().saturating_add(new_series) > MAX_PROVIDER_SERIES {
+        let producer = producer_for(ingress, connection_id);
+        let producer_new_series = producer
+            .map(|producer| {
+                incoming
+                    .iter()
+                    .filter(|series| !self.series.contains_key(*series))
+                    .count()
+                    .saturating_add(*self.producer_series.get(&producer).unwrap_or(&0))
+            })
+            .unwrap_or(0);
+        if self.series.len().saturating_add(new_series) > self.max_provider_series
+            || producer_new_series > self.max_series_per_producer
+        {
             return (IngressOutcome::Rejected, IngressErrorClass::None);
         }
-        self.series.extend(incoming);
+        let now = self.clock.now_ms();
+        for series in incoming {
+            if let Some(existing) = self.series.get_mut(&series) {
+                existing.last_seen_ms = now;
+                continue;
+            }
+            self.series.insert(
+                series,
+                SeriesState {
+                    last_seen_ms: now,
+                    owner: producer,
+                },
+            );
+            if let Some(producer) = producer {
+                *self.producer_series.entry(producer).or_default() += 1;
+            }
+        }
         (IngressOutcome::Accepted, IngressErrorClass::None)
     }
 
     /// Number of retained provider metric series.
     pub fn series_count(&self) -> usize {
-        self.series.len()
+        let now = self.clock.now_ms();
+        self.series
+            .values()
+            .filter(|state| {
+                now.saturating_sub(state.last_seen_ms) < SERIES_IDLE_SECONDS.saturating_mul(1000)
+            })
+            .count()
     }
 
     /// Whether a stream is quarantined.
@@ -405,6 +508,18 @@ impl IngressPolicyGate {
         {
             self.quarantined_connections = self.quarantined_connections.saturating_sub(1);
         }
+        if let Some(producer) = producer_for(ingress, connection_id) {
+            let owned = self
+                .series
+                .iter()
+                .filter_map(|(series, state)| {
+                    (state.owner == Some(producer)).then_some(series.clone())
+                })
+                .collect::<Vec<_>>();
+            for series in owned {
+                self.remove_series(&series);
+            }
+        }
     }
 
     /// Remove expired quarantines and stale connection entries.
@@ -423,6 +538,31 @@ impl IngressPolicyGate {
             .collect::<Vec<_>>();
         for key in expired {
             self.reset_connection(key.0, key.1);
+        }
+        let expired_series = self
+            .series
+            .iter()
+            .filter_map(|(series, state)| {
+                (now.saturating_sub(state.last_seen_ms) >= SERIES_IDLE_SECONDS.saturating_mul(1000))
+                    .then_some(series.clone())
+            })
+            .collect::<Vec<_>>();
+        for series in expired_series {
+            self.remove_series(&series);
+        }
+    }
+
+    fn remove_series(&mut self, series: &SeriesKey) {
+        let Some(state) = self.series.remove(series) else {
+            return;
+        };
+        if let Some(owner) = state.owner
+            && let Some(count) = self.producer_series.get_mut(&owner)
+        {
+            *count = count.saturating_sub(1);
+            if *count == 0 {
+                self.producer_series.remove(&owner);
+            }
         }
     }
 
@@ -475,13 +615,7 @@ fn metric_frame_from_raw(frame: &TelemetryFrame, encoded_bytes: usize) -> Option
         .iter()
         .map(|(key, value)| Some((key.clone(), value.as_str()?.to_owned())))
         .collect::<Option<BTreeMap<_, _>>>()?;
-    let descriptor = MetricDescriptor::new(
-        name,
-        labels
-            .iter()
-            .map(|(key, value)| crate::label(key, &[value.as_str()]))
-            .collect::<Vec<_>>(),
-    );
+    let descriptor = crate::canonical_descriptor(name)?;
     let value = object.get("value")?.as_f64()?;
     let resource_attributes = match object.get("resource_attributes") {
         Some(value) => serde_json::from_value(value.clone()).ok()?,
@@ -507,14 +641,26 @@ fn map_policy_error(error: MetricPolicyError) -> IngressErrorClass {
         MetricPolicyError::LabelSetMismatch | MetricPolicyError::ValueNotAllowlisted => {
             IngressErrorClass::Malformed
         }
-        MetricPolicyError::DescriptorMalformed => IngressErrorClass::Malformed,
+        MetricPolicyError::DescriptorMalformed | MetricPolicyError::DescriptorNotAllowlisted => {
+            IngressErrorClass::Malformed
+        }
     }
+}
+
+fn producer_for(ingress: Ingress, connection_id: u64) -> Option<ProducerKey> {
+    // The emitter socket deliberately passes zero because SO_PEERCRED is a
+    // connection property and cannot identify individual Unix datagrams.
+    (connection_id != 0).then_some(ProducerKey {
+        ingress,
+        connection_id,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::label;
+    use crate::{canonical_descriptor, label};
+    use d2b_contracts::v3::telemetry_policy::allowed_values;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     #[derive(Debug)]
@@ -527,14 +673,65 @@ mod tests {
     }
 
     fn frame(key: &str, value: &str) -> MetricFrame {
+        let (descriptor, labels) = if key == "outcome" {
+            (
+                canonical_descriptor("d2b_otel_ingress_policy_total").unwrap(),
+                BTreeMap::from([
+                    ("ingress".to_owned(), "emitter_unix".to_owned()),
+                    ("outcome".to_owned(), value.to_owned()),
+                    ("error_class".to_owned(), "none".to_owned()),
+                ]),
+            )
+        } else {
+            (
+                MetricDescriptor::new("d2b_otel_ingress_policy_total", [label(key, &[value])]),
+                BTreeMap::from([(key.to_owned(), value.to_owned())]),
+            )
+        };
         MetricFrame::new(
             64,
             [MetricPoint {
-                descriptor: MetricDescriptor::new(
-                    "d2b_test_total",
-                    [label("outcome", &["ok", "error"])],
-                ),
-                labels: BTreeMap::from([(key.to_owned(), value.to_owned())]),
+                descriptor,
+                labels,
+                value: 1.0,
+            }],
+            BTreeMap::from([(
+                "d2b.zone".to_owned(),
+                "sha256:0000000000000000000000000000000000000000000000000000000000000001"
+                    .to_owned(),
+            )]),
+        )
+    }
+
+    fn api_frame(
+        verb_index: usize,
+        resource_type_index: usize,
+        outcome_index: usize,
+    ) -> MetricFrame {
+        let verbs = allowed_values("verb").expect("canonical verbs");
+        let resource_types = allowed_values("resource_type").expect("canonical resource types");
+        let outcomes = &[
+            "ok",
+            "conflict",
+            "invalid",
+            "denied",
+            "not_found",
+            "quota",
+            "error",
+        ];
+        MetricFrame::new(
+            64,
+            [MetricPoint {
+                descriptor: canonical_descriptor("d2b_api_request_total")
+                    .expect("canonical API descriptor"),
+                labels: BTreeMap::from([
+                    ("verb".to_owned(), verbs[verb_index].to_owned()),
+                    (
+                        "resource_type".to_owned(),
+                        resource_types[resource_type_index].to_owned(),
+                    ),
+                    ("outcome".to_owned(), outcomes[outcome_index].to_owned()),
+                ]),
                 value: 1.0,
             }],
             BTreeMap::from([(
@@ -548,7 +745,7 @@ mod tests {
     #[test]
     fn policy_runs_before_capacity_and_rejects_the_whole_frame() {
         let mut gate = IngressPolicyGate::default();
-        let valid = frame("outcome", "ok");
+        let valid = frame("outcome", "accepted");
         assert_eq!(
             gate.admit(
                 Ingress::EmitterUnix,
@@ -566,7 +763,7 @@ mod tests {
                 &IdentityCanaries::default(),
                 true
             ),
-            (IngressOutcome::Rejected, IngressErrorClass::Malformed)
+            (IngressOutcome::Rejected, IngressErrorClass::KeyForbidden)
         );
     }
 
@@ -616,13 +813,21 @@ mod tests {
 
     #[test]
     fn raw_emitter_admission_enforces_the_provider_series_cap() {
-        let mut gate = IngressPolicyGate::default();
-        for index in 0..MAX_PROVIDER_SERIES {
+        let mut gate = IngressPolicyGate::with_clock_and_limits(
+            Arc::new(ManualClock(AtomicU64::new(0))),
+            2,
+            2,
+        );
+        for (outcome, error_class) in [("accepted", "none"), ("rejected", "malformed")] {
             let bytes = serde_json::to_vec(&serde_json::json!({
                 "signal": "metric",
                 "value": {
-                    "name": format!("d2b_series_{index}"),
-                    "labels": {"outcome": "ok"},
+                    "name": "d2b_otel_ingress_policy_total",
+                    "labels": {
+                        "ingress": "emitter_unix",
+                        "outcome": outcome,
+                        "error_class": error_class
+                    },
                     "value": 1
                 }
             }))
@@ -635,8 +840,12 @@ mod tests {
         let bytes = serde_json::to_vec(&serde_json::json!({
             "signal": "metric",
             "value": {
-                "name": "d2b_series_over_cap",
-                "labels": {"outcome": "ok"},
+                "name": "d2b_otel_ingress_policy_total",
+                "labels": {
+                    "ingress": "emitter_unix",
+                    "outcome": "quarantined",
+                    "error_class": "oversize"
+                },
                 "value": 1
             }
         }))
@@ -645,6 +854,259 @@ mod tests {
             gate.admit_raw(Ingress::EmitterUnix, 0, &bytes),
             (IngressOutcome::Rejected, IngressErrorClass::None)
         );
-        assert_eq!(gate.series_count(), MAX_PROVIDER_SERIES);
+        assert_eq!(gate.series_count(), 2);
+    }
+
+    #[test]
+    fn raw_unknown_descriptor_is_rejected_before_series_accounting() {
+        let mut gate = IngressPolicyGate::default();
+        let bytes = serde_json::to_vec(&serde_json::json!({
+            "signal": "metric",
+            "value": {
+                "name": "d2b_unregistered_total",
+                "labels": {"outcome": "ok"},
+                "value": 1
+            }
+        }))
+        .expect("unknown metric frame");
+
+        assert_eq!(
+            gate.admit_raw(Ingress::EmitterUnix, 0, &bytes),
+            (IngressOutcome::Rejected, IngressErrorClass::Malformed)
+        );
+        assert_eq!(gate.series_count(), 0);
+    }
+
+    #[test]
+    fn raw_known_descriptor_requires_its_canonical_label_set() {
+        let mut gate = IngressPolicyGate::default();
+        let valid = serde_json::to_vec(&serde_json::json!({
+            "signal": "metric",
+            "value": {
+                "name": "d2b_otel_ingress_policy_total",
+                "labels": {
+                    "ingress": "emitter_unix",
+                    "outcome": "accepted",
+                    "error_class": "none"
+                },
+                "value": 1
+            }
+        }))
+        .expect("valid metric frame");
+        assert_eq!(
+            gate.admit_raw(Ingress::EmitterUnix, 0, &valid),
+            (IngressOutcome::Accepted, IngressErrorClass::None)
+        );
+
+        let missing = serde_json::to_vec(&serde_json::json!({
+            "signal": "metric",
+            "value": {
+                "name": "d2b_otel_ingress_policy_total",
+                "labels": {"outcome": "accepted"},
+                "value": 1
+            }
+        }))
+        .expect("incomplete metric frame");
+        assert_eq!(
+            gate.admit_raw(Ingress::EmitterUnix, 0, &missing),
+            (IngressOutcome::Rejected, IngressErrorClass::Malformed)
+        );
+        let noncanonical_value = serde_json::to_vec(&serde_json::json!({
+            "signal": "metric",
+            "value": {
+                "name": "d2b_otel_ingress_policy_total",
+                "labels": {
+                    "ingress": "emitter_unix",
+                    "outcome": "accepted",
+                    "error_class": "transport"
+                },
+                "value": 1
+            }
+        }))
+        .expect("noncanonical metric value");
+        assert_eq!(
+            gate.admit_raw(Ingress::EmitterUnix, 0, &noncanonical_value),
+            (IngressOutcome::Rejected, IngressErrorClass::Malformed)
+        );
+        assert_eq!(gate.series_count(), 1);
+    }
+
+    #[test]
+    fn repeated_unknown_families_cannot_bypass_the_closed_descriptor_registry() {
+        let mut gate = IngressPolicyGate::default();
+        for index in 0..64 {
+            let bytes = serde_json::to_vec(&serde_json::json!({
+                "signal": "metric",
+                "value": {
+                    "name": format!("d2b_unregistered_{index}"),
+                    "labels": {"outcome": "ok"},
+                    "value": 1
+                }
+            }))
+            .expect("unknown metric frame");
+            assert_eq!(
+                gate.admit_raw(Ingress::EmitterUnix, 0, &bytes),
+                (IngressOutcome::Rejected, IngressErrorClass::Malformed)
+            );
+        }
+        assert_eq!(gate.series_count(), 0);
+    }
+
+    #[test]
+    fn series_cap_reclaims_only_after_monotonic_idle_expiry_or_connection_reset() {
+        let clock = Arc::new(ManualClock(AtomicU64::new(0)));
+        let mut gate = IngressPolicyGate::with_clock_and_limits(clock.clone(), 2, 2);
+        let first = api_frame(0, 0, 0);
+        let second = api_frame(0, 0, 1);
+        let third = api_frame(0, 0, 2);
+
+        assert_eq!(
+            gate.admit_for_connection(
+                Ingress::EmitterUnix,
+                0,
+                &first,
+                &IdentityCanaries::default(),
+                true
+            )
+            .0,
+            IngressOutcome::Accepted
+        );
+        assert_eq!(
+            gate.admit_for_connection(
+                Ingress::EmitterUnix,
+                0,
+                &second,
+                &IdentityCanaries::default(),
+                true
+            )
+            .0,
+            IngressOutcome::Accepted
+        );
+        assert_eq!(
+            gate.admit_for_connection(
+                Ingress::EmitterUnix,
+                0,
+                &third,
+                &IdentityCanaries::default(),
+                true
+            ),
+            (IngressOutcome::Rejected, IngressErrorClass::None)
+        );
+        clock.0.store(
+            (SERIES_IDLE_SECONDS * 1_000).saturating_sub(1),
+            Ordering::Relaxed,
+        );
+        assert_eq!(gate.series_count(), 2);
+        assert_eq!(
+            gate.admit_for_connection(
+                Ingress::EmitterUnix,
+                0,
+                &third,
+                &IdentityCanaries::default(),
+                true
+            ),
+            (IngressOutcome::Rejected, IngressErrorClass::None)
+        );
+
+        clock
+            .0
+            .store((SERIES_IDLE_SECONDS * 1_000) + 1, Ordering::Relaxed);
+        gate.prune_expired();
+        assert_eq!(gate.series_count(), 0);
+        assert_eq!(
+            gate.admit_for_connection(
+                Ingress::EmitterUnix,
+                0,
+                &third,
+                &IdentityCanaries::default(),
+                true
+            )
+            .0,
+            IngressOutcome::Accepted
+        );
+
+        gate.reset_connection(Ingress::ImportStream, 7);
+        assert_eq!(gate.series_count(), 1);
+        assert_eq!(
+            gate.admit_for_connection(
+                Ingress::ImportStream,
+                7,
+                &first,
+                &IdentityCanaries::default(),
+                true
+            )
+            .0,
+            IngressOutcome::Accepted
+        );
+        assert_eq!(gate.series_count(), 2);
+        gate.reset_connection(Ingress::ImportStream, 7);
+        assert_eq!(gate.series_count(), 1);
+    }
+
+    #[test]
+    fn identified_producer_quota_leaves_capacity_for_later_valid_series() {
+        let mut gate = IngressPolicyGate::default();
+        let verbs = allowed_values("verb").expect("canonical verbs");
+        let resource_types = allowed_values("resource_type").expect("canonical resource types");
+        let outcomes = &[
+            "ok",
+            "conflict",
+            "invalid",
+            "denied",
+            "not_found",
+            "quota",
+            "error",
+        ];
+        let frames = verbs
+            .iter()
+            .enumerate()
+            .flat_map(|(verb_index, _)| {
+                resource_types
+                    .iter()
+                    .enumerate()
+                    .flat_map(move |(resource_index, _)| {
+                        outcomes.iter().enumerate().map(move |(outcome_index, _)| {
+                            api_frame(verb_index, resource_index, outcome_index)
+                        })
+                    })
+            })
+            .collect::<Vec<_>>();
+        assert!(frames.len() > MAX_SERIES_PER_PRODUCER);
+
+        for frame in frames.iter().take(MAX_SERIES_PER_PRODUCER) {
+            assert_eq!(
+                gate.admit_for_connection(
+                    Ingress::ImportStream,
+                    1,
+                    frame,
+                    &IdentityCanaries::default(),
+                    true
+                )
+                .0,
+                IngressOutcome::Accepted
+            );
+        }
+        let starved_frame = &frames[MAX_SERIES_PER_PRODUCER];
+        assert_eq!(
+            gate.admit_for_connection(
+                Ingress::ImportStream,
+                1,
+                starved_frame,
+                &IdentityCanaries::default(),
+                true
+            ),
+            (IngressOutcome::Rejected, IngressErrorClass::None)
+        );
+        assert_eq!(
+            gate.admit_for_connection(
+                Ingress::ImportStream,
+                2,
+                starved_frame,
+                &IdentityCanaries::default(),
+                true
+            )
+            .0,
+            IngressOutcome::Accepted
+        );
     }
 }

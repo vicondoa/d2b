@@ -68,36 +68,44 @@ impl core::fmt::Display for TelemetryFrameError {
 
 impl std::error::Error for TelemetryFrameError {}
 
-/// Validate a raw frame before JSON parsing or redaction.
-pub fn validate_raw_frame(bytes: &[u8]) -> Result<TelemetryFrame, TelemetryFrameError> {
+/// Parse one raw frame into the shared typed representation.
+pub fn parse_raw_frame(bytes: &[u8]) -> Result<TelemetryFrame, TelemetryFrameError> {
     if bytes.len() > MAX_TELEMETRY_FRAME_BYTES {
         return Err(TelemetryFrameError::RawOversize);
     }
-    let frame = serde_json::from_slice::<TelemetryFrame>(bytes)
-        .map_err(|_| TelemetryFrameError::Malformed)?;
-    validate_value_shape(frame.signal, &frame.value)?;
+    serde_json::from_slice::<TelemetryFrame>(bytes).map_err(|_| TelemetryFrameError::Malformed)
+}
+
+/// Validate a previously parsed shared frame.
+pub fn validate_frame(frame: &TelemetryFrame) -> Result<(), TelemetryFrameError> {
+    validate_value_shape(frame.signal, &frame.value)
+}
+
+/// Parse and validate one raw frame.
+pub fn validate_raw_frame(bytes: &[u8]) -> Result<TelemetryFrame, TelemetryFrameError> {
+    let frame = parse_raw_frame(bytes)?;
+    validate_frame(&frame)?;
     Ok(frame)
 }
 
-/// Validate, redact, and remeasure one complete frame.
-pub fn redact_frame(bytes: &[u8]) -> Result<Vec<u8>, TelemetryFrameError> {
-    let frame = validate_raw_frame(bytes)?;
-    let mut value = serde_json::to_value(frame).map_err(|_| TelemetryFrameError::Malformed)?;
-    let redact_sensitive_signal = value
-        .get("signal")
-        .and_then(Value::as_str)
-        .ok_or(TelemetryFrameError::Malformed)?
-        .to_owned();
+/// Redact and serialize one previously validated shared frame.
+pub fn redact_parsed_frame(mut frame: TelemetryFrame) -> Result<Vec<u8>, TelemetryFrameError> {
     redact_value(
-        &mut value,
+        &mut frame.value,
         None,
-        matches!(redact_sensitive_signal.as_str(), "trace" | "log"),
+        matches!(frame.signal, TelemetrySignal::Trace | TelemetrySignal::Log),
     );
-    let encoded = serde_json::to_vec(&value).map_err(|_| TelemetryFrameError::Malformed)?;
+    let encoded = serde_json::to_vec(&frame).map_err(|_| TelemetryFrameError::Malformed)?;
     if encoded.len() > MAX_TELEMETRY_FRAME_BYTES {
         return Err(TelemetryFrameError::RedactedOversize);
     }
     Ok(encoded)
+}
+
+/// Parse, validate, redact, and remeasure one complete frame.
+pub fn redact_frame(bytes: &[u8]) -> Result<Vec<u8>, TelemetryFrameError> {
+    let frame = validate_raw_frame(bytes)?;
+    redact_parsed_frame(frame)
 }
 
 fn validate_value_shape(signal: TelemetrySignal, value: &Value) -> Result<(), TelemetryFrameError> {
@@ -536,6 +544,22 @@ mod tests {
         assert_eq!(
             validate_raw_frame(frame),
             Err(TelemetryFrameError::ResourceAttributeInvalid)
+        );
+    }
+
+    #[test]
+    fn parsed_redaction_enforces_the_post_redaction_size_bound() {
+        let mut object = serde_json::Map::new();
+        for index in 0..1024 {
+            object.insert(format!("field_{index}"), Value::String("x".to_owned()));
+        }
+        let frame = TelemetryFrame {
+            signal: TelemetrySignal::Trace,
+            value: Value::Object(object),
+        };
+        assert_eq!(
+            redact_parsed_frame(frame),
+            Err(TelemetryFrameError::RedactedOversize)
         );
     }
 }

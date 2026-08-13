@@ -14,9 +14,31 @@ use std::{
 };
 
 use crate::metric_label_policy::{
-    IdentityCanaries, MetricDescriptor, MetricPolicyError, validate_data_point,
+    IdentityCanaries, MetricDescriptor, MetricPolicyError, canonical_descriptor,
+    validate_data_point, validate_labels,
 };
-use d2b_contracts::v3::{TelemetrySignal, redact_frame as redact_shared_frame, validate_raw_frame};
+use d2b_contracts::v3::{
+    TelemetryFrame, TelemetryFrameError, TelemetrySignal, parse_raw_frame, redact_parsed_frame,
+    validate_frame,
+};
+
+#[cfg(test)]
+use std::cell::Cell;
+
+#[cfg(test)]
+thread_local! {
+    static RAW_FRAME_PARSE_COUNT: Cell<usize> = const { Cell::new(0) };
+}
+
+#[cfg(test)]
+fn count_raw_frame_parse() {
+    RAW_FRAME_PARSE_COUNT.with(|count| count.set(count.get().saturating_add(1)));
+}
+
+#[cfg(test)]
+fn raw_frame_parse_count() -> usize {
+    RAW_FRAME_PARSE_COUNT.with(Cell::get)
+}
 
 /// Default frame limit for core-process telemetry.
 pub const MAX_FRAME_BYTES: usize = 64 * 1024;
@@ -213,10 +235,9 @@ impl BoundedEmitter {
             self.drops.increment(signal);
             return Err(EmitterError::FrameTooLarge);
         }
-        if signal == Signal::Metric {
-            validate_metric_frame(frame)?;
-        }
-        let shared = validate_raw_frame(frame).map_err(|_| EmitterError::FrameRedaction)?;
+        #[cfg(test)]
+        count_raw_frame_parse();
+        let shared = parse_raw_frame(frame).map_err(|_| EmitterError::FrameRedaction)?;
         let expected_signal = match signal {
             Signal::Metric => TelemetrySignal::Metric,
             Signal::Trace => TelemetrySignal::Trace,
@@ -225,7 +246,18 @@ impl BoundedEmitter {
         if shared.signal != expected_signal {
             return Err(EmitterError::FrameRedaction);
         }
-        let frame = redact_shared_frame(frame).map_err(|_| EmitterError::FrameRedaction)?;
+        if signal == Signal::Metric {
+            validate_metric_frame(&shared)?;
+        }
+        validate_frame(&shared).map_err(|_| EmitterError::FrameRedaction)?;
+        let frame = match redact_parsed_frame(shared) {
+            Ok(frame) => frame,
+            Err(TelemetryFrameError::RedactedOversize) => {
+                self.drops.increment(signal);
+                return Err(EmitterError::FrameTooLarge);
+            }
+            Err(_) => return Err(EmitterError::FrameRedaction),
+        };
         if frame.len() > MAX_FRAME_BYTES {
             self.drops.increment(signal);
             return Err(EmitterError::FrameTooLarge);
@@ -454,20 +486,40 @@ pub fn encode_frame<T: serde::Serialize>(signal: Signal, value: &T) -> Result<Ve
     .map_err(io::Error::other)
 }
 
-fn validate_metric_frame(frame: &[u8]) -> Result<(), EmitterError> {
-    let value = serde_json::from_slice::<serde_json::Value>(frame)
-        .map_err(|_| EmitterError::MetricPolicy(MetricPolicyError::DescriptorMalformed))?;
-    let labels = value
-        .get("labels")
-        .or_else(|| value.get("value").and_then(|value| value.get("labels")));
-    let Some(labels) = labels else {
+fn validate_metric_frame(frame: &TelemetryFrame) -> Result<(), EmitterError> {
+    if frame.signal != TelemetrySignal::Metric {
+        return Err(EmitterError::FrameRedaction);
+    }
+    let Some(object) = frame.value.as_object() else {
         return Err(EmitterError::MetricPolicy(
             MetricPolicyError::DescriptorMalformed,
         ));
     };
-    let labels = labels.as_object().ok_or(EmitterError::MetricPolicy(
-        MetricPolicyError::DescriptorMalformed,
+    let name = object
+        .get("name")
+        .and_then(serde_json::Value::as_str)
+        .ok_or(EmitterError::MetricPolicy(
+            MetricPolicyError::DescriptorMalformed,
+        ))?;
+    if name.is_empty()
+        || name.len() > 128
+        || !name
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+    {
+        return Err(EmitterError::MetricPolicy(
+            MetricPolicyError::DescriptorMalformed,
+        ));
+    }
+    let descriptor = canonical_descriptor(name).ok_or(EmitterError::MetricPolicy(
+        MetricPolicyError::DescriptorNotAllowlisted,
     ))?;
+    let labels = object
+        .get("labels")
+        .and_then(serde_json::Value::as_object)
+        .ok_or(EmitterError::MetricPolicy(
+            MetricPolicyError::DescriptorMalformed,
+        ))?;
     let labels = labels
         .iter()
         .map(|(key, value)| {
@@ -479,13 +531,9 @@ fn validate_metric_frame(frame: &[u8]) -> Result<(), EmitterError> {
                 ))
         })
         .collect::<Result<BTreeMap<_, _>, _>>()?;
-    crate::metric_label_policy::validate_labels(&labels, &IdentityCanaries::default())
-        .map_err(EmitterError::MetricPolicy)
-}
-
-#[cfg(test)]
-fn redact_frame(frame: &[u8]) -> Result<Vec<u8>, EmitterError> {
-    redact_shared_frame(frame).map_err(|_| EmitterError::FrameRedaction)
+    let canaries = IdentityCanaries::default();
+    validate_labels(&labels, &canaries).map_err(EmitterError::MetricPolicy)?;
+    validate_data_point(&descriptor, &labels, &canaries).map_err(EmitterError::MetricPolicy)
 }
 
 #[cfg(test)]
@@ -507,6 +555,12 @@ mod tests {
             .nth(2)
             .unwrap()
             .join(format!("e-{label}-{nonce}.sock"))
+    }
+
+    fn redact_frame(frame: &[u8]) -> Result<Vec<u8>, EmitterError> {
+        let parsed = parse_raw_frame(frame).map_err(|_| EmitterError::FrameRedaction)?;
+        validate_frame(&parsed).map_err(|_| EmitterError::FrameRedaction)?;
+        redact_parsed_frame(parsed).map_err(|_| EmitterError::FrameRedaction)
     }
 
     #[test]
@@ -546,7 +600,7 @@ mod tests {
         let metric = encode_frame(
             Signal::Metric,
             &serde_json::json!({
-                "name": "d2b_test_total",
+                "name": "d2b_api_watch_active",
                 "labels": {},
                 "value": 1,
             }),
@@ -565,7 +619,7 @@ mod tests {
         let path = socket_path("policy");
         let emitter = BoundedEmitter::new(&path, 128).unwrap();
         let descriptor = MetricDescriptor::new(
-            "d2b_test_total",
+            "d2b_api_watch_active",
             [crate::meter_registry::label("vm", &["work"])],
         );
         let labels = BTreeMap::from([("vm".to_owned(), "work".to_owned())]);
@@ -586,7 +640,7 @@ mod tests {
         let frame = encode_frame(
             Signal::Metric,
             &serde_json::json!({
-                "name": "d2b_test_total",
+                "name": "d2b_api_watch_active",
                 "labels": {"zone": "work"},
                 "value": 1,
             }),
@@ -601,11 +655,107 @@ mod tests {
     }
 
     #[test]
+    fn canonical_metric_frames_are_admitted() {
+        let path = socket_path("canonical-metric");
+        let emitter = BoundedEmitter::new(&path, 512).unwrap();
+        let frame = encode_frame(
+            Signal::Metric,
+            &serde_json::json!({
+                "name": "d2b_api_watch_active",
+                "labels": {},
+                "value": 1,
+            }),
+        )
+        .unwrap();
+        assert_eq!(
+            emitter.emit(Signal::Metric, &frame).unwrap(),
+            EmitOutcome::Buffered
+        );
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn raw_metric_frames_require_a_canonical_descriptor() {
+        let path = socket_path("invalid-descriptor");
+        let emitter = BoundedEmitter::new(&path, 512).unwrap();
+        let frame = encode_frame(
+            Signal::Metric,
+            &serde_json::json!({
+                "name": "d2b_unregistered_total",
+                "labels": {"outcome": "ok"},
+                "value": 1,
+            }),
+        )
+        .unwrap();
+        assert!(matches!(
+            emitter.emit(Signal::Metric, &frame),
+            Err(EmitterError::MetricPolicy(_))
+        ));
+        assert_eq!(emitter.buffered_frames().unwrap(), 0);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn expected_signal_is_checked_before_metric_shape() {
+        let path = socket_path("wrong-signal");
+        let emitter = BoundedEmitter::new(&path, 512).unwrap();
+        let frame = encode_frame(Signal::Trace, &serde_json::json!({"event": "accepted"})).unwrap();
+        assert_eq!(
+            emitter.emit(Signal::Metric, &frame),
+            Err(EmitterError::FrameRedaction)
+        );
+        assert_eq!(emitter.buffered_frames().unwrap(), 0);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn emit_parses_one_shared_frame_for_metric_admission_and_redaction() {
+        let path = socket_path("single-parse");
+        let emitter = BoundedEmitter::new(&path, 512).unwrap();
+        let frame = encode_frame(
+            Signal::Metric,
+            &serde_json::json!({
+                "name": "d2b_api_watch_active",
+                "labels": {},
+                "value": 1,
+            }),
+        )
+        .unwrap();
+        RAW_FRAME_PARSE_COUNT.with(|count| count.set(0));
+        assert_eq!(
+            emitter.emit(Signal::Metric, &frame).unwrap(),
+            EmitOutcome::Buffered
+        );
+        assert_eq!(raw_frame_parse_count(), 1);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
     fn raw_observation_frames_are_rejected_before_retention() {
         let path = socket_path("raw-redaction");
         let emitter = BoundedEmitter::new(&path, 128).unwrap();
         assert_eq!(
             emitter.emit(Signal::Log, b"attacker-canary"),
+            Err(EmitterError::FrameRedaction)
+        );
+        assert_eq!(emitter.buffered_frames().unwrap(), 0);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn forbidden_observation_fields_are_rejected_before_retention() {
+        let path = socket_path("forbidden-field");
+        let emitter = BoundedEmitter::new(&path, 128).unwrap();
+        let frame = encode_frame(
+            Signal::Trace,
+            &serde_json::json!({
+                "event": "accepted",
+                "extra": "forbidden",
+            }),
+        )
+        .unwrap();
+        assert_eq!(
+            emitter.emit(Signal::Trace, &frame),
             Err(EmitterError::FrameRedaction)
         );
         assert_eq!(emitter.buffered_frames().unwrap(), 0);

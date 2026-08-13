@@ -186,7 +186,7 @@ mod tests {
     #[test]
     fn registry_rejects_identity_labels() {
         let family = MetricFamily::new(
-            MetricDescriptor::new("d2b_test_total", [label("vm", &["one"])]),
+            MetricDescriptor::new("d2b_api_watch_active", [label("vm", &["one"])]),
             MetricKind::Counter,
             [],
         );

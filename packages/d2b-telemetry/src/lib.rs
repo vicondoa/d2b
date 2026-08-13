@@ -22,8 +22,8 @@ pub use emitter::{
 pub use metric_label_policy::{
     FORBIDDEN_LABEL_KEYS, FORBIDDEN_LABEL_SUFFIXES, IdentityCanaries, LabelDescriptor,
     MetricDescriptor, MetricPolicyError, OTEL_RESOURCE_ATTRIBUTES, allowed_values,
-    validate_data_point, validate_descriptor, validate_label_key, validate_labels,
-    validate_resource_attributes,
+    canonical_descriptor, validate_data_point, validate_descriptor, validate_label_key,
+    validate_labels, validate_resource_attributes,
 };
 pub use redaction_guard::{RedactionError, RedactionGuard};
 pub use trace_context::{

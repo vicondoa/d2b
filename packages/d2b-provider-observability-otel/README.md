@@ -30,9 +30,10 @@ The Provider consumes the provider-neutral
 services carry the same semantic identity; Endpoint resources and socket
 names remain private implementation details.
 
-The closed metric-label and OTEL resource-attribute registry in `d2b-contracts`
-is the single-source contract for every telemetry ingress. This Provider
-consumes that registry rather than maintaining a parallel policy.
+The closed metric-descriptor, metric-label, and OTEL resource-attribute
+registry in `d2b-contracts` is the single-source contract for every telemetry
+ingress. This Provider consumes that registry rather than maintaining a
+parallel policy.
 
 ## Controllers / services / workers / binaries
 

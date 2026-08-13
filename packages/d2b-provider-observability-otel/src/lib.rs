@@ -23,6 +23,6 @@ pub use ingress_policy::{
 };
 pub use metric_policy::{
     IdentityCanaries, LabelDescriptor, MetricDescriptor, MetricPolicyError, ResourceAttributeError,
-    allowed_values, label, validate_data_point, validate_descriptor, validate_label_key,
-    validate_resource_attributes,
+    allowed_values, canonical_descriptor, label, validate_data_point, validate_descriptor,
+    validate_label_key, validate_resource_attributes,
 };

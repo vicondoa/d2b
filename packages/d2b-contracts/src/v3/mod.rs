@@ -156,12 +156,13 @@ pub use services::{
     V3Service, ZoneMethod, missing_audit_segments,
 };
 pub use telemetry_frame::{
-    MAX_TELEMETRY_FRAME_BYTES, TelemetryFrame, TelemetryFrameError, TelemetrySignal, redact_frame,
-    validate_raw_frame,
+    MAX_TELEMETRY_FRAME_BYTES, TelemetryFrame, TelemetryFrameError, TelemetrySignal,
+    parse_raw_frame, redact_frame, redact_parsed_frame, validate_frame, validate_raw_frame,
 };
 pub use telemetry_policy::{
-    FORBIDDEN_LABEL_KEYS, FORBIDDEN_LABEL_SUFFIXES, METRIC_LABEL_POLICY, OTEL_RESOURCE_ATTRIBUTES,
-    allowed_values as telemetry_allowed_values,
+    FORBIDDEN_LABEL_KEYS, FORBIDDEN_LABEL_SUFFIXES, METRIC_DESCRIPTOR_REGISTRY,
+    METRIC_LABEL_POLICY, MetricDescriptorSpec, OTEL_RESOURCE_ATTRIBUTES,
+    allowed_values as telemetry_allowed_values, metric_descriptor,
 };
 pub use zone::{
     ZoneConditionType, ZoneHandlerName, ZoneHandlerPhase, ZoneHandlerStatus, ZoneSpec, ZoneStatus,
