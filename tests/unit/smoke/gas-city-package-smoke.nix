@@ -108,22 +108,16 @@ pkgs.runCommand "gas-city-package-smoke" {
   sed \
     '\#^path = "/var/lib/gascity-contributor/state/rigs/d2b"$#d' \
     "$root/city/city.toml" > "$TMPDIR/city.toml"
-  DOLT_ROOT_PATH="$HOME" \
-    ${gasCityContributor}/bin/dolt config --global --add user.name "Gas City"
-  DOLT_ROOT_PATH="$HOME" \
-    ${gasCityContributor}/bin/dolt config --global --add \
-      user.email "gascity@localhost"
-  DOLT_ROOT_PATH="$HOME" \
-    ${gasCityContributor}/bin/gc init \
-      --file "$TMPDIR/city.toml" \
-      --preserve-existing \
-      --no-start \
-      --name d2b-contributor \
-      "$runtimeCity"
-  DOLT_ROOT_PATH="$HOME" \
-    ${gasCityContributor}/bin/gc \
-      --city "$runtimeCity" \
-      config show > "$TMPDIR/resolved-city.toml"
+  printf '\n[beads]\nprovider = "file"\n' >> "$TMPDIR/city.toml"
+  ${gasCityContributor}/bin/gc init \
+    --file "$TMPDIR/city.toml" \
+    --preserve-existing \
+    --no-start \
+    --name d2b-contributor \
+    "$runtimeCity"
+  ${gasCityContributor}/bin/gc \
+    --city "$runtimeCity" \
+    config show > "$TMPDIR/resolved-city.toml"
   grep -F 'name = "dog"' "$TMPDIR/resolved-city.toml"
   grep -F 'suspended = true' "$TMPDIR/resolved-city.toml"
   grep -F 'requirements-planner' "$TMPDIR/resolved-city.toml"
