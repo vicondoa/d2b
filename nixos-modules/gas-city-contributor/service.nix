@@ -126,11 +126,11 @@ let
     rig=${lib.escapeShellArg "${stateRoot}/rigs/${cfg.repository.rigName}"}
     test -d "$rig"
     test ! -L "$rig"
-    find -P "$rig" -type d -exec chgrp gascity-agent-channel {} + \
+    find -P "$rig" -type d -exec chgrp gascity-worktree {} + \
       -exec chmod 2770 {} +
-    find -P "$rig" -type f -exec chgrp gascity-agent-channel {} + \
+    find -P "$rig" -type f -exec chgrp gascity-worktree {} + \
       -exec chmod g+rw {} +
-    find -P "$rig" -type l -exec chgrp -h gascity-agent-channel {} +
+    find -P "$rig" -type l -exec chgrp -h gascity-worktree {} +
   '';
   decisionReconcile = pkgs.writeShellScript "gascity-decision-reconcile" ''
     set -euo pipefail
@@ -625,7 +625,7 @@ in
               waitReadiness
               "${pkgs.coreutils}/bin/install -d -m 0700 ${lib.escapeShellArg "${homeRoot}/.config"}"
               "${pkgs.coreutils}/bin/install -d -m 0700 ${lib.escapeShellArg "${homeRoot}/.local/state"}"
-              "${pkgs.coreutils}/bin/install -d -m 2770 -g gascity-agent-channel ${lib.escapeShellArg "${stateRoot}/rigs/${cfg.repository.rigName}"}"
+              "${pkgs.coreutils}/bin/install -d -m 2770 -g gascity-worktree ${lib.escapeShellArg "${stateRoot}/rigs/${cfg.repository.rigName}"}"
               "+${prepareRigPermissions}"
             ];
             ExecStart = mainExec;
@@ -920,7 +920,7 @@ in
             ];
             ReadOnlyPaths = [
               "${package}/share/gas-city-contributor"
-              "${stateRoot}/worktrees"
+              "${stateRoot}/rigs"
               egressDirectory
             ];
             InaccessiblePaths = [ "-/nix/var/nix/daemon-socket/socket" ];
@@ -945,6 +945,7 @@ in
               + " --socket ${lib.escapeShellArg checkSocket}"
               + " --allowed-uid ${toString config.users.users.gascity.uid}"
               + " --check-auth-token-env GC_CHECK_AUTH"
+              + " --snapshot-root ${lib.escapeShellArg "${stateRoot}/rigs"}"
               + " --approved-check ${lib.escapeShellArg
                 "build-artifact-valid=.gc/scripts/checks/build-artifact-valid.sh"}"
               + " --max-jobs ${toString cfg.resources.nixMaxJobs}"

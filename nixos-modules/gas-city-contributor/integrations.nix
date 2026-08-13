@@ -5,6 +5,7 @@ let
   buildBuddyEnabled =
     cfg.buildBuddy.enable || cfg.credentials.buildBuddyApiKeyFile != null;
   sharedGroup = "gascity-contributor";
+  worktreeGroup = "gascity-worktree";
   stateRoot = "/var/lib/gascity-contributor/state";
   checkChannelGroup = "gascity-check-channel";
   allServiceUsers = {
@@ -56,8 +57,13 @@ let
           "gascity-agent-channel"
           "gascity-discord-channel"
           "gascity-publisher-channel"
+          worktreeGroup
         ] ++ lib.optional cfg.check.enable checkChannelGroup;
-        gascity-agent = [ "gascity-agent-channel" "gascity-egress-channel" ];
+        gascity-agent = [
+          "gascity-agent-channel"
+          "gascity-egress-channel"
+          worktreeGroup
+        ];
         gascity-discord = [ "gascity-discord-channel" "gascity-egress-channel" ];
         gascity-publisher = [
           "gascity-publisher-channel"
@@ -65,7 +71,11 @@ let
           "gascity-discord-channel"
         ];
         gascity-egress = [ "gascity-egress-channel" ];
-        gascity-check = [ "gascity-egress-channel" checkChannelGroup ];
+        gascity-check = [
+          "gascity-egress-channel"
+          checkChannelGroup
+          worktreeGroup
+        ];
         gascity-buildbuddy-proxy = [ "gascity-egress-channel" ];
       }.${name};
     inherit (details) description home;
@@ -86,6 +96,7 @@ in
   config = lib.mkIf cfg.enable {
     users.groups = {
       ${sharedGroup} = { };
+      ${worktreeGroup} = { };
       gascity = { };
       gascity-agent = { };
       gascity-discord = { };
@@ -141,7 +152,7 @@ in
       "d /var/lib/gascity-contributor/managed 0750 root ${sharedGroup} -"
       "d ${stateRoot}/home 0700 gascity gascity -"
       "d ${stateRoot}/gc 0700 gascity gascity -"
-      "d /var/lib/gascity-contributor/state/rigs 2770 gascity gascity-agent-channel -"
+      "d /var/lib/gascity-contributor/state/rigs 2770 gascity ${worktreeGroup} -"
       "d /var/lib/gascity-contributor/state/worktrees 0770 gascity-agent ${sharedGroup} -"
       "d /var/lib/gascity-contributor/state/leases 0700 gascity-agent gascity-agent -"
       "d /var/lib/gascity-contributor/state/agent-state 0710 gascity-agent ${sharedGroup} -"

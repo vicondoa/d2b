@@ -8,5 +8,6 @@
   bd maintenance dog remains suspended because it has no workflow identity for
   the authenticated ACP launcher, while routed sessions use Gas City's
   standard session bead identity at that boundary. Managed rig files use the
-  dedicated lifecycle-agent channel group so sandboxed agents can traverse and
-  update their assigned checkout without exposing it to unrelated sidecars.
+  dedicated lifecycle-agent-check worktree group so sandboxed agents can update
+  their assigned checkout and the isolated check runner can validate it without
+  exposing repository contents to unrelated sidecars.
