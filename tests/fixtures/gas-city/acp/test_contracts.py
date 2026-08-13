@@ -3601,7 +3601,9 @@ class LauncherLifecycleTests(unittest.TestCase):
                 self.assertIsNotNone(process.stdin)
                 process.stdin.close()
                 process.wait(timeout=5)
-                self.assertEqual(process.returncode, 0)
+                self.assertIsNotNone(process.stderr)
+                stderr = process.stderr.read().decode("utf-8", errors="replace")
+                self.assertEqual(process.returncode, 0, stderr)
                 deadline = time.monotonic() + 2
                 root_path = gc_root_directory / "run-1"
                 while root_path.exists() and time.monotonic() < deadline:
