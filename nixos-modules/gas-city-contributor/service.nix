@@ -121,6 +121,17 @@ let
     + " --group ${lib.escapeShellArg managedAssetGroup}"
     + " --source ${lib.escapeShellArg configuredAssetRoot}"
     + " --destination ${lib.escapeShellArg "${serviceRoot}/managed"}";
+  prepareRigPermissions = pkgs.writeShellScript "gascity-prepare-rig-permissions" ''
+    set -euo pipefail
+    rig=${lib.escapeShellArg "${stateRoot}/rigs/${cfg.repository.rigName}"}
+    test -d "$rig"
+    test ! -L "$rig"
+    find -P "$rig" -type d -exec chgrp gascity-agent-channel {} + \
+      -exec chmod 2770 {} +
+    find -P "$rig" -type f -exec chgrp gascity-agent-channel {} + \
+      -exec chmod g+rw {} +
+    find -P "$rig" -type l -exec chgrp -h gascity-agent-channel {} +
+  '';
   decisionReconcile = pkgs.writeShellScript "gascity-decision-reconcile" ''
     set -euo pipefail
     reconcile="$(${python} ${discordDecision} reconcile \
@@ -614,7 +625,8 @@ in
               waitReadiness
               "${pkgs.coreutils}/bin/install -d -m 0700 ${lib.escapeShellArg "${homeRoot}/.config"}"
               "${pkgs.coreutils}/bin/install -d -m 0700 ${lib.escapeShellArg "${homeRoot}/.local/state"}"
-              "${pkgs.coreutils}/bin/install -d -m 0700 ${lib.escapeShellArg "${stateRoot}/rigs/${cfg.repository.rigName}"}"
+              "${pkgs.coreutils}/bin/install -d -m 2770 -g gascity-agent-channel ${lib.escapeShellArg "${stateRoot}/rigs/${cfg.repository.rigName}"}"
+              prepareRigPermissions
             ];
             ExecStart = mainExec;
             ExecStartPost = decisionReconcile;
@@ -710,6 +722,7 @@ in
               "PATH=${package}/bin:/run/current-system/sw/bin"
               "SSL_CERT_FILE=${package}/etc/ssl/certs/ca-bundle.crt"
             ];
+            UMask = "0007";
             ExecStart = agentStart;
           };
         };

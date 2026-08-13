@@ -7,4 +7,6 @@
   Dolt identity and packaged lifecycle tools to the supervisor. The optional
   bd maintenance dog remains suspended because it has no workflow identity for
   the authenticated ACP launcher, while routed sessions use Gas City's
-  standard session bead identity at that boundary.
+  standard session bead identity at that boundary. Managed rig files use the
+  dedicated lifecycle-agent channel group so sandboxed agents can traverse and
+  update their assigned checkout without exposing it to unrelated sidecars.

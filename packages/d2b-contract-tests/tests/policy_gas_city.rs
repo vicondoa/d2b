@@ -416,6 +416,10 @@ fn gas_city_uses_four_immutable_sibling_imports() {
         "DOLT_ROOT_PATH=${homeRoot}",
         "GIT_CONFIG_GLOBAL=${homeRoot}/.gitconfig",
         "PATH=${package}/bin:/run/current-system/sw/bin",
+        "gascity-prepare-rig-permissions",
+        "find -P \"$rig\" -type d -exec chgrp gascity-agent-channel",
+        "find -P \"$rig\" -type f -exec chgrp gascity-agent-channel",
+        "UMask = \"0007\";",
     ] {
         assert!(
             service.contains(required),

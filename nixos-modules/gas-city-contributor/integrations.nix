@@ -141,7 +141,7 @@ in
       "d /var/lib/gascity-contributor/managed 0750 root ${sharedGroup} -"
       "d ${stateRoot}/home 0700 gascity gascity -"
       "d ${stateRoot}/gc 0700 gascity gascity -"
-      "d /var/lib/gascity-contributor/state/rigs 0700 gascity gascity -"
+      "d /var/lib/gascity-contributor/state/rigs 2770 gascity gascity-agent-channel -"
       "d /var/lib/gascity-contributor/state/worktrees 0770 gascity-agent ${sharedGroup} -"
       "d /var/lib/gascity-contributor/state/leases 0700 gascity-agent gascity-agent -"
       "d /var/lib/gascity-contributor/state/agent-state 0710 gascity-agent ${sharedGroup} -"
