@@ -73,6 +73,8 @@ fn open_hidraw_security_key_request_wire_round_trips() {
     let request = BrokerRequest::OpenHidrawSecurityKey(OpenHidrawSecurityKeyRequest {
         vm_id: VmId::new("personal-dev"),
         selector_id: "yk5c-selector".to_owned(),
+        device_ref: None,
+        authority_key: None,
         tracing_span_id: None,
     });
     let json = serde_json::to_value(&request).expect("serialize request");

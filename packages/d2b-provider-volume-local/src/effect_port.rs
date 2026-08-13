@@ -12,6 +12,14 @@ use d2b_contracts::v3::{MarkerStatus, ResourceUid};
 
 use crate::marker::MarkerError;
 
+/// Neutral core/broker Volume effect boundary.
+pub use d2b_contracts::v3::effect_port::{
+    AccessClass, CleanupTrigger, EffectError, LayoutEntryId, ProvisionOutcome, QuotaCapacityStatus,
+    QuotaUsage, RepairOutcome, RotateSealingKeyDisposition, RotateSealingKeyRequest,
+    RotateSealingKeyResult, SealingPolicyId, SourcePolicyId, StoreSyncOutcome, UserId, ViewId,
+    VolumeEffectIdError, VolumeEffectPort, VolumeId, VolumeMountToken,
+};
+
 /// A stable Provider-side Volume effect identity.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct VolumeEffectId(ResourceUid);

@@ -78,6 +78,7 @@ impl fmt::Debug for SocketIdentity {
 /// target.
 #[derive(Clone, PartialEq, Eq)]
 pub struct ExportSpec {
+    provider_ref: ResourceRef,
     volume_ref: ResourceRef,
     execution_ref: ResourceRef,
     view: BoundedToken,
@@ -102,6 +103,8 @@ impl ExportSpec {
             return Err(VirtiofsExportError::InvalidExport);
         }
         Ok(Self {
+            provider_ref: ResourceRef::parse("Provider/volume-virtiofs")
+                .map_err(|_| VirtiofsExportError::InvalidExport)?,
             volume_ref,
             execution_ref,
             view,
@@ -109,6 +112,11 @@ impl ExportSpec {
             settings,
             mount_path: "/".to_owned(),
         })
+    }
+
+    /// Borrow the Provider that owns this Export.
+    pub const fn provider_ref(&self) -> &ResourceRef {
+        &self.provider_ref
     }
 
     /// Translate one virtiofs Volume attachment into one Export.

@@ -4,6 +4,7 @@ pub mod component_session;
 pub mod credential;
 pub mod credential_controller;
 pub mod device;
+pub mod effect_port;
 pub mod emergency_policy;
 pub mod endpoint;
 pub mod error;
@@ -33,6 +34,7 @@ pub mod storage;
 pub mod telemetry_frame;
 pub mod telemetry_policy;
 pub mod user;
+pub mod virtiofs_export;
 pub mod volume;
 pub mod volume_state;
 pub mod zone;
@@ -40,6 +42,12 @@ pub mod zone_link;
 pub mod zone_routing;
 pub mod zone_session;
 
+pub use effect_port::{
+    AccessClass, CleanupTrigger, EffectError, LayoutEntryId, ProvisionOutcome, QuotaCapacityStatus,
+    RepairOutcome, RotateSealingKeyDisposition, RotateSealingKeyRequest, RotateSealingKeyResult,
+    SealingPolicyId, SourcePolicyId, StoreSyncOutcome, UserId, ViewId, VolumeEffectIdError,
+    VolumeEffectPort, VolumeId, VolumeMountToken,
+};
 pub use emergency_policy::{
     EMERGENCY_DRAIN_FINALIZER, EMERGENCY_POLICY_RESOURCE_TYPE, EmergencyPolicyConditionType,
     EmergencyPolicySpec, EmergencyPolicyStatus, EmergencyPolicyStatusResource, EmergencyScope,
@@ -187,6 +195,10 @@ pub use semantic_services::{
 // The `volume_state` module's re-exports. Keep every
 // `pub use volume_state::...` line inside this region so it stays one
 // contiguous block.
+pub use virtiofs_export::{
+    MAX_EXPORT_MOUNT_PATH_BYTES, VIRTIOFS_EXPORT_RESOURCE_TYPE, VirtiofsExportSpec,
+    VirtiofsExportStatus, VirtiofsExportStatusResource,
+};
 pub use volume_state::{
     MAX_STATE_DOCUMENT_BYTES, MAX_STATE_GENERATION, MarkerStatus, MigrationPolicy,
     PersistenceClass, QuotaUsage, SealingStatus, SensitivityClass, StateDigest, StateEnvelope,

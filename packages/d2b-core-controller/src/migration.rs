@@ -27,6 +27,12 @@ pub struct LegacyTpmMigrationDecision {
 }
 
 impl LegacyTpmMigrationDecision {
+    /// Construct the Core-owned no-migration decision for a Device proven
+    /// never to have a legacy state row.
+    pub fn not_applicable(vm_id: &str, intent_ref: &str) -> Self {
+        Self::from_anchored_inventory(None, vm_id, intent_ref)
+    }
+
     pub const fn requires_migration(&self) -> bool {
         self.state_id.is_some()
     }

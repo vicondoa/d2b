@@ -14,7 +14,7 @@ use crate::types::{
     VmId,
 };
 use crate::v3::{
-    ResourceBundleGenerationId, ResourceGeneration, ResourceUid, storage::ZoneStoreId,
+    ResourceBundleGenerationId, ResourceGeneration, ResourceRef, ResourceUid, storage::ZoneStoreId,
 };
 use d2b_core::host::IfName;
 use d2b_core::workload_identity::WorkloadIdentity;
@@ -1803,6 +1803,12 @@ pub struct OpenHidrawSecurityKeyRequest {
     /// Opaque stable-selector id that the broker resolves against
     /// its trusted bundle's security-key device registry.
     pub selector_id: String,
+    /// Exact Device resource admitted by Core.
+    #[serde(default)]
+    pub device_ref: Option<ResourceRef>,
+    /// Core-derived Host physical-backing authority digest.
+    #[serde(default)]
+    pub authority_key: Option<String>,
     #[serde(default)]
     pub tracing_span_id: Option<TracingSpanId>,
 }

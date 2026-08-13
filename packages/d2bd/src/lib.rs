@@ -66,7 +66,7 @@ use d2b_contracts::{
     guest_proto as pb,
     public_wire::{self, AuthRole, AuthStatusResponse, DeniedCommandHint, SocketReachability},
     types::{BundleClosureRef, BundleOpId, MediaRef, RoleId, ScopeId, TracingSpanId, VmId},
-    v3::ZoneId,
+    v3::{ResourceUid, ZoneId},
 };
 use d2b_core::bundle::Bundle;
 use d2b_core::bundle_resolver::{
@@ -688,6 +688,7 @@ struct ServerState {
     /// `d2b console <vm>`. Sessions are created on first Attach and persist
     /// until the daemon restarts or the VM stops.
     console_sessions: Arc<Mutex<console_session::ConsoleSessionTable>>,
+    #[allow(dead_code)]
     security_key_sessions: Arc<parking_lot::Mutex<security_key::SkSessionTable>>,
     #[allow(dead_code)]
     unsafe_local_helpers: Arc<unsafe_local_helper::HelperRegistry>,
@@ -3656,12 +3657,17 @@ fn dispatch_resource_request(
         Ok(runtime) => runtime,
         Err(error) => return Ok(resource_runtime_error_frame(error)),
     };
+    if is_device_tpm_reconcile_request(&request.value()) {
+        return Ok(dispatch_device_tpm_reconcile(state, peer, &request.value())
+            .unwrap_or_else(resource_runtime_error_frame));
+    }
     if typed_shell {
         return Ok(
             dispatch_typed_shell_resource_request(state, peer, &request.value())
                 .unwrap_or_else(|error| typed_shell_resource_error_frame(&error)),
         );
     }
+
     // The public socket currently authenticates only the local peer role. It
     // does not carry a ComponentSession, so never let this compatibility
     // route turn SO_PEERCRED into a Resource API subject.
@@ -3669,6 +3675,119 @@ fn dispatch_resource_request(
         Ok(value) => Ok(value),
         Err(error) => Ok(resource_runtime_error_frame(error)),
     }
+}
+
+fn is_device_tpm_reconcile_request(request: &Value) -> bool {
+    request.get("method").and_then(Value::as_str) == Some("Reconcile")
+        && request.get("resourceType").and_then(Value::as_str) == Some("Device")
+        && request.get("providerRef").and_then(Value::as_str) == Some("Provider/device-tpm")
+}
+
+fn dispatch_device_tpm_reconcile(
+    state: &ServerState,
+    peer: &PeerIdentity,
+    request: &Value,
+) -> Result<Value, resource_runtime::ResourceRuntimeError> {
+    if !matches!(peer.role, PeerRole::Admin) {
+        return Err(resource_runtime::ResourceRuntimeError::AuthenticationUnavailable);
+    }
+    let zone = request
+        .get("zoneRef")
+        .and_then(Value::as_str)
+        .and_then(|value| value.strip_prefix("Zone/"))
+        .and_then(|value| ZoneId::parse(value.to_owned()).ok())
+        .ok_or(resource_runtime::ResourceRuntimeError::RouteMismatch)?;
+    let vm_id = request
+        .get("vmId")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty() && value.len() <= 64)
+        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+    let device_uid = request
+        .get("resourceUid")
+        .and_then(Value::as_str)
+        .and_then(|value| ResourceUid::parse(value).ok())
+        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+    let operation_id = request
+        .get("operationId")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty() && value.len() <= 128)
+        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+    let log_level = request
+        .get("logLevel")
+        .and_then(Value::as_u64)
+        .map(|value| {
+            u8::try_from(value).map_err(|_| resource_runtime::ResourceRuntimeError::RequestInvalid)
+        })
+        .transpose()?
+        .unwrap_or(20);
+    if !(1..=20).contains(&log_level) {
+        return Err(resource_runtime::ResourceRuntimeError::RequestInvalid);
+    }
+    let plane = state
+        .resource_plane
+        .lock()
+        .ok()
+        .and_then(|plane| plane.clone())
+        .ok_or(resource_runtime::ResourceRuntimeError::PlaneUnavailable)?;
+    let runtime = plane.zone(&zone)?;
+    let resolver = load_bundle_resolver(state)
+        .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+    let intent = tpm_state_intent(&device_uid, vm_id);
+    let binary = d2b_provider_device_tpm::SignedBinaryRef::from_core(
+        d2b_provider_device_tpm::BinaryKind::Swtpm,
+        tpm_opaque_bytes("d2b:tpm-binary/v1", vm_id),
+    );
+    let decision = d2b_core_controller::migration::LegacyTpmMigrationDecision::not_applicable(
+        vm_id,
+        operation_id,
+    );
+    let outcome = runtime
+        .device_tpm_controller()
+        .reconcile(
+            state,
+            &resolver,
+            VmId::new(vm_id),
+            BundleOpId::new(operation_id),
+            decision,
+            intent,
+            d2b_provider_device_tpm::SwtpmSettings { log_level },
+            binary,
+            broker_caller_role_for_peer(peer),
+        )
+        .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+    Ok(json!({
+        "resourceType": "Device",
+        "provider": "Provider/device-tpm",
+        "outcome": format!("{outcome:?}").to_lowercase()
+    }))
+}
+
+fn tpm_opaque_bytes(domain: &str, value: &str) -> [u8; 32] {
+    let digest = Sha256::digest(format!("{domain}:{value}").as_bytes());
+    let mut bytes = [0; 32];
+    bytes.copy_from_slice(&digest);
+    bytes
+}
+
+fn tpm_state_intent(
+    device_uid: &ResourceUid,
+    vm_id: &str,
+) -> d2b_provider_device_tpm::StateDirIntent {
+    d2b_provider_device_tpm::StateDirIntent::new(
+        d2b_provider_device_tpm::StateDirectoryToken::from_core(tpm_opaque_bytes(
+            "d2b:tpm-state/v1",
+            vm_id,
+        )),
+        d2b_provider_device_tpm::TamperMarkerToken::from_core(tpm_opaque_bytes(
+            "d2b:tpm-marker/v1",
+            device_uid.as_str(),
+        )),
+        d2b_provider_device_tpm::StateOwnerToken::from_core(
+            tpm_opaque_bytes("d2b:tpm-owner/v1", vm_id)[..16]
+                .try_into()
+                .expect("fixed owner token length"),
+        ),
+    )
 }
 
 fn resolve_resource_runtime(
@@ -13369,6 +13488,11 @@ async fn open_resource_plane(
             let _ = plane.shutdown().await;
             return Err(error);
         }
+        if !runtime.device_tpm_controller_registered() {
+            let _ = runtime.shutdown().await;
+            let _ = plane.shutdown().await;
+            return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
+        }
         if let Err(error) = plane.insert(runtime) {
             let _ = plane.shutdown().await;
             return Err(error);
@@ -14073,79 +14197,6 @@ impl VmStartRunner<'_> {
         }
     }
 
-    async fn start_sk_accept_loop(&self, vm: &str, node: &ProcessNode) -> Result<(), String> {
-        let dag = self
-            .resolver
-            .find_process_vm(vm)
-            .ok_or_else(|| "sk-accept-loop:no-process-dag".to_owned())?;
-        let ch = dag
-            .nodes
-            .iter()
-            .find(|candidate| candidate.role == ProcessRole::CloudHypervisorRunner)
-            .ok_or_else(|| "sk-accept-loop:no-cloud-hypervisor-node".to_owned())?;
-        let vsock_base_path = cloud_hypervisor_vsock_socket(&ch.argv)
-            .ok_or_else(|| "sk-accept-loop:no-vsock-socket".to_owned())?;
-        let sk_socket_path = PathBuf::from(format!("{}_14320", vsock_base_path.display()));
-        let expected_uid = ch.profile.uid;
-        let expected_gid = ch.profile.gid;
-
-        let (response, received_fds) = dispatch_broker_request_with_fds_timeout_as(
-            self.state,
-            BrokerRequest::OpenHidrawSecurityKey(
-                d2b_contracts::broker_wire::OpenHidrawSecurityKeyRequest {
-                    vm_id: VmId::new(vm),
-                    selector_id: "default".to_owned(),
-                    tracing_span_id: None,
-                },
-            ),
-            self.caller_role.clone(),
-            Duration::from_secs(30),
-        )
-        .map_err(|error| format!("sk-broker-dispatch:{}", error.message()))?;
-
-        let result = match response {
-            BrokerResponse::OpenHidrawSecurityKey(response) => {
-                let hidraw_fd = duplicate_received_fd(&received_fds, 0, "duplicate hidraw fd")
-                    .map_err(|error| format!("sk-hidraw-fd:{}", error.message()));
-                Ok((response.selector_resolved, hidraw_fd))
-            }
-            BrokerResponse::Error(error) => Err(format!("sk-broker-error:{}", error.kind)),
-            other => Err(format!(
-                "sk-broker-protocol:{}",
-                broker_response_kind(&other)
-            )),
-        };
-        close_received_fds(&received_fds);
-
-        let (selector_resolved, hidraw_fd) = result?;
-        let hidraw = security_key::HidrawDevice::from_owned_fd(hidraw_fd?);
-        let mut security_key_state = security_key::SecurityKeyState::new(selector_resolved);
-        security_key_state.enabled_vms.insert(vm.to_owned());
-        let state = Arc::new(parking_lot::Mutex::new(security_key_state));
-        let listener = security_key::bind_accept_socket(&sk_socket_path)
-            .map_err(|error| format!("sk-bind-socket:{error}"))?;
-        let abort = security_key::spawn_accept_loop(
-            listener,
-            vm.to_owned(),
-            expected_uid,
-            expected_gid,
-            Arc::clone(&state),
-            hidraw,
-        )
-        .map_err(|error| format!("sk-accept-loop:{error}"))?;
-        self.state
-            .security_key_sessions
-            .lock()
-            .register(vm.to_owned(), security_key::SkAcceptHandle { state, abort });
-        tracing::info!(
-            vm = %vm,
-            node = %node.id.0,
-            socket = %sk_socket_path.display(),
-            "security-key accept loop ready"
-        );
-        Ok(())
-    }
-
     /// State-aware readiness for a `GuestControlHealth` node. Resolves the
     /// per-VM probe parameters from the trusted bundle and runs the
     /// authenticated Health probe on a dedicated current-thread runtime
@@ -14218,7 +14269,11 @@ impl supervisor::dag::NodeRunner for VmStartRunner<'_> {
             return self.wait_for_guest_control_health(vm, node, budget).await;
         }
         if node.role == ProcessRole::SecurityKeyFrontend {
-            return self.start_sk_accept_loop(vm, node).await;
+            // Security-key relay/frontend ownership belongs to the
+            // Provider/device-security-key controller. The legacy daemon
+            // accept loop is not allowed to open a blanket hidraw device;
+            // this legacy DAG node is readiness-only during the cutover.
+            return wait_for_readiness(node, readiness, budget.readiness, None);
         }
         match vm_start_node_mode(&node.role) {
             VmStartNodeMode::ReadinessOnly => {

@@ -217,6 +217,7 @@ pub struct ZoneResourceRuntime {
     authority_index: Arc<tokio::sync::Mutex<HostGlobalAuthorityIndex>>,
     authority_persistence: Arc<RedbAuthorityPersistence>,
     authority_recovery: Arc<AuthorityRecoveryCoordinator>,
+    device_tpm_controller: crate::tpm_effect_port::DeviceTpmControllerRegistration,
 }
 
 impl core::fmt::Debug for ZoneResourceRuntime {
@@ -518,6 +519,7 @@ impl ZoneResourceRuntime {
             authority_index,
             authority_persistence,
             authority_recovery,
+            device_tpm_controller: crate::tpm_effect_port::register_device_tpm_controller(),
         })
     }
 
@@ -542,6 +544,19 @@ impl ZoneResourceRuntime {
             .lock()
             .map(|core| core.stage())
             .map_err(|_| ResourceRuntimeError::CoreStartupFailed)
+    }
+
+    /// Whether the production Device TPM reconcile entry point is registered.
+    pub(crate) const fn device_tpm_controller_registered(&self) -> bool {
+        let _ = self.device_tpm_controller;
+        true
+    }
+
+    /// Borrow the registered Device TPM reconcile entry point.
+    pub(crate) const fn device_tpm_controller(
+        &self,
+    ) -> crate::tpm_effect_port::DeviceTpmControllerRegistration {
+        self.device_tpm_controller
     }
 
     /// Mark the trusted Provider path after the daemon has configured it.

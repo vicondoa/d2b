@@ -451,6 +451,7 @@ d2b_contracts	impl core::clone::Clone for d2b_contracts::WireProtocolSchema
 d2b_contracts	impl core::clone::Clone for d2b_contracts::broker_wire::BrokerRequest
 d2b_contracts	impl core::clone::Clone for d2b_contracts::broker_wire::BrokerRequestEnvelope
 d2b_contracts	impl core::clone::Clone for d2b_contracts::broker_wire::DeletePersistentTapRequest
+d2b_contracts	impl core::clone::Clone for d2b_contracts::broker_wire::OpenHidrawSecurityKeyRequest
 d2b_contracts	impl core::clone::Clone for d2b_contracts::generation_bundle::BundleMetadata
 d2b_contracts	impl core::clone::Clone for d2b_contracts::generation_bundle::BundleResource
 d2b_contracts	impl core::clone::Clone for d2b_contracts::generation_bundle::ZoneBundle
@@ -515,6 +516,9 @@ d2b_contracts	impl core::clone::Clone for d2b_contracts::v3::role::RoleRule
 d2b_contracts	impl core::clone::Clone for d2b_contracts::v3::role::RoleSpec
 d2b_contracts	impl core::clone::Clone for d2b_contracts::v3::role_binding::RoleBindingSpec
 d2b_contracts	impl core::clone::Clone for d2b_contracts::v3::role_binding::ScopeNarrowing
+d2b_contracts	impl core::clone::Clone for d2b_contracts::v3::virtiofs_export::VirtiofsExportSpec
+d2b_contracts	impl core::clone::Clone for d2b_contracts::v3::virtiofs_export::VirtiofsExportStatus
+d2b_contracts	impl core::clone::Clone for d2b_contracts::v3::virtiofs_export::VirtiofsExportStatusResource
 d2b_contracts	impl core::clone::Clone for d2b_contracts::v3::volume::AclGrant
 d2b_contracts	impl core::clone::Clone for d2b_contracts::v3::volume::AclPrincipal
 d2b_contracts	impl core::clone::Clone for d2b_contracts::v3::volume::LayoutEntry
@@ -527,6 +531,7 @@ d2b_contracts	impl core::cmp::Eq for d2b_contracts::WireProtocolSchema
 d2b_contracts	impl core::cmp::Eq for d2b_contracts::broker_wire::BrokerRequest
 d2b_contracts	impl core::cmp::Eq for d2b_contracts::broker_wire::BrokerRequestEnvelope
 d2b_contracts	impl core::cmp::Eq for d2b_contracts::broker_wire::DeletePersistentTapRequest
+d2b_contracts	impl core::cmp::Eq for d2b_contracts::broker_wire::OpenHidrawSecurityKeyRequest
 d2b_contracts	impl core::cmp::Eq for d2b_contracts::generation_bundle::BundleMetadata
 d2b_contracts	impl core::cmp::Eq for d2b_contracts::generation_bundle::BundleResource
 d2b_contracts	impl core::cmp::Eq for d2b_contracts::generation_bundle::ZoneBundle
@@ -593,6 +598,9 @@ d2b_contracts	impl core::cmp::Eq for d2b_contracts::v3::role::RoleRule
 d2b_contracts	impl core::cmp::Eq for d2b_contracts::v3::role::RoleSpec
 d2b_contracts	impl core::cmp::Eq for d2b_contracts::v3::role_binding::RoleBindingSpec
 d2b_contracts	impl core::cmp::Eq for d2b_contracts::v3::role_binding::ScopeNarrowing
+d2b_contracts	impl core::cmp::Eq for d2b_contracts::v3::virtiofs_export::VirtiofsExportSpec
+d2b_contracts	impl core::cmp::Eq for d2b_contracts::v3::virtiofs_export::VirtiofsExportStatus
+d2b_contracts	impl core::cmp::Eq for d2b_contracts::v3::virtiofs_export::VirtiofsExportStatusResource
 d2b_contracts	impl core::cmp::Eq for d2b_contracts::v3::volume::AclGrant
 d2b_contracts	impl core::cmp::Eq for d2b_contracts::v3::volume::AclPrincipal
 d2b_contracts	impl core::cmp::Eq for d2b_contracts::v3::volume::LayoutEntry
@@ -607,6 +615,7 @@ d2b_contracts	impl core::cmp::PartialEq for d2b_contracts::WireProtocolSchema
 d2b_contracts	impl core::cmp::PartialEq for d2b_contracts::broker_wire::BrokerRequest
 d2b_contracts	impl core::cmp::PartialEq for d2b_contracts::broker_wire::BrokerRequestEnvelope
 d2b_contracts	impl core::cmp::PartialEq for d2b_contracts::broker_wire::DeletePersistentTapRequest
+d2b_contracts	impl core::cmp::PartialEq for d2b_contracts::broker_wire::OpenHidrawSecurityKeyRequest
 d2b_contracts	impl core::cmp::PartialEq for d2b_contracts::generation_bundle::BundleMetadata
 d2b_contracts	impl core::cmp::PartialEq for d2b_contracts::generation_bundle::BundleResource
 d2b_contracts	impl core::cmp::PartialEq for d2b_contracts::generation_bundle::ZoneBundle
@@ -673,6 +682,9 @@ d2b_contracts	impl core::cmp::PartialEq for d2b_contracts::v3::role::RoleRule
 d2b_contracts	impl core::cmp::PartialEq for d2b_contracts::v3::role::RoleSpec
 d2b_contracts	impl core::cmp::PartialEq for d2b_contracts::v3::role_binding::RoleBindingSpec
 d2b_contracts	impl core::cmp::PartialEq for d2b_contracts::v3::role_binding::ScopeNarrowing
+d2b_contracts	impl core::cmp::PartialEq for d2b_contracts::v3::virtiofs_export::VirtiofsExportSpec
+d2b_contracts	impl core::cmp::PartialEq for d2b_contracts::v3::virtiofs_export::VirtiofsExportStatus
+d2b_contracts	impl core::cmp::PartialEq for d2b_contracts::v3::virtiofs_export::VirtiofsExportStatusResource
 d2b_contracts	impl core::cmp::PartialEq for d2b_contracts::v3::volume::AclGrant
 d2b_contracts	impl core::cmp::PartialEq for d2b_contracts::v3::volume::AclPrincipal
 d2b_contracts	impl core::cmp::PartialEq for d2b_contracts::v3::volume::LayoutEntry
@@ -690,6 +702,7 @@ d2b_contracts	impl core::fmt::Debug for d2b_contracts::WireProtocolSchema
 d2b_contracts	impl core::fmt::Debug for d2b_contracts::broker_wire::BrokerRequest
 d2b_contracts	impl core::fmt::Debug for d2b_contracts::broker_wire::BrokerRequestEnvelope
 d2b_contracts	impl core::fmt::Debug for d2b_contracts::broker_wire::DeletePersistentTapRequest
+d2b_contracts	impl core::fmt::Debug for d2b_contracts::broker_wire::OpenHidrawSecurityKeyRequest
 d2b_contracts	impl core::fmt::Debug for d2b_contracts::generation_bundle::BundleMetadata
 d2b_contracts	impl core::fmt::Debug for d2b_contracts::generation_bundle::BundleResource
 d2b_contracts	impl core::fmt::Debug for d2b_contracts::generation_bundle::ZoneBundle
@@ -758,6 +771,9 @@ d2b_contracts	impl core::fmt::Debug for d2b_contracts::v3::role::RoleRule
 d2b_contracts	impl core::fmt::Debug for d2b_contracts::v3::role::RoleSpec
 d2b_contracts	impl core::fmt::Debug for d2b_contracts::v3::role_binding::RoleBindingSpec
 d2b_contracts	impl core::fmt::Debug for d2b_contracts::v3::role_binding::ScopeNarrowing
+d2b_contracts	impl core::fmt::Debug for d2b_contracts::v3::virtiofs_export::VirtiofsExportSpec
+d2b_contracts	impl core::fmt::Debug for d2b_contracts::v3::virtiofs_export::VirtiofsExportStatus
+d2b_contracts	impl core::fmt::Debug for d2b_contracts::v3::virtiofs_export::VirtiofsExportStatusResource
 d2b_contracts	impl core::fmt::Debug for d2b_contracts::v3::volume::AclGrant
 d2b_contracts	impl core::fmt::Debug for d2b_contracts::v3::volume::AclPrincipal
 d2b_contracts	impl core::fmt::Debug for d2b_contracts::v3::volume::LayoutEntry
@@ -774,6 +790,7 @@ d2b_contracts	impl core::marker::Freeze for d2b_contracts::WireProtocolSchema
 d2b_contracts	impl core::marker::Freeze for d2b_contracts::broker_wire::BrokerRequest
 d2b_contracts	impl core::marker::Freeze for d2b_contracts::broker_wire::BrokerRequestEnvelope
 d2b_contracts	impl core::marker::Freeze for d2b_contracts::broker_wire::DeletePersistentTapRequest
+d2b_contracts	impl core::marker::Freeze for d2b_contracts::broker_wire::OpenHidrawSecurityKeyRequest
 d2b_contracts	impl core::marker::Freeze for d2b_contracts::generation_bundle::BundleMetadata
 d2b_contracts	impl core::marker::Freeze for d2b_contracts::generation_bundle::BundleResource
 d2b_contracts	impl core::marker::Freeze for d2b_contracts::generation_bundle::ZoneBundle
@@ -840,6 +857,9 @@ d2b_contracts	impl core::marker::Freeze for d2b_contracts::v3::role::RoleRule
 d2b_contracts	impl core::marker::Freeze for d2b_contracts::v3::role::RoleSpec
 d2b_contracts	impl core::marker::Freeze for d2b_contracts::v3::role_binding::RoleBindingSpec
 d2b_contracts	impl core::marker::Freeze for d2b_contracts::v3::role_binding::ScopeNarrowing
+d2b_contracts	impl core::marker::Freeze for d2b_contracts::v3::virtiofs_export::VirtiofsExportSpec
+d2b_contracts	impl core::marker::Freeze for d2b_contracts::v3::virtiofs_export::VirtiofsExportStatus
+d2b_contracts	impl core::marker::Freeze for d2b_contracts::v3::virtiofs_export::VirtiofsExportStatusResource
 d2b_contracts	impl core::marker::Freeze for d2b_contracts::v3::volume::AclGrant
 d2b_contracts	impl core::marker::Freeze for d2b_contracts::v3::volume::AclPrincipal
 d2b_contracts	impl core::marker::Freeze for d2b_contracts::v3::volume::LayoutEntry
@@ -852,6 +872,7 @@ d2b_contracts	impl core::marker::Send for d2b_contracts::WireProtocolSchema
 d2b_contracts	impl core::marker::Send for d2b_contracts::broker_wire::BrokerRequest
 d2b_contracts	impl core::marker::Send for d2b_contracts::broker_wire::BrokerRequestEnvelope
 d2b_contracts	impl core::marker::Send for d2b_contracts::broker_wire::DeletePersistentTapRequest
+d2b_contracts	impl core::marker::Send for d2b_contracts::broker_wire::OpenHidrawSecurityKeyRequest
 d2b_contracts	impl core::marker::Send for d2b_contracts::generation_bundle::BundleMetadata
 d2b_contracts	impl core::marker::Send for d2b_contracts::generation_bundle::BundleResource
 d2b_contracts	impl core::marker::Send for d2b_contracts::generation_bundle::ZoneBundle
@@ -919,6 +940,9 @@ d2b_contracts	impl core::marker::Send for d2b_contracts::v3::role::RoleRule
 d2b_contracts	impl core::marker::Send for d2b_contracts::v3::role::RoleSpec
 d2b_contracts	impl core::marker::Send for d2b_contracts::v3::role_binding::RoleBindingSpec
 d2b_contracts	impl core::marker::Send for d2b_contracts::v3::role_binding::ScopeNarrowing
+d2b_contracts	impl core::marker::Send for d2b_contracts::v3::virtiofs_export::VirtiofsExportSpec
+d2b_contracts	impl core::marker::Send for d2b_contracts::v3::virtiofs_export::VirtiofsExportStatus
+d2b_contracts	impl core::marker::Send for d2b_contracts::v3::virtiofs_export::VirtiofsExportStatusResource
 d2b_contracts	impl core::marker::Send for d2b_contracts::v3::volume::AclGrant
 d2b_contracts	impl core::marker::Send for d2b_contracts::v3::volume::AclPrincipal
 d2b_contracts	impl core::marker::Send for d2b_contracts::v3::volume::LayoutEntry
@@ -931,6 +955,7 @@ d2b_contracts	impl core::marker::StructuralPartialEq for d2b_contracts::WireProt
 d2b_contracts	impl core::marker::StructuralPartialEq for d2b_contracts::broker_wire::BrokerRequest
 d2b_contracts	impl core::marker::StructuralPartialEq for d2b_contracts::broker_wire::BrokerRequestEnvelope
 d2b_contracts	impl core::marker::StructuralPartialEq for d2b_contracts::broker_wire::DeletePersistentTapRequest
+d2b_contracts	impl core::marker::StructuralPartialEq for d2b_contracts::broker_wire::OpenHidrawSecurityKeyRequest
 d2b_contracts	impl core::marker::StructuralPartialEq for d2b_contracts::generation_bundle::BundleMetadata
 d2b_contracts	impl core::marker::StructuralPartialEq for d2b_contracts::generation_bundle::BundleResource
 d2b_contracts	impl core::marker::StructuralPartialEq for d2b_contracts::generation_bundle::ZoneBundle
@@ -997,6 +1022,9 @@ d2b_contracts	impl core::marker::StructuralPartialEq for d2b_contracts::v3::role
 d2b_contracts	impl core::marker::StructuralPartialEq for d2b_contracts::v3::role::RoleSpec
 d2b_contracts	impl core::marker::StructuralPartialEq for d2b_contracts::v3::role_binding::RoleBindingSpec
 d2b_contracts	impl core::marker::StructuralPartialEq for d2b_contracts::v3::role_binding::ScopeNarrowing
+d2b_contracts	impl core::marker::StructuralPartialEq for d2b_contracts::v3::virtiofs_export::VirtiofsExportSpec
+d2b_contracts	impl core::marker::StructuralPartialEq for d2b_contracts::v3::virtiofs_export::VirtiofsExportStatus
+d2b_contracts	impl core::marker::StructuralPartialEq for d2b_contracts::v3::virtiofs_export::VirtiofsExportStatusResource
 d2b_contracts	impl core::marker::StructuralPartialEq for d2b_contracts::v3::volume::AclGrant
 d2b_contracts	impl core::marker::StructuralPartialEq for d2b_contracts::v3::volume::AclPrincipal
 d2b_contracts	impl core::marker::StructuralPartialEq for d2b_contracts::v3::volume::LayoutEntry
@@ -1009,6 +1037,7 @@ d2b_contracts	impl core::marker::Sync for d2b_contracts::WireProtocolSchema
 d2b_contracts	impl core::marker::Sync for d2b_contracts::broker_wire::BrokerRequest
 d2b_contracts	impl core::marker::Sync for d2b_contracts::broker_wire::BrokerRequestEnvelope
 d2b_contracts	impl core::marker::Sync for d2b_contracts::broker_wire::DeletePersistentTapRequest
+d2b_contracts	impl core::marker::Sync for d2b_contracts::broker_wire::OpenHidrawSecurityKeyRequest
 d2b_contracts	impl core::marker::Sync for d2b_contracts::generation_bundle::BundleMetadata
 d2b_contracts	impl core::marker::Sync for d2b_contracts::generation_bundle::BundleResource
 d2b_contracts	impl core::marker::Sync for d2b_contracts::generation_bundle::ZoneBundle
@@ -1076,6 +1105,9 @@ d2b_contracts	impl core::marker::Sync for d2b_contracts::v3::role::RoleRule
 d2b_contracts	impl core::marker::Sync for d2b_contracts::v3::role::RoleSpec
 d2b_contracts	impl core::marker::Sync for d2b_contracts::v3::role_binding::RoleBindingSpec
 d2b_contracts	impl core::marker::Sync for d2b_contracts::v3::role_binding::ScopeNarrowing
+d2b_contracts	impl core::marker::Sync for d2b_contracts::v3::virtiofs_export::VirtiofsExportSpec
+d2b_contracts	impl core::marker::Sync for d2b_contracts::v3::virtiofs_export::VirtiofsExportStatus
+d2b_contracts	impl core::marker::Sync for d2b_contracts::v3::virtiofs_export::VirtiofsExportStatusResource
 d2b_contracts	impl core::marker::Sync for d2b_contracts::v3::volume::AclGrant
 d2b_contracts	impl core::marker::Sync for d2b_contracts::v3::volume::AclPrincipal
 d2b_contracts	impl core::marker::Sync for d2b_contracts::v3::volume::LayoutEntry
@@ -1088,6 +1120,7 @@ d2b_contracts	impl core::marker::Unpin for d2b_contracts::WireProtocolSchema
 d2b_contracts	impl core::marker::Unpin for d2b_contracts::broker_wire::BrokerRequest
 d2b_contracts	impl core::marker::Unpin for d2b_contracts::broker_wire::BrokerRequestEnvelope
 d2b_contracts	impl core::marker::Unpin for d2b_contracts::broker_wire::DeletePersistentTapRequest
+d2b_contracts	impl core::marker::Unpin for d2b_contracts::broker_wire::OpenHidrawSecurityKeyRequest
 d2b_contracts	impl core::marker::Unpin for d2b_contracts::generation_bundle::BundleMetadata
 d2b_contracts	impl core::marker::Unpin for d2b_contracts::generation_bundle::BundleResource
 d2b_contracts	impl core::marker::Unpin for d2b_contracts::generation_bundle::ZoneBundle
@@ -1155,6 +1188,9 @@ d2b_contracts	impl core::marker::Unpin for d2b_contracts::v3::role::RoleRule
 d2b_contracts	impl core::marker::Unpin for d2b_contracts::v3::role::RoleSpec
 d2b_contracts	impl core::marker::Unpin for d2b_contracts::v3::role_binding::RoleBindingSpec
 d2b_contracts	impl core::marker::Unpin for d2b_contracts::v3::role_binding::ScopeNarrowing
+d2b_contracts	impl core::marker::Unpin for d2b_contracts::v3::virtiofs_export::VirtiofsExportSpec
+d2b_contracts	impl core::marker::Unpin for d2b_contracts::v3::virtiofs_export::VirtiofsExportStatus
+d2b_contracts	impl core::marker::Unpin for d2b_contracts::v3::virtiofs_export::VirtiofsExportStatusResource
 d2b_contracts	impl core::marker::Unpin for d2b_contracts::v3::volume::AclGrant
 d2b_contracts	impl core::marker::Unpin for d2b_contracts::v3::volume::AclPrincipal
 d2b_contracts	impl core::marker::Unpin for d2b_contracts::v3::volume::LayoutEntry
@@ -1167,6 +1203,7 @@ d2b_contracts	impl core::marker::UnsafeUnpin for d2b_contracts::WireProtocolSche
 d2b_contracts	impl core::marker::UnsafeUnpin for d2b_contracts::broker_wire::BrokerRequest
 d2b_contracts	impl core::marker::UnsafeUnpin for d2b_contracts::broker_wire::BrokerRequestEnvelope
 d2b_contracts	impl core::marker::UnsafeUnpin for d2b_contracts::broker_wire::DeletePersistentTapRequest
+d2b_contracts	impl core::marker::UnsafeUnpin for d2b_contracts::broker_wire::OpenHidrawSecurityKeyRequest
 d2b_contracts	impl core::marker::UnsafeUnpin for d2b_contracts::generation_bundle::BundleMetadata
 d2b_contracts	impl core::marker::UnsafeUnpin for d2b_contracts::generation_bundle::BundleResource
 d2b_contracts	impl core::marker::UnsafeUnpin for d2b_contracts::generation_bundle::ZoneBundle
@@ -1234,6 +1271,9 @@ d2b_contracts	impl core::marker::UnsafeUnpin for d2b_contracts::v3::role::RoleRu
 d2b_contracts	impl core::marker::UnsafeUnpin for d2b_contracts::v3::role::RoleSpec
 d2b_contracts	impl core::marker::UnsafeUnpin for d2b_contracts::v3::role_binding::RoleBindingSpec
 d2b_contracts	impl core::marker::UnsafeUnpin for d2b_contracts::v3::role_binding::ScopeNarrowing
+d2b_contracts	impl core::marker::UnsafeUnpin for d2b_contracts::v3::virtiofs_export::VirtiofsExportSpec
+d2b_contracts	impl core::marker::UnsafeUnpin for d2b_contracts::v3::virtiofs_export::VirtiofsExportStatus
+d2b_contracts	impl core::marker::UnsafeUnpin for d2b_contracts::v3::virtiofs_export::VirtiofsExportStatusResource
 d2b_contracts	impl core::marker::UnsafeUnpin for d2b_contracts::v3::volume::AclGrant
 d2b_contracts	impl core::marker::UnsafeUnpin for d2b_contracts::v3::volume::AclPrincipal
 d2b_contracts	impl core::marker::UnsafeUnpin for d2b_contracts::v3::volume::LayoutEntry
@@ -1247,6 +1287,7 @@ d2b_contracts	impl core::panic::unwind_safe::RefUnwindSafe for d2b_contracts::Wi
 d2b_contracts	impl core::panic::unwind_safe::RefUnwindSafe for d2b_contracts::broker_wire::BrokerRequest
 d2b_contracts	impl core::panic::unwind_safe::RefUnwindSafe for d2b_contracts::broker_wire::BrokerRequestEnvelope
 d2b_contracts	impl core::panic::unwind_safe::RefUnwindSafe for d2b_contracts::broker_wire::DeletePersistentTapRequest
+d2b_contracts	impl core::panic::unwind_safe::RefUnwindSafe for d2b_contracts::broker_wire::OpenHidrawSecurityKeyRequest
 d2b_contracts	impl core::panic::unwind_safe::RefUnwindSafe for d2b_contracts::generation_bundle::BundleMetadata
 d2b_contracts	impl core::panic::unwind_safe::RefUnwindSafe for d2b_contracts::generation_bundle::BundleResource
 d2b_contracts	impl core::panic::unwind_safe::RefUnwindSafe for d2b_contracts::generation_bundle::ZoneBundle
@@ -1314,6 +1355,9 @@ d2b_contracts	impl core::panic::unwind_safe::RefUnwindSafe for d2b_contracts::v3
 d2b_contracts	impl core::panic::unwind_safe::RefUnwindSafe for d2b_contracts::v3::role::RoleSpec
 d2b_contracts	impl core::panic::unwind_safe::RefUnwindSafe for d2b_contracts::v3::role_binding::RoleBindingSpec
 d2b_contracts	impl core::panic::unwind_safe::RefUnwindSafe for d2b_contracts::v3::role_binding::ScopeNarrowing
+d2b_contracts	impl core::panic::unwind_safe::RefUnwindSafe for d2b_contracts::v3::virtiofs_export::VirtiofsExportSpec
+d2b_contracts	impl core::panic::unwind_safe::RefUnwindSafe for d2b_contracts::v3::virtiofs_export::VirtiofsExportStatus
+d2b_contracts	impl core::panic::unwind_safe::RefUnwindSafe for d2b_contracts::v3::virtiofs_export::VirtiofsExportStatusResource
 d2b_contracts	impl core::panic::unwind_safe::RefUnwindSafe for d2b_contracts::v3::volume::AclGrant
 d2b_contracts	impl core::panic::unwind_safe::RefUnwindSafe for d2b_contracts::v3::volume::AclPrincipal
 d2b_contracts	impl core::panic::unwind_safe::RefUnwindSafe for d2b_contracts::v3::volume::LayoutEntry
@@ -1326,6 +1370,7 @@ d2b_contracts	impl core::panic::unwind_safe::UnwindSafe for d2b_contracts::WireP
 d2b_contracts	impl core::panic::unwind_safe::UnwindSafe for d2b_contracts::broker_wire::BrokerRequest
 d2b_contracts	impl core::panic::unwind_safe::UnwindSafe for d2b_contracts::broker_wire::BrokerRequestEnvelope
 d2b_contracts	impl core::panic::unwind_safe::UnwindSafe for d2b_contracts::broker_wire::DeletePersistentTapRequest
+d2b_contracts	impl core::panic::unwind_safe::UnwindSafe for d2b_contracts::broker_wire::OpenHidrawSecurityKeyRequest
 d2b_contracts	impl core::panic::unwind_safe::UnwindSafe for d2b_contracts::generation_bundle::BundleMetadata
 d2b_contracts	impl core::panic::unwind_safe::UnwindSafe for d2b_contracts::generation_bundle::BundleResource
 d2b_contracts	impl core::panic::unwind_safe::UnwindSafe for d2b_contracts::generation_bundle::ZoneBundle
@@ -1393,6 +1438,9 @@ d2b_contracts	impl core::panic::unwind_safe::UnwindSafe for d2b_contracts::v3::r
 d2b_contracts	impl core::panic::unwind_safe::UnwindSafe for d2b_contracts::v3::role::RoleSpec
 d2b_contracts	impl core::panic::unwind_safe::UnwindSafe for d2b_contracts::v3::role_binding::RoleBindingSpec
 d2b_contracts	impl core::panic::unwind_safe::UnwindSafe for d2b_contracts::v3::role_binding::ScopeNarrowing
+d2b_contracts	impl core::panic::unwind_safe::UnwindSafe for d2b_contracts::v3::virtiofs_export::VirtiofsExportSpec
+d2b_contracts	impl core::panic::unwind_safe::UnwindSafe for d2b_contracts::v3::virtiofs_export::VirtiofsExportStatus
+d2b_contracts	impl core::panic::unwind_safe::UnwindSafe for d2b_contracts::v3::virtiofs_export::VirtiofsExportStatusResource
 d2b_contracts	impl core::panic::unwind_safe::UnwindSafe for d2b_contracts::v3::volume::AclGrant
 d2b_contracts	impl core::panic::unwind_safe::UnwindSafe for d2b_contracts::v3::volume::AclPrincipal
 d2b_contracts	impl core::panic::unwind_safe::UnwindSafe for d2b_contracts::v3::volume::LayoutEntry
@@ -1472,6 +1520,7 @@ d2b_contracts	impl d2b_contracts::v3::role::RoleRule
 d2b_contracts	impl d2b_contracts::v3::role::RoleSpec
 d2b_contracts	impl d2b_contracts::v3::role_binding::RoleBindingSpec
 d2b_contracts	impl d2b_contracts::v3::role_binding::ScopeNarrowing
+d2b_contracts	impl d2b_contracts::v3::virtiofs_export::VirtiofsExportSpec
 d2b_contracts	impl d2b_contracts::v3::volume::AclGrant
 d2b_contracts	impl d2b_contracts::v3::volume::AclPrincipal
 d2b_contracts	impl d2b_contracts::v3::volume::LayoutEntry
@@ -1484,6 +1533,7 @@ d2b_contracts	impl schemars::JsonSchema for d2b_contracts::WireProtocolSchema
 d2b_contracts	impl schemars::JsonSchema for d2b_contracts::broker_wire::BrokerRequest
 d2b_contracts	impl schemars::JsonSchema for d2b_contracts::broker_wire::BrokerRequestEnvelope
 d2b_contracts	impl schemars::JsonSchema for d2b_contracts::broker_wire::DeletePersistentTapRequest
+d2b_contracts	impl schemars::JsonSchema for d2b_contracts::broker_wire::OpenHidrawSecurityKeyRequest
 d2b_contracts	impl schemars::JsonSchema for d2b_contracts::generation_bundle::BundleMetadata
 d2b_contracts	impl schemars::JsonSchema for d2b_contracts::generation_bundle::BundleResource
 d2b_contracts	impl schemars::JsonSchema for d2b_contracts::generation_bundle::ZoneBundle
@@ -1534,6 +1584,9 @@ d2b_contracts	impl schemars::JsonSchema for d2b_contracts::v3::role::RoleRule
 d2b_contracts	impl schemars::JsonSchema for d2b_contracts::v3::role::RoleSpec
 d2b_contracts	impl schemars::JsonSchema for d2b_contracts::v3::role_binding::RoleBindingSpec
 d2b_contracts	impl schemars::JsonSchema for d2b_contracts::v3::role_binding::ScopeNarrowing
+d2b_contracts	impl schemars::JsonSchema for d2b_contracts::v3::virtiofs_export::VirtiofsExportSpec
+d2b_contracts	impl schemars::JsonSchema for d2b_contracts::v3::virtiofs_export::VirtiofsExportStatus
+d2b_contracts	impl schemars::JsonSchema for d2b_contracts::v3::virtiofs_export::VirtiofsExportStatusResource
 d2b_contracts	impl schemars::JsonSchema for d2b_contracts::v3::volume::AclGrant
 d2b_contracts	impl schemars::JsonSchema for d2b_contracts::v3::volume::AclPrincipal
 d2b_contracts	impl schemars::JsonSchema for d2b_contracts::v3::volume::LayoutEntry
@@ -1546,6 +1599,7 @@ d2b_contracts	impl serde_core::ser::Serialize for d2b_contracts::WireProtocolSch
 d2b_contracts	impl serde_core::ser::Serialize for d2b_contracts::broker_wire::BrokerRequest
 d2b_contracts	impl serde_core::ser::Serialize for d2b_contracts::broker_wire::BrokerRequestEnvelope
 d2b_contracts	impl serde_core::ser::Serialize for d2b_contracts::broker_wire::DeletePersistentTapRequest
+d2b_contracts	impl serde_core::ser::Serialize for d2b_contracts::broker_wire::OpenHidrawSecurityKeyRequest
 d2b_contracts	impl serde_core::ser::Serialize for d2b_contracts::generation_bundle::BundleMetadata
 d2b_contracts	impl serde_core::ser::Serialize for d2b_contracts::generation_bundle::BundleResource
 d2b_contracts	impl serde_core::ser::Serialize for d2b_contracts::generation_bundle::ZoneBundle
@@ -1596,6 +1650,9 @@ d2b_contracts	impl serde_core::ser::Serialize for d2b_contracts::v3::role::RoleR
 d2b_contracts	impl serde_core::ser::Serialize for d2b_contracts::v3::role::RoleSpec
 d2b_contracts	impl serde_core::ser::Serialize for d2b_contracts::v3::role_binding::RoleBindingSpec
 d2b_contracts	impl serde_core::ser::Serialize for d2b_contracts::v3::role_binding::ScopeNarrowing
+d2b_contracts	impl serde_core::ser::Serialize for d2b_contracts::v3::virtiofs_export::VirtiofsExportSpec
+d2b_contracts	impl serde_core::ser::Serialize for d2b_contracts::v3::virtiofs_export::VirtiofsExportStatus
+d2b_contracts	impl serde_core::ser::Serialize for d2b_contracts::v3::virtiofs_export::VirtiofsExportStatusResource
 d2b_contracts	impl serde_core::ser::Serialize for d2b_contracts::v3::volume::AclGrant
 d2b_contracts	impl serde_core::ser::Serialize for d2b_contracts::v3::volume::AclPrincipal
 d2b_contracts	impl serde_core::ser::Serialize for d2b_contracts::v3::volume::LayoutEntry
@@ -1607,6 +1664,7 @@ d2b_contracts	impl serde_core::ser::Serialize for d2b_contracts::v3::zone_link::
 d2b_contracts	impl<'de> serde_core::de::Deserialize<'de> for d2b_contracts::broker_wire::BrokerRequest
 d2b_contracts	impl<'de> serde_core::de::Deserialize<'de> for d2b_contracts::broker_wire::BrokerRequestEnvelope
 d2b_contracts	impl<'de> serde_core::de::Deserialize<'de> for d2b_contracts::broker_wire::DeletePersistentTapRequest
+d2b_contracts	impl<'de> serde_core::de::Deserialize<'de> for d2b_contracts::broker_wire::OpenHidrawSecurityKeyRequest
 d2b_contracts	impl<'de> serde_core::de::Deserialize<'de> for d2b_contracts::generation_bundle::BundleMetadata
 d2b_contracts	impl<'de> serde_core::de::Deserialize<'de> for d2b_contracts::generation_bundle::BundleResource
 d2b_contracts	impl<'de> serde_core::de::Deserialize<'de> for d2b_contracts::generation_bundle::ZoneBundle
@@ -1656,6 +1714,9 @@ d2b_contracts	impl<'de> serde_core::de::Deserialize<'de> for d2b_contracts::v3::
 d2b_contracts	impl<'de> serde_core::de::Deserialize<'de> for d2b_contracts::v3::role::RoleSpec
 d2b_contracts	impl<'de> serde_core::de::Deserialize<'de> for d2b_contracts::v3::role_binding::RoleBindingSpec
 d2b_contracts	impl<'de> serde_core::de::Deserialize<'de> for d2b_contracts::v3::role_binding::ScopeNarrowing
+d2b_contracts	impl<'de> serde_core::de::Deserialize<'de> for d2b_contracts::v3::virtiofs_export::VirtiofsExportSpec
+d2b_contracts	impl<'de> serde_core::de::Deserialize<'de> for d2b_contracts::v3::virtiofs_export::VirtiofsExportStatus
+d2b_contracts	impl<'de> serde_core::de::Deserialize<'de> for d2b_contracts::v3::virtiofs_export::VirtiofsExportStatusResource
 d2b_contracts	impl<'de> serde_core::de::Deserialize<'de> for d2b_contracts::v3::volume::AclGrant
 d2b_contracts	impl<'de> serde_core::de::Deserialize<'de> for d2b_contracts::v3::volume::AclPrincipal
 d2b_contracts	impl<'de> serde_core::de::Deserialize<'de> for d2b_contracts::v3::volume::LayoutEntry
@@ -1675,6 +1736,7 @@ d2b_contracts	impl<T, U> core::convert::Into<U> for d2b_contracts::WireProtocolS
 d2b_contracts	impl<T, U> core::convert::Into<U> for d2b_contracts::broker_wire::BrokerRequest where U: core::convert::From<T>
 d2b_contracts	impl<T, U> core::convert::Into<U> for d2b_contracts::broker_wire::BrokerRequestEnvelope where U: core::convert::From<T>
 d2b_contracts	impl<T, U> core::convert::Into<U> for d2b_contracts::broker_wire::DeletePersistentTapRequest where U: core::convert::From<T>
+d2b_contracts	impl<T, U> core::convert::Into<U> for d2b_contracts::broker_wire::OpenHidrawSecurityKeyRequest where U: core::convert::From<T>
 d2b_contracts	impl<T, U> core::convert::Into<U> for d2b_contracts::generation_bundle::BundleMetadata where U: core::convert::From<T>
 d2b_contracts	impl<T, U> core::convert::Into<U> for d2b_contracts::generation_bundle::BundleResource where U: core::convert::From<T>
 d2b_contracts	impl<T, U> core::convert::Into<U> for d2b_contracts::generation_bundle::ZoneBundle where U: core::convert::From<T>
@@ -1743,6 +1805,9 @@ d2b_contracts	impl<T, U> core::convert::Into<U> for d2b_contracts::v3::role::Rol
 d2b_contracts	impl<T, U> core::convert::Into<U> for d2b_contracts::v3::role::RoleSpec where U: core::convert::From<T>
 d2b_contracts	impl<T, U> core::convert::Into<U> for d2b_contracts::v3::role_binding::RoleBindingSpec where U: core::convert::From<T>
 d2b_contracts	impl<T, U> core::convert::Into<U> for d2b_contracts::v3::role_binding::ScopeNarrowing where U: core::convert::From<T>
+d2b_contracts	impl<T, U> core::convert::Into<U> for d2b_contracts::v3::virtiofs_export::VirtiofsExportSpec where U: core::convert::From<T>
+d2b_contracts	impl<T, U> core::convert::Into<U> for d2b_contracts::v3::virtiofs_export::VirtiofsExportStatus where U: core::convert::From<T>
+d2b_contracts	impl<T, U> core::convert::Into<U> for d2b_contracts::v3::virtiofs_export::VirtiofsExportStatusResource where U: core::convert::From<T>
 d2b_contracts	impl<T, U> core::convert::Into<U> for d2b_contracts::v3::volume::AclGrant where U: core::convert::From<T>
 d2b_contracts	impl<T, U> core::convert::Into<U> for d2b_contracts::v3::volume::AclPrincipal where U: core::convert::From<T>
 d2b_contracts	impl<T, U> core::convert::Into<U> for d2b_contracts::v3::volume::LayoutEntry where U: core::convert::From<T>
@@ -1755,6 +1820,7 @@ d2b_contracts	impl<T, U> core::convert::TryFrom<U> for d2b_contracts::WireProtoc
 d2b_contracts	impl<T, U> core::convert::TryFrom<U> for d2b_contracts::broker_wire::BrokerRequest where U: core::convert::Into<T>
 d2b_contracts	impl<T, U> core::convert::TryFrom<U> for d2b_contracts::broker_wire::BrokerRequestEnvelope where U: core::convert::Into<T>
 d2b_contracts	impl<T, U> core::convert::TryFrom<U> for d2b_contracts::broker_wire::DeletePersistentTapRequest where U: core::convert::Into<T>
+d2b_contracts	impl<T, U> core::convert::TryFrom<U> for d2b_contracts::broker_wire::OpenHidrawSecurityKeyRequest where U: core::convert::Into<T>
 d2b_contracts	impl<T, U> core::convert::TryFrom<U> for d2b_contracts::generation_bundle::BundleMetadata where U: core::convert::Into<T>
 d2b_contracts	impl<T, U> core::convert::TryFrom<U> for d2b_contracts::generation_bundle::BundleResource where U: core::convert::Into<T>
 d2b_contracts	impl<T, U> core::convert::TryFrom<U> for d2b_contracts::generation_bundle::ZoneBundle where U: core::convert::Into<T>
@@ -1823,6 +1889,9 @@ d2b_contracts	impl<T, U> core::convert::TryFrom<U> for d2b_contracts::v3::role::
 d2b_contracts	impl<T, U> core::convert::TryFrom<U> for d2b_contracts::v3::role::RoleSpec where U: core::convert::Into<T>
 d2b_contracts	impl<T, U> core::convert::TryFrom<U> for d2b_contracts::v3::role_binding::RoleBindingSpec where U: core::convert::Into<T>
 d2b_contracts	impl<T, U> core::convert::TryFrom<U> for d2b_contracts::v3::role_binding::ScopeNarrowing where U: core::convert::Into<T>
+d2b_contracts	impl<T, U> core::convert::TryFrom<U> for d2b_contracts::v3::virtiofs_export::VirtiofsExportSpec where U: core::convert::Into<T>
+d2b_contracts	impl<T, U> core::convert::TryFrom<U> for d2b_contracts::v3::virtiofs_export::VirtiofsExportStatus where U: core::convert::Into<T>
+d2b_contracts	impl<T, U> core::convert::TryFrom<U> for d2b_contracts::v3::virtiofs_export::VirtiofsExportStatusResource where U: core::convert::Into<T>
 d2b_contracts	impl<T, U> core::convert::TryFrom<U> for d2b_contracts::v3::volume::AclGrant where U: core::convert::Into<T>
 d2b_contracts	impl<T, U> core::convert::TryFrom<U> for d2b_contracts::v3::volume::AclPrincipal where U: core::convert::Into<T>
 d2b_contracts	impl<T, U> core::convert::TryFrom<U> for d2b_contracts::v3::volume::LayoutEntry where U: core::convert::Into<T>
@@ -1835,6 +1904,7 @@ d2b_contracts	impl<T, U> core::convert::TryInto<U> for d2b_contracts::WireProtoc
 d2b_contracts	impl<T, U> core::convert::TryInto<U> for d2b_contracts::broker_wire::BrokerRequest where U: core::convert::TryFrom<T>
 d2b_contracts	impl<T, U> core::convert::TryInto<U> for d2b_contracts::broker_wire::BrokerRequestEnvelope where U: core::convert::TryFrom<T>
 d2b_contracts	impl<T, U> core::convert::TryInto<U> for d2b_contracts::broker_wire::DeletePersistentTapRequest where U: core::convert::TryFrom<T>
+d2b_contracts	impl<T, U> core::convert::TryInto<U> for d2b_contracts::broker_wire::OpenHidrawSecurityKeyRequest where U: core::convert::TryFrom<T>
 d2b_contracts	impl<T, U> core::convert::TryInto<U> for d2b_contracts::generation_bundle::BundleMetadata where U: core::convert::TryFrom<T>
 d2b_contracts	impl<T, U> core::convert::TryInto<U> for d2b_contracts::generation_bundle::BundleResource where U: core::convert::TryFrom<T>
 d2b_contracts	impl<T, U> core::convert::TryInto<U> for d2b_contracts::generation_bundle::ZoneBundle where U: core::convert::TryFrom<T>
@@ -1903,6 +1973,9 @@ d2b_contracts	impl<T, U> core::convert::TryInto<U> for d2b_contracts::v3::role::
 d2b_contracts	impl<T, U> core::convert::TryInto<U> for d2b_contracts::v3::role::RoleSpec where U: core::convert::TryFrom<T>
 d2b_contracts	impl<T, U> core::convert::TryInto<U> for d2b_contracts::v3::role_binding::RoleBindingSpec where U: core::convert::TryFrom<T>
 d2b_contracts	impl<T, U> core::convert::TryInto<U> for d2b_contracts::v3::role_binding::ScopeNarrowing where U: core::convert::TryFrom<T>
+d2b_contracts	impl<T, U> core::convert::TryInto<U> for d2b_contracts::v3::virtiofs_export::VirtiofsExportSpec where U: core::convert::TryFrom<T>
+d2b_contracts	impl<T, U> core::convert::TryInto<U> for d2b_contracts::v3::virtiofs_export::VirtiofsExportStatus where U: core::convert::TryFrom<T>
+d2b_contracts	impl<T, U> core::convert::TryInto<U> for d2b_contracts::v3::virtiofs_export::VirtiofsExportStatusResource where U: core::convert::TryFrom<T>
 d2b_contracts	impl<T, U> core::convert::TryInto<U> for d2b_contracts::v3::volume::AclGrant where U: core::convert::TryFrom<T>
 d2b_contracts	impl<T, U> core::convert::TryInto<U> for d2b_contracts::v3::volume::AclPrincipal where U: core::convert::TryFrom<T>
 d2b_contracts	impl<T, U> core::convert::TryInto<U> for d2b_contracts::v3::volume::LayoutEntry where U: core::convert::TryFrom<T>
@@ -1915,6 +1988,7 @@ d2b_contracts	impl<T> alloc::borrow::ToOwned for d2b_contracts::WireProtocolSche
 d2b_contracts	impl<T> alloc::borrow::ToOwned for d2b_contracts::broker_wire::BrokerRequest where T: core::clone::Clone
 d2b_contracts	impl<T> alloc::borrow::ToOwned for d2b_contracts::broker_wire::BrokerRequestEnvelope where T: core::clone::Clone
 d2b_contracts	impl<T> alloc::borrow::ToOwned for d2b_contracts::broker_wire::DeletePersistentTapRequest where T: core::clone::Clone
+d2b_contracts	impl<T> alloc::borrow::ToOwned for d2b_contracts::broker_wire::OpenHidrawSecurityKeyRequest where T: core::clone::Clone
 d2b_contracts	impl<T> alloc::borrow::ToOwned for d2b_contracts::generation_bundle::BundleMetadata where T: core::clone::Clone
 d2b_contracts	impl<T> alloc::borrow::ToOwned for d2b_contracts::generation_bundle::BundleResource where T: core::clone::Clone
 d2b_contracts	impl<T> alloc::borrow::ToOwned for d2b_contracts::generation_bundle::ZoneBundle where T: core::clone::Clone
@@ -1979,6 +2053,9 @@ d2b_contracts	impl<T> alloc::borrow::ToOwned for d2b_contracts::v3::role::RoleRu
 d2b_contracts	impl<T> alloc::borrow::ToOwned for d2b_contracts::v3::role::RoleSpec where T: core::clone::Clone
 d2b_contracts	impl<T> alloc::borrow::ToOwned for d2b_contracts::v3::role_binding::RoleBindingSpec where T: core::clone::Clone
 d2b_contracts	impl<T> alloc::borrow::ToOwned for d2b_contracts::v3::role_binding::ScopeNarrowing where T: core::clone::Clone
+d2b_contracts	impl<T> alloc::borrow::ToOwned for d2b_contracts::v3::virtiofs_export::VirtiofsExportSpec where T: core::clone::Clone
+d2b_contracts	impl<T> alloc::borrow::ToOwned for d2b_contracts::v3::virtiofs_export::VirtiofsExportStatus where T: core::clone::Clone
+d2b_contracts	impl<T> alloc::borrow::ToOwned for d2b_contracts::v3::virtiofs_export::VirtiofsExportStatusResource where T: core::clone::Clone
 d2b_contracts	impl<T> alloc::borrow::ToOwned for d2b_contracts::v3::volume::AclGrant where T: core::clone::Clone
 d2b_contracts	impl<T> alloc::borrow::ToOwned for d2b_contracts::v3::volume::AclPrincipal where T: core::clone::Clone
 d2b_contracts	impl<T> alloc::borrow::ToOwned for d2b_contracts::v3::volume::LayoutEntry where T: core::clone::Clone
@@ -1993,6 +2070,7 @@ d2b_contracts	impl<T> core::any::Any for d2b_contracts::WireProtocolSchema where
 d2b_contracts	impl<T> core::any::Any for d2b_contracts::broker_wire::BrokerRequest where T: 'static + ?core::marker::Sized
 d2b_contracts	impl<T> core::any::Any for d2b_contracts::broker_wire::BrokerRequestEnvelope where T: 'static + ?core::marker::Sized
 d2b_contracts	impl<T> core::any::Any for d2b_contracts::broker_wire::DeletePersistentTapRequest where T: 'static + ?core::marker::Sized
+d2b_contracts	impl<T> core::any::Any for d2b_contracts::broker_wire::OpenHidrawSecurityKeyRequest where T: 'static + ?core::marker::Sized
 d2b_contracts	impl<T> core::any::Any for d2b_contracts::generation_bundle::BundleMetadata where T: 'static + ?core::marker::Sized
 d2b_contracts	impl<T> core::any::Any for d2b_contracts::generation_bundle::BundleResource where T: 'static + ?core::marker::Sized
 d2b_contracts	impl<T> core::any::Any for d2b_contracts::generation_bundle::ZoneBundle where T: 'static + ?core::marker::Sized
@@ -2061,6 +2139,9 @@ d2b_contracts	impl<T> core::any::Any for d2b_contracts::v3::role::RoleRule where
 d2b_contracts	impl<T> core::any::Any for d2b_contracts::v3::role::RoleSpec where T: 'static + ?core::marker::Sized
 d2b_contracts	impl<T> core::any::Any for d2b_contracts::v3::role_binding::RoleBindingSpec where T: 'static + ?core::marker::Sized
 d2b_contracts	impl<T> core::any::Any for d2b_contracts::v3::role_binding::ScopeNarrowing where T: 'static + ?core::marker::Sized
+d2b_contracts	impl<T> core::any::Any for d2b_contracts::v3::virtiofs_export::VirtiofsExportSpec where T: 'static + ?core::marker::Sized
+d2b_contracts	impl<T> core::any::Any for d2b_contracts::v3::virtiofs_export::VirtiofsExportStatus where T: 'static + ?core::marker::Sized
+d2b_contracts	impl<T> core::any::Any for d2b_contracts::v3::virtiofs_export::VirtiofsExportStatusResource where T: 'static + ?core::marker::Sized
 d2b_contracts	impl<T> core::any::Any for d2b_contracts::v3::volume::AclGrant where T: 'static + ?core::marker::Sized
 d2b_contracts	impl<T> core::any::Any for d2b_contracts::v3::volume::AclPrincipal where T: 'static + ?core::marker::Sized
 d2b_contracts	impl<T> core::any::Any for d2b_contracts::v3::volume::LayoutEntry where T: 'static + ?core::marker::Sized
@@ -2073,6 +2154,7 @@ d2b_contracts	impl<T> core::borrow::Borrow<T> for d2b_contracts::WireProtocolSch
 d2b_contracts	impl<T> core::borrow::Borrow<T> for d2b_contracts::broker_wire::BrokerRequest where T: ?core::marker::Sized
 d2b_contracts	impl<T> core::borrow::Borrow<T> for d2b_contracts::broker_wire::BrokerRequestEnvelope where T: ?core::marker::Sized
 d2b_contracts	impl<T> core::borrow::Borrow<T> for d2b_contracts::broker_wire::DeletePersistentTapRequest where T: ?core::marker::Sized
+d2b_contracts	impl<T> core::borrow::Borrow<T> for d2b_contracts::broker_wire::OpenHidrawSecurityKeyRequest where T: ?core::marker::Sized
 d2b_contracts	impl<T> core::borrow::Borrow<T> for d2b_contracts::generation_bundle::BundleMetadata where T: ?core::marker::Sized
 d2b_contracts	impl<T> core::borrow::Borrow<T> for d2b_contracts::generation_bundle::BundleResource where T: ?core::marker::Sized
 d2b_contracts	impl<T> core::borrow::Borrow<T> for d2b_contracts::generation_bundle::ZoneBundle where T: ?core::marker::Sized
@@ -2141,6 +2223,9 @@ d2b_contracts	impl<T> core::borrow::Borrow<T> for d2b_contracts::v3::role::RoleR
 d2b_contracts	impl<T> core::borrow::Borrow<T> for d2b_contracts::v3::role::RoleSpec where T: ?core::marker::Sized
 d2b_contracts	impl<T> core::borrow::Borrow<T> for d2b_contracts::v3::role_binding::RoleBindingSpec where T: ?core::marker::Sized
 d2b_contracts	impl<T> core::borrow::Borrow<T> for d2b_contracts::v3::role_binding::ScopeNarrowing where T: ?core::marker::Sized
+d2b_contracts	impl<T> core::borrow::Borrow<T> for d2b_contracts::v3::virtiofs_export::VirtiofsExportSpec where T: ?core::marker::Sized
+d2b_contracts	impl<T> core::borrow::Borrow<T> for d2b_contracts::v3::virtiofs_export::VirtiofsExportStatus where T: ?core::marker::Sized
+d2b_contracts	impl<T> core::borrow::Borrow<T> for d2b_contracts::v3::virtiofs_export::VirtiofsExportStatusResource where T: ?core::marker::Sized
 d2b_contracts	impl<T> core::borrow::Borrow<T> for d2b_contracts::v3::volume::AclGrant where T: ?core::marker::Sized
 d2b_contracts	impl<T> core::borrow::Borrow<T> for d2b_contracts::v3::volume::AclPrincipal where T: ?core::marker::Sized
 d2b_contracts	impl<T> core::borrow::Borrow<T> for d2b_contracts::v3::volume::LayoutEntry where T: ?core::marker::Sized
@@ -2153,6 +2238,7 @@ d2b_contracts	impl<T> core::borrow::BorrowMut<T> for d2b_contracts::WireProtocol
 d2b_contracts	impl<T> core::borrow::BorrowMut<T> for d2b_contracts::broker_wire::BrokerRequest where T: ?core::marker::Sized
 d2b_contracts	impl<T> core::borrow::BorrowMut<T> for d2b_contracts::broker_wire::BrokerRequestEnvelope where T: ?core::marker::Sized
 d2b_contracts	impl<T> core::borrow::BorrowMut<T> for d2b_contracts::broker_wire::DeletePersistentTapRequest where T: ?core::marker::Sized
+d2b_contracts	impl<T> core::borrow::BorrowMut<T> for d2b_contracts::broker_wire::OpenHidrawSecurityKeyRequest where T: ?core::marker::Sized
 d2b_contracts	impl<T> core::borrow::BorrowMut<T> for d2b_contracts::generation_bundle::BundleMetadata where T: ?core::marker::Sized
 d2b_contracts	impl<T> core::borrow::BorrowMut<T> for d2b_contracts::generation_bundle::BundleResource where T: ?core::marker::Sized
 d2b_contracts	impl<T> core::borrow::BorrowMut<T> for d2b_contracts::generation_bundle::ZoneBundle where T: ?core::marker::Sized
@@ -2221,6 +2307,9 @@ d2b_contracts	impl<T> core::borrow::BorrowMut<T> for d2b_contracts::v3::role::Ro
 d2b_contracts	impl<T> core::borrow::BorrowMut<T> for d2b_contracts::v3::role::RoleSpec where T: ?core::marker::Sized
 d2b_contracts	impl<T> core::borrow::BorrowMut<T> for d2b_contracts::v3::role_binding::RoleBindingSpec where T: ?core::marker::Sized
 d2b_contracts	impl<T> core::borrow::BorrowMut<T> for d2b_contracts::v3::role_binding::ScopeNarrowing where T: ?core::marker::Sized
+d2b_contracts	impl<T> core::borrow::BorrowMut<T> for d2b_contracts::v3::virtiofs_export::VirtiofsExportSpec where T: ?core::marker::Sized
+d2b_contracts	impl<T> core::borrow::BorrowMut<T> for d2b_contracts::v3::virtiofs_export::VirtiofsExportStatus where T: ?core::marker::Sized
+d2b_contracts	impl<T> core::borrow::BorrowMut<T> for d2b_contracts::v3::virtiofs_export::VirtiofsExportStatusResource where T: ?core::marker::Sized
 d2b_contracts	impl<T> core::borrow::BorrowMut<T> for d2b_contracts::v3::volume::AclGrant where T: ?core::marker::Sized
 d2b_contracts	impl<T> core::borrow::BorrowMut<T> for d2b_contracts::v3::volume::AclPrincipal where T: ?core::marker::Sized
 d2b_contracts	impl<T> core::borrow::BorrowMut<T> for d2b_contracts::v3::volume::LayoutEntry where T: ?core::marker::Sized
@@ -2233,6 +2322,7 @@ d2b_contracts	impl<T> core::clone::CloneToUninit for d2b_contracts::WireProtocol
 d2b_contracts	impl<T> core::clone::CloneToUninit for d2b_contracts::broker_wire::BrokerRequest where T: core::clone::Clone
 d2b_contracts	impl<T> core::clone::CloneToUninit for d2b_contracts::broker_wire::BrokerRequestEnvelope where T: core::clone::Clone
 d2b_contracts	impl<T> core::clone::CloneToUninit for d2b_contracts::broker_wire::DeletePersistentTapRequest where T: core::clone::Clone
+d2b_contracts	impl<T> core::clone::CloneToUninit for d2b_contracts::broker_wire::OpenHidrawSecurityKeyRequest where T: core::clone::Clone
 d2b_contracts	impl<T> core::clone::CloneToUninit for d2b_contracts::generation_bundle::BundleMetadata where T: core::clone::Clone
 d2b_contracts	impl<T> core::clone::CloneToUninit for d2b_contracts::generation_bundle::BundleResource where T: core::clone::Clone
 d2b_contracts	impl<T> core::clone::CloneToUninit for d2b_contracts::generation_bundle::ZoneBundle where T: core::clone::Clone
@@ -2297,6 +2387,9 @@ d2b_contracts	impl<T> core::clone::CloneToUninit for d2b_contracts::v3::role::Ro
 d2b_contracts	impl<T> core::clone::CloneToUninit for d2b_contracts::v3::role::RoleSpec where T: core::clone::Clone
 d2b_contracts	impl<T> core::clone::CloneToUninit for d2b_contracts::v3::role_binding::RoleBindingSpec where T: core::clone::Clone
 d2b_contracts	impl<T> core::clone::CloneToUninit for d2b_contracts::v3::role_binding::ScopeNarrowing where T: core::clone::Clone
+d2b_contracts	impl<T> core::clone::CloneToUninit for d2b_contracts::v3::virtiofs_export::VirtiofsExportSpec where T: core::clone::Clone
+d2b_contracts	impl<T> core::clone::CloneToUninit for d2b_contracts::v3::virtiofs_export::VirtiofsExportStatus where T: core::clone::Clone
+d2b_contracts	impl<T> core::clone::CloneToUninit for d2b_contracts::v3::virtiofs_export::VirtiofsExportStatusResource where T: core::clone::Clone
 d2b_contracts	impl<T> core::clone::CloneToUninit for d2b_contracts::v3::volume::AclGrant where T: core::clone::Clone
 d2b_contracts	impl<T> core::clone::CloneToUninit for d2b_contracts::v3::volume::AclPrincipal where T: core::clone::Clone
 d2b_contracts	impl<T> core::clone::CloneToUninit for d2b_contracts::v3::volume::LayoutEntry where T: core::clone::Clone
@@ -2309,6 +2402,7 @@ d2b_contracts	impl<T> core::convert::From<T> for d2b_contracts::WireProtocolSche
 d2b_contracts	impl<T> core::convert::From<T> for d2b_contracts::broker_wire::BrokerRequest
 d2b_contracts	impl<T> core::convert::From<T> for d2b_contracts::broker_wire::BrokerRequestEnvelope
 d2b_contracts	impl<T> core::convert::From<T> for d2b_contracts::broker_wire::DeletePersistentTapRequest
+d2b_contracts	impl<T> core::convert::From<T> for d2b_contracts::broker_wire::OpenHidrawSecurityKeyRequest
 d2b_contracts	impl<T> core::convert::From<T> for d2b_contracts::generation_bundle::BundleMetadata
 d2b_contracts	impl<T> core::convert::From<T> for d2b_contracts::generation_bundle::BundleResource
 d2b_contracts	impl<T> core::convert::From<T> for d2b_contracts::generation_bundle::ZoneBundle
@@ -2377,6 +2471,9 @@ d2b_contracts	impl<T> core::convert::From<T> for d2b_contracts::v3::role::RoleRu
 d2b_contracts	impl<T> core::convert::From<T> for d2b_contracts::v3::role::RoleSpec
 d2b_contracts	impl<T> core::convert::From<T> for d2b_contracts::v3::role_binding::RoleBindingSpec
 d2b_contracts	impl<T> core::convert::From<T> for d2b_contracts::v3::role_binding::ScopeNarrowing
+d2b_contracts	impl<T> core::convert::From<T> for d2b_contracts::v3::virtiofs_export::VirtiofsExportSpec
+d2b_contracts	impl<T> core::convert::From<T> for d2b_contracts::v3::virtiofs_export::VirtiofsExportStatus
+d2b_contracts	impl<T> core::convert::From<T> for d2b_contracts::v3::virtiofs_export::VirtiofsExportStatusResource
 d2b_contracts	impl<T> core::convert::From<T> for d2b_contracts::v3::volume::AclGrant
 d2b_contracts	impl<T> core::convert::From<T> for d2b_contracts::v3::volume::AclPrincipal
 d2b_contracts	impl<T> core::convert::From<T> for d2b_contracts::v3::volume::LayoutEntry
@@ -2389,6 +2486,7 @@ d2b_contracts	impl<T> dyn_clone::DynClone for d2b_contracts::WireProtocolSchema 
 d2b_contracts	impl<T> dyn_clone::DynClone for d2b_contracts::broker_wire::BrokerRequest where T: core::clone::Clone
 d2b_contracts	impl<T> dyn_clone::DynClone for d2b_contracts::broker_wire::BrokerRequestEnvelope where T: core::clone::Clone
 d2b_contracts	impl<T> dyn_clone::DynClone for d2b_contracts::broker_wire::DeletePersistentTapRequest where T: core::clone::Clone
+d2b_contracts	impl<T> dyn_clone::DynClone for d2b_contracts::broker_wire::OpenHidrawSecurityKeyRequest where T: core::clone::Clone
 d2b_contracts	impl<T> dyn_clone::DynClone for d2b_contracts::generation_bundle::BundleMetadata where T: core::clone::Clone
 d2b_contracts	impl<T> dyn_clone::DynClone for d2b_contracts::generation_bundle::BundleResource where T: core::clone::Clone
 d2b_contracts	impl<T> dyn_clone::DynClone for d2b_contracts::generation_bundle::ZoneBundle where T: core::clone::Clone
@@ -2453,6 +2551,9 @@ d2b_contracts	impl<T> dyn_clone::DynClone for d2b_contracts::v3::role::RoleRule 
 d2b_contracts	impl<T> dyn_clone::DynClone for d2b_contracts::v3::role::RoleSpec where T: core::clone::Clone
 d2b_contracts	impl<T> dyn_clone::DynClone for d2b_contracts::v3::role_binding::RoleBindingSpec where T: core::clone::Clone
 d2b_contracts	impl<T> dyn_clone::DynClone for d2b_contracts::v3::role_binding::ScopeNarrowing where T: core::clone::Clone
+d2b_contracts	impl<T> dyn_clone::DynClone for d2b_contracts::v3::virtiofs_export::VirtiofsExportSpec where T: core::clone::Clone
+d2b_contracts	impl<T> dyn_clone::DynClone for d2b_contracts::v3::virtiofs_export::VirtiofsExportStatus where T: core::clone::Clone
+d2b_contracts	impl<T> dyn_clone::DynClone for d2b_contracts::v3::virtiofs_export::VirtiofsExportStatusResource where T: core::clone::Clone
 d2b_contracts	impl<T> dyn_clone::DynClone for d2b_contracts::v3::volume::AclGrant where T: core::clone::Clone
 d2b_contracts	impl<T> dyn_clone::DynClone for d2b_contracts::v3::volume::AclPrincipal where T: core::clone::Clone
 d2b_contracts	impl<T> dyn_clone::DynClone for d2b_contracts::v3::volume::LayoutEntry where T: core::clone::Clone
@@ -2464,6 +2565,7 @@ d2b_contracts	impl<T> dyn_clone::DynClone for d2b_contracts::v3::zone_link::Zone
 d2b_contracts	impl<T> serde_core::de::DeserializeOwned for d2b_contracts::broker_wire::BrokerRequest where T: for<'de> serde_core::de::Deserialize<'de>
 d2b_contracts	impl<T> serde_core::de::DeserializeOwned for d2b_contracts::broker_wire::BrokerRequestEnvelope where T: for<'de> serde_core::de::Deserialize<'de>
 d2b_contracts	impl<T> serde_core::de::DeserializeOwned for d2b_contracts::broker_wire::DeletePersistentTapRequest where T: for<'de> serde_core::de::Deserialize<'de>
+d2b_contracts	impl<T> serde_core::de::DeserializeOwned for d2b_contracts::broker_wire::OpenHidrawSecurityKeyRequest where T: for<'de> serde_core::de::Deserialize<'de>
 d2b_contracts	impl<T> serde_core::de::DeserializeOwned for d2b_contracts::generation_bundle::BundleMetadata where T: for<'de> serde_core::de::Deserialize<'de>
 d2b_contracts	impl<T> serde_core::de::DeserializeOwned for d2b_contracts::generation_bundle::BundleResource where T: for<'de> serde_core::de::Deserialize<'de>
 d2b_contracts	impl<T> serde_core::de::DeserializeOwned for d2b_contracts::generation_bundle::ZoneBundle where T: for<'de> serde_core::de::Deserialize<'de>
@@ -2513,6 +2615,9 @@ d2b_contracts	impl<T> serde_core::de::DeserializeOwned for d2b_contracts::v3::ro
 d2b_contracts	impl<T> serde_core::de::DeserializeOwned for d2b_contracts::v3::role::RoleSpec where T: for<'de> serde_core::de::Deserialize<'de>
 d2b_contracts	impl<T> serde_core::de::DeserializeOwned for d2b_contracts::v3::role_binding::RoleBindingSpec where T: for<'de> serde_core::de::Deserialize<'de>
 d2b_contracts	impl<T> serde_core::de::DeserializeOwned for d2b_contracts::v3::role_binding::ScopeNarrowing where T: for<'de> serde_core::de::Deserialize<'de>
+d2b_contracts	impl<T> serde_core::de::DeserializeOwned for d2b_contracts::v3::virtiofs_export::VirtiofsExportSpec where T: for<'de> serde_core::de::Deserialize<'de>
+d2b_contracts	impl<T> serde_core::de::DeserializeOwned for d2b_contracts::v3::virtiofs_export::VirtiofsExportStatus where T: for<'de> serde_core::de::Deserialize<'de>
+d2b_contracts	impl<T> serde_core::de::DeserializeOwned for d2b_contracts::v3::virtiofs_export::VirtiofsExportStatusResource where T: for<'de> serde_core::de::Deserialize<'de>
 d2b_contracts	impl<T> serde_core::de::DeserializeOwned for d2b_contracts::v3::volume::AclGrant where T: for<'de> serde_core::de::Deserialize<'de>
 d2b_contracts	impl<T> serde_core::de::DeserializeOwned for d2b_contracts::v3::volume::AclPrincipal where T: for<'de> serde_core::de::Deserialize<'de>
 d2b_contracts	impl<T> serde_core::de::DeserializeOwned for d2b_contracts::v3::volume::LayoutEntry where T: for<'de> serde_core::de::Deserialize<'de>
@@ -2525,6 +2630,7 @@ d2b_contracts	impl<T> typenum::type_operators::Same for d2b_contracts::WireProto
 d2b_contracts	impl<T> typenum::type_operators::Same for d2b_contracts::broker_wire::BrokerRequest
 d2b_contracts	impl<T> typenum::type_operators::Same for d2b_contracts::broker_wire::BrokerRequestEnvelope
 d2b_contracts	impl<T> typenum::type_operators::Same for d2b_contracts::broker_wire::DeletePersistentTapRequest
+d2b_contracts	impl<T> typenum::type_operators::Same for d2b_contracts::broker_wire::OpenHidrawSecurityKeyRequest
 d2b_contracts	impl<T> typenum::type_operators::Same for d2b_contracts::generation_bundle::BundleMetadata
 d2b_contracts	impl<T> typenum::type_operators::Same for d2b_contracts::generation_bundle::BundleResource
 d2b_contracts	impl<T> typenum::type_operators::Same for d2b_contracts::generation_bundle::ZoneBundle
@@ -2593,6 +2699,9 @@ d2b_contracts	impl<T> typenum::type_operators::Same for d2b_contracts::v3::role:
 d2b_contracts	impl<T> typenum::type_operators::Same for d2b_contracts::v3::role::RoleSpec
 d2b_contracts	impl<T> typenum::type_operators::Same for d2b_contracts::v3::role_binding::RoleBindingSpec
 d2b_contracts	impl<T> typenum::type_operators::Same for d2b_contracts::v3::role_binding::ScopeNarrowing
+d2b_contracts	impl<T> typenum::type_operators::Same for d2b_contracts::v3::virtiofs_export::VirtiofsExportSpec
+d2b_contracts	impl<T> typenum::type_operators::Same for d2b_contracts::v3::virtiofs_export::VirtiofsExportStatus
+d2b_contracts	impl<T> typenum::type_operators::Same for d2b_contracts::v3::virtiofs_export::VirtiofsExportStatusResource
 d2b_contracts	impl<T> typenum::type_operators::Same for d2b_contracts::v3::volume::AclGrant
 d2b_contracts	impl<T> typenum::type_operators::Same for d2b_contracts::v3::volume::AclPrincipal
 d2b_contracts	impl<T> typenum::type_operators::Same for d2b_contracts::v3::volume::LayoutEntry
@@ -2662,6 +2771,9 @@ d2b_contracts	pub const fn d2b_contracts::v3::resource_import::ResourceImportSta
 d2b_contracts	pub const fn d2b_contracts::v3::resource_status::ProviderStatusExtension::provider_ref(&self) -> &d2b_contracts::v3::resource_ref::ResourceRef
 d2b_contracts	pub const fn d2b_contracts::v3::resource_status::ResourceStatus::update(&self) -> &d2b_contracts::v3::resource_status::ResourceUpdateStatus
 d2b_contracts	pub const fn d2b_contracts::v3::role_binding::RoleBindingSpec::role_ref(&self) -> &d2b_contracts::v3::resource_ref::ResourceRef
+d2b_contracts	pub const fn d2b_contracts::v3::virtiofs_export::VirtiofsExportSpec::execution_ref(&self) -> &d2b_contracts::v3::resource_ref::ResourceRef
+d2b_contracts	pub const fn d2b_contracts::v3::virtiofs_export::VirtiofsExportSpec::provider_ref(&self) -> &d2b_contracts::v3::resource_ref::ResourceRef
+d2b_contracts	pub const fn d2b_contracts::v3::virtiofs_export::VirtiofsExportSpec::volume_ref(&self) -> &d2b_contracts::v3::resource_ref::ResourceRef
 d2b_contracts	pub const fn d2b_contracts::v3::volume::AclGrant::principal(&self) -> &d2b_contracts::v3::volume::AclPrincipal
 d2b_contracts	pub const fn d2b_contracts::v3::volume::AclPrincipal::reference(&self) -> &d2b_contracts::v3::resource_ref::ResourceRef
 d2b_contracts	pub const fn d2b_contracts::v3::volume::LayoutEntry::group_ref(&self) -> &d2b_contracts::v3::resource_ref::ResourceRef
@@ -2768,6 +2880,11 @@ d2b_contracts	pub d2b_contracts::broker_wire::DeletePersistentTapRequest::attach
 d2b_contracts	pub d2b_contracts::broker_wire::DeletePersistentTapRequest::expected_attachment_generation: d2b_contracts::v3::identity::ResourceGeneration
 d2b_contracts	pub d2b_contracts::broker_wire::DeletePersistentTapRequest::expected_network_generation: d2b_contracts::v3::identity::ResourceGeneration
 d2b_contracts	pub d2b_contracts::broker_wire::DeletePersistentTapRequest::tracing_span_id: core::option::Option<d2b_contracts::types::TracingSpanId>
+d2b_contracts	pub d2b_contracts::broker_wire::OpenHidrawSecurityKeyRequest::authority_key: core::option::Option<alloc::string::String>
+d2b_contracts	pub d2b_contracts::broker_wire::OpenHidrawSecurityKeyRequest::device_ref: core::option::Option<d2b_contracts::v3::resource_ref::ResourceRef>
+d2b_contracts	pub d2b_contracts::broker_wire::OpenHidrawSecurityKeyRequest::selector_id: alloc::string::String
+d2b_contracts	pub d2b_contracts::broker_wire::OpenHidrawSecurityKeyRequest::tracing_span_id: core::option::Option<d2b_contracts::types::TracingSpanId>
+d2b_contracts	pub d2b_contracts::broker_wire::OpenHidrawSecurityKeyRequest::vm_id: d2b_contracts::types::VmId
 d2b_contracts	pub d2b_contracts::v3::ProviderExtensionRegistration::provider_ref: d2b_contracts::v3::resource_ref::ResourceRef
 d2b_contracts	pub d2b_contracts::v3::ProviderExtensionRegistration::spec_schema_id: d2b_contracts::v3::resource_schema::ExtensionSchemaId
 d2b_contracts	pub d2b_contracts::v3::ProviderExtensionRegistration::spec_schema_version: d2b_contracts::v3::resource_schema::SchemaVersion
@@ -2781,6 +2898,12 @@ d2b_contracts	pub d2b_contracts::v3::ResourceBundle::integrity: d2b_contracts::v
 d2b_contracts	pub d2b_contracts::v3::ResourceBundle::resources: alloc::vec::Vec<d2b_contracts::v3::resource_bundle::BundleResource>
 d2b_contracts	pub d2b_contracts::v3::ResourceBundle::schema_version: u32
 d2b_contracts	pub d2b_contracts::v3::ResourceBundle::zone: d2b_contracts::v3::identity::ZoneId
+d2b_contracts	pub d2b_contracts::v3::VirtiofsExportStatus::conditions: alloc::vec::Vec<d2b_contracts::v3::resource_status::ResourceCondition>
+d2b_contracts	pub d2b_contracts::v3::VirtiofsExportStatus::phase: d2b_contracts::v3::resource_status::ResourcePhase
+d2b_contracts	pub d2b_contracts::v3::VirtiofsExportStatus::resource: d2b_contracts::v3::virtiofs_export::VirtiofsExportStatusResource
+d2b_contracts	pub d2b_contracts::v3::VirtiofsExportStatusResource::export_ready: bool
+d2b_contracts	pub d2b_contracts::v3::VirtiofsExportStatusResource::guest_mount_ready: bool
+d2b_contracts	pub d2b_contracts::v3::VirtiofsExportStatusResource::worker_process_ref: core::option::Option<d2b_contracts::v3::resource_ref::ResourceRef>
 d2b_contracts	pub d2b_contracts::v3::component_session::BootstrapIdentityBinding::purpose: d2b_contracts::v3::identity::SessionPurpose
 d2b_contracts	pub d2b_contracts::v3::component_session::BootstrapIdentityBinding::subject_ref: d2b_contracts::v3::resource_ref::ResourceRef
 d2b_contracts	pub d2b_contracts::v3::component_session::BootstrapIdentityBinding::subject_uid: d2b_contracts::v3::identity::ResourceUid
@@ -2816,6 +2939,12 @@ d2b_contracts	pub d2b_contracts::v3::resource_schema::ProviderExtensionRegistrat
 d2b_contracts	pub d2b_contracts::v3::resource_schema::ProviderExtensionRegistration::status_details: d2b_contracts::v3::resource_schema::ObjectFieldSchema
 d2b_contracts	pub d2b_contracts::v3::resource_schema::ProviderExtensionRegistration::status_schema_id: d2b_contracts::v3::resource_schema::ExtensionSchemaId
 d2b_contracts	pub d2b_contracts::v3::resource_schema::ProviderExtensionRegistration::status_schema_version: d2b_contracts::v3::resource_schema::SchemaVersion
+d2b_contracts	pub d2b_contracts::v3::virtiofs_export::VirtiofsExportStatus::conditions: alloc::vec::Vec<d2b_contracts::v3::resource_status::ResourceCondition>
+d2b_contracts	pub d2b_contracts::v3::virtiofs_export::VirtiofsExportStatus::phase: d2b_contracts::v3::resource_status::ResourcePhase
+d2b_contracts	pub d2b_contracts::v3::virtiofs_export::VirtiofsExportStatus::resource: d2b_contracts::v3::virtiofs_export::VirtiofsExportStatusResource
+d2b_contracts	pub d2b_contracts::v3::virtiofs_export::VirtiofsExportStatusResource::export_ready: bool
+d2b_contracts	pub d2b_contracts::v3::virtiofs_export::VirtiofsExportStatusResource::guest_mount_ready: bool
+d2b_contracts	pub d2b_contracts::v3::virtiofs_export::VirtiofsExportStatusResource::worker_process_ref: core::option::Option<d2b_contracts::v3::resource_ref::ResourceRef>
 d2b_contracts	pub enum d2b_contracts::broker_wire::BrokerRequest
 d2b_contracts	pub enum d2b_contracts::v3::credential::CredentialResponse
 d2b_contracts	pub enum d2b_contracts::v3::credential::service::CredentialResponse
@@ -2827,6 +2956,8 @@ d2b_contracts	pub fn d2b_contracts::broker_wire::BrokerRequestEnvelope::clone(&s
 d2b_contracts	pub fn d2b_contracts::broker_wire::BrokerRequestEnvelope::eq(&self, &d2b_contracts::broker_wire::BrokerRequestEnvelope) -> bool
 d2b_contracts	pub fn d2b_contracts::broker_wire::DeletePersistentTapRequest::clone(&self) -> d2b_contracts::broker_wire::DeletePersistentTapRequest
 d2b_contracts	pub fn d2b_contracts::broker_wire::DeletePersistentTapRequest::eq(&self, &d2b_contracts::broker_wire::DeletePersistentTapRequest) -> bool
+d2b_contracts	pub fn d2b_contracts::broker_wire::OpenHidrawSecurityKeyRequest::clone(&self) -> d2b_contracts::broker_wire::OpenHidrawSecurityKeyRequest
+d2b_contracts	pub fn d2b_contracts::broker_wire::OpenHidrawSecurityKeyRequest::eq(&self, &d2b_contracts::broker_wire::OpenHidrawSecurityKeyRequest) -> bool
 d2b_contracts	pub fn d2b_contracts::generation_bundle::BundleMetadata::clone(&self) -> d2b_contracts::generation_bundle::BundleMetadata
 d2b_contracts	pub fn d2b_contracts::generation_bundle::BundleMetadata::eq(&self, &d2b_contracts::generation_bundle::BundleMetadata) -> bool
 d2b_contracts	pub fn d2b_contracts::generation_bundle::BundleMetadata::new(d2b_contracts::v3::identity::ResourceName, d2b_contracts::v3::identity::ZoneId, core::option::Option<d2b_contracts::v3::resource_ref::ResourceRef>, alloc::collections::btree::map::BTreeMap<alloc::string::String, alloc::string::String>, alloc::collections::btree::map::BTreeMap<alloc::string::String, alloc::string::String>) -> core::result::Result<Self, d2b_contracts::generation_bundle::ZoneBundleError>
@@ -3097,6 +3228,13 @@ d2b_contracts	pub fn d2b_contracts::v3::semantic_services::SemanticProjectionBin
 d2b_contracts	pub fn d2b_contracts::v3::semantic_services::SemanticTypeContract::minimal_base_spec(&self, d2b_contracts::v3::resource_ref::ResourceRef, d2b_contracts::v3::resource_schema::CanonicalJsonObject) -> core::result::Result<d2b_contracts::v3::resource::ResourceSpec, d2b_contracts::v3::semantic_services::SemanticContractError>
 d2b_contracts	pub fn d2b_contracts::v3::semantic_services::SemanticTypeContract::schema_contract(&self, impl core::iter::traits::collect::IntoIterator<Item = d2b_contracts::v3::resource_schema::ProviderExtensionRegistration>) -> core::result::Result<d2b_contracts::v3::resource_schema::ResourceSchemaContract, d2b_contracts::v3::semantic_services::SemanticContractError>
 d2b_contracts	pub fn d2b_contracts::v3::validate_self_resource(&d2b_contracts::v3::identity::ZoneId, &d2b_contracts::v3::identity::ResourceUid, &d2b_contracts::v3::identity::ResourceName, &d2b_contracts::v3::identity::ZoneId, &d2b_contracts::v3::identity::ResourceUid, core::option::Option<&d2b_contracts::v3::resource_ref::ResourceRef>, &[d2b_contracts::v3::resource::FinalizerId], usize) -> core::result::Result<(), d2b_contracts::v3::zone::ZoneContractError>
+d2b_contracts	pub fn d2b_contracts::v3::virtiofs_export::VirtiofsExportSpec::clone(&self) -> d2b_contracts::v3::virtiofs_export::VirtiofsExportSpec
+d2b_contracts	pub fn d2b_contracts::v3::virtiofs_export::VirtiofsExportSpec::eq(&self, &d2b_contracts::v3::virtiofs_export::VirtiofsExportSpec) -> bool
+d2b_contracts	pub fn d2b_contracts::v3::virtiofs_export::VirtiofsExportSpec::new(d2b_contracts::v3::resource_ref::ResourceRef, d2b_contracts::v3::resource_ref::ResourceRef, d2b_contracts::v3::resource_ref::ResourceRef, impl core::convert::Into<alloc::string::String>, d2b_contracts::v3::volume::AttachmentAccess, impl core::convert::Into<alloc::string::String>) -> core::result::Result<Self, d2b_contracts::v3::execution_policy::PrimitiveSpecError>
+d2b_contracts	pub fn d2b_contracts::v3::virtiofs_export::VirtiofsExportStatus::clone(&self) -> d2b_contracts::v3::virtiofs_export::VirtiofsExportStatus
+d2b_contracts	pub fn d2b_contracts::v3::virtiofs_export::VirtiofsExportStatus::eq(&self, &d2b_contracts::v3::virtiofs_export::VirtiofsExportStatus) -> bool
+d2b_contracts	pub fn d2b_contracts::v3::virtiofs_export::VirtiofsExportStatusResource::clone(&self) -> d2b_contracts::v3::virtiofs_export::VirtiofsExportStatusResource
+d2b_contracts	pub fn d2b_contracts::v3::virtiofs_export::VirtiofsExportStatusResource::eq(&self, &d2b_contracts::v3::virtiofs_export::VirtiofsExportStatusResource) -> bool
 d2b_contracts	pub fn d2b_contracts::v3::volume::AclGrant::clone(&self) -> d2b_contracts::v3::volume::AclGrant
 d2b_contracts	pub fn d2b_contracts::v3::volume::AclGrant::eq(&self, &d2b_contracts::v3::volume::AclGrant) -> bool
 d2b_contracts	pub fn d2b_contracts::v3::volume::AclGrant::new(d2b_contracts::v3::volume::AclPrincipal, impl core::convert::Into<alloc::string::String>) -> core::result::Result<Self, d2b_contracts::v3::execution_policy::PrimitiveSpecError>
@@ -3132,6 +3270,7 @@ d2b_contracts	pub struct d2b_contracts::WireProtocolSchema
 d2b_contracts	pub struct d2b_contracts::ZoneBundle
 d2b_contracts	pub struct d2b_contracts::broker_wire::BrokerRequestEnvelope
 d2b_contracts	pub struct d2b_contracts::broker_wire::DeletePersistentTapRequest
+d2b_contracts	pub struct d2b_contracts::broker_wire::OpenHidrawSecurityKeyRequest
 d2b_contracts	pub struct d2b_contracts::generation_bundle::BundleMetadata
 d2b_contracts	pub struct d2b_contracts::generation_bundle::BundleResource
 d2b_contracts	pub struct d2b_contracts::generation_bundle::ZoneBundle
@@ -3174,6 +3313,9 @@ d2b_contracts	pub struct d2b_contracts::v3::RoleBindingSpec
 d2b_contracts	pub struct d2b_contracts::v3::RoleRule
 d2b_contracts	pub struct d2b_contracts::v3::RoleSpec
 d2b_contracts	pub struct d2b_contracts::v3::ScopeNarrowing
+d2b_contracts	pub struct d2b_contracts::v3::VirtiofsExportSpec
+d2b_contracts	pub struct d2b_contracts::v3::VirtiofsExportStatus
+d2b_contracts	pub struct d2b_contracts::v3::VirtiofsExportStatusResource
 d2b_contracts	pub struct d2b_contracts::v3::ZoneLinkSpec
 d2b_contracts	pub struct d2b_contracts::v3::ZoneLinkStatusResource
 d2b_contracts	pub struct d2b_contracts::v3::component_session::BootstrapIdentityBinding
@@ -3245,6 +3387,9 @@ d2b_contracts	pub struct d2b_contracts::v3::role::RoleRule
 d2b_contracts	pub struct d2b_contracts::v3::role::RoleSpec
 d2b_contracts	pub struct d2b_contracts::v3::role_binding::RoleBindingSpec
 d2b_contracts	pub struct d2b_contracts::v3::role_binding::ScopeNarrowing
+d2b_contracts	pub struct d2b_contracts::v3::virtiofs_export::VirtiofsExportSpec
+d2b_contracts	pub struct d2b_contracts::v3::virtiofs_export::VirtiofsExportStatus
+d2b_contracts	pub struct d2b_contracts::v3::virtiofs_export::VirtiofsExportStatusResource
 d2b_contracts	pub struct d2b_contracts::v3::volume::AclGrant
 d2b_contracts	pub struct d2b_contracts::v3::volume::AclPrincipal
 d2b_contracts	pub struct d2b_contracts::v3::volume::LayoutEntry
@@ -7874,115 +8019,266 @@ d2b_provider_device_gpu	pub fn d2b_provider_device_gpu::gpu_process_name(&d2b_co
 d2b_provider_device_gpu	pub struct d2b_provider_device_gpu::GpuController
 d2b_provider_device_gpu	pub trait d2b_provider_device_gpu::GpuEffectPort
 d2b_provider_device_security_key	impl core::clone::Clone for d2b_provider_device_security_key::FrontendProcessDeclaration
-d2b_provider_device_security_key	impl core::clone::Clone for d2b_provider_device_security_key::SecurityKeyOpenIntent
+d2b_provider_device_security_key	impl core::clone::Clone for d2b_provider_device_security_key::PhysicalUsbBackingClaim
+d2b_provider_device_security_key	impl core::clone::Clone for d2b_provider_device_security_key::RelayProcessDeclaration
 d2b_provider_device_security_key	impl core::cmp::Eq for d2b_provider_device_security_key::FrontendProcessDeclaration
+d2b_provider_device_security_key	impl core::cmp::Eq for d2b_provider_device_security_key::PhysicalUsbBackingClaim
+d2b_provider_device_security_key	impl core::cmp::Eq for d2b_provider_device_security_key::RelayProcessDeclaration
 d2b_provider_device_security_key	impl core::cmp::Eq for d2b_provider_device_security_key::SecurityKeyOpenIntent
 d2b_provider_device_security_key	impl core::cmp::PartialEq for d2b_provider_device_security_key::FrontendProcessDeclaration
+d2b_provider_device_security_key	impl core::cmp::PartialEq for d2b_provider_device_security_key::PhysicalUsbBackingClaim
+d2b_provider_device_security_key	impl core::cmp::PartialEq for d2b_provider_device_security_key::RelayProcessDeclaration
 d2b_provider_device_security_key	impl core::cmp::PartialEq for d2b_provider_device_security_key::SecurityKeyOpenIntent
 d2b_provider_device_security_key	impl core::fmt::Debug for d2b_provider_device_security_key::FrontendProcessDeclaration
+d2b_provider_device_security_key	impl core::fmt::Debug for d2b_provider_device_security_key::PhysicalUsbBackingClaim
+d2b_provider_device_security_key	impl core::fmt::Debug for d2b_provider_device_security_key::RelayProcessDeclaration
+d2b_provider_device_security_key	impl core::fmt::Debug for d2b_provider_device_security_key::SecurityKeyAdmission
 d2b_provider_device_security_key	impl core::fmt::Debug for d2b_provider_device_security_key::SecurityKeyController
 d2b_provider_device_security_key	impl core::fmt::Debug for d2b_provider_device_security_key::SecurityKeyLease
 d2b_provider_device_security_key	impl core::fmt::Debug for d2b_provider_device_security_key::SecurityKeyOpenIntent
 d2b_provider_device_security_key	impl core::marker::Freeze for d2b_provider_device_security_key::FrontendProcessDeclaration
+d2b_provider_device_security_key	impl core::marker::Freeze for d2b_provider_device_security_key::PhysicalUsbBackingClaim
+d2b_provider_device_security_key	impl core::marker::Freeze for d2b_provider_device_security_key::RelayProcessDeclaration
+d2b_provider_device_security_key	impl core::marker::Freeze for d2b_provider_device_security_key::SecurityKeyAdmission
 d2b_provider_device_security_key	impl core::marker::Freeze for d2b_provider_device_security_key::SecurityKeyController
 d2b_provider_device_security_key	impl core::marker::Freeze for d2b_provider_device_security_key::SecurityKeyLease
 d2b_provider_device_security_key	impl core::marker::Freeze for d2b_provider_device_security_key::SecurityKeyOpenIntent
 d2b_provider_device_security_key	impl core::marker::Send for d2b_provider_device_security_key::FrontendProcessDeclaration
+d2b_provider_device_security_key	impl core::marker::Send for d2b_provider_device_security_key::PhysicalUsbBackingClaim
+d2b_provider_device_security_key	impl core::marker::Send for d2b_provider_device_security_key::RelayProcessDeclaration
+d2b_provider_device_security_key	impl core::marker::Send for d2b_provider_device_security_key::SecurityKeyAdmission
 d2b_provider_device_security_key	impl core::marker::Send for d2b_provider_device_security_key::SecurityKeyController
 d2b_provider_device_security_key	impl core::marker::Send for d2b_provider_device_security_key::SecurityKeyLease
 d2b_provider_device_security_key	impl core::marker::Send for d2b_provider_device_security_key::SecurityKeyOpenIntent
 d2b_provider_device_security_key	impl core::marker::StructuralPartialEq for d2b_provider_device_security_key::FrontendProcessDeclaration
+d2b_provider_device_security_key	impl core::marker::StructuralPartialEq for d2b_provider_device_security_key::PhysicalUsbBackingClaim
+d2b_provider_device_security_key	impl core::marker::StructuralPartialEq for d2b_provider_device_security_key::RelayProcessDeclaration
 d2b_provider_device_security_key	impl core::marker::StructuralPartialEq for d2b_provider_device_security_key::SecurityKeyOpenIntent
 d2b_provider_device_security_key	impl core::marker::Sync for d2b_provider_device_security_key::FrontendProcessDeclaration
+d2b_provider_device_security_key	impl core::marker::Sync for d2b_provider_device_security_key::PhysicalUsbBackingClaim
+d2b_provider_device_security_key	impl core::marker::Sync for d2b_provider_device_security_key::RelayProcessDeclaration
+d2b_provider_device_security_key	impl core::marker::Sync for d2b_provider_device_security_key::SecurityKeyAdmission
 d2b_provider_device_security_key	impl core::marker::Sync for d2b_provider_device_security_key::SecurityKeyController
 d2b_provider_device_security_key	impl core::marker::Sync for d2b_provider_device_security_key::SecurityKeyLease
 d2b_provider_device_security_key	impl core::marker::Sync for d2b_provider_device_security_key::SecurityKeyOpenIntent
 d2b_provider_device_security_key	impl core::marker::Unpin for d2b_provider_device_security_key::FrontendProcessDeclaration
+d2b_provider_device_security_key	impl core::marker::Unpin for d2b_provider_device_security_key::PhysicalUsbBackingClaim
+d2b_provider_device_security_key	impl core::marker::Unpin for d2b_provider_device_security_key::RelayProcessDeclaration
+d2b_provider_device_security_key	impl core::marker::Unpin for d2b_provider_device_security_key::SecurityKeyAdmission
 d2b_provider_device_security_key	impl core::marker::Unpin for d2b_provider_device_security_key::SecurityKeyController
 d2b_provider_device_security_key	impl core::marker::Unpin for d2b_provider_device_security_key::SecurityKeyLease
 d2b_provider_device_security_key	impl core::marker::Unpin for d2b_provider_device_security_key::SecurityKeyOpenIntent
 d2b_provider_device_security_key	impl core::marker::UnsafeUnpin for d2b_provider_device_security_key::FrontendProcessDeclaration
+d2b_provider_device_security_key	impl core::marker::UnsafeUnpin for d2b_provider_device_security_key::PhysicalUsbBackingClaim
+d2b_provider_device_security_key	impl core::marker::UnsafeUnpin for d2b_provider_device_security_key::RelayProcessDeclaration
+d2b_provider_device_security_key	impl core::marker::UnsafeUnpin for d2b_provider_device_security_key::SecurityKeyAdmission
 d2b_provider_device_security_key	impl core::marker::UnsafeUnpin for d2b_provider_device_security_key::SecurityKeyController
 d2b_provider_device_security_key	impl core::marker::UnsafeUnpin for d2b_provider_device_security_key::SecurityKeyLease
 d2b_provider_device_security_key	impl core::marker::UnsafeUnpin for d2b_provider_device_security_key::SecurityKeyOpenIntent
 d2b_provider_device_security_key	impl core::panic::unwind_safe::RefUnwindSafe for d2b_provider_device_security_key::FrontendProcessDeclaration
+d2b_provider_device_security_key	impl core::panic::unwind_safe::RefUnwindSafe for d2b_provider_device_security_key::PhysicalUsbBackingClaim
+d2b_provider_device_security_key	impl core::panic::unwind_safe::RefUnwindSafe for d2b_provider_device_security_key::RelayProcessDeclaration
+d2b_provider_device_security_key	impl core::panic::unwind_safe::RefUnwindSafe for d2b_provider_device_security_key::SecurityKeyAdmission
 d2b_provider_device_security_key	impl core::panic::unwind_safe::RefUnwindSafe for d2b_provider_device_security_key::SecurityKeyController
 d2b_provider_device_security_key	impl core::panic::unwind_safe::RefUnwindSafe for d2b_provider_device_security_key::SecurityKeyLease
 d2b_provider_device_security_key	impl core::panic::unwind_safe::RefUnwindSafe for d2b_provider_device_security_key::SecurityKeyOpenIntent
 d2b_provider_device_security_key	impl core::panic::unwind_safe::UnwindSafe for d2b_provider_device_security_key::FrontendProcessDeclaration
+d2b_provider_device_security_key	impl core::panic::unwind_safe::UnwindSafe for d2b_provider_device_security_key::PhysicalUsbBackingClaim
+d2b_provider_device_security_key	impl core::panic::unwind_safe::UnwindSafe for d2b_provider_device_security_key::RelayProcessDeclaration
+d2b_provider_device_security_key	impl core::panic::unwind_safe::UnwindSafe for d2b_provider_device_security_key::SecurityKeyAdmission
 d2b_provider_device_security_key	impl core::panic::unwind_safe::UnwindSafe for d2b_provider_device_security_key::SecurityKeyController
 d2b_provider_device_security_key	impl core::panic::unwind_safe::UnwindSafe for d2b_provider_device_security_key::SecurityKeyLease
 d2b_provider_device_security_key	impl core::panic::unwind_safe::UnwindSafe for d2b_provider_device_security_key::SecurityKeyOpenIntent
 d2b_provider_device_security_key	impl d2b_provider_device_security_key::FrontendProcessDeclaration
+d2b_provider_device_security_key	impl d2b_provider_device_security_key::PhysicalUsbBackingClaim
+d2b_provider_device_security_key	impl d2b_provider_device_security_key::RelayProcessDeclaration
+d2b_provider_device_security_key	impl d2b_provider_device_security_key::SecurityKeyAdmission
 d2b_provider_device_security_key	impl d2b_provider_device_security_key::SecurityKeyController
 d2b_provider_device_security_key	impl d2b_provider_device_security_key::SecurityKeyLease
 d2b_provider_device_security_key	impl d2b_provider_device_security_key::SecurityKeyOpenIntent
 d2b_provider_device_security_key	impl<T, U> core::convert::Into<U> for d2b_provider_device_security_key::FrontendProcessDeclaration where U: core::convert::From<T>
+d2b_provider_device_security_key	impl<T, U> core::convert::Into<U> for d2b_provider_device_security_key::PhysicalUsbBackingClaim where U: core::convert::From<T>
+d2b_provider_device_security_key	impl<T, U> core::convert::Into<U> for d2b_provider_device_security_key::RelayProcessDeclaration where U: core::convert::From<T>
+d2b_provider_device_security_key	impl<T, U> core::convert::Into<U> for d2b_provider_device_security_key::SecurityKeyAdmission where U: core::convert::From<T>
 d2b_provider_device_security_key	impl<T, U> core::convert::Into<U> for d2b_provider_device_security_key::SecurityKeyController where U: core::convert::From<T>
 d2b_provider_device_security_key	impl<T, U> core::convert::Into<U> for d2b_provider_device_security_key::SecurityKeyLease where U: core::convert::From<T>
 d2b_provider_device_security_key	impl<T, U> core::convert::Into<U> for d2b_provider_device_security_key::SecurityKeyOpenIntent where U: core::convert::From<T>
 d2b_provider_device_security_key	impl<T, U> core::convert::TryFrom<U> for d2b_provider_device_security_key::FrontendProcessDeclaration where U: core::convert::Into<T>
+d2b_provider_device_security_key	impl<T, U> core::convert::TryFrom<U> for d2b_provider_device_security_key::PhysicalUsbBackingClaim where U: core::convert::Into<T>
+d2b_provider_device_security_key	impl<T, U> core::convert::TryFrom<U> for d2b_provider_device_security_key::RelayProcessDeclaration where U: core::convert::Into<T>
+d2b_provider_device_security_key	impl<T, U> core::convert::TryFrom<U> for d2b_provider_device_security_key::SecurityKeyAdmission where U: core::convert::Into<T>
 d2b_provider_device_security_key	impl<T, U> core::convert::TryFrom<U> for d2b_provider_device_security_key::SecurityKeyController where U: core::convert::Into<T>
 d2b_provider_device_security_key	impl<T, U> core::convert::TryFrom<U> for d2b_provider_device_security_key::SecurityKeyLease where U: core::convert::Into<T>
 d2b_provider_device_security_key	impl<T, U> core::convert::TryFrom<U> for d2b_provider_device_security_key::SecurityKeyOpenIntent where U: core::convert::Into<T>
 d2b_provider_device_security_key	impl<T, U> core::convert::TryInto<U> for d2b_provider_device_security_key::FrontendProcessDeclaration where U: core::convert::TryFrom<T>
+d2b_provider_device_security_key	impl<T, U> core::convert::TryInto<U> for d2b_provider_device_security_key::PhysicalUsbBackingClaim where U: core::convert::TryFrom<T>
+d2b_provider_device_security_key	impl<T, U> core::convert::TryInto<U> for d2b_provider_device_security_key::RelayProcessDeclaration where U: core::convert::TryFrom<T>
+d2b_provider_device_security_key	impl<T, U> core::convert::TryInto<U> for d2b_provider_device_security_key::SecurityKeyAdmission where U: core::convert::TryFrom<T>
 d2b_provider_device_security_key	impl<T, U> core::convert::TryInto<U> for d2b_provider_device_security_key::SecurityKeyController where U: core::convert::TryFrom<T>
 d2b_provider_device_security_key	impl<T, U> core::convert::TryInto<U> for d2b_provider_device_security_key::SecurityKeyLease where U: core::convert::TryFrom<T>
 d2b_provider_device_security_key	impl<T, U> core::convert::TryInto<U> for d2b_provider_device_security_key::SecurityKeyOpenIntent where U: core::convert::TryFrom<T>
 d2b_provider_device_security_key	impl<T> alloc::borrow::ToOwned for d2b_provider_device_security_key::FrontendProcessDeclaration where T: core::clone::Clone
-d2b_provider_device_security_key	impl<T> alloc::borrow::ToOwned for d2b_provider_device_security_key::SecurityKeyOpenIntent where T: core::clone::Clone
+d2b_provider_device_security_key	impl<T> alloc::borrow::ToOwned for d2b_provider_device_security_key::PhysicalUsbBackingClaim where T: core::clone::Clone
+d2b_provider_device_security_key	impl<T> alloc::borrow::ToOwned for d2b_provider_device_security_key::RelayProcessDeclaration where T: core::clone::Clone
 d2b_provider_device_security_key	impl<T> core::any::Any for d2b_provider_device_security_key::FrontendProcessDeclaration where T: 'static + ?core::marker::Sized
+d2b_provider_device_security_key	impl<T> core::any::Any for d2b_provider_device_security_key::PhysicalUsbBackingClaim where T: 'static + ?core::marker::Sized
+d2b_provider_device_security_key	impl<T> core::any::Any for d2b_provider_device_security_key::RelayProcessDeclaration where T: 'static + ?core::marker::Sized
+d2b_provider_device_security_key	impl<T> core::any::Any for d2b_provider_device_security_key::SecurityKeyAdmission where T: 'static + ?core::marker::Sized
 d2b_provider_device_security_key	impl<T> core::any::Any for d2b_provider_device_security_key::SecurityKeyController where T: 'static + ?core::marker::Sized
 d2b_provider_device_security_key	impl<T> core::any::Any for d2b_provider_device_security_key::SecurityKeyLease where T: 'static + ?core::marker::Sized
 d2b_provider_device_security_key	impl<T> core::any::Any for d2b_provider_device_security_key::SecurityKeyOpenIntent where T: 'static + ?core::marker::Sized
 d2b_provider_device_security_key	impl<T> core::borrow::Borrow<T> for d2b_provider_device_security_key::FrontendProcessDeclaration where T: ?core::marker::Sized
+d2b_provider_device_security_key	impl<T> core::borrow::Borrow<T> for d2b_provider_device_security_key::PhysicalUsbBackingClaim where T: ?core::marker::Sized
+d2b_provider_device_security_key	impl<T> core::borrow::Borrow<T> for d2b_provider_device_security_key::RelayProcessDeclaration where T: ?core::marker::Sized
+d2b_provider_device_security_key	impl<T> core::borrow::Borrow<T> for d2b_provider_device_security_key::SecurityKeyAdmission where T: ?core::marker::Sized
 d2b_provider_device_security_key	impl<T> core::borrow::Borrow<T> for d2b_provider_device_security_key::SecurityKeyController where T: ?core::marker::Sized
 d2b_provider_device_security_key	impl<T> core::borrow::Borrow<T> for d2b_provider_device_security_key::SecurityKeyLease where T: ?core::marker::Sized
 d2b_provider_device_security_key	impl<T> core::borrow::Borrow<T> for d2b_provider_device_security_key::SecurityKeyOpenIntent where T: ?core::marker::Sized
 d2b_provider_device_security_key	impl<T> core::borrow::BorrowMut<T> for d2b_provider_device_security_key::FrontendProcessDeclaration where T: ?core::marker::Sized
+d2b_provider_device_security_key	impl<T> core::borrow::BorrowMut<T> for d2b_provider_device_security_key::PhysicalUsbBackingClaim where T: ?core::marker::Sized
+d2b_provider_device_security_key	impl<T> core::borrow::BorrowMut<T> for d2b_provider_device_security_key::RelayProcessDeclaration where T: ?core::marker::Sized
+d2b_provider_device_security_key	impl<T> core::borrow::BorrowMut<T> for d2b_provider_device_security_key::SecurityKeyAdmission where T: ?core::marker::Sized
 d2b_provider_device_security_key	impl<T> core::borrow::BorrowMut<T> for d2b_provider_device_security_key::SecurityKeyController where T: ?core::marker::Sized
 d2b_provider_device_security_key	impl<T> core::borrow::BorrowMut<T> for d2b_provider_device_security_key::SecurityKeyLease where T: ?core::marker::Sized
 d2b_provider_device_security_key	impl<T> core::borrow::BorrowMut<T> for d2b_provider_device_security_key::SecurityKeyOpenIntent where T: ?core::marker::Sized
 d2b_provider_device_security_key	impl<T> core::clone::CloneToUninit for d2b_provider_device_security_key::FrontendProcessDeclaration where T: core::clone::Clone
-d2b_provider_device_security_key	impl<T> core::clone::CloneToUninit for d2b_provider_device_security_key::SecurityKeyOpenIntent where T: core::clone::Clone
+d2b_provider_device_security_key	impl<T> core::clone::CloneToUninit for d2b_provider_device_security_key::PhysicalUsbBackingClaim where T: core::clone::Clone
+d2b_provider_device_security_key	impl<T> core::clone::CloneToUninit for d2b_provider_device_security_key::RelayProcessDeclaration where T: core::clone::Clone
 d2b_provider_device_security_key	impl<T> core::convert::From<T> for d2b_provider_device_security_key::FrontendProcessDeclaration
+d2b_provider_device_security_key	impl<T> core::convert::From<T> for d2b_provider_device_security_key::PhysicalUsbBackingClaim
+d2b_provider_device_security_key	impl<T> core::convert::From<T> for d2b_provider_device_security_key::RelayProcessDeclaration
+d2b_provider_device_security_key	impl<T> core::convert::From<T> for d2b_provider_device_security_key::SecurityKeyAdmission
 d2b_provider_device_security_key	impl<T> core::convert::From<T> for d2b_provider_device_security_key::SecurityKeyController
 d2b_provider_device_security_key	impl<T> core::convert::From<T> for d2b_provider_device_security_key::SecurityKeyLease
 d2b_provider_device_security_key	impl<T> core::convert::From<T> for d2b_provider_device_security_key::SecurityKeyOpenIntent
 d2b_provider_device_security_key	impl<T> dyn_clone::DynClone for d2b_provider_device_security_key::FrontendProcessDeclaration where T: core::clone::Clone
-d2b_provider_device_security_key	impl<T> dyn_clone::DynClone for d2b_provider_device_security_key::SecurityKeyOpenIntent where T: core::clone::Clone
+d2b_provider_device_security_key	impl<T> dyn_clone::DynClone for d2b_provider_device_security_key::PhysicalUsbBackingClaim where T: core::clone::Clone
+d2b_provider_device_security_key	impl<T> dyn_clone::DynClone for d2b_provider_device_security_key::RelayProcessDeclaration where T: core::clone::Clone
 d2b_provider_device_security_key	impl<T> typenum::type_operators::Same for d2b_provider_device_security_key::FrontendProcessDeclaration
+d2b_provider_device_security_key	impl<T> typenum::type_operators::Same for d2b_provider_device_security_key::PhysicalUsbBackingClaim
+d2b_provider_device_security_key	impl<T> typenum::type_operators::Same for d2b_provider_device_security_key::RelayProcessDeclaration
+d2b_provider_device_security_key	impl<T> typenum::type_operators::Same for d2b_provider_device_security_key::SecurityKeyAdmission
 d2b_provider_device_security_key	impl<T> typenum::type_operators::Same for d2b_provider_device_security_key::SecurityKeyController
 d2b_provider_device_security_key	impl<T> typenum::type_operators::Same for d2b_provider_device_security_key::SecurityKeyLease
 d2b_provider_device_security_key	impl<T> typenum::type_operators::Same for d2b_provider_device_security_key::SecurityKeyOpenIntent
 d2b_provider_device_security_key	pub const fn d2b_provider_device_security_key::FrontendProcessDeclaration::execution_ref(&self) -> &d2b_contracts::v3::resource_ref::ResourceRef
+d2b_provider_device_security_key	pub const fn d2b_provider_device_security_key::PhysicalUsbBackingClaim::device_uid(&self) -> core::option::Option<&d2b_contracts::v3::identity::ResourceUid>
+d2b_provider_device_security_key	pub const fn d2b_provider_device_security_key::PhysicalUsbBackingClaim::holder_ref(&self) -> core::option::Option<&d2b_contracts::v3::resource_ref::ResourceRef>
+d2b_provider_device_security_key	pub const fn d2b_provider_device_security_key::PhysicalUsbBackingClaim::zone_ref(&self) -> core::option::Option<&d2b_contracts::v3::resource_ref::ResourceRef>
+d2b_provider_device_security_key	pub const fn d2b_provider_device_security_key::RelayProcessDeclaration::execution_ref(&self) -> &d2b_contracts::v3::resource_ref::ResourceRef
+d2b_provider_device_security_key	pub const fn d2b_provider_device_security_key::SecurityKeyAdmission::device_uid(&self) -> &d2b_contracts::v3::identity::ResourceUid
+d2b_provider_device_security_key	pub const fn d2b_provider_device_security_key::SecurityKeyAdmission::holder_ref(&self) -> &d2b_contracts::v3::resource_ref::ResourceRef
+d2b_provider_device_security_key	pub const fn d2b_provider_device_security_key::SecurityKeyAdmission::zone_ref(&self) -> &d2b_contracts::v3::resource_ref::ResourceRef
 d2b_provider_device_security_key	pub const fn d2b_provider_device_security_key::SecurityKeyController::lease(&self) -> &d2b_provider_device_security_key::SecurityKeyLease
 d2b_provider_device_security_key	pub const fn d2b_provider_device_security_key::SecurityKeyLease::holder(&self) -> &d2b_contracts::v3::identity::ResourceUid
+d2b_provider_device_security_key	pub const fn d2b_provider_device_security_key::SecurityKeyOpenIntent::backing(&self) -> &d2b_provider_device_security_key::PhysicalUsbBackingClaim
 d2b_provider_device_security_key	pub const fn d2b_provider_device_security_key::SecurityKeyOpenIntent::device_uid(&self) -> &d2b_contracts::v3::identity::ResourceUid
 d2b_provider_device_security_key	pub const fn d2b_provider_device_security_key::SecurityKeyOpenIntent::from_core(d2b_contracts::v3::identity::ResourceUid, d2b_provider_device_security_key::SecurityKeySessionId, d2b_provider_device_security_key::PhysicalUsbBackingClaim) -> Self
+d2b_provider_device_security_key	pub d2b_provider_device_security_key::PhysicalUsbBackingClaim::authority_scope: &'static str
+d2b_provider_device_security_key	pub d2b_provider_device_security_key::PhysicalUsbBackingClaim::backing_class: &'static str
 d2b_provider_device_security_key	pub fn d2b_provider_device_security_key::FrontendProcessDeclaration::clone(&self) -> d2b_provider_device_security_key::FrontendProcessDeclaration
 d2b_provider_device_security_key	pub fn d2b_provider_device_security_key::FrontendProcessDeclaration::eq(&self, &d2b_provider_device_security_key::FrontendProcessDeclaration) -> bool
 d2b_provider_device_security_key	pub fn d2b_provider_device_security_key::FrontendProcessDeclaration::new(&d2b_contracts::v3::identity::ResourceUid, d2b_contracts::v3::resource_ref::ResourceRef) -> core::result::Result<Self, d2b_provider_device_security_key::ProcessDeclarationError>
+d2b_provider_device_security_key	pub fn d2b_provider_device_security_key::PhysicalUsbBackingClaim::clone(&self) -> d2b_provider_device_security_key::PhysicalUsbBackingClaim
+d2b_provider_device_security_key	pub fn d2b_provider_device_security_key::PhysicalUsbBackingClaim::eq(&self, &d2b_provider_device_security_key::PhysicalUsbBackingClaim) -> bool
+d2b_provider_device_security_key	pub fn d2b_provider_device_security_key::PhysicalUsbBackingClaim::from_admission(d2b_provider_device_security_key::SecurityKeyAdmission) -> Self
+d2b_provider_device_security_key	pub fn d2b_provider_device_security_key::RelayProcessDeclaration::clone(&self) -> d2b_provider_device_security_key::RelayProcessDeclaration
+d2b_provider_device_security_key	pub fn d2b_provider_device_security_key::RelayProcessDeclaration::eq(&self, &d2b_provider_device_security_key::RelayProcessDeclaration) -> bool
+d2b_provider_device_security_key	pub fn d2b_provider_device_security_key::RelayProcessDeclaration::new(&d2b_contracts::v3::identity::ResourceUid, d2b_contracts::v3::resource_ref::ResourceRef) -> core::result::Result<Self, d2b_provider_device_security_key::ProcessDeclarationError>
+d2b_provider_device_security_key	pub fn d2b_provider_device_security_key::SecurityKeyAdmission::from_core(d2b_contracts::v3::resource_ref::ResourceRef, d2b_contracts::v3::identity::ResourceUid, d2b_contracts::v3::resource_ref::ResourceRef, d2b_provider_device_security_key::PhysicalUsbBackingToken) -> Self
+d2b_provider_device_security_key	pub fn d2b_provider_device_security_key::SecurityKeyAdmission::into_claim(self) -> d2b_provider_device_security_key::PhysicalUsbBackingClaim
 d2b_provider_device_security_key	pub fn d2b_provider_device_security_key::SecurityKeyController::acquire<P: d2b_provider_device_security_key::SecurityKeyEffectPort>(&mut self, d2b_provider_device_security_key::SecurityKeySessionId, d2b_contracts::v3::identity::ResourceUid, &mut P) -> core::result::Result<d2b_provider_device_security_key::SecurityKeyReconcileOutcome, d2b_provider_device_security_key::SecurityKeyControllerError>
+d2b_provider_device_security_key	pub fn d2b_provider_device_security_key::SecurityKeyController::acquire_authorized<P: d2b_provider_device_security_key::SecurityKeyEffectPort>(&mut self, d2b_provider_device_security_key::SecurityKeySessionId, d2b_contracts::v3::identity::ResourceUid, &d2b_contracts::v3::resource_ref::ResourceRef, &mut P) -> core::result::Result<d2b_provider_device_security_key::SecurityKeyReconcileOutcome, d2b_provider_device_security_key::SecurityKeyControllerError>
 d2b_provider_device_security_key	pub fn d2b_provider_device_security_key::SecurityKeyController::complete<P: d2b_provider_device_security_key::SecurityKeyEffectPort>(&mut self, &mut P) -> core::result::Result<d2b_provider_device_security_key::SecurityKeyReconcileOutcome, d2b_provider_device_security_key::SecurityKeyControllerError>
 d2b_provider_device_security_key	pub fn d2b_provider_device_security_key::SecurityKeyController::new(d2b_contracts::v3::identity::ResourceUid, d2b_provider_device_security_key::PhysicalUsbBackingClaim, usize) -> core::result::Result<Self, d2b_provider_device_security_key::SecurityKeyControllerError>
+d2b_provider_device_security_key	pub fn d2b_provider_device_security_key::SecurityKeyController::new_authorized(d2b_contracts::v3::identity::ResourceUid, d2b_provider_device_security_key::SecurityKeyAdmission, usize) -> core::result::Result<Self, d2b_provider_device_security_key::SecurityKeyControllerError>
 d2b_provider_device_security_key	pub fn d2b_provider_device_security_key::SecurityKeyEffectPort::claim_physical_backing(&mut self, &d2b_provider_device_security_key::PhysicalUsbBackingClaim) -> core::result::Result<d2b_provider_device_security_key::PhysicalAuthorityLease, d2b_provider_device_security_key::SecurityKeyEffectError>
 d2b_provider_device_security_key	pub fn d2b_provider_device_security_key::SecurityKeyEffectPort::open_hidraw(&mut self, &d2b_provider_device_security_key::SecurityKeyOpenIntent) -> core::result::Result<d2b_provider_device_security_key::RelayLaunchTicket, d2b_provider_device_security_key::SecurityKeyEffectError>
 d2b_provider_device_security_key	pub fn d2b_provider_device_security_key::SecurityKeyEffectPort::release_physical_backing(&mut self, d2b_provider_device_security_key::PhysicalAuthorityLease) -> core::result::Result<(), d2b_provider_device_security_key::SecurityKeyEffectError>
 d2b_provider_device_security_key	pub fn d2b_provider_device_security_key::SecurityKeyLease::acquire<P: d2b_provider_device_security_key::SecurityKeyEffectPort>(&mut self, d2b_provider_device_security_key::SecurityKeySessionId, d2b_contracts::v3::identity::ResourceUid, &mut P) -> core::result::Result<(), d2b_provider_device_security_key::SecurityKeyLeaseError>
+d2b_provider_device_security_key	pub fn d2b_provider_device_security_key::SecurityKeyLease::acquire_authorized<P: d2b_provider_device_security_key::SecurityKeyEffectPort>(&mut self, d2b_provider_device_security_key::SecurityKeySessionId, d2b_contracts::v3::identity::ResourceUid, &d2b_contracts::v3::resource_ref::ResourceRef, &mut P) -> core::result::Result<(), d2b_provider_device_security_key::SecurityKeyLeaseError>
 d2b_provider_device_security_key	pub fn d2b_provider_device_security_key::SecurityKeyLease::cancel<P: d2b_provider_device_security_key::SecurityKeyEffectPort>(&mut self, &mut P) -> core::result::Result<(), d2b_provider_device_security_key::SecurityKeyLeaseError>
 d2b_provider_device_security_key	pub fn d2b_provider_device_security_key::SecurityKeyLease::complete<P: d2b_provider_device_security_key::SecurityKeyEffectPort>(&mut self, &mut P) -> core::result::Result<(), d2b_provider_device_security_key::SecurityKeyLeaseError>
 d2b_provider_device_security_key	pub fn d2b_provider_device_security_key::SecurityKeyLease::expire<P: d2b_provider_device_security_key::SecurityKeyEffectPort>(&mut self, &mut P) -> core::result::Result<(), d2b_provider_device_security_key::SecurityKeyLeaseError>
 d2b_provider_device_security_key	pub fn d2b_provider_device_security_key::SecurityKeyLease::new(d2b_contracts::v3::identity::ResourceUid, d2b_provider_device_security_key::PhysicalUsbBackingClaim) -> Self
-d2b_provider_device_security_key	pub fn d2b_provider_device_security_key::SecurityKeyOpenIntent::clone(&self) -> d2b_provider_device_security_key::SecurityKeyOpenIntent
+d2b_provider_device_security_key	pub fn d2b_provider_device_security_key::SecurityKeyLease::new_authorized(d2b_contracts::v3::identity::ResourceUid, d2b_provider_device_security_key::SecurityKeyAdmission) -> core::result::Result<Self, d2b_provider_device_security_key::SecurityKeyLeaseError>
 d2b_provider_device_security_key	pub fn d2b_provider_device_security_key::SecurityKeyOpenIntent::eq(&self, &d2b_provider_device_security_key::SecurityKeyOpenIntent) -> bool
 d2b_provider_device_security_key	pub fn d2b_provider_device_security_key::SecurityKeySemanticDescriptor::validate_projection_spec(&self, &d2b_contracts::v3::resource::ResourceSpec) -> core::result::Result<(), d2b_contracts::v3::semantic_services::SemanticContractError>
 d2b_provider_device_security_key	pub fn d2b_provider_device_security_key::security_key_process_name(&d2b_contracts::v3::identity::ResourceUid, d2b_provider_device_security_key::SecurityKeyProcessRole) -> core::result::Result<alloc::string::String, d2b_provider_device_security_key::ProcessDeclarationError>
 d2b_provider_device_security_key	pub struct d2b_provider_device_security_key::FrontendProcessDeclaration
+d2b_provider_device_security_key	pub struct d2b_provider_device_security_key::PhysicalUsbBackingClaim
+d2b_provider_device_security_key	pub struct d2b_provider_device_security_key::RelayProcessDeclaration
+d2b_provider_device_security_key	pub struct d2b_provider_device_security_key::SecurityKeyAdmission
 d2b_provider_device_security_key	pub struct d2b_provider_device_security_key::SecurityKeyController
 d2b_provider_device_security_key	pub struct d2b_provider_device_security_key::SecurityKeyLease
 d2b_provider_device_security_key	pub struct d2b_provider_device_security_key::SecurityKeyOpenIntent
 d2b_provider_device_security_key	pub trait d2b_provider_device_security_key::SecurityKeyEffectPort
+d2b_provider_device_tpm	impl core::clone::Clone for d2b_provider_device_tpm::TpmStatusReport
+d2b_provider_device_tpm	impl core::cmp::Eq for d2b_provider_device_tpm::TpmStatusReport
+d2b_provider_device_tpm	impl core::cmp::PartialEq for d2b_provider_device_tpm::TpmStatusReport
+d2b_provider_device_tpm	impl core::fmt::Debug for d2b_provider_device_tpm::TpmStatusReport
+d2b_provider_device_tpm	impl core::marker::Freeze for d2b_provider_device_tpm::TpmResourceController
+d2b_provider_device_tpm	impl core::marker::Freeze for d2b_provider_device_tpm::TpmStatusReport
+d2b_provider_device_tpm	impl core::marker::Send for d2b_provider_device_tpm::TpmResourceController
+d2b_provider_device_tpm	impl core::marker::Send for d2b_provider_device_tpm::TpmStatusReport
+d2b_provider_device_tpm	impl core::marker::StructuralPartialEq for d2b_provider_device_tpm::TpmStatusReport
+d2b_provider_device_tpm	impl core::marker::Sync for d2b_provider_device_tpm::TpmResourceController
+d2b_provider_device_tpm	impl core::marker::Sync for d2b_provider_device_tpm::TpmStatusReport
+d2b_provider_device_tpm	impl core::marker::Unpin for d2b_provider_device_tpm::TpmResourceController
+d2b_provider_device_tpm	impl core::marker::Unpin for d2b_provider_device_tpm::TpmStatusReport
+d2b_provider_device_tpm	impl core::marker::UnsafeUnpin for d2b_provider_device_tpm::TpmResourceController
+d2b_provider_device_tpm	impl core::marker::UnsafeUnpin for d2b_provider_device_tpm::TpmStatusReport
+d2b_provider_device_tpm	impl core::panic::unwind_safe::RefUnwindSafe for d2b_provider_device_tpm::TpmResourceController
+d2b_provider_device_tpm	impl core::panic::unwind_safe::RefUnwindSafe for d2b_provider_device_tpm::TpmStatusReport
+d2b_provider_device_tpm	impl core::panic::unwind_safe::UnwindSafe for d2b_provider_device_tpm::TpmResourceController
+d2b_provider_device_tpm	impl core::panic::unwind_safe::UnwindSafe for d2b_provider_device_tpm::TpmStatusReport
+d2b_provider_device_tpm	impl d2b_provider_device_tpm::TpmResourceController
+d2b_provider_device_tpm	impl d2b_provider_device_tpm::TpmStatusReport
+d2b_provider_device_tpm	impl serde_core::ser::Serialize for d2b_provider_device_tpm::TpmStatusReport
+d2b_provider_device_tpm	impl<T, U> core::convert::Into<U> for d2b_provider_device_tpm::TpmResourceController where U: core::convert::From<T>
+d2b_provider_device_tpm	impl<T, U> core::convert::Into<U> for d2b_provider_device_tpm::TpmStatusReport where U: core::convert::From<T>
+d2b_provider_device_tpm	impl<T, U> core::convert::TryFrom<U> for d2b_provider_device_tpm::TpmResourceController where U: core::convert::Into<T>
+d2b_provider_device_tpm	impl<T, U> core::convert::TryFrom<U> for d2b_provider_device_tpm::TpmStatusReport where U: core::convert::Into<T>
+d2b_provider_device_tpm	impl<T, U> core::convert::TryInto<U> for d2b_provider_device_tpm::TpmResourceController where U: core::convert::TryFrom<T>
+d2b_provider_device_tpm	impl<T, U> core::convert::TryInto<U> for d2b_provider_device_tpm::TpmStatusReport where U: core::convert::TryFrom<T>
+d2b_provider_device_tpm	impl<T> alloc::borrow::ToOwned for d2b_provider_device_tpm::TpmStatusReport where T: core::clone::Clone
+d2b_provider_device_tpm	impl<T> core::any::Any for d2b_provider_device_tpm::TpmResourceController where T: 'static + ?core::marker::Sized
+d2b_provider_device_tpm	impl<T> core::any::Any for d2b_provider_device_tpm::TpmStatusReport where T: 'static + ?core::marker::Sized
+d2b_provider_device_tpm	impl<T> core::borrow::Borrow<T> for d2b_provider_device_tpm::TpmResourceController where T: ?core::marker::Sized
+d2b_provider_device_tpm	impl<T> core::borrow::Borrow<T> for d2b_provider_device_tpm::TpmStatusReport where T: ?core::marker::Sized
+d2b_provider_device_tpm	impl<T> core::borrow::BorrowMut<T> for d2b_provider_device_tpm::TpmResourceController where T: ?core::marker::Sized
+d2b_provider_device_tpm	impl<T> core::borrow::BorrowMut<T> for d2b_provider_device_tpm::TpmStatusReport where T: ?core::marker::Sized
+d2b_provider_device_tpm	impl<T> core::clone::CloneToUninit for d2b_provider_device_tpm::TpmStatusReport where T: core::clone::Clone
+d2b_provider_device_tpm	impl<T> core::convert::From<T> for d2b_provider_device_tpm::TpmResourceController
+d2b_provider_device_tpm	impl<T> core::convert::From<T> for d2b_provider_device_tpm::TpmStatusReport
+d2b_provider_device_tpm	impl<T> dyn_clone::DynClone for d2b_provider_device_tpm::TpmStatusReport where T: core::clone::Clone
+d2b_provider_device_tpm	impl<T> typenum::type_operators::Same for d2b_provider_device_tpm::TpmResourceController
+d2b_provider_device_tpm	impl<T> typenum::type_operators::Same for d2b_provider_device_tpm::TpmStatusReport
+d2b_provider_device_tpm	pub async fn d2b_provider_device_tpm::TpmResourceController::finalize<P: d2b_provider_device_tpm::TpmResourceEffectPort>(&mut self, &P) -> core::result::Result<d2b_provider_device_tpm::TpmResourceOutcome, d2b_provider_device_tpm::TpmResourceControllerError>
+d2b_provider_device_tpm	pub async fn d2b_provider_device_tpm::TpmResourceController::reconcile<P: d2b_provider_device_tpm::TpmResourceEffectPort>(&mut self, &P) -> core::result::Result<d2b_provider_device_tpm::TpmResourceOutcome, d2b_provider_device_tpm::TpmResourceControllerError>
+d2b_provider_device_tpm	pub const fn d2b_provider_device_tpm::TpmResourceController::endpoint_ref(&self) -> core::option::Option<&d2b_contracts::v3::resource_ref::ResourceRef>
+d2b_provider_device_tpm	pub d2b_provider_device_tpm::TpmStatusReport::condition: core::option::Option<&'static str>
+d2b_provider_device_tpm	pub d2b_provider_device_tpm::TpmStatusReport::marker_status: d2b_provider_device_tpm::TpmMarkerStatus
+d2b_provider_device_tpm	pub d2b_provider_device_tpm::TpmStatusReport::phase: d2b_provider_device_tpm::TpmResourcePhase
+d2b_provider_device_tpm	pub d2b_provider_device_tpm::TpmStatusReport::state_volume_ref: core::option::Option<d2b_contracts::v3::resource_ref::ResourceRef>
+d2b_provider_device_tpm	pub d2b_provider_device_tpm::TpmStatusReport::tpm_endpoint_ref: core::option::Option<d2b_contracts::v3::resource_ref::ResourceRef>
+d2b_provider_device_tpm	pub fn d2b_provider_device_tpm::TpmResourceController::new(d2b_contracts::v3::identity::ResourceUid, d2b_contracts::v3::resource_ref::ResourceRef) -> core::result::Result<Self, d2b_provider_device_tpm::TpmResourceControllerError>
+d2b_provider_device_tpm	pub fn d2b_provider_device_tpm::TpmResourceEffectPort::delete_flush_process(&self, &d2b_contracts::v3::resource_ref::ResourceRef) -> impl core::future::future::Future<Output = core::result::Result<(), d2b_provider_device_tpm::TpmResourceEffectError>> + core::marker::Send
+d2b_provider_device_tpm	pub fn d2b_provider_device_tpm::TpmResourceEffectPort::ensure_state_volume(&self, &d2b_contracts::v3::identity::ResourceUid, &d2b_contracts::v3::resource_ref::ResourceRef) -> impl core::future::future::Future<Output = core::result::Result<d2b_contracts::v3::resource_ref::ResourceRef, d2b_provider_device_tpm::TpmResourceEffectError>> + core::marker::Send
+d2b_provider_device_tpm	pub fn d2b_provider_device_tpm::TpmResourceEffectPort::request_flush_process(&self, &d2b_contracts::v3::identity::ResourceUid, &d2b_contracts::v3::resource_ref::ResourceRef, &d2b_contracts::v3::resource_ref::ResourceRef) -> impl core::future::future::Future<Output = core::result::Result<d2b_contracts::v3::resource_ref::ResourceRef, d2b_provider_device_tpm::TpmResourceEffectError>> + core::marker::Send
+d2b_provider_device_tpm	pub fn d2b_provider_device_tpm::TpmResourceEffectPort::request_swtpm_process(&self, &d2b_contracts::v3::identity::ResourceUid, &d2b_contracts::v3::resource_ref::ResourceRef, &d2b_contracts::v3::resource_ref::ResourceRef) -> impl core::future::future::Future<Output = core::result::Result<d2b_contracts::v3::resource_ref::ResourceRef, d2b_provider_device_tpm::TpmResourceEffectError>> + core::marker::Send
+d2b_provider_device_tpm	pub fn d2b_provider_device_tpm::TpmResourceEffectPort::stop_swtpm_process(&self, &d2b_contracts::v3::resource_ref::ResourceRef) -> impl core::future::future::Future<Output = core::result::Result<(), d2b_provider_device_tpm::TpmResourceEffectError>> + core::marker::Send
+d2b_provider_device_tpm	pub fn d2b_provider_device_tpm::TpmResourceEffectPort::watch_tpm_endpoint(&self, &d2b_contracts::v3::resource_ref::ResourceRef) -> impl core::future::future::Future<Output = core::result::Result<d2b_contracts::v3::resource_ref::ResourceRef, d2b_provider_device_tpm::TpmResourceEffectError>> + core::marker::Send
+d2b_provider_device_tpm	pub fn d2b_provider_device_tpm::TpmStatusReport::clone(&self) -> d2b_provider_device_tpm::TpmStatusReport
+d2b_provider_device_tpm	pub fn d2b_provider_device_tpm::TpmStatusReport::eq(&self, &d2b_provider_device_tpm::TpmStatusReport) -> bool
+d2b_provider_device_tpm	pub fn d2b_provider_device_tpm::TpmStatusReport::pending(d2b_contracts::v3::identity::ResourceUid) -> Self
+d2b_provider_device_tpm	pub fn d2b_provider_device_tpm::build_swtpm_flush_spec(&d2b_contracts::v3::identity::ResourceUid, &d2b_contracts::v3::resource_ref::ResourceRef) -> core::result::Result<serde_json::value::Value, d2b_provider_device_tpm::TpmResourceEffectError>
+d2b_provider_device_tpm	pub fn d2b_provider_device_tpm::build_swtpm_process_spec(&d2b_contracts::v3::identity::ResourceUid, &d2b_contracts::v3::resource_ref::ResourceRef) -> core::result::Result<serde_json::value::Value, d2b_provider_device_tpm::TpmResourceEffectError>
+d2b_provider_device_tpm	pub fn d2b_provider_device_tpm::build_tpm_state_volume_resource(&d2b_contracts::v3::identity::ResourceUid, &str, &d2b_contracts::v3::resource_ref::ResourceRef) -> core::result::Result<serde_json::value::Value, d2b_provider_device_tpm::TpmResourceEffectError>
+d2b_provider_device_tpm	pub fn d2b_provider_device_tpm::build_tpm_state_volume_spec(&d2b_contracts::v3::identity::ResourceUid, &d2b_contracts::v3::resource_ref::ResourceRef) -> core::result::Result<serde_json::value::Value, d2b_provider_device_tpm::TpmResourceEffectError>
+d2b_provider_device_tpm	pub struct d2b_provider_device_tpm::TpmResourceController
+d2b_provider_device_tpm	pub struct d2b_provider_device_tpm::TpmStatusReport
+d2b_provider_device_tpm	pub trait d2b_provider_device_tpm::TpmResourceEffectPort: core::marker::Send + core::marker::Sync
 d2b_provider_device_usbip	impl core::clone::Clone for d2b_provider_device_usbip::FirewallProjectionIntent
 d2b_provider_device_usbip	impl core::clone::Clone for d2b_provider_device_usbip::NetworkDependency
 d2b_provider_device_usbip	impl core::clone::Clone for d2b_provider_device_usbip::ScopedResourceUid
@@ -9499,6 +9795,7 @@ d2b_provider_volume_local	pub async fn &d2b_provider_volume_local::testing::Scri
 d2b_provider_volume_local	pub async fn &d2b_provider_volume_local::testing::ScriptedPort::provision(&self, &d2b_provider_volume_local::VolumeRootHandle, &d2b_provider_volume_local::EntryRequest) -> core::result::Result<(), d2b_provider_volume_local::VolumeLocalError>
 d2b_provider_volume_local	pub async fn &d2b_provider_volume_local::testing::ScriptedPort::repair(&self, &d2b_provider_volume_local::VolumeRootHandle, &d2b_provider_volume_local::EntryRequest, &alloc::collections::btree::set::BTreeSet<d2b_provider_volume_local::DriftClass>) -> core::result::Result<(), d2b_provider_volume_local::VolumeLocalError>
 d2b_provider_volume_local	pub async fn d2b_provider_volume_local::VolumeLocalController<S, L>::cleanup(&self, &d2b_contracts::v3::identity::ResourceUid, &d2b_contracts::v3::volume::VolumeSpec) -> core::result::Result<alloc::vec::Vec<d2b_provider_volume_local::EntryDigest>, d2b_provider_volume_local::VolumeLocalError>
+d2b_provider_volume_local	pub async fn d2b_provider_volume_local::VolumeLocalController<S, L>::finalize(&self, &d2b_contracts::v3::identity::ResourceUid, &d2b_contracts::v3::volume::VolumeSpec, d2b_provider_volume_local::FinalizationObservation) -> core::result::Result<d2b_provider_volume_local::FinalizationResult, d2b_provider_volume_local::VolumeLocalError>
 d2b_provider_volume_local	pub async fn d2b_provider_volume_local::VolumeLocalController<S, L>::reconcile(&self, &d2b_contracts::v3::identity::ResourceUid, &d2b_contracts::v3::volume::VolumeSpec) -> core::result::Result<d2b_provider_volume_local::VolumeStatusReport, d2b_provider_volume_local::VolumeLocalError>
 d2b_provider_volume_local	pub async fn d2b_provider_volume_local::audit::emit_volume_event<S: d2b_provider_volume_local::audit::VolumeAuditSink>(&S, &d2b_provider_volume_local::audit::VolumeAuditEvent) -> core::result::Result<(), d2b_provider_volume_local::audit::VolumeAuditError>
 d2b_provider_volume_local	pub const fn d2b_provider_volume_local::AclGrantSummary::principal(&self) -> &d2b_contracts::v3::resource_ref::ResourceRef
@@ -9717,6 +10014,7 @@ d2b_provider_volume_virtiofs	pub async fn &d2b_provider_volume_virtiofs::testing
 d2b_provider_volume_virtiofs	pub async fn d2b_provider_volume_virtiofs::VirtiofsExportController<P>::drain(&self, &d2b_provider_volume_virtiofs::ExportSpec, &d2b_provider_volume_virtiofs::LaunchedWorker) -> core::result::Result<(), d2b_provider_volume_virtiofs::VirtiofsExportError>
 d2b_provider_volume_virtiofs	pub async fn d2b_provider_volume_virtiofs::VirtiofsExportController<P>::reconcile(&self, &d2b_provider_volume_virtiofs::ExportSpec, &d2b_contracts::v3::volume::VolumeSpec, u32, d2b_contracts::v3::execution_policy::BoundedToken) -> core::result::Result<d2b_provider_volume_virtiofs::ExportStatusReport, d2b_provider_volume_virtiofs::VirtiofsExportError>
 d2b_provider_volume_virtiofs	pub const fn d2b_provider_volume_virtiofs::ExportSpec::execution_ref(&self) -> &d2b_contracts::v3::resource_ref::ResourceRef
+d2b_provider_volume_virtiofs	pub const fn d2b_provider_volume_virtiofs::ExportSpec::provider_ref(&self) -> &d2b_contracts::v3::resource_ref::ResourceRef
 d2b_provider_volume_virtiofs	pub const fn d2b_provider_volume_virtiofs::ExportSpec::volume_ref(&self) -> &d2b_contracts::v3::resource_ref::ResourceRef
 d2b_provider_volume_virtiofs	pub d2b_provider_volume_virtiofs::ExportStatusReport::export_ready: bool
 d2b_provider_volume_virtiofs	pub d2b_provider_volume_virtiofs::ExportStatusReport::guest_mount_ready: bool

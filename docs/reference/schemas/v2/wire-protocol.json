@@ -7384,6 +7384,26 @@
         "vmId"
       ],
       "properties": {
+        "authorityKey": {
+          "description": "Core-derived Host physical-backing authority digest.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "deviceRef": {
+          "description": "Exact Device resource admitted by Core.",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "selectorId": {
           "description": "Opaque stable-selector id that the broker resolves against its trusted bundle's security-key device registry.",
           "type": "string"
@@ -9333,6 +9353,22 @@
     "ResourceGeneration": {
       "type": "integer",
       "minimum": 1.0
+    },
+    "ResourceRef": {
+      "oneOf": [
+        {
+          "type": "string",
+          "maxLength": 80,
+          "minLength": 6,
+          "pattern": "^(Zone|ZoneLink|Provider|Role|RoleBinding|Quota|EmergencyPolicy|Host|Guest|Process|EphemeralProcess|Volume|Network|Device|User|Credential|Endpoint|ResourceExport|ResourceImport)/[a-z][a-z0-9-]{0,62}$"
+        },
+        {
+          "type": "string",
+          "maxLength": 201,
+          "minLength": 15,
+          "pattern": "^[a-z][a-z0-9-]{0,62}\\.d2bus\\.org\\.[A-Z][A-Za-z0-9]{0,62}/[a-z][a-z0-9-]{0,62}$"
+        }
+      ]
     },
     "ResourceUid": {
       "type": "string",

@@ -185,8 +185,8 @@ pub struct TpmController {
 
 impl TpmController {
     /// Construct a controller with the state-preserving finalizer installed.
-    #[allow(dead_code)]
-    pub(crate) fn new(
+    /// Construct the production controller.
+    pub fn new(
         intent: StateDirIntent,
         settings: SwtpmSettings,
         binary: SignedBinaryRef,
