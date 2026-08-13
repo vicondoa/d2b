@@ -71,7 +71,7 @@ fn current_only_requests() -> [BrokerRequest; 4] {
 #[test]
 fn previous_client_request_decodes_under_current_protocol() {
     assert_eq!(PREVIOUS_PROTOCOL_VERSION, 3);
-    assert_eq!(PROTOCOL_VERSION, 4);
+    assert_eq!(PROTOCOL_VERSION, 5);
 
     let encoded = serde_json::to_vec(&PreviousBrokerRequestEnvelope {
         request: PreviousBrokerRequest::ValidateBundle,
@@ -86,7 +86,7 @@ fn previous_client_request_decodes_under_current_protocol() {
 #[test]
 fn current_only_requests_are_rejected_by_previous_decoder() {
     assert_eq!(PREVIOUS_PROTOCOL_VERSION, 3);
-    assert_eq!(PROTOCOL_VERSION, 4);
+    assert_eq!(PROTOCOL_VERSION, 5);
 
     for request in current_only_requests() {
         let operation = request.op_name();

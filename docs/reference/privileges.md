@@ -106,7 +106,7 @@ are denied (`defaultForUnknown: deny`).
 > `PrivilegesJson.publicOperations` and the generated
 > `OperationAuthz.operation` enum, but not in the broker-only catalog below.
 
-## Operation catalog (PROTOCOL_VERSION = 4)
+## Operation catalog (PROTOCOL_VERSION = 5)
 
 The currently implemented broker operation catalog. Every row carries
 `audit: yes` and `defaultForUnknown: deny`.
@@ -241,7 +241,7 @@ non-bootstrap dispatch surface as typed per-op payloads:
 
 - `Hello { client_version }`
 - `ValidateBundle {}`
-- `ExportBrokerAudit { since, filter }`
+- `ExportBrokerAudit { since, filter, cursor, limit }`
 - `ApplyNftables { bundle_nft_intent_ref, scope_id, desired_hash, destroy }`
 - `ApplyRoute { bundle_route_intent_ref, destination, via, destroy }`
 - `ApplyNmUnmanaged { bundle_nm_intent_ref, scope_id, destroy }`

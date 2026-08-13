@@ -43,7 +43,10 @@ pub const UNSAFE_LOCAL_HELPER_SOCKET_PATH: &str = "/run/d2b/unsafe-local-helper.
 ///
 /// Version 4 adds the `ApplyNftablesProjection`, `CreateBridge`,
 /// `DeleteBridge`, and `DeletePersistentTap` broker operations.
-pub const PROTOCOL_VERSION: u32 = 4;
+///
+/// Version 5 adds cursor-bounded requests and typed paginated responses to
+/// `ExportBrokerAudit`.
+pub const PROTOCOL_VERSION: u32 = 5;
 
 /// Broker operation capability snapshot associated with the protocol version.
 /// This is contract metadata, not a runtime negotiation result.
@@ -435,7 +438,7 @@ mod tests {
     fn retired_unsafe_local_shell_feature_is_not_negotiated() {
         let retired = FeatureFlag::new("unsafe-local-shell-v1").expect("valid feature");
         assert_eq!(retired.known(), None);
-        assert_eq!(PROTOCOL_VERSION, 4);
+        assert_eq!(PROTOCOL_VERSION, 5);
 
         let unknown = FeatureFlag::new("unsafe-local-shell-v2").expect("valid future feature");
         assert_eq!(unknown.known(), None);
@@ -536,7 +539,7 @@ mod tests {
 
     #[test]
     fn protocol_version_covers_current_broker_operation_catalogue() {
-        assert_eq!(PROTOCOL_VERSION, 4);
+        assert_eq!(PROTOCOL_VERSION, 5);
         let capabilities = BrokerCapabilities::w3();
         for operation in [
             "ApplyNftablesProjection",

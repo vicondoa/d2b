@@ -31,7 +31,13 @@
 //! and every W3 broker op enum variant must round-trip through the
 //! wire-tag set.
 
-use d2b_contracts::{BrokerCapabilities, PROTOCOL_VERSION, W3BrokerOperation};
+use d2b_contracts::{
+    BrokerCapabilities, PROTOCOL_VERSION, W3BrokerOperation,
+    broker_wire::{
+        AuditExportCursor, AuditExportEntry, BrokerRequest, BrokerResponse,
+        ExportBrokerAuditRequest, ExportBrokerAuditResponse,
+    },
+};
 
 /// W2 broker operation tags - the closed pre-W3 set the version-skew
 /// scenarios pretend an "old daemon" or "old broker" advertised. We
@@ -280,6 +286,77 @@ fn w3_capabilities_advertise_current_protocol_version() {
     // W2 protocol_version is < W3; the test fixture must encode that
     // skew so the negotiated-protocol assertion can fail closed.
     assert!(w2_capabilities().protocol_version < caps.protocol_version);
+}
+
+#[test]
+fn protocol_v5_binds_paginated_audit_contract() {
+    assert_eq!(PROTOCOL_VERSION, 5);
+    let capabilities = BrokerCapabilities::w3();
+    assert_eq!(capabilities.protocol_version, 5);
+    assert!(
+        capabilities
+            .broker_operations
+            .iter()
+            .any(|operation| operation == "ExportBrokerAudit")
+    );
+
+    let cursor = AuditExportCursor {
+        day: "2026-08-12".to_owned(),
+        line: 41,
+        sequence: 41,
+    };
+    let request = BrokerRequest::ExportBrokerAudit(ExportBrokerAuditRequest {
+        filter: None,
+        since: None,
+        cursor: Some(cursor.clone()),
+        limit: 2,
+    });
+    let request_payload = serde_json::to_value(&request)
+        .expect("paginated audit request serializes")
+        .get("payload")
+        .cloned()
+        .expect("broker request payload");
+    assert_eq!(request_payload["cursor"]["day"], "2026-08-12");
+    assert_eq!(request_payload["cursor"]["line"], 41);
+    assert_eq!(request_payload["limit"], 2);
+
+    let legacy_request = serde_json::json!({
+        "kind": "ExportBrokerAudit",
+        "payload": { "filter": null, "since": null }
+    });
+    let decoded_legacy_request = serde_json::from_value::<BrokerRequest>(legacy_request).expect(
+        "the explicit request defaults preserve the existing legacy audit-request transition",
+    );
+    let BrokerRequest::ExportBrokerAudit(decoded_legacy_request) = decoded_legacy_request else {
+        panic!("legacy audit request decoded to the wrong broker operation");
+    };
+    assert!(decoded_legacy_request.cursor.is_none());
+    assert_eq!(decoded_legacy_request.limit, 256);
+
+    let response = BrokerResponse::ExportBrokerAudit(ExportBrokerAuditResponse {
+        entries: vec![AuditExportEntry {
+            sequence: 42,
+            record: Some(serde_json::json!({ "operation": "ApplyNftables" })),
+            error: None,
+        }],
+        next_cursor: Some(cursor),
+        complete: false,
+    });
+    let response_payload = serde_json::to_value(&response)
+        .expect("paginated audit response serializes")
+        .get("payload")
+        .cloned()
+        .expect("broker response payload");
+    assert!(response_payload.get("entries").is_some());
+    assert!(response_payload.get("lines").is_none());
+    assert_eq!(response_payload["nextCursor"]["sequence"], 41);
+    assert_eq!(response_payload["complete"], false);
+
+    let legacy_response = serde_json::json!({ "lines": ["{}"] });
+    assert!(
+        serde_json::from_value::<ExportBrokerAuditResponse>(legacy_response).is_err(),
+        "protocol v5 must not silently accept the incompatible legacy audit response shape"
+    );
 }
 
 // ---------- privileges.json drift gate (software-5, rust-3) ----------

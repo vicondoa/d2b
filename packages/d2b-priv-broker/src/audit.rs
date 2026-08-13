@@ -1,5 +1,5 @@
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, BufRead, BufReader, Write};
+use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::os::fd::{AsFd, AsRawFd};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
@@ -47,7 +47,12 @@ const DEFAULT_AUDIT_WRITES_PER_SECOND: u32 = 4096;
 const AUDIT_WRITE_WINDOW: Duration = Duration::from_secs(1);
 const MAX_EXPORTED_AUDIT_BYTES: usize = 768 * 1024;
 const MAX_EXPORTED_AUDIT_LINE_BYTES: usize = 64 * 1024;
+const MAX_EXPORTED_AUDIT_PAGE_RECORDS: u32 = 1024;
+const MAX_LEGACY_EXPORT_RECORDS: usize = 16 * 1024;
+const MAX_LEGACY_EXPORT_BYTES: usize = 512 * 1024;
 const MAX_AUDIT_DIRECTORY_ENTRIES: usize = 4096;
+const AUDIT_RECONCILE_CHUNK_BYTES: usize = 8 * 1024;
+const MAX_QUARANTINE_NAME_ATTEMPTS: usize = 64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AuditWriteClass {
@@ -161,7 +166,11 @@ impl core::fmt::Debug for AuditEntry<'_> {
 /// `broker-<utc-date>.jsonl` file. `ExportBrokerAudit` consumers and
 /// the `broker-export-audit.sh` / `broker-socket-acl.sh` Layer-1 gates
 /// migrate atomically: they now read the day's daily file (or the full
-/// directory enumeration) instead of the legacy single file.
+/// directory enumeration) instead of the legacy single file. Every
+/// append is rolled back to its pre-append offset after a write, flush,
+/// or synchronization error; if rollback cannot be synchronized, the
+/// writer is poisoned until a fresh open. A truncated final line found
+/// on open is quarantined before the daily file is reconciled.
 pub struct AuditLog {
     /// Directory holding the daily-rotated records
     /// (`<audit_dir>/broker-<utc-date>.jsonl`).
@@ -201,6 +210,58 @@ impl core::fmt::Debug for AuditLog {
 struct DailyAppender {
     file: File,
     date_utc: String,
+    poisoned: bool,
+    #[cfg(test)]
+    io_failure: Option<InjectedAuditIoFailure>,
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone, Copy)]
+enum InjectedAuditIoFailure {
+    PartialWrite,
+    Flush,
+    Sync { remaining: u32 },
+}
+
+impl DailyAppender {
+    fn write_all(&mut self, bytes: &[u8]) -> io::Result<()> {
+        #[cfg(test)]
+        if matches!(self.io_failure, Some(InjectedAuditIoFailure::PartialWrite)) {
+            self.io_failure = None;
+            let partial_len = (bytes.len() / 2).max(1).min(bytes.len());
+            self.file.write_all(&bytes[..partial_len])?;
+            return Err(io::Error::other("injected-audit-write-failure"));
+        }
+        self.file.write_all(bytes)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        #[cfg(test)]
+        if matches!(self.io_failure, Some(InjectedAuditIoFailure::Flush)) {
+            self.io_failure = None;
+            return Err(io::Error::other("injected-audit-flush-failure"));
+        }
+        self.file.flush()
+    }
+
+    fn sync_all(&mut self) -> io::Result<()> {
+        #[cfg(test)]
+        if let Some(InjectedAuditIoFailure::Sync { remaining }) = self.io_failure
+            && remaining > 0
+        {
+            self.io_failure = (remaining > 1).then_some(InjectedAuditIoFailure::Sync {
+                remaining: remaining - 1,
+            });
+            return Err(io::Error::other("injected-audit-sync-failure"));
+        }
+        self.file.sync_all()
+    }
+
+    fn rollback_to(&mut self, offset: u64, audit_dir: &Path) -> io::Result<()> {
+        self.file.set_len(offset)?;
+        self.sync_all()?;
+        sync_directory(audit_dir)
+    }
 }
 
 impl AuditLog {
@@ -233,6 +294,7 @@ impl AuditLog {
 
         let today = utc_date_string();
         let daily_path = audit_dir.join(format!("broker-{today}.jsonl"));
+        reconcile_truncated_final_line(&daily_path, audit_dir, expected_gid, test_mode)?;
         let daily_file = open_append_cloexec(&daily_path, expected_gid, test_mode)?;
 
         let log = Self {
@@ -240,6 +302,9 @@ impl AuditLog {
             daily: Mutex::new(DailyAppender {
                 file: daily_file,
                 date_utc: today,
+                poisoned: false,
+                #[cfg(test)]
+                io_failure: None,
             }),
             expected_gid,
             test_mode,
@@ -291,6 +356,16 @@ impl AuditLog {
             .map_err(|_| io::Error::other("audit limiter mutex poisoned"))? =
             AuditWriteLimiter::new(writes_per_second);
         Ok(log)
+    }
+
+    #[cfg(test)]
+    fn inject_io_failure(&self, failure: InjectedAuditIoFailure) -> io::Result<()> {
+        self.daily
+            .lock()
+            .map(|mut daily| {
+                daily.io_failure = Some(failure);
+            })
+            .map_err(|_| io::Error::other("audit daily mutex poisoned"))
     }
 
     /// Returns the path of the audit directory holding daily
@@ -424,13 +499,6 @@ impl AuditLog {
                 "audit operation join mismatch",
             ));
         }
-        #[cfg(test)]
-        if let Some(capture) = &self.captured_records {
-            capture
-                .lock()
-                .map_err(|_| io::Error::other("audit capture mutex poisoned"))?
-                .push(OwnedOpAuditRecord::from(record));
-        }
         let line = serde_json::to_string(&sanitize_audit_value(
             serde_json::to_value(record)
                 .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?,
@@ -445,6 +513,13 @@ impl AuditLog {
             record.operation,
             line.as_bytes(),
         )?;
+        #[cfg(test)]
+        if let Some(capture) = &self.captured_records {
+            capture
+                .lock()
+                .map_err(|_| io::Error::other("audit capture mutex poisoned"))?
+                .push(OwnedOpAuditRecord::from(record));
+        }
         Ok(())
     }
 
@@ -642,6 +717,13 @@ impl AuditLog {
         operation: &str,
         bytes: &[u8],
     ) -> io::Result<()> {
+        let mut guard = self
+            .daily
+            .lock()
+            .map_err(|_| io::Error::other("audit daily mutex poisoned"))?;
+        if guard.poisoned {
+            return Err(io::Error::other("audit-writer-poisoned"));
+        }
         if let Err(err) = self
             .write_limiter
             .lock()
@@ -651,25 +733,38 @@ impl AuditLog {
             self.record_rate_limited_drop(audit_class, operation);
             return Err(err);
         }
-        let mut guard = self
-            .daily
-            .lock()
-            .map_err(|_| io::Error::other("audit daily mutex poisoned"))?;
         let today = utc_date_string();
         let rotated = today != guard.date_utc;
         if rotated {
             // Rotations swap the fd via reopen + atomic rename. We
             // reopen the new day's file in O_APPEND; the old file is
             // closed by replacing it (drop runs).
-            guard.file.sync_all()?;
+            guard.sync_all()?;
             let new_path = self.audit_dir.join(format!("broker-{today}.jsonl"));
             let new_file = open_append_cloexec(&new_path, self.expected_gid, self.test_mode)?;
             guard.file = new_file;
             guard.date_utc = today;
         }
-        guard.file.write_all(bytes)?;
-        guard.file.flush()?;
-        guard.file.sync_all()?;
+
+        let pre_append_offset = guard.file.metadata()?.len();
+        let append_result = (|| {
+            guard.write_all(bytes)?;
+            guard.flush()?;
+            guard.sync_all()?;
+            sync_directory(&self.audit_dir)?;
+            Ok(())
+        })();
+        if let Err(err) = append_result {
+            if guard
+                .rollback_to(pre_append_offset, &self.audit_dir)
+                .is_err()
+            {
+                guard.poisoned = true;
+                return Err(io::Error::other("audit-writer-poisoned"));
+            }
+            return Err(err);
+        }
+
         // Keep the daily lock through the bounded retention scan so export
         // cannot observe a file set while rotation or pruning is in flight.
         if let Err(err) = self.prune_expired_daily_files_unlocked() {
@@ -677,8 +772,6 @@ impl AuditLog {
             // break the write path. The next rotation retries.
             let _ = err;
         }
-        drop(guard);
-        sync_directory(&self.audit_dir)?;
         Ok(())
     }
 
@@ -721,7 +814,8 @@ impl AuditLog {
     /// `broker-<utc-date>.jsonl` files retain the same semantics.
     /// Files that don't match the expected name format are left
     /// alone so out-of-band artifacts (export tarballs, operator
-    /// notes, etc.) survive.
+    /// notes, etc.) survive. Reconciled truncated tails use the
+    /// dated quarantine form and follow the same retention window.
     ///
     /// `retention_days == 0` disables pruning entirely.
     pub fn prune_expired_daily_files(&self) -> io::Result<usize> {
@@ -758,10 +852,7 @@ impl AuditLog {
             let Some(name_str) = name.to_str() else {
                 continue;
             };
-            let Some(stem) = name_str
-                .strip_prefix("broker-")
-                .and_then(|s| s.strip_suffix(".jsonl"))
-            else {
+            let Some(stem) = dated_audit_artifact_date(name_str) else {
                 continue;
             };
             // Expect `YYYY-MM-DD`.
@@ -811,7 +902,10 @@ impl AuditLog {
             .map_err(|_| io::Error::other("audit daily mutex poisoned"))?;
         let limit = usize::try_from(limit)
             .ok()
-            .filter(|limit| (1..=1024).contains(limit))
+            .filter(|limit| {
+                (1..=usize::try_from(MAX_EXPORTED_AUDIT_PAGE_RECORDS).unwrap_or(usize::MAX))
+                    .contains(limit)
+            })
             .ok_or_else(|| {
                 io::Error::new(io::ErrorKind::InvalidInput, "audit-export-limit-invalid")
             })?;
@@ -1053,24 +1147,56 @@ impl AuditLog {
     }
 
     /// Compatibility projection for the legacy bootstrap probe.
+    ///
+    /// The typed page contract remains bounded at 1024 records and 768 KiB
+    /// per page. This adapter follows every continuation cursor, while
+    /// refusing the complete projection if it exceeds 16,384 records or
+    /// 512 KiB of serialized response strings. It never silently truncates a legacy
+    /// export.
     pub fn export_lines(
         &self,
         since: Option<&str>,
         filter: Option<&str>,
     ) -> io::Result<Vec<String>> {
-        let page = self.export_page(since, filter, None, 1024)?;
-        page.entries
-            .into_iter()
-            .map(|entry| {
-                serde_json::to_string(&entry.record.or_else(|| {
-                    Some(serde_json::json!({
-                        "export_error": entry.error,
-                        "sequence": entry.sequence,
-                    }))
-                }))
-                .map_err(|error| io::Error::other(error.to_string()))
-            })
-            .collect()
+        let mut lines = Vec::new();
+        let mut total_bytes = 0_usize;
+        let mut cursor = None;
+
+        loop {
+            let page = self.export_page(
+                since,
+                filter,
+                cursor.as_ref(),
+                MAX_EXPORTED_AUDIT_PAGE_RECORDS,
+            )?;
+            for entry in page.entries {
+                let line = legacy_export_entry_line(entry)?;
+                let encoded_len = serde_json::to_vec(&line)
+                    .map_err(|_| io::Error::other("audit-export-encode-failed"))?
+                    .len()
+                    .saturating_add(1);
+                if lines.len() >= MAX_LEGACY_EXPORT_RECORDS
+                    || total_bytes.saturating_add(encoded_len) > MAX_LEGACY_EXPORT_BYTES
+                {
+                    return Err(io::Error::other("audit-export-legacy-limit"));
+                }
+                total_bytes = total_bytes.saturating_add(encoded_len);
+                lines.push(line);
+            }
+            if page.complete {
+                return Ok(lines);
+            }
+            let next_cursor = page
+                .next_cursor
+                .ok_or_else(|| io::Error::other("audit-export-pagination-invalid"))?;
+            if cursor
+                .as_ref()
+                .is_some_and(|previous| !cursor_is_after(previous, &next_cursor))
+            {
+                return Err(io::Error::other("audit-export-pagination-stalled"));
+            }
+            cursor = Some(next_cursor);
+        }
     }
 
     /// Returns `(uid, gid, mode)` of the current day's daily file.
@@ -1172,6 +1298,149 @@ fn open_append_cloexec(path: &Path, expected_gid: u32, test_mode: bool) -> io::R
         Mode::from_raw_mode(0),
     );
     Ok(file)
+}
+
+fn reconcile_truncated_final_line(
+    path: &Path,
+    audit_dir: &Path,
+    expected_gid: u32,
+    test_mode: bool,
+) -> io::Result<()> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    if metadata.file_type().is_symlink() {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "audit daily file rejected",
+        ));
+    }
+    if !metadata.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "audit daily path is not a regular file",
+        ));
+    }
+
+    let mut file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW)
+        .open(path)?;
+    let file_len = file.metadata()?.len();
+    if file_len == 0 {
+        return Ok(());
+    }
+
+    file.seek(SeekFrom::Start(file_len - 1))?;
+    let mut final_byte = [0_u8; 1];
+    file.read_exact(&mut final_byte)?;
+    if final_byte[0] == b'\n' {
+        return Ok(());
+    }
+
+    let truncate_at = last_newline_offset(&mut file, file_len)?
+        .map(|offset| offset.saturating_add(1))
+        .unwrap_or(0);
+    quarantine_truncated_tail(
+        &mut file,
+        path,
+        audit_dir,
+        truncate_at,
+        file_len.saturating_sub(truncate_at),
+        expected_gid,
+        test_mode,
+    )?;
+    file.set_len(truncate_at)?;
+    file.sync_all()?;
+    sync_directory(audit_dir)
+}
+
+fn last_newline_offset(file: &mut File, file_len: u64) -> io::Result<Option<u64>> {
+    let mut cursor = file_len;
+    let mut buffer = [0_u8; AUDIT_RECONCILE_CHUNK_BYTES];
+    while cursor > 0 {
+        let chunk_start = cursor.saturating_sub(buffer.len() as u64);
+        let chunk_len = usize::try_from(cursor - chunk_start)
+            .map_err(|_| io::Error::other("audit-reconcile-chunk-too-large"))?;
+        file.seek(SeekFrom::Start(chunk_start))?;
+        file.read_exact(&mut buffer[..chunk_len])?;
+        if let Some(index) = buffer[..chunk_len].iter().rposition(|byte| *byte == b'\n') {
+            return Ok(Some(chunk_start + index as u64));
+        }
+        cursor = chunk_start;
+    }
+    Ok(None)
+}
+
+fn quarantine_truncated_tail(
+    source: &mut File,
+    daily_path: &Path,
+    audit_dir: &Path,
+    tail_start: u64,
+    tail_len: u64,
+    expected_gid: u32,
+    test_mode: bool,
+) -> io::Result<()> {
+    let basename = daily_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidInput, "audit daily basename invalid")
+        })?;
+    let directory_fd = path_safe::open_dir_path_safe(audit_dir)?;
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+
+    for attempt in 0..MAX_QUARANTINE_NAME_ATTEMPTS {
+        let name = format!(
+            "{basename}.truncated-{}-{nonce}-{attempt}.quarantine",
+            std::process::id()
+        );
+        let fd = match path_safe::create_file_at_safe(
+            &directory_fd,
+            &name,
+            libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL,
+            0o640,
+        ) {
+            Ok(fd) => fd,
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        };
+        let quarantine_path = audit_dir.join(&name);
+        let mut quarantine = File::from(fd);
+        let result = (|| {
+            set_root_d2bd_acl(&quarantine, expected_gid, test_mode)?;
+            source.seek(SeekFrom::Start(tail_start))?;
+            let mut remaining = tail_len;
+            let mut buffer = [0_u8; AUDIT_RECONCILE_CHUNK_BYTES];
+            while remaining > 0 {
+                let chunk_len = usize::try_from(remaining.min(buffer.len() as u64))
+                    .map_err(|_| io::Error::other("audit-reconcile-chunk-too-large"))?;
+                source.read_exact(&mut buffer[..chunk_len])?;
+                quarantine.write_all(&buffer[..chunk_len])?;
+                remaining -= chunk_len as u64;
+            }
+            quarantine.flush()?;
+            quarantine.sync_all()?;
+            sync_directory(audit_dir)
+        })();
+        if let Err(error) = result {
+            drop(quarantine);
+            let _ = path_safe::remove_nofollow(&quarantine_path);
+            return Err(error);
+        }
+        return Ok(());
+    }
+
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "audit quarantine name allocation exhausted",
+    ))
 }
 
 fn sync_directory(directory: &Path) -> io::Result<()> {
@@ -1360,6 +1629,16 @@ fn unix_days_from_ymd(y: i32, m: u32, d: u32) -> Option<i64> {
     }
 }
 
+fn dated_audit_artifact_date(name: &str) -> Option<&str> {
+    let stem = name.strip_prefix("broker-")?;
+    if let Some(day) = stem.strip_suffix(".jsonl") {
+        return Some(day);
+    }
+    stem.strip_suffix(".quarantine")?
+        .split_once(".jsonl.truncated-")
+        .map(|(day, _)| day)
+}
+
 fn ts_at_least(record: &Value, since: &str) -> bool {
     let wanted = since.parse::<u128>().ok();
     let current = record
@@ -1405,6 +1684,20 @@ fn append_export_entry(
         sequence: emitted_sequence,
     });
     Ok(true)
+}
+
+fn legacy_export_entry_line(entry: AuditExportEntry) -> io::Result<String> {
+    serde_json::to_string(&entry.record.or_else(|| {
+        Some(serde_json::json!({
+            "export_error": entry.error,
+            "sequence": entry.sequence,
+        }))
+    }))
+    .map_err(|error| io::Error::other(error.to_string()))
+}
+
+fn cursor_is_after(previous: &AuditExportCursor, next: &AuditExportCursor) -> bool {
+    next.day > previous.day || (next.day == previous.day && next.line > previous.line)
 }
 
 fn record_matches_filter(record: &Value, filter: &BrokerAuditFilter) -> bool {
@@ -1701,6 +1994,29 @@ mod tests {
     }
 
     #[test]
+    fn prune_removes_expired_truncated_quarantines() {
+        let today_unix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+        let old = ymd_from_unix(today_unix - 86_400 * 50);
+        let log = make_audit_with_files(14, &[]);
+        let quarantine = log.audit_dir.join(format!(
+            "broker-{y:04}-{m:02}-{d:02}.jsonl.truncated-test.quarantine",
+            y = old.0,
+            m = old.1,
+            d = old.2
+        ));
+        fs::write(&quarantine, b"truncated").expect("seed old quarantine");
+
+        let pruned = log.prune_expired_daily_files().expect("prune quarantine");
+        assert_eq!(pruned, 1);
+        assert!(!quarantine.exists(), "expired quarantine should be pruned");
+
+        let _ = fs::remove_dir_all(log.audit_dir.parent().unwrap());
+    }
+
+    #[test]
     fn privileged_audit_is_not_rate_limited() {
         let root = target_scratch_root("audit-rate-limit");
         let log = AuditLog::open_with_write_limit(&root, Gid::current().as_raw(), true, 14, 4)
@@ -1745,6 +2061,229 @@ mod tests {
             .expect("export completion page");
         assert!(third.entries.is_empty());
         assert!(third.complete);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn append_failures_roll_back_and_keep_writer_usable() {
+        let root = target_scratch_root("audit-append-rollback");
+        let log = AuditLog::open(&root, Gid::current().as_raw(), true, 30)
+            .expect("open rollback audit log");
+        log.write_entry(
+            "BaselineOperation",
+            1000,
+            "allowed",
+            "baseline-target",
+            "success",
+        )
+        .expect("write baseline record");
+
+        for failure in [
+            InjectedAuditIoFailure::PartialWrite,
+            InjectedAuditIoFailure::Flush,
+            InjectedAuditIoFailure::Sync { remaining: 1 },
+        ] {
+            let before = fs::read(log.current_daily_path()).expect("read baseline audit");
+            log.inject_io_failure(failure)
+                .expect("install audit failure injection");
+            let error = log
+                .write_entry(
+                    "FailedOperationWithEnoughBytesForPartialWrite",
+                    1000,
+                    "allowed",
+                    "failed-target",
+                    "success",
+                )
+                .expect_err("injected append failure must propagate");
+            assert_ne!(
+                error.to_string(),
+                "audit-writer-poisoned",
+                "durable rollback should keep the writer usable"
+            );
+            assert_eq!(
+                fs::read(log.current_daily_path()).expect("read rolled-back audit"),
+                before,
+                "failed append must not leave partial authoritative bytes"
+            );
+            log.write_entry(
+                "RecoveryOperation",
+                1000,
+                "allowed",
+                "recovery-target",
+                "success",
+            )
+            .expect("writer should remain usable after durable rollback");
+        }
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn append_failure_poisons_writer_when_rollback_sync_fails() {
+        let root = target_scratch_root("audit-append-poison");
+        let log = AuditLog::open(&root, Gid::current().as_raw(), true, 30)
+            .expect("open poison audit log");
+        log.write_entry(
+            "BaselineOperation",
+            1000,
+            "allowed",
+            "baseline-target",
+            "success",
+        )
+        .expect("write baseline record");
+        let before = fs::read(log.current_daily_path()).expect("read baseline audit");
+
+        log.inject_io_failure(InjectedAuditIoFailure::Sync { remaining: 2 })
+            .expect("install sync failure injection");
+        let error = log
+            .write_entry(
+                "PoisonedOperation",
+                1000,
+                "allowed",
+                "poisoned-target",
+                "success",
+            )
+            .expect_err("sync failure with uncertain rollback must fail closed");
+        assert_eq!(error.to_string(), "audit-writer-poisoned");
+        assert_eq!(
+            fs::read(log.current_daily_path()).expect("read poisoned audit"),
+            before,
+            "poisoning must not expose the failed record as authoritative"
+        );
+        let second_error = log
+            .write_entry(
+                "AfterPoisonOperation",
+                1000,
+                "allowed",
+                "after-poison-target",
+                "success",
+            )
+            .expect_err("poisoned writer must reject subsequent appends");
+        assert_eq!(second_error.to_string(), "audit-writer-poisoned");
+
+        drop(log);
+        let reopened = AuditLog::open(&root, Gid::current().as_raw(), true, 30)
+            .expect("reopen after poisoned writer");
+        reopened
+            .write_entry(
+                "ReopenedOperation",
+                1000,
+                "allowed",
+                "reopened-target",
+                "success",
+            )
+            .expect("a fresh writer should recover after restart");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn reopen_quarantines_truncated_final_line_before_appending() {
+        let root = target_scratch_root("audit-reopen-truncated");
+        fs::create_dir_all(&root).expect("create audit root");
+        let path = root.join(format!("broker-{}.jsonl", utc_date_string()));
+        let prefix = b"{\"ts\":1,\"op\":\"complete\"}\n";
+        let truncated = br#"{"ts":2,"op":"truncated"#;
+        let mut seed = prefix.to_vec();
+        seed.extend_from_slice(truncated);
+        fs::write(&path, seed).expect("seed truncated audit");
+
+        let log = AuditLog::open(&root, Gid::current().as_raw(), true, 30)
+            .expect("reopen and reconcile audit log");
+        assert_eq!(
+            fs::read(&path).expect("read reconciled audit"),
+            prefix,
+            "reopen must remove the incomplete final JSONL record"
+        );
+        let quarantines: Vec<_> = fs::read_dir(&root)
+            .expect("read audit directory")
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_name().to_string_lossy().ends_with(".quarantine"))
+            .collect();
+        assert_eq!(quarantines.len(), 1, "truncated bytes must be quarantined");
+        assert_eq!(
+            fs::read(quarantines[0].path()).expect("read quarantined bytes"),
+            truncated,
+            "quarantine must preserve the exact incomplete tail"
+        );
+
+        log.write_entry(
+            "AfterReopenOperation",
+            1000,
+            "allowed",
+            "reopen-target",
+            "success",
+        )
+        .expect("append after reconciliation");
+        let contents = fs::read_to_string(&path).expect("read post-reopen audit");
+        assert_eq!(contents.lines().count(), 2);
+        assert!(
+            contents
+                .lines()
+                .all(|line| serde_json::from_str::<Value>(line).is_ok())
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn legacy_export_follows_all_pages_above_1024_in_order() {
+        let root = target_scratch_root("audit-legacy-export-pages");
+        let log = AuditLog::open(&root, Gid::current().as_raw(), true, 30)
+            .expect("open legacy export audit log");
+        let mut records = String::new();
+        for index in 0..1025 {
+            records.push_str(&format!(r#"{{"ts":{index},"op":"legacy-{index}"}}"#));
+            records.push('\n');
+        }
+        let path = log.current_daily_path();
+        let mut file = OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .expect("open audit file for page fixture");
+        file.write_all(records.as_bytes())
+            .expect("append page fixture");
+        file.sync_all().expect("sync page fixture");
+        drop(file);
+
+        let exported = log
+            .export_lines(None, None)
+            .expect("legacy export should follow continuation pages");
+        assert_eq!(exported.len(), 1025);
+        for (index, line) in exported.iter().enumerate() {
+            let value: Value = serde_json::from_str(line).expect("parse exported line");
+            assert_eq!(value["ts"], index as u64);
+            assert_eq!(value["op"], format!("legacy-{index}"));
+        }
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn legacy_export_refuses_records_beyond_compatibility_cap() {
+        let root = target_scratch_root("audit-legacy-export-cap");
+        let log = AuditLog::open(&root, Gid::current().as_raw(), true, 30)
+            .expect("open capped legacy export audit log");
+        let mut records = String::new();
+        for index in 0..=MAX_LEGACY_EXPORT_RECORDS {
+            records.push_str(&format!(r#"{{"ts":{index},"op":"legacy"}}"#));
+            records.push('\n');
+        }
+        let path = log.current_daily_path();
+        let mut file = OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .expect("open audit file for cap fixture");
+        file.write_all(records.as_bytes())
+            .expect("append cap fixture");
+        file.sync_all().expect("sync cap fixture");
+        drop(file);
+
+        let error = log
+            .export_lines(None, None)
+            .expect_err("legacy export must refuse an over-cap whole-log projection");
+        assert_eq!(error.to_string(), "audit-export-legacy-limit");
+
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -1802,15 +2341,19 @@ mod tests {
             .expect("open daily file");
         file.write_all(&[0xff, b'\n'])
             .expect("append invalid UTF-8");
+        file.write_all(
+            b"{\"ts\":1,\"op\":\"AfterCorruption\",\"outcome\":\"denied\",\"decision\":\"denied-policy\"}\n",
+        )
+        .expect("append valid record after corruption");
         file.sync_all().expect("sync corrupt record");
+        drop(file);
 
         let filter = serde_json::json!({
-            "operation": "does-not-match",
             "severity": "denied"
         })
         .to_string();
         let first = log
-            .export_page(Some("999999999999"), Some(&filter), None, 10)
+            .export_page(None, Some(&filter), None, 1)
             .expect("export corruption");
         assert_eq!(first.entries.len(), 1);
         assert_eq!(
@@ -1821,10 +2364,28 @@ mod tests {
         assert_eq!(cursor.line, 1);
 
         let second = log
-            .export_page(Some("999999999999"), Some(&filter), Some(cursor), 10)
+            .export_page(None, Some(&filter), Some(cursor), 10)
             .expect("resume after corruption");
-        assert!(second.entries.is_empty());
+        assert_eq!(second.entries.len(), 1);
+        assert_eq!(
+            second.entries[0]
+                .record
+                .as_ref()
+                .and_then(|record| record.get("op"))
+                .and_then(Value::as_str),
+            Some("AfterCorruption")
+        );
         assert!(second.complete);
+        let legacy = log
+            .export_lines(None, Some(&filter))
+            .expect("legacy export should preserve typed corruption");
+        assert_eq!(legacy.len(), 2);
+        let legacy_error: Value =
+            serde_json::from_str(&legacy[0]).expect("parse legacy corruption entry");
+        assert_eq!(legacy_error["export_error"], "read-failed");
+        let legacy_record: Value =
+            serde_json::from_str(&legacy[1]).expect("parse legacy recovered entry");
+        assert_eq!(legacy_record["op"], "AfterCorruption");
         let _ = fs::remove_dir_all(&root);
     }
 

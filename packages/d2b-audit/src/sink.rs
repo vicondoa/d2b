@@ -203,13 +203,11 @@ impl AuditSink {
         if decision == RateDecision::Limited {
             return Ok(AuditWriteOutcome::RateLimited);
         }
-        record
+        let line = record
             .to_json_line()
             .map_err(|_| AuditSinkError::Serialization)?;
-        if state.writer.append(record).is_err() {
-            if !state.writer.append_state_consistent()
-                || crate::segment::checkpoint_pending(state.writer.directory()).unwrap_or(true)
-            {
+        if state.writer.append_serialized(&line).is_err() {
+            if !state.writer.append_state_consistent() {
                 state.poisoned = true;
             }
             if state.poisoned {
@@ -244,16 +242,7 @@ impl AuditSink {
             .map_err(|_| AuditSinkError::StatePoisoned)?;
         let removed = match state.writer.prune_old(now_ms) {
             Ok(removed) => removed,
-            Err(_error) => {
-                if crate::segment::checkpoint_pending(state.writer.directory()).unwrap_or(true) {
-                    state.poisoned = true;
-                }
-                return Err(if state.poisoned {
-                    AuditSinkError::Poisoned
-                } else {
-                    AuditSinkError::Unavailable
-                });
-            }
+            Err(_error) => return Err(AuditSinkError::Unavailable),
         };
         if removed > 0 {
             let scan = scan_chain_state(state.writer.directory()).map_err(|_| {
@@ -291,6 +280,14 @@ impl AuditSink {
         self.state
             .lock()
             .map(|state| state.chain_head.clone())
+            .map_err(|_| AuditSinkError::StatePoisoned)
+    }
+
+    /// Whether automatic retention needs a retry.
+    pub fn retention_degraded(&self) -> Result<bool, AuditSinkError> {
+        self.state
+            .lock()
+            .map(|state| state.writer.retention_degraded())
             .map_err(|_| AuditSinkError::StatePoisoned)
     }
 
@@ -447,6 +444,7 @@ mod tests {
         hash_chain::genesis_hash,
         record_types::{
             AuditRecord, AuditRecordFields, ProcessEffectFields, ResourceMutationFields,
+            test_support,
         },
         segment::{FailureInjector, FailurePoint},
     };
@@ -492,6 +490,31 @@ mod tests {
             );
             previous = record.record_hash().clone();
         }
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn sink_serializes_each_append_once() {
+        let directory = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join(format!(
+                "d2b-audit-sink-serialization-{}",
+                std::process::id()
+            ));
+        let _ = std::fs::remove_dir_all(&directory);
+        let sink = AuditSink::open_with_limits(&directory, 1024, 30, 8).unwrap();
+        let record = sample(genesis_hash());
+        test_support::reset_json_line_serialization_count();
+
+        assert_eq!(
+            sink.append(AuditWriteClass::Privileged, &record).unwrap(),
+            AuditWriteOutcome::Written
+        );
+        assert_eq!(
+            test_support::json_line_serialization_count(),
+            1,
+            "one serialized line should serve the sink and segment writer"
+        );
         let _ = std::fs::remove_dir_all(directory);
     }
 
@@ -583,6 +606,43 @@ mod tests {
             );
             let _ = std::fs::remove_dir_all(directory);
         }
+    }
+
+    #[test]
+    fn durable_append_is_success_even_when_automatic_retention_degrades() {
+        let directory = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join(format!(
+                "d2b-audit-retention-success-{}",
+                std::process::id()
+            ));
+        let _ = std::fs::remove_dir_all(&directory);
+        let injector = FailureInjector::default();
+        let sink = AuditSink::open_with_injector(&directory, 1, 1, 8, injector.clone()).unwrap();
+        let old = directory.join("audit-19700101000000000000.jsonl");
+        std::fs::write(&old, b"").unwrap();
+        let first = sample(genesis_hash());
+        assert_eq!(
+            sink.append(AuditWriteClass::Privileged, &first).unwrap(),
+            AuditWriteOutcome::Written
+        );
+        let second = sample(first.record_hash().clone());
+        injector.fail_next(FailurePoint::PruneCheckpoint);
+        assert_eq!(
+            sink.append(AuditWriteClass::Privileged, &second).unwrap(),
+            AuditWriteOutcome::Written
+        );
+        assert_eq!(sink.chain_head(), Ok(second.record_hash().clone()));
+        assert!(sink.retention_degraded().unwrap());
+        assert!(old.exists());
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        assert_eq!(sink.prune_old(now_ms).unwrap(), 1);
+        assert!(!sink.retention_degraded().unwrap());
+        assert!(!old.exists());
+        let _ = std::fs::remove_dir_all(directory);
     }
 
     #[test]

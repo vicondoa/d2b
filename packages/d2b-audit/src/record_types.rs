@@ -548,6 +548,8 @@ impl AuditRecord {
 
     /// Serialize one NDJSON line.
     pub fn to_json_line(&self) -> Result<Vec<u8>, serde_json::Error> {
+        #[cfg(test)]
+        test_support::note_json_line_serialization();
         let mut bytes = serde_json::to_vec(self)?;
         bytes.push(b'\n');
         Ok(bytes)
@@ -646,6 +648,27 @@ impl AuditRecord {
         } else {
             redacted_fields_value(&self.fields)
         }
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod test_support {
+    use std::cell::Cell;
+
+    thread_local! {
+        static JSON_LINE_SERIALIZATION_COUNT: Cell<usize> = const { Cell::new(0) };
+    }
+
+    pub(crate) fn note_json_line_serialization() {
+        JSON_LINE_SERIALIZATION_COUNT.with(|count| count.set(count.get().saturating_add(1)));
+    }
+
+    pub(crate) fn reset_json_line_serialization_count() {
+        JSON_LINE_SERIALIZATION_COUNT.with(|count| count.set(0));
+    }
+
+    pub(crate) fn json_line_serialization_count() -> usize {
+        JSON_LINE_SERIALIZATION_COUNT.with(Cell::get)
     }
 }
 

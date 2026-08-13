@@ -78,8 +78,28 @@ fn export_audit_requires_admin_and_exports_op_audit_records() {
         .expect("exported ApplyNftables OpAuditRecord");
     assert_eq!(apply_record["peer_uid"], broker.d2bd_uid());
     assert_eq!(apply_record["operation"], "ApplyNftables");
-    assert_eq!(apply_record["public_operation_id"], "operation");
-    assert_eq!(apply_record["scope_id"], "operation");
+    let public_operation_id = apply_record["public_operation_id"]
+        .as_str()
+        .expect("canonical public operation id");
+    assert!(d2b_contracts::v3::is_canonical_digest(public_operation_id));
+    assert_ne!(public_operation_id, "operation");
+    assert_eq!(
+        apply_record["operation_identity"].as_str(),
+        Some(public_operation_id)
+    );
+    assert_eq!(
+        apply_record["zone_operation_key"]["operation"].as_str(),
+        Some(public_operation_id)
+    );
+    let zone_id = apply_record["zone_id"].as_str().expect("canonical zone id");
+    assert!(d2b_contracts::v3::is_canonical_digest(zone_id));
+    assert_eq!(
+        apply_record["zone_operation_key"]["zone"].as_str(),
+        Some(zone_id)
+    );
+    let scope_id = apply_record["scope_id"].as_str().expect("canonical scope id");
+    assert!(d2b_contracts::v3::is_canonical_digest(scope_id));
+    assert_ne!(scope_id, "operation");
     assert_eq!(apply_record["verb"], "ApplyNftables");
     assert_eq!(apply_record["decision"], "errored");
     assert_eq!(apply_record["result"], "error");

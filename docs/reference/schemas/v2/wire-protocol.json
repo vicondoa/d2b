@@ -811,6 +811,67 @@
       },
       "additionalProperties": false
     },
+    "AuditExportCursor": {
+      "description": "Opaque page position for typed broker audit export.",
+      "type": "object",
+      "required": [
+        "day",
+        "line"
+      ],
+      "properties": {
+        "day": {
+          "type": "string"
+        },
+        "line": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "sequence": {
+          "description": "Sequence of the last emitted entry. This keeps page sequence numbers monotonic across restarts and continuation requests.",
+          "default": 0,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "AuditExportEntry": {
+      "description": "One typed audit export entry. Exactly one of `record` and `error` is populated by the broker.",
+      "type": "object",
+      "required": [
+        "sequence"
+      ],
+      "properties": {
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AuditExportErrorCode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "record": true,
+        "sequence": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "AuditExportErrorCode": {
+      "description": "Closed export failure classes.",
+      "type": "string",
+      "enum": [
+        "hash-break",
+        "record-invalid",
+        "read-failed"
+      ]
+    },
     "AuditFormat": {
       "type": "string",
       "enum": [
@@ -821,6 +882,17 @@
     "AuditRequest": {
       "type": "object",
       "properties": {
+        "cursor": {
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AuditExportCursor"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "filter": {
           "anyOf": [
             {
@@ -838,6 +910,12 @@
               "$ref": "#/definitions/AuditFormat"
             }
           ]
+        },
+        "limit": {
+          "default": 256,
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
         },
         "since": {
           "type": [
@@ -867,6 +945,24 @@
       "type": "object",
       "properties": {
         "env": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "operation": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "outcome": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "role": {
           "type": [
             "string",
             "null"
@@ -1047,6 +1143,29 @@
             "null"
           ]
         },
+        "outcome": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "role": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "severity": {
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/BrokerAuditSeverity"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "vm": {
           "type": [
             "string",
@@ -1055,6 +1174,16 @@
         }
       },
       "additionalProperties": false
+    },
+    "BrokerAuditSeverity": {
+      "description": "Closed severity predicate for broker audit export.",
+      "type": "string",
+      "enum": [
+        "info",
+        "warning",
+        "error",
+        "denied"
+      ]
     },
     "BrokerErrorResponse": {
       "description": "Typed broker error envelope for the real wire. Mirrors the bootstrap `BrokerResponse::Error` struct variant fields so the audit pipeline + daemon-side error propagation stay shape-compatible across the dispatcher transition.",
@@ -5487,6 +5616,17 @@
     "ExportBrokerAuditRequest": {
       "type": "object",
       "properties": {
+        "cursor": {
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AuditExportCursor"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "filter": {
           "anyOf": [
             {
@@ -5496,6 +5636,12 @@
               "type": "null"
             }
           ]
+        },
+        "limit": {
+          "default": 256,
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
         },
         "since": {
           "type": [
@@ -5509,14 +5655,28 @@
     "ExportBrokerAuditResponse": {
       "type": "object",
       "required": [
-        "lines"
+        "complete",
+        "entries"
       ],
       "properties": {
-        "lines": {
+        "complete": {
+          "type": "boolean"
+        },
+        "entries": {
           "type": "array",
           "items": {
-            "type": "string"
+            "$ref": "#/definitions/AuditExportEntry"
           }
+        },
+        "nextCursor": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AuditExportCursor"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "additionalProperties": false

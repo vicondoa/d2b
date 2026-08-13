@@ -2,12 +2,12 @@
 
 use std::{
     fs::{self, File, OpenOptions},
-    io::{self, BufRead, BufReader, Seek, SeekFrom, Write},
+    io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write},
     os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
     sync::{
         Arc,
-        atomic::{AtomicU8, Ordering},
+        atomic::{AtomicBool, AtomicU8, Ordering},
     },
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -41,8 +41,14 @@ pub enum FailurePoint {
     ParentSync,
     /// Fail while rotating to a new segment.
     Rotation,
+    /// Fail when a retention scan starts.
+    PruneScan,
     /// Fail while publishing a retention checkpoint.
     PruneCheckpoint,
+    /// Fail after the retention checkpoint is prepared.
+    PruneDelete,
+    /// Fail after retention deletes segments but before clearing its checkpoint.
+    PruneFinalize,
 }
 
 struct RetentionScanBudget {
@@ -68,7 +74,10 @@ pub struct FailureInjector {
     data_sync: Arc<AtomicU8>,
     parent_sync: Arc<AtomicU8>,
     rotation: Arc<AtomicU8>,
+    prune_scan: Arc<AtomicU8>,
     prune_checkpoint: Arc<AtomicU8>,
+    prune_delete: Arc<AtomicU8>,
+    prune_finalize: Arc<AtomicU8>,
 }
 
 impl FailureInjector {
@@ -79,7 +88,10 @@ impl FailureInjector {
             FailurePoint::DataSync => &self.data_sync,
             FailurePoint::ParentSync => &self.parent_sync,
             FailurePoint::Rotation => &self.rotation,
+            FailurePoint::PruneScan => &self.prune_scan,
             FailurePoint::PruneCheckpoint => &self.prune_checkpoint,
+            FailurePoint::PruneDelete => &self.prune_delete,
+            FailurePoint::PruneFinalize => &self.prune_finalize,
         };
         slot.store(1, Ordering::SeqCst);
     }
@@ -90,7 +102,10 @@ impl FailureInjector {
             FailurePoint::DataSync => &self.data_sync,
             FailurePoint::ParentSync => &self.parent_sync,
             FailurePoint::Rotation => &self.rotation,
+            FailurePoint::PruneScan => &self.prune_scan,
             FailurePoint::PruneCheckpoint => &self.prune_checkpoint,
+            FailurePoint::PruneDelete => &self.prune_delete,
+            FailurePoint::PruneFinalize => &self.prune_finalize,
         };
         slot.swap(0, Ordering::SeqCst) != 0
     }
@@ -111,6 +126,7 @@ pub struct SegmentWriter {
     max_bytes: u64,
     retention_days: u64,
     injector: Option<FailureInjector>,
+    retention_degraded: AtomicBool,
 }
 
 impl core::fmt::Debug for SegmentWriter {
@@ -121,6 +137,10 @@ impl core::fmt::Debug for SegmentWriter {
             .field("sequence", &self.sequence)
             .field("max_bytes", &self.max_bytes)
             .field("retention_days", &self.retention_days)
+            .field(
+                "retention_degraded",
+                &self.retention_degraded.load(Ordering::Acquire),
+            )
             .finish()
     }
 }
@@ -155,9 +175,7 @@ impl SegmentWriter {
         let directory_metadata = directory_file.metadata()?;
         validate_directory_metadata(&directory_metadata)?;
         let lock_file = open_lock(&directory, directory_metadata.gid())?;
-        if checkpoint_pending(&directory)? {
-            return Err(io::Error::other("audit-retention-checkpoint-pending"));
-        }
+        repair_pending_checkpoint(&directory, &directory_file)?;
         let opened_day = day_number(timestamp_ms);
         let sequence = next_sequence(&directory, timestamp_ms)?;
         let path = directory.join(segment_name(timestamp_ms, sequence));
@@ -180,6 +198,7 @@ impl SegmentWriter {
             max_bytes: max_bytes.max(1),
             retention_days,
             injector: None,
+            retention_degraded: AtomicBool::new(false),
         };
         writer.prune_old(timestamp_ms)?;
         Ok(writer)
@@ -209,6 +228,18 @@ impl SegmentWriter {
     /// audit record's own timestamp remains part of the caller-supplied
     /// record and is never rewritten by the segment writer.
     pub fn append_at(&mut self, record: &AuditRecord, timestamp_ms: u64) -> io::Result<PathBuf> {
+        self.prepare_append()?;
+        let line = record.to_json_line().map_err(io::Error::other)?;
+        self.append_serialized_at(&line, timestamp_ms)
+    }
+
+    /// Append a line already serialized and validated by the audit record.
+    pub(crate) fn append_serialized(&mut self, line: &[u8]) -> io::Result<PathBuf> {
+        self.prepare_append()?;
+        self.append_serialized_at(line, now_ms())
+    }
+
+    fn prepare_append(&self) -> io::Result<()> {
         self.validate_live_inodes()?;
         if self
             .injector
@@ -217,16 +248,18 @@ impl SegmentWriter {
         {
             return Err(io::Error::other("audit-append-injected"));
         }
-        let line = record.to_json_line().map_err(io::Error::other)?;
+        Ok(())
+    }
+
+    fn append_serialized_at(&mut self, line: &[u8], timestamp_ms: u64) -> io::Result<PathBuf> {
         let current_day = day_number(timestamp_ms);
-        if self.bytes > 0
-            && (self.bytes.saturating_add(line.len() as u64) > self.max_bytes
-                || current_day != self.opened_day)
-        {
+        let rotated = current_day != self.opened_day
+            || (self.bytes > 0 && self.bytes.saturating_add(line.len() as u64) > self.max_bytes);
+        if rotated {
             self.rotate(timestamp_ms)?;
         }
         let offset = self.file.metadata()?.len();
-        if let Err(error) = self.file.write_all(&line) {
+        if let Err(error) = self.file.write_all(line) {
             let _ = rollback_append(&mut self.file, offset, &self.directory_file);
             return Err(error);
         }
@@ -255,7 +288,9 @@ impl SegmentWriter {
             return Err(error);
         }
         self.bytes = self.bytes.saturating_add(line.len() as u64);
-        self.prune_old(timestamp_ms)?;
+        if rotated {
+            let _ = self.prune_old(timestamp_ms);
+        }
         Ok(self.path.clone())
     }
 
@@ -283,16 +318,36 @@ impl SegmentWriter {
             .unwrap_or(false)
     }
 
+    /// Whether the last automatic retention attempt needs a retry.
+    pub fn retention_degraded(&self) -> bool {
+        self.retention_degraded.load(Ordering::Acquire)
+    }
+
     /// Remove segments older than the retention floor.
     ///
     /// Only files matching the owned `audit-*.jsonl` shape are considered.
     pub fn prune_old(&self, now_ms: u64) -> io::Result<usize> {
+        let result = self.prune_old_inner(now_ms);
+        self.retention_degraded
+            .store(result.is_err(), Ordering::Release);
+        result
+    }
+
+    fn prune_old_inner(&self, now_ms: u64) -> io::Result<usize> {
         if self.retention_days == 0 {
             return Ok(0);
         }
+        repair_pending_checkpoint(&self.directory, &self.directory_file)?;
         let floor = now_ms.saturating_sub(self.retention_days.saturating_mul(24 * 60 * 60 * 1000));
         let mut candidates = Vec::new();
         let mut budget = RetentionScanBudget { lines: 0, bytes: 0 };
+        if self
+            .injector
+            .as_ref()
+            .is_some_and(|injector| injector.take(FailurePoint::PruneScan))
+        {
+            return Err(io::Error::other("audit-prune-scan-injected"));
+        }
         let cutoff_date = utc_stamp(floor)
             .get(..8)
             .ok_or_else(|| io::Error::other("audit-retention-date-invalid"))?
@@ -335,9 +390,26 @@ impl SegmentWriter {
             return Ok(0);
         }
 
-        let mut anchor = checkpoint_anchor(&self.directory)?;
+        let start_anchor = checkpoint_anchor(&self.directory)?;
+        let mut anchor = start_anchor.clone();
+        let mut checkpoint_segments = Vec::with_capacity(prefix.len());
         for path in &prefix {
-            anchor = segment_tail_hash(path, &anchor, &mut budget)?;
+            let metadata = fs::symlink_metadata(path)?;
+            validate_segment_metadata(&metadata)?;
+            let previous = anchor.clone();
+            let tail = segment_tail_hash(path, &previous, &mut budget)?;
+            let name = path
+                .file_name()
+                .and_then(|value| value.to_str())
+                .ok_or_else(|| io::Error::other("audit-segment-name-invalid"))?;
+            checkpoint_segments.push(RetentionSegment {
+                name: name.to_owned(),
+                dev: metadata.dev(),
+                ino: metadata.ino(),
+                previous,
+                tail: tail.clone(),
+            });
+            anchor = tail;
         }
         if self
             .injector
@@ -346,17 +418,44 @@ impl SegmentWriter {
         {
             return Err(io::Error::other("audit-prune-checkpoint-injected"));
         }
-        write_checkpoint(&self.directory, &anchor, true)?;
+        write_checkpoint(
+            &self.directory,
+            &start_anchor,
+            &anchor,
+            &checkpoint_segments,
+            RetentionCheckpointPhase::Prepared,
+        )?;
         self.directory_file.sync_all()?;
+        write_checkpoint(
+            &self.directory,
+            &start_anchor,
+            &anchor,
+            &checkpoint_segments,
+            RetentionCheckpointPhase::Deleting,
+        )?;
+        self.directory_file.sync_all()?;
+        if self
+            .injector
+            .as_ref()
+            .is_some_and(|injector| injector.take(FailurePoint::PruneDelete))
+        {
+            return Err(io::Error::other("audit-prune-delete-injected"));
+        }
         let mut removed = 0;
-        for path in &prefix {
-            if fs::symlink_metadata(path).is_ok() {
-                fs::remove_file(path)?;
+        for segment in &checkpoint_segments {
+            if remove_checkpoint_segment(&self.directory, segment)? {
                 removed += 1;
             }
         }
         self.directory_file.sync_all()?;
-        write_checkpoint(&self.directory, &anchor, false)?;
+        if self
+            .injector
+            .as_ref()
+            .is_some_and(|injector| injector.take(FailurePoint::PruneFinalize))
+        {
+            return Err(io::Error::other("audit-prune-finalize-injected"));
+        }
+        clear_checkpoint(&self.directory, &anchor)?;
         self.directory_file.sync_all()?;
         Ok(removed)
     }
@@ -479,46 +578,247 @@ fn checkpoint_path(directory: &Path) -> PathBuf {
     directory.join("audit-checkpoint.json")
 }
 
-#[derive(serde::Serialize, serde::Deserialize)]
+fn checkpoint_next_path(directory: &Path) -> PathBuf {
+    directory.join("audit-checkpoint.json.next")
+}
+
+#[derive(Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RetentionCheckpoint {
     anchor: AuditHash,
     pending: bool,
+    #[serde(default)]
+    start_anchor: Option<AuditHash>,
+    #[serde(default)]
+    segments: Vec<RetentionSegment>,
+    #[serde(default)]
+    phase: Option<RetentionCheckpointPhase>,
+}
+
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum RetentionCheckpointPhase {
+    Prepared,
+    Deleting,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RetentionSegment {
+    name: String,
+    dev: u64,
+    ino: u64,
+    previous: AuditHash,
+    tail: AuditHash,
+}
+
+fn read_checkpoint_file(path: &Path) -> io::Result<Option<RetentionCheckpoint>> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    validate_segment_metadata(&metadata)?;
+    let mut file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW)
+        .open(path)?;
+    if file.metadata()?.len() > 1024 * 1024 {
+        return Err(io::Error::other("audit-retention-checkpoint-limit"));
+    }
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)?;
+    let checkpoint = serde_json::from_slice(&bytes)
+        .map_err(|_| io::Error::other("audit-retention-checkpoint-invalid"))?;
+    Ok(Some(checkpoint))
+}
+
+fn read_checkpoint(directory: &Path) -> io::Result<Option<RetentionCheckpoint>> {
+    let checkpoint = read_checkpoint_file(&checkpoint_path(directory))?;
+    let staged = read_checkpoint_file(&checkpoint_next_path(directory))?;
+    if let Some(checkpoint) = checkpoint.as_ref() {
+        validate_checkpoint(checkpoint)?;
+    }
+    if let Some(staged) = staged.as_ref() {
+        validate_checkpoint(staged)?;
+    }
+    let checkpoint = match (checkpoint, staged) {
+        (None, None) => None,
+        (Some(checkpoint), None) => Some(checkpoint),
+        (None, Some(staged)) => Some(staged),
+        (Some(committed), Some(staged)) => {
+            let compatible = match (&committed.pending, &staged.pending) {
+                (false, true) => staged.start_anchor.as_ref() == Some(&committed.anchor),
+                (true, false) => staged.anchor == committed.anchor,
+                (true, true) => {
+                    committed.anchor == staged.anchor
+                        && committed.start_anchor == staged.start_anchor
+                        && committed.segments == staged.segments
+                        && matches!(
+                            (committed.phase, staged.phase),
+                            (
+                                Some(RetentionCheckpointPhase::Prepared),
+                                Some(RetentionCheckpointPhase::Deleting)
+                            )
+                        )
+                }
+                (false, false) => committed.anchor == staged.anchor,
+            };
+            if !compatible {
+                return Err(io::Error::other("audit-retention-checkpoint-staged"));
+            }
+            Some(staged)
+        }
+    };
+    let Some(checkpoint) = checkpoint else {
+        return Ok(None);
+    };
+    validate_checkpoint(&checkpoint)?;
+    Ok(Some(checkpoint))
+}
+
+fn validate_checkpoint(checkpoint: &RetentionCheckpoint) -> io::Result<()> {
+    if !checkpoint.pending {
+        if checkpoint.start_anchor.is_some()
+            || !checkpoint.segments.is_empty()
+            || checkpoint.phase.is_some()
+        {
+            return Err(io::Error::other("audit-retention-checkpoint-unverifiable"));
+        }
+        return Ok(());
+    }
+    let Some(start_anchor) = checkpoint.start_anchor.as_ref() else {
+        return Err(io::Error::other("audit-retention-checkpoint-unverifiable"));
+    };
+    let Some(phase) = checkpoint.phase else {
+        return Err(io::Error::other("audit-retention-checkpoint-unverifiable"));
+    };
+    if checkpoint.segments.is_empty() || checkpoint.segments.len() > MAX_SEGMENT_SCAN_ENTRIES {
+        return Err(io::Error::other("audit-retention-checkpoint-unverifiable"));
+    }
+    let mut previous_name = None;
+    let mut previous = start_anchor.clone();
+    for segment in &checkpoint.segments {
+        if !crate::export::is_segment_name(&segment.name)
+            || previous_name.is_some_and(|name| name >= segment.name.as_str())
+            || segment.previous != previous
+        {
+            return Err(io::Error::other("audit-retention-checkpoint-unverifiable"));
+        }
+        previous_name = Some(segment.name.as_str());
+        previous = segment.tail.clone();
+    }
+    if checkpoint.anchor != previous {
+        return Err(io::Error::other("audit-retention-checkpoint-unverifiable"));
+    }
+    match phase {
+        RetentionCheckpointPhase::Prepared | RetentionCheckpointPhase::Deleting => Ok(()),
+    }
+}
+
+fn repair_pending_checkpoint(directory: &Path, directory_file: &File) -> io::Result<()> {
+    match fs::symlink_metadata(checkpoint_next_path(directory)) {
+        Ok(metadata) => {
+            validate_segment_metadata(&metadata)?;
+            read_checkpoint(directory)?;
+            fs::rename(checkpoint_next_path(directory), checkpoint_path(directory))?;
+            directory_file.sync_all()?;
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    let Some(checkpoint) = read_checkpoint(directory)? else {
+        return Ok(());
+    };
+    if !checkpoint.pending {
+        return Ok(());
+    }
+    let phase = checkpoint
+        .phase
+        .ok_or_else(|| io::Error::other("audit-retention-checkpoint-unverifiable"))?;
+    let allow_missing = phase == RetentionCheckpointPhase::Deleting;
+    let mut budget = RetentionScanBudget { lines: 0, bytes: 0 };
+    for segment in &checkpoint.segments {
+        let path = directory.join(&segment.name);
+        let metadata = match fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == io::ErrorKind::NotFound && allow_missing => continue,
+            Err(error) => return Err(error),
+        };
+        validate_segment_metadata(&metadata)?;
+        if (metadata.dev(), metadata.ino()) != (segment.dev, segment.ino) {
+            return Err(io::Error::other("audit-segment-identity-invalid"));
+        }
+        let tail = segment_tail_hash(&path, &segment.previous, &mut budget)?;
+        if tail != segment.tail {
+            return Err(io::Error::other("audit-retention-checkpoint-chain-invalid"));
+        }
+    }
+    if phase == RetentionCheckpointPhase::Prepared {
+        write_checkpoint(
+            directory,
+            checkpoint
+                .start_anchor
+                .as_ref()
+                .ok_or_else(|| io::Error::other("audit-retention-checkpoint-unverifiable"))?,
+            &checkpoint.anchor,
+            &checkpoint.segments,
+            RetentionCheckpointPhase::Deleting,
+        )?;
+        directory_file.sync_all()?;
+    }
+    for segment in &checkpoint.segments {
+        let _ = remove_checkpoint_segment(directory, segment)?;
+    }
+    directory_file.sync_all()?;
+    clear_checkpoint(directory, &checkpoint.anchor)?;
+    directory_file.sync_all()
+}
+
+fn remove_checkpoint_segment(directory: &Path, segment: &RetentionSegment) -> io::Result<bool> {
+    let path = directory.join(&segment.name);
+    let metadata = match fs::symlink_metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error),
+    };
+    validate_segment_metadata(&metadata)?;
+    if (metadata.dev(), metadata.ino()) != (segment.dev, segment.ino) {
+        return Err(io::Error::other("audit-segment-identity-invalid"));
+    }
+    fs::remove_file(path)?;
+    Ok(true)
 }
 
 pub(crate) fn checkpoint_pending(directory: &Path) -> io::Result<bool> {
-    let path = checkpoint_path(directory);
-    match fs::read(path) {
-        Ok(bytes) => serde_json::from_slice::<RetentionCheckpoint>(&bytes)
-            .map(|checkpoint| checkpoint.pending)
-            .map_err(|_| io::Error::other("audit-retention-checkpoint-invalid")),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(error),
-    }
+    Ok(read_checkpoint(directory)?.is_some_and(|checkpoint| checkpoint.pending))
 }
 
 pub(crate) fn checkpoint_anchor(directory: &Path) -> io::Result<AuditHash> {
-    let path = checkpoint_path(directory);
-    match fs::read(path) {
-        Ok(bytes) => {
-            let checkpoint = serde_json::from_slice::<RetentionCheckpoint>(&bytes)
-                .map_err(|_| io::Error::other("audit-retention-checkpoint-invalid"))?;
-            if checkpoint.pending {
-                return Err(io::Error::other("audit-retention-checkpoint-pending"));
-            }
-            Ok(checkpoint.anchor)
+    match read_checkpoint(directory)? {
+        Some(checkpoint) if checkpoint.pending => {
+            Err(io::Error::other("audit-retention-checkpoint-pending"))
         }
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(crate::genesis_hash()),
-        Err(error) => Err(error),
+        Some(checkpoint) => Ok(checkpoint.anchor),
+        None => Ok(crate::genesis_hash()),
     }
 }
 
-fn write_checkpoint(directory: &Path, anchor: &AuditHash, pending: bool) -> io::Result<()> {
+fn write_checkpoint(
+    directory: &Path,
+    start_anchor: &AuditHash,
+    anchor: &AuditHash,
+    segments: &[RetentionSegment],
+    phase: RetentionCheckpointPhase,
+) -> io::Result<()> {
     let path = checkpoint_path(directory);
-    let tmp = directory.join("audit-checkpoint.json.next");
+    let tmp = checkpoint_next_path(directory);
     let bytes = serde_json::to_vec(&RetentionCheckpoint {
         anchor: anchor.clone(),
-        pending,
+        pending: true,
+        start_anchor: Some(start_anchor.clone()),
+        segments: segments.to_vec(),
+        phase: Some(phase),
     })
     .map_err(io::Error::other)?;
     let mut file = OpenOptions::new()
@@ -536,6 +836,33 @@ fn write_checkpoint(directory: &Path, anchor: &AuditHash, pending: bool) -> io::
         .open(directory)?
         .sync_all()?;
     Ok(())
+}
+
+fn clear_checkpoint(directory: &Path, anchor: &AuditHash) -> io::Result<()> {
+    let path = checkpoint_path(directory);
+    let tmp = checkpoint_next_path(directory);
+    let bytes = serde_json::to_vec(&RetentionCheckpoint {
+        anchor: anchor.clone(),
+        pending: false,
+        start_anchor: None,
+        segments: Vec::new(),
+        phase: None,
+    })
+    .map_err(io::Error::other)?;
+    let mut file = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW)
+        .open(&tmp)?;
+    file.write_all(&bytes)?;
+    file.sync_all()?;
+    fs::rename(tmp, path)?;
+    OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_CLOEXEC | libc::O_DIRECTORY | libc::O_NOFOLLOW)
+        .open(directory)?
+        .sync_all()
 }
 
 fn owned_segment_names(
@@ -707,6 +1034,12 @@ mod tests {
         .unwrap()
     }
 
+    fn old_segment(directory: &Path) -> PathBuf {
+        let path = directory.join("audit-19700101000000000000.jsonl");
+        fs::write(&path, b"").unwrap();
+        path
+    }
+
     #[test]
     fn names_are_owned_and_rotation_is_size_bounded() {
         let directory = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -779,14 +1112,131 @@ mod tests {
     }
 
     #[test]
-    fn pending_retention_checkpoint_fails_closed_on_restart() {
+    fn durable_append_survives_retention_failure_and_reports_degradation() {
+        let directory = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join(format!(
+                "d2b-audit-retention-after-append-{}",
+                std::process::id()
+            ));
+        let _ = fs::remove_dir_all(&directory);
+        let injector = FailureInjector::default();
+        let mut writer = SegmentWriter::open_at_with_injector(
+            &directory,
+            1,
+            1,
+            1_900_000_000_000,
+            injector.clone(),
+        )
+        .unwrap();
+        let old = old_segment(&directory);
+        writer.append_at(&sample(), 1_900_000_000_000).unwrap();
+        injector.fail_next(FailurePoint::PruneCheckpoint);
+        assert!(writer.append_at(&sample(), 1_900_000_000_000).is_ok());
+        assert!(writer.retention_degraded());
+        assert!(writer.append_state_consistent());
+        assert!(old.exists());
+        assert_eq!(writer.prune_old(1_900_000_000_000).unwrap(), 1);
+        assert!(!writer.retention_degraded());
+        assert!(!old.exists());
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn pending_retention_checkpoint_repairs_on_restart_across_delete_boundaries() {
+        for point in [FailurePoint::PruneDelete, FailurePoint::PruneFinalize] {
+            let directory = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("target")
+                .join(format!(
+                    "d2b-audit-checkpoint-{point:?}-{}",
+                    std::process::id()
+                ));
+            let _ = fs::remove_dir_all(&directory);
+            let injector = FailureInjector::default();
+            let mut writer = SegmentWriter::open_at_with_injector(
+                &directory,
+                1,
+                1,
+                1_900_000_000_000,
+                injector.clone(),
+            )
+            .unwrap();
+            let old = old_segment(&directory);
+            writer.append_at(&sample(), 1_900_000_000_000).unwrap();
+            injector.fail_next(point);
+            assert!(writer.append_at(&sample(), 1_900_000_000_000).is_ok());
+            assert!(writer.retention_degraded());
+            drop(writer);
+
+            let writer = SegmentWriter::open_at(&directory, 1, 1, 1_900_000_000_000).unwrap();
+            assert!(!writer.retention_degraded());
+            assert!(!old.exists());
+            assert!(!checkpoint_pending(&directory).unwrap());
+            let _ = fs::remove_dir_all(directory);
+        }
+    }
+
+    #[test]
+    fn unverifiable_pending_retention_checkpoint_fails_closed_on_restart() {
         let directory = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("target")
             .join(format!("d2b-audit-checkpoint-{}", std::process::id()));
         let _ = fs::remove_dir_all(&directory);
         fs::create_dir_all(&directory).unwrap();
-        write_checkpoint(&directory, &crate::genesis_hash(), true).unwrap();
+        write_checkpoint(
+            &directory,
+            &crate::genesis_hash(),
+            &crate::genesis_hash(),
+            &[],
+            RetentionCheckpointPhase::Prepared,
+        )
+        .unwrap();
         assert!(SegmentWriter::open_at(&directory, 1024, 30, 1_700_000_000_000).is_err());
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn utc_day_rotation_occurs_for_an_empty_segment() {
+        let directory = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join(format!("d2b-audit-day-rotation-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&directory);
+        let first_day = 1_700_000_000_000;
+        let second_day = first_day + 86_400_000;
+        let mut writer = SegmentWriter::open_at(&directory, 1024, 30, first_day).unwrap();
+        let first = writer.path().to_path_buf();
+        assert_eq!(
+            writer.append_at(&sample(), second_day).unwrap(),
+            writer.path()
+        );
+        assert_ne!(first, writer.path());
+        assert!(
+            writer
+                .path()
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with(&format!("audit-{}", utc_stamp(second_day)))
+        );
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn ordinary_append_does_not_run_a_retention_scan() {
+        let directory = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join(format!("d2b-audit-no-scan-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&directory);
+        let mut writer = SegmentWriter::open_at(&directory, 1024, 30, 1_700_000_000_000).unwrap();
+        for index in 0..=MAX_SEGMENT_SCAN_ENTRIES {
+            fs::write(
+                directory.join(format!("retention-no-scan-{index}")),
+                b"unowned",
+            )
+            .unwrap();
+        }
+        assert!(writer.append_at(&sample(), 1_700_000_000_000).is_ok());
+        assert!(!writer.retention_degraded());
         let _ = fs::remove_dir_all(directory);
     }
 }
