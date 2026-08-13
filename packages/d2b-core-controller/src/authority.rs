@@ -27,6 +27,9 @@ use d2b_contracts::v3::{
 };
 use serde::{Deserialize, Serialize};
 
+#[cfg(test)]
+use std::{collections::hash_map::RandomState, hash::BuildHasher};
+
 #[path = "emergency_policy.rs"]
 pub mod emergency_policy;
 #[path = "quota.rs"]
@@ -46,12 +49,12 @@ static NEXT_AUTHORITY_INDEX_NONCE: AtomicU64 = AtomicU64::new(1);
 
 #[cfg(test)]
 fn test_nonce_for_operation(operation_id: &str) -> u64 {
-    let mut hash = 0xcbf29ce484222325_u64;
-    for byte in operation_id.bytes() {
-        hash ^= u64::from(byte);
-        hash = hash.wrapping_mul(0x100000001b3_u64);
+    loop {
+        let nonce = RandomState::new().hash_one(operation_id);
+        if nonce != 0 {
+            return nonce;
+        }
     }
-    if hash == 0 { u64::MAX } else { hash }
 }
 
 /// One stable physical-NIC identity resolved from trusted Host inventory.
