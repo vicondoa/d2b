@@ -413,6 +413,30 @@ def _open_check_channel(
         raise
 
 
+def _open_egress_channel() -> int | None:
+    socket_value = os.environ.get("GC_EGRESS_SOCKET")
+    auth_token = os.environ.get("GC_FDPROXY_AUTH")
+    if not socket_value and not auth_token:
+        return None
+    if not socket_value or not auth_token:
+        raise ProfileError("egress socket and authentication must be configured together")
+    socket_path = pathlib.Path(_absolute_path(socket_value, "egress socket"))
+    channel = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        channel.settimeout(5.0)
+        channel.connect(str(socket_path))
+        _check_server_uid(
+            channel,
+            environment_name="GC_EGRESS_SERVER_UID",
+            label="egress server",
+        )
+        channel.settimeout(None)
+        return channel.detach()
+    except (OSError, ProfileError):
+        channel.close()
+        raise
+
+
 def _launch_metadata(
     args: argparse.Namespace,
     *,
@@ -488,6 +512,8 @@ def _launch_metadata(
             descriptor = args.control_fd
         if descriptor is None:
             descriptor = _environment_fd(environment_name)
+        if descriptor is None and name == "proxy":
+            descriptor = _open_egress_channel()
         if descriptor is None:
             continue
         if descriptor < 3:

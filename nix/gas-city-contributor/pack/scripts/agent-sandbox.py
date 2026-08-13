@@ -46,6 +46,7 @@ ALLOWED_GC_ENV_NAMES = frozenset(
         "GC_FDPROXY_FD",
         "GC_FDPROXY_AUTH",
         "GC_PROFILE_NAME",
+        "GC_ROOT_BEAD_ID",
         "GC_RUN_ID",
         "GC_STATE_SCHEMA",
     }

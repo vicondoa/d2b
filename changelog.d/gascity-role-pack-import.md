@@ -11,6 +11,7 @@
   dedicated lifecycle-agent-check worktree group so sandboxed agents can update
   their assigned checkout and the isolated check runner can validate it without
   exposing repository contents to unrelated sidecars. Run-scoped GC roots bind
-  to the durable workflow root separately from transient agent session beads,
-  and provider sessions receive only `$VAR` references to the authenticated
-  launcher, check, readiness, terminal-state, and egress channels.
+  to the durable workflow root separately from transient agent session beads.
+  Model-provider sessions receive scoped `$VAR` references to authenticated
+  channels, and the profile boundary converts the egress socket into the
+  descriptor consumed by the sandbox proxy.

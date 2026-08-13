@@ -136,6 +136,58 @@ class ProfileContractTests(unittest.TestCase):
         self.assertEqual(metadata["root_bead_id"], "workflow-root-1")
         self.assertEqual(metadata["bead_id"], "session-bead-1")
         self.assertEqual(descriptors, [])
+        child_environment = LAUNCHER.scrub_environment(
+            {},
+            profile="code-luna",
+            run_id="run-1",
+            bead_id="session-bead-1",
+            root_bead_id="workflow-root-1",
+            generation="generation-1",
+            state_schema="1",
+        )
+        self.assertEqual(child_environment["GC_ROOT_BEAD_ID"], "workflow-root-1")
+
+    def test_launch_metadata_connects_verified_egress_channel(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="gascity-egress-launch-") as raw:
+            root = pathlib.Path(raw)
+            socket_path = root / "egress.sock"
+            listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            listener.bind(str(socket_path))
+            listener.listen(1)
+            accepted = threading.Event()
+
+            def serve() -> None:
+                client, _address = listener.accept()
+                accepted.set()
+                client.close()
+
+            thread = threading.Thread(target=serve, daemon=True)
+            thread.start()
+            args = PROFILE._default_namespace("review-luna", "review")
+            args.run_id = "run-1"
+            args.bead_id = "bead-1"
+            args.generation = "generation-1"
+            args.worktree = str(root)
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "GC_EGRESS_SOCKET": str(socket_path),
+                    "GC_EGRESS_SERVER_UID": str(os.geteuid()),
+                    "GC_FDPROXY_AUTH": "fixture-auth",
+                },
+                clear=False,
+            ):
+                metadata, descriptors = PROFILE._launch_metadata(
+                    args,
+                    profile="review-luna",
+                    tool_policy="review",
+                )
+            self.assertTrue(accepted.wait(timeout=1))
+            self.assertEqual(metadata["fds"], ["proxy"])
+            self.assertEqual(len(descriptors), 1)
+            os.close(descriptors.pop())
+            listener.close()
+            thread.join(timeout=2)
 
     def test_settings_have_only_persistent_authority(self) -> None:
         for profile in ("review-sol", "review-luna", "code-luna"):

@@ -176,6 +176,7 @@ def _create_active_run_roots(
     bead_id: str,
     generation: str,
     state_schema: str,
+    root_bead_id: str | None = None,
     terminal_state_path: str | None = None,
 ):
     if not args.gc_root_directory or run_id == "readiness":
@@ -699,6 +700,8 @@ def scrub_environment(
         raise LauncherError(f"unknown Copilot profile: {profile}")
     _validate_identifier(run_id, "run id")
     _validate_identifier(bead_id, "bead id")
+    root_bead_id = root_bead_id or run_id
+    _validate_identifier(root_bead_id, "root bead id")
     source_environment = os.environ if source is None else source
     result: dict[str, str] = {}
     for name, value in source_environment.items():
@@ -731,6 +734,7 @@ def scrub_environment(
             "GC_PROFILE_NAME": profile,
             "GC_RUN_ID": run_id,
             "GC_BEAD_ID": bead_id,
+            "GC_ROOT_BEAD_ID": root_bead_id,
         }
     )
     if generation is not None:
@@ -1943,6 +1947,7 @@ def _serve_client(
             bead_id=bead_id,
             generation=generation,
             state_schema=state_schema,
+            root_bead_id=root_bead_id,
         )
         environment["COPILOT_HOME"] = str(home)
         proxy_fd = attachments.get("proxy")

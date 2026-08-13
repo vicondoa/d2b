@@ -370,8 +370,11 @@ fn validate_role_routes(matrix: &str, city: &str, launcher: &str) -> Result<(), 
         "GC_TERMINAL_STATE_ROOT = \"$GC_TERMINAL_STATE_ROOT\"",
     ] {
         if !city.contains(required) {
-            return Err(format!("city workspace env is missing {required}"));
+            return Err(format!("city provider env is missing {required}"));
         }
+    }
+    if city.contains("[workspace.env]") {
+        return Err("authenticated channel variables must not use workspace.env".to_owned());
     }
     validate_tool_policies(matrix, city, launcher, &owned_asset(COPILOT_PROFILE))?;
     Ok(())
