@@ -7,7 +7,7 @@
 //! with the existing typed broker dispatch functions.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs::{self, OpenOptions},
     io::Write,
     path::PathBuf,
@@ -309,12 +309,27 @@ impl ProviderLifecycleDispatch {
         let mut next_desired_generation = 0_u64;
         match fs::read(&state_path) {
             Ok(bytes) => {
-                let persisted = serde_json::from_slice::<Vec<PersistedLifecycleMutation>>(&bytes)
-                    .map_err(|_| ProviderEffectError::StateUnavailable)?;
-                for entry in persisted {
+                let mut persisted =
+                    serde_json::from_slice::<Vec<PersistedLifecycleMutation>>(&bytes)
+                        .map_err(|_| ProviderEffectError::StateUnavailable)?;
+                let mut keys = BTreeSet::new();
+                for entry in &mut persisted {
                     if entry.key.is_empty() || entry.key.len() > 128 {
                         return Err(ProviderEffectError::StateUnavailable);
                     }
+                    if !keys.insert(entry.key.clone()) {
+                        return Err(ProviderEffectError::StateUnavailable);
+                    }
+                    let guest = ResourceRef::parse(&entry.guest)
+                        .map_err(|_| ProviderEffectError::StateUnavailable)?;
+                    match entry.operation.as_str() {
+                        "start" | "stop" => {}
+                        _ => return Err(ProviderEffectError::StateUnavailable),
+                    }
+                    entry.guest = guest.to_canonical_string();
+                }
+                next_desired_generation = migrate_legacy_generations(&mut persisted)?;
+                for entry in persisted {
                     let guest = ResourceRef::parse(&entry.guest)
                         .map_err(|_| ProviderEffectError::StateUnavailable)?;
                     let operation = match entry.operation.as_str() {
@@ -322,14 +337,6 @@ impl ProviderLifecycleDispatch {
                         "stop" => GuestLifecycleOperation::Stop,
                         _ => return Err(ProviderEffectError::StateUnavailable),
                     };
-                    let desired_generation = if entry.desired_generation == 0 {
-                        next_desired_generation
-                            .checked_add(1)
-                            .ok_or(ProviderEffectError::StateUnavailable)?
-                    } else {
-                        entry.desired_generation
-                    };
-                    next_desired_generation = next_desired_generation.max(desired_generation);
                     if mutations
                         .insert(
                             entry.key,
@@ -337,7 +344,7 @@ impl ProviderLifecycleDispatch {
                                 guest,
                                 operation,
                                 admitted_at_ms: entry.admitted_at_ms,
-                                desired_generation,
+                                desired_generation: entry.desired_generation,
                                 status: entry.status,
                                 executing: false,
                             },
@@ -691,6 +698,66 @@ impl ProviderLifecycleDispatch {
     }
 }
 
+fn migrate_legacy_generations(
+    persisted: &mut [PersistedLifecycleMutation],
+) -> Result<u64, ProviderEffectError> {
+    let mut used_generations = BTreeSet::new();
+    let mut next_generation = 0_u64;
+    let mut zero_generation_by_guest = BTreeMap::<String, Vec<usize>>::new();
+
+    for (index, entry) in persisted.iter().enumerate() {
+        if entry.desired_generation == 0 {
+            zero_generation_by_guest
+                .entry(entry.guest.clone())
+                .or_default()
+                .push(index);
+        } else {
+            used_generations.insert(entry.desired_generation);
+            next_generation = next_generation.max(entry.desired_generation);
+        }
+    }
+
+    for indexes in zero_generation_by_guest.values_mut() {
+        indexes.sort_by(|left, right| {
+            persisted[*left]
+                .admitted_at_ms
+                .cmp(&persisted[*right].admitted_at_ms)
+                .then_with(|| persisted[*left].key.cmp(&persisted[*right].key))
+        });
+
+        let mut group_start = 0;
+        while group_start < indexes.len() {
+            let timestamp = persisted[indexes[group_start]].admitted_at_ms;
+            let group_end = indexes[group_start..]
+                .iter()
+                .position(|index| persisted[*index].admitted_at_ms != timestamp)
+                .map_or(indexes.len(), |offset| group_start + offset);
+            let operation = &persisted[indexes[group_start]].operation;
+            if indexes[group_start..group_end]
+                .iter()
+                .any(|index| persisted[*index].operation != *operation)
+            {
+                return Err(ProviderEffectError::StateUnavailable);
+            }
+            group_start = group_end;
+        }
+
+        for index in indexes {
+            loop {
+                next_generation = next_generation
+                    .checked_add(1)
+                    .ok_or(ProviderEffectError::StateUnavailable)?;
+                if used_generations.insert(next_generation) {
+                    break;
+                }
+            }
+            persisted[*index].desired_generation = next_generation;
+        }
+    }
+
+    Ok(next_generation)
+}
+
 fn latest_generation_for_guest(
     mutations: &BTreeMap<String, LifecycleMutation>,
     guest: &ResourceRef,
@@ -943,6 +1010,23 @@ mod tests {
         .expect("lifecycle request")
     }
 
+    fn persisted_row(
+        key: &str,
+        guest: &str,
+        operation: &str,
+        admitted_at_ms: u64,
+        desired_generation: u64,
+    ) -> serde_json::Value {
+        serde_json::json!({
+            "key": key,
+            "guest": guest,
+            "operation": operation,
+            "admitted_at_ms": admitted_at_ms,
+            "desired_generation": desired_generation,
+            "status": "pending",
+        })
+    }
+
     #[test]
     fn dispatch_invokes_typed_effect_once_and_deduplicates_reachably() {
         let zone = ZoneId::parse("work").expect("Zone");
@@ -1080,6 +1164,265 @@ mod tests {
             serde_json::from_slice(&std::fs::read(&path).expect("read lifecycle state"))
                 .expect("parse lifecycle state");
         assert_eq!(persisted[0]["status"], "applied");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn legacy_generation_migration_preserves_temporal_latest_after_restart() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join(format!(
+                "provider-lifecycle-legacy-temporal-migration-{}",
+                std::process::id()
+            ));
+        let _ = std::fs::remove_dir_all(&root);
+        let path = root.join("lifecycle.json");
+        let now = now_ms();
+        let rows = vec![
+            persisted_row(
+                "a-later",
+                "Guest/workstation",
+                "stop",
+                now.saturating_sub(100),
+                0,
+            ),
+            persisted_row(
+                "z-earlier",
+                "Guest/workstation",
+                "start",
+                now.saturating_sub(200),
+                0,
+            ),
+        ];
+        std::fs::create_dir_all(&root).expect("create state directory");
+        std::fs::write(
+            &path,
+            serde_json::to_vec(&rows).expect("serialize legacy state"),
+        )
+        .expect("write legacy state");
+
+        let zone = ZoneId::parse("work").expect("Zone");
+        let caller = BrokerCallerRole::AdminUid { uid: 1000 };
+        let restarted =
+            ProviderLifecycleDispatch::new_persistent(zone.clone(), &path).expect("restart");
+        let persisted: Vec<serde_json::Value> =
+            serde_json::from_slice(&std::fs::read(&path).expect("read migrated state"))
+                .expect("parse migrated state");
+        assert_eq!(persisted[0]["key"], "a-later");
+        assert_eq!(persisted[0]["desired_generation"], 2);
+        assert_eq!(persisted[1]["key"], "z-earlier");
+        assert_eq!(persisted[1]["desired_generation"], 1);
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let effect = ReconciliationEffect {
+            calls: Arc::clone(&calls),
+            reached: AtomicBool::new(false),
+        };
+        let later = request(&zone, GuestLifecycleOperation::Stop, "a-later");
+        let earlier = request(&zone, GuestLifecycleOperation::Start, "z-earlier");
+        assert_eq!(
+            restarted.dispatch(&caller, &later, &effect),
+            Ok(EffectDispatch::Dispatched(1))
+        );
+        assert_eq!(
+            restarted.dispatch(&caller, &earlier, &effect),
+            Err(ProviderEffectError::MutationPending)
+        );
+        assert_eq!(calls.load(Ordering::Acquire), 1);
+
+        let migrated_bytes = std::fs::read(&path).expect("read stable migrated state");
+        drop(restarted);
+        let restarted_again =
+            ProviderLifecycleDispatch::new_persistent(zone, &path).expect("second restart");
+        assert_eq!(
+            std::fs::read(&path).expect("read second migrated state"),
+            migrated_bytes
+        );
+        drop(restarted_again);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn legacy_generation_migration_rejects_conflicting_same_guest_timestamp_tie() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join(format!(
+                "provider-lifecycle-legacy-tie-conflict-{}",
+                std::process::id()
+            ));
+        let _ = std::fs::remove_dir_all(&root);
+        let path = root.join("lifecycle.json");
+        let timestamp = now_ms().saturating_sub(100);
+        let rows = vec![
+            persisted_row("a-start", "Guest/workstation", "start", timestamp, 0),
+            persisted_row("b-stop", "Guest/workstation", "stop", timestamp, 0),
+        ];
+        std::fs::create_dir_all(&root).expect("create state directory");
+        let original = serde_json::to_vec(&rows).expect("serialize conflicting legacy state");
+        std::fs::write(&path, &original).expect("write conflicting legacy state");
+
+        let zone = ZoneId::parse("work").expect("Zone");
+        assert!(matches!(
+            ProviderLifecycleDispatch::new_persistent(zone, &path),
+            Err(ProviderEffectError::StateUnavailable)
+        ));
+        assert_eq!(std::fs::read(&path).expect("read refused state"), original);
+        assert!(!path.with_extension("json.next").exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn legacy_generation_migration_orders_identical_timestamp_duplicates_deterministically() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join(format!(
+                "provider-lifecycle-legacy-tie-duplicates-{}",
+                std::process::id()
+            ));
+        let _ = std::fs::remove_dir_all(&root);
+        let path = root.join("lifecycle.json");
+        let timestamp = now_ms().saturating_sub(100);
+        let rows = vec![
+            persisted_row("b-start", "Guest/workstation", "start", timestamp, 0),
+            persisted_row("a-start", "Guest/workstation", "start", timestamp, 0),
+        ];
+        std::fs::create_dir_all(&root).expect("create state directory");
+        std::fs::write(
+            &path,
+            serde_json::to_vec(&rows).expect("serialize duplicate legacy state"),
+        )
+        .expect("write duplicate legacy state");
+
+        let zone = ZoneId::parse("work").expect("Zone");
+        let dispatch =
+            ProviderLifecycleDispatch::new_persistent(zone.clone(), &path).expect("restart");
+        let persisted: Vec<serde_json::Value> =
+            serde_json::from_slice(&std::fs::read(&path).expect("read migrated state"))
+                .expect("parse migrated state");
+        assert_eq!(persisted[0]["key"], "a-start");
+        assert_eq!(persisted[0]["desired_generation"], 1);
+        assert_eq!(persisted[1]["key"], "b-start");
+        assert_eq!(persisted[1]["desired_generation"], 2);
+        let migrated_bytes = std::fs::read(&path).expect("read stable migrated state");
+        drop(dispatch);
+
+        let restarted_again =
+            ProviderLifecycleDispatch::new_persistent(zone, &path).expect("second restart");
+        assert_eq!(
+            std::fs::read(&path).expect("read second migrated state"),
+            migrated_bytes
+        );
+        drop(restarted_again);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn legacy_generation_migration_assigns_unique_values_above_mixed_explicit_state() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join(format!(
+                "provider-lifecycle-legacy-mixed-generations-{}",
+                std::process::id()
+            ));
+        let _ = std::fs::remove_dir_all(&root);
+        let path = root.join("lifecycle.json");
+        let now = now_ms();
+        let rows = vec![
+            persisted_row(
+                "explicit-alpha",
+                "Guest/alpha",
+                "start",
+                now.saturating_sub(400),
+                4,
+            ),
+            persisted_row(
+                "zero-beta-early",
+                "Guest/beta",
+                "start",
+                now.saturating_sub(300),
+                0,
+            ),
+            persisted_row(
+                "zero-alpha",
+                "Guest/alpha",
+                "stop",
+                now.saturating_sub(200),
+                0,
+            ),
+            persisted_row(
+                "explicit-gamma",
+                "Guest/gamma",
+                "stop",
+                now.saturating_sub(100),
+                9,
+            ),
+            persisted_row(
+                "zero-beta-late",
+                "Guest/beta",
+                "stop",
+                now.saturating_sub(50),
+                0,
+            ),
+        ];
+        std::fs::create_dir_all(&root).expect("create state directory");
+        std::fs::write(
+            &path,
+            serde_json::to_vec(&rows).expect("serialize mixed legacy state"),
+        )
+        .expect("write mixed legacy state");
+
+        let zone = ZoneId::parse("work").expect("Zone");
+        let dispatch =
+            ProviderLifecycleDispatch::new_persistent(zone.clone(), &path).expect("restart");
+        let persisted: Vec<serde_json::Value> =
+            serde_json::from_slice(&std::fs::read(&path).expect("read migrated state"))
+                .expect("parse migrated state");
+        let mut generations = persisted
+            .iter()
+            .map(|entry| {
+                (
+                    entry["key"].as_str().expect("key").to_owned(),
+                    entry["desired_generation"].as_u64().expect("generation"),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(generations.remove("explicit-alpha"), Some(4));
+        assert_eq!(generations.remove("explicit-gamma"), Some(9));
+        assert_eq!(generations.remove("zero-alpha"), Some(10));
+        assert_eq!(generations.remove("zero-beta-early"), Some(11));
+        assert_eq!(generations.remove("zero-beta-late"), Some(12));
+        assert!(generations.is_empty());
+        let assigned = persisted
+            .iter()
+            .map(|entry| entry["desired_generation"].as_u64().expect("generation"))
+            .collect::<Vec<_>>();
+        let unique = assigned
+            .iter()
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(unique.len(), assigned.len());
+
+        let new_request = GuestLifecycleRequest::new(
+            zone,
+            ResourceRef::parse("Guest/delta").expect("Guest ref"),
+            GuestLifecycleOperation::Start,
+            "new-admission",
+        )
+        .expect("new request");
+        assert_eq!(
+            dispatch.admit(&BrokerCallerRole::AdminUid { uid: 1000 }, &new_request),
+            Ok(LifecycleDispatch::Dispatch)
+        );
+        assert_eq!(
+            dispatch
+                .mutations
+                .lock()
+                .expect("mutation lock")
+                .get("new-admission")
+                .map(|mutation| mutation.desired_generation),
+            Some(13)
+        );
+        drop(dispatch);
         let _ = std::fs::remove_dir_all(root);
     }
 
