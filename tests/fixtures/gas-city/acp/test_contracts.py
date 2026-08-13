@@ -3603,7 +3603,15 @@ class LauncherLifecycleTests(unittest.TestCase):
                 process.wait(timeout=5)
                 self.assertIsNotNone(process.stderr)
                 stderr = process.stderr.read().decode("utf-8", errors="replace")
-                self.assertEqual(process.returncode, 0, stderr)
+                if process.returncode != 0:
+                    self.assertIsNotNone(server.process)
+                    server.process.send_signal(signal.SIGTERM)
+                    _stdout, server_stderr = server.process.communicate(timeout=5)
+                    self.fail(
+                        f"client stderr:\n{stderr}\n"
+                        f"server stderr:\n"
+                        f"{server_stderr.decode('utf-8', errors='replace')}"
+                    )
                 deadline = time.monotonic() + 2
                 root_path = gc_root_directory / "run-1"
                 while root_path.exists() and time.monotonic() < deadline:
