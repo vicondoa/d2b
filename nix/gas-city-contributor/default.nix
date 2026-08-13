@@ -36,6 +36,7 @@ let
     "ps"
     "lsof"
     "flock"
+    "tmux"
     "nix"
   ];
 

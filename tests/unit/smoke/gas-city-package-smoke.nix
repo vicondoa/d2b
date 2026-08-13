@@ -291,7 +291,7 @@ pkgs.runCommand "gas-city-package-smoke" {
      and .runtime.requiredExecutables == [
        "gc", "bd", "dolt", "copilot", "go", "bazel", "bwrap",
        "nft", "tinyproxy", "envoy", "python3", "git", "gh", "openssl",
-       "jq", "ps", "lsof", "flock", "nix"
+       "jq", "ps", "lsof", "flock", "tmux", "nix"
      ]' \
     "$root/sources.json" >/dev/null
 
