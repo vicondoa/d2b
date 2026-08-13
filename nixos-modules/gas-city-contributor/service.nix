@@ -123,9 +123,16 @@ let
     + " --destination ${lib.escapeShellArg "${serviceRoot}/managed"}";
   prepareRigPermissions = pkgs.writeShellScript "gascity-prepare-rig-permissions" ''
     set -euo pipefail
+    parent=${lib.escapeShellArg "${stateRoot}/rigs"}
     rig=${lib.escapeShellArg "${stateRoot}/rigs/${cfg.repository.rigName}"}
-    test -d "$rig"
+    test -d "$parent"
+    test ! -L "$parent"
     test ! -L "$rig"
+    if ! test -e "$rig"; then
+      mkdir -m 2770 "$rig"
+      chown gascity:gascity-worktree "$rig"
+    fi
+    test -d "$rig"
     find -P "$rig" -type d -exec chgrp gascity-worktree {} + \
       -exec chmod 2770 {} +
     find -P "$rig" -type f -exec chgrp gascity-worktree {} + \
@@ -625,7 +632,6 @@ in
               waitReadiness
               "${pkgs.coreutils}/bin/install -d -m 0700 ${lib.escapeShellArg "${homeRoot}/.config"}"
               "${pkgs.coreutils}/bin/install -d -m 0700 ${lib.escapeShellArg "${homeRoot}/.local/state"}"
-              "${pkgs.coreutils}/bin/install -d -m 2770 -g gascity-worktree ${lib.escapeShellArg "${stateRoot}/rigs/${cfg.repository.rigName}"}"
               "+${prepareRigPermissions}"
             ];
             ExecStart = mainExec;
