@@ -106,7 +106,8 @@ pkgs.runCommand "gas-city-package-smoke" {
   ln -s "$root/packs" "$runtimeRoot/packs"
   ln -s "$root/pack" "$runtimeRoot/pack"
   sed \
-    '\#^path = "/var/lib/gascity-contributor/state/rigs/d2b"$#d' \
+    -e '\#^path = "/var/lib/gascity-contributor/state/rigs/d2b"$#d' \
+    -e '/# The implicit bd maintenance dog/,/suspended = true/d' \
     "$root/city/city.toml" > "$TMPDIR/city.toml"
   printf '\n[beads]\nprovider = "file"\n' >> "$TMPDIR/city.toml"
   ${gasCityContributor}/bin/gc init \
@@ -115,6 +116,11 @@ pkgs.runCommand "gas-city-package-smoke" {
     --no-start \
     --name d2b-contributor \
     "$runtimeCity"
+  printf '\n[imports.bd]\nsource = "%s"\n' \
+    "${gasCityContributor.passthru.gascity.src}/examples/bd" \
+    >> "$runtimeCity/pack.toml"
+  printf '\n[[patches.agent]]\ndir = ""\nname = "bd.dog"\nsuspended = true\n' \
+    >> "$runtimeCity/pack.toml"
   ${gasCityContributor}/bin/gc \
     --city "$runtimeCity" \
     config show > "$TMPDIR/resolved-city.toml"
