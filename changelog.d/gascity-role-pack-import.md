@@ -15,4 +15,5 @@
   Model-provider sessions receive scoped `$VAR` references to authenticated
   channels with coding-only check credentials. The profile boundary requires
   the configured egress peer identity before converting that socket into the
-  descriptor consumed by the sandbox proxy.
+  descriptor consumed by the sandbox proxy, and the lifecycle controller has
+  only the egress channel group needed to establish that verified connection.

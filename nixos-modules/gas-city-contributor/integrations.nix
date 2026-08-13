@@ -56,6 +56,7 @@ let
         gascity = [
           "gascity-agent-channel"
           "gascity-discord-channel"
+          "gascity-egress-channel"
           "gascity-publisher-channel"
           worktreeGroup
         ] ++ lib.optional cfg.check.enable checkChannelGroup;

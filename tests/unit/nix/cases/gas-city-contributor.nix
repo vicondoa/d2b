@@ -480,6 +480,9 @@ in
       mainCheckChannelGroup = builtins.elem
         "gascity-check-channel"
         main.SupplementaryGroups;
+      mainEgressChannelGroup = builtins.elem
+        "gascity-egress-channel"
+        main.SupplementaryGroups;
       discordRequiresEgress = builtins.elem
         "gascity-egress.service"
         (discordUnit.requires or [ ]);
@@ -611,6 +614,7 @@ in
       checkGroup = "gascity-check-channel";
       checkChannelGroup = true;
       mainCheckChannelGroup = true;
+      mainEgressChannelGroup = true;
       monitorRequiresMain = true;
       monitorBeforeMain = true;
       discordRequiresEgress = true;

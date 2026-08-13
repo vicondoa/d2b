@@ -598,6 +598,7 @@ in
               "gascity-contributor"
               "gascity-agent-channel"
               "gascity-discord-channel"
+              "gascity-egress-channel"
               "gascity-publisher-channel"
             ] ++ lib.optional cfg.check.enable "gascity-check-channel";
             WorkingDirectory = serviceRoot;
