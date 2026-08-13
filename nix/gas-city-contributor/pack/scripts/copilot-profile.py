@@ -250,7 +250,11 @@ def _effective_profile(
 
 def _metadata(args: argparse.Namespace) -> dict[str, str]:
     run_id = args.run_id or os.environ.get("GC_RUN_ID")
-    bead_id = args.bead_id or os.environ.get("GC_BEAD_ID")
+    bead_id = (
+        args.bead_id
+        or os.environ.get("GC_BEAD_ID")
+        or os.environ.get("GC_SESSION_ID")
+    )
     generation = args.generation or os.environ.get("GC_CITY_GENERATION")
     if not run_id or not bead_id or not generation:
         raise ProfileError("run, bead, and city generation metadata are required")

@@ -6,4 +6,5 @@
   assets from the package's immutable symlink tree and exposing the managed
   Dolt identity and packaged lifecycle tools to the supervisor. The optional
   bd maintenance dog remains suspended because it has no workflow identity for
-  the authenticated ACP launcher.
+  the authenticated ACP launcher, while routed sessions use Gas City's
+  standard session bead identity at that boundary.

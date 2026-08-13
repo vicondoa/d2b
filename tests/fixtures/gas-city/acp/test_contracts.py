@@ -91,6 +91,28 @@ def complete_probe_exchange(
 
 
 class ProfileContractTests(unittest.TestCase):
+    def test_metadata_uses_gas_city_session_identity_as_bead_fallback(self) -> None:
+        args = PROFILE._default_namespace("code-luna", "coding")
+        with mock.patch.dict(
+            os.environ,
+            {
+                "GC_RUN_ID": "run-1",
+                "GC_SESSION_ID": "session-bead-1",
+                "GC_CITY_GENERATION": "generation-1",
+                "GC_STATE_SCHEMA": "1",
+            },
+            clear=False,
+        ):
+            self.assertEqual(
+                PROFILE._metadata(args),
+                {
+                    "run_id": "run-1",
+                    "bead_id": "session-bead-1",
+                    "generation": "generation-1",
+                    "state_schema": "1",
+                },
+            )
+
     def test_settings_have_only_persistent_authority(self) -> None:
         for profile in ("review-sol", "review-luna", "code-luna"):
             path = COPILOT_ROOT / profile / "settings.json"
