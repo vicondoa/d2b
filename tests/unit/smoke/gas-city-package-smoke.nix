@@ -52,7 +52,7 @@ pkgs.runCommand "gas-city-package-smoke" {
   # immutable closure, not from the evaluator's or operator's ambient PATH.
   for tool in \
     gc bd dolt copilot go bazel bwrap nft tinyproxy envoy python3 \
-    git gh openssl jq ps lsof flock nix
+    git gh openssl jq ps lsof flock tmux nix
   do
     toolPath="${gasCityContributor}/bin/$tool"
     test -x "$toolPath"

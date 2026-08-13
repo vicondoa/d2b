@@ -64,6 +64,7 @@ let
     pkgs.procps
     pkgs.lsof
     pkgs.flock
+    pkgs.tmux
     pkgs.nix
     pkgs.python3
     pkgs.git
