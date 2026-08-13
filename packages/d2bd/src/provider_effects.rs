@@ -11,7 +11,10 @@ use std::{
     fs::{self, OpenOptions},
     io::Write,
     path::PathBuf,
-    sync::Mutex,
+    sync::{
+        Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -124,7 +127,8 @@ pub enum ProviderEffectError {
     IdempotencyConflict,
     /// The dispatcher state could not be read or updated.
     StateUnavailable,
-    /// An identical request is still executing in this daemon.
+    /// The request cannot claim lifecycle ownership because another request
+    /// for the Guest is executing or a newer desired generation is pending.
     MutationPending,
     /// The configured Provider registry is unavailable.
     RegistryUnavailable,
@@ -172,7 +176,8 @@ pub enum LifecycleDispatch {
     /// A durable pending request must be reconciled with the actual lifecycle
     /// state before invoking its effect port.
     Reconcile,
-    /// Another in-process execution owns the pending request.
+    /// Another in-process execution owns the Guest or a newer generation is
+    /// pending.
     Pending,
     /// The exact request was already applied under this idempotency key.
     Duplicate,
@@ -233,12 +238,14 @@ pub trait ProviderLifecycleEffectPort {
     fn apply(&self, request: &GuestLifecycleRequest) -> Result<Self::Output, ProviderEffectError>;
 }
 
-/// Effect-free lifecycle dispatcher with bounded idempotency tracking.
+/// Effect-free lifecycle dispatcher with bounded idempotency tracking,
+/// per-Guest ownership, and monotonic desired-state generations.
 #[derive(Debug)]
 pub struct ProviderLifecycleDispatch {
     zone: ZoneId,
     mutations: Mutex<BTreeMap<String, LifecycleMutation>>,
     state_path: Option<PathBuf>,
+    next_desired_generation: AtomicU64,
 }
 
 #[derive(Debug, Clone)]
@@ -246,6 +253,7 @@ struct LifecycleMutation {
     guest: ResourceRef,
     operation: GuestLifecycleOperation,
     admitted_at_ms: u64,
+    desired_generation: u64,
     status: LifecycleMutationStatus,
     executing: bool,
 }
@@ -265,6 +273,9 @@ struct PersistedLifecycleMutation {
     guest: String,
     operation: String,
     admitted_at_ms: u64,
+    /// Monotonic desired-state generation for this lifecycle admission.
+    #[serde(default)]
+    desired_generation: u64,
     /// Missing status is treated as pending for migration from the original
     /// admission-only persistence format.
     #[serde(default)]
@@ -278,6 +289,7 @@ impl ProviderLifecycleDispatch {
             zone,
             mutations: Mutex::new(BTreeMap::new()),
             state_path: None,
+            next_desired_generation: AtomicU64::new(0),
         }
     }
 
@@ -294,6 +306,7 @@ impl ProviderLifecycleDispatch {
             fs::create_dir_all(parent).map_err(|_| ProviderEffectError::StateUnavailable)?;
         }
         let mut mutations = BTreeMap::new();
+        let mut next_desired_generation = 0_u64;
         match fs::read(&state_path) {
             Ok(bytes) => {
                 let persisted = serde_json::from_slice::<Vec<PersistedLifecycleMutation>>(&bytes)
@@ -309,6 +322,14 @@ impl ProviderLifecycleDispatch {
                         "stop" => GuestLifecycleOperation::Stop,
                         _ => return Err(ProviderEffectError::StateUnavailable),
                     };
+                    let desired_generation = if entry.desired_generation == 0 {
+                        next_desired_generation
+                            .checked_add(1)
+                            .ok_or(ProviderEffectError::StateUnavailable)?
+                    } else {
+                        entry.desired_generation
+                    };
+                    next_desired_generation = next_desired_generation.max(desired_generation);
                     if mutations
                         .insert(
                             entry.key,
@@ -316,6 +337,7 @@ impl ProviderLifecycleDispatch {
                                 guest,
                                 operation,
                                 admitted_at_ms: entry.admitted_at_ms,
+                                desired_generation,
                                 status: entry.status,
                                 executing: false,
                             },
@@ -333,6 +355,7 @@ impl ProviderLifecycleDispatch {
             zone,
             mutations: Mutex::new(mutations),
             state_path: Some(state_path),
+            next_desired_generation: AtomicU64::new(next_desired_generation),
         };
         if let Ok(mut state) = dispatcher.mutations.lock() {
             dispatcher.retain_live(&mut state);
@@ -369,16 +392,18 @@ impl ProviderLifecycleDispatch {
             .lock()
             .map_err(|_| ProviderEffectError::StateUnavailable)?;
         let now = now_ms();
-        mutations.retain(|_, mutation| {
-            now.saturating_sub(mutation.admitted_at_ms)
-                < LIFECYCLE_IDEMPOTENCY_TTL.as_millis() as u64
-        });
+        self.retain_live(&mut mutations);
+        let latest_generation = latest_generation_for_guest(&mutations, request.guest());
+        let guest_executing = guest_has_execution(&mutations, request.guest());
         if let Some(mutation) = mutations.get_mut(request.idempotency_key()) {
             if mutation.guest == *request.guest() && mutation.operation == request.operation() {
+                let is_latest = latest_generation == Some(mutation.desired_generation);
                 return Ok(match mutation.status {
-                    LifecycleMutationStatus::Applied => LifecycleDispatch::Duplicate,
+                    LifecycleMutationStatus::Applied if is_latest => LifecycleDispatch::Duplicate,
+                    LifecycleMutationStatus::Applied => LifecycleDispatch::Pending,
+                    LifecycleMutationStatus::Pending if !is_latest => LifecycleDispatch::Pending,
                     LifecycleMutationStatus::Pending if claim_pending => {
-                        if mutation.executing {
+                        if mutation.executing || guest_executing {
                             LifecycleDispatch::Pending
                         } else {
                             mutation.executing = true;
@@ -393,21 +418,28 @@ impl ProviderLifecycleDispatch {
         if mutations.len() >= MAX_TRACKED_LIFECYCLE_MUTATIONS {
             return Err(ProviderEffectError::MutationTableFull);
         }
+        let desired_generation = self.allocate_desired_generation()?;
+        let executing = claim_pending && !guest_executing;
         mutations.insert(
             request.idempotency_key().to_owned(),
             LifecycleMutation {
                 guest: request.guest().clone(),
                 operation: request.operation(),
                 admitted_at_ms: now,
+                desired_generation,
                 status: LifecycleMutationStatus::Pending,
-                executing: claim_pending,
+                executing,
             },
         );
         if let Err(error) = self.persist_locked(&mutations) {
             mutations.remove(request.idempotency_key());
             return Err(error);
         }
-        Ok(LifecycleDispatch::Dispatch)
+        Ok(if claim_pending && guest_executing {
+            LifecycleDispatch::Pending
+        } else {
+            LifecycleDispatch::Dispatch
+        })
     }
 
     /// Admit a request and invoke its typed effect exactly once.
@@ -432,8 +464,14 @@ impl ProviderLifecycleDispatch {
                     }
                 };
                 if actual_state.satisfies(request.operation()) {
-                    self.complete_applied(request)?;
-                    Ok(EffectDispatch::Duplicate)
+                    match self.complete_applied(request) {
+                        Ok(true) => Ok(EffectDispatch::Duplicate),
+                        Ok(false) => Err(ProviderEffectError::MutationPending),
+                        Err(error) => {
+                            self.release_execution(request);
+                            Err(error)
+                        }
+                    }
                 } else {
                     self.apply_admitted(request, effect)
                 }
@@ -447,15 +485,24 @@ impl ProviderLifecycleDispatch {
         request: &GuestLifecycleRequest,
         effect: &P,
     ) -> Result<EffectDispatch<P::Output>, ProviderEffectError> {
+        if !self.execution_is_current(request)? {
+            return Err(ProviderEffectError::MutationPending);
+        }
         match effect.apply(request) {
-            Ok(output) => {
-                self.complete_applied(request)?;
-                Ok(EffectDispatch::Dispatched(output))
-            }
-            Err(error) => {
-                self.remove(request)?;
-                Err(error)
-            }
+            Ok(output) => match self.complete_applied(request) {
+                Ok(_) => Ok(EffectDispatch::Dispatched(output)),
+                Err(error) => {
+                    self.release_execution(request);
+                    Err(error)
+                }
+            },
+            Err(error) => match self.remove(request) {
+                Ok(()) => Err(error),
+                Err(persist_error) => {
+                    self.release_execution(request);
+                    Err(persist_error)
+                }
+            },
         }
     }
 
@@ -465,47 +512,119 @@ impl ProviderLifecycleDispatch {
             .lock()
             .map_err(|_| ProviderEffectError::StateUnavailable)?;
         let previous = mutations.clone();
+        let (guest, operation, desired_generation, status) = mutations
+            .get(request.idempotency_key())
+            .map(|mutation| {
+                (
+                    mutation.guest.clone(),
+                    mutation.operation,
+                    mutation.desired_generation,
+                    mutation.status,
+                )
+            })
+            .ok_or(ProviderEffectError::StateUnavailable)?;
+        if guest != *request.guest()
+            || operation != request.operation()
+            || status != LifecycleMutationStatus::Pending
+        {
+            return Err(ProviderEffectError::StateUnavailable);
+        }
+        if latest_generation_for_guest(&mutations, request.guest()) != Some(desired_generation) {
+            if let Some(mutation) = mutations.get_mut(request.idempotency_key()) {
+                mutation.executing = false;
+            }
+            return Ok(());
+        }
         mutations.remove(request.idempotency_key());
         if let Err(error) = self.persist_locked(&mutations) {
             *mutations = previous;
+            restore_pending_execution(&mut mutations, request);
             return Err(error);
         }
         Ok(())
     }
 
-    fn complete_applied(&self, request: &GuestLifecycleRequest) -> Result<(), ProviderEffectError> {
+    fn complete_applied(
+        &self,
+        request: &GuestLifecycleRequest,
+    ) -> Result<bool, ProviderEffectError> {
         let mut mutations = self
             .mutations
             .lock()
             .map_err(|_| ProviderEffectError::StateUnavailable)?;
         let previous = mutations.clone();
-        let mutation = mutations
+        let (guest, operation, desired_generation, status) = mutations
             .get_mut(request.idempotency_key())
+            .map(|mutation| {
+                (
+                    mutation.guest.clone(),
+                    mutation.operation,
+                    mutation.desired_generation,
+                    mutation.status,
+                )
+            })
             .ok_or(ProviderEffectError::StateUnavailable)?;
-        if mutation.guest != *request.guest()
-            || mutation.operation != request.operation()
-            || mutation.status != LifecycleMutationStatus::Pending
+        if guest != *request.guest()
+            || operation != request.operation()
+            || status != LifecycleMutationStatus::Pending
         {
             return Err(ProviderEffectError::StateUnavailable);
         }
+        if latest_generation_for_guest(&mutations, request.guest()) != Some(desired_generation) {
+            if let Some(mutation) = mutations.get_mut(request.idempotency_key()) {
+                mutation.executing = false;
+            }
+            return Ok(false);
+        }
+        let mutation = mutations
+            .get_mut(request.idempotency_key())
+            .ok_or(ProviderEffectError::StateUnavailable)?;
         mutation.status = LifecycleMutationStatus::Applied;
         mutation.executing = false;
-        let opposite = match request.operation() {
-            GuestLifecycleOperation::Start => GuestLifecycleOperation::Stop,
-            GuestLifecycleOperation::Stop => GuestLifecycleOperation::Start,
-        };
         mutations.retain(|_, mutation| {
-            let is_applied_history =
-                mutation.status == LifecycleMutationStatus::Applied && !mutation.executing;
             mutation.guest != *request.guest()
-                || mutation.operation != opposite
-                || !is_applied_history
+                || mutation.desired_generation >= desired_generation
+                || mutation.executing
+                || mutation.status == LifecycleMutationStatus::Pending
         });
         if let Err(error) = self.persist_locked(&mutations) {
             *mutations = previous;
+            restore_pending_execution(&mut mutations, request);
             return Err(error);
         }
-        Ok(())
+        Ok(true)
+    }
+
+    fn allocate_desired_generation(&self) -> Result<u64, ProviderEffectError> {
+        self.next_desired_generation
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |generation| {
+                generation.checked_add(1)
+            })
+            .map(|previous| previous.saturating_add(1))
+            .map_err(|_| ProviderEffectError::StateUnavailable)
+    }
+
+    fn execution_is_current(
+        &self,
+        request: &GuestLifecycleRequest,
+    ) -> Result<bool, ProviderEffectError> {
+        let mut mutations = self
+            .mutations
+            .lock()
+            .map_err(|_| ProviderEffectError::StateUnavailable)?;
+        let latest_generation = latest_generation_for_guest(&mutations, request.guest());
+        let Some(mutation) = mutations.get_mut(request.idempotency_key()) else {
+            return Err(ProviderEffectError::StateUnavailable);
+        };
+        let current = mutation.guest == *request.guest()
+            && mutation.operation == request.operation()
+            && mutation.status == LifecycleMutationStatus::Pending
+            && mutation.executing
+            && latest_generation == Some(mutation.desired_generation);
+        if !current {
+            mutation.executing = false;
+        }
+        Ok(current)
     }
 
     fn release_execution(&self, request: &GuestLifecycleRequest) {
@@ -522,8 +641,11 @@ impl ProviderLifecycleDispatch {
     fn retain_live(&self, mutations: &mut BTreeMap<String, LifecycleMutation>) {
         let now = now_ms();
         mutations.retain(|_, mutation| {
-            now.saturating_sub(mutation.admitted_at_ms)
-                < LIFECYCLE_IDEMPOTENCY_TTL.as_millis() as u64
+            // An executing row is live until its effect returns. Pending and
+            // settled history gets bounded recovery/retention.
+            mutation.executing
+                || now.saturating_sub(mutation.admitted_at_ms)
+                    < LIFECYCLE_IDEMPOTENCY_TTL.as_millis() as u64
         });
     }
 
@@ -541,6 +663,7 @@ impl ProviderLifecycleDispatch {
                 guest: mutation.guest.to_canonical_string(),
                 operation: mutation.operation.as_str().to_owned(),
                 admitted_at_ms: mutation.admitted_at_ms,
+                desired_generation: mutation.desired_generation,
                 status: mutation.status,
             })
             .collect::<Vec<_>>();
@@ -565,6 +688,39 @@ impl ProviderLifecycleDispatch {
                 .map_err(|_| ProviderEffectError::StateUnavailable)?;
         }
         Ok(())
+    }
+}
+
+fn latest_generation_for_guest(
+    mutations: &BTreeMap<String, LifecycleMutation>,
+    guest: &ResourceRef,
+) -> Option<u64> {
+    mutations
+        .values()
+        .filter(|mutation| mutation.guest == *guest)
+        .map(|mutation| mutation.desired_generation)
+        .max()
+}
+
+fn guest_has_execution(
+    mutations: &BTreeMap<String, LifecycleMutation>,
+    guest: &ResourceRef,
+) -> bool {
+    mutations
+        .values()
+        .any(|mutation| mutation.guest == *guest && mutation.executing)
+}
+
+fn restore_pending_execution(
+    mutations: &mut BTreeMap<String, LifecycleMutation>,
+    request: &GuestLifecycleRequest,
+) {
+    if let Some(mutation) = mutations.get_mut(request.idempotency_key())
+        && mutation.guest == *request.guest()
+        && mutation.operation == request.operation()
+        && mutation.status == LifecycleMutationStatus::Pending
+    {
+        mutation.executing = false;
     }
 }
 
@@ -658,25 +814,6 @@ mod tests {
     }
 
     #[derive(Clone)]
-    struct ConcurrentEffect {
-        entered: Arc<Barrier>,
-        calls: Arc<AtomicUsize>,
-    }
-
-    impl ProviderLifecycleEffectPort for ConcurrentEffect {
-        type Output = usize;
-
-        fn apply(
-            &self,
-            _request: &GuestLifecycleRequest,
-        ) -> Result<Self::Output, ProviderEffectError> {
-            let call = self.calls.fetch_add(1, Ordering::AcqRel) + 1;
-            self.entered.wait();
-            Ok(call)
-        }
-    }
-
-    #[derive(Clone)]
     struct BlockingEffect {
         entered: Sender<()>,
         release: Arc<Barrier>,
@@ -693,6 +830,101 @@ mod tests {
             let call = self.calls.fetch_add(1, Ordering::AcqRel) + 1;
             self.entered.send(()).expect("effect entered");
             self.release.wait();
+            Ok(call)
+        }
+    }
+
+    struct FailThenReconcileEffect {
+        calls: Arc<AtomicUsize>,
+        fail_first: AtomicBool,
+        reached: AtomicBool,
+    }
+
+    impl ProviderLifecycleEffectPort for FailThenReconcileEffect {
+        type Output = usize;
+
+        fn actual_state(
+            &self,
+            request: &GuestLifecycleRequest,
+        ) -> Result<GuestLifecycleState, ProviderEffectError> {
+            Ok(
+                match (request.operation(), self.reached.load(Ordering::Acquire)) {
+                    (GuestLifecycleOperation::Start, true) => GuestLifecycleState::Started,
+                    (GuestLifecycleOperation::Start, false) => GuestLifecycleState::Stopped,
+                    (GuestLifecycleOperation::Stop, true) => GuestLifecycleState::Stopped,
+                    (GuestLifecycleOperation::Stop, false) => GuestLifecycleState::Started,
+                },
+            )
+        }
+
+        fn apply(
+            &self,
+            request: &GuestLifecycleRequest,
+        ) -> Result<Self::Output, ProviderEffectError> {
+            let call = self.calls.fetch_add(1, Ordering::AcqRel) + 1;
+            if self.fail_first.swap(false, Ordering::AcqRel) {
+                return Err(ProviderEffectError::EffectRejected);
+            }
+            self.reached.store(true, Ordering::Release);
+            let _ = request;
+            Ok(call)
+        }
+    }
+
+    #[derive(Clone)]
+    struct LongRunningEffect {
+        entered: Sender<()>,
+        release: Arc<Barrier>,
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl ProviderLifecycleEffectPort for LongRunningEffect {
+        type Output = usize;
+
+        fn apply(
+            &self,
+            _request: &GuestLifecycleRequest,
+        ) -> Result<Self::Output, ProviderEffectError> {
+            let call = self.calls.fetch_add(1, Ordering::AcqRel) + 1;
+            if call == 1 {
+                self.entered.send(()).expect("effect entered");
+                self.release.wait();
+            }
+            Ok(call)
+        }
+    }
+
+    #[derive(Clone)]
+    struct StatefulEffect {
+        entered: Sender<()>,
+        release: Arc<Barrier>,
+        state: Arc<Mutex<GuestLifecycleState>>,
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl ProviderLifecycleEffectPort for StatefulEffect {
+        type Output = usize;
+
+        fn actual_state(
+            &self,
+            _request: &GuestLifecycleRequest,
+        ) -> Result<GuestLifecycleState, ProviderEffectError> {
+            Ok(*self.state.lock().expect("state lock"))
+        }
+
+        fn apply(
+            &self,
+            request: &GuestLifecycleRequest,
+        ) -> Result<Self::Output, ProviderEffectError> {
+            let call = self.calls.fetch_add(1, Ordering::AcqRel) + 1;
+            if call == 1 {
+                self.entered.send(()).expect("effect entered");
+                self.release.wait();
+            }
+            *self.state.lock().expect("state lock") = match request.operation() {
+                GuestLifecycleOperation::Start => GuestLifecycleState::Started,
+                GuestLifecycleOperation::Stop => GuestLifecycleState::Stopped,
+            };
             Ok(call)
         }
     }
@@ -1016,9 +1248,13 @@ mod tests {
             ProviderLifecycleDispatch::new_persistent(zone.clone(), &path)
                 .expect("open persistent state"),
         );
+        let state = Arc::new(Mutex::new(GuestLifecycleState::Stopped));
         let calls = Arc::new(AtomicUsize::new(0));
-        let effect = ConcurrentEffect {
-            entered: Arc::new(Barrier::new(2)),
+        let (entered, entered_rx) = channel();
+        let effect = StatefulEffect {
+            entered,
+            release: Arc::new(Barrier::new(2)),
+            state,
             calls: Arc::clone(&calls),
         };
         let start_dispatch = Arc::clone(&dispatch);
@@ -1031,53 +1267,38 @@ mod tests {
                 &start_effect,
             )
         });
-        let stop_dispatch = Arc::clone(&dispatch);
-        let stop_effect = effect.clone();
+        entered_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("start effect entered");
         let stop = request(&zone, GuestLifecycleOperation::Stop, "concurrent-stop");
-        let stop_thread = std::thread::spawn(move || {
-            stop_dispatch.dispatch(
-                &BrokerCallerRole::AdminUid { uid: 1000 },
-                &stop,
-                &stop_effect,
-            )
-        });
-
-        let start_result = start_thread.join().expect("start thread");
-        let stop_result = stop_thread.join().expect("stop thread");
-        assert!(matches!(start_result, Ok(EffectDispatch::Dispatched(_))));
-        assert!(matches!(stop_result, Ok(EffectDispatch::Dispatched(_))));
+        assert_eq!(
+            dispatch.dispatch(&BrokerCallerRole::AdminUid { uid: 1000 }, &stop, &effect),
+            Err(ProviderEffectError::MutationPending)
+        );
+        let pending: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).expect("read pending state"))
+                .expect("parse pending state");
+        assert_eq!(
+            pending.as_array().map(|entries| entries.len()),
+            Some(2),
+            "the newer opposite admission must remain durable while the older effect runs"
+        );
+        effect.release.wait();
+        assert_eq!(
+            start_thread.join().expect("start thread"),
+            Ok(EffectDispatch::Dispatched(1))
+        );
+        assert_eq!(
+            dispatch.dispatch(&BrokerCallerRole::AdminUid { uid: 1000 }, &stop, &effect),
+            Ok(EffectDispatch::Dispatched(2))
+        );
         assert_eq!(calls.load(Ordering::Acquire), 2);
-
         let persisted: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&path).expect("read settled state"))
                 .expect("parse settled state");
-        assert_eq!(
-            persisted.as_array().map(|entries| entries.len()),
-            Some(1),
-            "only the last settled opposite operation remains as applied history"
-        );
-        assert_eq!(persisted[0]["status"], "applied");
-        let applied_key = persisted[0]["key"].as_str().expect("applied key");
-        let (retry_operation, retry_key) = if applied_key == "concurrent-start" {
-            (GuestLifecycleOperation::Stop, "concurrent-stop")
-        } else {
-            (GuestLifecycleOperation::Start, "concurrent-start")
-        };
-        let retry_calls = Arc::new(AtomicUsize::new(0));
-        let retry_effect = RecordingEffect {
-            calls: Arc::clone(&retry_calls),
-            reject: AtomicBool::new(false),
-        };
-        let retry = request(&zone, retry_operation, retry_key);
-        assert!(matches!(
-            dispatch.dispatch(
-                &BrokerCallerRole::AdminUid { uid: 1000 },
-                &retry,
-                &retry_effect,
-            ),
-            Ok(EffectDispatch::Dispatched(_))
-        ));
-        assert_eq!(retry_calls.load(Ordering::Acquire), 1);
+        assert_eq!(persisted[0]["status"], "pending");
+        assert_eq!(persisted[1]["status"], "applied");
+        assert_eq!(persisted[1]["desired_generation"], 2);
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -1118,6 +1339,315 @@ mod tests {
             first_thread.join().expect("first thread"),
             Ok(EffectDispatch::Dispatched(1))
         );
+    }
+
+    #[test]
+    fn executing_rows_survive_ttl_while_the_effect_is_running() {
+        let zone = ZoneId::parse("work").expect("Zone");
+        let dispatch = Arc::new(ProviderLifecycleDispatch::new(zone.clone()));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let (entered, entered_rx) = channel();
+        let effect = LongRunningEffect {
+            entered,
+            release: Arc::new(Barrier::new(2)),
+            calls: Arc::clone(&calls),
+        };
+        let first_dispatch = Arc::clone(&dispatch);
+        let first_effect = effect.clone();
+        let lifecycle_request = request(&zone, GuestLifecycleOperation::Start, "ttl-running");
+        let first_thread = std::thread::spawn(move || {
+            first_dispatch.dispatch(
+                &BrokerCallerRole::AdminUid { uid: 1000 },
+                &lifecycle_request,
+                &first_effect,
+            )
+        });
+        entered_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("long-running effect entered");
+
+        {
+            let mut mutations = dispatch.mutations.lock().expect("mutation lock");
+            let mutation = mutations
+                .get_mut("ttl-running")
+                .expect("executing mutation");
+            mutation.admitted_at_ms =
+                now_ms().saturating_sub(LIFECYCLE_IDEMPOTENCY_TTL.as_millis() as u64 + 1);
+        }
+        let retry = request(&zone, GuestLifecycleOperation::Start, "ttl-running");
+        assert_eq!(
+            dispatch.dispatch(&BrokerCallerRole::AdminUid { uid: 1000 }, &retry, &effect,),
+            Err(ProviderEffectError::MutationPending)
+        );
+        assert_eq!(calls.load(Ordering::Acquire), 1);
+
+        effect.release.wait();
+        assert_eq!(
+            first_thread.join().expect("first thread"),
+            Ok(EffectDispatch::Dispatched(1))
+        );
+    }
+
+    #[test]
+    fn completion_persist_failure_releases_execution_for_reconciliation() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join(format!(
+                "provider-lifecycle-completion-persist-failure-{}",
+                std::process::id()
+            ));
+        let _ = std::fs::remove_dir_all(&root);
+        let path = root.join("lifecycle.json");
+        let zone = ZoneId::parse("work").expect("Zone");
+        let caller = BrokerCallerRole::AdminUid { uid: 1000 };
+        let lifecycle_request =
+            request(&zone, GuestLifecycleOperation::Start, "completion-failure");
+        let dispatch =
+            ProviderLifecycleDispatch::new_persistent(zone.clone(), &path).expect("open state");
+        assert_eq!(
+            dispatch.admit(&caller, &lifecycle_request),
+            Ok(LifecycleDispatch::Dispatch)
+        );
+        std::fs::create_dir(path.with_extension("json.next")).expect("block next state");
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let effect = ReconciliationEffect {
+            calls: Arc::clone(&calls),
+            reached: AtomicBool::new(false),
+        };
+        assert_eq!(
+            dispatch.dispatch(&caller, &lifecycle_request, &effect),
+            Err(ProviderEffectError::StateUnavailable)
+        );
+        assert_eq!(calls.load(Ordering::Acquire), 1);
+        std::fs::remove_dir(path.with_extension("json.next")).expect("unblock next state");
+
+        assert_eq!(
+            dispatch.dispatch(&caller, &lifecycle_request, &effect),
+            Ok(EffectDispatch::Duplicate)
+        );
+        assert_eq!(calls.load(Ordering::Acquire), 1);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn removal_persist_failure_releases_execution_for_retry() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join(format!(
+                "provider-lifecycle-removal-persist-failure-{}",
+                std::process::id()
+            ));
+        let _ = std::fs::remove_dir_all(&root);
+        let path = root.join("lifecycle.json");
+        let zone = ZoneId::parse("work").expect("Zone");
+        let caller = BrokerCallerRole::AdminUid { uid: 1000 };
+        let lifecycle_request = request(&zone, GuestLifecycleOperation::Start, "removal-failure");
+        let dispatch =
+            ProviderLifecycleDispatch::new_persistent(zone.clone(), &path).expect("open state");
+        assert_eq!(
+            dispatch.admit(&caller, &lifecycle_request),
+            Ok(LifecycleDispatch::Dispatch)
+        );
+        std::fs::create_dir(path.with_extension("json.next")).expect("block next state");
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let effect = FailThenReconcileEffect {
+            calls: Arc::clone(&calls),
+            fail_first: AtomicBool::new(true),
+            reached: AtomicBool::new(false),
+        };
+        assert_eq!(
+            dispatch.dispatch(&caller, &lifecycle_request, &effect),
+            Err(ProviderEffectError::StateUnavailable)
+        );
+        assert_eq!(calls.load(Ordering::Acquire), 1);
+        std::fs::remove_dir(path.with_extension("json.next")).expect("unblock next state");
+
+        assert_eq!(
+            dispatch.dispatch(&caller, &lifecycle_request, &effect),
+            Ok(EffectDispatch::Dispatched(2))
+        );
+        assert_eq!(calls.load(Ordering::Acquire), 2);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn opposite_admissions_are_serialized_by_latest_desired_generation() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join(format!(
+                "provider-lifecycle-opposite-generation-{}",
+                std::process::id()
+            ));
+        let _ = std::fs::remove_dir_all(&root);
+        let path = root.join("lifecycle.json");
+        let zone = ZoneId::parse("work").expect("Zone");
+        let dispatch = Arc::new(
+            ProviderLifecycleDispatch::new_persistent(zone.clone(), &path).expect("open state"),
+        );
+        let state = Arc::new(Mutex::new(GuestLifecycleState::Stopped));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let (entered, entered_rx) = channel();
+        let effect = StatefulEffect {
+            entered,
+            release: Arc::new(Barrier::new(2)),
+            state: Arc::clone(&state),
+            calls: Arc::clone(&calls),
+        };
+        let start = request(&zone, GuestLifecycleOperation::Start, "generation-start");
+        let start_dispatch = Arc::clone(&dispatch);
+        let start_effect = effect.clone();
+        let start_thread = std::thread::spawn(move || {
+            start_dispatch.dispatch(
+                &BrokerCallerRole::AdminUid { uid: 1000 },
+                &start,
+                &start_effect,
+            )
+        });
+        entered_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("start effect entered");
+
+        let stop = request(&zone, GuestLifecycleOperation::Stop, "generation-stop");
+        assert_eq!(
+            dispatch.dispatch(&BrokerCallerRole::AdminUid { uid: 1000 }, &stop, &effect),
+            Err(ProviderEffectError::MutationPending)
+        );
+        effect.release.wait();
+        assert_eq!(
+            start_thread.join().expect("start thread"),
+            Ok(EffectDispatch::Dispatched(1))
+        );
+        assert_eq!(
+            *state.lock().expect("state lock"),
+            GuestLifecycleState::Started
+        );
+
+        assert_eq!(
+            dispatch.dispatch(&BrokerCallerRole::AdminUid { uid: 1000 }, &stop, &effect),
+            Ok(EffectDispatch::Dispatched(2))
+        );
+        assert_eq!(
+            *state.lock().expect("state lock"),
+            GuestLifecycleState::Stopped
+        );
+        let persisted: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).expect("read generation state"))
+                .expect("parse generation state");
+        assert_eq!(persisted.as_array().map(|entries| entries.len()), Some(2));
+        assert_eq!(persisted[0]["key"], "generation-start");
+        assert_eq!(persisted[0]["status"], "pending");
+        assert_eq!(persisted[0]["desired_generation"], 1);
+        assert_eq!(persisted[1]["key"], "generation-stop");
+        assert_eq!(persisted[1]["desired_generation"], 2);
+        assert_eq!(calls.load(Ordering::Acquire), 2);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn restart_preserves_latest_desired_generation() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join(format!(
+                "provider-lifecycle-generation-restart-{}",
+                std::process::id()
+            ));
+        let _ = std::fs::remove_dir_all(&root);
+        let path = root.join("lifecycle.json");
+        let zone = ZoneId::parse("work").expect("Zone");
+        let caller = BrokerCallerRole::AdminUid { uid: 1000 };
+        let dispatch =
+            ProviderLifecycleDispatch::new_persistent(zone.clone(), &path).expect("open state");
+        let start = request(&zone, GuestLifecycleOperation::Start, "restart-start");
+        let stop = request(&zone, GuestLifecycleOperation::Stop, "restart-stop");
+        assert_eq!(
+            dispatch.admit(&caller, &start),
+            Ok(LifecycleDispatch::Dispatch)
+        );
+        assert_eq!(
+            dispatch.admit(&caller, &stop),
+            Ok(LifecycleDispatch::Dispatch)
+        );
+        let before_restart: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).expect("read pre-restart state"))
+                .expect("parse pre-restart state");
+        assert_eq!(before_restart[0]["desired_generation"], 1);
+        assert_eq!(before_restart[1]["desired_generation"], 2);
+        drop(dispatch);
+
+        let restarted =
+            ProviderLifecycleDispatch::new_persistent(zone.clone(), &path).expect("restart");
+        let (entered, _entered_rx) = channel();
+        let effect = StatefulEffect {
+            entered,
+            release: Arc::new(Barrier::new(1)),
+            state: Arc::new(Mutex::new(GuestLifecycleState::Started)),
+            calls: Arc::new(AtomicUsize::new(0)),
+        };
+        assert_eq!(
+            restarted.dispatch(&caller, &start, &effect),
+            Err(ProviderEffectError::MutationPending)
+        );
+        assert_eq!(
+            restarted.dispatch(&caller, &stop, &effect),
+            Ok(EffectDispatch::Dispatched(1))
+        );
+        let persisted: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).expect("read restarted state"))
+                .expect("parse restarted state");
+        assert_eq!(persisted.as_array().map(|entries| entries.len()), Some(2));
+        assert_eq!(persisted[0]["key"], "restart-start");
+        assert_eq!(persisted[0]["status"], "pending");
+        assert_eq!(persisted[0]["desired_generation"], 1);
+        assert_eq!(persisted[1]["key"], "restart-stop");
+        assert_eq!(persisted[1]["desired_generation"], 2);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn restart_prunes_expired_unowned_pending_rows_for_bounded_recovery() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join(format!(
+                "provider-lifecycle-expired-recovery-{}",
+                std::process::id()
+            ));
+        let _ = std::fs::remove_dir_all(&root);
+        let path = root.join("lifecycle.json");
+        let zone = ZoneId::parse("work").expect("Zone");
+        let caller = BrokerCallerRole::AdminUid { uid: 1000 };
+        let lifecycle_request = request(&zone, GuestLifecycleOperation::Start, "expired-recovery");
+        let dispatch =
+            ProviderLifecycleDispatch::new_persistent(zone.clone(), &path).expect("open state");
+        assert_eq!(
+            dispatch.admit(&caller, &lifecycle_request),
+            Ok(LifecycleDispatch::Dispatch)
+        );
+        drop(dispatch);
+
+        let mut persisted: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).expect("read pending state"))
+                .expect("parse pending state");
+        persisted[0]["admitted_at_ms"] = serde_json::Value::from(0_u64);
+        std::fs::write(
+            &path,
+            serde_json::to_vec(&persisted).expect("serialize expired state"),
+        )
+        .expect("write expired state");
+
+        let restarted = ProviderLifecycleDispatch::new_persistent(zone, &path).expect("restart");
+        let calls = Arc::new(AtomicUsize::new(0));
+        let effect = RecordingEffect {
+            calls: Arc::clone(&calls),
+            reject: AtomicBool::new(false),
+        };
+        assert_eq!(
+            restarted.dispatch(&caller, &lifecycle_request, &effect),
+            Ok(EffectDispatch::Dispatched(1))
+        );
+        assert_eq!(calls.load(Ordering::Acquire), 1);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
