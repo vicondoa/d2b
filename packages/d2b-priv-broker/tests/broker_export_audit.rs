@@ -97,7 +97,9 @@ fn export_audit_requires_admin_and_exports_op_audit_records() {
         apply_record["zone_operation_key"]["zone"].as_str(),
         Some(zone_id)
     );
-    let scope_id = apply_record["scope_id"].as_str().expect("canonical scope id");
+    let scope_id = apply_record["scope_id"]
+        .as_str()
+        .expect("canonical scope id");
     assert!(d2b_contracts::v3::is_canonical_digest(scope_id));
     assert_ne!(scope_id, "operation");
     assert_eq!(apply_record["verb"], "ApplyNftables");
