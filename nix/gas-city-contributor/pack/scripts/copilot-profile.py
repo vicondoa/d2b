@@ -420,6 +420,8 @@ def _open_egress_channel() -> int | None:
         return None
     if not socket_value or not auth_token:
         raise ProfileError("egress socket and authentication must be configured together")
+    if os.environ.get("GC_EGRESS_SERVER_UID") is None:
+        raise ProfileError("egress server uid is not configured")
     socket_path = pathlib.Path(_absolute_path(socket_value, "egress socket"))
     channel = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:

@@ -189,6 +189,53 @@ class ProfileContractTests(unittest.TestCase):
             listener.close()
             thread.join(timeout=2)
 
+    def test_egress_channel_requires_verified_server_uid(self) -> None:
+        with mock.patch.dict(
+            os.environ,
+            {
+                "GC_EGRESS_SOCKET": "/run/gascity/egress.sock",
+                "GC_FDPROXY_AUTH": "fixture-auth",
+            },
+            clear=True,
+        ):
+            with self.assertRaisesRegex(
+                PROFILE.ProfileError,
+                "egress server uid is not configured",
+            ):
+                PROFILE._open_egress_channel()
+
+        with tempfile.TemporaryDirectory(prefix="gascity-egress-uid-") as raw:
+            socket_path = pathlib.Path(raw) / "egress.sock"
+            listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            listener.bind(str(socket_path))
+            listener.listen(1)
+
+            def accept_once() -> None:
+                connection, _address = listener.accept()
+                connection.close()
+
+            server = threading.Thread(target=accept_once)
+            server.start()
+            try:
+                with mock.patch.dict(
+                    os.environ,
+                    {
+                        "GC_EGRESS_SOCKET": str(socket_path),
+                        "GC_EGRESS_SERVER_UID": str(os.geteuid() + 1),
+                        "GC_FDPROXY_AUTH": "fixture-auth",
+                    },
+                    clear=True,
+                ):
+                    with self.assertRaisesRegex(
+                        PROFILE.ProfileError,
+                        "egress server identity is unauthorized",
+                    ):
+                        PROFILE._open_egress_channel()
+            finally:
+                server.join(timeout=5)
+                listener.close()
+            self.assertFalse(server.is_alive())
+
     def test_settings_have_only_persistent_authority(self) -> None:
         for profile in ("review-sol", "review-luna", "code-luna"):
             path = COPILOT_ROOT / profile / "settings.json"
@@ -822,6 +869,38 @@ class RoleRoutingContractTests(unittest.TestCase):
                 LAUNCHER.TOOL_POLICIES[executable_policy],
                 PROFILE.TOOL_POLICIES[executable_policy],
             )
+
+    def test_provider_channel_projection_is_exact(self) -> None:
+        city = tomllib.loads(CITY.read_text(encoding="utf-8"))
+        common = {
+            "GC_AGENT_LAUNCHER_SOCKET": "$GC_AGENT_LAUNCHER_SOCKET",
+            "GC_AGENT_LAUNCHER_TOKEN": "$GC_AGENT_LAUNCHER_TOKEN",
+            "GC_EGRESS_SERVER_UID": "$GC_EGRESS_SERVER_UID",
+            "GC_EGRESS_SOCKET": "$GC_EGRESS_SOCKET",
+            "GC_FDPROXY_AUTH": "$GC_FDPROXY_AUTH",
+            "GC_READINESS_FILE": "$GC_READINESS_FILE",
+            "GC_TERMINAL_STATE_ROOT": "$GC_TERMINAL_STATE_ROOT",
+        }
+        expected = {
+            "copilot-planning-sol": common,
+            "copilot-review-sol": common,
+            "copilot-review-luna": common,
+            "copilot-code-luna": common
+            | {
+                "GC_CHECK_AUTH": "$GC_CHECK_AUTH",
+                "GC_CHECK_REQUEST_DIR": "$GC_CHECK_REQUEST_DIR",
+                "GC_CHECK_SERVER_UID": "$GC_CHECK_SERVER_UID",
+                "GC_CHECK_SOCKET": "$GC_CHECK_SOCKET",
+            },
+        }
+        self.assertNotIn("env", city.get("workspace", {}))
+        self.assertEqual(
+            {
+                provider: value["env"]
+                for provider, value in city["providers"].items()
+            },
+            expected,
+        )
 
 
 class ActivationContractTests(unittest.TestCase):

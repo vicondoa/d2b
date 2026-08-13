@@ -13,5 +13,6 @@
   exposing repository contents to unrelated sidecars. Run-scoped GC roots bind
   to the durable workflow root separately from transient agent session beads.
   Model-provider sessions receive scoped `$VAR` references to authenticated
-  channels, and the profile boundary converts the egress socket into the
+  channels with coding-only check credentials. The profile boundary requires
+  the configured egress peer identity before converting that socket into the
   descriptor consumed by the sandbox proxy.

@@ -204,6 +204,62 @@ fn provider_tool_policies(city: &str) -> Result<BTreeMap<String, String>, String
     Ok(policies)
 }
 
+fn provider_environments(
+    city: &str,
+) -> Result<BTreeMap<String, BTreeMap<String, String>>, String> {
+    let mut environments = BTreeMap::new();
+    let mut current: Option<String> = None;
+    for line in city.lines() {
+        if let Some(provider) = line
+            .strip_prefix("[providers.")
+            .and_then(|value| value.strip_suffix(".env]"))
+        {
+            if provider.is_empty() || provider.contains('.') {
+                return Err(format!("provider environment table is malformed: {line}"));
+            }
+            if environments
+                .insert(provider.to_owned(), BTreeMap::new())
+                .is_some()
+            {
+                return Err(format!("duplicate provider environment: {provider}"));
+            }
+            current = Some(provider.to_owned());
+            continue;
+        }
+        if line.starts_with('[') {
+            current = None;
+            continue;
+        }
+        let Some(provider) = current.as_ref() else {
+            continue;
+        };
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Some((name, raw_value)) = trimmed.split_once(" = ") else {
+            return Err(format!("provider environment row is malformed: {line}"));
+        };
+        let Some(value) = raw_value
+            .strip_prefix('"')
+            .and_then(|value| value.strip_suffix('"'))
+        else {
+            return Err(format!("provider environment value is malformed: {line}"));
+        };
+        if environments
+            .get_mut(provider)
+            .expect("current provider environment exists")
+            .insert(name.to_owned(), value.to_owned())
+            .is_some()
+        {
+            return Err(format!(
+                "duplicate provider environment variable: {provider}.{name}"
+            ));
+        }
+    }
+    Ok(environments)
+}
+
 fn validate_tool_policies(
     matrix: &str,
     city: &str,
@@ -361,20 +417,66 @@ fn validate_role_routes(matrix: &str, city: &str, launcher: &str) -> Result<(), 
     if !city.contains("[session]\n# Control-plane") || !city.contains("provider = \"subprocess\"") {
         return Err("city default session runtime must be subprocess".to_owned());
     }
-    for required in [
-        "GC_AGENT_LAUNCHER_SOCKET = \"$GC_AGENT_LAUNCHER_SOCKET\"",
-        "GC_CHECK_AUTH = \"$GC_CHECK_AUTH\"",
-        "GC_CHECK_SOCKET = \"$GC_CHECK_SOCKET\"",
-        "GC_EGRESS_SOCKET = \"$GC_EGRESS_SOCKET\"",
-        "GC_FDPROXY_AUTH = \"$GC_FDPROXY_AUTH\"",
-        "GC_TERMINAL_STATE_ROOT = \"$GC_TERMINAL_STATE_ROOT\"",
-    ] {
-        if !city.contains(required) {
-            return Err(format!("city provider env is missing {required}"));
-        }
-    }
     if city.contains("[workspace.env]") {
         return Err("authenticated channel variables must not use workspace.env".to_owned());
+    }
+    let common = BTreeMap::from([
+        (
+            "GC_AGENT_LAUNCHER_SOCKET".to_owned(),
+            "$GC_AGENT_LAUNCHER_SOCKET".to_owned(),
+        ),
+        (
+            "GC_AGENT_LAUNCHER_TOKEN".to_owned(),
+            "$GC_AGENT_LAUNCHER_TOKEN".to_owned(),
+        ),
+        (
+            "GC_EGRESS_SERVER_UID".to_owned(),
+            "$GC_EGRESS_SERVER_UID".to_owned(),
+        ),
+        (
+            "GC_EGRESS_SOCKET".to_owned(),
+            "$GC_EGRESS_SOCKET".to_owned(),
+        ),
+        (
+            "GC_FDPROXY_AUTH".to_owned(),
+            "$GC_FDPROXY_AUTH".to_owned(),
+        ),
+        (
+            "GC_READINESS_FILE".to_owned(),
+            "$GC_READINESS_FILE".to_owned(),
+        ),
+        (
+            "GC_TERMINAL_STATE_ROOT".to_owned(),
+            "$GC_TERMINAL_STATE_ROOT".to_owned(),
+        ),
+    ]);
+    let mut coding = common.clone();
+    coding.extend([
+        ("GC_CHECK_AUTH".to_owned(), "$GC_CHECK_AUTH".to_owned()),
+        (
+            "GC_CHECK_REQUEST_DIR".to_owned(),
+            "$GC_CHECK_REQUEST_DIR".to_owned(),
+        ),
+        (
+            "GC_CHECK_SERVER_UID".to_owned(),
+            "$GC_CHECK_SERVER_UID".to_owned(),
+        ),
+        (
+            "GC_CHECK_SOCKET".to_owned(),
+            "$GC_CHECK_SOCKET".to_owned(),
+        ),
+    ]);
+    let expected_environments = BTreeMap::from([
+        ("copilot-code-luna".to_owned(), coding),
+        ("copilot-planning-sol".to_owned(), common.clone()),
+        ("copilot-review-luna".to_owned(), common.clone()),
+        ("copilot-review-sol".to_owned(), common),
+    ]);
+    if provider_environments(city)? != expected_environments {
+        return Err(
+            "provider channel projection must be exact and keep check credentials coding-only"
+                .to_owned(),
+        );
     }
     validate_tool_policies(matrix, city, launcher, &owned_asset(COPILOT_PROFILE))?;
     Ok(())
