@@ -302,7 +302,7 @@ let
 
       SOCKET = pathlib.Path("/run/gascity-egress/egress.sock")
       MARKERS = pathlib.Path("/run/gascity-egress/test")
-      ALLOWED_UIDS = {45101, 45102, 45103, 45105, 45106}
+      ALLOWED_UIDS = {45100, 45101, 45102, 45103, 45105, 45106}
       ALLOWED_HOSTS = {
           "api.github.com",
           "api.githubcopilot.com",
@@ -2260,6 +2260,7 @@ pkgs.testers.runNixOSTest {
         )
         machine.succeed(f"! runuser -u gascity-egress -- {direct_probe}")
     for index, identity in enumerate([
+        "gascity",
         "gascity-agent",
         "gascity-discord",
         "gascity-publisher",
@@ -2273,7 +2274,7 @@ pkgs.testers.runNixOSTest {
     machine.wait_until_succeeds(
         "test -s /run/gascity-egress/test/egress-allow"
     )
-    for uid in ["45102", "45103", "45105", "45106"]:
+    for uid in ["45100", "45102", "45103", "45105", "45106"]:
         machine.succeed(
             f"grep -qx '{uid}' /run/gascity-egress/test/egress-peer"
         )

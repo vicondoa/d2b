@@ -511,6 +511,7 @@ in
       proxySystemCallFilter = proxy.SystemCallFilter;
       discordStartWrapper = lib.hasInfix "gascity-discord-start" discordStartText;
       publisherStartWrapper = lib.hasInfix "gascity-publisher-start" publisherStartText;
+      allowedMainUid = lib.hasInfix "--allowed-uid 45100" egressStartText;
       allowedDiscordUid = lib.hasInfix "--allowed-uid 45102" egressStartText;
       allowedPublisherUid = lib.hasInfix "--allowed-uid 45103" egressStartText;
       allowedDiscordDomains =
@@ -640,6 +641,7 @@ in
       ];
       discordStartWrapper = true;
       publisherStartWrapper = true;
+      allowedMainUid = true;
       allowedDiscordUid = true;
       allowedPublisherUid = true;
       allowedDiscordDomains = true;

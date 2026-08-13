@@ -24,6 +24,7 @@ let
     ++ lib.optional buildBuddyEnabled "remote.buildbuddy.io");
   egressUids =
     [
+      config.users.users.gascity.uid
       config.users.users.gascity-agent.uid
       config.users.users.gascity-discord.uid
       config.users.users.gascity-publisher.uid
