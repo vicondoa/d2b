@@ -49,8 +49,6 @@ let
     let
       spec = row.resource.spec or { };
       providerConfig = spec.config or { };
-      providerEnvelope = spec.provider or { };
-      settings = providerEnvelope.settings or { };
       providerRef =
         if row.resource.type == "Provider"
         then "Provider/${row.name}"

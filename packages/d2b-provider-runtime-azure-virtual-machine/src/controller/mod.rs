@@ -264,7 +264,6 @@ where
                         };
                         if let Some(psk) = self.bootstrap_psk.take() {
                             let payload = PskExtensionPayload::from_secret(psk.consume().to_vec())?;
-                            let _payload_len = payload.len();
                             self.operation =
                                 Some(self.effect.put_vm_extension(&handle, payload).await?);
                             self.phase = AzureVmPhase::PskDelivering;

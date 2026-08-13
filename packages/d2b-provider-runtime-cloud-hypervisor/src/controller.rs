@@ -154,6 +154,30 @@ where
         self.finalizer
     }
 
+    fn apply_health(
+        &mut self,
+        health: GuestControlHealth,
+    ) -> Result<CloudHypervisorReconcileOutcome, CloudHypervisorError> {
+        match health {
+            GuestControlHealth::Ready => {
+                self.phase = CloudHypervisorPhase::Ready;
+                Ok(CloudHypervisorReconcileOutcome::Converged)
+            }
+            GuestControlHealth::Degraded => {
+                self.phase = CloudHypervisorPhase::Degraded;
+                Ok(CloudHypervisorReconcileOutcome::Retry {
+                    after_ms: self.config.health_check_interval_ms,
+                })
+            }
+            GuestControlHealth::Failed => {
+                self.phase = CloudHypervisorPhase::Failed;
+                Err(CloudHypervisorError::GuestControl(
+                    GuestControlHealthError::AuthenticationFailed,
+                ))
+            }
+        }
+    }
+
     /// Reconcile after dependency readiness has been observed.
     pub async fn reconcile(
         &mut self,
@@ -197,29 +221,12 @@ where
             }
         }
         self.phase = CloudHypervisorPhase::Bootstrapping;
-        match self
+        let health = self
             .probe
             .probe(expected_cid, self.config.health_check_timeout_ms)
             .await
-            .map_err(CloudHypervisorError::GuestControl)?
-        {
-            GuestControlHealth::Ready => {
-                self.phase = CloudHypervisorPhase::Ready;
-                Ok(CloudHypervisorReconcileOutcome::Converged)
-            }
-            GuestControlHealth::Degraded => {
-                self.phase = CloudHypervisorPhase::Degraded;
-                Ok(CloudHypervisorReconcileOutcome::Retry {
-                    after_ms: self.config.health_check_interval_ms,
-                })
-            }
-            GuestControlHealth::Failed => {
-                self.phase = CloudHypervisorPhase::Failed;
-                Err(CloudHypervisorError::GuestControl(
-                    GuestControlHealthError::AuthenticationFailed,
-                ))
-            }
-        }
+            .map_err(CloudHypervisorError::GuestControl)?;
+        self.apply_health(health)
     }
 
     /// Adopt a process after the caller has rehydrated the expected identity
@@ -240,29 +247,12 @@ where
         self.effect.open_pidfd(&candidate).await?;
         self.identity = Some(candidate);
         self.phase = CloudHypervisorPhase::VmmReady;
-        match self
+        let health = self
             .probe
             .probe(expected_cid, self.config.health_check_timeout_ms)
             .await
-            .map_err(CloudHypervisorError::GuestControl)?
-        {
-            GuestControlHealth::Ready => {
-                self.phase = CloudHypervisorPhase::Ready;
-                Ok(CloudHypervisorReconcileOutcome::Converged)
-            }
-            GuestControlHealth::Degraded => {
-                self.phase = CloudHypervisorPhase::Degraded;
-                Ok(CloudHypervisorReconcileOutcome::Retry {
-                    after_ms: self.config.health_check_interval_ms,
-                })
-            }
-            GuestControlHealth::Failed => {
-                self.phase = CloudHypervisorPhase::Failed;
-                Err(CloudHypervisorError::GuestControl(
-                    GuestControlHealthError::AuthenticationFailed,
-                ))
-            }
-        }
+            .map_err(CloudHypervisorError::GuestControl)?;
+        self.apply_health(health)
     }
 
     /// Stop guest-control first, then the VMM process.
