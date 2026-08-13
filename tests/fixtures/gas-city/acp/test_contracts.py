@@ -873,12 +873,15 @@ class RoleRoutingContractTests(unittest.TestCase):
     def test_provider_channel_projection_is_exact(self) -> None:
         city = tomllib.loads(CITY.read_text(encoding="utf-8"))
         common = {
+            "COPILOT_CUSTOM_INSTRUCTIONS_DIRS": "",
             "GC_AGENT_LAUNCHER_SOCKET": "$GC_AGENT_LAUNCHER_SOCKET",
-            "GC_AGENT_LAUNCHER_TOKEN": "$GC_AGENT_LAUNCHER_TOKEN",
+            "GC_AGENT_SERVER_UID": "$GC_AGENT_SERVER_UID",
+            "GC_CITY_GENERATION": "$GC_CITY_GENERATION",
             "GC_EGRESS_SERVER_UID": "$GC_EGRESS_SERVER_UID",
             "GC_EGRESS_SOCKET": "$GC_EGRESS_SOCKET",
             "GC_FDPROXY_AUTH": "$GC_FDPROXY_AUTH",
-            "GC_READINESS_FILE": "$GC_READINESS_FILE",
+            "GC_REQUIRE_READINESS": "$GC_REQUIRE_READINESS",
+            "GC_STATE_SCHEMA": "$GC_STATE_SCHEMA",
             "GC_TERMINAL_STATE_ROOT": "$GC_TERMINAL_STATE_ROOT",
         }
         expected = {
@@ -888,7 +891,6 @@ class RoleRoutingContractTests(unittest.TestCase):
             "copilot-code-luna": common
             | {
                 "GC_CHECK_AUTH": "$GC_CHECK_AUTH",
-                "GC_CHECK_REQUEST_DIR": "$GC_CHECK_REQUEST_DIR",
                 "GC_CHECK_SERVER_UID": "$GC_CHECK_SERVER_UID",
                 "GC_CHECK_SOCKET": "$GC_CHECK_SOCKET",
             },

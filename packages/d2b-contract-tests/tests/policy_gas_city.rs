@@ -204,9 +204,7 @@ fn provider_tool_policies(city: &str) -> Result<BTreeMap<String, String>, String
     Ok(policies)
 }
 
-fn provider_environments(
-    city: &str,
-) -> Result<BTreeMap<String, BTreeMap<String, String>>, String> {
+fn provider_environments(city: &str) -> Result<BTreeMap<String, BTreeMap<String, String>>, String> {
     let mut environments = BTreeMap::new();
     let mut current: Option<String> = None;
     for line in city.lines() {
@@ -422,12 +420,20 @@ fn validate_role_routes(matrix: &str, city: &str, launcher: &str) -> Result<(), 
     }
     let common = BTreeMap::from([
         (
+            "COPILOT_CUSTOM_INSTRUCTIONS_DIRS".to_owned(),
+            String::new(),
+        ),
+        (
             "GC_AGENT_LAUNCHER_SOCKET".to_owned(),
             "$GC_AGENT_LAUNCHER_SOCKET".to_owned(),
         ),
         (
-            "GC_AGENT_LAUNCHER_TOKEN".to_owned(),
-            "$GC_AGENT_LAUNCHER_TOKEN".to_owned(),
+            "GC_AGENT_SERVER_UID".to_owned(),
+            "$GC_AGENT_SERVER_UID".to_owned(),
+        ),
+        (
+            "GC_CITY_GENERATION".to_owned(),
+            "$GC_CITY_GENERATION".to_owned(),
         ),
         (
             "GC_EGRESS_SERVER_UID".to_owned(),
@@ -437,13 +443,14 @@ fn validate_role_routes(matrix: &str, city: &str, launcher: &str) -> Result<(), 
             "GC_EGRESS_SOCKET".to_owned(),
             "$GC_EGRESS_SOCKET".to_owned(),
         ),
+        ("GC_FDPROXY_AUTH".to_owned(), "$GC_FDPROXY_AUTH".to_owned()),
         (
-            "GC_FDPROXY_AUTH".to_owned(),
-            "$GC_FDPROXY_AUTH".to_owned(),
+            "GC_REQUIRE_READINESS".to_owned(),
+            "$GC_REQUIRE_READINESS".to_owned(),
         ),
         (
-            "GC_READINESS_FILE".to_owned(),
-            "$GC_READINESS_FILE".to_owned(),
+            "GC_STATE_SCHEMA".to_owned(),
+            "$GC_STATE_SCHEMA".to_owned(),
         ),
         (
             "GC_TERMINAL_STATE_ROOT".to_owned(),
@@ -454,17 +461,10 @@ fn validate_role_routes(matrix: &str, city: &str, launcher: &str) -> Result<(), 
     coding.extend([
         ("GC_CHECK_AUTH".to_owned(), "$GC_CHECK_AUTH".to_owned()),
         (
-            "GC_CHECK_REQUEST_DIR".to_owned(),
-            "$GC_CHECK_REQUEST_DIR".to_owned(),
-        ),
-        (
             "GC_CHECK_SERVER_UID".to_owned(),
             "$GC_CHECK_SERVER_UID".to_owned(),
         ),
-        (
-            "GC_CHECK_SOCKET".to_owned(),
-            "$GC_CHECK_SOCKET".to_owned(),
-        ),
+        ("GC_CHECK_SOCKET".to_owned(), "$GC_CHECK_SOCKET".to_owned()),
     ]);
     let expected_environments = BTreeMap::from([
         ("copilot-code-luna".to_owned(), coding),
