@@ -14908,8 +14908,7 @@ mod tests {
         let caller_gid = Gid::current().as_raw();
         let exported = {
             fs::create_dir_all(&audit_dir).expect("create audit dir");
-            let log = AuditLog::open(&audit_dir, caller_gid, true, 14)
-                .expect("open audit log");
+            let log = AuditLog::open(&audit_dir, caller_gid, true, 14).expect("open audit log");
             for case in &cases {
                 let audit_context = DispatchAuditContext {
                     peer_pid: 4242,

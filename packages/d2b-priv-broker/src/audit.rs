@@ -1622,17 +1622,15 @@ pub(crate) fn sanitize_audit_value(value: Value) -> Value {
     fn walk(value: &mut Value, key: Option<&str>) {
         match value {
             Value::Object(object) => {
-                object.retain(|name, child| {
-                    match name.as_str() {
-                        "caller_uid" | "caller_gid" => {
-                            key.is_none()
-                                && child
-                                    .as_u64()
-                                    .is_some_and(|value| value <= u64::from(u32::MAX))
-                        }
-                        "peer_pid" | "pid" | "pidfd" | "handle" => false,
-                        _ => true,
+                object.retain(|name, child| match name.as_str() {
+                    "caller_uid" | "caller_gid" => {
+                        key.is_none()
+                            && child
+                                .as_u64()
+                                .is_some_and(|value| value <= u64::from(u32::MAX))
                     }
+                    "peer_pid" | "pid" | "pidfd" | "handle" => false,
+                    _ => true,
                 });
                 for (name, child) in object {
                     let propagated = key
