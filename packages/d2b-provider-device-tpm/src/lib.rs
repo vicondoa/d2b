@@ -16,7 +16,7 @@ pub use controller::{
     TpmController, TpmControllerError, TpmEffectError, TpmEffectPort, TpmPhase,
     TpmReconcileDisposition, TpmReconcileOutcome, TpmStatePreparationResult,
 };
-pub use migration::{LegacyMigrationOutcome, LegacyTpmMigrationDecision, LegacyTpmStateId};
+pub use migration::LegacyMigrationOutcome;
 pub use runner::{
     BinaryKind, FlushLaunchTicket, SignedBinaryRef, SwtpmArgv, SwtpmArgvError, SwtpmSettings,
     SwtpmStartLaunchTicket, validate_start_ticket,

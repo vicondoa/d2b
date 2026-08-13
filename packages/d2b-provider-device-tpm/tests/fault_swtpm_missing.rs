@@ -1,17 +1,18 @@
 use d2b_provider_device_tpm::{
-    BinaryKind, FlushLaunchTicket, LegacyMigrationOutcome, LegacyTpmStateId, SignedBinaryRef,
-    StateDirIntent, StateDirectoryToken, StateOwnerToken, SwtpmSettings, SwtpmStartLaunchTicket,
-    TpmController, TpmEffectError, TpmEffectPort, TpmPhase, TpmStateObservation,
-    TpmStateObservationKind, TpmStatePreparationResult,
+    BinaryKind, FlushLaunchTicket, LegacyMigrationOutcome, SignedBinaryRef, StateDirIntent,
+    StateDirectoryToken, StateOwnerToken, SwtpmSettings, SwtpmStartLaunchTicket, TpmController,
+    TpmEffectError, TpmEffectPort, TpmPhase, TpmStateObservation, TpmStateObservationKind,
+    TpmStatePreparationResult,
 };
 
 struct MissingSwtpm;
 
 impl TpmEffectPort for MissingSwtpm {
-    fn migrate_legacy_state(
-        &mut self,
-        _: &LegacyTpmStateId,
-    ) -> Result<LegacyMigrationOutcome, TpmEffectError> {
+    fn legacy_migration_required(&self) -> bool {
+        false
+    }
+
+    fn migrate_legacy_state(&mut self) -> Result<LegacyMigrationOutcome, TpmEffectError> {
         Ok(LegacyMigrationOutcome::NotApplicable)
     }
 

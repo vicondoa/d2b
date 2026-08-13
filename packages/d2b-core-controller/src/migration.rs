@@ -18,7 +18,7 @@ impl LegacyTpmStateId {
     }
 }
 
-/// Core-issued decision consumed by the production TPM controller constructor.
+/// Core-owned decision held by the production TPM effect adapter.
 #[derive(Clone, PartialEq, Eq)]
 pub struct LegacyTpmMigrationDecision {
     state_id: Option<LegacyTpmStateId>,
@@ -29,10 +29,6 @@ pub struct LegacyTpmMigrationDecision {
 impl LegacyTpmMigrationDecision {
     pub const fn requires_migration(&self) -> bool {
         self.state_id.is_some()
-    }
-
-    pub fn state_id(&self) -> Option<&LegacyTpmStateId> {
-        self.state_id.as_ref()
     }
 
     pub fn validates_binding(&self, vm_id: &str, intent_ref: &str) -> bool {
@@ -51,15 +47,6 @@ impl LegacyTpmMigrationDecision {
             state_id,
             vm_binding: canonical_digest("d2b:tpm-vm-binding/v1", vm_id.as_bytes()),
             intent_binding: canonical_digest("d2b:tpm-intent-binding/v1", intent_ref.as_bytes()),
-        }
-    }
-
-    #[cfg(any(test, feature = "test-support"))]
-    pub const fn from_test_inventory() -> Self {
-        Self {
-            state_id: None,
-            vm_binding: String::new(),
-            intent_binding: String::new(),
         }
     }
 }
@@ -92,6 +79,10 @@ mod tests {
             Some(LegacyTpmStateId::from_anchored_inventory([7; 32])),
             "work",
             "legacy-swtpm:vm:work",
+        );
+        assert_eq!(
+            format!("{decision:?}"),
+            "LegacyTpmMigrationDecision(<sealed>)"
         );
         assert!(decision.validates_binding("work", "legacy-swtpm:vm:work"));
         assert!(!decision.validates_binding("other", "legacy-swtpm:vm:work"));

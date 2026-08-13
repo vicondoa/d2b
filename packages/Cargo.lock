@@ -1272,7 +1272,6 @@ name = "d2b-provider-device-tpm"
 version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts",
- "d2b-core-controller",
  "serde",
  "serde_json",
 ]

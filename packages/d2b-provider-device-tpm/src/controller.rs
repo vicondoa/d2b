@@ -4,7 +4,7 @@ use core::fmt;
 
 use crate::{
     DEVICE_TPM_FINALIZER,
-    migration::{LegacyMigrationOutcome, LegacyTpmMigrationDecision, LegacyTpmStateId},
+    migration::LegacyMigrationOutcome,
     runner::{
         FlushLaunchTicket, SignedBinaryRef, SwtpmArgvError, SwtpmSettings, SwtpmStartLaunchTicket,
     },
@@ -77,11 +77,10 @@ impl std::error::Error for TpmEffectError {}
 
 /// Core effect port for TPM state hardening and worker launch.
 pub trait TpmEffectPort {
+    /// Report whether Core's trusted inventory requires legacy state adoption.
+    fn legacy_migration_required(&self) -> bool;
     /// Complete or resume the broker-owned one-time legacy state adoption.
-    fn migrate_legacy_state(
-        &mut self,
-        state_id: &LegacyTpmStateId,
-    ) -> Result<LegacyMigrationOutcome, TpmEffectError>;
+    fn migrate_legacy_state(&mut self) -> Result<LegacyMigrationOutcome, TpmEffectError>;
     /// Harden/reconcile the state directory and return opaque launch tickets.
     fn prepare_state_dir(
         &mut self,
@@ -177,7 +176,6 @@ pub struct TpmController {
     intent: StateDirIntent,
     settings: SwtpmSettings,
     binary: SignedBinaryRef,
-    migration_decision: LegacyTpmMigrationDecision,
     migration_complete: bool,
     phase: TpmPhase,
     finalizer: bool,
@@ -192,13 +190,11 @@ impl TpmController {
         intent: StateDirIntent,
         settings: SwtpmSettings,
         binary: SignedBinaryRef,
-        migration_decision: LegacyTpmMigrationDecision,
     ) -> Result<Self, TpmControllerError> {
-        Self::new_inner(intent, settings, binary, migration_decision)
+        Self::new_inner(intent, settings, binary)
     }
 
-    /// Construct the no-legacy test fixture. Production construction consumes
-    /// a Core-issued migration decision.
+    /// Construct the test fixture.
     #[doc(hidden)]
     #[cfg(any(test, feature = "test-support"))]
     pub fn new_for_tests(
@@ -206,12 +202,7 @@ impl TpmController {
         settings: SwtpmSettings,
         binary: SignedBinaryRef,
     ) -> Result<Self, TpmControllerError> {
-        Self::new_inner(
-            intent,
-            settings,
-            binary,
-            LegacyTpmMigrationDecision::from_test_inventory(),
-        )
+        Self::new_inner(intent, settings, binary)
     }
 
     #[allow(dead_code)]
@@ -219,15 +210,13 @@ impl TpmController {
         intent: StateDirIntent,
         settings: SwtpmSettings,
         binary: SignedBinaryRef,
-        migration_decision: LegacyTpmMigrationDecision,
     ) -> Result<Self, TpmControllerError> {
         settings.validate().map_err(TpmControllerError::Settings)?;
         Ok(Self {
             intent,
             settings,
             binary,
-            migration_complete: !migration_decision.requires_migration(),
-            migration_decision,
+            migration_complete: false,
             phase: TpmPhase::Pending,
             finalizer: true,
             volume_preserved: true,
@@ -265,27 +254,27 @@ impl TpmController {
         }
         if !self.migration_complete {
             self.phase = TpmPhase::MigratingLegacyState;
-            let state_id = self
-                .migration_decision
-                .state_id()
-                .ok_or(TpmControllerError::InvalidState)?;
-            match port
-                .migrate_legacy_state(state_id)
-                .map_err(TpmControllerError::Effect)?
-            {
-                outcome if outcome.permits_ensure() => {
-                    self.migration_complete = true;
-                }
-                LegacyMigrationOutcome::Pending => {
-                    return Ok(TpmReconcileOutcome::Transient);
-                }
-                outcome if outcome.is_terminal_failure() => {
-                    self.phase = TpmPhase::Failed;
-                    return Err(TpmControllerError::LegacyMigration(outcome));
-                }
-                _ => {
-                    self.phase = TpmPhase::Failed;
-                    return Err(TpmControllerError::InvalidState);
+            if !port.legacy_migration_required() {
+                self.migration_complete = true;
+            } else {
+                match port
+                    .migrate_legacy_state()
+                    .map_err(TpmControllerError::Effect)?
+                {
+                    outcome if outcome.permits_ensure() => {
+                        self.migration_complete = true;
+                    }
+                    LegacyMigrationOutcome::Pending => {
+                        return Ok(TpmReconcileOutcome::Transient);
+                    }
+                    outcome if outcome.is_terminal_failure() => {
+                        self.phase = TpmPhase::Failed;
+                        return Err(TpmControllerError::LegacyMigration(outcome));
+                    }
+                    _ => {
+                        self.phase = TpmPhase::Failed;
+                        return Err(TpmControllerError::InvalidState);
+                    }
                 }
             }
         }

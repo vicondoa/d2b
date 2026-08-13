@@ -1,16 +1,42 @@
 //! Core-owned production adapter for the Device TPM Provider effect boundary.
 //!
-//! The Provider receives no broker handle or host locator. Core supplies the
-//! migration decision and an effect executor for the state/runner operations;
-//! this adapter is the only place that maps the migration decision to the
-//! typed broker operation.
+//! The Provider receives no broker handle, host locator, or Core migration
+//! receipt. Core supplies the migration decision and an effect executor for
+//! the state/runner operations; this adapter is the only place that maps the
+//! private decision to the typed broker operation.
 
 use d2b_contracts::types::{BundleOpId, VmId};
+use d2b_core_controller::migration::LegacyTpmMigrationDecision;
 use d2b_provider_device_tpm::{
-    FlushLaunchTicket, LegacyMigrationOutcome, LegacyTpmMigrationDecision, LegacyTpmStateId,
-    SignedBinaryRef, StateDirIntent, SwtpmSettings, SwtpmStartLaunchTicket, TpmEffectError,
-    TpmEffectPort, TpmStatePreparationResult,
+    FlushLaunchTicket, LegacyMigrationOutcome, SignedBinaryRef, StateDirIntent, SwtpmSettings,
+    SwtpmStartLaunchTicket, TpmEffectError, TpmEffectPort, TpmStatePreparationResult,
 };
+
+#[allow(dead_code)]
+fn map_legacy_migration_outcome(
+    outcome: d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome,
+) -> LegacyMigrationOutcome {
+    match outcome {
+        d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::Migrated => {
+            LegacyMigrationOutcome::Migrated
+        }
+        d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::AlreadyMigrated => {
+            LegacyMigrationOutcome::AlreadyMigrated
+        }
+        d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::NotApplicable => {
+            LegacyMigrationOutcome::NotApplicable
+        }
+        d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::Pending => {
+            LegacyMigrationOutcome::Pending
+        }
+        d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::Failed => {
+            LegacyMigrationOutcome::Failed
+        }
+        d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::Ambiguous => {
+            LegacyMigrationOutcome::Ambiguous
+        }
+    }
+}
 
 /// Core-side executor for the non-migration TPM effects.
 pub trait CoreTpmEffectExecutor {
@@ -62,11 +88,12 @@ impl<'a, E> ProductionTpmEffectPort<'a, E> {
 }
 
 impl<E: CoreTpmEffectExecutor> TpmEffectPort for ProductionTpmEffectPort<'_, E> {
-    fn migrate_legacy_state(
-        &mut self,
-        state_id: &LegacyTpmStateId,
-    ) -> Result<LegacyMigrationOutcome, TpmEffectError> {
-        if self.migration_decision.state_id() != Some(state_id)
+    fn legacy_migration_required(&self) -> bool {
+        self.migration_decision.requires_migration()
+    }
+
+    fn migrate_legacy_state(&mut self) -> Result<LegacyMigrationOutcome, TpmEffectError> {
+        if !self.migration_decision.requires_migration()
             || !self
                 .migration_decision
                 .validates_binding(self.vm_id.as_str(), self.migration_intent_ref.as_str())
@@ -79,26 +106,7 @@ impl<E: CoreTpmEffectExecutor> TpmEffectPort for ProductionTpmEffectPort<'_, E> 
             self.migration_intent_ref.clone(),
         )
         .map_err(|_| TpmEffectError::Transient)?;
-        Ok(match outcome {
-            d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::Migrated => {
-                LegacyMigrationOutcome::Migrated
-            }
-            d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::AlreadyMigrated => {
-                LegacyMigrationOutcome::AlreadyMigrated
-            }
-            d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::NotApplicable => {
-                LegacyMigrationOutcome::NotApplicable
-            }
-            d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::Pending => {
-                LegacyMigrationOutcome::Pending
-            }
-            d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::Failed => {
-                LegacyMigrationOutcome::Failed
-            }
-            d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::Ambiguous => {
-                LegacyMigrationOutcome::Ambiguous
-            }
-        })
+        Ok(map_legacy_migration_outcome(outcome))
     }
 
     fn prepare_state_dir(
@@ -123,5 +131,43 @@ impl<E: CoreTpmEffectExecutor> TpmEffectPort for ProductionTpmEffectPort<'_, E> 
 
     fn stop(&mut self) -> Result<(), TpmEffectError> {
         self.executor.stop()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome;
+
+    #[test]
+    fn broker_migration_outcomes_are_preserved_at_the_provider_boundary() {
+        for (broker, provider) in [
+            (
+                LegacySwtpmMigrationOutcome::Migrated,
+                LegacyMigrationOutcome::Migrated,
+            ),
+            (
+                LegacySwtpmMigrationOutcome::AlreadyMigrated,
+                LegacyMigrationOutcome::AlreadyMigrated,
+            ),
+            (
+                LegacySwtpmMigrationOutcome::NotApplicable,
+                LegacyMigrationOutcome::NotApplicable,
+            ),
+            (
+                LegacySwtpmMigrationOutcome::Pending,
+                LegacyMigrationOutcome::Pending,
+            ),
+            (
+                LegacySwtpmMigrationOutcome::Failed,
+                LegacyMigrationOutcome::Failed,
+            ),
+            (
+                LegacySwtpmMigrationOutcome::Ambiguous,
+                LegacyMigrationOutcome::Ambiguous,
+            ),
+        ] {
+            assert_eq!(map_legacy_migration_outcome(broker), provider);
+        }
     }
 }

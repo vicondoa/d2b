@@ -1,7 +1,5 @@
 //! Opaque legacy swtpm adoption contract.
 
-pub use d2b_core_controller::migration::{LegacyTpmMigrationDecision, LegacyTpmStateId};
-
 /// Closed outcome of the broker-owned one-time legacy state adoption.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LegacyMigrationOutcome {

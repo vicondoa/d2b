@@ -12,12 +12,10 @@ test-support = []
 workspace = true
 
 [dependencies]
-d2b-core-controller = { path = "../d2b-core-controller", version = "0.0.0-bootstrap" }
 d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
 serde.workspace = true
 
 [dev-dependencies]
-d2b-core-controller = { path = "../d2b-core-controller", version = "0.0.0-bootstrap", features = ["test-support"] }
 serde_json.workspace = true
 
 [[test]]
