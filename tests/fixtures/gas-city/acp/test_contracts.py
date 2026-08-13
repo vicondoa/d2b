@@ -2919,7 +2919,7 @@ class DurableStateContractTests(unittest.TestCase):
                     {
                         "schema": ACTIVATION.TERMINAL_RECORD_SCHEMA,
                         "run_id": "run-1",
-                        "bead_id": "run-1",
+                        "bead_id": "bead-1",
                         "generation": "old-generation",
                         "state_schema": "1",
                         "terminal_status": "closed",
@@ -3119,7 +3119,7 @@ class DurableStateContractTests(unittest.TestCase):
                     {
                         "schema": ACTIVATION.TERMINAL_RECORD_SCHEMA,
                         "run_id": "run-1",
-                        "bead_id": "bead-1",
+                        "bead_id": "run-1",
                         "generation": "g1",
                         "state_schema": "1",
                         "terminal_status": "open",
