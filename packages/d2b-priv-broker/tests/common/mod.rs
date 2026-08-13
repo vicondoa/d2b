@@ -113,6 +113,10 @@ impl TestBroker {
         self.d2bd_uid
     }
 
+    pub fn caller_gid(&self) -> u32 {
+        nix::unistd::Gid::current().as_raw()
+    }
+
     pub fn server_log(&self) -> String {
         fs::read_to_string(&self.server_log_path).unwrap_or_default()
     }

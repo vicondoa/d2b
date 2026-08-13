@@ -117,6 +117,7 @@ pub struct AuditEntry<'a> {
     pub ts: u128,
     pub op: &'a str,
     pub caller_uid: u32,
+    pub caller_gid: Option<u32>,
     pub disposition: &'a str,
     pub opaque_target_id: &'a str,
     pub outcome: &'a str,
@@ -143,6 +144,9 @@ impl Serialize for AuditEntry<'_> {
             ),
             ("outcome".to_owned(), serde_json::json!(self.outcome)),
         ]);
+        if let Some(caller_gid) = self.caller_gid {
+            value.insert("caller_gid".to_owned(), serde_json::json!(caller_gid));
+        }
         if let Some(error_kind) = self.error_kind {
             value.insert("error_kind".to_owned(), serde_json::json!(error_kind));
         }
@@ -412,9 +416,10 @@ impl AuditLog {
     /// Legacy short-record writer. New op dispatch arms call
     /// [`Self::write_op_record`] instead. The `AuditEntry` JSONL shape
     /// is still produced for back-compat with the `broker-socket-acl.sh`
-    /// gate (which greps `caller_uid`); all records - `AuditEntry` and
-    /// `OpAuditRecord` alike - land in the day's daily file under
-    /// `audit_dir`.
+    /// gate (which greps numeric `caller_uid` attribution). Authenticated
+    /// caller UID/GID pairs use [`Self::write_entry_with_caller_ids`];
+    /// all records - `AuditEntry` and `OpAuditRecord` alike - land in the
+    /// day's daily file under `audit_dir`.
     pub fn write_entry(
         &self,
         op: &str,
@@ -433,11 +438,73 @@ impl AuditLog {
         )
     }
 
+    pub(crate) fn write_entry_with_caller_ids(
+        &self,
+        op: &str,
+        caller_uid: u32,
+        caller_gid: u32,
+        disposition: &str,
+        opaque_target_id: &str,
+        outcome: &str,
+    ) -> io::Result<()> {
+        self.write_entry_with_class_and_caller_ids(
+            AuditWriteClass::Privileged,
+            op,
+            caller_uid,
+            caller_gid,
+            disposition,
+            opaque_target_id,
+            outcome,
+        )
+    }
+
     pub(crate) fn write_entry_with_class(
         &self,
         audit_class: AuditWriteClass,
         op: &str,
         caller_uid: u32,
+        disposition: &str,
+        opaque_target_id: &str,
+        outcome: &str,
+    ) -> io::Result<()> {
+        self.write_entry_with_class_and_optional_caller_gid(
+            audit_class,
+            op,
+            caller_uid,
+            None,
+            disposition,
+            opaque_target_id,
+            outcome,
+        )
+    }
+
+    pub(crate) fn write_entry_with_class_and_caller_ids(
+        &self,
+        audit_class: AuditWriteClass,
+        op: &str,
+        caller_uid: u32,
+        caller_gid: u32,
+        disposition: &str,
+        opaque_target_id: &str,
+        outcome: &str,
+    ) -> io::Result<()> {
+        self.write_entry_with_class_and_optional_caller_gid(
+            audit_class,
+            op,
+            caller_uid,
+            Some(caller_gid),
+            disposition,
+            opaque_target_id,
+            outcome,
+        )
+    }
+
+    fn write_entry_with_class_and_optional_caller_gid(
+        &self,
+        audit_class: AuditWriteClass,
+        op: &str,
+        caller_uid: u32,
+        caller_gid: Option<u32>,
         disposition: &str,
         opaque_target_id: &str,
         outcome: &str,
@@ -449,6 +516,7 @@ impl AuditLog {
                 .as_millis(),
             op,
             caller_uid,
+            caller_gid,
             disposition,
             opaque_target_id,
             outcome,
@@ -471,6 +539,48 @@ impl AuditLog {
         error_kind: &str,
         error_message: &str,
     ) -> io::Result<()> {
+        self.write_error_entry_with_optional_caller_gid(
+            operation,
+            caller_uid,
+            None,
+            decision,
+            target_id,
+            error_kind,
+            error_message,
+        )
+    }
+
+    pub(crate) fn write_error_entry_with_caller_ids(
+        &self,
+        operation: &str,
+        caller_uid: u32,
+        caller_gid: u32,
+        decision: &str,
+        target_id: &str,
+        error_kind: &str,
+        error_message: &str,
+    ) -> io::Result<()> {
+        self.write_error_entry_with_optional_caller_gid(
+            operation,
+            caller_uid,
+            Some(caller_gid),
+            decision,
+            target_id,
+            error_kind,
+            error_message,
+        )
+    }
+
+    fn write_error_entry_with_optional_caller_gid(
+        &self,
+        operation: &str,
+        caller_uid: u32,
+        caller_gid: Option<u32>,
+        decision: &str,
+        target_id: &str,
+        error_kind: &str,
+        error_message: &str,
+    ) -> io::Result<()> {
         let entry = AuditEntry {
             ts: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -478,6 +588,7 @@ impl AuditLog {
                 .as_millis(),
             op: operation,
             caller_uid,
+            caller_gid,
             disposition: decision,
             opaque_target_id: target_id,
             outcome: "errored",
@@ -1511,11 +1622,17 @@ pub(crate) fn sanitize_audit_value(value: Value) -> Value {
     fn walk(value: &mut Value, key: Option<&str>) {
         match value {
             Value::Object(object) => {
-                object.retain(|name, _| {
-                    !matches!(
-                        name.as_str(),
-                        "peer_pid" | "caller_uid" | "caller_gid" | "pid" | "pidfd" | "handle"
-                    )
+                object.retain(|name, child| {
+                    match name.as_str() {
+                        "caller_uid" | "caller_gid" => {
+                            key.is_none()
+                                && child
+                                    .as_u64()
+                                    .is_some_and(|value| value <= u64::from(u32::MAX))
+                        }
+                        "peer_pid" | "pid" | "pidfd" | "handle" => false,
+                        _ => true,
+                    }
                 });
                 for (name, child) in object {
                     let propagated = key
@@ -3128,6 +3245,71 @@ mod tests {
         assert!(audit.contains(r#""decision":"allowed""#), "{audit}");
 
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn sanitizer_preserves_numeric_legacy_caller_ids_and_redacts_other_identity() {
+        let sanitized = sanitize_audit_value(serde_json::json!({
+            "ts": 1,
+            "op": "Hello",
+            "caller_uid": 4242_u32,
+            "caller_gid": 1000_u32,
+            "disposition": "peer-refused",
+            "opaque_target_id": "daemon-handshake",
+            "outcome": "closed",
+            "peer_pid": 4242,
+            "pid": 4243,
+            "pidfd": 9,
+            "handle": "opaque-handle",
+            "path": "/private/host/path",
+            "peer_role": "AdminUid(4242)",
+            "nested": {
+                "caller_uid": 7,
+                "caller_gid": 8,
+                "role_name": "attacker text"
+            }
+        }));
+        let object = sanitized.as_object().expect("sanitized audit object");
+
+        assert_eq!(object.get("caller_uid").and_then(Value::as_u64), Some(4242));
+        assert_eq!(object.get("caller_gid").and_then(Value::as_u64), Some(1000));
+        for forbidden in ["peer_pid", "pid", "pidfd", "handle"] {
+            assert!(!object.contains_key(forbidden), "{forbidden}: {object:?}");
+        }
+        assert!(
+            object
+                .get("path")
+                .and_then(Value::as_str)
+                .is_some_and(|value| value.starts_with("sha256:"))
+        );
+        assert!(
+            object
+                .get("peer_role")
+                .and_then(Value::as_str)
+                .is_some_and(|value| value.starts_with("sha256:"))
+        );
+        let nested = object
+            .get("nested")
+            .and_then(Value::as_object)
+            .expect("nested audit object");
+        assert!(!nested.contains_key("caller_uid"));
+        assert!(!nested.contains_key("caller_gid"));
+        assert!(
+            nested
+                .get("role_name")
+                .and_then(Value::as_str)
+                .is_some_and(|value| value.starts_with("sha256:"))
+        );
+        let string_ids = sanitize_audit_value(serde_json::json!({
+            "caller_uid": "uid-name",
+            "caller_gid": "gid-name"
+        }));
+        assert!(
+            string_ids
+                .as_object()
+                .expect("string identity object")
+                .is_empty()
+        );
     }
 
     #[test]

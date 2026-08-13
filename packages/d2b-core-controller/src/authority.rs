@@ -44,6 +44,16 @@ pub const USBIP_NETWORK_RELAY_IDENTITY_DOMAIN: &str = "usbip-network-relay/v1";
 const MAX_RESOLVED_NIC_IDENTITY_BYTES: usize = 256;
 static NEXT_AUTHORITY_INDEX_NONCE: AtomicU64 = AtomicU64::new(1);
 
+#[cfg(test)]
+fn test_nonce_for_operation(operation_id: &str) -> u64 {
+    let mut hash = 0xcbf29ce484222325_u64;
+    for byte in operation_id.bytes() {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x100000001b3_u64);
+    }
+    if hash == 0 { u64::MAX } else { hash }
+}
+
 /// One stable physical-NIC identity resolved from trusted Host inventory.
 ///
 /// This is not an authored interface selector and cannot be serialized into a
@@ -1859,7 +1869,7 @@ impl HostGlobalAuthorityIndex {
                     crate::authority_persistence::PreparedAuthorityOperation::new(
                         operation.operation_id.clone(),
                         operation.store_binding_digest.clone(),
-                        1,
+                        test_nonce_for_operation(&operation.operation_id),
                     )
                     .map_err(|_| AuthorityError::InvalidAuthorityRequest)?,
                 ))
@@ -2041,7 +2051,7 @@ impl HostGlobalAuthorityIndex {
                     crate::authority_persistence::PreparedAuthorityOperation::new(
                         operation.operation_id.clone(),
                         operation.store_binding_digest.clone(),
-                        1,
+                        test_nonce_for_operation(&operation.operation_id),
                     )
                     .map_err(|_| AuthorityError::InvalidAuthorityRequest)?,
                 ))
@@ -3092,6 +3102,17 @@ mod tests {
         AuthorityDigest([byte; 32])
     }
 
+    #[test]
+    fn test_nonce_for_operation_is_nonzero_and_operation_sensitive() {
+        let first = test_nonce_for_operation("operation-a");
+        let second = test_nonce_for_operation("operation-b");
+
+        assert_ne!(first, 0);
+        assert_ne!(second, 0);
+        assert_ne!(first, second);
+        assert_ne!(test_nonce_for_operation(""), 0);
+    }
+
     fn request(
         host: &ResourceUid,
         nic: &ResolvedExternalNicIdentity,
@@ -3130,7 +3151,7 @@ mod tests {
                 PreparedAuthorityOperation::new(
                     operation_id.to_owned(),
                     "sha256:".to_owned() + &"1".repeat(64),
-                    1,
+                    test_nonce_for_operation(operation_id),
                 )
             })
         }

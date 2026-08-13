@@ -953,6 +953,7 @@ fn handle_connection(
             },
             operation,
             effective_uid,
+            peer_gid,
             "ipc-rate-limited",
             opaque_target_id,
             "closed",
@@ -970,6 +971,7 @@ fn handle_connection(
             AuditWriteClass::Unprivileged,
             operation,
             effective_uid,
+            peer_gid,
             "peer-refused",
             opaque_target_id,
             "closed",
@@ -1054,6 +1056,7 @@ fn handle_connection(
     let dispatch_outcome = dispatch_request(
         request,
         effective_uid,
+        peer_gid,
         envelope.caller_role.clone(),
         &audit_context,
         config,
@@ -1120,14 +1123,16 @@ fn write_refusal_audit_bounded(
     audit_class: AuditWriteClass,
     operation: &str,
     caller_uid: u32,
+    caller_gid: u32,
     disposition: &str,
     opaque_target_id: &str,
     outcome: &str,
 ) -> io::Result<()> {
-    match audit_log.write_entry_with_class(
+    match audit_log.write_entry_with_class_and_caller_ids(
         audit_class,
         operation,
         caller_uid,
+        caller_gid,
         disposition,
         opaque_target_id,
         outcome,
@@ -1627,6 +1632,7 @@ fn request_fields_value(request: &BrokerRequest) -> Result<Value, BrokerError> {
 fn dispatch_request(
     request: BrokerRequest,
     caller_uid: u32,
+    caller_gid: u32,
     caller_role: CallerRole,
     _audit_context: &DispatchAuditContext,
     _config: &ServerConfig,
@@ -1635,9 +1641,10 @@ fn dispatch_request(
     match request {
         BrokerRequest::Hello { .. } => {
             audit_log
-                .write_entry(
+                .write_entry_with_caller_ids(
                     "Hello",
                     caller_uid,
+                    caller_gid,
                     "callable-read-only",
                     "daemon-handshake",
                     "ok",
@@ -1646,12 +1653,13 @@ fn dispatch_request(
             Ok(hello_ok_response())
         }
         BrokerRequest::ValidateBundle { path } => {
-            handle_validate_bundle(&path, caller_uid, audit_log)
+            handle_validate_bundle(&path, caller_uid, caller_gid, audit_log)
         }
         BrokerRequest::ExportBrokerAudit { since, filter } => handle_export_broker_audit(
             since.as_deref(),
             filter.as_deref(),
             caller_uid,
+            caller_gid,
             caller_role,
             audit_log,
         ),
@@ -3334,9 +3342,10 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
         RealBrokerRequest::PollChildReaped => {
             let notifications = drain_child_reap_buffer();
             audit_log
-                .write_entry(
+                .write_entry_with_caller_ids(
                     "PollChildReaped",
                     caller_uid,
+                    caller_gid,
                     "allowed",
                     "pidfd-reap-buffer",
                     "success",
@@ -8325,14 +8334,16 @@ use d2b_core::manifest as manifest_api;
 fn handle_validate_bundle(
     path: &Path,
     caller_uid: u32,
+    caller_gid: u32,
     audit_log: &AuditLog,
 ) -> Result<BrokerResponse, BrokerError> {
     crate::bootstrap::manifest::validate_bundle(path)
         .map_err(|err| BrokerError::ValidateBundle(err.to_string()))?;
     audit_log
-        .write_entry(
+        .write_entry_with_caller_ids(
             "ValidateBundle",
             caller_uid,
+            caller_gid,
             "callable-read-only",
             "bundle",
             "ok",
@@ -8346,14 +8357,16 @@ fn handle_export_broker_audit(
     since: Option<&str>,
     filter: Option<&str>,
     caller_uid: u32,
+    caller_gid: u32,
     caller_role: CallerRole,
     audit_log: &AuditLog,
 ) -> Result<BrokerResponse, BrokerError> {
     if !caller_role_is_admin(&caller_role) {
         audit_log
-            .write_entry(
+            .write_entry_with_caller_ids(
                 "ExportBrokerAudit",
                 caller_uid,
+                caller_gid,
                 "callable-read-only",
                 "audit-log",
                 "denied",
@@ -8365,9 +8378,10 @@ fn handle_export_broker_audit(
         .export_lines(since, filter)
         .map_err(|err| BrokerError::Protocol(err.to_string()))?;
     audit_log
-        .write_entry(
+        .write_entry_with_caller_ids(
             "ExportBrokerAudit",
             caller_uid,
+            caller_gid,
             "callable-read-only",
             "audit-log",
             "ok",
@@ -8651,9 +8665,10 @@ impl BrokerError {
             } => {
                 // Legacy short-record (preserved for the export-audit /
                 // socket-acl gates).
-                audit_log.write_entry(
+                audit_log.write_entry_with_caller_ids(
                     operation,
                     caller_uid,
+                    caller_gid,
                     "stubbed-unimplemented",
                     opaque_target_id,
                     "denied",
@@ -8682,9 +8697,10 @@ impl BrokerError {
                 )?;
             }
             Self::UnknownOperation { operation: op } => {
-                audit_log.write_entry(
+                audit_log.write_entry_with_caller_ids(
                     operation,
                     caller_uid,
+                    caller_gid,
                     "unknown-operation",
                     opaque_target_id,
                     "denied",
@@ -8715,9 +8731,10 @@ impl BrokerError {
                 )?;
             }
             Self::MinijailValidation { reason } => {
-                audit_log.write_error_entry(
+                audit_log.write_error_entry_with_caller_ids(
                     operation,
                     caller_uid,
+                    caller_gid,
                     "minijail-validation-failed",
                     opaque_target_id,
                     "Broker.MinijailValidation",
@@ -8725,9 +8742,10 @@ impl BrokerError {
                 )?;
             }
             Self::NoPidfd { runner_id } => {
-                audit_log.write_error_entry(
+                audit_log.write_error_entry_with_caller_ids(
                     operation,
                     caller_uid,
+                    caller_gid,
                     "runner-pidfd-missing",
                     runner_id,
                     "Broker.NoPidfd",
@@ -8735,9 +8753,10 @@ impl BrokerError {
                 )?;
             }
             Self::ValidateBundle(message) => {
-                audit_log.write_error_entry(
+                audit_log.write_error_entry_with_caller_ids(
                     operation,
                     caller_uid,
+                    caller_gid,
                     "bundle-validation-failed",
                     opaque_target_id,
                     "Broker.ValidateBundleFailed",
@@ -8745,9 +8764,10 @@ impl BrokerError {
                 )?;
             }
             Self::BundleResolverUnavailable => {
-                audit_log.write_error_entry(
+                audit_log.write_error_entry_with_caller_ids(
                     operation,
                     caller_uid,
+                    caller_gid,
                     "bundle-resolver-unavailable",
                     opaque_target_id,
                     "Broker.BundleResolverUnavailable",
@@ -8755,9 +8775,10 @@ impl BrokerError {
                 )?;
             }
             Self::BundleTampered { path, reason } => {
-                audit_log.write_error_entry(
+                audit_log.write_error_entry_with_caller_ids(
                     operation,
                     caller_uid,
+                    caller_gid,
                     "bundle-tampered",
                     opaque_target_id,
                     "Broker.BundleTampered",
@@ -8765,9 +8786,10 @@ impl BrokerError {
                 )?;
             }
             Self::BundleIntentMissing { kind, intent_id } => {
-                audit_log.write_error_entry(
+                audit_log.write_error_entry_with_caller_ids(
                     operation,
                     caller_uid,
+                    caller_gid,
                     "bundle-intent-missing",
                     intent_id,
                     "Broker.BundleIntentMissing",
@@ -8775,9 +8797,10 @@ impl BrokerError {
                 )?;
             }
             Self::StoreViewFilesystemMismatch { a, a_dev, b, b_dev } => {
-                audit_log.write_error_entry(
+                audit_log.write_error_entry_with_caller_ids(
                     operation,
                     caller_uid,
+                    caller_gid,
                     "store-view-fs-mismatch",
                     opaque_target_id,
                     "Broker.StoreViewFilesystemMismatch",
@@ -8787,9 +8810,10 @@ impl BrokerError {
                 )?;
             }
             Self::StoreViewMarkerMissing { generation_dir } => {
-                audit_log.write_error_entry(
+                audit_log.write_error_entry_with_caller_ids(
                     operation,
                     caller_uid,
+                    caller_gid,
                     "store-view-marker-missing",
                     opaque_target_id,
                     "Broker.StoreViewMarkerMissing",
@@ -8801,9 +8825,10 @@ impl BrokerError {
                 vendor,
                 product,
             } => {
-                audit_log.write_entry(
+                audit_log.write_entry_with_caller_ids(
                     operation,
                     caller_uid,
+                    caller_gid,
                     "usbip-device-not-allowed",
                     busid,
                     "denied",
@@ -8834,9 +8859,10 @@ impl BrokerError {
                 )?;
             }
             Self::UsbipPolicyMismatch { busid, reason } => {
-                audit_log.write_entry(
+                audit_log.write_entry_with_caller_ids(
                     operation,
                     caller_uid,
+                    caller_gid,
                     "usbip-policy-mismatch",
                     busid,
                     "denied",
@@ -8866,9 +8892,10 @@ impl BrokerError {
                 )?;
             }
             Self::UsbipLockConflict { busid, owner } => {
-                audit_log.write_error_entry(
+                audit_log.write_error_entry_with_caller_ids(
                     operation,
                     caller_uid,
+                    caller_gid,
                     "usbip-lock-conflict",
                     busid,
                     "Broker.UsbipLockConflict",
@@ -8876,9 +8903,10 @@ impl BrokerError {
                 )?;
             }
             Self::UsbipDeviceAbsent { busid } => {
-                audit_log.write_error_entry(
+                audit_log.write_error_entry_with_caller_ids(
                     operation,
                     caller_uid,
+                    caller_gid,
                     "usbip-device-absent",
                     busid,
                     "Broker.UsbipDeviceAbsent",
@@ -8899,9 +8927,10 @@ impl BrokerError {
                     detail = %message,
                     "broker live-handler op failed"
                 );
-                audit_log.write_error_entry(
+                audit_log.write_error_entry_with_caller_ids(
                     operation,
                     caller_uid,
+                    caller_gid,
                     "live-handler-error",
                     opaque_target_id,
                     "Broker.LiveHandlerFailed",
@@ -8909,9 +8938,10 @@ impl BrokerError {
                 )?;
             }
             Self::Protocol(message) => {
-                audit_log.write_error_entry(
+                audit_log.write_error_entry_with_caller_ids(
                     operation,
                     caller_uid,
+                    caller_gid,
                     "protocol-error",
                     opaque_target_id,
                     "Broker.Protocol",
@@ -8919,9 +8949,10 @@ impl BrokerError {
                 )?;
             }
             Self::CoexistenceRefused { manager, rationale } => {
-                audit_log.write_entry(
+                audit_log.write_entry_with_caller_ids(
                     operation,
                     caller_uid,
+                    caller_gid,
                     "coexistence-refused",
                     opaque_target_id,
                     "denied",
@@ -8952,9 +8983,10 @@ impl BrokerError {
                 )?;
             }
             Self::NftScriptParseFailed(detail) => {
-                audit_log.write_entry(
+                audit_log.write_entry_with_caller_ids(
                     operation,
                     caller_uid,
+                    caller_gid,
                     "nft-script-parse-failed",
                     opaque_target_id,
                     "errored",
@@ -8982,9 +9014,10 @@ impl BrokerError {
                 )?;
             }
             Self::CarveoutOrderingViolation(detail) => {
-                audit_log.write_entry(
+                audit_log.write_entry_with_caller_ids(
                     operation,
                     caller_uid,
+                    caller_gid,
                     "nft-carveout-ordering-violation",
                     opaque_target_id,
                     "denied",
@@ -9012,9 +9045,10 @@ impl BrokerError {
                 )?;
             }
             Self::NftablesDriftDetected { expected, observed } => {
-                audit_log.write_entry(
+                audit_log.write_entry_with_caller_ids(
                     operation,
                     caller_uid,
+                    caller_gid,
                     "nftables-drift-detected",
                     opaque_target_id,
                     "denied",
@@ -9048,9 +9082,10 @@ impl BrokerError {
                 intent_vm,
                 expected_obs_vm,
             } => {
-                audit_log.write_error_entry(
+                audit_log.write_error_entry_with_caller_ids(
                     operation,
                     caller_uid,
+                    caller_gid,
                     "otel-host-bridge-intent-invalid",
                     opaque_target_id,
                     "Broker.OtelHostBridgeIntentInvalid",
@@ -9064,9 +9099,10 @@ impl BrokerError {
                 requested,
                 resolved,
             } => {
-                audit_log.write_error_entry(
+                audit_log.write_error_entry_with_caller_ids(
                     operation,
                     caller_uid,
+                    caller_gid,
                     "spawn-runner-intent-mismatch",
                     opaque_target_id,
                     "Broker.SpawnRunnerIntentMismatch",
@@ -9076,9 +9112,10 @@ impl BrokerError {
                 )?;
             }
             Self::GuestControlSignRefused { reason } => {
-                audit_log.write_error_entry(
+                audit_log.write_error_entry_with_caller_ids(
                     operation,
                     caller_uid,
+                    caller_gid,
                     "guest-control-sign-refused",
                     opaque_target_id,
                     "Broker.GuestControlSignRefused",
@@ -9100,9 +9137,10 @@ impl BrokerError {
                 operation: op,
                 reason,
             } => {
-                audit_log.write_entry(
+                audit_log.write_entry_with_caller_ids(
                     operation,
                     caller_uid,
+                    caller_gid,
                     "request-validation-failed",
                     opaque_target_id,
                     "denied",
@@ -9130,9 +9168,10 @@ impl BrokerError {
                 )?;
             }
             Self::IpcRateLimited => {
-                audit_log.write_entry(
+                audit_log.write_entry_with_caller_ids(
                     operation,
                     caller_uid,
+                    caller_gid,
                     "ipc-rate-limited",
                     opaque_target_id,
                     "denied",
@@ -13431,6 +13470,7 @@ mod tests {
         let root = test_audit_dir("usb-peercred-refused");
         fs::create_dir_all(&root).expect("create audit test dir");
         let actual_uid = Uid::current().as_raw();
+        let caller_gid = Gid::current().as_raw();
         let configured_daemon_uid = if actual_uid == 0 { 1 } else { 0 };
         let mut config = test_server_config(&root, &root.join("unused-bundle.json"));
         config.test_mode = false;
@@ -13516,7 +13556,14 @@ mod tests {
             4,
             "{audit}"
         );
-        assert!(!audit.contains("caller_uid"), "{audit}");
+        assert!(
+            audit.contains(&format!("\"caller_uid\":{actual_uid}")),
+            "{audit}"
+        );
+        assert!(
+            audit.contains(&format!("\"caller_gid\":{caller_gid}")),
+            "{audit}"
+        );
 
         let _ = fs::remove_dir_all(&root);
     }
@@ -14858,9 +14905,10 @@ mod tests {
             },
         ];
 
+        let caller_gid = Gid::current().as_raw();
         let exported = {
             fs::create_dir_all(&audit_dir).expect("create audit dir");
-            let log = AuditLog::open(&audit_dir, Gid::current().as_raw(), true, 14)
+            let log = AuditLog::open(&audit_dir, caller_gid, true, 14)
                 .expect("open audit log");
             for case in &cases {
                 let audit_context = DispatchAuditContext {
@@ -14876,7 +14924,7 @@ mod tests {
                     .audit(
                         &log,
                         1000,
-                        Gid::current().as_raw(),
+                        caller_gid,
                         &CallerRole::AdminUid { uid: 1000 },
                         &audit_context,
                         None,
@@ -14889,7 +14937,7 @@ mod tests {
                     .audit(
                         &log,
                         1000,
-                        Gid::current().as_raw(),
+                        caller_gid,
                         &CallerRole::AdminUid { uid: 1000 },
                         &audit_context,
                         case.operation,
@@ -14907,7 +14955,11 @@ mod tests {
                 value.get("op").and_then(Value::as_str),
                 Some(case.operation)
             );
-            assert!(value.get("caller_uid").is_none());
+            assert_eq!(value.get("caller_uid").and_then(Value::as_u64), Some(1000));
+            assert_eq!(
+                value.get("caller_gid").and_then(Value::as_u64),
+                Some(u64::from(caller_gid))
+            );
             assert_eq!(
                 value.get("disposition").and_then(Value::as_str),
                 Some(case.decision)
