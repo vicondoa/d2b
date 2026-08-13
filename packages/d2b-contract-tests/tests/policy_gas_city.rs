@@ -817,7 +817,7 @@ fn gas_city_sidecars_are_private_and_use_the_authenticated_egress_proxy() {
         ("config.users.users.gascity-publisher.uid", 1),
         ("config.users.users.gascity-check.uid", 1),
         ("config.users.users.gascity-buildbuddy-proxy.uid", 1),
-        ("config.users.users.gascity.uid", 2),
+        ("config.users.users.gascity.uid", 3),
         ("config.users.users.gascity-egress.uid", 10),
     ] {
         assert_eq!(
