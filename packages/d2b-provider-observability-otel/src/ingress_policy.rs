@@ -1,6 +1,10 @@
 //! Shared structural metric admission for every telemetry ingress.
 
-use std::{collections::BTreeMap, sync::Arc, time::Instant};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+    time::Instant,
+};
 
 use crate::metric_policy::{
     IdentityCanaries, MetricDescriptor, MetricPolicyError, validate_data_point,
@@ -201,13 +205,18 @@ pub struct IngressPolicyGate {
     connections: BTreeMap<(Ingress, u64), ConnectionState>,
     quarantined_connections: usize,
     series: BTreeMap<SeriesKey, SeriesState>,
-    producer_series: BTreeMap<ProducerKey, usize>,
+    producer_series: BTreeMap<ProducerKey, BTreeSet<SeriesKey>>,
     max_provider_series: usize,
     max_series_per_producer: usize,
     clock: Arc<dyn IngressClock>,
 }
 
-type SeriesKey = (String, Vec<(String, String)>);
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct SeriesKey {
+    metric_name: String,
+    labels: Vec<(String, String)>,
+    resource_attributes: Vec<(String, String)>,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct ProducerKey {
@@ -215,10 +224,10 @@ struct ProducerKey {
     connection_id: u64,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Default)]
 struct SeriesState {
-    last_seen_ms: u64,
-    owner: Option<ProducerKey>,
+    shared_last_seen_ms: Option<u64>,
+    producer_members: BTreeMap<ProducerKey, u64>,
 }
 
 #[derive(Debug, Default)]
@@ -395,47 +404,40 @@ impl IngressPolicyGate {
         let incoming = frame
             .points
             .iter()
-            .map(|point| {
-                (
-                    point.descriptor.name().to_owned(),
-                    point
-                        .labels
-                        .iter()
-                        .map(|(key, value)| (key.clone(), value.clone()))
-                        .collect::<Vec<_>>(),
-                )
-            })
-            .collect::<std::collections::BTreeSet<_>>();
+            .map(|point| canonical_series_key(point, &frame.resource_attributes))
+            .collect::<BTreeSet<_>>();
         let producer = producer_for(ingress, connection_id);
         let new_series = incoming
             .iter()
             .filter(|series| !self.series.contains_key(*series))
             .count();
-        let producer_new_series = producer
-            .map(|producer| {
-                new_series.saturating_add(*self.producer_series.get(&producer).unwrap_or(&0))
-            })
-            .unwrap_or(0);
+        let producer_series_count = producer
+            .and_then(|producer| self.producer_series.get(&producer))
+            .map_or(0, BTreeSet::len);
+        let producer_new_series = producer.map_or(0, |producer| {
+            let known_series = self.producer_series.get(&producer);
+            incoming
+                .iter()
+                .filter(|series| known_series.is_none_or(|known| !known.contains(*series)))
+                .count()
+        });
         if self.series.len().saturating_add(new_series) > self.max_provider_series
-            || producer_new_series > self.max_series_per_producer
+            || producer_series_count.saturating_add(producer_new_series)
+                > self.max_series_per_producer
         {
             return (IngressOutcome::Rejected, IngressErrorClass::None);
         }
         let now = self.clock.now_ms();
         for series in incoming {
-            if let Some(existing) = self.series.get_mut(&series) {
-                existing.last_seen_ms = now;
-                continue;
-            }
-            self.series.insert(
-                series,
-                SeriesState {
-                    last_seen_ms: now,
-                    owner: producer,
-                },
-            );
+            let state = self.series.entry(series.clone()).or_default();
             if let Some(producer) = producer {
-                *self.producer_series.entry(producer).or_default() += 1;
+                state.producer_members.insert(producer, now);
+                self.producer_series
+                    .entry(producer)
+                    .or_default()
+                    .insert(series);
+            } else {
+                state.shared_last_seen_ms = Some(now);
             }
         }
         (IngressOutcome::Accepted, IngressErrorClass::None)
@@ -447,7 +449,11 @@ impl IngressPolicyGate {
         self.series
             .values()
             .filter(|state| {
-                now.saturating_sub(state.last_seen_ms) < SERIES_IDLE_SECONDS.saturating_mul(1000)
+                state.shared_last_seen_ms.is_some_and(|last_seen_ms| {
+                    now.saturating_sub(last_seen_ms) < SERIES_IDLE_SECONDS.saturating_mul(1000)
+                }) || state.producer_members.values().any(|last_seen_ms| {
+                    now.saturating_sub(*last_seen_ms) < SERIES_IDLE_SECONDS.saturating_mul(1000)
+                })
             })
             .count()
     }
@@ -497,6 +503,11 @@ impl IngressPolicyGate {
 
     /// Forget a disconnected connection and release its quarantine slot.
     pub fn reset_connection(&mut self, ingress: Ingress, connection_id: u64) {
+        self.prune_expired();
+        self.reset_connection_inner(ingress, connection_id);
+    }
+
+    fn reset_connection_inner(&mut self, ingress: Ingress, connection_id: u64) {
         if self
             .connections
             .remove(&(ingress, connection_id))
@@ -505,15 +516,9 @@ impl IngressPolicyGate {
             self.quarantined_connections = self.quarantined_connections.saturating_sub(1);
         }
         if let Some(producer) = producer_for(ingress, connection_id) {
-            let owned = self
-                .series
-                .iter()
-                .filter_map(|(series, state)| {
-                    (state.owner == Some(producer)).then_some(series.clone())
-                })
-                .collect::<Vec<_>>();
-            for series in owned {
-                self.remove_series(&series);
+            let producer_series = self.producer_series.remove(&producer).unwrap_or_default();
+            for series in producer_series {
+                self.remove_membership(&series, producer);
             }
         }
     }
@@ -533,18 +538,67 @@ impl IngressPolicyGate {
             })
             .collect::<Vec<_>>();
         for key in expired {
-            self.reset_connection(key.0, key.1);
+            self.reset_connection_inner(key.0, key.1);
         }
-        let expired_series = self
+        let expired_memberships = self
+            .series
+            .iter()
+            .flat_map(|(series, state)| {
+                state
+                    .producer_members
+                    .iter()
+                    .filter_map(|(producer, last_seen_ms)| {
+                        (now.saturating_sub(*last_seen_ms)
+                            >= SERIES_IDLE_SECONDS.saturating_mul(1000))
+                        .then_some((series.clone(), *producer))
+                    })
+            })
+            .collect::<Vec<_>>();
+        for (series, producer) in expired_memberships {
+            self.remove_membership(&series, producer);
+        }
+        let expired_shared_series = self
             .series
             .iter()
             .filter_map(|(series, state)| {
-                (now.saturating_sub(state.last_seen_ms) >= SERIES_IDLE_SECONDS.saturating_mul(1000))
+                state
+                    .shared_last_seen_ms
+                    .is_some_and(|last_seen_ms| {
+                        now.saturating_sub(last_seen_ms) >= SERIES_IDLE_SECONDS.saturating_mul(1000)
+                    })
                     .then_some(series.clone())
             })
             .collect::<Vec<_>>();
-        for series in expired_series {
-            self.remove_series(&series);
+        for series in expired_shared_series {
+            if let Some(state) = self.series.get_mut(&series) {
+                state.shared_last_seen_ms = None;
+            }
+            self.remove_if_unreferenced(&series);
+        }
+    }
+
+    fn remove_membership(&mut self, series: &SeriesKey, producer: ProducerKey) {
+        let removed = self
+            .series
+            .get_mut(series)
+            .is_some_and(|state| state.producer_members.remove(&producer).is_some());
+        if !removed {
+            return;
+        }
+        if let Some(series_set) = self.producer_series.get_mut(&producer) {
+            series_set.remove(series);
+            if series_set.is_empty() {
+                self.producer_series.remove(&producer);
+            }
+        }
+        self.remove_if_unreferenced(series);
+    }
+
+    fn remove_if_unreferenced(&mut self, series: &SeriesKey) {
+        if self.series.get(series).is_some_and(|state| {
+            state.producer_members.is_empty() && state.shared_last_seen_ms.is_none()
+        }) {
+            self.remove_series(series);
         }
     }
 
@@ -552,12 +606,12 @@ impl IngressPolicyGate {
         let Some(state) = self.series.remove(series) else {
             return;
         };
-        if let Some(owner) = state.owner
-            && let Some(count) = self.producer_series.get_mut(&owner)
-        {
-            *count = count.saturating_sub(1);
-            if *count == 0 {
-                self.producer_series.remove(&owner);
+        for producer in state.producer_members.keys().copied().collect::<Vec<_>>() {
+            if let Some(series_set) = self.producer_series.get_mut(&producer) {
+                series_set.remove(series);
+                if series_set.is_empty() {
+                    self.producer_series.remove(&producer);
+                }
             }
         }
     }
@@ -601,6 +655,24 @@ impl IngressPolicyGate {
 
 fn valid_resource_attributes(attributes: &BTreeMap<String, String>) -> bool {
     validate_resource_attributes(attributes).is_ok()
+}
+
+fn canonical_series_key(
+    point: &MetricPoint,
+    resource_attributes: &BTreeMap<String, String>,
+) -> SeriesKey {
+    SeriesKey {
+        metric_name: point.descriptor.name().to_owned(),
+        labels: point
+            .labels
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect(),
+        resource_attributes: resource_attributes
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect(),
+    }
 }
 
 fn metric_frame_from_raw(frame: &TelemetryFrame, encoded_bytes: usize) -> Option<MetricFrame> {
@@ -697,6 +769,13 @@ mod tests {
                     .to_owned(),
             )]),
         )
+    }
+
+    fn frame_for_zone(zone: u64) -> MetricFrame {
+        let mut frame = frame("outcome", "accepted");
+        frame.resource_attributes =
+            BTreeMap::from([("d2b.zone".to_owned(), format!("sha256:{zone:064x}"))]);
+        frame
     }
 
     fn api_frame(
@@ -854,6 +933,40 @@ mod tests {
     }
 
     #[test]
+    fn raw_admission_counts_resource_attributes_in_series_identity() {
+        let mut gate = IngressPolicyGate::with_clock_and_limits(
+            Arc::new(ManualClock(AtomicU64::new(0))),
+            1,
+            1,
+        );
+        for zone in [1, 2] {
+            let bytes = serde_json::to_vec(&serde_json::json!({
+                "signal": "metric",
+                "value": {
+                    "name": "d2b_otel_ingress_policy_total",
+                    "labels": {
+                        "ingress": "emitter_unix",
+                        "outcome": "accepted",
+                        "error_class": "none"
+                    },
+                    "value": 1,
+                    "resource_attributes": {
+                        "d2b.zone": format!("sha256:{zone:064x}")
+                    }
+                }
+            }))
+            .expect("metric frame");
+            let expected = if zone == 1 {
+                IngressOutcome::Accepted
+            } else {
+                IngressOutcome::Rejected
+            };
+            assert_eq!(gate.admit_raw(Ingress::EmitterUnix, 0, &bytes).0, expected);
+        }
+        assert_eq!(gate.series_count(), 1);
+    }
+
+    #[test]
     fn raw_unknown_descriptor_is_rejected_before_series_accounting() {
         let mut gate = IngressPolicyGate::default();
         let bytes = serde_json::to_vec(&serde_json::json!({
@@ -946,6 +1059,192 @@ mod tests {
             );
         }
         assert_eq!(gate.series_count(), 0);
+    }
+
+    #[test]
+    fn resource_attributes_are_part_of_provider_series_identity() {
+        let mut gate = IngressPolicyGate::with_clock_and_limits(
+            Arc::new(ManualClock(AtomicU64::new(0))),
+            2,
+            4,
+        );
+        for zone in [1, 2] {
+            assert_eq!(
+                gate.admit_for_connection(
+                    Ingress::ImportStream,
+                    1,
+                    &frame_for_zone(zone),
+                    &IdentityCanaries::default(),
+                    true
+                )
+                .0,
+                IngressOutcome::Accepted
+            );
+        }
+        assert_eq!(gate.series_count(), 2);
+        assert_eq!(
+            gate.admit_for_connection(
+                Ingress::ImportStream,
+                2,
+                &frame_for_zone(3),
+                &IdentityCanaries::default(),
+                true
+            ),
+            (IngressOutcome::Rejected, IngressErrorClass::None)
+        );
+        assert_eq!(gate.series_count(), 2);
+    }
+
+    #[test]
+    fn resource_attributes_count_toward_the_identified_producer_quota() {
+        let mut gate = IngressPolicyGate::with_clock_and_limits(
+            Arc::new(ManualClock(AtomicU64::new(0))),
+            4,
+            1,
+        );
+        assert_eq!(
+            gate.admit_for_connection(
+                Ingress::ImportStream,
+                1,
+                &frame_for_zone(1),
+                &IdentityCanaries::default(),
+                true
+            )
+            .0,
+            IngressOutcome::Accepted
+        );
+        assert_eq!(
+            gate.admit_for_connection(
+                Ingress::ImportStream,
+                1,
+                &frame_for_zone(2),
+                &IdentityCanaries::default(),
+                true
+            ),
+            (IngressOutcome::Rejected, IngressErrorClass::None)
+        );
+        assert_eq!(gate.series_count(), 1);
+    }
+
+    #[test]
+    fn shared_series_survives_the_first_producer_disconnect() {
+        let mut gate = IngressPolicyGate::with_clock_and_limits(
+            Arc::new(ManualClock(AtomicU64::new(0))),
+            2,
+            1,
+        );
+        let shared = frame("outcome", "accepted");
+        for connection_id in [1, 2] {
+            assert_eq!(
+                gate.admit_for_connection(
+                    Ingress::ImportStream,
+                    connection_id,
+                    &shared,
+                    &IdentityCanaries::default(),
+                    true
+                )
+                .0,
+                IngressOutcome::Accepted
+            );
+        }
+        assert_eq!(gate.series_count(), 1);
+
+        gate.reset_connection(Ingress::ImportStream, 1);
+        assert_eq!(gate.series_count(), 1);
+        assert_eq!(
+            gate.admit_for_connection(
+                Ingress::ImportStream,
+                1,
+                &api_frame(0, 0, 0),
+                &IdentityCanaries::default(),
+                true
+            )
+            .0,
+            IngressOutcome::Accepted
+        );
+        assert_eq!(gate.series_count(), 2);
+        gate.reset_connection(Ingress::ImportStream, 2);
+        assert_eq!(gate.series_count(), 1);
+        gate.reset_connection(Ingress::ImportStream, 1);
+        assert_eq!(gate.series_count(), 0);
+    }
+
+    #[test]
+    fn expiry_removes_only_the_expired_producer_membership() {
+        let clock = Arc::new(ManualClock(AtomicU64::new(0)));
+        let mut gate = IngressPolicyGate::with_clock_and_limits(clock.clone(), 2, 2);
+        let shared = frame("outcome", "accepted");
+        assert_eq!(
+            gate.admit_for_connection(
+                Ingress::ImportStream,
+                1,
+                &shared,
+                &IdentityCanaries::default(),
+                true
+            )
+            .0,
+            IngressOutcome::Accepted
+        );
+        clock.0.store(1_000, Ordering::Relaxed);
+        assert_eq!(
+            gate.admit_for_connection(
+                Ingress::ImportStream,
+                2,
+                &shared,
+                &IdentityCanaries::default(),
+                true
+            )
+            .0,
+            IngressOutcome::Accepted
+        );
+
+        clock.0.store(
+            SERIES_IDLE_SECONDS.saturating_mul(1_000) + 1,
+            Ordering::Relaxed,
+        );
+        gate.prune_expired();
+        assert_eq!(gate.series_count(), 1);
+        assert!(!gate.producer_series.contains_key(&ProducerKey {
+            ingress: Ingress::ImportStream,
+            connection_id: 1,
+        }));
+        assert_eq!(
+            gate.producer_series
+                .get(&ProducerKey {
+                    ingress: Ingress::ImportStream,
+                    connection_id: 2,
+                })
+                .map_or(0, BTreeSet::len),
+            1
+        );
+
+        gate.reset_connection(Ingress::ImportStream, 2);
+        assert_eq!(gate.series_count(), 0);
+    }
+
+    #[test]
+    fn shared_emitter_scope_does_not_create_a_fake_producer() {
+        let mut gate = IngressPolicyGate::with_clock_and_limits(
+            Arc::new(ManualClock(AtomicU64::new(0))),
+            2,
+            1,
+        );
+        for zone in [1, 2] {
+            assert_eq!(
+                gate.admit_for_connection(
+                    Ingress::EmitterUnix,
+                    0,
+                    &frame_for_zone(zone),
+                    &IdentityCanaries::default(),
+                    true
+                )
+                .0,
+                IngressOutcome::Accepted
+            );
+        }
+        assert!(gate.producer_series.is_empty());
+        gate.reset_connection(Ingress::EmitterUnix, 0);
+        assert_eq!(gate.series_count(), 2);
     }
 
     #[test]
