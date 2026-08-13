@@ -19,8 +19,8 @@ use sha2::{Digest, Sha256};
 
 use crate::schema::TABLE_SCHEMAS;
 use crate::transaction::{
-    ALL_TABLES, PHYSICAL_SCHEMA_VERSION, StoreMeta, decode, encode, integrity, read_meta,
-    validate_consistency, validate_identity,
+    ALL_TABLES, PHYSICAL_SCHEMA_VERSION, StoreMeta, decode, encode, integrity,
+    normalize_and_validate, read_meta, validate_consistency,
 };
 use crate::{DecodedKey, DecodedValue, KeySpace, StoreIdentity, ValueKind};
 
@@ -470,11 +470,16 @@ impl LogicalBackup {
             .map_err(integrity)
             .map_err(|error| error.with_store_slot(identity.slot()))?;
 
-        validate_identity(database, identity)
-            .and_then(|_| validate_consistency(database))
-            .map_err(|_| {
-                crate::transaction::quarantined_reason("restore-validation-failed")
-                    .with_store_slot(identity.slot())
+        normalize_and_validate(database, identity, PHYSICAL_SCHEMA_VERSION, false)
+            .map(|_| ())
+            .map_err(|error| {
+                if error.reason_code() == crate::transaction::UNINTERPRETABLE_REQUEST_DIGEST_REASON
+                {
+                    error.with_store_slot(identity.slot())
+                } else {
+                    crate::transaction::quarantined_reason("restore-validation-failed")
+                        .with_store_slot(identity.slot())
+                }
             })
     }
 
@@ -565,7 +570,7 @@ fn validate_row(
     Ok(())
 }
 
-fn checksum_rows(rows: &[BackupRow]) -> String {
+pub(crate) fn checksum_rows(rows: &[BackupRow]) -> String {
     let mut digest = Sha256::new();
     for row in rows {
         digest.update((row.key.len() as u64).to_be_bytes());

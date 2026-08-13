@@ -918,6 +918,54 @@ pub(crate) fn normalize_audit_outboxes(database: &Database) -> Result<(), StoreE
     write.commit().map_err(integrity)
 }
 
+/// Normalize legacy audit rows before applying the strict store checks.
+///
+/// This is the single startup and migration validation path. A current
+/// schema store can therefore be repaired in place before its outbox fields
+/// are checked, while older supported schemas are normalized before their
+/// migration copy is accepted.
+pub(crate) fn normalize_and_validate(
+    database: &Database,
+    identity: &crate::StoreIdentity,
+    expected_schema_version: u32,
+    require_revision_match: bool,
+) -> Result<StoreMeta, StoreError> {
+    let observed_version = {
+        let read = database.begin_read().map_err(integrity)?;
+        read_meta(&read)?.schema_version
+    };
+    if observed_version != expected_schema_version {
+        return Err(integrity("store-schema-version-mismatch"));
+    }
+
+    backfill_schema_catalog(database)?;
+    normalize_audit_outboxes(database)?;
+
+    let meta = if expected_schema_version == PHYSICAL_SCHEMA_VERSION {
+        if require_revision_match {
+            validate_identity(database, identity)?
+        } else {
+            validate_identity_for_open(database, identity)?
+        }
+    } else {
+        let read = database.begin_read().map_err(integrity)?;
+        validate_table_set(&read)?;
+        let meta = read_meta(&read)?;
+        validate_store_identity(&meta, identity)?;
+        meta
+    };
+    if meta.schema_version != expected_schema_version {
+        return Err(integrity("store-schema-version-mismatch"));
+    }
+    if require_revision_match && !revisions_match(&meta, identity.revisions) {
+        return Err(integrity("store-identity-mismatch"));
+    }
+    if meta.schema_version == PHYSICAL_SCHEMA_VERSION {
+        validate_consistency(database)?;
+    }
+    Ok(meta)
+}
+
 pub(crate) fn validate_identity(
     database: &Database,
     identity: &crate::StoreIdentity,
@@ -934,17 +982,36 @@ pub(crate) fn validate_identity_for_open(
     identity: &crate::StoreIdentity,
 ) -> Result<StoreMeta, StoreError> {
     let read = database.begin_read().map_err(integrity)?;
-    if read.list_tables().map_err(integrity)?.count() != ALL_TABLES.len() {
-        return Err(integrity("physical-table-set-invalid"));
-    }
+    validate_table_set(&read)?;
     let table = read.open_table(STORE_META).map_err(integrity)?;
     let bytes = table
         .get(meta_key().as_slice())
         .map_err(integrity)?
         .ok_or_else(|| integrity("store-meta-missing"))?;
     let meta: StoreMeta = decode(ValueKind::StoreMetaScalar, bytes.value())?;
-    if meta.schema_version != PHYSICAL_SCHEMA_VERSION
-        || meta.store_uuid != identity.store_uuid.as_str()
+    if meta.schema_version != PHYSICAL_SCHEMA_VERSION {
+        return Err(integrity("store-schema-version-mismatch"));
+    }
+    validate_store_identity(&meta, identity)?;
+    Ok(meta)
+}
+
+fn validate_table_set(read: &redb::ReadTransaction) -> Result<(), StoreError> {
+    if read.list_tables().map_err(integrity)?.count() != ALL_TABLES.len()
+        || ALL_TABLES
+            .iter()
+            .any(|definition| read.open_table(*definition).is_err())
+    {
+        return Err(integrity("physical-table-set-invalid"));
+    }
+    Ok(())
+}
+
+fn validate_store_identity(
+    meta: &StoreMeta,
+    identity: &crate::StoreIdentity,
+) -> Result<(), StoreError> {
+    if meta.store_uuid != identity.store_uuid.as_str()
         || meta.zone_name != identity.zone.as_str()
         || meta.zone_uid != identity.zone_uid.as_str()
         || meta.created_at != identity.created_at
@@ -952,7 +1019,7 @@ pub(crate) fn validate_identity_for_open(
     {
         return Err(integrity("store-identity-mismatch"));
     }
-    Ok(meta)
+    Ok(())
 }
 
 pub(crate) fn validate_consistency(database: &Database) -> Result<(), StoreError> {

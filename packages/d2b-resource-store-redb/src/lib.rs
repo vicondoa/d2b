@@ -712,10 +712,12 @@ impl RedbResourceStore {
                 .set_cache_size(REDB_CACHE_SIZE)
                 .create_with_backend(backend)
                 .map_err(transaction::integrity)?;
-            transaction::backfill_schema_catalog(&database)?;
-            transaction::normalize_audit_outboxes(&database)?;
-            let meta = transaction::validate_identity_for_open(&database, &open_identity)?;
-            transaction::validate_consistency(&database)?;
+            let meta = transaction::normalize_and_validate(
+                &database,
+                &open_identity,
+                migration::CURRENT_PHYSICAL_SCHEMA_VERSION,
+                false,
+            )?;
             let recovered_after_crash = !meta.clean_shutdown;
             let mut open_identity = open_identity;
             open_identity.revisions = policy_snapshot_from_meta(&meta)?;

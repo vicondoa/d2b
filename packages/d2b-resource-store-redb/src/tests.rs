@@ -260,6 +260,67 @@ fn provisioned_store() -> (tempfile::TempDir, File, File) {
     (directory, file, marker)
 }
 
+fn insert_legacy_outbox(directory: &tempfile::TempDir, operation_id: &str) {
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(directory.path().join("store.redb"))
+        .unwrap();
+    let database = Database::builder()
+        .set_cache_size(crate::REDB_CACHE_SIZE)
+        .create_with_backend(redb::backends::FileBackend::new(file).unwrap())
+        .unwrap();
+    let operation = crate::transaction::OperationRecord {
+        request_digest: format!("sha256:{}", "a".repeat(64)),
+        resource_uids: Vec::new(),
+        resources: Vec::new(),
+        outcome: "committed".to_owned(),
+        error_code: None,
+        accepted_revision: 0,
+        finished_revision: 0,
+        audit_outbox: Some(crate::transaction::AuditOutboxRecord {
+            zone: identity().zone.as_str().to_owned(),
+            operation_id: String::new(),
+            operation_identity: None,
+            correlation_id: "legacy-correlation".to_owned(),
+            subject_digest: "legacy-subject".to_owned(),
+            policy_revision: 7,
+            resulting_revision: 0,
+            requires_broker: false,
+            mutations: vec![crate::transaction::AuditOutboxMutation {
+                verb: "create".to_owned(),
+                resource_type: "Host".to_owned(),
+                resource_uid: None,
+                target_digest: "legacy-target".to_owned(),
+                generation: 1,
+                expected_revision: 0,
+                mutation_id: String::new(),
+                ordinal: 9,
+                timestamp_ms: 0,
+                outcome: String::new(),
+                error_code: None,
+                previous_hash: None,
+                record_hash: None,
+            }],
+        }),
+        authority: None,
+    };
+    let key = crate::keys::encode_key(
+        crate::keys::KeySpace::Operations,
+        &[crate::keys::KeyComponent::Text(operation_id)],
+    )
+    .unwrap();
+    let value = crate::transaction::encode(crate::ValueKind::OperationRecord, &operation).unwrap();
+    let mut write = database.begin_write().unwrap();
+    write.set_durability(Durability::Immediate).unwrap();
+    write
+        .open_table(crate::transaction::OPERATIONS)
+        .unwrap()
+        .insert(key.as_bytes(), value.as_slice())
+        .unwrap();
+    write.commit().unwrap();
+}
+
 fn operation(id: &str) -> StoreOperationContext {
     StoreOperationContext {
         operation_id: id.to_owned(),
@@ -1267,6 +1328,32 @@ async fn owned_file_open_initializes_and_reopens_only_matching_identity() {
         error.kind(),
         d2b_resource_store::StoreErrorKind::StoreIntegrityFailure
     );
+}
+
+#[tokio::test]
+async fn current_v2_legacy_outbox_normalizes_before_cold_open_validation() {
+    let (directory, file, marker) = provisioned_store();
+    let store = provision_store(file, marker, identity()).await.unwrap();
+    store.shutdown().await.unwrap();
+    insert_legacy_outbox(&directory, "cold-legacy-outbox");
+
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(directory.path().join("store.redb"))
+        .unwrap();
+    let store = open_store(file, identity()).await.unwrap();
+    store.shutdown().await.unwrap();
+
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(directory.path().join("store.redb"))
+        .unwrap();
+    let database = Database::builder()
+        .create_with_backend(redb::backends::FileBackend::new(file).unwrap())
+        .unwrap();
+    crate::transaction::validate_consistency(&database).unwrap();
 }
 
 #[tokio::test]
