@@ -17429,6 +17429,48 @@ struct DaemonProviderLifecycleEffect<'a> {
 impl provider_effects::ProviderLifecycleEffectPort for DaemonProviderLifecycleEffect<'_> {
     type Output = Value;
 
+    fn actual_state(
+        &self,
+        _request: &provider_effects::GuestLifecycleRequest,
+    ) -> Result<provider_effects::GuestLifecycleState, provider_effects::ProviderEffectError> {
+        self.state
+            .pidfd_table
+            .prune_dead_entries()
+            .map_err(|_| provider_effects::ProviderEffectError::StateUnavailable)?;
+        let manifest_entry = manifest_entry_for_vm(self.state, &self.request.vm)
+            .ok_or(provider_effects::ProviderEffectError::StateUnavailable)?;
+        let processes = load_json::<ProcessesJson>(&self.state.config.artifacts.processes_path)
+            .map_err(|_| provider_effects::ProviderEffectError::StateUnavailable)?;
+        let process_vm = processes
+            .vms
+            .iter()
+            .find(|entry| entry.vm == self.request.vm);
+        let lifecycle =
+            public_vm_lifecycle(self.state, &self.request.vm, &manifest_entry, process_vm);
+        let lifecycle_state = lifecycle
+            .get("state")
+            .and_then(Value::as_str)
+            .ok_or(provider_effects::ProviderEffectError::StateUnavailable)?;
+        let requested_state_reached = match self.operation {
+            provider_effects::GuestLifecycleOperation::Start => lifecycle_state == "Running",
+            provider_effects::GuestLifecycleOperation::Stop => lifecycle_state == "Stopped",
+        };
+        Ok(match (self.operation, requested_state_reached) {
+            (provider_effects::GuestLifecycleOperation::Start, true) => {
+                provider_effects::GuestLifecycleState::Started
+            }
+            (provider_effects::GuestLifecycleOperation::Start, false) => {
+                provider_effects::GuestLifecycleState::Stopped
+            }
+            (provider_effects::GuestLifecycleOperation::Stop, true) => {
+                provider_effects::GuestLifecycleState::Stopped
+            }
+            (provider_effects::GuestLifecycleOperation::Stop, false) => {
+                provider_effects::GuestLifecycleState::Started
+            }
+        })
+    }
+
     fn apply(
         &self,
         _request: &provider_effects::GuestLifecycleRequest,
@@ -17476,13 +17518,23 @@ fn provider_lifecycle_failure_response(
     guest: &str,
     error: provider_effects::ProviderEffectError,
 ) -> Value {
+    let remediation = match error {
+        provider_effects::ProviderEffectError::MutationPending => {
+            "Retry after the in-progress Provider lifecycle request completes.".to_owned()
+        }
+        provider_effects::ProviderEffectError::StateUnavailable => {
+            "Retry after d2bd lifecycle state becomes available.".to_owned()
+        }
+        _ => "Admin: rebuild the trusted Provider catalog and retry the lifecycle operation."
+            .to_owned(),
+    };
     broker_failure_response(
         verb,
         format!(
             "Provider lifecycle dispatch for {guest} refused ({})",
             error.code()
         ),
-        "Admin: rebuild the trusted Provider catalog and retry the lifecycle operation.".to_owned(),
+        remediation,
         None,
     )
 }
