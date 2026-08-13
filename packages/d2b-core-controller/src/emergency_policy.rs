@@ -369,7 +369,7 @@ mod tests {
 
     #[test]
     fn only_one_emergency_scope_authority_is_admitted_per_zone() {
-        let mut index = HostGlobalAuthorityIndex::default();
+        let mut index = HostGlobalAuthorityIndex::new_for_tests_ready();
         EmergencyPolicyAuthority::admit(
             &mut index,
             uid("123e4567-e89b-42d3-a456-426614174000"),
@@ -391,7 +391,7 @@ mod tests {
 
     #[test]
     fn enabled_policy_union_keeps_other_contributions_on_partial_deactivation() {
-        let mut index = HostGlobalAuthorityIndex::default();
+        let mut index = HostGlobalAuthorityIndex::new_for_tests_ready();
         let mut authority = EmergencyPolicyAuthority::admit(
             &mut index,
             uid("623e4567-e89b-42d3-a456-426614174005"),
@@ -446,7 +446,7 @@ mod tests {
 
     #[test]
     fn active_delete_retains_finalizer_until_drain_confirmation() {
-        let mut index = HostGlobalAuthorityIndex::default();
+        let mut index = HostGlobalAuthorityIndex::new_for_tests_ready();
         let policy_uid = uid("a23e4567-e89b-42d3-a456-426614174009");
         let mut authority = EmergencyPolicyAuthority::admit(
             &mut index,
@@ -484,7 +484,7 @@ mod tests {
 
     #[test]
     fn reason_is_not_present_in_status_or_debug() {
-        let mut index = HostGlobalAuthorityIndex::default();
+        let mut index = HostGlobalAuthorityIndex::new_for_tests_ready();
         let authority = EmergencyPolicyAuthority::admit(
             &mut index,
             uid("c33e4567-e89b-42d3-a456-426614174018"),

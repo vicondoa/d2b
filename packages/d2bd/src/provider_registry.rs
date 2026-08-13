@@ -6,11 +6,7 @@
 //! and associates Guest runtime rows with those instances.  It deliberately
 //! does not define a second registry or a second session authority.
 
-use std::{
-    collections::BTreeMap,
-    sync::RwLock,
-    sync::atomic::{AtomicU64, Ordering},
-};
+use std::{collections::BTreeMap, path::PathBuf, sync::RwLock};
 
 use d2b_contracts::{
     broker_wire::BrokerCallerRole,
@@ -46,12 +42,18 @@ pub const PROVIDER_BUNDLE_SCHEMA_VERSION: &str = "v3";
 /// Registry limits and snapshots are owned by the shared Provider crate.
 pub use d2b_provider::{MAX_PROVIDER_REGISTRY_ENTRIES, ProviderRegistrySnapshot};
 
-static NEXT_LIFECYCLE_OPERATION_ID: AtomicU64 = AtomicU64::new(1);
-
-/// Allocate a bounded daemon-local idempotency key for one lifecycle request.
-pub(crate) fn next_lifecycle_operation_id(operation: &str, guest: &str) -> String {
-    let ordinal = NEXT_LIFECYCLE_OPERATION_ID.fetch_add(1, Ordering::Relaxed);
-    format!("provider-{operation}-{guest}-{ordinal}")
+/// Derive a stable idempotency key for one lifecycle request. The key is
+/// intentionally independent of an in-process ordinal so a retry after a
+/// daemon restart reaches the same Provider deduplication identity.
+pub(crate) fn next_lifecycle_operation_id(
+    operation: &str,
+    guest: &str,
+    request_fingerprint: &str,
+) -> String {
+    d2b_contracts::v3::canonical_digest(
+        "d2bd:provider-lifecycle:v1",
+        format!("{operation}:{guest}:{request_fingerprint}").as_bytes(),
+    )
 }
 
 /// Closed Provider composition failures.
@@ -302,6 +304,7 @@ enum ProviderRuntimeState {
 #[derive(Debug)]
 pub struct ProviderRuntime {
     state: RwLock<ProviderRuntimeState>,
+    lifecycle_state_path: Option<PathBuf>,
 }
 
 impl ProviderRuntime {
@@ -310,7 +313,27 @@ impl ProviderRuntime {
     pub fn new() -> Self {
         Self {
             state: RwLock::new(ProviderRuntimeState::Legacy),
+            lifecycle_state_path: None,
         }
+    }
+
+    /// Construct a Provider runtime whose lifecycle admission boundary is
+    /// persisted under the daemon-owned state directory.
+    pub fn new_persistent(
+        state_path: impl Into<PathBuf>,
+    ) -> Result<Self, ProviderCompositionError> {
+        let state_path = state_path.into();
+        if !state_path.is_absolute() {
+            return Err(ProviderCompositionError::StateUnavailable);
+        }
+        if let Some(parent) = state_path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|_| ProviderCompositionError::StateUnavailable)?;
+        }
+        Ok(Self {
+            state: RwLock::new(ProviderRuntimeState::Legacy),
+            lifecycle_state_path: Some(state_path),
+        })
     }
 
     /// Compose the v3 catalog from the trusted host artifact.
@@ -372,6 +395,7 @@ impl ProviderRuntime {
                 routes: route_index,
                 lifecycle: ProviderLifecycleDispatch::new(zone),
             })),
+            lifecycle_state_path: None,
         })
     }
 
@@ -510,7 +534,14 @@ impl ProviderRuntime {
             zone: zone.clone(),
             registry: ProviderRegistryManager::new(registry),
             routes,
-            lifecycle: ProviderLifecycleDispatch::new(zone),
+            lifecycle: match &self.lifecycle_state_path {
+                Some(path) => ProviderLifecycleDispatch::new_persistent(
+                    zone.clone(),
+                    path.with_file_name("provider-lifecycle.json"),
+                )
+                .map_err(|_| ProviderCompositionError::StateUnavailable)?,
+                None => ProviderLifecycleDispatch::new(zone.clone()),
+            },
         })
     }
 }

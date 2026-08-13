@@ -73,7 +73,7 @@ pub fn session_connect_record_with_trace(
         zone,
         operation_id,
         correlation_id,
-        trace.map(|trace| trace.trace_id().to_owned()),
+        trace.map(TraceContext::exported_trace_id),
         source,
         previous_hash,
         AuditRecordFields::SessionConnect(SessionConnectFields {
@@ -211,7 +211,7 @@ pub fn session_process_effect_with_trace(
         zone,
         "operation-digest",
         "correlation-digest",
-        trace.map(|trace| trace.trace_id().to_owned()),
+        trace.map(TraceContext::exported_trace_id),
         source,
         previous_hash,
         AuditRecordFields::ProcessEffect(ProcessEffectFields {
@@ -219,7 +219,8 @@ pub fn session_process_effect_with_trace(
             provider: "systemd".to_owned(),
             domain: "system".to_owned(),
             no_isolation: false,
-            execution_ref_digest: "sha256:session".to_owned(),
+            execution_ref_digest:
+                "sha256:0000000000000000000000000000000000000000000000000000000000000001".to_owned(),
             process_uid: "uid-session".to_owned(),
             outcome: "ok".to_owned(),
             exit_class: None,
@@ -245,10 +246,10 @@ mod tests {
             "NN",
             "local",
             "zone_link",
-            "sha256:subject",
+            "sha256:0000000000000000000000000000000000000000000000000000000000000001",
             "allowed",
             1,
-            "sha256:generation",
+            "sha256:0000000000000000000000000000000000000000000000000000000000000002",
             "ok",
             None,
         )
@@ -273,16 +274,17 @@ mod tests {
             "NN",
             "local",
             "zone_link",
-            "sha256:subject",
+            "sha256:0000000000000000000000000000000000000000000000000000000000000001",
             "allowed",
             1,
-            "sha256:generation",
+            "sha256:0000000000000000000000000000000000000000000000000000000000000002",
             "ok",
             None,
             Some(&trace),
         )
         .unwrap();
-        assert_eq!(record.trace_id(), Some("trace-id"));
+        let expected_trace = d2b_telemetry::canonical_export_id("trace-id");
+        assert_eq!(record.trace_id(), Some(expected_trace.as_str()));
         assert!(!serde_json::to_string(&record).unwrap().contains("span-id"));
     }
 
@@ -298,10 +300,10 @@ mod tests {
             "NN",
             "local",
             "unix",
-            "sha256:subject",
+            "sha256:0000000000000000000000000000000000000000000000000000000000000001",
             "allowed",
             1,
-            "sha256:generation",
+            "sha256:0000000000000000000000000000000000000000000000000000000000000002",
             "ok",
             None,
             None,

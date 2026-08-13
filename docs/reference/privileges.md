@@ -41,16 +41,16 @@ are denied (`defaultForUnknown: deny`).
 >    here. The filesystem-permissions gate (group ownership + mode)
 >    requires the connecting user to be in the `d2b`
 >    Linux SYSTEM GROUP. At `accept(2)` time, `d2bd` reads the
->    peer's pid/uid/gid via `SO_PEERCRED` (`man 7 unix` - the Linux
->    SO_PEERCRED primitive returns ONLY pid+uid+gid, NOT
->    supplementary groups), then classifies the peer's uid via lookup
->    against the `launcherUsers` / `adminUsers` arrays in
->    `/etc/d2b/daemon-config.json` to produce one of three
->    authz-class outcomes: `d2b-launcher`, `d2b-admin`, or
->    `deny`. Membership in the `d2b` Linux system group
->    is the conventional way operators add users to `launcherUsers`;
->    the system group's mode-0660 connect gate is the filesystem-level
->    deny-by-default protection before `accept(2)` runs.
+>    peer's pid/uid/gid via `SO_PEERCRED` (`man 7 unix`), resolves the local
+>    account and supplementary groups, and applies the configured local
+>    classifier. A group-derived launcher grant is accepted only for the
+>    configured `publicSocketGroup` lifecycle group; unconfigured or
+>    unrelated groups grant nothing, and a failed account or group lookup
+>    denies the peer. The `launcherUsers` / `adminUsers` arrays still
+>    classify configured local users. The result is one of three authz-class
+>    outcomes: `d2b-launcher`, `d2b-admin`, or `deny`. The system group's
+>    mode-0660 connect gate remains the filesystem-level deny-by-default
+>    protection before `accept(2)` runs.
 >
 > 2. **Broker private socket** at `/run/d2b/priv.sock` (owned
 >    `root:d2bd` mode `0660` per `nixos-modules/host-broker.nix`).
@@ -66,8 +66,9 @@ are denied (`defaultForUnknown: deny`).
 > SYSTEM GROUP `d2b` on the host: the system
 > group gates **connect(2) reachability** to the daemon's public socket
 > at the filesystem layer; the authz classes are the classification
-> outputs the daemon produces by `launcherUsers`/`adminUsers` uid
-> lookup and forwards to the broker. The authz-class name
+>    outputs the daemon produces from kernel credentials, the configured
+>    lifecycle group, and `launcherUsers`/`adminUsers` classification, then
+>    forwards to the broker. The authz-class name
 > `d2b-launcher` shares a similar spelling for historical reasons,
 > but it is an authz classification identifier, NOT a Linux group.
 
@@ -105,7 +106,7 @@ are denied (`defaultForUnknown: deny`).
 > `PrivilegesJson.publicOperations` and the generated
 > `OperationAuthz.operation` enum, but not in the broker-only catalog below.
 
-## Operation catalog (PROTOCOL_VERSION = 4)
+## Operation catalog (PROTOCOL_VERSION = 5)
 
 The currently implemented broker operation catalog. Every row carries
 `audit: yes` and `defaultForUnknown: deny`.
@@ -120,6 +121,7 @@ The currently implemented broker operation catalog. Every row carries
 | `ReconcileStorageScope` | fs (`storage.json`) | global / per VM / per role | live (static directories only for `apply`) | bounded (mkdir/chown/chmod for static directory specs only) | metadata-only | `d2b-admin` | yes | deny | `storage_ref`, `scope`, `kind`, `status`, `applied`, `path_hash` (no raw path) | [0034](../adr/0034-storage-lifecycle-restart-and-synchronization.md) |
 | `ValidateLockSpec` | lock (`sync.json`) | global / per VM / per role | live (read-only) | no | metadata-only | `d2b-admin` | yes | deny | `lock_ref`, `scope`, `kind`, `cloexec_required`, `fd_passing_mechanism`, `order_key` | [0034](../adr/0034-storage-lifecycle-restart-and-synchronization.md) |
 | `PrepareSwtpmDir` | fs (`${stateDir}/swtpm`) | per VM | live (`SpawnRunner` side-effect) | yes (mkdir/chown/chmod/setfacl + marker) | metadata-only | `d2b-admin` | yes | deny | `vm_id`, `base_dir_hash`, `result` (`created`/`reconciled`/`verified_clean`/`failed_closed`), `mode`, `owner_uid`, `owner_gid`, `marker_result` (`created`/`verified`/`failed_closed`), `fail_reason` (path-free slug, fail-closed only). NO raw `base_dir`/`tpm.sock`/state paths. | [0015](../adr/0015-daemon-only-clean-break.md) |
+| `MigrateLegacySwtpmState` | fs (`${stateDir}/swtpm-legacy` -> `${stateDir}/swtpm`) | per VM | live | yes (journaled byte-preserving stage, marker, commit, source retirement) | metadata-only | `d2b-admin` | yes | deny | `vm_id`, `outcome` (`migrated`/`already-migrated`/`not-applicable`/`pending`/`failed`/`ambiguous`). Raw source, destination, journal, and marker paths never cross the wire. | [0034](../adr/0034-storage-lifecycle-restart-and-synchronization.md) |
 | `OpenKvm` | device | per role | live | no | no | `d2b-launcher` | yes | deny | `device_class`, `role_id` | [0014](../adr/0014-w3-modules-devices-runner-shape.md) |
 | `OpenVhostNet` | device | per role | live | no | no | `d2b-launcher` | yes | deny | `device_class`, `role_id` | [0014](../adr/0014-w3-modules-devices-runner-shape.md) |
 | `OpenFuse` | device | per role | live | no | no | `d2b-launcher` | yes | deny | `device_class`, `role_id` | [0014](../adr/0014-w3-modules-devices-runner-shape.md) |
@@ -239,7 +241,7 @@ non-bootstrap dispatch surface as typed per-op payloads:
 
 - `Hello { client_version }`
 - `ValidateBundle {}`
-- `ExportBrokerAudit { since, filter }`
+- `ExportBrokerAudit { since, filter, cursor, limit }`
 - `ApplyNftables { bundle_nft_intent_ref, scope_id, desired_hash, destroy }`
 - `ApplyRoute { bundle_route_intent_ref, destination, via, destroy }`
 - `ApplyNmUnmanaged { bundle_nm_intent_ref, scope_id, destroy }`
@@ -491,15 +493,17 @@ enforces fail-closed before fork/exec.
 | `Usbip` | per-env singletons `d2b-sys-<env>-usbipd-{proxy,backend}.{service,socket}`; replaced by broker `SpawnRunner{role: Usbip, vm_id: sys-<env>-usbipd, …}` | backend: scoped host-root carve-out with `CAP_NET_RAW`; proxy: empty | **per env** - two runners per USBIP-enabled env (`vm_id` = `sys-<env>-usbipd`, roles `backend` and `proxy`) | `d2b device usb attach --apply` dispatches `UsbipBind` with a bundle-resolved bind intent first so broker allowlist validation and the per-busid lock succeed before any listener is exposed, then applies `UsbipBindFirewallRule`, ensures the per-env backend (`usbipd -4 --tcp-port <backendPort>`) and bounded proxy (`socat TCP-LISTEN:3240,bind=<env.hostUplinkIp>,fork,max-children=4,reuseaddr ...`) are spawned and TCP-ready, then runs `UsbipProxyReconcile`. Host kernel module is `usbip-host` (not `vhci_hcd`, which is the guest module). |
 | `CloudHypervisor` (guest-control VM) | `d2b@<vm>.service` runner; replaced by broker `SpawnRunner{role: CloudHypervisor, vm_id: <vm>, …}` | empty | per VM | On a guest-control-enabled VM the broker, as a SpawnRunner **side-effect**, grants the unprivileged `d2bd` daemon uid a minimal ACL on the per-VM vsock transport so the daemon can run the authenticated readiness/config-read bridge: traversal `--x` on every non-public component of the per-VM state dir and `rw` on `vsock.sock`. The grant is scoped to the **current** socket inode/dev (the broker re-fstats after the fd-based setfacl and aborts+retries if the path is replaced mid-grant), grants **only** that single daemon uid (no `g:`, no default, no blanket entry), and retries until bound while cloud-hypervisor finishes creating the socket. It runs as a revoke-then-grant at each cloud-hypervisor (re-)spawn - any stale daemon grant on a replaced/disabled socket inode is revoked first - so a disabled or replaced socket cannot retain a stale daemon grant; a dedicated stop-time teardown revoke hook is future work (`SignalRunner` carries no socket path). The shared traversal `--x` grants on non-public ancestors are retained, since the daemon also needs them for the per-VM api-socket and sibling VMs depend on them. Both grant and revoke emit hash-only audit records (`target_class` ∈ {`state-dir`, `ancestor`, `vsock-socket`}, `daemon_principal`, `acl_diff_hash`, `result`); raw socket / state-dir paths are never recorded. A **second** SpawnRunner side-effect grants the cloud-hypervisor **runner** uid connect access to the cross-principal `d2b-gctl` token fs-share socket (served by the narrower `gctlfs` principal, ADR 0021, so cloud-hypervisor does not own it as it owns its other fs-share sockets): `--x` traversal on the per-VM `guest-control` dir and `rw` with an explicit `m::rw` mask on the `gctlfs`-owned `d2b-gctl` socket inode. The explicit mask lifts the 0700 socket's `mask::---`, which otherwise masks out the inherited `default:u:<ch_uid>` grant and EACCESes cloud-hypervisor's vhost-user connect (hanging device-init at api-ready timeout). It is `(dev, ino)`-scoped (re-fstat after the fd-based setfacl), grants **only** the runner uid (no execute in the mask, no group/other broadening), and retries until the socket is bound. It emits its own hash-only audit record (`target_class` ∈ {`gctlfs-dir`, `gctlfs-socket`}, `consumer_principal` = `cloud-hypervisor-runner`, `acl_diff_hash`, `result`); raw paths and uids-by-value are never recorded. |
 
-### Metrics endpoint
+### Metrics transport
 
-The daemon serves these metrics endpoints. They are not broker ops,
-but their capability + sandbox posture is documented here alongside
+The daemon does not serve an HTTP metrics endpoint. Core processes emit
+bounded telemetry to the per-Zone Unix socket, and the optional
+observability Provider or an external collector owns any exposition
+endpoint. The transports and sandbox posture are documented here alongside
 the broker-dispatch contracts for trust-boundary completeness.
 
 | Endpoint | Served by | Transport | Capabilities | Sandbox posture | Notes |
 | --- | --- | --- | --- | --- | --- |
-| `http://127.0.0.1:9101/metrics` | `d2bd` (daemon, **not** broker) | HTTP Prometheus exposition, no auth (loopback-only bind) | **empty** bounding set on `d2bd.service` (the daemon already runs unprivileged; the metrics handler adds no new caps) | `NoNewPrivileges=true` on `d2bd.service`. Listener is `127.0.0.1:9101` only - never `0.0.0.0`. | Metric names are preserved (`d2b_vm_ch_api_up`, `d2b_vm_running`, `d2b_vm_state`); default cardinality budget is `vm`/`env`/`role` labels only, with topology labels opt-in. |
+| External collector URL configured by the operator | external collector | Prometheus exposition is owned by the external collector; `d2bd` serves no HTTP metrics listener | no daemon capability surface | Configure collector transport and access policy outside d2b. | Daemon metric descriptors remain canonical and bounded; collection is an external deployment concern. |
 | `unix:///run/d2b/otel/host-egress.sock` | broker-spawned `OtelHostBridge` | OTLP/gRPC over `AF_UNIX` into CH-vsock | **empty** bounding set | Host OTel collector connects to the d2b-owned runtime socket; the bridge principal gets only the required runtime path and obs-vsock socket access. | Span/log attributes are constrained to the tracing contract: no secrets, no argv, no `/nix/store` paths. |
 
 ### Mutating recovery verb
@@ -530,7 +534,7 @@ unit names should not appear in operator-facing remediation.
 | --- | --- | --- | --- |
 | `d2b-net-route-preflight.service` | Daemon startup self-check; startup failures are diagnostic so cold-boot net VMs can still run their host-prep DAG and recreate bridges/routes. Workloads degrade only if their env net VM actually fails to start. Focused repair is `d2b host reconcile --network --apply`, which the broker dispatches through existing host-prep ops without starting any VM. | not emitted | `d2b host reconcile --network --apply` |
 | `d2b-audit-check.service` + `d2b-audit-check.timer` | Daemon health endpoint that reads the broker `OpAuditRecord` daily files via `ExportBrokerAudit`; the Rust CLI `d2b audit` reads through the daemon. No separate systemd timer - `d2b host doctor` polls on demand. | not emitted | `ExportBrokerAudit` |
-| `d2b-ch-exporter.service` | Daemon-emitted scrape metrics with preserved metric names (`d2b_vm_ch_api_up`, `d2b_vm_running`, `d2b_vm_state`) and bounded labels (`vm`/`env`/`role` only by default). The loopback scrape endpoint is `http://127.0.0.1:9101/metrics`; host telemetry egress to the obs VM uses `unix:///run/d2b/otel/host-egress.sock`. | not emitted | [`docs/reference/components-observability.md`](components-observability.md) |
+| `d2b-ch-exporter.service` | Retired daemon-served scrape unit. Host telemetry egress to the obs VM uses the configured Unix socket when enabled. | not emitted | [`docs/reference/components-observability.md`](components-observability.md) |
 | `d2b-otel-host-bridge.service` | Broker `SpawnRunner{role: OtelHostBridge}` runner (host-scoped singleton). See the per-runner-role dispatch contract above. | not emitted | `SpawnRunner{role: OtelHostBridge}` |
 | `d2b-sys-<env>-usbipd-proxy.service` + `d2b-sys-<env>-usbipd-proxy.socket` + `d2b-sys-<env>-usbipd-backend.service` + `d2b-sys-<env>-usbipd-backend.socket` (per USBIP-enabled env) | Broker `SpawnRunner{role: Usbip, vm_id: sys-<env>-usbipd}` runner per env, gated by the per-busid state machine. See the runner-role row above. | not emitted | [`docs/reference/usbip-state-machine.md`](usbip-state-machine.md) |
 
@@ -575,7 +579,7 @@ is advisory until the fixture-contract lane is enabled and promoted.
 | --- | --- | --- |
 | `d2b-net-route-preflight.service` | Daemon startup self-check + net-VM autostart dependency gating + `d2b host reconcile --network --apply` (broker `ApplyNftables` / `ApplyRoute` / `ApplySysctl` / `SetBridgePortFlags`). | not emitted |
 | `d2b-audit-check.service` + `d2b-audit-check.timer` | Broker `ExportBrokerAudit` + `d2b host doctor` on-demand poll; no timer. | not emitted |
-| `d2b-ch-exporter.service` | `d2bd` Prometheus exposition at `http://127.0.0.1:9101/metrics` (no broker op - daemon-emitted). | not emitted |
+| `d2b-ch-exporter.service` | Retired; no daemon-served Prometheus endpoint. | not emitted |
 | `d2b-otel-host-bridge.service` | Broker `SpawnRunner{role: OtelHostBridge}` (host-scoped singleton, broker-supervised). | not emitted |
 | `d2b-sys-<env>-usbipd-proxy.{service,socket}` + `d2b-sys-<env>-usbipd-backend.{service,socket}` (per USBIP-enabled env) | Broker `SpawnRunner{role: Usbip, vm_id: sys-<env>-usbipd}` + per-busid state machine (`UsbipBind`, `UsbipBindFirewallRule`, proxy reconcile). | not emitted |
 

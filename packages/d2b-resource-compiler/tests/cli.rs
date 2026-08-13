@@ -5,6 +5,13 @@ use std::{fs, process::Command};
 use serde_json::json;
 use tempfile::tempdir;
 
+fn schema_root() -> String {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/reference/schemas/v3")
+        .to_string_lossy()
+        .into_owned()
+}
+
 fn run(input: &serde_json::Value, strict: bool) -> std::process::Output {
     let directory = tempdir().expect("temporary compiler directory");
     let input_path = directory.path().join("input.json");
@@ -20,6 +27,7 @@ fn run(input: &serde_json::Value, strict: bool) -> std::process::Output {
     input["expectedArtifactCatalogDigest"] =
         json!("sha256:0000000000000000000000000000000000000000000000000000000000000001");
     input["strictSecrets"] = json!(strict);
+    input["schemaRoot"] = json!(schema_root());
     fs::write(
         &input_path,
         serde_json::to_vec(&input).expect("serialize compiler input"),
@@ -124,6 +132,144 @@ fn cli_rejects_unsorted_resources() {
     assert!(
         String::from_utf8_lossy(&output.stderr)
             .contains("resource-compiler-resource-order-invalid"),
+        "{output:?}"
+    );
+}
+
+#[test]
+fn cli_rejects_unknown_resource_envelope_fields() {
+    let mut input = empty_input();
+    input["resources"] = json!([{
+        "apiVersion": "resources.d2bus.org/v3",
+        "type": "Zone",
+        "metadata": {"name": "local-root", "zone": "local-root"},
+        "spec": {},
+        "unexpected": true
+    }]);
+    let output = run(&input, false);
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("resource-compiler-schema-invalid"),
+        "{output:?}"
+    );
+}
+
+#[test]
+fn cli_rejects_resource_api_version_mismatch() {
+    let mut input = empty_input();
+    input["resources"] = json!([{
+        "apiVersion": "resources.d2bus.org/v2",
+        "type": "Zone",
+        "metadata": {"name": "local-root", "zone": "local-root"},
+        "spec": {}
+    }]);
+    let output = run(&input, false);
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("resource-compiler-version-mismatch"),
+        "{output:?}"
+    );
+}
+
+#[test]
+fn cli_rejects_reference_to_missing_resource() {
+    let mut input = empty_input();
+    input["resources"] = json!([{
+        "apiVersion": "resources.d2bus.org/v3",
+        "type": "ZoneLink",
+        "metadata": {"name": "uplink", "zone": "local-root"},
+        "spec": {
+            "childZoneName": "local-root",
+            "disabled": false,
+            "limits": {
+                "maxActiveStreams": 32,
+                "maxPendingIntents": 256,
+                "reconnectMaxAttempts": 10,
+                "reconnectWindowSecs": 300
+            },
+            "transportCredentials": [],
+            "transportProviderRef": "Provider/transport-missing",
+            "transportSettings": {}
+        }
+    }]);
+    let output = run(&input, false);
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("resource-compiler-reference-invalid"),
+        "{output:?}"
+    );
+}
+
+#[test]
+fn cli_rejects_unknown_resource_type() {
+    let mut input = empty_input();
+    input["resources"] = json!([{
+        "apiVersion": "resources.d2bus.org/v3",
+        "type": "Unknown",
+        "metadata": {"name": "thing", "zone": "local-root"},
+        "spec": {}
+    }]);
+    let output = run(&input, false);
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("resource-compiler-resource-type-invalid"),
+        "{output:?}"
+    );
+}
+
+#[test]
+fn cli_rejects_wrong_resource_field_type() {
+    let mut input = empty_input();
+    input["resources"] = json!([{
+        "apiVersion": "resources.d2bus.org/v3",
+        "type": "ZoneLink",
+        "metadata": {"name": "uplink", "zone": "local-root"},
+        "spec": {
+            "childZoneName": "local-root",
+            "disabled": "false",
+            "limits": {
+                "maxActiveStreams": 32,
+                "maxPendingIntents": 256,
+                "reconnectMaxAttempts": 10,
+                "reconnectWindowSecs": 300
+            },
+            "transportCredentials": [],
+            "transportProviderRef": "Provider/transport-unix",
+            "transportSettings": {}
+        }
+    }]);
+    let output = run(&input, false);
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("resource-compiler-schema-invalid"),
+        "{output:?}"
+    );
+}
+
+#[test]
+fn cli_rejects_missing_required_resource_field() {
+    let mut input = empty_input();
+    input["resources"] = json!([{
+        "apiVersion": "resources.d2bus.org/v3",
+        "type": "ZoneLink",
+        "metadata": {"name": "uplink", "zone": "local-root"},
+        "spec": {
+            "childZoneName": "local-root",
+            "disabled": false,
+            "limits": {
+                "maxActiveStreams": 32,
+                "maxPendingIntents": 256,
+                "reconnectMaxAttempts": 10,
+                "reconnectWindowSecs": 300
+            },
+            "transportCredentials": [],
+            "transportSettings": {}
+        }
+    }]);
+    let output = run(&input, false);
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("resource-compiler-schema-invalid"),
         "{output:?}"
     );
 }

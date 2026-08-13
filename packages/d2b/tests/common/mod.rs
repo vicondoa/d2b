@@ -29,34 +29,21 @@ pub fn d2bd_bin() -> Option<PathBuf> {
     std::env::var_os("D2B_TEST_D2BD_BIN").map(PathBuf::from)
 }
 
-/// A test peer identity presented to the daemon via the `D2BD_TEST_PEER_*`
-/// env hooks, which stand in for the real `SO_PEERCRED` of the connecting CLI.
+/// A test peer role used to compile a hermetic daemon config for the real
+/// process that opens the public socket.
 pub struct TestPeer {
-    pub uid: u32,
-    pub gid: u32,
-    pub username: &'static str,
-    pub groups: &'static str,
+    admin: bool,
 }
 
 impl TestPeer {
     /// A launcher-role peer (in `launcherUsers`, not `adminUsers`).
     pub fn launcher() -> Self {
-        TestPeer {
-            uid: 60003,
-            gid: 60003,
-            username: "launcher-user",
-            groups: "wheel",
-        }
+        TestPeer { admin: false }
     }
 
     /// An admin-role peer (in `adminUsers`).
     pub fn admin() -> Self {
-        TestPeer {
-            uid: 60004,
-            gid: 60004,
-            username: "admin-user",
-            groups: "wheel",
-        }
+        TestPeer { admin: true }
     }
 }
 
@@ -95,10 +82,26 @@ fn primary_group_name() -> String {
         .unwrap_or_else(|| gid.to_string())
 }
 
-/// Spawn `d2bd serve --once --test-listen-on <socket>` with a synthetic
-/// config presenting `peer` as the connecting identity, and block until the
-/// public socket exists. Returns `None` when the daemon-spawn harness is
-/// unavailable (so the caller can skip).
+fn lifecycle_group_name() -> String {
+    nix::unistd::Group::from_name("d2b")
+        .ok()
+        .flatten()
+        .map(|group| group.name)
+        .unwrap_or_else(primary_group_name)
+}
+
+fn current_username() -> String {
+    nix::unistd::User::from_uid(nix::unistd::getuid())
+        .ok()
+        .flatten()
+        .map(|user| user.name)
+        .unwrap_or_else(|| "d2b-test-user".to_owned())
+}
+
+/// Spawn `d2bd serve --once --test-listen-on <socket>` with a hermetic config
+/// classifying the real test process, and block until the public socket
+/// exists. Returns `None` when the daemon-spawn harness is unavailable (so
+/// the caller can skip).
 ///
 /// In `--once` mode the daemon accepts exactly one request and then exits, so
 /// the caller should run a single `d2b` invocation against
@@ -150,7 +153,8 @@ fn spawn_d2bd_inner(
     let state_lock = run.join("daemon.lock");
     let config_json = run.join("config.json");
 
-    let group = primary_group_name();
+    let username = current_username();
+    let group = lifecycle_group_name();
     let mut config = serde_json::json!({
         "publicSocketPath": socket_path,
         "brokerSocketPath": run.join("priv.sock"),
@@ -159,8 +163,12 @@ fn spawn_d2bd_inner(
         "daemonUser": "root",
         "daemonGroup": "root",
         "publicSocketGroup": group,
-        "launcherUsers": ["launcher-user"],
-        "adminUsers": ["admin-user"],
+        "launcherUsers": [&username],
+        "adminUsers": if peer.admin {
+            serde_json::json!([&username])
+        } else {
+            serde_json::json!([])
+        },
         "serverVersion": "0.4.0",
         "acceptedClientVersionRange": ">=0.4.0, <0.5.0",
         "gatewayConfigPath": run.join("gateway.json")
@@ -200,10 +208,6 @@ fn spawn_d2bd_inner(
             "--allow-unprivileged-runtime-dir",
             "--no-drop-privileges",
         ])
-        .env("D2BD_TEST_PEER_UID", peer.uid.to_string())
-        .env("D2BD_TEST_PEER_GID", peer.gid.to_string())
-        .env("D2BD_TEST_PEER_USERNAME", peer.username)
-        .env("D2BD_TEST_PEER_GROUPS", peer.groups)
         // The daemon's startup kernel-module gate reads the real /proc/modules
         // (NOT the host-check fixture); bypass it so the daemon starts on any
         // host. The host-check dispatch itself still runs entirely from

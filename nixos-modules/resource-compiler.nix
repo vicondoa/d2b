@@ -42,13 +42,25 @@ let
   };
 
   resourceTypes = import ./generated/resource-types.nix;
-  schemaRoot = pkgs.linkFarm "d2b-resource-schemas" (map
-    (resourceType: {
-      name = "core.d2bus.org_${resourceType}.schema.json";
-      path = ../docs/reference/schemas/v3
-        + "/core.d2bus.org_${resourceType}.schema.json";
-    })
-    resourceTypes);
+  semanticResourceTypes = import ./generated/semantic-resource-types.nix;
+  semanticSchemaFileName = resourceType:
+    let parts = lib.splitString "." resourceType;
+    in "${lib.concatStringsSep "." (lib.init parts)}_${lib.last parts}.schema.json";
+  schemaRoot = pkgs.linkFarm "d2b-resource-schemas" (
+    (map
+      (resourceType: {
+        name = "core.d2bus.org_${resourceType}.schema.json";
+        path = ../docs/reference/schemas/v3
+          + "/core.d2bus.org_${resourceType}.schema.json";
+      })
+      resourceTypes)
+    ++ (map
+      (resourceType: {
+        path = ../docs/reference/schemas/v3 + "/${semanticSchemaFileName resourceType}";
+        name = semanticSchemaFileName resourceType;
+      })
+      semanticResourceTypes)
+  );
 in
 {
   config.d2b._resourceCompiler.phase2 = {

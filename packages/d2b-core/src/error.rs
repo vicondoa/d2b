@@ -1049,6 +1049,7 @@ pub enum BrokerOp {
     PauseBroker,
     PrepareRuntimeDir,
     PrepareStateDir,
+    MigrateLegacySwtpmState,
     PrepareStoreView,
     ReadSecretById,
     ResumeBroker,

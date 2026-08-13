@@ -31,6 +31,7 @@ side-effect audit operation that never reaches the wire dispatcher).
 | InjectSecretById | stubbed-unimplemented | Returns `BrokerError::Unimplemented`; secret write paths are not implemented. | future work |
 | LaunchMinijailChild | stubbed-unimplemented | Returns `BrokerError::Unimplemented`; privileged child launch is not implemented. | future work |
 | ModprobeIfAllowed | promoted-live | Resolves the trusted module policy, checks the host module posture, and runs the live modprobe handler when allowed. | live in production broker |
+| MigrateLegacySwtpmState | promoted-live | Resolves the trusted legacy swtpm intent and performs crash-safe, byte-preserving journal/marker migration with replay and source retirement. | live in production broker |
 | OpenCgroupDir | promoted-live | Opens the trusted cgroup directory and returns the fd over `SCM_RIGHTS`. | live in production broker |
 | OpenDevice | promoted-live | Opens a device allowed by the trusted device matrix and returns the fd over `SCM_RIGHTS`. | live in production broker |
 | OpenFuse | promoted-live | Opens the allowed FUSE device path and returns the fd over `SCM_RIGHTS`. | live in production broker |

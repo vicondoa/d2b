@@ -7,8 +7,27 @@
     "channels": {},
     "enforcementPosture": {},
     "lastSetApplied": {},
-    "observedServiceRef": {},
-    "realizationRefs": {}
+    "observedServiceRef": {
+      "pattern": "^(?:audio\\.d2bus\\.org\\.AudioService)/[a-z][a-z0-9-]{0,62}$",
+      "type": "string",
+      "x-d2b-allowed-ref-types": [
+        "audio.d2bus.org.AudioService"
+      ],
+      "x-d2b-reference-kind": "ResourceRef",
+      "x-d2b-reference-scope": "same-zone"
+    },
+    "realizationRefs": {
+      "items": {
+        "pattern": "^(?:Endpoint)/[a-z][a-z0-9-]{0,62}$",
+        "type": "string",
+        "x-d2b-allowed-ref-types": [
+          "Endpoint"
+        ],
+        "x-d2b-reference-kind": "ResourceRef",
+        "x-d2b-reference-scope": "same-zone"
+      },
+      "type": "array"
+    }
   },
   "required": [],
   "title": "audio.d2bus.org/AudioBinding/status",

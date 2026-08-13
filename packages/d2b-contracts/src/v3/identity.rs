@@ -699,11 +699,7 @@ fn parse_sha256(value: impl Into<String>, class: IdentityClass) -> Result<String
             max_bytes: 71,
         });
     }
-    let valid = value.len() == 71
-        && value.starts_with("sha256:")
-        && value[7..]
-            .bytes()
-            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase());
+    let valid = super::resource_schema::is_canonical_digest(&value);
     if !valid {
         return Err(IdentityError::InvalidShape { class });
     }

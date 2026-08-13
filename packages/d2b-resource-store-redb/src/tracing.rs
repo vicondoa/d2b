@@ -64,7 +64,8 @@ impl StoreSpan {
             &serde_json::json!({
                 "name": self.name,
                 "fields": self.fields,
-                "trace_id": self.trace.as_ref().map(TraceContext::trace_id),
+                "trace_id": self.trace.as_ref().map(TraceContext::exported_trace_id),
+                "span_id": self.trace.as_ref().map(TraceContext::exported_span_id),
             }),
         )
         .map_err(|_| EmitterError::FrameTooLarge)?;
@@ -86,5 +87,19 @@ mod tests {
         .unwrap();
         assert_eq!(span.name(), STORE_WRITE_SPAN);
         assert!(StoreSpan::new(STORE_WRITE_SPAN, [("path", "/tmp")], None).is_err());
+    }
+
+    #[test]
+    fn store_read_scan_uses_the_admitted_operation_key() {
+        let span = StoreSpan::new(
+            STORE_READ_SPAN,
+            [("operation", "scan"), ("outcome", "ok")],
+            None,
+        )
+        .expect("scan span");
+        assert_eq!(
+            span.fields().get("operation").map(String::as_str),
+            Some("scan")
+        );
     }
 }

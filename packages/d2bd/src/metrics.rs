@@ -1,5 +1,4 @@
-//! Daemon metrics registry + Prometheus text-format exposition for
-//! `GET /metrics` on the daemon's public socket.
+//! Daemon metrics registry and Prometheus text-format renderer.
 //!
 //! Why a hand-rolled registry rather than the `prometheus` crate:
 //! the daemon-only worktree has no other consumer of the crate, the
@@ -19,6 +18,10 @@
 use std::collections::BTreeMap;
 use std::sync::Mutex;
 use std::time::Instant;
+
+/// Maximum number of distinct metric series retained by the daemon.
+pub const MAX_METRIC_SERIES: usize = 4096;
+const UNKNOWN_LABEL_VALUE: &str = "unknown";
 
 /// Static descriptor for one metric. Mirrors the rows in
 /// `docs/reference/daemon-metrics.md` one-for-one; the eval gate
@@ -80,13 +83,13 @@ pub const METRIC_INVENTORY: &[MetricDescriptor] = &[
     MetricDescriptor {
         name: "d2b_daemon_vm_state",
         kind: MetricKind::Gauge,
-        labels: &["vm", "state"],
+        labels: &["state"],
         buckets_seconds: &[],
     },
     MetricDescriptor {
         name: "d2b_daemon_vm_start_duration_seconds",
         kind: MetricKind::Histogram,
-        labels: &["vm", "outcome"],
+        labels: &["outcome"],
         buckets_seconds: VM_START_BUCKETS_SECONDS,
     },
     MetricDescriptor {
@@ -110,13 +113,13 @@ pub const METRIC_INVENTORY: &[MetricDescriptor] = &[
     MetricDescriptor {
         name: "d2b_daemon_vm_shutdown_total",
         kind: MetricKind::Counter,
-        labels: &["vm", "vmm", "outcome"],
+        labels: &["vmm", "outcome"],
         buckets_seconds: &[],
     },
     MetricDescriptor {
         name: "d2b_daemon_vm_shutdown_duration_seconds",
         kind: MetricKind::Histogram,
-        labels: &["vm", "vmm", "outcome"],
+        labels: &["vmm", "outcome"],
         buckets_seconds: VM_SHUTDOWN_BUCKETS_SECONDS,
     },
     MetricDescriptor {
@@ -128,19 +131,19 @@ pub const METRIC_INVENTORY: &[MetricDescriptor] = &[
     MetricDescriptor {
         name: "d2b_daemon_vm_degraded",
         kind: MetricKind::Gauge,
-        labels: &["vm", "reason"],
+        labels: &["reason"],
         buckets_seconds: &[],
     },
     MetricDescriptor {
         name: "d2b_daemon_ownership_drift_total",
         kind: MetricKind::Counter,
-        labels: &["vm"],
+        labels: &[],
         buckets_seconds: &[],
     },
     MetricDescriptor {
         name: "d2b_daemon_ssh_host_key_drift_total",
         kind: MetricKind::Counter,
-        labels: &["vm"],
+        labels: &[],
         buckets_seconds: &[],
     },
     MetricDescriptor {
@@ -259,24 +262,59 @@ impl Registry {
         }
     }
 
-    pub fn counter_inc(&self, name: &'static str, labels: &[(&str, &str)]) {
-        let owned: LabelSet = labels
+    fn sanitize_labels(name: &'static str, labels: &[(&str, &str)]) -> LabelSet {
+        let descriptor = descriptor(name).unwrap_or_else(|| panic!("unknown metric: {name}"));
+        descriptor
+            .labels
             .iter()
-            .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
-            .collect();
+            .map(|declared| {
+                (
+                    (*declared).to_owned(),
+                    normalize_label_value(
+                        declared,
+                        labels
+                            .iter()
+                            .find_map(|(key, value)| {
+                                (*key == *declared).then_some((*value).to_owned())
+                            })
+                            .as_deref()
+                            .unwrap_or(UNKNOWN_LABEL_VALUE),
+                    ),
+                )
+            })
+            .collect()
+    }
+
+    fn admit_series(inner: &RegistryInner, name: &'static str, labels: &LabelSet) -> bool {
+        let exists = inner.counters.contains_key(&(name, labels.clone()))
+            || inner.gauges.contains_key(&(name, labels.clone()))
+            || inner.histograms.contains_key(&(name, labels.clone()));
+        exists
+            || inner.counters.len() + inner.gauges.len() + inner.histograms.len()
+                < MAX_METRIC_SERIES
+    }
+
+    pub fn counter_inc(&self, name: &'static str, labels: &[(&str, &str)]) {
+        let owned = Self::sanitize_labels(name, labels);
         Self::validate(name, MetricKind::Counter, &owned);
         let mut g = self.inner.lock().expect("metrics registry poisoned");
+        if !Self::admit_series(&g, name, &owned) {
+            return;
+        }
         let entry = g.counters.entry((name, owned)).or_default();
         entry.value += 1.0;
     }
 
     pub fn gauge_set(&self, name: &'static str, labels: &[(&str, &str)], value: f64) {
-        let owned: LabelSet = labels
-            .iter()
-            .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
-            .collect();
+        let owned = Self::sanitize_labels(name, labels);
         Self::validate(name, MetricKind::Gauge, &owned);
+        if !value.is_finite() {
+            return;
+        }
         let mut g = self.inner.lock().expect("metrics registry poisoned");
+        if !Self::admit_series(&g, name, &owned) {
+            return;
+        }
         let entry = g.gauges.entry((name, owned)).or_default();
         entry.value = value;
     }
@@ -288,10 +326,7 @@ impl Registry {
         let owned = samples
             .iter()
             .map(|(labels, value)| {
-                let labels = labels
-                    .iter()
-                    .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
-                    .collect::<LabelSet>();
+                let labels = Self::sanitize_labels(name, labels);
                 Self::validate(name, MetricKind::Gauge, &labels);
                 (labels, *value)
             })
@@ -303,6 +338,9 @@ impl Registry {
             }
         }
         for (labels, value) in owned {
+            if !value.is_finite() || !Self::admit_series(&registry, name, &labels) {
+                continue;
+            }
             registry.gauges.entry((name, labels)).or_default().value = value;
         }
     }
@@ -313,13 +351,16 @@ impl Registry {
         labels: &[(&str, &str)],
         value_seconds: f64,
     ) {
-        let owned: LabelSet = labels
-            .iter()
-            .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
-            .collect();
+        let owned = Self::sanitize_labels(name, labels);
         Self::validate(name, MetricKind::Histogram, &owned);
         let d = descriptor(name).expect("validated above");
+        if !value_seconds.is_finite() {
+            return;
+        }
         let mut g = self.inner.lock().expect("metrics registry poisoned");
+        if !Self::admit_series(&g, name, &owned) {
+            return;
+        }
         let entry = g.histograms.entry((name, owned)).or_default();
         if entry.bucket_counts.is_empty() {
             entry.bucket_counts = vec![0u64; d.buckets_seconds.len() + 1];
@@ -495,10 +536,215 @@ fn escape_label_value(v: &str) -> String {
             '\\' => out.push_str("\\\\"),
             '"' => out.push_str("\\\""),
             '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            ch if ch.is_control() => {
+                out.push_str(&format!("\\x{:02x}", ch as u32));
+            }
             _ => out.push(ch),
         }
     }
     out
+}
+
+fn normalize_label_value(key: &str, value: &str) -> String {
+    let allowed = match key {
+        "state" => &[
+            "running",
+            "stopped",
+            "degraded",
+            "starting",
+            "stopping",
+            "ready",
+            "not-applicable",
+            "helper-unavailable",
+            "helper-stale",
+            "user-manager-unavailable",
+            "graphical-session-inactive",
+            "wayland-unavailable",
+            "proxy-unavailable",
+            "unknown",
+        ][..],
+        "reason" => &[
+            "buffer_full",
+            "export_error",
+            "policy_violation",
+            "ingress_quarantine",
+            "auth",
+            "quota",
+            "conflict",
+            "invalid",
+            "schema",
+            "activation-pending",
+            "unknown",
+        ][..],
+        "provider" | "vmm" => &[
+            "cloud-hypervisor",
+            "qemu-media",
+            "cloud_hypervisor",
+            "qemu_media",
+            "unknown",
+            "guest-control",
+            "unsafe-local",
+            "local-vm",
+            "provider-managed",
+        ][..],
+        "component" => &[
+            "shell", "exec", "workload", "launcher", "helper", "scope", "proxy", "unknown",
+        ][..],
+        "outcome" => &[
+            "ok",
+            "success",
+            "failure",
+            "error",
+            "denied",
+            "conflict",
+            "timeout",
+            "degraded",
+            "accepted",
+            "rejected",
+            "unknown",
+            "management",
+            "established",
+            "closed",
+            "op-error",
+            "broker-fallback",
+            "refused",
+            "indeterminate",
+            "broker-error",
+            "protocol-error",
+            "dispatch-error",
+            "requested",
+            "committed",
+            "already-committed",
+            "failed",
+            "clean_guest_shutdown",
+            "clean_vmm_cleanup",
+            "api_unavailable",
+            "timeout_exceeded",
+            "force_requested",
+            "forced_cleanup",
+            "cleanup_failed",
+        ][..],
+        "mode" => &["switch", "boot", "test", "rollback", "unknown"][..],
+        "op" => &[
+            "Hello",
+            "ValidateBundle",
+            "ExportBrokerAudit",
+            "ApplyNftables",
+            "ApplyRoute",
+            "ApplySysctl",
+            "StoreSync",
+            "StoreVerify",
+            "SpawnRunner",
+            "SignalRunner",
+            "OpenPidfd",
+            "CreateBridge",
+            "CreatePersistentTap",
+            "UsbipBind",
+            "UsbipUnbind",
+            "QemuMediaBoot",
+            "QemuMediaAttach",
+            "QemuMediaDetach",
+            "vmStart",
+            "vmStop",
+            "vmRestart",
+            "unknown",
+        ][..],
+        "status" => &[
+            "pending",
+            "ready",
+            "degraded",
+            "failed",
+            "success",
+            "failure",
+            "indeterminate",
+            "broker-error",
+            "protocol-error",
+            "dispatch-error",
+            "unknown",
+        ][..],
+        "phase" => &[
+            "prepare",
+            "marker-write",
+            "guest",
+            "commit",
+            "metadata-only",
+            "unknown",
+        ][..],
+        "subsystem" => &["guest-control-exec", "guest-control-shell", "unknown"][..],
+        "operation" => &[
+            "create",
+            "attach",
+            "list",
+            "detach",
+            "kill",
+            "close",
+            "start",
+            "stop",
+            "launcher-exec",
+            "unknown",
+        ][..],
+        "error_kind" => &[
+            "none",
+            "transport",
+            "auth",
+            "protocol",
+            "timeout",
+            "capability",
+            "capacity",
+            "not-found",
+            "internal",
+            "old-generation",
+            "detached-unavailable",
+            "session-capacity",
+            "rate-limited",
+            "stale-session",
+            "exec-not-found",
+            "exec-expired",
+            "invalid-program",
+            "guest",
+            "unknown",
+            "inflight-cap-exceeded",
+            "already-attached",
+            "not-found",
+            "output-gap",
+            "offset-mismatch",
+            "terminal-closed",
+            "invalid-size",
+            "helper-unavailable",
+            "helper-stale",
+            "user-manager",
+            "environment",
+            "executable",
+            "scope-create",
+            "scope-identity",
+            "graphical-session",
+            "wayland",
+            "proxy",
+            "operation-conflict",
+        ][..],
+        "step" => &[
+            "prepare",
+            "apply",
+            "verify",
+            "cleanup",
+            "nft",
+            "route",
+            "sysctl",
+            "hosts",
+            "nm-unmanaged",
+            "usbip-firewall",
+            "cgroup-delegate",
+            "unknown",
+        ][..],
+        _ => &[][..],
+    };
+    if allowed.is_empty() || allowed.contains(&value) {
+        value.to_owned()
+    } else {
+        UNKNOWN_LABEL_VALUE.to_owned()
+    }
 }
 
 fn render_float(v: f64) -> String {
@@ -516,11 +762,8 @@ fn render_float(v: f64) -> String {
     }
 }
 
-/// HTTP response for a `GET /metrics` request. Other paths return
-/// `404 Not Found`; non-GET methods return `405 Method Not Allowed`.
-/// The parser is intentionally minimal - the daemon's accept loop
-/// gates everything else (peer creds, frame size). Returns the full
-/// HTTP/1.1 response as bytes ready to write back to the client.
+/// Render an HTTP-shaped response for library consumers and tests. The
+/// daemon does not expose this renderer as a public listener.
 pub fn metrics_handler(request: &[u8], registry: &Registry) -> Vec<u8> {
     let head = request.split(|b| *b == b'\n').next().unwrap_or(&[]);
     let head = std::str::from_utf8(head).unwrap_or("");
@@ -634,7 +877,7 @@ mod tests {
     fn vm_state_labels() {
         let d = descriptor("d2b_daemon_vm_state").expect("vm_state");
         assert_eq!(d.kind, MetricKind::Gauge);
-        assert_eq!(d.labels, &["vm", "state"]);
+        assert_eq!(d.labels, &["state"]);
     }
 
     #[test]
@@ -815,6 +1058,31 @@ mod tests {
     }
 
     #[test]
+    fn total_series_cap_drops_new_series_after_bound() {
+        let registry = Registry::new();
+        {
+            let mut inner = registry.inner.lock().unwrap();
+            for index in 0..MAX_METRIC_SERIES {
+                inner.counters.insert(
+                    (
+                        "d2b_daemon_broker_request_total",
+                        vec![("synthetic".to_owned(), index.to_string())],
+                    ),
+                    ScalarSample { value: 1.0 },
+                );
+            }
+        }
+        registry.counter_inc(
+            "d2b_daemon_broker_request_total",
+            &[("op", "OpenPidfd"), ("outcome", "ok")],
+        );
+        assert_eq!(
+            registry.inner.lock().unwrap().counters.len(),
+            MAX_METRIC_SERIES
+        );
+    }
+
+    #[test]
     fn workload_metrics_serialize_without_execution_details() {
         let r = Registry::new();
         r.gauge_set(
@@ -883,13 +1151,23 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "label order mismatch")]
-    fn validate_rejects_label_misorder() {
+    fn identity_labels_are_dropped_and_declared_order_is_canonical() {
         let r = Registry::new();
         r.counter_inc(
             "d2b_daemon_broker_request_total",
             &[("outcome", "ok"), ("op", "OpenPidfd")],
         );
+        r.gauge_set(
+            "d2b_daemon_vm_state",
+            &[("vm", "secret-vm"), ("state", "running")],
+            1.0,
+        );
+        let body = r.render();
+        assert!(
+            body.contains("d2b_daemon_broker_request_total{op=\"OpenPidfd\",outcome=\"ok\"} 1")
+        );
+        assert!(body.contains("d2b_daemon_vm_state{state=\"running\"} 1"));
+        assert!(!body.contains("secret-vm"));
     }
 
     #[test]
@@ -913,7 +1191,8 @@ mod tests {
         assert!(s.starts_with("HTTP/1.1 200 OK\r\n"));
         assert!(s.contains("# TYPE d2b_daemon_uptime_seconds gauge"));
         assert!(s.contains("# TYPE d2b_vm_ch_api_up gauge"));
-        assert!(s.contains("d2b_vm_ch_api_up{vm=\"corp-vm\",env=\"work\",role=\"workload\"} 0"));
+        assert!(s.contains("d2b_vm_ch_api_up{vm=\"sha256:"));
+        assert!(!s.contains("corp-vm"));
     }
 
     #[test]

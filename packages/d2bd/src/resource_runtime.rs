@@ -15,34 +15,48 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+#[cfg(test)]
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use crate::authority_persistence::RedbAuthorityPersistence;
+use d2b_audit::{AuditSink, DurabilityEvidence};
+#[cfg(test)]
+use d2b_contracts::v3::{
+    DEFAULT_LIST_PAGE_SIZE, MAX_FILTER_VALUES, MAX_LIST_FILTERS, MAX_LIST_PAGE_SIZE,
+    MAX_LIST_RESOURCE_TYPES, MAX_PAGE_CURSOR_BYTES, MAX_RESPONSE_CANONICAL_BYTES, ResourceName,
+    ZoneRevision,
+};
 use d2b_contracts::{
     broker_wire::{OpenZoneStoreResponse, ZoneStoreDisposition},
     v3::{
-        AuthenticatedSubjectContext, ConfigurationGeneration, ControllerGeneration,
-        DEFAULT_LIST_PAGE_SIZE, DEFAULT_REQUEST_DEADLINE_MS, EvidenceClass, Locality,
-        MAX_FILTER_VALUES, MAX_LIST_FILTERS, MAX_LIST_PAGE_SIZE, MAX_LIST_RESOURCE_TYPES,
-        MAX_PAGE_CURSOR_BYTES, MAX_RESPONSE_CANONICAL_BYTES, ResourceError, ResourceErrorKind,
-        ResourceErrorReason, ResourceName, ResourceRef, ResourceTypeName, ResourceUid, RetryClass,
-        Timestamp, ZoneId, ZoneRevision,
+        ConfigurationGeneration, ControllerGeneration, ResourceError, ResourceErrorKind,
+        ResourceErrorReason, ResourceRef, ResourceTypeName, ResourceUid, RetryClass, Timestamp,
+        ZoneId,
     },
 };
+use d2b_core_controller::authority::{
+    AuthorityRequest, AuthorityReservation, ExternalNicClaimRequest, ExternalNicRecoveryInventory,
+    ExternalNicReservation, HostGlobalAuthorityIndex, TrustedExternalNicInventory,
+};
+use d2b_core_controller::authority_persistence::AuthorityRecoveryCoordinator;
 use d2b_core_controller::main::{
     CoreProcess, RecoverySnapshot, RuntimeReadiness as CoreRuntimeReadiness, StartupError,
     StartupStage,
 };
 use d2b_resource_api::{
-    RedbBackend, ResourceService, ResourceStoreBackend,
-    authz::{
-        ApiCatalog, ApiMethod, AuthorizationDenial, AuthorizationRequest, AuthorizationState,
-        AuthorizationTarget, NativeAuthorizer, ResourceVerb,
-    },
+    RedbBackend, ResourceService,
+    authz::{ApiCatalog, NativeAuthorizer},
 };
-use d2b_resource_store::{
-    PolicySnapshot, StoreFilter, StoreListRequest, StoreListResult, StoreOperationContext,
-    StoreProjection, StoreSlot,
+use d2b_resource_store::{PolicySnapshot, StoreSlot};
+#[cfg(test)]
+use d2b_resource_store::{StoreFilter, StoreListResult, StoreProjection};
+use d2b_resource_store_redb::{
+    BrokerEvidenceIndex, RedbResourceStore, StoreIdentity, StoreRuntimeMetadata,
+    write_provisioning_marker,
 };
-use d2b_resource_store_redb::{RedbResourceStore, StoreIdentity, write_provisioning_marker};
-use serde_json::{Map, Value, json};
+#[cfg(test)]
+use serde_json::json;
+use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
 /// Maximum number of Zone runtimes owned by one daemon.
@@ -87,6 +101,9 @@ pub enum ResourceRuntimeError {
     AuthenticationUnavailable,
     /// The store watch/recovery admission is not available.
     WatchUnavailable,
+    /// Durable Host-global authority proofs have not crossed the startup
+    /// barrier.
+    AuthorityUnavailable,
     /// The fixed core handlers have not converged.
     HandlerNotReady,
     /// The provider path has not completed startup.
@@ -123,6 +140,7 @@ impl ResourceRuntimeError {
             }
             Self::AuthenticationUnavailable => "resource-runtime-authentication-unavailable",
             Self::WatchUnavailable => "resource-runtime-watch-unavailable",
+            Self::AuthorityUnavailable => "resource-runtime-authority-unavailable",
             Self::HandlerNotReady => "resource-runtime-handler-not-ready",
             Self::ProviderPathUnavailable => "resource-runtime-provider-path-unavailable",
             Self::LiveRequestOwners => "resource-runtime-live-request-owners",
@@ -141,12 +159,23 @@ impl core::fmt::Display for ResourceRuntimeError {
 impl std::error::Error for ResourceRuntimeError {}
 
 /// Broker client result required by [`ZoneResourceRuntime::open`].
-#[derive(Debug)]
 pub struct OpenedZoneStore {
     /// Opaque broker response metadata.
     pub response: OpenZoneStoreResponse,
     /// The one owned database descriptor received from the broker.
     pub database_fd: OwnedFd,
+    /// Host/bundle-owned trusted external-NIC inventory, when available.
+    pub external_inventory: Option<Arc<dyn ExternalNicRecoveryInventory>>,
+}
+
+impl core::fmt::Debug for OpenedZoneStore {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("OpenedZoneStore")
+            .field("response", &self.response)
+            .field("has_external_inventory", &self.external_inventory.is_some())
+            .finish()
+    }
 }
 
 /// Readiness projection for one Zone runtime.
@@ -156,6 +185,7 @@ pub struct ZoneRuntimeReadiness {
     pub resource_api_ready: bool,
     pub local_session_ready: bool,
     pub provider_path_ready: bool,
+    pub authority_ready: bool,
     pub core_stage: StartupStage,
 }
 
@@ -166,6 +196,7 @@ impl ZoneRuntimeReadiness {
             && self.resource_api_ready
             && self.local_session_ready
             && self.provider_path_ready
+            && self.authority_ready
             && matches!(self.core_stage, StartupStage::Ready)
     }
 }
@@ -175,15 +206,17 @@ pub struct ZoneResourceRuntime {
     zone: ZoneId,
     store_id: String,
     store: Arc<RedbResourceStore>,
+    store_metadata: StoreRuntimeMetadata,
     backend: Arc<RedbBackend>,
     api: Arc<ResourceService<RedbBackend>>,
-    authorizer: Arc<NativeAuthorizer>,
-    authorization_state: AuthorizationState,
     core: Mutex<CoreProcess>,
     readiness: ZoneRuntimeReadiness,
     policy_installed: bool,
     controller_endpoint_registered: bool,
     watch_admitted: bool,
+    authority_index: Arc<tokio::sync::Mutex<HostGlobalAuthorityIndex>>,
+    authority_persistence: Arc<RedbAuthorityPersistence>,
+    authority_recovery: Arc<AuthorityRecoveryCoordinator>,
 }
 
 impl core::fmt::Debug for ZoneResourceRuntime {
@@ -192,6 +225,7 @@ impl core::fmt::Debug for ZoneResourceRuntime {
             .debug_struct("ZoneResourceRuntime")
             .field("zone", &self.zone)
             .field("store_id", &"<opaque>")
+            .field("current_revision", &self.store_metadata.current_revision)
             .field("readiness", &self.readiness)
             .finish()
     }
@@ -200,6 +234,125 @@ impl core::fmt::Debug for ZoneResourceRuntime {
 impl ZoneResourceRuntime {
     /// Open one Zone from a broker-owned descriptor.
     pub async fn open(zone: ZoneId, opened: OpenedZoneStore) -> Result<Self, ResourceRuntimeError> {
+        Self::open_internal(
+            zone,
+            opened,
+            None,
+            Arc::new(BrokerEvidenceIndex::default()),
+            None,
+        )
+        .await
+    }
+
+    /// Open one Zone with the production-owned durable audit sink.
+    pub async fn open_with_audit(
+        zone: ZoneId,
+        opened: OpenedZoneStore,
+        audit_sink: Arc<AuditSink>,
+    ) -> Result<Self, ResourceRuntimeError> {
+        Self::open_internal(
+            zone,
+            opened,
+            Some(audit_sink),
+            Arc::new(BrokerEvidenceIndex::default()),
+            None,
+        )
+        .await
+    }
+
+    /// Open one Zone with durable audit and broker reconciliation evidence.
+    pub async fn open_with_audit_and_evidence(
+        zone: ZoneId,
+        opened: OpenedZoneStore,
+        audit_sink: Arc<AuditSink>,
+        broker_evidence: Arc<BrokerEvidenceIndex>,
+    ) -> Result<Self, ResourceRuntimeError> {
+        Self::open_internal(zone, opened, Some(audit_sink), broker_evidence, None).await
+    }
+
+    /// Open one Zone with explicit audit, broker-evidence, and telemetry
+    /// ownership.
+    pub async fn open_with_audit_and_evidence_and_telemetry(
+        zone: ZoneId,
+        opened: OpenedZoneStore,
+        audit_sink: Arc<AuditSink>,
+        broker_evidence: Arc<BrokerEvidenceIndex>,
+        telemetry_path: impl Into<std::path::PathBuf>,
+    ) -> Result<Self, ResourceRuntimeError> {
+        Self::open_internal(
+            zone,
+            opened,
+            Some(audit_sink),
+            broker_evidence,
+            Some(telemetry_path.into()),
+        )
+        .await
+    }
+
+    async fn open_internal(
+        zone: ZoneId,
+        opened: OpenedZoneStore,
+        audit_sink: Option<Arc<AuditSink>>,
+        broker_evidence: Arc<BrokerEvidenceIndex>,
+        telemetry_path: Option<std::path::PathBuf>,
+    ) -> Result<Self, ResourceRuntimeError> {
+        #[cfg(test)]
+        let audit_sink = audit_sink.or_else(|| {
+            let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("target")
+                .join(format!(
+                    "d2bd-resource-audit-{}-{}-{}",
+                    zone.as_str(),
+                    std::process::id(),
+                    SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .map(|duration| duration.as_nanos())
+                        .unwrap_or_default()
+                ));
+            AuditSink::open(path).ok().map(Arc::new)
+        });
+        #[cfg(not(test))]
+        let audit_sink = audit_sink;
+        let external_inventory = opened.external_inventory.clone().unwrap_or_else(|| {
+            Arc::new(TrustedExternalNicInventory::default())
+                as Arc<dyn ExternalNicRecoveryInventory>
+        });
+        Self::open_with_external_inventory_and_audit(
+            zone,
+            opened,
+            external_inventory,
+            audit_sink,
+            broker_evidence,
+            telemetry_path,
+        )
+        .await
+    }
+
+    /// Open one Zone with the host/bundle-owned physical-NIC inventory port.
+    pub async fn open_with_external_inventory(
+        zone: ZoneId,
+        opened: OpenedZoneStore,
+        external_inventory: Arc<dyn ExternalNicRecoveryInventory>,
+    ) -> Result<Self, ResourceRuntimeError> {
+        Self::open_with_external_inventory_and_audit(
+            zone,
+            opened,
+            external_inventory,
+            None,
+            Arc::new(BrokerEvidenceIndex::default()),
+            None,
+        )
+        .await
+    }
+
+    async fn open_with_external_inventory_and_audit(
+        zone: ZoneId,
+        opened: OpenedZoneStore,
+        external_inventory: Arc<dyn ExternalNicRecoveryInventory>,
+        audit_sink: Option<Arc<AuditSink>>,
+        broker_evidence: Arc<BrokerEvidenceIndex>,
+        telemetry_path: Option<std::path::PathBuf>,
+    ) -> Result<Self, ResourceRuntimeError> {
         let expected_store_id = format!("zone-store-{}", zone.as_str());
         if opened.response.zone_store_id.as_str() != expected_store_id {
             return Err(ResourceRuntimeError::BrokerResponseMismatch);
@@ -227,66 +380,144 @@ impl ZoneResourceRuntime {
                     tempfile::tempfile().map_err(|_| ResourceRuntimeError::StoreOpenFailed)?;
                 write_provisioning_marker(&mut marker, &store_identity)
                     .map_err(|_| ResourceRuntimeError::StoreOpenFailed)?;
-                RedbResourceStore::provision_owned(file, marker, store_identity, acceptor).await
+                match audit_sink {
+                    Some(sink) => {
+                        match telemetry_path.as_ref() {
+                            Some(path) => {
+                                RedbResourceStore::provision_owned_with_audit_and_evidence_and_telemetry(
+                                    file,
+                                    marker,
+                                    store_identity,
+                                    acceptor,
+                                    sink,
+                                    broker_evidence,
+                                    path,
+                                )
+                                .await
+                            }
+                            None => {
+                                RedbResourceStore::provision_owned_with_audit_and_evidence(
+                                    file,
+                                    marker,
+                                    store_identity,
+                                    acceptor,
+                                    sink,
+                                    broker_evidence,
+                                )
+                                .await
+                            }
+                        }
+                    }
+                    None => {
+                        RedbResourceStore::provision_owned(file, marker, store_identity, acceptor)
+                            .await
+                    }
+                }
             }
-            ZoneStoreDisposition::Opened => {
-                RedbResourceStore::open_owned(file, store_identity, acceptor).await
-            }
+            ZoneStoreDisposition::Opened => match audit_sink {
+                Some(sink) => {
+                    match telemetry_path.as_ref() {
+                        Some(path) => {
+                            RedbResourceStore::open_owned_with_audit_and_evidence_and_telemetry(
+                                file,
+                                store_identity,
+                                acceptor,
+                                sink,
+                                broker_evidence,
+                                path,
+                            )
+                            .await
+                        }
+                        None => {
+                            RedbResourceStore::open_owned_with_audit_and_evidence(
+                                file,
+                                store_identity,
+                                acceptor,
+                                sink,
+                                broker_evidence,
+                            )
+                            .await
+                        }
+                    }
+                }
+                None => RedbResourceStore::open_owned(file, store_identity, acceptor).await,
+            },
         }
         .map_err(|_| ResourceRuntimeError::StoreOpenFailed)?;
         let store = Arc::new(store);
-        let authorization_state = runtime_authorization_state()?;
+        let authority_persistence = Arc::new(
+            RedbAuthorityPersistence::new(Arc::clone(&store))
+                .with_external_inventory(external_inventory),
+        );
+        let authority_recovery = Arc::new(
+            AuthorityRecoveryCoordinator::recover_with_provenance(
+                authority_persistence.clone(),
+                authority_persistence.as_ref(),
+            )
+            .await
+            .map_err(|_| ResourceRuntimeError::AuthorityUnavailable)?,
+        );
+        let authority_index = authority_recovery.index();
+        let store_metadata = store
+            .runtime_metadata()
+            .await
+            .map_err(|_| ResourceRuntimeError::StoreReadFailed)?;
         let backend = Arc::new(RedbBackend::from_arc(Arc::clone(&store)));
         let api = Arc::new(
             ResourceService::new(Arc::clone(&backend), Arc::clone(&authorizer))
                 .map_err(|_| ResourceRuntimeError::ResourceApiBindFailed)?,
         );
 
-        // The public daemon currently has no registered ResourceService
-        // endpoint or authenticated ComponentSession. Drive the real core
-        // startup state machine with those facts instead of manufacturing
-        // readiness. `drive_core_startup` also owns the later recovery/watch
-        // and handler-readiness transitions when a trusted runtime supplies
-        // them.
         let mut core = CoreProcess::new();
-        let _ = drive_core_startup(
-            &mut core,
-            CoreRuntimeReadiness {
-                store_ready: true,
-                resource_api_ready: false,
-                local_bus_ready: false,
-                controller_endpoint_registered: false,
-                authenticated_system_core_session: false,
-            },
-            RecoverySnapshot {
-                checkpoint_revision: 0,
-                active_configuration_revision: 1,
-                provider_lease_count: 0,
-                controller_lease_count: 0,
-                ambiguous_operation_count: 0,
-                watch_admitted: false,
-            },
-        );
+        {
+            let recovered_authority = authority_index.lock().await;
+            let _ = drive_core_startup(
+                &mut core,
+                CoreRuntimeReadiness {
+                    store_ready: true,
+                    resource_api_ready: false,
+                    local_bus_ready: false,
+                    controller_endpoint_registered: false,
+                    authenticated_system_core_session: false,
+                },
+                RecoverySnapshot {
+                    startup_epoch: 0,
+                    checkpoint_revision: 0,
+                    active_configuration_revision: store_metadata
+                        .policy_snapshot
+                        .active_configuration_revision
+                        .get(),
+                    provider_lease_count: 0,
+                    controller_lease_count: 0,
+                    ambiguous_operation_count: 0,
+                    watch_admitted: false,
+                },
+                &recovered_authority,
+            );
+        }
         let stage = core.stage();
         Ok(Self {
             zone,
             store_id: expected_store_id,
             store,
+            store_metadata,
             backend,
             api,
-            authorizer,
-            authorization_state,
             core: Mutex::new(core),
             readiness: ZoneRuntimeReadiness {
                 store_ready: true,
                 resource_api_ready: false,
                 local_session_ready: false,
                 provider_path_ready: false,
+                authority_ready: true,
                 core_stage: stage,
             },
             policy_installed: false,
             controller_endpoint_registered: false,
             watch_admitted: false,
+            authority_index,
+            authority_persistence,
+            authority_recovery,
         })
     }
 
@@ -321,6 +552,92 @@ impl ZoneResourceRuntime {
         self.readiness.provider_path_ready = ready;
     }
 
+    /// Reserve a Host-global claim through the Zone's durable redb owner.
+    pub async fn reserve_authority(
+        &self,
+        operation_id: impl Into<String>,
+        request: AuthorityRequest,
+    ) -> Result<
+        AuthorityReservation,
+        d2b_core_controller::authority::AuthorityReservationError<
+            d2b_core_controller::authority::AuthorityError,
+        >,
+    > {
+        if !self.authority_index.lock().await.is_ready_for_readiness() {
+            return Err(
+                d2b_core_controller::authority::AuthorityReservationError::Effect(
+                    d2b_core_controller::authority::AuthorityError::StartupRehydrationRequired,
+                ),
+            );
+        }
+        AuthorityReservation::reserve_durable(
+            Arc::clone(&self.authority_index),
+            self.authority_persistence.clone(),
+            operation_id,
+            request,
+        )
+        .await
+    }
+
+    /// Reserve an external physical-NIC claim through the same durable
+    /// startup-barrier owner as generic Host-global claims.
+    pub async fn reserve_external_nic(
+        &self,
+        operation_id: impl Into<String>,
+        request: ExternalNicClaimRequest,
+    ) -> Result<
+        ExternalNicReservation,
+        d2b_core_controller::authority::AuthorityReservationError<
+            d2b_core_controller::authority::AuthorityError,
+        >,
+    > {
+        if !self.authority_index.lock().await.is_ready_for_readiness() {
+            return Err(
+                d2b_core_controller::authority::AuthorityReservationError::Effect(
+                    d2b_core_controller::authority::AuthorityError::StartupRehydrationRequired,
+                ),
+            );
+        }
+        ExternalNicReservation::reserve_durable(
+            Arc::clone(&self.authority_index),
+            self.authority_persistence.clone(),
+            operation_id,
+            request,
+        )
+        .await
+    }
+
+    /// Resolve one recovered authority after the authoritative effect is
+    /// observed closed. Persistence must complete before the holder is
+    /// removed from the in-memory index.
+    pub async fn resolve_recovered_authority_closed(
+        &self,
+        operation_id: &str,
+    ) -> Result<(), d2b_core_controller::authority_persistence::AuthorityPersistenceError> {
+        self.authority_recovery
+            .resolve_observed_closed(operation_id)
+            .await
+    }
+
+    /// Mark one recovered operation observed and adopted without releasing
+    /// its authority holder.
+    pub async fn resolve_recovered_authority_adopted(
+        &self,
+        operation_id: &str,
+    ) -> Result<(), d2b_core_controller::authority_persistence::AuthorityPersistenceError> {
+        self.authority_recovery
+            .resolve_observed_and_adopted(operation_id)
+            .await
+    }
+
+    /// Quarantine one recovered operation when observation is ambiguous.
+    pub async fn quarantine_recovered_authority(
+        &self,
+        operation_id: &str,
+    ) -> Result<(), d2b_core_controller::authority_persistence::AuthorityPersistenceError> {
+        self.authority_recovery.quarantine(operation_id).await
+    }
+
     /// Return the first startup gate that prevents publication.
     pub fn readiness_error(&self) -> Option<ResourceRuntimeError> {
         if !self.policy_installed {
@@ -340,6 +657,15 @@ impl ZoneResourceRuntime {
         }
         if !self.watch_admitted {
             return Some(ResourceRuntimeError::WatchUnavailable);
+        }
+        if !self.readiness.authority_ready
+            || self
+                .authority_index
+                .try_lock()
+                .map(|index| !index.is_ready_for_readiness())
+                .unwrap_or(true)
+        {
+            return Some(ResourceRuntimeError::AuthorityUnavailable);
         }
         if !self.readiness.provider_path_ready {
             return Some(ResourceRuntimeError::ProviderPathUnavailable);
@@ -393,11 +719,11 @@ impl ZoneResourceRuntime {
         &self,
         request: &Value,
     ) -> Result<Value, ResourceRuntimeError> {
-        self.dispatch_cli_request_with_subject(request, None).await
+        self.dispatch_public_cli_request(request).await
     }
 
-    /// Dispatch the public socket compatibility route without treating its
-    /// peer-role admission as a Zone ComponentSession.
+    /// Refuse the public compatibility route until an authenticated
+    /// ComponentSession is registered by the ZoneRegistrar.
     pub async fn dispatch_public_cli_request(
         &self,
         request: &Value,
@@ -416,125 +742,19 @@ impl ZoneResourceRuntime {
         if !route_service_matches(request.get("service"), method)? {
             return Err(ResourceRuntimeError::RouteMismatch);
         }
-        if let Some(error) = self.readiness_error() {
-            return Ok(resource_error_envelope(&readiness_resource_error(error)));
-        }
-        // A public peer role is not a ComponentSession. Keep this branch
-        // unreachable for ResourceService calls even if another startup path
-        // later makes the store and policy ready.
         Ok(resource_error_envelope(&readiness_resource_error(
             ResourceRuntimeError::AuthenticationUnavailable,
         )))
     }
 
-    /// Dispatch a request carrying an authenticated local session context.
-    ///
-    /// The context is supplied by the authenticated Zone/session boundary,
-    /// never decoded from the request. The current public daemon path does
-    /// not have this binding and consequently uses the public compatibility
-    /// route, which fails closed.
-    #[allow(dead_code)]
-    pub(crate) async fn dispatch_authenticated_cli_request(
+    /// Publish terminal broker evidence into the live store join index.
+    pub fn ingest_broker_evidence(
         &self,
-        request: &Value,
-        subject: AuthenticatedSubjectContext,
-    ) -> Result<Value, ResourceRuntimeError> {
-        self.dispatch_cli_request_with_subject(request, Some(&subject))
-            .await
-    }
-
-    async fn dispatch_cli_request_with_subject(
-        &self,
-        request: &Value,
-        subject: Option<&AuthenticatedSubjectContext>,
-    ) -> Result<Value, ResourceRuntimeError> {
-        let requested_zone = request
-            .get("zoneRef")
-            .and_then(Value::as_str)
-            .ok_or(ResourceRuntimeError::RequestInvalid)?;
-        if requested_zone != format!("Zone/{}", self.zone.as_str()) {
-            return Err(ResourceRuntimeError::RouteMismatch);
-        }
-        let method = request
-            .get("method")
-            .and_then(Value::as_str)
-            .ok_or(ResourceRuntimeError::RequestInvalid)?;
-        if !route_service_matches(request.get("service"), method)? {
-            return Err(ResourceRuntimeError::RouteMismatch);
-        }
-        if let Some(error) = self.readiness_error() {
-            return Ok(resource_error_envelope(&readiness_resource_error(error)));
-        }
-        match method {
-            "Get" => {
-                let target = request
-                    .get("resourceRef")
-                    .and_then(Value::as_str)
-                    .and_then(|value| ResourceRef::parse(value).ok())
-                    .ok_or(ResourceRuntimeError::RequestInvalid)?;
-                let operation_id = operation_id(request)?;
-                let Some(subject) = subject else {
-                    return Ok(resource_error_envelope(&identity_unbound_error()));
-                };
-                if !subject_matches_runtime(subject, &self.zone) {
-                    return Ok(resource_error_envelope(&identity_unbound_error()));
-                }
-                let resource = match self
-                    .api
-                    .get_runtime(
-                        subject.clone(),
-                        self.authorization_state.clone(),
-                        target,
-                        operation_id,
-                    )
-                    .await
-                {
-                    Ok(resource) => resource,
-                    Err(error) => return Ok(resource_error_envelope(&error)),
-                };
-                match decode_resource_result(&resource.canonical_json) {
-                    Ok(value) => Ok(value),
-                    Err(error) => Ok(resource_error_envelope(&error)),
-                }
-            }
-            "List" => {
-                let query = match parse_list_request(request) {
-                    Ok(query) => query,
-                    Err(ResourceRuntimeError::CapabilityUnavailable) => {
-                        return Ok(resource_error_envelope(&capability_error()));
-                    }
-                    Err(error) => return Err(error),
-                };
-                let operation_id = operation_id(request)?;
-                let Some(subject) = subject else {
-                    return Ok(resource_error_envelope(&identity_unbound_error()));
-                };
-                if !subject_matches_runtime(subject, &self.zone) {
-                    return Ok(resource_error_envelope(&identity_unbound_error()));
-                }
-                let result = match self.list_authenticated(subject, query, operation_id).await {
-                    Ok(result) => result,
-                    Err(error) => return Ok(resource_error_envelope(&error)),
-                };
-                Ok(result)
-            }
-            "ZoneList" | "ZoneStatus" => {
-                if let Err(error) = self.require_ready() {
-                    return Ok(resource_error_envelope(&readiness_resource_error(error)));
-                }
-                let core_stage = self.core_stage()?;
-                Ok(json!({
-                    "zoneRef": format!("Zone/{}", self.zone.as_str()),
-                    "store": "ready",
-                    "resourceApi": "ready",
-                    "core": format!("{core_stage:?}"),
-                }))
-            }
-            "Watch" | "Status" | "Create" | "Update" | "UpdateSpec" | "UpdateStatus"
-            | "UpdateMetadata" | "UpdateFinalizers" | "Delete" | "Upgrade" | "Reconcile"
-            | "ProcessAttach" => Ok(resource_error_envelope(&capability_error())),
-            _ => Err(ResourceRuntimeError::RequestInvalid),
-        }
+        evidence: DurabilityEvidence,
+    ) -> Result<(), ResourceRuntimeError> {
+        self.store
+            .ingest_broker_evidence(evidence)
+            .map_err(|_| ResourceRuntimeError::StoreOpenFailed)
     }
 
     /// Close the production redb workers before the runtime is discarded.
@@ -543,92 +763,19 @@ impl ZoneResourceRuntime {
             store,
             backend,
             api,
+            authority_persistence,
+            authority_recovery,
             ..
         } = self;
         drop(api);
         drop(backend);
+        drop(authority_persistence);
+        drop(authority_recovery);
         let store = Arc::try_unwrap(store).map_err(|_| ResourceRuntimeError::CoreStartupFailed)?;
         store
             .shutdown()
             .await
             .map_err(|_| ResourceRuntimeError::StoreOpenFailed)
-    }
-
-    async fn list_authenticated(
-        &self,
-        subject: &AuthenticatedSubjectContext,
-        query: ParsedListRequest,
-        operation_id: String,
-    ) -> Result<Value, ResourceError> {
-        // ResourceService::list_runtime currently exposes only the default
-        // collection query. Keep the richer public List contract on the same
-        // native authorizer and checked backend ordering rather than dropping
-        // its selectors or inventing a second mutation path.
-        let zone = ZoneId::parse(subject.zone_ref().name().as_str())
-            .map_err(|_| resource_result_error("authenticated Zone is invalid"))?;
-        let targets = if query.resource_names.is_empty() {
-            query
-                .resource_types
-                .iter()
-                .cloned()
-                .map(|resource_type| AuthorizationTarget {
-                    resource_type,
-                    resource_name: None,
-                    verb: ResourceVerb::List,
-                    subresource: None,
-                    execution_ref: None,
-                })
-                .collect()
-        } else {
-            query
-                .resource_types
-                .iter()
-                .cloned()
-                .flat_map(|resource_type| {
-                    query
-                        .resource_names
-                        .iter()
-                        .cloned()
-                        .map(move |resource_name| AuthorizationTarget {
-                            resource_type: resource_type.clone(),
-                            resource_name: Some(resource_name),
-                            verb: ResourceVerb::List,
-                            subresource: None,
-                            execution_ref: None,
-                        })
-                })
-                .collect()
-        };
-        let authorization = AuthorizationRequest {
-            method: ApiMethod::List,
-            zone: zone.clone(),
-            targets,
-        };
-        self.authorizer
-            .authorize(subject, &authorization, &self.authorization_state)
-            .map_err(authorization_error)?;
-
-        let result = self
-            .backend
-            .list(StoreListRequest {
-                operation: StoreOperationContext {
-                    operation_id: operation_id.clone(),
-                    idempotency_key: None,
-                    correlation_id: operation_id,
-                    trace_id: None,
-                    deadline_ms: DEFAULT_REQUEST_DEADLINE_MS,
-                },
-                zone,
-                resource_types: query.resource_types,
-                resource_names: query.resource_names,
-                filters: query.filters,
-                page_size: query.page_size,
-                cursor: query.cursor,
-                projection: query.projection,
-            })
-            .await
-            .map_err(d2b_resource_api::error::map_store_error)?;
-        encode_list_result(result)
     }
 }
 
@@ -648,20 +795,7 @@ fn route_service_matches(
     })
 }
 
-const MAX_OPERATION_ID_BYTES: usize = 128;
-
-fn operation_id(request: &Value) -> Result<String, ResourceRuntimeError> {
-    match request.get("operationId") {
-        None => Ok("cli-resource".to_owned()),
-        Some(Value::String(value))
-            if !value.is_empty() && value.len() <= MAX_OPERATION_ID_BYTES =>
-        {
-            Ok(value.clone())
-        }
-        _ => Err(ResourceRuntimeError::RequestInvalid),
-    }
-}
-
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ParsedListRequest {
     resource_types: Vec<ResourceTypeName>,
@@ -672,6 +806,7 @@ struct ParsedListRequest {
     projection: StoreProjection,
 }
 
+#[cfg(test)]
 fn parse_list_request(request: &Value) -> Result<ParsedListRequest, ResourceRuntimeError> {
     const LIST_FIELDS: &[&str] = &[
         "service",
@@ -862,6 +997,7 @@ fn parse_list_request(request: &Value) -> Result<ParsedListRequest, ResourceRunt
     })
 }
 
+#[cfg(test)]
 fn parse_resource_names(request: &Value) -> Result<Vec<ResourceName>, ResourceRuntimeError> {
     let Some(value) = request.get("resourceNames") else {
         return Ok(Vec::new());
@@ -888,6 +1024,7 @@ fn parse_resource_names(request: &Value) -> Result<Vec<ResourceName>, ResourceRu
         .collect()
 }
 
+#[cfg(test)]
 fn parse_typed_filters(request: &Value) -> Result<Vec<StoreFilter>, ResourceRuntimeError> {
     let Some(value) = request.get("filters") else {
         return Ok(Vec::new());
@@ -934,6 +1071,7 @@ fn parse_typed_filters(request: &Value) -> Result<Vec<StoreFilter>, ResourceRunt
         .collect()
 }
 
+#[cfg(test)]
 fn typed_filter(field: &str, values: Vec<String>) -> Result<StoreFilter, ResourceRuntimeError> {
     if field.is_empty()
         || field.len() > 64
@@ -966,6 +1104,7 @@ fn typed_filter(field: &str, values: Vec<String>) -> Result<StoreFilter, Resourc
     })
 }
 
+#[cfg(test)]
 fn optional_capability_string(
     request: &Value,
     field: &str,
@@ -987,6 +1126,7 @@ fn optional_capability_string(
     Ok(())
 }
 
+#[cfg(test)]
 fn aliased_cursor(request: &Value) -> Result<Option<String>, ResourceRuntimeError> {
     let mut values = Vec::new();
     for field in ["cursor", "pageCursor", "pageToken"] {
@@ -1008,6 +1148,7 @@ fn aliased_cursor(request: &Value) -> Result<Option<String>, ResourceRuntimeErro
     Ok(values.into_iter().next().filter(|value| !value.is_empty()))
 }
 
+#[cfg(test)]
 fn aliased_page_size(request: &Value) -> Result<u32, ResourceRuntimeError> {
     let mut values = Vec::new();
     for field in ["pageSize", "limit"] {
@@ -1029,6 +1170,7 @@ fn aliased_page_size(request: &Value) -> Result<u32, ResourceRuntimeError> {
     Ok(values.first().copied().unwrap_or(DEFAULT_LIST_PAGE_SIZE))
 }
 
+#[cfg(test)]
 fn parse_projection(value: Option<&Value>) -> Result<StoreProjection, ResourceRuntimeError> {
     let Some(value) = value else {
         return Ok(StoreProjection::Full);
@@ -1057,12 +1199,14 @@ fn parse_projection(value: Option<&Value>) -> Result<StoreProjection, ResourceRu
     }
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 fn drive_core_startup(
     core: &mut CoreProcess,
     readiness: CoreRuntimeReadiness,
     recovery: RecoverySnapshot,
+    authority_index: &HostGlobalAuthorityIndex,
 ) -> Result<StartupStage, ResourceRuntimeError> {
-    core.start_production(readiness, recovery)
+    core.start_production(readiness, recovery, authority_index)
         .map_err(map_startup_error)?;
     core.publish_readiness().map_err(map_startup_error)
 }
@@ -1074,6 +1218,7 @@ fn map_startup_error(error: StartupError) -> ResourceRuntimeError {
         }
         StartupError::AuthenticationUnavailable => ResourceRuntimeError::AuthenticationUnavailable,
         StartupError::WatchAdmissionUnavailable => ResourceRuntimeError::WatchUnavailable,
+        StartupError::AuthorityRehydrationUnavailable => ResourceRuntimeError::AuthorityUnavailable,
         StartupError::MandatoryHandlerNotReady => ResourceRuntimeError::HandlerNotReady,
         StartupError::RuntimeNotReady | StartupError::InvalidRecoverySnapshot => {
             ResourceRuntimeError::CoreStartupFailed
@@ -1081,60 +1226,31 @@ fn map_startup_error(error: StartupError) -> ResourceRuntimeError {
     }
 }
 
-fn subject_matches_runtime(subject: &AuthenticatedSubjectContext, zone: &ZoneId) -> bool {
-    subject.zone_ref().resource_type().as_str() == "Zone"
-        && subject.zone_ref().name().as_str() == zone.as_str()
-        && subject.evidence_class() == EvidenceClass::UnixPeer
-        && subject.transport_binding().locality() == Locality::Local
-}
-
-fn identity_unbound_error() -> ResourceError {
-    ResourceError::new(
-        ResourceErrorKind::AuthorizationDenied,
-        None,
-        None,
-        RetryClass::Reauthorize,
-        d2b_contracts::v3::ResourceErrorReason::parse(
-            "authenticated resource subject is unavailable",
-        )
-        .expect("fixed resource error reason"),
-    )
-    .expect("fixed resource error fields")
-}
-
-fn authorization_error(denial: AuthorizationDenial) -> ResourceError {
-    let reason = match denial {
-        AuthorizationDenial::PolicyUnavailable => "installed resource policy is unavailable",
-        AuthorizationDenial::PolicyRevisionChanged => "resource policy revision changed",
-        AuthorizationDenial::ZoneMismatch => "resource zone authorization boundary denied",
-        AuthorizationDenial::NoMatchingGrant => "resource authorization denied",
-        AuthorizationDenial::RelayOriginInvalid => "resource relay origin denied",
-        AuthorizationDenial::RelayGrantMissing => "resource relay grant unavailable",
-        AuthorizationDenial::RelayTargetGrantMissing => "resource relay target denied",
-        AuthorizationDenial::BootstrapDenied => "resource bootstrap authorization denied",
-        AuthorizationDenial::UnknownResourceType => "resource type is not installed",
-    };
-    ResourceError::new(
-        denial.resource_error_kind(),
-        None,
-        None,
-        RetryClass::Reauthorize,
-        ResourceErrorReason::parse(reason).expect("fixed authorization error reason"),
-    )
-    .expect("fixed authorization error fields")
-}
-
 fn readiness_resource_error(error: ResourceRuntimeError) -> ResourceError {
     let (kind, retry_class, reason) = match error {
-        ResourceRuntimeError::PolicyUnavailable
-        | ResourceRuntimeError::ControllerEndpointUnavailable
-        | ResourceRuntimeError::AuthenticationUnavailable
-        | ResourceRuntimeError::IdentityUnbound => (
+        ResourceRuntimeError::PolicyUnavailable => (
             ResourceErrorKind::AuthorizationDenied,
             RetryClass::Reauthorize,
-            "authenticated zone session and installed policy are unavailable",
+            "installed resource policy is unavailable",
         ),
-        ResourceRuntimeError::WatchUnavailable | ResourceRuntimeError::HandlerNotReady => (
+        ResourceRuntimeError::AuthenticationUnavailable => (
+            ResourceErrorKind::AuthorizationDenied,
+            RetryClass::Reauthorize,
+            "ZoneRegistrar ComponentSession route is unavailable",
+        ),
+        ResourceRuntimeError::IdentityUnbound => (
+            ResourceErrorKind::AuthorizationDenied,
+            RetryClass::Reauthorize,
+            "authenticated resource subject is unavailable",
+        ),
+        ResourceRuntimeError::ControllerEndpointUnavailable => (
+            ResourceErrorKind::ResourcePlaneUnavailable,
+            RetryClass::AfterDelay,
+            "registered Resource API endpoint is unavailable",
+        ),
+        ResourceRuntimeError::WatchUnavailable
+        | ResourceRuntimeError::AuthorityUnavailable
+        | ResourceRuntimeError::HandlerNotReady => (
             ResourceErrorKind::ResourcePlaneUnavailable,
             RetryClass::AfterDelay,
             "zone resource runtime is still converging",
@@ -1155,17 +1271,12 @@ fn readiness_resource_error(error: ResourceRuntimeError) -> ResourceError {
     .expect("fixed readiness error fields")
 }
 
-fn capability_error() -> ResourceError {
-    ResourceError::terminal(
-        ResourceErrorKind::UnsupportedCapability,
-        "resource operation is not registered on the Zone service",
-    )
-}
-
+#[cfg(test)]
 fn resource_result_error(reason: &'static str) -> ResourceError {
     ResourceError::terminal(ResourceErrorKind::InternalIntegrityFailure, reason)
 }
 
+#[cfg(test)]
 fn decode_resource_result(bytes: &[u8]) -> Result<Value, ResourceError> {
     if bytes.len() > MAX_RESPONSE_CANONICAL_BYTES {
         return Err(resource_result_error(
@@ -1180,6 +1291,7 @@ fn decode_resource_result(bytes: &[u8]) -> Result<Value, ResourceError> {
     Ok(value)
 }
 
+#[cfg(test)]
 fn encode_list_result(result: StoreListResult) -> Result<Value, ResourceError> {
     let resources = result
         .resources
@@ -1329,6 +1441,17 @@ impl ResourcePlane {
             .ok_or(ResourceRuntimeError::PlaneUnavailable)
     }
 
+    /// Ingest one terminal broker result into every Zone's shared live index.
+    pub fn ingest_broker_evidence(
+        &self,
+        evidence: DurabilityEvidence,
+    ) -> Result<(), ResourceRuntimeError> {
+        for runtime in self.zones.values() {
+            runtime.ingest_broker_evidence(evidence.clone())?;
+        }
+        Ok(())
+    }
+
     /// Return the number of ready Zone runtimes.
     pub fn ready_zone_count(&self) -> usize {
         self.zones
@@ -1380,28 +1503,6 @@ impl ResourcePlane {
 fn runtime_authorizer() -> Result<NativeAuthorizer, ResourceRuntimeError> {
     NativeAuthorizer::new(ApiCatalog::standard(), None)
         .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)
-}
-
-fn runtime_authorization_state() -> Result<AuthorizationState, ResourceRuntimeError> {
-    Ok(AuthorizationState {
-        snapshot: PolicySnapshot {
-            // No policy is installed at this seam. Zero is the explicit
-            // unavailable/bootstrap revision; a nonzero revision without a
-            // matching PolicySet would make the API look configured while
-            // every request is denied internally.
-            policy_revision: 0,
-            api_catalog_revision: 1,
-            active_configuration_revision: ConfigurationGeneration::new(1)
-                .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?,
-            controller_generation: Some(
-                ControllerGeneration::new(1)
-                    .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?,
-            ),
-        },
-        zone_policy_revision: ZoneRevision::new(1),
-        bootstrap_phase: d2b_resource_api::authz::BootstrapPhase::Disabled,
-        now_tick: 1,
-    })
 }
 
 fn store_identity(
@@ -1466,10 +1567,14 @@ fn stable_uid(domain: &str, value: &str) -> ResourceUid {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{fs::OpenOptions, os::fd::AsRawFd};
+    use std::{fs::OpenOptions, os::fd::AsRawFd, sync::Arc};
 
     use d2b_resource_store::mutation_seal::mutation_seal_pair;
     use d2b_resource_store_redb::write_provisioning_marker;
+
+    fn test_audit_sink(directory: &std::path::Path, name: &str) -> Arc<AuditSink> {
+        Arc::new(AuditSink::open(directory.join(name)).unwrap())
+    }
 
     #[test]
     fn stable_identity_is_repeatable_and_uuid_v4_shaped() {
@@ -1479,19 +1584,9 @@ mod tests {
     }
 
     #[test]
-    fn unavailable_policy_never_uses_a_nonzero_revision() {
-        assert_eq!(
-            runtime_authorization_state()
-                .unwrap()
-                .snapshot
-                .policy_revision,
-            0
-        );
-    }
-
-    #[test]
     fn core_progression_reaches_handler_gate_before_readiness_check() {
         let mut core = CoreProcess::new();
+        let authority = HostGlobalAuthorityIndex::new_for_tests_ready();
         let result = drive_core_startup(
             &mut core,
             CoreRuntimeReadiness {
@@ -1502,6 +1597,7 @@ mod tests {
                 authenticated_system_core_session: true,
             },
             RecoverySnapshot {
+                startup_epoch: 0,
                 checkpoint_revision: 0,
                 active_configuration_revision: 1,
                 provider_lease_count: 0,
@@ -1509,6 +1605,7 @@ mod tests {
                 ambiguous_operation_count: 0,
                 watch_admitted: true,
             },
+            &authority,
         );
         assert_eq!(result, Err(ResourceRuntimeError::HandlerNotReady));
         assert_eq!(core.stage(), StartupStage::ReconcilingSystemCore);
@@ -1658,9 +1755,15 @@ mod tests {
             .unwrap();
         write_provisioning_marker(&mut marker, &identity).unwrap();
         let (_, acceptor) = mutation_seal_pair(identity.seal_identity());
-        let provisioned = RedbResourceStore::provision_owned(database, marker, identity, acceptor)
-            .await
-            .unwrap();
+        let provisioned = RedbResourceStore::provision_owned_with_audit(
+            database,
+            marker,
+            identity,
+            acceptor,
+            test_audit_sink(directory.path(), "audit-provision"),
+        )
+        .await
+        .unwrap();
         provisioned.shutdown().await.unwrap();
 
         let database = OpenOptions::new()
@@ -1687,6 +1790,7 @@ mod tests {
                     fd_index: 0,
                 },
                 database_fd: database.into(),
+                external_inventory: None,
             },
         )
         .await
@@ -1771,6 +1875,7 @@ mod tests {
                     fd_index: 0,
                 },
                 database_fd: database.into(),
+                external_inventory: None,
             },
         )
         .await
@@ -1789,5 +1894,166 @@ mod tests {
         drop(owner);
         assert!(!plane.has_live_request_owners());
         plane.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn production_runtime_rejects_immutable_store_identity_mismatch() {
+        let directory = tempfile::tempdir().unwrap();
+        let database_path = directory.path().join("store.redb");
+        let marker_path = directory.path().join(".d2b-store-marker");
+        let zone = ZoneId::parse("work").unwrap();
+        let stored_identity = "sha256:".to_owned() + &"e".repeat(64);
+        let identity = store_identity(&zone, &stored_identity).unwrap();
+        let database = OpenOptions::new()
+            .create_new(true)
+            .read(true)
+            .write(true)
+            .open(&database_path)
+            .unwrap();
+        let mut marker = OpenOptions::new()
+            .create_new(true)
+            .read(true)
+            .write(true)
+            .open(&marker_path)
+            .unwrap();
+        write_provisioning_marker(&mut marker, &identity).unwrap();
+        let provisioned = RedbResourceStore::provision_owned_with_audit(
+            database,
+            marker,
+            identity,
+            mutation_seal_pair(
+                store_identity(&zone, &stored_identity)
+                    .unwrap()
+                    .seal_identity(),
+            )
+            .1,
+            test_audit_sink(directory.path(), "audit-mismatch"),
+        )
+        .await
+        .unwrap();
+        provisioned.shutdown().await.unwrap();
+
+        let database = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&database_path)
+            .unwrap();
+        let result = ZoneResourceRuntime::open(
+            zone,
+            OpenedZoneStore {
+                response: OpenZoneStoreResponse {
+                    zone_store_id: d2b_contracts::v3::storage::ZoneStoreId::parse(
+                        "zone-store-work",
+                    )
+                    .unwrap(),
+                    store_identity: "sha256:".to_owned() + &"f".repeat(64),
+                    disposition: ZoneStoreDisposition::Opened,
+                    fd_index: 0,
+                },
+                database_fd: database.into(),
+                external_inventory: None,
+            },
+        )
+        .await;
+        assert!(matches!(result, Err(ResourceRuntimeError::StoreOpenFailed)));
+    }
+
+    #[tokio::test]
+    async fn public_reads_remain_fail_closed_after_restart_revisions_rehydrate() {
+        let directory = tempfile::tempdir().unwrap();
+        let database_path = directory.path().join("store.redb");
+        let zone = ZoneId::parse("work").unwrap();
+        let marker_identity = "sha256:".to_owned() + &"d".repeat(64);
+        let revisions = PolicySnapshot {
+            policy_revision: 7,
+            api_catalog_revision: 8,
+            active_configuration_revision: ConfigurationGeneration::new(9).unwrap(),
+            controller_generation: Some(ControllerGeneration::new(10).unwrap()),
+        };
+        let identity = store_identity(&zone, &marker_identity)
+            .unwrap()
+            .with_revisions(revisions);
+
+        let database = OpenOptions::new()
+            .create_new(true)
+            .read(true)
+            .write(true)
+            .open(&database_path)
+            .unwrap();
+        let mut marker = OpenOptions::new()
+            .create_new(true)
+            .read(true)
+            .write(true)
+            .open(directory.path().join(".d2b-store-marker"))
+            .unwrap();
+        write_provisioning_marker(&mut marker, &identity).unwrap();
+        let provisioned = RedbResourceStore::provision_owned_with_audit(
+            database,
+            marker,
+            identity,
+            mutation_seal_pair(
+                store_identity(&zone, &marker_identity)
+                    .unwrap()
+                    .with_revisions(revisions)
+                    .seal_identity(),
+            )
+            .1,
+            test_audit_sink(directory.path(), "audit-rehydrate"),
+        )
+        .await
+        .unwrap();
+        provisioned.shutdown().await.unwrap();
+
+        let database = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&database_path)
+            .unwrap();
+        let runtime = ZoneResourceRuntime::open(
+            zone.clone(),
+            OpenedZoneStore {
+                response: OpenZoneStoreResponse {
+                    zone_store_id: d2b_contracts::v3::storage::ZoneStoreId::parse(
+                        "zone-store-work",
+                    )
+                    .unwrap(),
+                    store_identity: marker_identity,
+                    disposition: ZoneStoreDisposition::Opened,
+                    fd_index: 0,
+                },
+                database_fd: database.into(),
+                external_inventory: None,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(runtime.store_metadata.policy_snapshot, revisions);
+
+        let peer_route = runtime
+            .dispatch_public_cli_request(&json!({
+                "method": "List",
+                "zoneRef": "Zone/work",
+                "resourceType": "Host",
+            }))
+            .await
+            .unwrap();
+        assert_eq!(
+            peer_route["error"]["kind"], "authorization-denied",
+            "local lifecycle admission must not mint a Resource API subject"
+        );
+        assert_eq!(
+            peer_route["error"]["message"],
+            "ZoneRegistrar ComponentSession route is unavailable"
+        );
+        let direct_delete = runtime
+            .dispatch_public_cli_request(&json!({
+                "method": "Delete",
+                "zoneRef": "Zone/work",
+                "resourceRef": "Host/host-system",
+            }))
+            .await
+            .unwrap();
+        assert_eq!(direct_delete["error"]["kind"], "authorization-denied");
+        runtime.shutdown().await.unwrap();
     }
 }

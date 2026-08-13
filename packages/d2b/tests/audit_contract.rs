@@ -130,7 +130,7 @@ fn audit_strict_returns_not_yet_implemented_envelope() {
 #[test]
 fn audit_relays_daemon_auditresponse_frames() {
     // In-process SOCK_SEQPACKET mock daemon: hello -> helloOk -> audit ->
-    // auditResponse{lines}. The CLI relays the lines to stdout verbatim.
+    // auditResponse{entries}. The CLI relays the records to stdout verbatim.
     let tmp = tempfile::tempdir().expect("tempdir");
     let sock = tmp.path().join("mock.sock");
     let handle = spawn_audit_mock_daemon(&sock);
@@ -156,6 +156,66 @@ fn audit_relays_daemon_auditresponse_frames() {
         String::from_utf8_lossy(&out.stdout),
         "broker audit line 1\nbroker audit line 2\n",
         "audit should relay the daemon auditResponse lines verbatim"
+    );
+}
+
+#[test]
+fn audit_rejects_legacy_lines_response() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let sock = tmp.path().join("mock-legacy-lines.sock");
+    let handle = spawn_single_audit_response_mock(
+        &sock,
+        serde_json::json!({
+            "type": "auditResponse",
+            "lines": ["legacy audit line"],
+            "complete": true,
+        }),
+    );
+
+    let out = Command::new(env!("CARGO_BIN_EXE_d2b"))
+        .args(["audit", "--human"])
+        .env("D2B_PUBLIC_SOCKET", &sock)
+        .output()
+        .expect("spawn d2b audit --human (legacy mock daemon)");
+
+    handle.join().expect("legacy mock daemon thread");
+
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "legacy audit lines must be rejected: stderr:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("failed to decode auditResponse"),
+        "legacy rejection should identify the audit response decode failure: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
+fn audit_relays_multiple_paginated_auditresponse_frames() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let sock = tmp.path().join("mock-paginated.sock");
+    let handle = spawn_paginated_audit_mock_daemon(&sock);
+
+    let out = Command::new(env!("CARGO_BIN_EXE_d2b"))
+        .args(["audit", "--human"])
+        .env("D2B_PUBLIC_SOCKET", &sock)
+        .output()
+        .expect("spawn d2b audit --human (paginated mock daemon)");
+
+    handle.join().expect("paginated mock daemon thread");
+
+    assert!(
+        out.status.success(),
+        "paginated audit should succeed; stderr:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "broker audit page 1\nbroker audit page 2\n",
+        "audit should concatenate all complete pages"
     );
 }
 
@@ -231,6 +291,20 @@ fn audit_admin_rejected_against_live_daemon_without_fallback() {
 /// Spawn a one-shot mock daemon that performs the audit handshake and returns
 /// an `auditResponse` with two lines. Returns the joinable server thread.
 fn spawn_audit_mock_daemon(path: &Path) -> std::thread::JoinHandle<()> {
+    spawn_single_audit_response_mock(
+        path,
+        serde_json::json!({
+            "type": "auditResponse",
+            "entries": [
+                {"sequence": 0, "record": "broker audit line 1"},
+                {"sequence": 1, "record": "broker audit line 2"},
+            ],
+            "complete": true,
+        }),
+    )
+}
+
+fn spawn_single_audit_response_mock(path: &Path, response: Value) -> std::thread::JoinHandle<()> {
     use nix::sys::socket::{
         AddressFamily, Backlog, SockFlag, SockType, UnixAddr, accept, bind, listen, socket,
     };
@@ -264,11 +338,84 @@ fn spawn_audit_mock_daemon(path: &Path) -> std::thread::JoinHandle<()> {
         // audit -> auditResponse
         let req = recv_frame(conn);
         assert_eq!(req["type"], "audit", "expected audit frame, got {req}");
+        send_frame(conn, &response);
+        let _ = nix::unistd::close(conn);
+    })
+}
+
+fn spawn_paginated_audit_mock_daemon(path: &Path) -> std::thread::JoinHandle<()> {
+    use d2b_contracts::broker_wire::AuditExportCursor;
+    use nix::sys::socket::{
+        AddressFamily, Backlog, SockFlag, SockType, UnixAddr, accept, bind, listen, socket,
+    };
+
+    let _ = std::fs::remove_file(path);
+    let listener = socket(
+        AddressFamily::Unix,
+        SockType::SeqPacket,
+        SockFlag::empty(),
+        None,
+    )
+    .expect("seqpacket socket");
+    let addr = UnixAddr::new(path.as_os_str().as_bytes()).expect("unix addr");
+    bind(listener.as_raw_fd(), &addr).expect("bind paginated mock sock");
+    listen(&listener, Backlog::new(1).unwrap()).expect("listen paginated mock sock");
+
+    std::thread::spawn(move || {
+        let conn = accept(listener.as_raw_fd()).expect("accept");
+        let hello = recv_frame(conn);
+        assert_eq!(hello["type"], "hello", "expected hello frame, got {hello}");
+        send_frame(
+            conn,
+            &serde_json::json!({
+                "type": "helloOk",
+                "serverVersion": "0.4.0",
+                "selectedVersion": "0.4.0",
+                "capabilities": ["typed-errors", "export-broker-audit"],
+            }),
+        );
+
+        let first_request = recv_frame(conn);
+        assert_eq!(
+            first_request["type"], "audit",
+            "expected first audit frame, got {first_request}"
+        );
+        let cursor = AuditExportCursor {
+            day: "2026-08-13".to_owned(),
+            line: 0,
+            sequence: 0,
+        };
         send_frame(
             conn,
             &serde_json::json!({
                 "type": "auditResponse",
-                "lines": ["broker audit line 1", "broker audit line 2"],
+                "entries": [{
+                    "sequence": 0,
+                    "record": "broker audit page 1"
+                }],
+                "nextCursor": cursor,
+                "complete": false,
+            }),
+        );
+
+        let second_request = recv_frame_with_timeout(conn);
+        assert_eq!(
+            second_request["type"], "audit",
+            "expected second audit frame, got {second_request}"
+        );
+        assert_eq!(
+            second_request["cursor"]["line"], 0,
+            "CLI must send the continuation cursor"
+        );
+        send_frame(
+            conn,
+            &serde_json::json!({
+                "type": "auditResponse",
+                "entries": [{
+                    "sequence": 1,
+                    "record": "broker audit page 2"
+                }],
+                "complete": true,
             }),
         );
         let _ = nix::unistd::close(conn);
@@ -284,6 +431,34 @@ fn recv_frame(fd: std::os::fd::RawFd) -> Value {
     let body = &buf[4..n];
     assert_eq!(body.len(), declared, "frame length mismatch");
     serde_json::from_slice(body).expect("frame json")
+}
+
+fn recv_frame_with_timeout(fd: std::os::fd::RawFd) -> Value {
+    use nix::errno::Errno;
+    use nix::sys::socket::{MsgFlags, recv};
+    use std::time::{Duration, Instant};
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut buf = vec![0u8; 1 << 20];
+    loop {
+        match recv(fd, &mut buf, MsgFlags::MSG_DONTWAIT) {
+            Ok(n) => {
+                assert!(n >= 4, "short frame ({n} bytes)");
+                let declared = u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]) as usize;
+                let body = &buf[4..n];
+                assert_eq!(body.len(), declared, "frame length mismatch");
+                return serde_json::from_slice(body).expect("frame json");
+            }
+            Err(error) if error == Errno::EAGAIN || error == Errno::EWOULDBLOCK => {
+                assert!(
+                    Instant::now() < deadline,
+                    "timed out waiting for paginated audit request"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(error) => panic!("receive paginated audit frame: {error}"),
+        }
+    }
 }
 
 fn send_frame(fd: std::os::fd::RawFd, payload: &Value) {

@@ -20,7 +20,7 @@ use d2b_contracts::{
     Hello as IpcHello, HelloOk as IpcHelloOk, HelloRejected as IpcHelloRejected, KnownFeatureFlag,
     SemverRange,
     broker_wire::{
-        ExportBrokerAuditResponse, StoreVerifyResponse as IpcStoreVerifyResponse,
+        AuditExportCursor, StoreVerifyResponse as IpcStoreVerifyResponse,
         StoreVerifyStatus as IpcStoreVerifyStatus,
     },
     cli_output::*,
@@ -91,9 +91,9 @@ pub(super) fn system_tool_command(program: &str) -> Command {
 /// `d2b host doctor --read-only` inspects. Mirrors
 /// `d2bd::DEFAULT_DAEMON_STATE_DIR`.
 pub(super) const DEFAULT_DAEMON_STATE_DIR: &str = "/var/lib/d2b/daemon-state";
-/// Canonical Prometheus scrape URL the doctor probes for reachability.
-/// See `docs/reference/daemon-metrics.md`.
-pub(super) const DEFAULT_METRICS_URL: &str = "http://127.0.0.1:9101/metrics";
+/// No default URL: d2bd does not serve an HTTP metrics endpoint.
+/// Set `D2B_METRICS_URL` when an external collector is available.
+pub(super) const DEFAULT_METRICS_URL: &str = "";
 pub(super) const MAX_REALM_ENTRYPOINTS_BYTES: u64 = 1024 * 1024;
 /// Default in-guest path of the editable guest config working copy. Only the
 /// legacy operator SSH transport honors a custom path; the guest-control
@@ -1370,12 +1370,12 @@ pub(super) struct ErrorFrame {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct AuditResponseFrame {
     #[serde(rename = "type")]
     _type_name: String,
     #[serde(flatten)]
-    payload: ExportBrokerAuditResponse,
+    payload: public_wire::AuditResponse,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1568,6 +1568,14 @@ pub(super) fn daemon_hello_frame(type_name: &str) -> Result<Vec<u8>, CliFailure>
 }
 
 pub(super) fn daemon_audit_frame(type_name: &str, json_mode: bool) -> Result<Vec<u8>, CliFailure> {
+    daemon_audit_frame_with_cursor(type_name, json_mode, None)
+}
+
+fn daemon_audit_frame_with_cursor(
+    type_name: &str,
+    json_mode: bool,
+    cursor: Option<AuditExportCursor>,
+) -> Result<Vec<u8>, CliFailure> {
     let request = IpcAuditRequest {
         filter: None,
         format: if json_mode {
@@ -1576,6 +1584,8 @@ pub(super) fn daemon_audit_frame(type_name: &str, json_mode: bool) -> Result<Vec
             IpcAuditFormat::Human
         },
         since: None,
+        cursor,
+        limit: 1024,
     };
     encode_type_tagged_message(type_name, &request, "audit request")
 }
@@ -1632,7 +1642,9 @@ pub(super) fn parse_hello_reply(response: &[u8]) -> Result<IpcHelloOk, CliFailur
     }
 }
 
-pub(super) fn parse_audit_reply(response: &[u8]) -> Result<Vec<String>, CliFailure> {
+fn parse_audit_page(
+    response: &[u8],
+) -> Result<(Vec<String>, Option<AuditExportCursor>, bool), CliFailure> {
     let value = decode_daemon_frame(response, "audit reply")?;
     let Some(type_name) = value.get("type").and_then(Value::as_str) else {
         return Err(CliFailure::new(
@@ -1642,7 +1654,29 @@ pub(super) fn parse_audit_reply(response: &[u8]) -> Result<Vec<String>, CliFailu
     };
     match type_name {
         "auditResponse" => serde_json::from_value::<AuditResponseFrame>(value)
-            .map(|frame| frame.payload.lines)
+            .map(|frame| {
+                let lines = frame
+                    .payload
+                    .entries
+                    .into_iter()
+                    .map(|entry| {
+                        entry
+                            .record
+                            .map(|record| match record {
+                                Value::String(line) => line,
+                                record => record.to_string(),
+                            })
+                            .unwrap_or_else(|| {
+                                serde_json::json!({
+                                    "export_error": entry.error,
+                                    "sequence": entry.sequence,
+                                })
+                                .to_string()
+                            })
+                    })
+                    .collect();
+                (lines, frame.payload.next_cursor, frame.payload.complete)
+            })
             .map_err(|err| CliFailure::new(1, format!("failed to decode auditResponse: {err}"))),
         "error" => {
             let frame: ErrorFrame = serde_json::from_value(value).map_err(|err| {
@@ -1655,6 +1689,10 @@ pub(super) fn parse_audit_reply(response: &[u8]) -> Result<Vec<String>, CliFailu
             format!("unexpected audit reply type {other}"),
         )),
     }
+}
+
+pub(super) fn parse_audit_reply(response: &[u8]) -> Result<Vec<String>, CliFailure> {
+    parse_audit_page(response).map(|(lines, _, _)| lines)
 }
 
 pub(super) fn render_daemon_audit_lines(
@@ -10478,14 +10516,33 @@ pub(super) fn try_audit_via_socket(
         .recv_frame()
         .map_err(|err| CliFailure::new(1, format!("failed to receive hello reply: {err}")))?;
     let _ = parse_hello_reply(&hello_response)?;
-    let request = daemon_audit_frame("audit", json_mode)?;
-    socket
-        .send_frame(&request)
-        .map_err(|err| CliFailure::new(1, format!("failed to send audit request: {err}")))?;
-    let response = socket
-        .recv_frame()
-        .map_err(|err| CliFailure::new(1, format!("failed to receive audit reply: {err}")))?;
-    parse_audit_reply(&response).map(AuditSocketOutcome::Lines)
+    let mut cursor = None;
+    let mut lines = Vec::new();
+    for _ in 0..1024 {
+        let request = daemon_audit_frame_with_cursor("audit", json_mode, cursor.clone())?;
+        socket
+            .send_frame(&request)
+            .map_err(|err| CliFailure::new(1, format!("failed to send audit request: {err}")))?;
+        let response = socket
+            .recv_frame()
+            .map_err(|err| CliFailure::new(1, format!("failed to receive audit reply: {err}")))?;
+        let (page, next_cursor, complete) = parse_audit_page(&response)?;
+        lines.extend(page);
+        if complete {
+            return Ok(AuditSocketOutcome::Lines(lines));
+        }
+        cursor = next_cursor;
+        if cursor.is_none() {
+            return Err(CliFailure::new(
+                1,
+                "audit export pagination omitted continuation metadata",
+            ));
+        }
+    }
+    Err(CliFailure::new(
+        1,
+        "audit export exceeded the bounded pagination limit",
+    ))
 }
 
 pub(super) fn try_keys_list_via_socket(

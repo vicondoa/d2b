@@ -235,7 +235,7 @@ non-bootstrap dispatcher as well as the cgroup paths documented here:
 
 - `Hello { client_version }`
 - `ValidateBundle {}`
-- `ExportBrokerAudit { since, filter }`
+- `ExportBrokerAudit { since, filter, cursor, limit }`
 - `ApplyNftables { bundle_nft_intent_ref, scope_id, desired_hash, destroy }`
 - `ApplyRoute { bundle_route_intent_ref, destination, via, destroy }`
 - `ApplyNmUnmanaged { bundle_nm_intent_ref, scope_id, destroy }`

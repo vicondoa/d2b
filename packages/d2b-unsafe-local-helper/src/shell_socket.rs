@@ -179,23 +179,55 @@ fn remove_if_exact_socket(path: &Path, owner_uid: u32, identity: Option<(u64, u6
 mod tests {
     use super::*;
     use nix::unistd::Uid;
+    use std::ops::Deref;
     use std::os::fd::{AsFd, AsRawFd};
 
-    fn scratch() -> PathBuf {
-        let mut random = [0u8; 4];
-        getrandom::getrandom(&mut random).unwrap();
-        let suffix = random
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>();
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .and_then(Path::parent)
-            .unwrap();
-        let path = root.join(format!(".d2bt-{suffix}"));
-        fs::create_dir_all(&path).unwrap();
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
-        path
+    struct Scratch {
+        path: PathBuf,
+    }
+
+    impl Scratch {
+        fn new() -> Self {
+            let root = std::env::temp_dir();
+            let pid = std::process::id();
+            for _ in 0..32 {
+                let mut random = [0u8; 4];
+                getrandom::getrandom(&mut random).unwrap();
+                let path = root.join(format!(
+                    "d2b-shell-{pid}-{:02x}{:02x}{:02x}{:02x}",
+                    random[0], random[1], random[2], random[3]
+                ));
+                if fs::create_dir(&path).is_ok() {
+                    fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+                    return Self { path };
+                }
+            }
+            panic!("could not reserve private temporary shell directory");
+        }
+    }
+
+    impl AsRef<Path> for Scratch {
+        fn as_ref(&self) -> &Path {
+            &self.path
+        }
+    }
+
+    impl Deref for Scratch {
+        type Target = Path;
+
+        fn deref(&self) -> &Self::Target {
+            &self.path
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+
+    fn scratch() -> Scratch {
+        Scratch::new()
     }
 
     #[test]

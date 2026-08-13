@@ -6,9 +6,33 @@
   "properties": {
     "accessPolicy": {},
     "attachmentPolicy": {},
-    "guestRef": {},
-    "providerRef": {},
-    "serviceRef": {},
+    "guestRef": {
+      "pattern": "^(?:Guest)/[a-z][a-z0-9-]{0,62}$",
+      "type": "string",
+      "x-d2b-allowed-ref-types": [
+        "Guest"
+      ],
+      "x-d2b-reference-kind": "ResourceRef",
+      "x-d2b-reference-scope": "same-zone"
+    },
+    "providerRef": {
+      "pattern": "^Provider/[a-z][a-z0-9-]{0,62}$",
+      "type": "string",
+      "x-d2b-allowed-ref-types": [
+        "Provider"
+      ],
+      "x-d2b-reference-kind": "ResourceRef",
+      "x-d2b-reference-scope": "same-zone"
+    },
+    "serviceRef": {
+      "pattern": "^usb\\.d2bus\\.org\\.UsbService\\/[a-z][a-z0-9-]{0,62}$",
+      "type": "string",
+      "x-d2b-allowed-ref-types": [
+        "usb.d2bus.org.UsbService"
+      ],
+      "x-d2b-reference-kind": "ResourceRef",
+      "x-d2b-reference-scope": "same-zone"
+    },
     "updatePolicy": {}
   },
   "required": [

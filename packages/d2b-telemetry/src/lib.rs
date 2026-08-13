@@ -13,14 +13,19 @@ pub mod redaction_guard;
 pub mod session_metrics_sink;
 pub mod trace_context;
 
-pub use audit_hash::{AuditChainLink, AuditHash, ChainVerificationError};
+pub use audit_hash::{AuditChainLink, AuditHash, ChainVerificationError, is_canonical_digest};
 pub use emitter::{
-    BoundedEmitter, DEFAULT_RING_CAPACITY_BYTES, DropSnapshot, EmitOutcome, EmitterError, Signal,
+    BoundedEmitter, DEFAULT_MAX_RETRY_ATTEMPTS, DEFAULT_RING_CAPACITY_BYTES,
+    DEFAULT_RING_CAPACITY_FRAMES, DEFAULT_RING_MAX_AGE, DropSnapshot, EmitOutcome, EmitterError,
+    Signal,
 };
 pub use metric_label_policy::{
     FORBIDDEN_LABEL_KEYS, FORBIDDEN_LABEL_SUFFIXES, IdentityCanaries, LabelDescriptor,
     MetricDescriptor, MetricPolicyError, OTEL_RESOURCE_ATTRIBUTES, allowed_values,
-    validate_data_point, validate_descriptor, validate_label_key, validate_labels,
+    canonical_descriptor, validate_data_point, validate_descriptor, validate_label_key,
+    validate_labels, validate_resource_attributes,
 };
 pub use redaction_guard::{RedactionError, RedactionGuard};
-pub use trace_context::{MAX_TRACE_FIELD_LEN, TraceContext};
+pub use trace_context::{
+    MAX_TRACE_FIELD_LEN, TRACE_CONTEXT_DIGEST_DOMAIN, TraceContext, canonical_export_id,
+};

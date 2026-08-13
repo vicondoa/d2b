@@ -26,6 +26,10 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use arc_swap::ArcSwapOption;
 use async_trait::async_trait;
+use d2b_audit::{
+    AuditSink, DurabilityEvidence, OperationIdentity, ZoneId as AuditZoneId, ZoneOperationKey,
+    evidence_from_decision_result,
+};
 use d2b_contracts::v3::storage::ZoneStoreId;
 use d2b_contracts::{
     BROKER_SOCKET_PATH, KnownFeatureFlag,
@@ -34,8 +38,10 @@ use d2b_contracts::{
         ApplyNftablesRequest as BrokerApplyNftablesRequest,
         ApplyNmUnmanagedRequest as BrokerApplyNmUnmanagedRequest,
         ApplyRouteRequest as BrokerApplyRouteRequest,
-        ApplySysctlRequest as BrokerApplySysctlRequest, BrokerCallerRole, BrokerErrorResponse,
-        BrokerRequest, BrokerRequestEnvelope, BrokerResponse, DeregisterRunnerPidfdRequest,
+        ApplySysctlRequest as BrokerApplySysctlRequest, AuditJoinContext, BrokerCallerRole,
+        BrokerErrorResponse, BrokerRequest, BrokerRequestEnvelope, BrokerResponse,
+        CanonicalAuditDigest, DeregisterRunnerPidfdRequest, ExportBrokerAuditRequest, HelloRequest,
+        LegacySwtpmMigrationOutcome, MigrateLegacySwtpmStateRequest,
         OpenPidfdRequest as BrokerOpenPidfdRequest,
         OpenZoneStoreRequest as BrokerOpenZoneStoreRequest,
         QemuMediaBootRequest as BrokerQemuMediaBootRequest,
@@ -187,6 +193,7 @@ pub mod net_route_preflight;
 pub mod pidfs_probe;
 // ADR 0034 startup contract check for generated storage/restart/sync artifacts.
 pub mod storage_lifecycle;
+pub mod tpm_effect_port;
 // Contract for bringing autostart VMs up on daemon startup (net VMs
 // first, concurrency cap, degraded-mode tolerant, idempotent). See
 // docs/reference/daemon-autostart.md.
@@ -218,6 +225,7 @@ pub mod provider_shutdown;
 // v3 Provider composition and descriptor-bound lifecycle effects. The
 // modules reuse the shared Provider registry and the typed broker lifecycle
 // path; they are initialized below after the trusted host bundle loads.
+mod authority_persistence;
 pub mod provider_effects;
 pub mod provider_registry;
 pub mod resource_runtime;
@@ -1477,12 +1485,11 @@ fn validate_gateway_host_relay_transition_guard(
     config: &GatewayFileConfig,
 ) -> Result<(), TypedError> {
     if config.allow_host_relay_credentials {
-        Err(gateway_display_config_error(
+        return Err(gateway_display_config_error(
             "host-held gateway credentials and relay send-bearer minting are retired; enroll inside gateway then retry",
-        ))
-    } else {
-        Ok(())
+        ));
     }
+    Ok(())
 }
 
 fn validate_waypipe_receiver_socket(path: &Path) -> Result<ValidatedWaypipeSocket, TypedError> {
@@ -1685,7 +1692,7 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
         daemon_uid: runtime_identity.daemon_uid.as_raw(),
         config,
         daemon_audit: Arc::new(daemon_audit::DaemonAuditLog::new(&daemon_state_dir)),
-        daemon_state_dir,
+        daemon_state_dir: daemon_state_dir.clone(),
         pidfd_table,
         broker_reap_log,
         metrics_registry: Arc::new(crate::metrics::Registry::new()),
@@ -1699,7 +1706,15 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
         conn_semaphore: concurrency::ConnSemaphore::new(resolve_max_inflight_connections()),
         op_locks: crate::concurrency::OpLockManager::new(),
         public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
-        provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
+        provider_runtime: Arc::new(
+            crate::provider_registry::ProviderRuntime::new_persistent(
+                daemon_state_dir.join("provider-lifecycle.json"),
+            )
+            .map_err(|_| TypedError::InternalIo {
+                context: "open provider lifecycle state".to_owned(),
+                detail: "provider lifecycle state unavailable".to_owned(),
+            })?,
+        ),
         resource_plane: Arc::new(Mutex::new(None)),
         typed_shell_session_targets: new_typed_shell_session_targets(),
         zone_coordinator: new_zone_coordinator(),
@@ -1745,31 +1760,45 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
                 restore_configuration_staging_on_startup(&state);
                 match open_resource_plane(&state, &resolver, provider_ready).await {
                     Ok(plane) => {
+                        for zone in plane.zone_ids() {
+                            audit_resource_plane(
+                                &state,
+                                &zone,
+                                daemon_audit::ResourcePlaneAction::Start,
+                                daemon_audit::ResourcePlaneResult::Ready,
+                            )
+                            .map_err(|error| {
+                                TypedError::InternalIo {
+                                    context: "authoritative resource-plane start audit".to_owned(),
+                                    detail: error.to_string(),
+                                }
+                            })?;
+                        }
                         if let Ok(mut slot) = state.resource_plane.lock() {
-                            for zone in plane.zone_ids() {
-                                audit_resource_plane(
-                                    &state,
-                                    &zone,
-                                    daemon_audit::ResourcePlaneAction::Start,
-                                    daemon_audit::ResourcePlaneResult::Ready,
-                                );
-                            }
                             *slot = Some(plane);
                         } else {
-                            tracing::error!(
-                                "resource plane state lock unavailable; refusing Zone runtime publication",
-                            );
+                            return Err(TypedError::InternalIo {
+                                context: "publish resource plane".to_owned(),
+                                detail: "resource-plane state lock unavailable".to_owned(),
+                            });
                         }
                     }
                     Err(error) => {
                         if let Ok(zones) = authoritative_zone_ids(&resolver) {
                             for zone in zones {
-                                audit_resource_plane(
+                                record_authoritative_resource_plane_audit(
                                     &state,
                                     &zone,
                                     daemon_audit::ResourcePlaneAction::Start,
                                     daemon_audit::ResourcePlaneResult::Refused,
-                                );
+                                )
+                                .map_err(|audit_error| {
+                                    TypedError::InternalIo {
+                                        context: "authoritative resource-plane refusal audit"
+                                            .to_owned(),
+                                        detail: audit_error.to_string(),
+                                    }
+                                })?;
                             }
                         }
                         tracing::error!(
@@ -1977,7 +2006,12 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
             if let Err(error) = handle_connection(stream, &state, None) {
                 eprintln!("{}", error.message());
             }
-            shutdown_resource_plane(&state).await;
+            shutdown_resource_plane(&state)
+                .await
+                .map_err(|error| TypedError::InternalIo {
+                    context: "authoritative resource-plane shutdown audit".to_owned(),
+                    detail: error.to_string(),
+                })?;
             break;
         }
 
@@ -2366,7 +2400,13 @@ impl autostart::VmStarter for BrokerVmStarter {
             // `d2b vm start --apply` invocations.
             no_wait_api: true,
         };
-        match dispatch_broker_vm_start(&self.state, request) {
+        match dispatch_broker_vm_start_as(
+            &self.state,
+            request,
+            BrokerCallerRole::RootUid {
+                uid: self.state.daemon_uid,
+            },
+        ) {
             Ok(value) => {
                 // dispatch_broker_vm_start returns a JSON envelope
                 // even on logical failure (so the public verb can
@@ -3431,20 +3471,15 @@ fn dispatch_request(
     request: wire::Request,
 ) -> Result<Value, TypedError> {
     let verb = request.verb_name();
-    if verb_requires_admin(verb) && !matches!(peer.role, PeerRole::Admin) {
-        // HostShutdown is permitted for the vmStop allowlist only; all
-        // other admin-only verbs are denied even from uid 0.
-        if matches!(peer.role, PeerRole::HostShutdown) {
-            if !verb_allowed_for_host_shutdown(verb) {
-                return Err(TypedError::AuthzNotAdmin {
-                    verb: verb.to_owned(),
-                });
-            }
-        } else {
-            return Err(TypedError::AuthzNotAdmin {
-                verb: verb.to_owned(),
-            });
-        }
+    if matches!(peer.role, PeerRole::HostShutdown) && !verb_allowed_for_host_shutdown(verb) {
+        return Err(TypedError::AuthzNotAdmin {
+            verb: verb.to_owned(),
+        });
+    }
+    if verb_requires_admin(verb) && !matches!(peer.role, PeerRole::Admin | PeerRole::HostShutdown) {
+        return Err(TypedError::AuthzNotAdmin {
+            verb: verb.to_owned(),
+        });
     }
     match &request {
         wire::Request::VmStop(lifecycle) | wire::Request::VmRestart(lifecycle)
@@ -3500,7 +3535,9 @@ fn dispatch_request_locked(
 ) -> Result<Value, TypedError> {
     match request {
         wire::Request::List(request) => dispatch_list(state, request),
-        wire::Request::Status(request) => dispatch_status(state, request),
+        wire::Request::Status(request) => {
+            dispatch_status_as(state, broker_caller_role_for_peer(peer), request)
+        }
         wire::Request::Audit(request) => dispatch_audit(state, peer, request),
         wire::Request::HostCheck(request) => dispatch_host_check(state, request),
         wire::Request::AuthStatus => Ok(dispatch_auth_status(state, peer)),
@@ -3515,31 +3552,69 @@ fn dispatch_request_locked(
         // applies in d2bd; only `mutating_verb_preflight` remains
         // to emit the typed InvalidRequest / dry-run-planned envelope
         // before apply dispatch runs.
-        wire::Request::VmStart(req) => dispatch_broker_vm_start(state, req),
+        wire::Request::VmStart(req) => {
+            dispatch_broker_vm_start_as(state, req, broker_caller_role_for_peer(peer))
+        }
         wire::Request::VmStop(req) => {
             dispatch_broker_vm_stop_as(state, req, broker_caller_role_for_peer(peer))
         }
         wire::Request::VmRestart(req) => {
             dispatch_broker_vm_restart_as(state, req, broker_caller_role_for_peer(peer))
         }
-        wire::Request::Switch(req) => dispatch_broker_switch(state, req),
-        wire::Request::Boot(req) => dispatch_broker_boot(state, req),
-        wire::Request::Test(req) => dispatch_broker_test(state, req),
-        wire::Request::Rollback(req) => dispatch_broker_rollback(state, req),
-        wire::Request::Gc(req) => dispatch_broker_gc(state, req),
-        wire::Request::KeysRotate(req) => dispatch_broker_keys_rotate(state, req),
-        wire::Request::Trust(req) => dispatch_broker_trust(state, req),
-        wire::Request::RotateKnownHost(req) => dispatch_broker_rotate_known_host(state, req),
-        wire::Request::UsbipBind(req) => dispatch_broker_usbip_bind(state, req),
-        wire::Request::UsbipUnbind(req) => dispatch_broker_usbip_unbind(state, req),
-        wire::Request::UsbipProbe => dispatch_broker_usbip_probe(state),
-        wire::Request::StoreVerify(req) => dispatch_broker_store_verify(state, req),
-        wire::Request::Migrate(req) => dispatch_broker_run_migrate(state, req),
-        wire::Request::HostPrepare(req) => dispatch_broker_host_prepare(state, req),
-        wire::Request::HostDestroy(req) => dispatch_broker_host_destroy(state, req),
-        wire::Request::HostInstall(req) => dispatch_broker_run_host_install(state, req),
-        wire::Request::HostReconcile(req) => dispatch_broker_host_reconcile(state, req),
-        wire::Request::ReadGuestConfig(req) => dispatch_read_guest_config(state, req),
+        wire::Request::Switch(req) => {
+            dispatch_broker_switch_as(state, broker_caller_role_for_peer(peer), req)
+        }
+        wire::Request::Boot(req) => {
+            dispatch_broker_boot_as(state, broker_caller_role_for_peer(peer), req)
+        }
+        wire::Request::Test(req) => {
+            dispatch_broker_test_as(state, broker_caller_role_for_peer(peer), req)
+        }
+        wire::Request::Rollback(req) => {
+            dispatch_broker_rollback_as(state, broker_caller_role_for_peer(peer), req)
+        }
+        wire::Request::Gc(req) => {
+            dispatch_broker_gc_as(state, req, broker_caller_role_for_peer(peer))
+        }
+        wire::Request::KeysRotate(req) => {
+            dispatch_broker_keys_rotate_as(state, req, broker_caller_role_for_peer(peer))
+        }
+        wire::Request::Trust(req) => {
+            dispatch_broker_trust_as(state, req, broker_caller_role_for_peer(peer))
+        }
+        wire::Request::RotateKnownHost(req) => {
+            dispatch_broker_rotate_known_host_as(state, req, broker_caller_role_for_peer(peer))
+        }
+        wire::Request::UsbipBind(req) => {
+            dispatch_broker_usbip_bind(state, broker_caller_role_for_peer(peer), req)
+        }
+        wire::Request::UsbipUnbind(req) => {
+            dispatch_broker_usbip_unbind(state, broker_caller_role_for_peer(peer), req)
+        }
+        wire::Request::UsbipProbe => {
+            dispatch_broker_usbip_probe(state, broker_caller_role_for_peer(peer))
+        }
+        wire::Request::StoreVerify(req) => {
+            dispatch_broker_store_verify_as(state, req, broker_caller_role_for_peer(peer))
+        }
+        wire::Request::Migrate(req) => {
+            dispatch_broker_run_migrate_as(state, req, broker_caller_role_for_peer(peer))
+        }
+        wire::Request::HostPrepare(req) => {
+            dispatch_broker_host_prepare_as(state, req, broker_caller_role_for_peer(peer))
+        }
+        wire::Request::HostDestroy(req) => {
+            dispatch_broker_host_destroy_as(state, req, broker_caller_role_for_peer(peer))
+        }
+        wire::Request::HostInstall(req) => {
+            dispatch_broker_run_host_install_as(state, req, broker_caller_role_for_peer(peer))
+        }
+        wire::Request::HostReconcile(req) => {
+            dispatch_broker_host_reconcile_as(state, req, broker_caller_role_for_peer(peer))
+        }
+        wire::Request::ReadGuestConfig(req) => {
+            dispatch_read_guest_config(state, broker_caller_role_for_peer(peer), req)
+        }
         // Attached Exec::Start is intercepted in `handle_connection` (it takes
         // over the connection as the owner connection and is handled on a
         // spawned worker off the serial accept loop). Detached management ops
@@ -3556,7 +3631,7 @@ fn dispatch_request_locked(
                     verb: "audio".to_owned(),
                 });
             }
-            audio_dispatch::dispatch_audio(state, op)
+            audio_dispatch::dispatch_audio(state, broker_caller_role_for_peer(peer), op)
         }
         wire::Request::Resource(request) => dispatch_resource_request(state, peer, request),
     }
@@ -3931,7 +4006,7 @@ fn dispatch_workload(
                     &args.operation_id,
                     None,
                     WorkloadLaunchResult::AlreadyCommitted,
-                );
+                )?;
                 return Ok(wire::workload_response(
                     &public_wire::WorkloadOpResponse::LauncherExec(
                         public_wire::LauncherExecResult {
@@ -3971,7 +4046,7 @@ fn dispatch_workload(
                         &args.operation_id,
                         None,
                         WorkloadLaunchResult::Failed,
-                    );
+                    )?;
                     return Err(error);
                 }
             };
@@ -3985,7 +4060,7 @@ fn dispatch_workload(
                         &args.operation_id,
                         exec_id.as_deref(),
                         WorkloadLaunchResult::Committed,
-                    );
+                    )?;
                     public_wire::LauncherExecDisposition::Committed
                 }
                 public_wire::LauncherExecDisposition::AlreadyCommitted => {
@@ -3996,7 +4071,7 @@ fn dispatch_workload(
                         &args.operation_id,
                         exec_id.as_deref(),
                         WorkloadLaunchResult::AlreadyCommitted,
-                    );
+                    )?;
                     public_wire::LauncherExecDisposition::AlreadyCommitted
                 }
             };
@@ -4041,7 +4116,7 @@ fn prepare_workload_launch(
                 &args.operation_id,
                 None,
                 WorkloadLaunchResult::Refused,
-            );
+            )?;
             return Err(map_workload_catalog_error(error));
         }
     };
@@ -4060,7 +4135,7 @@ fn prepare_workload_launch(
                 &args.operation_id,
                 None,
                 WorkloadLaunchResult::Refused,
-            );
+            )?;
             return Err(map_workload_catalog_error(error));
         }
     };
@@ -4241,7 +4316,12 @@ fn dispatch_local_vm_launcher(
         "workload-launch:{}",
         hex_bytes(&fingerprint.finalize()[..16])
     );
-    let result = exec_detached::create_idempotent(state, &request, request_id)?;
+    let result = exec_detached::create_idempotent_as(
+        state,
+        &request,
+        request_id,
+        BrokerCallerRole::LauncherUid { uid: requester_uid },
+    )?;
     emit_detached_create_audit(state, requester_uid, vm, &result.exec_id);
     Ok((
         public_wire::LauncherExecDisposition::Committed,
@@ -4455,7 +4535,7 @@ fn record_workload_launch_result(
     operation_id: &d2b_realm_core::OperationId,
     exec_id: Option<&str>,
     result: WorkloadLaunchResult,
-) {
+) -> Result<(), TypedError> {
     let (outcome, audit_result) = match result {
         WorkloadLaunchResult::Committed => {
             ("committed", daemon_audit::WorkloadLaunchResult::Committed)
@@ -4468,17 +4548,24 @@ fn record_workload_launch_result(
         WorkloadLaunchResult::Failed => ("failed", daemon_audit::WorkloadLaunchResult::Failed),
     };
     workload_lifecycle_metric(state, context.provider_label, "launcher-exec", outcome);
-    let _ = state
+    state
         .daemon_audit
-        .write_event(&daemon_audit::DaemonEvent::WorkloadLauncher {
-            target: context.target.clone(),
-            item_id: context.item_id.clone(),
-            operation_id: operation_id.to_string(),
-            exec_id: exec_id.map(str::to_owned),
-            peer_uid,
-            provider: context.audit_provider,
-            result: audit_result,
-        });
+        .write_event_with_authority(
+            &daemon_audit::DaemonEvent::WorkloadLauncher {
+                target: context.target.clone(),
+                item_id: context.item_id.clone(),
+                operation_id: operation_id.to_string(),
+                exec_id: exec_id.map(str::to_owned),
+                peer_uid,
+                provider: context.audit_provider,
+                result: audit_result,
+            },
+            daemon_audit::DaemonAuditAuthority::Authoritative,
+        )
+        .map_err(|_| TypedError::InternalIo {
+            context: "authoritative workload audit".to_owned(),
+            detail: "daemon audit unavailable".to_owned(),
+        })
 }
 
 #[cfg(test)]
@@ -4689,6 +4776,10 @@ mod workload_observability_tests {
             .collect()
     }
 
+    fn audit_digest(value: &str) -> String {
+        d2b_contracts::v3::canonical_digest("d2b:daemon-audit-redaction:v1", value.as_bytes())
+    }
+
     #[test]
     fn workload_availability_counts_inventory_and_clears_stale_tuples() {
         let registry = metrics::Registry::new();
@@ -4845,7 +4936,7 @@ mod workload_observability_tests {
         assert_eq!(events[0]["event"]["result"], "refused");
         assert_eq!(
             events[0]["event"]["target"],
-            entry.metadata.identity.canonical_target.to_canonical()
+            audit_digest(&entry.metadata.identity.canonical_target.to_canonical())
         );
     }
 
@@ -6016,17 +6107,17 @@ fn dispatch_exec_management(
         ensure_vm_runtime_capability(state, vm, RuntimeCapabilityGate::Exec, "exec")?;
     }
     let response = match op {
-        public_wire::ExecOp::List(args) => {
-            public_wire::ExecOpResponse::List(exec_detached::list(state, &args)?)
-        }
-        public_wire::ExecOp::Logs(args) => {
-            public_wire::ExecOpResponse::Logs(exec_detached::logs(state, &args)?)
-        }
-        public_wire::ExecOp::Status(args) => {
-            public_wire::ExecOpResponse::Status(exec_detached::status(state, &args)?)
-        }
+        public_wire::ExecOp::List(args) => public_wire::ExecOpResponse::List(
+            exec_detached::list_as(state, &args, broker_caller_role_for_peer(peer))?,
+        ),
+        public_wire::ExecOp::Logs(args) => public_wire::ExecOpResponse::Logs(
+            exec_detached::logs_as(state, &args, broker_caller_role_for_peer(peer))?,
+        ),
+        public_wire::ExecOp::Status(args) => public_wire::ExecOpResponse::Status(
+            exec_detached::status_as(state, &args, broker_caller_role_for_peer(peer))?,
+        ),
         public_wire::ExecOp::Kill(args) => {
-            let result = exec_detached::kill(state, &args);
+            let result = exec_detached::kill_as(state, &args, broker_caller_role_for_peer(peer));
             emit_detached_kill_audit(state, peer.uid, &args.vm, result.as_ref());
             public_wire::ExecOpResponse::Kill(result?)
         }
@@ -6161,6 +6252,7 @@ fn read_trimmed_file(path: &Path, context: &str) -> Result<String, TypedError> {
 
 fn dispatch_broker_usbip_bind(
     state: &ServerState,
+    caller_role: BrokerCallerRole,
     request: public_wire::UsbipBindCliRequest,
 ) -> Result<Value, TypedError> {
     const VERB: &str = "usb attach";
@@ -6176,7 +6268,7 @@ fn dispatch_broker_usbip_bind(
         VERB,
     )?;
     if vm_is_qemu_media(&resolver, &request.vm)? {
-        return dispatch_broker_qemu_media_attach(state, request);
+        return dispatch_broker_qemu_media_attach(state, request, caller_role);
     }
     if let Err(response) = validate_usbip_bus_id_for_daemon(VERB, &request.bus_id) {
         return Ok(response);
@@ -6211,6 +6303,7 @@ fn dispatch_broker_usbip_bind(
         &resolver,
         &request.vm,
         &request.bus_id,
+        caller_role.clone(),
         guest_control_health::GuestUsbipAction::Detach,
     ) {
         return Ok(daemon_failure_response(VERB, summary));
@@ -6227,7 +6320,7 @@ fn dispatch_broker_usbip_bind(
     if has_declared_intents {
         // Declared path: use bundle-ref broker ops (existing behavior).
         let bundle_usbip_bind_intent_ref = BundleOpId::new(bind_id);
-        if let Err(response) = dispatch_broker_ack_request(
+        if let Err(response) = dispatch_broker_ack_request_as(
             state,
             VERB,
             "UsbipBind",
@@ -6235,6 +6328,7 @@ fn dispatch_broker_usbip_bind(
                 bundle_usbip_bind_intent_ref,
                 tracing_span_id: None,
             }),
+            caller_role.clone(),
         ) {
             return Ok(response);
         }
@@ -6249,7 +6343,7 @@ fn dispatch_broker_usbip_bind(
             compensate_usbip_bind_failure(state, &resolver, &request.vm, &request.bus_id, VERB);
             return Ok(response);
         }
-        if let Err(response) = dispatch_broker_ack_request(
+        if let Err(response) = dispatch_broker_ack_request_as(
             state,
             VERB,
             "UsbipProxyReconcile",
@@ -6257,6 +6351,7 @@ fn dispatch_broker_usbip_bind(
                 scope_id: ScopeId::new(format!("vm:{}", request.vm)),
                 tracing_span_id: None,
             }),
+            caller_role.clone(),
         ) {
             compensate_usbip_bind_failure(state, &resolver, &request.vm, &request.bus_id, VERB);
             return Ok(response);
@@ -6271,7 +6366,7 @@ fn dispatch_broker_usbip_bind(
             .and_then(|e| e.static_ip.as_deref())
             .unwrap_or("")
             .to_owned();
-        if let Err(response) = dispatch_broker_ack_request(
+        if let Err(response) = dispatch_broker_ack_request_as(
             state,
             VERB,
             "UsbipExplicitFirewallRule",
@@ -6282,10 +6377,11 @@ fn dispatch_broker_usbip_bind(
                 net_uplink_ip,
                 tracing_span_id: None,
             }),
+            caller_role.clone(),
         ) {
             return Ok(response);
         }
-        if let Err(response) = dispatch_broker_ack_request(
+        if let Err(response) = dispatch_broker_ack_request_as(
             state,
             VERB,
             "UsbipExplicitBind",
@@ -6295,6 +6391,7 @@ fn dispatch_broker_usbip_bind(
                 env: env.to_owned(),
                 tracing_span_id: None,
             }),
+            caller_role.clone(),
         ) {
             return Ok(response);
         }
@@ -6305,6 +6402,7 @@ fn dispatch_broker_usbip_bind(
         &resolver,
         &request.vm,
         &request.bus_id,
+        caller_role,
         guest_control_health::GuestUsbipAction::Attach,
     ) {
         compensate_usbip_bind_failure(state, &resolver, &request.vm, &request.bus_id, VERB);
@@ -6463,6 +6561,7 @@ fn run_guest_usbip_import(
     resolver: &BundleResolver,
     vm: &str,
     bus_id: &str,
+    caller_role: BrokerCallerRole,
     action: guest_control_health::GuestUsbipAction,
 ) -> Result<guest_control_health::GuestUsbipImportResult, String> {
     let Some(entry) = resolver.manifest.vms.get(vm) else {
@@ -6487,6 +6586,7 @@ fn run_guest_usbip_import(
     guest_control_bridge::run_usbip_import_on_dedicated_thread(
         params,
         broker_socket_path(state),
+        caller_role,
         action,
         host.to_owned(),
         bus_id.to_owned(),
@@ -6500,6 +6600,7 @@ fn run_guest_usbip_status(
     resolver: &BundleResolver,
     vm: &str,
     bus_id: &str,
+    caller_role: BrokerCallerRole,
     timeout: Duration,
 ) -> Result<guest_control_health::GuestUsbipStatusResult, GuestUsbipStatusError> {
     let Some(entry) = resolver.manifest.vms.get(vm) else {
@@ -6526,6 +6627,7 @@ fn run_guest_usbip_status(
     guest_control_bridge::run_usbip_status_on_dedicated_thread(
         params,
         broker_socket_path(state),
+        caller_role,
         Some(host.to_owned()),
         Some(bus_id.to_owned()),
         timeout,
@@ -6702,8 +6804,9 @@ fn lifecycle_broker_ack(
     state: &ServerState,
     op_name: &str,
     request: BrokerRequest,
+    caller_role: &BrokerCallerRole,
 ) -> Result<(), usbip_reconcile_state::UsbipLifecycleStepError> {
-    match dispatch_broker_request(state, request) {
+    match dispatch_broker_request_as(state, request, caller_role.clone()) {
         Ok(BrokerResponse::Ack(ack)) if ack.accepted && ack.operation == op_name => Ok(()),
         Ok(BrokerResponse::Error(error)) => {
             Err(usbip_reconcile_state::UsbipLifecycleStepError::new(
@@ -6728,6 +6831,7 @@ fn lifecycle_broker_ack(
 struct DaemonUsbipStartReconcileExecutor<'a> {
     state: &'a ServerState,
     resolver: &'a BundleResolver,
+    caller_role: BrokerCallerRole,
 }
 
 impl usbip_reconcile_state::UsbipVmStartReconcileExecutor
@@ -6746,6 +6850,7 @@ impl usbip_reconcile_state::UsbipVmStartReconcileExecutor
                 bundle_usbip_bind_intent_ref: BundleOpId::new(claim.claim_ref.clone()),
                 tracing_span_id: Some(tracing_span_id),
             }),
+            &self.caller_role,
         )
     }
 
@@ -6780,6 +6885,7 @@ impl usbip_reconcile_state::UsbipVmStartReconcileExecutor
                 scope_id: ScopeId::new(format!("vm:{}", claim.vm)),
                 tracing_span_id: Some(tracing_span_id),
             }),
+            &self.caller_role,
         )
         .map_err(|mut error| {
             error.kind = usbip_reconcile_state::UsbipLifecycleFailureKind::ProxyFailed;
@@ -6800,6 +6906,7 @@ impl usbip_reconcile_state::UsbipVmStartReconcileExecutor
             self.resolver,
             &claim.vm,
             &claim.bus_id,
+            self.caller_role.clone(),
             guest_control_bridge::GUEST_CONTROL_USBIP_IMPORT_TIMEOUT,
         )
         .map_err(|error| {
@@ -6829,6 +6936,7 @@ impl usbip_reconcile_state::UsbipVmStartReconcileExecutor
             self.resolver,
             &claim.vm,
             &claim.bus_id,
+            self.caller_role.clone(),
             guest_control_health::GuestUsbipAction::Attach,
         )
         .map(|_| ())
@@ -6843,6 +6951,7 @@ impl usbip_reconcile_state::UsbipVmStartReconcileExecutor
 
 struct DaemonUsbipStopCleanupExecutor<'a> {
     state: &'a ServerState,
+    caller_role: BrokerCallerRole,
 }
 
 impl usbip_reconcile_state::UsbipVmStopCarrierCleanup for DaemonUsbipStopCleanupExecutor<'_> {
@@ -6862,6 +6971,7 @@ impl usbip_reconcile_state::UsbipVmStopCarrierCleanup for DaemonUsbipStopCleanup
             &resolver,
             &claim.vm,
             &claim.bus_id,
+            self.caller_role.clone(),
             guest_control_health::GuestUsbipAction::Detach,
         )
         .map(|_| ())
@@ -6887,6 +6997,7 @@ impl usbip_reconcile_state::UsbipVmStopCarrierCleanup for DaemonUsbipStopCleanup
                 preserve_durable_claim: true,
                 tracing_span_id: Some(tracing_span_id),
             }),
+            &self.caller_role,
         )
     }
 
@@ -6903,6 +7014,7 @@ impl usbip_reconcile_state::UsbipVmStopCarrierCleanup for DaemonUsbipStopCleanup
                 scope_id: ScopeId::new(format!("vm:{}", claim.vm)),
                 tracing_span_id: Some(tracing_span_id),
             }),
+            &self.caller_role,
         )
         .map_err(|mut error| {
             error.kind = usbip_reconcile_state::UsbipLifecycleFailureKind::ProxyFailed;
@@ -7007,13 +7119,18 @@ fn reconcile_usbip_after_vm_start(
     state: &ServerState,
     resolver: &BundleResolver,
     vm: &str,
+    caller_role: BrokerCallerRole,
 ) -> Option<usbip_reconcile_state::UsbipLifecycleReconcileReport> {
     let claims = same_vm_declared_usbip_start_claims(resolver, vm);
     if claims.is_empty() {
         return None;
     }
     let attempt = new_usbip_reconcile_attempt("start");
-    let mut executor = DaemonUsbipStartReconcileExecutor { state, resolver };
+    let mut executor = DaemonUsbipStartReconcileExecutor {
+        state,
+        resolver,
+        caller_role,
+    };
     let report =
         usbip_reconcile_state::reconcile_usbip_vm_start_claims(&claims, &attempt, &mut executor);
     emit_usbip_lifecycle_observations("start", &report);
@@ -7027,12 +7144,13 @@ fn reconcile_usbip_after_vm_start_until_converged(
     state: &ServerState,
     resolver: &BundleResolver,
     vm: &str,
+    caller_role: BrokerCallerRole,
     timeout: Duration,
     backoff: Duration,
 ) -> Option<usbip_reconcile_state::UsbipLifecycleReconcileReport> {
     let deadline = Instant::now() + timeout;
     loop {
-        let report = reconcile_usbip_after_vm_start(state, resolver, vm)?;
+        let report = reconcile_usbip_after_vm_start(state, resolver, vm, caller_role.clone())?;
         if report.degraded_count() == 0 || report.fatal() || Instant::now() >= deadline {
             return Some(report);
         }
@@ -7081,6 +7199,7 @@ fn spawn_usbip_reconcile_after_vm_start(
     resolver: &BundleResolver,
     vm: &str,
     runner_role_id: &str,
+    caller_role: BrokerCallerRole,
 ) -> UsbipBackgroundReconcileSpawn {
     if same_vm_declared_usbip_start_claims(resolver, vm).is_empty() {
         return UsbipBackgroundReconcileSpawn::NoClaims;
@@ -7108,7 +7227,9 @@ fn spawn_usbip_reconcile_after_vm_start(
                 return;
             }
 
-            let Some(report) = reconcile_usbip_after_vm_start(&state, &resolver, &vm) else {
+            let Some(report) =
+                reconcile_usbip_after_vm_start(&state, &resolver, &vm, caller_role.clone())
+            else {
                 return;
             };
             let degraded = report.degraded_count();
@@ -7160,13 +7281,14 @@ fn cleanup_usbip_before_vm_stop(
     state: &ServerState,
     resolver: &BundleResolver,
     vm: &str,
+    caller_role: BrokerCallerRole,
 ) -> Option<usbip_reconcile_state::UsbipLifecycleReconcileReport> {
     let claims = same_vm_persisted_usbip_stop_claims(resolver, vm);
     if claims.is_empty() {
         return None;
     }
     let attempt = new_usbip_reconcile_attempt("stop");
-    let mut executor = DaemonUsbipStopCleanupExecutor { state };
+    let mut executor = DaemonUsbipStopCleanupExecutor { state, caller_role };
     let report =
         usbip_reconcile_state::cleanup_usbip_vm_stop_claims(&claims, &attempt, &mut executor);
     emit_usbip_lifecycle_observations("stop", &report);
@@ -7413,6 +7535,7 @@ fn ensure_usbipd_env_ready_for_attach(
 
 fn dispatch_broker_usbip_unbind(
     state: &ServerState,
+    caller_role: BrokerCallerRole,
     request: public_wire::UsbipUnbindCliRequest,
 ) -> Result<Value, TypedError> {
     const VERB: &str = "usb detach";
@@ -7428,7 +7551,7 @@ fn dispatch_broker_usbip_unbind(
         VERB,
     )?;
     if vm_is_qemu_media(&resolver, &request.vm)? {
-        return dispatch_broker_qemu_media_detach(state, request);
+        return dispatch_broker_qemu_media_detach(state, request, caller_role);
     }
     if let Err(response) = validate_usbip_bus_id_for_daemon(VERB, &request.bus_id) {
         return Ok(response);
@@ -7444,6 +7567,7 @@ fn dispatch_broker_usbip_unbind(
         &resolver,
         &request.vm,
         &request.bus_id,
+        caller_role.clone(),
         guest_control_health::GuestUsbipAction::Detach,
     ) {
         tracing::warn!(
@@ -7454,7 +7578,7 @@ fn dispatch_broker_usbip_unbind(
         );
     }
 
-    if let Err(response) = dispatch_broker_ack_request(
+    if let Err(response) = dispatch_broker_ack_request_as(
         state,
         VERB,
         "UsbipUnbind",
@@ -7463,11 +7587,12 @@ fn dispatch_broker_usbip_unbind(
             preserve_durable_claim: false,
             tracing_span_id: None,
         }),
+        caller_role.clone(),
     ) {
         return Ok(response);
     }
 
-    if let Err(response) = dispatch_broker_ack_request(
+    if let Err(response) = dispatch_broker_ack_request_as(
         state,
         VERB,
         "UsbipProxyReconcile",
@@ -7475,6 +7600,7 @@ fn dispatch_broker_usbip_unbind(
             scope_id: ScopeId::new(format!("vm:{}", request.vm)),
             tracing_span_id: None,
         }),
+        caller_role.clone(),
     ) {
         return Ok(response);
     }
@@ -7503,14 +7629,29 @@ fn refresh_qemu_media_registry_index_if_needed(
     state: &ServerState,
     resolver: &BundleResolver,
 ) -> Result<(), TypedError> {
+    refresh_qemu_media_registry_index_if_needed_as(
+        state,
+        resolver,
+        BrokerCallerRole::AdminUid {
+            uid: state.daemon_uid,
+        },
+    )
+}
+
+fn refresh_qemu_media_registry_index_if_needed_as(
+    state: &ServerState,
+    resolver: &BundleResolver,
+    caller_role: BrokerCallerRole,
+) -> Result<(), TypedError> {
     if resolver.host.qemu_media.is_none() {
         return Ok(());
     }
-    match dispatch_broker_request(
+    match dispatch_broker_request_as(
         state,
         BrokerRequest::QemuMediaRefreshRegistry(BrokerQemuMediaRefreshRegistryRequest {
             tracing_span_id: None,
         }),
+        caller_role,
     )? {
         BrokerResponse::QemuMediaRefreshRegistry(_) => Ok(()),
         BrokerResponse::Error(error) => Err(TypedError::InternalIo {
@@ -7530,6 +7671,7 @@ fn refresh_qemu_media_registry_index_if_needed(
 fn dispatch_broker_qemu_media_attach(
     state: &ServerState,
     request: public_wire::UsbipBindCliRequest,
+    caller_role: BrokerCallerRole,
 ) -> Result<Value, TypedError> {
     const VERB: &str = "usb attach";
     if let Err(err) = d2b_host::media::validate_usb_busid(&request.bus_id) {
@@ -7538,13 +7680,14 @@ fn dispatch_broker_qemu_media_attach(
             format!("invalid USB busid selector: {err}"),
         ));
     }
-    match dispatch_broker_request(
+    match dispatch_broker_request_as(
         state,
         BrokerRequest::QemuMediaAttach(BrokerQemuMediaHotplugRequest {
             vm_id: VmId::new(request.vm.clone()),
             bus_id: request.bus_id,
             tracing_span_id: None,
         }),
+        caller_role,
     ) {
         Ok(BrokerResponse::QemuMediaAttach(response)) => Ok(applied_response(
             VERB,
@@ -7572,6 +7715,7 @@ fn dispatch_broker_qemu_media_attach(
 fn dispatch_broker_qemu_media_detach(
     state: &ServerState,
     request: public_wire::UsbipUnbindCliRequest,
+    caller_role: BrokerCallerRole,
 ) -> Result<Value, TypedError> {
     const VERB: &str = "usb detach";
     if let Err(err) = d2b_host::media::validate_usb_busid(&request.bus_id) {
@@ -7580,13 +7724,14 @@ fn dispatch_broker_qemu_media_detach(
             format!("invalid USB busid selector: {err}"),
         ));
     }
-    match dispatch_broker_request(
+    match dispatch_broker_request_as(
         state,
         BrokerRequest::QemuMediaDetach(BrokerQemuMediaHotplugRequest {
             vm_id: VmId::new(request.vm.clone()),
             bus_id: request.bus_id,
             tracing_span_id: None,
         }),
+        caller_role,
     ) {
         Ok(BrokerResponse::QemuMediaDetach(response)) => Ok(applied_response(
             VERB,
@@ -7642,7 +7787,10 @@ fn broker_error_for_qemu_media_hotplug(
     ))
 }
 
-fn dispatch_broker_usbip_probe(state: &ServerState) -> Result<Value, TypedError> {
+fn dispatch_broker_usbip_probe(
+    state: &ServerState,
+    caller_role: BrokerCallerRole,
+) -> Result<Value, TypedError> {
     const VERB: &str = "usb probe";
     let resolver =
         BundleResolver::load(&state.config.artifacts.bundle_path).map_err(|err| match err {
@@ -7654,13 +7802,13 @@ fn dispatch_broker_usbip_probe(state: &ServerState) -> Result<Value, TypedError>
                 detail: other.to_string(),
             },
         })?;
-    refresh_qemu_media_registry_index_if_needed(state, &resolver)?;
+    refresh_qemu_media_registry_index_if_needed_as(state, &resolver, caller_role.clone())?;
     let usbip_intent_ids: Vec<_> = resolver
         .usbip_bind_intent_ids()
         .map(str::to_owned)
         .collect();
     if !usbip_intent_ids.is_empty()
-        && let Err(response) = dispatch_broker_ack_request(
+        && let Err(response) = dispatch_broker_ack_request_as(
             state,
             VERB,
             "UsbipProxyReconcile",
@@ -7668,6 +7816,7 @@ fn dispatch_broker_usbip_probe(state: &ServerState) -> Result<Value, TypedError>
                 scope_id: ScopeId::new("host"),
                 tracing_span_id: None,
             }),
+            caller_role.clone(),
         )
     {
         return Ok(response);
@@ -7681,6 +7830,7 @@ fn dispatch_broker_usbip_probe(state: &ServerState) -> Result<Value, TypedError>
                 state,
                 &resolver,
                 intent,
+                caller_role.clone(),
                 Some(guest_control_bridge::GUEST_CONTROL_USBIP_IMPORT_TIMEOUT),
             )
         })
@@ -7695,6 +7845,7 @@ fn usbip_probe_entry_from_intent(
     state: &ServerState,
     resolver: &BundleResolver,
     intent: &d2b_core::bundle_resolver::ResolvedUsbipBindIntent,
+    caller_role: BrokerCallerRole,
     guest_status_timeout: Option<Duration>,
 ) -> public_wire::UsbipProbeEntry {
     let owner_vm = fs::read_to_string(&intent.lock_path)
@@ -7747,6 +7898,7 @@ fn usbip_probe_entry_from_intent(
                 resolver,
                 &intent.vm_name,
                 &intent.bus_id,
+                caller_role,
                 guest_status_timeout,
             ) {
                 Ok(status) => {
@@ -8066,6 +8218,7 @@ fn public_usb_status_for_vm(
     state: &ServerState,
     resolver: &BundleResolver,
     vm: &str,
+    caller_role: BrokerCallerRole,
 ) -> Option<public_wire::UsbipVmStatus> {
     let entries: Vec<_> = resolver
         .usbip_bind_intent_ids()
@@ -8076,6 +8229,7 @@ fn public_usb_status_for_vm(
                 state,
                 resolver,
                 intent,
+                caller_role.clone(),
                 Some(PUBLIC_STATUS_GUEST_USBIP_TIMEOUT),
             )
         })
@@ -8493,6 +8647,7 @@ fn map_guest_file_read_error(error: guest_control_health::GuestFileReadError) ->
 /// any guest content is never echoed into an error.
 fn dispatch_read_guest_config(
     state: &ServerState,
+    caller_role: BrokerCallerRole,
     request: public_wire::ReadGuestConfigRequest,
 ) -> Result<Value, TypedError> {
     ensure_vm_runtime_capability(
@@ -8524,6 +8679,7 @@ fn dispatch_read_guest_config(
     let bytes = guest_control_bridge::run_config_read_on_dedicated_thread(
         params,
         broker_path,
+        caller_role,
         guest_control_bridge::GUEST_CONTROL_CONFIG_READ_TIMEOUT,
     )
     .map_err(map_guest_file_read_error)?;
@@ -8807,18 +8963,27 @@ fn dispatch_shell_management(
             })?;
             let (result, provider, target, operation_digest) = match resolved.route.clone() {
                 WorkloadRoute::LocalVm { vm } => {
-                    let result = run_guest_shell_management(state, &vm, |client, metadata| {
-                        let mut request = pb::ShellListRequest::new();
-                        request.metadata = protobuf::MessageField::some(metadata);
-                        async move {
-                            let response: pb::ShellListResponse = client
-                                .unary_with_timeout("ShellList", request, SHELL_MANAGEMENT_TIMEOUT)
-                                .await
-                                .map_err(map_shell_health_error)?;
-                            shell_error_to_typed(response.error.as_ref())?;
-                            map_shell_list_response(response)
-                        }
-                    })
+                    let result = run_guest_shell_management(
+                        state,
+                        &vm,
+                        broker_caller_role_for_peer(peer),
+                        |client, metadata| {
+                            let mut request = pb::ShellListRequest::new();
+                            request.metadata = protobuf::MessageField::some(metadata);
+                            async move {
+                                let response: pb::ShellListResponse = client
+                                    .unary_with_timeout(
+                                        "ShellList",
+                                        request,
+                                        SHELL_MANAGEMENT_TIMEOUT,
+                                    )
+                                    .await
+                                    .map_err(map_shell_health_error)?;
+                                shell_error_to_typed(response.error.as_ref())?;
+                                map_shell_list_response(response)
+                            }
+                        },
+                    )
                     .inspect_err(|error| {
                         record_shell_dispatch_failure(
                             state,
@@ -8912,23 +9077,28 @@ fn dispatch_shell_management(
             })?;
             let (result, provider, target, operation_digest) = match resolved.route.clone() {
                 WorkloadRoute::LocalVm { vm } => {
-                    let result = run_guest_shell_management(state, &vm, |client, metadata| {
-                        let mut request = pb::ShellDetachRequest::new();
-                        request.metadata = protobuf::MessageField::some(metadata);
-                        request.name = name.map(|name| name.as_str().to_owned());
-                        async move {
-                            let response: pb::ShellDetachResponse = client
-                                .unary_with_timeout(
-                                    "ShellDetach",
-                                    request,
-                                    SHELL_MANAGEMENT_TIMEOUT,
-                                )
-                                .await
-                                .map_err(map_shell_health_error)?;
-                            shell_error_to_typed(response.error.as_ref())?;
-                            map_shell_detach_response(response)
-                        }
-                    })
+                    let result = run_guest_shell_management(
+                        state,
+                        &vm,
+                        broker_caller_role_for_peer(peer),
+                        |client, metadata| {
+                            let mut request = pb::ShellDetachRequest::new();
+                            request.metadata = protobuf::MessageField::some(metadata);
+                            request.name = name.map(|name| name.as_str().to_owned());
+                            async move {
+                                let response: pb::ShellDetachResponse = client
+                                    .unary_with_timeout(
+                                        "ShellDetach",
+                                        request,
+                                        SHELL_MANAGEMENT_TIMEOUT,
+                                    )
+                                    .await
+                                    .map_err(map_shell_health_error)?;
+                                shell_error_to_typed(response.error.as_ref())?;
+                                map_shell_detach_response(response)
+                            }
+                        },
+                    )
                     .inspect_err(|error| {
                         record_shell_dispatch_failure(
                             state,
@@ -9020,19 +9190,28 @@ fn dispatch_shell_management(
             let (result, provider, target, operation_digest) = match resolved.route.clone() {
                 WorkloadRoute::LocalVm { vm } => {
                     let guest_name = requested_name.clone();
-                    let result = run_guest_shell_management(state, &vm, |client, metadata| {
-                        let mut request = pb::ShellKillRequest::new();
-                        request.metadata = protobuf::MessageField::some(metadata);
-                        request.name = guest_name.as_str().to_owned();
-                        async move {
-                            let response: pb::ShellKillResponse = client
-                                .unary_with_timeout("ShellKill", request, SHELL_MANAGEMENT_TIMEOUT)
-                                .await
-                                .map_err(map_shell_health_error)?;
-                            shell_error_to_typed(response.error.as_ref())?;
-                            map_shell_kill_response(response)
-                        }
-                    })
+                    let result = run_guest_shell_management(
+                        state,
+                        &vm,
+                        broker_caller_role_for_peer(peer),
+                        |client, metadata| {
+                            let mut request = pb::ShellKillRequest::new();
+                            request.metadata = protobuf::MessageField::some(metadata);
+                            request.name = guest_name.as_str().to_owned();
+                            async move {
+                                let response: pb::ShellKillResponse = client
+                                    .unary_with_timeout(
+                                        "ShellKill",
+                                        request,
+                                        SHELL_MANAGEMENT_TIMEOUT,
+                                    )
+                                    .await
+                                    .map_err(map_shell_health_error)?;
+                                shell_error_to_typed(response.error.as_ref())?;
+                                map_shell_kill_response(response)
+                            }
+                        },
+                    )
                     .inspect_err(|error| {
                         record_shell_dispatch_failure(
                             state,
@@ -9792,7 +9971,12 @@ fn run_typed_shell_owner(
             .unwrap_or(false),
         initial_terminal_size: size,
     };
-    let established = match rt.block_on(establish_shell_backend(&state, peer.uid, &attach)) {
+    let established = match rt.block_on(establish_shell_backend(
+        &state,
+        peer.uid,
+        broker_caller_role_for_peer(&peer),
+        &attach,
+    )) {
         Ok(value) => value,
         Err(error) => {
             tracing::warn!(
@@ -10074,6 +10258,7 @@ impl shell_backend::ShellBackend for GuestShellBackend {
 async fn establish_shell_backend(
     state: &ServerState,
     peer_uid: u32,
+    caller_role: BrokerCallerRole,
     attach: &public_wire::ShellAttachArgs,
 ) -> Result<shell_backend::EstablishedShell, TypedError> {
     use workload_dispatch::WorkloadRoute;
@@ -10085,7 +10270,8 @@ async fn establish_shell_backend(
             let mut guest_attach = attach.clone();
             guest_attach.vm = vm.clone();
             let (client, guest_boot_id, response) =
-                establish_guest_shell_owner_async(state, &guest_attach).await?;
+                establish_guest_shell_owner_async(state, &guest_attach, caller_role.clone())
+                    .await?;
             shell_error_to_typed(response.error.as_ref())?;
             let session_id = response.session_id.clone().ok_or_else(|| {
                 tracing::warn!(
@@ -10314,6 +10500,7 @@ fn map_shell_helper_registry_error(error: unsafe_local_helper::HelperRegistryErr
 async fn establish_guest_shell_owner_async(
     state: &ServerState,
     attach: &public_wire::ShellAttachArgs,
+    caller_role: BrokerCallerRole,
 ) -> Result<
     (
         Arc<guest_control_health::TtrpcGuestControlClient>,
@@ -10336,7 +10523,11 @@ async fn establish_guest_shell_owner_async(
         SHELL_MANAGEMENT_TIMEOUT,
         guest_control_bridge::GUEST_CONTROL_ATTEMPT_CAP,
     );
-    let signer = guest_control_bridge::BrokerSigner::new(broker_path, budget);
+    let signer = guest_control_bridge::BrokerSigner::with_caller_role(
+        broker_path,
+        budget,
+        caller_role.clone(),
+    );
     let nonce = guest_control_bridge::host_nonce().map_err(|_| shell_transport_failed())?;
     let client = guest_control_bridge::connect_and_build_client(&params, budget)
         .map_err(map_shell_health_error)?;
@@ -10554,6 +10745,7 @@ fn shell_close_attach_with_runtime(
 fn run_guest_shell_management<F, Fut, T>(
     state: &ServerState,
     vm: &str,
+    caller_role: BrokerCallerRole,
     f: F,
 ) -> Result<T, TypedError>
 where
@@ -10577,7 +10769,11 @@ where
             SHELL_MANAGEMENT_TIMEOUT,
             guest_control_bridge::GUEST_CONTROL_ATTEMPT_CAP,
         );
-        let signer = guest_control_bridge::BrokerSigner::new(broker_path, budget);
+        let signer = guest_control_bridge::BrokerSigner::with_caller_role(
+            broker_path,
+            budget,
+            caller_role.clone(),
+        );
         let nonce = guest_control_bridge::host_nonce().map_err(|_| shell_transport_failed())?;
         let client = guest_control_bridge::connect_and_build_client(&params, budget)
             .map_err(map_shell_health_error)?;
@@ -11051,7 +11247,7 @@ fn run_exec_owner(
         return;
     }
     if start.detached {
-        match exec_detached::create(&state, &start) {
+        match exec_detached::create_as(&state, &start, broker_caller_role_for_peer(&peer)) {
             Ok(result) => {
                 emit_detached_create_audit(&state, peer.uid, &start.vm, &result.exec_id);
                 let response = public_wire::ExecOpResponse::DetachedCreate(result);
@@ -11143,9 +11339,13 @@ fn run_exec_owner(
     };
 
     let deadlines = exec_session::ExecOpDeadlines::default();
-    let connector: Arc<dyn exec_session::ExecGuestConnector> = Arc::new(
-        exec_session_real::RealExecConnector::new(params, broker_socket_path(&state), deadlines),
-    );
+    let connector: Arc<dyn exec_session::ExecGuestConnector> =
+        Arc::new(exec_session_real::RealExecConnector::new(
+            params,
+            broker_socket_path(&state),
+            broker_caller_role_for_peer(&peer),
+            deadlines,
+        ));
 
     // The terminal-cleanup reaper shuts down the owner socket so a
     // stalled owner that never closes after the command goes terminal does not
@@ -12352,11 +12552,70 @@ mod exec_owner_io_tests {
     }
 }
 
+/// Dispatch the typed legacy swtpm migration operation through the production
+/// broker socket. The Provider effect adapter consumes only this closed
+/// outcome and never receives a host path or journal byte.
+#[allow(dead_code)]
+pub(crate) fn dispatch_broker_legacy_tpm_migration(
+    state: &ServerState,
+    vm_id: VmId,
+    intent_ref: BundleOpId,
+) -> Result<LegacySwtpmMigrationOutcome, TypedError> {
+    let caller_role = BrokerCallerRole::AdminUid {
+        uid: state.daemon_uid,
+    };
+    match dispatch_broker_request_as(
+        state,
+        BrokerRequest::Hello(HelloRequest {
+            client_version: d2b_contracts::PROTOCOL_VERSION.to_string(),
+            supported_features: vec!["MigrateLegacySwtpmState".to_owned()],
+        }),
+        caller_role.clone(),
+    )? {
+        BrokerResponse::Hello(response)
+            if response
+                .capabilities
+                .iter()
+                .any(|capability| capability == "MigrateLegacySwtpmState") => {}
+        _ => {
+            return Err(TypedError::InternalBrokerUnavailable {
+                path: broker_socket_path(state),
+                detail: "broker did not advertise legacy TPM migration".to_owned(),
+            });
+        }
+    }
+    match dispatch_broker_request_as(
+        state,
+        BrokerRequest::MigrateLegacySwtpmState(MigrateLegacySwtpmStateRequest {
+            bundle_legacy_swtpm_intent_ref: intent_ref,
+            vm_id,
+            tracing_span_id: None,
+        }),
+        caller_role,
+    )? {
+        BrokerResponse::MigrateLegacySwtpmState(response) => Ok(response.outcome),
+        BrokerResponse::Error(error) => Err(TypedError::InternalBrokerUnavailable {
+            path: broker_socket_path(state),
+            detail: error.message,
+        }),
+        _ => Err(TypedError::InternalBrokerUnavailable {
+            path: broker_socket_path(state),
+            detail: "legacy TPM migration response mismatch".to_owned(),
+        }),
+    }
+}
+
 fn dispatch_broker_request(
     state: &ServerState,
     request: BrokerRequest,
 ) -> Result<BrokerResponse, TypedError> {
-    dispatch_broker_request_as(state, request, Default::default())
+    dispatch_broker_request_as(
+        state,
+        request,
+        BrokerCallerRole::AdminUid {
+            uid: state.daemon_uid,
+        },
+    )
 }
 
 fn dispatch_broker_request_as(
@@ -12365,6 +12624,7 @@ fn dispatch_broker_request_as(
     caller_role: BrokerCallerRole,
 ) -> Result<BrokerResponse, TypedError> {
     let socket_path = broker_socket_path(state);
+    let audit_join = default_audit_join_context(&request);
     let socket = connect_seqpacket(&socket_path)?;
     write_json_frame(
         &socket,
@@ -12372,13 +12632,17 @@ fn dispatch_broker_request_as(
             request,
             caller_role,
             test_peer_uid: None,
+            audit_join: audit_join.clone(),
         },
     )?;
     let response = read_frame(&socket)?;
-    serde_json::from_slice(&response).map_err(|err| TypedError::InternalBrokerUnavailable {
-        path: socket_path,
-        detail: err.to_string(),
-    })
+    let decoded =
+        serde_json::from_slice(&response).map_err(|err| TypedError::InternalBrokerUnavailable {
+            path: socket_path,
+            detail: err.to_string(),
+        })?;
+    ingest_broker_response_evidence(state, audit_join.as_ref(), &decoded);
+    Ok(decoded)
 }
 
 fn broker_caller_role_for_peer(peer: &PeerIdentity) -> BrokerCallerRole {
@@ -12397,8 +12661,30 @@ fn dispatch_broker_request_with_timeout(
     request: BrokerRequest,
     timeout: Duration,
 ) -> Result<BrokerResponse, TypedError> {
+    dispatch_broker_request_with_timeout_as(
+        state,
+        request,
+        BrokerCallerRole::AdminUid {
+            uid: state.daemon_uid,
+        },
+        timeout,
+    )
+}
+
+fn dispatch_broker_request_with_timeout_as(
+    state: &ServerState,
+    request: BrokerRequest,
+    caller_role: BrokerCallerRole,
+    timeout: Duration,
+) -> Result<BrokerResponse, TypedError> {
     let socket_path = broker_socket_path(state);
-    dispatch_broker_request_to_socket(&socket_path, request, Default::default(), Some(timeout))
+    let audit_join = default_audit_join_context(&request);
+    let result =
+        dispatch_broker_request_to_socket(&socket_path, request, caller_role, Some(timeout));
+    if let Ok(response) = &result {
+        ingest_broker_response_evidence(state, audit_join.as_ref(), response);
+    }
+    result
 }
 
 /// Dispatch a single broker request over a freshly-connected seqpacket
@@ -12424,10 +12710,12 @@ pub(crate) fn dispatch_broker_request_to_socket(
     caller_role: BrokerCallerRole,
     timeout: Option<Duration>,
 ) -> Result<BrokerResponse, TypedError> {
+    let audit_join = default_audit_join_context(&request);
     let envelope = BrokerRequestEnvelope {
         request,
         caller_role,
         test_peer_uid: None,
+        audit_join,
     };
     let Some(timeout) = timeout else {
         // No deadline: plain blocking connect + round trip (unchanged).
@@ -12454,6 +12742,50 @@ pub(crate) fn dispatch_broker_request_to_socket(
             path: socket_path.to_path_buf(),
         }),
         Err(err) => Err(err),
+    }
+}
+
+fn default_audit_join_context(request: &BrokerRequest) -> Option<AuditJoinContext> {
+    let (zone_id, operation_identity) = request.authoritative_audit_join()?;
+    Some(AuditJoinContext {
+        zone_id: CanonicalAuditDigest::parse(zone_id).expect("canonical broker zone digest"),
+        operation_identity: CanonicalAuditDigest::parse(operation_identity)
+            .expect("canonical broker operation digest"),
+    })
+}
+
+fn ingest_broker_response_evidence(
+    state: &ServerState,
+    audit_join: Option<&AuditJoinContext>,
+    response: &BrokerResponse,
+) {
+    let Some(join) = audit_join else {
+        return;
+    };
+    let Ok(zone) = AuditZoneId::parse(join.zone_id.as_str()) else {
+        return;
+    };
+    let Ok(operation) = OperationIdentity::parse(join.operation_identity.as_str()) else {
+        return;
+    };
+    let evidence = DurabilityEvidence {
+        key: ZoneOperationKey::new(zone, operation),
+        outcome: if matches!(response, BrokerResponse::Error(_)) {
+            d2b_audit::DurabilityOutcome::Failure
+        } else {
+            d2b_audit::DurabilityOutcome::Success
+        },
+        effect_durable: !matches!(response, BrokerResponse::Error(_)),
+    };
+    let plane = state
+        .resource_plane
+        .lock()
+        .ok()
+        .and_then(|plane| plane.clone());
+    if let Some(plane) = plane
+        && let Err(error) = plane.ingest_broker_evidence(evidence)
+    {
+        tracing::debug!(error = ?error, "broker evidence ingestion skipped");
     }
 }
 
@@ -12546,7 +12878,24 @@ fn dispatch_broker_request_with_fds_timeout(
     request: BrokerRequest,
     timeout: Duration,
 ) -> Result<(BrokerResponse, Vec<RawFd>), TypedError> {
+    dispatch_broker_request_with_fds_timeout_as(
+        state,
+        request,
+        BrokerCallerRole::AdminUid {
+            uid: state.daemon_uid,
+        },
+        timeout,
+    )
+}
+
+fn dispatch_broker_request_with_fds_timeout_as(
+    state: &ServerState,
+    request: BrokerRequest,
+    caller_role: BrokerCallerRole,
+    timeout: Duration,
+) -> Result<(BrokerResponse, Vec<RawFd>), TypedError> {
     let socket_path = broker_socket_path(state);
+    let audit_join = default_audit_join_context(&request);
     let socket = Socket::from(connect_seqpacket_with_timeout(&socket_path, Some(timeout))?);
     socket
         .set_read_timeout(Some(timeout))
@@ -12564,8 +12913,9 @@ fn dispatch_broker_request_with_fds_timeout(
         &socket,
         &BrokerRequestEnvelope {
             request,
-            caller_role: Default::default(),
+            caller_role,
             test_peer_uid: None,
+            audit_join: audit_join.clone(),
         },
     )?;
     let (response, received_fds) = read_frame_with_fds(&socket)?;
@@ -12576,6 +12926,7 @@ fn dispatch_broker_request_with_fds_timeout(
             detail: err.to_string(),
         }
     })?;
+    ingest_broker_response_evidence(state, audit_join.as_ref(), &decoded);
     Ok((decoded, received_fds))
 }
 
@@ -12812,7 +13163,25 @@ fn dispatch_broker_ack_request(
     op_name: &str,
     request: BrokerRequest,
 ) -> Result<(), Value> {
-    match dispatch_broker_request(state, request) {
+    dispatch_broker_ack_request_as(
+        state,
+        verb,
+        op_name,
+        request,
+        BrokerCallerRole::AdminUid {
+            uid: state.daemon_uid,
+        },
+    )
+}
+
+fn dispatch_broker_ack_request_as(
+    state: &ServerState,
+    verb: &str,
+    op_name: &str,
+    request: BrokerRequest,
+    caller_role: BrokerCallerRole,
+) -> Result<(), Value> {
+    match dispatch_broker_request_as(state, request, caller_role) {
         Ok(BrokerResponse::Ack(ack)) if ack.accepted && ack.operation == op_name => Ok(()),
         Ok(BrokerResponse::Ack(ack)) => {
             tracing::warn!(
@@ -12927,6 +13296,7 @@ fn open_zone_store_from_broker(
             Ok(resource_runtime::OpenedZoneStore {
                 response,
                 database_fd: fd,
+                external_inventory: None,
             })
         }
         BrokerResponse::Error(error) => Err(TypedError::InternalBrokerUnavailable {
@@ -12949,6 +13319,7 @@ async fn open_resource_plane(
         return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
     }
     let mut plane = resource_runtime::ResourcePlane::new();
+    let broker_evidence = load_broker_audit_evidence(state)?;
     let zones = authoritative_zone_ids(resolver)
         .map_err(|_| resource_runtime::ResourceRuntimeError::ZoneStoreIdInvalid)?;
     for zone in zones {
@@ -12959,13 +13330,39 @@ async fn open_resource_plane(
                 return Err(resource_runtime::ResourceRuntimeError::StoreOpenFailed);
             }
         };
-        let mut runtime = match resource_runtime::ZoneResourceRuntime::open(zone, opened).await {
-            Ok(runtime) => runtime,
-            Err(error) => {
-                let _ = plane.shutdown().await;
-                return Err(error);
-            }
-        };
+        let zone_state_dir = state
+            .daemon_state_dir
+            .parent()
+            .unwrap_or(state.daemon_state_dir.as_path())
+            .join("zones")
+            .join(zone.as_str());
+        let audit_dir = zone_state_dir.join("audit");
+        let telemetry_path = zone_state_dir.join("telemetry").join("emitter.sock");
+        #[cfg(not(test))]
+        if !audit_dir.is_absolute() {
+            let _ = plane.shutdown().await;
+            return Err(resource_runtime::ResourceRuntimeError::StoreOpenFailed);
+        }
+        let audit_sink = Arc::new(
+            AuditSink::open(&audit_dir)
+                .map_err(|_| resource_runtime::ResourceRuntimeError::StoreOpenFailed)?,
+        );
+        let mut runtime =
+            match resource_runtime::ZoneResourceRuntime::open_with_audit_and_evidence_and_telemetry(
+                zone,
+                opened,
+                audit_sink,
+                Arc::clone(&broker_evidence),
+                telemetry_path,
+            )
+            .await
+            {
+                Ok(runtime) => runtime,
+                Err(error) => {
+                    let _ = plane.shutdown().await;
+                    return Err(error);
+                }
+            };
         runtime.set_provider_path_ready(provider_ready);
         if let Err(error) = runtime.require_ready() {
             let _ = runtime.shutdown().await;
@@ -12983,26 +13380,138 @@ async fn open_resource_plane(
     Ok(Arc::new(plane))
 }
 
+#[derive(serde::Deserialize)]
+struct BrokerAuditEvidenceLine {
+    #[serde(default)]
+    zone_id: Option<AuditZoneId>,
+    #[serde(default)]
+    operation_identity: Option<OperationIdentity>,
+    #[serde(default)]
+    decision: Option<String>,
+    #[serde(default)]
+    result: Option<String>,
+    #[serde(default)]
+    zone_operation_key: Option<ZoneOperationKey>,
+}
+
+fn load_broker_audit_evidence(
+    state: &ServerState,
+) -> Result<Arc<d2b_resource_store_redb::BrokerEvidenceIndex>, resource_runtime::ResourceRuntimeError>
+{
+    let mut evidence = BTreeMap::new();
+    let mut cursor = None;
+    for _ in 0..1024 {
+        let response = dispatch_broker_request_as(
+            state,
+            BrokerRequest::ExportBrokerAudit(ExportBrokerAuditRequest {
+                filter: None,
+                since: None,
+                cursor: cursor.clone(),
+                limit: 1024,
+            }),
+            BrokerCallerRole::AdminUid {
+                uid: state.daemon_uid,
+            },
+        )
+        .map_err(|_| resource_runtime::ResourceRuntimeError::StoreOpenFailed)?;
+        let BrokerResponse::ExportBrokerAudit(response) = response else {
+            return Err(resource_runtime::ResourceRuntimeError::StoreOpenFailed);
+        };
+        for entry in response.entries {
+            if entry.error.is_some() {
+                return Err(resource_runtime::ResourceRuntimeError::StoreOpenFailed);
+            }
+            let value = entry
+                .record
+                .ok_or(resource_runtime::ResourceRuntimeError::StoreOpenFailed)?;
+            let record_class = value.get("record_class").and_then(Value::as_str);
+            let diagnostic_or_legacy = record_class != Some("durability")
+                || value
+                    .get("durability")
+                    .and_then(Value::as_bool)
+                    .is_some_and(|durability| !durability);
+            if diagnostic_or_legacy {
+                continue;
+            }
+            let parsed = serde_json::from_value::<BrokerAuditEvidenceLine>(value)
+                .map_err(|_| resource_runtime::ResourceRuntimeError::StoreOpenFailed)?;
+            let (
+                Some(zone_id),
+                Some(operation_identity),
+                Some(decision),
+                Some(result),
+                Some(zone_operation_key),
+            ) = (
+                parsed.zone_id,
+                parsed.operation_identity,
+                parsed.decision,
+                parsed.result,
+                parsed.zone_operation_key,
+            )
+            else {
+                return Err(resource_runtime::ResourceRuntimeError::StoreOpenFailed);
+            };
+            let item = evidence_from_decision_result(
+                zone_id,
+                operation_identity,
+                Some(&zone_operation_key),
+                Some(&decision),
+                Some(&result),
+            )
+            .map_err(|_| resource_runtime::ResourceRuntimeError::StoreOpenFailed)?;
+            let key = item.key.clone();
+            if let Some(previous) = evidence.insert(key, item.clone())
+                && (previous.outcome != item.outcome
+                    || previous.effect_durable != item.effect_durable)
+            {
+                return Err(resource_runtime::ResourceRuntimeError::StoreOpenFailed);
+            }
+        }
+        if response.complete {
+            return Ok(Arc::new(d2b_resource_store_redb::BrokerEvidenceIndex::new(
+                evidence,
+            )));
+        }
+        cursor = response.next_cursor;
+        if cursor.is_none() {
+            return Err(resource_runtime::ResourceRuntimeError::StoreOpenFailed);
+        }
+    }
+    Err(resource_runtime::ResourceRuntimeError::StoreOpenFailed)
+}
+
 fn audit_resource_plane(
     state: &ServerState,
-    zone: &ZoneId,
+    zone: &d2b_contracts::v3::ZoneId,
     action: daemon_audit::ResourcePlaneAction,
     result: daemon_audit::ResourcePlaneResult,
-) {
-    if let Err(error) =
-        state
-            .daemon_audit
-            .write_event(&daemon_audit::DaemonEvent::ResourcePlaneLifecycle {
+) -> Result<(), std::io::Error> {
+    state.daemon_audit.write_event_with_authority(
+        &daemon_audit::DaemonEvent::ResourcePlaneLifecycle {
+            zone: zone.as_str().to_owned(),
+            action,
+            result,
+        },
+        daemon_audit::DaemonAuditLog::authority_for(
+            &daemon_audit::DaemonEvent::ResourcePlaneLifecycle {
                 zone: zone.as_str().to_owned(),
                 action,
                 result,
-            })
-    {
-        tracing::warn!(error = %error, "resource plane lifecycle audit write failed");
-    }
+            },
+        ),
+    )
 }
 
-async fn shutdown_resource_plane(state: &ServerState) {
+fn record_authoritative_resource_plane_audit(
+    state: &ServerState,
+    zone: &d2b_contracts::v3::ZoneId,
+    action: daemon_audit::ResourcePlaneAction,
+    result: daemon_audit::ResourcePlaneResult,
+) -> Result<(), std::io::Error> {
+    audit_resource_plane(state, zone, action, result)
+}
+
+async fn shutdown_resource_plane(state: &ServerState) -> Result<(), std::io::Error> {
     let plane = state
         .resource_plane
         .lock()
@@ -13013,12 +13522,12 @@ async fn shutdown_resource_plane(state: &ServerState) {
         match Arc::try_unwrap(plane) {
             Ok(plane) if plane.has_live_request_owners() => {
                 for zone in &zones {
-                    audit_resource_plane(
+                    record_authoritative_resource_plane_audit(
                         state,
                         zone,
                         daemon_audit::ResourcePlaneAction::Shutdown,
                         daemon_audit::ResourcePlaneResult::Refused,
-                    );
+                    )?;
                 }
                 match state.resource_plane.lock() {
                     Ok(mut slot) => *slot = Some(Arc::new(plane)),
@@ -13028,22 +13537,22 @@ async fn shutdown_resource_plane(state: &ServerState) {
             Ok(mut plane) => match plane.shutdown().await {
                 Ok(()) => {
                     for zone in &zones {
-                        audit_resource_plane(
+                        record_authoritative_resource_plane_audit(
                             state,
                             zone,
                             daemon_audit::ResourcePlaneAction::Shutdown,
                             daemon_audit::ResourcePlaneResult::Closed,
-                        );
+                        )?;
                     }
                 }
                 Err(resource_runtime::ResourceRuntimeError::LiveRequestOwners) => {
                     for zone in &zones {
-                        audit_resource_plane(
+                        record_authoritative_resource_plane_audit(
                             state,
                             zone,
                             daemon_audit::ResourcePlaneAction::Shutdown,
                             daemon_audit::ResourcePlaneResult::Refused,
-                        );
+                        )?;
                     }
                     match state.resource_plane.lock() {
                         Ok(mut slot) => *slot = Some(Arc::new(plane)),
@@ -13053,12 +13562,12 @@ async fn shutdown_resource_plane(state: &ServerState) {
                 }
                 Err(error) => {
                     for zone in &zones {
-                        audit_resource_plane(
+                        record_authoritative_resource_plane_audit(
                             state,
                             zone,
                             daemon_audit::ResourcePlaneAction::Shutdown,
                             daemon_audit::ResourcePlaneResult::Error,
-                        );
+                        )?;
                     }
                     tracing::warn!(error = %error, "resource plane shutdown failed");
                 }
@@ -13069,17 +13578,18 @@ async fn shutdown_resource_plane(state: &ServerState) {
                     Err(_) => std::mem::forget(plane),
                 }
                 for zone in &zones {
-                    audit_resource_plane(
+                    record_authoritative_resource_plane_audit(
                         state,
                         zone,
                         daemon_audit::ResourcePlaneAction::Shutdown,
                         daemon_audit::ResourcePlaneResult::Refused,
-                    );
+                    )?;
                 }
                 tracing::warn!("resource plane still has live request owners during shutdown");
             }
         }
     }
+    Ok(())
 }
 
 fn duplicate_received_fd(
@@ -13185,6 +13695,7 @@ fn node_requires_disk_init_dispatch(node: &ProcessNode) -> bool {
 struct VmStartRunner<'a> {
     state: &'a ServerState,
     resolver: &'a BundleResolver,
+    caller_role: BrokerCallerRole,
     /// Workload identity from the `VmProcessDag` this runner was constructed
     /// for.  `None` for VMs that predate realm workload declarations; `Some`
     /// for VMs declared as realm workloads.  Threaded into every
@@ -13242,7 +13753,7 @@ fn emit_guest_control_readiness_event(
 impl VmStartRunner<'_> {
     fn sync_store_view(&self, vm: &str) -> Result<(), String> {
         let intent = resolve_store_view_intent_for_vm(self.resolver, vm)?;
-        match dispatch_broker_request(
+        match dispatch_broker_request_as(
             self.state,
             BrokerRequest::StoreSync(d2b_contracts::broker_wire::StoreSyncRequest {
                 vm_id: VmId::new(vm),
@@ -13251,6 +13762,7 @@ impl VmStartRunner<'_> {
                     .map_err(|_| "store-view-generation-overflow".to_owned())?,
                 tracing_span_id: None,
             }),
+            self.caller_role.clone(),
         ) {
             Ok(BrokerResponse::StoreSync(_)) => Ok(()),
             Ok(BrokerResponse::Error(error)) => {
@@ -13309,12 +13821,13 @@ impl VmStartRunner<'_> {
         // `node_requires_disk_init_dispatch` for hermetic unit
         // testing - the regression covered by panel-test R1 #2.
         if node_requires_disk_init_dispatch(node) {
-            match dispatch_broker_request(
+            match dispatch_broker_request_as(
                 self.state,
                 BrokerRequest::DiskInit(d2b_contracts::broker_wire::DiskInitRequest {
                     vm_id: VmId::new(vm),
                     tracing_span_id: None,
                 }),
+                self.caller_role.clone(),
             ) {
                 Ok(BrokerResponse::Ack(_)) => {
                     tracing::info!(
@@ -13357,7 +13870,7 @@ impl VmStartRunner<'_> {
                 }
             }
         }
-        match dispatch_broker_request_with_fds_timeout(
+        match dispatch_broker_request_with_fds_timeout_as(
             self.state,
             BrokerRequest::SpawnRunner(BrokerSpawnRunnerRequest {
                 workload_identity: self.workload_identity.clone(),
@@ -13368,6 +13881,7 @@ impl VmStartRunner<'_> {
                 runtime_allocations: vec![],
                 tracing_span_id: None,
             }),
+            self.caller_role.clone(),
             timeout,
         ) {
             Ok((BrokerResponse::SpawnRunner(response), received_fds)) => {
@@ -13380,6 +13894,7 @@ impl VmStartRunner<'_> {
                         &role_id,
                         &response,
                         &received_fds,
+                        self.caller_role.clone(),
                     );
                     close_received_fds(&received_fds);
                     return Err(error);
@@ -13504,12 +14019,13 @@ impl VmStartRunner<'_> {
         node: &ProcessNode,
         timeout: Duration,
     ) -> Result<(), String> {
-        match dispatch_broker_request_with_timeout(
+        match dispatch_broker_request_with_timeout_as(
             self.state,
             BrokerRequest::QemuMediaBoot(BrokerQemuMediaBootRequest {
                 vm_id: VmId::new(vm),
                 tracing_span_id: None,
             }),
+            self.caller_role.clone(),
             timeout,
         ) {
             Ok(BrokerResponse::QemuMediaBoot(response)) => {
@@ -13573,7 +14089,7 @@ impl VmStartRunner<'_> {
         let expected_uid = ch.profile.uid;
         let expected_gid = ch.profile.gid;
 
-        let (response, received_fds) = dispatch_broker_request_with_fds_timeout(
+        let (response, received_fds) = dispatch_broker_request_with_fds_timeout_as(
             self.state,
             BrokerRequest::OpenHidrawSecurityKey(
                 d2b_contracts::broker_wire::OpenHidrawSecurityKeyRequest {
@@ -13582,6 +14098,7 @@ impl VmStartRunner<'_> {
                     tracing_span_id: None,
                 },
             ),
+            self.caller_role.clone(),
             Duration::from_secs(30),
         )
         .map_err(|error| format!("sk-broker-dispatch:{}", error.message()))?;
@@ -13644,10 +14161,14 @@ impl VmStartRunner<'_> {
     ) -> Result<(), String> {
         let params = resolve_guest_control_probe_params(self.state, self.resolver, vm)?;
         let broker_path = broker_socket_path(self.state);
+        let caller_role = self.caller_role.clone();
         let deadline = budget.readiness;
         let node_id = node.id.0.clone();
         let run = tokio::task::spawn_blocking(move || {
-            let probe = guest_control_bridge::RealGuestControlProbe::new(broker_path);
+            let probe = guest_control_bridge::RealGuestControlProbe::with_caller_role(
+                broker_path,
+                caller_role,
+            );
             let clock = guest_control_bridge::RealProbeClock::new();
             guest_control_bridge::run_guest_control_readiness_loop(
                 &probe,
@@ -14353,6 +14874,7 @@ fn stop_unregistered_spawned_runner(
     role_id: &str,
     response: &d2b_contracts::broker_wire::SpawnRunnerResponse,
     received_fds: &[RawFd],
+    caller_role: BrokerCallerRole,
 ) {
     let pidfd = duplicate_received_fd(
         received_fds,
@@ -14377,14 +14899,10 @@ fn stop_unregistered_spawned_runner(
         response,
         pidfd.as_ref().ok(),
         RunnerSignal::Term,
+        caller_role.clone(),
     );
     if wait_unregistered_spawned_runner_reaped(state, vm, role_id, Duration::from_secs(2)) {
-        deregister_runner_pidfd_via_broker(
-            state,
-            BrokerCallerRole::AdminUid { uid: 0 },
-            vm,
-            role_id,
-        );
+        deregister_runner_pidfd_via_broker(state, caller_role.clone(), vm, role_id);
         return;
     }
 
@@ -14401,14 +14919,10 @@ fn stop_unregistered_spawned_runner(
         response,
         pidfd.as_ref().ok(),
         RunnerSignal::Kill,
+        caller_role.clone(),
     );
     if wait_unregistered_spawned_runner_reaped(state, vm, role_id, Duration::from_secs(2)) {
-        deregister_runner_pidfd_via_broker(
-            state,
-            BrokerCallerRole::AdminUid { uid: 0 },
-            vm,
-            role_id,
-        );
+        deregister_runner_pidfd_via_broker(state, caller_role, vm, role_id);
     } else {
         tracing::warn!(
             vm = %vm,
@@ -14426,6 +14940,7 @@ fn signal_unregistered_spawned_runner(
     response: &d2b_contracts::broker_wire::SpawnRunnerResponse,
     pidfd: Option<&OwnedFd>,
     signal: RunnerSignal,
+    caller_role: BrokerCallerRole,
 ) {
     let signal_number = match signal {
         RunnerSignal::Term => libc::SIGTERM,
@@ -14464,7 +14979,7 @@ fn signal_unregistered_spawned_runner(
         expected_start_time_ticks: Some(response.start_time_ticks),
         tracing_span_id: None,
     });
-    match dispatch_broker_request_as(state, request, BrokerCallerRole::AdminUid { uid: 0 }) {
+    match dispatch_broker_request_as(state, request, caller_role) {
         Ok(BrokerResponse::SignalRunner(resp))
             if resp.vm_id.as_str() == vm && resp.role_id.as_str() == role_id && resp.signaled =>
         {
@@ -14657,6 +15172,7 @@ fn rollback_failed_vm_start(
     state: &ServerState,
     vm: &str,
     tracked_roles: &[String],
+    caller_role: BrokerCallerRole,
 ) -> Result<(), Value> {
     let tracked: BTreeSet<&str> = tracked_roles.iter().map(String::as_str).collect();
     let mut entries = ordered_vm_stop_entries(state, vm)
@@ -14681,7 +15197,7 @@ fn rollback_failed_vm_start(
         );
         stop_vm_pidfd_role(
             state,
-            BrokerCallerRole::AdminUid { uid: 0 },
+            caller_role.clone(),
             "vm start",
             vm,
             &entry.role,
@@ -14739,6 +15255,7 @@ fn cleanup_stale_qemu_media_dependencies_before_start(
     state: &ServerState,
     vm: &str,
     tracked_roles: &[String],
+    caller_role: BrokerCallerRole,
 ) -> Result<usize, Value> {
     let stale_roles = stale_qemu_media_dependency_roles_from_entries(
         tracked_roles,
@@ -14752,7 +15269,7 @@ fn cleanup_stale_qemu_media_dependencies_before_start(
         );
         stop_vm_pidfd_role(
             state,
-            BrokerCallerRole::AdminUid { uid: 0 },
+            caller_role.clone(),
             "vm start",
             vm,
             role,
@@ -14921,7 +15438,6 @@ fn provider_metric_label(kind: Option<provider_shutdown::ProviderKind>) -> &'sta
 
 fn record_vm_shutdown_metric(
     state: &ServerState,
-    vm: &str,
     provider: Option<provider_shutdown::ProviderKind>,
     outcome: VmShutdownOutcome,
     elapsed: Duration,
@@ -14930,11 +15446,11 @@ fn record_vm_shutdown_metric(
     let outcome = outcome.label();
     state.metrics_registry.counter_inc(
         "d2b_daemon_vm_shutdown_total",
-        &[("vm", vm), ("vmm", vmm), ("outcome", outcome)],
+        &[("vmm", vmm), ("outcome", outcome)],
     );
     state.metrics_registry.histogram_observe(
         "d2b_daemon_vm_shutdown_duration_seconds",
-        &[("vm", vm), ("vmm", vmm), ("outcome", outcome)],
+        &[("vmm", vmm), ("outcome", outcome)],
         elapsed.as_secs_f64(),
     );
 }
@@ -14946,20 +15462,18 @@ fn emit_vm_shutdown_intent_audit(
     provider: Option<provider_shutdown::ProviderKind>,
     force_requested: bool,
     timeout_secs: u64,
-) {
+) -> Result<(), std::io::Error> {
     let peer_uid = broker_caller_uid(caller_role);
-    if let Err(err) = state
-        .daemon_audit
-        .write_event(&daemon_audit::DaemonEvent::VmShutdownIntent {
+    state.daemon_audit.write_event_with_authority(
+        &daemon_audit::DaemonEvent::VmShutdownIntent {
             vm: vm.to_owned(),
             peer_uid,
             provider: provider_audit_label(provider),
             force_requested,
             timeout_secs,
-        })
-    {
-        tracing::warn!(error = %err, vm = %vm, "failed to write vm shutdown intent audit event");
-    }
+        },
+        daemon_audit::DaemonAuditAuthority::Authoritative,
+    )
 }
 
 fn emit_vm_shutdown_outcome_audit(
@@ -14969,22 +15483,20 @@ fn emit_vm_shutdown_outcome_audit(
     provider: Option<provider_shutdown::ProviderKind>,
     outcome: VmShutdownOutcome,
     elapsed: Duration,
-) {
+) -> Result<(), std::io::Error> {
     let peer_uid = broker_caller_uid(caller_role);
-    if let Err(err) =
-        state
-            .daemon_audit
-            .write_event(&daemon_audit::DaemonEvent::VmShutdownOutcome {
-                vm: vm.to_owned(),
-                peer_uid,
-                provider: provider_audit_label(provider),
-                outcome: outcome.audit(),
-                elapsed_ms: elapsed.as_millis() as u64,
-            })
-    {
-        tracing::warn!(error = %err, vm = %vm, "failed to write vm shutdown outcome audit event");
-    }
+    state.daemon_audit.write_event_with_authority(
+        &daemon_audit::DaemonEvent::VmShutdownOutcome {
+            vm: vm.to_owned(),
+            peer_uid,
+            provider: provider_audit_label(provider),
+            outcome: outcome.audit(),
+            elapsed_ms: elapsed.as_millis() as u64,
+        },
+        daemon_audit::DaemonAuditAuthority::Authoritative,
+    )?;
     persist_vm_shutdown_marker(state, vm, outcome, elapsed);
+    Ok(())
 }
 
 fn persist_vm_shutdown_marker(
@@ -15908,14 +16420,21 @@ fn stop_vmm_runner_with_provider(
     let manifest_entry = manifest_entry_for_vm(state, input.vm)?;
     let target = provider_shutdown_target_for_role(&manifest_entry, input.vm, input.role_id)?;
     let graceful_timeout = graceful_shutdown_timeout_for(state, &manifest_entry);
-    emit_vm_shutdown_intent_audit(
+    if emit_vm_shutdown_intent_audit(
         state,
         input.vm,
         &input.caller_role,
         Some(target.kind),
         input.force_requested,
         graceful_timeout.as_secs(),
-    );
+    )
+    .is_err()
+    {
+        return Some(Err(daemon_failure_response(
+            input.verb,
+            "authoritative VM shutdown intent audit failed".to_owned(),
+        )));
+    }
     let started = Instant::now();
     if input.force_requested {
         let report = stop_vm_pidfd_role(
@@ -15932,21 +16451,22 @@ fn stop_vmm_runner_with_provider(
             .ok()
             .and_then(|report| report.shutdown_outcome)
             .unwrap_or(VmShutdownOutcome::ForceRequested);
-        record_vm_shutdown_metric(
-            state,
-            input.vm,
-            Some(target.kind),
-            audit_outcome,
-            started.elapsed(),
-        );
-        emit_vm_shutdown_outcome_audit(
+        record_vm_shutdown_metric(state, Some(target.kind), audit_outcome, started.elapsed());
+        if emit_vm_shutdown_outcome_audit(
             state,
             input.vm,
             &input.caller_role,
             Some(target.kind),
             audit_outcome,
             started.elapsed(),
-        );
+        )
+        .is_err()
+        {
+            return Some(Err(daemon_failure_response(
+                input.verb,
+                "authoritative VM shutdown outcome audit failed".to_owned(),
+            )));
+        }
         return Some(report.map(|mut report| {
             if report.shutdown_outcome != Some(VmShutdownOutcome::CleanupFailed) {
                 report.shutdown_outcome = Some(VmShutdownOutcome::ForceRequested);
@@ -15969,21 +16489,22 @@ fn stop_vmm_runner_with_provider(
             .ok()
             .and_then(|report| report.shutdown_outcome)
             .unwrap_or(VmShutdownOutcome::Disabled);
-        record_vm_shutdown_metric(
-            state,
-            input.vm,
-            Some(target.kind),
-            audit_outcome,
-            started.elapsed(),
-        );
-        emit_vm_shutdown_outcome_audit(
+        record_vm_shutdown_metric(state, Some(target.kind), audit_outcome, started.elapsed());
+        if emit_vm_shutdown_outcome_audit(
             state,
             input.vm,
             &input.caller_role,
             Some(target.kind),
             audit_outcome,
             started.elapsed(),
-        );
+        )
+        .is_err()
+        {
+            return Some(Err(daemon_failure_response(
+                input.verb,
+                "authoritative VM shutdown outcome audit failed".to_owned(),
+            )));
+        }
         return Some(report.map(|mut report| {
             if report.shutdown_outcome != Some(VmShutdownOutcome::CleanupFailed) {
                 report.shutdown_outcome = Some(VmShutdownOutcome::Disabled);
@@ -16017,21 +16538,22 @@ fn stop_vmm_runner_with_provider(
         },
     ));
     if let Some(report) = report {
-        record_vm_shutdown_metric(
-            state,
-            input.vm,
-            Some(target.kind),
-            outcome,
-            started.elapsed(),
-        );
-        emit_vm_shutdown_outcome_audit(
+        record_vm_shutdown_metric(state, Some(target.kind), outcome, started.elapsed());
+        if emit_vm_shutdown_outcome_audit(
             state,
             input.vm,
             &input.caller_role,
             Some(target.kind),
             outcome,
             started.elapsed(),
-        );
+        )
+        .is_err()
+        {
+            return Some(Err(daemon_failure_response(
+                input.verb,
+                "authoritative VM shutdown outcome audit failed".to_owned(),
+            )));
+        }
         return Some(Ok(report));
     }
 
@@ -16057,21 +16579,22 @@ fn stop_vmm_runner_with_provider(
         .ok()
         .and_then(|report| report.shutdown_outcome)
         .unwrap_or(outcome);
-    record_vm_shutdown_metric(
-        state,
-        input.vm,
-        Some(target.kind),
-        audit_outcome,
-        started.elapsed(),
-    );
-    emit_vm_shutdown_outcome_audit(
+    record_vm_shutdown_metric(state, Some(target.kind), audit_outcome, started.elapsed());
+    if emit_vm_shutdown_outcome_audit(
         state,
         input.vm,
         &input.caller_role,
         Some(target.kind),
         audit_outcome,
         started.elapsed(),
-    );
+    )
+    .is_err()
+    {
+        return Some(Err(daemon_failure_response(
+            input.verb,
+            "authoritative VM shutdown outcome audit failed".to_owned(),
+        )));
+    }
     Some(fallback)
 }
 
@@ -16441,8 +16964,9 @@ fn dispatch_broker_host_prep_step(
     verb: &str,
     op_name: &str,
     request: BrokerRequest,
+    caller_role: BrokerCallerRole,
 ) -> Result<(), Value> {
-    match dispatch_broker_request(state, request) {
+    match dispatch_broker_request_as(state, request, caller_role) {
         Ok(BrokerResponse::Error(error)) => {
             tracing::warn!(
                 broker_kind = %error.kind,
@@ -16483,6 +17007,7 @@ fn execute_host_prep_dag(
     state: &ServerState,
     vm: &str,
     steps: &[d2b_host::host_prep_dag::HostPrepStep],
+    caller_role: BrokerCallerRole,
 ) -> Result<(), Value> {
     use d2b_host::host_prep_dag::HostPrepStepKind;
     const VERB: &str = "vm start";
@@ -16609,7 +17134,9 @@ fn execute_host_prep_dag(
                         tracing_span_id: None,
                     },
                 );
-                if let Err(response) = dispatch_broker_host_prep_step(state, VERB, op_name, req) {
+                if let Err(response) =
+                    dispatch_broker_host_prep_step(state, VERB, op_name, req, caller_role.clone())
+                {
                     tracing::warn!(
                         vm = %vm,
                         step_id = %step.id,
@@ -16632,7 +17159,9 @@ fn execute_host_prep_dag(
                         role_id,
                         tracing_span_id: None,
                     });
-                if let Err(response) = dispatch_broker_host_prep_step(state, VERB, op_name, req) {
+                if let Err(response) =
+                    dispatch_broker_host_prep_step(state, VERB, op_name, req, caller_role.clone())
+                {
                     tracing::warn!(
                         vm = %vm,
                         step_id = %step.id,
@@ -16660,7 +17189,9 @@ fn execute_host_prep_dag(
                     destroy: false,
                     tracing_span_id: None,
                 });
-                if let Err(response) = dispatch_broker_ack_request(state, VERB, op_name, req) {
+                if let Err(response) =
+                    dispatch_broker_ack_request_as(state, VERB, op_name, req, caller_role.clone())
+                {
                     tracing::warn!(
                         vm = %vm,
                         step_id = %step.id,
@@ -16718,7 +17249,13 @@ fn execute_host_prep_dag(
                         destroy: false,
                         tracing_span_id: None,
                     });
-                    if let Err(response) = dispatch_broker_ack_request(state, VERB, op_name, req) {
+                    if let Err(response) = dispatch_broker_ack_request_as(
+                        state,
+                        VERB,
+                        op_name,
+                        req,
+                        caller_role.clone(),
+                    ) {
                         tracing::warn!(
                             vm = %vm,
                             step_id = %step.id,
@@ -16756,7 +17293,9 @@ fn execute_host_prep_dag(
                         tracing_span_id: None,
                     },
                 );
-                if let Err(response) = dispatch_broker_host_prep_step(state, VERB, op_name, req) {
+                if let Err(response) =
+                    dispatch_broker_host_prep_step(state, VERB, op_name, req, caller_role.clone())
+                {
                     tracing::warn!(
                         vm = %vm,
                         step_id = %step.id,
@@ -16782,7 +17321,9 @@ fn execute_host_prep_dag(
                 continue;
             }
         };
-        if let Err(response) = dispatch_broker_ack_request(state, VERB, op_name, request) {
+        if let Err(response) =
+            dispatch_broker_ack_request_as(state, VERB, op_name, request, caller_role.clone())
+        {
             tracing::warn!(
                 vm = %vm,
                 step_id = %step.id,
@@ -16795,9 +17336,24 @@ fn execute_host_prep_dag(
     Ok(())
 }
 
+#[cfg(test)]
 fn dispatch_broker_vm_start(
     state: &ServerState,
     request: public_wire::VmLifecycleRequest,
+) -> Result<Value, TypedError> {
+    dispatch_broker_vm_start_as(
+        state,
+        request,
+        BrokerCallerRole::AdminUid {
+            uid: state.daemon_uid,
+        },
+    )
+}
+
+fn dispatch_broker_vm_start_as(
+    state: &ServerState,
+    request: public_wire::VmLifecycleRequest,
+    caller_role: BrokerCallerRole,
 ) -> Result<Value, TypedError> {
     const VERB: &str = "vm start";
 
@@ -16820,15 +17376,13 @@ fn dispatch_broker_vm_start(
         }
     };
     if !provider_route_available {
-        return dispatch_broker_vm_start_inner(state, request);
+        return dispatch_broker_vm_start_inner(state, request, caller_role);
     }
 
     let effect = DaemonProviderLifecycleEffect {
         state,
         request: request.clone(),
-        caller_role: BrokerCallerRole::AdminUid {
-            uid: state.daemon_uid,
-        },
+        caller_role: caller_role.clone(),
         term_timeout: VM_STOP_TIMEOUT,
         kill_timeout: VM_STOP_TIMEOUT,
         operation: provider_effects::GuestLifecycleOperation::Start,
@@ -16837,11 +17391,11 @@ fn dispatch_broker_vm_start(
         &effect.caller_role,
         &request.vm,
         effect.operation,
-        next_provider_lifecycle_operation_id("start", &request.vm),
+        next_provider_lifecycle_operation_id("start", &request),
         &effect,
     ) {
         Ok(provider_registry::ProviderRuntimeDispatch::Legacy) => {
-            dispatch_broker_vm_start_inner(state, request)
+            dispatch_broker_vm_start_inner(state, request, caller_role)
         }
         Ok(provider_registry::ProviderRuntimeDispatch::Active(
             provider_effects::EffectDispatch::Dispatched(response),
@@ -16875,14 +17429,45 @@ struct DaemonProviderLifecycleEffect<'a> {
 impl provider_effects::ProviderLifecycleEffectPort for DaemonProviderLifecycleEffect<'_> {
     type Output = Value;
 
+    fn actual_state(
+        &self,
+        _request: &provider_effects::GuestLifecycleRequest,
+    ) -> Result<provider_effects::GuestLifecycleState, provider_effects::ProviderEffectError> {
+        self.state
+            .pidfd_table
+            .prune_dead_entries()
+            .map_err(|_| provider_effects::ProviderEffectError::StateUnavailable)?;
+        let manifest_entry = manifest_entry_for_vm(self.state, &self.request.vm)
+            .ok_or(provider_effects::ProviderEffectError::StateUnavailable)?;
+        let processes = load_json::<ProcessesJson>(&self.state.config.artifacts.processes_path)
+            .map_err(|_| provider_effects::ProviderEffectError::StateUnavailable)?;
+        let process_vm = processes
+            .vms
+            .iter()
+            .find(|entry| entry.vm == self.request.vm);
+        let lifecycle =
+            public_vm_lifecycle(self.state, &self.request.vm, &manifest_entry, process_vm);
+        let lifecycle_state = lifecycle
+            .get("state")
+            .and_then(Value::as_str)
+            .ok_or(provider_effects::ProviderEffectError::StateUnavailable)?;
+        match lifecycle_state {
+            "Running" => Ok(provider_effects::GuestLifecycleState::Started),
+            "Stopped" => Ok(provider_effects::GuestLifecycleState::Stopped),
+            _ => Err(provider_effects::ProviderEffectError::StateUnavailable),
+        }
+    }
+
     fn apply(
         &self,
         _request: &provider_effects::GuestLifecycleRequest,
     ) -> Result<Self::Output, provider_effects::ProviderEffectError> {
         let result = match self.operation {
-            provider_effects::GuestLifecycleOperation::Start => {
-                dispatch_broker_vm_start_inner(self.state, self.request.clone())
-            }
+            provider_effects::GuestLifecycleOperation::Start => dispatch_broker_vm_start_inner(
+                self.state,
+                self.request.clone(),
+                self.caller_role.clone(),
+            ),
             provider_effects::GuestLifecycleOperation::Stop => {
                 dispatch_broker_vm_stop_with_timeout_as_inner(
                     self.state,
@@ -16900,8 +17485,19 @@ impl provider_effects::ProviderLifecycleEffectPort for DaemonProviderLifecycleEf
     }
 }
 
-fn next_provider_lifecycle_operation_id(operation: &str, guest: &str) -> String {
-    provider_registry::next_lifecycle_operation_id(operation, guest)
+fn next_provider_lifecycle_operation_id(
+    operation: &str,
+    request: &public_wire::VmLifecycleRequest,
+) -> String {
+    let fingerprint = format!(
+        "force={};no_wait_api={};dry_run={};apply={};json={}",
+        request.force,
+        request.no_wait_api,
+        request.flags.dry_run,
+        request.flags.apply,
+        request.flags.json
+    );
+    provider_registry::next_lifecycle_operation_id(operation, &request.vm, &fingerprint)
 }
 
 fn provider_lifecycle_failure_response(
@@ -16909,13 +17505,23 @@ fn provider_lifecycle_failure_response(
     guest: &str,
     error: provider_effects::ProviderEffectError,
 ) -> Value {
+    let remediation = match error {
+        provider_effects::ProviderEffectError::MutationPending => {
+            "Retry after the in-progress Provider lifecycle request completes.".to_owned()
+        }
+        provider_effects::ProviderEffectError::StateUnavailable => {
+            "Retry after d2bd lifecycle state becomes available.".to_owned()
+        }
+        _ => "Admin: rebuild the trusted Provider catalog and retry the lifecycle operation."
+            .to_owned(),
+    };
     broker_failure_response(
         verb,
         format!(
             "Provider lifecycle dispatch for {guest} refused ({})",
             error.code()
         ),
-        "Admin: rebuild the trusted Provider catalog and retry the lifecycle operation.".to_owned(),
+        remediation,
         None,
     )
 }
@@ -16923,6 +17529,7 @@ fn provider_lifecycle_failure_response(
 fn dispatch_broker_vm_start_inner(
     state: &ServerState,
     request: public_wire::VmLifecycleRequest,
+    caller_role: BrokerCallerRole,
 ) -> Result<Value, TypedError> {
     const VERB: &str = "vm start";
 
@@ -17022,7 +17629,8 @@ fn dispatch_broker_vm_start_inner(
     if std::env::var("D2B_HOST_PREP_DAG_EXECUTE")
         .map(|v| v == "1")
         .unwrap_or(false)
-        && let Err(response) = execute_host_prep_dag(state, &request.vm, &host_prep_steps)
+        && let Err(response) =
+            execute_host_prep_dag(state, &request.vm, &host_prep_steps, caller_role.clone())
     {
         return Ok(response);
     }
@@ -17040,6 +17648,7 @@ fn dispatch_broker_vm_start_inner(
     let runner = VmStartRunner {
         state,
         resolver: &resolver,
+        caller_role: caller_role.clone(),
         workload_identity: dag.workload_identity.clone(),
     };
 
@@ -17163,7 +17772,12 @@ fn dispatch_broker_vm_start_inner(
             );
         }
     }
-    match cleanup_stale_qemu_media_dependencies_before_start(state, &request.vm, &tracked_roles) {
+    match cleanup_stale_qemu_media_dependencies_before_start(
+        state,
+        &request.vm,
+        &tracked_roles,
+        caller_role.clone(),
+    ) {
         Ok(n) if n > 0 => {
             tracing::info!(
                 vm = %request.vm,
@@ -17188,6 +17802,7 @@ fn dispatch_broker_vm_start_inner(
                     state,
                     &resolver,
                     &request.vm,
+                    caller_role.clone(),
                     USBIP_STRICT_RECONCILE_TIMEOUT,
                     USBIP_STRICT_RECONCILE_BACKOFF,
                 ) {
@@ -17225,6 +17840,7 @@ fn dispatch_broker_vm_start_inner(
                     &resolver,
                     &request.vm,
                     runner_role_id,
+                    caller_role.clone(),
                 );
                 match scheduled {
                     UsbipBackgroundReconcileSpawn::Spawned => append_response_summary(
@@ -17334,7 +17950,9 @@ fn dispatch_broker_vm_start_inner(
                 "vm start: failed to write ApiReadyTimeout audit event (non-fatal)",
             );
         }
-        if let Err(response) = rollback_failed_vm_start(state, &request.vm, &tracked_roles) {
+        if let Err(response) =
+            rollback_failed_vm_start(state, &request.vm, &tracked_roles, caller_role.clone())
+        {
             return Ok(response);
         }
         return Ok(api_ready_timeout_response(
@@ -17443,6 +18061,7 @@ fn dispatch_broker_vm_start_inner(
                     state,
                     &resolver,
                     &request.vm,
+                    caller_role.clone(),
                     USBIP_STRICT_RECONCILE_TIMEOUT,
                     USBIP_STRICT_RECONCILE_BACKOFF,
                 )
@@ -17456,9 +18075,12 @@ fn dispatch_broker_vm_start_inner(
                                 request.vm
                             )
                         });
-                    if let Err(response) =
-                        rollback_failed_vm_start(state, &request.vm, &tracked_roles)
-                    {
+                    if let Err(response) = rollback_failed_vm_start(
+                        state,
+                        &request.vm,
+                        &tracked_roles,
+                        caller_role.clone(),
+                    ) {
                         return Ok(response);
                     }
                     return Ok(broker_failure_response(
@@ -17492,6 +18114,7 @@ fn dispatch_broker_vm_start_inner(
                 &resolver,
                 &request.vm,
                 vm_start_primary_runner_role_id(&tracked_roles),
+                caller_role.clone(),
             ) {
                 UsbipBackgroundReconcileSpawn::Spawned => {
                     summary.push_str("; USBIP reconciliation scheduled in background");
@@ -17538,7 +18161,9 @@ fn dispatch_broker_vm_start_inner(
         );
         vm_start_runner_exited_response(&request.vm, &role_id, reason_kind, exit_status.as_ref())
     });
-    if let Err(response) = rollback_failed_vm_start(state, &request.vm, &tracked_roles) {
+    if let Err(response) =
+        rollback_failed_vm_start(state, &request.vm, &tracked_roles, caller_role.clone())
+    {
         return Ok(response);
     }
     if let Some(response) = runner_exit_response {
@@ -17797,7 +18422,7 @@ fn dispatch_broker_vm_stop_with_timeout_as(
         &caller_role,
         &request.vm,
         effect.operation,
-        next_provider_lifecycle_operation_id("stop", &request.vm),
+        next_provider_lifecycle_operation_id("stop", &request),
         &effect,
     ) {
         Ok(provider_registry::ProviderRuntimeDispatch::Legacy) => {
@@ -17847,8 +18472,10 @@ fn dispatch_broker_vm_stop_with_timeout_as_inner(
     }
 
     let usb_lifecycle_summary = match load_bundle_resolver(state) {
-        Ok(resolver) => cleanup_usbip_before_vm_stop(state, &resolver, &request.vm)
-            .and_then(|report| usbip_lifecycle_report_summary("stop", &report)),
+        Ok(resolver) => {
+            cleanup_usbip_before_vm_stop(state, &resolver, &request.vm, caller_role.clone())
+                .and_then(|report| usbip_lifecycle_report_summary("stop", &report))
+        }
         Err(error) => match probe_usbip_claim_locks_for_vm_without_bundle(state, &request.vm) {
             UsbipClaimLockProbe::None => {
                 tracing::warn!(
@@ -17994,11 +18621,11 @@ fn dispatch_broker_vm_restart_as(
         return Ok(response);
     }
 
-    let stop_response = dispatch_broker_vm_stop_as(state, request.clone(), caller_role)?;
+    let stop_response = dispatch_broker_vm_stop_as(state, request.clone(), caller_role.clone())?;
     if response_outcome(&stop_response) != Some("applied") {
         return Ok(retarget_mutating_response(&stop_response, VERB));
     }
-    let start_response = dispatch_broker_vm_start(state, request.clone())?;
+    let start_response = dispatch_broker_vm_start_as(state, request.clone(), caller_role)?;
     if response_outcome(&start_response) != Some("applied") {
         return Ok(retarget_mutating_response(&start_response, VERB));
     }
@@ -18013,15 +18640,34 @@ fn dispatch_broker_vm_restart_as(
     ))
 }
 
+#[allow(dead_code)]
 fn dispatch_broker_host_prepare(
     state: &ServerState,
     request: public_wire::HostPrepareRequest,
+) -> Result<Value, TypedError> {
+    dispatch_broker_host_prepare_as(
+        state,
+        request,
+        BrokerCallerRole::AdminUid {
+            uid: state.daemon_uid,
+        },
+    )
+}
+
+fn dispatch_broker_host_prepare_as(
+    state: &ServerState,
+    request: public_wire::HostPrepareRequest,
+    caller_role: BrokerCallerRole,
 ) -> Result<Value, TypedError> {
     const VERB: &str = "host prepare";
 
     if let Some(response) = mutating_verb_preflight(VERB, &request.flags, None) {
         return Ok(response);
     }
+    let dispatch_broker_ack_request =
+        |state: &ServerState, verb: &str, op_name: &str, request: BrokerRequest| {
+            dispatch_broker_ack_request_as(state, verb, op_name, request, caller_role.clone())
+        };
 
     let host = load_host_artifact(state)?;
     if let Err(response) = dispatch_broker_ack_request(
@@ -18116,15 +18762,34 @@ fn dispatch_broker_host_prepare(
     ))
 }
 
+#[allow(dead_code)]
 fn dispatch_broker_host_destroy(
     state: &ServerState,
     request: public_wire::HostDestroyRequest,
+) -> Result<Value, TypedError> {
+    dispatch_broker_host_destroy_as(
+        state,
+        request,
+        BrokerCallerRole::AdminUid {
+            uid: state.daemon_uid,
+        },
+    )
+}
+
+fn dispatch_broker_host_destroy_as(
+    state: &ServerState,
+    request: public_wire::HostDestroyRequest,
+    caller_role: BrokerCallerRole,
 ) -> Result<Value, TypedError> {
     const VERB: &str = "host destroy";
 
     if let Some(response) = mutating_verb_preflight(VERB, &request.flags, None) {
         return Ok(response);
     }
+    let dispatch_broker_ack_request =
+        |state: &ServerState, verb: &str, op_name: &str, request: BrokerRequest| {
+            dispatch_broker_ack_request_as(state, verb, op_name, request, caller_role.clone())
+        };
 
     let host = load_host_artifact(state)?;
     let mut route_ops = 0usize;
@@ -18229,15 +18894,34 @@ fn dispatch_broker_host_destroy(
 /// are scoped to full `host prepare`. On success the persistent
 /// preflight history is reset so the next daemon startup begins with
 /// clean diagnostic evidence.
+#[allow(dead_code)]
 fn dispatch_broker_host_reconcile(
     state: &ServerState,
     request: public_wire::HostReconcileRequest,
+) -> Result<Value, TypedError> {
+    dispatch_broker_host_reconcile_as(
+        state,
+        request,
+        BrokerCallerRole::AdminUid {
+            uid: state.daemon_uid,
+        },
+    )
+}
+
+fn dispatch_broker_host_reconcile_as(
+    state: &ServerState,
+    request: public_wire::HostReconcileRequest,
+    caller_role: BrokerCallerRole,
 ) -> Result<Value, TypedError> {
     const VERB: &str = "host reconcile";
 
     if let Some(response) = mutating_verb_preflight(VERB, &request.flags, None) {
         return Ok(response);
     }
+    let dispatch_broker_ack_request =
+        |state: &ServerState, verb: &str, op_name: &str, request: BrokerRequest| {
+            dispatch_broker_ack_request_as(state, verb, op_name, request, caller_role.clone())
+        };
 
     if !request.network {
         return Err(TypedError::WireUnknownField {
@@ -18322,9 +19006,24 @@ fn dispatch_broker_host_reconcile(
     ))
 }
 
+#[allow(dead_code)]
 fn dispatch_broker_run_host_install(
     state: &ServerState,
     request: public_wire::HostInstallRequest,
+) -> Result<Value, TypedError> {
+    dispatch_broker_run_host_install_as(
+        state,
+        request,
+        BrokerCallerRole::AdminUid {
+            uid: state.daemon_uid,
+        },
+    )
+}
+
+fn dispatch_broker_run_host_install_as(
+    state: &ServerState,
+    request: public_wire::HostInstallRequest,
+    caller_role: BrokerCallerRole,
 ) -> Result<Value, TypedError> {
     use d2b_contracts::public_wire::{MutatingVerbOutcome, MutatingVerbResponse};
 
@@ -18335,7 +19034,7 @@ fn dispatch_broker_run_host_install(
         return Ok(response);
     }
 
-    match dispatch_broker_request(
+    match dispatch_broker_request_as(
         state,
         BrokerRequest::RunHostInstall(BrokerRunHostInstallRequest {
             bundle_installer_intent_ref: BundleOpId::new(intent_id_installer_host()),
@@ -18344,6 +19043,7 @@ fn dispatch_broker_run_host_install(
             no_start: request.no_start,
             tracing_span_id: None,
         }),
+        caller_role,
     ) {
         Ok(BrokerResponse::RunHostInstall(response)) => {
             Ok(wire::mutating_verb_response(MutatingVerbResponse {
@@ -18401,9 +19101,24 @@ fn dispatch_broker_run_host_install(
     }
 }
 
+#[allow(dead_code)]
 fn dispatch_broker_run_migrate(
     state: &ServerState,
     request: public_wire::MigrateRequest,
+) -> Result<Value, TypedError> {
+    dispatch_broker_run_migrate_as(
+        state,
+        request,
+        BrokerCallerRole::AdminUid {
+            uid: state.daemon_uid,
+        },
+    )
+}
+
+fn dispatch_broker_run_migrate_as(
+    state: &ServerState,
+    request: public_wire::MigrateRequest,
+    caller_role: BrokerCallerRole,
 ) -> Result<Value, TypedError> {
     use d2b_contracts::public_wire::{MutatingVerbOutcome, MutatingVerbResponse};
 
@@ -18414,12 +19129,13 @@ fn dispatch_broker_run_migrate(
         return Ok(response);
     }
 
-    match dispatch_broker_request(
+    match dispatch_broker_request_as(
         state,
         BrokerRequest::RunMigrate(BrokerRunMigrateRequest {
             bundle_migrate_intent_ref: BundleOpId::new(intent_id_migrate_host()),
             tracing_span_id: None,
         }),
+        caller_role,
     ) {
         Ok(BrokerResponse::RunMigrate(response)) => {
             Ok(wire::mutating_verb_response(MutatingVerbResponse {
@@ -18758,7 +19474,7 @@ fn refresh_activation_marker_metrics_on_startup(state: &ServerState) {
             state = ?marker.state,
             "startup observed unresolved activation marker; VM status/list will report degraded activation-pending"
         );
-        record_activation_degraded_metric(state, &marker.vm, true);
+        record_activation_degraded_metric(state, true);
     }
 }
 
@@ -18813,10 +19529,10 @@ fn activation_marker_remediation(vm: &str, marker: &HostActivationPendingMarker)
     }
 }
 
-fn record_activation_degraded_metric(state: &ServerState, vm: &str, pending: bool) {
+fn record_activation_degraded_metric(state: &ServerState, pending: bool) {
     state.metrics_registry.gauge_set(
         "d2b_daemon_vm_degraded",
-        &[("vm", vm), ("reason", "activation_pending")],
+        &[("reason", "activation-pending")],
         if pending { 1.0 } else { 0.0 },
     );
 }
@@ -18975,6 +19691,7 @@ fn run_guest_system_activation(
     state: &ServerState,
     params: Option<guest_control_bridge::ProbeParams>,
     plan: GuestActivationPlan,
+    caller_role: BrokerCallerRole,
 ) -> GuestActivationTerminal {
     tracing::info!(
         vm = %plan.vm,
@@ -19007,6 +19724,7 @@ fn run_guest_system_activation(
     let started = match guest_control_bridge::run_activation_start_on_dedicated_thread(
         params.clone(),
         state.config.broker_socket_path.clone(),
+        caller_role.clone(),
         start,
         GUEST_SYSTEM_ACTIVATION_START_DEADLINE,
     ) {
@@ -19018,6 +19736,7 @@ fn run_guest_system_activation(
                     state,
                     params,
                     plan.activation_id.clone(),
+                    caller_role.clone(),
                     live_timeout + GUEST_SYSTEM_ACTIVATION_REJOIN_GRACE,
                 ) {
                     GuestActivationTerminal::Indeterminate(detail) => {
@@ -19048,6 +19767,7 @@ fn run_guest_system_activation(
         state,
         params,
         plan.activation_id,
+        caller_role,
         live_timeout + GUEST_SYSTEM_ACTIVATION_REJOIN_GRACE,
     )
 }
@@ -19056,6 +19776,7 @@ fn rejoin_guest_activation_status(
     state: &ServerState,
     params: guest_control_bridge::ProbeParams,
     activation_id: String,
+    caller_role: BrokerCallerRole,
     rejoin_deadline: Duration,
 ) -> GuestActivationTerminal {
     let deadline = Instant::now() + rejoin_deadline;
@@ -19070,6 +19791,7 @@ fn rejoin_guest_activation_status(
         match guest_control_bridge::run_activation_status_on_dedicated_thread(
             params.clone(),
             state.config.broker_socket_path.clone(),
+            caller_role.clone(),
             activation_id.clone(),
             remaining.min(Duration::from_secs(15)),
         ) {
@@ -19152,6 +19874,7 @@ fn dispatch_broker_activation(
     request: public_wire::ActivationRequest,
     verb: &'static str,
     mode: BrokerActivationMode,
+    caller_role: BrokerCallerRole,
 ) -> Result<Value, TypedError> {
     if let Some(response) = mutating_verb_preflight(verb, &request.flags, Some(request.vm.as_str()))
     {
@@ -19167,10 +19890,10 @@ fn dispatch_broker_activation(
                 verb,
             )?;
         }
-        return dispatch_broker_activation_metadata_only(state, request, verb, mode);
+        return dispatch_broker_activation_metadata_only(state, request, verb, mode, caller_role);
     }
 
-    dispatch_live_guest_activation(state, request, verb, mode)
+    dispatch_live_guest_activation(state, request, verb, mode, caller_role)
 }
 
 fn dispatch_run_activation_phase(
@@ -19179,10 +19902,11 @@ fn dispatch_run_activation_phase(
     verb: &'static str,
     mode: BrokerActivationMode,
     phase: BrokerActivationPhase,
+    caller_role: BrokerCallerRole,
 ) -> Result<d2b_contracts::broker_wire::RunActivationResponse, Value> {
     const OP_NAME: &str = "RunActivation";
     let started = Instant::now();
-    let result = dispatch_broker_request(
+    let result = dispatch_broker_request_as(
         state,
         BrokerRequest::RunActivation(BrokerRunActivationRequest {
             bundle_activation_intent_ref: BundleOpId::new(intent_id_activation(&request.vm)),
@@ -19191,6 +19915,7 @@ fn dispatch_run_activation_phase(
             vm: request.vm.clone(),
             tracing_span_id: None,
         }),
+        caller_role,
     );
     let metric_phase = match phase {
         BrokerActivationPhase::Prepare => "prepare",
@@ -19267,6 +19992,7 @@ fn dispatch_broker_activation_metadata_only(
     request: public_wire::ActivationRequest,
     verb: &'static str,
     mode: BrokerActivationMode,
+    caller_role: BrokerCallerRole,
 ) -> Result<Value, TypedError> {
     let response = match dispatch_run_activation_phase(
         state,
@@ -19274,6 +20000,7 @@ fn dispatch_broker_activation_metadata_only(
         verb,
         mode,
         BrokerActivationPhase::MetadataOnly,
+        caller_role,
     ) {
         Ok(response) => response,
         Err(frame) => return Ok(frame),
@@ -19300,6 +20027,7 @@ fn dispatch_live_guest_activation(
     request: public_wire::ActivationRequest,
     verb: &'static str,
     mode: BrokerActivationMode,
+    caller_role: BrokerCallerRole,
 ) -> Result<Value, TypedError> {
     let _guard = match try_acquire_activation_lock(state, &request.vm) {
         Ok(guard) => guard,
@@ -19366,6 +20094,7 @@ fn dispatch_live_guest_activation(
         verb,
         mode,
         BrokerActivationPhase::Prepare,
+        caller_role.clone(),
     ) {
         Ok(response) => response,
         Err(frame) => return Ok(frame),
@@ -19412,7 +20141,7 @@ fn dispatch_live_guest_activation(
                 "success",
                 marker_started.elapsed(),
             );
-            record_activation_degraded_metric(state, &request.vm, true);
+            record_activation_degraded_metric(state, true);
         }
         Err(error) => {
             record_activation_phase_metric(
@@ -19439,6 +20168,7 @@ fn dispatch_live_guest_activation(
             activation_id: activation_id.clone(),
             switch_script_path: switch_script_path.clone(),
         },
+        caller_role.clone(),
     );
     match guest {
         GuestActivationTerminal::Succeeded => {
@@ -19465,7 +20195,7 @@ fn dispatch_live_guest_activation(
                 let _ = abort_configuration_ordinal(state, _guard.zone());
             }
             clear_activation_marker(state, &request.vm);
-            record_activation_degraded_metric(state, &request.vm, false);
+            record_activation_degraded_metric(state, false);
             let remediation = match remediation {
                 GuestActivationFailureRemediation::GuestJournal => format!(
                     "Inspect the guest journal for `d2b-activation-{}` and retry after fixing the guest activation failure. If this VM uses Entra/Himmelblau or another identity-bound user service, complete the in-guest provider prompt (for example `aad-tool hello`) and retry, or use `d2b boot {} --apply` followed by a VM restart when live user-session activation is expected to block.",
@@ -19494,7 +20224,7 @@ fn dispatch_live_guest_activation(
             marker.state = HostActivationMarkerState::Indeterminate;
             marker.updated_unix_secs = now_unix_secs();
             let _ = write_activation_marker(state, &marker);
-            record_activation_degraded_metric(state, &request.vm, true);
+            record_activation_degraded_metric(state, true);
             return Ok(broker_failure_response(
                 verb,
                 format!(
@@ -19516,13 +20246,14 @@ fn dispatch_live_guest_activation(
         verb,
         mode,
         BrokerActivationPhase::Commit,
+        caller_role,
     ) {
         Ok(response) => response,
         Err(frame) => {
             marker.state = HostActivationMarkerState::Indeterminate;
             marker.updated_unix_secs = now_unix_secs();
             let _ = write_activation_marker(state, &marker);
-            record_activation_degraded_metric(state, &request.vm, true);
+            record_activation_degraded_metric(state, true);
             return Ok(frame);
         }
     };
@@ -19536,7 +20267,7 @@ fn dispatch_live_guest_activation(
         );
     }
     clear_activation_marker(state, &request.vm);
-    record_activation_degraded_metric(state, &request.vm, false);
+    record_activation_degraded_metric(state, false);
     let generation_suffix = commit
         .generation_number
         .map(|generation| format!(", generationNumber={generation}"))
@@ -19553,37 +20284,112 @@ fn dispatch_live_guest_activation(
     ))
 }
 
+#[allow(dead_code)]
 fn dispatch_broker_switch(
     state: &ServerState,
     request: public_wire::ActivationRequest,
 ) -> Result<Value, TypedError> {
-    dispatch_broker_activation(state, request, "switch", BrokerActivationMode::Switch)
+    dispatch_broker_switch_as(state, BrokerCallerRole::NotAuthorized, request)
 }
 
+fn dispatch_broker_switch_as(
+    state: &ServerState,
+    caller_role: BrokerCallerRole,
+    request: public_wire::ActivationRequest,
+) -> Result<Value, TypedError> {
+    dispatch_broker_activation(
+        state,
+        request,
+        "switch",
+        BrokerActivationMode::Switch,
+        caller_role,
+    )
+}
+
+#[allow(dead_code)]
 fn dispatch_broker_boot(
     state: &ServerState,
     request: public_wire::ActivationRequest,
 ) -> Result<Value, TypedError> {
-    dispatch_broker_activation(state, request, "boot", BrokerActivationMode::Boot)
+    dispatch_broker_boot_as(state, BrokerCallerRole::NotAuthorized, request)
 }
 
+fn dispatch_broker_boot_as(
+    state: &ServerState,
+    caller_role: BrokerCallerRole,
+    request: public_wire::ActivationRequest,
+) -> Result<Value, TypedError> {
+    dispatch_broker_activation(
+        state,
+        request,
+        "boot",
+        BrokerActivationMode::Boot,
+        caller_role,
+    )
+}
+
+#[allow(dead_code)]
 fn dispatch_broker_test(
     state: &ServerState,
     request: public_wire::ActivationRequest,
 ) -> Result<Value, TypedError> {
-    dispatch_broker_activation(state, request, "test", BrokerActivationMode::Test)
+    dispatch_broker_test_as(state, BrokerCallerRole::NotAuthorized, request)
 }
 
+fn dispatch_broker_test_as(
+    state: &ServerState,
+    caller_role: BrokerCallerRole,
+    request: public_wire::ActivationRequest,
+) -> Result<Value, TypedError> {
+    dispatch_broker_activation(
+        state,
+        request,
+        "test",
+        BrokerActivationMode::Test,
+        caller_role,
+    )
+}
+
+#[allow(dead_code)]
 fn dispatch_broker_rollback(
     state: &ServerState,
     request: public_wire::ActivationRequest,
 ) -> Result<Value, TypedError> {
-    dispatch_broker_activation(state, request, "rollback", BrokerActivationMode::Rollback)
+    dispatch_broker_rollback_as(state, BrokerCallerRole::NotAuthorized, request)
 }
 
+fn dispatch_broker_rollback_as(
+    state: &ServerState,
+    caller_role: BrokerCallerRole,
+    request: public_wire::ActivationRequest,
+) -> Result<Value, TypedError> {
+    dispatch_broker_activation(
+        state,
+        request,
+        "rollback",
+        BrokerActivationMode::Rollback,
+        caller_role,
+    )
+}
+
+#[allow(dead_code)]
 fn dispatch_broker_gc(
     state: &ServerState,
     request: public_wire::GcRequest,
+) -> Result<Value, TypedError> {
+    dispatch_broker_gc_as(
+        state,
+        request,
+        BrokerCallerRole::AdminUid {
+            uid: state.daemon_uid,
+        },
+    )
+}
+
+fn dispatch_broker_gc_as(
+    state: &ServerState,
+    request: public_wire::GcRequest,
+    caller_role: BrokerCallerRole,
 ) -> Result<Value, TypedError> {
     const VERB: &str = "gc";
     const OP_NAME: &str = "RunGc";
@@ -19592,13 +20398,14 @@ fn dispatch_broker_gc(
         return Ok(response);
     }
 
-    match dispatch_broker_request(
+    match dispatch_broker_request_as(
         state,
         BrokerRequest::RunGc(BrokerRunGcRequest {
             bundle_gc_intent_ref: BundleOpId::new(intent_id_gc_host()),
             keep_generations: request.keep_generations,
             tracing_span_id: None,
         }),
+        caller_role,
     ) {
         Ok(BrokerResponse::RunGc(response)) => Ok(applied_response(
             VERB,
@@ -19647,9 +20454,24 @@ fn dispatch_broker_gc(
     }
 }
 
+#[allow(dead_code)]
 fn dispatch_broker_store_verify(
     state: &ServerState,
     request: public_wire::StoreVerifyRequest,
+) -> Result<Value, TypedError> {
+    dispatch_broker_store_verify_as(
+        state,
+        request,
+        BrokerCallerRole::AdminUid {
+            uid: state.daemon_uid,
+        },
+    )
+}
+
+fn dispatch_broker_store_verify_as(
+    state: &ServerState,
+    request: public_wire::StoreVerifyRequest,
+    caller_role: BrokerCallerRole,
 ) -> Result<Value, TypedError> {
     ensure_vm_runtime_capability(
         state,
@@ -19657,13 +20479,14 @@ fn dispatch_broker_store_verify(
         RuntimeCapabilityGate::StoreSync,
         "store verify",
     )?;
-    let response = match dispatch_broker_request(
+    let response = match dispatch_broker_request_as(
         state,
         BrokerRequest::StoreVerify(BrokerStoreVerifyRequest {
             vm_id: VmId::new(&request.vm),
             repair: request.repair,
             tracing_span_id: None,
         }),
+        caller_role,
     ) {
         Ok(BrokerResponse::StoreVerify(response)) => response,
         Ok(BrokerResponse::Error(error)) => d2b_contracts::broker_wire::StoreVerifyResponse {
@@ -19709,9 +20532,24 @@ fn dispatch_broker_store_verify(
     Ok(wire::store_verify_response(response))
 }
 
+#[allow(dead_code)]
 fn dispatch_broker_keys_rotate(
     state: &ServerState,
     request: public_wire::KeysRotateRequest,
+) -> Result<Value, TypedError> {
+    dispatch_broker_keys_rotate_as(
+        state,
+        request,
+        BrokerCallerRole::AdminUid {
+            uid: state.daemon_uid,
+        },
+    )
+}
+
+fn dispatch_broker_keys_rotate_as(
+    state: &ServerState,
+    request: public_wire::KeysRotateRequest,
+    caller_role: BrokerCallerRole,
 ) -> Result<Value, TypedError> {
     const VERB: &str = "keys rotate";
     const OP_NAME: &str = "RunKeysRotate";
@@ -19722,13 +20560,14 @@ fn dispatch_broker_keys_rotate(
         return Ok(response);
     }
 
-    match dispatch_broker_request(
+    match dispatch_broker_request_as(
         state,
         BrokerRequest::RunKeysRotate(BrokerRunKeysRotateRequest {
             bundle_keys_intent_ref: BundleOpId::new(intent_id_keys_rotate(&request.vm)),
             vm: request.vm.clone(),
             tracing_span_id: None,
         }),
+        caller_role,
     ) {
         Ok(BrokerResponse::RunKeysRotate(response)) => Ok(applied_response(
             VERB,
@@ -19777,9 +20616,24 @@ fn dispatch_broker_keys_rotate(
     }
 }
 
+#[allow(dead_code)]
 fn dispatch_broker_trust(
     state: &ServerState,
     request: public_wire::TrustRequest,
+) -> Result<Value, TypedError> {
+    dispatch_broker_trust_as(
+        state,
+        request,
+        BrokerCallerRole::AdminUid {
+            uid: state.daemon_uid,
+        },
+    )
+}
+
+fn dispatch_broker_trust_as(
+    state: &ServerState,
+    request: public_wire::TrustRequest,
+    caller_role: BrokerCallerRole,
 ) -> Result<Value, TypedError> {
     const VERB: &str = "trust";
     const OP_NAME: &str = "RunHostKeyTrust";
@@ -19790,13 +20644,14 @@ fn dispatch_broker_trust(
         return Ok(response);
     }
 
-    match dispatch_broker_request(
+    match dispatch_broker_request_as(
         state,
         BrokerRequest::RunHostKeyTrust(BrokerRunHostKeyTrustRequest {
             bundle_trust_intent_ref: BundleOpId::new(intent_id_trust(&request.vm)),
             vm: request.vm.clone(),
             tracing_span_id: None,
         }),
+        caller_role,
     ) {
         Ok(BrokerResponse::RunHostKeyTrust(response)) => Ok(applied_response(
             VERB,
@@ -19845,9 +20700,24 @@ fn dispatch_broker_trust(
     }
 }
 
+#[allow(dead_code)]
 fn dispatch_broker_rotate_known_host(
     state: &ServerState,
     request: public_wire::RotateKnownHostRequest,
+) -> Result<Value, TypedError> {
+    dispatch_broker_rotate_known_host_as(
+        state,
+        request,
+        BrokerCallerRole::AdminUid {
+            uid: state.daemon_uid,
+        },
+    )
+}
+
+fn dispatch_broker_rotate_known_host_as(
+    state: &ServerState,
+    request: public_wire::RotateKnownHostRequest,
+    caller_role: BrokerCallerRole,
 ) -> Result<Value, TypedError> {
     const VERB: &str = "rotate-known-host";
     const OP_NAME: &str = "RunRotateKnownHost";
@@ -19858,7 +20728,7 @@ fn dispatch_broker_rotate_known_host(
         return Ok(response);
     }
 
-    match dispatch_broker_request(
+    match dispatch_broker_request_as(
         state,
         BrokerRequest::RunRotateKnownHost(BrokerRunRotateKnownHostRequest {
             bundle_rotate_known_host_intent_ref: BundleOpId::new(intent_id_rotate_known_host(
@@ -19867,6 +20737,7 @@ fn dispatch_broker_rotate_known_host(
             vm: request.vm.clone(),
             tracing_span_id: None,
         }),
+        caller_role,
     ) {
         Ok(BrokerResponse::RunRotateKnownHost(response)) => Ok(applied_response(
             VERB,
@@ -20295,8 +21166,17 @@ fn build_public_list(
     Ok(wire::list_response(vms))
 }
 
+#[allow(dead_code)]
 fn dispatch_status(
     state: &ServerState,
+    request: public_wire::StatusRequest,
+) -> Result<Value, TypedError> {
+    dispatch_status_as(state, BrokerCallerRole::NotAuthorized, request)
+}
+
+fn dispatch_status_as(
+    state: &ServerState,
+    caller_role: BrokerCallerRole,
     request: public_wire::StatusRequest,
 ) -> Result<Value, TypedError> {
     let cacheable = request.vm.is_none() && !request.check_bridges;
@@ -20306,7 +21186,7 @@ fn dispatch_status(
     let before = cacheable
         .then(|| public_artifact_fingerprint(state).ok())
         .flatten();
-    let frame = build_public_status(state, request)?;
+    let frame = build_public_status(state, caller_role, request)?;
     if cacheable {
         return Ok(publish_public_frame_if_stable(
             state,
@@ -20340,6 +21220,7 @@ fn publish_public_frame_if_stable(
 
 fn build_public_status(
     state: &ServerState,
+    caller_role: BrokerCallerRole,
     request: public_wire::StatusRequest,
 ) -> Result<Value, TypedError> {
     let PublicRequestArtifacts {
@@ -20367,6 +21248,7 @@ fn build_public_status(
                     .as_ref()
                     .and_then(|idx| idx.identity_for_vm(name))
                     .and_then(|id| serde_json::to_value(id).ok());
+                let caller_role = caller_role.clone();
                 scope.spawn(move || {
                     let lifecycle = public_vm_lifecycle(state, name, manifest_entry, process_vm);
                     let runtime_kind = public_runtime_kind(manifest_entry);
@@ -20397,7 +21279,14 @@ fn build_public_status(
                             &services,
                         ),
                         "usb": usb_resolver
-                            .and_then(|resolver| public_usb_status_for_vm(state, resolver, name)),
+                            .and_then(|resolver| {
+                                public_usb_status_for_vm(
+                                    state,
+                                    resolver,
+                                    name,
+                                    caller_role.clone(),
+                                )
+                            }),
                         "services": services,
                         "bridgeChecks": [],
                     });
@@ -20497,7 +21386,7 @@ fn public_vm_lifecycle(
     let running = lifecycle_state == "Running";
     let activation_marker = read_activation_marker(state, vm);
     if let Some(marker) = activation_marker.as_ref() {
-        record_activation_degraded_metric(state, vm, true);
+        record_activation_degraded_metric(state, true);
         tracing::warn!(
             vm = %vm,
             mode = %marker.mode,
@@ -20506,7 +21395,7 @@ fn public_vm_lifecycle(
             "status/list observed unresolved activation marker"
         );
     } else {
-        record_activation_degraded_metric(state, vm, false);
+        record_activation_degraded_metric(state, false);
     }
     let degraded_reasons = activation_marker
         .as_ref()
@@ -21055,6 +21944,28 @@ mod public_status_tests {
             role: PeerRole::Launcher,
             uid: 1001,
         }
+    }
+
+    #[test]
+    fn launcher_broker_context_cannot_be_relabelled_as_admin() {
+        let caller = broker_caller_role_for_peer(&launcher_peer());
+        assert!(matches!(
+            caller,
+            BrokerCallerRole::LauncherUid { uid: 1001 }
+        ));
+        assert!(!caller.is_admin_uid());
+        let envelope = BrokerRequestEnvelope {
+            request: BrokerRequest::Hello(HelloRequest {
+                client_version: d2b_contracts::PROTOCOL_VERSION.to_string(),
+                supported_features: Vec::new(),
+            }),
+            caller_role: caller,
+            test_peer_uid: None,
+            audit_join: None,
+        };
+        let json = serde_json::to_string(&envelope).unwrap();
+        assert!(json.contains("\"role\":\"LauncherUid\""));
+        assert!(!json.contains("\"role\":\"AdminUid\""));
     }
 
     fn gateway_config_for_waypipe(
@@ -23080,6 +23991,99 @@ mod public_status_tests {
         let lifecycle = public_vm_lifecycle(&state, "vm-a", &manifest_entry, None);
         assert_eq!(lifecycle_state(&lifecycle), "Starting");
     }
+
+    #[test]
+    fn provider_lifecycle_reconciliation_refuses_nonterminal_states() {
+        use std::io::{Read, Write};
+
+        let root = tempfile::tempdir().expect("status artifacts");
+        let artifacts = write_public_status_artifacts(root.path());
+        let socket = root.path().join("vm-a.sock");
+        let mut manifest: Value =
+            serde_json::from_slice(&fs::read(&artifacts.public_manifest_path).expect("manifest"))
+                .expect("parse manifest");
+        manifest["vm-a"]["apiSocket"] = Value::String(socket.display().to_string());
+        fs::write(
+            &artifacts.public_manifest_path,
+            serde_json::to_vec(&manifest).expect("serialize manifest"),
+        )
+        .expect("write manifest");
+
+        let config = DaemonConfig {
+            artifacts,
+            ..DaemonConfig::default()
+        };
+        let (state, _state_dir) = test_state_with_config(config);
+        state
+            .pidfd_table
+            .register(
+                "vm-a".to_owned(),
+                "virtiofsd-ro-store".to_owned(),
+                current_process_entry(),
+            )
+            .expect("register sidecar");
+        let effect = DaemonProviderLifecycleEffect {
+            state: &state,
+            request: public_wire::VmLifecycleRequest {
+                vm: "vm-a".to_owned(),
+                flags: public_wire::MutationFlags::default(),
+                force: false,
+                no_wait_api: false,
+            },
+            caller_role: BrokerCallerRole::AdminUid { uid: 0 },
+            term_timeout: VM_STOP_TIMEOUT,
+            kill_timeout: VM_STOP_TIMEOUT,
+            operation: provider_effects::GuestLifecycleOperation::Start,
+        };
+        let lifecycle_request = provider_effects::GuestLifecycleRequest::new(
+            ZoneId::parse("work").expect("Zone"),
+            d2b_contracts::v3::ResourceRef::parse("Guest/vm-a").expect("Guest ref"),
+            provider_effects::GuestLifecycleOperation::Start,
+            "failed-state",
+        )
+        .expect("lifecycle request");
+
+        assert_eq!(
+            provider_effects::ProviderLifecycleEffectPort::actual_state(
+                &effect,
+                &lifecycle_request
+            ),
+            Err(provider_effects::ProviderEffectError::StateUnavailable)
+        );
+
+        let listener =
+            std::os::unix::net::UnixListener::bind(&socket).expect("bind provider status socket");
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept provider status request");
+            let mut request = [0_u8; 1024];
+            let _ = stream.read(&mut request);
+            let body = r#"{"state":"Created"}"#;
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{}",
+                body.len(),
+                body
+            )
+            .expect("write provider status response");
+        });
+        state
+            .pidfd_table
+            .register(
+                "vm-a".to_owned(),
+                VM_RUNNER_ROLE_ID.to_owned(),
+                current_process_entry(),
+            )
+            .expect("register runner");
+
+        assert_eq!(
+            provider_effects::ProviderLifecycleEffectPort::actual_state(
+                &effect,
+                &lifecycle_request
+            ),
+            Err(provider_effects::ProviderEffectError::StateUnavailable)
+        );
+        server.join().expect("status server");
+    }
 }
 
 fn dispatch_audit(
@@ -23090,61 +24094,62 @@ fn dispatch_audit(
     if peer.role != PeerRole::Admin {
         return Err(TypedError::AuthzAuditRequiresAdmin);
     }
-    let socket = connect_seqpacket(&state.config.broker_socket_path).map_err(|error| {
-        TypedError::InternalBrokerUnavailable {
-            path: state.config.broker_socket_path.clone(),
-            detail: error.message(),
-        }
-    })?;
-    let hello = json!({
-        "type": "hello",
-        "clientVersion": state.config.accepted_client_version_range,
-        "supportedFeatures": []
-    });
-    let hello_bytes = serde_json::to_vec(&hello).map_err(|err| TypedError::InternalIo {
-        context: "serialize broker hello".to_owned(),
-        detail: err.to_string(),
-    })?;
-    write_frame(&socket, &hello_bytes)?;
-    let _ = read_frame(&socket)?;
-
-    let broker_request = json!({
-        "type": "exportBrokerAudit",
-        "since": request.since,
-        "filter": request.filter.as_ref().map(|filter| {
-            json!({
-                "env": filter.env,
-                "vm": filter.vm,
+    let filter = request
+        .filter
+        .map(|filter| {
+            let severity = match filter.severity.as_deref() {
+                None => Ok(None),
+                Some("info") => Ok(Some(d2b_contracts::broker_wire::BrokerAuditSeverity::Info)),
+                Some("warning") => Ok(Some(
+                    d2b_contracts::broker_wire::BrokerAuditSeverity::Warning,
+                )),
+                Some("error") => Ok(Some(d2b_contracts::broker_wire::BrokerAuditSeverity::Error)),
+                Some("denied") => Ok(Some(
+                    d2b_contracts::broker_wire::BrokerAuditSeverity::Denied,
+                )),
+                Some(_) => Err(TypedError::InternalIo {
+                    context: "audit filter".to_owned(),
+                    detail: "severity-invalid".to_owned(),
+                }),
+            }?;
+            Ok::<_, TypedError>(d2b_contracts::broker_wire::BrokerAuditFilter {
+                env: filter.env,
+                operation: filter.operation,
+                vm: filter.vm,
+                role: filter.role,
+                outcome: filter.outcome,
+                severity,
             })
-        }),
-    });
-    let request_bytes =
-        serde_json::to_vec(&broker_request).map_err(|err| TypedError::InternalIo {
-            context: "serialize broker audit request".to_owned(),
-            detail: err.to_string(),
-        })?;
-    write_frame(&socket, &request_bytes)?;
-    let response = read_frame(&socket)?;
-    let value: Value =
-        serde_json::from_slice(&response).map_err(|err| TypedError::InternalBrokerUnavailable {
-            path: state.config.broker_socket_path.clone(),
-            detail: err.to_string(),
-        })?;
-    let lines = value
-        .get("lines")
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(Value::as_str)
-                .map(ToOwned::to_owned)
-                .collect::<Vec<_>>()
         })
-        .unwrap_or_default();
-    serde_json::to_value(wire::audit_response(lines)).map_err(|err| TypedError::InternalIo {
-        context: "serialize audit response".to_owned(),
-        detail: err.to_string(),
-    })
+        .transpose()?;
+    let response = dispatch_broker_request_as(
+        state,
+        BrokerRequest::ExportBrokerAudit(ExportBrokerAuditRequest {
+            filter,
+            since: request.since,
+            cursor: request.cursor,
+            limit: request.limit,
+        }),
+        broker_caller_role_for_peer(peer),
+    )?;
+    match response {
+        BrokerResponse::ExportBrokerAudit(payload) => {
+            serde_json::to_value(wire::audit_response(payload)).map_err(|err| {
+                TypedError::InternalIo {
+                    context: "serialize audit response".to_owned(),
+                    detail: err.to_string(),
+                }
+            })
+        }
+        BrokerResponse::Error(error) => Err(TypedError::InternalBrokerUnavailable {
+            path: state.config.broker_socket_path.clone(),
+            detail: error.kind,
+        }),
+        _ => Err(TypedError::InternalBrokerUnavailable {
+            path: state.config.broker_socket_path.clone(),
+            detail: "broker returned an unexpected audit response".to_owned(),
+        }),
+    }
 }
 
 fn dispatch_host_check(
@@ -23840,6 +24845,10 @@ mod detached_exec_routing_tests {
     use serde_json::Value;
     use std::sync::Arc;
 
+    fn audit_digest(value: &str) -> String {
+        d2b_contracts::v3::canonical_digest("d2b:daemon-audit-redaction:v1", value.as_bytes())
+    }
+
     fn test_state(caps: exec_session::ExecSessionCaps) -> ServerState {
         let broker_reap_log = BrokerReapLog::new();
         let temp_root = tempfile::Builder::new()
@@ -24099,11 +25108,17 @@ mod detached_exec_routing_tests {
             record["event"]["kind"].as_str(),
             Some("guest_control_exec_detached_create")
         );
-        assert_eq!(record["event"]["vm"].as_str(), Some("work"));
-        assert_eq!(record["event"]["peer_uid"].as_u64(), Some(4242));
+        assert_eq!(
+            record["event"]["vm"].as_str(),
+            Some(audit_digest("work").as_str())
+        );
+        assert!(record["event"]["peer_uid"].is_null());
         assert_eq!(record["event"]["action"].as_str(), Some("create"));
         assert_eq!(record["event"]["result"].as_str(), Some("created"));
-        assert_eq!(record["event"]["exec_id"].as_str(), Some("exec-detached-1"));
+        assert_eq!(
+            record["event"]["exec_id"].as_str(),
+            Some(audit_digest("exec-detached-1").as_str())
+        );
     }
 
     #[test]
@@ -24398,11 +25413,17 @@ mod detached_exec_routing_tests {
             record["event"]["kind"].as_str(),
             Some("guest_control_exec_detached_kill")
         );
-        assert_eq!(record["event"]["vm"].as_str(), Some("work"));
-        assert_eq!(record["event"]["peer_uid"].as_u64(), Some(4242));
+        assert_eq!(
+            record["event"]["vm"].as_str(),
+            Some(audit_digest("work").as_str())
+        );
+        assert!(record["event"]["peer_uid"].is_null());
         assert_eq!(record["event"]["action"].as_str(), Some("cancel"));
         assert_eq!(record["event"]["result"].as_str(), Some("cancelling"));
-        assert_eq!(record["event"]["exec_id"].as_str(), Some("exec-1"));
+        assert_eq!(
+            record["event"]["exec_id"].as_str(),
+            Some(audit_digest("exec-1").as_str())
+        );
     }
 
     #[test]
@@ -24439,7 +25460,10 @@ mod detached_exec_routing_tests {
         assert_eq!(records.len(), 1, "kill writes one audit event");
         let record: Value = serde_json::from_str(&records[0]).expect("parse kill audit");
         assert_eq!(record["event"]["result"].as_str(), Some("already-terminal"));
-        assert_eq!(record["event"]["exec_id"].as_str(), Some("exec-1"));
+        assert_eq!(
+            record["event"]["exec_id"].as_str(),
+            Some(audit_digest("exec-1").as_str())
+        );
     }
 
     #[test]
@@ -24480,7 +25504,7 @@ mod detached_exec_routing_tests {
         assert_eq!(record["event"]["result"].as_str(), Some("error"));
         assert_eq!(
             record["event"]["exec_id"].as_str(),
-            Some("<redacted-on-error>")
+            Some(audit_digest("<redacted-on-error>").as_str())
         );
     }
 
@@ -24748,6 +25772,45 @@ mod accept_loop_concurrency_tests {
                 gid: 9999,
                 username: Some("nobody-unlisted".to_owned()),
                 groups: Some(Vec::new()),
+            });
+            Self { _lock: lock }
+        }
+
+        fn unresolved() -> Self {
+            let lock = TEST_PEER_OVERRIDE_LOCK
+                .lock()
+                .unwrap_or_else(|p| p.into_inner());
+            *TEST_PEER_OVERRIDE.lock().unwrap_or_else(|p| p.into_inner()) = Some(PeerOverride {
+                uid: 9998,
+                gid: 9998,
+                username: None,
+                groups: None,
+            });
+            Self { _lock: lock }
+        }
+
+        fn daemon_uid() -> Self {
+            let lock = TEST_PEER_OVERRIDE_LOCK
+                .lock()
+                .unwrap_or_else(|p| p.into_inner());
+            *TEST_PEER_OVERRIDE.lock().unwrap_or_else(|p| p.into_inner()) = Some(PeerOverride {
+                uid: 0,
+                gid: 0,
+                username: Some("should-not-be-looked-up".to_owned()),
+                groups: Some(vec!["should-not-be-looked-up".to_owned()]),
+            });
+            Self { _lock: lock }
+        }
+
+        fn host_shutdown() -> Self {
+            let lock = TEST_PEER_OVERRIDE_LOCK
+                .lock()
+                .unwrap_or_else(|p| p.into_inner());
+            *TEST_PEER_OVERRIDE.lock().unwrap_or_else(|p| p.into_inner()) = Some(PeerOverride {
+                uid: 0,
+                gid: 0,
+                username: None,
+                groups: None,
             });
             Self { _lock: lock }
         }
@@ -25056,6 +26119,48 @@ mod accept_loop_concurrency_tests {
         drop(client);
     }
 
+    #[test]
+    fn unresolved_peer_identity_is_rejected_without_caller_fallback() {
+        let _env = PeerOverrideEnv::unresolved();
+        let (state, _state_dir) = admin_exec_state();
+        let (server, client) = seqpacket_pair();
+        let result = handle_connection(server, &state, None);
+        assert!(matches!(
+            result,
+            Err(TypedError::AuthzNotALauncher { peer_uid: 9998 })
+        ));
+        let frame = read_frame(&client).expect("client reads rejection frame");
+        let value: serde_json::Value =
+            serde_json::from_slice(&frame).expect("rejection frame is JSON");
+        assert_eq!(value["type"], "helloRejected");
+        drop(client);
+    }
+
+    #[test]
+    fn daemon_uid_precedes_nss_lookup_in_peer_classification() {
+        let _env = PeerOverrideEnv::daemon_uid();
+        let (state, _state_dir) = admin_exec_state();
+        let (server, client) = seqpacket_pair();
+        let result = authorize_peer(&server, &state);
+        assert!(matches!(
+            result,
+            Err(TypedError::AuthzNotALauncher { peer_uid: 0 })
+        ));
+        drop(client);
+    }
+
+    #[test]
+    fn uid_zero_classifies_as_host_shutdown_after_daemon_uid_check() {
+        let _env = PeerOverrideEnv::host_shutdown();
+        let (mut state, _state_dir) = admin_exec_state();
+        state.daemon_uid = 4242;
+        let (server, client) = seqpacket_pair();
+        let peer = authorize_peer(&server, &state).expect("uid 0 HostShutdown classification");
+        assert_eq!(peer.role, PeerRole::HostShutdown);
+        assert_eq!(peer.uid, 0);
+        drop(client);
+    }
+
     /// fix2b: the admission permit moved into a handler is released when the
     /// handler returns, on BOTH the success path (clean EOF) and the error
     /// path (malformed hello). After each handler returns the in-flight count
@@ -25191,6 +26296,7 @@ mod broker_dispatch_tests {
         SignalRunnerResponse, SpawnRunnerResponse,
     };
     use d2b_contracts::guest_proto as pb;
+    use d2b_contracts::public_wire;
     use d2b_contracts::public_wire::{
         ActivationRequest, GcRequest, HostDestroyRequest, HostInstallRequest, HostPrepareRequest,
         KeysRotateRequest, MigrateRequest, MutationFlags, RotateKnownHostRequest,
@@ -25216,6 +26322,8 @@ mod broker_dispatch_tests {
         FilesystemSnapshotStore, PidfdOpener, ProcReader, RunnerSnapshotRecord, SnapshotStore,
         parse_proc_stat_starttime,
     };
+    use super::typed_error::TypedError;
+    use super::wire;
     use super::{
         ArtifactPaths, DaemonConfig, HostActivationMarkerState, PeerIdentity, PeerRole,
         ProviderGracefulInputs, QemuBrokerShutdownProvider, ServerState,
@@ -26100,8 +27208,8 @@ mod broker_dispatch_tests {
         use crate::guest_control_bridge::{BrokerSigner, GUEST_CONTROL_ATTEMPT_CAP};
         use crate::guest_control_health::{AttemptBudget, GuestControlSigner};
         use d2b_contracts::broker_wire::{
-            GuestBootIdWire, GuestControlAuthPurpose, GuestControlDirection, GuestControlProofRole,
-            GuestControlSignRequest, GuestControlSignResponse,
+            BrokerCallerRole, GuestBootIdWire, GuestControlAuthPurpose, GuestControlDirection,
+            GuestControlProofRole, GuestControlSignRequest, GuestControlSignResponse,
         };
         use d2b_contracts::guest_auth::{AUTH_NONCE_LEN, GUEST_CONTROL_AUTH_PORT};
         use d2b_contracts::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION;
@@ -26143,9 +27251,10 @@ mod broker_dispatch_tests {
                 other => panic!("unexpected broker request {other:?}"),
             },
         );
-        let signer = BrokerSigner::new(
+        let signer = BrokerSigner::with_caller_role(
             socket_path,
             AttemptBudget::from_now(Duration::from_secs(10), GUEST_CONTROL_ATTEMPT_CAP),
+            BrokerCallerRole::AdminUid { uid: 1000 },
         );
         let response = signer.sign(request).expect("broker signer succeeds");
         broker.join().expect("broker join");
@@ -26198,8 +27307,8 @@ mod broker_dispatch_tests {
             AttemptBudget, GuestControlHealthError, GuestControlSigner,
         };
         use d2b_contracts::broker_wire::{
-            GuestBootIdWire, GuestControlAuthPurpose, GuestControlDirection, GuestControlProofRole,
-            GuestControlSignRequest,
+            BrokerCallerRole, GuestBootIdWire, GuestControlAuthPurpose, GuestControlDirection,
+            GuestControlProofRole, GuestControlSignRequest,
         };
         use d2b_contracts::guest_auth::{AUTH_NONCE_LEN, GUEST_CONTROL_AUTH_PORT};
         use d2b_contracts::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION;
@@ -26219,9 +27328,10 @@ mod broker_dispatch_tests {
                     other => panic!("unexpected broker request {other:?}"),
                 }
             });
-        let signer = BrokerSigner::new(
+        let signer = BrokerSigner::with_caller_role(
             socket_path,
             AttemptBudget::from_now(attempt, GUEST_CONTROL_ATTEMPT_CAP),
+            BrokerCallerRole::AdminUid { uid: 1000 },
         );
         let request = GuestControlSignRequest {
             vm_id: VmId::new("corp-vm"),
@@ -26754,6 +27864,44 @@ mod broker_dispatch_tests {
             assert!(
                 matches!(err, super::typed_error::TypedError::AuthzNotAdmin { .. }),
                 "HostShutdown denial of {verb} must be AuthzNotAdmin, got {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn host_shutdown_peer_is_denied_for_read_only_and_gateway_display_requests() {
+        let state =
+            test_state_with_broker_socket(unreachable_broker_socket_path("host-shutdown-read"));
+        let peer = host_shutdown_peer();
+        let requests = [
+            (
+                "list",
+                wire::Request::List(public_wire::ListRequest {
+                    env: None,
+                    vm: None,
+                }),
+            ),
+            (
+                "status",
+                wire::Request::Status(public_wire::StatusRequest {
+                    check_bridges: false,
+                    vm: None,
+                }),
+            ),
+            ("authStatus", wire::Request::AuthStatus),
+            (
+                "gatewayDisplay",
+                wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::List(
+                    public_wire::GatewayDisplayListArgs { target: None },
+                )),
+            ),
+        ];
+        for (expected_verb, request) in requests {
+            let err = dispatch_request(&state, &peer, request)
+                .expect_err("HostShutdown must not bypass its vmStop-only boundary");
+            assert!(
+                matches!(err, TypedError::AuthzNotAdmin { .. }),
+                "HostShutdown denial of {expected_verb} must preserve AuthzNotAdmin: {err:?}"
             );
         }
     }
@@ -28320,8 +29468,13 @@ mod broker_dispatch_tests {
             test_state_with_broker_socket(unreachable_broker_socket_path("rollback-force-cleanup"));
         let child = register_sleep_runner(&state, "vm-a", false);
 
-        rollback_failed_vm_start(&state, "vm-a", &[VM_RUNNER_ROLE_ID.to_owned()])
-            .expect("rollback stops spawned primary VMM without provider wait");
+        rollback_failed_vm_start(
+            &state,
+            "vm-a",
+            &[VM_RUNNER_ROLE_ID.to_owned()],
+            BrokerCallerRole::AdminUid { uid: 0 },
+        )
+        .expect("rollback stops spawned primary VMM without provider wait");
 
         assert!(!state.pidfd_table.contains("vm-a", VM_RUNNER_ROLE_ID));
         let status = child.wait();
@@ -28833,6 +29986,7 @@ mod broker_dispatch_tests {
                 console_fd_index: None,
             },
             &[],
+            BrokerCallerRole::AdminUid { uid: 0 },
         );
         broker.join().expect("broker join");
     }
@@ -29885,7 +31039,13 @@ mod broker_dispatch_tests {
             Some("api_ready_timeout"),
             "event.kind must be 'api_ready_timeout'",
         );
-        assert_eq!(event.get("vm").and_then(|v| v.as_str()), Some("vm-a"),);
+        assert_eq!(
+            event.get("vm").and_then(|v| v.as_str()),
+            Some(
+                d2b_contracts::v3::canonical_digest("d2b:daemon-audit-redaction:v1", b"vm-a",)
+                    .as_str(),
+            ),
+        );
         assert_eq!(
             event.get("runner").and_then(|v| v.as_str()),
             Some(VM_RUNNER_ROLE_ID),

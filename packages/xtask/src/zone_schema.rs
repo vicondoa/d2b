@@ -32,9 +32,9 @@ const NAME_PATTERN: &str = "^[a-z][a-z0-9-]{0,62}$";
 const CREDENTIAL_REF_PATTERN: &str = "^Credential/[a-z][a-z0-9-]{0,62}$";
 /// `ADR-046-resources-zone-control.md` section 3.3: the transport Provider ref
 /// is required, explicit, and its local name always begins with `transport-`.
-const TRANSPORT_PROVIDER_REF_PATTERN: &str = "^Provider/transport-[a-z][a-z0-9-]*$";
+const TRANSPORT_PROVIDER_REF_PATTERN: &str = "^Provider/transport-[a-z][a-z0-9-]{0,52}$";
 /// Any same-Zone `<Type>/<name>` ref, used by `metadata.ownerRef`.
-const RESOURCE_REF_PATTERN: &str = "^[A-Z][A-Za-z0-9]{0,62}/[a-z][a-z0-9-]{0,62}$";
+const RESOURCE_REF_PATTERN: &str = "^(?:[A-Z][A-Za-z0-9]{0,62}|[a-z][a-z0-9-]{0,62}\\.d2bus\\.org\\.[A-Z][A-Za-z0-9]{0,62})/[a-z][a-z0-9-]{0,62}$";
 
 const API_VERSION: &str = "resources.d2bus.org/v3";
 const CORE_SCHEMA_NAMESPACE: &str = "core.d2bus.org";
@@ -236,6 +236,15 @@ impl Field {
                 "items": { "type": "string", "pattern": pattern },
             }),
         };
+        if self.name == "transportProviderRef" {
+            schema = resource_ref_schema_with(TRANSPORT_PROVIDER_REF_PATTERN, &["Provider"]);
+        } else if self.name == "transportCredentials" {
+            schema = json!({
+                "type": "array",
+                "maxItems": 8,
+                "items": resource_ref_schema_with(CREDENTIAL_REF_PATTERN, &["Credential"]),
+            });
+        }
         let object = schema
             .as_object_mut()
             .expect("field schema is always a JSON object");
@@ -297,37 +306,53 @@ fn metadata_schema(type_name: &str) -> Value {
     } else {
         "Name of the Zone this resource is local to."
     };
+    let mut properties = Map::new();
+    properties.insert(
+        "annotations".to_owned(),
+        json!({
+            "type": "object",
+            "additionalProperties": { "type": "string" },
+            "description": "Optional authored key-value annotation map.",
+        }),
+    );
+    properties.insert(
+        "labels".to_owned(),
+        json!({
+            "type": "object",
+            "additionalProperties": { "type": "string" },
+            "description": "Optional authored key-value label map.",
+        }),
+    );
+    properties.insert(
+        "name".to_owned(),
+        json!({
+            "type": "string",
+            "pattern": NAME_PATTERN,
+            "description": "Zone-local resource name.",
+        }),
+    );
+    let mut owner_ref = resource_ref_schema();
+    owner_ref
+        .as_object_mut()
+        .expect("ResourceRef schema is an object")
+        .insert(
+            "description".to_owned(),
+            Value::String("Optional same-Zone ref of the owning resource.".to_owned()),
+        );
+    properties.insert("ownerRef".to_owned(), owner_ref);
+    properties.insert(
+        "zone".to_owned(),
+        json!({
+            "type": "string",
+            "pattern": NAME_PATTERN,
+            "description": zone_description,
+        }),
+    );
     json!({
         "type": "object",
         "additionalProperties": false,
         "required": ["name", "zone"],
-        "properties": {
-            "annotations": {
-                "type": "object",
-                "additionalProperties": { "type": "string" },
-                "description": "Optional authored key-value annotation map.",
-            },
-            "labels": {
-                "type": "object",
-                "additionalProperties": { "type": "string" },
-                "description": "Optional authored key-value label map.",
-            },
-            "name": {
-                "type": "string",
-                "pattern": NAME_PATTERN,
-                "description": "Zone-local resource name.",
-            },
-            "ownerRef": {
-                "type": "string",
-                "pattern": RESOURCE_REF_PATTERN,
-                "description": "Optional same-Zone ref of the owning resource.",
-            },
-            "zone": {
-                "type": "string",
-                "pattern": NAME_PATTERN,
-                "description": zone_description,
-            },
-        },
+        "properties": Value::Object(properties),
     })
 }
 
@@ -340,6 +365,7 @@ fn resource_schema(schema: &ResourceTypeSchema) -> Value {
         ),
         "title": schema.name,
         "description": schema.description,
+        "x-d2b-resource-type": schema.name,
         "type": "object",
         "additionalProperties": false,
         "required": ["apiVersion", "metadata", "spec", "type"],
@@ -384,7 +410,36 @@ fn nullable(schema: Value) -> Value {
 }
 
 fn resource_ref_schema() -> Value {
-    string_schema(RESOURCE_REF_PATTERN)
+    resource_ref_schema_with(RESOURCE_REF_PATTERN, &[])
+}
+
+fn provider_ref_schema() -> Value {
+    resource_ref_schema_with("^Provider/[a-z][a-z0-9-]{0,62}$", &["Provider"])
+}
+
+fn resource_ref_schema_with(pattern: &str, allowed_types: &[&str]) -> Value {
+    let mut schema = string_schema(pattern);
+    let object = schema
+        .as_object_mut()
+        .expect("ResourceRef schema is an object");
+    object.insert(
+        "x-d2b-reference-kind".to_owned(),
+        Value::String("ResourceRef".to_owned()),
+    );
+    object.insert(
+        "x-d2b-allowed-ref-types".to_owned(),
+        Value::Array(
+            allowed_types
+                .iter()
+                .map(|value| Value::String((*value).to_owned()))
+                .collect(),
+        ),
+    );
+    object.insert(
+        "x-d2b-reference-scope".to_owned(),
+        Value::String("same-zone".to_owned()),
+    );
+    schema
 }
 
 fn array_schema(items: Value, max_items: usize) -> Value {
@@ -456,7 +511,7 @@ fn with_universal_spec_fields(name: &str, mut spec: Value) -> Value {
     if name != "Provider" && name != "Zone" && name != "ZoneLink" {
         properties
             .entry("providerRef".to_owned())
-            .or_insert_with(resource_ref_schema);
+            .or_insert_with(provider_ref_schema);
         properties
             .entry("updatePolicy".to_owned())
             .or_insert_with(update_policy_schema);
@@ -512,7 +567,78 @@ fn dto_resource_schema<T: JsonSchema>(
             .expect("resource schema is an object")
             .insert("definitions".to_owned(), definitions);
     }
+    annotate_resource_ref_schemas(&mut resource);
     resource
+}
+
+fn annotate_resource_ref_schemas(schema: &mut Value) {
+    match schema {
+        Value::Object(object) => {
+            if object.get("$ref").and_then(Value::as_str) == Some("#/definitions/ResourceRef") {
+                object.insert(
+                    "x-d2b-reference-kind".to_owned(),
+                    Value::String("ResourceRef".to_owned()),
+                );
+                object.insert(
+                    "x-d2b-reference-scope".to_owned(),
+                    Value::String("same-zone".to_owned()),
+                );
+            }
+            if let Some(definitions) = object.get_mut("definitions").and_then(Value::as_object_mut)
+                && let Some(resource_ref) = definitions.get_mut("ResourceRef")
+                && let Some(resource_ref) = resource_ref.as_object_mut()
+            {
+                resource_ref.insert(
+                    "x-d2b-reference-kind".to_owned(),
+                    Value::String("ResourceRef".to_owned()),
+                );
+                resource_ref.insert(
+                    "x-d2b-reference-scope".to_owned(),
+                    Value::String("same-zone".to_owned()),
+                );
+            }
+            let ref_property_names = object
+                .keys()
+                .filter(|name| name.ends_with("Ref"))
+                .cloned()
+                .collect::<Vec<_>>();
+            for name in ref_property_names {
+                if object.get(&name).is_some_and(contains_resource_ref_schema)
+                    && let Some(property) = object.get_mut(&name).and_then(Value::as_object_mut)
+                {
+                    property.insert(
+                        "x-d2b-reference-kind".to_owned(),
+                        Value::String("ResourceRef".to_owned()),
+                    );
+                    property.insert(
+                        "x-d2b-reference-scope".to_owned(),
+                        Value::String("same-zone".to_owned()),
+                    );
+                }
+            }
+            for value in object.values_mut() {
+                annotate_resource_ref_schemas(value);
+            }
+        }
+        Value::Array(values) => {
+            for value in values {
+                annotate_resource_ref_schemas(value);
+            }
+        }
+
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
+    }
+}
+
+fn contains_resource_ref_schema(value: &Value) -> bool {
+    match value {
+        Value::Object(object) => {
+            object.get("$ref").and_then(Value::as_str) == Some("#/definitions/ResourceRef")
+                || object.values().any(contains_resource_ref_schema)
+        }
+        Value::Array(values) => values.iter().any(contains_resource_ref_schema),
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => false,
+    }
 }
 
 fn resource_envelope_schema(name: &str, description: &str, spec: Value) -> Value {
@@ -524,6 +650,7 @@ fn resource_envelope_schema(name: &str, description: &str, spec: Value) -> Value
         ),
         "title": name,
         "description": description,
+        "x-d2b-resource-type": name,
         "type": "object",
         "additionalProperties": false,
         "required": ["apiVersion", "metadata", "spec", "type"],
@@ -620,7 +747,10 @@ fn standard_core_schemas() -> Vec<(&'static str, Value)> {
         "Zone-local binding of a Role to authenticated subjects.",
         object_from_pairs(
             [
-                ("roleRef", string_schema("^Role/[a-z][a-z0-9-]{0,62}$")),
+                (
+                    "roleRef",
+                    resource_ref_schema_with("^Role/[a-z][a-z0-9-]{0,62}$", &["Role"]),
+                ),
                 ("subjects", array_schema(resource_ref_schema(), 64)),
                 (
                     "externalPrincipalSelector",
@@ -807,7 +937,7 @@ fn standard_core_schemas() -> Vec<(&'static str, Value)> {
             [
                 (
                     "providerRef",
-                    string_schema("^Provider/[a-z][a-z0-9-]{0,62}$"),
+                    resource_ref_schema_with("^Provider/[a-z][a-z0-9-]{0,62}$", &["Provider"]),
                 ),
                 ("resourceRef", resource_ref_schema()),
                 ("serviceType", string_schema(RESOURCE_TYPE_NAME_PATTERN)),
@@ -850,11 +980,11 @@ fn standard_core_schemas() -> Vec<(&'static str, Value)> {
             [
                 (
                     "providerRef",
-                    string_schema("^Provider/[a-z][a-z0-9-]{0,62}$"),
+                    resource_ref_schema_with("^Provider/[a-z][a-z0-9-]{0,62}$", &["Provider"]),
                 ),
                 (
                     "zoneLinkRef",
-                    string_schema("^ZoneLink/[a-z][a-z0-9-]{0,62}$"),
+                    resource_ref_schema_with("^ZoneLink/[a-z][a-z0-9-]{0,62}$", &["ZoneLink"]),
                 ),
                 ("exportKey", bounded_string(1, 128)),
                 (
@@ -1439,6 +1569,24 @@ mod tests {
         assert_eq!(
             core_schema_artifact_name("ZoneLink"),
             "core.d2bus.org_ZoneLink.schema.json"
+        );
+    }
+
+    #[test]
+    fn generated_provider_and_transport_refs_are_schema_identified() {
+        let credential = standard_resource_schemas()
+            .into_iter()
+            .find(|(name, _)| *name == "Credential")
+            .map(|(_, schema)| schema)
+            .expect("Credential schema");
+        assert_eq!(
+            credential["properties"]["spec"]["properties"]["providerRef"]["x-d2b-reference-kind"],
+            json!("ResourceRef")
+        );
+        let zone_link = resource_schema(&RESOURCE_TYPE_SCHEMAS[1]);
+        assert_eq!(
+            zone_link["properties"]["spec"]["properties"]["transportProviderRef"]["x-d2b-allowed-ref-types"],
+            json!(["Provider"])
         );
     }
 

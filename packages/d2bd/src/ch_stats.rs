@@ -34,7 +34,7 @@ use crate::ch_api;
 /// One VM the scraper should attempt to query on a scrape cycle.
 /// Built from the host manifest. Only the three label values
 /// (`vm`, `env`, `role`) and the API socket path are needed.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct ChVmInput {
     pub vm: String,
     pub env: String,
@@ -42,16 +42,34 @@ pub struct ChVmInput {
     pub api_socket: String,
 }
 
+impl core::fmt::Debug for ChVmInput {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("ChVmInput(<redacted>)")
+    }
+}
+
 /// Outcome of one VM's CH stats scrape. Every field is optional
 /// because each step of the scrape may fail independently (socket
 /// missing, ping fails, info parse fails). Renderers translate
 /// these into the documented metric series.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Clone, Default, PartialEq, Eq)]
 pub struct ChVmStats {
     pub api_up: bool,
     pub state: Option<String>,
     pub vcpu_count: Option<u64>,
     pub memory_bytes: Option<u64>,
+}
+
+impl core::fmt::Debug for ChVmStats {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("ChVmStats")
+            .field("api_up", &self.api_up)
+            .field("has_state", &self.state.is_some())
+            .field("has_vcpu_count", &self.vcpu_count.is_some())
+            .field("has_memory_bytes", &self.memory_bytes.is_some())
+            .finish()
+    }
 }
 
 /// Source that produces a [`ChVmStats`] for a given input. The
@@ -95,6 +113,8 @@ where
 /// emitted even when no VM is in that state. Mirrors the legacy
 /// exporter's `KNOWN_STATES` array so dashboards keep working.
 pub const KNOWN_STATES: &[&str] = &["Created", "Running", "Shutdown", "Paused"];
+/// Maximum CH metric series emitted by one scrape.
+pub const MAX_CH_SERIES: usize = 4096;
 
 /// HTTP read timeout for a single Cloud Hypervisor API request.
 /// Matches the legacy exporter's `curl --max-time 5`.
@@ -165,6 +185,7 @@ pub fn render_ch_stats(
     // block can iterate without redundant scrape calls.
     let scrapes: Vec<(&ChVmInput, ChVmStats)> = vms
         .iter()
+        .take(MAX_CH_SERIES / (KNOWN_STATES.len() + 5))
         .map(|input| (input, source.scrape(input)))
         .collect();
 
@@ -174,13 +195,15 @@ pub fn render_ch_stats(
         out.push_str(&format!("d2b_vm_ch_api_up{{{labels}}} {api_up}\n"));
 
         let mut states: Vec<&str> = KNOWN_STATES.to_vec();
-        if let Some(s) = stats.state.as_deref()
-            && !states.contains(&s)
-        {
-            states.push(s);
-        }
+        states.push("Unknown");
         for st in &states {
-            let v = if Some(*st) == stats.state.as_deref() {
+            let state = stats
+                .state
+                .as_deref()
+                .filter(|state| KNOWN_STATES.contains(state));
+            let v = if Some(*st) == state
+                || (*st == "Unknown" && stats.state.is_some() && state.is_none())
+            {
                 1
             } else {
                 0
@@ -211,10 +234,14 @@ pub fn render_ch_stats(
 fn base_labels(input: &ChVmInput) -> String {
     format!(
         "vm=\"{}\",env=\"{}\",role=\"{}\"",
-        escape_label_value(&input.vm),
-        escape_label_value(&input.env),
-        escape_label_value(&input.role)
+        escape_label_value(&opaque_label(&input.vm)),
+        escape_label_value(&opaque_label(&input.env)),
+        escape_label_value(role_label(&input.role))
     )
+}
+
+fn opaque_label(value: &str) -> String {
+    d2b_contracts::v3::canonical_digest("d2b:daemon-metric-label:v1", value.as_bytes())
 }
 
 fn escape_label_value(v: &str) -> String {
@@ -224,10 +251,22 @@ fn escape_label_value(v: &str) -> String {
             '\\' => out.push_str("\\\\"),
             '"' => out.push_str("\\\""),
             '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            ch if ch.is_control() => out.push_str(&format!("\\x{:02x}", ch as u32)),
             _ => out.push(ch),
         }
     }
     out
+}
+
+fn role_label(value: &str) -> &'static str {
+    match value {
+        "host" => "host",
+        "workload" => "workload",
+        "system" => "system",
+        _ => "unknown",
+    }
 }
 
 #[cfg(test)]
@@ -268,6 +307,10 @@ mod tests {
         }
     }
 
+    fn labels(name: &str, env: &str, role: &str) -> String {
+        super::base_labels(&vm(name, env, role))
+    }
+
     #[test]
     fn render_emits_help_and_type_headers() {
         let body = render_ch_stats(&[], &NullChStatsSource, &|_: &str| false);
@@ -287,7 +330,12 @@ mod tests {
         let body = render_ch_stats(&[vm("corp-vm", "work", "workload")], &source, &|_: &str| {
             false
         });
-        assert!(body.contains("d2b_vm_ch_api_up{vm=\"corp-vm\",env=\"work\",role=\"workload\"} 0"));
+        assert!(body.contains(&format!(
+            "d2b_vm_ch_api_up{{{}}} 0",
+            labels("corp-vm", "work", "workload")
+        )));
+        assert!(!body.contains("corp-vm"));
+        assert!(!body.contains("env=\"work\""));
         // No topology labels by default.
         assert!(!body.contains("bridge="));
         assert!(!body.contains("tap="));
@@ -304,7 +352,10 @@ mod tests {
             &NullChStatsSource,
             &|_: &str| false,
         );
-        assert!(body.contains("d2b_vm_ch_api_up{vm=\"ghost\",env=\"work\",role=\"workload\"} 0"));
+        assert!(body.contains(&format!(
+            "d2b_vm_ch_api_up{{{}}} 0",
+            labels("ghost", "work", "workload")
+        )));
     }
 
     #[test]
@@ -326,17 +377,23 @@ mod tests {
         for st in KNOWN_STATES {
             let v = if *st == "Running" { 1 } else { 0 };
             let line = format!(
-                "d2b_vm_state{{vm=\"corp-vm\",env=\"work\",role=\"workload\",state=\"{st}\"}} {v}"
+                "d2b_vm_state{{{},state=\"{st}\"}} {v}",
+                labels("corp-vm", "work", "workload")
             );
             assert!(body.contains(&line), "missing line: {line}\n--\n{body}");
         }
-        assert!(body.contains("d2b_vm_running{vm=\"corp-vm\",env=\"work\",role=\"workload\"} 1"));
-        assert!(
-            body.contains("d2b_vm_ch_vcpu_count{vm=\"corp-vm\",env=\"work\",role=\"workload\"} 4")
-        );
-        assert!(body.contains(
-            "d2b_vm_ch_memory_bytes{vm=\"corp-vm\",env=\"work\",role=\"workload\"} 2147483648"
-        ));
+        assert!(body.contains(&format!(
+            "d2b_vm_running{{{}}} 1",
+            labels("corp-vm", "work", "workload")
+        )));
+        assert!(body.contains(&format!(
+            "d2b_vm_ch_vcpu_count{{{}}} 4",
+            labels("corp-vm", "work", "workload")
+        )));
+        assert!(body.contains(&format!(
+            "d2b_vm_ch_memory_bytes{{{}}} 2147483648",
+            labels("corp-vm", "work", "workload")
+        )));
     }
 
     #[test]
@@ -353,12 +410,14 @@ mod tests {
         let body = render_ch_stats(&[vm("weird", "work", "workload")], &source, &|_: &str| {
             false
         });
-        assert!(body.contains(
-            "d2b_vm_state{vm=\"weird\",env=\"work\",role=\"workload\",state=\"Crashing\"} 1"
-        ));
-        assert!(body.contains(
-            "d2b_vm_state{vm=\"weird\",env=\"work\",role=\"workload\",state=\"Running\"} 0"
-        ));
+        assert!(body.contains(&format!(
+            "d2b_vm_state{{{},state=\"Unknown\"}} 1",
+            labels("weird", "work", "workload")
+        )));
+        assert!(body.contains(&format!(
+            "d2b_vm_state{{{},state=\"Running\"}} 0",
+            labels("weird", "work", "workload")
+        )));
     }
 
     #[test]
@@ -439,8 +498,18 @@ mod tests {
             &source,
             &|_: &str| false,
         );
-        let pos_a = body.find("d2b_vm_ch_api_up{vm=\"a\"").expect("a present");
-        let pos_b = body.find("d2b_vm_ch_api_up{vm=\"b\"").expect("b present");
+        let pos_a = body
+            .find(&format!(
+                "d2b_vm_ch_api_up{{{}",
+                labels("a", "work", "workload")
+            ))
+            .expect("a present");
+        let pos_b = body
+            .find(&format!(
+                "d2b_vm_ch_api_up{{{}",
+                labels("b", "work", "workload")
+            ))
+            .expect("b present");
         assert!(pos_a < pos_b);
     }
 }

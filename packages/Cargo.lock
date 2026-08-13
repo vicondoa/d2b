@@ -933,6 +933,7 @@ version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-telemetry",
  "libc",
+ "rustix 0.38.44",
  "serde",
  "serde_json",
 ]
@@ -996,6 +997,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml_ng",
+ "syn 2.0.118",
 ]
 
 [[package]]
@@ -1057,6 +1059,7 @@ dependencies = [
  "d2b-contracts",
  "d2b-controller-toolkit",
  "d2b-telemetry",
+ "serde",
  "serde_json",
  "sha2",
  "tokio",
@@ -1301,6 +1304,7 @@ version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts",
  "d2b-provider-toolkit",
+ "rustix 0.38.44",
  "serde",
  "serde_json",
 ]
@@ -1531,6 +1535,7 @@ dependencies = [
  "base64",
  "d2b-contracts",
  "d2b-core",
+ "regex",
  "ring",
  "rustix 0.38.44",
  "serde",
@@ -1613,6 +1618,7 @@ name = "d2b-telemetry"
 version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts",
+ "rustix 0.38.44",
  "serde",
  "serde_json",
  "sha2",
@@ -1674,6 +1680,7 @@ dependencies = [
  "arc-swap",
  "async-trait",
  "clap",
+ "d2b-audit",
  "d2b-bus",
  "d2b-contracts",
  "d2b-core",
@@ -1683,6 +1690,7 @@ dependencies = [
  "d2b-host",
  "d2b-provider",
  "d2b-provider-aca",
+ "d2b-provider-device-tpm",
  "d2b-provider-relay",
  "d2b-realm-core",
  "d2b-realm-provider",

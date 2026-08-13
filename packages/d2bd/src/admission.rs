@@ -2,7 +2,7 @@ use d2b_contracts::public_wire;
 use d2b_realm_core::PrincipalId;
 use nix::sys::socket::{getsockopt, sockopt::PeerCredentials};
 use socket2::Socket;
-use uzers::{get_user_by_uid, get_user_groups};
+use uzers::{get_group_by_name, get_user_by_uid, get_user_groups};
 
 use crate::{ServerState, io_wrap, typed_error::TypedError};
 
@@ -26,7 +26,8 @@ pub(crate) enum PeerRole {
     HostShutdown,
 }
 
-#[cfg_attr(test, derive(Clone))]
+#[cfg(test)]
+#[derive(Clone)]
 pub(crate) struct PeerOverride {
     pub(crate) uid: u32,
     pub(crate) gid: u32,
@@ -38,54 +39,55 @@ pub(crate) fn authorize_peer(
     stream: &Socket,
     state: &ServerState,
 ) -> Result<PeerIdentity, TypedError> {
-    // Peer-identity resolution order:
-    //   1. the `#[cfg(test)]` in-process injection slot (lib unit tests that
-    //      drive `handle_connection` directly),
-    //   2. the `D2BD_TEST_PEER_*` env vars (integration tests that spawn
-    //      the real daemon binary and pass them via `Command::env`; reading
-    //      env is safe under edition 2024),
-    //   3. the real `SO_PEERCRED` of the connected socket (production).
-    let peer_override = match peer_override_injected() {
-        Some(peer) => peer,
-        None => match peer_override_from_env()? {
-            Some(peer) => peer,
-            None => {
-                let peer =
-                    getsockopt(stream, PeerCredentials).map_err(io_wrap("read SO_PEERCRED"))?;
-                PeerOverride {
-                    uid: peer.uid() as u32,
-                    gid: peer.gid() as u32,
-                    username: None,
-                    groups: None,
-                }
-            }
-        },
-    };
-    let uid = peer_override.uid;
-    let _gid = peer_override.gid;
-    let username = peer_override
-        .username
-        .or_else(|| get_user_by_uid(uid).map(|user| user.name().to_string_lossy().into_owned()));
-    let _supplementary_groups = if let Some(groups) = peer_override.groups {
-        groups
-    } else if let Some(user) = get_user_by_uid(uid) {
-        get_user_groups(user.name(), user.primary_group_id())
-            .into_iter()
-            .flatten()
-            .map(|group| group.name().to_string_lossy().into_owned())
-            .collect()
-    } else {
-        Vec::new()
-    };
+    #[cfg(test)]
+    if let Some(peer) = peer_override_injected() {
+        let _peer_gid = peer.gid;
+        return classify_peer(peer.uid, peer.username, peer.groups, state, false);
+    }
 
+    let peer = getsockopt(stream, PeerCredentials).map_err(io_wrap("read SO_PEERCRED"))?;
+    let _peer_pid = peer.pid();
+    let _peer_gid = peer.gid();
+    let uid = peer.uid() as u32;
+    if uid == state.daemon_uid {
+        return Err(TypedError::AuthzNotALauncher { peer_uid: uid });
+    }
+    if uid == 0 {
+        return Ok(PeerIdentity {
+            role: PeerRole::HostShutdown,
+            uid,
+        });
+    }
+    let user = get_user_by_uid(uid);
+    let username = user
+        .as_ref()
+        .map(|user| user.name().to_string_lossy().into_owned());
+    let groups = user
+        .as_ref()
+        .and_then(|user| get_user_groups(user.name(), user.primary_group_id()))
+        .map(|groups| {
+            groups
+                .into_iter()
+                .map(|group| group.name().to_string_lossy().into_owned())
+                .collect()
+        });
+    classify_peer(uid, username, groups, state, true)
+}
+
+fn classify_peer(
+    uid: u32,
+    username: Option<String>,
+    groups: Option<Vec<String>>,
+    state: &ServerState,
+    production_lookup: bool,
+) -> Result<PeerIdentity, TypedError> {
     if uid == state.daemon_uid {
         return Err(TypedError::AuthzNotALauncher { peer_uid: uid });
     }
 
     // uid=0 is the host-shutdown hook running under systemd
-    // `ExecStop = "+..."`.  It receives the narrow `HostShutdown` role
-    // which is only permitted to issue `vmStop` during host shutdown
-    // teardown.  Any other admin-only operation is denied at dispatch.
+    // `ExecStop = "+..."`. It receives the narrow `HostShutdown` role which
+    // is only permitted to issue `vmStop` during host shutdown teardown.
     if uid == 0 {
         return Ok(PeerIdentity {
             role: PeerRole::HostShutdown,
@@ -93,24 +95,35 @@ pub(crate) fn authorize_peer(
         });
     }
 
-    let is_launcher = username
-        .as_ref()
-        .map(|name| {
-            state
-                .config
-                .launcher_users
-                .iter()
-                .any(|launcher| launcher == name)
-        })
-        .unwrap_or(false);
-    if !is_launcher {
+    // A failed local identity or group lookup is an authorization failure,
+    // never an empty-group fallback. The configured socket group is the only
+    // supplementary-group grant; only the exact configured group is used.
+    let Some(groups) = groups else {
+        return Err(TypedError::AuthzNotALauncher { peer_uid: uid });
+    };
+    let lifecycle_group = state.config.public_socket_group.as_str();
+    let lifecycle_member = lifecycle_group_member(lifecycle_group, &groups);
+    let configured_launcher = username.as_ref().is_some_and(|name| {
+        state
+            .config
+            .launcher_users
+            .iter()
+            .any(|launcher| launcher == name)
+    });
+    if !configured_launcher && !lifecycle_member {
+        return Err(TypedError::AuthzNotALauncher { peer_uid: uid });
+    }
+
+    // In production, an unknown configured lifecycle group is a failed
+    // classifier lookup rather than an authority grant. Test injection keeps
+    // the group list hermetic and therefore skips NSS group-name lookup.
+    if production_lookup && get_group_by_name(lifecycle_group).is_none() {
         return Err(TypedError::AuthzNotALauncher { peer_uid: uid });
     }
 
     let role = if username
         .as_ref()
-        .map(|name| state.config.admin_users.iter().any(|admin| admin == name))
-        .unwrap_or(false)
+        .is_some_and(|name| state.config.admin_users.iter().any(|admin| admin == name))
     {
         PeerRole::Admin
     } else {
@@ -118,6 +131,10 @@ pub(crate) fn authorize_peer(
     };
 
     Ok(PeerIdentity { role, uid })
+}
+
+fn lifecycle_group_member(configured_group: &str, groups: &[String]) -> bool {
+    !configured_group.is_empty() && groups.iter().any(|group| group == configured_group)
 }
 
 pub(crate) fn verb_requires_admin(verb: &str) -> bool {
@@ -199,54 +216,17 @@ fn peer_override_injected() -> Option<PeerOverride> {
         .clone()
 }
 
-#[cfg(not(test))]
-fn peer_override_injected() -> Option<PeerOverride> {
-    None
-}
+#[cfg(test)]
+mod tests {
+    use super::lifecycle_group_member;
 
-/// Read a peer-credential override from the `D2BD_TEST_PEER_*` env vars.
-/// Used by integration tests that spawn the real daemon binary and pass these
-/// via `Command::env`; reading env is safe under edition 2024. Returns `None`
-/// (the normal production case) when `D2BD_TEST_PEER_UID` is unset.
-fn peer_override_from_env() -> Result<Option<PeerOverride>, TypedError> {
-    let uid = match std::env::var("D2BD_TEST_PEER_UID") {
-        Ok(value) => value
-            .parse::<u32>()
-            .map_err(|err| TypedError::InternalConfig {
-                detail: format!("D2BD_TEST_PEER_UID: {err}"),
-            })?,
-        Err(std::env::VarError::NotPresent) => return Ok(None),
-        Err(err) => {
-            return Err(TypedError::InternalConfig {
-                detail: format!("D2BD_TEST_PEER_UID: {err}"),
-            });
-        }
-    };
-    let gid = match std::env::var("D2BD_TEST_PEER_GID") {
-        Ok(value) => value
-            .parse::<u32>()
-            .map_err(|err| TypedError::InternalConfig {
-                detail: format!("D2BD_TEST_PEER_GID: {err}"),
-            })?,
-        Err(std::env::VarError::NotPresent) => uid,
-        Err(err) => {
-            return Err(TypedError::InternalConfig {
-                detail: format!("D2BD_TEST_PEER_GID: {err}"),
-            });
-        }
-    };
-    let username = std::env::var("D2BD_TEST_PEER_USERNAME").ok();
-    let groups = std::env::var("D2BD_TEST_PEER_GROUPS").ok().map(|value| {
-        value
-            .split(',')
-            .filter(|part| !part.is_empty())
-            .map(|part| part.to_owned())
-            .collect::<Vec<_>>()
-    });
-    Ok(Some(PeerOverride {
-        uid,
-        gid,
-        username,
-        groups,
-    }))
+    #[test]
+    fn only_the_configured_lifecycle_group_grants_group_authority() {
+        let groups = vec!["wheel".to_owned(), "d2b".to_owned()];
+        assert!(lifecycle_group_member("d2b", &groups));
+        assert!(lifecycle_group_member("wheel", &["wheel".to_owned()]));
+        assert!(!lifecycle_group_member("d2b", &["wheel".to_owned()]));
+        assert!(!lifecycle_group_member("missing", &groups));
+        assert!(!lifecycle_group_member("", &groups));
+    }
 }

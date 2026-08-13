@@ -108,6 +108,7 @@ fn map_broker_sign_response(
 pub struct BrokerSigner {
     broker_socket_path: PathBuf,
     budget: AttemptBudget,
+    caller_role: BrokerCallerRole,
 }
 
 impl BrokerSigner {
@@ -115,6 +116,20 @@ impl BrokerSigner {
         Self {
             broker_socket_path,
             budget,
+            caller_role: BrokerCallerRole::NotAuthorized,
+        }
+    }
+
+    /// Construct a signer with the authenticated caller role.
+    pub fn with_caller_role(
+        broker_socket_path: PathBuf,
+        budget: AttemptBudget,
+        caller_role: BrokerCallerRole,
+    ) -> Self {
+        Self {
+            broker_socket_path,
+            budget,
+            caller_role,
         }
     }
 }
@@ -125,10 +140,13 @@ impl GuestControlSigner for BrokerSigner {
         request: GuestControlSignRequest,
     ) -> Result<GuestControlSignResponse, GuestControlHealthError> {
         let timeout = self.budget.next().ok_or(GuestControlHealthError::Timeout)?;
+        if matches!(self.caller_role, BrokerCallerRole::NotAuthorized) {
+            return Err(GuestControlHealthError::Signer);
+        }
         let result = crate::dispatch_broker_request_to_socket(
             &self.broker_socket_path,
             BrokerRequest::GuestControlSign(request),
-            BrokerCallerRole::default(),
+            self.caller_role.clone(),
             Some(timeout),
         );
         map_broker_sign_response(result)
@@ -233,11 +251,24 @@ pub trait GuestControlProbe: Send + Sync {
 /// current-thread runtime. Owns only the broker socket path.
 pub struct RealGuestControlProbe {
     broker_socket_path: PathBuf,
+    caller_role: BrokerCallerRole,
 }
 
 impl RealGuestControlProbe {
     pub fn new(broker_socket_path: PathBuf) -> Self {
-        Self { broker_socket_path }
+        Self {
+            broker_socket_path,
+            caller_role: BrokerCallerRole::NotAuthorized,
+        }
+    }
+
+    /// Construct a production probe with the authenticated daemon caller
+    /// role that must be preserved through every broker signer/backend call.
+    pub fn with_caller_role(broker_socket_path: PathBuf, caller_role: BrokerCallerRole) -> Self {
+        Self {
+            broker_socket_path,
+            caller_role,
+        }
     }
 }
 
@@ -247,7 +278,12 @@ impl GuestControlProbe for RealGuestControlProbe {
         params: &ProbeParams,
         attempt_timeout: Duration,
     ) -> Result<GuestControlHealthEvidence, GuestControlHealthError> {
-        run_health_probe_once(params, &self.broker_socket_path, attempt_timeout)
+        run_health_probe_once(
+            params,
+            &self.broker_socket_path,
+            self.caller_role.clone(),
+            attempt_timeout,
+        )
     }
 
     fn read_config(
@@ -255,7 +291,12 @@ impl GuestControlProbe for RealGuestControlProbe {
         params: &ProbeParams,
         attempt_timeout: Duration,
     ) -> Result<Vec<u8>, GuestFileReadError> {
-        run_config_read_once(params, &self.broker_socket_path, attempt_timeout)
+        run_config_read_once(
+            params,
+            &self.broker_socket_path,
+            self.caller_role.clone(),
+            attempt_timeout,
+        )
     }
 
     fn usbip_import(
@@ -269,6 +310,7 @@ impl GuestControlProbe for RealGuestControlProbe {
         run_usbip_import_once(
             params,
             &self.broker_socket_path,
+            self.caller_role.clone(),
             attempt_timeout,
             GuestUsbipImportCall {
                 action,
@@ -288,6 +330,7 @@ impl GuestControlProbe for RealGuestControlProbe {
         run_usbip_status_once(
             params,
             &self.broker_socket_path,
+            self.caller_role.clone(),
             attempt_timeout,
             host,
             bus_id,
@@ -300,7 +343,13 @@ impl GuestControlProbe for RealGuestControlProbe {
         attempt_timeout: Duration,
         start: &GuestSystemActivationStart,
     ) -> Result<GuestSystemActivationStatus, GuestSystemActivationError> {
-        run_activation_start_once(params, &self.broker_socket_path, attempt_timeout, start)
+        run_activation_start_once(
+            params,
+            &self.broker_socket_path,
+            self.caller_role.clone(),
+            attempt_timeout,
+            start,
+        )
     }
 
     fn activate_system_status(
@@ -312,6 +361,7 @@ impl GuestControlProbe for RealGuestControlProbe {
         run_activation_status_once(
             params,
             &self.broker_socket_path,
+            self.caller_role.clone(),
             attempt_timeout,
             activation_id,
         )
@@ -322,7 +372,12 @@ impl GuestControlProbe for RealGuestControlProbe {
         params: &ProbeParams,
         attempt_timeout: Duration,
     ) -> Result<GuestAudioStatus, GuestAudioSetError> {
-        run_audio_status_once(params, &self.broker_socket_path, attempt_timeout)
+        run_audio_status_once(
+            params,
+            &self.broker_socket_path,
+            self.caller_role.clone(),
+            attempt_timeout,
+        )
     }
 
     fn audio_set(
@@ -337,6 +392,7 @@ impl GuestControlProbe for RealGuestControlProbe {
         run_audio_set_once(
             params,
             &self.broker_socket_path,
+            self.caller_role.clone(),
             attempt_timeout,
             channel,
             kind,
@@ -417,10 +473,12 @@ pub(crate) fn connect_and_build_client_for_tests(
 pub fn run_health_probe_once(
     params: &ProbeParams,
     broker_socket_path: &Path,
+    caller_role: BrokerCallerRole,
     attempt_timeout: Duration,
 ) -> Result<GuestControlHealthEvidence, GuestControlHealthError> {
     let budget = AttemptBudget::from_now(attempt_timeout, GUEST_CONTROL_ATTEMPT_CAP);
-    let signer = BrokerSigner::new(broker_socket_path.to_path_buf(), budget);
+    let signer =
+        BrokerSigner::with_caller_role(broker_socket_path.to_path_buf(), budget, caller_role);
     let nonce = host_nonce().map_err(|_| GuestControlHealthError::Signer)?;
     let runtime = build_probe_runtime()?;
     runtime.block_on(async {
@@ -441,10 +499,12 @@ pub fn run_health_probe_once(
 pub fn run_config_read_once(
     params: &ProbeParams,
     broker_socket_path: &Path,
+    caller_role: BrokerCallerRole,
     attempt_timeout: Duration,
 ) -> Result<Vec<u8>, GuestFileReadError> {
     let budget = AttemptBudget::from_now(attempt_timeout, GUEST_CONTROL_ATTEMPT_CAP);
-    let signer = BrokerSigner::new(broker_socket_path.to_path_buf(), budget);
+    let signer =
+        BrokerSigner::with_caller_role(broker_socket_path.to_path_buf(), budget, caller_role);
     let nonce =
         host_nonce().map_err(|_| GuestFileReadError::Probe(GuestControlHealthError::Signer))?;
     let runtime = build_probe_runtime().map_err(GuestFileReadError::Probe)?;
@@ -464,11 +524,13 @@ pub fn run_config_read_once(
 pub fn run_usbip_import_once(
     params: &ProbeParams,
     broker_socket_path: &Path,
+    caller_role: BrokerCallerRole,
     attempt_timeout: Duration,
     call: GuestUsbipImportCall<'_>,
 ) -> Result<GuestUsbipImportResult, GuestUsbipImportError> {
     let budget = AttemptBudget::from_now(attempt_timeout, attempt_timeout);
-    let signer = BrokerSigner::new(broker_socket_path.to_path_buf(), budget);
+    let signer =
+        BrokerSigner::with_caller_role(broker_socket_path.to_path_buf(), budget, caller_role);
     let nonce =
         host_nonce().map_err(|_| GuestUsbipImportError::Probe(GuestControlHealthError::Signer))?;
     let runtime = build_probe_runtime().map_err(GuestUsbipImportError::Probe)?;
@@ -490,12 +552,14 @@ pub fn run_usbip_import_once(
 pub fn run_usbip_status_once(
     params: &ProbeParams,
     broker_socket_path: &Path,
+    caller_role: BrokerCallerRole,
     attempt_timeout: Duration,
     host: Option<&str>,
     bus_id: Option<&str>,
 ) -> Result<GuestUsbipStatusResult, GuestUsbipImportError> {
     let budget = AttemptBudget::from_now(attempt_timeout, attempt_timeout);
-    let signer = BrokerSigner::new(broker_socket_path.to_path_buf(), budget);
+    let signer =
+        BrokerSigner::with_caller_role(broker_socket_path.to_path_buf(), budget, caller_role);
     let nonce =
         host_nonce().map_err(|_| GuestUsbipImportError::Probe(GuestControlHealthError::Signer))?;
     let runtime = build_probe_runtime().map_err(GuestUsbipImportError::Probe)?;
@@ -518,11 +582,13 @@ pub fn run_usbip_status_once(
 pub fn run_activation_start_once(
     params: &ProbeParams,
     broker_socket_path: &Path,
+    caller_role: BrokerCallerRole,
     attempt_timeout: Duration,
     start: &GuestSystemActivationStart,
 ) -> Result<GuestSystemActivationStatus, GuestSystemActivationError> {
     let budget = AttemptBudget::from_now(attempt_timeout, attempt_timeout);
-    let signer = BrokerSigner::new(broker_socket_path.to_path_buf(), budget);
+    let signer =
+        BrokerSigner::with_caller_role(broker_socket_path.to_path_buf(), budget, caller_role);
     let nonce = host_nonce()
         .map_err(|_| GuestSystemActivationError::Probe(GuestControlHealthError::Signer))?;
     let runtime = build_probe_runtime().map_err(GuestSystemActivationError::Probe)?;
@@ -544,11 +610,13 @@ pub fn run_activation_start_once(
 pub fn run_activation_status_once(
     params: &ProbeParams,
     broker_socket_path: &Path,
+    caller_role: BrokerCallerRole,
     attempt_timeout: Duration,
     activation_id: &str,
 ) -> Result<GuestSystemActivationStatus, GuestSystemActivationError> {
     let budget = AttemptBudget::from_now(attempt_timeout, attempt_timeout);
-    let signer = BrokerSigner::new(broker_socket_path.to_path_buf(), budget);
+    let signer =
+        BrokerSigner::with_caller_role(broker_socket_path.to_path_buf(), budget, caller_role);
     let nonce = host_nonce()
         .map_err(|_| GuestSystemActivationError::Probe(GuestControlHealthError::Signer))?;
     let runtime = build_probe_runtime().map_err(GuestSystemActivationError::Probe)?;
@@ -569,9 +637,11 @@ pub fn run_activation_status_once(
 
 /// Issue a single authenticated AudioSet RPC attempt on the current thread's
 /// runtime. Callers MUST be inside a current-thread Tokio runtime.
+#[allow(clippy::too_many_arguments)]
 pub fn run_audio_set_once(
     params: &ProbeParams,
     broker_socket_path: &Path,
+    caller_role: BrokerCallerRole,
     attempt_timeout: Duration,
     channel: d2b_contracts::guest_proto::AudioChannel,
     kind: d2b_contracts::guest_proto::AudioSetKind,
@@ -579,7 +649,8 @@ pub fn run_audio_set_once(
     level: u32,
 ) -> Result<GuestAudioChannelStatus, GuestAudioSetError> {
     let budget = AttemptBudget::from_now(attempt_timeout, attempt_timeout);
-    let signer = BrokerSigner::new(broker_socket_path.to_path_buf(), budget);
+    let signer =
+        BrokerSigner::with_caller_role(broker_socket_path.to_path_buf(), budget, caller_role);
     let nonce =
         host_nonce().map_err(|_| GuestAudioSetError::Probe(GuestControlHealthError::Signer))?;
     let runtime = build_probe_runtime().map_err(GuestAudioSetError::Probe)?;
@@ -605,10 +676,12 @@ pub fn run_audio_set_once(
 pub fn run_audio_status_once(
     params: &ProbeParams,
     broker_socket_path: &Path,
+    caller_role: BrokerCallerRole,
     attempt_timeout: Duration,
 ) -> Result<GuestAudioStatus, GuestAudioSetError> {
     let budget = AttemptBudget::from_now(attempt_timeout, attempt_timeout);
-    let signer = BrokerSigner::new(broker_socket_path.to_path_buf(), budget);
+    let signer =
+        BrokerSigner::with_caller_role(broker_socket_path.to_path_buf(), budget, caller_role);
     let nonce =
         host_nonce().map_err(|_| GuestAudioSetError::Probe(GuestControlHealthError::Signer))?;
     let runtime = build_probe_runtime().map_err(GuestAudioSetError::Probe)?;
@@ -725,10 +798,11 @@ pub fn run_guest_control_config_read_loop(
 pub fn run_config_read_on_dedicated_thread(
     params: ProbeParams,
     broker_socket_path: PathBuf,
+    caller_role: BrokerCallerRole,
     deadline: Duration,
 ) -> Result<Vec<u8>, GuestFileReadError> {
     std::thread::spawn(move || {
-        let probe = RealGuestControlProbe::new(broker_socket_path);
+        let probe = RealGuestControlProbe::with_caller_role(broker_socket_path, caller_role);
         let clock = RealProbeClock::new();
         run_guest_control_config_read_loop(
             &probe,
@@ -746,13 +820,14 @@ pub fn run_config_read_on_dedicated_thread(
 pub fn run_usbip_import_on_dedicated_thread(
     params: ProbeParams,
     broker_socket_path: PathBuf,
+    caller_role: BrokerCallerRole,
     action: GuestUsbipAction,
     host: String,
     bus_id: String,
     deadline: Duration,
 ) -> Result<GuestUsbipImportResult, GuestUsbipImportError> {
     std::thread::spawn(move || {
-        let probe = RealGuestControlProbe::new(broker_socket_path);
+        let probe = RealGuestControlProbe::with_caller_role(broker_socket_path, caller_role);
         let clock = RealProbeClock::new();
         run_guest_control_usbip_import_loop(
             &probe,
@@ -774,12 +849,13 @@ pub fn run_usbip_import_on_dedicated_thread(
 pub fn run_usbip_status_on_dedicated_thread(
     params: ProbeParams,
     broker_socket_path: PathBuf,
+    caller_role: BrokerCallerRole,
     host: Option<String>,
     bus_id: Option<String>,
     deadline: Duration,
 ) -> Result<GuestUsbipStatusResult, GuestUsbipImportError> {
     std::thread::spawn(move || {
-        let probe = RealGuestControlProbe::new(broker_socket_path);
+        let probe = RealGuestControlProbe::with_caller_role(broker_socket_path, caller_role);
         let clock = RealProbeClock::new();
         run_guest_control_usbip_status_loop(
             &probe,
@@ -798,11 +874,12 @@ pub fn run_usbip_status_on_dedicated_thread(
 pub fn run_activation_start_on_dedicated_thread(
     params: ProbeParams,
     broker_socket_path: PathBuf,
+    caller_role: BrokerCallerRole,
     start: GuestSystemActivationStart,
     deadline: Duration,
 ) -> Result<GuestSystemActivationStatus, GuestSystemActivationError> {
     std::thread::spawn(move || {
-        let probe = RealGuestControlProbe::new(broker_socket_path);
+        let probe = RealGuestControlProbe::with_caller_role(broker_socket_path, caller_role);
         let clock = RealProbeClock::new();
         run_guest_control_activation_start_loop(
             &probe,
@@ -820,11 +897,12 @@ pub fn run_activation_start_on_dedicated_thread(
 pub fn run_activation_status_on_dedicated_thread(
     params: ProbeParams,
     broker_socket_path: PathBuf,
+    caller_role: BrokerCallerRole,
     activation_id: String,
     deadline: Duration,
 ) -> Result<GuestSystemActivationStatus, GuestSystemActivationError> {
     std::thread::spawn(move || {
-        let probe = RealGuestControlProbe::new(broker_socket_path);
+        let probe = RealGuestControlProbe::with_caller_role(broker_socket_path, caller_role);
         let clock = RealProbeClock::new();
         run_guest_control_activation_status_loop(
             &probe,
@@ -910,9 +988,11 @@ pub const GUEST_CONTROL_AUDIO_SET_TIMEOUT: Duration = Duration::from_secs(5);
 /// be running and guestd ready before the audio command is dispatched. If
 /// the VM is not reachable, we return `Probe(TransportIo)` so callers can
 /// report `HostOnly` rather than hanging.
+#[allow(clippy::too_many_arguments)]
 pub fn run_audio_set_on_dedicated_thread(
     params: ProbeParams,
     broker_socket_path: PathBuf,
+    caller_role: BrokerCallerRole,
     channel: d2b_contracts::guest_proto::AudioChannel,
     kind: d2b_contracts::guest_proto::AudioSetKind,
     grant_on: bool,
@@ -920,7 +1000,7 @@ pub fn run_audio_set_on_dedicated_thread(
     deadline: Duration,
 ) -> Result<GuestAudioChannelStatus, GuestAudioSetError> {
     std::thread::spawn(move || {
-        let probe = RealGuestControlProbe::new(broker_socket_path);
+        let probe = RealGuestControlProbe::with_caller_role(broker_socket_path, caller_role);
         let remaining = deadline;
         let attempt_timeout = remaining.max(Duration::from_millis(1));
         probe.audio_set(&params, attempt_timeout, channel, kind, grant_on, level)
@@ -932,10 +1012,11 @@ pub fn run_audio_set_on_dedicated_thread(
 pub fn run_audio_status_on_dedicated_thread(
     params: ProbeParams,
     broker_socket_path: PathBuf,
+    caller_role: BrokerCallerRole,
     deadline: Duration,
 ) -> Result<GuestAudioStatus, GuestAudioSetError> {
     std::thread::spawn(move || {
-        let probe = RealGuestControlProbe::new(broker_socket_path);
+        let probe = RealGuestControlProbe::with_caller_role(broker_socket_path, caller_role);
         let attempt_timeout = deadline.max(Duration::from_millis(1));
         probe.audio_status(&params, attempt_timeout)
     })

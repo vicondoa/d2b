@@ -10,6 +10,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use d2b_contracts::broker_wire::BrokerCallerRole;
 use d2b_contracts::guest_proto as pb;
 use d2b_contracts::guest_wire::ExecState as PublicExecState;
 use d2b_contracts::public_wire::{
@@ -168,25 +169,50 @@ fn test_hook(request: DetachedTestRequest) -> Option<Result<DetachedTestResponse
         .map(|hook| hook(request))
 }
 
+#[allow(dead_code)]
 pub(crate) fn create(
     state: &ServerState,
     start: &public_wire::ExecStartArgs,
 ) -> Result<ExecDetachedCreateResult, TypedError> {
-    create_with_request_id(state, start, None)
+    create_with_request_id(state, start, None, BrokerCallerRole::NotAuthorized)
 }
 
+pub(crate) fn create_as(
+    state: &ServerState,
+    start: &public_wire::ExecStartArgs,
+    caller_role: BrokerCallerRole,
+) -> Result<ExecDetachedCreateResult, TypedError> {
+    create_with_request_id(state, start, None, caller_role)
+}
+
+#[allow(dead_code)]
 pub(crate) fn create_idempotent(
     state: &ServerState,
     start: &public_wire::ExecStartArgs,
     request_id: String,
 ) -> Result<ExecDetachedCreateResult, TypedError> {
-    create_with_request_id(state, start, Some(request_id))
+    create_with_request_id(
+        state,
+        start,
+        Some(request_id),
+        BrokerCallerRole::NotAuthorized,
+    )
+}
+
+pub(crate) fn create_idempotent_as(
+    state: &ServerState,
+    start: &public_wire::ExecStartArgs,
+    request_id: String,
+    caller_role: BrokerCallerRole,
+) -> Result<ExecDetachedCreateResult, TypedError> {
+    create_with_request_id(state, start, Some(request_id), caller_role)
 }
 
 fn create_with_request_id(
     state: &ServerState,
     start: &public_wire::ExecStartArgs,
     request_id: Option<String>,
+    caller_role: BrokerCallerRole,
 ) -> Result<ExecDetachedCreateResult, TypedError> {
     #[cfg(test)]
     if let Some(result) = test_hook(DetachedTestRequest::Create {
@@ -220,12 +246,18 @@ fn create_with_request_id(
         cwd: start.cwd.clone(),
         term_size: start.term_size.map(|size| (size.rows, size.cols)),
     };
-    match run_real(state, &start.vm, DetachedRealRequest::Create(spec))? {
+    match run_real(
+        state,
+        &start.vm,
+        caller_role,
+        DetachedRealRequest::Create(spec),
+    )? {
         DetachedRealResponse::Create(response) => Ok(response),
         _ => Err(internal_error("detached create returned wrong variant")),
     }
 }
 
+#[allow(dead_code)]
 pub(crate) fn list(
     state: &ServerState,
     args: &public_wire::ExecDetachedListArgs,
@@ -242,12 +274,40 @@ pub(crate) fn list(
         };
     }
 
-    match run_real(state, &args.vm, DetachedRealRequest::List)? {
+    match run_real(
+        state,
+        &args.vm,
+        BrokerCallerRole::NotAuthorized,
+        DetachedRealRequest::List,
+    )? {
         DetachedRealResponse::List(response) => Ok(response),
         _ => Err(internal_error("detached list returned wrong variant")),
     }
 }
 
+pub(crate) fn list_as(
+    state: &ServerState,
+    args: &public_wire::ExecDetachedListArgs,
+    caller_role: BrokerCallerRole,
+) -> Result<ExecDetachedListResult, TypedError> {
+    #[cfg(test)]
+    if let Some(result) = test_hook(DetachedTestRequest::List {
+        vm: args.vm.clone(),
+    }) {
+        return match result? {
+            DetachedTestResponse::List(response) => Ok(response),
+            _ => Err(internal_error(
+                "detached list test hook returned wrong variant",
+            )),
+        };
+    }
+    match run_real(state, &args.vm, caller_role, DetachedRealRequest::List)? {
+        DetachedRealResponse::List(response) => Ok(response),
+        _ => Err(internal_error("detached list returned wrong variant")),
+    }
+}
+
+#[allow(dead_code)]
 pub(crate) fn status(
     state: &ServerState,
     args: &public_wire::ExecDetachedStatusArgs,
@@ -268,6 +328,7 @@ pub(crate) fn status(
     match run_real(
         state,
         &args.vm,
+        BrokerCallerRole::NotAuthorized,
         DetachedRealRequest::Status {
             exec_id: args.exec_id.clone(),
         },
@@ -277,6 +338,37 @@ pub(crate) fn status(
     }
 }
 
+pub(crate) fn status_as(
+    state: &ServerState,
+    args: &public_wire::ExecDetachedStatusArgs,
+    caller_role: BrokerCallerRole,
+) -> Result<ExecDetachedStatusResult, TypedError> {
+    #[cfg(test)]
+    if let Some(result) = test_hook(DetachedTestRequest::Status {
+        vm: args.vm.clone(),
+        exec_id: args.exec_id.clone(),
+    }) {
+        return match result? {
+            DetachedTestResponse::Status(response) => Ok(response),
+            _ => Err(internal_error(
+                "detached status test hook returned wrong variant",
+            )),
+        };
+    }
+    match run_real(
+        state,
+        &args.vm,
+        caller_role,
+        DetachedRealRequest::Status {
+            exec_id: args.exec_id.clone(),
+        },
+    )? {
+        DetachedRealResponse::Status(response) => Ok(response),
+        _ => Err(internal_error("detached status returned wrong variant")),
+    }
+}
+
+#[allow(dead_code)]
 pub(crate) fn logs(
     state: &ServerState,
     args: &public_wire::ExecDetachedLogsArgs,
@@ -300,6 +392,7 @@ pub(crate) fn logs(
     match run_real(
         state,
         &args.vm,
+        BrokerCallerRole::NotAuthorized,
         DetachedRealRequest::Logs {
             exec_id: args.exec_id.clone(),
             stdout_offset: args.stdout_offset,
@@ -312,6 +405,43 @@ pub(crate) fn logs(
     }
 }
 
+pub(crate) fn logs_as(
+    state: &ServerState,
+    args: &public_wire::ExecDetachedLogsArgs,
+    caller_role: BrokerCallerRole,
+) -> Result<ExecDetachedLogsResult, TypedError> {
+    #[cfg(test)]
+    if let Some(result) = test_hook(DetachedTestRequest::Logs {
+        vm: args.vm.clone(),
+        exec_id: args.exec_id.clone(),
+        stdout_offset: args.stdout_offset,
+        stderr_offset: args.stderr_offset,
+        max_len: args.max_len,
+    }) {
+        return match result? {
+            DetachedTestResponse::Logs(response) => Ok(response),
+            _ => Err(internal_error(
+                "detached logs test hook returned wrong variant",
+            )),
+        };
+    }
+    match run_real(
+        state,
+        &args.vm,
+        caller_role,
+        DetachedRealRequest::Logs {
+            exec_id: args.exec_id.clone(),
+            stdout_offset: args.stdout_offset,
+            stderr_offset: args.stderr_offset,
+            max_len: args.max_len,
+        },
+    )? {
+        DetachedRealResponse::Logs(response) => Ok(response),
+        _ => Err(internal_error("detached logs returned wrong variant")),
+    }
+}
+
+#[allow(dead_code)]
 pub(crate) fn kill(
     state: &ServerState,
     args: &public_wire::ExecDetachedKillArgs,
@@ -332,6 +462,37 @@ pub(crate) fn kill(
     match run_real(
         state,
         &args.vm,
+        BrokerCallerRole::NotAuthorized,
+        DetachedRealRequest::Kill {
+            exec_id: args.exec_id.clone(),
+        },
+    )? {
+        DetachedRealResponse::Kill(response) => Ok(response),
+        _ => Err(internal_error("detached kill returned wrong variant")),
+    }
+}
+
+pub(crate) fn kill_as(
+    state: &ServerState,
+    args: &public_wire::ExecDetachedKillArgs,
+    caller_role: BrokerCallerRole,
+) -> Result<ExecDetachedKillResult, TypedError> {
+    #[cfg(test)]
+    if let Some(result) = test_hook(DetachedTestRequest::Kill {
+        vm: args.vm.clone(),
+        exec_id: args.exec_id.clone(),
+    }) {
+        return match result? {
+            DetachedTestResponse::Kill(response) => Ok(response),
+            _ => Err(internal_error(
+                "detached kill test hook returned wrong variant",
+            )),
+        };
+    }
+    match run_real(
+        state,
+        &args.vm,
+        caller_role,
         DetachedRealRequest::Kill {
             exec_id: args.exec_id.clone(),
         },
@@ -344,6 +505,7 @@ pub(crate) fn kill(
 fn run_real(
     state: &ServerState,
     vm: &str,
+    caller_role: BrokerCallerRole,
     request: DetachedRealRequest,
 ) -> Result<DetachedRealResponse, TypedError> {
     let resolver =
@@ -351,7 +513,7 @@ fn run_real(
     let params = resolve_guest_control_probe_params(state, &resolver, vm)
         .map_err(|_| exec_typed_error(ExecOpError::OldGeneration))?;
     let broker_socket = broker_socket_path(state);
-    run_detached_request(params, broker_socket, request)
+    run_detached_request(params, broker_socket, caller_role, request)
 }
 
 /// Drive a detached guest-control request to completion over the guest-control
@@ -369,10 +531,11 @@ fn run_real(
 fn run_detached_request(
     params: ProbeParams,
     broker_socket: PathBuf,
+    caller_role: BrokerCallerRole,
     request: DetachedRealRequest,
 ) -> Result<DetachedRealResponse, TypedError> {
     crate::block_on_future(async move {
-        let client = DetachedClient::connect(params, broker_socket).await?;
+        let client = DetachedClient::connect(params, broker_socket, caller_role).await?;
         match request {
             DetachedRealRequest::Create(spec) => client
                 .exec_create(&spec)
@@ -498,12 +661,16 @@ struct DetachedClient<C = TtrpcGuestControlClient> {
 }
 
 impl DetachedClient<TtrpcGuestControlClient> {
-    async fn connect(params: ProbeParams, broker_socket: PathBuf) -> Result<Self, ExecOpError> {
+    async fn connect(
+        params: ProbeParams,
+        broker_socket: PathBuf,
+        caller_role: BrokerCallerRole,
+    ) -> Result<Self, ExecOpError> {
         let budget = AttemptBudget::from_now(
             exec_session_real::ESTABLISH_TIMEOUT,
             GUEST_CONTROL_ATTEMPT_CAP,
         );
-        let signer = BrokerSigner::new(broker_socket, budget);
+        let signer = BrokerSigner::with_caller_role(broker_socket, budget, caller_role);
         let nonce = host_nonce().map_err(|_| ExecOpError::Transport)?;
         let vm_id = params.vm_id.clone();
         let client = connect_and_build_client(&params, budget)
@@ -1101,6 +1268,7 @@ mod tests {
         let result = run_detached_request(
             params,
             PathBuf::from("/nonexistent/d2b/broker.sock"),
+            BrokerCallerRole::NotAuthorized,
             DetachedRealRequest::List,
         );
         assert!(

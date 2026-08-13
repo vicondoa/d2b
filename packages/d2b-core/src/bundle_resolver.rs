@@ -625,6 +625,19 @@ pub struct ResolvedPrepareDirIntent {
     pub mode: u32,
 }
 
+/// Trusted legacy swtpm adoption paths derived from the private bundle.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedLegacySwtpmIntent {
+    pub intent_id: String,
+    pub vm: String,
+    pub source: PathBuf,
+    pub destination: PathBuf,
+    pub journal: PathBuf,
+    pub marker: PathBuf,
+    pub owner_uid: u32,
+    pub owner_gid: u32,
+}
+
 /// Bundle-resolved kernel-module allowlist row.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedKernelModuleIntent {
@@ -1564,6 +1577,28 @@ impl BundleResolver {
         })
     }
 
+    /// Resolve the one migration-required legacy swtpm row for a VM.
+    pub fn resolve_legacy_swtpm_intent(&self, vm_id: &str) -> Option<ResolvedLegacySwtpmIntent> {
+        let vm = self.find_manifest_vm(vm_id)?;
+        if !vm.tpm {
+            return None;
+        }
+        let state_dir = PathBuf::from(&vm.state_dir);
+        let destination = state_dir.join("swtpm");
+        let (owner_uid, owner_gid) = self.resolve_path_owner(vm_id, &destination)?;
+        let marker_root = state_dir.parent()?.parent()?.join("swtpm-markers");
+        Some(ResolvedLegacySwtpmIntent {
+            intent_id: intent_id_legacy_swtpm(vm_id),
+            vm: vm_id.to_owned(),
+            source: state_dir.join("swtpm-legacy"),
+            destination,
+            journal: state_dir.join(".d2b-legacy-swtpm.journal"),
+            marker: marker_root.join(vm_id),
+            owner_uid,
+            owner_gid,
+        })
+    }
+
     fn collect_vm_start_predecessors(
         &self,
         vm: &VmProcessDag,
@@ -2000,6 +2035,10 @@ pub fn intent_id_store_view(vm: &str) -> String {
 
 pub fn intent_id_vm_start(vm: &str, role_id: &str) -> String {
     format!("vm-start:vm:{vm}:role:{role_id}")
+}
+
+pub fn intent_id_legacy_swtpm(vm: &str) -> String {
+    format!("legacy-swtpm:vm:{vm}")
 }
 
 pub fn intent_id_gc_host() -> String {

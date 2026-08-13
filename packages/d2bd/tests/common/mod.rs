@@ -18,10 +18,23 @@ pub fn d2bd_bin() -> PathBuf {
 
 #[derive(Debug, Clone)]
 pub struct TestPeer {
+    /// Synthetic values used only by the explicit forged-environment test.
     pub uid: u32,
+    /// Synthetic values used only by the explicit forged-environment test.
     pub gid: u32,
+    /// Synthetic values used only by the explicit forged-environment test.
     pub username: &'static str,
+    /// Synthetic values used only by the explicit forged-environment test.
     pub groups: &'static str,
+    kind: TestPeerKind,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum TestPeerKind {
+    Launcher,
+    Admin,
+    Deny,
+    Daemon,
 }
 
 impl TestPeer {
@@ -31,6 +44,7 @@ impl TestPeer {
             gid: 60003,
             username: "launcher-user",
             groups: "wheel",
+            kind: TestPeerKind::Launcher,
         }
     }
 
@@ -40,6 +54,7 @@ impl TestPeer {
             gid: 60004,
             username: "admin-user",
             groups: "wheel",
+            kind: TestPeerKind::Admin,
         }
     }
 
@@ -49,6 +64,17 @@ impl TestPeer {
             gid: uid,
             username,
             groups,
+            kind: TestPeerKind::Deny,
+        }
+    }
+
+    pub fn daemon() -> Self {
+        Self {
+            uid: 0,
+            gid: 0,
+            username: "daemon-user",
+            groups: "root",
+            kind: TestPeerKind::Daemon,
         }
     }
 }
@@ -137,6 +163,22 @@ pub fn primary_group_name() -> String {
         .unwrap_or_else(|| gid.to_string())
 }
 
+pub fn lifecycle_group_name() -> String {
+    nix::unistd::Group::from_name("d2b")
+        .ok()
+        .flatten()
+        .map(|group| group.name)
+        .unwrap_or_else(primary_group_name)
+}
+
+pub fn current_username() -> String {
+    nix::unistd::User::from_uid(nix::unistd::getuid())
+        .ok()
+        .flatten()
+        .map(|user| user.name)
+        .unwrap_or_else(|| "d2b-test-user".to_owned())
+}
+
 pub fn write_daemon_config(fixture: &DaemonFixture, launcher_users: &[&str], admin_users: &[&str]) {
     write_daemon_config_with_artifacts(fixture, launcher_users, admin_users, None);
 }
@@ -172,6 +214,18 @@ pub fn write_daemon_config_with_artifacts(
         serde_json::to_string_pretty(&config)
             .expect("serialize daemon config")
             .as_bytes(),
+    )
+    .expect("write daemon config");
+}
+
+pub fn set_public_socket_group(fixture: &DaemonFixture, group: &str) {
+    let bytes = fs::read(&fixture.config_path).expect("read daemon config");
+    let mut config: serde_json::Value =
+        serde_json::from_slice(&bytes).expect("parse daemon config");
+    config["publicSocketGroup"] = serde_json::Value::String(group.to_owned());
+    fs::write(
+        &fixture.config_path,
+        serde_json::to_vec_pretty(&config).expect("serialize daemon config"),
     )
     .expect("write daemon config");
 }
@@ -239,7 +293,29 @@ pub fn spawn_d2bd_serve(
     once: bool,
     state_restore_report: Option<&Path>,
 ) -> SpawnedProcess {
+    spawn_d2bd_serve_inner(fixture, peer, once, state_restore_report, true)
+}
+
+pub fn spawn_d2bd_serve_with_forged_peer_env(
+    fixture: &DaemonFixture,
+    peer: &TestPeer,
+    once: bool,
+    state_restore_report: Option<&Path>,
+) -> SpawnedProcess {
+    spawn_d2bd_serve_inner(fixture, peer, once, state_restore_report, false)
+}
+
+fn spawn_d2bd_serve_inner(
+    fixture: &DaemonFixture,
+    peer: &TestPeer,
+    once: bool,
+    state_restore_report: Option<&Path>,
+    configure_peer: bool,
+) -> SpawnedProcess {
     fixture.reset_runtime_endpoints();
+    if configure_peer {
+        configure_real_peer(fixture, peer);
+    }
     let mut command = Command::new(d2bd_bin());
     command
         .arg("serve")
@@ -259,20 +335,69 @@ pub fn spawn_d2bd_serve(
     command
         .arg("--allow-unprivileged-runtime-dir")
         .arg("--no-drop-privileges")
-        .env("D2BD_TEST_PEER_UID", peer.uid.to_string())
-        .env("D2BD_TEST_PEER_GID", peer.gid.to_string())
-        .env("D2BD_TEST_PEER_USERNAME", peer.username)
-        .env("D2BD_TEST_PEER_GROUPS", peer.groups)
         .env("D2B_SKIP_KERNEL_MODULE_CHECK", "1")
         .env("RUST_LOG", "off")
         .stdout(Stdio::null())
         .stderr(Stdio::null());
+    if !configure_peer {
+        command
+            .env("D2BD_TEST_PEER_UID", peer.uid.to_string())
+            .env("D2BD_TEST_PEER_GID", peer.gid.to_string())
+            .env("D2BD_TEST_PEER_USERNAME", peer.username)
+            .env("D2BD_TEST_PEER_GROUPS", peer.groups);
+    }
     if let Some(report) = state_restore_report {
         command.arg("--test-state-restore-report").arg(report);
     }
     let child = command.spawn().expect("spawn d2bd serve");
     wait_for_socket(&fixture.socket_path, Duration::from_secs(15));
     SpawnedProcess::from_child(child)
+}
+
+fn configure_real_peer(fixture: &DaemonFixture, peer: &TestPeer) {
+    let bytes = fs::read(&fixture.config_path).expect("read daemon config");
+    let mut config: serde_json::Value =
+        serde_json::from_slice(&bytes).expect("parse daemon config");
+    let username = current_username();
+    let lifecycle_group = lifecycle_group_name();
+    let configured_admin = config
+        .get("adminUsers")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|users| {
+            users.iter().any(|value| {
+                value.as_str() == Some(peer.username) || value.as_str() == Some(username.as_str())
+            })
+        });
+    config["publicSocketGroup"] = serde_json::Value::String(lifecycle_group);
+    match peer.kind {
+        TestPeerKind::Launcher => {
+            config["launcherUsers"] = serde_json::json!([username]);
+            config["adminUsers"] = if configured_admin {
+                serde_json::json!([current_username()])
+            } else {
+                serde_json::json!([])
+            };
+        }
+        TestPeerKind::Admin => {
+            config["launcherUsers"] = serde_json::json!([username]);
+            config["adminUsers"] = serde_json::json!([username]);
+        }
+        TestPeerKind::Deny => {
+            config["launcherUsers"] = serde_json::json!(["unrelated-test-user"]);
+            config["adminUsers"] = serde_json::json!([]);
+            config["publicSocketGroup"] = serde_json::Value::String("d2b-test-denied".to_owned());
+        }
+        TestPeerKind::Daemon => {
+            config["daemonUser"] = serde_json::Value::String(username.clone());
+            config["launcherUsers"] = serde_json::json!([username]);
+            config["adminUsers"] = serde_json::json!([username]);
+        }
+    }
+    fs::write(
+        &fixture.config_path,
+        serde_json::to_vec_pretty(&config).expect("serialize daemon config"),
+    )
+    .expect("write daemon config");
 }
 
 pub fn spawn_lock_only(config: &Path, state_lock: &Path, hold_seconds: u64) -> SpawnedProcess {

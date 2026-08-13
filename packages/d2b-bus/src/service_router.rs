@@ -93,7 +93,7 @@ mod tests {
             "correlation",
             "bus",
             d2b_audit::genesis_hash(),
-            "sha256:subject",
+            "sha256:0000000000000000000000000000000000000000000000000000000000000001",
             "allowed",
             1,
             None,

@@ -305,10 +305,14 @@ fn validate_record(
         "process_effect_fields",
         "state_reset_fields",
     ];
+    let schema_version = object
+        .get("schema_version")
+        .and_then(Value::as_u64)
+        .ok_or(RecordValidationError::Invalid)?;
     if object
         .keys()
         .any(|key| !ENVELOPE_KEYS.contains(&key.as_str()))
-        || !validate_public_envelope(object)
+        || (schema_version == 1 && !validate_public_envelope(object))
     {
         return Err(RecordValidationError::Invalid);
     }
@@ -331,6 +335,9 @@ fn validate_record(
     let Some(fields) = object.get(fields_key).and_then(Value::as_object) else {
         return Err(RecordValidationError::Invalid);
     };
+    if schema_version == 2 {
+        return validate_v2_record(object, class, fields_key, fields, expected_previous);
+    }
     if object
         .keys()
         .any(|key| key.ends_with("_fields") && key != fields_key)
@@ -338,6 +345,55 @@ fn validate_record(
         || !validate_public_fields(class, fields)
     {
         return Err(RecordValidationError::Invalid);
+    }
+
+    fn validate_v2_record(
+        object: &serde_json::Map<String, Value>,
+        class: &str,
+        fields_key: &str,
+        fields: &serde_json::Map<String, Value>,
+        expected_previous: Option<&str>,
+    ) -> Result<String, RecordValidationError> {
+        if object
+            .keys()
+            .any(|key| key.ends_with("_fields") && key != fields_key)
+            || !validate_v2_envelope(object)
+            || !validate_v2_fields(class, fields)
+        {
+            return Err(RecordValidationError::Invalid);
+        }
+        let previous = object
+            .get("prev_hash")
+            .and_then(Value::as_str)
+            .ok_or(RecordValidationError::Invalid)?;
+        let record_hash = object
+            .get("record_hash")
+            .and_then(Value::as_str)
+            .ok_or(RecordValidationError::Invalid)?;
+        if !valid_hash(previous) || !valid_hash(record_hash) {
+            return Err(RecordValidationError::Invalid);
+        }
+        if expected_previous.is_some_and(|expected| expected != previous) {
+            return Err(RecordValidationError::ChainBreak);
+        }
+        let canonical = json!({
+            "ts_ms": object.get("ts_ms").ok_or(RecordValidationError::Invalid)?,
+            "schema_version": object.get("schema_version").ok_or(RecordValidationError::Invalid)?,
+            "zone": object.get("zone").ok_or(RecordValidationError::Invalid)?,
+            "record_class": object.get("record_class").ok_or(RecordValidationError::Invalid)?,
+            "operation_id": object.get("operation_id").ok_or(RecordValidationError::Invalid)?,
+            "correlation_id": object.get("correlation_id").ok_or(RecordValidationError::Invalid)?,
+            "trace_id": object.get("trace_id").ok_or(RecordValidationError::Invalid)?,
+            "source": object.get("source").ok_or(RecordValidationError::Invalid)?,
+            "prev_hash": object.get("prev_hash").ok_or(RecordValidationError::Invalid)?,
+            fields_key: object.get(fields_key).ok_or(RecordValidationError::Invalid)?,
+        });
+        let canonical =
+            serde_json::to_vec(&canonical).map_err(|_| RecordValidationError::Invalid)?;
+        if record_hash != record_hash_for(previous, &canonical) {
+            return Err(RecordValidationError::ChainBreak);
+        }
+        Ok(record_hash.to_owned())
     }
     let previous = object
         .get("prev_hash")
@@ -477,6 +533,30 @@ fn validate_public_envelope(object: &serde_json::Map<String, Value>) -> bool {
             .is_some_and(valid_source)
 }
 
+fn validate_v2_envelope(object: &serde_json::Map<String, Value>) -> bool {
+    object.get("ts_ms").and_then(Value::as_u64).is_some()
+        && object.get("schema_version").and_then(Value::as_u64) == Some(2)
+        && object
+            .get("zone")
+            .and_then(Value::as_str)
+            .is_some_and(valid_digest)
+        && object
+            .get("operation_id")
+            .and_then(Value::as_str)
+            .is_some_and(valid_digest)
+        && object
+            .get("correlation_id")
+            .and_then(Value::as_str)
+            .is_some_and(valid_digest)
+        && object
+            .get("trace_id")
+            .is_some_and(|value| value.is_null() || value.as_str().is_some_and(valid_digest))
+        && object
+            .get("source")
+            .and_then(Value::as_str)
+            .is_some_and(valid_digest)
+}
+
 fn valid_source(value: &str) -> bool {
     matches!(
         value,
@@ -522,6 +602,73 @@ fn validate_public_fields(class: &str, fields: &serde_json::Map<String, Value>) 
         && fields
             .iter()
             .all(|(key, value)| validate_public_field(class, key, value))
+}
+
+fn validate_v2_fields(class: &str, fields: &serde_json::Map<String, Value>) -> bool {
+    let Some(expected) = fields_for_class(class) else {
+        return false;
+    };
+    let expected_count = expected.len() + usize::from(class == "process-effect");
+    fields.len() == expected_count
+        && expected.iter().all(|key| fields.contains_key(*key))
+        && (class != "process-effect" || fields.contains_key(posture_field()))
+        && fields
+            .keys()
+            .all(|key| expected.contains(&key.as_str()) || key == posture_field())
+        && fields
+            .iter()
+            .all(|(key, value)| validate_v2_field(class, key, value))
+}
+
+fn validate_v2_field(class: &str, key: &str, value: &Value) -> bool {
+    if key == "generation"
+        || key == "expected_revision"
+        || key == "resulting_revision"
+        || key == "policy_revision"
+        || key == "observed_generation"
+        || key == "target_generation"
+        || key == "affected_owned_count"
+        || key == "authz_revision"
+    {
+        return value.as_u64().is_some();
+    }
+    if key == "preserve_state" || key == posture_field() {
+        return value.is_boolean();
+    }
+    if key == "reasons" || key == "capability_subset" {
+        return value.as_array().is_some_and(|values| {
+            values.len() <= 16
+                && values.iter().all(|value| {
+                    value.as_str().is_some_and(|value| {
+                        if key == "capability_subset" {
+                            safe_public_text(value, false)
+                        } else {
+                            valid_code(value)
+                        }
+                    })
+                })
+        });
+    }
+    if key == "error_code" || key == "exit_class" {
+        return value.is_null()
+            || value
+                .as_str()
+                .is_some_and(|value| safe_public_text(value, false) && valid_code(value));
+    }
+    let Some(value) = value.as_str() else {
+        return false;
+    };
+    match key {
+        "resource_uid"
+        | "process_uid"
+        | "subject_digest"
+        | "execution_ref_digest"
+        | "session_gen_digest"
+        | "prior_digest"
+        | "peer_zone"
+        | "operation_id" => valid_digest(value),
+        _ => validate_public_field(class, key, &Value::String(value.to_owned())),
+    }
 }
 
 fn validate_public_field(class: &str, key: &str, value: &Value) -> bool {
@@ -885,6 +1032,57 @@ mod tests {
     fn validator_allows_a_selected_range_to_start_at_a_chain_boundary() {
         let mut validator = AuditStreamValidator::new(true);
         assert!(validator.accept(&record()).contains("\"record_class\""));
+        assert!(!validator.had_break());
+    }
+
+    #[test]
+    fn validator_accepts_normalized_v2_redacted_envelopes() {
+        let digest = "sha256:0000000000000000000000000000000000000000000000000000000000000001";
+        let previous = genesis_hash();
+        let mut fields = serde_json::Map::new();
+        fields.insert("event".to_owned(), json!("launch"));
+        fields.insert("provider".to_owned(), json!("systemd"));
+        fields.insert("domain".to_owned(), json!("system"));
+        fields.insert(posture_field().to_owned(), json!(false));
+        fields.insert("execution_ref_digest".to_owned(), json!(digest));
+        fields.insert("process_uid".to_owned(), json!(digest));
+        fields.insert("outcome".to_owned(), json!("ok"));
+        fields.insert("exit_class".to_owned(), Value::Null);
+        let canonical = json!({
+            "ts_ms": 1,
+            "schema_version": 2,
+            "zone": digest,
+            "record_class": "process-effect",
+            "operation_id": digest,
+            "correlation_id": digest,
+            "trace_id": null,
+            "source": digest,
+            "prev_hash": previous,
+            "process_effect_fields": Value::Object(fields.clone()),
+        });
+        let record_hash = record_hash_for(
+            canonical["prev_hash"].as_str().unwrap(),
+            &serde_json::to_vec(&canonical).unwrap(),
+        );
+        let value = json!({
+            "ts_ms": 1,
+            "schema_version": 2,
+            "zone": digest,
+            "record_class": "process-effect",
+            "operation_id": digest,
+            "correlation_id": digest,
+            "trace_id": null,
+            "source": digest,
+            "prev_hash": previous,
+            "record_hash": record_hash,
+            "process_effect_fields": canonical["process_effect_fields"],
+        });
+        let mut validator = AuditStreamValidator::new(false);
+        assert!(
+            validator
+                .accept(&value.to_string())
+                .contains("\"record_class\"")
+        );
         assert!(!validator.had_break());
     }
 

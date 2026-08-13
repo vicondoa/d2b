@@ -6,7 +6,12 @@
 //! owns only startup ordering and handler readiness, never a private
 //! replacement ledger.
 
+use crate::authority::HostGlobalAuthorityIndex;
 use crate::controllers::{AggregateHealth, CoreHandlerKind, CoreHandlerRegistry, HandlerPhase};
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+};
 
 /// Fixed process startup stage.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -38,6 +43,8 @@ pub struct RuntimeReadiness {
 /// Bounded recovery facts read from authoritative resources and revision log.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RecoverySnapshot {
+    /// Monotonic startup epoch issued by this CoreProcess instance.
+    pub startup_epoch: u64,
     pub checkpoint_revision: u64,
     pub active_configuration_revision: u64,
     pub provider_lease_count: u32,
@@ -54,6 +61,7 @@ pub enum StartupError {
     ControllerEndpointUnavailable,
     AuthenticationUnavailable,
     WatchAdmissionUnavailable,
+    AuthorityRehydrationUnavailable,
     InvalidRecoverySnapshot,
     MandatoryHandlerNotReady,
 }
@@ -66,6 +74,7 @@ impl StartupError {
             Self::ControllerEndpointUnavailable => "core-controller-endpoint-unavailable",
             Self::AuthenticationUnavailable => "core-session-authentication-unavailable",
             Self::WatchAdmissionUnavailable => "core-watch-admission-unavailable",
+            Self::AuthorityRehydrationUnavailable => "core-authority-rehydration-unavailable",
             Self::InvalidRecoverySnapshot => "core-recovery-snapshot-invalid",
             Self::MandatoryHandlerNotReady => "core-mandatory-handler-not-ready",
         }
@@ -86,6 +95,8 @@ pub struct CoreProcess {
     handlers: CoreHandlerRegistry,
     stage: StartupStage,
     recovery: Option<RecoverySnapshot>,
+    startup_epoch: u64,
+    authority_epoch: Option<Arc<AtomicU64>>,
 }
 
 impl CoreProcess {
@@ -137,12 +148,23 @@ impl CoreProcess {
     }
 
     /// Accept one authoritative relist/checkpoint snapshot.
-    pub fn recover(&mut self, snapshot: RecoverySnapshot) -> Result<(), StartupError> {
+    pub fn recover(
+        &mut self,
+        snapshot: RecoverySnapshot,
+        authority_index: &HostGlobalAuthorityIndex,
+    ) -> Result<(), StartupError> {
         if self.stage != StartupStage::RecoveringHandlers {
+            return Err(StartupError::InvalidRecoverySnapshot);
+        }
+        self.authority_epoch = Some(authority_index.restart_epoch_handle());
+        if snapshot.startup_epoch != self.startup_epoch {
             return Err(StartupError::InvalidRecoverySnapshot);
         }
         if !snapshot.watch_admitted {
             return Err(StartupError::WatchAdmissionUnavailable);
+        }
+        if !authority_index.is_ready_for_readiness() {
+            return Err(StartupError::AuthorityRehydrationUnavailable);
         }
         if snapshot.active_configuration_revision == 0 || snapshot.ambiguous_operation_count != 0 {
             return Err(StartupError::InvalidRecoverySnapshot);
@@ -182,9 +204,19 @@ impl CoreProcess {
 
     /// Begin restart recovery without cleanup or trusting prior observations.
     pub fn restart(&mut self) {
+        if let Some(epoch) = &self.authority_epoch {
+            epoch.fetch_add(1, Ordering::AcqRel);
+        }
+        self.startup_epoch = self.startup_epoch.saturating_add(1);
         self.handlers.begin_recovery();
         self.recovery = None;
         self.stage = StartupStage::WaitingForAuthenticatedSession;
+    }
+
+    /// Restart while invalidating the process-local authority readiness.
+    pub fn restart_with_authority(&mut self, authority_index: &mut HostGlobalAuthorityIndex) {
+        self.authority_epoch = Some(authority_index.restart_epoch_handle());
+        self.restart();
     }
 
     /// Admit the fixed controller set after the Zone runtime has registered
@@ -197,9 +229,10 @@ impl CoreProcess {
         &mut self,
         readiness: RuntimeReadiness,
         recovery: RecoverySnapshot,
+        authority_index: &HostGlobalAuthorityIndex,
     ) -> Result<StartupStage, StartupError> {
         self.connect_runtime(readiness)?;
-        self.recover(recovery)?;
+        self.recover(recovery, authority_index)?;
         self.configuration_published()?;
         Ok(self.stage)
     }
@@ -237,6 +270,7 @@ mod tests {
 
     fn recovery() -> RecoverySnapshot {
         RecoverySnapshot {
+            startup_epoch: 0,
             checkpoint_revision: 1,
             active_configuration_revision: 1,
             provider_lease_count: 0,
@@ -246,11 +280,16 @@ mod tests {
         }
     }
 
+    fn authority_ready() -> HostGlobalAuthorityIndex {
+        HostGlobalAuthorityIndex::new_for_tests_ready()
+    }
+
     #[test]
     fn startup_reaches_ready_only_after_runtime_recovery_and_mandatory_handlers() {
         let mut process = CoreProcess::new();
+        let authority = authority_ready();
         process.connect_runtime(runtime_ready(true)).unwrap();
-        process.recover(recovery()).unwrap();
+        process.recover(recovery(), &authority).unwrap();
         process.configuration_published().unwrap();
         for kind in CoreHandlerKind::ALL {
             if kind.mandatory() || kind == CoreHandlerKind::Watches {
@@ -276,12 +315,16 @@ mod tests {
     #[test]
     fn an_empty_store_checkpoint_is_not_fabricated() {
         let mut process = CoreProcess::new();
+        let authority = authority_ready();
         process.connect_runtime(runtime_ready(true)).unwrap();
         assert_eq!(
-            process.recover(RecoverySnapshot {
-                checkpoint_revision: 0,
-                ..recovery()
-            }),
+            process.recover(
+                RecoverySnapshot {
+                    checkpoint_revision: 0,
+                    ..recovery()
+                },
+                &authority
+            ),
             Ok(())
         );
     }
@@ -289,12 +332,16 @@ mod tests {
     #[test]
     fn ambiguous_recovery_is_rejected_before_configuration_publication() {
         let mut process = CoreProcess::new();
+        let authority = authority_ready();
         process.connect_runtime(runtime_ready(true)).unwrap();
         assert_eq!(
-            process.recover(RecoverySnapshot {
-                ambiguous_operation_count: 1,
-                ..recovery()
-            }),
+            process.recover(
+                RecoverySnapshot {
+                    ambiguous_operation_count: 1,
+                    ..recovery()
+                },
+                &authority
+            ),
             Err(StartupError::InvalidRecoverySnapshot)
         );
     }
@@ -302,13 +349,15 @@ mod tests {
     #[test]
     fn restart_discards_process_local_recovery_and_preserves_unknown() {
         let mut process = CoreProcess::new();
+        let mut authority = authority_ready();
         process.connect_runtime(runtime_ready(true)).unwrap();
-        process.recover(recovery()).unwrap();
-        process.restart();
+        process.recover(recovery(), &authority).unwrap();
+        process.restart_with_authority(&mut authority);
         assert_eq!(
             process.stage(),
             StartupStage::WaitingForAuthenticatedSession
         );
+        assert!(!authority.is_ready_for_readiness());
         for kind in CoreHandlerKind::ALL {
             assert_eq!(
                 process.handlers().status(kind).phase,
@@ -318,10 +367,37 @@ mod tests {
     }
 
     #[test]
+    fn restart_rejects_a_stale_recovery_snapshot() {
+        let mut process = CoreProcess::new();
+        let authority = authority_ready();
+        process.connect_runtime(runtime_ready(true)).unwrap();
+        process.recover(recovery(), &authority).unwrap();
+        process.restart();
+        process.connect_runtime(runtime_ready(true)).unwrap();
+        assert_eq!(
+            process.recover(recovery(), &authority),
+            Err(StartupError::InvalidRecoverySnapshot)
+        );
+    }
+
+    #[test]
+    fn restart_epoch_is_scoped_to_the_bound_authority_index() {
+        let mut process = CoreProcess::new();
+        let bound = authority_ready();
+        let other = authority_ready();
+        process.connect_runtime(runtime_ready(true)).unwrap();
+        process.recover(recovery(), &bound).unwrap();
+        process.restart();
+        assert!(!bound.is_ready_for_readiness());
+        assert!(other.is_ready_for_readiness());
+    }
+
+    #[test]
     fn a_missing_mandatory_handler_blocks_readiness() {
         let mut process = CoreProcess::new();
+        let authority = authority_ready();
         process.connect_runtime(runtime_ready(true)).unwrap();
-        process.recover(recovery()).unwrap();
+        process.recover(recovery(), &authority).unwrap();
         process.configuration_published().unwrap();
         for kind in CoreHandlerKind::ALL {
             if (kind.mandatory() || kind == CoreHandlerKind::Watches)
@@ -339,8 +415,9 @@ mod tests {
     #[test]
     fn production_startup_waits_for_real_handler_admission() {
         let mut process = CoreProcess::new();
+        let authority = authority_ready();
         assert_eq!(
-            process.start_production(runtime_ready(true), recovery()),
+            process.start_production(runtime_ready(true), recovery(), &authority),
             Ok(StartupStage::ReconcilingSystemCore),
         );
         assert_eq!(
@@ -372,13 +449,29 @@ mod tests {
     #[test]
     fn watch_must_be_admitted_before_recovery() {
         let mut process = CoreProcess::new();
+        let authority = authority_ready();
         process.connect_runtime(runtime_ready(true)).unwrap();
         assert_eq!(
-            process.recover(RecoverySnapshot {
-                watch_admitted: false,
-                ..recovery()
-            }),
+            process.recover(
+                RecoverySnapshot {
+                    watch_admitted: false,
+                    ..recovery()
+                },
+                &authority
+            ),
             Err(StartupError::WatchAdmissionUnavailable)
         );
+    }
+
+    #[test]
+    fn authority_rehydration_is_a_startup_barrier() {
+        let mut process = CoreProcess::new();
+        let authority = HostGlobalAuthorityIndex::new_unrehydrated();
+        process.connect_runtime(runtime_ready(true)).unwrap();
+        assert_eq!(
+            process.recover(RecoverySnapshot { ..recovery() }, &authority),
+            Err(StartupError::AuthorityRehydrationUnavailable)
+        );
+        assert_eq!(process.stage(), StartupStage::RecoveringHandlers);
     }
 }

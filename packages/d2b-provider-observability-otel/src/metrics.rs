@@ -1,6 +1,6 @@
 //! Observability Provider self-metric inventory.
 
-use crate::metric_policy::{MetricDescriptor, label};
+use crate::metric_policy::{MetricDescriptor, canonical_descriptor};
 
 /// Provider self-metric names.
 pub const SELF_METRICS: &[&str] = &[
@@ -11,28 +11,8 @@ pub const SELF_METRICS: &[&str] = &[
 
 /// Build the ingress policy metric descriptor.
 pub fn ingress_policy_descriptor() -> MetricDescriptor {
-    MetricDescriptor::new(
-        "d2b_otel_ingress_policy_total",
-        [
-            label(
-                "ingress",
-                &["emitter_unix", "otlp_unix", "otlp_vsock", "import_stream"],
-            ),
-            label("outcome", &["accepted", "rejected", "quarantined"]),
-            label(
-                "error_class",
-                &[
-                    "none",
-                    "key_not_allowlisted",
-                    "key_forbidden",
-                    "key_suffix_forbidden",
-                    "value_identity",
-                    "malformed",
-                    "oversize",
-                ],
-            ),
-        ],
-    )
+    canonical_descriptor("d2b_otel_ingress_policy_total")
+        .expect("self metric must be in the canonical descriptor registry")
 }
 
 #[cfg(test)]
@@ -43,6 +23,10 @@ mod tests {
     #[test]
     fn self_metric_descriptor_uses_closed_labels() {
         validate_descriptor(&ingress_policy_descriptor()).unwrap();
-        assert!(SELF_METRICS.iter().all(|name| !name.contains("vm_state")));
+        assert!(
+            SELF_METRICS
+                .iter()
+                .all(|name| { !name.contains("vm_state") && canonical_descriptor(name).is_some() })
+        );
     }
 }

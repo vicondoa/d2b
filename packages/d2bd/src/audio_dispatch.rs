@@ -21,6 +21,7 @@ use std::path::Path;
 
 use nix::fcntl::{FcntlArg, fcntl};
 
+use d2b_contracts::broker_wire::BrokerCallerRole;
 use d2b_contracts::guest_proto as pb;
 use d2b_contracts::public_wire::{
     AudioChannel, AudioChannelState, AudioEnforcementPosture, AudioErrorKind, AudioMuteArgs,
@@ -464,6 +465,7 @@ pub(crate) fn combined_audio_applied(
 fn enforce_guest_grant(
     state: &ServerState,
     vm_name: &str,
+    caller_role: BrokerCallerRole,
     grant: AudioGrant,
     channel: AudioChannel,
 ) -> GuestEnforcementResult {
@@ -474,6 +476,7 @@ fn enforce_guest_grant(
     run_guestd_audio_set(
         state,
         vm_name,
+        caller_role,
         wire_channel,
         pb::AudioSetKind::AUDIO_SET_KIND_GRANT,
         grant.is_on(),
@@ -485,6 +488,7 @@ fn enforce_guest_grant(
 fn enforce_guest_level(
     state: &ServerState,
     vm_name: &str,
+    caller_role: BrokerCallerRole,
     level: LevelPercent,
     channel: AudioChannel,
 ) -> GuestEnforcementResult {
@@ -495,6 +499,7 @@ fn enforce_guest_level(
     run_guestd_audio_set(
         state,
         vm_name,
+        caller_role,
         wire_channel,
         pb::AudioSetKind::AUDIO_SET_KIND_LEVEL,
         false,
@@ -505,6 +510,7 @@ fn enforce_guest_level(
 fn run_guestd_audio_set(
     state: &ServerState,
     vm_name: &str,
+    caller_role: BrokerCallerRole,
     channel: pb::AudioChannel,
     kind: pb::AudioSetKind,
     grant_on: bool,
@@ -529,6 +535,7 @@ fn run_guestd_audio_set(
     match run_audio_set_on_dedicated_thread(
         params,
         broker_path,
+        caller_role,
         channel,
         kind,
         grant_on,
@@ -556,17 +563,25 @@ fn run_guestd_audio_set(
 
 // ── dispatch_audio ────────────────────────────────────────────────────────────
 
-pub fn dispatch_audio(state: &ServerState, op: AudioOp) -> Result<Value, TypedError> {
+pub fn dispatch_audio(
+    state: &ServerState,
+    caller_role: BrokerCallerRole,
+    op: AudioOp,
+) -> Result<Value, TypedError> {
     match op {
-        AudioOp::Status(args) => dispatch_audio_status(state, args),
-        AudioOp::SetVolume(args) => dispatch_audio_set_volume(state, args),
-        AudioOp::Mute(args) => dispatch_audio_mute(state, args),
+        AudioOp::Status(args) => dispatch_audio_status(state, caller_role, args),
+        AudioOp::SetVolume(args) => dispatch_audio_set_volume(state, caller_role, args),
+        AudioOp::Mute(args) => dispatch_audio_mute(state, caller_role, args),
     }
 }
 
 // ── Status ─────────────────────────────────────────────────────────────────
 
-fn dispatch_audio_status(state: &ServerState, args: AudioStatusArgs) -> Result<Value, TypedError> {
+fn dispatch_audio_status(
+    state: &ServerState,
+    caller_role: BrokerCallerRole,
+    args: AudioStatusArgs,
+) -> Result<Value, TypedError> {
     let manifest: ManifestV04 = crate::load_json(&state.config.artifacts.public_manifest_path)?;
     let mut entries: Vec<AudioVmState> = Vec::new();
     let mut errors: Vec<AudioVmError> = Vec::new();
@@ -584,7 +599,7 @@ fn dispatch_audio_status(state: &ServerState, args: AudioStatusArgs) -> Result<V
     };
 
     for vm_name in &vm_names {
-        match resolve_vm_audio_status(state, vm_name, &manifest) {
+        match resolve_vm_audio_status(state, vm_name, &manifest, caller_role.clone()) {
             Ok(vm_state) => entries.push(vm_state),
             Err(vm_error) => errors.push(vm_error),
         }
@@ -600,6 +615,7 @@ fn resolve_vm_audio_status(
     state: &ServerState,
     vm_name: &str,
     manifest: &ManifestV04,
+    caller_role: BrokerCallerRole,
 ) -> Result<AudioVmState, AudioVmError> {
     let vm = manifest.vms.get(vm_name).ok_or_else(|| AudioVmError {
         vm: vm_name.to_owned(),
@@ -634,7 +650,7 @@ fn resolve_vm_audio_status(
         cap.guest_enforcement,
         AudioGuestEnforcementKind::GuestdCapable
     ) {
-        if let Some(guest_status) = query_guest_audio_status(state, vm_name) {
+        if let Some(guest_status) = query_guest_audio_status(state, vm_name, caller_role) {
             apply_guest_status(&mut vm_state, guest_status);
         } else {
             vm_state.enforcement = match cap.host_enforcement {
@@ -646,12 +662,17 @@ fn resolve_vm_audio_status(
     Ok(vm_state)
 }
 
-fn query_guest_audio_status(state: &ServerState, vm_name: &str) -> Option<GuestAudioStatus> {
+fn query_guest_audio_status(
+    state: &ServerState,
+    vm_name: &str,
+    caller_role: BrokerCallerRole,
+) -> Option<GuestAudioStatus> {
     let resolver = crate::load_bundle_resolver(state).ok()?;
     let params = crate::resolve_guest_control_probe_params(state, &resolver, vm_name).ok()?;
     run_audio_status_on_dedicated_thread(
         params,
         crate::broker_socket_path(state),
+        caller_role,
         GUEST_CONTROL_AUDIO_SET_TIMEOUT,
     )
     .ok()
@@ -676,6 +697,7 @@ fn apply_guest_status(vm_state: &mut AudioVmState, guest_status: GuestAudioStatu
 
 fn dispatch_audio_set_volume(
     state: &ServerState,
+    caller_role: BrokerCallerRole,
     args: AudioSetVolumeArgs,
 ) -> Result<Value, TypedError> {
     let vm_name = &args.vm;
@@ -764,7 +786,7 @@ fn dispatch_audio_set_volume(
     // Guest enforcement for guestd-capable VMs (CH NixOS). qemu never calls
     // guestd. ACA has no local state file and calls guestd only.
     let guest_result = if cap.guest_enforcement == AudioGuestEnforcementKind::GuestdCapable {
-        enforce_guest_level(state, vm_name, level, channel)
+        enforce_guest_level(state, vm_name, caller_role.clone(), level, channel)
     } else {
         GuestEnforcementResult::Unavailable
     };
@@ -788,7 +810,11 @@ fn dispatch_audio_set_volume(
 
 // ── Mute ──────────────────────────────────────────────────────────────────────
 
-fn dispatch_audio_mute(state: &ServerState, args: AudioMuteArgs) -> Result<Value, TypedError> {
+fn dispatch_audio_mute(
+    state: &ServerState,
+    caller_role: BrokerCallerRole,
+    args: AudioMuteArgs,
+) -> Result<Value, TypedError> {
     let vm_name = &args.vm;
     let channel = args.channel;
     let mute = args.mute;
@@ -874,7 +900,7 @@ fn dispatch_audio_mute(state: &ServerState, args: AudioMuteArgs) -> Result<Value
 
     // Guest enforcement for guestd-capable VMs. qemu never calls guestd.
     let guest_result = if cap.guest_enforcement == AudioGuestEnforcementKind::GuestdCapable {
-        enforce_guest_grant(state, vm_name, grant, channel)
+        enforce_guest_grant(state, vm_name, caller_role, grant, channel)
     } else {
         GuestEnforcementResult::Unavailable
     };

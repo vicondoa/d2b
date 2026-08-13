@@ -3,8 +3,9 @@
 use std::collections::BTreeMap;
 
 use crate::metric_label_policy::{
-    IdentityCanaries, LabelDescriptor, MetricDescriptor, MetricPolicyError, validate_data_point,
+    IdentityCanaries, MetricDescriptor, MetricPolicyError, validate_data_point,
 };
+pub use d2b_contracts::v3::telemetry_policy::label;
 
 /// Metric instrument kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -167,11 +168,6 @@ pub const PROCESS_LAUNCH_BUCKETS_SECONDS: &[f64] = &[
 /// Buckets for store writes.
 pub const STORE_WRITE_BUCKETS_SECONDS: &[f64] = &[0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.5, 1.0];
 
-/// Build a descriptor label with a static domain.
-pub fn label(key: impl Into<String>, values: &[&str]) -> LabelDescriptor {
-    LabelDescriptor::new(key, values.iter().copied())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -186,7 +182,7 @@ mod tests {
     #[test]
     fn registry_rejects_identity_labels() {
         let family = MetricFamily::new(
-            MetricDescriptor::new("d2b_test_total", [label("vm", &["one"])]),
+            MetricDescriptor::new("d2b_api_watch_active", [label("vm", &["one"])]),
             MetricKind::Counter,
             [],
         );

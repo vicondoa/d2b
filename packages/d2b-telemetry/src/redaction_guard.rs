@@ -14,6 +14,10 @@ pub enum RedactionError {
     AttributeNotAllowlisted,
     /// A high-risk field was attempted as a span attribute.
     ForbiddenSpanField,
+    /// A span field is not in the closed semantic registry.
+    SemanticFieldNotAllowlisted,
+    /// A span field value is outside its closed semantic domain.
+    SemanticValueNotAllowlisted,
 }
 
 impl core::fmt::Display for RedactionError {
@@ -21,6 +25,8 @@ impl core::fmt::Display for RedactionError {
         formatter.write_str(match self {
             Self::AttributeNotAllowlisted => "otel-resource-attribute-not-allowlisted",
             Self::ForbiddenSpanField => "otel-span-field-forbidden",
+            Self::SemanticFieldNotAllowlisted => "otel-span-field-not-allowlisted",
+            Self::SemanticValueNotAllowlisted => "otel-span-value-not-allowlisted",
         })
     }
 }
@@ -53,8 +59,28 @@ impl RedactionGuard {
             {
                 return Err(RedactionError::AttributeNotAllowlisted);
             }
+            let value = redact_attribute_value(&key, &value);
             if values.insert(key, value).is_some() {
                 return Err(RedactionError::AttributeNotAllowlisted);
+            }
+
+            fn redact_attribute_value(key: &str, value: &str) -> String {
+                let identity_key = matches!(
+                    key,
+                    "d2b.zone" | "vm.name" | "vm.env" | "vm.role" | "host.name" | "source"
+                );
+                if identity_key || value.contains('/') || value.chars().any(char::is_whitespace) {
+                    if d2b_contracts::v3::is_canonical_digest(value) {
+                        value.to_owned()
+                    } else {
+                        d2b_contracts::v3::canonical_digest(
+                            "d2b:telemetry-redaction:v1",
+                            value.as_bytes(),
+                        )
+                    }
+                } else {
+                    value.to_owned()
+                }
             }
         }
         Ok(Self { attributes: values })
@@ -127,7 +153,13 @@ impl RedactionGuard {
             {
                 return Err(RedactionError::ForbiddenSpanField);
             }
-            if output.insert(key, "<bounded>".to_owned()).is_some() {
+            let allowed = d2b_contracts::v3::telemetry_policy::allowed_values(&key)
+                .ok_or(RedactionError::SemanticFieldNotAllowlisted)?;
+            if !allowed.contains(&value.as_str()) {
+                return Err(RedactionError::SemanticValueNotAllowlisted);
+            }
+            let stored = value;
+            if output.insert(key, stored).is_some() {
                 return Err(RedactionError::ForbiddenSpanField);
             }
         }
@@ -148,6 +180,7 @@ mod tests {
         ])
         .unwrap();
         assert!(guard.attributes().contains_key("d2b.zone"));
+        assert!(!guard.attributes().values().any(|value| value == "local"));
     }
 
     #[test]
@@ -168,5 +201,37 @@ mod tests {
                 Err(RedactionError::ForbiddenSpanField)
             );
         }
+    }
+
+    #[test]
+    fn unknown_semantic_fields_and_values_fail_closed() {
+        assert_eq!(
+            RedactionGuard::span_attributes([("unknown", "value")]),
+            Err(RedactionError::SemanticFieldNotAllowlisted)
+        );
+        assert_eq!(
+            RedactionGuard::span_attributes([("operation", "not-a-store-operation")]),
+            Err(RedactionError::SemanticValueNotAllowlisted)
+        );
+    }
+
+    #[test]
+    fn canonical_semantic_fields_are_preserved() {
+        let fields = RedactionGuard::span_attributes([
+            ("kind", "single"),
+            ("operation", "scan"),
+            ("op", "vmStart"),
+            ("service", "store"),
+            ("transport", "unix"),
+            ("profile", "NN"),
+        ])
+        .expect("closed semantic fields");
+        assert_eq!(fields.get("kind").map(String::as_str), Some("single"));
+        assert_eq!(fields.get("operation").map(String::as_str), Some("scan"));
+        assert_eq!(fields.get("op").map(String::as_str), Some("vmStart"));
+        assert_eq!(fields.get("service").map(String::as_str), Some("store"));
+        assert_eq!(fields.get("transport").map(String::as_str), Some("unix"));
+        assert_eq!(fields.get("profile").map(String::as_str), Some("NN"));
+        assert!(!fields.values().any(|value| value == "<bounded>"));
     }
 }

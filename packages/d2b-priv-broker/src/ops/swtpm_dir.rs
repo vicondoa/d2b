@@ -53,7 +53,7 @@ const MARKER_DIR_MODE: u32 = 0o700;
 /// Root of the identity-bound tamper-guard marker tree. Intentionally
 /// NOT under `<stateDir>/vms/<vm>` (which the swtpm principal can
 /// mutate) nor under the swtpm dir itself.
-const MARKER_TREE: &str = "/var/lib/d2b/swtpm-markers";
+pub(crate) const MARKER_TREE: &str = "/var/lib/d2b/swtpm-markers";
 /// The single trusted control-socket name the broker may unlink as a
 /// stale leftover under the runtime dir.
 const TRUSTED_SOCKET_NAME: &str = "tpm.sock";
@@ -68,6 +68,8 @@ pub mod reasons {
     pub const NOT_A_DIRECTORY: &str = "swtpm-dir-not-a-directory";
     pub const OWNER_MISMATCH: &str = "swtpm-dir-owner-mismatch";
     pub const PREV_PROVISIONED_MISSING: &str = "previously-provisioned-swtpm-state-missing";
+    pub const LEGACY_ADOPTION_REQUIRED: &str = "legacy-swtpm-adoption-required";
+    pub const LEGACY_MIGRATION_FAILED: &str = "legacy-swtpm-migration-failed";
     pub const CREATE_FAILED: &str = "swtpm-dir-create-failed";
     pub const RACED_CREATE: &str = "swtpm-dir-raced-create";
     pub const ACL_CLEAR_FAILED: &str = "swtpm-dir-acl-clear-failed";
@@ -142,12 +144,69 @@ pub struct SwtpmHardenConfig {
 
 /// Marker payload: the trusted swtpm-dir identity. Serialized as JSON.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct MarkerData {
     v: u32,
     vm: String,
+    origin: MarkerOrigin,
     dev: u64,
     ino: u64,
+    uid: u32,
+    gid: u32,
+    mode: u32,
     first_provisioned_ms: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum MarkerOrigin {
+    FreshProvision,
+    LegacyMigration,
+}
+
+pub(crate) fn marker_payload(
+    vm: &str,
+    origin: MarkerOrigin,
+    dev: u64,
+    ino: u64,
+    uid: u32,
+    gid: u32,
+    mode: u32,
+    first_provisioned_ms: u64,
+) -> Result<Vec<u8>, serde_json::Error> {
+    serde_json::to_vec(&MarkerData {
+        v: MARKER_VERSION,
+        vm: vm.to_owned(),
+        origin,
+        dev,
+        ino,
+        uid,
+        gid,
+        mode,
+        first_provisioned_ms,
+    })
+}
+
+pub(crate) fn marker_matches(
+    bytes: &[u8],
+    vm: &str,
+    origin: MarkerOrigin,
+    dev: u64,
+    ino: u64,
+    uid: u32,
+    gid: u32,
+    mode: u32,
+) -> bool {
+    serde_json::from_slice::<MarkerData>(bytes).is_ok_and(|marker| {
+        marker.v == MARKER_VERSION
+            && marker.vm == vm
+            && marker.origin == origin
+            && marker.dev == dev
+            && marker.ino == ino
+            && marker.uid == uid
+            && marker.gid == gid
+            && marker.mode == mode
+    })
 }
 
 /// True for the real production state-dir tree. Tests pass scratch dirs.
@@ -170,10 +229,11 @@ pub fn derive_paths(plan: &SpawnRunnerPlan) -> Result<SwtpmDirPaths, &'static st
         if !path.is_absolute() {
             continue;
         }
-        if path.starts_with("/run/") {
-            if path.starts_with("/run/d2b/vms") && runtime_dir.is_none() {
-                runtime_dir = Some(path.to_path_buf());
-            }
+        if (path.starts_with("/run/d2b/vms") || cfg!(test))
+            && path.file_name().and_then(|name| name.to_str()) != Some("swtpm")
+            && runtime_dir.is_none()
+        {
+            runtime_dir = Some(path.to_path_buf());
         } else if path.file_name().and_then(|s| s.to_str()) == Some("swtpm") && swtpm_dir.is_none()
         {
             swtpm_dir = Some(path.to_path_buf());
@@ -198,8 +258,13 @@ pub fn derive_paths(plan: &SpawnRunnerPlan) -> Result<SwtpmDirPaths, &'static st
         return Err(reasons::DERIVATION_FAILED);
     }
 
+    let marker_dir = per_vm_root
+        .parent()
+        .and_then(Path::parent)
+        .ok_or(reasons::DERIVATION_FAILED)?
+        .join("swtpm-markers");
     Ok(SwtpmDirPaths {
-        marker_dir: PathBuf::from(MARKER_TREE),
+        marker_dir,
         marker_name: vm_id.clone(),
         vm_id,
         swtpm_dir,
@@ -243,14 +308,7 @@ pub fn harden(
         },
     };
 
-    // 1. Establish + open the root-owned marker tree, then read any
-    //    existing marker (fail closed on tamper).
-    let marker_dir_fd = ensure_marker_tree(paths, cfg)
-        .map_err(|reason| fail(reason, SwtpmMarkerResult::FailedClosed))?;
-    let existing_marker = read_marker(&marker_dir_fd, paths, cfg)
-        .map_err(|reason| fail(reason, SwtpmMarkerResult::FailedClosed))?;
-
-    // 2. Open the per-VM root path-safely.
+    // 1. Open the per-VM root path-safely.
     if cfg.enforce_root_parents && production_swtpm_path(&paths.swtpm_dir) {
         path_safe::refuse_world_writable_parent(&paths.swtpm_dir)
             .map_err(|_| fail(reasons::PARENT_OPEN_FAILED, SwtpmMarkerResult::FailedClosed))?;
@@ -258,10 +316,28 @@ pub fn harden(
     let per_vm_root_fd = path_safe::open_dir_path_safe(&paths.per_vm_root)
         .map_err(|_| fail(reasons::PARENT_OPEN_FAILED, SwtpmMarkerResult::FailedClosed))?;
 
-    // 3. Stat the swtpm dir under the per-VM root WITHOUT following a
-    //    symlink.
+    // 2. Stat the swtpm and legacy entries under the per-VM root WITHOUT
+    //    following a symlink. Do this before creating the marker tree so a
+    //    legacy source cannot cause any fresh-create mutation.
     let swtpm_stat = path_safe::fstatat_nofollow(&per_vm_root_fd, "swtpm")
         .map_err(|_| fail(reasons::PARENT_OPEN_FAILED, SwtpmMarkerResult::FailedClosed))?;
+    let legacy_stat = path_safe::fstatat_nofollow(&per_vm_root_fd, "swtpm-legacy")
+        .map_err(|_| fail(reasons::PARENT_OPEN_FAILED, SwtpmMarkerResult::FailedClosed))?;
+    let marker_present = marker_file_present(paths)
+        .map_err(|reason| fail(reason, SwtpmMarkerResult::FailedClosed))?;
+    if swtpm_stat.is_none() && legacy_stat.is_some() && !marker_present {
+        return Err(fail(
+            reasons::LEGACY_ADOPTION_REQUIRED,
+            SwtpmMarkerResult::FailedClosed,
+        ));
+    }
+
+    // 3. Establish + open the root-owned marker tree, then read any
+    //    existing marker (fail closed on tamper).
+    let marker_dir_fd = ensure_marker_tree(paths, cfg)
+        .map_err(|reason| fail(reason, SwtpmMarkerResult::FailedClosed))?;
+    let existing_marker = read_marker(&marker_dir_fd, paths, cfg)
+        .map_err(|reason| fail(reason, SwtpmMarkerResult::FailedClosed))?;
 
     let (result, marker_result) = match swtpm_stat {
         None => {
@@ -271,6 +347,16 @@ pub fn harden(
             if existing_marker.is_some() {
                 return Err(fail(
                     reasons::PREV_PROVISIONED_MISSING,
+                    SwtpmMarkerResult::FailedClosed,
+                ));
+            }
+            // A legacy source is an adoption obligation, not a fresh
+            // provisioning opportunity. Check it relative to the held
+            // per-VM root so a symlink or replacement cannot turn this into
+            // a path check-then-use.
+            if legacy_stat.is_some() {
+                return Err(fail(
+                    reasons::LEGACY_ADOPTION_REQUIRED,
                     SwtpmMarkerResult::FailedClosed,
                 ));
             }
@@ -319,7 +405,7 @@ pub fn harden(
             let dev = fd_stat.st_dev as u64;
             let ino = fd_stat.st_ino as u64;
 
-            let marker_result = match &existing_marker {
+            let marker_result = match existing_marker.clone() {
                 Some(marker) => {
                     // Identity bind: a fresh correct-owner empty
                     // replacement (different st_ino) fails closed.
@@ -329,24 +415,45 @@ pub fn harden(
                             SwtpmMarkerResult::FailedClosed,
                         ));
                     }
+                    if marker.uid != fd_stat.st_uid
+                        || marker.gid != fd_stat.st_gid
+                        || marker.mode != SWTPM_DIR_MODE
+                    {
+                        return Err(fail(
+                            reasons::PREV_PROVISIONED_MISSING,
+                            SwtpmMarkerResult::FailedClosed,
+                        ));
+                    }
+                    if marker.origin == MarkerOrigin::LegacyMigration {
+                        let journal_valid =
+                            crate::ops::swtpm_migration::validate_committed_for_harden(
+                                &paths.per_vm_root.join("swtpm-legacy"),
+                                &paths.swtpm_dir,
+                                &paths.per_vm_root.join(".d2b-legacy-swtpm.journal"),
+                                &paths.marker_dir.join(&paths.marker_name),
+                                (cfg.expected_uid, cfg.expected_gid),
+                            )
+                            .unwrap_or(false);
+                        if !journal_valid {
+                            return Err(fail(
+                                reasons::LEGACY_ADOPTION_REQUIRED,
+                                SwtpmMarkerResult::FailedClosed,
+                            ));
+                        }
+                    }
                     SwtpmMarkerResult::Verified
                 }
-                None => SwtpmMarkerResult::FailedClosed, // placeholder; set below
+                None => {
+                    return Err(fail(
+                        reasons::LEGACY_ADOPTION_REQUIRED,
+                        SwtpmMarkerResult::FailedClosed,
+                    ));
+                }
             };
 
             // Reconcile: clear ACLs + re-assert 0700, preserve contents.
             let had_acl = reconcile_existing_swtpm_dir(dir_fd.as_fd(), &fd_stat)
                 .map_err(|reason| fail(reason, SwtpmMarkerResult::FailedClosed))?;
-
-            let marker_result = if existing_marker.is_none() {
-                // Upgrade path: first run on a pre-existing dir, no
-                // marker yet. Record current identity.
-                write_marker(&marker_dir_fd, paths, cfg, dev, ino)
-                    .map_err(|reason| fail(reason, SwtpmMarkerResult::FailedClosed))?;
-                SwtpmMarkerResult::Created
-            } else {
-                marker_result
-            };
 
             let result = if had_acl {
                 SwtpmDirResult::Reconciled
@@ -398,6 +505,17 @@ fn ensure_marker_tree(
     path_safe::open_dir_path_safe(&paths.marker_dir).map_err(|_| reasons::MARKER_TREE_FAILED)
 }
 
+fn marker_file_present(paths: &SwtpmDirPaths) -> Result<bool, &'static str> {
+    let marker_dir_fd = match path_safe::open_dir_path_safe(&paths.marker_dir) {
+        Ok(fd) => fd,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(_) => return Err(reasons::MARKER_TREE_FAILED),
+    };
+    path_safe::fstatat_nofollow(&marker_dir_fd, &paths.marker_name)
+        .map(|stat| stat.is_some())
+        .map_err(|_| reasons::MARKER_TREE_FAILED)
+}
+
 /// Read + validate the per-VM marker file. Returns `Ok(None)` when no
 /// marker exists, `Ok(Some(_))` for a valid marker, and a path-free
 /// `previously-provisioned-swtpm-state-missing` slug for ANY tamper
@@ -416,7 +534,7 @@ fn read_marker(
     if fmt == libc::S_IFLNK || fmt != libc::S_IFREG {
         return Err(reasons::PREV_PROVISIONED_MISSING);
     }
-    if stat.st_uid != cfg.marker_owner_uid {
+    if stat.st_uid != cfg.marker_owner_uid || stat.st_gid != cfg.marker_owner_gid {
         return Err(reasons::PREV_PROVISIONED_MISSING);
     }
     // Reject any group/other permission bit: marker must be 0600.
@@ -427,13 +545,17 @@ fn read_marker(
     let file_fd = path_safe::open_at(
         marker_dir_fd.as_fd(),
         Path::new(&paths.marker_name),
-        rustix::fs::OFlags::RDONLY,
+        rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::NOFOLLOW,
     )
     .map_err(|_| reasons::PREV_PROVISIONED_MISSING)?;
     // TOCTOU re-check on the held fd.
     let fd_stat =
         path_safe::fstat_fd(file_fd.as_fd()).map_err(|_| reasons::PREV_PROVISIONED_MISSING)?;
-    if (fd_stat.st_mode & libc::S_IFMT) != libc::S_IFREG || fd_stat.st_uid != cfg.marker_owner_uid {
+    if (fd_stat.st_mode & libc::S_IFMT) != libc::S_IFREG
+        || fd_stat.st_uid != cfg.marker_owner_uid
+        || fd_stat.st_gid != cfg.marker_owner_gid
+        || (fd_stat.st_mode & 0o7777) != MARKER_FILE_MODE
+    {
         return Err(reasons::PREV_PROVISIONED_MISSING);
     }
 
@@ -443,7 +565,7 @@ fn read_marker(
         .map_err(|_| reasons::PREV_PROVISIONED_MISSING)?;
     let marker: MarkerData =
         serde_json::from_str(&buf).map_err(|_| reasons::PREV_PROVISIONED_MISSING)?;
-    if marker.v != MARKER_VERSION || marker.vm != paths.vm_id {
+    if marker.v != MARKER_VERSION || marker.vm != paths.vm_id || marker.mode != SWTPM_DIR_MODE {
         return Err(reasons::PREV_PROVISIONED_MISSING);
     }
     Ok(Some(marker))
@@ -459,14 +581,17 @@ fn write_marker(
     dev: u64,
     ino: u64,
 ) -> Result<(), &'static str> {
-    let marker = MarkerData {
-        v: MARKER_VERSION,
-        vm: paths.vm_id.clone(),
+    let payload = marker_payload(
+        &paths.vm_id,
+        MarkerOrigin::FreshProvision,
         dev,
         ino,
-        first_provisioned_ms: cfg.now_ms,
-    };
-    let payload = serde_json::to_vec(&marker).map_err(|_| reasons::MARKER_WRITE_FAILED)?;
+        cfg.expected_uid,
+        cfg.expected_gid,
+        SWTPM_DIR_MODE,
+        cfg.now_ms,
+    )
+    .map_err(|_| reasons::MARKER_WRITE_FAILED)?;
 
     let fd = path_safe::create_file_at_safe(
         marker_dir_fd,
@@ -489,6 +614,7 @@ fn write_marker(
             .map_err(|_| reasons::MARKER_WRITE_FAILED)?;
         file.sync_all().map_err(|_| reasons::MARKER_WRITE_FAILED)?;
     }
+
     rustix::fs::fsync(marker_dir_fd.as_fd()).map_err(|_| reasons::MARKER_WRITE_FAILED)?;
     Ok(())
 }
@@ -604,8 +730,22 @@ fn unlink_stale_socket(runtime_dir: &Path) -> Result<(), &'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ops::swtpm_migration::{
+        LegacyMigrationAction, LegacyMigrationJournal, LegacyMigrationObservation,
+        LegacyMigrationPhase, LegacyMigrationStatus,
+    };
+    use d2b_core::bundle::{Bundle, BundleGeneration};
+    use d2b_core::bundle_resolver::BundleResolver;
+    use d2b_core::host::HostJson;
+    use d2b_core::manifest_v04::ManifestV04;
+    use d2b_core::minijail_profile::WritablePath;
+    use d2b_core::processes::{
+        NodeId, ProcessNode, ProcessRole, ProcessesJson, VmProcessDag, VmProcessInvariants,
+    };
+    use d2b_core::test_support::RoleProfileBuilder;
+    use sha2::{Digest, Sha256};
     use std::fs;
-    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
     use std::path::PathBuf;
 
     fn cur_uid() -> u32 {
@@ -667,6 +807,133 @@ mod tests {
         fn make_per_vm_root(&self, paths: &SwtpmDirPaths) {
             fs::create_dir_all(&paths.per_vm_root).unwrap();
             fs::set_permissions(&paths.per_vm_root, fs::Permissions::from_mode(0o3770)).unwrap();
+        }
+
+        fn spawn_plan(&self, paths: &SwtpmDirPaths) -> SpawnRunnerPlan {
+            use d2b_core::minijail_profile::{CgroupPlacement, MountPolicy, WritablePath};
+            SpawnRunnerPlan {
+                binary_path: PathBuf::from("/run/current-system/sw/bin/swtpm"),
+                argv: vec!["swtpm".into()],
+                uid: cur_uid(),
+                gid: cur_gid(),
+                supplementary_groups: vec![],
+                env: vec![],
+                capabilities: vec![],
+                namespaces: d2b_core::minijail_profile::NamespaceSet {
+                    mount: true,
+                    pid: true,
+                    net: false,
+                    ipc: true,
+                    uts: true,
+                    user: true,
+                },
+                seccomp_policy_ref: Some("w1-swtpm".into()),
+                mount_policy: MountPolicy {
+                    read_only_paths: vec![],
+                    writable_paths: vec![
+                        WritablePath {
+                            path: paths.swtpm_dir.display().to_string(),
+                            purpose: "tpm nvram".into(),
+                        },
+                        WritablePath {
+                            path: paths.runtime_dir.display().to_string(),
+                            purpose: "tpm socket".into(),
+                        },
+                    ],
+                    nix_store_read_only: true,
+                    hide_device_nodes_by_default: true,
+                    device_binds: vec![],
+                    bind_mounts: vec![],
+                },
+                cgroup_placement: CgroupPlacement {
+                    subtree: format!("d2b.slice/{}/swtpm", paths.vm_id),
+                    controllers: vec![],
+                    delegated: true,
+                },
+                user_namespace: None,
+                umask: None,
+            }
+        }
+
+        fn resolver(&self, paths: &SwtpmDirPaths) -> BundleResolver {
+            let mut manifest = ManifestV04::from_slice(
+                include_str!("../../../../tests/golden/manifest_v04/baseline-vms.json").as_bytes(),
+            )
+            .expect("manifest fixture parses");
+            let vm = manifest.vms.get_mut("corp-vm").expect("corp-vm fixture");
+            vm.state_dir = paths.per_vm_root.display().to_string();
+            vm.tpm = true;
+
+            let profile = RoleProfileBuilder::new()
+                .with_profile_id("swtpm-test")
+                .with_uid(cur_uid())
+                .with_gid(cur_gid())
+                .with_writable_paths(vec![WritablePath {
+                    path: paths.swtpm_dir.display().to_string(),
+                    purpose: "tpm nvram".to_owned(),
+                }])
+                .with_cgroup_subtree("d2b.slice/corp-vm/swtpm")
+                .build();
+            let processes = ProcessesJson {
+                schema_version: "v2".to_owned(),
+                vms: vec![VmProcessDag {
+                    vm: "corp-vm".to_owned(),
+                    workload_identity: None,
+                    nodes: vec![ProcessNode {
+                        id: NodeId("swtpm".to_owned()),
+                        role: ProcessRole::Swtpm,
+                        unit: None,
+                        binary_path: None,
+                        argv: vec![],
+                        env: vec![],
+                        plan_ops: vec![],
+                        network_interfaces: vec![],
+                        profile,
+                        readiness: vec![],
+                    }],
+                    edges: vec![],
+                    invariants: VmProcessInvariants {
+                        swtpm_pre_start_flush: true,
+                        per_vm_audit_pipeline: true,
+                        usbip_gating: true,
+                        tpm_ownership_migration_without_running_vm_mutation: true,
+                    },
+                }],
+            };
+            let host: HostJson = serde_json::from_str(include_str!(
+                "../../../../tests/fixtures/deny-unknown/host-valid.json"
+            ))
+            .expect("host fixture parses");
+            BundleResolver::from_artifacts(
+                Bundle {
+                    bundle_version: 4,
+                    schema_version: "v2".to_owned(),
+                    public_manifest_path: "vms.json".to_owned(),
+                    host_path: "host.json".to_owned(),
+                    processes_path: "processes.json".to_owned(),
+                    privileges_path: "privileges.json".to_owned(),
+                    storage_path: None,
+                    sync_path: None,
+                    allocator_path: None,
+                    realm_controllers_path: None,
+                    realm_identity_path: None,
+                    realm_workloads_launcher_v2_path: None,
+                    unsafe_local_workloads_path: None,
+                    closures: vec![],
+                    minijail_profiles: vec![],
+                    managed_keys: Default::default(),
+                    generation: BundleGeneration {
+                        generator: "swtpm-test".to_owned(),
+                        source_revision: None,
+                        generated_at: None,
+                    },
+                    bundle_hash: None,
+                    artifact_hashes: None,
+                },
+                host,
+                processes,
+                manifest,
+            )
         }
     }
 
@@ -762,7 +1029,7 @@ mod tests {
     }
 
     #[test]
-    fn upgrade_existing_dir_without_marker_creates_marker() {
+    fn existing_dir_without_marker_requires_core_migration_decision() {
         let s = Scratch::new("upgrade");
         let paths = s.paths("gamma");
         s.make_per_vm_root(&paths);
@@ -772,17 +1039,175 @@ mod tests {
         fs::set_permissions(&paths.swtpm_dir, fs::Permissions::from_mode(0o700)).unwrap();
         fs::write(paths.swtpm_dir.join("tpm2-00.permall"), b"legacy").unwrap();
 
-        let audit = harden(&paths, &cfg).expect("upgrade ok");
-        assert!(matches!(
-            audit.result,
-            SwtpmDirResult::Reconciled | SwtpmDirResult::VerifiedClean
-        ));
-        assert_eq!(audit.marker_result, SwtpmMarkerResult::Created);
-        assert!(paths.marker_dir.join(&paths.marker_name).is_file());
+        let err = harden(&paths, &cfg).expect_err("legacy state must migrate first");
+        assert_eq!(err.reason, reasons::LEGACY_ADOPTION_REQUIRED);
+        assert!(!paths.marker_dir.join(&paths.marker_name).exists());
+    }
+
+    #[test]
+    fn fresh_create_with_legacy_source_requires_adoption_without_mutation() {
+        let s = Scratch::new("fresh-legacy");
+        let paths = s.paths("gamma-fresh");
+        s.make_per_vm_root(&paths);
+        let cfg = s.cfg();
+        let legacy = paths.per_vm_root.join("swtpm-legacy");
+        fs::create_dir_all(&legacy).unwrap();
+        fs::write(legacy.join("tpm2-00.permall"), b"legacy").unwrap();
+
+        let err = harden(&paths, &cfg).expect_err("legacy source must require adoption");
+        assert_eq!(err.reason, reasons::LEGACY_ADOPTION_REQUIRED);
+        assert!(!paths.swtpm_dir.exists());
+        assert!(!paths.marker_dir.join(&paths.marker_name).exists());
+        assert!(!paths.marker_dir.exists());
+        assert!(legacy.exists());
+    }
+
+    #[test]
+    fn committed_legacy_migration_publishes_the_harden_marker_contract() {
+        let s = Scratch::new("migration-marker");
+        let derived = s.paths("gamma2");
+        let paths = derive_paths(&s.spawn_plan(&derived)).unwrap();
+        s.make_per_vm_root(&paths);
+        let cfg = s.cfg();
+        fs::create_dir_all(&paths.marker_dir).unwrap();
+        let legacy = paths.per_vm_root.join("swtpm-legacy");
+        fs::create_dir_all(&legacy).unwrap();
+        fs::write(legacy.join("tpm2-00.permall"), b"legacy").unwrap();
+        let migration_paths = crate::ops::swtpm_migration::LegacyMigrationPaths::new(
+            legacy,
+            paths.swtpm_dir.clone(),
+            paths.per_vm_root.join(".d2b-legacy-swtpm.journal"),
+            paths.marker_dir.join(&paths.marker_name),
+            (cfg.expected_uid, cfg.expected_gid),
+        )
+        .unwrap();
         assert_eq!(
-            fs::read(paths.swtpm_dir.join("tpm2-00.permall")).unwrap(),
-            b"legacy"
+            crate::ops::swtpm_migration::migrate(&migration_paths).unwrap(),
+            crate::ops::swtpm_migration::LegacyMigrationOutcome::Migrated
         );
+        let audit = harden(&paths, &cfg).expect("committed migration is hardenable");
+        assert_eq!(audit.marker_result, SwtpmMarkerResult::Verified);
+        assert_eq!(mode_of(&paths.swtpm_dir), 0o700);
+    }
+
+    #[test]
+    fn marker_published_before_commit_cannot_start_swtpm() {
+        let s = Scratch::new("marker-before-commit");
+        let paths = s.paths("crash-vm");
+        s.make_per_vm_root(&paths);
+        fs::create_dir_all(&paths.marker_dir).unwrap();
+        let cfg = s.cfg();
+
+        let source = paths.per_vm_root.join("swtpm-legacy");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(source.join("nvram"), b"legacy").unwrap();
+        fs::create_dir_all(&paths.swtpm_dir).unwrap();
+        fs::set_permissions(&paths.swtpm_dir, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::write(paths.swtpm_dir.join("nvram"), b"legacy").unwrap();
+
+        let source_digest = crate::ops::swtpm_migration::digest_tree(&source).unwrap();
+        let destination_digest =
+            crate::ops::swtpm_migration::digest_tree(&paths.swtpm_dir).unwrap();
+        let destination_stat = fs::symlink_metadata(&paths.swtpm_dir).unwrap();
+        let marker_payload = marker_payload(
+            &paths.vm_id,
+            MarkerOrigin::LegacyMigration,
+            destination_stat.dev(),
+            destination_stat.ino(),
+            cfg.expected_uid,
+            cfg.expected_gid,
+            0o700,
+            cfg.now_ms,
+        )
+        .unwrap();
+        fs::write(paths.marker_dir.join(&paths.marker_name), &marker_payload).unwrap();
+        fs::set_permissions(
+            paths.marker_dir.join(&paths.marker_name),
+            fs::Permissions::from_mode(0o600),
+        )
+        .unwrap();
+
+        let source_stat = fs::symlink_metadata(&source).unwrap();
+        let journal = serde_json::json!({
+            "sourceDigest": serde_json::to_value(source_digest).unwrap(),
+            "destinationDigest": serde_json::to_value(destination_digest).unwrap(),
+            "markerDigest": serde_json::to_value(<[u8; 32]>::from(Sha256::digest(&marker_payload))).unwrap(),
+            "markerFirstProvisionedMs": cfg.now_ms,
+            "phase": "marker-published",
+            "sourceIdentity": {
+                "dev": source_stat.dev(),
+                "ino": source_stat.ino(),
+                "uid": source_stat.uid(),
+                "gid": source_stat.gid(),
+                "mode": source_stat.permissions().mode() & 0o7777,
+            },
+            "destinationIdentity": {
+                "dev": destination_stat.dev(),
+                "ino": destination_stat.ino(),
+                "uid": destination_stat.uid(),
+                "gid": destination_stat.gid(),
+                "mode": destination_stat.permissions().mode() & 0o7777,
+            },
+        });
+        let journal_path = paths.per_vm_root.join(".d2b-legacy-swtpm.journal");
+        fs::write(&journal_path, serde_json::to_vec(&journal).unwrap()).unwrap();
+        fs::set_permissions(&journal_path, fs::Permissions::from_mode(0o600)).unwrap();
+
+        let err = harden(&paths, &cfg).expect_err("commit point is not durable");
+        assert_eq!(err.reason, reasons::LEGACY_ADOPTION_REQUIRED);
+        assert_eq!(fs::read(paths.swtpm_dir.join("nvram")).unwrap(), b"legacy");
+        assert!(source.exists());
+    }
+
+    #[test]
+    fn resolver_to_migration_to_harden_uses_one_marker_contract() {
+        let s = Scratch::new("resolver-migration-harden");
+        let seed = s.paths("corp-vm");
+        let resolver = s.resolver(&seed);
+        let intent = resolver
+            .resolve_legacy_swtpm_intent("corp-vm")
+            .expect("resolver emits TPM migration intent");
+        assert_eq!(intent.marker, s.root.join("swtpm-markers").join("corp-vm"));
+
+        let paths = SwtpmDirPaths {
+            vm_id: intent.vm.clone(),
+            swtpm_dir: intent.destination.clone(),
+            per_vm_root: intent
+                .destination
+                .parent()
+                .expect("destination parent")
+                .to_path_buf(),
+            runtime_dir: s.root.join("run").join("corp-vm"),
+            marker_dir: intent.marker.parent().expect("marker parent").to_path_buf(),
+            marker_name: intent
+                .marker
+                .file_name()
+                .expect("marker name")
+                .to_string_lossy()
+                .into_owned(),
+        };
+        let derived = derive_paths(&s.spawn_plan(&paths)).expect("harden derives paths");
+        assert_eq!(derived.marker_dir.join(&derived.marker_name), intent.marker);
+        s.make_per_vm_root(&derived);
+        fs::create_dir_all(&intent.marker.parent().unwrap()).unwrap();
+        fs::create_dir_all(&intent.source).unwrap();
+        fs::write(intent.source.join("tpm2-00.permall"), b"legacy").unwrap();
+
+        let cfg = s.cfg();
+        let migration_paths = crate::ops::swtpm_migration::LegacyMigrationPaths::new(
+            intent.source,
+            intent.destination,
+            intent.journal,
+            intent.marker,
+            (cfg.expected_uid, cfg.expected_gid),
+        )
+        .unwrap();
+        assert_eq!(
+            crate::ops::swtpm_migration::migrate(&migration_paths).unwrap(),
+            crate::ops::swtpm_migration::LegacyMigrationOutcome::Migrated
+        );
+        let audit = harden(&derived, &cfg).expect("resolver-produced migration hardens");
+        assert_eq!(audit.marker_result, SwtpmMarkerResult::Verified);
     }
 
     #[test]
@@ -1038,5 +1463,87 @@ mod tests {
         assert_eq!(paths.runtime_dir, PathBuf::from("/run/d2b/vms/work"));
         assert_eq!(paths.marker_dir, PathBuf::from(MARKER_TREE));
         assert_eq!(paths.marker_name, "work");
+    }
+
+    #[test]
+    fn migration_journal_replay_never_repeats_a_committed_host_mutation() {
+        let mut journal = LegacyMigrationJournal::new([1; 32], [2; 32], [3; 32]).unwrap();
+        assert_eq!(
+            journal.next_action(LegacyMigrationObservation::Committed),
+            LegacyMigrationAction::Quarantine
+        );
+        assert_eq!(
+            journal.next_action(LegacyMigrationObservation::Unmigrated),
+            LegacyMigrationAction::PrepareJournal
+        );
+        journal
+            .advance(LegacyMigrationPhase::Prepared)
+            .expect("prepared");
+        journal
+            .advance(LegacyMigrationPhase::PayloadStaged)
+            .expect("payload staged");
+        journal
+            .advance(LegacyMigrationPhase::MarkerPublished)
+            .expect("marker published");
+        journal
+            .advance(LegacyMigrationPhase::Committed)
+            .expect("committed");
+
+        assert_eq!(
+            journal.next_action(LegacyMigrationObservation::Committed),
+            LegacyMigrationAction::RetireSource
+        );
+        journal
+            .advance(LegacyMigrationPhase::SourceRetired)
+            .expect("source retired");
+        assert_eq!(
+            journal.next_action(LegacyMigrationObservation::Committed),
+            LegacyMigrationAction::AlreadyMigrated
+        );
+    }
+
+    #[test]
+    fn migration_journal_quarantines_missing_replacement_and_foreign_state() {
+        for observation in [
+            LegacyMigrationObservation::MissingMarker,
+            LegacyMigrationObservation::ReplacementDetected,
+            LegacyMigrationObservation::Ambiguous,
+            LegacyMigrationObservation::ForeignOwner,
+        ] {
+            let journal = LegacyMigrationJournal::new([4; 32], [5; 32], [6; 32]).unwrap();
+            assert_eq!(
+                journal.next_action(observation),
+                LegacyMigrationAction::Quarantine
+            );
+            assert_eq!(
+                journal.status_for(observation),
+                LegacyMigrationStatus::Quarantined
+            );
+        }
+    }
+
+    #[test]
+    fn redb_status_is_derived_from_the_journal_commit_point() {
+        let mut journal = LegacyMigrationJournal::new([7; 32], [8; 32], [9; 32]).unwrap();
+        assert_eq!(journal.derived_status(), LegacyMigrationStatus::Pending);
+        journal
+            .advance(LegacyMigrationPhase::Prepared)
+            .expect("prepared");
+        journal
+            .advance(LegacyMigrationPhase::PayloadStaged)
+            .expect("payload staged");
+        journal
+            .advance(LegacyMigrationPhase::MarkerPublished)
+            .expect("marker published");
+        assert_eq!(journal.derived_status(), LegacyMigrationStatus::Pending);
+
+        let bytes = serde_json::to_vec(&journal).unwrap();
+        let replayed: LegacyMigrationJournal = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(replayed.derived_status(), LegacyMigrationStatus::Pending);
+
+        journal
+            .advance(LegacyMigrationPhase::Committed)
+            .expect("committed");
+        assert_eq!(journal.derived_status(), LegacyMigrationStatus::Adopted);
     }
 }

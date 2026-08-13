@@ -941,6 +941,16 @@ pub const BROKER_OPERATION_AUTHZ: &[OperationAuthzRow] = &[
         AuditMode::Yes,
     ),
     row(
+        "MigrateLegacySwtpmState",
+        "fs",
+        "per-VM",
+        &["d2bd"],
+        true,
+        SecretAccess::MetadataOnly,
+        BrokerRequirement::Yes,
+        AuditMode::Yes,
+    ),
+    row(
         "CreateOrReconcileUsersGroups",
         "account",
         "global/per-role",

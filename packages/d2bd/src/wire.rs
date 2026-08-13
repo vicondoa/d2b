@@ -2,7 +2,7 @@ use crate::typed_error::{ErrorEnvelope, TypedError};
 use d2b_contracts::{
     FeatureFlag, Hello, HelloOk, HelloRejected, HelloRejectedReason, Version,
     broker_wire::ExportBrokerAuditResponse,
-    public_wire::{self, AuthStatusResponse},
+    public_wire::{self, AuditResponse, AuthStatusResponse},
 };
 use d2b_core::host::IfName;
 use semver::{Version as SemverVersion, VersionReq};
@@ -222,12 +222,12 @@ pub struct ErrorFrame {
 }
 
 #[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AuditResponseFrame {
     #[serde(rename = "type")]
     pub type_name: &'static str,
     #[serde(flatten)]
-    pub payload: ExportBrokerAuditResponse,
+    pub payload: AuditResponse,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -535,10 +535,10 @@ pub fn status_response(status: Value) -> Value {
     json!({ "type": "statusResponse", "status": status })
 }
 
-pub fn audit_response(lines: Vec<String>) -> AuditResponseFrame {
+pub fn audit_response(payload: ExportBrokerAuditResponse) -> AuditResponseFrame {
     AuditResponseFrame {
         type_name: "auditResponse",
-        payload: ExportBrokerAuditResponse { lines },
+        payload: payload.into(),
     }
 }
 
@@ -712,7 +712,11 @@ fn map_parse_error(error: serde_json::Error) -> TypedError {
 
 #[cfg(test)]
 mod tests {
-    use super::{Request, parse_request};
+    use super::{Request, audit_response, parse_request};
+    use d2b_contracts::broker_wire::{
+        AuditExportCursor, AuditExportEntry, ExportBrokerAuditResponse,
+    };
+    use serde_json::json;
 
     #[test]
     fn retired_shell_request_is_not_dispatched() {
@@ -750,5 +754,36 @@ mod tests {
         assert_eq!(request.method(), Some("List"));
         assert_eq!(request.fields["zoneRef"], "Zone/work");
         assert_eq!(request.fields["limit"], 10);
+    }
+
+    #[test]
+    fn real_d2bd_audit_response_round_trips_through_public_contract() {
+        let private = ExportBrokerAuditResponse {
+            entries: vec![AuditExportEntry {
+                sequence: 42,
+                record: Some(json!({"operation": "ApplyNftables"})),
+                error: None,
+            }],
+            next_cursor: Some(AuditExportCursor {
+                day: "2026-08-13".to_owned(),
+                line: 41,
+                sequence: 41,
+            }),
+            complete: false,
+        };
+        let frame = serde_json::to_value(audit_response(private))
+            .expect("serialize real d2bd audit response");
+        let mut payload = frame.as_object().expect("audit frame object").clone();
+        assert_eq!(payload.remove("type"), Some(json!("auditResponse")));
+
+        let public: d2b_contracts::public_wire::AuditResponse =
+            serde_json::from_value(payload.into()).expect("public audit response decodes");
+        assert_eq!(public.entries.len(), 1);
+        assert_eq!(public.entries[0].sequence, 42);
+        assert_eq!(
+            public.next_cursor.as_ref().map(|cursor| cursor.line),
+            Some(41)
+        );
+        assert!(!public.complete);
     }
 }

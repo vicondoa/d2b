@@ -1,11 +1,9 @@
 use std::collections::BTreeMap;
 
-use d2b_provider_observability_otel::ingress_policy::{
-    MAX_INGRESS_FRAME_BYTES, QUARANTINE_VIOLATION_THRESHOLD,
-};
+use d2b_provider_observability_otel::ingress_policy::QUARANTINE_VIOLATION_THRESHOLD;
 use d2b_provider_observability_otel::{
     IdentityCanaries, Ingress, IngressErrorClass, IngressOutcome, IngressPolicyGate,
-    MetricDescriptor, MetricFrame, MetricPoint, label,
+    MetricDescriptor, MetricFrame, MetricPoint, canonical_descriptor, label,
 };
 
 const ALL_INGRESSES: [Ingress; 4] = [
@@ -53,8 +51,8 @@ impl PolicyCase {
         match self {
             Self::Oversize => (
                 MetricFrame::new(
-                    MAX_INGRESS_FRAME_BYTES + 1,
-                    [valid_point()],
+                    0,
+                    std::iter::repeat_with(oversize_point).take(1024),
                     valid_resource_attributes(),
                 ),
                 IdentityCanaries::default(),
@@ -92,7 +90,7 @@ impl PolicyCase {
             Self::ValueIdentity => (
                 valid_frame(),
                 IdentityCanaries::new(
-                    ["ok"],
+                    ["accepted"],
                     std::iter::empty::<&str>(),
                     std::iter::empty::<&str>(),
                 ),
@@ -103,13 +101,34 @@ impl PolicyCase {
 }
 
 fn valid_resource_attributes() -> BTreeMap<String, String> {
-    BTreeMap::from([("d2b.zone".to_owned(), "work".to_owned())])
+    BTreeMap::from([(
+        "d2b.zone".to_owned(),
+        "sha256:0000000000000000000000000000000000000000000000000000000000000001".to_owned(),
+    )])
 }
 
 fn valid_point() -> MetricPoint {
     MetricPoint {
-        descriptor: MetricDescriptor::new("d2b_test_total", [label("outcome", &["ok", "error"])]),
-        labels: BTreeMap::from([("outcome".to_owned(), "ok".to_owned())]),
+        descriptor: canonical_descriptor("d2b_otel_ingress_policy_total").unwrap(),
+        labels: BTreeMap::from([
+            ("ingress".to_owned(), "emitter_unix".to_owned()),
+            ("outcome".to_owned(), "accepted".to_owned()),
+            ("error_class".to_owned(), "none".to_owned()),
+        ]),
+        value: 1.0,
+    }
+}
+
+fn oversize_point() -> MetricPoint {
+    let values = BTreeMap::from([
+        ("verb".to_owned(), "get".to_owned()),
+        ("resource_type".to_owned(), "Host".to_owned()),
+        ("outcome".to_owned(), "ok".to_owned()),
+    ]);
+    MetricPoint {
+        descriptor: canonical_descriptor("d2b_api_request_total").unwrap(),
+        labels: values,
+        value: 1.0,
     }
 }
 
@@ -121,8 +140,12 @@ fn frame_with_label(key: &str, values: &[&str], value: &str) -> MetricFrame {
     MetricFrame::new(
         64,
         [MetricPoint {
-            descriptor: MetricDescriptor::new("d2b_test_total", [label(key, values)]),
+            descriptor: MetricDescriptor::new(
+                "d2b_otel_ingress_policy_total",
+                [label(key, values)],
+            ),
             labels: BTreeMap::from([(key.to_owned(), value.to_owned())]),
+            value: 1.0,
         }],
         valid_resource_attributes(),
     )

@@ -1,7 +1,8 @@
 use crate::audit::{DurableMutationAudit, resource_mutation_record};
 use crate::metrics::{NoopStoreTelemetry, StoreMetric};
 use d2b_audit::{
-    AuditHash, AuditRecord, AuditRecordError, AuditRecordFields, AuditSink, genesis_hash,
+    AuditHash, AuditRecord, AuditRecordError, AuditRecordFields, AuditSink, DurabilityEvidence,
+    DurabilityOutcome, OperationIdentity, ZoneOperationKey, genesis_hash,
 };
 use d2b_contracts::v3::identity::STANDARD_RESOURCE_TYPES;
 use d2b_contracts::v3::{
@@ -60,6 +61,40 @@ impl DurableMutationAudit for RecordingAudit {
         records.push(record.clone());
         Ok(())
     }
+
+    fn existing_mutation_hash(
+        &self,
+        key: &d2b_audit::ZoneOperationKey,
+        mutation_id: &str,
+    ) -> Result<Option<AuditHash>, AuditRecordError> {
+        Ok(self
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|record| {
+                record.mutation_id() == Some(mutation_id)
+                    && record.zone_operation_key().ok().as_ref() == Some(key)
+            })
+            .map(|record| record.record_hash().clone()))
+    }
+
+    fn existing_mutation_predecessor(
+        &self,
+        key: &d2b_audit::ZoneOperationKey,
+        mutation_id: &str,
+    ) -> Result<Option<AuditHash>, AuditRecordError> {
+        Ok(self
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|record| {
+                record.mutation_id() == Some(mutation_id)
+                    && record.zone_operation_key().ok().as_ref() == Some(key)
+            })
+            .map(|record| record.previous_hash().clone()))
+    }
 }
 
 struct RejectingAudit(AtomicU64);
@@ -68,6 +103,22 @@ impl DurableMutationAudit for RejectingAudit {
     fn append_before_commit(&self, _record: &AuditRecord) -> Result<(), AuditRecordError> {
         self.0.fetch_add(1, Ordering::Relaxed);
         Err(AuditRecordError::Serialization)
+    }
+
+    fn existing_mutation_hash(
+        &self,
+        _key: &d2b_audit::ZoneOperationKey,
+        _mutation_id: &str,
+    ) -> Result<Option<AuditHash>, AuditRecordError> {
+        Ok(None)
+    }
+
+    fn existing_mutation_predecessor(
+        &self,
+        _key: &d2b_audit::ZoneOperationKey,
+        _mutation_id: &str,
+    ) -> Result<Option<AuditHash>, AuditRecordError> {
+        Ok(None)
     }
 }
 
@@ -207,6 +258,67 @@ fn provisioned_store() -> (tempfile::TempDir, File, File) {
         .unwrap();
     write_provisioning_marker(&mut marker, &identity()).unwrap();
     (directory, file, marker)
+}
+
+fn insert_legacy_outbox(directory: &tempfile::TempDir, operation_id: &str) {
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(directory.path().join("store.redb"))
+        .unwrap();
+    let database = Database::builder()
+        .set_cache_size(crate::REDB_CACHE_SIZE)
+        .create_with_backend(redb::backends::FileBackend::new(file).unwrap())
+        .unwrap();
+    let operation = crate::transaction::OperationRecord {
+        request_digest: format!("sha256:{}", "a".repeat(64)),
+        resource_uids: Vec::new(),
+        resources: Vec::new(),
+        outcome: "committed".to_owned(),
+        error_code: None,
+        accepted_revision: 0,
+        finished_revision: 0,
+        audit_outbox: Some(crate::transaction::AuditOutboxRecord {
+            zone: identity().zone.as_str().to_owned(),
+            operation_id: String::new(),
+            operation_identity: None,
+            correlation_id: "legacy-correlation".to_owned(),
+            subject_digest: "legacy-subject".to_owned(),
+            policy_revision: 7,
+            resulting_revision: 0,
+            requires_broker: false,
+            mutations: vec![crate::transaction::AuditOutboxMutation {
+                verb: "create".to_owned(),
+                resource_type: "Host".to_owned(),
+                resource_uid: None,
+                target_digest: "legacy-target".to_owned(),
+                generation: 1,
+                expected_revision: 0,
+                mutation_id: String::new(),
+                ordinal: 9,
+                timestamp_ms: 0,
+                outcome: String::new(),
+                error_code: None,
+                previous_hash: None,
+                record_hash: None,
+            }],
+        }),
+        authority: None,
+    };
+    let key = crate::keys::encode_key(
+        crate::keys::KeySpace::Operations,
+        &[crate::keys::KeyComponent::Text(operation_id)],
+    )
+    .unwrap();
+    let value = crate::transaction::encode(crate::ValueKind::OperationRecord, &operation).unwrap();
+    let mut write = database.begin_write().unwrap();
+    write.set_durability(Durability::Immediate).unwrap();
+    write
+        .open_table(crate::transaction::OPERATIONS)
+        .unwrap()
+        .insert(key.as_bytes(), value.as_slice())
+        .unwrap();
+    write.commit().unwrap();
 }
 
 fn operation(id: &str) -> StoreOperationContext {
@@ -474,11 +586,18 @@ fn backup_capture_limits_are_accounted_cumulatively() {
 #[test]
 fn production_ports_use_real_telemetry_and_durable_audit_adapters() {
     let (directory, file) = owned_file();
-    let production = super::StorePorts::production(&file).expect("production ports");
-    assert!(!production.audit.enabled());
-    assert!(!directory.path().join("audit").exists());
-
     let owned_audit = directory.path().join("owned-audit");
+    let sink = Arc::new(AuditSink::open(&owned_audit).expect("owner-provisioned audit sink"));
+    let production = super::StorePorts::production_with_audit(
+        &file,
+        sink,
+        Arc::new(super::BrokerEvidenceIndex::default()),
+    )
+    .expect("production ports");
+    assert!(production.audit.enabled());
+    assert!(owned_audit.is_dir());
+
+    let owned_audit = directory.path().join("test-owned-audit");
     let sink = Arc::new(AuditSink::open(&owned_audit).expect("owner-provisioned audit sink"));
     let ports = super::StorePorts::with_audit_sink(&file, sink).expect("owned audit ports");
     assert!(ports.audit.enabled());
@@ -487,6 +606,32 @@ fn production_ports_use_real_telemetry_and_durable_audit_adapters() {
         StoreMetric::QueueDepth,
         std::collections::BTreeMap::from([("operation".to_owned(), "write".to_owned())]),
         1.0,
+    );
+}
+
+#[test]
+fn broker_evidence_index_is_live_after_startup_snapshot() {
+    let index = Arc::new(crate::BrokerEvidenceIndex::default());
+    let reader = Arc::clone(&index);
+    let evidence = DurabilityEvidence {
+        key: ZoneOperationKey::derive("work", "operation").unwrap(),
+        outcome: DurabilityOutcome::Success,
+        effect_durable: true,
+    };
+    assert!(index.is_empty().unwrap());
+    index.insert(evidence.clone()).unwrap();
+    assert_eq!(reader.len().unwrap(), 1);
+    assert_eq!(reader.get(&evidence.key).unwrap(), Some(evidence));
+    assert_eq!(
+        index
+            .insert(DurabilityEvidence {
+                key: ZoneOperationKey::derive("work", "operation").unwrap(),
+                outcome: DurabilityOutcome::Failure,
+                effect_durable: false,
+            })
+            .unwrap_err()
+            .kind(),
+        d2b_resource_store::StoreErrorKind::StoreIntegrityFailure
     );
 }
 
@@ -501,11 +646,11 @@ fn resource_mutation_audit_class_is_not_privileged_by_default() {
         genesis_hash(),
         "create",
         "Host",
-        "sha256:uid",
+        "sha256:0000000000000000000000000000000000000000000000000000000000000001",
         1,
         0,
         1,
-        "sha256:subject",
+        "sha256:0000000000000000000000000000000000000000000000000000000000000002",
         7,
         "ok",
         None,
@@ -525,11 +670,11 @@ fn resource_mutation_audit_class_is_not_privileged_by_default() {
         genesis_hash(),
         "create",
         "Host",
-        "sha256:uid",
+        "sha256:0000000000000000000000000000000000000000000000000000000000000001",
         0,
         0,
         0,
-        "sha256:subject",
+        "sha256:0000000000000000000000000000000000000000000000000000000000000002",
         7,
         "denied",
         Some("authorization-denied".to_owned()),
@@ -549,11 +694,11 @@ fn resource_mutation_audit_class_is_not_privileged_by_default() {
         genesis_hash(),
         "create",
         "Role",
-        "sha256:uid",
+        "sha256:0000000000000000000000000000000000000000000000000000000000000001",
         1,
         0,
         1,
-        "sha256:subject",
+        "sha256:0000000000000000000000000000000000000000000000000000000000000002",
         7,
         "ok",
         None,
@@ -706,7 +851,7 @@ async fn mutation_audit_uses_result_identity_and_failure_revision() {
     assert_eq!(fields[0].resource_uid, created.resources[0].uid.as_str());
     assert_eq!(fields[0].generation, 1);
     assert_eq!(fields[0].resulting_revision, 1);
-    assert_eq!(fields[1].outcome, "invalid");
+    assert_eq!(fields[1].outcome, "error");
     assert_eq!(
         fields[1].resource_uid,
         crate::audit::opaque_digest("Host/audited-create")
@@ -779,6 +924,14 @@ async fn audit_failure_after_commit_returns_error_and_retains_the_outbox() {
             .len(),
         1
     );
+    let outbox = crate::transaction::pending_audit_outboxes(&database)
+        .unwrap()
+        .pop()
+        .expect("pending outbox");
+    assert_eq!(
+        outbox.operation_identity.as_ref(),
+        Some(&OperationIdentity::derive("audit-outbox").unwrap())
+    );
     drop(database);
 
     let audit = Arc::new(RecordingAudit::default());
@@ -797,6 +950,59 @@ async fn audit_failure_after_commit_returns_error_and_retains_the_outbox() {
     .await
     .unwrap();
     assert_eq!(audit.records().len(), 1);
+    recovered.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn audit_outbox_clear_failure_is_replayable_after_restart() {
+    let (directory, file, marker) = provisioned_store();
+    let store_identity = identity();
+    let (issuer, store_acceptor) = mutation_seal_pair(store_identity.seal_identity());
+    let audit = Arc::new(RecordingAudit::default());
+    let store = RedbResourceStore::provision_owned_with_test_ports(
+        file,
+        marker,
+        store_identity,
+        store_acceptor,
+        Arc::new(NoopStoreTelemetry),
+        audit.clone(),
+    )
+    .await
+    .unwrap();
+
+    crate::transaction::fail_next_audit_outbox_clear_for_test();
+    let canonical = create_body("audit-clear-retry");
+    let digest = canonical_digest(RESOURCE_ENVELOPE_DOMAIN_TAG, &canonical);
+    let error = store
+        .commit_verified(issuer.seal(create_seal_body_with_resource(
+            "audit-clear-retry",
+            "audit-clear-retry",
+            canonical,
+            digest,
+        )))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.kind(),
+        d2b_resource_store::StoreErrorKind::StoreIntegrityFailure
+    );
+    assert_eq!(audit.records().len(), 1);
+    drop(store);
+
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(directory.path().join("store.redb"))
+        .unwrap();
+    let recovered = RedbResourceStore::open_owned_with_test_ports(
+        file,
+        identity(),
+        acceptor(&identity()),
+        Arc::new(NoopStoreTelemetry),
+        audit,
+    )
+    .await
+    .unwrap();
     recovered.shutdown().await.unwrap();
 }
 
@@ -1089,11 +1295,11 @@ async fn sealed_create_mints_uid_in_the_store_and_replays_without_it() {
     assert_eq!(error.reason_code(), "operation-id-reused");
 
     let replacement = format!("sha256:{}", "f".repeat(64));
-    let error = store
+    let replay = store
         .commit_verified(issuer.seal(create_seal_body("sealed-create", name, replacement)))
         .await
-        .unwrap_err();
-    assert_eq!(error.reason_code(), "mutation-payload-digest-mismatch");
+        .unwrap();
+    assert_eq!(replay.resources[0].uid, uid);
 }
 
 #[tokio::test]
@@ -1122,6 +1328,32 @@ async fn owned_file_open_initializes_and_reopens_only_matching_identity() {
         error.kind(),
         d2b_resource_store::StoreErrorKind::StoreIntegrityFailure
     );
+}
+
+#[tokio::test]
+async fn current_v2_legacy_outbox_normalizes_before_cold_open_validation() {
+    let (directory, file, marker) = provisioned_store();
+    let store = provision_store(file, marker, identity()).await.unwrap();
+    store.shutdown().await.unwrap();
+    insert_legacy_outbox(&directory, "cold-legacy-outbox");
+
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(directory.path().join("store.redb"))
+        .unwrap();
+    let store = open_store(file, identity()).await.unwrap();
+    store.shutdown().await.unwrap();
+
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(directory.path().join("store.redb"))
+        .unwrap();
+    let database = Database::builder()
+        .create_with_backend(redb::backends::FileBackend::new(file).unwrap())
+        .unwrap();
+    crate::transaction::validate_consistency(&database).unwrap();
 }
 
 #[tokio::test]
@@ -2369,4 +2601,70 @@ async fn commit_fixture_resource(
         )))
         .await
         .expect("production fixture mutation")
+}
+
+#[tokio::test]
+async fn authority_operation_lifecycle_is_durable_and_restart_visible() {
+    let (directory, file, marker) = provisioned_store();
+    let identity = identity();
+    let store = std::sync::Arc::new(
+        provision_store(file, marker, identity.clone())
+            .await
+            .unwrap(),
+    );
+    let claim_digest = "sha256:".to_owned() + &"0".repeat(64);
+    let binding_digest = store.authority_binding_digest(&claim_digest);
+    let payload = serde_json::to_vec(&serde_json::json!({
+        "operationId": "authority-owner",
+        "claim": "opaque",
+        "state": "pending",
+        "claimDigest": claim_digest.clone(),
+        "storeBindingDigest": binding_digest,
+    }))
+    .unwrap();
+    let capability = store
+        .prepare_authority_operation("authority-owner".to_owned(), payload, &claim_digest)
+        .await
+        .unwrap();
+    capability
+        .record_effect(AuthorityOperationState::EffectConfirmed)
+        .await
+        .unwrap();
+    drop(capability);
+    std::sync::Arc::try_unwrap(store)
+        .unwrap()
+        .shutdown()
+        .await
+        .unwrap();
+
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(directory.path().join("store.redb"))
+        .unwrap();
+    let reopened = std::sync::Arc::new(open_store(file, identity).await.unwrap());
+    let rows = reopened.authority_operations().await.unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].operation_id, "authority-owner");
+    let payload: serde_json::Value = serde_json::from_slice(&rows[0].payload).unwrap();
+    assert_eq!(
+        payload.get("state").and_then(serde_json::Value::as_str),
+        Some("effect-confirmed")
+    );
+    assert_eq!(rows[0].state, AuthorityOperationState::EffectConfirmed);
+
+    let capability = reopened
+        .resume_authority_operation("authority-owner".to_owned(), &binding_digest)
+        .await
+        .unwrap();
+    capability.record_close().await.unwrap();
+    capability.release().await.unwrap();
+    let released = reopened.authority_operations().await.unwrap();
+    assert_eq!(released[0].state, AuthorityOperationState::Released);
+    drop(capability);
+    std::sync::Arc::try_unwrap(reopened)
+        .unwrap()
+        .shutdown()
+        .await
+        .unwrap();
 }

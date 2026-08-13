@@ -15,6 +15,7 @@ use super::{
     ResourceRef, ResourceTypeName, ZoneId,
     resource_schema::{
         CanonicalJsonObject, CanonicalJsonValue, canonical_json_bytes, framed_canonical_digest,
+        is_canonical_digest,
     },
 };
 
@@ -411,9 +412,7 @@ fn digest_resources(resources: &[BundleResource]) -> Result<String, ResourceBund
 }
 
 fn is_digest(value: &str) -> bool {
-    value.len() == 71
-        && value.starts_with("sha256:")
-        && value[7..].bytes().all(|byte| byte.is_ascii_hexdigit())
+    is_canonical_digest(value)
 }
 
 fn reject_runtime_or_private_fields(

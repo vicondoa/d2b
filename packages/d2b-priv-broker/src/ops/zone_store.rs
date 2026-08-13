@@ -631,10 +631,7 @@ fn validate_marker(
 }
 
 fn is_store_identity(value: &str) -> bool {
-    let Some(hex) = value.strip_prefix("sha256:") else {
-        return false;
-    };
-    hex.len() == 64 && hex.bytes().all(|byte| byte.is_ascii_hexdigit())
+    d2b_contracts::v3::is_canonical_digest(value)
 }
 
 fn read_anchored_file(path: &Path) -> Result<Vec<u8>, ZoneStoreError> {

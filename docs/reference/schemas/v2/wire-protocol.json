@@ -787,29 +787,66 @@
         }
       }
     },
-    "AuditEntry": {
+    "AuditExportCursor": {
+      "description": "Opaque page position for typed broker audit export.",
       "type": "object",
       "required": [
-        "action",
-        "result",
-        "scope",
-        "timestamp"
+        "day",
+        "line"
       ],
       "properties": {
-        "action": {
+        "day": {
           "type": "string"
         },
-        "result": {
-          "type": "string"
+        "line": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
         },
-        "scope": {
-          "type": "string"
-        },
-        "timestamp": {
-          "type": "string"
+        "sequence": {
+          "description": "Sequence of the last emitted entry. This keeps page sequence numbers monotonic across restarts and continuation requests.",
+          "default": 0,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
         }
       },
       "additionalProperties": false
+    },
+    "AuditExportEntry": {
+      "description": "One typed audit export entry. Exactly one of `record` and `error` is populated by the broker.",
+      "type": "object",
+      "required": [
+        "sequence"
+      ],
+      "properties": {
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AuditExportErrorCode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "record": true,
+        "sequence": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "AuditExportErrorCode": {
+      "description": "Closed export failure classes.",
+      "type": "string",
+      "enum": [
+        "hash-break",
+        "record-invalid",
+        "read-failed"
+      ]
     },
     "AuditFormat": {
       "type": "string",
@@ -821,6 +858,17 @@
     "AuditRequest": {
       "type": "object",
       "properties": {
+        "cursor": {
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AuditExportCursor"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "filter": {
           "anyOf": [
             {
@@ -839,6 +887,12 @@
             }
           ]
         },
+        "limit": {
+          "default": 256,
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
         "since": {
           "type": [
             "string",
@@ -851,14 +905,31 @@
     "AuditResponse": {
       "type": "object",
       "required": [
+        "complete",
         "entries"
       ],
       "properties": {
+        "complete": {
+          "description": "Protocol v5 requires an explicit completion marker.",
+          "type": "boolean"
+        },
         "entries": {
+          "description": "Typed broker audit entries. The public daemon page deliberately shares the broker entry shape so pagination does not lose sequence or export error information.",
           "type": "array",
           "items": {
-            "$ref": "#/definitions/AuditEntry"
+            "$ref": "#/definitions/AuditExportEntry"
           }
+        },
+        "nextCursor": {
+          "description": "Omitted only when this is the final page.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AuditExportCursor"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "additionalProperties": false
@@ -867,6 +938,24 @@
       "type": "object",
       "properties": {
         "env": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "operation": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "outcome": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "role": {
           "type": [
             "string",
             "null"
@@ -1047,6 +1136,29 @@
             "null"
           ]
         },
+        "outcome": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "role": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "severity": {
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/BrokerAuditSeverity"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "vm": {
           "type": [
             "string",
@@ -1055,6 +1167,16 @@
         }
       },
       "additionalProperties": false
+    },
+    "BrokerAuditSeverity": {
+      "description": "Closed severity predicate for broker audit export.",
+      "type": "string",
+      "enum": [
+        "info",
+        "warning",
+        "error",
+        "denied"
+      ]
     },
     "BrokerErrorResponse": {
       "description": "Typed broker error envelope for the real wire. Mirrors the bootstrap `BrokerResponse::Error` struct variant fields so the audit pipeline + daemon-side error propagation stay shape-compatible across the dispatcher transition.",
@@ -1798,6 +1920,25 @@
             },
             "payload": {
               "$ref": "#/definitions/PrepareDirRequest"
+            }
+          }
+        },
+        {
+          "description": "Adopt a known legacy swtpm state through the broker-owned journal.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "MigrateLegacySwtpmState"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/MigrateLegacySwtpmStateRequest"
             }
           }
         },
@@ -2949,6 +3090,24 @@
             },
             "payload": {
               "$ref": "#/definitions/ReconcileStorageScopeResponse"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "MigrateLegacySwtpmState"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/MigrateLegacySwtpmStateResponse"
             }
           }
         },
@@ -5450,6 +5609,17 @@
     "ExportBrokerAuditRequest": {
       "type": "object",
       "properties": {
+        "cursor": {
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AuditExportCursor"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "filter": {
           "anyOf": [
             {
@@ -5459,6 +5629,12 @@
               "type": "null"
             }
           ]
+        },
+        "limit": {
+          "default": 256,
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
         },
         "since": {
           "type": [
@@ -5472,14 +5648,28 @@
     "ExportBrokerAuditResponse": {
       "type": "object",
       "required": [
-        "lines"
+        "complete",
+        "entries"
       ],
       "properties": {
-        "lines": {
+        "complete": {
+          "type": "boolean"
+        },
+        "entries": {
           "type": "array",
           "items": {
-            "type": "string"
+            "$ref": "#/definitions/AuditExportEntry"
           }
+        },
+        "nextCursor": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AuditExportCursor"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "additionalProperties": false
@@ -6795,6 +6985,18 @@
       },
       "additionalProperties": false
     },
+    "LegacySwtpmMigrationOutcome": {
+      "description": "Closed migration outcome returned by the broker.",
+      "type": "string",
+      "enum": [
+        "migrated",
+        "already-migrated",
+        "not-applicable",
+        "pending",
+        "failed",
+        "ambiguous"
+      ]
+    },
     "LevelPercent": {
       "description": "Audio level in the range 0..=100.",
       "type": "integer",
@@ -6957,6 +7159,43 @@
           "items": {
             "$ref": "#/definitions/ListEntry"
           }
+        }
+      },
+      "additionalProperties": false
+    },
+    "MigrateLegacySwtpmStateRequest": {
+      "description": "Opaque request for one trusted legacy swtpm migration.",
+      "type": "object",
+      "required": [
+        "bundleLegacySwtpmIntentRef",
+        "vmId"
+      ],
+      "properties": {
+        "bundleLegacySwtpmIntentRef": {
+          "type": "string"
+        },
+        "tracingSpanId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "vmId": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "MigrateLegacySwtpmStateResponse": {
+      "description": "Result of one broker-owned legacy swtpm migration attempt.",
+      "type": "object",
+      "required": [
+        "outcome"
+      ],
+      "properties": {
+        "outcome": {
+          "$ref": "#/definitions/LegacySwtpmMigrationOutcome"
         }
       },
       "additionalProperties": false

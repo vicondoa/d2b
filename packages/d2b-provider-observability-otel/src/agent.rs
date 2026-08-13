@@ -8,7 +8,7 @@ use d2b_contracts::v3::{
     zone_routing::{ZoneLabelId, ZonePath},
 };
 use d2b_provider_toolkit::{ProviderAgentAuditEvent as ToolkitAuditEvent, ProviderAgentAuditLog};
-use serde::Serialize;
+use serde::{Serialize, Serializer, ser::SerializeStruct};
 
 /// Closed Provider-agent errors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -55,7 +55,7 @@ impl ProviderAgentAuditOutcome {
 }
 
 /// One non-authoritative Provider agent diagnostic event.
-#[derive(Clone, Serialize)]
+#[derive(Clone)]
 pub struct ProviderAgentAuditEvent {
     zone: String,
     source: String,
@@ -66,6 +66,38 @@ pub struct ProviderAgentAuditEvent {
     provider: Option<String>,
     domain: Option<String>,
     outcome: ProviderAgentAuditOutcome,
+}
+
+impl Serialize for ProviderAgentAuditEvent {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut output = serializer.serialize_struct("ProviderAgentAuditEvent", 9)?;
+        output.serialize_field("zone", &redact_identity(&self.zone))?;
+        output.serialize_field("source", &redact_identity(&self.source))?;
+        output.serialize_field("record_class", self.record_class)?;
+        output.serialize_field("event", self.event.as_str())?;
+        output.serialize_field("transport_class", self.transport_class)?;
+        output.serialize_field("authz_decision", &self.authz_decision)?;
+        output.serialize_field("provider", &self.provider)?;
+        output.serialize_field("domain", &self.domain)?;
+        output.serialize_field("outcome", &self.outcome)?;
+        output.end()
+    }
+}
+
+fn redact_identity(value: &str) -> String {
+    if value.strip_prefix("sha256:").is_some_and(|hex| {
+        hex.len() == 64
+            && hex
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+    }) {
+        value.to_owned()
+    } else {
+        d2b_contracts::v3::canonical_digest("d2b:telemetry-redaction:v1", value.as_bytes())
+    }
 }
 
 impl core::fmt::Debug for ProviderAgentAuditEvent {
@@ -162,7 +194,6 @@ impl ProviderAgentAuditEvent {
 /// The toolkit owns the event shape and bounded ring. This agent only adapts
 /// the Provider's session lifecycle inputs to that admitted boundary; it does
 /// not construct authoritative audit records or hold session authority.
-#[derive(Debug)]
 pub struct ProviderAgentProcess {
     zone: ZonePath,
     provider_ref: ResourceRef,
@@ -171,6 +202,16 @@ pub struct ProviderAgentProcess {
     zone_name: String,
     source_name: String,
     capacity: usize,
+}
+
+impl core::fmt::Debug for ProviderAgentProcess {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("ProviderAgentProcess")
+            .field("event_count", &self.events.len())
+            .field("capacity", &self.capacity)
+            .finish()
+    }
 }
 
 impl ProviderAgentProcess {
@@ -214,8 +255,8 @@ impl ProviderAgentProcess {
         let event = event.into();
         let authz_decision = authz_decision.into();
         let outcome = outcome.into();
-        let method = parse_token(event.clone())?;
-        let authz_decision = parse_token(authz_decision.clone())?;
+        let method = parse_closed_token(event.clone(), &["connect", "reconnect", "close"])?;
+        let authz_decision = parse_closed_token(authz_decision.clone(), &["allowed", "denied"])?;
         let outcome = parse_outcome(outcome)?;
         self.push(
             method,
@@ -242,9 +283,12 @@ impl ProviderAgentProcess {
         let provider = provider.into();
         let domain = domain.into();
         let outcome = outcome.into();
-        let method = parse_token(event.clone())?;
-        let provider = parse_token(provider.clone())?;
-        let domain = parse_token(domain.clone())?;
+        let method = parse_closed_token(event.clone(), &["launch", "stop", "adopt", "quarantine"])?;
+        let provider = parse_closed_token(
+            provider.clone(),
+            &["minijail", "systemd", "system-core-user"],
+        )?;
+        let domain = parse_closed_token(domain.clone(), &["system", "user"])?;
         let outcome = parse_outcome(outcome)?;
         self.push(
             method,
@@ -302,6 +346,17 @@ fn parse_token(value: impl Into<String>) -> Result<BoundedToken, ProviderAgentEr
     BoundedToken::parse(value).map_err(|_| ProviderAgentError::InvalidInput)
 }
 
+fn parse_closed_token(
+    value: impl Into<String>,
+    allowed: &[&str],
+) -> Result<BoundedToken, ProviderAgentError> {
+    let token = parse_token(value)?;
+    allowed
+        .contains(&token.as_str())
+        .then_some(token)
+        .ok_or(ProviderAgentError::InvalidInput)
+}
+
 fn parse_outcome(
     value: impl Into<String>,
 ) -> Result<ProviderAgentAuditOutcome, ProviderAgentError> {
@@ -332,6 +387,9 @@ mod tests {
                 .unwrap()
                 .contains("session-connect")
         );
+        let rendered = serde_json::to_string(&event).unwrap();
+        assert!(!rendered.contains("work"));
+        assert!(!format!("{event:?}").contains("work"));
     }
 
     #[test]

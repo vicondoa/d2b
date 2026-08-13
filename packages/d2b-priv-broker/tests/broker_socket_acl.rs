@@ -8,6 +8,7 @@ use common::TestBroker;
 fn socket_acl_rejects_non_d2bd_peers_and_accepts_daemon() {
     let broker = TestBroker::spawn("broker-socket-acl-");
     assert_eq!(broker.socket_mode(), 0o660, "expected socket mode 660");
+    let caller_gid = broker.caller_gid();
 
     let launcher_uid = 2001;
     let admin_uid = 2002;
@@ -42,4 +43,8 @@ fn socket_acl_rejects_non_d2bd_peers_and_accepts_daemon() {
             "missing denied audit row for uid {denied_uid}:\n{audit}"
         );
     }
+    assert!(
+        audit.contains(&format!("\"caller_gid\":{caller_gid}")),
+        "missing authenticated caller gid in denied audit rows:\n{audit}"
+    );
 }

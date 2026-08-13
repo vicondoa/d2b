@@ -523,7 +523,7 @@ mod tests {
 
     #[test]
     fn only_one_quota_authority_is_admitted_per_zone() {
-        let mut index = HostGlobalAuthorityIndex::default();
+        let mut index = HostGlobalAuthorityIndex::new_for_tests_ready();
         QuotaAuthority::admit(
             &mut index,
             uid("123e4567-e89b-42d3-a456-426614174000"),
@@ -543,7 +543,7 @@ mod tests {
 
     #[test]
     fn hard_quota_rejects_before_mutation_and_soft_quota_warns() {
-        let mut hard_index = HostGlobalAuthorityIndex::default();
+        let mut hard_index = HostGlobalAuthorityIndex::new_for_tests_ready();
         let mut hard = QuotaAuthority::admit(
             &mut hard_index,
             uid("123e4567-e89b-42d3-a456-426614174000"),
@@ -569,7 +569,7 @@ mod tests {
         );
         assert_eq!(hard.status().unwrap().used_resources(), 1);
 
-        let mut soft_index = HostGlobalAuthorityIndex::default();
+        let mut soft_index = HostGlobalAuthorityIndex::new_for_tests_ready();
         let mut soft = QuotaAuthority::admit(
             &mut soft_index,
             uid("323e4567-e89b-42d3-a456-426614174002"),
@@ -599,7 +599,7 @@ mod tests {
 
     #[test]
     fn quota_drain_never_reassigns_dependents_or_clears_early() {
-        let mut index = HostGlobalAuthorityIndex::default();
+        let mut index = HostGlobalAuthorityIndex::new_for_tests_ready();
         let mut quota = QuotaAuthority::admit(
             &mut index,
             uid("523e4567-e89b-42d3-a456-426614174004"),
@@ -640,7 +640,7 @@ mod tests {
             QuotaEnforcementPolicy::Hard,
         )
         .unwrap();
-        let mut index = HostGlobalAuthorityIndex::default();
+        let mut index = HostGlobalAuthorityIndex::new_for_tests_ready();
         let mut quota = QuotaAuthority::admit(
             &mut index,
             uid("723e4567-e89b-42d3-a456-426614174006"),

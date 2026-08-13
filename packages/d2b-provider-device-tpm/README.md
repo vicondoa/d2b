@@ -45,11 +45,20 @@ TPM ResourceTypes.
 ## Controllers / services / workers / binaries
 
 `TpmController` owns the lifecycle order:
-state-directory preparation and marker validation, mandatory flush, and
-long-lived swtpm start. `TpmEffectPort` is the only effect boundary. The
-Provider supplies opaque `FlushLaunchTicket` and
+the Core adapter's legacy migration status, state-directory preparation and
+marker validation, mandatory flush, and long-lived swtpm start.
+`TpmEffectPort` is the only effect boundary. The Provider only asks whether
+legacy adoption is required and receives the closed migration outcome; it
+never receives or names Core's migration receipt. The Core adapter must return
+`Migrated`, `AlreadyMigrated`, or `NotApplicable` before state preparation can
+begin. `Pending`, `Failed`, and `Ambiguous` outcomes keep the Device non-ready
+and never initialize replacement state. The Provider supplies opaque
+`FlushLaunchTicket` and
 `SwtpmStartLaunchTicket` values to Core; it does not construct a broker
-request.
+request. The broker migration operation now owns the anchored inventory,
+journal, marker, and byte-preserving replay. A known legacy row is admitted
+only through the Core-owned migration-required adapter; a proven
+never-provisioned row skips broker migration.
 
 The signed component supplies the swtpm and swtpm-ioctl binaries. A worker is
 Ready only after preparation, flush, and swtpm start all succeed. Finalization

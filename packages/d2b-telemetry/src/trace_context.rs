@@ -1,18 +1,32 @@
 //! Bounded trace context shared by the v3 telemetry and audit surfaces.
 
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, ser::SerializeStruct};
 
 /// Maximum length of a trace or span identifier.
 pub const MAX_TRACE_FIELD_LEN: usize = 64;
+/// Domain used for every exported trace and span identity.
+pub const TRACE_CONTEXT_DIGEST_DOMAIN: &str = "d2b:telemetry-trace-context:v1";
 
 /// An opaque, bounded trace context.
 ///
 /// The fields are private so every deserialization path goes through the same
 /// validation as the constructor.
-#[derive(Clone, PartialEq, Eq, Serialize)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct TraceContext {
     trace_id: String,
     span_id: String,
+}
+
+impl Serialize for TraceContext {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut state = serializer.serialize_struct("TraceContext", 2)?;
+        state.serialize_field("trace_id", &self.exported_trace_id())?;
+        state.serialize_field("span_id", &self.exported_span_id())?;
+        state.end()
+    }
 }
 
 impl TraceContext {
@@ -31,6 +45,17 @@ impl TraceContext {
     /// Borrow the span identifier.
     pub fn span_id(&self) -> &str {
         &self.span_id
+    }
+
+    /// Return the canonical trace identity used by telemetry and audit
+    /// exporters.
+    pub fn exported_trace_id(&self) -> String {
+        canonical_export_id(&self.trace_id)
+    }
+
+    /// Return the canonical span identity used by telemetry exporters.
+    pub fn exported_span_id(&self) -> String {
+        canonical_export_id(&self.span_id)
     }
 
     /// Derive a child span while preserving the validated trace identifier.
@@ -69,6 +94,15 @@ fn valid_field(value: &str) -> bool {
         && value.bytes().all(|byte| byte.is_ascii_graphic())
 }
 
+/// Canonicalize one validated trace-context field for an external sink.
+pub fn canonical_export_id(value: &str) -> String {
+    if d2b_contracts::v3::is_canonical_digest(value) {
+        value.to_owned()
+    } else {
+        d2b_contracts::v3::canonical_digest(TRACE_CONTEXT_DIGEST_DOMAIN, value.as_bytes())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -102,5 +136,18 @@ mod tests {
         assert_eq!(child.trace_id(), "trace");
         assert_eq!(child.span_id(), "child");
         assert!(parent.child_span("span id").is_none());
+    }
+
+    #[test]
+    fn exported_ids_share_one_canonical_digest_domain() {
+        let context = TraceContext::new("trace", "span").unwrap();
+        assert_eq!(
+            context.exported_trace_id(),
+            d2b_contracts::v3::canonical_digest(TRACE_CONTEXT_DIGEST_DOMAIN, b"trace")
+        );
+        assert_eq!(
+            context.exported_span_id(),
+            d2b_contracts::v3::canonical_digest(TRACE_CONTEXT_DIGEST_DOMAIN, b"span")
+        );
     }
 }

@@ -567,10 +567,11 @@ fn broker_backend_uses_the_production_spawn_wire_and_pidfd_handoff() {
         template_identity: [0x22; 32],
         generation: 1,
     };
-    let backend = BrokerProcessBackend::with_socket(
+    let backend = BrokerProcessBackend::with_socket_and_role(
         FixedBrokerResolver { intent },
         &socket_path,
         Duration::from_secs(2),
+        d2b_contracts::broker_wire::BrokerCallerRole::AdminUid { uid: 1000 },
     );
     let provider = MinijailProcessProvider::new(ProviderSupervisor::new(backend));
     let ticket = fixtures::ticket_builder()

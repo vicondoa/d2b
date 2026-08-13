@@ -28,14 +28,14 @@ const EXPECTED_METRICS: &[ExpectedMetric] = &[
     ExpectedMetric {
         name: "d2b_daemon_vm_state",
         kind: "Gauge",
-        labels: &["vm", "state"],
+        labels: &["state"],
         buckets_expr: "&[]",
         bucket_values: None,
     },
     ExpectedMetric {
         name: "d2b_daemon_vm_start_duration_seconds",
         kind: "Histogram",
-        labels: &["vm", "outcome"],
+        labels: &["outcome"],
         buckets_expr: "VM_START_BUCKETS_SECONDS",
         bucket_values: Some(&[0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 30.0, 60.0, 120.0, 300.0]),
     },
@@ -63,14 +63,14 @@ const EXPECTED_METRICS: &[ExpectedMetric] = &[
     ExpectedMetric {
         name: "d2b_daemon_vm_shutdown_total",
         kind: "Counter",
-        labels: &["vm", "vmm", "outcome"],
+        labels: &["vmm", "outcome"],
         buckets_expr: "&[]",
         bucket_values: None,
     },
     ExpectedMetric {
         name: "d2b_daemon_vm_shutdown_duration_seconds",
         kind: "Histogram",
-        labels: &["vm", "vmm", "outcome"],
+        labels: &["vmm", "outcome"],
         buckets_expr: "VM_SHUTDOWN_BUCKETS_SECONDS",
         bucket_values: Some(&[
             0.5, 1.0, 2.0, 5.0, 10.0, 30.0, 60.0, 90.0, 120.0, 300.0, 600.0,
@@ -88,21 +88,21 @@ const EXPECTED_METRICS: &[ExpectedMetric] = &[
     ExpectedMetric {
         name: "d2b_daemon_vm_degraded",
         kind: "Gauge",
-        labels: &["vm", "reason"],
+        labels: &["reason"],
         buckets_expr: "&[]",
         bucket_values: None,
     },
     ExpectedMetric {
         name: "d2b_daemon_ownership_drift_total",
         kind: "Counter",
-        labels: &["vm"],
+        labels: &[],
         buckets_expr: "&[]",
         bucket_values: None,
     },
     ExpectedMetric {
         name: "d2b_daemon_ssh_host_key_drift_total",
         kind: "Counter",
-        labels: &["vm"],
+        labels: &[],
         buckets_expr: "&[]",
         bucket_values: None,
     },

@@ -171,21 +171,21 @@ impl ApiMetrics {
         self.emit_value(
             ApiMetric::RequestTotal,
             labels.clone(),
-            serde_json::json!({
-                "count": 1,
-                "duration_seconds": duration_seconds,
-                "trace_id": trace.map(TraceContext::trace_id),
-            }),
+            serde_json::json!(1.0),
         )?;
         let duration_labels = labels
             .into_iter()
             .filter(|(key, _)| key != "outcome")
             .collect();
-        self.emit_value(
+        let outcome = self.emit_value(
             ApiMetric::RequestDuration,
             duration_labels,
             serde_json::json!(duration_seconds),
-        )
+        )?;
+        if let Some(trace) = trace {
+            self.emit_trace_context(trace)?;
+        }
+        Ok(outcome)
     }
 
     /// Emit one request metric without a trace context.
@@ -234,6 +234,21 @@ impl ApiMetrics {
         .map_err(|_| MetricPolicyError::DescriptorMalformed)?;
         self.emitter
             .emit(Signal::Metric, &frame)
+            .map_err(|_| MetricPolicyError::DescriptorMalformed)
+    }
+
+    fn emit_trace_context(&self, trace: &TraceContext) -> Result<(), MetricPolicyError> {
+        let frame = encode_frame(
+            Signal::Trace,
+            &serde_json::json!({
+                "trace_id": trace.exported_trace_id(),
+                "span_id": trace.exported_span_id(),
+            }),
+        )
+        .map_err(|_| MetricPolicyError::DescriptorMalformed)?;
+        self.emitter
+            .emit(Signal::Trace, &frame)
+            .map(|_| ())
             .map_err(|_| MetricPolicyError::DescriptorMalformed)
     }
 }

@@ -6,9 +6,25 @@
   "properties": {
     "accessPolicy": {},
     "backingAuthority": {},
-    "backingDeviceRef": {},
+    "backingDeviceRef": {
+      "pattern": "^(?:Device)/[a-z][a-z0-9-]{0,62}$",
+      "type": "string",
+      "x-d2b-allowed-ref-types": [
+        "Device"
+      ],
+      "x-d2b-reference-kind": "ResourceRef",
+      "x-d2b-reference-scope": "same-zone"
+    },
     "mode": {},
-    "providerRef": {},
+    "providerRef": {
+      "pattern": "^Provider/[a-z][a-z0-9-]{0,62}$",
+      "type": "string",
+      "x-d2b-allowed-ref-types": [
+        "Provider"
+      ],
+      "x-d2b-reference-kind": "ResourceRef",
+      "x-d2b-reference-scope": "same-zone"
+    },
     "sourceSchemaFingerprint": {},
     "updatePolicy": {}
   },

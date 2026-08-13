@@ -1043,8 +1043,8 @@ impl TypedError {
 
     pub fn message(&self) -> String {
         match self {
-            Self::AuthzNotALauncher { peer_uid } => {
-                format!("peer uid {peer_uid} is not in d2b.site.launcherUsers")
+            Self::AuthzNotALauncher { .. } => {
+                "the authenticated peer is not authorized for local lifecycle access".to_owned()
             }
             Self::AuthzNotAdmin { verb } => {
                 format!("{verb} requires an admin role from d2b.site.adminUsers")
