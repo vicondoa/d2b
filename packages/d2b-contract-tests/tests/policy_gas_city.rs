@@ -419,10 +419,7 @@ fn validate_role_routes(matrix: &str, city: &str, launcher: &str) -> Result<(), 
         return Err("authenticated channel variables must not use workspace.env".to_owned());
     }
     let common = BTreeMap::from([
-        (
-            "COPILOT_CUSTOM_INSTRUCTIONS_DIRS".to_owned(),
-            String::new(),
-        ),
+        ("COPILOT_CUSTOM_INSTRUCTIONS_DIRS".to_owned(), String::new()),
         (
             "GC_AGENT_LAUNCHER_SOCKET".to_owned(),
             "$GC_AGENT_LAUNCHER_SOCKET".to_owned(),
@@ -448,10 +445,7 @@ fn validate_role_routes(matrix: &str, city: &str, launcher: &str) -> Result<(), 
             "GC_REQUIRE_READINESS".to_owned(),
             "$GC_REQUIRE_READINESS".to_owned(),
         ),
-        (
-            "GC_STATE_SCHEMA".to_owned(),
-            "$GC_STATE_SCHEMA".to_owned(),
-        ),
+        ("GC_STATE_SCHEMA".to_owned(), "$GC_STATE_SCHEMA".to_owned()),
         (
             "GC_TERMINAL_STATE_ROOT".to_owned(),
             "$GC_TERMINAL_STATE_ROOT".to_owned(),
