@@ -1004,6 +1004,7 @@ dependencies = [
 name = "d2b-contracts"
 version = "0.0.0-bootstrap"
 dependencies = [
+ "async-trait",
  "d2b-core",
  "d2b-realm-core",
  "protobuf",
@@ -1335,14 +1336,41 @@ dependencies = [
 [[package]]
 name = "d2b-provider-runtime-azure-container-apps"
 version = "0.0.0-bootstrap"
+dependencies = [
+ "async-trait",
+ "d2b-contracts",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+]
 
 [[package]]
 name = "d2b-provider-runtime-azure-virtual-machine"
 version = "0.0.0-bootstrap"
+dependencies = [
+ "async-trait",
+ "base64",
+ "d2b-contracts",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "zeroize",
+]
 
 [[package]]
 name = "d2b-provider-runtime-cloud-hypervisor"
 version = "0.0.0-bootstrap"
+dependencies = [
+ "async-trait",
+ "d2b-contracts",
+ "d2b-process-conformance",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+]
 
 [[package]]
 name = "d2b-provider-runtime-qemu-media"
@@ -1412,6 +1440,19 @@ dependencies = [
 [[package]]
 name = "d2b-provider-transport-azure-relay"
 version = "0.0.0-bootstrap"
+dependencies = [
+ "async-trait",
+ "base64",
+ "d2b-contracts",
+ "futures-util",
+ "hmac",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "urlencoding",
+ "zeroize",
+]
 
 [[package]]
 name = "d2b-provider-transport-unix"

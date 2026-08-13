@@ -454,6 +454,10 @@ d2b_contracts	impl core::clone::Clone for d2b_contracts::broker_wire::DeletePers
 d2b_contracts	impl core::clone::Clone for d2b_contracts::generation_bundle::BundleMetadata
 d2b_contracts	impl core::clone::Clone for d2b_contracts::generation_bundle::BundleResource
 d2b_contracts	impl core::clone::Clone for d2b_contracts::generation_bundle::ZoneBundle
+d2b_contracts	impl core::clone::Clone for d2b_contracts::provider_effects::aca::AcaDesiredSandbox
+d2b_contracts	impl core::clone::Clone for d2b_contracts::provider_effects::aca::AcaProviderConfig
+d2b_contracts	impl core::clone::Clone for d2b_contracts::provider_effects::aca::AcaResourceBinding
+d2b_contracts	impl core::clone::Clone for d2b_contracts::provider_effects::aca::AcaWorkloadQuery
 d2b_contracts	impl core::clone::Clone for d2b_contracts::v3::credential::CredentialAuthorization
 d2b_contracts	impl core::clone::Clone for d2b_contracts::v3::credential::CredentialRequest
 d2b_contracts	impl core::clone::Clone for d2b_contracts::v3::credential::CredentialResponse
@@ -530,6 +534,10 @@ d2b_contracts	impl core::cmp::Eq for d2b_contracts::broker_wire::DeletePersisten
 d2b_contracts	impl core::cmp::Eq for d2b_contracts::generation_bundle::BundleMetadata
 d2b_contracts	impl core::cmp::Eq for d2b_contracts::generation_bundle::BundleResource
 d2b_contracts	impl core::cmp::Eq for d2b_contracts::generation_bundle::ZoneBundle
+d2b_contracts	impl core::cmp::Eq for d2b_contracts::provider_effects::aca::AcaDesiredSandbox
+d2b_contracts	impl core::cmp::Eq for d2b_contracts::provider_effects::aca::AcaProviderConfig
+d2b_contracts	impl core::cmp::Eq for d2b_contracts::provider_effects::aca::AcaResourceBinding
+d2b_contracts	impl core::cmp::Eq for d2b_contracts::provider_effects::aca::AcaWorkloadQuery
 d2b_contracts	impl core::cmp::Eq for d2b_contracts::v3::component_session::BootstrapIdentityBinding
 d2b_contracts	impl core::cmp::Eq for d2b_contracts::v3::component_session::BootstrapPskBinding
 d2b_contracts	impl core::cmp::Eq for d2b_contracts::v3::credential::CredentialAuthorization
@@ -610,6 +618,10 @@ d2b_contracts	impl core::cmp::PartialEq for d2b_contracts::broker_wire::DeletePe
 d2b_contracts	impl core::cmp::PartialEq for d2b_contracts::generation_bundle::BundleMetadata
 d2b_contracts	impl core::cmp::PartialEq for d2b_contracts::generation_bundle::BundleResource
 d2b_contracts	impl core::cmp::PartialEq for d2b_contracts::generation_bundle::ZoneBundle
+d2b_contracts	impl core::cmp::PartialEq for d2b_contracts::provider_effects::aca::AcaDesiredSandbox
+d2b_contracts	impl core::cmp::PartialEq for d2b_contracts::provider_effects::aca::AcaProviderConfig
+d2b_contracts	impl core::cmp::PartialEq for d2b_contracts::provider_effects::aca::AcaResourceBinding
+d2b_contracts	impl core::cmp::PartialEq for d2b_contracts::provider_effects::aca::AcaWorkloadQuery
 d2b_contracts	impl core::cmp::PartialEq for d2b_contracts::v3::component_session::BootstrapIdentityBinding
 d2b_contracts	impl core::cmp::PartialEq for d2b_contracts::v3::component_session::BootstrapPskBinding
 d2b_contracts	impl core::cmp::PartialEq for d2b_contracts::v3::credential::CredentialAuthorization
@@ -693,6 +705,10 @@ d2b_contracts	impl core::fmt::Debug for d2b_contracts::broker_wire::DeletePersis
 d2b_contracts	impl core::fmt::Debug for d2b_contracts::generation_bundle::BundleMetadata
 d2b_contracts	impl core::fmt::Debug for d2b_contracts::generation_bundle::BundleResource
 d2b_contracts	impl core::fmt::Debug for d2b_contracts::generation_bundle::ZoneBundle
+d2b_contracts	impl core::fmt::Debug for d2b_contracts::provider_effects::aca::AcaDesiredSandbox
+d2b_contracts	impl core::fmt::Debug for d2b_contracts::provider_effects::aca::AcaProviderConfig
+d2b_contracts	impl core::fmt::Debug for d2b_contracts::provider_effects::aca::AcaResourceBinding
+d2b_contracts	impl core::fmt::Debug for d2b_contracts::provider_effects::aca::AcaWorkloadQuery
 d2b_contracts	impl core::fmt::Debug for d2b_contracts::v3::component_session::BootstrapIdentityBinding
 d2b_contracts	impl core::fmt::Debug for d2b_contracts::v3::component_session::BootstrapPskBinding
 d2b_contracts	impl core::fmt::Debug for d2b_contracts::v3::credential::CredentialAuthorization
@@ -777,6 +793,10 @@ d2b_contracts	impl core::marker::Freeze for d2b_contracts::broker_wire::DeletePe
 d2b_contracts	impl core::marker::Freeze for d2b_contracts::generation_bundle::BundleMetadata
 d2b_contracts	impl core::marker::Freeze for d2b_contracts::generation_bundle::BundleResource
 d2b_contracts	impl core::marker::Freeze for d2b_contracts::generation_bundle::ZoneBundle
+d2b_contracts	impl core::marker::Freeze for d2b_contracts::provider_effects::aca::AcaDesiredSandbox
+d2b_contracts	impl core::marker::Freeze for d2b_contracts::provider_effects::aca::AcaProviderConfig
+d2b_contracts	impl core::marker::Freeze for d2b_contracts::provider_effects::aca::AcaResourceBinding
+d2b_contracts	impl core::marker::Freeze for d2b_contracts::provider_effects::aca::AcaWorkloadQuery
 d2b_contracts	impl core::marker::Freeze for d2b_contracts::v3::component_session::BootstrapIdentityBinding
 d2b_contracts	impl core::marker::Freeze for d2b_contracts::v3::component_session::BootstrapPskBinding
 d2b_contracts	impl core::marker::Freeze for d2b_contracts::v3::credential::CredentialAuthorization
@@ -855,6 +875,10 @@ d2b_contracts	impl core::marker::Send for d2b_contracts::broker_wire::DeletePers
 d2b_contracts	impl core::marker::Send for d2b_contracts::generation_bundle::BundleMetadata
 d2b_contracts	impl core::marker::Send for d2b_contracts::generation_bundle::BundleResource
 d2b_contracts	impl core::marker::Send for d2b_contracts::generation_bundle::ZoneBundle
+d2b_contracts	impl core::marker::Send for d2b_contracts::provider_effects::aca::AcaDesiredSandbox
+d2b_contracts	impl core::marker::Send for d2b_contracts::provider_effects::aca::AcaProviderConfig
+d2b_contracts	impl core::marker::Send for d2b_contracts::provider_effects::aca::AcaResourceBinding
+d2b_contracts	impl core::marker::Send for d2b_contracts::provider_effects::aca::AcaWorkloadQuery
 d2b_contracts	impl core::marker::Send for d2b_contracts::v3::component_session::BootstrapIdentityBinding
 d2b_contracts	impl core::marker::Send for d2b_contracts::v3::component_session::BootstrapPskBinding
 d2b_contracts	impl core::marker::Send for d2b_contracts::v3::credential::CredentialAuthorization
@@ -934,6 +958,10 @@ d2b_contracts	impl core::marker::StructuralPartialEq for d2b_contracts::broker_w
 d2b_contracts	impl core::marker::StructuralPartialEq for d2b_contracts::generation_bundle::BundleMetadata
 d2b_contracts	impl core::marker::StructuralPartialEq for d2b_contracts::generation_bundle::BundleResource
 d2b_contracts	impl core::marker::StructuralPartialEq for d2b_contracts::generation_bundle::ZoneBundle
+d2b_contracts	impl core::marker::StructuralPartialEq for d2b_contracts::provider_effects::aca::AcaDesiredSandbox
+d2b_contracts	impl core::marker::StructuralPartialEq for d2b_contracts::provider_effects::aca::AcaProviderConfig
+d2b_contracts	impl core::marker::StructuralPartialEq for d2b_contracts::provider_effects::aca::AcaResourceBinding
+d2b_contracts	impl core::marker::StructuralPartialEq for d2b_contracts::provider_effects::aca::AcaWorkloadQuery
 d2b_contracts	impl core::marker::StructuralPartialEq for d2b_contracts::v3::component_session::BootstrapIdentityBinding
 d2b_contracts	impl core::marker::StructuralPartialEq for d2b_contracts::v3::component_session::BootstrapPskBinding
 d2b_contracts	impl core::marker::StructuralPartialEq for d2b_contracts::v3::credential::CredentialAuthorization
@@ -1012,6 +1040,10 @@ d2b_contracts	impl core::marker::Sync for d2b_contracts::broker_wire::DeletePers
 d2b_contracts	impl core::marker::Sync for d2b_contracts::generation_bundle::BundleMetadata
 d2b_contracts	impl core::marker::Sync for d2b_contracts::generation_bundle::BundleResource
 d2b_contracts	impl core::marker::Sync for d2b_contracts::generation_bundle::ZoneBundle
+d2b_contracts	impl core::marker::Sync for d2b_contracts::provider_effects::aca::AcaDesiredSandbox
+d2b_contracts	impl core::marker::Sync for d2b_contracts::provider_effects::aca::AcaProviderConfig
+d2b_contracts	impl core::marker::Sync for d2b_contracts::provider_effects::aca::AcaResourceBinding
+d2b_contracts	impl core::marker::Sync for d2b_contracts::provider_effects::aca::AcaWorkloadQuery
 d2b_contracts	impl core::marker::Sync for d2b_contracts::v3::component_session::BootstrapIdentityBinding
 d2b_contracts	impl core::marker::Sync for d2b_contracts::v3::component_session::BootstrapPskBinding
 d2b_contracts	impl core::marker::Sync for d2b_contracts::v3::credential::CredentialAuthorization
@@ -1091,6 +1123,10 @@ d2b_contracts	impl core::marker::Unpin for d2b_contracts::broker_wire::DeletePer
 d2b_contracts	impl core::marker::Unpin for d2b_contracts::generation_bundle::BundleMetadata
 d2b_contracts	impl core::marker::Unpin for d2b_contracts::generation_bundle::BundleResource
 d2b_contracts	impl core::marker::Unpin for d2b_contracts::generation_bundle::ZoneBundle
+d2b_contracts	impl core::marker::Unpin for d2b_contracts::provider_effects::aca::AcaDesiredSandbox
+d2b_contracts	impl core::marker::Unpin for d2b_contracts::provider_effects::aca::AcaProviderConfig
+d2b_contracts	impl core::marker::Unpin for d2b_contracts::provider_effects::aca::AcaResourceBinding
+d2b_contracts	impl core::marker::Unpin for d2b_contracts::provider_effects::aca::AcaWorkloadQuery
 d2b_contracts	impl core::marker::Unpin for d2b_contracts::v3::component_session::BootstrapIdentityBinding
 d2b_contracts	impl core::marker::Unpin for d2b_contracts::v3::component_session::BootstrapPskBinding
 d2b_contracts	impl core::marker::Unpin for d2b_contracts::v3::credential::CredentialAuthorization
@@ -1170,6 +1206,10 @@ d2b_contracts	impl core::marker::UnsafeUnpin for d2b_contracts::broker_wire::Del
 d2b_contracts	impl core::marker::UnsafeUnpin for d2b_contracts::generation_bundle::BundleMetadata
 d2b_contracts	impl core::marker::UnsafeUnpin for d2b_contracts::generation_bundle::BundleResource
 d2b_contracts	impl core::marker::UnsafeUnpin for d2b_contracts::generation_bundle::ZoneBundle
+d2b_contracts	impl core::marker::UnsafeUnpin for d2b_contracts::provider_effects::aca::AcaDesiredSandbox
+d2b_contracts	impl core::marker::UnsafeUnpin for d2b_contracts::provider_effects::aca::AcaProviderConfig
+d2b_contracts	impl core::marker::UnsafeUnpin for d2b_contracts::provider_effects::aca::AcaResourceBinding
+d2b_contracts	impl core::marker::UnsafeUnpin for d2b_contracts::provider_effects::aca::AcaWorkloadQuery
 d2b_contracts	impl core::marker::UnsafeUnpin for d2b_contracts::v3::component_session::BootstrapIdentityBinding
 d2b_contracts	impl core::marker::UnsafeUnpin for d2b_contracts::v3::component_session::BootstrapPskBinding
 d2b_contracts	impl core::marker::UnsafeUnpin for d2b_contracts::v3::credential::CredentialAuthorization
@@ -1250,6 +1290,10 @@ d2b_contracts	impl core::panic::unwind_safe::RefUnwindSafe for d2b_contracts::br
 d2b_contracts	impl core::panic::unwind_safe::RefUnwindSafe for d2b_contracts::generation_bundle::BundleMetadata
 d2b_contracts	impl core::panic::unwind_safe::RefUnwindSafe for d2b_contracts::generation_bundle::BundleResource
 d2b_contracts	impl core::panic::unwind_safe::RefUnwindSafe for d2b_contracts::generation_bundle::ZoneBundle
+d2b_contracts	impl core::panic::unwind_safe::RefUnwindSafe for d2b_contracts::provider_effects::aca::AcaDesiredSandbox
+d2b_contracts	impl core::panic::unwind_safe::RefUnwindSafe for d2b_contracts::provider_effects::aca::AcaProviderConfig
+d2b_contracts	impl core::panic::unwind_safe::RefUnwindSafe for d2b_contracts::provider_effects::aca::AcaResourceBinding
+d2b_contracts	impl core::panic::unwind_safe::RefUnwindSafe for d2b_contracts::provider_effects::aca::AcaWorkloadQuery
 d2b_contracts	impl core::panic::unwind_safe::RefUnwindSafe for d2b_contracts::v3::component_session::BootstrapIdentityBinding
 d2b_contracts	impl core::panic::unwind_safe::RefUnwindSafe for d2b_contracts::v3::component_session::BootstrapPskBinding
 d2b_contracts	impl core::panic::unwind_safe::RefUnwindSafe for d2b_contracts::v3::credential::CredentialAuthorization
@@ -1329,6 +1373,10 @@ d2b_contracts	impl core::panic::unwind_safe::UnwindSafe for d2b_contracts::broke
 d2b_contracts	impl core::panic::unwind_safe::UnwindSafe for d2b_contracts::generation_bundle::BundleMetadata
 d2b_contracts	impl core::panic::unwind_safe::UnwindSafe for d2b_contracts::generation_bundle::BundleResource
 d2b_contracts	impl core::panic::unwind_safe::UnwindSafe for d2b_contracts::generation_bundle::ZoneBundle
+d2b_contracts	impl core::panic::unwind_safe::UnwindSafe for d2b_contracts::provider_effects::aca::AcaDesiredSandbox
+d2b_contracts	impl core::panic::unwind_safe::UnwindSafe for d2b_contracts::provider_effects::aca::AcaProviderConfig
+d2b_contracts	impl core::panic::unwind_safe::UnwindSafe for d2b_contracts::provider_effects::aca::AcaResourceBinding
+d2b_contracts	impl core::panic::unwind_safe::UnwindSafe for d2b_contracts::provider_effects::aca::AcaWorkloadQuery
 d2b_contracts	impl core::panic::unwind_safe::UnwindSafe for d2b_contracts::v3::component_session::BootstrapIdentityBinding
 d2b_contracts	impl core::panic::unwind_safe::UnwindSafe for d2b_contracts::v3::component_session::BootstrapPskBinding
 d2b_contracts	impl core::panic::unwind_safe::UnwindSafe for d2b_contracts::v3::credential::CredentialAuthorization
@@ -1407,6 +1455,7 @@ d2b_contracts	impl d2b_contracts::broker_wire::BrokerRequest
 d2b_contracts	impl d2b_contracts::generation_bundle::BundleMetadata
 d2b_contracts	impl d2b_contracts::generation_bundle::BundleResource
 d2b_contracts	impl d2b_contracts::generation_bundle::ZoneBundle
+d2b_contracts	impl d2b_contracts::provider_effects::aca::AcaProviderConfig
 d2b_contracts	impl d2b_contracts::v3::component_session::BootstrapIdentityBinding
 d2b_contracts	impl d2b_contracts::v3::component_session::BootstrapPskBinding
 d2b_contracts	impl d2b_contracts::v3::credential::CredentialAuthorization
@@ -1549,6 +1598,7 @@ d2b_contracts	impl serde_core::ser::Serialize for d2b_contracts::broker_wire::De
 d2b_contracts	impl serde_core::ser::Serialize for d2b_contracts::generation_bundle::BundleMetadata
 d2b_contracts	impl serde_core::ser::Serialize for d2b_contracts::generation_bundle::BundleResource
 d2b_contracts	impl serde_core::ser::Serialize for d2b_contracts::generation_bundle::ZoneBundle
+d2b_contracts	impl serde_core::ser::Serialize for d2b_contracts::provider_effects::aca::AcaProviderConfig
 d2b_contracts	impl serde_core::ser::Serialize for d2b_contracts::v3::component_session::BootstrapIdentityBinding
 d2b_contracts	impl serde_core::ser::Serialize for d2b_contracts::v3::component_session::BootstrapPskBinding
 d2b_contracts	impl serde_core::ser::Serialize for d2b_contracts::v3::credential::CredentialScope
@@ -1610,6 +1660,7 @@ d2b_contracts	impl<'de> serde_core::de::Deserialize<'de> for d2b_contracts::brok
 d2b_contracts	impl<'de> serde_core::de::Deserialize<'de> for d2b_contracts::generation_bundle::BundleMetadata
 d2b_contracts	impl<'de> serde_core::de::Deserialize<'de> for d2b_contracts::generation_bundle::BundleResource
 d2b_contracts	impl<'de> serde_core::de::Deserialize<'de> for d2b_contracts::generation_bundle::ZoneBundle
+d2b_contracts	impl<'de> serde_core::de::Deserialize<'de> for d2b_contracts::provider_effects::aca::AcaProviderConfig
 d2b_contracts	impl<'de> serde_core::de::Deserialize<'de> for d2b_contracts::v3::component_session::BootstrapIdentityBinding
 d2b_contracts	impl<'de> serde_core::de::Deserialize<'de> for d2b_contracts::v3::component_session::BootstrapPskBinding
 d2b_contracts	impl<'de> serde_core::de::Deserialize<'de> for d2b_contracts::v3::credential::CredentialScope
@@ -1678,6 +1729,10 @@ d2b_contracts	impl<T, U> core::convert::Into<U> for d2b_contracts::broker_wire::
 d2b_contracts	impl<T, U> core::convert::Into<U> for d2b_contracts::generation_bundle::BundleMetadata where U: core::convert::From<T>
 d2b_contracts	impl<T, U> core::convert::Into<U> for d2b_contracts::generation_bundle::BundleResource where U: core::convert::From<T>
 d2b_contracts	impl<T, U> core::convert::Into<U> for d2b_contracts::generation_bundle::ZoneBundle where U: core::convert::From<T>
+d2b_contracts	impl<T, U> core::convert::Into<U> for d2b_contracts::provider_effects::aca::AcaDesiredSandbox where U: core::convert::From<T>
+d2b_contracts	impl<T, U> core::convert::Into<U> for d2b_contracts::provider_effects::aca::AcaProviderConfig where U: core::convert::From<T>
+d2b_contracts	impl<T, U> core::convert::Into<U> for d2b_contracts::provider_effects::aca::AcaResourceBinding where U: core::convert::From<T>
+d2b_contracts	impl<T, U> core::convert::Into<U> for d2b_contracts::provider_effects::aca::AcaWorkloadQuery where U: core::convert::From<T>
 d2b_contracts	impl<T, U> core::convert::Into<U> for d2b_contracts::v3::component_session::BootstrapIdentityBinding where U: core::convert::From<T>
 d2b_contracts	impl<T, U> core::convert::Into<U> for d2b_contracts::v3::component_session::BootstrapPskBinding where U: core::convert::From<T>
 d2b_contracts	impl<T, U> core::convert::Into<U> for d2b_contracts::v3::credential::CredentialAuthorization where U: core::convert::From<T>
@@ -1758,6 +1813,10 @@ d2b_contracts	impl<T, U> core::convert::TryFrom<U> for d2b_contracts::broker_wir
 d2b_contracts	impl<T, U> core::convert::TryFrom<U> for d2b_contracts::generation_bundle::BundleMetadata where U: core::convert::Into<T>
 d2b_contracts	impl<T, U> core::convert::TryFrom<U> for d2b_contracts::generation_bundle::BundleResource where U: core::convert::Into<T>
 d2b_contracts	impl<T, U> core::convert::TryFrom<U> for d2b_contracts::generation_bundle::ZoneBundle where U: core::convert::Into<T>
+d2b_contracts	impl<T, U> core::convert::TryFrom<U> for d2b_contracts::provider_effects::aca::AcaDesiredSandbox where U: core::convert::Into<T>
+d2b_contracts	impl<T, U> core::convert::TryFrom<U> for d2b_contracts::provider_effects::aca::AcaProviderConfig where U: core::convert::Into<T>
+d2b_contracts	impl<T, U> core::convert::TryFrom<U> for d2b_contracts::provider_effects::aca::AcaResourceBinding where U: core::convert::Into<T>
+d2b_contracts	impl<T, U> core::convert::TryFrom<U> for d2b_contracts::provider_effects::aca::AcaWorkloadQuery where U: core::convert::Into<T>
 d2b_contracts	impl<T, U> core::convert::TryFrom<U> for d2b_contracts::v3::component_session::BootstrapIdentityBinding where U: core::convert::Into<T>
 d2b_contracts	impl<T, U> core::convert::TryFrom<U> for d2b_contracts::v3::component_session::BootstrapPskBinding where U: core::convert::Into<T>
 d2b_contracts	impl<T, U> core::convert::TryFrom<U> for d2b_contracts::v3::credential::CredentialAuthorization where U: core::convert::Into<T>
@@ -1838,6 +1897,10 @@ d2b_contracts	impl<T, U> core::convert::TryInto<U> for d2b_contracts::broker_wir
 d2b_contracts	impl<T, U> core::convert::TryInto<U> for d2b_contracts::generation_bundle::BundleMetadata where U: core::convert::TryFrom<T>
 d2b_contracts	impl<T, U> core::convert::TryInto<U> for d2b_contracts::generation_bundle::BundleResource where U: core::convert::TryFrom<T>
 d2b_contracts	impl<T, U> core::convert::TryInto<U> for d2b_contracts::generation_bundle::ZoneBundle where U: core::convert::TryFrom<T>
+d2b_contracts	impl<T, U> core::convert::TryInto<U> for d2b_contracts::provider_effects::aca::AcaDesiredSandbox where U: core::convert::TryFrom<T>
+d2b_contracts	impl<T, U> core::convert::TryInto<U> for d2b_contracts::provider_effects::aca::AcaProviderConfig where U: core::convert::TryFrom<T>
+d2b_contracts	impl<T, U> core::convert::TryInto<U> for d2b_contracts::provider_effects::aca::AcaResourceBinding where U: core::convert::TryFrom<T>
+d2b_contracts	impl<T, U> core::convert::TryInto<U> for d2b_contracts::provider_effects::aca::AcaWorkloadQuery where U: core::convert::TryFrom<T>
 d2b_contracts	impl<T, U> core::convert::TryInto<U> for d2b_contracts::v3::component_session::BootstrapIdentityBinding where U: core::convert::TryFrom<T>
 d2b_contracts	impl<T, U> core::convert::TryInto<U> for d2b_contracts::v3::component_session::BootstrapPskBinding where U: core::convert::TryFrom<T>
 d2b_contracts	impl<T, U> core::convert::TryInto<U> for d2b_contracts::v3::credential::CredentialAuthorization where U: core::convert::TryFrom<T>
@@ -1918,6 +1981,10 @@ d2b_contracts	impl<T> alloc::borrow::ToOwned for d2b_contracts::broker_wire::Del
 d2b_contracts	impl<T> alloc::borrow::ToOwned for d2b_contracts::generation_bundle::BundleMetadata where T: core::clone::Clone
 d2b_contracts	impl<T> alloc::borrow::ToOwned for d2b_contracts::generation_bundle::BundleResource where T: core::clone::Clone
 d2b_contracts	impl<T> alloc::borrow::ToOwned for d2b_contracts::generation_bundle::ZoneBundle where T: core::clone::Clone
+d2b_contracts	impl<T> alloc::borrow::ToOwned for d2b_contracts::provider_effects::aca::AcaDesiredSandbox where T: core::clone::Clone
+d2b_contracts	impl<T> alloc::borrow::ToOwned for d2b_contracts::provider_effects::aca::AcaProviderConfig where T: core::clone::Clone
+d2b_contracts	impl<T> alloc::borrow::ToOwned for d2b_contracts::provider_effects::aca::AcaResourceBinding where T: core::clone::Clone
+d2b_contracts	impl<T> alloc::borrow::ToOwned for d2b_contracts::provider_effects::aca::AcaWorkloadQuery where T: core::clone::Clone
 d2b_contracts	impl<T> alloc::borrow::ToOwned for d2b_contracts::v3::credential::CredentialAuthorization where T: core::clone::Clone
 d2b_contracts	impl<T> alloc::borrow::ToOwned for d2b_contracts::v3::credential::CredentialRequest where T: core::clone::Clone
 d2b_contracts	impl<T> alloc::borrow::ToOwned for d2b_contracts::v3::credential::CredentialResponse where T: core::clone::Clone
@@ -1996,6 +2063,10 @@ d2b_contracts	impl<T> core::any::Any for d2b_contracts::broker_wire::DeletePersi
 d2b_contracts	impl<T> core::any::Any for d2b_contracts::generation_bundle::BundleMetadata where T: 'static + ?core::marker::Sized
 d2b_contracts	impl<T> core::any::Any for d2b_contracts::generation_bundle::BundleResource where T: 'static + ?core::marker::Sized
 d2b_contracts	impl<T> core::any::Any for d2b_contracts::generation_bundle::ZoneBundle where T: 'static + ?core::marker::Sized
+d2b_contracts	impl<T> core::any::Any for d2b_contracts::provider_effects::aca::AcaDesiredSandbox where T: 'static + ?core::marker::Sized
+d2b_contracts	impl<T> core::any::Any for d2b_contracts::provider_effects::aca::AcaProviderConfig where T: 'static + ?core::marker::Sized
+d2b_contracts	impl<T> core::any::Any for d2b_contracts::provider_effects::aca::AcaResourceBinding where T: 'static + ?core::marker::Sized
+d2b_contracts	impl<T> core::any::Any for d2b_contracts::provider_effects::aca::AcaWorkloadQuery where T: 'static + ?core::marker::Sized
 d2b_contracts	impl<T> core::any::Any for d2b_contracts::v3::component_session::BootstrapIdentityBinding where T: 'static + ?core::marker::Sized
 d2b_contracts	impl<T> core::any::Any for d2b_contracts::v3::component_session::BootstrapPskBinding where T: 'static + ?core::marker::Sized
 d2b_contracts	impl<T> core::any::Any for d2b_contracts::v3::credential::CredentialAuthorization where T: 'static + ?core::marker::Sized
@@ -2076,6 +2147,10 @@ d2b_contracts	impl<T> core::borrow::Borrow<T> for d2b_contracts::broker_wire::De
 d2b_contracts	impl<T> core::borrow::Borrow<T> for d2b_contracts::generation_bundle::BundleMetadata where T: ?core::marker::Sized
 d2b_contracts	impl<T> core::borrow::Borrow<T> for d2b_contracts::generation_bundle::BundleResource where T: ?core::marker::Sized
 d2b_contracts	impl<T> core::borrow::Borrow<T> for d2b_contracts::generation_bundle::ZoneBundle where T: ?core::marker::Sized
+d2b_contracts	impl<T> core::borrow::Borrow<T> for d2b_contracts::provider_effects::aca::AcaDesiredSandbox where T: ?core::marker::Sized
+d2b_contracts	impl<T> core::borrow::Borrow<T> for d2b_contracts::provider_effects::aca::AcaProviderConfig where T: ?core::marker::Sized
+d2b_contracts	impl<T> core::borrow::Borrow<T> for d2b_contracts::provider_effects::aca::AcaResourceBinding where T: ?core::marker::Sized
+d2b_contracts	impl<T> core::borrow::Borrow<T> for d2b_contracts::provider_effects::aca::AcaWorkloadQuery where T: ?core::marker::Sized
 d2b_contracts	impl<T> core::borrow::Borrow<T> for d2b_contracts::v3::component_session::BootstrapIdentityBinding where T: ?core::marker::Sized
 d2b_contracts	impl<T> core::borrow::Borrow<T> for d2b_contracts::v3::component_session::BootstrapPskBinding where T: ?core::marker::Sized
 d2b_contracts	impl<T> core::borrow::Borrow<T> for d2b_contracts::v3::credential::CredentialAuthorization where T: ?core::marker::Sized
@@ -2156,6 +2231,10 @@ d2b_contracts	impl<T> core::borrow::BorrowMut<T> for d2b_contracts::broker_wire:
 d2b_contracts	impl<T> core::borrow::BorrowMut<T> for d2b_contracts::generation_bundle::BundleMetadata where T: ?core::marker::Sized
 d2b_contracts	impl<T> core::borrow::BorrowMut<T> for d2b_contracts::generation_bundle::BundleResource where T: ?core::marker::Sized
 d2b_contracts	impl<T> core::borrow::BorrowMut<T> for d2b_contracts::generation_bundle::ZoneBundle where T: ?core::marker::Sized
+d2b_contracts	impl<T> core::borrow::BorrowMut<T> for d2b_contracts::provider_effects::aca::AcaDesiredSandbox where T: ?core::marker::Sized
+d2b_contracts	impl<T> core::borrow::BorrowMut<T> for d2b_contracts::provider_effects::aca::AcaProviderConfig where T: ?core::marker::Sized
+d2b_contracts	impl<T> core::borrow::BorrowMut<T> for d2b_contracts::provider_effects::aca::AcaResourceBinding where T: ?core::marker::Sized
+d2b_contracts	impl<T> core::borrow::BorrowMut<T> for d2b_contracts::provider_effects::aca::AcaWorkloadQuery where T: ?core::marker::Sized
 d2b_contracts	impl<T> core::borrow::BorrowMut<T> for d2b_contracts::v3::component_session::BootstrapIdentityBinding where T: ?core::marker::Sized
 d2b_contracts	impl<T> core::borrow::BorrowMut<T> for d2b_contracts::v3::component_session::BootstrapPskBinding where T: ?core::marker::Sized
 d2b_contracts	impl<T> core::borrow::BorrowMut<T> for d2b_contracts::v3::credential::CredentialAuthorization where T: ?core::marker::Sized
@@ -2236,6 +2315,10 @@ d2b_contracts	impl<T> core::clone::CloneToUninit for d2b_contracts::broker_wire:
 d2b_contracts	impl<T> core::clone::CloneToUninit for d2b_contracts::generation_bundle::BundleMetadata where T: core::clone::Clone
 d2b_contracts	impl<T> core::clone::CloneToUninit for d2b_contracts::generation_bundle::BundleResource where T: core::clone::Clone
 d2b_contracts	impl<T> core::clone::CloneToUninit for d2b_contracts::generation_bundle::ZoneBundle where T: core::clone::Clone
+d2b_contracts	impl<T> core::clone::CloneToUninit for d2b_contracts::provider_effects::aca::AcaDesiredSandbox where T: core::clone::Clone
+d2b_contracts	impl<T> core::clone::CloneToUninit for d2b_contracts::provider_effects::aca::AcaProviderConfig where T: core::clone::Clone
+d2b_contracts	impl<T> core::clone::CloneToUninit for d2b_contracts::provider_effects::aca::AcaResourceBinding where T: core::clone::Clone
+d2b_contracts	impl<T> core::clone::CloneToUninit for d2b_contracts::provider_effects::aca::AcaWorkloadQuery where T: core::clone::Clone
 d2b_contracts	impl<T> core::clone::CloneToUninit for d2b_contracts::v3::credential::CredentialAuthorization where T: core::clone::Clone
 d2b_contracts	impl<T> core::clone::CloneToUninit for d2b_contracts::v3::credential::CredentialRequest where T: core::clone::Clone
 d2b_contracts	impl<T> core::clone::CloneToUninit for d2b_contracts::v3::credential::CredentialResponse where T: core::clone::Clone
@@ -2312,6 +2395,10 @@ d2b_contracts	impl<T> core::convert::From<T> for d2b_contracts::broker_wire::Del
 d2b_contracts	impl<T> core::convert::From<T> for d2b_contracts::generation_bundle::BundleMetadata
 d2b_contracts	impl<T> core::convert::From<T> for d2b_contracts::generation_bundle::BundleResource
 d2b_contracts	impl<T> core::convert::From<T> for d2b_contracts::generation_bundle::ZoneBundle
+d2b_contracts	impl<T> core::convert::From<T> for d2b_contracts::provider_effects::aca::AcaDesiredSandbox
+d2b_contracts	impl<T> core::convert::From<T> for d2b_contracts::provider_effects::aca::AcaProviderConfig
+d2b_contracts	impl<T> core::convert::From<T> for d2b_contracts::provider_effects::aca::AcaResourceBinding
+d2b_contracts	impl<T> core::convert::From<T> for d2b_contracts::provider_effects::aca::AcaWorkloadQuery
 d2b_contracts	impl<T> core::convert::From<T> for d2b_contracts::v3::component_session::BootstrapIdentityBinding
 d2b_contracts	impl<T> core::convert::From<T> for d2b_contracts::v3::component_session::BootstrapPskBinding
 d2b_contracts	impl<T> core::convert::From<T> for d2b_contracts::v3::credential::CredentialAuthorization
@@ -2392,6 +2479,10 @@ d2b_contracts	impl<T> dyn_clone::DynClone for d2b_contracts::broker_wire::Delete
 d2b_contracts	impl<T> dyn_clone::DynClone for d2b_contracts::generation_bundle::BundleMetadata where T: core::clone::Clone
 d2b_contracts	impl<T> dyn_clone::DynClone for d2b_contracts::generation_bundle::BundleResource where T: core::clone::Clone
 d2b_contracts	impl<T> dyn_clone::DynClone for d2b_contracts::generation_bundle::ZoneBundle where T: core::clone::Clone
+d2b_contracts	impl<T> dyn_clone::DynClone for d2b_contracts::provider_effects::aca::AcaDesiredSandbox where T: core::clone::Clone
+d2b_contracts	impl<T> dyn_clone::DynClone for d2b_contracts::provider_effects::aca::AcaProviderConfig where T: core::clone::Clone
+d2b_contracts	impl<T> dyn_clone::DynClone for d2b_contracts::provider_effects::aca::AcaResourceBinding where T: core::clone::Clone
+d2b_contracts	impl<T> dyn_clone::DynClone for d2b_contracts::provider_effects::aca::AcaWorkloadQuery where T: core::clone::Clone
 d2b_contracts	impl<T> dyn_clone::DynClone for d2b_contracts::v3::credential::CredentialAuthorization where T: core::clone::Clone
 d2b_contracts	impl<T> dyn_clone::DynClone for d2b_contracts::v3::credential::CredentialRequest where T: core::clone::Clone
 d2b_contracts	impl<T> dyn_clone::DynClone for d2b_contracts::v3::credential::CredentialResponse where T: core::clone::Clone
@@ -2467,6 +2558,7 @@ d2b_contracts	impl<T> serde_core::de::DeserializeOwned for d2b_contracts::broker
 d2b_contracts	impl<T> serde_core::de::DeserializeOwned for d2b_contracts::generation_bundle::BundleMetadata where T: for<'de> serde_core::de::Deserialize<'de>
 d2b_contracts	impl<T> serde_core::de::DeserializeOwned for d2b_contracts::generation_bundle::BundleResource where T: for<'de> serde_core::de::Deserialize<'de>
 d2b_contracts	impl<T> serde_core::de::DeserializeOwned for d2b_contracts::generation_bundle::ZoneBundle where T: for<'de> serde_core::de::Deserialize<'de>
+d2b_contracts	impl<T> serde_core::de::DeserializeOwned for d2b_contracts::provider_effects::aca::AcaProviderConfig where T: for<'de> serde_core::de::Deserialize<'de>
 d2b_contracts	impl<T> serde_core::de::DeserializeOwned for d2b_contracts::v3::component_session::BootstrapIdentityBinding where T: for<'de> serde_core::de::Deserialize<'de>
 d2b_contracts	impl<T> serde_core::de::DeserializeOwned for d2b_contracts::v3::component_session::BootstrapPskBinding where T: for<'de> serde_core::de::Deserialize<'de>
 d2b_contracts	impl<T> serde_core::de::DeserializeOwned for d2b_contracts::v3::credential::CredentialScope where T: for<'de> serde_core::de::Deserialize<'de>
@@ -2528,6 +2620,10 @@ d2b_contracts	impl<T> typenum::type_operators::Same for d2b_contracts::broker_wi
 d2b_contracts	impl<T> typenum::type_operators::Same for d2b_contracts::generation_bundle::BundleMetadata
 d2b_contracts	impl<T> typenum::type_operators::Same for d2b_contracts::generation_bundle::BundleResource
 d2b_contracts	impl<T> typenum::type_operators::Same for d2b_contracts::generation_bundle::ZoneBundle
+d2b_contracts	impl<T> typenum::type_operators::Same for d2b_contracts::provider_effects::aca::AcaDesiredSandbox
+d2b_contracts	impl<T> typenum::type_operators::Same for d2b_contracts::provider_effects::aca::AcaProviderConfig
+d2b_contracts	impl<T> typenum::type_operators::Same for d2b_contracts::provider_effects::aca::AcaResourceBinding
+d2b_contracts	impl<T> typenum::type_operators::Same for d2b_contracts::provider_effects::aca::AcaWorkloadQuery
 d2b_contracts	impl<T> typenum::type_operators::Same for d2b_contracts::v3::component_session::BootstrapIdentityBinding
 d2b_contracts	impl<T> typenum::type_operators::Same for d2b_contracts::v3::component_session::BootstrapPskBinding
 d2b_contracts	impl<T> typenum::type_operators::Same for d2b_contracts::v3::credential::CredentialAuthorization
@@ -2768,6 +2864,25 @@ d2b_contracts	pub d2b_contracts::broker_wire::DeletePersistentTapRequest::attach
 d2b_contracts	pub d2b_contracts::broker_wire::DeletePersistentTapRequest::expected_attachment_generation: d2b_contracts::v3::identity::ResourceGeneration
 d2b_contracts	pub d2b_contracts::broker_wire::DeletePersistentTapRequest::expected_network_generation: d2b_contracts::v3::identity::ResourceGeneration
 d2b_contracts	pub d2b_contracts::broker_wire::DeletePersistentTapRequest::tracing_span_id: core::option::Option<d2b_contracts::types::TracingSpanId>
+d2b_contracts	pub d2b_contracts::provider_effects::aca::AcaDesiredSandbox::binding: d2b_contracts::provider_effects::aca::AcaResourceBinding
+d2b_contracts	pub d2b_contracts::provider_effects::aca::AcaDesiredSandbox::disk_image: d2b_contracts::provider_effects::aca::AcaDiskImageRecord
+d2b_contracts	pub d2b_contracts::provider_effects::aca::AcaDesiredSandbox::profile: d2b_contracts::provider_effects::aca::AcaSandboxProfile
+d2b_contracts	pub d2b_contracts::provider_effects::aca::AcaProviderConfig::client_id: d2b_contracts::v3::credential::OpaqueAzureRef
+d2b_contracts	pub d2b_contracts::provider_effects::aca::AcaProviderConfig::control_credential_ref: d2b_contracts::v3::resource_ref::ResourceRef
+d2b_contracts	pub d2b_contracts::provider_effects::aca::AcaProviderConfig::defaults: d2b_contracts::provider_effects::aca::AcaRuntimeConfig
+d2b_contracts	pub d2b_contracts::provider_effects::aca::AcaProviderConfig::environment_id: d2b_contracts::provider_effects::aca::AcaConfiguredImageId
+d2b_contracts	pub d2b_contracts::provider_effects::aca::AcaProviderConfig::gateway_execution_ref: d2b_contracts::v3::resource_ref::ResourceRef
+d2b_contracts	pub d2b_contracts::provider_effects::aca::AcaProviderConfig::network_ref: core::option::Option<d2b_contracts::v3::resource_ref::ResourceRef>
+d2b_contracts	pub d2b_contracts::provider_effects::aca::AcaProviderConfig::pull_credential_ref: core::option::Option<d2b_contracts::v3::resource_ref::ResourceRef>
+d2b_contracts	pub d2b_contracts::provider_effects::aca::AcaProviderConfig::resource_group_id: d2b_contracts::provider_effects::aca::AcaConfiguredImageId
+d2b_contracts	pub d2b_contracts::provider_effects::aca::AcaProviderConfig::sandbox_transport_alias: d2b_contracts::provider_effects::aca::AcaProfileId
+d2b_contracts	pub d2b_contracts::provider_effects::aca::AcaProviderConfig::subscription_id: d2b_contracts::v3::credential::OpaqueAzureRef
+d2b_contracts	pub d2b_contracts::provider_effects::aca::AcaProviderConfig::tenant_id: d2b_contracts::v3::credential::OpaqueAzureRef
+d2b_contracts	pub d2b_contracts::provider_effects::aca::AcaResourceBinding::config_fingerprint: [u8; 32]
+d2b_contracts	pub d2b_contracts::provider_effects::aca::AcaResourceBinding::guest_uid: d2b_contracts::v3::identity::ResourceUid
+d2b_contracts	pub d2b_contracts::provider_effects::aca::AcaResourceBinding::provider_generation: u64
+d2b_contracts	pub d2b_contracts::provider_effects::aca::AcaWorkloadQuery::binding: d2b_contracts::provider_effects::aca::AcaResourceBinding
+d2b_contracts	pub d2b_contracts::provider_effects::aca::AcaWorkloadQuery::profile_id: d2b_contracts::provider_effects::aca::AcaProfileId
 d2b_contracts	pub d2b_contracts::v3::ProviderExtensionRegistration::provider_ref: d2b_contracts::v3::resource_ref::ResourceRef
 d2b_contracts	pub d2b_contracts::v3::ProviderExtensionRegistration::spec_schema_id: d2b_contracts::v3::resource_schema::ExtensionSchemaId
 d2b_contracts	pub d2b_contracts::v3::ProviderExtensionRegistration::spec_schema_version: d2b_contracts::v3::resource_schema::SchemaVersion
@@ -2838,6 +2953,24 @@ d2b_contracts	pub fn d2b_contracts::generation_bundle::ZoneBundle::clone(&self) 
 d2b_contracts	pub fn d2b_contracts::generation_bundle::ZoneBundle::compute_content_hash(&[d2b_contracts::generation_bundle::BundleResource]) -> core::result::Result<d2b_contracts::v3::identity::ResourceBundleGenerationId, d2b_contracts::generation_bundle::ZoneBundleError>
 d2b_contracts	pub fn d2b_contracts::generation_bundle::ZoneBundle::eq(&self, &d2b_contracts::generation_bundle::ZoneBundle) -> bool
 d2b_contracts	pub fn d2b_contracts::generation_bundle::ZoneBundle::resources(&self) -> &[d2b_contracts::generation_bundle::BundleResource]
+d2b_contracts	pub fn d2b_contracts::provider_effects::aca::AcaControl::create_disk_image<'life0, 'life1, 'life2, 'life3, 'async_trait>(&'life0 self, &'life1 d2b_contracts::provider_effects::aca::AcaCredentialLease, &'life2 d2b_contracts::provider_effects::aca::AcaControlContext, &'life3 d2b_contracts::provider_effects::aca::AcaDesiredDiskImage) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<d2b_contracts::provider_effects::aca::AcaDiskImageRecord, d2b_contracts::provider_effects::aca::AcaControlError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
+d2b_contracts	pub fn d2b_contracts::provider_effects::aca::AcaControl::create_sandbox<'life0, 'life1, 'life2, 'life3, 'async_trait>(&'life0 self, &'life1 d2b_contracts::provider_effects::aca::AcaCredentialLease, &'life2 d2b_contracts::provider_effects::aca::AcaControlContext, &'life3 d2b_contracts::provider_effects::aca::AcaDesiredSandbox) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<d2b_contracts::provider_effects::aca::AcaSandboxRecord, d2b_contracts::provider_effects::aca::AcaControlError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
+d2b_contracts	pub fn d2b_contracts::provider_effects::aca::AcaControl::delete_sandbox<'life0, 'life1, 'life2, 'life3, 'async_trait>(&'life0 self, &'life1 d2b_contracts::provider_effects::aca::AcaCredentialLease, &'life2 d2b_contracts::provider_effects::aca::AcaControlContext, &'life3 d2b_contracts::provider_effects::aca::AcaSandboxId) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<d2b_contracts::provider_effects::aca::AcaDeleteOutcome, d2b_contracts::provider_effects::aca::AcaControlError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
+d2b_contracts	pub fn d2b_contracts::provider_effects::aca::AcaControl::find_disk_images<'life0, 'life1, 'life2, 'life3, 'async_trait>(&'life0 self, &'life1 d2b_contracts::provider_effects::aca::AcaCredentialLease, &'life2 d2b_contracts::provider_effects::aca::AcaControlContext, &'life3 d2b_contracts::provider_effects::aca::AcaDesiredDiskImage) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<d2b_contracts::provider_effects::aca::AcaDiskImageCandidates, d2b_contracts::provider_effects::aca::AcaControlError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
+d2b_contracts	pub fn d2b_contracts::provider_effects::aca::AcaControl::find_sandboxes<'life0, 'life1, 'life2, 'life3, 'async_trait>(&'life0 self, &'life1 d2b_contracts::provider_effects::aca::AcaCredentialLease, &'life2 d2b_contracts::provider_effects::aca::AcaControlContext, &'life3 d2b_contracts::provider_effects::aca::AcaWorkloadQuery) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<d2b_contracts::provider_effects::aca::AcaSandboxCandidates, d2b_contracts::provider_effects::aca::AcaControlError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
+d2b_contracts	pub fn d2b_contracts::provider_effects::aca::AcaControl::health<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 d2b_contracts::provider_effects::aca::AcaCredentialLease, &'life2 d2b_contracts::provider_effects::aca::AcaControlContext) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<d2b_contracts::provider_effects::aca::AcaControlHealth, d2b_contracts::provider_effects::aca::AcaControlError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+d2b_contracts	pub fn d2b_contracts::provider_effects::aca::AcaControl::resume_sandbox<'life0, 'life1, 'life2, 'life3, 'async_trait>(&'life0 self, &'life1 d2b_contracts::provider_effects::aca::AcaCredentialLease, &'life2 d2b_contracts::provider_effects::aca::AcaControlContext, &'life3 d2b_contracts::provider_effects::aca::AcaSandboxId) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<d2b_contracts::provider_effects::aca::AcaSandboxRecord, d2b_contracts::provider_effects::aca::AcaControlError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
+d2b_contracts	pub fn d2b_contracts::provider_effects::aca::AcaControl::stop_sandbox<'life0, 'life1, 'life2, 'life3, 'async_trait>(&'life0 self, &'life1 d2b_contracts::provider_effects::aca::AcaCredentialLease, &'life2 d2b_contracts::provider_effects::aca::AcaControlContext, &'life3 d2b_contracts::provider_effects::aca::AcaSandboxId) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<d2b_contracts::provider_effects::aca::AcaSandboxRecord, d2b_contracts::provider_effects::aca::AcaControlError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
+d2b_contracts	pub fn d2b_contracts::provider_effects::aca::AcaDesiredSandbox::clone(&self) -> d2b_contracts::provider_effects::aca::AcaDesiredSandbox
+d2b_contracts	pub fn d2b_contracts::provider_effects::aca::AcaDesiredSandbox::eq(&self, &d2b_contracts::provider_effects::aca::AcaDesiredSandbox) -> bool
+d2b_contracts	pub fn d2b_contracts::provider_effects::aca::AcaProviderConfig::clone(&self) -> d2b_contracts::provider_effects::aca::AcaProviderConfig
+d2b_contracts	pub fn d2b_contracts::provider_effects::aca::AcaProviderConfig::eq(&self, &d2b_contracts::provider_effects::aca::AcaProviderConfig) -> bool
+d2b_contracts	pub fn d2b_contracts::provider_effects::aca::AcaProviderConfig::new(d2b_contracts::v3::resource_ref::ResourceRef, d2b_contracts::v3::credential::OpaqueAzureRef, d2b_contracts::v3::credential::OpaqueAzureRef, d2b_contracts::v3::credential::OpaqueAzureRef, d2b_contracts::v3::resource_ref::ResourceRef, core::option::Option<d2b_contracts::v3::resource_ref::ResourceRef>, d2b_contracts::provider_effects::aca::AcaConfiguredImageId, d2b_contracts::provider_effects::aca::AcaConfiguredImageId, core::option::Option<d2b_contracts::v3::resource_ref::ResourceRef>, d2b_contracts::provider_effects::aca::AcaProfileId, d2b_contracts::provider_effects::aca::AcaRuntimeConfig) -> core::result::Result<Self, d2b_contracts::provider_effects::aca::AcaTypeError>
+d2b_contracts	pub fn d2b_contracts::provider_effects::aca::AcaProviderConfig::validate_credential_scope(&self, &d2b_contracts::v3::resource_ref::ResourceRef) -> core::result::Result<(), d2b_contracts::provider_effects::aca::AcaTypeError>
+d2b_contracts	pub fn d2b_contracts::provider_effects::aca::AcaResourceBinding::clone(&self) -> d2b_contracts::provider_effects::aca::AcaResourceBinding
+d2b_contracts	pub fn d2b_contracts::provider_effects::aca::AcaResourceBinding::eq(&self, &d2b_contracts::provider_effects::aca::AcaResourceBinding) -> bool
+d2b_contracts	pub fn d2b_contracts::provider_effects::aca::AcaWorkloadQuery::clone(&self) -> d2b_contracts::provider_effects::aca::AcaWorkloadQuery
+d2b_contracts	pub fn d2b_contracts::provider_effects::aca::AcaWorkloadQuery::eq(&self, &d2b_contracts::provider_effects::aca::AcaWorkloadQuery) -> bool
 d2b_contracts	pub fn d2b_contracts::v3::CredentialControllerHandlers::drain(&self, &d2b_contracts::v3::credential_controller::CredentialRevocationInput) -> core::result::Result<d2b_contracts::v3::credential_controller::CredentialControllerDecision, d2b_contracts::v3::credential_controller::CredentialControllerError>
 d2b_contracts	pub fn d2b_contracts::v3::CredentialControllerHandlers::finalize(&self, &d2b_contracts::v3::credential_controller::CredentialRevocationInput) -> core::result::Result<d2b_contracts::v3::credential_controller::CredentialControllerDecision, d2b_contracts::v3::credential_controller::CredentialControllerError>
 d2b_contracts	pub fn d2b_contracts::v3::CredentialControllerHandlers::health(&self, bool, u32, u32) -> core::result::Result<d2b_contracts::v3::credential_controller::CredentialControllerHealth, d2b_contracts::v3::credential_controller::CredentialControllerError>
@@ -3135,6 +3268,10 @@ d2b_contracts	pub struct d2b_contracts::broker_wire::DeletePersistentTapRequest
 d2b_contracts	pub struct d2b_contracts::generation_bundle::BundleMetadata
 d2b_contracts	pub struct d2b_contracts::generation_bundle::BundleResource
 d2b_contracts	pub struct d2b_contracts::generation_bundle::ZoneBundle
+d2b_contracts	pub struct d2b_contracts::provider_effects::aca::AcaDesiredSandbox
+d2b_contracts	pub struct d2b_contracts::provider_effects::aca::AcaProviderConfig
+d2b_contracts	pub struct d2b_contracts::provider_effects::aca::AcaResourceBinding
+d2b_contracts	pub struct d2b_contracts::provider_effects::aca::AcaWorkloadQuery
 d2b_contracts	pub struct d2b_contracts::v3::AuthenticatedSubjectContext
 d2b_contracts	pub struct d2b_contracts::v3::BundleResource
 d2b_contracts	pub struct d2b_contracts::v3::BundleResourceMetadata
@@ -3253,6 +3390,7 @@ d2b_contracts	pub struct d2b_contracts::v3::volume::VolumeSource
 d2b_contracts	pub struct d2b_contracts::v3::volume::VolumeSpec
 d2b_contracts	pub struct d2b_contracts::v3::zone_link::ZoneLinkSpec
 d2b_contracts	pub struct d2b_contracts::v3::zone_link::ZoneLinkStatusResource
+d2b_contracts	pub trait d2b_contracts::provider_effects::aca::AcaControl: core::marker::Send + core::marker::Sync
 d2b_contracts	pub trait d2b_contracts::v3::CredentialControllerHandlers
 d2b_contracts	pub trait d2b_contracts::v3::credential::CredentialProvider: core::marker::Send + core::marker::Sync
 d2b_contracts	pub trait d2b_contracts::v3::credential::service::CredentialProvider: core::marker::Send + core::marker::Sync
@@ -8395,6 +8533,263 @@ d2b_provider_observability_otel	impl<T> crossbeam_epoch::atomic::Pointable for d
 d2b_provider_observability_otel	impl<T> typenum::type_operators::Same for d2b_provider_observability_otel::agent::ProviderAgentProcess
 d2b_provider_observability_otel	pub struct d2b_provider_observability_otel::ProviderAgentProcess
 d2b_provider_observability_otel	pub struct d2b_provider_observability_otel::agent::ProviderAgentProcess
+d2b_provider_runtime_azure_container_apps	impl core::clone::Clone for d2b_provider_runtime_azure_container_apps::AcaDeploymentRequest
+d2b_provider_runtime_azure_container_apps	impl core::cmp::Eq for d2b_provider_runtime_azure_container_apps::AcaDeploymentRequest
+d2b_provider_runtime_azure_container_apps	impl core::cmp::PartialEq for d2b_provider_runtime_azure_container_apps::AcaDeploymentRequest
+d2b_provider_runtime_azure_container_apps	impl core::fmt::Debug for d2b_provider_runtime_azure_container_apps::AcaDeploymentRequest
+d2b_provider_runtime_azure_container_apps	impl core::marker::Freeze for d2b_provider_runtime_azure_container_apps::AcaDeploymentRequest
+d2b_provider_runtime_azure_container_apps	impl core::marker::Send for d2b_provider_runtime_azure_container_apps::AcaDeploymentRequest
+d2b_provider_runtime_azure_container_apps	impl core::marker::StructuralPartialEq for d2b_provider_runtime_azure_container_apps::AcaDeploymentRequest
+d2b_provider_runtime_azure_container_apps	impl core::marker::Sync for d2b_provider_runtime_azure_container_apps::AcaDeploymentRequest
+d2b_provider_runtime_azure_container_apps	impl core::marker::Unpin for d2b_provider_runtime_azure_container_apps::AcaDeploymentRequest
+d2b_provider_runtime_azure_container_apps	impl core::marker::UnsafeUnpin for d2b_provider_runtime_azure_container_apps::AcaDeploymentRequest
+d2b_provider_runtime_azure_container_apps	impl core::panic::unwind_safe::RefUnwindSafe for d2b_provider_runtime_azure_container_apps::AcaDeploymentRequest
+d2b_provider_runtime_azure_container_apps	impl core::panic::unwind_safe::UnwindSafe for d2b_provider_runtime_azure_container_apps::AcaDeploymentRequest
+d2b_provider_runtime_azure_container_apps	impl<C, L> core::marker::Freeze for d2b_provider_runtime_azure_container_apps::AcaController<C, L>
+d2b_provider_runtime_azure_container_apps	impl<C, L> core::marker::Freeze for d2b_provider_runtime_azure_container_apps::AzureContainerAppsRuntimeProvider<C, L>
+d2b_provider_runtime_azure_container_apps	impl<C, L> core::marker::Send for d2b_provider_runtime_azure_container_apps::AcaController<C, L> where C: core::marker::Sync + core::marker::Send, L: core::marker::Sync + core::marker::Send
+d2b_provider_runtime_azure_container_apps	impl<C, L> core::marker::Send for d2b_provider_runtime_azure_container_apps::AzureContainerAppsRuntimeProvider<C, L> where C: core::marker::Sync + core::marker::Send, L: core::marker::Sync + core::marker::Send
+d2b_provider_runtime_azure_container_apps	impl<C, L> core::marker::Sync for d2b_provider_runtime_azure_container_apps::AcaController<C, L> where C: core::marker::Sync + core::marker::Send, L: core::marker::Sync + core::marker::Send
+d2b_provider_runtime_azure_container_apps	impl<C, L> core::marker::Sync for d2b_provider_runtime_azure_container_apps::AzureContainerAppsRuntimeProvider<C, L> where C: core::marker::Sync + core::marker::Send, L: core::marker::Sync + core::marker::Send
+d2b_provider_runtime_azure_container_apps	impl<C, L> core::marker::Unpin for d2b_provider_runtime_azure_container_apps::AcaController<C, L>
+d2b_provider_runtime_azure_container_apps	impl<C, L> core::marker::Unpin for d2b_provider_runtime_azure_container_apps::AzureContainerAppsRuntimeProvider<C, L>
+d2b_provider_runtime_azure_container_apps	impl<C, L> core::marker::UnsafeUnpin for d2b_provider_runtime_azure_container_apps::AcaController<C, L>
+d2b_provider_runtime_azure_container_apps	impl<C, L> core::marker::UnsafeUnpin for d2b_provider_runtime_azure_container_apps::AzureContainerAppsRuntimeProvider<C, L>
+d2b_provider_runtime_azure_container_apps	impl<C, L> core::panic::unwind_safe::RefUnwindSafe for d2b_provider_runtime_azure_container_apps::AcaController<C, L> where C: core::panic::unwind_safe::RefUnwindSafe, L: core::panic::unwind_safe::RefUnwindSafe
+d2b_provider_runtime_azure_container_apps	impl<C, L> core::panic::unwind_safe::RefUnwindSafe for d2b_provider_runtime_azure_container_apps::AzureContainerAppsRuntimeProvider<C, L> where C: core::panic::unwind_safe::RefUnwindSafe, L: core::panic::unwind_safe::RefUnwindSafe
+d2b_provider_runtime_azure_container_apps	impl<C, L> core::panic::unwind_safe::UnwindSafe for d2b_provider_runtime_azure_container_apps::AcaController<C, L> where C: core::panic::unwind_safe::RefUnwindSafe, L: core::panic::unwind_safe::RefUnwindSafe
+d2b_provider_runtime_azure_container_apps	impl<C, L> core::panic::unwind_safe::UnwindSafe for d2b_provider_runtime_azure_container_apps::AzureContainerAppsRuntimeProvider<C, L> where C: core::panic::unwind_safe::RefUnwindSafe, L: core::panic::unwind_safe::RefUnwindSafe
+d2b_provider_runtime_azure_container_apps	impl<C, L> d2b_provider_runtime_azure_container_apps::AcaController<C, L> where C: d2b_contracts::provider_effects::aca::AcaControl + 'static, L: d2b_contracts::provider_effects::aca::AcaCredentialLeaseClient + 'static
+d2b_provider_runtime_azure_container_apps	impl<C, L> d2b_provider_runtime_azure_container_apps::AcaDeploymentService<C, L> where C: d2b_contracts::provider_effects::aca::AcaControl + 'static, L: d2b_contracts::provider_effects::aca::AcaCredentialLeaseClient + 'static
+d2b_provider_runtime_azure_container_apps	impl<C, L> d2b_provider_runtime_azure_container_apps::AzureContainerAppsRuntimeProvider<C, L> where C: d2b_contracts::provider_effects::aca::AcaControl + 'static, L: d2b_contracts::provider_effects::aca::AcaCredentialLeaseClient + 'static
+d2b_provider_runtime_azure_container_apps	impl<T, U> core::convert::Into<U> for d2b_provider_runtime_azure_container_apps::AcaController<C, L> where U: core::convert::From<T>
+d2b_provider_runtime_azure_container_apps	impl<T, U> core::convert::Into<U> for d2b_provider_runtime_azure_container_apps::AcaDeploymentRequest where U: core::convert::From<T>
+d2b_provider_runtime_azure_container_apps	impl<T, U> core::convert::Into<U> for d2b_provider_runtime_azure_container_apps::AzureContainerAppsRuntimeProvider<C, L> where U: core::convert::From<T>
+d2b_provider_runtime_azure_container_apps	impl<T, U> core::convert::TryFrom<U> for d2b_provider_runtime_azure_container_apps::AcaController<C, L> where U: core::convert::Into<T>
+d2b_provider_runtime_azure_container_apps	impl<T, U> core::convert::TryFrom<U> for d2b_provider_runtime_azure_container_apps::AcaDeploymentRequest where U: core::convert::Into<T>
+d2b_provider_runtime_azure_container_apps	impl<T, U> core::convert::TryFrom<U> for d2b_provider_runtime_azure_container_apps::AzureContainerAppsRuntimeProvider<C, L> where U: core::convert::Into<T>
+d2b_provider_runtime_azure_container_apps	impl<T, U> core::convert::TryInto<U> for d2b_provider_runtime_azure_container_apps::AcaController<C, L> where U: core::convert::TryFrom<T>
+d2b_provider_runtime_azure_container_apps	impl<T, U> core::convert::TryInto<U> for d2b_provider_runtime_azure_container_apps::AcaDeploymentRequest where U: core::convert::TryFrom<T>
+d2b_provider_runtime_azure_container_apps	impl<T, U> core::convert::TryInto<U> for d2b_provider_runtime_azure_container_apps::AzureContainerAppsRuntimeProvider<C, L> where U: core::convert::TryFrom<T>
+d2b_provider_runtime_azure_container_apps	impl<T> alloc::borrow::ToOwned for d2b_provider_runtime_azure_container_apps::AcaDeploymentRequest where T: core::clone::Clone
+d2b_provider_runtime_azure_container_apps	impl<T> core::any::Any for d2b_provider_runtime_azure_container_apps::AcaController<C, L> where T: 'static + ?core::marker::Sized
+d2b_provider_runtime_azure_container_apps	impl<T> core::any::Any for d2b_provider_runtime_azure_container_apps::AcaDeploymentRequest where T: 'static + ?core::marker::Sized
+d2b_provider_runtime_azure_container_apps	impl<T> core::any::Any for d2b_provider_runtime_azure_container_apps::AzureContainerAppsRuntimeProvider<C, L> where T: 'static + ?core::marker::Sized
+d2b_provider_runtime_azure_container_apps	impl<T> core::borrow::Borrow<T> for d2b_provider_runtime_azure_container_apps::AcaController<C, L> where T: ?core::marker::Sized
+d2b_provider_runtime_azure_container_apps	impl<T> core::borrow::Borrow<T> for d2b_provider_runtime_azure_container_apps::AcaDeploymentRequest where T: ?core::marker::Sized
+d2b_provider_runtime_azure_container_apps	impl<T> core::borrow::Borrow<T> for d2b_provider_runtime_azure_container_apps::AzureContainerAppsRuntimeProvider<C, L> where T: ?core::marker::Sized
+d2b_provider_runtime_azure_container_apps	impl<T> core::borrow::BorrowMut<T> for d2b_provider_runtime_azure_container_apps::AcaController<C, L> where T: ?core::marker::Sized
+d2b_provider_runtime_azure_container_apps	impl<T> core::borrow::BorrowMut<T> for d2b_provider_runtime_azure_container_apps::AcaDeploymentRequest where T: ?core::marker::Sized
+d2b_provider_runtime_azure_container_apps	impl<T> core::borrow::BorrowMut<T> for d2b_provider_runtime_azure_container_apps::AzureContainerAppsRuntimeProvider<C, L> where T: ?core::marker::Sized
+d2b_provider_runtime_azure_container_apps	impl<T> core::clone::CloneToUninit for d2b_provider_runtime_azure_container_apps::AcaDeploymentRequest where T: core::clone::Clone
+d2b_provider_runtime_azure_container_apps	impl<T> core::convert::From<T> for d2b_provider_runtime_azure_container_apps::AcaController<C, L>
+d2b_provider_runtime_azure_container_apps	impl<T> core::convert::From<T> for d2b_provider_runtime_azure_container_apps::AcaDeploymentRequest
+d2b_provider_runtime_azure_container_apps	impl<T> core::convert::From<T> for d2b_provider_runtime_azure_container_apps::AzureContainerAppsRuntimeProvider<C, L>
+d2b_provider_runtime_azure_container_apps	impl<T> dyn_clone::DynClone for d2b_provider_runtime_azure_container_apps::AcaDeploymentRequest where T: core::clone::Clone
+d2b_provider_runtime_azure_container_apps	impl<T> typenum::type_operators::Same for d2b_provider_runtime_azure_container_apps::AcaController<C, L>
+d2b_provider_runtime_azure_container_apps	impl<T> typenum::type_operators::Same for d2b_provider_runtime_azure_container_apps::AcaDeploymentRequest
+d2b_provider_runtime_azure_container_apps	impl<T> typenum::type_operators::Same for d2b_provider_runtime_azure_container_apps::AzureContainerAppsRuntimeProvider<C, L>
+d2b_provider_runtime_azure_container_apps	pub async fn d2b_provider_runtime_azure_container_apps::AcaDeploymentService<C, L>::dispatch(&self, d2b_provider_runtime_azure_container_apps::AcaServiceMethod, d2b_provider_runtime_azure_container_apps::AcaDeploymentRequest, u32) -> core::result::Result<d2b_provider_runtime_azure_container_apps::AcaDeploymentResponse, d2b_provider_runtime_azure_container_apps::AcaServiceError>
+d2b_provider_runtime_azure_container_apps	pub const fn d2b_provider_runtime_azure_container_apps::AzureContainerAppsRuntimeProvider<C, L>::config(&self) -> &d2b_contracts::provider_effects::aca::AcaProviderConfig
+d2b_provider_runtime_azure_container_apps	pub d2b_provider_runtime_azure_container_apps::AcaDeploymentRequest::Destroy
+d2b_provider_runtime_azure_container_apps	pub d2b_provider_runtime_azure_container_apps::AcaDeploymentRequest::Destroy::operation_id: d2b_contracts::provider_effects::aca::AcaOperationId
+d2b_provider_runtime_azure_container_apps	pub d2b_provider_runtime_azure_container_apps::AcaDeploymentRequest::Destroy::sandbox_id: d2b_contracts::provider_effects::aca::AcaSandboxId
+d2b_provider_runtime_azure_container_apps	pub d2b_provider_runtime_azure_container_apps::AcaDeploymentRequest::Find
+d2b_provider_runtime_azure_container_apps	pub d2b_provider_runtime_azure_container_apps::AcaDeploymentRequest::Find::operation_id: d2b_contracts::provider_effects::aca::AcaOperationId
+d2b_provider_runtime_azure_container_apps	pub d2b_provider_runtime_azure_container_apps::AcaDeploymentRequest::Find::query: d2b_contracts::provider_effects::aca::AcaWorkloadQuery
+d2b_provider_runtime_azure_container_apps	pub d2b_provider_runtime_azure_container_apps::AcaDeploymentRequest::Start
+d2b_provider_runtime_azure_container_apps	pub d2b_provider_runtime_azure_container_apps::AcaDeploymentRequest::Start::operation_id: d2b_contracts::provider_effects::aca::AcaOperationId
+d2b_provider_runtime_azure_container_apps	pub d2b_provider_runtime_azure_container_apps::AcaDeploymentRequest::Start::sandbox_id: d2b_contracts::provider_effects::aca::AcaSandboxId
+d2b_provider_runtime_azure_container_apps	pub d2b_provider_runtime_azure_container_apps::AcaDeploymentRequest::Stop
+d2b_provider_runtime_azure_container_apps	pub d2b_provider_runtime_azure_container_apps::AcaDeploymentRequest::Stop::operation_id: d2b_contracts::provider_effects::aca::AcaOperationId
+d2b_provider_runtime_azure_container_apps	pub d2b_provider_runtime_azure_container_apps::AcaDeploymentRequest::Stop::sandbox_id: d2b_contracts::provider_effects::aca::AcaSandboxId
+d2b_provider_runtime_azure_container_apps	pub enum d2b_provider_runtime_azure_container_apps::AcaDeploymentRequest
+d2b_provider_runtime_azure_container_apps	pub fn d2b_provider_runtime_azure_container_apps::AcaController<C, L>::new(d2b_contracts::provider_effects::aca::AcaResourceBinding, d2b_contracts::provider_effects::aca::AcaRuntimeConfig, alloc::sync::Arc<C>, alloc::sync::Arc<L>) -> Self
+d2b_provider_runtime_azure_container_apps	pub fn d2b_provider_runtime_azure_container_apps::AcaDeploymentRequest::clone(&self) -> d2b_provider_runtime_azure_container_apps::AcaDeploymentRequest
+d2b_provider_runtime_azure_container_apps	pub fn d2b_provider_runtime_azure_container_apps::AcaDeploymentRequest::eq(&self, &d2b_provider_runtime_azure_container_apps::AcaDeploymentRequest) -> bool
+d2b_provider_runtime_azure_container_apps	pub fn d2b_provider_runtime_azure_container_apps::AzureContainerAppsRuntimeProvider<C, L>::controller(&self, d2b_contracts::provider_effects::aca::AcaResourceBinding) -> d2b_provider_runtime_azure_container_apps::AcaController<C, L>
+d2b_provider_runtime_azure_container_apps	pub fn d2b_provider_runtime_azure_container_apps::AzureContainerAppsRuntimeProvider<C, L>::new(d2b_contracts::provider_effects::aca::AcaProviderConfig, alloc::sync::Arc<C>, alloc::sync::Arc<L>) -> Self
+d2b_provider_runtime_azure_container_apps	pub struct d2b_provider_runtime_azure_container_apps::AcaController<C, L>
+d2b_provider_runtime_azure_container_apps	pub struct d2b_provider_runtime_azure_container_apps::AzureContainerAppsRuntimeProvider<C, L>
+d2b_provider_runtime_azure_container_apps	pub use d2b_provider_runtime_azure_container_apps::AcaControl
+d2b_provider_runtime_azure_container_apps	pub use d2b_provider_runtime_azure_container_apps::AcaDesiredSandbox
+d2b_provider_runtime_azure_container_apps	pub use d2b_provider_runtime_azure_container_apps::AcaProviderConfig
+d2b_provider_runtime_azure_container_apps	pub use d2b_provider_runtime_azure_container_apps::AcaResourceBinding
+d2b_provider_runtime_azure_container_apps	pub use d2b_provider_runtime_azure_container_apps::AcaWorkloadQuery
+d2b_provider_runtime_azure_virtual_machine	impl core::clone::Clone for d2b_provider_runtime_azure_virtual_machine::config::AzureVmConfig
+d2b_provider_runtime_azure_virtual_machine	impl core::cmp::Eq for d2b_provider_runtime_azure_virtual_machine::config::AzureVmConfig
+d2b_provider_runtime_azure_virtual_machine	impl core::cmp::PartialEq for d2b_provider_runtime_azure_virtual_machine::config::AzureVmConfig
+d2b_provider_runtime_azure_virtual_machine	impl core::fmt::Debug for d2b_provider_runtime_azure_virtual_machine::config::AzureVmConfig
+d2b_provider_runtime_azure_virtual_machine	impl core::marker::Freeze for d2b_provider_runtime_azure_virtual_machine::config::AzureVmConfig
+d2b_provider_runtime_azure_virtual_machine	impl core::marker::Send for d2b_provider_runtime_azure_virtual_machine::config::AzureVmConfig
+d2b_provider_runtime_azure_virtual_machine	impl core::marker::StructuralPartialEq for d2b_provider_runtime_azure_virtual_machine::config::AzureVmConfig
+d2b_provider_runtime_azure_virtual_machine	impl core::marker::Sync for d2b_provider_runtime_azure_virtual_machine::config::AzureVmConfig
+d2b_provider_runtime_azure_virtual_machine	impl core::marker::Unpin for d2b_provider_runtime_azure_virtual_machine::config::AzureVmConfig
+d2b_provider_runtime_azure_virtual_machine	impl core::marker::UnsafeUnpin for d2b_provider_runtime_azure_virtual_machine::config::AzureVmConfig
+d2b_provider_runtime_azure_virtual_machine	impl core::panic::unwind_safe::RefUnwindSafe for d2b_provider_runtime_azure_virtual_machine::config::AzureVmConfig
+d2b_provider_runtime_azure_virtual_machine	impl core::panic::unwind_safe::UnwindSafe for d2b_provider_runtime_azure_virtual_machine::config::AzureVmConfig
+d2b_provider_runtime_azure_virtual_machine	impl d2b_provider_runtime_azure_virtual_machine::config::AzureVmConfig
+d2b_provider_runtime_azure_virtual_machine	impl serde_core::ser::Serialize for d2b_provider_runtime_azure_virtual_machine::config::AzureVmConfig
+d2b_provider_runtime_azure_virtual_machine	impl<'de> serde_core::de::Deserialize<'de> for d2b_provider_runtime_azure_virtual_machine::config::AzureVmConfig
+d2b_provider_runtime_azure_virtual_machine	impl<E> core::marker::Freeze for d2b_provider_runtime_azure_virtual_machine::controller::AzureVmController<E>
+d2b_provider_runtime_azure_virtual_machine	impl<E> core::marker::Send for d2b_provider_runtime_azure_virtual_machine::controller::AzureVmController<E> where E: core::marker::Sync + core::marker::Send
+d2b_provider_runtime_azure_virtual_machine	impl<E> core::marker::Sync for d2b_provider_runtime_azure_virtual_machine::controller::AzureVmController<E> where E: core::marker::Sync + core::marker::Send
+d2b_provider_runtime_azure_virtual_machine	impl<E> core::marker::Unpin for d2b_provider_runtime_azure_virtual_machine::controller::AzureVmController<E>
+d2b_provider_runtime_azure_virtual_machine	impl<E> core::marker::UnsafeUnpin for d2b_provider_runtime_azure_virtual_machine::controller::AzureVmController<E>
+d2b_provider_runtime_azure_virtual_machine	impl<E> core::panic::unwind_safe::RefUnwindSafe for d2b_provider_runtime_azure_virtual_machine::controller::AzureVmController<E> where E: core::panic::unwind_safe::RefUnwindSafe
+d2b_provider_runtime_azure_virtual_machine	impl<E> core::panic::unwind_safe::UnwindSafe for d2b_provider_runtime_azure_virtual_machine::controller::AzureVmController<E> where E: core::panic::unwind_safe::RefUnwindSafe
+d2b_provider_runtime_azure_virtual_machine	impl<E> d2b_provider_runtime_azure_virtual_machine::controller::AzureVmController<E> where E: d2b_provider_runtime_azure_virtual_machine::effect::AzureEffectPort + 'static
+d2b_provider_runtime_azure_virtual_machine	impl<T, U> core::convert::Into<U> for d2b_provider_runtime_azure_virtual_machine::config::AzureVmConfig where U: core::convert::From<T>
+d2b_provider_runtime_azure_virtual_machine	impl<T, U> core::convert::Into<U> for d2b_provider_runtime_azure_virtual_machine::controller::AzureVmController<E> where U: core::convert::From<T>
+d2b_provider_runtime_azure_virtual_machine	impl<T, U> core::convert::TryFrom<U> for d2b_provider_runtime_azure_virtual_machine::config::AzureVmConfig where U: core::convert::Into<T>
+d2b_provider_runtime_azure_virtual_machine	impl<T, U> core::convert::TryFrom<U> for d2b_provider_runtime_azure_virtual_machine::controller::AzureVmController<E> where U: core::convert::Into<T>
+d2b_provider_runtime_azure_virtual_machine	impl<T, U> core::convert::TryInto<U> for d2b_provider_runtime_azure_virtual_machine::config::AzureVmConfig where U: core::convert::TryFrom<T>
+d2b_provider_runtime_azure_virtual_machine	impl<T, U> core::convert::TryInto<U> for d2b_provider_runtime_azure_virtual_machine::controller::AzureVmController<E> where U: core::convert::TryFrom<T>
+d2b_provider_runtime_azure_virtual_machine	impl<T> alloc::borrow::ToOwned for d2b_provider_runtime_azure_virtual_machine::config::AzureVmConfig where T: core::clone::Clone
+d2b_provider_runtime_azure_virtual_machine	impl<T> core::any::Any for d2b_provider_runtime_azure_virtual_machine::config::AzureVmConfig where T: 'static + ?core::marker::Sized
+d2b_provider_runtime_azure_virtual_machine	impl<T> core::any::Any for d2b_provider_runtime_azure_virtual_machine::controller::AzureVmController<E> where T: 'static + ?core::marker::Sized
+d2b_provider_runtime_azure_virtual_machine	impl<T> core::borrow::Borrow<T> for d2b_provider_runtime_azure_virtual_machine::config::AzureVmConfig where T: ?core::marker::Sized
+d2b_provider_runtime_azure_virtual_machine	impl<T> core::borrow::Borrow<T> for d2b_provider_runtime_azure_virtual_machine::controller::AzureVmController<E> where T: ?core::marker::Sized
+d2b_provider_runtime_azure_virtual_machine	impl<T> core::borrow::BorrowMut<T> for d2b_provider_runtime_azure_virtual_machine::config::AzureVmConfig where T: ?core::marker::Sized
+d2b_provider_runtime_azure_virtual_machine	impl<T> core::borrow::BorrowMut<T> for d2b_provider_runtime_azure_virtual_machine::controller::AzureVmController<E> where T: ?core::marker::Sized
+d2b_provider_runtime_azure_virtual_machine	impl<T> core::clone::CloneToUninit for d2b_provider_runtime_azure_virtual_machine::config::AzureVmConfig where T: core::clone::Clone
+d2b_provider_runtime_azure_virtual_machine	impl<T> core::convert::From<T> for d2b_provider_runtime_azure_virtual_machine::config::AzureVmConfig
+d2b_provider_runtime_azure_virtual_machine	impl<T> core::convert::From<T> for d2b_provider_runtime_azure_virtual_machine::controller::AzureVmController<E>
+d2b_provider_runtime_azure_virtual_machine	impl<T> dyn_clone::DynClone for d2b_provider_runtime_azure_virtual_machine::config::AzureVmConfig where T: core::clone::Clone
+d2b_provider_runtime_azure_virtual_machine	impl<T> serde_core::de::DeserializeOwned for d2b_provider_runtime_azure_virtual_machine::config::AzureVmConfig where T: for<'de> serde_core::de::Deserialize<'de>
+d2b_provider_runtime_azure_virtual_machine	impl<T> typenum::type_operators::Same for d2b_provider_runtime_azure_virtual_machine::config::AzureVmConfig
+d2b_provider_runtime_azure_virtual_machine	impl<T> typenum::type_operators::Same for d2b_provider_runtime_azure_virtual_machine::controller::AzureVmController<E>
+d2b_provider_runtime_azure_virtual_machine	pub d2b_provider_runtime_azure_virtual_machine::AzureVmConfig::arm_credential_ref: d2b_contracts::v3::resource_ref::ResourceRef
+d2b_provider_runtime_azure_virtual_machine	pub d2b_provider_runtime_azure_virtual_machine::AzureVmConfig::client_id: core::option::Option<d2b_contracts::v3::credential::OpaqueAzureRef>
+d2b_provider_runtime_azure_virtual_machine	pub d2b_provider_runtime_azure_virtual_machine::AzureVmConfig::controller_execution_ref: d2b_contracts::v3::resource_ref::ResourceRef
+d2b_provider_runtime_azure_virtual_machine	pub d2b_provider_runtime_azure_virtual_machine::AzureVmConfig::network_ref: core::option::Option<d2b_contracts::v3::resource_ref::ResourceRef>
+d2b_provider_runtime_azure_virtual_machine	pub d2b_provider_runtime_azure_virtual_machine::AzureVmConfig::tenant_id: core::option::Option<d2b_contracts::v3::credential::OpaqueAzureRef>
+d2b_provider_runtime_azure_virtual_machine	pub d2b_provider_runtime_azure_virtual_machine::config::AzureVmConfig::arm_credential_ref: d2b_contracts::v3::resource_ref::ResourceRef
+d2b_provider_runtime_azure_virtual_machine	pub d2b_provider_runtime_azure_virtual_machine::config::AzureVmConfig::client_id: core::option::Option<d2b_contracts::v3::credential::OpaqueAzureRef>
+d2b_provider_runtime_azure_virtual_machine	pub d2b_provider_runtime_azure_virtual_machine::config::AzureVmConfig::controller_execution_ref: d2b_contracts::v3::resource_ref::ResourceRef
+d2b_provider_runtime_azure_virtual_machine	pub d2b_provider_runtime_azure_virtual_machine::config::AzureVmConfig::network_ref: core::option::Option<d2b_contracts::v3::resource_ref::ResourceRef>
+d2b_provider_runtime_azure_virtual_machine	pub d2b_provider_runtime_azure_virtual_machine::config::AzureVmConfig::tenant_id: core::option::Option<d2b_contracts::v3::credential::OpaqueAzureRef>
+d2b_provider_runtime_azure_virtual_machine	pub fn d2b_provider_runtime_azure_virtual_machine::config::AzureVmConfig::clone(&self) -> d2b_provider_runtime_azure_virtual_machine::config::AzureVmConfig
+d2b_provider_runtime_azure_virtual_machine	pub fn d2b_provider_runtime_azure_virtual_machine::config::AzureVmConfig::eq(&self, &d2b_provider_runtime_azure_virtual_machine::config::AzureVmConfig) -> bool
+d2b_provider_runtime_azure_virtual_machine	pub fn d2b_provider_runtime_azure_virtual_machine::config::AzureVmConfig::validate_credential_scope(&self, &d2b_contracts::v3::resource_ref::ResourceRef) -> core::result::Result<(), d2b_provider_runtime_azure_virtual_machine::error::AzureVmError>
+d2b_provider_runtime_azure_virtual_machine	pub fn d2b_provider_runtime_azure_virtual_machine::controller::AzureVmController<E>::controller_execution_ref(&self) -> &d2b_contracts::v3::resource_ref::ResourceRef
+d2b_provider_runtime_azure_virtual_machine	pub fn d2b_provider_runtime_azure_virtual_machine::controller::AzureVmController<E>::new(d2b_provider_runtime_azure_virtual_machine::config::AzureVmConfig, d2b_provider_runtime_azure_virtual_machine::config::AzureVmGuestSettings, alloc::sync::Arc<E>, core::option::Option<d2b_provider_runtime_azure_virtual_machine::bootstrap::BootstrapPsk>) -> core::result::Result<Self, d2b_provider_runtime_azure_virtual_machine::error::AzureVmError>
+d2b_provider_runtime_azure_virtual_machine	pub struct d2b_provider_runtime_azure_virtual_machine::AzureVmConfig
+d2b_provider_runtime_azure_virtual_machine	pub struct d2b_provider_runtime_azure_virtual_machine::AzureVmController<E>
+d2b_provider_runtime_azure_virtual_machine	pub struct d2b_provider_runtime_azure_virtual_machine::config::AzureVmConfig
+d2b_provider_runtime_azure_virtual_machine	pub struct d2b_provider_runtime_azure_virtual_machine::controller::AzureVmController<E>
+d2b_provider_runtime_cloud_hypervisor	impl core::clone::Clone for d2b_provider_runtime_cloud_hypervisor::bootstrap_graph::BootstrapGraph
+d2b_provider_runtime_cloud_hypervisor	impl core::clone::Clone for d2b_provider_runtime_cloud_hypervisor::config::CloudHypervisorConfig
+d2b_provider_runtime_cloud_hypervisor	impl core::cmp::Eq for d2b_provider_runtime_cloud_hypervisor::bootstrap_graph::BootstrapGraph
+d2b_provider_runtime_cloud_hypervisor	impl core::cmp::Eq for d2b_provider_runtime_cloud_hypervisor::config::CloudHypervisorConfig
+d2b_provider_runtime_cloud_hypervisor	impl core::cmp::PartialEq for d2b_provider_runtime_cloud_hypervisor::bootstrap_graph::BootstrapGraph
+d2b_provider_runtime_cloud_hypervisor	impl core::cmp::PartialEq for d2b_provider_runtime_cloud_hypervisor::config::CloudHypervisorConfig
+d2b_provider_runtime_cloud_hypervisor	impl core::fmt::Debug for d2b_provider_runtime_cloud_hypervisor::bootstrap_graph::BootstrapGraph
+d2b_provider_runtime_cloud_hypervisor	impl core::fmt::Debug for d2b_provider_runtime_cloud_hypervisor::config::CloudHypervisorConfig
+d2b_provider_runtime_cloud_hypervisor	impl core::marker::Freeze for d2b_provider_runtime_cloud_hypervisor::bootstrap_graph::BootstrapGraph
+d2b_provider_runtime_cloud_hypervisor	impl core::marker::Freeze for d2b_provider_runtime_cloud_hypervisor::config::CloudHypervisorConfig
+d2b_provider_runtime_cloud_hypervisor	impl core::marker::Send for d2b_provider_runtime_cloud_hypervisor::bootstrap_graph::BootstrapGraph
+d2b_provider_runtime_cloud_hypervisor	impl core::marker::Send for d2b_provider_runtime_cloud_hypervisor::config::CloudHypervisorConfig
+d2b_provider_runtime_cloud_hypervisor	impl core::marker::StructuralPartialEq for d2b_provider_runtime_cloud_hypervisor::bootstrap_graph::BootstrapGraph
+d2b_provider_runtime_cloud_hypervisor	impl core::marker::StructuralPartialEq for d2b_provider_runtime_cloud_hypervisor::config::CloudHypervisorConfig
+d2b_provider_runtime_cloud_hypervisor	impl core::marker::Sync for d2b_provider_runtime_cloud_hypervisor::bootstrap_graph::BootstrapGraph
+d2b_provider_runtime_cloud_hypervisor	impl core::marker::Sync for d2b_provider_runtime_cloud_hypervisor::config::CloudHypervisorConfig
+d2b_provider_runtime_cloud_hypervisor	impl core::marker::Unpin for d2b_provider_runtime_cloud_hypervisor::bootstrap_graph::BootstrapGraph
+d2b_provider_runtime_cloud_hypervisor	impl core::marker::Unpin for d2b_provider_runtime_cloud_hypervisor::config::CloudHypervisorConfig
+d2b_provider_runtime_cloud_hypervisor	impl core::marker::UnsafeUnpin for d2b_provider_runtime_cloud_hypervisor::bootstrap_graph::BootstrapGraph
+d2b_provider_runtime_cloud_hypervisor	impl core::marker::UnsafeUnpin for d2b_provider_runtime_cloud_hypervisor::config::CloudHypervisorConfig
+d2b_provider_runtime_cloud_hypervisor	impl core::panic::unwind_safe::RefUnwindSafe for d2b_provider_runtime_cloud_hypervisor::bootstrap_graph::BootstrapGraph
+d2b_provider_runtime_cloud_hypervisor	impl core::panic::unwind_safe::RefUnwindSafe for d2b_provider_runtime_cloud_hypervisor::config::CloudHypervisorConfig
+d2b_provider_runtime_cloud_hypervisor	impl core::panic::unwind_safe::UnwindSafe for d2b_provider_runtime_cloud_hypervisor::bootstrap_graph::BootstrapGraph
+d2b_provider_runtime_cloud_hypervisor	impl core::panic::unwind_safe::UnwindSafe for d2b_provider_runtime_cloud_hypervisor::config::CloudHypervisorConfig
+d2b_provider_runtime_cloud_hypervisor	impl d2b_provider_runtime_cloud_hypervisor::bootstrap_graph::BootstrapGraph
+d2b_provider_runtime_cloud_hypervisor	impl d2b_provider_runtime_cloud_hypervisor::config::CloudHypervisorConfig
+d2b_provider_runtime_cloud_hypervisor	impl serde_core::ser::Serialize for d2b_provider_runtime_cloud_hypervisor::config::CloudHypervisorConfig
+d2b_provider_runtime_cloud_hypervisor	impl<'de> serde_core::de::Deserialize<'de> for d2b_provider_runtime_cloud_hypervisor::config::CloudHypervisorConfig
+d2b_provider_runtime_cloud_hypervisor	impl<E, P> core::marker::Freeze for d2b_provider_runtime_cloud_hypervisor::controller::CloudHypervisorController<E, P>
+d2b_provider_runtime_cloud_hypervisor	impl<E, P> core::marker::Send for d2b_provider_runtime_cloud_hypervisor::controller::CloudHypervisorController<E, P> where E: core::marker::Sync + core::marker::Send, P: core::marker::Sync + core::marker::Send
+d2b_provider_runtime_cloud_hypervisor	impl<E, P> core::marker::Sync for d2b_provider_runtime_cloud_hypervisor::controller::CloudHypervisorController<E, P> where E: core::marker::Sync + core::marker::Send, P: core::marker::Sync + core::marker::Send
+d2b_provider_runtime_cloud_hypervisor	impl<E, P> core::marker::Unpin for d2b_provider_runtime_cloud_hypervisor::controller::CloudHypervisorController<E, P>
+d2b_provider_runtime_cloud_hypervisor	impl<E, P> core::marker::UnsafeUnpin for d2b_provider_runtime_cloud_hypervisor::controller::CloudHypervisorController<E, P>
+d2b_provider_runtime_cloud_hypervisor	impl<E, P> core::panic::unwind_safe::RefUnwindSafe for d2b_provider_runtime_cloud_hypervisor::controller::CloudHypervisorController<E, P> where E: core::panic::unwind_safe::RefUnwindSafe, P: core::panic::unwind_safe::RefUnwindSafe
+d2b_provider_runtime_cloud_hypervisor	impl<E, P> core::panic::unwind_safe::UnwindSafe for d2b_provider_runtime_cloud_hypervisor::controller::CloudHypervisorController<E, P> where E: core::panic::unwind_safe::RefUnwindSafe, P: core::panic::unwind_safe::RefUnwindSafe
+d2b_provider_runtime_cloud_hypervisor	impl<E, P> d2b_provider_runtime_cloud_hypervisor::controller::CloudHypervisorController<E, P> where E: d2b_provider_runtime_cloud_hypervisor::controller::CloudHypervisorEffectPort + 'static, P: d2b_provider_runtime_cloud_hypervisor::health::GuestControlProbe + 'static
+d2b_provider_runtime_cloud_hypervisor	impl<T, U> core::convert::Into<U> for d2b_provider_runtime_cloud_hypervisor::bootstrap_graph::BootstrapGraph where U: core::convert::From<T>
+d2b_provider_runtime_cloud_hypervisor	impl<T, U> core::convert::Into<U> for d2b_provider_runtime_cloud_hypervisor::config::CloudHypervisorConfig where U: core::convert::From<T>
+d2b_provider_runtime_cloud_hypervisor	impl<T, U> core::convert::Into<U> for d2b_provider_runtime_cloud_hypervisor::controller::CloudHypervisorController<E, P> where U: core::convert::From<T>
+d2b_provider_runtime_cloud_hypervisor	impl<T, U> core::convert::TryFrom<U> for d2b_provider_runtime_cloud_hypervisor::bootstrap_graph::BootstrapGraph where U: core::convert::Into<T>
+d2b_provider_runtime_cloud_hypervisor	impl<T, U> core::convert::TryFrom<U> for d2b_provider_runtime_cloud_hypervisor::config::CloudHypervisorConfig where U: core::convert::Into<T>
+d2b_provider_runtime_cloud_hypervisor	impl<T, U> core::convert::TryFrom<U> for d2b_provider_runtime_cloud_hypervisor::controller::CloudHypervisorController<E, P> where U: core::convert::Into<T>
+d2b_provider_runtime_cloud_hypervisor	impl<T, U> core::convert::TryInto<U> for d2b_provider_runtime_cloud_hypervisor::bootstrap_graph::BootstrapGraph where U: core::convert::TryFrom<T>
+d2b_provider_runtime_cloud_hypervisor	impl<T, U> core::convert::TryInto<U> for d2b_provider_runtime_cloud_hypervisor::config::CloudHypervisorConfig where U: core::convert::TryFrom<T>
+d2b_provider_runtime_cloud_hypervisor	impl<T, U> core::convert::TryInto<U> for d2b_provider_runtime_cloud_hypervisor::controller::CloudHypervisorController<E, P> where U: core::convert::TryFrom<T>
+d2b_provider_runtime_cloud_hypervisor	impl<T> alloc::borrow::ToOwned for d2b_provider_runtime_cloud_hypervisor::bootstrap_graph::BootstrapGraph where T: core::clone::Clone
+d2b_provider_runtime_cloud_hypervisor	impl<T> alloc::borrow::ToOwned for d2b_provider_runtime_cloud_hypervisor::config::CloudHypervisorConfig where T: core::clone::Clone
+d2b_provider_runtime_cloud_hypervisor	impl<T> core::any::Any for d2b_provider_runtime_cloud_hypervisor::bootstrap_graph::BootstrapGraph where T: 'static + ?core::marker::Sized
+d2b_provider_runtime_cloud_hypervisor	impl<T> core::any::Any for d2b_provider_runtime_cloud_hypervisor::config::CloudHypervisorConfig where T: 'static + ?core::marker::Sized
+d2b_provider_runtime_cloud_hypervisor	impl<T> core::any::Any for d2b_provider_runtime_cloud_hypervisor::controller::CloudHypervisorController<E, P> where T: 'static + ?core::marker::Sized
+d2b_provider_runtime_cloud_hypervisor	impl<T> core::borrow::Borrow<T> for d2b_provider_runtime_cloud_hypervisor::bootstrap_graph::BootstrapGraph where T: ?core::marker::Sized
+d2b_provider_runtime_cloud_hypervisor	impl<T> core::borrow::Borrow<T> for d2b_provider_runtime_cloud_hypervisor::config::CloudHypervisorConfig where T: ?core::marker::Sized
+d2b_provider_runtime_cloud_hypervisor	impl<T> core::borrow::Borrow<T> for d2b_provider_runtime_cloud_hypervisor::controller::CloudHypervisorController<E, P> where T: ?core::marker::Sized
+d2b_provider_runtime_cloud_hypervisor	impl<T> core::borrow::BorrowMut<T> for d2b_provider_runtime_cloud_hypervisor::bootstrap_graph::BootstrapGraph where T: ?core::marker::Sized
+d2b_provider_runtime_cloud_hypervisor	impl<T> core::borrow::BorrowMut<T> for d2b_provider_runtime_cloud_hypervisor::config::CloudHypervisorConfig where T: ?core::marker::Sized
+d2b_provider_runtime_cloud_hypervisor	impl<T> core::borrow::BorrowMut<T> for d2b_provider_runtime_cloud_hypervisor::controller::CloudHypervisorController<E, P> where T: ?core::marker::Sized
+d2b_provider_runtime_cloud_hypervisor	impl<T> core::clone::CloneToUninit for d2b_provider_runtime_cloud_hypervisor::bootstrap_graph::BootstrapGraph where T: core::clone::Clone
+d2b_provider_runtime_cloud_hypervisor	impl<T> core::clone::CloneToUninit for d2b_provider_runtime_cloud_hypervisor::config::CloudHypervisorConfig where T: core::clone::Clone
+d2b_provider_runtime_cloud_hypervisor	impl<T> core::convert::From<T> for d2b_provider_runtime_cloud_hypervisor::bootstrap_graph::BootstrapGraph
+d2b_provider_runtime_cloud_hypervisor	impl<T> core::convert::From<T> for d2b_provider_runtime_cloud_hypervisor::config::CloudHypervisorConfig
+d2b_provider_runtime_cloud_hypervisor	impl<T> core::convert::From<T> for d2b_provider_runtime_cloud_hypervisor::controller::CloudHypervisorController<E, P>
+d2b_provider_runtime_cloud_hypervisor	impl<T> dyn_clone::DynClone for d2b_provider_runtime_cloud_hypervisor::bootstrap_graph::BootstrapGraph where T: core::clone::Clone
+d2b_provider_runtime_cloud_hypervisor	impl<T> dyn_clone::DynClone for d2b_provider_runtime_cloud_hypervisor::config::CloudHypervisorConfig where T: core::clone::Clone
+d2b_provider_runtime_cloud_hypervisor	impl<T> serde_core::de::DeserializeOwned for d2b_provider_runtime_cloud_hypervisor::config::CloudHypervisorConfig where T: for<'de> serde_core::de::Deserialize<'de>
+d2b_provider_runtime_cloud_hypervisor	impl<T> typenum::type_operators::Same for d2b_provider_runtime_cloud_hypervisor::bootstrap_graph::BootstrapGraph
+d2b_provider_runtime_cloud_hypervisor	impl<T> typenum::type_operators::Same for d2b_provider_runtime_cloud_hypervisor::config::CloudHypervisorConfig
+d2b_provider_runtime_cloud_hypervisor	impl<T> typenum::type_operators::Same for d2b_provider_runtime_cloud_hypervisor::controller::CloudHypervisorController<E, P>
+d2b_provider_runtime_cloud_hypervisor	pub d2b_provider_runtime_cloud_hypervisor::CloudHypervisorConfig::adoption_window_ms: u32
+d2b_provider_runtime_cloud_hypervisor	pub d2b_provider_runtime_cloud_hypervisor::CloudHypervisorConfig::controller_execution_ref: d2b_contracts::v3::resource_ref::ResourceRef
+d2b_provider_runtime_cloud_hypervisor	pub d2b_provider_runtime_cloud_hypervisor::CloudHypervisorConfig::default_machine_type: d2b_contracts::v3::credential::OpaqueAzureRef
+d2b_provider_runtime_cloud_hypervisor	pub d2b_provider_runtime_cloud_hypervisor::CloudHypervisorConfig::default_memory_mb: u32
+d2b_provider_runtime_cloud_hypervisor	pub d2b_provider_runtime_cloud_hypervisor::CloudHypervisorConfig::default_vcpus: u16
+d2b_provider_runtime_cloud_hypervisor	pub d2b_provider_runtime_cloud_hypervisor::CloudHypervisorConfig::health_check_failure_threshold: u8
+d2b_provider_runtime_cloud_hypervisor	pub d2b_provider_runtime_cloud_hypervisor::CloudHypervisorConfig::health_check_interval_ms: u32
+d2b_provider_runtime_cloud_hypervisor	pub d2b_provider_runtime_cloud_hypervisor::CloudHypervisorConfig::health_check_timeout_ms: u32
+d2b_provider_runtime_cloud_hypervisor	pub d2b_provider_runtime_cloud_hypervisor::CloudHypervisorConfig::startup_deadline_ms: u32
+d2b_provider_runtime_cloud_hypervisor	pub d2b_provider_runtime_cloud_hypervisor::CloudHypervisorConfig::watchdog: bool
+d2b_provider_runtime_cloud_hypervisor	pub d2b_provider_runtime_cloud_hypervisor::bootstrap_graph::BootstrapGraph::attachments: alloc::vec::Vec<d2b_provider_runtime_cloud_hypervisor::bootstrap_graph::AttachmentRef>
+d2b_provider_runtime_cloud_hypervisor	pub d2b_provider_runtime_cloud_hypervisor::bootstrap_graph::BootstrapGraph::devices: alloc::vec::Vec<d2b_contracts::v3::resource_ref::ResourceRef>
+d2b_provider_runtime_cloud_hypervisor	pub d2b_provider_runtime_cloud_hypervisor::bootstrap_graph::BootstrapGraph::networks: alloc::vec::Vec<d2b_contracts::v3::resource_ref::ResourceRef>
+d2b_provider_runtime_cloud_hypervisor	pub d2b_provider_runtime_cloud_hypervisor::bootstrap_graph::BootstrapGraph::volumes: alloc::vec::Vec<d2b_contracts::v3::resource_ref::ResourceRef>
+d2b_provider_runtime_cloud_hypervisor	pub d2b_provider_runtime_cloud_hypervisor::config::CloudHypervisorConfig::adoption_window_ms: u32
+d2b_provider_runtime_cloud_hypervisor	pub d2b_provider_runtime_cloud_hypervisor::config::CloudHypervisorConfig::controller_execution_ref: d2b_contracts::v3::resource_ref::ResourceRef
+d2b_provider_runtime_cloud_hypervisor	pub d2b_provider_runtime_cloud_hypervisor::config::CloudHypervisorConfig::default_machine_type: d2b_contracts::v3::credential::OpaqueAzureRef
+d2b_provider_runtime_cloud_hypervisor	pub d2b_provider_runtime_cloud_hypervisor::config::CloudHypervisorConfig::default_memory_mb: u32
+d2b_provider_runtime_cloud_hypervisor	pub d2b_provider_runtime_cloud_hypervisor::config::CloudHypervisorConfig::default_vcpus: u16
+d2b_provider_runtime_cloud_hypervisor	pub d2b_provider_runtime_cloud_hypervisor::config::CloudHypervisorConfig::health_check_failure_threshold: u8
+d2b_provider_runtime_cloud_hypervisor	pub d2b_provider_runtime_cloud_hypervisor::config::CloudHypervisorConfig::health_check_interval_ms: u32
+d2b_provider_runtime_cloud_hypervisor	pub d2b_provider_runtime_cloud_hypervisor::config::CloudHypervisorConfig::health_check_timeout_ms: u32
+d2b_provider_runtime_cloud_hypervisor	pub d2b_provider_runtime_cloud_hypervisor::config::CloudHypervisorConfig::startup_deadline_ms: u32
+d2b_provider_runtime_cloud_hypervisor	pub d2b_provider_runtime_cloud_hypervisor::config::CloudHypervisorConfig::watchdog: bool
+d2b_provider_runtime_cloud_hypervisor	pub fn d2b_provider_runtime_cloud_hypervisor::CloudHypervisorEffectPort::launch<'life0, 'life1, 'life2, 'life3, 'async_trait>(&'life0 self, &'life1 d2b_provider_runtime_cloud_hypervisor::bootstrap_graph::BootstrapGraph, &'life2 d2b_provider_runtime_cloud_hypervisor::config::CloudHypervisorConfig, &'life3 d2b_provider_runtime_cloud_hypervisor::config::CloudHypervisorGuestSettings) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<d2b_provider_runtime_cloud_hypervisor::adoption::ProcessIdentity, d2b_provider_runtime_cloud_hypervisor::controller::CloudHypervisorError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
+d2b_provider_runtime_cloud_hypervisor	pub fn d2b_provider_runtime_cloud_hypervisor::CloudHypervisorEffectPort::observe<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<core::option::Option<d2b_provider_runtime_cloud_hypervisor::adoption::ProcessIdentity>, d2b_provider_runtime_cloud_hypervisor::controller::CloudHypervisorError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+d2b_provider_runtime_cloud_hypervisor	pub fn d2b_provider_runtime_cloud_hypervisor::CloudHypervisorEffectPort::open_pidfd<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 d2b_provider_runtime_cloud_hypervisor::adoption::ProcessIdentity) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), d2b_provider_runtime_cloud_hypervisor::controller::CloudHypervisorError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+d2b_provider_runtime_cloud_hypervisor	pub fn d2b_provider_runtime_cloud_hypervisor::CloudHypervisorEffectPort::stop<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 d2b_provider_runtime_cloud_hypervisor::adoption::ProcessIdentity) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), d2b_provider_runtime_cloud_hypervisor::controller::CloudHypervisorError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+d2b_provider_runtime_cloud_hypervisor	pub fn d2b_provider_runtime_cloud_hypervisor::bootstrap_graph::BootstrapGraph::clone(&self) -> d2b_provider_runtime_cloud_hypervisor::bootstrap_graph::BootstrapGraph
+d2b_provider_runtime_cloud_hypervisor	pub fn d2b_provider_runtime_cloud_hypervisor::bootstrap_graph::BootstrapGraph::eq(&self, &d2b_provider_runtime_cloud_hypervisor::bootstrap_graph::BootstrapGraph) -> bool
+d2b_provider_runtime_cloud_hypervisor	pub fn d2b_provider_runtime_cloud_hypervisor::bootstrap_graph::BootstrapGraph::new(alloc::vec::Vec<d2b_contracts::v3::resource_ref::ResourceRef>, alloc::vec::Vec<d2b_contracts::v3::resource_ref::ResourceRef>, alloc::vec::Vec<d2b_contracts::v3::resource_ref::ResourceRef>, alloc::vec::Vec<d2b_provider_runtime_cloud_hypervisor::bootstrap_graph::AttachmentRef>) -> core::result::Result<Self, d2b_provider_runtime_cloud_hypervisor::bootstrap_graph::BootstrapGraphError>
+d2b_provider_runtime_cloud_hypervisor	pub fn d2b_provider_runtime_cloud_hypervisor::config::CloudHypervisorConfig::clone(&self) -> d2b_provider_runtime_cloud_hypervisor::config::CloudHypervisorConfig
+d2b_provider_runtime_cloud_hypervisor	pub fn d2b_provider_runtime_cloud_hypervisor::config::CloudHypervisorConfig::eq(&self, &d2b_provider_runtime_cloud_hypervisor::config::CloudHypervisorConfig) -> bool
+d2b_provider_runtime_cloud_hypervisor	pub fn d2b_provider_runtime_cloud_hypervisor::controller::CloudHypervisorController<E, P>::new(d2b_provider_runtime_cloud_hypervisor::config::CloudHypervisorConfig, d2b_provider_runtime_cloud_hypervisor::config::CloudHypervisorGuestSettings, d2b_provider_runtime_cloud_hypervisor::bootstrap_graph::BootstrapGraph, alloc::sync::Arc<E>, alloc::sync::Arc<P>) -> core::result::Result<Self, d2b_provider_runtime_cloud_hypervisor::controller::CloudHypervisorError>
+d2b_provider_runtime_cloud_hypervisor	pub fn d2b_provider_runtime_cloud_hypervisor::controller::CloudHypervisorEffectPort::launch<'life0, 'life1, 'life2, 'life3, 'async_trait>(&'life0 self, &'life1 d2b_provider_runtime_cloud_hypervisor::bootstrap_graph::BootstrapGraph, &'life2 d2b_provider_runtime_cloud_hypervisor::config::CloudHypervisorConfig, &'life3 d2b_provider_runtime_cloud_hypervisor::config::CloudHypervisorGuestSettings) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<d2b_provider_runtime_cloud_hypervisor::adoption::ProcessIdentity, d2b_provider_runtime_cloud_hypervisor::controller::CloudHypervisorError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
+d2b_provider_runtime_cloud_hypervisor	pub fn d2b_provider_runtime_cloud_hypervisor::controller::CloudHypervisorEffectPort::observe<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<core::option::Option<d2b_provider_runtime_cloud_hypervisor::adoption::ProcessIdentity>, d2b_provider_runtime_cloud_hypervisor::controller::CloudHypervisorError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+d2b_provider_runtime_cloud_hypervisor	pub fn d2b_provider_runtime_cloud_hypervisor::controller::CloudHypervisorEffectPort::open_pidfd<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 d2b_provider_runtime_cloud_hypervisor::adoption::ProcessIdentity) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), d2b_provider_runtime_cloud_hypervisor::controller::CloudHypervisorError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+d2b_provider_runtime_cloud_hypervisor	pub fn d2b_provider_runtime_cloud_hypervisor::controller::CloudHypervisorEffectPort::stop<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 d2b_provider_runtime_cloud_hypervisor::adoption::ProcessIdentity) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), d2b_provider_runtime_cloud_hypervisor::controller::CloudHypervisorError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+d2b_provider_runtime_cloud_hypervisor	pub struct d2b_provider_runtime_cloud_hypervisor::CloudHypervisorConfig
+d2b_provider_runtime_cloud_hypervisor	pub struct d2b_provider_runtime_cloud_hypervisor::CloudHypervisorController<E, P>
+d2b_provider_runtime_cloud_hypervisor	pub struct d2b_provider_runtime_cloud_hypervisor::bootstrap_graph::BootstrapGraph
+d2b_provider_runtime_cloud_hypervisor	pub struct d2b_provider_runtime_cloud_hypervisor::config::CloudHypervisorConfig
+d2b_provider_runtime_cloud_hypervisor	pub struct d2b_provider_runtime_cloud_hypervisor::controller::CloudHypervisorController<E, P>
+d2b_provider_runtime_cloud_hypervisor	pub trait d2b_provider_runtime_cloud_hypervisor::CloudHypervisorEffectPort: core::marker::Send + core::marker::Sync
+d2b_provider_runtime_cloud_hypervisor	pub trait d2b_provider_runtime_cloud_hypervisor::controller::CloudHypervisorEffectPort: core::marker::Send + core::marker::Sync
 d2b_provider_supervisor	impl<B: d2b_process::backend::ProcessEffectBackend> core::clone::Clone for d2b_provider_supervisor::ProviderSupervisor<B>
 d2b_provider_supervisor	impl<B: d2b_process::backend::ProcessEffectBackend> core::fmt::Debug for d2b_provider_supervisor::ProviderSupervisor<B>
 d2b_provider_supervisor	impl<B: d2b_process::backend::ProcessEffectBackend> d2b_process_conformance::port::ProcessLaunchEffectPort for d2b_provider_supervisor::ProviderSupervisor<B>
@@ -9153,6 +9548,62 @@ d2b_provider_toolkit	pub struct d2b_provider_toolkit::SampleLeaseRequest
 d2b_provider_toolkit	pub struct d2b_provider_toolkit::fakes::FakeBus
 d2b_provider_toolkit	pub trait d2b_provider_toolkit::ExactRegistration<I>
 d2b_provider_toolkit	pub trait d2b_provider_toolkit::ProviderFrameCodec: core::marker::Send + core::marker::Sync
+d2b_provider_transport_azure_relay	impl core::clone::Clone for d2b_provider_transport_azure_relay::relay_transport::RelayTransportConfig
+d2b_provider_transport_azure_relay	impl core::cmp::Eq for d2b_provider_transport_azure_relay::relay_transport::RelayTransportConfig
+d2b_provider_transport_azure_relay	impl core::cmp::PartialEq for d2b_provider_transport_azure_relay::relay_transport::RelayTransportConfig
+d2b_provider_transport_azure_relay	impl core::fmt::Debug for d2b_provider_transport_azure_relay::relay_transport::RelayTransportConfig
+d2b_provider_transport_azure_relay	impl core::marker::Freeze for d2b_provider_transport_azure_relay::relay_transport::RelayTransportConfig
+d2b_provider_transport_azure_relay	impl core::marker::Send for d2b_provider_transport_azure_relay::relay_transport::RelayTransportConfig
+d2b_provider_transport_azure_relay	impl core::marker::StructuralPartialEq for d2b_provider_transport_azure_relay::relay_transport::RelayTransportConfig
+d2b_provider_transport_azure_relay	impl core::marker::Sync for d2b_provider_transport_azure_relay::relay_transport::RelayTransportConfig
+d2b_provider_transport_azure_relay	impl core::marker::Unpin for d2b_provider_transport_azure_relay::relay_transport::RelayTransportConfig
+d2b_provider_transport_azure_relay	impl core::marker::UnsafeUnpin for d2b_provider_transport_azure_relay::relay_transport::RelayTransportConfig
+d2b_provider_transport_azure_relay	impl core::panic::unwind_safe::RefUnwindSafe for d2b_provider_transport_azure_relay::relay_transport::RelayTransportConfig
+d2b_provider_transport_azure_relay	impl core::panic::unwind_safe::UnwindSafe for d2b_provider_transport_azure_relay::relay_transport::RelayTransportConfig
+d2b_provider_transport_azure_relay	impl d2b_provider_transport_azure_relay::relay_transport::RelayTransportConfig
+d2b_provider_transport_azure_relay	impl<C, K> core::marker::Freeze for d2b_provider_transport_azure_relay::relay_transport::AzureRelayTransportProvider<C, K>
+d2b_provider_transport_azure_relay	impl<C, K> core::marker::Send for d2b_provider_transport_azure_relay::relay_transport::AzureRelayTransportProvider<C, K> where C: core::marker::Sync + core::marker::Send, K: core::marker::Sync + core::marker::Send
+d2b_provider_transport_azure_relay	impl<C, K> core::marker::Sync for d2b_provider_transport_azure_relay::relay_transport::AzureRelayTransportProvider<C, K> where C: core::marker::Sync + core::marker::Send, K: core::marker::Sync + core::marker::Send
+d2b_provider_transport_azure_relay	impl<C, K> core::marker::Unpin for d2b_provider_transport_azure_relay::relay_transport::AzureRelayTransportProvider<C, K>
+d2b_provider_transport_azure_relay	impl<C, K> core::marker::UnsafeUnpin for d2b_provider_transport_azure_relay::relay_transport::AzureRelayTransportProvider<C, K>
+d2b_provider_transport_azure_relay	impl<C, K> core::panic::unwind_safe::RefUnwindSafe for d2b_provider_transport_azure_relay::relay_transport::AzureRelayTransportProvider<C, K> where C: core::panic::unwind_safe::RefUnwindSafe, K: core::panic::unwind_safe::RefUnwindSafe
+d2b_provider_transport_azure_relay	impl<C, K> core::panic::unwind_safe::UnwindSafe for d2b_provider_transport_azure_relay::relay_transport::AzureRelayTransportProvider<C, K> where C: core::panic::unwind_safe::RefUnwindSafe, K: core::panic::unwind_safe::RefUnwindSafe
+d2b_provider_transport_azure_relay	impl<C, K> d2b_provider_transport_azure_relay::relay_transport::AzureRelayTransportProvider<C, K> where C: d2b_provider_transport_azure_relay::credential_client::RelayCredentialPort + 'static, K: d2b_provider_transport_azure_relay::relay_transport::RelaySocketConnector + 'static
+d2b_provider_transport_azure_relay	impl<T, U> core::convert::Into<U> for d2b_provider_transport_azure_relay::relay_transport::AzureRelayTransportProvider<C, K> where U: core::convert::From<T>
+d2b_provider_transport_azure_relay	impl<T, U> core::convert::Into<U> for d2b_provider_transport_azure_relay::relay_transport::RelayTransportConfig where U: core::convert::From<T>
+d2b_provider_transport_azure_relay	impl<T, U> core::convert::TryFrom<U> for d2b_provider_transport_azure_relay::relay_transport::AzureRelayTransportProvider<C, K> where U: core::convert::Into<T>
+d2b_provider_transport_azure_relay	impl<T, U> core::convert::TryFrom<U> for d2b_provider_transport_azure_relay::relay_transport::RelayTransportConfig where U: core::convert::Into<T>
+d2b_provider_transport_azure_relay	impl<T, U> core::convert::TryInto<U> for d2b_provider_transport_azure_relay::relay_transport::AzureRelayTransportProvider<C, K> where U: core::convert::TryFrom<T>
+d2b_provider_transport_azure_relay	impl<T, U> core::convert::TryInto<U> for d2b_provider_transport_azure_relay::relay_transport::RelayTransportConfig where U: core::convert::TryFrom<T>
+d2b_provider_transport_azure_relay	impl<T> alloc::borrow::ToOwned for d2b_provider_transport_azure_relay::relay_transport::RelayTransportConfig where T: core::clone::Clone
+d2b_provider_transport_azure_relay	impl<T> core::any::Any for d2b_provider_transport_azure_relay::relay_transport::AzureRelayTransportProvider<C, K> where T: 'static + ?core::marker::Sized
+d2b_provider_transport_azure_relay	impl<T> core::any::Any for d2b_provider_transport_azure_relay::relay_transport::RelayTransportConfig where T: 'static + ?core::marker::Sized
+d2b_provider_transport_azure_relay	impl<T> core::borrow::Borrow<T> for d2b_provider_transport_azure_relay::relay_transport::AzureRelayTransportProvider<C, K> where T: ?core::marker::Sized
+d2b_provider_transport_azure_relay	impl<T> core::borrow::Borrow<T> for d2b_provider_transport_azure_relay::relay_transport::RelayTransportConfig where T: ?core::marker::Sized
+d2b_provider_transport_azure_relay	impl<T> core::borrow::BorrowMut<T> for d2b_provider_transport_azure_relay::relay_transport::AzureRelayTransportProvider<C, K> where T: ?core::marker::Sized
+d2b_provider_transport_azure_relay	impl<T> core::borrow::BorrowMut<T> for d2b_provider_transport_azure_relay::relay_transport::RelayTransportConfig where T: ?core::marker::Sized
+d2b_provider_transport_azure_relay	impl<T> core::clone::CloneToUninit for d2b_provider_transport_azure_relay::relay_transport::RelayTransportConfig where T: core::clone::Clone
+d2b_provider_transport_azure_relay	impl<T> core::convert::From<T> for d2b_provider_transport_azure_relay::relay_transport::AzureRelayTransportProvider<C, K>
+d2b_provider_transport_azure_relay	impl<T> core::convert::From<T> for d2b_provider_transport_azure_relay::relay_transport::RelayTransportConfig
+d2b_provider_transport_azure_relay	impl<T> dyn_clone::DynClone for d2b_provider_transport_azure_relay::relay_transport::RelayTransportConfig where T: core::clone::Clone
+d2b_provider_transport_azure_relay	impl<T> typenum::type_operators::Same for d2b_provider_transport_azure_relay::relay_transport::AzureRelayTransportProvider<C, K>
+d2b_provider_transport_azure_relay	impl<T> typenum::type_operators::Same for d2b_provider_transport_azure_relay::relay_transport::RelayTransportConfig
+d2b_provider_transport_azure_relay	pub const fn d2b_provider_transport_azure_relay::relay_transport::AzureRelayTransportProvider<C, K>::config(&self) -> &d2b_provider_transport_azure_relay::relay_transport::RelayTransportConfig
+d2b_provider_transport_azure_relay	pub d2b_provider_transport_azure_relay::RelayTransportConfig::connect_timeout_seconds: u32
+d2b_provider_transport_azure_relay	pub d2b_provider_transport_azure_relay::RelayTransportConfig::execution_ref: d2b_contracts::v3::resource_ref::ResourceRef
+d2b_provider_transport_azure_relay	pub d2b_provider_transport_azure_relay::RelayTransportConfig::max_concurrent_sessions: u32
+d2b_provider_transport_azure_relay	pub d2b_provider_transport_azure_relay::RelayTransportConfig::network_ref: d2b_contracts::v3::resource_ref::ResourceRef
+d2b_provider_transport_azure_relay	pub d2b_provider_transport_azure_relay::relay_transport::RelayTransportConfig::connect_timeout_seconds: u32
+d2b_provider_transport_azure_relay	pub d2b_provider_transport_azure_relay::relay_transport::RelayTransportConfig::execution_ref: d2b_contracts::v3::resource_ref::ResourceRef
+d2b_provider_transport_azure_relay	pub d2b_provider_transport_azure_relay::relay_transport::RelayTransportConfig::max_concurrent_sessions: u32
+d2b_provider_transport_azure_relay	pub d2b_provider_transport_azure_relay::relay_transport::RelayTransportConfig::network_ref: d2b_contracts::v3::resource_ref::ResourceRef
+d2b_provider_transport_azure_relay	pub fn d2b_provider_transport_azure_relay::relay_transport::AzureRelayTransportProvider<C, K>::new(d2b_provider_transport_azure_relay::relay_transport::RelayTransportConfig, d2b_provider_transport_azure_relay::relay_transport::RelayEndpoint, alloc::sync::Arc<C>, alloc::sync::Arc<K>) -> core::result::Result<Self, d2b_provider_transport_azure_relay::relay_transport::RelayTransportError>
+d2b_provider_transport_azure_relay	pub fn d2b_provider_transport_azure_relay::relay_transport::RelayTransportConfig::clone(&self) -> d2b_provider_transport_azure_relay::relay_transport::RelayTransportConfig
+d2b_provider_transport_azure_relay	pub fn d2b_provider_transport_azure_relay::relay_transport::RelayTransportConfig::eq(&self, &d2b_provider_transport_azure_relay::relay_transport::RelayTransportConfig) -> bool
+d2b_provider_transport_azure_relay	pub struct d2b_provider_transport_azure_relay::AzureRelayTransportProvider<C, K>
+d2b_provider_transport_azure_relay	pub struct d2b_provider_transport_azure_relay::RelayTransportConfig
+d2b_provider_transport_azure_relay	pub struct d2b_provider_transport_azure_relay::relay_transport::AzureRelayTransportProvider<C, K>
+d2b_provider_transport_azure_relay	pub struct d2b_provider_transport_azure_relay::relay_transport::RelayTransportConfig
 d2b_provider_volume_local	impl !core::marker::Sync for d2b_provider_volume_local::lock::LockGuard
 d2b_provider_volume_local	impl !core::marker::Sync for d2b_provider_volume_local::lock::LockSet
 d2b_provider_volume_local	impl !core::panic::unwind_safe::RefUnwindSafe for d2b_provider_volume_local::lock::LockGuard

@@ -1,0 +1,10 @@
+ACA Provider integration fixtures are intentionally kept behind the Provider
+effect ports. Run hermetic lifecycle coverage with:
+
+```text
+cargo test -p d2b-provider-runtime-azure-container-apps
+```
+
+The fixture path never uses Azure credentials, network access, a broker, or a
+host socket. Live validation is manual-only and must be explicitly enabled by
+the deployment harness.
