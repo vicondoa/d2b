@@ -189,7 +189,7 @@ fn profile_tool_policies(matrix: &str) -> Result<BTreeMap<String, String>, Strin
 
 fn provider_tool_policies(city: &str) -> Result<BTreeMap<String, String>, String> {
     let provider = Regex::new(
-        r#"(?ms)^\[providers\.([^\]]+)\]\s.*?^acp_args = \[\s*"--profile",\s*"[^"]+",\s*"--tool-policy",\s*"([^"]+)""#,
+        r#"(?ms)^\[providers\.([^\].]+)\]\s.*?^acp_args = \[\s*"--profile",\s*"[^"]+",\s*"--tool-policy",\s*"([^"]+)""#,
     )
     .expect("valid provider tool-policy regex");
     let mut policies = BTreeMap::new();

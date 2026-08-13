@@ -693,6 +693,7 @@ def scrub_environment(
     profile: str,
     run_id: str,
     bead_id: str,
+    root_bead_id: str | None = None,
     generation: str | None = None,
     state_schema: str | None = None,
 ) -> dict[str, str]:
