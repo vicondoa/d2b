@@ -920,9 +920,9 @@ pub(crate) fn normalize_audit_outboxes(database: &Database) -> Result<(), StoreE
 
 /// Normalize legacy audit rows before applying the strict store checks.
 ///
-/// This is the single startup and migration validation path. A current
-/// schema store can therefore be repaired in place before its outbox fields
-/// are checked, while older supported schemas are normalized before their
+/// Read-only table and identity admission is completed before any repair. A
+/// current schema store can therefore be repaired in place only after it has
+/// been admitted, while older supported schemas are normalized before their
 /// migration copy is accepted.
 pub(crate) fn normalize_and_validate(
     database: &Database,
@@ -930,33 +930,36 @@ pub(crate) fn normalize_and_validate(
     expected_schema_version: u32,
     require_revision_match: bool,
 ) -> Result<StoreMeta, StoreError> {
-    let observed_version = {
-        let read = database.begin_read().map_err(integrity)?;
-        read_meta(&read)?.schema_version
-    };
-    if observed_version != expected_schema_version {
-        return Err(integrity("store-schema-version-mismatch"));
-    }
-
-    backfill_schema_catalog(database)?;
-    normalize_audit_outboxes(database)?;
-
-    let meta = if expected_schema_version == PHYSICAL_SCHEMA_VERSION {
-        if require_revision_match {
-            validate_identity(database, identity)?
-        } else {
-            validate_identity_for_open(database, identity)?
-        }
-    } else {
+    let admitted_meta = {
         let read = database.begin_read().map_err(integrity)?;
         validate_table_set(&read)?;
         let meta = read_meta(&read)?;
+        if meta.schema_version != expected_schema_version {
+            return Err(integrity("store-schema-version-mismatch"));
+        }
+        validate_store_identity(&meta, identity)?;
+        if require_revision_match && !revisions_match(&meta, identity.revisions) {
+            return Err(integrity("store-identity-mismatch"));
+        }
+        meta
+    };
+
+    if expected_schema_version == PHYSICAL_SCHEMA_VERSION {
+        backfill_schema_catalog(database)?;
+    }
+    normalize_audit_outboxes(database)?;
+
+    let meta = {
+        let read = database.begin_read().map_err(integrity)?;
+        validate_table_set(&read)?;
+        let meta = read_meta(&read)?;
+        if meta.schema_version != expected_schema_version {
+            return Err(integrity("store-schema-version-mismatch"));
+        }
         validate_store_identity(&meta, identity)?;
         meta
     };
-    if meta.schema_version != expected_schema_version {
-        return Err(integrity("store-schema-version-mismatch"));
-    }
+    debug_assert_eq!(admitted_meta.schema_version, meta.schema_version);
     if require_revision_match && !revisions_match(&meta, identity.revisions) {
         return Err(integrity("store-identity-mismatch"));
     }
@@ -966,6 +969,7 @@ pub(crate) fn normalize_and_validate(
     Ok(meta)
 }
 
+#[cfg(test)]
 pub(crate) fn validate_identity(
     database: &Database,
     identity: &crate::StoreIdentity,
@@ -977,6 +981,7 @@ pub(crate) fn validate_identity(
     Ok(meta)
 }
 
+#[cfg(test)]
 pub(crate) fn validate_identity_for_open(
     database: &Database,
     identity: &crate::StoreIdentity,
@@ -5215,6 +5220,42 @@ mod tests {
         assert_eq!(
             validate_identity(&database, &identity).unwrap().zone_name,
             "dev"
+        );
+    }
+
+    #[test]
+    fn identity_gate_rejects_foreign_store_before_any_legacy_repair() {
+        let (directory, database, identity) = fixture();
+        let target = ResourceRef::parse("Host/host-system").unwrap();
+        let uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
+        let operation = verified(
+            "foreign-legacy",
+            create_mutation_with_uid(target, &uid),
+            uid,
+        );
+        let legacy_digest = legacy_operation_digest(&operation).unwrap();
+        apply_group(&database, vec![operation]).unwrap();
+        rewrite_request_digest(&database, "foreign-legacy", legacy_digest);
+
+        let mut write = database.begin_write().unwrap();
+        set_full_durability(&mut write).unwrap();
+        let mut meta = read_meta_in_write(&write).unwrap();
+        meta.store_uuid = "33333333-3333-4333-8333-333333333333".to_owned();
+        let value = encode(ValueKind::StoreMetaScalar, &meta).unwrap();
+        write
+            .open_table(STORE_META)
+            .unwrap()
+            .insert(meta_key().as_slice(), value.as_slice())
+            .unwrap();
+        write.commit().unwrap();
+
+        let before = std::fs::read(directory.path().join("store.redb")).unwrap();
+        let error = normalize_and_validate(&database, &identity, PHYSICAL_SCHEMA_VERSION, false)
+            .unwrap_err();
+        assert_eq!(error.reason_code(), "store-identity-mismatch");
+        assert_eq!(
+            std::fs::read(directory.path().join("store.redb")).unwrap(),
+            before
         );
     }
 }

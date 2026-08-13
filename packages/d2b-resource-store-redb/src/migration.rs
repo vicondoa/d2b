@@ -37,6 +37,7 @@ pub const DEFAULT_STAGED_FILE_NAME: &str = "store.redb.staged";
 pub const DEFAULT_PRIOR_FILE_NAME: &str = "store.redb.prior";
 
 const STAGED_PREPARED_MARKER_FILE_NAME: &str = "store.redb.staged.prepared";
+const STAGED_PREPARED_MARKER_TEMP_FILE_NAME: &str = "store.redb.staged.prepared.tmp";
 
 /// One approved edge in the physical-schema migration graph.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -220,69 +221,150 @@ fn recover_owned_inner(
         DEFAULT_ACTIVE_FILE_NAME,
         DEFAULT_PRIOR_FILE_NAME,
     )?;
-    match state {
-        PublicationState::Empty => {
-            if entry_type(parent, STAGED_PREPARED_MARKER_FILE_NAME)?.is_some() {
-                return Err(quarantine(identity, "migration-stage-marker-without-stage"));
-            }
-            Ok(RecoveryOutcome::Clean)
+    let marker = inspect_stage_prepared_marker(parent, identity)?;
+    let marker_temp_present = match entry_type(parent, STAGED_PREPARED_MARKER_TEMP_FILE_NAME)? {
+        None => false,
+        Some(FileType::RegularFile) => true,
+        Some(_) => {
+            return Err(quarantine(
+                identity,
+                "migration-stage-marker-temp-not-regular",
+            ));
         }
-        PublicationState::ActiveOnly => {
-            validate_named_supported(parent, DEFAULT_ACTIVE_FILE_NAME, identity)?;
-            if entry_type(parent, STAGED_PREPARED_MARKER_FILE_NAME)?.is_some() {
-                validate_named_prepared_marker_against_active(parent, identity)?;
-                remove_stage_prepared_marker(parent, identity)?;
-                sync_parent(parent, identity)?;
-                return Ok(RecoveryOutcome::Finalized);
+    };
+    match state {
+        PublicationState::Empty => match marker {
+            StageMarkerState::Absent => {
+                if marker_temp_present {
+                    remove_stage_prepared_marker_temp(parent, identity)?;
+                    sync_parent(parent, identity)?;
+                    return Ok(RecoveryOutcome::Finalized);
+                }
+                Ok(RecoveryOutcome::Clean)
             }
-            Ok(RecoveryOutcome::Clean)
+            StageMarkerState::Prepared(_) => {
+                discard_marker_residue(parent, identity)?;
+                Ok(RecoveryOutcome::Finalized)
+            }
+            StageMarkerState::Invalid => {
+                Err(quarantine(identity, "migration-stage-marker-without-stage"))
+            }
+            StageMarkerState::Unsafe => Err(quarantine(
+                identity,
+                "migration-stage-marker-identity-mismatch",
+            )),
+        },
+        PublicationState::ActiveOnly => {
+            if matches!(&marker, StageMarkerState::Unsafe) {
+                return Err(quarantine(
+                    identity,
+                    "migration-stage-marker-identity-mismatch",
+                ));
+            }
+            validate_named_supported(parent, DEFAULT_ACTIVE_FILE_NAME, identity)?;
+            match marker {
+                StageMarkerState::Absent => {
+                    if marker_temp_present {
+                        remove_stage_prepared_marker_temp(parent, identity)?;
+                        sync_parent(parent, identity)?;
+                        return Ok(RecoveryOutcome::Finalized);
+                    }
+                    Ok(RecoveryOutcome::Clean)
+                }
+                StageMarkerState::Prepared(_) | StageMarkerState::Invalid => {
+                    discard_marker_residue(parent, identity)?;
+                    Ok(RecoveryOutcome::Finalized)
+                }
+                StageMarkerState::Unsafe => Err(quarantine(
+                    identity,
+                    "migration-stage-marker-identity-mismatch",
+                )),
+            }
         }
         PublicationState::ActiveAndStaged => {
+            if matches!(&marker, StageMarkerState::Unsafe) {
+                return Err(quarantine(
+                    identity,
+                    "migration-stage-marker-identity-mismatch",
+                ));
+            }
             validate_named_supported(parent, DEFAULT_ACTIVE_FILE_NAME, identity)?;
-            if !stage_is_prepared(parent, identity)? {
-                discard_unprepared_stage(parent, identity)?;
-                return Ok(RecoveryOutcome::Clean);
+            match marker {
+                StageMarkerState::Absent | StageMarkerState::Invalid => {
+                    discard_unpublished_stage(parent, identity)?;
+                    Ok(RecoveryOutcome::Clean)
+                }
+                StageMarkerState::Unsafe => unreachable!("unsafe marker returned above"),
+                StageMarkerState::Prepared(_) => {
+                    validate_named_prepared_current(parent, identity)?;
+                    publish_with_rollback(parent, None, identity)?;
+                    validate_named_current(parent, DEFAULT_ACTIVE_FILE_NAME, identity)?;
+                    finalize_prior(parent, identity)?;
+                    Ok(RecoveryOutcome::Resumed)
+                }
             }
-            validate_named_prepared_current(parent, identity)?;
-            publish_with_rollback(parent, None, identity)?;
-            validate_named_current(parent, DEFAULT_ACTIVE_FILE_NAME, identity)?;
-            finalize_prior(parent, identity)?;
-            Ok(RecoveryOutcome::Resumed)
         }
-        PublicationState::StagedOnly => {
-            if !stage_is_prepared(parent, identity)? {
-                return Err(quarantine(
-                    identity,
-                    "migration-unprepared-stage-without-active",
-                ));
+        PublicationState::StagedOnly => match marker {
+            StageMarkerState::Absent => {
+                discard_unpublished_stage(parent, identity)?;
+                Ok(RecoveryOutcome::Clean)
             }
-            validate_named_prepared_current(parent, identity)?;
-            publish_with_rollback(parent, None, identity)?;
-            validate_named_current(parent, DEFAULT_ACTIVE_FILE_NAME, identity)?;
-            Ok(RecoveryOutcome::Resumed)
-        }
+            StageMarkerState::Invalid => Err(quarantine(
+                identity,
+                "migration-unprepared-stage-without-active",
+            )),
+            StageMarkerState::Unsafe => Err(quarantine(
+                identity,
+                "migration-stage-marker-identity-mismatch",
+            )),
+            StageMarkerState::Prepared(_) => {
+                validate_named_prepared_current(parent, identity)?;
+                publish_with_rollback(parent, None, identity)?;
+                validate_named_current(parent, DEFAULT_ACTIVE_FILE_NAME, identity)?;
+                Ok(RecoveryOutcome::Resumed)
+            }
+        },
         PublicationState::StagedAndPrior => {
-            if !stage_is_prepared(parent, identity)? {
-                return Err(quarantine(
-                    identity,
-                    "migration-unprepared-stage-without-active",
-                ));
+            if !matches!(&marker, StageMarkerState::Prepared(_)) {
+                return Err(match marker {
+                    StageMarkerState::Unsafe => {
+                        quarantine(identity, "migration-stage-marker-identity-mismatch")
+                    }
+                    _ => quarantine(identity, "migration-unprepared-stage-without-active"),
+                });
             }
             validate_named_prepared_current(parent, identity)?;
             validate_named_supported(parent, DEFAULT_PRIOR_FILE_NAME, identity)?;
             resume_staged_with_prior(parent, identity)?;
             validate_named_current(parent, DEFAULT_ACTIVE_FILE_NAME, identity)?;
             remove_stage_prepared_marker(parent, identity)?;
+            remove_stage_prepared_marker_temp(parent, identity)?;
             sync_parent(parent, identity)?;
             finalize_prior(parent, identity)?;
             Ok(RecoveryOutcome::Resumed)
         }
         PublicationState::ActiveAndPrior => {
+            if matches!(&marker, StageMarkerState::Unsafe) {
+                return Err(quarantine(
+                    identity,
+                    "migration-stage-marker-identity-mismatch",
+                ));
+            }
             validate_named_current(parent, DEFAULT_ACTIVE_FILE_NAME, identity)?;
             validate_named_supported(parent, DEFAULT_PRIOR_FILE_NAME, identity)?;
-            if entry_type(parent, STAGED_PREPARED_MARKER_FILE_NAME)?.is_some() {
-                validate_named_prepared_marker_against_active(parent, identity)?;
-                remove_stage_prepared_marker(parent, identity)?;
+            let marker_cleanup = matches!(
+                &marker,
+                StageMarkerState::Prepared(_) | StageMarkerState::Invalid
+            );
+            match marker {
+                StageMarkerState::Unsafe => unreachable!("unsafe marker returned above"),
+                StageMarkerState::Absent => {}
+                StageMarkerState::Prepared(_) | StageMarkerState::Invalid => {
+                    discard_marker_residue(parent, identity)?;
+                }
+            }
+            if marker_temp_present && !marker_cleanup {
+                remove_stage_prepared_marker_temp(parent, identity)?;
                 sync_parent(parent, identity)?;
             }
             finalize_prior(parent, identity)?;
@@ -320,8 +402,20 @@ fn prepare_restore_stage(
     identity: &StoreIdentity,
     next_backup_generation: u64,
 ) -> Result<(), StoreError> {
+    prepare_restore_stage_with_fault(parent, backup, identity, next_backup_generation, None)
+}
+
+fn prepare_restore_stage_with_fault(
+    parent: &File,
+    backup: &LogicalBackup,
+    identity: &StoreIdentity,
+    next_backup_generation: u64,
+    fault: Option<PublicationBoundary>,
+) -> Result<(), StoreError> {
     let staged = create_stage(parent, identity)?;
+    inject_boundary_fault(fault, PublicationBoundary::StageCreate, identity)?;
     let result = (|| {
+        inject_boundary_fault(fault, PublicationBoundary::StageDatabaseCreate, identity)?;
         let database = backup
             .restore_file_with_generation(staged, identity, next_backup_generation)
             .map_err(|error| {
@@ -332,10 +426,11 @@ fn prepare_restore_stage(
                     quarantine(identity, "migration-staged-restore-invalid")
                 }
             })?;
+        inject_boundary_fault(fault, PublicationBoundary::StageDatabaseCommit, identity)?;
         drop(database);
-        finish_stage_preparation(parent, identity)
+        finish_stage_preparation_with_fault(parent, identity, fault)
     })();
-    cleanup_failed_stage(parent, identity, result)
+    cleanup_failed_stage_with_fault(parent, identity, result, fault)
 }
 
 fn prepare_upgrade_stage(
@@ -344,7 +439,18 @@ fn prepare_upgrade_stage(
     identity: &StoreIdentity,
     from: u32,
 ) -> Result<(), StoreError> {
+    prepare_upgrade_stage_with_fault(source, parent, identity, from, None)
+}
+
+fn prepare_upgrade_stage_with_fault(
+    source: &Database,
+    parent: &File,
+    identity: &StoreIdentity,
+    from: u32,
+    fault: Option<PublicationBoundary>,
+) -> Result<(), StoreError> {
     let staged = create_stage(parent, identity)?;
+    inject_boundary_fault(fault, PublicationBoundary::StageCreate, identity)?;
     let result = (|| {
         let backend = FileBackend::new(staged)
             .map_err(|_| quarantine(identity, "migration-staged-open-failed"))?;
@@ -352,7 +458,9 @@ fn prepare_upgrade_stage(
             .set_cache_size(REDB_CACHE_SIZE)
             .create_with_backend(backend)
             .map_err(|_| quarantine(identity, "migration-staged-open-failed"))?;
+        inject_boundary_fault(fault, PublicationBoundary::StageDatabaseCreate, identity)?;
         copy_registered_step(source, &target, from, identity)?;
+        inject_boundary_fault(fault, PublicationBoundary::StageDatabaseCommit, identity)?;
         drop(target);
         // Normalize U4 outbox identity, mutation, and timestamp fields in
         // the staged copy before the strict current-schema validation runs.
@@ -365,31 +473,38 @@ fn prepare_upgrade_stage(
             }
         })?;
         drop(staged_database);
-        finish_stage_preparation(parent, identity)
+        finish_stage_preparation_with_fault(parent, identity, fault)
     })();
-    cleanup_failed_stage(parent, identity, result)
+    cleanup_failed_stage_with_fault(parent, identity, result, fault)
 }
 
-fn finish_stage_preparation(parent: &File, identity: &StoreIdentity) -> Result<(), StoreError> {
+fn finish_stage_preparation_with_fault(
+    parent: &File,
+    identity: &StoreIdentity,
+    fault: Option<PublicationBoundary>,
+) -> Result<(), StoreError> {
     validate_named_current(parent, DEFAULT_STAGED_FILE_NAME, identity)?;
-    sync_named_stage(parent, identity)?;
-    mark_stage_prepared(parent, identity)
+    sync_named_stage_with_fault(parent, identity, fault)?;
+    mark_stage_prepared_with_fault(parent, identity, fault)
 }
 
-fn cleanup_failed_stage<T>(
+fn cleanup_failed_stage_with_fault<T>(
     parent: &File,
     identity: &StoreIdentity,
     result: Result<T, StoreError>,
+    fault: Option<PublicationBoundary>,
 ) -> Result<T, StoreError> {
     let Err(error) = result else {
         return result;
     };
-    if entry_type(parent, DEFAULT_STAGED_FILE_NAME)?.is_some() {
-        remove_regular(parent, DEFAULT_STAGED_FILE_NAME, identity)?;
-    }
-    if entry_type(parent, STAGED_PREPARED_MARKER_FILE_NAME)?.is_some() {
-        remove_stage_prepared_marker(parent, identity)?;
-    }
+    remove_stage_prepared_marker(parent, identity)?;
+    inject_boundary_fault(fault, PublicationBoundary::MarkerRemove, identity)?;
+    sync_parent(parent, identity)?;
+    remove_stage_prepared_marker_temp(parent, identity)?;
+    inject_boundary_fault(fault, PublicationBoundary::MarkerTempRemove, identity)?;
+    sync_parent(parent, identity)?;
+    remove_regular_if_present(parent, DEFAULT_STAGED_FILE_NAME, identity)?;
+    inject_boundary_fault(fault, PublicationBoundary::StageRemove, identity)?;
     sync_parent(parent, identity)?;
     Err(error)
 }
@@ -558,10 +673,7 @@ fn publish_once(
         return Err(quarantine(identity, "migration-publication-state-invalid"));
     }
     validate_named_prepared_current(parent, identity)?;
-    sync_named_stage(parent, identity)?;
-    if fault == Some(PublicationBoundary::StageSync) {
-        return Err(injected_fault("migration-fault-after-stage-sync", identity));
-    }
+    sync_named_stage_with_fault(parent, identity, fault)?;
     if matches!(state, PublicationState::ActiveAndStaged) {
         renameat_with(
             parent,
@@ -598,6 +710,9 @@ fn publish_once(
         return Err(injected_fault("migration-fault-after-final-sync", identity));
     }
     remove_stage_prepared_marker(parent, identity)?;
+    inject_boundary_fault(fault, PublicationBoundary::MarkerRemove, identity)?;
+    sync_parent(parent, identity)?;
+    remove_stage_prepared_marker_temp(parent, identity)?;
     sync_parent(parent, identity)?;
     Ok(())
 }
@@ -623,18 +738,16 @@ fn rollback_publication(parent: &File, identity: &StoreIdentity) -> Result<(), S
     )?;
     match state {
         PublicationState::StagedOnly | PublicationState::ActiveAndStaged => {
-            remove_regular(parent, DEFAULT_STAGED_FILE_NAME, identity)?;
-            if entry_type(parent, STAGED_PREPARED_MARKER_FILE_NAME)?.is_some() {
-                remove_stage_prepared_marker(parent, identity)?;
-            }
+            remove_stage_prepared_marker(parent, identity)?;
+            remove_stage_prepared_marker_temp(parent, identity)?;
+            remove_regular_if_present(parent, DEFAULT_STAGED_FILE_NAME, identity)?;
             sync_parent(parent, identity)
         }
         PublicationState::StagedAndPrior => {
             validate_named_supported(parent, DEFAULT_PRIOR_FILE_NAME, identity)?;
-            remove_regular(parent, DEFAULT_STAGED_FILE_NAME, identity)?;
-            if entry_type(parent, STAGED_PREPARED_MARKER_FILE_NAME)?.is_some() {
-                remove_stage_prepared_marker(parent, identity)?;
-            }
+            remove_stage_prepared_marker(parent, identity)?;
+            remove_stage_prepared_marker_temp(parent, identity)?;
+            remove_regular_if_present(parent, DEFAULT_STAGED_FILE_NAME, identity)?;
             renameat_with(
                 parent,
                 DEFAULT_PRIOR_FILE_NAME,
@@ -646,10 +759,9 @@ fn rollback_publication(parent: &File, identity: &StoreIdentity) -> Result<(), S
             sync_parent(parent, identity)
         }
         PublicationState::ActiveAndPrior => {
+            remove_stage_prepared_marker(parent, identity)?;
+            remove_stage_prepared_marker_temp(parent, identity)?;
             remove_regular(parent, DEFAULT_ACTIVE_FILE_NAME, identity)?;
-            if entry_type(parent, STAGED_PREPARED_MARKER_FILE_NAME)?.is_some() {
-                remove_stage_prepared_marker(parent, identity)?;
-            }
             validate_named_supported(parent, DEFAULT_PRIOR_FILE_NAME, identity)?;
             renameat_with(
                 parent,
@@ -662,13 +774,25 @@ fn rollback_publication(parent: &File, identity: &StoreIdentity) -> Result<(), S
             sync_parent(parent, identity)
         }
         PublicationState::ActiveOnly => {
-            if entry_type(parent, STAGED_PREPARED_MARKER_FILE_NAME)?.is_some() {
+            let marker_present = entry_type(parent, STAGED_PREPARED_MARKER_FILE_NAME)?.is_some();
+            let temp_present = entry_type(parent, STAGED_PREPARED_MARKER_TEMP_FILE_NAME)?.is_some();
+            if marker_present || temp_present {
                 remove_stage_prepared_marker(parent, identity)?;
+                remove_stage_prepared_marker_temp(parent, identity)?;
                 sync_parent(parent, identity)?;
             }
             Ok(())
         }
-        PublicationState::Empty => Ok(()),
+        PublicationState::Empty => {
+            let marker_present = entry_type(parent, STAGED_PREPARED_MARKER_FILE_NAME)?.is_some();
+            let temp_present = entry_type(parent, STAGED_PREPARED_MARKER_TEMP_FILE_NAME)?.is_some();
+            if marker_present || temp_present {
+                remove_stage_prepared_marker(parent, identity)?;
+                remove_stage_prepared_marker_temp(parent, identity)?;
+                sync_parent(parent, identity)?;
+            }
+            Ok(())
+        }
         PublicationState::PriorOnly | PublicationState::AllPresent => {
             Err(quarantine(identity, "migration-rollback-state-ambiguous"))
         }
@@ -717,15 +841,6 @@ fn validate_named_prepared_current(
     identity: &StoreIdentity,
 ) -> Result<(), StoreError> {
     let database = open_named_database(parent, DEFAULT_STAGED_FILE_NAME, identity)?;
-    let meta = validate_database(&database, identity, Some(CURRENT_PHYSICAL_SCHEMA_VERSION))?;
-    validate_stage_prepared_marker(parent, identity, &meta)
-}
-
-fn validate_named_prepared_marker_against_active(
-    parent: &File,
-    identity: &StoreIdentity,
-) -> Result<(), StoreError> {
-    let database = open_named_database(parent, DEFAULT_ACTIVE_FILE_NAME, identity)?;
     let meta = validate_database(&database, identity, Some(CURRENT_PHYSICAL_SCHEMA_VERSION))?;
     validate_stage_prepared_marker(parent, identity, &meta)
 }
@@ -846,6 +961,12 @@ fn create_stage(parent: &File, identity: &StoreIdentity) -> Result<File, StoreEr
             "migration-stage-marker-already-present",
         ));
     }
+    if entry_type(parent, STAGED_PREPARED_MARKER_TEMP_FILE_NAME)?.is_some() {
+        return Err(quarantine(
+            identity,
+            "migration-stage-marker-temp-already-present",
+        ));
+    }
     let fd = openat(
         parent,
         DEFAULT_STAGED_FILE_NAME,
@@ -859,26 +980,143 @@ fn create_stage(parent: &File, identity: &StoreIdentity) -> Result<File, StoreEr
     Ok(file)
 }
 
+#[cfg(test)]
 fn sync_named_stage(parent: &File, identity: &StoreIdentity) -> Result<(), StoreError> {
-    let staged = open_named_file(parent, DEFAULT_STAGED_FILE_NAME, identity)?;
-    backup::sync_staged_file(&staged, parent)
-        .map_err(|_| quarantine(identity, "migration-staged-sync-failed"))
+    sync_named_stage_with_fault(parent, identity, None)
 }
 
-fn stage_is_prepared(parent: &File, identity: &StoreIdentity) -> Result<bool, StoreError> {
-    match entry_type(parent, STAGED_PREPARED_MARKER_FILE_NAME)? {
-        None => Ok(false),
-        Some(FileType::RegularFile) => Ok(true),
-        Some(_) => Err(quarantine(identity, "migration-stage-marker-not-regular")),
+fn sync_named_stage_with_fault(
+    parent: &File,
+    identity: &StoreIdentity,
+    fault: Option<PublicationBoundary>,
+) -> Result<(), StoreError> {
+    let staged = open_named_file(parent, DEFAULT_STAGED_FILE_NAME, identity)?;
+    backup::sync_staged_file(&staged, parent)
+        .map_err(|_| quarantine(identity, "migration-staged-sync-failed"))?;
+    inject_boundary_fault(fault, PublicationBoundary::StageSync, identity)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum StageMarkerState {
+    Absent,
+    Prepared(StoreMeta),
+    Invalid,
+    Unsafe,
+}
+
+fn inspect_stage_prepared_marker(
+    parent: &File,
+    identity: &StoreIdentity,
+) -> Result<StageMarkerState, StoreError> {
+    let Some(file_type) = entry_type(parent, STAGED_PREPARED_MARKER_FILE_NAME)? else {
+        return Ok(StageMarkerState::Absent);
+    };
+    if file_type != FileType::RegularFile {
+        return Err(quarantine(identity, "migration-stage-marker-not-regular"));
+    }
+    let marker = open_named_file(parent, STAGED_PREPARED_MARKER_FILE_NAME, identity)?;
+    let mut bytes = Vec::new();
+    marker
+        .take(4096)
+        .read_to_end(&mut bytes)
+        .map_err(|_| quarantine(identity, "migration-stage-marker-read-failed"))?;
+    Ok(parse_stage_prepared_marker(&bytes, identity))
+}
+
+fn parse_stage_prepared_marker(bytes: &[u8], identity: &StoreIdentity) -> StageMarkerState {
+    let mut lines = bytes.splitn(3, |byte| *byte == b'\n');
+    if lines.next() != Some(b"d2b-redb-stage-prepared/v1") {
+        return StageMarkerState::Invalid;
+    }
+    let Some(slot) = lines.next().and_then(|line| line.strip_prefix(b"slot=")) else {
+        return StageMarkerState::Invalid;
+    };
+    let Ok(slot) = std::str::from_utf8(slot) else {
+        return StageMarkerState::Invalid;
+    };
+    let Ok(slot) = slot.parse::<u32>() else {
+        return StageMarkerState::Invalid;
+    };
+    if slot != identity.slot().get() {
+        return StageMarkerState::Unsafe;
+    }
+    let Some(mut metadata) = lines.next() else {
+        return StageMarkerState::Invalid;
+    };
+    if let Some(stripped) = metadata.strip_suffix(b"\n") {
+        metadata = stripped;
+    }
+    let Ok(meta) = serde_json::from_slice::<StoreMeta>(metadata) else {
+        return StageMarkerState::Invalid;
+    };
+    if meta.store_uuid != identity.store_uuid().as_str()
+        || meta.zone_name != identity.zone().as_str()
+        || meta.zone_uid != identity.zone_uid().as_str()
+        || meta.created_at != identity.created_at()
+    {
+        return StageMarkerState::Unsafe;
+    }
+    if meta.schema_version != CURRENT_PHYSICAL_SCHEMA_VERSION {
+        return StageMarkerState::Invalid;
+    }
+    StageMarkerState::Prepared(meta)
+}
+
+fn discard_marker_residue(parent: &File, identity: &StoreIdentity) -> Result<(), StoreError> {
+    let mut changed = false;
+    if entry_type(parent, STAGED_PREPARED_MARKER_FILE_NAME)?.is_some() {
+        remove_stage_prepared_marker(parent, identity)?;
+        changed = true;
+    }
+    if entry_type(parent, STAGED_PREPARED_MARKER_TEMP_FILE_NAME)?.is_some() {
+        remove_stage_prepared_marker_temp(parent, identity)?;
+        changed = true;
+    }
+    if changed {
+        sync_parent(parent, identity)?;
+    }
+    Ok(())
+}
+
+fn discard_unpublished_stage(parent: &File, identity: &StoreIdentity) -> Result<(), StoreError> {
+    discard_marker_residue(parent, identity)?;
+    if entry_type(parent, DEFAULT_STAGED_FILE_NAME)?.is_some() {
+        remove_regular(parent, DEFAULT_STAGED_FILE_NAME, identity)?;
+        sync_parent(parent, identity)?;
+    }
+    Ok(())
+}
+
+fn remove_stage_prepared_marker_temp(
+    parent: &File,
+    identity: &StoreIdentity,
+) -> Result<(), StoreError> {
+    remove_regular_if_present(parent, STAGED_PREPARED_MARKER_TEMP_FILE_NAME, identity)
+}
+
+fn remove_regular_if_present(
+    parent: &File,
+    name: &str,
+    identity: &StoreIdentity,
+) -> Result<(), StoreError> {
+    match entry_type(parent, name)? {
+        None => Ok(()),
+        Some(FileType::RegularFile) => unlinkat(parent, name, AtFlags::empty())
+            .map_err(|_| quarantine(identity, "migration-remove-failed")),
+        Some(_) => Err(quarantine(identity, "migration-remove-nonregular")),
     }
 }
 
-fn discard_unprepared_stage(parent: &File, identity: &StoreIdentity) -> Result<(), StoreError> {
-    remove_regular(parent, DEFAULT_STAGED_FILE_NAME, identity)?;
-    sync_parent(parent, identity)
+#[cfg(test)]
+fn mark_stage_prepared(parent: &File, identity: &StoreIdentity) -> Result<(), StoreError> {
+    mark_stage_prepared_with_fault(parent, identity, None)
 }
 
-fn mark_stage_prepared(parent: &File, identity: &StoreIdentity) -> Result<(), StoreError> {
+fn mark_stage_prepared_with_fault(
+    parent: &File,
+    identity: &StoreIdentity,
+    fault: Option<PublicationBoundary>,
+) -> Result<(), StoreError> {
     let staged = open_named_database(parent, DEFAULT_STAGED_FILE_NAME, identity)?;
     let meta = read_meta(&staged, identity)?;
     let marker_bytes = stage_prepared_marker_bytes(identity, &meta)?;
@@ -886,20 +1124,35 @@ fn mark_stage_prepared(parent: &File, identity: &StoreIdentity) -> Result<(), St
 
     let fd = openat(
         parent,
-        STAGED_PREPARED_MARKER_FILE_NAME,
+        STAGED_PREPARED_MARKER_TEMP_FILE_NAME,
         OFlags::CREATE | OFlags::EXCL | OFlags::RDWR | OFlags::CLOEXEC | OFlags::NOFOLLOW,
         Mode::from_raw_mode(0o600),
     )
-    .map_err(|_| quarantine(identity, "migration-stage-marker-create-failed"))?;
+    .map_err(|_| quarantine(identity, "migration-stage-marker-temp-create-failed"))?;
     let mut marker = File::from(fd);
     crate::validate_owned_file(&marker)
-        .map_err(|_| quarantine(identity, "migration-stage-marker-posture-invalid"))?;
+        .map_err(|_| quarantine(identity, "migration-stage-marker-temp-posture-invalid"))?;
+    inject_boundary_fault(fault, PublicationBoundary::MarkerTempCreate, identity)?;
     marker
         .write_all(&marker_bytes)
-        .and_then(|()| marker.sync_all())
-        .map_err(|_| quarantine(identity, "migration-stage-marker-sync-failed"))?;
+        .map_err(|_| quarantine(identity, "migration-stage-marker-temp-write-failed"))?;
+    inject_boundary_fault(fault, PublicationBoundary::MarkerTempWrite, identity)?;
+    marker
+        .sync_all()
+        .map_err(|_| quarantine(identity, "migration-stage-marker-temp-sync-failed"))?;
+    inject_boundary_fault(fault, PublicationBoundary::MarkerTempSync, identity)?;
     drop(marker);
-    sync_parent(parent, identity)
+    renameat_with(
+        parent,
+        STAGED_PREPARED_MARKER_TEMP_FILE_NAME,
+        parent,
+        STAGED_PREPARED_MARKER_FILE_NAME,
+        RenameFlags::NOREPLACE,
+    )
+    .map_err(|_| quarantine(identity, "migration-stage-marker-rename-failed"))?;
+    inject_boundary_fault(fault, PublicationBoundary::MarkerRename, identity)?;
+    sync_parent(parent, identity)?;
+    inject_boundary_fault(fault, PublicationBoundary::MarkerSync, identity)
 }
 
 fn validate_stage_prepared_marker(
@@ -907,17 +1160,16 @@ fn validate_stage_prepared_marker(
     identity: &StoreIdentity,
     meta: &StoreMeta,
 ) -> Result<(), StoreError> {
-    let expected = stage_prepared_marker_bytes(identity, meta)?;
-    let marker = open_named_file(parent, STAGED_PREPARED_MARKER_FILE_NAME, identity)?;
-    let mut actual = Vec::new();
-    marker
-        .take(4096)
-        .read_to_end(&mut actual)
-        .map_err(|_| quarantine(identity, "migration-stage-marker-read-failed"))?;
-    if actual != expected {
-        return Err(quarantine(identity, "migration-stage-marker-invalid"));
+    match inspect_stage_prepared_marker(parent, identity)? {
+        StageMarkerState::Prepared(actual) if actual == *meta => Ok(()),
+        StageMarkerState::Unsafe => Err(quarantine(
+            identity,
+            "migration-stage-marker-identity-mismatch",
+        )),
+        StageMarkerState::Absent | StageMarkerState::Prepared(_) | StageMarkerState::Invalid => {
+            Err(quarantine(identity, "migration-stage-marker-invalid"))
+        }
     }
-    Ok(())
 }
 
 fn stage_prepared_marker_bytes(
@@ -933,14 +1185,14 @@ fn stage_prepared_marker_bytes(
 }
 
 fn remove_stage_prepared_marker(parent: &File, identity: &StoreIdentity) -> Result<(), StoreError> {
-    if !matches!(
-        entry_type(parent, STAGED_PREPARED_MARKER_FILE_NAME)?,
-        Some(FileType::RegularFile)
-    ) {
-        return Err(quarantine(identity, "migration-stage-marker-not-regular"));
+    match entry_type(parent, STAGED_PREPARED_MARKER_FILE_NAME)? {
+        None => Ok(()),
+        Some(FileType::RegularFile) => {
+            unlinkat(parent, STAGED_PREPARED_MARKER_FILE_NAME, AtFlags::empty())
+                .map_err(|_| quarantine(identity, "migration-stage-marker-remove-failed"))
+        }
+        Some(_) => Err(quarantine(identity, "migration-stage-marker-not-regular")),
     }
-    unlinkat(parent, STAGED_PREPARED_MARKER_FILE_NAME, AtFlags::empty())
-        .map_err(|_| quarantine(identity, "migration-stage-marker-remove-failed"))
 }
 
 fn entry_type(parent: &File, name: &str) -> Result<Option<FileType>, StoreError> {
@@ -1014,10 +1266,35 @@ fn injected_fault(reason: &'static str, identity: &StoreIdentity) -> StoreError 
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PublicationBoundary {
+    StageCreate,
+    StageDatabaseCreate,
+    StageDatabaseCommit,
     StageSync,
+    MarkerTempCreate,
+    MarkerTempWrite,
+    MarkerTempSync,
+    MarkerRename,
+    MarkerSync,
+    MarkerTempRemove,
+    MarkerRemove,
+    StageRemove,
     PriorRename,
     ActiveRename,
     FinalSync,
+}
+
+fn inject_boundary_fault(
+    fault: Option<PublicationBoundary>,
+    boundary: PublicationBoundary,
+    identity: &StoreIdentity,
+) -> Result<(), StoreError> {
+    if fault == Some(boundary) {
+        return Err(injected_fault(
+            "migration-fault-at-publication-boundary",
+            identity,
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1076,6 +1353,14 @@ mod tests {
     }
 
     fn create_current_file(directory: &tempfile::TempDir, name: &str) {
+        create_current_file_with_identity(directory, name, &identity());
+    }
+
+    fn create_current_file_with_identity(
+        directory: &tempfile::TempDir,
+        name: &str,
+        store_identity: &StoreIdentity,
+    ) {
         let file = OpenOptions::new()
             .create_new(true)
             .read(true)
@@ -1086,8 +1371,19 @@ mod tests {
             .set_cache_size(REDB_CACHE_SIZE)
             .create_with_backend(FileBackend::new(file).unwrap())
             .unwrap();
-        crate::transaction::initialize(&database, &identity()).unwrap();
+        crate::transaction::initialize(&database, store_identity).unwrap();
         drop(database);
+    }
+
+    fn other_identity() -> StoreIdentity {
+        StoreIdentity::new(
+            d2b_resource_store::StoreSlot::new(0).unwrap(),
+            ResourceUid::parse("33333333-3333-4333-8333-333333333333").unwrap(),
+            ZoneId::parse("work").unwrap(),
+            ResourceUid::parse("22222222-2222-4222-8222-222222222222").unwrap(),
+            Timestamp::parse("2026-07-31T00:00:00.000Z").unwrap(),
+            identity().revisions,
+        )
     }
 
     fn set_schema_version(directory: &tempfile::TempDir, version: u32) {
@@ -1360,6 +1656,51 @@ mod tests {
         );
         let file = open_named_database(&parent_fd, DEFAULT_ACTIVE_FILE_NAME, &identity()).unwrap();
         validate_database(&file, &identity(), Some(CURRENT_PHYSICAL_SCHEMA_VERSION)).unwrap();
+    }
+
+    #[test]
+    fn upgrade_normalizes_legacy_outbox_on_staged_copy_before_publish() {
+        let (directory, parent_fd, mut marker) = parent();
+        create_current_file(&directory, DEFAULT_ACTIVE_FILE_NAME);
+        set_schema_version(&directory, 1);
+        insert_legacy_outbox(&directory, "legacy-staged-upgrade");
+
+        assert_eq!(
+            upgrade_owned(&parent_fd, &mut marker, &identity()).unwrap(),
+            MigrationOutcome::Upgraded { from: 1, to: 2 }
+        );
+        let active =
+            open_named_database(&parent_fd, DEFAULT_ACTIVE_FILE_NAME, &identity()).unwrap();
+        let read = active.begin_read().unwrap();
+        let key = crate::keys::encode_key(
+            crate::keys::KeySpace::Operations,
+            &[crate::keys::KeyComponent::Text("legacy-staged-upgrade")],
+        )
+        .unwrap();
+        let value = read
+            .open_table(crate::transaction::OPERATIONS)
+            .unwrap()
+            .get(key.as_bytes())
+            .unwrap()
+            .unwrap();
+        let operation: OperationRecord =
+            crate::transaction::decode(ValueKind::OperationRecord, value.value()).unwrap();
+        let outbox = operation.audit_outbox.expect("normalized outbox");
+        assert_eq!(outbox.operation_id, "legacy-staged-upgrade");
+        assert!(outbox.operation_identity.is_some());
+        assert!(!outbox.mutations[0].mutation_id.is_empty());
+        assert!(outbox.mutations[0].timestamp_ms > 0);
+        assert_eq!(
+            backup::publication_state(
+                &parent_fd,
+                DEFAULT_STAGED_FILE_NAME,
+                DEFAULT_ACTIVE_FILE_NAME,
+                DEFAULT_PRIOR_FILE_NAME
+            )
+            .unwrap(),
+            PublicationState::ActiveOnly
+        );
+        drop(directory);
     }
 
     #[test]
@@ -1699,9 +2040,267 @@ mod tests {
             .open(corrupt_directory.path().join(DEFAULT_STAGED_FILE_NAME))
             .unwrap();
         corrupt.sync_all().unwrap();
-        let error =
-            recover_owned(&corrupt_parent_fd, &mut corrupt_marker, &identity()).unwrap_err();
-        assert_eq!(error.kind(), StoreErrorKind::StoreQuarantined);
+        assert_eq!(
+            recover_owned(&corrupt_parent_fd, &mut corrupt_marker, &identity()).unwrap(),
+            RecoveryOutcome::Clean
+        );
+        assert_eq!(
+            backup::publication_state(
+                &corrupt_parent_fd,
+                DEFAULT_STAGED_FILE_NAME,
+                DEFAULT_ACTIVE_FILE_NAME,
+                DEFAULT_PRIOR_FILE_NAME
+            )
+            .unwrap(),
+            PublicationState::Empty
+        );
+    }
+
+    #[test]
+    fn empty_target_unprepared_stage_is_discarded_and_restore_retries() {
+        let (directory, parent_fd, mut marker) = parent();
+        create_current_file(&directory, DEFAULT_STAGED_FILE_NAME);
+        assert_eq!(
+            backup::publication_state(
+                &parent_fd,
+                DEFAULT_STAGED_FILE_NAME,
+                DEFAULT_ACTIVE_FILE_NAME,
+                DEFAULT_PRIOR_FILE_NAME
+            )
+            .unwrap(),
+            PublicationState::StagedOnly
+        );
+
+        assert_eq!(
+            recover_owned(&parent_fd, &mut marker, &identity()).unwrap(),
+            RecoveryOutcome::Clean
+        );
+        assert_eq!(
+            backup::publication_state(
+                &parent_fd,
+                DEFAULT_STAGED_FILE_NAME,
+                DEFAULT_ACTIVE_FILE_NAME,
+                DEFAULT_PRIOR_FILE_NAME
+            )
+            .unwrap(),
+            PublicationState::Empty
+        );
+        assert_eq!(
+            restore_owned(&parent_fd, &mut marker, &empty_backup(), &identity()).unwrap(),
+            MigrationOutcome::Restored
+        );
+        drop(directory);
+    }
+
+    #[test]
+    fn marker_only_cleanup_residue_heals_idempotently() {
+        let (directory, parent_fd, mut marker) = parent();
+        create_staged_current(&directory);
+        std::fs::remove_file(directory.path().join(DEFAULT_STAGED_FILE_NAME)).unwrap();
+        assert_eq!(
+            recover_owned(&parent_fd, &mut marker, &identity()).unwrap(),
+            RecoveryOutcome::Finalized
+        );
+        assert_eq!(
+            entry_type(&parent_fd, STAGED_PREPARED_MARKER_FILE_NAME).unwrap(),
+            None
+        );
+        assert_eq!(
+            recover_owned(&parent_fd, &mut marker, &identity()).unwrap(),
+            RecoveryOutcome::Clean
+        );
+        drop(directory);
+    }
+
+    #[test]
+    fn partial_marker_is_not_authority_when_active_is_valid() {
+        let (directory, parent_fd, mut marker) = parent();
+        create_current_file(&directory, DEFAULT_ACTIVE_FILE_NAME);
+        create_staged_current(&directory);
+        let marker_path = directory.path().join(STAGED_PREPARED_MARKER_FILE_NAME);
+        let partial = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&marker_path)
+            .unwrap();
+        partial.set_len(0).unwrap();
+        partial.sync_all().unwrap();
+
+        assert_eq!(
+            recover_owned(&parent_fd, &mut marker, &identity()).unwrap(),
+            RecoveryOutcome::Clean
+        );
+        assert_eq!(
+            backup::publication_state(
+                &parent_fd,
+                DEFAULT_STAGED_FILE_NAME,
+                DEFAULT_ACTIVE_FILE_NAME,
+                DEFAULT_PRIOR_FILE_NAME
+            )
+            .unwrap(),
+            PublicationState::ActiveOnly
+        );
+        validate_named_current(&parent_fd, DEFAULT_ACTIVE_FILE_NAME, &identity()).unwrap();
+        drop(directory);
+    }
+
+    #[test]
+    fn unsafe_marker_identity_refuses_without_mutating_publication() {
+        let (directory, parent_fd, mut marker) = parent();
+        create_current_file(&directory, DEFAULT_ACTIVE_FILE_NAME);
+        create_staged_current(&directory);
+        let marker_path = directory.path().join(STAGED_PREPARED_MARKER_FILE_NAME);
+        let mut partial = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&marker_path)
+            .unwrap();
+        partial.set_len(0).unwrap();
+        partial
+            .write_all(b"d2b-redb-stage-prepared/v1\nslot=1\n")
+            .unwrap();
+        partial.sync_all().unwrap();
+        let active_before = std::fs::read(directory.path().join(DEFAULT_ACTIVE_FILE_NAME)).unwrap();
+
+        let error = recover_owned(&parent_fd, &mut marker, &identity()).unwrap_err();
+        assert_eq!(
+            error.reason_code(),
+            "migration-stage-marker-identity-mismatch"
+        );
+        assert_eq!(
+            std::fs::read(directory.path().join(DEFAULT_ACTIVE_FILE_NAME)).unwrap(),
+            active_before
+        );
+        assert_eq!(
+            backup::publication_state(
+                &parent_fd,
+                DEFAULT_STAGED_FILE_NAME,
+                DEFAULT_ACTIVE_FILE_NAME,
+                DEFAULT_PRIOR_FILE_NAME
+            )
+            .unwrap(),
+            PublicationState::ActiveAndStaged
+        );
+        drop(directory);
+    }
+
+    #[test]
+    fn foreign_active_is_rejected_before_legacy_repair() {
+        let (directory, parent_fd, mut marker) = parent();
+        let foreign = other_identity();
+        create_current_file_with_identity(&directory, DEFAULT_ACTIVE_FILE_NAME, &foreign);
+        insert_legacy_outbox(&directory, "foreign-legacy");
+        let foreign_db =
+            open_named_database(&parent_fd, DEFAULT_ACTIVE_FILE_NAME, &foreign).unwrap();
+        let key = crate::keys::encode_key(
+            crate::keys::KeySpace::Operations,
+            &[crate::keys::KeyComponent::Text("foreign-legacy")],
+        )
+        .unwrap();
+        let before = foreign_db
+            .begin_read()
+            .unwrap()
+            .open_table(crate::transaction::OPERATIONS)
+            .unwrap()
+            .get(key.as_bytes())
+            .unwrap()
+            .unwrap()
+            .value()
+            .to_vec();
+        drop(foreign_db);
+
+        let error = recover_owned(&parent_fd, &mut marker, &identity()).unwrap_err();
+        assert_eq!(error.reason_code(), "migration-store-identity-mismatch");
+        let foreign_db =
+            open_named_database(&parent_fd, DEFAULT_ACTIVE_FILE_NAME, &foreign).unwrap();
+        let after = foreign_db
+            .begin_read()
+            .unwrap()
+            .open_table(crate::transaction::OPERATIONS)
+            .unwrap()
+            .get(key.as_bytes())
+            .unwrap()
+            .unwrap()
+            .value()
+            .to_vec();
+        assert_eq!(after, before);
+        drop(directory);
+    }
+
+    #[test]
+    fn stage_creation_and_marker_boundaries_are_recoverable() {
+        let boundaries = [
+            PublicationBoundary::StageCreate,
+            PublicationBoundary::StageDatabaseCreate,
+            PublicationBoundary::StageDatabaseCommit,
+            PublicationBoundary::StageSync,
+            PublicationBoundary::MarkerTempCreate,
+            PublicationBoundary::MarkerTempWrite,
+            PublicationBoundary::MarkerTempSync,
+            PublicationBoundary::MarkerRename,
+            PublicationBoundary::MarkerSync,
+            PublicationBoundary::MarkerRemove,
+            PublicationBoundary::MarkerTempRemove,
+            PublicationBoundary::StageRemove,
+        ];
+        for boundary in boundaries {
+            let (directory, parent_fd, mut marker) = parent();
+            let backup = empty_backup();
+            let next_generation = next_backup_generation(&parent_fd, &backup, &identity()).unwrap();
+            let result = if matches!(
+                boundary,
+                PublicationBoundary::MarkerRemove
+                    | PublicationBoundary::MarkerTempRemove
+                    | PublicationBoundary::StageRemove
+            ) {
+                prepare_restore_stage_with_fault(
+                    &parent_fd,
+                    &backup,
+                    &identity(),
+                    next_generation,
+                    None,
+                )
+                .unwrap();
+                cleanup_failed_stage_with_fault(
+                    &parent_fd,
+                    &identity(),
+                    Err::<(), _>(injected_fault("migration-fault-cleanup", &identity())),
+                    Some(boundary),
+                )
+            } else {
+                prepare_restore_stage_with_fault(
+                    &parent_fd,
+                    &backup,
+                    &identity(),
+                    next_generation,
+                    Some(boundary),
+                )
+            };
+            assert!(result.is_err(), "boundary {boundary:?} did not inject");
+            let recovery = recover_owned(&parent_fd, &mut marker, &identity()).unwrap();
+            assert!(
+                matches!(
+                    recovery,
+                    RecoveryOutcome::Clean | RecoveryOutcome::Finalized
+                ),
+                "boundary {boundary:?} left {recovery:?}"
+            );
+            assert_eq!(
+                backup::publication_state(
+                    &parent_fd,
+                    DEFAULT_STAGED_FILE_NAME,
+                    DEFAULT_ACTIVE_FILE_NAME,
+                    DEFAULT_PRIOR_FILE_NAME
+                )
+                .unwrap(),
+                PublicationState::Empty
+            );
+            assert_eq!(
+                restore_owned(&parent_fd, &mut marker, &backup, &identity()).unwrap(),
+                MigrationOutcome::Restored
+            );
+            drop(directory);
+        }
     }
 
     #[test]

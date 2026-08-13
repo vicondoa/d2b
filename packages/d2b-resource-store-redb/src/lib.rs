@@ -428,6 +428,14 @@ impl StoreIdentity {
         &self.zone_uid
     }
 
+    pub(crate) const fn store_uuid(&self) -> &ResourceUid {
+        &self.store_uuid
+    }
+
+    pub(crate) fn created_at(&self) -> &str {
+        &self.created_at
+    }
+
     pub const fn slot(&self) -> StoreSlot {
         self.slot
     }
