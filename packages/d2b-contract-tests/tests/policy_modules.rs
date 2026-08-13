@@ -541,16 +541,15 @@ impl<'ast> syn::visit::Visit<'ast> for HostEffectVisitor {
             "systemd",
             "d2b_priv_broker",
         ];
-        if forbidden
+        if (forbidden
             .iter()
             .any(|prefix| resolved == *prefix || resolved.starts_with(&format!("{prefix}::")))
             || segments
                 .iter()
-                .any(|segment| matches!(segment.as_str(), "TcpStream" | "UdpSocket"))
+                .any(|segment| matches!(segment.as_str(), "TcpStream" | "UdpSocket")))
+            && !self.forbidden.contains(&resolved)
         {
-            if !self.forbidden.contains(&resolved) {
-                self.forbidden.push(resolved);
-            }
+            self.forbidden.push(resolved);
         }
 
         syn::visit::visit_path(self, path);
