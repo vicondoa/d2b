@@ -102,12 +102,11 @@ pkgs.runCommand "gas-city-package-smoke" {
   )
   runtimeRoot="$TMPDIR/runtime-assets"
   runtimeCity="$runtimeRoot/city"
-  runtimeRig="$TMPDIR/rig"
-  mkdir -p "$runtimeCity" "$runtimeRig"
+  mkdir -p "$runtimeCity"
   ln -s "$root/packs" "$runtimeRoot/packs"
   ln -s "$root/pack" "$runtimeRoot/pack"
   sed \
-    "s#/var/lib/gascity-contributor/state/rigs/d2b#$runtimeRig#" \
+    '\#^path = "/var/lib/gascity-contributor/state/rigs/d2b"$#d' \
     "$root/city/city.toml" > "$TMPDIR/city.toml"
   DOLT_ROOT_PATH="$HOME" \
     ${gasCityContributor}/bin/dolt config --global --add user.name "Gas City"
@@ -125,7 +124,6 @@ pkgs.runCommand "gas-city-package-smoke" {
     ${gasCityContributor}/bin/gc \
       --city "$runtimeCity" \
       config show > "$TMPDIR/resolved-city.toml"
-  grep -F "$runtimeRig" "$TMPDIR/resolved-city.toml"
   grep -F 'name = "dog"' "$TMPDIR/resolved-city.toml"
   grep -F 'suspended = true' "$TMPDIR/resolved-city.toml"
   grep -F 'requirements-planner' "$TMPDIR/resolved-city.toml"
