@@ -361,6 +361,18 @@ fn validate_role_routes(matrix: &str, city: &str, launcher: &str) -> Result<(), 
     if !city.contains("[session]\n# Control-plane") || !city.contains("provider = \"subprocess\"") {
         return Err("city default session runtime must be subprocess".to_owned());
     }
+    for required in [
+        "GC_AGENT_LAUNCHER_SOCKET = \"$GC_AGENT_LAUNCHER_SOCKET\"",
+        "GC_CHECK_AUTH = \"$GC_CHECK_AUTH\"",
+        "GC_CHECK_SOCKET = \"$GC_CHECK_SOCKET\"",
+        "GC_EGRESS_SOCKET = \"$GC_EGRESS_SOCKET\"",
+        "GC_FDPROXY_AUTH = \"$GC_FDPROXY_AUTH\"",
+        "GC_TERMINAL_STATE_ROOT = \"$GC_TERMINAL_STATE_ROOT\"",
+    ] {
+        if !city.contains(required) {
+            return Err(format!("city workspace env is missing {required}"));
+        }
+    }
     validate_tool_policies(matrix, city, launcher, &owned_asset(COPILOT_PROFILE))?;
     Ok(())
 }

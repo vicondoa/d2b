@@ -11,6 +11,20 @@ provider = "copilot-code-luna"
 max_active_sessions = 2
 global_fragments = ["d2b-managed-contributor"]
 
+[workspace.env]
+GC_AGENT_LAUNCHER_SOCKET = "$GC_AGENT_LAUNCHER_SOCKET"
+GC_AGENT_SERVER_UID = "$GC_AGENT_SERVER_UID"
+GC_CHECK_AUTH = "$GC_CHECK_AUTH"
+GC_CHECK_SERVER_UID = "$GC_CHECK_SERVER_UID"
+GC_CHECK_SOCKET = "$GC_CHECK_SOCKET"
+GC_CITY_GENERATION = "$GC_CITY_GENERATION"
+GC_EGRESS_SERVER_UID = "$GC_EGRESS_SERVER_UID"
+GC_EGRESS_SOCKET = "$GC_EGRESS_SOCKET"
+GC_FDPROXY_AUTH = "$GC_FDPROXY_AUTH"
+GC_REQUIRE_READINESS = "$GC_REQUIRE_READINESS"
+GC_STATE_SCHEMA = "$GC_STATE_SCHEMA"
+GC_TERMINAL_STATE_ROOT = "$GC_TERMINAL_STATE_ROOT"
+
 [session]
 # Control-plane, dispatcher, and non-model helper processes use the headless
 # local runtime.  Model-backed agents opt into ACP below.
