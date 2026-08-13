@@ -682,6 +682,8 @@ provider-runtime-contracts-requires-exact-relay-settings
 provider-runtime-contracts-requires-provider-resolution-for-processes
 provider-runtime-contracts-requires-relay-credential-consumer
 provider-runtime-contracts-validates-relay-identifiers
+provider-system/defaults-and-bounds
+provider-system/rejects-invalid-carrier
 readiness-waves/daemon-auto-default
 readiness-waves/has-p0
 readiness-waves/has-p1

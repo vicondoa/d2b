@@ -19,6 +19,14 @@ revision metadata before the readiness barrier. Revision metadata does not
 install policy content or establish session authority. Shutdown drains the
 daemon-owned runtime and asks the production store to persist its
 clean-shutdown marker.
+
+Every production Zone status projection is constructed through the fixed
+system-core emitter. It contains exactly one `system-core-host` and one
+`system-core-user` handler record; missing, duplicate, underscore, or
+`ProviderLifecycle` substitutions cannot be published as a ready Zone. The
+daemon retains this validated projection and updates it from real Host/User
+handler observations.
+
 CLI Zone requests use the daemon's authoritative Zone index for routing; the
 request's `zoneRef` is checked as a route assertion and is never used to mint
 authority. Direct resource mutation verbs remain unsupported. Removal is

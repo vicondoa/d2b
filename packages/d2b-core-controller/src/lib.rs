@@ -37,6 +37,7 @@ pub mod tracing;
 pub mod user_session_authority;
 pub mod watches;
 pub mod zone_links;
+pub mod zone_status;
 pub mod zonelink;
 
 pub use controllers::{
@@ -66,3 +67,4 @@ pub use runtime::{
     CoreAdmissionCounts, CoreControllerSource, CoreDispatchOutcome, CoreReconcileError,
     CoreResourceReconciler, CoreSourceError, RegisteredControllerApi,
 };
+pub use zone_status::{SystemCoreStatusEmitter, ZoneStatusInput};

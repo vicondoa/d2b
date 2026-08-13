@@ -1,0 +1,58 @@
+{
+  "$id": "https://d2bus.org/schemas/v3/activation-nixos.d2bus.org/NixosGeneration/status",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "activationDetail": {
+      "enum": [
+        "planning",
+        "staged",
+        "applying",
+        "applied",
+        "boot-default",
+        "adopted",
+        "rolled-back",
+        "superseded"
+      ],
+      "type": "string"
+    },
+    "observedGeneration": {
+      "minimum": 0,
+      "type": "integer"
+    },
+    "outcome": {
+      "enum": [
+        "succeeded",
+        "adopted",
+        "unauthorized",
+        "stale-generation",
+        "target-mismatch",
+        "helper-refused",
+        "helper-failed",
+        "rolled-back"
+      ],
+      "type": "string"
+    },
+    "phase": {
+      "enum": [
+        "Pending",
+        "Ready",
+        "Succeeded",
+        "Degraded",
+        "Failed",
+        "Deleted",
+        "Unknown"
+      ],
+      "type": "string"
+    }
+  },
+  "required": [
+    "activationDetail",
+    "observedGeneration",
+    "phase"
+  ],
+  "title": "activation-nixos.d2bus.org/NixosGeneration/status",
+  "type": "object",
+  "x-d2b-resource-type": "activation-nixos.d2bus.org.NixosGeneration",
+  "x-d2b-schema-layer": "status"
+}

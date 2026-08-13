@@ -54,6 +54,7 @@ use d2b_host::hardlink_farm::{
     BuildStoreViewFarmRequest, BuildStoreViewRequest, ReplaceLivePathsRequest, build_farm,
     build_store_view, replace_live_top_level_paths,
 };
+use d2b_host::host_generation::{ActivationHelperOutcome, ActivationHelperResponse, parse_request};
 
 /// Security fix: open `path`
 /// with `openat2(AT_FDCWD, path, { O_NOFOLLOW + ..., RESOLVE_NO_SYMLINKS })`.
@@ -726,6 +727,7 @@ fn cmd_build_store_view_farm() -> ExitCode {
         eprintln!("build-store-view-farm: read stdin: {e}");
         return ExitCode::from(1);
     }
+
     let req: BuildStoreViewFarmRequest = match serde_json::from_slice(&buf) {
         Ok(r) => r,
         Err(e) => {
@@ -755,6 +757,42 @@ fn cmd_build_store_view_farm() -> ExitCode {
             eprintln!("build-store-view-farm: {e}");
             ExitCode::from(1)
         }
+    }
+}
+
+fn cmd_apply_generation() -> ExitCode {
+    use std::io::Read;
+
+    let mut bytes = Vec::new();
+    if std::io::stdin().read_to_end(&mut bytes).is_err() {
+        return ExitCode::from(1);
+    }
+    let request = match parse_request(&bytes) {
+        Ok(request) => request,
+        Err(error) => {
+            eprintln!("activation-helper: {error}");
+            return ExitCode::from(1);
+        }
+    };
+    // The target-local mutation is admitted only through the typed parent
+    // effect adapter. Adopt has no mutation and can be acknowledged here;
+    // other modes are refused rather than falling back to a raw command.
+    let outcome = match request.activation_mode {
+        d2b_contracts::v3::ActivationMode::Adopt => ActivationHelperOutcome::Adopted,
+        d2b_contracts::v3::ActivationMode::Switch
+        | d2b_contracts::v3::ActivationMode::Boot
+        | d2b_contracts::v3::ActivationMode::Test => ActivationHelperOutcome::Refused,
+    };
+    match serde_json::to_vec(&ActivationHelperResponse { outcome }) {
+        Ok(response) => {
+            println!("{}", String::from_utf8_lossy(&response));
+            if outcome == ActivationHelperOutcome::Refused {
+                ExitCode::from(2)
+            } else {
+                ExitCode::from(0)
+            }
+        }
+        Err(_) => ExitCode::from(1),
     }
 }
 
@@ -885,6 +923,9 @@ fn main() -> ExitCode {
     }
     if args.get(1).map(String::as_str) == Some("replace-store-view-live") {
         return cmd_replace_store_view_live();
+    }
+    if args.get(1).map(String::as_str) == Some("apply-generation") {
+        return cmd_apply_generation();
     }
     let args = match parse_args() {
         Ok(a) => a,

@@ -229,6 +229,7 @@ pub mod provider_shutdown;
 // modules reuse the shared Provider registry and the typed broker lifecycle
 // path; they are initialized below after the trusted host bundle loads.
 mod authority_persistence;
+pub mod host_generation;
 pub mod provider_effects;
 pub mod provider_registry;
 pub mod resource_runtime;

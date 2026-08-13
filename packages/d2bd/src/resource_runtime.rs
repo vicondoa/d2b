@@ -30,8 +30,8 @@ use d2b_contracts::{
     broker_wire::{OpenZoneStoreResponse, ZoneStoreDisposition},
     v3::{
         ConfigurationGeneration, ControllerGeneration, ResourceError, ResourceErrorKind,
-        ResourceErrorReason, ResourceRef, ResourceTypeName, ResourceUid, RetryClass, Timestamp,
-        ZoneId,
+        ResourceErrorReason, ResourcePhase, ResourceRef, ResourceTypeName, ResourceUid, RetryClass,
+        Timestamp, ZoneId, ZoneStatusResource,
     },
 };
 use d2b_core_controller::authority::{
@@ -43,6 +43,7 @@ use d2b_core_controller::main::{
     CoreProcess, RecoverySnapshot, RuntimeReadiness as CoreRuntimeReadiness, StartupError,
     StartupStage,
 };
+use d2b_core_controller::zone_status::{SystemCoreStatusEmitter, ZoneStatusInput};
 use d2b_resource_api::{
     RedbBackend, ResourceService,
     authz::{ApiCatalog, NativeAuthorizer},
@@ -217,6 +218,7 @@ pub struct ZoneResourceRuntime {
     authority_index: Arc<tokio::sync::Mutex<HostGlobalAuthorityIndex>>,
     authority_persistence: Arc<RedbAuthorityPersistence>,
     authority_recovery: Arc<AuthorityRecoveryCoordinator>,
+    zone_status: Mutex<ZoneStatusResource>,
 }
 
 impl core::fmt::Debug for ZoneResourceRuntime {
@@ -496,6 +498,9 @@ impl ZoneResourceRuntime {
             );
         }
         let stage = core.stage();
+        let zone_status = SystemCoreStatusEmitter::new()
+            .emit(ZoneStatusInput::new(ResourcePhase::Pending, Vec::new()))
+            .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
         Ok(Self {
             zone,
             store_id: expected_store_id,
@@ -518,6 +523,7 @@ impl ZoneResourceRuntime {
             authority_index,
             authority_persistence,
             authority_recovery,
+            zone_status: Mutex::new(zone_status),
         })
     }
 
@@ -542,6 +548,28 @@ impl ZoneResourceRuntime {
             .lock()
             .map(|core| core.stage())
             .map_err(|_| ResourceRuntimeError::CoreStartupFailed)
+    }
+
+    /// Borrow the production Zone status projection.
+    pub fn zone_status(&self) -> Result<ZoneStatusResource, ResourceRuntimeError> {
+        self.zone_status
+            .lock()
+            .map(|status| status.clone())
+            .map_err(|_| ResourceRuntimeError::HandlerNotReady)
+    }
+
+    /// Publish a validated status projection from the real system-core
+    /// handler observations.
+    pub fn publish_zone_status(&self, input: ZoneStatusInput) -> Result<(), ResourceRuntimeError> {
+        let status = SystemCoreStatusEmitter::new()
+            .emit(input)
+            .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
+        self.zone_status
+            .lock()
+            .map(|mut current| {
+                *current = status;
+            })
+            .map_err(|_| ResourceRuntimeError::HandlerNotReady)
     }
 
     /// Mark the trusted Provider path after the daemon has configured it.
@@ -671,6 +699,14 @@ impl ZoneResourceRuntime {
             return Some(ResourceRuntimeError::ProviderPathUnavailable);
         }
         if !matches!(self.core_stage().ok(), Some(StartupStage::Ready)) {
+            return Some(ResourceRuntimeError::HandlerNotReady);
+        }
+        if self
+            .zone_status
+            .try_lock()
+            .map(|status| !status.mandatory_handlers_ready())
+            .unwrap_or(true)
+        {
             return Some(ResourceRuntimeError::HandlerNotReady);
         }
         None

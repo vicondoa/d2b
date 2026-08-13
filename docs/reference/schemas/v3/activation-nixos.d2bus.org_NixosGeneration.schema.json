@@ -1,0 +1,34 @@
+{
+  "$id": "https://d2bus.org/schemas/v3/activation-nixos.d2bus.org/NixosGeneration",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "apiVersion": {
+      "const": "resources.d2bus.org/v3",
+      "type": "string"
+    },
+    "metadata": {
+      "type": "object"
+    },
+    "spec": {
+      "$ref": "activation-nixos.d2bus.org_NixosGeneration_spec.schema.json"
+    },
+    "status": {
+      "$ref": "activation-nixos.d2bus.org_NixosGeneration_status.schema.json"
+    },
+    "type": {
+      "const": "activation-nixos.d2bus.org.NixosGeneration",
+      "type": "string"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "metadata",
+    "spec",
+    "type"
+  ],
+  "title": "activation-nixos.d2bus.org/NixosGeneration",
+  "type": "object",
+  "x-d2b-resource-type": "activation-nixos.d2bus.org.NixosGeneration",
+  "x-d2b-schema-version": "1.0"
+}

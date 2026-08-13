@@ -25,15 +25,26 @@
 #![deny(missing_docs)]
 
 pub mod adoption;
+pub mod audit;
+pub mod controller;
+pub mod drain;
 pub mod effect_port;
+pub mod error;
 pub mod guest_exec;
 pub mod launch;
+pub mod lifecycle;
+pub mod manifest;
+pub mod metrics;
 pub mod sandbox;
 
 pub use guest_exec::{
     AttachRequest, ComponentSessionAttachment, GuestExecError, GuestExecPort, GuestExecRequest,
     NamedAttachmentStream, TtySize,
 };
+pub use lifecycle::{
+    EphemeralProcessController, RestartPolicy, SystemdConfigError, SystemdProviderConfig,
+};
+pub use manifest::SystemdManifest;
 
 use std::collections::BTreeSet;
 

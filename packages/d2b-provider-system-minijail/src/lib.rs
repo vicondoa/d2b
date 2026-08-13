@@ -26,7 +26,10 @@
 pub mod adoption;
 pub mod effect_port;
 pub mod effect_result;
+pub mod ephemeral;
+pub mod finalize;
 pub mod launch;
+pub mod manifest;
 pub mod sandbox_compiler;
 pub mod user_ns;
 
