@@ -1,6 +1,8 @@
+use std::ffi::OsStr;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::os::fd::{AsFd, AsRawFd};
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 #[cfg(test)]
@@ -10,7 +12,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use nix::libc;
 use nix::unistd::{Gid, Uid};
-use rustix::fs::{Mode, OFlags, ResolveFlags};
+use rustix::fs::{FlockOperation, Mode, OFlags, ResolveFlags, flock};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -53,6 +55,7 @@ const MAX_LEGACY_EXPORT_BYTES: usize = 512 * 1024;
 const MAX_AUDIT_DIRECTORY_ENTRIES: usize = 4096;
 const AUDIT_RECONCILE_CHUNK_BYTES: usize = 8 * 1024;
 const MAX_QUARANTINE_NAME_ATTEMPTS: usize = 64;
+const MAX_EXPORTED_AUDIT_DISCARD_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AuditWriteClass {
@@ -170,11 +173,15 @@ impl core::fmt::Debug for AuditEntry<'_> {
 /// append is rolled back to its pre-append offset after a write, flush,
 /// or synchronization error; if rollback cannot be synchronized, the
 /// writer is poisoned until a fresh open. A truncated final line found
-/// on open is quarantined before the daily file is reconciled.
+/// on any owned daily file is quarantined before pruning or export.
 pub struct AuditLog {
     /// Directory holding the daily-rotated records
     /// (`<audit_dir>/broker-<utc-date>.jsonl`).
     audit_dir: PathBuf,
+    /// Exclusive directory ownership lock held for the lifetime of the log.
+    /// Reconciliation, pruning, export, and append therefore share one
+    /// cross-process mutation boundary.
+    _directory_lock: File,
     /// Open append-fd for the current UTC day's record file. Refreshed
     /// on day-boundary crossings via [`Self::append_to_daily`].
     daily: Mutex<DailyAppender>,
@@ -292,13 +299,20 @@ impl AuditLog {
             if test_mode { None } else { Some(expected_gid) },
         )?;
 
+        let directory_lock = open_audit_directory_lock(audit_dir, expected_gid, test_mode)?;
+        let owned_daily_files = scan_owned_daily_files(audit_dir)?;
+        for (_, path) in &owned_daily_files {
+            reconcile_truncated_final_line(path, audit_dir, expected_gid, test_mode)?;
+        }
+
         let today = utc_date_string();
         let daily_path = audit_dir.join(format!("broker-{today}.jsonl"));
-        reconcile_truncated_final_line(&daily_path, audit_dir, expected_gid, test_mode)?;
         let daily_file = open_append_cloexec(&daily_path, expected_gid, test_mode)?;
+        sync_directory(audit_dir)?;
 
         let log = Self {
             audit_dir: audit_dir.to_path_buf(),
+            _directory_lock: directory_lock,
             daily: Mutex::new(DailyAppender {
                 file: daily_file,
                 date_utc: today,
@@ -320,6 +334,9 @@ impl AuditLog {
         // log + ignore errors (caller should not fail to start the daemon
         // because of a stale-file cleanup hiccup).
         if let Err(err) = log.prune_expired_daily_files() {
+            if err.to_string() == "audit-owned-file-identity-invalid" {
+                return Err(err);
+            }
             // We don't have tracing in scope here; rely on the broker
             // runtime to surface this via its own log if it cares.
             // The append path is unaffected.
@@ -812,10 +829,11 @@ impl AuditLog {
     /// Filename is the source of truth - we never parse JSON to
     /// inspect record timestamps. Operators who manually drop in
     /// `broker-<utc-date>.jsonl` files retain the same semantics.
-    /// Files that don't match the expected name format are left
-    /// alone so out-of-band artifacts (export tarballs, operator
-    /// notes, etc.) survive. Reconciled truncated tails use the
-    /// dated quarantine form and follow the same retention window.
+    /// Foreign files that don't enter the owned namespace are left alone so
+    /// out-of-band artifacts (export tarballs, operator notes, etc.) survive.
+    /// An invalid name in the owned namespace fails closed. Reconciled
+    /// truncated tails use the dated quarantine form and follow the same
+    /// retention window.
     ///
     /// `retention_days == 0` disables pruning entirely.
     pub fn prune_expired_daily_files(&self) -> io::Result<usize> {
@@ -849,10 +867,7 @@ impl AuditLog {
             }
             let entry = entry?;
             let name = entry.file_name();
-            let Some(name_str) = name.to_str() else {
-                continue;
-            };
-            let Some(stem) = dated_audit_artifact_date(name_str) else {
+            let Some(stem) = dated_audit_artifact_date(&name)? else {
                 continue;
             };
             // Expect `YYYY-MM-DD`.
@@ -881,9 +896,13 @@ impl AuditLog {
                 // Best-effort: remove failures don't propagate as
                 // hard errors (e.g. file vanished between readdir
                 // and remove, permission denied on a stray file).
-                let _ = path_safe::remove_nofollow(&entry.path());
-                pruned += 1;
+                if path_safe::remove_nofollow(&entry.path()).is_ok() {
+                    pruned += 1;
+                }
             }
+        }
+        if pruned > 0 {
+            sync_directory(&self.audit_dir)?;
         }
         Ok(pruned)
     }
@@ -913,64 +932,13 @@ impl AuditLog {
             .map(serde_json::from_str::<BrokerAuditFilter>)
             .transpose()
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "audit-filter-invalid"))?;
-        if let Some(cursor) = cursor
-            && (cursor.day.len() != 10
-                || !cursor.day.bytes().enumerate().all(|(index, byte)| {
-                    if matches!(index, 4 | 7) {
-                        byte == b'-'
-                    } else {
-                        byte.is_ascii_digit()
-                    }
-                })
-                || {
-                    let parts = cursor.day.split('-').collect::<Vec<_>>();
-                    parts.len() != 3
-                        || parts[0].parse::<i32>().is_err()
-                        || parts[1].parse::<u32>().is_err()
-                        || parts[2].parse::<u32>().is_err()
-                        || unix_days_from_ymd(
-                            parts[0].parse().unwrap_or_default(),
-                            parts[1].parse().unwrap_or_default(),
-                            parts[2].parse().unwrap_or_default(),
-                        )
-                        .is_none()
-                })
-        {
+        if cursor.is_some_and(|cursor| !is_valid_audit_day(&cursor.day)) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "audit-export-cursor-invalid",
             ));
         }
-        let mut daily_paths = Vec::new();
-        for (index, entry) in fs::read_dir(&self.audit_dir)?.enumerate() {
-            if index >= MAX_AUDIT_DIRECTORY_ENTRIES {
-                return Err(io::Error::other("audit-directory-scan-limit"));
-            }
-            let entry = entry?;
-            let name = entry.file_name();
-            let Some(name_str) = name.to_str() else {
-                continue;
-            };
-            let Some(stem) = name_str
-                .strip_prefix("broker-")
-                .and_then(|s| s.strip_suffix(".jsonl"))
-            else {
-                continue;
-            };
-            let parts: Vec<&str> = stem.split('-').collect();
-            if parts.len() != 3 {
-                continue;
-            }
-            let y = parts[0].parse::<i32>().ok();
-            let m = parts[1].parse::<u32>().ok();
-            let d = parts[2].parse::<u32>().ok();
-            if let (Some(y), Some(m), Some(d)) = (y, m, d)
-                && unix_days_from_ymd(y, m, d).is_some()
-            {
-                daily_paths.push((stem.to_owned(), entry.path()));
-            }
-        }
-        daily_paths.sort_by(|left, right| left.0.cmp(&right.0));
+        let daily_paths = scan_owned_daily_files(&self.audit_dir)?;
 
         let mut output = Vec::new();
         let mut bytes = 0_usize;
@@ -1004,14 +972,12 @@ impl AuditLog {
                         &mut next_cursor,
                         &day,
                         u64::MAX,
-                        u64::MAX,
                         limit,
                         entry,
                     )? {
                         complete = false;
                         break 'files;
                     }
-                    complete = false;
                     continue;
                 }
             };
@@ -1020,9 +986,20 @@ impl AuditLog {
             loop {
                 let current_line = line_number;
                 let line_bytes = match read_bounded_line(&mut reader) {
-                    Ok(Some(line)) => line,
-                    Ok(None) => break,
-                    Err(_) => {
+                    Ok(BoundedLine::EndOfFile) => break,
+                    Ok(BoundedLine::Record(line)) => {
+                        line_number = line_number.saturating_add(1);
+                        line
+                    }
+                    Ok(BoundedLine::ReadFailed {
+                        consumed,
+                        end_of_file,
+                    }) => {
+                        if !consumed {
+                            // The physical line is still pending. Do not
+                            // manufacture a cursor that would skip it.
+                            return Err(io::Error::other("audit-export-line-discard-limit"));
+                        }
                         line_number = line_number.saturating_add(1);
                         if cursor.is_some_and(|cursor| {
                             day < cursor.day || (day == cursor.day && current_line <= cursor.line)
@@ -1041,18 +1018,19 @@ impl AuditLog {
                             &mut next_cursor,
                             &day,
                             current_line,
-                            current_line.saturating_sub(1),
                             limit,
                             entry,
                         )? {
                             complete = false;
                             break 'files;
                         }
-                        complete = false;
-                        continue 'files;
+                        if end_of_file {
+                            break;
+                        }
+                        continue;
                     }
+                    Err(error) => return Err(error),
                 };
-                line_number = line_number.saturating_add(1);
                 if cursor.is_some_and(|cursor| {
                     day < cursor.day || (day == cursor.day && current_line <= cursor.line)
                 }) {
@@ -1073,14 +1051,12 @@ impl AuditLog {
                             &mut next_cursor,
                             &day,
                             current_line,
-                            current_line.saturating_sub(1),
                             limit,
                             entry,
                         )? {
                             complete = false;
                             break 'files;
                         }
-                        complete = false;
                         continue;
                     }
                 };
@@ -1123,7 +1099,6 @@ impl AuditLog {
                     &mut next_cursor,
                     &day,
                     current_line,
-                    current_line.saturating_sub(1),
                     limit,
                     entry,
                 )? {
@@ -1300,6 +1275,86 @@ fn open_append_cloexec(path: &Path, expected_gid: u32, test_mode: bool) -> io::R
     Ok(file)
 }
 
+fn open_audit_directory_lock(
+    audit_dir: &Path,
+    expected_gid: u32,
+    test_mode: bool,
+) -> io::Result<File> {
+    let path = audit_dir.join("audit.lock");
+    let was_present = match fs::symlink_metadata(&path) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() || !metadata.is_file() {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "audit lock rejected",
+                ));
+            }
+            true
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => false,
+        Err(error) => return Err(error),
+    };
+    let file = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .mode(0o600)
+        .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW)
+        .open(&path)?;
+    let owner_uid = if test_mode {
+        Uid::current().as_raw()
+    } else {
+        0
+    };
+    let group_gid = if test_mode {
+        Gid::current().as_raw()
+    } else {
+        expected_gid
+    };
+    if !was_present {
+        path_safe::fchmod(file.as_fd(), 0o600)?;
+        if let Err(error) = path_safe::fchown(file.as_fd(), Some(owner_uid), Some(group_gid))
+            && !test_mode
+        {
+            return Err(error);
+        }
+    }
+    let metadata = file.metadata()?;
+    if !metadata.is_file()
+        || metadata.uid() != owner_uid
+        || metadata.gid() != group_gid
+        || metadata.permissions().mode() & 0o777 != 0o600
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "audit-lock-ownership-invalid",
+        ));
+    }
+    flock(&file, FlockOperation::NonBlockingLockExclusive)
+        .map_err(|_| io::Error::new(io::ErrorKind::WouldBlock, "audit-lock-held"))?;
+    sync_directory(audit_dir)?;
+    Ok(file)
+}
+
+fn scan_owned_daily_files(audit_dir: &Path) -> io::Result<Vec<(String, PathBuf)>> {
+    let mut daily_paths = Vec::new();
+    for (index, entry) in fs::read_dir(audit_dir)?.enumerate() {
+        if index >= MAX_AUDIT_DIRECTORY_ENTRIES {
+            return Err(io::Error::other("audit-directory-scan-limit"));
+        }
+        let entry = entry?;
+        let name = entry.file_name();
+        let Some(day) = dated_audit_artifact_date(&name)? else {
+            continue;
+        };
+        if name.as_bytes().ends_with(b".jsonl") {
+            daily_paths.push((day, entry.path()));
+        }
+    }
+    daily_paths.sort_by(|left, right| left.0.cmp(&right.0));
+    Ok(daily_paths)
+}
+
 fn reconcile_truncated_final_line(
     path: &Path,
     audit_dir: &Path,
@@ -1414,6 +1469,7 @@ fn quarantine_truncated_tail(
         let quarantine_path = audit_dir.join(&name);
         let mut quarantine = File::from(fd);
         let result = (|| {
+            path_safe::fchmod(quarantine.as_fd(), 0o640)?;
             set_root_d2bd_acl(&quarantine, expected_gid, test_mode)?;
             source.seek(SeekFrom::Start(tail_start))?;
             let mut remaining = tail_len;
@@ -1629,14 +1685,65 @@ fn unix_days_from_ymd(y: i32, m: u32, d: u32) -> Option<i64> {
     }
 }
 
-fn dated_audit_artifact_date(name: &str) -> Option<&str> {
-    let stem = name.strip_prefix("broker-")?;
-    if let Some(day) = stem.strip_suffix(".jsonl") {
-        return Some(day);
+fn dated_audit_artifact_date(name: &OsStr) -> io::Result<Option<String>> {
+    let bytes = name.as_bytes();
+    let looks_owned = bytes.starts_with(b"broker-")
+        && (bytes.ends_with(b".jsonl") || bytes.ends_with(b".quarantine"));
+    let Some(name) = name.to_str() else {
+        return if looks_owned {
+            Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "audit-owned-file-identity-invalid",
+            ))
+        } else {
+            Ok(None)
+        };
+    };
+    let Some(stem) = name.strip_prefix("broker-") else {
+        return Ok(None);
+    };
+    let day = if let Some(day) = stem.strip_suffix(".jsonl") {
+        Some(day)
+    } else {
+        stem.strip_suffix(".quarantine")
+            .and_then(|value| value.split_once(".jsonl.truncated-"))
+            .map(|(day, _)| day)
+    };
+    let Some(day) = day else {
+        return Ok(None);
+    };
+    if !is_valid_audit_day(day) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "audit-owned-file-identity-invalid",
+        ));
     }
-    stem.strip_suffix(".quarantine")?
-        .split_once(".jsonl.truncated-")
-        .map(|(day, _)| day)
+    Ok(Some(day.to_owned()))
+}
+
+fn is_valid_audit_day(day: &str) -> bool {
+    if day.len() != 10
+        || !day.bytes().enumerate().all(|(index, byte)| {
+            if matches!(index, 4 | 7) {
+                byte == b'-'
+            } else {
+                byte.is_ascii_digit()
+            }
+        })
+    {
+        return false;
+    }
+    let parts = day.split('-').collect::<Vec<_>>();
+    parts.len() == 3
+        && parts[0].parse::<i32>().is_ok()
+        && parts[1].parse::<u32>().is_ok()
+        && parts[2].parse::<u32>().is_ok()
+        && unix_days_from_ymd(
+            parts[0].parse().unwrap_or_default(),
+            parts[1].parse().unwrap_or_default(),
+            parts[2].parse().unwrap_or_default(),
+        )
+        .is_some()
 }
 
 fn ts_at_least(record: &Value, since: &str) -> bool {
@@ -1660,18 +1767,12 @@ fn append_export_entry(
     next_cursor: &mut Option<AuditExportCursor>,
     day: &str,
     physical_line: u64,
-    cursor_line_if_full: u64,
     limit: usize,
     entry: AuditExportEntry,
 ) -> io::Result<bool> {
     let encoded =
         serde_json::to_vec(&entry).map_err(|_| io::Error::other("audit-export-encode-failed"))?;
     if output.len() >= limit || bytes.saturating_add(encoded.len()) > MAX_EXPORTED_AUDIT_BYTES {
-        *next_cursor = Some(AuditExportCursor {
-            day: day.to_owned(),
-            line: cursor_line_if_full,
-            sequence: sequence.saturating_sub(1),
-        });
         return Ok(false);
     }
     *bytes = bytes.saturating_add(encoded.len());
@@ -1769,31 +1870,83 @@ fn severity_matches(record: &Value, severity: BrokerAuditSeverity) -> bool {
     }
 }
 
-fn read_bounded_line<R: BufRead>(reader: &mut R) -> io::Result<Option<Vec<u8>>> {
+#[derive(Debug, PartialEq, Eq)]
+enum BoundedLine {
+    EndOfFile,
+    Record(Vec<u8>),
+    ReadFailed { consumed: bool, end_of_file: bool },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DiscardedLine {
+    Newline,
+    EndOfFile,
+    BudgetExhausted,
+}
+
+fn read_bounded_line<R: BufRead>(reader: &mut R) -> io::Result<BoundedLine> {
     let mut bytes = Vec::new();
     loop {
         let chunk = reader.fill_buf()?;
         if chunk.is_empty() {
             return if bytes.is_empty() {
-                Ok(None)
+                Ok(BoundedLine::EndOfFile)
             } else {
-                Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "audit-export-line-truncated",
-                ))
+                Ok(BoundedLine::ReadFailed {
+                    consumed: true,
+                    end_of_file: true,
+                })
             };
         }
         let newline = chunk.iter().position(|byte| *byte == b'\n');
         let take = newline.map_or(chunk.len(), |index| index + 1);
         if bytes.len().saturating_add(take) > MAX_EXPORTED_AUDIT_LINE_BYTES {
-            return Err(io::Error::other("audit-export-line-limit"));
+            return Ok(match discard_oversized_line(reader)? {
+                DiscardedLine::Newline => BoundedLine::ReadFailed {
+                    consumed: true,
+                    end_of_file: false,
+                },
+                DiscardedLine::EndOfFile => BoundedLine::ReadFailed {
+                    consumed: true,
+                    end_of_file: true,
+                },
+                DiscardedLine::BudgetExhausted => BoundedLine::ReadFailed {
+                    consumed: false,
+                    end_of_file: false,
+                },
+            });
         }
         bytes.extend_from_slice(&chunk[..take]);
         reader.consume(take);
         if newline.is_some() {
             bytes.pop();
-            return Ok(Some(bytes));
+            return Ok(BoundedLine::Record(bytes));
         }
+    }
+}
+
+fn discard_oversized_line<R: BufRead>(reader: &mut R) -> io::Result<DiscardedLine> {
+    let mut remaining = MAX_EXPORTED_AUDIT_DISCARD_BYTES;
+    while remaining > 0 {
+        let chunk = reader.fill_buf()?;
+        if chunk.is_empty() {
+            return Ok(DiscardedLine::EndOfFile);
+        }
+        if let Some(index) = chunk.iter().position(|byte| *byte == b'\n') {
+            let take = index.saturating_add(1);
+            if take <= remaining {
+                reader.consume(take);
+                return Ok(DiscardedLine::Newline);
+            }
+        }
+        let take = chunk.len().min(remaining);
+        reader.consume(take);
+        remaining -= take;
+    }
+    if reader.fill_buf()?.is_empty() {
+        Ok(DiscardedLine::EndOfFile)
+    } else {
+        Ok(DiscardedLine::BudgetExhausted)
     }
 }
 
@@ -1979,7 +2132,7 @@ mod tests {
         // survive pruning.
         let note = log.audit_dir.join("NOTES-operator.txt");
         let tar = log.audit_dir.join("export-2024-01-01.tar.gz");
-        let stray = log.audit_dir.join("broker-not-a-date.jsonl");
+        let stray = log.audit_dir.join("foreign-audit.jsonl");
         fs::write(&note, b"todo").unwrap();
         fs::write(&tar, b"\0").unwrap();
         fs::write(&stray, b"{}\n").unwrap();
@@ -1988,7 +2141,7 @@ mod tests {
         assert_eq!(pruned, 1, "only the dated daily file should be pruned");
         assert!(note.exists(), "operator notes must survive prune");
         assert!(tar.exists(), "export tarballs must survive prune");
-        assert!(stray.exists(), "non-date-matching jsonl must survive prune");
+        assert!(stray.exists(), "foreign jsonl must survive prune");
 
         let _ = fs::remove_dir_all(log.audit_dir.parent().unwrap());
     }
@@ -2223,6 +2376,262 @@ mod tests {
                 .all(|line| serde_json::from_str::<Value>(line).is_ok())
         );
 
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn open_reconciles_prior_day_tail_and_ignores_foreign_files() {
+        let root = target_scratch_root("audit-reopen-prior-day");
+        fs::create_dir_all(&root).expect("create audit root");
+        let today = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+        let prior = ymd_from_unix(today - 86_400);
+        let prior_path = root.join(format!(
+            "broker-{y:04}-{m:02}-{d:02}.jsonl",
+            y = prior.0,
+            m = prior.1,
+            d = prior.2
+        ));
+        let complete = b"{\"ts\":1,\"op\":\"prior-complete\"}\n";
+        let truncated = b"{\"ts\":2,\"op\":\"prior-truncated\"";
+        let mut seeded = complete.to_vec();
+        seeded.extend_from_slice(truncated);
+        fs::write(&prior_path, seeded).expect("seed prior-day tail");
+        let foreign = root.join("operator-export.jsonl");
+        fs::write(&foreign, b"foreign").expect("seed foreign file");
+
+        let log = AuditLog::open(&root, Gid::current().as_raw(), true, 30)
+            .expect("open should reconcile every owned daily file");
+        assert_eq!(
+            fs::read(&prior_path).expect("read repaired prior-day file"),
+            complete,
+            "a prior-day tail must be repaired even after the UTC day changes"
+        );
+        let quarantines: Vec<_> = fs::read_dir(&root)
+            .expect("read audit directory")
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry.file_name().to_string_lossy().starts_with("broker-")
+                    && entry
+                        .file_name()
+                        .to_string_lossy()
+                        .contains(".jsonl.truncated-")
+            })
+            .collect();
+        assert_eq!(quarantines.len(), 1);
+        assert_eq!(
+            fs::read(quarantines[0].path()).expect("read prior-day quarantine"),
+            truncated
+        );
+        assert!(
+            foreign.exists(),
+            "foreign files must survive reconciliation"
+        );
+        drop(log);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn open_fails_closed_for_invalid_or_unsafe_owned_files() {
+        let root = target_scratch_root("audit-invalid-owned-file");
+        fs::create_dir_all(&root).expect("create audit root");
+        fs::write(root.join("broker-2024-02-30.jsonl"), b"{}\n")
+            .expect("seed invalid owned identity");
+        let error = AuditLog::open(&root, Gid::current().as_raw(), true, 30)
+            .expect_err("invalid owned date must fail closed");
+        assert_eq!(
+            error.to_string(),
+            "audit-owned-file-identity-invalid",
+            "invalid owned identity must not be treated as foreign"
+        );
+        let _ = fs::remove_dir_all(&root);
+
+        let root = target_scratch_root("audit-unsafe-owned-file");
+        fs::create_dir_all(&root).expect("create audit root");
+        let day = utc_date_string();
+        let target = root.join("outside");
+        let unsafe_daily = root.join(format!("broker-{day}.jsonl"));
+        fs::write(&target, b"{}\n").expect("seed symlink target");
+        std::os::unix::fs::symlink(&target, &unsafe_daily).expect("seed unsafe daily symlink");
+        let error = AuditLog::open(&root, Gid::current().as_raw(), true, 30)
+            .expect_err("owned symlink must fail closed");
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn audit_directory_lock_is_held_until_log_drop() {
+        let root = target_scratch_root("audit-directory-lock");
+        let log =
+            AuditLog::open(&root, Gid::current().as_raw(), true, 30).expect("open first audit log");
+        let error = AuditLog::open(&root, Gid::current().as_raw(), true, 30)
+            .expect_err("second audit owner must not enter the directory");
+        assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
+        drop(log);
+        let reopened = AuditLog::open(&root, Gid::current().as_raw(), true, 30)
+            .expect("directory lock should release with the writer");
+        drop(reopened);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn full_page_before_unreadable_file_keeps_last_emitted_cursor() {
+        let root = target_scratch_root("audit-full-page-unreadable");
+        let log = AuditLog::open(&root, Gid::current().as_raw(), true, 30).expect("open audit log");
+        log.write_entry("First", 1000, "allowed", "target", "success")
+            .expect("write first record");
+        let today = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+        let next_day = ymd_from_unix(today + 86_400);
+        let next_day_path = root.join(format!(
+            "broker-{y:04}-{m:02}-{d:02}.jsonl",
+            y = next_day.0,
+            m = next_day.1,
+            d = next_day.2
+        ));
+        let target = root.join("unreadable-target");
+        fs::write(&target, b"{}\n").expect("seed unreadable target");
+        std::os::unix::fs::symlink(&target, &next_day_path).expect("seed unreadable owned symlink");
+
+        let first = log
+            .export_page(None, None, None, 1)
+            .expect("export first full page");
+        assert_eq!(first.entries.len(), 1);
+        let cursor = first.next_cursor.as_ref().expect("cursor after full page");
+        assert_eq!(cursor.day, utc_date_string());
+        assert_eq!(cursor.line, 0, "cursor must remain on the emitted record");
+        let second = log
+            .export_page(None, None, Some(cursor), 10)
+            .expect("retry unreadable file");
+        assert_eq!(second.entries.len(), 1);
+        assert_eq!(
+            second.entries[0].error,
+            Some(AuditExportErrorCode::ReadFailed)
+        );
+        assert!(second.complete);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn oversized_line_is_reported_once_and_valid_continuation_is_preserved() {
+        let root = target_scratch_root("audit-oversized-line");
+        let log = AuditLog::open(&root, Gid::current().as_raw(), true, 30)
+            .expect("open oversized-line audit log");
+        let path = log.current_daily_path();
+        let mut file = OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .expect("open daily file");
+        let oversized = vec![b'x'; MAX_EXPORTED_AUDIT_LINE_BYTES + 1024];
+        file.write_all(&oversized).expect("write oversized line");
+        file.write_all(b"\n{\"ts\":1,\"op\":\"after-oversized\"}\n")
+            .expect("write valid continuation");
+        file.sync_all().expect("sync oversized fixture");
+        drop(file);
+
+        let first = log
+            .export_page(None, None, None, 1)
+            .expect("export oversized line");
+        assert_eq!(first.entries.len(), 1);
+        assert_eq!(
+            first.entries[0].error,
+            Some(AuditExportErrorCode::ReadFailed)
+        );
+        let cursor = first
+            .next_cursor
+            .as_ref()
+            .expect("cursor after oversized line");
+        assert_eq!(cursor.line, 0);
+        let second = log
+            .export_page(None, None, Some(cursor), 10)
+            .expect("continue after oversized line");
+        assert_eq!(second.entries.len(), 1);
+        assert_eq!(
+            second.entries[0]
+                .record
+                .as_ref()
+                .and_then(|record| record.get("op"))
+                .and_then(Value::as_str),
+            Some("after-oversized")
+        );
+        assert!(second.complete);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn oversized_line_spanning_small_reads_drains_exactly_one_physical_line() {
+        let mut bytes = vec![b'x'; MAX_EXPORTED_AUDIT_LINE_BYTES + 17];
+        bytes.extend_from_slice(b"\n{\"ts\":1,\"op\":\"valid\"}\n");
+        let mut reader = BufReader::with_capacity(7, io::Cursor::new(bytes));
+        assert_eq!(
+            read_bounded_line(&mut reader).expect("read oversized line"),
+            BoundedLine::ReadFailed {
+                consumed: true,
+                end_of_file: false,
+            }
+        );
+        assert_eq!(
+            read_bounded_line(&mut reader).expect("read valid continuation"),
+            BoundedLine::Record(br#"{"ts":1,"op":"valid"}"#.to_vec())
+        );
+    }
+
+    #[test]
+    fn truncated_export_line_is_typed_once_after_consuming_eof() {
+        let root = target_scratch_root("audit-export-truncated-line");
+        let log = AuditLog::open(&root, Gid::current().as_raw(), true, 30)
+            .expect("open truncated export audit log");
+        let path = log.current_daily_path();
+        let mut file = OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .expect("open daily file");
+        file.write_all(br#"{"ts":1,"op":"truncated-at-eof""#)
+            .expect("write truncated line");
+        file.sync_all().expect("sync truncated fixture");
+        drop(file);
+
+        let page = log
+            .export_page(None, None, None, 10)
+            .expect("export truncated line");
+        assert_eq!(page.entries.len(), 1);
+        assert_eq!(
+            page.entries[0].error,
+            Some(AuditExportErrorCode::ReadFailed)
+        );
+        assert!(page.complete);
+        assert!(page.next_cursor.is_none());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn oversized_line_without_bounded_newline_fails_closed() {
+        let root = target_scratch_root("audit-oversized-no-newline");
+        let log = AuditLog::open(&root, Gid::current().as_raw(), true, 30)
+            .expect("open oversized no-newline audit log");
+        let path = log.current_daily_path();
+        let mut file = OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .expect("open daily file");
+        file.write_all(&vec![
+            b'x';
+            MAX_EXPORTED_AUDIT_LINE_BYTES
+                + MAX_EXPORTED_AUDIT_DISCARD_BYTES
+                + 1
+        ])
+        .expect("write unbounded oversized line");
+        file.sync_all().expect("sync oversized fixture");
+        drop(file);
+
+        let error = log
+            .export_page(None, None, None, 10)
+            .expect_err("line without a bounded newline must fail closed");
+        assert_eq!(error.to_string(), "audit-export-line-discard-limit");
         let _ = fs::remove_dir_all(&root);
     }
 

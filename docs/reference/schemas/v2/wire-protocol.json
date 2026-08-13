@@ -787,30 +787,6 @@
         }
       }
     },
-    "AuditEntry": {
-      "type": "object",
-      "required": [
-        "action",
-        "result",
-        "scope",
-        "timestamp"
-      ],
-      "properties": {
-        "action": {
-          "type": "string"
-        },
-        "result": {
-          "type": "string"
-        },
-        "scope": {
-          "type": "string"
-        },
-        "timestamp": {
-          "type": "string"
-        }
-      },
-      "additionalProperties": false
-    },
     "AuditExportCursor": {
       "description": "Opaque page position for typed broker audit export.",
       "type": "object",
@@ -929,14 +905,31 @@
     "AuditResponse": {
       "type": "object",
       "required": [
+        "complete",
         "entries"
       ],
       "properties": {
+        "complete": {
+          "description": "Protocol v5 requires an explicit completion marker.",
+          "type": "boolean"
+        },
         "entries": {
+          "description": "Typed broker audit entries. The public daemon page deliberately shares the broker entry shape so pagination does not lose sequence or export error information.",
           "type": "array",
           "items": {
-            "$ref": "#/definitions/AuditEntry"
+            "$ref": "#/definitions/AuditExportEntry"
           }
+        },
+        "nextCursor": {
+          "description": "Omitted only when this is the final page.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AuditExportCursor"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "additionalProperties": false

@@ -1,4 +1,4 @@
-use crate::broker_wire::AuditExportCursor;
+use crate::broker_wire::{AuditExportCursor, AuditExportEntry};
 use crate::types::MediaRef;
 use crate::{FeatureFlag, Version, guest_wire::ExecState};
 pub use d2b_core::audio_policy::LevelPercent;
@@ -2154,10 +2154,54 @@ pub struct PublicReadModelMetadata {
     pub deep_refresh: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AuditResponse {
-    pub entries: Vec<AuditEntry>,
+    /// Typed broker audit entries. The public daemon page deliberately shares
+    /// the broker entry shape so pagination does not lose sequence or export
+    /// error information.
+    pub entries: Vec<AuditExportEntry>,
+    /// Omitted only when this is the final page.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<AuditExportCursor>,
+    /// Protocol v5 requires an explicit completion marker.
+    pub complete: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AuditResponseWire {
+    entries: Vec<AuditExportEntry>,
+    #[serde(default)]
+    next_cursor: Option<AuditExportCursor>,
+    complete: bool,
+}
+
+impl<'de> Deserialize<'de> for AuditResponse {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let wire = AuditResponseWire::deserialize(deserializer)?;
+        validate_audit_page(wire.complete, wire.next_cursor.as_ref())
+            .map_err(serde::de::Error::custom)?;
+        Ok(Self {
+            entries: wire.entries,
+            next_cursor: wire.next_cursor,
+            complete: wire.complete,
+        })
+    }
+}
+
+pub(crate) fn validate_audit_page(
+    complete: bool,
+    next_cursor: Option<&AuditExportCursor>,
+) -> Result<(), &'static str> {
+    match (complete, next_cursor.is_some()) {
+        (true, true) => Err("complete audit page must omit nextCursor"),
+        (false, false) => Err("incomplete audit page requires nextCursor"),
+        _ => Ok(()),
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -2689,10 +2733,10 @@ fn default_true() -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        LevelPercent, MutationFlags, PublicRequest, PublicResponse, RuntimeSummary,
+        AuditResponse, LevelPercent, MutationFlags, PublicRequest, PublicResponse, RuntimeSummary,
         VmLifecycleRequest, VmLifecycleState,
     };
-    use crate::{FeatureFlag, Version, decode_frame, encode_frame};
+    use crate::{FeatureFlag, Version, broker_wire::AuditExportCursor, decode_frame, encode_frame};
     use d2b_core::error::Error;
     use d2b_core::{
         processes::ProcessRole,
@@ -2750,11 +2794,15 @@ mod tests {
                 "kind": "audit",
                 "payload": {
                     "entries": [{
-                        "action": "vm-start",
-                        "result": "ok",
-                        "scope": "vm:corp-vm",
-                        "timestamp": "2026-07-05T18:00:00Z"
-                    }]
+                        "sequence": 0,
+                        "record": {
+                            "action": "vm-start",
+                            "result": "ok",
+                            "scope": "vm:corp-vm",
+                            "timestamp": "2026-07-05T18:00:00Z"
+                        }
+                    }],
+                    "complete": true
                 }
             }),
             serde_json::json!({
@@ -2771,6 +2819,88 @@ mod tests {
             }),
         ] {
             serde_json::from_value::<PublicResponse>(value).expect("public response decodes");
+        }
+    }
+
+    #[test]
+    fn paginated_audit_response_decodes_through_public_contract() {
+        let cursor = AuditExportCursor {
+            day: "2026-08-13".to_owned(),
+            line: 41,
+            sequence: 41,
+        };
+        let value = serde_json::json!({
+            "entries": [{
+                "sequence": 42,
+                "record": {"operation": "ApplyNftables"}
+            }],
+            "nextCursor": {
+                "day": "2026-08-13",
+                "line": 41,
+                "sequence": 41
+            },
+            "complete": false
+        });
+
+        let response: AuditResponse =
+            serde_json::from_value(value).expect("paginated audit response decodes");
+        assert_eq!(response.entries.len(), 1);
+        assert_eq!(response.entries[0].sequence, 42);
+        assert_eq!(response.next_cursor, Some(cursor));
+        assert!(!response.complete);
+    }
+
+    #[test]
+    fn complete_audit_page_omits_cursor() {
+        let response: AuditResponse = serde_json::from_value(serde_json::json!({
+            "entries": [],
+            "complete": true
+        }))
+        .expect("complete audit page decodes");
+        assert!(response.next_cursor.is_none());
+        assert!(response.complete);
+    }
+
+    #[test]
+    fn incomplete_audit_page_requires_cursor() {
+        let error = serde_json::from_value::<AuditResponse>(serde_json::json!({
+            "entries": [],
+            "complete": false
+        }))
+        .expect_err("incomplete audit page without cursor must fail");
+        assert!(
+            error.to_string().contains("nextCursor"),
+            "pagination error should name nextCursor: {error}"
+        );
+    }
+
+    #[test]
+    fn audit_response_rejects_complete_cursor_and_unknown_legacy_fields() {
+        let cursor = serde_json::json!({
+            "day": "2026-08-13",
+            "line": 41,
+            "sequence": 41
+        });
+        for value in [
+            serde_json::json!({
+                "entries": [],
+                "nextCursor": cursor,
+                "complete": true
+            }),
+            serde_json::json!({
+                "entries": [],
+                "complete": true,
+                "unexpected": true
+            }),
+            serde_json::json!({
+                "lines": [],
+                "complete": true
+            }),
+        ] {
+            assert!(
+                serde_json::from_value::<AuditResponse>(value.clone()).is_err(),
+                "audit response must fail closed: {value}"
+            );
         }
     }
 

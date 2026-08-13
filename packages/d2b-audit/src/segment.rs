@@ -620,19 +620,38 @@ fn read_checkpoint_file(path: &Path) -> io::Result<Option<RetentionCheckpoint>> 
 }
 
 fn read_checkpoint(directory: &Path) -> io::Result<Option<RetentionCheckpoint>> {
+    read_checkpoint_with_directory(directory, None)
+}
+
+fn read_checkpoint_with_directory(
+    directory: &Path,
+    directory_file: Option<&File>,
+) -> io::Result<Option<RetentionCheckpoint>> {
     let checkpoint = read_checkpoint_file(&checkpoint_path(directory))?;
-    let staged = read_checkpoint_file(&checkpoint_next_path(directory))?;
     if let Some(checkpoint) = checkpoint.as_ref() {
         validate_checkpoint(checkpoint)?;
     }
-    if let Some(staged) = staged.as_ref() {
-        validate_checkpoint(staged)?;
+    let staged = match read_checkpoint_file(&checkpoint_next_path(directory)) {
+        Ok(staged) => staged,
+        Err(error) if is_discardable_checkpoint_scratch_error(&error) => {
+            discard_checkpoint_scratch(directory, directory_file)?;
+            None
+        }
+        Err(error) => return Err(error),
+    };
+    let Some(staged) = staged else {
+        return Ok(checkpoint);
+    };
+    if let Err(error) = validate_checkpoint(&staged) {
+        if is_discardable_checkpoint_scratch_error(&error) {
+            discard_checkpoint_scratch(directory, directory_file)?;
+            return Ok(checkpoint);
+        }
+        return Err(error);
     }
-    let checkpoint = match (checkpoint, staged) {
-        (None, None) => None,
-        (Some(checkpoint), None) => Some(checkpoint),
-        (None, Some(staged)) => Some(staged),
-        (Some(committed), Some(staged)) => {
+    let checkpoint = match checkpoint {
+        None => Some(staged),
+        Some(committed) => {
             let compatible = match (&committed.pending, &staged.pending) {
                 (false, true) => staged.start_anchor.as_ref() == Some(&committed.anchor),
                 (true, false) => staged.anchor == committed.anchor,
@@ -651,16 +670,37 @@ fn read_checkpoint(directory: &Path) -> io::Result<Option<RetentionCheckpoint>> 
                 (false, false) => committed.anchor == staged.anchor,
             };
             if !compatible {
-                return Err(io::Error::other("audit-retention-checkpoint-staged"));
+                discard_checkpoint_scratch(directory, directory_file)?;
+                return Ok(Some(committed));
             }
             Some(staged)
         }
     };
-    let Some(checkpoint) = checkpoint else {
-        return Ok(None);
+    Ok(checkpoint)
+}
+
+fn is_discardable_checkpoint_scratch_error(error: &io::Error) -> bool {
+    matches!(
+        error.to_string().as_str(),
+        "audit-retention-checkpoint-invalid"
+            | "audit-retention-checkpoint-limit"
+            | "audit-retention-checkpoint-unverifiable"
+    )
+}
+
+fn discard_checkpoint_scratch(directory: &Path, directory_file: Option<&File>) -> io::Result<()> {
+    let path = checkpoint_next_path(directory);
+    let metadata = match fs::symlink_metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
     };
-    validate_checkpoint(&checkpoint)?;
-    Ok(Some(checkpoint))
+    validate_segment_metadata(&metadata)?;
+    fs::remove_file(path)?;
+    match directory_file {
+        Some(directory_file) => directory_file.sync_all(),
+        None => open_directory(directory)?.sync_all(),
+    }
 }
 
 fn validate_checkpoint(checkpoint: &RetentionCheckpoint) -> io::Result<()> {
@@ -706,14 +746,21 @@ fn repair_pending_checkpoint(directory: &Path, directory_file: &File) -> io::Res
     match fs::symlink_metadata(checkpoint_next_path(directory)) {
         Ok(metadata) => {
             validate_segment_metadata(&metadata)?;
-            read_checkpoint(directory)?;
-            fs::rename(checkpoint_next_path(directory), checkpoint_path(directory))?;
-            directory_file.sync_all()?;
+            read_checkpoint_with_directory(directory, Some(directory_file))?;
+            match fs::symlink_metadata(checkpoint_next_path(directory)) {
+                Ok(metadata) => {
+                    validate_segment_metadata(&metadata)?;
+                    fs::rename(checkpoint_next_path(directory), checkpoint_path(directory))?;
+                    directory_file.sync_all()?;
+                }
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
+            }
         }
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
         Err(error) => return Err(error),
     }
-    let Some(checkpoint) = read_checkpoint(directory)? else {
+    let Some(checkpoint) = read_checkpoint_with_directory(directory, Some(directory_file))? else {
         return Ok(());
     };
     if !checkpoint.pending {
@@ -1040,6 +1087,30 @@ mod tests {
         path
     }
 
+    fn test_directory(name: &str) -> PathBuf {
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join(format!("d2b-audit-{name}-{}", std::process::id()))
+    }
+
+    fn write_staged_checkpoint(
+        directory: &Path,
+        start_anchor: &AuditHash,
+        anchor: &AuditHash,
+        segments: &[RetentionSegment],
+        phase: RetentionCheckpointPhase,
+    ) {
+        let bytes = serde_json::to_vec(&RetentionCheckpoint {
+            anchor: anchor.clone(),
+            pending: true,
+            start_anchor: Some(start_anchor.clone()),
+            segments: segments.to_vec(),
+            phase: Some(phase),
+        })
+        .unwrap();
+        fs::write(checkpoint_next_path(directory), bytes).unwrap();
+    }
+
     #[test]
     fn names_are_owned_and_rotation_is_size_bounded() {
         let directory = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -1252,6 +1323,112 @@ mod tests {
             assert!(!checkpoint_pending(&directory).unwrap());
             let _ = fs::remove_dir_all(directory);
         }
+    }
+
+    #[test]
+    fn truncated_checkpoint_scratch_is_discarded_before_recovery() {
+        let directory = test_directory("truncated-checkpoint-next");
+        let _ = fs::remove_dir_all(&directory);
+        fs::create_dir_all(&directory).unwrap();
+        clear_checkpoint(&directory, &genesis_hash()).unwrap();
+        fs::write(checkpoint_next_path(&directory), b"{").unwrap();
+
+        let writer = SegmentWriter::open_at(&directory, 1024, 30, 1_700_000_000_000).unwrap();
+
+        assert!(!checkpoint_next_path(&directory).exists());
+        assert_eq!(checkpoint_anchor(&directory).unwrap(), genesis_hash());
+        drop(writer);
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn garbage_checkpoint_scratch_without_commit_is_discarded() {
+        let directory = test_directory("garbage-checkpoint-next");
+        let _ = fs::remove_dir_all(&directory);
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(checkpoint_next_path(&directory), b"garbage").unwrap();
+
+        let writer = SegmentWriter::open_at(&directory, 1024, 30, 1_700_000_000_000).unwrap();
+
+        assert!(!checkpoint_path(&directory).exists());
+        assert!(!checkpoint_next_path(&directory).exists());
+        assert_eq!(checkpoint_anchor(&directory).unwrap(), genesis_hash());
+        drop(writer);
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn unsafe_checkpoint_scratch_identity_fails_closed() {
+        for kind in ["directory", "symlink"] {
+            let directory = test_directory(&format!("unsafe-checkpoint-next-{kind}"));
+            let _ = fs::remove_dir_all(&directory);
+            fs::create_dir_all(&directory).unwrap();
+            match kind {
+                "directory" => fs::create_dir(checkpoint_next_path(&directory)).unwrap(),
+                "symlink" => {
+                    std::os::unix::fs::symlink("missing", checkpoint_next_path(&directory)).unwrap()
+                }
+                _ => unreachable!(),
+            }
+
+            let error =
+                SegmentWriter::open_at(&directory, 1024, 30, 1_700_000_000_000).unwrap_err();
+
+            assert_eq!(error.to_string(), "audit-segment-identity-invalid");
+            let _ = fs::remove_dir_all(directory);
+        }
+    }
+
+    #[test]
+    fn invalid_committed_checkpoint_fails_closed_even_with_garbage_scratch() {
+        let directory = test_directory("invalid-committed-checkpoint");
+        let _ = fs::remove_dir_all(&directory);
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(checkpoint_path(&directory), b"invalid").unwrap();
+        fs::write(checkpoint_next_path(&directory), b"garbage").unwrap();
+
+        let error = SegmentWriter::open_at(&directory, 1024, 30, 1_700_000_000_000).unwrap_err();
+
+        assert_eq!(error.to_string(), "audit-retention-checkpoint-invalid");
+        assert!(checkpoint_next_path(&directory).exists());
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn staged_checkpoint_publish_wins_atomically() {
+        let directory = test_directory("staged-checkpoint-publish");
+        let _ = fs::remove_dir_all(&directory);
+        fs::create_dir_all(&directory).unwrap();
+        clear_checkpoint(&directory, &genesis_hash()).unwrap();
+
+        let segment = directory.join("audit-19700101000000000000.jsonl");
+        let record = sample();
+        let line = record.to_json_line().unwrap();
+        fs::write(&segment, line).unwrap();
+        let metadata = fs::symlink_metadata(&segment).unwrap();
+        let anchor = record.record_hash().clone();
+        let checkpoint_segment = RetentionSegment {
+            name: "audit-19700101000000000000.jsonl".to_owned(),
+            dev: metadata.dev(),
+            ino: metadata.ino(),
+            previous: genesis_hash(),
+            tail: anchor.clone(),
+        };
+        write_staged_checkpoint(
+            &directory,
+            &genesis_hash(),
+            &anchor,
+            &[checkpoint_segment],
+            RetentionCheckpointPhase::Prepared,
+        );
+
+        let writer = SegmentWriter::open_at(&directory, 1024, 30, 1_700_000_000_000).unwrap();
+
+        assert!(!checkpoint_next_path(&directory).exists());
+        assert!(!segment.exists());
+        assert_eq!(checkpoint_anchor(&directory).unwrap(), anchor);
+        drop(writer);
+        let _ = fs::remove_dir_all(directory);
     }
 
     #[test]

@@ -37,6 +37,7 @@ use d2b_contracts::{
         AuditExportCursor, AuditExportEntry, BrokerRequest, BrokerResponse,
         ExportBrokerAuditRequest, ExportBrokerAuditResponse,
     },
+    public_wire::AuditResponse,
 };
 
 /// W2 broker operation tags - the closed pre-W3 set the version-skew
@@ -352,10 +353,32 @@ fn protocol_v5_binds_paginated_audit_contract() {
     assert_eq!(response_payload["nextCursor"]["sequence"], 41);
     assert_eq!(response_payload["complete"], false);
 
-    let legacy_response = serde_json::json!({ "lines": ["{}"] });
+    for legacy_response in [
+        serde_json::json!({ "lines": ["{}"] }),
+        serde_json::json!({ "entries": [], "complete": true, "lines": [] }),
+    ] {
+        assert!(
+            serde_json::from_value::<ExportBrokerAuditResponse>(legacy_response).is_err(),
+            "protocol v5 must not silently accept the incompatible legacy audit response shape"
+        );
+    }
+
+    let complete_payload = serde_json::json!({
+        "entries": [],
+        "complete": true
+    });
+    let complete: AuditResponse =
+        serde_json::from_value(complete_payload).expect("complete public audit page decodes");
+    assert!(complete.complete);
+    assert!(complete.next_cursor.is_none());
+
+    let incomplete_without_cursor = serde_json::json!({
+        "entries": [],
+        "complete": false
+    });
     assert!(
-        serde_json::from_value::<ExportBrokerAuditResponse>(legacy_response).is_err(),
-        "protocol v5 must not silently accept the incompatible legacy audit response shape"
+        serde_json::from_value::<AuditResponse>(incomplete_without_cursor).is_err(),
+        "protocol v5 must reject an incomplete page without nextCursor"
     );
 }
 

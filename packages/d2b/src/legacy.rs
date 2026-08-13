@@ -20,8 +20,8 @@ use d2b_contracts::{
     Hello as IpcHello, HelloOk as IpcHelloOk, HelloRejected as IpcHelloRejected, KnownFeatureFlag,
     SemverRange,
     broker_wire::{
-        AuditExportCursor, ExportBrokerAuditResponse,
-        StoreVerifyResponse as IpcStoreVerifyResponse, StoreVerifyStatus as IpcStoreVerifyStatus,
+        AuditExportCursor, StoreVerifyResponse as IpcStoreVerifyResponse,
+        StoreVerifyStatus as IpcStoreVerifyStatus,
     },
     cli_output::*,
     public_wire::{
@@ -1370,12 +1370,12 @@ pub(super) struct ErrorFrame {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct AuditResponseFrame {
     #[serde(rename = "type")]
     _type_name: String,
     #[serde(flatten)]
-    payload: ExportBrokerAuditResponse,
+    payload: public_wire::AuditResponse,
 }
 
 #[derive(Debug, Clone, Deserialize)]

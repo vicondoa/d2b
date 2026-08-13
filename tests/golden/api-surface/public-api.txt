@@ -3767,7 +3767,7 @@ pub fn d2b_bus::metrics::BusMetric::borrow(&self) -> &T
 pub fn d2b_bus::metrics::BusMetric::borrow_mut(&mut self) -> &mut T
 pub fn d2b_bus::metrics::BusMetric::clone(&self) -> d2b_bus::metrics::BusMetric
 pub fn d2b_bus::metrics::BusMetric::clone_into(&self, &mut T)
-pub fn d2b_bus::metrics::BusMetric::descriptor(self) -> d2b_telemetry::metric_label_policy::MetricDescriptor
+pub fn d2b_bus::metrics::BusMetric::descriptor(self) -> d2b_contracts::v3::telemetry_policy::MetricDescriptor
 pub fn d2b_bus::metrics::BusMetric::eq(&self, &d2b_bus::metrics::BusMetric) -> bool
 pub fn d2b_bus::metrics::BusMetric::equivalent(&self, &K) -> bool
 pub fn d2b_bus::metrics::BusMetric::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
@@ -3799,7 +3799,7 @@ pub fn d2b_bus::metrics::BusMetrics::to_owned(&self) -> T
 pub fn d2b_bus::metrics::BusMetrics::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
 pub fn d2b_bus::metrics::BusMetrics::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
 pub fn d2b_bus::metrics::BusMetrics::type_id(&self) -> core::any::TypeId
-pub fn d2b_bus::metrics::BusMetrics::validate_inventory() -> core::result::Result<(), d2b_telemetry::metric_label_policy::MetricPolicyError>
+pub fn d2b_bus::metrics::BusMetrics::validate_inventory() -> core::result::Result<(), d2b_contracts::v3::telemetry_policy::MetricPolicyError>
 pub fn d2b_bus::metrics::BusRegistrationOutcome::__clone_box(&self, dyn_clone::sealed::Private) -> *mut ()
 pub fn d2b_bus::metrics::BusRegistrationOutcome::borrow(&self) -> &T
 pub fn d2b_bus::metrics::BusRegistrationOutcome::borrow_mut(&mut self) -> &mut T

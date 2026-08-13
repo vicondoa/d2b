@@ -2135,13 +2135,38 @@ pub struct TapReadyResponse {
     pub tap: IfName,
 }
 
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ExportBrokerAuditResponse {
     pub entries: Vec<AuditExportEntry>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_cursor: Option<AuditExportCursor>,
     pub complete: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ExportBrokerAuditResponseWire {
+    entries: Vec<AuditExportEntry>,
+    #[serde(default)]
+    next_cursor: Option<AuditExportCursor>,
+    complete: bool,
+}
+
+impl<'de> Deserialize<'de> for ExportBrokerAuditResponse {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let wire = ExportBrokerAuditResponseWire::deserialize(deserializer)?;
+        crate::public_wire::validate_audit_page(wire.complete, wire.next_cursor.as_ref())
+            .map_err(serde::de::Error::custom)?;
+        Ok(Self {
+            entries: wire.entries,
+            next_cursor: wire.next_cursor,
+            complete: wire.complete,
+        })
+    }
 }
 
 impl core::fmt::Debug for ExportBrokerAuditResponse {
@@ -2152,6 +2177,16 @@ impl core::fmt::Debug for ExportBrokerAuditResponse {
             .field("has_next_cursor", &self.next_cursor.is_some())
             .field("complete", &self.complete)
             .finish()
+    }
+}
+
+impl From<ExportBrokerAuditResponse> for crate::public_wire::AuditResponse {
+    fn from(response: ExportBrokerAuditResponse) -> Self {
+        Self {
+            entries: response.entries,
+            next_cursor: response.next_cursor,
+            complete: response.complete,
+        }
     }
 }
 
