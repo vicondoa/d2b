@@ -535,10 +535,10 @@ pub fn status_response(status: Value) -> Value {
     json!({ "type": "statusResponse", "status": status })
 }
 
-pub fn audit_response(lines: Vec<String>) -> AuditResponseFrame {
+pub fn audit_response(payload: ExportBrokerAuditResponse) -> AuditResponseFrame {
     AuditResponseFrame {
         type_name: "auditResponse",
-        payload: ExportBrokerAuditResponse { lines },
+        payload,
     }
 }
 

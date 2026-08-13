@@ -470,7 +470,7 @@ All five surfaces are gone. Their work moved as follows:
 | --- | --- |
 | `d2b-net-route-preflight.service` | `d2bd` startup self-check + `d2b host reconcile --network --apply`; typed envelope `net-route-preflight-degraded` (exit 66). |
 | `d2b-audit-check.{service,timer}` | broker `ExportBrokerAudit` op + `d2b host doctor`. Doctor's `checks[]` array reports the audit-rotation health. |
-| `d2b-ch-exporter.service` | `d2bd`'s own Prometheus exposition at `127.0.0.1:9101/metrics`. |
+| `d2b-ch-exporter.service` | Retired; configure an external collector for daemon metrics. |
 | `d2b-otel-host-bridge.service` | broker `SpawnRunner{role: OtelHostBridge}` - runs as a daemon-supervised runner, not a persistent root service. |
 | `microvms.target` | retired with `microvm@<vm>`; the upstream `microvm.autostart` / `systemd.targets.microvms.wants` cascade is suppressed in `host.nix`. |
 
@@ -492,11 +492,11 @@ sudo grep -rIn \
   | grep -v Binary
 ```
 
-The Prometheus endpoint at `127.0.0.1:9101/metrics` is unchanged;
-only the unit owning the listening socket moved. If you scraped
-the metrics by host:port you do not need to change anything. If
+The daemon no longer owns an HTTP Prometheus endpoint. Configure an
+external collector for the canonical daemon metric descriptors. If
 you scraped by `systemd_unit="d2b-ch-exporter.service"` label
-(via node_exporter / alloy), retarget to `d2bd.service`.
+(via node_exporter / alloy), retarget the collector to the daemon's
+supported telemetry transport.
 
 If you ran ad-hoc `systemctl start d2b-audit-check.service`
 to force an audit-log rotation, replace it with:
@@ -516,8 +516,8 @@ for u in d2b-net-route-preflight d2b-audit-check.service \
               | awk '$1 == "'$u'" {print}')"
 done
 
-# d2bd's own metrics endpoint is up:
-curl -fsS http://127.0.0.1:9101/metrics | head
+# External collector configuration is present and healthy:
+test -n "${D2B_METRICS_URL:-}"
 
 # Per-wave Layer-2 validator covers daemon-side preflight + metrics:
 sudo d2b host validate --apply --wave p3

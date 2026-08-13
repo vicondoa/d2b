@@ -39,8 +39,8 @@ use crate::audit::{AuditLog, AuditWriteClass};
 use crate::audit::{BROKER_VERSION, new_event_id, result_for_decision};
 #[cfg(not(feature = "layer1-bootstrap"))]
 use crate::ops::audit_op::{
-    OpAuditRecord, OperationFields, UsbAuditDeviceIdentity, UsbSerialCorrelation,
-    UsbSerialCorrelationKeyRotationAudit,
+    BrokerAuditRecordClass, OpAuditRecord, OperationFields, UsbAuditDeviceIdentity,
+    UsbSerialCorrelation, UsbSerialCorrelationKeyRotationAudit,
 };
 #[cfg(feature = "layer1-bootstrap")]
 use crate::protocol::{bind_seqpacket, connect_seqpacket, recv_json_frame, send_json_frame};
@@ -54,9 +54,11 @@ use crate::bootstrap::manifest as manifest_api;
 use crate::bootstrap::wire::{BrokerRequest, BrokerResponse, CallerRole, RequestEnvelope};
 #[cfg(not(feature = "layer1-bootstrap"))]
 use d2b_contracts::broker_wire::{
-    BrokerCallerRole as CallerRole, BrokerRequest, BrokerRequestEnvelope as RequestEnvelope,
-    BrokerResponse,
+    AuditJoinContext, BrokerCallerRole as CallerRole, BrokerRequest,
+    BrokerRequestEnvelope as RequestEnvelope, BrokerResponse, CanonicalAuditDigest,
 };
+#[cfg(feature = "layer1-bootstrap")]
+type AuditJoinContext = ();
 
 #[cfg(not(feature = "layer1-bootstrap"))]
 use d2b_core::bundle_resolver::BundleResolver;
@@ -78,7 +80,7 @@ const DEFAULT_AUDIT_DIR: &str = "/var/lib/d2b/audit";
 /// plane". Override via `--audit-retention-days` (broker flag) or the
 /// NixOS module's `d2b.site.audit.retentionDays` option. Set to 0
 /// to disable pruning.
-const DEFAULT_AUDIT_RETENTION_DAYS: u32 = 14;
+const DEFAULT_AUDIT_RETENTION_DAYS: u32 = 30;
 const DEFAULT_BUNDLE_PATH: &str = "/var/lib/d2b/current-bundle/manifest.json";
 const DEFAULT_REALM_CONTROLLERS_PATH: &str = "/etc/d2b/realm-controllers.json";
 const DEFAULT_REALM_IDENTITY_PATH: &str = "/etc/d2b/realm-identity.json";
@@ -161,7 +163,6 @@ impl From<io::Error> for RunError {
     }
 }
 
-#[derive(Debug)]
 enum BrokerError {
     #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
     MinijailValidation {
@@ -320,6 +321,12 @@ enum BrokerError {
         reason: &'static str,
     },
     IpcRateLimited,
+}
+
+impl core::fmt::Debug for BrokerError {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("BrokerError(<redacted>)")
+    }
 }
 
 pub fn parse_command<I>(args: I) -> Result<BrokerMode, RunError>
@@ -937,7 +944,7 @@ fn handle_connection(
         .map_err(|_| io::Error::other("broker IPC rate limiter mutex poisoned"))?
         .check(rate_pool, effective_uid, rate_role, rate_operation);
     if !rate_allowed {
-        write_refusal_audit_bounded(
+        if let Err(error) = write_refusal_audit_bounded(
             audit_log,
             if effective_uid == config.d2bd_uid {
                 AuditWriteClass::Privileged
@@ -949,14 +956,16 @@ fn handle_connection(
             "ipc-rate-limited",
             opaque_target_id,
             "closed",
-        )?;
+        ) {
+            tracing::error!(error = ?error, "broker rate-limit audit failed");
+        }
         if effective_uid == config.d2bd_uid {
             send_json_frame(fd.as_raw_fd(), &BrokerError::IpcRateLimited.into_response())?;
         }
         return Ok(());
     }
     if effective_uid != config.d2bd_uid {
-        write_refusal_audit_bounded(
+        if let Err(error) = write_refusal_audit_bounded(
             audit_log,
             AuditWriteClass::Unprivileged,
             operation,
@@ -964,7 +973,9 @@ fn handle_connection(
             "peer-refused",
             opaque_target_id,
             "closed",
-        )?;
+        ) {
+            tracing::error!(error = ?error, "broker peer-refusal audit failed");
+        }
         send_json_frame(
             fd.as_raw_fd(),
             &BrokerError::PeerCredentialRefused { operation }.into_response(),
@@ -973,15 +984,20 @@ fn handle_connection(
     }
 
     if let Err(error) = validate_broker_request(&request) {
+        #[cfg(not(feature = "layer1-bootstrap"))]
+        let audit_join = envelope.audit_join.clone();
+        #[cfg(feature = "layer1-bootstrap")]
+        let audit_join = None;
         let audit_context = DispatchAuditContext {
             peer_pid,
             peer_role: envelope.caller_role.for_display().to_owned(),
             verb: operation.to_owned(),
             request_fields: serde_json::json!({ "validation": "failed" }),
             started_at: Instant::now(),
+            audit_join,
         };
         #[cfg(not(feature = "layer1-bootstrap"))]
-        error.audit(
+        if let Err(audit_error) = error.audit(
             audit_log,
             effective_uid,
             peer_gid,
@@ -990,9 +1006,11 @@ fn handle_connection(
             resolver.map(std::sync::Arc::as_ref),
             operation,
             opaque_target_id,
-        )?;
+        ) {
+            tracing::error!(error = ?audit_error, "broker validation error audit failed");
+        }
         #[cfg(feature = "layer1-bootstrap")]
-        error.audit(
+        if let Err(audit_error) = error.audit(
             audit_log,
             effective_uid,
             peer_gid,
@@ -1000,13 +1018,23 @@ fn handle_connection(
             &audit_context,
             operation,
             opaque_target_id,
-        )?;
+        ) {
+            tracing::error!(error = ?audit_error, "broker validation error audit failed");
+        }
         send_json_frame(fd.as_raw_fd(), &error.into_response())?;
         return Ok(());
     }
-    let audit_context =
-        DispatchAuditContext::from_request(&request, peer_pid, &envelope.caller_role)
-            .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, format!("{err:?}")))?;
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    let audit_join = envelope.audit_join.as_ref();
+    #[cfg(feature = "layer1-bootstrap")]
+    let audit_join: Option<&AuditJoinContext> = None;
+    let audit_context = DispatchAuditContext::from_request_with_join(
+        &request,
+        peer_pid,
+        &envelope.caller_role,
+        audit_join,
+    )
+    .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, format!("{err:?}")))?;
     #[cfg(not(feature = "layer1-bootstrap"))]
     let dispatch_outcome = if let Some((path, reason)) = bundle_tamper {
         Err(BrokerError::BundleTampered { path, reason })
@@ -1037,7 +1065,7 @@ fn handle_connection(
         Ok(result) => (result.response, result.fds),
         Err(error) => {
             #[cfg(not(feature = "layer1-bootstrap"))]
-            error.audit(
+            if let Err(audit_error) = error.audit(
                 audit_log,
                 effective_uid,
                 peer_gid,
@@ -1046,9 +1074,11 @@ fn handle_connection(
                 resolver.map(std::sync::Arc::as_ref),
                 operation,
                 opaque_target_id,
-            )?;
+            ) {
+                tracing::error!(error = ?audit_error, "broker terminal error audit failed");
+            }
             #[cfg(feature = "layer1-bootstrap")]
-            error.audit(
+            if let Err(audit_error) = error.audit(
                 audit_log,
                 effective_uid,
                 peer_gid,
@@ -1056,7 +1086,9 @@ fn handle_connection(
                 &audit_context,
                 operation,
                 opaque_target_id,
-            )?;
+            ) {
+                tracing::error!(error = ?audit_error, "broker terminal error audit failed");
+            }
             (error.into_response(), Vec::new())
         }
     };
@@ -1399,6 +1431,7 @@ struct DispatchAuditContext {
     verb: String,
     request_fields: Value,
     started_at: Instant,
+    audit_join: Option<AuditJoinContext>,
 }
 
 impl DispatchAuditContext {
@@ -1407,17 +1440,75 @@ impl DispatchAuditContext {
         peer_pid: i32,
         caller_role: &CallerRole,
     ) -> Result<Self, BrokerError> {
+        #[cfg(feature = "layer1-bootstrap")]
+        {
+            Self::from_request_with_join(request, peer_pid, caller_role, None)
+        }
+        #[cfg(not(feature = "layer1-bootstrap"))]
+        {
+            let join = request
+                .authoritative_audit_join()
+                .map(|(zone_id, operation_identity)| AuditJoinContext {
+                    zone_id: CanonicalAuditDigest::parse(zone_id)
+                        .expect("authoritative zone digest"),
+                    operation_identity: CanonicalAuditDigest::parse(operation_identity)
+                        .expect("authoritative operation digest"),
+                });
+            Self::from_request_with_join(request, peer_pid, caller_role, join.as_ref())
+        }
+    }
+
+    fn from_request_with_join(
+        request: &BrokerRequest,
+        peer_pid: i32,
+        caller_role: &CallerRole,
+        audit_join: Option<&AuditJoinContext>,
+    ) -> Result<Self, BrokerError> {
+        #[cfg(not(feature = "layer1-bootstrap"))]
+        if audit_join.is_none() && Self::request_requires_audit_join(request) {
+            return Err(BrokerError::Protocol("audit-join-required".to_owned()));
+        }
+        #[cfg(not(feature = "layer1-bootstrap"))]
+        if let Some(supplied) = audit_join
+            && let Some((zone_id, operation_identity)) = request.authoritative_audit_join()
+        {
+            let expected_zone = CanonicalAuditDigest::parse(zone_id)
+                .map_err(|_| BrokerError::Protocol("audit zone identity invalid".to_owned()))?;
+            let expected_operation =
+                CanonicalAuditDigest::parse(operation_identity).map_err(|_| {
+                    BrokerError::Protocol("audit operation identity invalid".to_owned())
+                })?;
+            if supplied.zone_id != expected_zone
+                || supplied.operation_identity != expected_operation
+            {
+                return Err(BrokerError::Protocol("audit-join-mismatch".to_owned()));
+            }
+        }
         Ok(Self {
             peer_pid,
             peer_role: caller_role.for_display().to_owned(),
             verb: request.op_name().to_owned(),
             request_fields: request_fields_value(request)?,
             started_at: Instant::now(),
+            audit_join: audit_join.cloned(),
         })
     }
 
     fn duration_us(&self) -> u64 {
         self.started_at.elapsed().as_micros() as u64
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    fn request_requires_audit_join(request: &BrokerRequest) -> bool {
+        !matches!(
+            request,
+            BrokerRequest::Hello(_)
+                | BrokerRequest::ExportBrokerAudit(_)
+                | BrokerRequest::ValidateBundle
+                | BrokerRequest::PollChildReaped
+                | BrokerRequest::PauseBroker
+                | BrokerRequest::ResumeBroker
+        )
     }
 }
 
@@ -1880,8 +1971,13 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                 )?;
                 return Err(BrokerError::AuditRequiresAdmin);
             }
-            let lines = audit_log
-                .export_lines(req.since.as_deref(), filter_json.as_deref())
+            let page = audit_log
+                .export_page(
+                    req.since.as_deref(),
+                    filter_json.as_deref(),
+                    req.cursor.as_ref(),
+                    req.limit,
+                )
                 .map_err(|err| BrokerError::Protocol(err.to_string()))?;
             write_success_op_record!(
                 audit_log,
@@ -1897,7 +1993,7 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                 op_fields,
             )?;
             Ok(DispatchResult::no_fds(export_broker_audit_ok_response(
-                lines,
+                page,
             )))
         }
         // Live bundle-dependent real-wire ops. Each one (1) resolves the
@@ -4101,6 +4197,7 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                         "tracingSpanIdPresent": req.tracing_span_id.is_some(),
                     }),
                     started_at: audit_context.started_at,
+                    audit_join: audit_context.audit_join.clone(),
                 };
                 if let Err(err) = write_success_op_record_impl(
                     audit_log,
@@ -4418,6 +4515,7 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                         "tracingSpanIdPresent": req.tracing_span_id.is_some(),
                     }),
                     started_at: audit_context.started_at,
+                    audit_join: audit_context.audit_join.clone(),
                 };
                 if let Err(err) = write_success_op_record_impl(
                     audit_log,
@@ -4741,13 +4839,34 @@ fn write_decision_op_record_impl(
     })?;
     let event_id = new_event_id()
         .map_err(|err| BrokerError::Protocol(format!("generate audit event id: {err}")))?;
+    let (zone_id, operation_identity, public_operation_id) = if let Some(join) =
+        audit_context.audit_join.as_ref()
+    {
+        let zone_id = d2b_audit::ZoneId::parse(join.zone_id.as_str())
+            .map_err(|_| BrokerError::Protocol("audit zone identity invalid".to_owned()))?;
+        let operation_identity = d2b_audit::OperationIdentity::parse(
+            join.operation_identity.as_str(),
+        )
+        .map_err(|_| BrokerError::Protocol("audit operation identity invalid".to_owned()))?;
+        let public_operation_id = operation_identity.as_str().to_owned();
+        (zone_id, operation_identity, public_operation_id)
+    } else {
+        let zone_id = d2b_audit::ZoneId::derive(scope_id)
+            .map_err(|_| BrokerError::Protocol("audit zone identity invalid".to_owned()))?;
+        let operation_identity = d2b_audit::OperationIdentity::derive(public_operation_id)
+            .map_err(|_| BrokerError::Protocol("audit operation identity invalid".to_owned()))?;
+        (zone_id, operation_identity, public_operation_id.to_owned())
+    };
     let record = OpAuditRecord {
+        record_class: BrokerAuditRecordClass::Durability,
         ts_ms: audit_timestamp_ms(),
         broker_version: BROKER_VERSION,
         bundle_version: bundle_metadata.bundle_version,
         bundle_hash: bundle_metadata.bundle_hash,
         operation,
-        public_operation_id,
+        public_operation_id: &public_operation_id,
+        zone_id: &zone_id,
+        operation_identity: &operation_identity,
         event_id: event_id.as_str(),
         peer_uid,
         peer_gid,
@@ -4764,6 +4883,10 @@ fn write_decision_op_record_impl(
         tracing_span_id,
         duration_us: audit_context.duration_us(),
         operation_fields: Some(operation_fields),
+        zone_operation_key: d2b_audit::ZoneOperationKey::new(
+            zone_id.clone(),
+            operation_identity.clone(),
+        ),
     };
     audit_log
         .write_op_record(&record)
@@ -8469,6 +8592,58 @@ impl BrokerError {
         let authz_result = "launcher";
         #[cfg(feature = "layer1-bootstrap")]
         let _ = caller_role;
+        #[cfg(not(feature = "layer1-bootstrap"))]
+        let supplied_join = audit_context
+            .audit_join
+            .as_ref()
+            .map(|join| (join.zone_id.as_str(), join.operation_identity.as_str()));
+        #[cfg(feature = "layer1-bootstrap")]
+        let supplied_join = None;
+        let has_typed_terminal = matches!(
+            self,
+            Self::Unimplemented { .. }
+                | Self::UnknownOperation { .. }
+                | Self::UsbipDeviceNotAllowed { .. }
+                | Self::UsbipPolicyMismatch { .. }
+                | Self::CoexistenceRefused { .. }
+                | Self::NftScriptParseFailed(_)
+                | Self::CarveoutOrderingViolation(_)
+                | Self::NftablesDriftDetected { .. }
+                | Self::StoreSyncFailed { .. }
+                | Self::SwtpmDirHardening { .. }
+                | Self::RequestValidation { .. }
+        );
+        let has_request_payload = !audit_context
+            .request_fields
+            .as_object()
+            .is_some_and(|object| object.is_empty());
+        if !has_typed_terminal && has_request_payload {
+            let (typed_public_operation_id, typed_scope_id) = supplied_join
+                .map_or((operation, opaque_target_id), |(_, operation_identity)| {
+                    (operation_identity, operation_identity)
+                });
+            audit_log.record_with_join(
+                operation,
+                typed_public_operation_id,
+                caller_uid,
+                caller_gid,
+                audit_context.peer_pid,
+                audit_context.peer_role.as_str(),
+                authz_result,
+                "",
+                typed_scope_id,
+                audit_context.verb.as_str(),
+                audit_context.request_fields.clone(),
+                "error",
+                Some("broker-error"),
+                None,
+                bundle_metadata.bundle_version,
+                bundle_metadata.bundle_hash,
+                audit_context.duration_us(),
+                Some(serde_json::json!({ "error_class": "broker-error" })),
+                supplied_join,
+            )?;
+        }
         match self {
             Self::Unimplemented {
                 operation: op,
@@ -8484,7 +8659,7 @@ impl BrokerError {
                     "denied",
                 )?;
                 // Typed [`OpAuditRecord`] record for every decision.
-                audit_log.record(
+                audit_log.record_with_join(
                     op,
                     opaque_target_id,
                     caller_uid,
@@ -8503,6 +8678,7 @@ impl BrokerError {
                     bundle_metadata.bundle_hash,
                     audit_context.duration_us(),
                     Some(serde_json::json!({ "target_wave": target_wave })),
+                    supplied_join,
                 )?;
             }
             Self::UnknownOperation { operation: op } => {
@@ -8513,7 +8689,7 @@ impl BrokerError {
                     opaque_target_id,
                     "denied",
                 )?;
-                audit_log.record(
+                audit_log.record_with_join(
                     op,
                     opaque_target_id,
                     caller_uid,
@@ -8535,6 +8711,7 @@ impl BrokerError {
                         "reason": "broker does not yet implement USBIP live-device-routing ops",
                         "target_wave": "W6"
                     })),
+                    supplied_join,
                 )?;
             }
             Self::MinijailValidation { reason } => {
@@ -8631,7 +8808,7 @@ impl BrokerError {
                     busid,
                     "denied",
                 )?;
-                audit_log.record(
+                audit_log.record_with_join(
                     operation,
                     busid,
                     caller_uid,
@@ -8653,6 +8830,7 @@ impl BrokerError {
                         "vendor": format!("{vendor:04x}"),
                         "product": format!("{product:04x}"),
                     })),
+                    supplied_join,
                 )?;
             }
             Self::UsbipPolicyMismatch { busid, reason } => {
@@ -8663,7 +8841,7 @@ impl BrokerError {
                     busid,
                     "denied",
                 )?;
-                audit_log.record(
+                audit_log.record_with_join(
                     operation,
                     busid,
                     caller_uid,
@@ -8684,6 +8862,7 @@ impl BrokerError {
                     Some(serde_json::json!({
                         "reason": reason,
                     })),
+                    supplied_join,
                 )?;
             }
             Self::UsbipLockConflict { busid, owner } => {
@@ -8747,7 +8926,7 @@ impl BrokerError {
                     opaque_target_id,
                     "denied",
                 )?;
-                audit_log.record(
+                audit_log.record_with_join(
                     operation,
                     opaque_target_id,
                     caller_uid,
@@ -8769,6 +8948,7 @@ impl BrokerError {
                         "manager": format!("{manager:?}"),
                         "rationale": rationale,
                     })),
+                    supplied_join,
                 )?;
             }
             Self::NftScriptParseFailed(detail) => {
@@ -8779,7 +8959,7 @@ impl BrokerError {
                     opaque_target_id,
                     "errored",
                 )?;
-                audit_log.record(
+                audit_log.record_with_join(
                     operation,
                     opaque_target_id,
                     caller_uid,
@@ -8798,6 +8978,7 @@ impl BrokerError {
                     bundle_metadata.bundle_hash,
                     audit_context.duration_us(),
                     Some(serde_json::json!({ "detail": detail })),
+                    supplied_join,
                 )?;
             }
             Self::CarveoutOrderingViolation(detail) => {
@@ -8808,7 +8989,7 @@ impl BrokerError {
                     opaque_target_id,
                     "denied",
                 )?;
-                audit_log.record(
+                audit_log.record_with_join(
                     operation,
                     opaque_target_id,
                     caller_uid,
@@ -8827,6 +9008,7 @@ impl BrokerError {
                     bundle_metadata.bundle_hash,
                     audit_context.duration_us(),
                     Some(serde_json::json!({ "detail": detail })),
+                    supplied_join,
                 )?;
             }
             Self::NftablesDriftDetected { expected, observed } => {
@@ -8837,7 +9019,7 @@ impl BrokerError {
                     opaque_target_id,
                     "denied",
                 )?;
-                audit_log.record(
+                audit_log.record_with_join(
                     operation,
                     opaque_target_id,
                     caller_uid,
@@ -8859,6 +9041,7 @@ impl BrokerError {
                         "expected": expected,
                         "observed": observed,
                     })),
+                    supplied_join,
                 )?;
             }
             Self::OtelHostBridgeIntentInvalid {
@@ -8924,7 +9107,7 @@ impl BrokerError {
                     opaque_target_id,
                     "denied",
                 )?;
-                audit_log.record(
+                audit_log.record_with_join(
                     op,
                     opaque_target_id,
                     caller_uid,
@@ -8943,6 +9126,7 @@ impl BrokerError {
                     bundle_metadata.bundle_hash,
                     audit_context.duration_us(),
                     Some(serde_json::json!({ "reason": reason })),
+                    supplied_join,
                 )?;
             }
             Self::IpcRateLimited => {
@@ -8998,7 +9182,7 @@ impl BrokerError {
                 "Broker.BundleResolverUnavailable",
                 "BundleResolver",
                 Some("W12"),
-                "Broker started without a loadable bundle at ServerConfig.bundle_path. Bundle-dependent real-wire ops cannot resolve their BundleOpId refs.",
+                "broker operation failed; details are available only in the redacted audit channel",
                 "Restore the trusted bundle at the broker-configured bundle path and retry; the broker reloads the bundle on the next request.",
             ),
             Self::BundleTampered { .. } => error_response(
@@ -9013,7 +9197,7 @@ impl BrokerError {
                 "BundleResolver",
                 Some("W12"),
                 &format!("trusted bundle does not contain the requested {kind} intent"),
-                "Confirm the daemon emitted the BundleOpId that matches the loaded bundle (nixos-modules/bundle.nix populates the intent table).",
+                "broker operation failed; details are available only in the redacted audit channel",
             ),
             Self::StoreViewFilesystemMismatch { a, a_dev, b, b_dev } => error_response(
                 "Broker.StoreViewFilesystemMismatch",
@@ -9240,17 +9424,16 @@ fn validate_bundle_ok_response() -> BrokerResponse {
     }
 }
 
+#[cfg(feature = "layer1-bootstrap")]
 fn export_broker_audit_ok_response(lines: Vec<String>) -> BrokerResponse {
-    #[cfg(feature = "layer1-bootstrap")]
-    {
-        BrokerResponse::ExportBrokerAuditOk { lines }
-    }
-    #[cfg(not(feature = "layer1-bootstrap"))]
-    {
-        BrokerResponse::ExportBrokerAudit(d2b_contracts::broker_wire::ExportBrokerAuditResponse {
-            lines,
-        })
-    }
+    BrokerResponse::ExportBrokerAuditOk { lines }
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn export_broker_audit_ok_response(
+    page: d2b_contracts::broker_wire::ExportBrokerAuditResponse,
+) -> BrokerResponse {
+    BrokerResponse::ExportBrokerAudit(page)
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
@@ -9290,14 +9473,16 @@ fn error_response(
     message: &str,
     remediation: &str,
 ) -> BrokerResponse {
+    let message = redact_public_detail(message);
+    let remediation = redact_public_detail(remediation);
     #[cfg(feature = "layer1-bootstrap")]
     {
         BrokerResponse::Error {
             kind: kind.to_owned(),
             operation: operation.to_owned(),
             target_wave: target_wave.map(str::to_owned),
-            message: message.to_owned(),
-            remediation: remediation.to_owned(),
+            message,
+            remediation,
         }
     }
     #[cfg(not(feature = "layer1-bootstrap"))]
@@ -9306,10 +9491,30 @@ fn error_response(
             kind: kind.to_owned(),
             operation: operation.to_owned(),
             target_wave: target_wave.map(str::to_owned),
-            message: message.to_owned(),
-            action: remediation.to_owned(),
+            message,
+            action: remediation,
         })
     }
+}
+
+fn redact_public_detail(detail: &str) -> String {
+    if d2b_contracts::v3::is_canonical_digest(detail) {
+        return detail.to_owned();
+    }
+    if matches!(
+        detail,
+        "broker operation failed; details are available only in the redacted audit channel"
+            | "Trusted bundle failed integrity checks; privileged operations are refused."
+            | "privileged host operation failed; details are available only in the broker audit log"
+            | "privileged USB host operation failed; details are available only in the broker audit log"
+            | "Inspect the broker audit log for the failing live executor's underlying syscall."
+            | "Restore the trusted bundle at the broker-configured bundle path and retry; the broker reloads the bundle on the next request."
+            | "rebuild the bundle from a trusted source (nixos-rebuild switch) and verify ownership root:d2bd 0640; refuse to run mutating verbs until the bundle is restored"
+    ) || detail.starts_with("trusted bundle does not contain the requested ")
+    {
+        return detail.to_owned();
+    }
+    d2b_contracts::v3::canonical_digest("d2b:broker-public-error:v1", detail.as_bytes())
 }
 
 /// Start a background tokio runtime that listens for SIGCHLD and reaps
@@ -9621,6 +9826,24 @@ mod tests {
 
     #[cfg(not(feature = "layer1-bootstrap"))]
     static TEST_USB_SYSFS_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+    #[test]
+    fn public_error_details_fail_closed_for_paths_and_attacker_text() {
+        assert_eq!(
+            redact_public_detail("failed at /private/host/path"),
+            d2b_contracts::v3::canonical_digest(
+                "d2b:broker-public-error:v1",
+                b"failed at /private/host/path"
+            )
+        );
+        assert_eq!(
+            redact_public_detail("attacker error text"),
+            d2b_contracts::v3::canonical_digest(
+                "d2b:broker-public-error:v1",
+                b"attacker error text"
+            )
+        );
+    }
 
     #[cfg(not(feature = "layer1-bootstrap"))]
     fn usb_sysfs_test_lock() -> MutexGuard<'static, ()> {
@@ -11452,6 +11675,9 @@ mod tests {
             env: Some("work".to_owned()),
             operation: Some("Run".to_owned()),
             vm: Some("corp-vm".to_owned()),
+            role: None,
+            outcome: None,
+            severity: None,
         };
         let export_filter_json = serde_json::to_string(&export_filter).expect("serialize filter");
         let export = assert_dispatch(
@@ -11459,6 +11685,8 @@ mod tests {
                 d2b_contracts::broker_wire::ExportBrokerAuditRequest {
                     since: Some("2026-01-01T00:00:00Z".to_owned()),
                     filter: Some(export_filter),
+                    cursor: None,
+                    limit: 256,
                 },
             ),
             "ExportBrokerAudit",
@@ -11469,7 +11697,9 @@ mod tests {
             None,
         );
         match export.response {
-            BrokerResponse::ExportBrokerAudit(response) => assert_eq!(response.lines.len(), 0),
+            BrokerResponse::ExportBrokerAudit(response) => {
+                assert_eq!(response.entries.len(), 0)
+            }
             other => panic!("expected ExportBrokerAudit response, got {other:?}"),
         }
 
@@ -13174,7 +13404,11 @@ mod tests {
         };
         let rendered = format!("{} {}", response.message, response.action);
         assert!(response.kind.contains("PolicyMismatch"));
-        assert!(rendered.contains("policy"));
+        assert!(
+            rendered
+                .split_whitespace()
+                .any(d2b_contracts::v3::is_canonical_digest)
+        );
         assert!(!rendered.contains("1-2.3"), "{rendered}");
         assert!(!rendered.contains("/sys/"), "{rendered}");
 
@@ -13246,6 +13480,7 @@ mod tests {
                 // Ignored because config.test_mode=false: the broker must use the
                 // kernel SO_PEERCRED uid, not a caller-supplied envelope field.
                 test_peer_uid: Some(configured_daemon_uid),
+                audit_join: None,
             };
             let (client, server) = socketpair(
                 AddressFamily::Unix,
@@ -13281,10 +13516,7 @@ mod tests {
             4,
             "{audit}"
         );
-        assert!(
-            audit.contains(&format!(r#""caller_uid":{actual_uid}"#)),
-            "{audit}"
-        );
+        assert!(!audit.contains("caller_uid"), "{audit}");
 
         let _ = fs::remove_dir_all(&root);
     }
@@ -13617,7 +13849,7 @@ mod tests {
         let audit_context = DispatchAuditContext::from_request(&request, 4242, &caller_role)
             .expect("audit context");
 
-        let error = dispatch_request_with_backend(
+        let result = dispatch_request_with_backend(
             request,
             1000,
             caller_gid,
@@ -13628,37 +13860,24 @@ mod tests {
             Some(&bundle.resolver),
             &backend,
         )
-        .expect_err("rate-limited final audit write must fail dispatch");
-
-        assert!(matches!(
-            error,
-            BrokerError::Protocol(ref message)
-                if message.contains("audit write rate limit exceeded")
-        ));
+        .expect("privileged audit is never rate limited");
         assert_eq!(
             backend.take_usbip_events(),
-            vec![
-                FakeUsbipEvent::Bind {
-                    intent_id: intent_id.clone()
-                },
-                FakeUsbipEvent::Unbind { intent_id },
-            ],
-            "fresh UsbipBind must unbind the backend when its terminal success audit cannot be written"
+            vec![FakeUsbipEvent::Bind { intent_id }],
+            "privileged success remains durable despite the unprivileged write limit"
         );
         assert_eq!(
             take_test_usbip_backend_acl_events(),
-            vec![
-                TestUsbipBackendAclEvent::Grant { uid: 1002 },
-                TestUsbipBackendAclEvent::Revoke { uid: 1002 },
-            ],
-            "backend device ACL must not remain granted without a terminal UsbipBind audit record"
+            vec![TestUsbipBackendAclEvent::Grant { uid: 1002 }],
+            "successful bind retains its backend ACL"
         );
 
         let audit = fs::read_to_string(log.current_daily_path()).expect("read audit log");
         assert!(
-            !audit.contains(r#""operation":"UsbipBind""#),
-            "rate-limited terminal record must not be partially written: {audit}"
+            audit.contains(r#""operation":"UsbipBind""#),
+            "privileged terminal record must be present: {audit}"
         );
+        let _ = result;
 
         let _ = fs::remove_dir_all(&root);
     }
@@ -14264,7 +14483,9 @@ mod tests {
             .iter()
             .find(|record| record.operation == "UsbSerialCorrelationKeyRotate")
             .expect("rotation audit record");
-        assert_eq!(rotation_record.public_operation_id, "usb-audit-serial-hmac");
+        assert!(d2b_contracts::v3::is_canonical_digest(
+            &rotation_record.public_operation_id
+        ));
         assert_eq!(rotation_record.subject_id, "usb-audit-serial-hmac");
         assert_eq!(rotation_record.scope_id, "host");
         assert_eq!(rotation_record.verb, "UsbSerialCorrelationKeyRotate");
@@ -14648,6 +14869,7 @@ mod tests {
                     verb: case.operation.to_owned(),
                     request_fields: Value::Object(Default::default()),
                     started_at: Instant::now(),
+                    audit_join: None,
                 };
                 #[cfg(not(feature = "layer1-bootstrap"))]
                 case.error
@@ -14685,7 +14907,7 @@ mod tests {
                 value.get("op").and_then(Value::as_str),
                 Some(case.operation)
             );
-            assert_eq!(value.get("caller_uid").and_then(Value::as_u64), Some(1000));
+            assert!(value.get("caller_uid").is_none());
             assert_eq!(
                 value.get("disposition").and_then(Value::as_str),
                 Some(case.decision)
@@ -14702,10 +14924,12 @@ mod tests {
                 value.get("error_kind").and_then(Value::as_str),
                 Some(case.error_kind)
             );
-            assert_eq!(
-                value.get("error_message").and_then(Value::as_str),
-                Some(case.error_message.as_str())
-            );
+            let error_message = value
+                .get("error_message")
+                .and_then(Value::as_str)
+                .expect("redacted error message");
+            assert!(error_message.starts_with("sha256:"));
+            assert_ne!(error_message, case.error_message);
         }
 
         let _ = fs::remove_dir_all(&audit_dir);

@@ -87,6 +87,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "d2b-audit"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-telemetry",
+ "libc",
+ "rustix 0.38.44",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "d2b-contracts"
 version = "0.0.0-bootstrap"
 dependencies = [
@@ -134,6 +145,7 @@ dependencies = [
 name = "d2b-priv-broker"
 version = "0.0.0-bootstrap"
 dependencies = [
+ "d2b-audit",
  "d2b-contracts",
  "d2b-core",
  "d2b-host",
@@ -156,6 +168,17 @@ version = "0.0.0-bootstrap"
 dependencies = [
  "schemars",
  "serde",
+]
+
+[[package]]
+name = "d2b-telemetry"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-contracts",
+ "rustix 0.38.44",
+ "serde",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]

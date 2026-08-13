@@ -6,7 +6,14 @@
 //! at the Provider boundary.  The production port is implemented by `d2bd`
 //! with the existing typed broker dispatch functions.
 
-use std::{collections::BTreeMap, sync::Mutex};
+use std::{
+    collections::BTreeMap,
+    fs::{self, OpenOptions},
+    io::Write,
+    path::PathBuf,
+    sync::Mutex,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
 use d2b_contracts::{
     broker_wire::BrokerCallerRole,
@@ -15,6 +22,9 @@ use d2b_contracts::{
 
 /// Maximum retained lifecycle mutation keys.
 pub const MAX_TRACKED_LIFECYCLE_MUTATIONS: usize = 256;
+/// Idempotency entries are retained only long enough to cover one bounded
+/// lifecycle retry window.
+pub const LIFECYCLE_IDEMPOTENCY_TTL: Duration = Duration::from_secs(300);
 
 /// Closed caller roles allowed to request a Provider lifecycle effect.
 ///
@@ -187,7 +197,24 @@ pub trait ProviderLifecycleEffectPort {
 #[derive(Debug)]
 pub struct ProviderLifecycleDispatch {
     zone: ZoneId,
-    mutations: Mutex<BTreeMap<String, (ResourceRef, GuestLifecycleOperation)>>,
+    mutations: Mutex<BTreeMap<String, LifecycleMutation>>,
+    state_path: Option<PathBuf>,
+}
+
+#[derive(Debug)]
+struct LifecycleMutation {
+    guest: ResourceRef,
+    operation: GuestLifecycleOperation,
+    admitted_at_ms: u64,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PersistedLifecycleMutation {
+    key: String,
+    guest: String,
+    operation: String,
+    admitted_at_ms: u64,
 }
 
 impl ProviderLifecycleDispatch {
@@ -196,7 +223,68 @@ impl ProviderLifecycleDispatch {
         Self {
             zone,
             mutations: Mutex::new(BTreeMap::new()),
+            state_path: None,
         }
+    }
+
+    /// Construct a dispatcher backed by a daemon-owned durable state file.
+    pub fn new_persistent(
+        zone: ZoneId,
+        state_path: impl Into<PathBuf>,
+    ) -> Result<Self, ProviderEffectError> {
+        let state_path = state_path.into();
+        if !state_path.is_absolute() {
+            return Err(ProviderEffectError::StateUnavailable);
+        }
+        if let Some(parent) = state_path.parent() {
+            fs::create_dir_all(parent).map_err(|_| ProviderEffectError::StateUnavailable)?;
+        }
+        let mut mutations = BTreeMap::new();
+        match fs::read(&state_path) {
+            Ok(bytes) => {
+                let persisted = serde_json::from_slice::<Vec<PersistedLifecycleMutation>>(&bytes)
+                    .map_err(|_| ProviderEffectError::StateUnavailable)?;
+                for entry in persisted {
+                    if entry.key.is_empty() || entry.key.len() > 128 {
+                        return Err(ProviderEffectError::StateUnavailable);
+                    }
+                    let guest = ResourceRef::parse(&entry.guest)
+                        .map_err(|_| ProviderEffectError::StateUnavailable)?;
+                    let operation = match entry.operation.as_str() {
+                        "start" => GuestLifecycleOperation::Start,
+                        "stop" => GuestLifecycleOperation::Stop,
+                        _ => return Err(ProviderEffectError::StateUnavailable),
+                    };
+                    if mutations
+                        .insert(
+                            entry.key,
+                            LifecycleMutation {
+                                guest,
+                                operation,
+                                admitted_at_ms: entry.admitted_at_ms,
+                            },
+                        )
+                        .is_some()
+                    {
+                        return Err(ProviderEffectError::StateUnavailable);
+                    }
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return Err(ProviderEffectError::StateUnavailable),
+        }
+        let dispatcher = Self {
+            zone,
+            mutations: Mutex::new(mutations),
+            state_path: Some(state_path),
+        };
+        if let Ok(mut state) = dispatcher.mutations.lock() {
+            dispatcher.retain_live(&mut state);
+            dispatcher.persist_locked(&state)?;
+        } else {
+            return Err(ProviderEffectError::StateUnavailable);
+        }
+        Ok(dispatcher)
     }
 
     /// Admit one request after checking caller role, Zone, and deduplication.
@@ -215,8 +303,13 @@ impl ProviderLifecycleDispatch {
             .mutations
             .lock()
             .map_err(|_| ProviderEffectError::StateUnavailable)?;
-        if let Some((guest, operation)) = mutations.get(request.idempotency_key()) {
-            if guest == request.guest() && *operation == request.operation() {
+        let now = now_ms();
+        mutations.retain(|_, mutation| {
+            now.saturating_sub(mutation.admitted_at_ms)
+                < LIFECYCLE_IDEMPOTENCY_TTL.as_millis() as u64
+        });
+        if let Some(mutation) = mutations.get(request.idempotency_key()) {
+            if mutation.guest == *request.guest() && mutation.operation == request.operation() {
                 return Ok(LifecycleDispatch::Duplicate);
             }
             return Err(ProviderEffectError::IdempotencyConflict);
@@ -226,8 +319,16 @@ impl ProviderLifecycleDispatch {
         }
         mutations.insert(
             request.idempotency_key().to_owned(),
-            (request.guest().clone(), request.operation()),
+            LifecycleMutation {
+                guest: request.guest().clone(),
+                operation: request.operation(),
+                admitted_at_ms: now,
+            },
         );
+        if let Err(error) = self.persist_locked(&mutations) {
+            mutations.remove(request.idempotency_key());
+            return Err(error);
+        }
         Ok(LifecycleDispatch::Dispatch)
     }
 
@@ -244,20 +345,98 @@ impl ProviderLifecycleDispatch {
         match self.admit(caller, request)? {
             LifecycleDispatch::Duplicate => Ok(EffectDispatch::Duplicate),
             LifecycleDispatch::Dispatch => match effect.apply(request) {
-                Ok(output) => Ok(EffectDispatch::Dispatched(output)),
+                Ok(output) => {
+                    if request.operation() == GuestLifecycleOperation::Stop {
+                        self.retire_completed_start(request)?;
+                    }
+                    Ok(EffectDispatch::Dispatched(output))
+                }
                 Err(error) => {
-                    self.remove(request);
+                    self.remove(request)?;
                     Err(error)
                 }
             },
         }
     }
 
-    fn remove(&self, request: &GuestLifecycleRequest) {
-        if let Ok(mut mutations) = self.mutations.lock() {
-            mutations.remove(request.idempotency_key());
-        }
+    fn remove(&self, request: &GuestLifecycleRequest) -> Result<(), ProviderEffectError> {
+        let mut mutations = self
+            .mutations
+            .lock()
+            .map_err(|_| ProviderEffectError::StateUnavailable)?;
+        mutations.remove(request.idempotency_key());
+        self.persist_locked(&mutations)
     }
+
+    fn retire_completed_start(
+        &self,
+        request: &GuestLifecycleRequest,
+    ) -> Result<(), ProviderEffectError> {
+        let mut mutations = self
+            .mutations
+            .lock()
+            .map_err(|_| ProviderEffectError::StateUnavailable)?;
+        mutations.retain(|_, mutation| {
+            mutation.guest != *request.guest()
+                || mutation.operation != GuestLifecycleOperation::Start
+        });
+        self.persist_locked(&mutations)
+    }
+
+    fn retain_live(&self, mutations: &mut BTreeMap<String, LifecycleMutation>) {
+        let now = now_ms();
+        mutations.retain(|_, mutation| {
+            now.saturating_sub(mutation.admitted_at_ms)
+                < LIFECYCLE_IDEMPOTENCY_TTL.as_millis() as u64
+        });
+    }
+
+    fn persist_locked(
+        &self,
+        mutations: &BTreeMap<String, LifecycleMutation>,
+    ) -> Result<(), ProviderEffectError> {
+        let Some(path) = self.state_path.as_deref() else {
+            return Ok(());
+        };
+        let entries = mutations
+            .iter()
+            .map(|(key, mutation)| PersistedLifecycleMutation {
+                key: key.clone(),
+                guest: mutation.guest.to_canonical_string(),
+                operation: mutation.operation.as_str().to_owned(),
+                admitted_at_ms: mutation.admitted_at_ms,
+            })
+            .collect::<Vec<_>>();
+        let bytes =
+            serde_json::to_vec(&entries).map_err(|_| ProviderEffectError::StateUnavailable)?;
+        let next = path.with_extension("json.next");
+        let mut file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&next)
+            .map_err(|_| ProviderEffectError::StateUnavailable)?;
+        file.write_all(&bytes)
+            .and_then(|_| file.sync_all())
+            .map_err(|_| ProviderEffectError::StateUnavailable)?;
+        fs::rename(&next, path).map_err(|_| ProviderEffectError::StateUnavailable)?;
+        if let Some(parent) = path.parent() {
+            OpenOptions::new()
+                .read(true)
+                .open(parent)
+                .and_then(|directory| directory.sync_all())
+                .map_err(|_| ProviderEffectError::StateUnavailable)?;
+        }
+        Ok(())
+    }
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .min(u128::from(u64::MAX)) as u64
 }
 
 #[cfg(test)]
@@ -374,5 +553,97 @@ mod tests {
             ),
             Err(ProviderEffectError::EffectRejected)
         );
+    }
+
+    #[test]
+    fn completed_stop_retires_prior_start_without_releasing_failed_retry() {
+        let zone = ZoneId::parse("work").expect("Zone");
+        let dispatch = ProviderLifecycleDispatch::new(zone.clone());
+        let calls = Arc::new(AtomicUsize::new(0));
+        let effect = RecordingEffect {
+            calls: Arc::clone(&calls),
+            reject: AtomicBool::new(false),
+        };
+        let caller = BrokerCallerRole::AdminUid { uid: 1000 };
+        let start = request(&zone, GuestLifecycleOperation::Start, "start-1");
+        let stop = request(&zone, GuestLifecycleOperation::Stop, "stop-1");
+        assert!(matches!(
+            dispatch.dispatch(&caller, &start, &effect),
+            Ok(EffectDispatch::Dispatched(_))
+        ));
+        assert!(matches!(
+            dispatch.dispatch(&caller, &stop, &effect),
+            Ok(EffectDispatch::Dispatched(_))
+        ));
+        let next_start = request(&zone, GuestLifecycleOperation::Start, "start-2");
+        assert!(matches!(
+            dispatch.dispatch(&caller, &next_start, &effect),
+            Ok(EffectDispatch::Dispatched(_))
+        ));
+        assert_eq!(calls.load(Ordering::Acquire), 3);
+    }
+
+    #[test]
+    fn persistent_admission_deduplicates_the_same_request_after_restart() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join(format!("provider-lifecycle-restart-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let path = root.join("lifecycle.json");
+        let zone = ZoneId::parse("work").expect("Zone");
+        let request = request(&zone, GuestLifecycleOperation::Start, "admitted-start");
+        let caller = BrokerCallerRole::AdminUid { uid: 1000 };
+        let calls = Arc::new(AtomicUsize::new(0));
+        let effect = RecordingEffect {
+            calls: Arc::clone(&calls),
+            reject: AtomicBool::new(false),
+        };
+        let dispatch =
+            ProviderLifecycleDispatch::new_persistent(zone.clone(), &path).expect("open state");
+        assert_eq!(
+            dispatch.dispatch(&caller, &request, &effect),
+            Ok(EffectDispatch::Dispatched(1))
+        );
+        drop(dispatch);
+
+        let restarted =
+            ProviderLifecycleDispatch::new_persistent(zone, &path).expect("restore state");
+        assert_eq!(
+            restarted.dispatch(&caller, &request, &effect),
+            Ok(EffectDispatch::Duplicate)
+        );
+        assert_eq!(calls.load(Ordering::Acquire), 1);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn persistent_start_stop_start_accepts_distinct_operation_ids() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join(format!("provider-lifecycle-cycles-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let zone = ZoneId::parse("work").expect("Zone");
+        let caller = BrokerCallerRole::AdminUid { uid: 1000 };
+        let calls = Arc::new(AtomicUsize::new(0));
+        let effect = RecordingEffect {
+            calls: Arc::clone(&calls),
+            reject: AtomicBool::new(false),
+        };
+        let dispatch =
+            ProviderLifecycleDispatch::new_persistent(zone.clone(), root.join("lifecycle.json"))
+                .expect("open state");
+        for (operation, key) in [
+            (GuestLifecycleOperation::Start, "start-1"),
+            (GuestLifecycleOperation::Stop, "stop-1"),
+            (GuestLifecycleOperation::Start, "start-2"),
+        ] {
+            let request = request(&zone, operation, key);
+            assert!(matches!(
+                dispatch.dispatch(&caller, &request, &effect),
+                Ok(EffectDispatch::Dispatched(_))
+            ));
+        }
+        assert_eq!(calls.load(Ordering::Acquire), 3);
+        let _ = std::fs::remove_dir_all(root);
     }
 }

@@ -5,7 +5,7 @@
 //!   private socket exists and correctly rejects this unprivileged caller.
 //! - `daemon_ready` - connect to `/run/d2b/public.sock`.
 //! - `metrics_endpoint` - `GET /metrics` over the canonical
-//!   Prometheus URL (`http://127.0.0.1:9101/metrics`, see
+//!   operator-configured external Prometheus URL (see
 //!   `docs/reference/daemon-metrics.md`). The scrape endpoint is optional;
 //!   connect / HTTP failures are reported as a passing "not serving"
 //!   posture so local host health stays clean until the metrics listener
@@ -271,6 +271,14 @@ fn check_daemon_socket(context: &Context, report: &mut DoctorReport) {
 
 fn check_metrics_endpoint(context: &Context, report: &mut DoctorReport) {
     let url = &context.metrics_url;
+    if url.trim().is_empty() {
+        report.push(
+            "metrics-endpoint",
+            DoctorStatus::Pass,
+            "external collector URL not configured",
+        );
+        return;
+    }
     match probe_http_metrics(url) {
         Ok(200) => report.push(
             "metrics-endpoint",

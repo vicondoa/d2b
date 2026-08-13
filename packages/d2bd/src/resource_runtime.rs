@@ -15,7 +15,11 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+#[cfg(test)]
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use crate::authority_persistence::RedbAuthorityPersistence;
+use d2b_audit::{AuditSink, DurabilityEvidence};
 #[cfg(test)]
 use d2b_contracts::v3::{
     DEFAULT_LIST_PAGE_SIZE, MAX_FILTER_VALUES, MAX_LIST_FILTERS, MAX_LIST_PAGE_SIZE,
@@ -47,7 +51,8 @@ use d2b_resource_store::{PolicySnapshot, StoreSlot};
 #[cfg(test)]
 use d2b_resource_store::{StoreFilter, StoreListResult, StoreProjection};
 use d2b_resource_store_redb::{
-    RedbResourceStore, StoreIdentity, StoreRuntimeMetadata, write_provisioning_marker,
+    BrokerEvidenceIndex, RedbResourceStore, StoreIdentity, StoreRuntimeMetadata,
+    write_provisioning_marker,
 };
 #[cfg(test)]
 use serde_json::json;
@@ -229,11 +234,98 @@ impl core::fmt::Debug for ZoneResourceRuntime {
 impl ZoneResourceRuntime {
     /// Open one Zone from a broker-owned descriptor.
     pub async fn open(zone: ZoneId, opened: OpenedZoneStore) -> Result<Self, ResourceRuntimeError> {
+        Self::open_internal(
+            zone,
+            opened,
+            None,
+            Arc::new(BrokerEvidenceIndex::default()),
+            None,
+        )
+        .await
+    }
+
+    /// Open one Zone with the production-owned durable audit sink.
+    pub async fn open_with_audit(
+        zone: ZoneId,
+        opened: OpenedZoneStore,
+        audit_sink: Arc<AuditSink>,
+    ) -> Result<Self, ResourceRuntimeError> {
+        Self::open_internal(
+            zone,
+            opened,
+            Some(audit_sink),
+            Arc::new(BrokerEvidenceIndex::default()),
+            None,
+        )
+        .await
+    }
+
+    /// Open one Zone with durable audit and broker reconciliation evidence.
+    pub async fn open_with_audit_and_evidence(
+        zone: ZoneId,
+        opened: OpenedZoneStore,
+        audit_sink: Arc<AuditSink>,
+        broker_evidence: Arc<BrokerEvidenceIndex>,
+    ) -> Result<Self, ResourceRuntimeError> {
+        Self::open_internal(zone, opened, Some(audit_sink), broker_evidence, None).await
+    }
+
+    /// Open one Zone with explicit audit, broker-evidence, and telemetry
+    /// ownership.
+    pub async fn open_with_audit_and_evidence_and_telemetry(
+        zone: ZoneId,
+        opened: OpenedZoneStore,
+        audit_sink: Arc<AuditSink>,
+        broker_evidence: Arc<BrokerEvidenceIndex>,
+        telemetry_path: impl Into<std::path::PathBuf>,
+    ) -> Result<Self, ResourceRuntimeError> {
+        Self::open_internal(
+            zone,
+            opened,
+            Some(audit_sink),
+            broker_evidence,
+            Some(telemetry_path.into()),
+        )
+        .await
+    }
+
+    async fn open_internal(
+        zone: ZoneId,
+        opened: OpenedZoneStore,
+        audit_sink: Option<Arc<AuditSink>>,
+        broker_evidence: Arc<BrokerEvidenceIndex>,
+        telemetry_path: Option<std::path::PathBuf>,
+    ) -> Result<Self, ResourceRuntimeError> {
+        #[cfg(test)]
+        let audit_sink = audit_sink.or_else(|| {
+            let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("target")
+                .join(format!(
+                    "d2bd-resource-audit-{}-{}-{}",
+                    zone.as_str(),
+                    std::process::id(),
+                    SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .map(|duration| duration.as_nanos())
+                        .unwrap_or_default()
+                ));
+            AuditSink::open(path).ok().map(Arc::new)
+        });
+        #[cfg(not(test))]
+        let audit_sink = audit_sink;
         let external_inventory = opened.external_inventory.clone().unwrap_or_else(|| {
             Arc::new(TrustedExternalNicInventory::default())
                 as Arc<dyn ExternalNicRecoveryInventory>
         });
-        Self::open_with_external_inventory(zone, opened, external_inventory).await
+        Self::open_with_external_inventory_and_audit(
+            zone,
+            opened,
+            external_inventory,
+            audit_sink,
+            broker_evidence,
+            telemetry_path,
+        )
+        .await
     }
 
     /// Open one Zone with the host/bundle-owned physical-NIC inventory port.
@@ -241,6 +333,25 @@ impl ZoneResourceRuntime {
         zone: ZoneId,
         opened: OpenedZoneStore,
         external_inventory: Arc<dyn ExternalNicRecoveryInventory>,
+    ) -> Result<Self, ResourceRuntimeError> {
+        Self::open_with_external_inventory_and_audit(
+            zone,
+            opened,
+            external_inventory,
+            None,
+            Arc::new(BrokerEvidenceIndex::default()),
+            None,
+        )
+        .await
+    }
+
+    async fn open_with_external_inventory_and_audit(
+        zone: ZoneId,
+        opened: OpenedZoneStore,
+        external_inventory: Arc<dyn ExternalNicRecoveryInventory>,
+        audit_sink: Option<Arc<AuditSink>>,
+        broker_evidence: Arc<BrokerEvidenceIndex>,
+        telemetry_path: Option<std::path::PathBuf>,
     ) -> Result<Self, ResourceRuntimeError> {
         let expected_store_id = format!("zone-store-{}", zone.as_str());
         if opened.response.zone_store_id.as_str() != expected_store_id {
@@ -269,11 +380,68 @@ impl ZoneResourceRuntime {
                     tempfile::tempfile().map_err(|_| ResourceRuntimeError::StoreOpenFailed)?;
                 write_provisioning_marker(&mut marker, &store_identity)
                     .map_err(|_| ResourceRuntimeError::StoreOpenFailed)?;
-                RedbResourceStore::provision_owned(file, marker, store_identity, acceptor).await
+                match audit_sink {
+                    Some(sink) => {
+                        match telemetry_path.as_ref() {
+                            Some(path) => {
+                                RedbResourceStore::provision_owned_with_audit_and_evidence_and_telemetry(
+                                    file,
+                                    marker,
+                                    store_identity,
+                                    acceptor,
+                                    sink,
+                                    broker_evidence,
+                                    path,
+                                )
+                                .await
+                            }
+                            None => {
+                                RedbResourceStore::provision_owned_with_audit_and_evidence(
+                                    file,
+                                    marker,
+                                    store_identity,
+                                    acceptor,
+                                    sink,
+                                    broker_evidence,
+                                )
+                                .await
+                            }
+                        }
+                    }
+                    None => {
+                        RedbResourceStore::provision_owned(file, marker, store_identity, acceptor)
+                            .await
+                    }
+                }
             }
-            ZoneStoreDisposition::Opened => {
-                RedbResourceStore::open_owned(file, store_identity, acceptor).await
-            }
+            ZoneStoreDisposition::Opened => match audit_sink {
+                Some(sink) => {
+                    match telemetry_path.as_ref() {
+                        Some(path) => {
+                            RedbResourceStore::open_owned_with_audit_and_evidence_and_telemetry(
+                                file,
+                                store_identity,
+                                acceptor,
+                                sink,
+                                broker_evidence,
+                                path,
+                            )
+                            .await
+                        }
+                        None => {
+                            RedbResourceStore::open_owned_with_audit_and_evidence(
+                                file,
+                                store_identity,
+                                acceptor,
+                                sink,
+                                broker_evidence,
+                            )
+                            .await
+                        }
+                    }
+                }
+                None => RedbResourceStore::open_owned(file, store_identity, acceptor).await,
+            },
         }
         .map_err(|_| ResourceRuntimeError::StoreOpenFailed)?;
         let store = Arc::new(store);
@@ -577,6 +745,16 @@ impl ZoneResourceRuntime {
         Ok(resource_error_envelope(&readiness_resource_error(
             ResourceRuntimeError::AuthenticationUnavailable,
         )))
+    }
+
+    /// Publish terminal broker evidence into the live store join index.
+    pub fn ingest_broker_evidence(
+        &self,
+        evidence: DurabilityEvidence,
+    ) -> Result<(), ResourceRuntimeError> {
+        self.store
+            .ingest_broker_evidence(evidence)
+            .map_err(|_| ResourceRuntimeError::StoreOpenFailed)
     }
 
     /// Close the production redb workers before the runtime is discarded.
@@ -1263,6 +1441,17 @@ impl ResourcePlane {
             .ok_or(ResourceRuntimeError::PlaneUnavailable)
     }
 
+    /// Ingest one terminal broker result into every Zone's shared live index.
+    pub fn ingest_broker_evidence(
+        &self,
+        evidence: DurabilityEvidence,
+    ) -> Result<(), ResourceRuntimeError> {
+        for runtime in self.zones.values() {
+            runtime.ingest_broker_evidence(evidence.clone())?;
+        }
+        Ok(())
+    }
+
     /// Return the number of ready Zone runtimes.
     pub fn ready_zone_count(&self) -> usize {
         self.zones
@@ -1378,10 +1567,14 @@ fn stable_uid(domain: &str, value: &str) -> ResourceUid {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{fs::OpenOptions, os::fd::AsRawFd};
+    use std::{fs::OpenOptions, os::fd::AsRawFd, sync::Arc};
 
     use d2b_resource_store::mutation_seal::mutation_seal_pair;
     use d2b_resource_store_redb::write_provisioning_marker;
+
+    fn test_audit_sink(directory: &std::path::Path, name: &str) -> Arc<AuditSink> {
+        Arc::new(AuditSink::open(directory.join(name)).unwrap())
+    }
 
     #[test]
     fn stable_identity_is_repeatable_and_uuid_v4_shaped() {
@@ -1562,9 +1755,15 @@ mod tests {
             .unwrap();
         write_provisioning_marker(&mut marker, &identity).unwrap();
         let (_, acceptor) = mutation_seal_pair(identity.seal_identity());
-        let provisioned = RedbResourceStore::provision_owned(database, marker, identity, acceptor)
-            .await
-            .unwrap();
+        let provisioned = RedbResourceStore::provision_owned_with_audit(
+            database,
+            marker,
+            identity,
+            acceptor,
+            test_audit_sink(directory.path(), "audit-provision"),
+        )
+        .await
+        .unwrap();
         provisioned.shutdown().await.unwrap();
 
         let database = OpenOptions::new()
@@ -1718,7 +1917,7 @@ mod tests {
             .open(&marker_path)
             .unwrap();
         write_provisioning_marker(&mut marker, &identity).unwrap();
-        let provisioned = RedbResourceStore::provision_owned(
+        let provisioned = RedbResourceStore::provision_owned_with_audit(
             database,
             marker,
             identity,
@@ -1728,6 +1927,7 @@ mod tests {
                     .seal_identity(),
             )
             .1,
+            test_audit_sink(directory.path(), "audit-mismatch"),
         )
         .await
         .unwrap();
@@ -1787,7 +1987,7 @@ mod tests {
             .open(directory.path().join(".d2b-store-marker"))
             .unwrap();
         write_provisioning_marker(&mut marker, &identity).unwrap();
-        let provisioned = RedbResourceStore::provision_owned(
+        let provisioned = RedbResourceStore::provision_owned_with_audit(
             database,
             marker,
             identity,
@@ -1798,6 +1998,7 @@ mod tests {
                     .seal_identity(),
             )
             .1,
+            test_audit_sink(directory.path(), "audit-rehydrate"),
         )
         .await
         .unwrap();

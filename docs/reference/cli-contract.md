@@ -2616,7 +2616,7 @@ persists during startup. Probed surfaces:
 - **broker-ready** - `SOCK_SEQPACKET` connect to the broker socket.
 - **daemon-ready** - connect to the public daemon socket.
 - **metrics-endpoint** - loopback HTTP GET against the Prometheus scrape
-  URL (default `http://127.0.0.1:9101/metrics`; see
+  URL (configured with `D2B_METRICS_URL`; see
   [`daemon-metrics`](./daemon-metrics.md)).
 - **otel-host-bridge-runner** - counts `role: "otel-host-bridge"`
   entries in `<daemon-state>/pidfd-table.json`.
@@ -2656,7 +2656,7 @@ Legacy top-level fields (`broker_ready`, `findings[]`, `summary`,
 | `D2B_BROKER_SOCKET` | `/run/d2b/broker.sock` | Probe target for `broker-ready`. |
 | `D2B_PUBLIC_SOCKET` | `/run/d2b/public.sock` | Probe target for `daemon-ready`. |
 | `D2B_DAEMON_STATE_DIR` | `/var/lib/d2b/daemon-state` | Where the daemon writes pidfd/module/autostart reports. |
-| `D2B_METRICS_URL` | `http://127.0.0.1:9101/metrics` | URL probed by `metrics-endpoint`. |
+| `D2B_METRICS_URL` | unset | Optional external collector URL probed by `metrics-endpoint`. |
 
 **Exit codes**
 

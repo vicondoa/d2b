@@ -16,7 +16,14 @@ use serde_json::Value;
 
 #[cfg(test)]
 use crate::ops::audit_op::OwnedOpAuditRecord;
-use crate::{ops::audit_op::OpAuditRecord, sys::path_safe};
+use crate::{
+    ops::audit_op::{BrokerAuditRecordClass, OpAuditRecord},
+    sys::path_safe,
+};
+use d2b_contracts::broker_wire::{
+    AuditExportCursor, AuditExportEntry, AuditExportErrorCode, BrokerAuditFilter,
+    BrokerAuditSeverity, ExportBrokerAuditResponse,
+};
 
 /// Broker semantic version embedded in every [`OpAuditRecord`].
 /// Picked up at compile time from `Cargo.toml`.
@@ -38,6 +45,9 @@ pub(crate) fn result_for_decision(decision: &str) -> &'static str {
 
 const DEFAULT_AUDIT_WRITES_PER_SECOND: u32 = 4096;
 const AUDIT_WRITE_WINDOW: Duration = Duration::from_secs(1);
+const MAX_EXPORTED_AUDIT_BYTES: usize = 768 * 1024;
+const MAX_EXPORTED_AUDIT_LINE_BYTES: usize = 64 * 1024;
+const MAX_AUDIT_DIRECTORY_ENTRIES: usize = 4096;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AuditWriteClass {
@@ -94,7 +104,7 @@ impl AuditDropWarningState {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Clone)]
 pub struct AuditEntry<'a> {
     pub ts: u128,
     pub op: &'a str,
@@ -102,10 +112,43 @@ pub struct AuditEntry<'a> {
     pub disposition: &'a str,
     pub opaque_target_id: &'a str,
     pub outcome: &'a str,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub error_kind: Option<&'a str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub error_message: Option<&'a str>,
+}
+
+impl Serialize for AuditEntry<'_> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut value = serde_json::Map::from_iter([
+            ("ts".to_owned(), serde_json::json!(self.ts)),
+            ("op".to_owned(), serde_json::json!(self.op)),
+            ("caller_uid".to_owned(), serde_json::json!(self.caller_uid)),
+            (
+                "disposition".to_owned(),
+                serde_json::json!(self.disposition),
+            ),
+            (
+                "opaque_target_id".to_owned(),
+                serde_json::json!(self.opaque_target_id),
+            ),
+            ("outcome".to_owned(), serde_json::json!(self.outcome)),
+        ]);
+        if let Some(error_kind) = self.error_kind {
+            value.insert("error_kind".to_owned(), serde_json::json!(error_kind));
+        }
+        if let Some(error_message) = self.error_message {
+            value.insert("error_message".to_owned(), serde_json::json!(error_message));
+        }
+        sanitize_audit_value(serde_json::Value::Object(value)).serialize(serializer)
+    }
+}
+
+impl core::fmt::Debug for AuditEntry<'_> {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("AuditEntry(<redacted>)")
+    }
 }
 
 /// Structured audit log writer.
@@ -119,7 +162,6 @@ pub struct AuditEntry<'a> {
 /// the `broker-export-audit.sh` / `broker-socket-acl.sh` Layer-1 gates
 /// migrate atomically: they now read the day's daily file (or the full
 /// directory enumeration) instead of the legacy single file.
-#[derive(Debug)]
 pub struct AuditLog {
     /// Directory holding the daily-rotated records
     /// (`<audit_dir>/broker-<utc-date>.jsonl`).
@@ -131,7 +173,7 @@ pub struct AuditLog {
     expected_gid: u32,
     test_mode: bool,
     /// How many days of daily rotated audit files to retain. 0 disables
-    /// pruning. Default 14 (matches the docs claim in
+    /// pruning. Default 30 (matches the docs claim in
     /// `docs/reference/daemon-api.md` "Audit" and `AGENTS.md` "Control
     /// plane"). Operators that need bounded retention have it: prune
     /// runs on every day-boundary rotation in `append_to_daily` and on
@@ -143,6 +185,16 @@ pub struct AuditLog {
     drop_warning_state: Mutex<AuditDropWarningState>,
     #[cfg(test)]
     captured_records: Option<Arc<Mutex<Vec<OwnedOpAuditRecord>>>>,
+}
+
+impl core::fmt::Debug for AuditLog {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("AuditLog")
+            .field("retention_days", &self.retention_days)
+            .field("test_mode", &self.test_mode)
+            .finish()
+    }
 }
 
 #[derive(Debug)]
@@ -164,10 +216,7 @@ impl AuditLog {
         {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
-                format!(
-                    "audit directory must not be a symlink: {}",
-                    audit_dir.display()
-                ),
+                "audit directory rejected",
             ));
         }
 
@@ -352,7 +401,9 @@ impl AuditLog {
         operation: &str,
         value: &T,
     ) -> io::Result<()> {
-        let mut line = serde_json::to_string(value)
+        let value = serde_json::to_value(value)
+            .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+        let mut line = serde_json::to_string(&sanitize_audit_value(value))
             .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
         line.push('\n');
         self.append_to_daily(audit_class, operation, line.as_bytes())
@@ -360,6 +411,19 @@ impl AuditLog {
 
     /// Append one [`OpAuditRecord`] to the day's daily file.
     pub fn write_op_record(&self, record: &OpAuditRecord<'_>) -> io::Result<()> {
+        record
+            .operation_identity()
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "audit operation invalid"))?;
+        let expected_key = d2b_audit::ZoneOperationKey::new(
+            record.zone_id.clone(),
+            record.operation_identity.clone(),
+        );
+        if record.zone_operation_key != expected_key {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "audit operation join mismatch",
+            ));
+        }
         #[cfg(test)]
         if let Some(capture) = &self.captured_records {
             capture
@@ -367,7 +431,15 @@ impl AuditLog {
                 .map_err(|_| io::Error::other("audit capture mutex poisoned"))?
                 .push(OwnedOpAuditRecord::from(record));
         }
-        let line = record.to_jsonl();
+        let line = serde_json::to_string(&sanitize_audit_value(
+            serde_json::to_value(record)
+                .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?,
+        ))
+        .map(|mut line| {
+            line.push('\n');
+            line
+        })
+        .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
         self.append_to_daily(
             AuditWriteClass::Privileged,
             record.operation,
@@ -435,19 +507,9 @@ impl AuditLog {
         duration_us: u64,
         operation_fields: Option<Value>,
     ) -> io::Result<()> {
-        let ts_ms = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis();
-        let event_id = new_event_id()?;
-        let record = OpAuditRecord {
-            ts_ms,
-            broker_version: BROKER_VERSION,
-            bundle_version,
-            bundle_hash,
+        self.record_with_join(
             operation,
             public_operation_id,
-            event_id: &event_id,
             peer_uid,
             peer_gid,
             peer_pid,
@@ -458,11 +520,111 @@ impl AuditLog {
             verb,
             request_fields,
             decision,
+            error_kind,
+            tracing_span_id,
+            bundle_version,
+            bundle_hash,
+            duration_us,
+            operation_fields,
+            None,
+        )
+    }
+
+    /// Append a typed durability record using the caller-supplied canonical
+    /// join. The broker never derives this key from a display target or a
+    /// serialized request.
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_with_join(
+        &self,
+        operation: &str,
+        public_operation_id: &str,
+        peer_uid: u32,
+        peer_gid: u32,
+        peer_pid: i32,
+        peer_role: &str,
+        authz_result: &str,
+        subject_id: &str,
+        scope_id: &str,
+        verb: &str,
+        request_fields: Value,
+        decision: &str,
+        error_kind: Option<&str>,
+        tracing_span_id: Option<&str>,
+        bundle_version: &str,
+        bundle_hash: &str,
+        duration_us: u64,
+        operation_fields: Option<Value>,
+        supplied_join: Option<(&str, &str)>,
+    ) -> io::Result<()> {
+        let ts_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
+        let event_id = new_event_id()?;
+        let expected_operation = d2b_audit::OperationIdentity::parse(public_operation_id)
+            .or_else(|_| d2b_audit::OperationIdentity::derive(public_operation_id))
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "audit operation invalid"))?;
+        let (zone_id, operation_identity, public_operation_id, audit_scope_id, zone_operation_key) =
+            if let Some((join_zone_id, join_operation_identity)) = supplied_join {
+                let zone_id = d2b_audit::ZoneId::parse(join_zone_id).map_err(|_| {
+                    io::Error::new(io::ErrorKind::InvalidInput, "audit zone invalid")
+                })?;
+                let operation_identity =
+                    d2b_audit::OperationIdentity::parse(join_operation_identity).map_err(|_| {
+                        io::Error::new(io::ErrorKind::InvalidInput, "audit operation invalid")
+                    })?;
+                let key =
+                    d2b_audit::ZoneOperationKey::new(zone_id.clone(), operation_identity.clone());
+                (
+                    zone_id.clone(),
+                    operation_identity.clone(),
+                    operation_identity.as_str().to_owned(),
+                    zone_id.as_str().to_owned(),
+                    key,
+                )
+            } else {
+                let zone_id = d2b_audit::ZoneId::derive(scope_id)
+                    .or_else(|_| d2b_audit::ZoneId::derive(&d2b_audit::opaque_identity(scope_id)))
+                    .map_err(|_| {
+                        io::Error::new(io::ErrorKind::InvalidInput, "audit zone invalid")
+                    })?;
+                let key =
+                    d2b_audit::ZoneOperationKey::new(zone_id.clone(), expected_operation.clone());
+                (
+                    zone_id,
+                    expected_operation,
+                    public_operation_id.to_owned(),
+                    scope_id.to_owned(),
+                    key,
+                )
+            };
+        let record = OpAuditRecord {
+            record_class: BrokerAuditRecordClass::Durability,
+            ts_ms,
+            broker_version: BROKER_VERSION,
+            bundle_version,
+            bundle_hash,
+            operation,
+            public_operation_id: &public_operation_id,
+            zone_id: &zone_id,
+            operation_identity: &operation_identity,
+            event_id: &event_id,
+            peer_uid,
+            peer_gid,
+            peer_pid,
+            peer_role,
+            authz_result,
+            subject_id,
+            scope_id: &audit_scope_id,
+            verb,
+            request_fields,
+            decision,
             result: result_for_decision(decision),
             error_kind,
             tracing_span_id,
             duration_us,
             operation_fields,
+            zone_operation_key,
         };
         self.write_op_record(&record)
     }
@@ -499,6 +661,7 @@ impl AuditLog {
             // Rotations swap the fd via reopen + atomic rename. We
             // reopen the new day's file in O_APPEND; the old file is
             // closed by replacing it (drop runs).
+            guard.file.sync_all()?;
             let new_path = self.audit_dir.join(format!("broker-{today}.jsonl"));
             let new_file = open_append_cloexec(&new_path, self.expected_gid, self.test_mode)?;
             guard.file = new_file;
@@ -506,16 +669,16 @@ impl AuditLog {
         }
         guard.file.write_all(bytes)?;
         guard.file.flush()?;
-        // Release the daily lock BEFORE pruning so a slow `readdir`
-        // never blocks concurrent writers. Prune is best-effort and
-        // only runs on day-boundary crossings; the cost is bounded
-        // by O(retention_days + leftover files).
-        drop(guard);
-        if rotated && let Err(err) = self.prune_expired_daily_files() {
+        guard.file.sync_all()?;
+        // Keep the daily lock through the bounded retention scan so export
+        // cannot observe a file set while rotation or pruning is in flight.
+        if let Err(err) = self.prune_expired_daily_files_unlocked() {
             // Same swallow as open(): pruning failures must not
             // break the write path. The next rotation retries.
             let _ = err;
         }
+        drop(guard);
+        sync_directory(&self.audit_dir)?;
         Ok(())
     }
 
@@ -562,6 +725,14 @@ impl AuditLog {
     ///
     /// `retention_days == 0` disables pruning entirely.
     pub fn prune_expired_daily_files(&self) -> io::Result<usize> {
+        let _guard = self
+            .daily
+            .lock()
+            .map_err(|_| io::Error::other("audit daily mutex poisoned"))?;
+        self.prune_expired_daily_files_unlocked()
+    }
+
+    fn prune_expired_daily_files_unlocked(&self) -> io::Result<usize> {
         if self.retention_days == 0 {
             return Ok(0);
         }
@@ -578,11 +749,11 @@ impl AuditLog {
             Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(0),
             Err(err) => return Err(err),
         };
-        for entry in entries {
-            let entry = match entry {
-                Ok(e) => e,
-                Err(_) => continue,
-            };
+        for (index, entry) in entries.enumerate() {
+            if index >= MAX_AUDIT_DIRECTORY_ENTRIES {
+                return Err(io::Error::other("audit-directory-scan-limit"));
+            }
+            let entry = entry?;
             let name = entry.file_name();
             let Some(name_str) = name.to_str() else {
                 continue;
@@ -626,66 +797,280 @@ impl AuditLog {
         Ok(pruned)
     }
 
-    /// Reads every `broker-YYYY-MM-DD.jsonl` file in `audit_dir`,
-    /// sorted by filename (which equals chronological order), and
-    /// returns the concatenated lines after filtering by `since`
-    /// and `filter` substrings. Files that don't match the dated
-    /// pattern are skipped so out-of-band artifacts (operator
-    /// notes, export tarballs) don't pollute the export stream.
+    /// Reads one bounded, typed page from the broker audit chain.
+    pub fn export_page(
+        &self,
+        since: Option<&str>,
+        filter: Option<&str>,
+        cursor: Option<&AuditExportCursor>,
+        limit: u32,
+    ) -> io::Result<ExportBrokerAuditResponse> {
+        let _daily_guard = self
+            .daily
+            .lock()
+            .map_err(|_| io::Error::other("audit daily mutex poisoned"))?;
+        let limit = usize::try_from(limit)
+            .ok()
+            .filter(|limit| (1..=1024).contains(limit))
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidInput, "audit-export-limit-invalid")
+            })?;
+        let typed_filter = filter
+            .map(serde_json::from_str::<BrokerAuditFilter>)
+            .transpose()
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "audit-filter-invalid"))?;
+        if let Some(cursor) = cursor
+            && (cursor.day.len() != 10
+                || !cursor.day.bytes().enumerate().all(|(index, byte)| {
+                    if matches!(index, 4 | 7) {
+                        byte == b'-'
+                    } else {
+                        byte.is_ascii_digit()
+                    }
+                })
+                || {
+                    let parts = cursor.day.split('-').collect::<Vec<_>>();
+                    parts.len() != 3
+                        || parts[0].parse::<i32>().is_err()
+                        || parts[1].parse::<u32>().is_err()
+                        || parts[2].parse::<u32>().is_err()
+                        || unix_days_from_ymd(
+                            parts[0].parse().unwrap_or_default(),
+                            parts[1].parse().unwrap_or_default(),
+                            parts[2].parse().unwrap_or_default(),
+                        )
+                        .is_none()
+                })
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "audit-export-cursor-invalid",
+            ));
+        }
+        let mut daily_paths = Vec::new();
+        for (index, entry) in fs::read_dir(&self.audit_dir)?.enumerate() {
+            if index >= MAX_AUDIT_DIRECTORY_ENTRIES {
+                return Err(io::Error::other("audit-directory-scan-limit"));
+            }
+            let entry = entry?;
+            let name = entry.file_name();
+            let Some(name_str) = name.to_str() else {
+                continue;
+            };
+            let Some(stem) = name_str
+                .strip_prefix("broker-")
+                .and_then(|s| s.strip_suffix(".jsonl"))
+            else {
+                continue;
+            };
+            let parts: Vec<&str> = stem.split('-').collect();
+            if parts.len() != 3 {
+                continue;
+            }
+            let y = parts[0].parse::<i32>().ok();
+            let m = parts[1].parse::<u32>().ok();
+            let d = parts[2].parse::<u32>().ok();
+            if let (Some(y), Some(m), Some(d)) = (y, m, d)
+                && unix_days_from_ymd(y, m, d).is_some()
+            {
+                daily_paths.push((stem.to_owned(), entry.path()));
+            }
+        }
+        daily_paths.sort_by(|left, right| left.0.cmp(&right.0));
+
+        let mut output = Vec::new();
+        let mut bytes = 0_usize;
+        let mut sequence = cursor
+            .map(|cursor| cursor.sequence.saturating_add(1))
+            .unwrap_or(0);
+        let mut next_cursor = None;
+        let mut complete = true;
+        'files: for (day, path) in daily_paths {
+            if cursor.is_some_and(|cursor| {
+                day < cursor.day || (day == cursor.day && cursor.line == u64::MAX)
+            }) {
+                continue;
+            }
+            let file = match OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW)
+                .open(&path)
+            {
+                Ok(file) => file,
+                Err(_) => {
+                    let entry = AuditExportEntry {
+                        sequence,
+                        record: None,
+                        error: Some(AuditExportErrorCode::ReadFailed),
+                    };
+                    if !append_export_entry(
+                        &mut output,
+                        &mut bytes,
+                        &mut sequence,
+                        &mut next_cursor,
+                        &day,
+                        u64::MAX,
+                        u64::MAX,
+                        limit,
+                        entry,
+                    )? {
+                        complete = false;
+                        break 'files;
+                    }
+                    complete = false;
+                    continue;
+                }
+            };
+            let mut reader = BufReader::new(file);
+            let mut line_number = 0_u64;
+            loop {
+                let current_line = line_number;
+                let line_bytes = match read_bounded_line(&mut reader) {
+                    Ok(Some(line)) => line,
+                    Ok(None) => break,
+                    Err(_) => {
+                        line_number = line_number.saturating_add(1);
+                        if cursor.is_some_and(|cursor| {
+                            day < cursor.day || (day == cursor.day && current_line <= cursor.line)
+                        }) {
+                            continue;
+                        }
+                        let entry = AuditExportEntry {
+                            sequence,
+                            record: None,
+                            error: Some(AuditExportErrorCode::ReadFailed),
+                        };
+                        if !append_export_entry(
+                            &mut output,
+                            &mut bytes,
+                            &mut sequence,
+                            &mut next_cursor,
+                            &day,
+                            current_line,
+                            current_line.saturating_sub(1),
+                            limit,
+                            entry,
+                        )? {
+                            complete = false;
+                            break 'files;
+                        }
+                        complete = false;
+                        continue 'files;
+                    }
+                };
+                line_number = line_number.saturating_add(1);
+                if cursor.is_some_and(|cursor| {
+                    day < cursor.day || (day == cursor.day && current_line <= cursor.line)
+                }) {
+                    continue;
+                }
+                let line = match String::from_utf8(line_bytes) {
+                    Ok(line) => line,
+                    Err(_) => {
+                        let entry = AuditExportEntry {
+                            sequence,
+                            record: None,
+                            error: Some(AuditExportErrorCode::ReadFailed),
+                        };
+                        if !append_export_entry(
+                            &mut output,
+                            &mut bytes,
+                            &mut sequence,
+                            &mut next_cursor,
+                            &day,
+                            current_line,
+                            current_line.saturating_sub(1),
+                            limit,
+                            entry,
+                        )? {
+                            complete = false;
+                            break 'files;
+                        }
+                        complete = false;
+                        continue;
+                    }
+                };
+                let raw_record = serde_json::from_str::<Value>(&line).ok();
+                let is_corrupt = raw_record.is_none();
+                if !is_corrupt
+                    && since.is_some_and(|since| {
+                        !raw_record
+                            .as_ref()
+                            .is_some_and(|record| ts_at_least(record, since))
+                    })
+                {
+                    continue;
+                }
+                if !is_corrupt
+                    && typed_filter.as_ref().is_some_and(|filter| {
+                        !raw_record
+                            .as_ref()
+                            .is_some_and(|record| record_matches_filter(record, filter))
+                    })
+                {
+                    continue;
+                }
+                let entry = match raw_record.map(sanitize_audit_value) {
+                    Some(Value::Object(record)) => AuditExportEntry {
+                        sequence,
+                        record: Some(Value::Object(record)),
+                        error: None,
+                    },
+                    _ => AuditExportEntry {
+                        sequence,
+                        record: None,
+                        error: Some(AuditExportErrorCode::RecordInvalid),
+                    },
+                };
+                if !append_export_entry(
+                    &mut output,
+                    &mut bytes,
+                    &mut sequence,
+                    &mut next_cursor,
+                    &day,
+                    current_line,
+                    current_line.saturating_sub(1),
+                    limit,
+                    entry,
+                )? {
+                    complete = false;
+                    break 'files;
+                }
+                if output.len() >= limit {
+                    complete = false;
+                    break 'files;
+                }
+            }
+        }
+        if complete {
+            next_cursor = None;
+        }
+        Ok(ExportBrokerAuditResponse {
+            entries: output,
+            next_cursor,
+            complete,
+        })
+    }
+
+    /// Compatibility projection for the legacy bootstrap probe.
     pub fn export_lines(
         &self,
         since: Option<&str>,
         filter: Option<&str>,
     ) -> io::Result<Vec<String>> {
-        let entries = match fs::read_dir(&self.audit_dir) {
-            Ok(it) => it,
-            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(err) => return Err(err),
-        };
-        let mut daily_paths: Vec<PathBuf> = entries
-            .filter_map(|entry| entry.ok())
-            .filter_map(|entry| {
-                let name = entry.file_name();
-                let name_str = name.to_str()?;
-                let stem = name_str
-                    .strip_prefix("broker-")
-                    .and_then(|s| s.strip_suffix(".jsonl"))?;
-                let parts: Vec<&str> = stem.split('-').collect();
-                if parts.len() != 3 {
-                    return None;
-                }
-                let y = parts[0].parse::<i32>().ok()?;
-                let m = parts[1].parse::<u32>().ok()?;
-                let d = parts[2].parse::<u32>().ok()?;
-                unix_days_from_ymd(y, m, d)?;
-                Some(entry.path())
+        let page = self.export_page(since, filter, None, 1024)?;
+        page.entries
+            .into_iter()
+            .map(|entry| {
+                serde_json::to_string(&entry.record.or_else(|| {
+                    Some(serde_json::json!({
+                        "export_error": entry.error,
+                        "sequence": entry.sequence,
+                    }))
+                }))
+                .map_err(|error| io::Error::other(error.to_string()))
             })
-            .collect();
-        // Filenames sort lexicographically in chronological order
-        // because of the YYYY-MM-DD format.
-        daily_paths.sort();
-
-        let mut lines = Vec::new();
-        for path in &daily_paths {
-            let file = File::open(path)?;
-            let reader = BufReader::new(file);
-            for line in reader.lines() {
-                let line = line?;
-                if let Some(since) = since
-                    && !line.contains(since)
-                    && !ts_at_least(&line, since)
-                {
-                    continue;
-                }
-                if let Some(filter) = filter
-                    && !line.contains(filter)
-                {
-                    continue;
-                }
-                lines.push(line);
-            }
-        }
-        Ok(lines)
+            .collect()
     }
 
     /// Returns `(uid, gid, mode)` of the current day's daily file.
@@ -728,7 +1113,9 @@ impl AuditWriteLimiter {
 
     fn check(&mut self, audit_class: AuditWriteClass) -> io::Result<()> {
         match audit_class {
-            AuditWriteClass::Privileged => self.privileged.check(),
+            // Privileged audit is part of the mutation success boundary. It
+            // may fail on I/O, but it is never rejected by a quota.
+            AuditWriteClass::Privileged => Ok(()),
             AuditWriteClass::Unprivileged => self.unprivileged.check(),
         }
     }
@@ -785,6 +1172,106 @@ fn open_append_cloexec(path: &Path, expected_gid: u32, test_mode: bool) -> io::R
         Mode::from_raw_mode(0),
     );
     Ok(file)
+}
+
+fn sync_directory(directory: &Path) -> io::Result<()> {
+    let file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_CLOEXEC | libc::O_DIRECTORY | libc::O_NOFOLLOW)
+        .open(directory)?;
+    file.sync_all()
+}
+
+pub(crate) fn sanitize_audit_value(value: Value) -> Value {
+    fn walk(value: &mut Value, key: Option<&str>) {
+        match value {
+            Value::Object(object) => {
+                object.retain(|name, _| {
+                    !matches!(
+                        name.as_str(),
+                        "peer_pid" | "caller_uid" | "caller_gid" | "pid" | "pidfd" | "handle"
+                    )
+                });
+                for (name, child) in object {
+                    let propagated = key
+                        .filter(|parent| is_sensitive_key(parent))
+                        .unwrap_or(name);
+                    walk(child, Some(propagated));
+                }
+            }
+            Value::Array(values) => {
+                for child in values {
+                    walk(child, key);
+                }
+            }
+            Value::String(text)
+                if (key.is_some_and(is_sensitive_key)
+                    || text.contains('/')
+                    || text.chars().any(char::is_whitespace))
+                    && !is_canonical_digest(text) =>
+            {
+                *text = if key
+                    .is_some_and(|key| matches!(key, "public_operation_id" | "operation_id"))
+                {
+                    d2b_audit::OperationIdentity::derive(text)
+                        .map(|identity| identity.as_str().to_owned())
+                        .unwrap_or_else(|_| opaque_digest(text))
+                } else {
+                    opaque_digest(text)
+                };
+            }
+            _ => {}
+        }
+    }
+
+    let mut value = value;
+    walk(&mut value, None);
+    value
+}
+
+fn is_sensitive_key(key: &str) -> bool {
+    matches!(
+        key,
+        "path"
+            | "argv"
+            | "env"
+            | "socket"
+            | "peer_role"
+            | "subject_id"
+            | "scope_id"
+            | "public_operation_id"
+            | "event_id"
+            | "tracing_span_id"
+            | "runner_id"
+            | "vm"
+            | "vm_id"
+            | "role_id"
+            | "zone"
+            | "zone_id"
+            | "credential"
+            | "secret"
+            | "message"
+            | "error_message"
+    ) || key.ends_with("_path")
+        || key.ends_with("_uid")
+        || key.ends_with("_name")
+}
+
+fn opaque_digest(value: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut bytes = b"d2b:broker-audit-redaction:v1:".to_vec();
+    bytes.extend_from_slice(value.as_bytes());
+    let digest = Sha256::digest(bytes);
+    let mut output = String::from("sha256:");
+    for byte in digest {
+        output.push_str(&format!("{byte:02x}"));
+    }
+
+    output
+}
+
+fn is_canonical_digest(value: &str) -> bool {
+    d2b_audit::is_canonical_digest(value)
 }
 
 fn set_root_d2bd_acl(file: &File, expected_gid: u32, test_mode: bool) -> io::Result<()> {
@@ -873,24 +1360,147 @@ fn unix_days_from_ymd(y: i32, m: u32, d: u32) -> Option<i64> {
     }
 }
 
-fn ts_at_least(line: &str, since: &str) -> bool {
+fn ts_at_least(record: &Value, since: &str) -> bool {
     let wanted = since.parse::<u128>().ok();
-    let current = line
-        .split('"')
-        .collect::<Vec<_>>()
-        .windows(2)
-        .find_map(|window| {
-            if window.first().copied() == Some(":") {
-                window
-                    .get(1)
-                    .and_then(|candidate| candidate.parse::<u128>().ok())
-            } else {
-                None
-            }
-        });
+    let current = record
+        .get("ts_ms")
+        .or_else(|| record.get("ts"))
+        .and_then(Value::as_u64)
+        .map(u128::from);
     match (current, wanted) {
         (Some(current), Some(wanted)) => current >= wanted,
-        _ => true,
+        (None, Some(_)) => false,
+        (_, None) => true,
+    }
+}
+
+fn append_export_entry(
+    output: &mut Vec<AuditExportEntry>,
+    bytes: &mut usize,
+    sequence: &mut u64,
+    next_cursor: &mut Option<AuditExportCursor>,
+    day: &str,
+    physical_line: u64,
+    cursor_line_if_full: u64,
+    limit: usize,
+    entry: AuditExportEntry,
+) -> io::Result<bool> {
+    let encoded =
+        serde_json::to_vec(&entry).map_err(|_| io::Error::other("audit-export-encode-failed"))?;
+    if output.len() >= limit || bytes.saturating_add(encoded.len()) > MAX_EXPORTED_AUDIT_BYTES {
+        *next_cursor = Some(AuditExportCursor {
+            day: day.to_owned(),
+            line: cursor_line_if_full,
+            sequence: sequence.saturating_sub(1),
+        });
+        return Ok(false);
+    }
+    *bytes = bytes.saturating_add(encoded.len());
+    let emitted_sequence = *sequence;
+    output.push(entry);
+    *sequence = sequence.saturating_add(1);
+    *next_cursor = Some(AuditExportCursor {
+        day: day.to_owned(),
+        line: physical_line,
+        sequence: emitted_sequence,
+    });
+    Ok(true)
+}
+
+fn record_matches_filter(record: &Value, filter: &BrokerAuditFilter) -> bool {
+    let text = |keys: &[&str]| {
+        keys.iter()
+            .find_map(|key| record.get(*key).and_then(Value::as_str))
+    };
+    filter.env.as_deref().is_none_or(|expected| {
+        text(&["env", "scope_id", "zone_id"])
+            .is_some_and(|value| identity_filter_matches(expected, value))
+    }) && filter.vm.as_deref().is_none_or(|expected| {
+        text(&["vm", "vm_id"]).is_some_and(|value| identity_filter_matches(expected, value))
+    }) && filter.role.as_deref().is_none_or(|expected| {
+        text(&["peer_role", "role"]).is_some_and(|value| identity_filter_matches(expected, value))
+    }) && filter.operation.as_deref().is_none_or(|expected| {
+        text(&["operation", "op"]).is_some_and(|value| {
+            value == expected
+                || d2b_audit::OperationIdentity::derive(expected)
+                    .is_ok_and(|identity| identity.as_str() == value)
+        }) || text(&["public_operation_id", "operation_id"]).is_some_and(|value| {
+            d2b_audit::OperationIdentity::derive(expected)
+                .is_ok_and(|identity| identity.as_str() == value)
+        })
+    }) && filter.outcome.as_deref().is_none_or(|expected| {
+        text(&["outcome", "result", "decision"]).is_some_and(|value| value == expected)
+    }) && filter
+        .severity
+        .is_none_or(|severity| severity_matches(record, severity))
+}
+
+fn identity_filter_matches(expected: &str, actual: &str) -> bool {
+    actual == expected
+        || d2b_audit::is_canonical_digest(expected) && actual == expected
+        || actual == opaque_digest(expected)
+        || d2b_audit::ZoneId::derive(expected).is_ok_and(|zone| zone.as_str() == actual)
+}
+
+fn severity_matches(record: &Value, severity: BrokerAuditSeverity) -> bool {
+    let decision = record
+        .get("decision")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let result = record
+        .get("result")
+        .or_else(|| record.get("outcome"))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let error = record
+        .get("error_kind")
+        .and_then(Value::as_str)
+        .is_some_and(|value| !value.is_empty());
+    match severity {
+        BrokerAuditSeverity::Denied => decision.starts_with("denied") || result == "denied",
+        BrokerAuditSeverity::Error => {
+            error
+                || matches!(decision, "error" | "errored")
+                || matches!(result, "error" | "errored")
+        }
+        BrokerAuditSeverity::Warning => {
+            !severity_matches(record, BrokerAuditSeverity::Denied)
+                && !severity_matches(record, BrokerAuditSeverity::Error)
+                && matches!(result, "warning" | "degraded" | "rejected")
+        }
+        BrokerAuditSeverity::Info => {
+            !severity_matches(record, BrokerAuditSeverity::Denied)
+                && !severity_matches(record, BrokerAuditSeverity::Error)
+                && !severity_matches(record, BrokerAuditSeverity::Warning)
+        }
+    }
+}
+
+fn read_bounded_line<R: BufRead>(reader: &mut R) -> io::Result<Option<Vec<u8>>> {
+    let mut bytes = Vec::new();
+    loop {
+        let chunk = reader.fill_buf()?;
+        if chunk.is_empty() {
+            return if bytes.is_empty() {
+                Ok(None)
+            } else {
+                Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "audit-export-line-truncated",
+                ))
+            };
+        }
+        let newline = chunk.iter().position(|byte| *byte == b'\n');
+        let take = newline.map_or(chunk.len(), |index| index + 1);
+        if bytes.len().saturating_add(take) > MAX_EXPORTED_AUDIT_LINE_BYTES {
+            return Err(io::Error::other("audit-export-line-limit"));
+        }
+        bytes.extend_from_slice(&chunk[..take]);
+        reader.consume(take);
+        if newline.is_some() {
+            bytes.pop();
+            return Ok(Some(bytes));
+        }
     }
 }
 
@@ -1091,17 +1701,244 @@ mod tests {
     }
 
     #[test]
-    fn audit_write_rate_limit_refuses_excess_records() {
+    fn privileged_audit_is_not_rate_limited() {
         let root = target_scratch_root("audit-rate-limit");
-        let log = AuditLog::open_with_write_limit(&root, Gid::current().as_raw(), true, 14, 1)
+        let log = AuditLog::open_with_write_limit(&root, Gid::current().as_raw(), true, 14, 4)
             .expect("open audit log with low write limit");
         log.write_entry("UsbipBind", 1000, "allowed", "operation", "ok")
             .expect("first write allowed");
-        let err = log
-            .write_entry("UsbipBind", 1000, "allowed", "operation", "ok")
-            .expect_err("second write in same window must be rate-limited");
-        assert_eq!(err.kind(), io::ErrorKind::WouldBlock);
+        for _ in 0..8 {
+            log.write_entry("UsbipBind", 1000, "allowed", "operation", "ok")
+                .expect("privileged audit remains writable under pressure");
+        }
 
+        assert_eq!(log.audit_drop_summary().unwrap().privileged_rate_limited, 0);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn typed_export_is_bounded_and_cursor_paginated() {
+        let root = target_scratch_root("audit-typed-export");
+        let log = AuditLog::open(&root, Gid::current().as_raw(), true, 30)
+            .expect("open typed export audit log");
+        log.write_entry("Hello", 1000, "allowed", "operation", "success")
+            .expect("write first record");
+        log.write_entry("ValidateBundle", 1000, "allowed", "bundle", "success")
+            .expect("write second record");
+        let first = log
+            .export_page(None, None, None, 1)
+            .expect("export first page");
+        assert_eq!(first.entries.len(), 1);
+        assert_eq!(first.entries[0].sequence, 0);
+        assert_eq!(first.next_cursor.as_ref().unwrap().sequence, 0);
+        assert!(!first.complete);
+        let second = log
+            .export_page(None, None, first.next_cursor.as_ref(), 1)
+            .expect("export second page");
+        assert_eq!(second.entries.len(), 1);
+        assert_eq!(second.entries[0].sequence, 1);
+        assert_eq!(second.next_cursor.as_ref().unwrap().sequence, 1);
+        assert!(second.entries.iter().all(|entry| entry.record.is_some()));
+        let third = log
+            .export_page(None, None, second.next_cursor.as_ref(), 1)
+            .expect("export completion page");
+        assert!(third.entries.is_empty());
+        assert!(third.complete);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn typed_export_applies_record_predicates_and_numeric_since() {
+        let root = target_scratch_root("audit-typed-filter");
+        let log = AuditLog::open(&root, Gid::current().as_raw(), true, 30)
+            .expect("open typed filter audit log");
+        log.write_entry("Hello", 1000, "allowed", "operation", "success")
+            .expect("write info record");
+        log.write_error_entry(
+            "ValidateBundle",
+            1000,
+            "denied-policy",
+            "bundle",
+            "policy",
+            "redacted",
+        )
+        .expect("write denied record");
+        let filter = serde_json::json!({
+            "env": null,
+            "operation": "Hello",
+            "vm": null,
+            "role": null,
+            "outcome": "success",
+            "severity": "info",
+        })
+        .to_string();
+        let page = log
+            .export_page(Some("0"), Some(&filter), None, 10)
+            .expect("filter export");
+        assert_eq!(page.entries.len(), 1);
+        assert_eq!(
+            page.entries[0]
+                .record
+                .as_ref()
+                .and_then(|record| record.get("op"))
+                .and_then(Value::as_str),
+            Some("Hello")
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn typed_export_surfaces_corruption_and_advances_past_failed_physical_records() {
+        let root = target_scratch_root("audit-corrupt-export");
+        let log = AuditLog::open(&root, Gid::current().as_raw(), true, 30)
+            .expect("open corrupt export audit log");
+        log.write_entry("Hello", 1000, "allowed", "operation", "success")
+            .expect("write valid record");
+        let path = log.current_daily_path();
+        let mut file = OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .expect("open daily file");
+        file.write_all(&[0xff, b'\n'])
+            .expect("append invalid UTF-8");
+        file.sync_all().expect("sync corrupt record");
+
+        let filter = serde_json::json!({
+            "operation": "does-not-match",
+            "severity": "denied"
+        })
+        .to_string();
+        let first = log
+            .export_page(Some("999999999999"), Some(&filter), None, 10)
+            .expect("export corruption");
+        assert_eq!(first.entries.len(), 1);
+        assert_eq!(
+            first.entries[0].error,
+            Some(AuditExportErrorCode::ReadFailed)
+        );
+        let cursor = first.next_cursor.as_ref().expect("cursor after failure");
+        assert_eq!(cursor.line, 1);
+
+        let second = log
+            .export_page(Some("999999999999"), Some(&filter), Some(cursor), 10)
+            .expect("resume after corruption");
+        assert!(second.entries.is_empty());
+        assert!(second.complete);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn typed_export_filters_redacted_identity_fields_and_severity() {
+        let root = target_scratch_root("audit-redacted-filter");
+        let log = AuditLog::open(&root, Gid::current().as_raw(), true, 30)
+            .expect("open redacted filter audit log");
+        let path = log.current_daily_path();
+        let records = [
+            serde_json::json!({
+                "ts": 1000,
+                "env": opaque_digest("work"),
+                "vm": opaque_digest("vm-a"),
+                "peer_role": opaque_digest("launcher"),
+                "operation": "RunHostInstall",
+                "outcome": "success",
+                "decision": "allowed"
+            }),
+            serde_json::json!({
+                "ts": 2000,
+                "env": opaque_digest("work"),
+                "vm": opaque_digest("vm-b"),
+                "peer_role": opaque_digest("admin"),
+                "operation": "RunHostInstall",
+                "outcome": "denied",
+                "decision": "denied-policy"
+            }),
+        ];
+        let mut file = OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .expect("open daily file");
+        for record in records {
+            writeln!(file, "{record}").expect("append filter record");
+        }
+        file.sync_all().expect("sync filter records");
+
+        let filter = serde_json::json!({
+            "env": "work",
+            "vm": "vm-a",
+            "role": "launcher",
+            "operation": "RunHostInstall",
+            "outcome": "success",
+            "severity": "info"
+        })
+        .to_string();
+        let page = log
+            .export_page(Some("1000"), Some(&filter), None, 10)
+            .expect("filter redacted records");
+        assert_eq!(page.entries.len(), 1);
+        assert_eq!(
+            page.entries[0]
+                .record
+                .as_ref()
+                .and_then(|record| record.get("vm"))
+                .and_then(Value::as_str),
+            Some(opaque_digest("vm-a").as_str())
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn record_with_join_uses_one_authoritative_operation_key() {
+        let root = target_scratch_root("audit-record-join");
+        let log = AuditLog::open(&root, Gid::current().as_raw(), true, 30)
+            .expect("open joined audit log");
+        let zone = d2b_audit::ZoneId::derive("work").expect("zone");
+        let operation =
+            d2b_audit::OperationIdentity::derive("authoritative-operation").expect("operation");
+        log.record_with_join(
+            "RunHostInstall",
+            "display-operation",
+            1000,
+            1000,
+            42,
+            "d2b-admin",
+            "admin",
+            "subject",
+            "display-scope",
+            "run",
+            serde_json::json!({}),
+            "allowed",
+            None,
+            None,
+            "v3",
+            "sha256:bundle",
+            1,
+            None,
+            Some((zone.as_str(), operation.as_str())),
+        )
+        .expect("joined audit record");
+        let line = fs::read_to_string(log.current_daily_path()).expect("read joined record");
+        let value: Value = serde_json::from_str(line.lines().next().expect("record line"))
+            .expect("parse joined record");
+        assert_eq!(
+            value.get("public_operation_id").and_then(Value::as_str),
+            Some(operation.as_str())
+        );
+        assert_eq!(
+            value.get("operation_identity").and_then(Value::as_str),
+            Some(operation.as_str())
+        );
+        assert_eq!(
+            value.get("zone_id").and_then(Value::as_str),
+            Some(zone.as_str())
+        );
+        assert_eq!(
+            value
+                .get("zone_operation_key")
+                .and_then(|key| key.get("zone"))
+                .and_then(Value::as_str),
+            Some(zone.as_str())
+        );
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -1149,32 +1986,46 @@ mod tests {
     }
 
     #[test]
-    fn rate_limited_drop_counters_remain_exact_when_warnings_are_suppressed() {
+    fn unprivileged_drop_counters_remain_exact_when_warnings_are_suppressed() {
         let root = target_scratch_root("audit-drop-summary-aggregate");
-        let log = AuditLog::open_with_write_limit(&root, Gid::current().as_raw(), true, 14, 1)
+        let log = AuditLog::open_with_write_limit(&root, Gid::current().as_raw(), true, 14, 4)
             .expect("open audit log with low write limit");
-        log.write_entry("UsbipBind", 1000, "allowed", "operation", "ok")
-            .expect("first write allowed");
+        log.write_entry_with_class(
+            AuditWriteClass::Unprivileged,
+            "UsbipBind",
+            1000,
+            "allowed",
+            "operation",
+            "ok",
+        )
+        .expect("first write allowed");
 
         for _ in 0..8 {
             let err = log
-                .write_entry("UsbipBind", 1000, "allowed", "operation", "ok")
+                .write_entry_with_class(
+                    AuditWriteClass::Unprivileged,
+                    "UsbipBind",
+                    1000,
+                    "allowed",
+                    "operation",
+                    "ok",
+                )
                 .expect_err("excess write in same window must be rate-limited");
             assert_eq!(err.kind(), io::ErrorKind::WouldBlock);
         }
 
         let summary = log.audit_drop_summary().expect("drop summary");
-        assert_eq!(summary.privileged_rate_limited, 8);
-        assert_eq!(summary.unprivileged_rate_limited, 0);
+        assert_eq!(summary.privileged_rate_limited, 0);
+        assert_eq!(summary.unprivileged_rate_limited, 8);
         let warning_state = log.drop_warning_state.lock().expect("drop warning state");
-        assert_eq!(warning_state.privileged_reported, 8);
-        assert_eq!(warning_state.unprivileged_reported, 0);
+        assert_eq!(warning_state.privileged_reported, 0);
+        assert_eq!(warning_state.unprivileged_reported, 8);
 
         let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
-    fn audit_write_rate_limit_applies_to_usb_op_records() {
+    fn privileged_usb_op_records_are_not_rate_limited() {
         let root = target_scratch_root("audit-usb-op-rate-limit");
         let log = AuditLog::open_with_write_limit(&root, Gid::current().as_raw(), true, 14, 1)
             .expect("open audit log with low write limit");
@@ -1207,37 +2058,35 @@ mod tests {
             })),
         )
         .expect("first USB op record allowed");
-        let err = log
-            .record(
-                "UsbipBind",
-                "usbip-bind",
-                1000,
-                1000,
-                42,
-                "d2b-admin",
-                "admin",
-                "vm:work",
-                "usbip",
-                "bind",
-                serde_json::json!({"bus_id": "redacted"}),
-                "allowed",
-                None,
-                None,
-                "v2",
-                "fnv1a64:test",
-                10,
-                Some(serde_json::json!({
-                    "bus_id": "1-2",
-                    "vm": "work",
-                    "device_identity": {
-                        "vendorId": "1050",
-                        "productId": "0407",
-                        "serialObserved": false
-                    }
-                })),
-            )
-            .expect_err("second USB op record in same window must be rate-limited");
-        assert_eq!(err.kind(), io::ErrorKind::WouldBlock);
+        log.record(
+            "UsbipBind",
+            "usbip-bind",
+            1000,
+            1000,
+            42,
+            "d2b-admin",
+            "admin",
+            "vm:work",
+            "usbip",
+            "bind",
+            serde_json::json!({"bus_id": "redacted"}),
+            "allowed",
+            None,
+            None,
+            "v2",
+            "fnv1a64:test",
+            10,
+            Some(serde_json::json!({
+                "bus_id": "1-2",
+                "vm": "work",
+                "device_identity": {
+                    "vendorId": "1050",
+                    "productId": "0407",
+                    "serialObserved": false
+                }
+            })),
+        )
+        .expect("privileged USB audit remains durable under pressure");
 
         let _ = fs::remove_dir_all(&root);
     }
@@ -1308,6 +2157,65 @@ mod tests {
         assert!(audit.contains(r#""operation":"UsbipBind""#), "{audit}");
         assert!(audit.contains(r#""decision":"allowed""#), "{audit}");
 
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn audit_output_redacts_peer_identity_paths_and_attacker_text() {
+        let root = target_scratch_root("audit-redaction-canary");
+        let log = AuditLog::open(&root, Gid::current().as_raw(), true, 14).expect("open audit log");
+        log.record(
+            "SpawnRunner",
+            "operation-canary",
+            1000,
+            1000,
+            4242,
+            "d2b-admin",
+            "admin",
+            "User/secret-user",
+            "Zone/secret-zone",
+            "spawn",
+            serde_json::json!({
+                "path": "/private/host/path",
+                "argv": ["attacker-text-canary"],
+                "env": {"TOKEN": "secret-token-canary"},
+            }),
+            "allowed",
+            Some("attacker error text"),
+            Some("trace-canary"),
+            "v3",
+            "sha256:bundle",
+            1,
+            Some(serde_json::json!({
+                "vm_id": "secret-vm",
+                "socket": "/run/private.sock",
+                "pid": 4242,
+            })),
+        )
+        .unwrap();
+        let rendered = fs::read_to_string(log.current_daily_path()).unwrap();
+        for forbidden in [
+            "operation-canary",
+            "User/secret-user",
+            "Zone/secret-zone",
+            "/private/host/path",
+            "attacker-text-canary",
+            "secret-token-canary",
+            "secret-vm",
+            "/run/private.sock",
+        ] {
+            assert!(!rendered.contains(forbidden), "{forbidden}: {rendered}");
+        }
+        assert!(
+            rendered.contains(
+                d2b_audit::OperationIdentity::derive("operation-canary")
+                    .unwrap()
+                    .as_str()
+            )
+        );
+        assert!(rendered.contains("\"peer_uid\":1000"));
+        assert!(rendered.contains("\"peer_gid\":1000"));
+        assert!(!rendered.contains("\"peer_pid\""));
         let _ = fs::remove_dir_all(&root);
     }
 }

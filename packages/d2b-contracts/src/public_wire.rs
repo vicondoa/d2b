@@ -1,3 +1,4 @@
+use crate::broker_wire::AuditExportCursor;
 use crate::types::MediaRef;
 use crate::{FeatureFlag, Version, guest_wire::ExecState};
 pub use d2b_core::audio_policy::LevelPercent;
@@ -444,6 +445,14 @@ pub struct AuditRequest {
     #[serde(default)]
     pub format: AuditFormat,
     pub since: Option<String>,
+    #[serde(default)]
+    pub cursor: Option<AuditExportCursor>,
+    #[serde(default = "default_audit_request_limit")]
+    pub limit: u32,
+}
+
+fn default_audit_request_limit() -> u32 {
+    256
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -2428,6 +2437,12 @@ pub struct AuditSelector {
     pub env: Option<String>,
     pub severity: Option<String>,
     pub vm: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]

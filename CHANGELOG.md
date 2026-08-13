@@ -1710,7 +1710,7 @@ block. A new `AGENTS.md` policy makes the panel-review process a
   (`d2b-ch-exporter.service`, pure-Bash + jq + curl + socat -
   no new language runtime in the host closure). Polls each VM's CH
   REST socket (`/vmm.ping`, `/vm.info`, `/vm.counters`), exposes
-  Prometheus text on `127.0.0.1:9101/metrics`. Counter allowlist
+  Prometheus text on the historical loopback collector URL. Counter allowlist
   pinned to Cloud Hypervisor v50 device IDs (`_net*`, `_disk*`,
   `_fs*`, `_pmem*`, `__rng`, `__balloon`, `__console`); unknown
   schema rolls into `d2b_vm_unknown_counters_total`. Topology

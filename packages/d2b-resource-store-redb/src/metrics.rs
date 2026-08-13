@@ -3,8 +3,9 @@
 use std::collections::BTreeMap;
 
 use d2b_telemetry::{
-    BoundedEmitter, EmitOutcome, IdentityCanaries, MetricDescriptor, MetricPolicyError, Signal,
-    TraceContext, emitter::encode_frame, meter_registry::label, validate_data_point,
+    BoundedEmitter, EmitOutcome, EmitterError, IdentityCanaries, MetricDescriptor,
+    MetricPolicyError, Signal, TraceContext, emitter::encode_frame, meter_registry::label,
+    validate_data_point,
 };
 
 /// Store metric names owned by this backend.
@@ -194,11 +195,33 @@ impl EmitterStoreTelemetry {
     pub const fn metrics(&self) -> &StoreMetrics {
         &self.metrics
     }
+
+    /// Emit a metric and return the actual bounded-emitter outcome.
+    pub fn emit_metric(
+        &self,
+        metric: StoreMetric,
+        labels: BTreeMap<String, String>,
+        value: f64,
+    ) -> Result<EmitOutcome, MetricPolicyError> {
+        self.metrics.observe(metric, labels, value)
+    }
+
+    /// Emit a span and return the actual bounded-emitter outcome.
+    pub fn emit_span(
+        &self,
+        name: &'static str,
+        fields: BTreeMap<String, String>,
+        trace: Option<TraceContext>,
+    ) -> Result<EmitOutcome, EmitterError> {
+        let span = crate::tracing::StoreSpan::new(name, fields, trace)
+            .map_err(|_| EmitterError::FrameRedaction)?;
+        span.emit(&self.emitter)
+    }
 }
 
 impl StoreTelemetry for EmitterStoreTelemetry {
     fn metric(&self, metric: StoreMetric, labels: BTreeMap<String, String>, value: f64) {
-        let _ = self.metrics.observe(metric, labels, value);
+        let _ = self.emit_metric(metric, labels, value);
     }
 
     fn span(
@@ -207,9 +230,7 @@ impl StoreTelemetry for EmitterStoreTelemetry {
         fields: BTreeMap<String, String>,
         trace: Option<TraceContext>,
     ) {
-        if let Ok(span) = crate::tracing::StoreSpan::new(name, fields, trace) {
-            let _ = span.emit(&self.emitter);
-        }
+        let _ = self.emit_span(name, fields, trace);
     }
 }
 
@@ -252,15 +273,23 @@ mod tests {
     fn emitter_telemetry_has_a_non_test_metric_and_span_port() {
         let emitter = BoundedEmitter::new("/nonexistent", 1024).unwrap();
         let telemetry = EmitterStoreTelemetry::new(emitter);
-        telemetry.metric(
-            StoreMetric::QueueDepth,
-            BTreeMap::from([("operation".to_owned(), "write".to_owned())]),
-            1.0,
+        assert!(
+            telemetry
+                .emit_metric(
+                    StoreMetric::QueueDepth,
+                    BTreeMap::from([("operation".to_owned(), "write".to_owned())]),
+                    1.0,
+                )
+                .is_ok()
         );
-        telemetry.span(
-            crate::tracing::STORE_WRITE_SPAN,
-            BTreeMap::from([("kind".to_owned(), "single".to_owned())]),
-            None,
+        assert!(
+            telemetry
+                .emit_span(
+                    crate::tracing::STORE_WRITE_SPAN,
+                    BTreeMap::from([("kind".to_owned(), "single".to_owned())]),
+                    None,
+                )
+                .is_ok()
         );
     }
 }

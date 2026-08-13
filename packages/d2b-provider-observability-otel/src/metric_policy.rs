@@ -77,11 +77,22 @@ impl MetricDescriptor {
 }
 
 /// Identity values which must not enter a metric data point.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Clone, Default, PartialEq, Eq)]
 pub struct IdentityCanaries {
     names: BTreeSet<String>,
     uids: BTreeSet<String>,
     refs: BTreeSet<String>,
+}
+
+impl core::fmt::Debug for IdentityCanaries {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("IdentityCanaries")
+            .field("name_count", &self.names.len())
+            .field("uid_count", &self.uids.len())
+            .field("ref_count", &self.refs.len())
+            .finish()
+    }
 }
 
 impl IdentityCanaries {
@@ -239,8 +250,28 @@ pub fn validate_resource_attributes(
                 .bytes()
                 .any(|byte| !byte.is_ascii_graphic() || byte == b'/')
             || !seen.insert(key)
+            || !valid_resource_attribute_value(key, value)
         {
             return Err(ResourceAttributeError::Invalid);
+        }
+
+        fn valid_resource_attribute_value(key: &str, value: &str) -> bool {
+            let identity_key = matches!(
+                key,
+                "d2b.zone"
+                    | "d2b.provider"
+                    | "d2b.component"
+                    | "host.name"
+                    | "vm.name"
+                    | "vm.env"
+                    | "vm.role"
+            );
+            if identity_key {
+                return d2b_contracts::v3::is_canonical_digest(value);
+            }
+            value.bytes().all(|byte| {
+                byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_' | b':')
+            })
         }
     }
     Ok(())
@@ -298,7 +329,11 @@ mod tests {
     #[test]
     fn resource_attributes_have_a_separate_allowlist() {
         let attributes = BTreeMap::from([
-            ("d2b.zone".to_owned(), "work".to_owned()),
+            (
+                "d2b.zone".to_owned(),
+                "sha256:0000000000000000000000000000000000000000000000000000000000000001"
+                    .to_owned(),
+            ),
             ("service.version".to_owned(), "0.0.0".to_owned()),
         ]);
         assert!(validate_resource_attributes(&attributes).is_ok());

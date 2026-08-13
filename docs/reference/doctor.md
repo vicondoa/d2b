@@ -35,7 +35,7 @@ Each probe is a passive, read-only check. Exit codes: `0` = all pass,
 | Field | Value |
 |-------|-------|
 | Invariant | Prometheus text-format scrape endpoint returns HTTP 200 |
-| Source | `GET /metrics` to `D2B_METRICS_URL` (default `http://127.0.0.1:9101/metrics`) |
+| Source | `GET /metrics` to the optional operator-configured `D2B_METRICS_URL` |
 | Pass | HTTP 200, or connection failure while the optional scrape endpoint is not serving |
 | Warn | Non-200 HTTP response from a reachable metrics server |
 
@@ -250,4 +250,4 @@ with a descriptive error rather than Fail.
 | `D2B_BROKER_SOCKET` | `/run/d2b/priv.sock` | Override broker socket path |
 | `D2B_PUBLIC_SOCKET` | `/run/d2b/public.sock` | Override public socket path |
 | `D2B_DAEMON_STATE_DIR` | `/var/lib/d2b/daemon-state` | Override daemon state directory |
-| `D2B_METRICS_URL` | `http://127.0.0.1:9101/metrics` | Override daemon metrics scrape URL |
+| `D2B_METRICS_URL` | unset | Optional external collector scrape URL; the daemon does not serve HTTP metrics |

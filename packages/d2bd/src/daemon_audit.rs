@@ -16,9 +16,18 @@
 //! any release; existing variants MUST NOT be renamed or removed. Field
 //! names use `snake_case` (matching the `#[serde(rename_all = "snake_case")]`
 //! attribute). This mirrors the broker audit's forward-compat posture.
+//!
+//! This is a separate daemon best-effort chain, not the Zone reconciliation
+//! source of truth. Authoritative workload, shutdown, and resource-plane
+//! events use `write_event_with_authority`, which requires a durable state
+//! directory and synchronized append; Zone joins use the checkpointed
+//! redb/audit sink chain.
 
 use std::fs;
-use std::io::{self, Read, Seek, SeekFrom, Write};
+use std::io::{self, BufRead, BufReader, Write};
+#[cfg(test)]
+use std::io::{Read, Seek, SeekFrom};
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::{
     Arc, Mutex,
@@ -146,12 +155,18 @@ pub enum ResourcePlaneResult {
     Error,
 }
 
+/// Whether a daemon audit event is part of an operation's authority boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DaemonAuditAuthority {
+    Authoritative,
+    BestEffort,
+}
+
 /// Daemon-side audit event variants.
 ///
 /// Additive-only: new variants may be added; existing ones must not be
 /// renamed or removed. `#[non_exhaustive]` enforces this at the type level.
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "snake_case", tag = "kind")]
+#[derive(Clone)]
 #[non_exhaustive]
 pub enum DaemonEvent {
     /// Bounded configured-launch lifecycle boundary. Target and item identity
@@ -160,7 +175,6 @@ pub enum DaemonEvent {
         target: String,
         item_id: String,
         operation_id: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
         exec_id: Option<String>,
         peer_uid: u32,
         provider: WorkloadLaunchProvider,
@@ -214,11 +228,8 @@ pub enum DaemonEvent {
         provider: ShellAuditProvider,
         action: ShellAuditAction,
         result: ShellAuditResult,
-        #[serde(skip_serializing_if = "Option::is_none")]
         force: Option<bool>,
-        #[serde(skip_serializing_if = "Option::is_none")]
         operation_digest: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
         session_digest: Option<String>,
     },
     /// Emitted when a detached `vm exec -d` create succeeds.
@@ -264,13 +275,10 @@ pub enum DaemonEvent {
         /// Closed reason kind: exited vs PID-reused.
         reason_kind: VmStartRunnerExitReason,
         /// Bounded broker exit kind, when a reap status was buffered.
-        #[serde(skip_serializing_if = "Option::is_none")]
         exit_kind: Option<RunnerExitKind>,
         /// Exit code, when `exit_kind == "exited"`.
-        #[serde(skip_serializing_if = "Option::is_none")]
         exit_code: Option<i32>,
         /// Signal number, when `exit_kind` is `signaled`/`killed`.
-        #[serde(skip_serializing_if = "Option::is_none")]
         exit_signal: Option<i32>,
         /// Wall-clock milliseconds from DAG dispatch to fast-fail.
         elapsed_ms: u64,
@@ -302,6 +310,168 @@ pub enum DaemonEvent {
     },
 }
 
+impl Serialize for DaemonEvent {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let value = match self {
+            Self::WorkloadLauncher {
+                target,
+                item_id,
+                operation_id,
+                exec_id,
+                peer_uid,
+                provider,
+                result,
+            } => serde_json::json!({
+                "kind": "workload_launcher",
+                "target": target,
+                "item_id": item_id,
+                "operation_id": operation_id,
+                "exec_id": exec_id,
+                "peer_uid": peer_uid,
+                "provider": provider,
+                "result": result,
+            }),
+            Self::ApiReadyTimeout {
+                vm,
+                runner,
+                elapsed_secs,
+                mode,
+            } => serde_json::json!({
+                "kind": "api_ready_timeout",
+                "vm": vm,
+                "runner": runner,
+                "elapsed_secs": elapsed_secs,
+                "mode": mode,
+            }),
+            Self::GuestControlExecEstablished { vm, peer_uid, tty } => serde_json::json!({
+                "kind": "guest_control_exec_established",
+                "vm": vm,
+                "peer_uid": peer_uid,
+                "tty": tty,
+            }),
+            Self::GuestControlExecTerminated { vm, peer_uid } => serde_json::json!({
+                "kind": "guest_control_exec_terminated",
+                "vm": vm,
+                "peer_uid": peer_uid,
+            }),
+            Self::ShellLifecycle {
+                target,
+                peer_uid,
+                provider,
+                action,
+                result,
+                force,
+                operation_digest,
+                session_digest,
+            } => serde_json::json!({
+                "kind": "shell_lifecycle",
+                "target": target,
+                "peer_uid": peer_uid,
+                "provider": provider,
+                "action": action,
+                "result": result,
+                "force": force,
+                "operation_digest": operation_digest,
+                "session_digest": session_digest,
+            }),
+            Self::GuestControlExecDetachedCreate {
+                vm,
+                peer_uid,
+                action,
+                result,
+                exec_id,
+            } => serde_json::json!({
+                "kind": "guest_control_exec_detached_create",
+                "vm": vm,
+                "peer_uid": peer_uid,
+                "action": action,
+                "result": result,
+                "exec_id": exec_id,
+            }),
+            Self::GuestControlExecDetachedKill {
+                vm,
+                peer_uid,
+                action,
+                result,
+                exec_id,
+            } => serde_json::json!({
+                "kind": "guest_control_exec_detached_kill",
+                "vm": vm,
+                "peer_uid": peer_uid,
+                "action": action,
+                "result": result,
+                "exec_id": exec_id,
+            }),
+            Self::VmStartRunnerExited {
+                vm,
+                role_id,
+                reason_kind,
+                exit_kind,
+                exit_code,
+                exit_signal,
+                elapsed_ms,
+            } => serde_json::json!({
+                "kind": "vm_start_runner_exited",
+                "vm": vm,
+                "role_id": role_id,
+                "reason_kind": reason_kind,
+                "exit_kind": exit_kind,
+                "exit_code": exit_code,
+                "exit_signal": exit_signal,
+                "elapsed_ms": elapsed_ms,
+            }),
+            Self::VmShutdownIntent {
+                vm,
+                peer_uid,
+                provider,
+                force_requested,
+                timeout_secs,
+            } => serde_json::json!({
+                "kind": "vm_shutdown_intent",
+                "vm": vm,
+                "peer_uid": peer_uid,
+                "provider": provider,
+                "force_requested": force_requested,
+                "timeout_secs": timeout_secs,
+            }),
+            Self::VmShutdownOutcome {
+                vm,
+                peer_uid,
+                provider,
+                outcome,
+                elapsed_ms,
+            } => serde_json::json!({
+                "kind": "vm_shutdown_outcome",
+                "vm": vm,
+                "peer_uid": peer_uid,
+                "provider": provider,
+                "outcome": outcome,
+                "elapsed_ms": elapsed_ms,
+            }),
+            Self::ResourcePlaneLifecycle {
+                zone,
+                action,
+                result,
+            } => serde_json::json!({
+                "kind": "resource_plane_lifecycle",
+                "zone": zone,
+                "action": action,
+                "result": result,
+            }),
+        };
+        sanitize_daemon_event(value).serialize(serializer)
+    }
+}
+
+impl core::fmt::Debug for DaemonEvent {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("DaemonEvent(<redacted>)")
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum WorkloadLaunchProvider {
@@ -324,7 +494,8 @@ pub enum WorkloadLaunchResult {
 ///   the day's `daemon-events-{YYYY-MM-DD}.jsonl` file inside the
 ///   daemon-state directory.
 /// - **Tests that don't care about audit output**: use
-///   [`DaemonAuditLog::no_op`]; all writes are silently discarded.
+///   [`DaemonAuditLog::no_op`]; best-effort writes are discarded, while
+///   authoritative writes fail closed.
 ///
 /// Appends are serialized behind a single in-process writer mutex so
 /// concurrent connection-handler threads cannot interleave bytes within
@@ -332,19 +503,26 @@ pub enum WorkloadLaunchResult {
 /// `daemon-events-*.jsonl` files older than [`AUDIT_RETENTION_DAYS`] are
 /// pruned on open and again whenever a write crosses a day boundary
 /// (the file name itself provides day-boundary rotation).
-#[derive(Debug)]
 pub struct DaemonAuditLog {
     state_dir: Option<PathBuf>,
     writer: Arc<Mutex<AuditWriterState>>,
     #[cfg(test)]
     pub(crate) captured: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    #[cfg(test)]
+    allow_authoritative_without_state: bool,
+}
+
+impl core::fmt::Debug for DaemonAuditLog {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("DaemonAuditLog(<redacted>)")
+    }
 }
 
 /// Default retention window for daemon audit JSONL files (days).
-pub const AUDIT_RETENTION_DAYS: i64 = 14;
+pub const AUDIT_RETENTION_DAYS: i64 = 30;
 
 /// Minimum daemon audit retention floor used by the default health helper.
-pub const AUDIT_RETENTION_FLOOR_DAYS: i64 = 7;
+pub const AUDIT_RETENTION_FLOOR_DAYS: i64 = AUDIT_RETENTION_DAYS;
 
 /// First-link marker for a daemon audit hash chain.
 pub const DAEMON_AUDIT_GENESIS_HASH: &str =
@@ -352,6 +530,7 @@ pub const DAEMON_AUDIT_GENESIS_HASH: &str =
 
 const DAEMON_AUDIT_SOURCE: &str = "d2bd";
 const DAEMON_AUDIT_HASH_DOMAIN: &[u8] = b"d2bd-daemon-audit-v1";
+#[cfg(test)]
 const DAEMON_AUDIT_TAIL_CHUNK_BYTES: u64 = 8192;
 const MAX_DAEMON_AUDIT_TAIL_LINE_BYTES: usize = 1024 * 1024;
 static HEALTHCHECK_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -368,6 +547,9 @@ struct AuditWriterState {
     /// Whether `last_hash` has been initialized from existing on-disk daemon
     /// audit records for this process.
     initialized_from_disk: bool,
+    /// A failed chain verification or post-write sync poisons this writer
+    /// until the daemon is restarted and the state is repaired.
+    poisoned: bool,
 }
 
 /// Overall daemon audit sink health.
@@ -532,12 +714,17 @@ impl DaemonAuditLog {
     /// (best-effort).
     pub fn new(state_dir: impl Into<PathBuf>) -> Self {
         let state_dir = state_dir.into();
-        prune_old_audit_logs(&state_dir, AUDIT_RETENTION_DAYS);
+        let poisoned = prune_old_audit_logs(&state_dir, AUDIT_RETENTION_DAYS).is_err();
         Self {
             state_dir: Some(state_dir),
-            writer: Arc::new(Mutex::new(AuditWriterState::default())),
+            writer: Arc::new(Mutex::new(AuditWriterState {
+                poisoned,
+                ..AuditWriterState::default()
+            })),
             #[cfg(test)]
             captured: Default::default(),
+            #[cfg(test)]
+            allow_authoritative_without_state: false,
         }
     }
 
@@ -548,33 +735,68 @@ impl DaemonAuditLog {
             writer: Arc::new(Mutex::new(AuditWriterState::default())),
             #[cfg(test)]
             captured: Default::default(),
+            #[cfg(test)]
+            allow_authoritative_without_state: true,
         }
     }
 
     /// Serialize and append one `DaemonEvent` JSONL line.
     ///
-    /// This method is best-effort: callers MUST NOT abort the surrounding
-    /// operation on audit failure. They should log the error (if any) and
-    /// continue.
+    /// The default method is best-effort. Callers of an authoritative event
+    /// must use [`Self::write_event_with_authority`] and propagate failure.
     ///
     /// The actual file append is serialized behind a single writer mutex
     /// so concurrent handler threads produce a valid, line-atomic JSONL
     /// stream. A day-boundary crossing triggers best-effort retention
     /// pruning of stale `daemon-events-*.jsonl` files.
     pub fn write_event(&self, event: &DaemonEvent) -> io::Result<()> {
+        self.write_event_with_authority(event, DaemonAuditAuthority::BestEffort)
+    }
+
+    /// Write an event with an explicit authority class.
+    pub fn write_event_with_authority(
+        &self,
+        event: &DaemonEvent,
+        authority: DaemonAuditAuthority,
+    ) -> io::Result<()> {
         let ts_ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis();
         let event_value = serde_json::to_value(event)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        let event_value = sanitize_daemon_event(event_value);
 
         let mut writer = self
             .writer
             .lock()
             .map_err(|_| io::Error::other("DaemonAuditLog writer mutex poisoned"))?;
-        if let Some(ref state_dir) = self.state_dir {
-            initialize_chain_from_disk(state_dir, &mut writer);
+        if writer.poisoned {
+            return Err(io::Error::other("daemon audit unavailable"));
+        }
+        if authority == DaemonAuditAuthority::Authoritative && self.state_dir.is_none() {
+            #[cfg(test)]
+            if self.allow_authoritative_without_state {
+                // The test-only capture sink is not a production durability
+                // path; it records the event for assertions without claiming
+                // host persistence.
+            } else {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "authoritative-daemon-audit-unavailable",
+                ));
+            }
+            #[cfg(not(test))]
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "authoritative-daemon-audit-unavailable",
+            ));
+        }
+        if let Some(ref state_dir) = self.state_dir
+            && let Err(error) = initialize_chain_from_disk(state_dir, &mut writer)
+        {
+            writer.poisoned = true;
+            return Err(error);
         }
 
         let prev_hash = writer
@@ -591,10 +813,29 @@ impl DaemonAuditLog {
             // First write of the process or a day-boundary crossing:
             // re-run retention pruning (best-effort) before appending.
             if writer.last_date.as_deref() != Some(today.as_str()) {
-                prune_old_audit_logs(state_dir, AUDIT_RETENTION_DAYS);
+                if let Err(error) = prune_old_audit_logs(state_dir, AUDIT_RETENTION_DAYS) {
+                    writer.poisoned = true;
+                    return Err(error);
+                }
                 writer.last_date = Some(today.clone());
             }
-            write_jsod2b_line_for_date(state_dir, &today, &line)?;
+            let path = daemon_audit_path(state_dir, &today);
+            let offset = match write_jsod2b_line_for_date(state_dir, &today, &line) {
+                Ok(offset) => offset,
+                Err(error) => {
+                    writer.poisoned = true;
+                    return Err(error);
+                }
+            };
+            if authority == DaemonAuditAuthority::Authoritative
+                && let Err(error) = sync_daemon_audit_path(state_dir, &today)
+            {
+                writer.poisoned = true;
+                if rollback_daemon_audit_line(&path, offset, state_dir).is_err() {
+                    return Err(io::Error::other("daemon audit rollback uncertain"));
+                }
+                return Err(error);
+            }
         }
 
         writer.last_hash = Some(record_hash);
@@ -607,6 +848,17 @@ impl DaemonAuditLog {
                 .push(line.trim_end_matches('\n').to_owned());
         }
         Ok(())
+    }
+
+    /// Return the policy classification for one event.
+    pub const fn authority_for(event: &DaemonEvent) -> DaemonAuditAuthority {
+        match event {
+            DaemonEvent::ResourcePlaneLifecycle { .. }
+            | DaemonEvent::WorkloadLauncher { .. }
+            | DaemonEvent::VmShutdownIntent { .. }
+            | DaemonEvent::VmShutdownOutcome { .. } => DaemonAuditAuthority::Authoritative,
+            _ => DaemonAuditAuthority::BestEffort,
+        }
     }
 
     /// Report explicit daemon audit sink health without changing
@@ -634,6 +886,93 @@ impl DaemonAuditLog {
             ),
         }
     }
+}
+
+fn sanitize_daemon_event(mut value: Value) -> Value {
+    fn walk(value: &mut Value, key: Option<&str>) {
+        match value {
+            Value::Object(object) => {
+                object.retain(|name, _| {
+                    !matches!(
+                        name.as_str(),
+                        "peer_uid" | "peer_pid" | "pid" | "pidfd" | "handle"
+                    )
+                });
+                for (name, child) in object {
+                    let propagated = key.filter(|parent| sensitive_key(parent)).unwrap_or(name);
+                    walk(child, Some(propagated));
+                }
+            }
+            Value::Array(values) => {
+                for child in values {
+                    walk(child, key);
+                }
+            }
+            Value::String(text)
+                if (key.is_some_and(sensitive_key)
+                    || text.contains('/')
+                    || text.chars().any(char::is_whitespace))
+                    && !is_canonical_digest(text)
+                    && !is_closed_semantic_token(text) =>
+            {
+                *text = d2b_contracts::v3::canonical_digest(
+                    "d2b:daemon-audit-redaction:v1",
+                    text.as_bytes(),
+                );
+            }
+            _ => {}
+        }
+    }
+
+    walk(&mut value, None);
+    value
+}
+
+fn sensitive_key(key: &str) -> bool {
+    matches!(
+        key,
+        "target"
+            | "item_id"
+            | "operation_id"
+            | "exec_id"
+            | "session_digest"
+            | "operation_digest"
+            | "vm"
+            | "zone"
+            | "path"
+            | "argv"
+            | "env"
+            | "socket"
+            | "credential"
+            | "secret"
+            | "message"
+            | "error"
+    ) || key.ends_with("_uid")
+        || key.ends_with("_path")
+        || key.ends_with("_name")
+}
+
+fn is_canonical_digest(value: &str) -> bool {
+    d2b_audit::is_canonical_digest(value)
+}
+
+fn is_closed_semantic_token(value: &str) -> bool {
+    matches!(
+        value,
+        "unknown"
+            | "launch"
+            | "create"
+            | "cancel"
+            | "created"
+            | "cancelling"
+            | "already-terminal"
+            | "error"
+            | "refused"
+            | "strict"
+            | "no-wait-api"
+            | "host"
+            | "workload"
+    )
 }
 
 /// Probe daemon audit sink health without writing an audit record.
@@ -931,25 +1270,27 @@ fn compute_record_hash(
     Ok(hex_lower(&hasher.finalize()))
 }
 
-fn initialize_chain_from_disk(state_dir: &Path, writer: &mut AuditWriterState) {
+const DAEMON_AUDIT_CHECKPOINT_FILE: &str = "daemon-audit-checkpoint.json";
+const MAX_DAEMON_AUDIT_FILES: usize = 4096;
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DaemonAuditCheckpoint {
+    anchor: String,
+    pending: bool,
+}
+
+fn initialize_chain_from_disk(state_dir: &Path, writer: &mut AuditWriterState) -> io::Result<()> {
     if writer.initialized_from_disk {
-        return;
+        return Ok(());
     }
-    writer.last_hash = last_daemon_record_hash_on_disk(state_dir);
+    let (last_hash, _) = verify_daemon_audit_files(state_dir)?;
+    writer.last_hash = (last_hash != DAEMON_AUDIT_GENESIS_HASH).then_some(last_hash);
     writer.initialized_from_disk = true;
+    Ok(())
 }
 
-fn last_daemon_record_hash_on_disk(state_dir: &Path) -> Option<String> {
-    let mut files = discover_daemon_daily_files(state_dir).ok()?;
-    files.sort();
-    for path in files.iter().rev() {
-        if let Some(hash) = last_daemon_record_hash_in_file(path) {
-            return Some(hash);
-        }
-    }
-    None
-}
-
+#[cfg(test)]
 fn last_daemon_record_hash_in_file(path: &Path) -> Option<String> {
     let mut file = fs::File::open(path).ok()?;
     let mut position = file.seek(SeekFrom::End(0)).ok()?;
@@ -999,6 +1340,7 @@ fn last_daemon_record_hash_in_file(path: &Path) -> Option<String> {
     }
 }
 
+#[cfg(test)]
 fn record_hash_from_reversed_line(reversed_line: &[u8]) -> Option<String> {
     let mut line = reversed_line.to_vec();
     line.reverse();
@@ -1013,24 +1355,123 @@ fn record_hash_from_reversed_line(reversed_line: &[u8]) -> Option<String> {
     is_sha256_hex(hash).then(|| hash.to_owned())
 }
 
+fn checkpoint_anchor(state_dir: &Path) -> io::Result<String> {
+    let path = state_dir.join(DAEMON_AUDIT_CHECKPOINT_FILE);
+    match fs::read(path) {
+        Ok(bytes) => {
+            let checkpoint: DaemonAuditCheckpoint = serde_json::from_slice(&bytes)
+                .map_err(|_| io::Error::other("daemon-audit-checkpoint-invalid"))?;
+            if checkpoint.pending || !is_sha256_hex(&checkpoint.anchor) {
+                return Err(io::Error::other("daemon-audit-checkpoint-pending"));
+            }
+            Ok(checkpoint.anchor)
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            Ok(DAEMON_AUDIT_GENESIS_HASH.to_owned())
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn write_checkpoint(state_dir: &Path, anchor: &str, pending: bool) -> io::Result<()> {
+    let path = state_dir.join(DAEMON_AUDIT_CHECKPOINT_FILE);
+    let next = state_dir.join(format!("{DAEMON_AUDIT_CHECKPOINT_FILE}.next"));
+    let bytes = serde_json::to_vec(&DaemonAuditCheckpoint {
+        anchor: anchor.to_owned(),
+        pending,
+    })
+    .map_err(io::Error::other)?;
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&next)?;
+    file.write_all(&bytes)?;
+    file.sync_all()?;
+    fs::rename(next, path)?;
+    sync_daemon_audit_dir(state_dir)
+}
+
+type DaemonAuditFileTails = Vec<(PathBuf, Option<String>)>;
+
+fn verify_daemon_audit_files(state_dir: &Path) -> io::Result<(String, DaemonAuditFileTails)> {
+    let files = discover_daemon_daily_files(state_dir)?;
+    let mut expected = checkpoint_anchor(state_dir)?;
+    let mut tails = Vec::with_capacity(files.len());
+    for path in files {
+        let file = fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW)
+            .open(&path)?;
+        let mut reader = BufReader::new(file);
+        let mut tail = None;
+        while let Some(line) = read_bounded_daemon_line(&mut reader)? {
+            let trimmed = line.trim_end_matches(['\r', '\n']);
+            if trimmed.is_empty() {
+                continue;
+            }
+            let record_hash = validate_daemon_audit_chain_line(trimmed, &expected)
+                .map_err(|_| io::Error::other("daemon-audit-chain-invalid"))?;
+            expected = record_hash.clone();
+            tail = Some(record_hash);
+        }
+        tails.push((path, tail));
+    }
+    Ok((expected, tails))
+}
+
+fn read_bounded_daemon_line<R: BufRead>(reader: &mut R) -> io::Result<Option<String>> {
+    let mut bytes = Vec::new();
+    loop {
+        let chunk = reader.fill_buf()?;
+        if chunk.is_empty() {
+            return if bytes.is_empty() {
+                Ok(None)
+            } else {
+                Err(io::Error::other("daemon-audit-line-truncated"))
+            };
+        }
+        let newline = chunk.iter().position(|byte| *byte == b'\n');
+        let take = newline.map_or(chunk.len(), |index| index + 1);
+        if bytes.len().saturating_add(take) > MAX_DAEMON_AUDIT_TAIL_LINE_BYTES {
+            return Err(io::Error::other("daemon-audit-line-limit"));
+        }
+        bytes.extend_from_slice(&chunk[..take]);
+        reader.consume(take);
+        if newline.is_some() {
+            return String::from_utf8(bytes)
+                .map(Some)
+                .map_err(|_| io::Error::other("daemon-audit-line-invalid"));
+        }
+    }
+}
+
 fn discover_daemon_daily_files(state_dir: &Path) -> io::Result<Vec<PathBuf>> {
     let entries = match fs::read_dir(state_dir) {
         Ok(it) => it,
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(err) => return Err(err),
     };
-    let mut paths: Vec<PathBuf> = entries
-        .filter_map(Result::ok)
-        .filter_map(|entry| {
-            let name = entry.file_name();
-            let name = name.to_str()?;
-            let date = name
-                .strip_prefix("daemon-events-")
-                .and_then(|rest| rest.strip_suffix(".jsonl"))?;
-            parse_ymd(date)?;
-            Some(entry.path())
-        })
-        .collect();
+    let mut paths = Vec::new();
+    for (count, entry) in entries.enumerate() {
+        if count >= MAX_DAEMON_AUDIT_FILES {
+            return Err(io::Error::other("daemon-audit-file-scan-limit"));
+        }
+        let entry = entry?;
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        let Some(date) = name
+            .strip_prefix("daemon-events-")
+            .and_then(|rest| rest.strip_suffix(".jsonl"))
+        else {
+            continue;
+        };
+        if parse_ymd(date).is_some() {
+            paths.push(entry.path());
+        }
+    }
     paths.sort();
     Ok(paths)
 }
@@ -1183,35 +1624,73 @@ fn io_error_kind(kind: io::ErrorKind) -> &'static str {
     }
 }
 
-fn write_jsod2b_line_for_date(state_dir: &Path, today: &str, line: &str) -> io::Result<()> {
-    let path = state_dir.join(format!("daemon-events-{today}.jsonl"));
+fn daemon_audit_path(state_dir: &Path, today: &str) -> PathBuf {
+    state_dir.join(format!("daemon-events-{today}.jsonl"))
+}
+
+fn write_jsod2b_line_for_date(state_dir: &Path, today: &str, line: &str) -> io::Result<u64> {
+    let path = daemon_audit_path(state_dir, today);
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
     let mut file = fs::OpenOptions::new()
         .create(true)
         .append(true)
+        .read(true)
         .open(&path)?;
-    file.write_all(line.as_bytes())
+    let offset = file.metadata()?.len();
+    if let Err(error) = file.write_all(line.as_bytes()) {
+        if rollback_daemon_audit_line(&path, offset, state_dir).is_err() {
+            return Err(io::Error::other("daemon audit rollback uncertain"));
+        }
+        return Err(error);
+    }
+    Ok(offset)
 }
 
-/// Best-effort retention: delete `daemon-events-YYYY-MM-DD.jsonl` files
-/// whose date is older than `retention_days` before today (UTC). All
-/// errors are swallowed - retention must never abort an audit write.
-fn prune_old_audit_logs(state_dir: &Path, retention_days: i64) {
+fn rollback_daemon_audit_line(path: &Path, offset: u64, state_dir: &Path) -> io::Result<()> {
+    let file = fs::OpenOptions::new().read(true).write(true).open(path)?;
+    file.set_len(offset)?;
+    file.sync_all()?;
+    sync_daemon_audit_dir(state_dir)
+}
+
+fn sync_daemon_audit_path(state_dir: &Path, today: &str) -> io::Result<()> {
+    let path = daemon_audit_path(state_dir, today);
+    fs::OpenOptions::new().read(true).open(&path)?.sync_all()?;
+    sync_daemon_audit_dir(state_dir)
+}
+
+fn sync_daemon_audit_dir(state_dir: &Path) -> io::Result<()> {
+    fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_CLOEXEC | libc::O_DIRECTORY | libc::O_NOFOLLOW)
+        .open(state_dir)?
+        .sync_all()
+}
+
+/// Delete owned daily files older than `retention_days` before today (UTC).
+/// The checkpoint is advanced before removal so the remaining chain still
+/// verifies from the retained anchor after a restart.
+fn prune_old_audit_logs(state_dir: &Path, retention_days: i64) -> io::Result<()> {
+    if retention_days < 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "daemon-audit-retention-invalid",
+        ));
+    }
     let now_secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs() as i64;
     let cutoff = ymd_from_unix(now_secs - retention_days * 86_400);
-    let Ok(entries) = fs::read_dir(state_dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let name = entry.file_name();
-        let Some(name) = name.to_str() else {
-            continue;
-        };
+    let files = discover_daemon_daily_files(state_dir)?;
+    let mut candidates = Vec::new();
+    for path in files {
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| io::Error::other("daemon-audit-file-name-invalid"))?;
         let Some(date) = name
             .strip_prefix("daemon-events-")
             .and_then(|rest| rest.strip_suffix(".jsonl"))
@@ -1221,9 +1700,42 @@ fn prune_old_audit_logs(state_dir: &Path, retention_days: i64) {
         if let Some(parsed) = parse_ymd(date)
             && parsed < cutoff
         {
-            let _ = fs::remove_file(entry.path());
+            candidates.push(path);
         }
     }
+    if candidates.is_empty() {
+        return Ok(());
+    }
+    // Verify every retained and candidate file from the current checkpoint
+    // before deriving the new anchor. A tail-only scan can otherwise advance
+    // retention past an earlier broken link. If an old file is already
+    // unreadable, remove only that stale portion without advancing the
+    // checkpoint; the retained chain remains fail-closed for the next open.
+    let verified_tails = match verify_daemon_audit_files(state_dir) {
+        Ok((_, tails)) => tails,
+        Err(_) => {
+            for path in &candidates {
+                let _ = fs::remove_file(path);
+            }
+            sync_daemon_audit_dir(state_dir)?;
+            return Ok(());
+        }
+    };
+    let mut anchor = checkpoint_anchor(state_dir)?;
+    for path in &candidates {
+        if let Some((_, Some(tail))) = verified_tails
+            .iter()
+            .find(|(verified_path, _)| verified_path == path)
+        {
+            anchor = tail.clone();
+        }
+    }
+    write_checkpoint(state_dir, &anchor, true)?;
+    for path in candidates {
+        fs::remove_file(path)?;
+    }
+    sync_daemon_audit_dir(state_dir)?;
+    write_checkpoint(state_dir, &anchor, false)
 }
 
 /// Parse a `YYYY-MM-DD` stamp into a comparable `(year, month, day)`
@@ -1373,15 +1885,17 @@ mod tests {
             Some("api_ready_timeout"),
             "event.kind must be 'api_ready_timeout'",
         );
-        assert_eq!(
-            event.get("vm").and_then(|v| v.as_str()),
-            Some("vm-a"),
-            "event.vm must match",
+        assert!(
+            event
+                .get("vm")
+                .and_then(|v| v.as_str())
+                .is_some_and(|v| v.starts_with("sha256:")),
+            "event.vm must remain opaque",
         );
         assert_eq!(
             event.get("runner").and_then(|v| v.as_str()),
             Some("ch-runner"),
-            "event.runner must match",
+            "event.runner is a closed stable descriptor",
         );
         assert_eq!(
             event.get("elapsed_secs").and_then(|v| v.as_u64()),
@@ -1571,15 +2085,19 @@ mod tests {
             let event = record.get("event").expect("event object");
             let obj = event.as_object().expect("event is an object");
             // Closed key set: kind + the leak-safe fields only. No `session`,
-            // `handle`, `argv`, `env`, `cwd`, or stdio keys may appear.
+            // `handle`, `argv`, `env`, `cwd`, peer claims, or stdio keys may appear.
             for key in obj.keys() {
                 assert!(
-                    matches!(key.as_str(), "kind" | "vm" | "peer_uid" | "tty"),
+                    matches!(key.as_str(), "kind" | "vm" | "tty"),
                     "exec lifecycle audit exposed an unexpected key {key:?}: {line}"
                 );
             }
-            assert_eq!(event.get("vm").and_then(|v| v.as_str()), Some("corp-vm"));
-            assert_eq!(event.get("peer_uid").and_then(|v| v.as_u64()), Some(1000));
+            assert!(
+                event
+                    .get("vm")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|v| v.starts_with("sha256:"))
+            );
         }
 
         let established = serde_json::from_str::<serde_json::Value>(&records[0])
@@ -1596,7 +2114,7 @@ mod tests {
             terminated["event"]["kind"].as_str(),
             Some("guest_control_exec_terminated")
         );
-        // The terminate event has no tty field (only vm + peer_uid).
+        // The terminate event has no tty field (only the redacted vm identity).
         assert!(terminated["event"].get("tty").is_none());
     }
 
@@ -1651,7 +2169,6 @@ mod tests {
                 "force",
                 "kind",
                 "operation_digest",
-                "peer_uid",
                 "provider",
                 "result",
                 "session_digest",
@@ -1717,16 +2234,22 @@ mod tests {
                 assert!(
                     matches!(
                         key.as_str(),
-                        "kind" | "vm" | "peer_uid" | "action" | "result" | "exec_id"
+                        "kind" | "vm" | "action" | "result" | "exec_id"
                     ),
                     "detached exec audit exposed unexpected key {key:?}: {line}"
                 );
             }
-            assert_eq!(event.get("vm").and_then(|v| v.as_str()), Some("corp-vm"));
-            assert_eq!(event.get("peer_uid").and_then(|v| v.as_u64()), Some(1000));
-            assert_eq!(
-                event.get("exec_id").and_then(|v| v.as_str()),
-                Some("exec-opaque-1")
+            assert!(
+                event
+                    .get("vm")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|v| v.starts_with("sha256:"))
+            );
+            assert!(
+                event
+                    .get("exec_id")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|v| v.starts_with("sha256:"))
             );
         }
 
@@ -1858,12 +2381,8 @@ mod tests {
                 mode: "strict".to_owned(),
             })
             .expect_err("blocked destination must return an io error");
-        assert!(matches!(
-            error.kind(),
-            io::ErrorKind::AlreadyExists
-                | io::ErrorKind::NotADirectory
-                | io::ErrorKind::PermissionDenied
-        ));
+        assert_eq!(error.kind(), io::ErrorKind::Other);
+        assert_eq!(error.to_string(), "daemon audit unavailable");
         assert!(log.captured.lock().expect("captured").is_empty());
     }
 
@@ -1922,6 +2441,21 @@ mod tests {
             .expect("read temp dir")
             .count();
         assert_eq!(count, 0, "no-op log must not write any files");
+    }
+
+    #[test]
+    fn test_capture_authoritative_events_are_not_silently_dropped() {
+        let log = DaemonAuditLog::no_op();
+        let result = log.write_event_with_authority(
+            &DaemonEvent::ResourcePlaneLifecycle {
+                zone: "work".to_owned(),
+                action: ResourcePlaneAction::Start,
+                result: ResourcePlaneResult::Ready,
+            },
+            DaemonAuditAuthority::Authoritative,
+        );
+        assert!(result.is_ok());
+        assert_eq!(log.captured.lock().unwrap().len(), 1);
     }
 
     #[test]
@@ -2034,7 +2568,8 @@ mod tests {
         };
         let rendered = serde_json::to_string(&event).expect("serialize launch event");
         assert!(rendered.contains("\"kind\":\"workload_launcher\""));
-        assert!(rendered.contains("\"peer_uid\":1000"));
+        assert!(!rendered.contains("\"peer_uid\""));
+        assert!(!rendered.contains("browser.host.d2b"));
         assert!(rendered.contains("\"provider\":\"unsafe-local\""));
         for canary in [
             "private-argv-canary",
@@ -2062,10 +2597,37 @@ mod tests {
         };
         let rendered = serde_json::to_string(&event).unwrap();
         assert!(rendered.contains("\"provider\":\"local-vm\""));
-        assert!(rendered.contains("\"operation_id\":\"launch-2\""));
-        assert!(rendered.contains("\"exec_id\":\"0123456789abcdef0123456789abcdef\""));
+        assert!(rendered.contains("\"operation_id\":\"sha256:"));
+        assert!(rendered.contains("\"exec_id\":\"sha256:"));
+        assert!(!rendered.contains("browser.work.d2b"));
         assert!(!rendered.contains("argv"));
         assert!(!rendered.contains("environment"));
         assert!(!rendered.contains("cwd"));
+    }
+
+    #[test]
+    fn daemon_audit_write_redacts_identity_and_attacker_text() {
+        let log = DaemonAuditLog::no_op();
+        let event = DaemonEvent::WorkloadLauncher {
+            target: "target-secret-canary".to_owned(),
+            item_id: "item-secret-canary".to_owned(),
+            operation_id: "operation-secret-canary".to_owned(),
+            exec_id: Some("handle-secret-canary".to_owned()),
+            peer_uid: 1000,
+            provider: WorkloadLaunchProvider::UnsafeLocal,
+            result: WorkloadLaunchResult::Committed,
+        };
+        assert!(!format!("{event:?}").contains("target-secret-canary"));
+        log.write_event(&event).unwrap();
+        let line = log.captured.lock().unwrap().last().cloned().unwrap();
+        for canary in [
+            "target-secret-canary",
+            "item-secret-canary",
+            "operation-secret-canary",
+            "handle-secret-canary",
+        ] {
+            assert!(!line.contains(canary), "{canary}: {line}");
+        }
+        assert!(!line.contains("\"peer_uid\""));
     }
 }

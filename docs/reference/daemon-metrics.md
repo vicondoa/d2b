@@ -1,51 +1,21 @@
-# Daemon metrics (Prometheus scrape)
+# Daemon metrics registry
 
 **Diataxis category:** reference.
 
-> Canonical metric inventory exposed by `d2bd`.
+> Canonical metric inventory maintained by `d2bd`.
 > Implementation: [`packages/d2bd/src/metrics.rs`](../../packages/d2bd/src/metrics.rs).
 > Policy coverage:
 > [`packages/d2b-contract-tests/tests/policy_metrics.rs`](../../packages/d2b-contract-tests/tests/policy_metrics.rs).
 > This is advisory until the fixture-contract lane is enabled and promoted.
 
-> **v1.2 status - scrapable endpoint deferred.** The in-process
-> registry described below is wired and exercised by the daemon
-> (`broker-fallback` and friends record correctly), but the actual
-> scrapable HTTP `/metrics` listener is **deferred to a later release** -
-> see [`TODO.md`](../../TODO.md) "scrapable /metrics endpoint for
-> d2bd". An attempt to multiplex HTTP through the public
-> `SOCK_SEQPACKET` socket was reverted because Prometheus scrapers
-> require `SOCK_STREAM`. A later release will land a dedicated
-> `SOCK_STREAM` metrics socket (loopback) per the same
-> trust model as the broker. Until then `metrics-endpoint` in
-> `d2b host doctor` warns by design, and the URL/port shape
-> below documents the *intended* contract - not a currently
-> reachable endpoint.
+## Endpoint status
 
-## Endpoint shape
-
-`d2bd` exposes a **Prometheus text-format scrape endpoint**
-(content-type `text/plain; version=0.0.4`) on the daemon's public
-socket. The request line is `GET /metrics HTTP/1.1`. The response
-body is the registry rendered in
-[exposition format v0.0.4](https://prometheus.io/docs/instrumenting/exposition_formats/#text-based-format).
-
-Why scrape and not OTLP push:
-
-- The daemon is long-lived and already owns a listening socket; an
-  additional scrape path is zero new sockets and zero new
-  capabilities.
-- A scrape collector decides cardinality + retention policy
-  out-of-band, so the daemon doesn't need a remote-write client
-  buffer, retry loop, or backoff state.
-- The observability pipeline's OTel Collector runs a scrape receiver
-  for this endpoint (see
-  [`docs/reference/components-observability.md`](./components-observability.md))
-  so wiring the scrape side is a config-only change.
-
-OTLP push is intentionally *out of scope* for the daemon process
-itself. Operators who need OTLP metrics shipping run an OTel Collector
-pipeline that scrapes this endpoint and exports OTLP downstream.
+The daemon's in-process registry is wired and exercised, but `d2bd` does not
+currently expose an HTTP `/metrics` listener. The registry is a library
+surface for the daemon and its tests; operators must use the configured
+observability Provider until a dedicated, authenticated scrape transport is
+introduced. `d2b host doctor` reports the endpoint as unavailable rather than
+claiming that the public `SOCK_SEQPACKET` socket is an HTTP endpoint.
 
 ## Metric inventory
 
@@ -57,17 +27,15 @@ declared schema; see "Cardinality bounds" below.
 ### `d2b_daemon_vm_state`
 
 - **Type:** gauge
-- **Labels:** `vm`, `state`
+- **Labels:** `state`
 - **State values:** `running`, `stopped`, `degraded`
-- **Meaning:** Per-VM lifecycle state. Exactly one series per `(vm,
-  state)` tuple is set to `1`; the other tuples for the same `vm`
-  are `0`. Operators graph `sum by (state) (...)` for an at-a-glance
-  fleet view.
+- **Meaning:** Aggregate lifecycle state. Resource identity is kept out
+  of metric labels; operators graph `sum by (state) (...)`.
 
 ### `d2b_daemon_vm_start_duration_seconds`
 
 - **Type:** histogram
-- **Labels:** `vm`, `outcome`
+- **Labels:** `outcome`
 - **Outcome values:** `success`, `failure`
 - **Buckets (seconds):** `0.5, 1, 2, 5, 10, 20, 30, 60, 120, 300`
 - **Meaning:** Wall-clock duration of `d2b guest start <name>` as
@@ -119,7 +87,7 @@ declared schema; see "Cardinality bounds" below.
 ### `d2b_daemon_vm_shutdown_total`
 
 - **Type:** counter
-- **Labels:** `vm`, `vmm`, `outcome`
+- **Labels:** `vmm`, `outcome`
 - **VMM values:** `cloud_hypervisor`, `qemu_media`, `unknown`
 - **Outcome values:** bounded daemon enum such as `clean_guest_shutdown`,
   `clean_vmm_cleanup`, `api_unavailable`, `timeout_exceeded`,
@@ -131,7 +99,7 @@ declared schema; see "Cardinality bounds" below.
 ### `d2b_daemon_vm_shutdown_duration_seconds`
 
 - **Type:** histogram
-- **Labels:** `vm`, `vmm`, `outcome`
+- **Labels:** `vmm`, `outcome`
 - **Buckets (seconds):** `0.5, 1, 2, 5, 10, 30, 60, 90, 120, 300, 600`
 - **Meaning:** Elapsed provider graceful-shutdown wait time. Explicit
   force and config-disabled paths record near-zero observations with their
@@ -156,9 +124,9 @@ declared schema; see "Cardinality bounds" below.
 ### `d2b_daemon_vm_degraded`
 
 - **Type:** gauge
-- **Labels:** `vm`, `reason`
+- **Labels:** `reason`
 - **Reason values:** currently `activation_pending`
-- **Meaning:** Per-VM degraded-state indicator for bounded daemon reasons
+- **Meaning:** Aggregate degraded-state indicator for bounded daemon reasons
   that should be visible to operators even when lifecycle state remains
   `Running` or `Stopped`. Activation sets this gauge while a host pending
   marker is unresolved and clears it after a successful commit or
@@ -167,21 +135,16 @@ declared schema; see "Cardinality bounds" below.
 ### `d2b_daemon_ownership_drift_total`
 
 - **Type:** counter
-- **Labels:** `vm`
-- **Meaning:** Number of times the daemon's ownership preflight
-  detected drift on a per-VM state path (uid/gid/mode mismatch on
-  files under `${stateDir}/vms/<vm>/`). A non-zero counter is
-  always a remediation signal.
+- **Labels:** *(none)*
+- **Meaning:** Number of ownership preflight drift observations. Resource
+  identity is intentionally absent from labels.
 
 ### `d2b_daemon_ssh_host_key_drift_total`
 
 - **Type:** counter
-- **Labels:** `vm`
-- **Meaning:** Number of times the daemon's SSH host-key preflight
-  observed a mismatch between the framework-managed
-  `${keysDir}/<vm>_ed25519.pub` and the guest's running host key.
-  Increment paths are documented in
-  [`docs/reference/ssh-host-key-preflight.md`](./ssh-host-key-preflight.md).
+- **Labels:** *(none)*
+- **Meaning:** Number of SSH host-key preflight drift observations.
+  Resource identity is intentionally absent from labels.
 
 ### `d2b_daemon_pidfd_table_size`
 
@@ -286,20 +249,6 @@ terminal handles, no terminal stream ids, and no provider resource ids). The
 [observability panel's cardinality + PII rules](../../AGENTS.md#default-observability-panel)
 apply.
 
-## Scrape configuration example
-
-```yaml
-receivers:
-  prometheus:
-    config:
-      scrape_configs:
-        - job_name: d2bd
-          scrape_interval: 30s
-          metrics_path: /metrics
-          static_configs:
-            - targets: ["127.0.0.1:9101"]
-```
-
-The 30-second scrape interval is the recommended default; faster
-scrapes (5-10 s) are appropriate during incident investigation but
-inflate backend storage proportionally.
+No scrape configuration is provided while the daemon has no authenticated
+metrics transport. A future transport must define its socket trust boundary
+before a collector configuration is documented here.

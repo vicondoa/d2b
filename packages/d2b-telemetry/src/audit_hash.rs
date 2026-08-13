@@ -3,7 +3,15 @@
 use sha2::{Digest, Sha256};
 
 const PREFIX: &str = "sha256:";
-const HEX_BYTES: usize = 64;
+
+/// Return whether `value` is exactly the canonical lower-case SHA-256 form.
+///
+/// Keeping this check next to [`AuditHash`] prevents individual audit,
+/// telemetry, and broker surfaces from accepting truncated or upper-case
+/// digests that cannot safely participate in joins.
+pub fn is_canonical_digest(value: &str) -> bool {
+    d2b_contracts::v3::is_canonical_digest(value)
+}
 
 /// A validated SHA-256 digest string.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
@@ -14,14 +22,7 @@ impl AuditHash {
     /// Parse the canonical `sha256:<lowercase hex>` representation.
     pub fn parse(value: impl Into<String>) -> Result<Self, AuditHashError> {
         let value = value.into();
-        let Some(hex) = value.strip_prefix(PREFIX) else {
-            return Err(AuditHashError::BadShape);
-        };
-        if hex.len() != HEX_BYTES
-            || !hex
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
-        {
+        if !is_canonical_digest(&value) {
             return Err(AuditHashError::BadShape);
         }
         Ok(Self(value))

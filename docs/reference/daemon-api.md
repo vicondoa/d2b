@@ -658,12 +658,12 @@ per-date file under `/var/lib/d2b/audit/`:
 - mode: `0640`
 - owner/group: `root:d2bd`
 - append-only via a pre-opened `O_APPEND` fd held by the broker
-- retention: 14 days of daily files by default; override via
+- retention: 30 days of daily files by default; override via
   `d2b.site.audit.retentionDays` (set to `0` to disable pruning
   entirely). **Reserved**: the broker prune-on-rotate loop is shipping,
   but the NixOS module does not yet thread the option value through to
   the broker invocation (`daemon-config.json` → `d2bd` → broker
-  spawn args). Until then, the broker uses its 14-day default regardless
+  spawn args). Until then, the broker uses its 30-day default regardless
   of NixOS overrides.
 
 Broker caller-role values such as `peer_role = "d2b-launcher"` are
@@ -671,14 +671,14 @@ stable audit/authz class labels, not Unix group names. See
 [`naming-conventions.md` § "Broker caller-role audit labels"](naming-conventions.md#broker-caller-role-audit-labels).
 
 The `audit` CLI command does **not** read those files directly. Instead it
-sends `ExportBrokerAudit { since, filter }` to `d2bd` over the
+sends typed paginated `ExportBrokerAudit { since, filter, cursor, limit }` to `d2bd` over the
 public socket. The daemon authorizes the caller against
 `d2b.site.adminUsers`; if the caller is allowed, the daemon forwards
 that request to the broker over `/run/d2b/priv.sock` and streams
-back redacted log entries. The broker enumerates every
+back typed redacted log entries. The broker enumerates every
 `broker-YYYY-MM-DD.jsonl` file in the audit directory in chronological
-order, applies the `since` and `filter` substrings, and returns the
-concatenated lines.
+order, applies the `since` and `filter` substrings, and returns a bounded
+page with an opaque cursor. Pages stay below the 1 MiB private frame limit.
 
 This keeps the read path narrow:
 
@@ -692,6 +692,11 @@ the daemon authorization layer. The systemd `ExecStop` hook connects as uid `0`
 and receives the narrow `HostShutdown` role; the daemon permits only `vmStop`
 for that role and forwards the request to the broker with the normal lifecycle
 audit path. Other admin-only daemon verbs remain denied for `HostShutdown`.
+
+Every broker envelope also carries an optional typed `auditJoin` containing
+canonical `zoneId` and `operationIdentity` digests. Audit records use these
+explicit identities; `scopeId` remains an operational bundle selector and is
+never used to infer a Zone join key.
 
 USBIP bind audit records may include `deviceIdentity` for privileged
 forensics. That projection keeps raw serial descriptors out of the log:
@@ -709,7 +714,7 @@ do not need systemd credentials or a key-read IPC path.
 
 **Retention**. The broker now prunes
 daily-rotated files older than `d2b.site.audit.retentionDays`
-(default 14) on every day-boundary rotation in `append_to_daily` and
+(default 30) on every day-boundary rotation in `append_to_daily` and
 again on `AuditLog::open` so a long-stopped daemon catches up. Pruning
 is best-effort - failures are logged but do not break the audit-write
 path. Filename is the source of truth (`broker-YYYY-MM-DD.jsonl`); we

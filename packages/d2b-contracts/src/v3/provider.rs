@@ -282,14 +282,7 @@ impl ArtifactDigest {
     /// Parse exactly `sha256:` followed by 64 lower-case hex digits.
     pub fn parse(value: impl Into<String>) -> Result<Self, ProviderContractError> {
         let value = value.into();
-        let hex = value
-            .strip_prefix("sha256:")
-            .ok_or(ProviderContractError::InvalidPrimitive)?;
-        if hex.len() != 64
-            || !hex
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
-        {
+        if !super::resource_schema::is_canonical_digest(&value) {
             return Err(ProviderContractError::InvalidPrimitive);
         }
         Ok(Self(value))

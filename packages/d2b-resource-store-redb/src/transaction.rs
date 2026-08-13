@@ -1,5 +1,6 @@
 //! Persisted store DTOs, recovery validation, and crash-safe write transactions.
 
+use d2b_audit::{AuditHash, OperationIdentity};
 use d2b_contracts::v3::identity::STANDARD_RESOURCE_TYPES;
 use d2b_contracts::v3::{
     CanonicalJsonValue, ControllerGeneration, FinalizerId, RESOURCE_ENVELOPE_DOMAIN_TAG,
@@ -15,6 +16,7 @@ use redb::{
     Database, Durability, ReadableDatabase, ReadableTable, ReadableTableMetadata, TableDefinition,
 };
 use serde::{Deserialize, Serialize};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::{DecodedKey, KeyComponent, KeySpace, ValueKind, encode_key, encode_value};
 use d2b_resource_store::mutation_seal::OpenedMutation;
@@ -109,6 +111,8 @@ pub(crate) struct OperationRecord {
     pub resource_uids: Vec<String>,
     pub resources: Vec<OperationResourceRecord>,
     pub outcome: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<String>,
     pub accepted_revision: u64,
     pub finished_revision: u64,
     /// A durable post-commit audit outbox entry.
@@ -147,10 +151,16 @@ pub(crate) struct OperationResourceRecord {
 pub(crate) struct AuditOutboxRecord {
     pub zone: String,
     pub operation_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation_identity: Option<OperationIdentity>,
     pub correlation_id: String,
     pub subject_digest: String,
     pub policy_revision: u64,
     pub resulting_revision: u64,
+    /// Whether a matching broker durability record is required before this
+    /// outbox may be acknowledged.
+    #[serde(default)]
+    pub requires_broker: bool,
     pub mutations: Vec<AuditOutboxMutation>,
 }
 
@@ -159,10 +169,31 @@ pub(crate) struct AuditOutboxRecord {
 pub(crate) struct AuditOutboxMutation {
     pub verb: String,
     pub resource_type: String,
-    pub resource_uid: String,
+    #[serde(default)]
+    pub resource_uid: Option<String>,
     pub target_digest: String,
     pub generation: u64,
     pub expected_revision: u64,
+    #[serde(default)]
+    pub mutation_id: String,
+    #[serde(default)]
+    pub ordinal: u32,
+    #[serde(default)]
+    pub timestamp_ms: u64,
+    #[serde(default = "default_audit_outcome")]
+    pub outcome: String,
+    #[serde(default)]
+    pub error_code: Option<String>,
+    /// Hash that preceded this mutation's durable audit record.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_hash: Option<AuditHash>,
+    /// Durable hash of this mutation's audit record, when already appended.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub record_hash: Option<AuditHash>,
+}
+
+fn default_audit_outcome() -> String {
+    "ok".to_owned()
 }
 
 /// Closed resource mutation event persisted in the revision log.
@@ -392,6 +423,7 @@ fn audit_outbox_for(
     verified: &VerifiedWrite,
     resources: &[StoredResource],
     resulting_revision: u64,
+    timestamp_ms: u64,
 ) -> Result<AuditOutboxRecord, StoreError> {
     if verified.mutations.len() != resources.len() {
         return Err(integrity("audit-outbox-resource-count-mismatch"));
@@ -400,32 +432,179 @@ fn audit_outbox_for(
         .mutations
         .iter()
         .zip(resources)
-        .map(|(prepared, resource)| {
+        .enumerate()
+        .map(|(ordinal, (prepared, resource))| {
             let mutation = prepared.mutation();
+            let resource_type = resource.resource_ref.resource_type().as_str().to_owned();
+            let target_digest = crate::audit::opaque_digest(&mutation.target.to_canonical_string());
             AuditOutboxMutation {
                 verb: mutation_audit_verb(mutation.kind).to_owned(),
-                resource_type: resource.resource_ref.resource_type().as_str().to_owned(),
-                resource_uid: resource.uid.as_str().to_owned(),
-                target_digest: crate::audit::opaque_digest(&mutation.target.to_canonical_string()),
+                resource_type,
+                resource_uid: Some(resource.uid.as_str().to_owned()),
+                target_digest,
                 generation: resource.generation.get(),
                 expected_revision: match mutation.expected {
                     ExpectedRevision::CreateAbsent => 0,
                     ExpectedRevision::Exact(revision) => revision.get(),
                 },
+                mutation_id: audit_mutation_id(
+                    &verified.operation.operation_id,
+                    ordinal as u32,
+                    resulting_revision,
+                ),
+                ordinal: ordinal as u32,
+                timestamp_ms,
+                outcome: "ok".to_owned(),
+                error_code: None,
+                previous_hash: None,
+                record_hash: None,
             }
         })
         .collect::<Vec<_>>();
     Ok(AuditOutboxRecord {
         zone: verified.authorization.zone.as_str().to_owned(),
         operation_id: verified.operation.operation_id.clone(),
+        operation_identity: Some(
+            OperationIdentity::derive(&verified.operation.operation_id)
+                .map_err(|_| integrity("audit-operation-identity-invalid"))?,
+        ),
         correlation_id: verified.operation.correlation_id.clone(),
         subject_digest: crate::audit::opaque_digest(
             &verified.authorization.subject_ref.to_canonical_string(),
         ),
         policy_revision: verified.policy_snapshot.policy_revision,
         resulting_revision,
+        requires_broker: verified.mutations.iter().any(|prepared| {
+            requires_broker_audit(prepared.mutation().target.resource_type().as_str())
+        }),
         mutations,
     })
+}
+
+fn audit_outbox_for_failure(
+    verified: &VerifiedWrite,
+    resulting_revision: u64,
+    timestamp_ms: u64,
+    outcome: &str,
+    error_code: &str,
+) -> Result<AuditOutboxRecord, StoreError> {
+    let mutations = verified
+        .mutations
+        .iter()
+        .enumerate()
+        .map(|(ordinal, prepared)| {
+            let mutation = prepared.mutation();
+            AuditOutboxMutation {
+                verb: mutation_audit_verb(mutation.kind).to_owned(),
+                resource_type: mutation.target.resource_type().as_str().to_owned(),
+                resource_uid: mutation
+                    .expected_uid
+                    .as_ref()
+                    .map(|uid| uid.as_str().to_owned()),
+                target_digest: crate::audit::opaque_digest(&mutation.target.to_canonical_string()),
+                generation: 0,
+                expected_revision: match mutation.expected {
+                    ExpectedRevision::CreateAbsent => 0,
+                    ExpectedRevision::Exact(revision) => revision.get(),
+                },
+                mutation_id: audit_mutation_id(
+                    &verified.operation.operation_id,
+                    ordinal as u32,
+                    resulting_revision,
+                ),
+                ordinal: ordinal as u32,
+                timestamp_ms,
+                outcome: outcome.to_owned(),
+                error_code: Some(error_code.to_owned()),
+                previous_hash: None,
+                record_hash: None,
+            }
+        })
+        .collect::<Vec<_>>();
+    Ok(AuditOutboxRecord {
+        zone: verified.authorization.zone.as_str().to_owned(),
+        operation_id: verified.operation.operation_id.clone(),
+        operation_identity: Some(
+            OperationIdentity::derive(&verified.operation.operation_id)
+                .map_err(|_| integrity("audit-operation-identity-invalid"))?,
+        ),
+        correlation_id: verified.operation.correlation_id.clone(),
+        subject_digest: crate::audit::opaque_digest(
+            &verified.authorization.subject_ref.to_canonical_string(),
+        ),
+        policy_revision: verified.policy_snapshot.policy_revision,
+        resulting_revision,
+        requires_broker: verified.mutations.iter().any(|prepared| {
+            requires_broker_audit(prepared.mutation().target.resource_type().as_str())
+        }),
+        mutations,
+    })
+}
+
+fn audit_mutation_id(operation_id: &str, ordinal: u32, revision: u64) -> String {
+    canonical_digest(
+        "d2b:resource-audit-mutation:v1",
+        format!("{operation_id}:{revision}:{ordinal}").as_bytes(),
+    )
+}
+
+fn requires_broker_audit(resource_type: &str) -> bool {
+    matches!(
+        resource_type,
+        "Zone"
+            | "ZoneLink"
+            | "Provider"
+            | "Role"
+            | "RoleBinding"
+            | "Quota"
+            | "EmergencyPolicy"
+            | "Credential"
+            | "ResourceExport"
+            | "ResourceImport"
+    )
+}
+
+fn failed_operation_record(
+    verified: &VerifiedWrite,
+    current_revision: u64,
+    error: &StoreError,
+) -> Result<OperationRecord, StoreError> {
+    let outcome = if error.kind() == StoreErrorKind::AuthorizationDenied {
+        "denied"
+    } else {
+        "error"
+    };
+    let request_digest = operation_digest(verified).unwrap_or_else(|_| {
+        canonical_digest(
+            "d2b:failed-resource-operation:v1",
+            verified.operation.operation_id.as_bytes(),
+        )
+    });
+    Ok(OperationRecord {
+        request_digest,
+        resource_uids: Vec::new(),
+        resources: Vec::new(),
+        outcome: outcome.to_owned(),
+        error_code: Some(error.reason_code().to_owned()),
+        accepted_revision: current_revision,
+        finished_revision: current_revision,
+        audit_outbox: Some(audit_outbox_for_failure(
+            verified,
+            current_revision,
+            audit_now_ms(),
+            outcome,
+            error.reason_code(),
+        )?),
+        authority: None,
+    })
+}
+
+fn audit_now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .and_then(|duration| u64::try_from(duration.as_millis()).ok())
+        .unwrap_or(0)
 }
 
 const fn mutation_audit_verb(kind: ResourceMutationKind) -> &'static str {
@@ -581,6 +760,7 @@ pub(crate) fn backfill_schema_catalog(database: &Database) -> Result<(), StoreEr
         if meta.schema_version != PHYSICAL_SCHEMA_VERSION {
             return Ok(());
         }
+
         let table = read.open_table(API_SCHEMAS).map_err(integrity)?;
         let count = table.len().map_err(integrity)?;
         if count == STANDARD_SCHEMA_CATALOG.len() as u64 {
@@ -617,6 +797,128 @@ pub(crate) fn backfill_schema_catalog(database: &Database) -> Result<(), StoreEr
             .map_err(integrity)?;
     }
     drop(schemas);
+    write.commit().map_err(integrity)
+}
+
+/// Normalize pre-U4 audit outboxes before consistency validation.
+///
+/// Old valid stores may contain a pending outbox without the typed operation
+/// identity or deterministic replay metadata. Missing values are derived from
+/// the durable operation key and persisted atomically. Any contradictory or
+/// malformed value remains a quarantine-worthy integrity failure.
+pub(crate) fn normalize_audit_outboxes(database: &Database) -> Result<(), StoreError> {
+    let read = database.begin_read().map_err(integrity)?;
+    let meta = read_meta(&read)?;
+    let operations = read.open_table(OPERATIONS).map_err(integrity)?;
+    let mut updates = Vec::new();
+    for row in operations.iter().map_err(integrity)? {
+        let (key, value) = row.map_err(integrity)?;
+        let operation_id = operation_id_from_key(key.value())?;
+        let mut operation: OperationRecord = decode(ValueKind::OperationRecord, value.value())?;
+        let mut operation_changed = false;
+        if !valid_digest(&operation.request_digest) {
+            operation.request_digest = canonical_digest(
+                "d2b:resource-operation-request-legacy:v1",
+                operation.request_digest.as_bytes(),
+            );
+            operation_changed = true;
+        }
+        let Some(outbox) = operation.audit_outbox.as_mut() else {
+            if operation_changed {
+                updates.push((key.value().to_vec(), operation));
+            }
+            continue;
+        };
+        let expected_identity = OperationIdentity::derive(&operation_id)
+            .map_err(|_| integrity("audit-operation-identity-invalid"))?;
+        if outbox.operation_id.is_empty() {
+            outbox.operation_id = operation_id.clone();
+        }
+        if outbox.operation_id != operation_id
+            || outbox.zone != meta.zone_name
+            || outbox.correlation_id.is_empty()
+            || outbox.correlation_id.len() > 512
+            || outbox
+                .correlation_id
+                .bytes()
+                .any(|byte| byte.is_ascii_control())
+            || outbox.mutations.is_empty()
+            || outbox.mutations.len() > d2b_contracts::v3::MAX_BATCH_MUTATIONS
+        {
+            return Err(integrity("audit-outbox-record-invalid"));
+        }
+        if let Some(identity) = &outbox.operation_identity
+            && identity != &expected_identity
+        {
+            return Err(integrity("audit-operation-identity-mismatch"));
+        }
+        let mut changed = operation_changed || outbox.operation_identity.is_none();
+        outbox.operation_identity = Some(expected_identity);
+        if !valid_digest(&outbox.subject_digest) {
+            outbox.subject_digest = crate::audit::opaque_digest(&outbox.subject_digest);
+            changed = true;
+        }
+        if outbox.resulting_revision > meta.current_revision {
+            return Err(integrity("audit-outbox-revision-invalid"));
+        }
+        let timestamp_ms = audit_now_ms();
+        for (ordinal, mutation) in outbox.mutations.iter_mut().enumerate() {
+            if mutation.mutation_id.is_empty() {
+                mutation.mutation_id =
+                    audit_mutation_id(&operation_id, ordinal as u32, outbox.resulting_revision);
+                changed = true;
+            } else if !valid_digest(&mutation.mutation_id) {
+                mutation.mutation_id = canonical_digest(
+                    "d2b:resource-audit-legacy-mutation:v1",
+                    mutation.mutation_id.as_bytes(),
+                );
+                changed = true;
+            }
+            if !valid_digest(&mutation.target_digest) {
+                mutation.target_digest = crate::audit::opaque_digest(&mutation.target_digest);
+                changed = true;
+            }
+            if mutation.timestamp_ms == 0 {
+                mutation.timestamp_ms = timestamp_ms;
+                changed = true;
+            }
+            if mutation.ordinal != ordinal as u32 {
+                mutation.ordinal = ordinal as u32;
+                changed = true;
+            }
+            if mutation.outcome.is_empty() {
+                mutation.outcome = default_audit_outcome();
+                changed = true;
+            }
+        }
+        let required_broker = outbox.requires_broker
+            || outbox
+                .mutations
+                .iter()
+                .any(|mutation| requires_broker_audit(mutation.resource_type.as_str()));
+        if required_broker != outbox.requires_broker {
+            outbox.requires_broker = required_broker;
+            changed = true;
+        }
+        if changed {
+            updates.push((key.value().to_vec(), operation));
+        }
+    }
+    drop(operations);
+    drop(read);
+    if updates.is_empty() {
+        return Ok(());
+    }
+    let mut write = database.begin_write().map_err(integrity)?;
+    set_full_durability(&mut write)?;
+    let mut table = write.open_table(OPERATIONS).map_err(integrity)?;
+    for (key, operation) in updates {
+        let value = encode(ValueKind::OperationRecord, &operation)?;
+        table
+            .insert(key.as_slice(), value.as_slice())
+            .map_err(integrity)?;
+    }
+    drop(table);
     write.commit().map_err(integrity)
 }
 
@@ -808,8 +1110,21 @@ pub(crate) fn validate_consistency(database: &Database) -> Result<(), StoreError
         let operation: OperationRecord = decode(ValueKind::OperationRecord, value.value())?;
         if operation.request_digest.is_empty()
             || !valid_digest(&operation.request_digest)
-            || operation.outcome != "committed"
-            || operation.resources.len() != operation.resource_uids.len()
+            || !matches!(operation.outcome.as_str(), "committed" | "denied" | "error")
+            || (operation.outcome == "committed" && operation.error_code.is_some())
+            || operation.error_code.as_deref().is_some_and(|code| {
+                code.is_empty()
+                    || code.len() > 128
+                    || !code.bytes().all(|byte| {
+                        byte.is_ascii_lowercase()
+                            || byte.is_ascii_digit()
+                            || matches!(byte, b'-' | b'_' | b'.')
+                    })
+            })
+            || (operation.outcome == "committed"
+                && operation.resources.len() != operation.resource_uids.len())
+            || (operation.outcome != "committed"
+                && (!operation.resources.is_empty() || !operation.resource_uids.is_empty()))
             || operation.accepted_revision > operation.finished_revision
             || operation.finished_revision > meta.current_revision
         {
@@ -976,7 +1291,10 @@ fn validate_audit_outbox(
     operation_id: &str,
     meta: &StoreMeta,
 ) -> Result<(), StoreError> {
-    if outbox.zone != meta.zone_name
+    let expected_identity = OperationIdentity::derive(&outbox.operation_id)
+        .map_err(|_| integrity("audit-operation-identity-invalid"))?;
+    if outbox.operation_identity.as_ref() != Some(&expected_identity)
+        || outbox.zone != meta.zone_name
         || outbox.operation_id != operation_id
         || outbox.correlation_id.is_empty()
         || outbox.correlation_id.len() > 512
@@ -1001,8 +1319,25 @@ fn validate_audit_outbox(
                 | "update-finalizers"
                 | "delete"
         ) || ResourceTypeName::parse(mutation.resource_type.clone()).is_err()
-            || ResourceUid::parse(mutation.resource_uid.clone()).is_err()
+            || mutation
+                .resource_uid
+                .as_ref()
+                .is_some_and(|uid| ResourceUid::parse(uid.clone()).is_err())
             || !valid_digest(&mutation.target_digest)
+            || mutation.mutation_id.is_empty()
+            || !valid_digest(&mutation.mutation_id)
+            || mutation.ordinal >= d2b_contracts::v3::MAX_BATCH_MUTATIONS as u32
+            || mutation.timestamp_ms == 0
+            || !matches!(mutation.outcome.as_str(), "ok" | "denied" | "error")
+            || mutation.error_code.as_deref().is_some_and(|code| {
+                code.is_empty()
+                    || code.len() > 128
+                    || !code.bytes().all(|byte| {
+                        byte.is_ascii_lowercase()
+                            || byte.is_ascii_digit()
+                            || matches!(byte, b'-' | b'_' | b'.')
+                    })
+            })
         {
             return Err(integrity("audit-outbox-mutation-invalid"));
         }
@@ -1231,9 +1566,7 @@ fn schema_invalid(reason: &'static str) -> StoreError {
 }
 
 fn valid_digest(value: &str) -> bool {
-    value
-        .strip_prefix("sha256:")
-        .is_some_and(|hex| hex.len() == 64 && hex.bytes().all(|byte| byte.is_ascii_hexdigit()))
+    d2b_audit::is_canonical_digest(value)
 }
 
 pub(crate) fn current_meta(database: &Database) -> Result<StoreMeta, StoreError> {
@@ -1278,6 +1611,7 @@ pub(crate) fn authority_prepare(
         resource_uids: Vec::new(),
         resources: Vec::new(),
         outcome: "committed".to_owned(),
+        error_code: None,
         accepted_revision: current_revision,
         finished_revision: current_revision,
         audit_outbox: None,
@@ -1435,11 +1769,30 @@ pub(crate) fn audit_outbox_pending(
     Ok(operation.audit_outbox.is_some())
 }
 
+pub(crate) fn audit_outbox_for_operation(
+    database: &Database,
+    operation_id: &str,
+) -> Result<Option<AuditOutboxRecord>, StoreError> {
+    let read = database.begin_read().map_err(integrity)?;
+    let table = read.open_table(OPERATIONS).map_err(integrity)?;
+    let key = operation_key(operation_id)?;
+    let Some(value) = table.get(key.as_slice()).map_err(integrity)? else {
+        return Ok(None);
+    };
+    let operation: OperationRecord = decode(ValueKind::OperationRecord, value.value())?;
+    Ok(operation.audit_outbox)
+}
+
 /// Clear one audit outbox entry after its records have been durably written.
 pub(crate) fn mark_audit_outbox_complete(
     database: &Database,
     operation_id: &str,
 ) -> Result<(), StoreError> {
+    #[cfg(test)]
+    if FAIL_NEXT_AUDIT_OUTBOX_CLEAR.swap(false, std::sync::atomic::Ordering::SeqCst) {
+        return Err(durability_failure("injected-audit-outbox-clear-failure"));
+    }
+
     let mut write = database.begin_write().map_err(integrity)?;
     set_full_durability(&mut write)?;
     let key = operation_key(operation_id)?;
@@ -1456,6 +1809,59 @@ pub(crate) fn mark_audit_outbox_complete(
         return Ok(());
     }
     operation.audit_outbox = None;
+    let value = encode(ValueKind::OperationRecord, &operation)?;
+    write
+        .open_table(OPERATIONS)
+        .map_err(integrity)?
+        .insert(key.as_slice(), value.as_slice())
+        .map_err(integrity)?;
+    write.commit().map_err(integrity)
+}
+
+/// Persist the predecessor and record hash after one outbox mutation reaches
+/// the external sink. A crash after the append therefore leaves enough
+/// evidence for recovery to query or replay the exact mutation without
+/// rebuilding it against a newer chain head.
+pub(crate) fn mark_audit_outbox_progress(
+    database: &Database,
+    operation_id: &str,
+    ordinal: u32,
+    previous_hash: &AuditHash,
+    record_hash: &AuditHash,
+) -> Result<(), StoreError> {
+    let mut write = database.begin_write().map_err(integrity)?;
+    set_full_durability(&mut write)?;
+    let key = operation_key(operation_id)?;
+    let mut operation = {
+        let table = write.open_table(OPERATIONS).map_err(integrity)?;
+        let bytes = table
+            .get(key.as_slice())
+            .map_err(integrity)?
+            .ok_or_else(|| integrity("audit-outbox-operation-missing"))?;
+        decode::<OperationRecord>(ValueKind::OperationRecord, bytes.value())?
+    };
+    let Some(outbox) = operation.audit_outbox.as_mut() else {
+        write.abort().map_err(integrity)?;
+        return Ok(());
+    };
+    let mutation = outbox
+        .mutations
+        .iter_mut()
+        .find(|mutation| mutation.ordinal == ordinal)
+        .ok_or_else(|| integrity("audit-outbox-mutation-missing"))?;
+    if mutation
+        .previous_hash
+        .as_ref()
+        .is_some_and(|value| value != previous_hash)
+        || mutation
+            .record_hash
+            .as_ref()
+            .is_some_and(|value| value != record_hash)
+    {
+        return Err(integrity("audit-outbox-hash-conflict"));
+    }
+    mutation.previous_hash = Some(previous_hash.clone());
+    mutation.record_hash = Some(record_hash.clone());
     let value = encode(ValueKind::OperationRecord, &operation)?;
     write
         .open_table(OPERATIONS)
@@ -1495,6 +1901,74 @@ pub(crate) fn set_clean_shutdown(
     write.commit().map_err(integrity)
 }
 
+fn replayed_operation_failure(operation: &OperationRecord) -> StoreError {
+    let kind = if operation.outcome == "denied" {
+        StoreErrorKind::AuthorizationDenied
+    } else {
+        match operation.error_code.as_deref() {
+            Some("resource-not-found") => StoreErrorKind::ResourceNotFound,
+            Some("resource-already-exists") => StoreErrorKind::ResourceAlreadyExists,
+            Some("resource-conflict") | Some("operation-id-reused") => {
+                StoreErrorKind::ResourceConflict
+            }
+            Some("resource-schema-invalid") => StoreErrorKind::ResourceSchemaInvalid,
+            Some("resource-ref-invalid") => StoreErrorKind::ResourceRefInvalid,
+            Some("resource-owner-cycle") => StoreErrorKind::ResourceOwnerCycle,
+            Some("resource-owner-depth") => StoreErrorKind::ResourceOwnerDepth,
+            Some("resource-finalizer-denied") => StoreErrorKind::ResourceFinalizerDenied,
+            Some("resource-controller-mismatch") => StoreErrorKind::ResourceControllerMismatch,
+            Some("resource-status-owner-mismatch") => StoreErrorKind::ResourceStatusOwnerMismatch,
+            Some("status-oversize") => StoreErrorKind::StatusOversize,
+            Some("status-provider-schema-invalid") => StoreErrorKind::StatusProviderSchemaInvalid,
+            Some("status-provider-overlap") => StoreErrorKind::StatusProviderOverlap,
+            Some("spec-provider-schema-invalid") => StoreErrorKind::SpecProviderSchemaInvalid,
+            Some("spec-provider-shadow") => StoreErrorKind::SpecProviderShadow,
+            Some("unsupported-capability") => StoreErrorKind::UnsupportedCapability,
+            Some("expedited-not-authorized") => StoreErrorKind::ExpeditedNotAuthorized,
+            Some("expedited-quota-exceeded") => StoreErrorKind::ExpeditedQuotaExceeded,
+            _ => StoreErrorKind::InternalIntegrityFailure,
+        }
+    };
+    let reason = match kind {
+        StoreErrorKind::AuthorizationDenied => "operation-replayed-denied",
+        StoreErrorKind::ResourceNotFound => "resource-not-found",
+        StoreErrorKind::ResourceAlreadyExists => "resource-already-exists",
+        StoreErrorKind::ResourceConflict => "resource-conflict",
+        StoreErrorKind::ResourceSchemaInvalid => "resource-schema-invalid",
+        StoreErrorKind::ResourceRefInvalid => "resource-ref-invalid",
+        StoreErrorKind::ResourceOwnerCycle => "resource-owner-cycle",
+        StoreErrorKind::ResourceOwnerDepth => "resource-owner-depth",
+        StoreErrorKind::ResourceFinalizerDenied => "resource-finalizer-denied",
+        StoreErrorKind::ResourceControllerMismatch => "resource-controller-mismatch",
+        StoreErrorKind::ResourceStatusOwnerMismatch => "resource-status-owner-mismatch",
+        StoreErrorKind::StatusOversize => "status-oversize",
+        StoreErrorKind::StatusProviderSchemaInvalid => "status-provider-schema-invalid",
+        StoreErrorKind::StatusProviderOverlap => "status-provider-overlap",
+        StoreErrorKind::SpecProviderSchemaInvalid => "spec-provider-schema-invalid",
+        StoreErrorKind::SpecProviderShadow => "spec-provider-shadow",
+        StoreErrorKind::UnsupportedCapability => "unsupported-capability",
+        StoreErrorKind::ExpeditedNotAuthorized => "expedited-not-authorized",
+        StoreErrorKind::ExpeditedQuotaExceeded => "expedited-quota-exceeded",
+        _ => "operation-replayed-error",
+    };
+    let retry_class = if kind == StoreErrorKind::AuthorizationDenied {
+        RetryClass::Reauthorize
+    } else {
+        RetryClass::Never
+    };
+    StoreError::new(
+        kind,
+        Some(ZoneRevision::new(operation.finished_revision)),
+        None,
+        retry_class,
+        reason,
+    )
+}
+
+fn request_digest_matches(persisted: &str, candidates: &[String; 2]) -> bool {
+    candidates.iter().any(|candidate| candidate == persisted)
+}
+
 #[cfg(test)]
 pub(crate) fn apply_group(
     database: &Database,
@@ -1531,35 +2005,43 @@ pub(crate) fn apply_group_with_hook(
     let mut results = Vec::with_capacity(group.len());
     let mut entries = Vec::new();
     let mut accepted_targets = std::collections::BTreeSet::new();
+    let mut failed_operations = Vec::new();
+    let mut seen_operations = std::collections::BTreeMap::<String, String>::new();
 
     for verified in group {
-        let snapshot = verified.policy_snapshot;
-        if verified.mutations.is_empty()
-            || verified.mutations.len() > d2b_contracts::v3::MAX_BATCH_MUTATIONS
-        {
-            results.push(Err(integrity("empty-verified-mutation")));
-            continue;
-        }
-        if !revisions_match(&meta, snapshot) {
-            results.push(Err(authorization_denied(meta.current_revision)));
-            continue;
-        }
-        if let Err(error) = validate_prepared_payloads(&verified) {
-            results.push(Err(error));
-            continue;
-        }
+        // Resolve an existing operation before policy or payload validation.
+        // A terminal row is authoritative for retries, including retries
+        // whose current admission snapshot is stale or whose payload is no
+        // longer valid.
         let operation_id = verified.operation.operation_id.clone();
-        let correlation_id = verified.operation.correlation_id.clone();
-        let request_digest = operation_digest(&verified)?;
-        let operation_key = operation_key(&operation_id)?;
+        let request_digests = operation_digests(&verified)?;
+        let request_digest = request_digests[0].clone();
+        let operation_key_bytes = operation_key(&operation_id)?;
+        if let Some(previous_digest) =
+            seen_operations.insert(operation_id.clone(), request_digest.clone())
+        {
+            let reason = if previous_digest == request_digest {
+                "operation-duplicate-in-group"
+            } else {
+                "operation-id-reused"
+            };
+            results.push(Err(conflict(meta.current_revision, 0, reason)));
+            continue;
+        }
         {
             let operations = write.open_table(OPERATIONS).map_err(integrity)?;
             if let Some(bytes) = operations
-                .get(operation_key.as_slice())
+                .get(operation_key_bytes.as_slice())
                 .map_err(integrity)?
             {
                 let prior: OperationRecord = decode(ValueKind::OperationRecord, bytes.value())?;
-                if prior.request_digest == request_digest {
+                if !request_digest_matches(&prior.request_digest, &request_digests) {
+                    results.push(Err(conflict(
+                        meta.current_revision,
+                        0,
+                        "operation-id-reused",
+                    )));
+                } else if prior.outcome == "committed" {
                     results.push(Ok(StoreCommitResult {
                         resources: prior
                             .resources
@@ -1569,12 +2051,70 @@ pub(crate) fn apply_group_with_hook(
                         revision: ZoneRevision::new(prior.finished_revision),
                     }));
                 } else {
-                    results.push(Err(conflict(
-                        meta.current_revision,
-                        0,
-                        "operation-id-reused",
-                    )));
+                    results.push(Err(replayed_operation_failure(&prior)));
                 }
+                continue;
+            }
+        }
+
+        let snapshot = verified.policy_snapshot;
+        if verified.mutations.is_empty()
+            || verified.mutations.len() > d2b_contracts::v3::MAX_BATCH_MUTATIONS
+        {
+            results.push(Err(integrity("empty-verified-mutation")));
+            continue;
+        }
+        if !revisions_match(&meta, snapshot) {
+            let error = authorization_denied(meta.current_revision);
+            results.push(Err(error.clone()));
+            if !verified.mutations.is_empty() {
+                failed_operations.push((
+                    operation_key(&verified.operation.operation_id)?,
+                    failed_operation_record(&verified, meta.current_revision, &error)?,
+                ));
+            }
+            continue;
+        }
+        if let Err(error) = validate_prepared_payloads(&verified) {
+            results.push(Err(error.clone()));
+            if !verified.mutations.is_empty() {
+                failed_operations.push((
+                    operation_key(&verified.operation.operation_id)?,
+                    failed_operation_record(&verified, meta.current_revision, &error)?,
+                ));
+            }
+            continue;
+        }
+        let operation_id = verified.operation.operation_id.clone();
+        let correlation_id = verified.operation.correlation_id.clone();
+        let request_digests = operation_digests(&verified)?;
+        let request_digest = request_digests[0].clone();
+        let operation_key_bytes = operation_key(&operation_id)?;
+        {
+            let operations = write.open_table(OPERATIONS).map_err(integrity)?;
+            if let Some(bytes) = operations
+                .get(operation_key_bytes.as_slice())
+                .map_err(integrity)?
+            {
+                let prior: OperationRecord = decode(ValueKind::OperationRecord, bytes.value())?;
+                if request_digest_matches(&prior.request_digest, &request_digests) {
+                    if prior.outcome != "committed" {
+                        results.push(Err(replayed_operation_failure(&prior)));
+                        continue;
+                    }
+                    results.push(Ok(StoreCommitResult {
+                        resources: prior
+                            .resources
+                            .iter()
+                            .map(operation_resource)
+                            .collect::<Result<Vec<_>, _>>()?,
+                        revision: ZoneRevision::new(prior.finished_revision),
+                    }));
+                } else {
+                    let error = conflict(meta.current_revision, 0, "operation-id-reused");
+                    results.push(Err(error.clone()));
+                }
+
                 continue;
             }
         }
@@ -1591,13 +2131,21 @@ pub(crate) fn apply_group_with_hook(
             match validate_verified_write(&write, &verified, revision, &accepted_targets) {
                 Ok(finalized) => finalized,
                 Err(error) => {
-                    results[result_index] = Err(error);
+                    results[result_index] = Err(error.clone());
+                    failed_operations.push((
+                        operation_key_bytes.clone(),
+                        failed_operation_record(&verified, meta.current_revision, &error)?,
+                    ));
                     continue;
                 }
             };
         let mut simulated = read_simulated_state(&write)?;
         if let Err(error) = validate_structural_group(&verified, &mut simulated) {
-            results[result_index] = Err(error);
+            results[result_index] = Err(error.clone());
+            failed_operations.push((
+                operation_key_bytes.clone(),
+                failed_operation_record(&verified, meta.current_revision, &error)?,
+            ));
             continue;
         }
         let mut group_resources = Vec::new();
@@ -1635,16 +2183,22 @@ pub(crate) fn apply_group_with_hook(
                 })
                 .collect(),
             outcome: "committed".to_owned(),
+            error_code: None,
             accepted_revision: revision,
             finished_revision: revision,
-            audit_outbox: Some(audit_outbox_for(&verified, &group_resources, revision)?),
+            audit_outbox: Some(audit_outbox_for(
+                &verified,
+                &group_resources,
+                revision,
+                audit_now_ms(),
+            )?),
             authority: None,
         };
         let operation_value = encode(ValueKind::OperationRecord, &operation)?;
         write
             .open_table(OPERATIONS)
             .map_err(integrity)?
-            .insert(operation_key.as_slice(), operation_value.as_slice())
+            .insert(operation_key_bytes.as_slice(), operation_value.as_slice())
             .map_err(integrity)?;
         results[result_index] = Ok(StoreCommitResult {
             resources: group_resources.clone(),
@@ -1659,13 +2213,22 @@ pub(crate) fn apply_group_with_hook(
         entries.extend(group_entries);
     }
 
+    for (operation_key, operation) in failed_operations {
+        let operation_value = encode(ValueKind::OperationRecord, &operation)?;
+        write
+            .open_table(OPERATIONS)
+            .map_err(integrity)?
+            .insert(operation_key.as_slice(), operation_value.as_slice())
+            .map_err(integrity)?;
+    }
+
     if entries.is_empty() {
         let committed = CommittedGroup {
             results,
             batch: None,
             resulting_revision: meta.current_revision,
         };
-        write.abort().map_err(integrity)?;
+        write.commit().map_err(integrity)?;
         after_commit(&committed)?;
         return Ok(committed);
     }
@@ -1704,8 +2267,17 @@ static FAIL_NEXT_APPLY_GROUP: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
 #[cfg(test)]
+static FAIL_NEXT_AUDIT_OUTBOX_CLEAR: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(test)]
 pub(crate) fn fail_next_apply_group_for_test() {
     FAIL_NEXT_APPLY_GROUP.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+#[cfg(test)]
+pub(crate) fn fail_next_audit_outbox_clear_for_test() {
+    FAIL_NEXT_AUDIT_OUTBOX_CLEAR.store(true, std::sync::atomic::Ordering::SeqCst);
 }
 
 fn read_simulated_state(
@@ -3095,7 +3667,104 @@ fn controller_binding_id(envelope: &ResourceEnvelope) -> String {
     )
 }
 
+fn operation_digests(verified: &VerifiedWrite) -> Result<[String; 2], StoreError> {
+    Ok([
+        operation_digest(verified)?,
+        legacy_operation_digest(verified)?,
+    ])
+}
+
 fn operation_digest(verified: &VerifiedWrite) -> Result<String, StoreError> {
+    use sha2::{Digest, Sha256};
+
+    let mut digest = Sha256::new();
+    digest_field(&mut digest, verified.operation.operation_id.as_bytes())?;
+    digest_optional_field(
+        &mut digest,
+        verified
+            .operation
+            .idempotency_key
+            .as_deref()
+            .map(str::as_bytes),
+    )?;
+    digest_field(&mut digest, verified.authorization.zone.as_str().as_bytes())?;
+    digest_field(
+        &mut digest,
+        verified
+            .authorization
+            .subject_ref
+            .to_canonical_string()
+            .as_bytes(),
+    )?;
+    digest.update(verified.authorization.subject_uid.as_str().as_bytes());
+    digest.update(
+        u32::try_from(verified.mutations.len())
+            .map_err(|_| integrity("operation-request-too-large"))?
+            .to_be_bytes(),
+    );
+    for mutation in &verified.mutations {
+        let prepared = mutation.mutation();
+        digest_field(&mut digest, prepared.zone.as_str().as_bytes())?;
+        digest_field(
+            &mut digest,
+            prepared.target.to_canonical_string().as_bytes(),
+        )?;
+        digest.update([mutation_kind_discriminant(prepared.kind)]);
+        match prepared.expected {
+            ExpectedRevision::CreateAbsent => digest.update([0]),
+            ExpectedRevision::Exact(revision) => {
+                digest.update([1]);
+                digest.update(revision.get().to_be_bytes());
+            }
+        }
+        digest_optional_field(
+            &mut digest,
+            prepared
+                .expected_uid
+                .as_ref()
+                .map(|uid| uid.as_str().as_bytes()),
+        )?;
+        digest_optional_field(
+            &mut digest,
+            prepared
+                .owner
+                .as_ref()
+                .map(|owner| owner.to_canonical_string())
+                .as_deref()
+                .map(str::as_bytes),
+        )?;
+        let request_body = canonical_request_body(prepared)?;
+        digest_optional_field(&mut digest, request_body.as_deref())?;
+        digest_finalizers(&mut digest, &prepared.add_finalizers)?;
+        digest_finalizers(&mut digest, &prepared.remove_finalizers)?;
+        digest.update([u8::from(prepared.wait_for_reconcile)]);
+        digest_optional_u64(&mut digest, prepared.reconcile_deadline_ms);
+        if prepared.kind != ResourceMutationKind::Create {
+            digest_optional_field(
+                &mut digest,
+                mutation.resource_uid().map(|uid| uid.as_str().as_bytes()),
+            )?;
+        }
+        // A create body is normalized above before fingerprinting, so its
+        // supplied digest may include a store-minted UID and is intentionally
+        // ignored. A body-less create still needs the caller-supplied digest
+        // in the request fingerprint so it cannot replay a different request.
+        if prepared.kind != ResourceMutationKind::Create
+            || mutation.mutation.canonical_resource.is_none()
+        {
+            digest_optional_field(
+                &mut digest,
+                mutation.prepared_payload_digest().map(str::as_bytes),
+            )?;
+        }
+    }
+    Ok(format!("sha256:{:x}", digest.finalize()))
+}
+
+/// The request fingerprint used before the U4 durability changes.  Durable
+/// operation rows did not carry an algorithm tag, so retries must compare
+/// against this shape as well as the current fingerprint.
+fn legacy_operation_digest(verified: &VerifiedWrite) -> Result<String, StoreError> {
     use sha2::{Digest, Sha256};
 
     let mut digest = Sha256::new();
@@ -3258,9 +3927,17 @@ fn canonical_request_body(mutation: &StoreMutation) -> Result<Option<Vec<u8>>, S
     if mutation.kind != ResourceMutationKind::Create {
         return Ok(Some(bytes.to_vec()));
     }
-    let mut value = CanonicalJsonValue::parse(bytes)
-        .map_err(|_| integrity("mutation-resource-envelope-invalid"))?;
-    let metadata = metadata_object_mut(&mut value)?;
+    // Request fingerprinting runs before payload validation. If the body is
+    // malformed, hash its bounded raw bytes so an existing terminal row can
+    // still be compared and replayed instead of being revalidated first.
+    let mut value = match CanonicalJsonValue::parse(bytes) {
+        Ok(value) => value,
+        Err(_) => return Ok(Some(bytes.to_vec())),
+    };
+    let metadata = match metadata_object_mut(&mut value) {
+        Ok(metadata) => metadata,
+        Err(_) => return Ok(Some(bytes.to_vec())),
+    };
     for field in [
         "uid",
         "generation",
@@ -3619,7 +4296,7 @@ mod tests {
         let read = database.begin_read().unwrap();
         assert_eq!(read.open_table(RESOURCES).unwrap().len().unwrap(), 1);
         assert_eq!(read.open_table(REVISION_LOG).unwrap().len().unwrap(), 1);
-        assert_eq!(read.open_table(OPERATIONS).unwrap().len().unwrap(), 1);
+        assert_eq!(read.open_table(OPERATIONS).unwrap().len().unwrap(), 2);
     }
 
     #[test]
@@ -3637,8 +4314,32 @@ mod tests {
         assert_eq!(current_meta(&database).unwrap().current_revision, 0);
         let read = database.begin_read().unwrap();
         assert_eq!(read.open_table(RESOURCES).unwrap().len().unwrap(), 0);
-        assert_eq!(read.open_table(OPERATIONS).unwrap().len().unwrap(), 0);
+        assert_eq!(read.open_table(OPERATIONS).unwrap().len().unwrap(), 1);
         assert_eq!(read.open_table(REVISION_LOG).unwrap().len().unwrap(), 0);
+    }
+
+    #[test]
+    fn failed_operation_retry_replays_the_persisted_failure() {
+        let (_directory, database, _identity) = fixture();
+        let target = ResourceRef::parse("Host/host-system").unwrap();
+        let uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
+        let mut request = verified("failed-retry", create_mutation(target), uid);
+        request.policy_snapshot.policy_revision = 99;
+        let first = apply_group(&database, vec![request]).unwrap();
+        assert_eq!(
+            first.results[0].as_ref().unwrap_err().kind(),
+            StoreErrorKind::AuthorizationDenied
+        );
+
+        let target = ResourceRef::parse("Host/host-system").unwrap();
+        let uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
+        let mut retry = verified("failed-retry", create_mutation(target), uid);
+        retry.policy_snapshot.policy_revision = 99;
+        let second = apply_group(&database, vec![retry]).unwrap();
+        assert_eq!(
+            second.results[0].as_ref().unwrap_err().kind(),
+            StoreErrorKind::AuthorizationDenied
+        );
     }
 
     #[test]
@@ -3701,7 +4402,7 @@ mod tests {
         assert_eq!(current_meta(&database).unwrap().current_revision, 2);
         let read = database.begin_read().unwrap();
         assert_eq!(read.open_table(RESOURCES).unwrap().len().unwrap(), 2);
-        assert_eq!(read.open_table(OPERATIONS).unwrap().len().unwrap(), 2);
+        assert_eq!(read.open_table(OPERATIONS).unwrap().len().unwrap(), 3);
         assert_eq!(read.open_table(REVISION_LOG).unwrap().len().unwrap(), 2);
         let stored = read
             .open_table(RESOURCES)
@@ -3811,6 +4512,38 @@ mod tests {
             persisted_digest
         );
         assert_eq!(current_meta(&database).unwrap().current_revision, 1);
+    }
+
+    #[test]
+    fn terminal_denial_replays_before_policy_validation() {
+        let (_directory, database, _identity) = fixture();
+        let target = ResourceRef::parse("Host/host-system").unwrap();
+        let uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
+        let mut denied = verified(
+            "terminal-denial",
+            create_mutation_with_uid(target.clone(), &uid),
+            uid.clone(),
+        );
+        denied.policy_snapshot.policy_revision = 999;
+        let first = apply_group(&database, vec![denied]).unwrap();
+        assert_eq!(
+            first.results[0].as_ref().unwrap_err().reason_code(),
+            "store-generation-recheck-failed"
+        );
+
+        let replay = apply_group(
+            &database,
+            vec![verified(
+                "terminal-denial",
+                create_mutation_with_uid(target, &uid),
+                uid,
+            )],
+        )
+        .unwrap();
+        assert_eq!(
+            replay.results[0].as_ref().unwrap_err().reason_code(),
+            "operation-replayed-denied"
+        );
     }
 
     #[test]

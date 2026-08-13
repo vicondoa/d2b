@@ -36,16 +36,18 @@ consumes that registry rather than maintaining a parallel policy.
 
 ## Controllers / services / workers / binaries
 
-The source contains the session-bound Provider agent, bounded emitter socket,
-structural metric ingress gate, strict configuration parser, and closed
-self-metric descriptors. Full collector and forwarder process launch remains
-owned by the Process Provider boundary.
+The source contains only the session-bound Provider agent, bounded emitter
+socket, structural metric ingress gate, strict configuration parser, and
+closed self-metric descriptors. Collector, forwarder, exporter, journald,
+ComponentSession transport, resource ownership, projection/share, and process
+launch remain separate completion work.
 
 ## Placement and dependencies
 
 The Provider runs as an ordinary optional process in its owning Zone. Its
 workspace dependencies are limited to `d2b-contracts` and
-`d2b-provider-toolkit`, the admitted neutral Provider boundaries. The toolkit
+`d2b-provider-toolkit` plus the low-level `rustix` fd-policy helper, the
+admitted neutral Provider boundaries. The toolkit
 supplies the diagnostic audit ring and session-facing values; authoritative
 audit durability and core telemetry emission stay outside this crate.
 This Provider does not and must not depend directly on `d2b-audit` or
@@ -71,8 +73,8 @@ credential, secret, token, password, and path-shaped messages.
 
 Emitter, ingress, quarantine, and diagnostic audit state is bounded and
 in-memory. Export loss degrades telemetry only; it never blocks resource
-mutation or audit durability. Resource identity belongs in the closed OTEL
-resource-attribute set, never in metric dimensions.
+mutation or audit durability. This crate does not claim production OTLP,
+vsock, ComponentSession, journald, projection, or cross-Zone share support.
 
 ## Build and test
 
@@ -84,7 +86,6 @@ cargo clippy -p d2b-provider-observability-otel --all-targets -- -D warnings
 cargo fmt --manifest-path d2b-provider-observability-otel/Cargo.toml -- --check
 ```
 
-The crate's normal tests are hermetic. The scenario declarations in
-`integration/` are exercised by the existing container or host-integration
-lane once the production Provider supervisor, ComponentSession stream, OTLP
-exporter, and NixOS adapter are present.
+The crate's normal tests are hermetic and cover the retained agent, socket,
+configuration, ingress, metric, and redaction foundations. Production
+transport and exporter scenarios are intentionally not marked complete.

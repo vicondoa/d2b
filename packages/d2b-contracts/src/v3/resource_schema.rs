@@ -525,6 +525,17 @@ pub fn canonical_digest(domain_tag: &str, canonical_bytes: &[u8]) -> String {
     digest_bytes(digest.finalize())
 }
 
+/// Validate the one canonical digest spelling used by every wire and audit
+/// boundary: `sha256:` followed by exactly 64 lower-case hexadecimal bytes.
+pub fn is_canonical_digest(value: &str) -> bool {
+    value.strip_prefix("sha256:").is_some_and(|hex| {
+        hex.len() == 64
+            && hex
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+    })
+}
+
 /// Compute a digest over an explicitly framed textual canonical-JSON object.
 ///
 /// Bundle and artifact-catalog hashes cross the Nix/Rust/Python boundary.

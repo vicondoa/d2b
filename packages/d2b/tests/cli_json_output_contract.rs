@@ -774,7 +774,24 @@ fn spawn_audit_mock_daemon(path: &Path, lines: Vec<String>) -> std::thread::Join
         );
         let req = recv_frame(conn);
         assert_eq!(req["type"], "audit", "expected audit frame, got {req}");
-        send_frame(conn, &json!({ "type": "auditResponse", "lines": lines }));
+        let entries = lines
+            .into_iter()
+            .enumerate()
+            .map(|(sequence, line)| {
+                json!({
+                    "sequence": sequence,
+                    "record": line,
+                })
+            })
+            .collect::<Vec<_>>();
+        send_frame(
+            conn,
+            &json!({
+                "type": "auditResponse",
+                "entries": entries,
+                "complete": true,
+            }),
+        );
         let _ = nix::unistd::close(conn);
     })
 }

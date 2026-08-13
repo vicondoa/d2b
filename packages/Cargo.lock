@@ -933,6 +933,7 @@ version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-telemetry",
  "libc",
+ "rustix 0.38.44",
  "serde",
  "serde_json",
 ]
@@ -1304,6 +1305,7 @@ version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts",
  "d2b-provider-toolkit",
+ "rustix 0.38.44",
  "serde",
  "serde_json",
 ]
@@ -1617,6 +1619,7 @@ name = "d2b-telemetry"
 version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts",
+ "rustix 0.38.44",
  "serde",
  "serde_json",
  "sha2",
@@ -1678,6 +1681,7 @@ dependencies = [
  "arc-swap",
  "async-trait",
  "clap",
+ "d2b-audit",
  "d2b-bus",
  "d2b-contracts",
  "d2b-core",

@@ -51,7 +51,8 @@ impl ProcessSpan {
             &serde_json::json!({
                 "name": self.name,
                 "fields": self.fields,
-                "trace_id": self.trace.as_ref().map(TraceContext::trace_id),
+                "trace_id": self.trace.as_ref().map(TraceContext::exported_trace_id),
+                "span_id": self.trace.as_ref().map(TraceContext::exported_span_id),
             }),
         )
         .map_err(|_| EmitterError::FrameTooLarge)?;

@@ -20,6 +20,7 @@ use d2b_core::host::IfName;
 use d2b_core::workload_identity::WorkloadIdentity;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", content = "payload")]
@@ -370,6 +371,421 @@ impl BrokerRequest {
             _ => "operation",
         }
     }
+
+    /// Return the canonical join identities for a typed durability request.
+    ///
+    /// The material is assembled from authoritative typed fields only. It
+    /// deliberately does not use the display category, opaque target label,
+    /// or a serialization of the whole request.
+    pub fn authoritative_audit_join(&self) -> Option<(String, String)> {
+        let (scope, operation) = match self {
+            Self::ApplyNftables(request) => (
+                request.scope_id.to_string(),
+                format!(
+                    "{}:{}:{}",
+                    self.op_name(),
+                    request.bundle_nft_intent_ref,
+                    request.destroy
+                ),
+            ),
+            Self::ApplyNftablesProjection(request) => (
+                request.scope_id.to_string(),
+                format!(
+                    "{}:{}:{:?}:{}",
+                    self.op_name(),
+                    request.bundle_nft_projection_intent_ref,
+                    request.action,
+                    request.expected_generation_id.as_str()
+                ),
+            ),
+            Self::ApplyNmUnmanaged(request) => (
+                request.scope_id.to_string(),
+                format!(
+                    "{}:{}:{}",
+                    self.op_name(),
+                    request.bundle_nm_intent_ref,
+                    request.destroy
+                ),
+            ),
+            Self::ApplyRoute(request) => (
+                request.scope_id.to_string(),
+                format!(
+                    "{}:{}:{}",
+                    self.op_name(),
+                    request.bundle_route_intent_ref,
+                    request.destroy
+                ),
+            ),
+            Self::ApplySysctl(request) => (
+                request.scope_id.to_string(),
+                format!(
+                    "{}:{}:{}",
+                    self.op_name(),
+                    request.bundle_sysctl_intent_ref,
+                    request.destroy
+                ),
+            ),
+            Self::BindUnixSocket(request) => (
+                request.vm_id.to_string(),
+                format!("{}:{}:{}", self.op_name(), request.vm_id, request.role_id),
+            ),
+            Self::CreateOrReconcileUsersGroups(request) => (
+                request
+                    .subject_ids
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(","),
+                format!("{}:{}", self.op_name(), request.subject_ids.len()),
+            ),
+            Self::CreateBridge(request) => (
+                request.scope_id.to_string(),
+                format!("{}:{}", self.op_name(), request.bundle_bridge_intent_ref),
+            ),
+            Self::DeleteBridge(request) => (
+                request.scope_id.to_string(),
+                format!("{}:{}", self.op_name(), request.bundle_bridge_intent_ref),
+            ),
+            Self::CreatePersistentTap(request) => (
+                request.vm_id.to_string(),
+                format!("{}:{}:{}", self.op_name(), request.vm_id, request.role_id),
+            ),
+            Self::CreateTapFd(request) => (
+                request.vm_id.to_string(),
+                format!("{}:{}:{}", self.op_name(), request.vm_id, request.role_id),
+            ),
+            Self::DeletePersistentTap(request) => (
+                request.attachment_id.to_string(),
+                format!(
+                    "{}:{}:{}:{}",
+                    self.op_name(),
+                    request.attachment_id,
+                    request.expected_network_generation.get(),
+                    request.expected_attachment_generation.get()
+                ),
+            ),
+            Self::DelegateCgroupV2(request) => (
+                request.scope_id.to_string(),
+                format!("{}:{}", self.op_name(), request.scope_id),
+            ),
+            Self::GuestControlSign(request) => (
+                request.vm_id.to_string(),
+                format!("{}:{}", self.op_name(), request.vm_id),
+            ),
+            Self::InjectSecretById(request)
+            | Self::ReadSecretById(request)
+            | Self::RotateSecretById(request) => (
+                request.opaque_id.clone(),
+                format!("{}:{}", self.op_name(), request.opaque_id),
+            ),
+            Self::LaunchMinijailChild(request) => (
+                request.vm_id.to_string(),
+                format!("{}:{}:{}", self.op_name(), request.vm_id, request.role_id),
+            ),
+            Self::ModprobeIfAllowed(request) => (
+                request.module_name.clone(),
+                format!("{}:{}", self.op_name(), request.module_name),
+            ),
+            Self::OpenCgroupDir(request) => (
+                request.scope_id.to_string(),
+                format!(
+                    "{}:{}:{:?}",
+                    self.op_name(),
+                    request.scope_id,
+                    request.path_class
+                ),
+            ),
+            Self::OpenDevice(request) => (
+                request.role_id.to_string(),
+                format!(
+                    "{}:{}:{}",
+                    self.op_name(),
+                    request.role_id,
+                    request.device_class
+                ),
+            ),
+            Self::OpenFuse(request) => (
+                request.role_id.to_string(),
+                format!("{}:{}", self.op_name(), request.role_id),
+            ),
+            Self::OpenKvm(request) => (
+                request.role_id.to_string(),
+                format!("{}:{}", self.op_name(), request.role_id),
+            ),
+            Self::OpenVhostNet(request) => (
+                request.role_id.to_string(),
+                format!("{}:{}", self.op_name(), request.role_id),
+            ),
+            Self::OpenHidrawSecurityKey(request) => (
+                request.vm_id.to_string(),
+                format!(
+                    "{}:{}:{}",
+                    self.op_name(),
+                    request.vm_id,
+                    request.selector_id
+                ),
+            ),
+            Self::QemuMediaEnroll(request) => (
+                request.vm_id.to_string(),
+                format!("{}:{}:{}", self.op_name(), request.vm_id, request.media_ref),
+            ),
+            Self::QemuMediaRefreshRegistry(_) => {
+                ("qemu-media-registry".to_owned(), self.op_name().to_owned())
+            }
+            Self::QemuMediaBoot(request) => (
+                request.vm_id.to_string(),
+                format!("{}:{}", self.op_name(), request.vm_id),
+            ),
+            Self::QemuMediaSystemPowerdown(request) => (
+                request.vm_id.to_string(),
+                format!("{}:{}", self.op_name(), request.vm_id),
+            ),
+            Self::QemuMediaQueryStatus(request) => (
+                request.vm_id.to_string(),
+                format!("{}:{}", self.op_name(), request.vm_id),
+            ),
+            Self::QemuMediaQuit(request) => (
+                request.vm_id.to_string(),
+                format!("{}:{}", self.op_name(), request.vm_id),
+            ),
+            Self::QemuMediaAttach(request) | Self::QemuMediaDetach(request) => (
+                request.vm_id.to_string(),
+                format!("{}:{}:{}", self.op_name(), request.vm_id, request.bus_id),
+            ),
+            Self::OpenPidfd(request) => (
+                request.vm_id.to_string(),
+                format!("{}:{}:{}", self.op_name(), request.vm_id, request.role_id),
+            ),
+            Self::SignalRunner(request) => (
+                request.vm_id.to_string(),
+                format!("{}:{}:{}", self.op_name(), request.vm_id, request.role_id),
+            ),
+            Self::DeregisterRunnerPidfd(request) => (
+                request.vm_id.to_string(),
+                format!("{}:{}:{}", self.op_name(), request.vm_id, request.role_id),
+            ),
+            Self::OpenZoneStore(request) => (
+                request.zone_store_id.as_str().to_owned(),
+                format!("{}:{}", self.op_name(), request.zone_store_id.as_str()),
+            ),
+            Self::PrepareRuntimeDir(request) | Self::PrepareStateDir(request) => (
+                request.vm_id.to_string(),
+                format!(
+                    "{}:{}:{:?}",
+                    self.op_name(),
+                    request.vm_id,
+                    request.path_class
+                ),
+            ),
+            Self::MigrateLegacySwtpmState(request) => (
+                request.vm_id.to_string(),
+                format!(
+                    "{}:{}:{}",
+                    self.op_name(),
+                    request.vm_id,
+                    request.bundle_legacy_swtpm_intent_ref
+                ),
+            ),
+            Self::ReconcileStorageScope(request) => (
+                request.storage_ref.to_string(),
+                format!("{}:{}", self.op_name(), request.storage_ref),
+            ),
+            Self::ValidateLockSpec(request) => (
+                request.lock_ref.to_string(),
+                format!("{}:{}", self.op_name(), request.lock_ref),
+            ),
+            Self::PrepareStoreView(request) => (
+                request.vm_id.to_string(),
+                format!("{}:{}", self.op_name(), request.vm_id),
+            ),
+            Self::StoreVerify(request) => (
+                request.vm_id.to_string(),
+                format!("{}:{}", self.op_name(), request.vm_id),
+            ),
+            Self::StoreSync(request) => (
+                request.vm_id.to_string(),
+                format!(
+                    "{}:{}:{}:{}",
+                    self.op_name(),
+                    request.vm_id,
+                    request.bundle_closure_ref,
+                    request.generation_token
+                ),
+            ),
+            Self::RunHostInstall(request) => (
+                request.bundle_installer_intent_ref.to_string(),
+                format!(
+                    "{}:{}:{}:{}",
+                    self.op_name(),
+                    request.bundle_installer_intent_ref,
+                    request.enable,
+                    request.start
+                ),
+            ),
+            Self::RunMigrate(request) => (
+                request.bundle_migrate_intent_ref.to_string(),
+                format!("{}:{}", self.op_name(), request.bundle_migrate_intent_ref),
+            ),
+            Self::RunActivation(request) => (
+                request.vm.clone(),
+                format!(
+                    "{}:{}:{}:{:?}:{:?}",
+                    self.op_name(),
+                    request.bundle_activation_intent_ref,
+                    request.vm,
+                    request.mode,
+                    request.phase
+                ),
+            ),
+            Self::RunGc(request) => (
+                request.bundle_gc_intent_ref.to_string(),
+                format!("{}:{}", self.op_name(), request.bundle_gc_intent_ref),
+            ),
+            Self::RunKeysRotate(request) => (
+                request.vm.clone(),
+                format!(
+                    "{}:{}:{}",
+                    self.op_name(),
+                    request.bundle_keys_intent_ref,
+                    request.vm
+                ),
+            ),
+            Self::RunHostKeyTrust(request) => (
+                request.vm.clone(),
+                format!(
+                    "{}:{}:{}",
+                    self.op_name(),
+                    request.bundle_trust_intent_ref,
+                    request.vm
+                ),
+            ),
+            Self::RunRotateKnownHost(request) => (
+                request.vm.clone(),
+                format!(
+                    "{}:{}:{}",
+                    self.op_name(),
+                    request.bundle_rotate_known_host_intent_ref,
+                    request.vm
+                ),
+            ),
+            Self::SetBridgePortFlags(request) => (
+                request.vm_id.to_string(),
+                format!("{}:{}:{}", self.op_name(), request.vm_id, request.role_id),
+            ),
+            Self::SetSocketAcl(request) => (
+                request.vm_id.to_string(),
+                format!("{}:{}:{}", self.op_name(), request.vm_id, request.role_id),
+            ),
+            Self::SetupMountNamespace(request) => (
+                request.vm_id.to_string(),
+                format!("{}:{}:{}", self.op_name(), request.vm_id, request.role_id),
+            ),
+            Self::SpawnRunner(request) => (
+                request.vm_id.to_string(),
+                format!(
+                    "{}:{}:{}:{}",
+                    self.op_name(),
+                    request.vm_id,
+                    request.role_id,
+                    request.bundle_runner_intent_ref
+                ),
+            ),
+            Self::UpdateHostsFile(request) => (
+                request.bundle_hosts_intent_ref.to_string(),
+                format!(
+                    "{}:{}:{}",
+                    self.op_name(),
+                    request.bundle_hosts_intent_ref,
+                    request.destroy
+                ),
+            ),
+            Self::UsbipBind(request) => (
+                request.bundle_usbip_bind_intent_ref.to_string(),
+                format!(
+                    "{}:{}",
+                    self.op_name(),
+                    request.bundle_usbip_bind_intent_ref
+                ),
+            ),
+            Self::UsbipUnbind(request) => (
+                request.bundle_usbip_bind_intent_ref.to_string(),
+                format!(
+                    "{}:{}:{}",
+                    self.op_name(),
+                    request.bundle_usbip_bind_intent_ref,
+                    request.preserve_durable_claim
+                ),
+            ),
+            Self::UsbipBindFirewallRule(request) => (
+                request.bundle_usbip_firewall_intent_ref.to_string(),
+                format!(
+                    "{}:{}",
+                    self.op_name(),
+                    request.bundle_usbip_firewall_intent_ref
+                ),
+            ),
+            Self::UsbipProxyReconcile(request) => (
+                request.scope_id.to_string(),
+                format!("{}:{}", self.op_name(), request.scope_id),
+            ),
+            Self::UsbipExplicitBind(request) => (
+                request.vm.clone(),
+                format!("{}:{}:{}", self.op_name(), request.vm, request.env),
+            ),
+            Self::UsbipExplicitFirewallRule(request) => (
+                request.env.clone(),
+                format!(
+                    "{}:{}:{}",
+                    self.op_name(),
+                    request.env,
+                    request.host_uplink_ip
+                ),
+            ),
+            Self::SeedDnsmasqLease(request) => (
+                request.vm_id.to_string(),
+                format!("{}:{}:{}", self.op_name(), request.vm_id, request.scope_id),
+            ),
+            Self::BindMountFromHardlinkFarm(request) => (
+                request.vm_id.to_string(),
+                format!(
+                    "{}:{}:{:?}",
+                    self.op_name(),
+                    request.vm_id,
+                    request.bundle_store_view_intent_ref
+                ),
+            ),
+            Self::OwnershipMatrixCheck(request) => (
+                request.vm_id.to_string(),
+                format!("{}:{}", self.op_name(), request.vm_id),
+            ),
+            Self::SshHostKeyPreflight(request) => (
+                request.vm_id.to_string(),
+                format!("{}:{}", self.op_name(), request.vm_id),
+            ),
+            Self::DiskInit(request) => (
+                request.vm_id.to_string(),
+                format!("{}:{}", self.op_name(), request.vm_id),
+            ),
+            Self::SecurityKeyOpenDevice(request) => (
+                request.device_label.as_str().to_owned(),
+                format!("{}:{}", self.op_name(), request.session_id.as_str()),
+            ),
+            Self::SecurityKeyApplyUdevRules(request) => (
+                request.bundle_udev_intent_ref.clone(),
+                format!("{}:{}", self.op_name(), request.bundle_udev_intent_ref),
+            ),
+            Self::ValidateBundle
+            | Self::ExportBrokerAudit(_)
+            | Self::Hello(_)
+            | Self::PauseBroker
+            | Self::PollChildReaped
+            | Self::ResumeBroker => return None,
+        };
+        Some((
+            crate::v3::canonical_digest("d2b:broker-zone:v2", scope.as_bytes()),
+            crate::v3::canonical_digest("d2b:broker-operation:v2", operation.as_bytes()),
+        ))
+    }
 }
 
 /// Broker-side installer driver. The broker resolves the bundle's
@@ -617,7 +1033,7 @@ pub enum BrokerResponse {
 /// bootstrap `BrokerResponse::Error` struct variant fields so the audit
 /// pipeline + daemon-side error propagation stay shape-compatible
 /// across the dispatcher transition.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BrokerErrorResponse {
     pub kind: String,
@@ -626,6 +1042,19 @@ pub struct BrokerErrorResponse {
     pub target_wave: Option<String>,
     pub message: String,
     pub action: String,
+}
+
+impl core::fmt::Debug for BrokerErrorResponse {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("BrokerErrorResponse")
+            .field("kind", &self.kind)
+            .field("operation", &self.operation)
+            .field("has_target_wave", &self.target_wave.is_some())
+            .field("message", &"<redacted>")
+            .field("action", &"<redacted>")
+            .finish()
+    }
 }
 
 /// Daemon ↔ broker handshake response. Mirrors the bootstrap
@@ -812,19 +1241,107 @@ pub struct DelegateCgroupV2Request {
     pub tracing_span_id: Option<TracingSpanId>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ExportBrokerAuditRequest {
     pub filter: Option<BrokerAuditFilter>,
     pub since: Option<String>,
+    #[serde(default)]
+    pub cursor: Option<AuditExportCursor>,
+    #[serde(default = "default_audit_export_limit")]
+    pub limit: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+impl core::fmt::Debug for ExportBrokerAuditRequest {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("ExportBrokerAuditRequest")
+            .field("has_filter", &self.filter.is_some())
+            .field("has_since", &self.since.is_some())
+            .field("has_cursor", &self.cursor.is_some())
+            .field("limit", &self.limit)
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BrokerAuditFilter {
     pub env: Option<String>,
     pub operation: Option<String>,
     pub vm: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<String>,
+    #[serde(default)]
+    pub severity: Option<BrokerAuditSeverity>,
+}
+
+impl core::fmt::Debug for BrokerAuditFilter {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("BrokerAuditFilter(<redacted>)")
+    }
+}
+
+/// Closed severity predicate for broker audit export.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum BrokerAuditSeverity {
+    Info,
+    Warning,
+    Error,
+    Denied,
+}
+
+fn default_audit_export_limit() -> u32 {
+    256
+}
+
+/// Opaque page position for typed broker audit export.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AuditExportCursor {
+    pub day: String,
+    pub line: u64,
+    /// Sequence of the last emitted entry. This keeps page sequence numbers
+    /// monotonic across restarts and continuation requests.
+    #[serde(default)]
+    pub sequence: u64,
+}
+
+/// Closed export failure classes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum AuditExportErrorCode {
+    HashBreak,
+    RecordInvalid,
+    ReadFailed,
+}
+
+/// One typed audit export entry. Exactly one of `record` and `error` is
+/// populated by the broker.
+#[derive(Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AuditExportEntry {
+    pub sequence: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub record: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<AuditExportErrorCode>,
+}
+
+impl Eq for AuditExportEntry {}
+
+impl core::fmt::Debug for AuditExportEntry {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("AuditExportEntry")
+            .field("sequence", &self.sequence)
+            .field("has_record", &self.record.is_some())
+            .field("error", &self.error)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -1618,10 +2135,24 @@ pub struct TapReadyResponse {
     pub tap: IfName,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ExportBrokerAuditResponse {
-    pub lines: Vec<String>,
+    pub entries: Vec<AuditExportEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<AuditExportCursor>,
+    pub complete: bool,
+}
+
+impl core::fmt::Debug for ExportBrokerAuditResponse {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("ExportBrokerAuditResponse")
+            .field("entry_count", &self.entries.len())
+            .field("has_next_cursor", &self.next_cursor.is_some())
+            .field("complete", &self.complete)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -1861,6 +2392,58 @@ pub struct SpawnRunnerResponse {
     pub console_fd_index: Option<u32>,
 }
 
+/// Canonical opaque digest carried by the broker audit join context.
+#[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(transparent)]
+pub struct CanonicalAuditDigest(pub String);
+
+impl CanonicalAuditDigest {
+    /// Parse the exact lower-case SHA-256 wire spelling.
+    pub fn parse(value: impl Into<String>) -> Result<Self, &'static str> {
+        let value = value.into();
+        if crate::v3::is_canonical_digest(&value) {
+            Ok(Self(value))
+        } else {
+            Err("canonical-audit-digest-invalid")
+        }
+    }
+
+    /// Borrow the digest.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl core::fmt::Debug for CanonicalAuditDigest {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("CanonicalAuditDigest(<redacted>)")
+    }
+}
+
+impl<'de> Deserialize<'de> for CanonicalAuditDigest {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Self::parse(value).map_err(serde::de::Error::custom)
+    }
+}
+
+/// Explicit Zone and operation identity carried with broker requests.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AuditJoinContext {
+    pub zone_id: CanonicalAuditDigest,
+    pub operation_identity: CanonicalAuditDigest,
+}
+
+impl core::fmt::Debug for AuditJoinContext {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("AuditJoinContext(<redacted>)")
+    }
+}
+
 /// Wire envelope wrapping a [`BrokerRequest`] with the authenticated
 /// caller context the broker uses for authorization and audit.
 ///
@@ -1877,6 +2460,9 @@ pub struct BrokerRequestEnvelope {
     /// broker (which always uses `SO_PEERCRED`).
     #[serde(default)]
     pub test_peer_uid: Option<u32>,
+    /// Explicit canonical join identities for broker/resource durability.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audit_join: Option<AuditJoinContext>,
 }
 
 /// Caller role classification derived from `SO_PEERCRED` + the
@@ -2177,6 +2763,7 @@ mod tests {
             request: BrokerRequest::ValidateBundle,
             caller_role: BrokerCallerRole::AdminUid { uid: 1000 },
             test_peer_uid: None,
+            audit_join: None,
         };
         let frame = encode_frame(&env).expect("encodes");
         let parsed: BrokerRequestEnvelope =

@@ -1,10 +1,17 @@
 //! Typed v3 authoritative audit records.
 
-use crate::hash_chain::{AuditChainLink, AuditHash, genesis_hash, payload_hash, record_hash};
+use crate::{
+    hash_chain::{
+        AuditChainLink, AuditHash, genesis_hash, is_canonical_digest, payload_hash, record_hash,
+    },
+    operation::{OperationIdentity, opaque_identity},
+};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// Current audit record schema version.
-pub const AUDIT_SCHEMA_VERSION: u16 = 1;
+pub const AUDIT_SCHEMA_VERSION: u16 = 2;
+/// The pre-U4 raw-field hash schema retained for read-only chain continuity.
+pub const LEGACY_AUDIT_SCHEMA_VERSION: u16 = 1;
 
 /// Closed audit record classes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -77,7 +84,7 @@ impl AuditRecordClass {
 }
 
 /// Resource mutation fields.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct ResourceMutationFields {
     /// Mutation verb.
@@ -100,10 +107,16 @@ pub struct ResourceMutationFields {
     pub outcome: String,
     /// Stable error code, when present.
     pub error_code: Option<String>,
+    /// Deterministic mutation identity persisted by resource outboxes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mutation_id: Option<String>,
+    /// Stable ordinal within the operation batch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mutation_ordinal: Option<u32>,
 }
 
 /// Resource upgrade fields.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct ResourceUpgradeFields {
     /// Upgrade operation.
@@ -135,7 +148,7 @@ pub struct ResourceUpgradeFields {
 }
 
 /// RBAC change fields.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct RbacChangeFields {
     /// RBAC verb.
@@ -155,7 +168,7 @@ pub struct RbacChangeFields {
 }
 
 /// Session connection fields.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct SessionConnectFields {
     /// Connection lifecycle event.
@@ -181,7 +194,7 @@ pub struct SessionConnectFields {
 }
 
 /// Bus route admission fields.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct RouteAdmissionFields {
     /// Closed service package name.
@@ -201,7 +214,7 @@ pub struct RouteAdmissionFields {
 }
 
 /// Resource share fields.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct ResourceShareFields {
     /// Share lifecycle event.
@@ -215,7 +228,7 @@ pub struct ResourceShareFields {
 }
 
 /// Broker effect fields.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct BrokerEffectFields {
     /// Stable broker operation class.
@@ -233,7 +246,7 @@ pub struct BrokerEffectFields {
 }
 
 /// Process effect fields.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct ProcessEffectFields {
     /// Process lifecycle event.
@@ -255,7 +268,7 @@ pub struct ProcessEffectFields {
 }
 
 /// State reset fields.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct StateResetFields {
     /// Reset scope.
@@ -270,8 +283,32 @@ pub struct StateResetFields {
     pub outcome: String,
 }
 
+macro_rules! impl_redacted_debug {
+    ($($type:ty),+ $(,)?) => {
+        $(
+            impl core::fmt::Debug for $type {
+                fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                    formatter.write_str(stringify!($type).split("::").last().unwrap_or("AuditFields"))
+                }
+            }
+        )+
+    };
+}
+
+impl_redacted_debug!(
+    ResourceMutationFields,
+    ResourceUpgradeFields,
+    RbacChangeFields,
+    SessionConnectFields,
+    RouteAdmissionFields,
+    ResourceShareFields,
+    BrokerEffectFields,
+    ProcessEffectFields,
+    StateResetFields,
+);
+
 /// Class-specific record fields.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum AuditRecordFields {
     /// Resource mutation.
     ResourceMutation(ResourceMutationFields),
@@ -291,6 +328,12 @@ pub enum AuditRecordFields {
     ProcessEffect(ProcessEffectFields),
     /// State reset.
     StateReset(StateResetFields),
+}
+
+impl core::fmt::Debug for AuditRecordFields {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("AuditRecordFields(<redacted>)")
+    }
 }
 
 impl AuditRecordFields {
@@ -355,7 +398,7 @@ impl AuditRecordFields {
 }
 
 /// One complete hash-chained audit record.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct AuditRecord {
     ts_ms: u64,
     schema_version: u16,
@@ -367,6 +410,16 @@ pub struct AuditRecord {
     previous_hash: AuditHash,
     record_hash: AuditHash,
     fields: AuditRecordFields,
+}
+
+impl core::fmt::Debug for AuditRecord {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("AuditRecord")
+            .field("class", &self.class())
+            .field("timestamp_ms", &self.ts_ms)
+            .finish_non_exhaustive()
+    }
 }
 
 impl AuditRecord {
@@ -388,7 +441,10 @@ impl AuditRecord {
             zone: bounded_text(zone.into())?,
             operation_id: bounded_text(operation_id.into())?,
             correlation_id: bounded_text(correlation_id.into())?,
-            trace_id: trace_id.map(bounded_text).transpose()?,
+            trace_id: trace_id
+                .map(|trace| d2b_telemetry::canonical_export_id(&trace))
+                .map(bounded_text)
+                .transpose()?,
             source: bounded_text(source.into())?,
             previous_hash,
             record_hash: genesis_hash(),
@@ -414,9 +470,38 @@ impl AuditRecord {
         self.ts_ms
     }
 
+    /// Physical schema version read from the durable record.
+    pub const fn schema_version(&self) -> u16 {
+        self.schema_version
+    }
+
     /// Opaque operation correlator.
     pub fn operation_id(&self) -> &str {
         &self.operation_id
+    }
+
+    /// Return the stable opaque identity shared with other durability domains.
+    pub fn operation_identity(&self) -> OperationIdentity {
+        opaque_operation(&self.operation_id)
+    }
+
+    /// Return the deterministic mutation identity when this record came from
+    /// a resource outbox.
+    pub fn mutation_id(&self) -> Option<&str> {
+        match &self.fields {
+            AuditRecordFields::ResourceMutation(fields) => fields.mutation_id.as_deref(),
+            _ => None,
+        }
+    }
+
+    /// Return the Zone-scoped operation join key for this record.
+    pub fn zone_operation_key(&self) -> Result<crate::ZoneOperationKey, AuditRecordError> {
+        Ok(crate::ZoneOperationKey::new(
+            crate::ZoneId::parse(&self.zone)
+                .or_else(|_| crate::ZoneId::derive(&self.zone))
+                .map_err(|_| AuditRecordError::FieldInvalid)?,
+            self.operation_identity(),
+        ))
     }
 
     /// Opaque cross-system correlator.
@@ -468,10 +553,35 @@ impl AuditRecord {
         Ok(bytes)
     }
 
+    /// Rebuild one record for export using the current redacted V2 identity
+    /// envelope. This deliberately does not echo the original raw line or
+    /// preserve a legacy V1 hash over raw fields.
+    pub fn redacted_for_export(&self, previous_hash: AuditHash) -> Result<Self, AuditRecordError> {
+        let mut record = Self {
+            ts_ms: self.ts_ms,
+            schema_version: AUDIT_SCHEMA_VERSION,
+            zone: bounded_text(opaque_zone(&self.zone))?,
+            operation_id: bounded_text(opaque_operation(&self.operation_id).as_str().to_owned())?,
+            correlation_id: bounded_text(opaque_preserving(&self.correlation_id))?,
+            trace_id: self
+                .trace_id
+                .as_deref()
+                .map(d2b_telemetry::canonical_export_id)
+                .map(bounded_text)
+                .transpose()?,
+            source: bounded_text(opaque_preserving(&self.source))?,
+            previous_hash,
+            record_hash: genesis_hash(),
+            fields: self.fields.clone(),
+        };
+        record.record_hash = record.computed_record_hash()?;
+        Ok(record)
+    }
+
     /// Compute a link view for callers that need explicit chain metadata.
     pub fn chain_link(&self, sequence: u64) -> Result<AuditChainLink, AuditRecordError> {
         let payload = payload_hash(
-            &serde_json::to_vec(&self.fields.to_value())
+            &serde_json::to_vec(&self.serialized_fields_value())
                 .map_err(|_| AuditRecordError::Serialization)?,
         );
         Ok(AuditChainLink::new(
@@ -483,14 +593,17 @@ impl AuditRecord {
     }
 
     fn computed_record_hash(&self) -> Result<AuditHash, AuditRecordError> {
+        if self.schema_version == LEGACY_AUDIT_SCHEMA_VERSION {
+            return self.computed_record_hash_legacy_raw();
+        }
         let envelope = self.canonical_without_hash()?;
         Ok(record_hash(&self.previous_hash, &envelope))
     }
 
-    fn canonical_without_hash(&self) -> Result<Vec<u8>, AuditRecordError> {
-        serde_json::to_vec(&serde_json::json!({
+    fn computed_record_hash_legacy_raw(&self) -> Result<AuditHash, AuditRecordError> {
+        let envelope = serde_json::to_vec(&serde_json::json!({
             "ts_ms": self.ts_ms,
-            "schema_version": self.schema_version,
+            "schema_version": LEGACY_AUDIT_SCHEMA_VERSION,
             "zone": self.zone,
             "record_class": self.class().as_str(),
             "operation_id": self.operation_id,
@@ -500,7 +613,39 @@ impl AuditRecord {
             "prev_hash": self.previous_hash,
             self.class().fields_key(): self.fields.to_value(),
         }))
+        .map_err(|_| AuditRecordError::Serialization)?;
+        Ok(record_hash(&self.previous_hash, &envelope))
+    }
+
+    fn canonical_without_hash(&self) -> Result<Vec<u8>, AuditRecordError> {
+        self.canonical_without_hash_with_zone(opaque_zone(&self.zone))
+    }
+
+    fn canonical_without_hash_with_zone(&self, zone: String) -> Result<Vec<u8>, AuditRecordError> {
+        serde_json::to_vec(&serde_json::json!({
+            "ts_ms": self.ts_ms,
+            "schema_version": self.schema_version,
+            "zone": zone,
+            "record_class": self.class().as_str(),
+            "operation_id": opaque_operation(&self.operation_id).as_str(),
+            "correlation_id": opaque_preserving(&self.correlation_id),
+            "trace_id": self
+                .trace_id
+                .as_deref()
+                .map(d2b_telemetry::canonical_export_id),
+            "source": opaque_preserving(&self.source),
+            "prev_hash": self.previous_hash,
+            self.class().fields_key(): redacted_fields_value(&self.fields),
+        }))
         .map_err(|_| AuditRecordError::Serialization)
+    }
+
+    fn serialized_fields_value(&self) -> serde_json::Value {
+        if self.schema_version == LEGACY_AUDIT_SCHEMA_VERSION {
+            self.fields.to_value()
+        } else {
+            redacted_fields_value(&self.fields)
+        }
     }
 }
 
@@ -515,21 +660,53 @@ impl Serialize for AuditRecord {
             "schema_version".to_owned(),
             serde_json::json!(self.schema_version),
         );
-        object.insert("zone".to_owned(), serde_json::json!(self.zone));
+        let legacy = self.schema_version == LEGACY_AUDIT_SCHEMA_VERSION;
+        object.insert(
+            "zone".to_owned(),
+            serde_json::json!(if legacy {
+                self.zone.clone()
+            } else {
+                opaque_zone(&self.zone)
+            }),
+        );
         object.insert(
             "record_class".to_owned(),
             serde_json::json!(self.class().as_str()),
         );
         object.insert(
             "operation_id".to_owned(),
-            serde_json::json!(self.operation_id),
+            serde_json::json!(if legacy {
+                self.operation_id.clone()
+            } else {
+                opaque_operation(&self.operation_id).as_str().to_owned()
+            }),
         );
         object.insert(
             "correlation_id".to_owned(),
-            serde_json::json!(self.correlation_id),
+            serde_json::json!(if legacy {
+                self.correlation_id.clone()
+            } else {
+                opaque_preserving(&self.correlation_id)
+            }),
         );
-        object.insert("trace_id".to_owned(), serde_json::json!(self.trace_id));
-        object.insert("source".to_owned(), serde_json::json!(self.source));
+        object.insert(
+            "trace_id".to_owned(),
+            serde_json::json!(if legacy {
+                self.trace_id.clone()
+            } else {
+                self.trace_id
+                    .as_deref()
+                    .map(d2b_telemetry::canonical_export_id)
+            }),
+        );
+        object.insert(
+            "source".to_owned(),
+            serde_json::json!(if legacy {
+                self.source.clone()
+            } else {
+                opaque_preserving(&self.source)
+            }),
+        );
         object.insert(
             "prev_hash".to_owned(),
             serde_json::json!(self.previous_hash),
@@ -538,7 +715,10 @@ impl Serialize for AuditRecord {
             "record_hash".to_owned(),
             serde_json::json!(self.record_hash),
         );
-        object.insert(self.class().fields_key().to_owned(), self.fields.to_value());
+        object.insert(
+            self.class().fields_key().to_owned(),
+            self.serialized_fields_value(),
+        );
         object.serialize(serializer)
     }
 }
@@ -549,9 +729,6 @@ impl<'de> Deserialize<'de> for AuditRecord {
         D: Deserializer<'de>,
     {
         let value = serde_json::Value::deserialize(deserializer)?;
-        if contains_legacy_fields(&value) {
-            return Err(serde::de::Error::custom("audit-record-legacy-field"));
-        }
         let object = value
             .as_object()
             .ok_or_else(|| serde::de::Error::custom("audit-record-not-object"))?;
@@ -602,7 +779,6 @@ impl<'de> Deserialize<'de> for AuditRecord {
             .ok_or_else(|| serde::de::Error::custom("audit-record-fields-missing"))?;
         let fields =
             AuditRecordFields::from_value(class, field_value).map_err(serde::de::Error::custom)?;
-        validate_fields(&fields).map_err(serde::de::Error::custom)?;
         let get_string = |key: &str| {
             object
                 .get(key)
@@ -634,15 +810,29 @@ impl<'de> Deserialize<'de> for AuditRecord {
             .get("schema_version")
             .and_then(serde_json::Value::as_u64)
             .ok_or_else(|| serde::de::Error::custom("audit-record-field-invalid"))?;
-        if schema_version != u64::from(AUDIT_SCHEMA_VERSION) {
+        if schema_version != u64::from(AUDIT_SCHEMA_VERSION)
+            && schema_version != u64::from(LEGACY_AUDIT_SCHEMA_VERSION)
+        {
             return Err(serde::de::Error::custom("audit-record-schema-version"));
+        }
+        if schema_version == u64::from(AUDIT_SCHEMA_VERSION) {
+            validate_fields(&fields).map_err(serde::de::Error::custom)?;
+        } else if serde_json::to_vec(&fields.to_value())
+            .map_err(|_| serde::de::Error::custom("audit-record-fields-invalid"))?
+            .len()
+            > 64 * 1024
+        {
+            return Err(serde::de::Error::custom(
+                "audit-record-fields-out-of-bounds",
+            ));
         }
         let record = Self {
             ts_ms: object
                 .get("ts_ms")
                 .and_then(serde_json::Value::as_u64)
                 .ok_or_else(|| serde::de::Error::custom("audit-record-field-invalid"))?,
-            schema_version: AUDIT_SCHEMA_VERSION,
+            schema_version: u16::try_from(schema_version)
+                .map_err(|_| serde::de::Error::custom("audit-record-schema-version"))?,
             zone: get_bounded_string("zone")?,
             operation_id: get_bounded_string("operation_id")?,
             correlation_id: get_bounded_string("correlation_id")?,
@@ -704,6 +894,106 @@ fn bounded_text(value: String) -> Result<String, AuditRecordError> {
     Ok(value)
 }
 
+fn opaque_operation(value: &str) -> OperationIdentity {
+    OperationIdentity::parse(value).unwrap_or_else(|_| {
+        OperationIdentity::derive(value).expect("bounded audit operation identity")
+    })
+}
+
+fn opaque_preserving(value: &str) -> String {
+    OperationIdentity::parse(value)
+        .map(|identity| identity.as_str().to_owned())
+        .unwrap_or_else(|_| opaque_identity(value))
+}
+
+fn opaque_zone(value: &str) -> String {
+    crate::ZoneId::parse(value)
+        .map(|zone| zone.as_str().to_owned())
+        .or_else(|_| crate::ZoneId::derive(value).map(|zone| zone.as_str().to_owned()))
+        .unwrap_or_else(|_| opaque_identity(value))
+}
+
+fn redacted_fields_value(fields: &AuditRecordFields) -> serde_json::Value {
+    redact_json_value(fields.to_value(), None)
+}
+
+fn redact_json_value(value: serde_json::Value, key: Option<&str>) -> serde_json::Value {
+    match value {
+        serde_json::Value::Object(object) => serde_json::Value::Object(
+            object
+                .into_iter()
+                .map(|(key, value)| {
+                    let redacted = redact_json_value(value, Some(&key));
+                    (key, redacted)
+                })
+                .collect(),
+        ),
+        serde_json::Value::Array(values) => serde_json::Value::Array(
+            values
+                .into_iter()
+                .map(|value| redact_json_value(value, key))
+                .collect(),
+        ),
+        serde_json::Value::String(value) if key.is_some_and(is_sensitive_key) => {
+            redact_scalar(serde_json::Value::String(value), key)
+        }
+        scalar => scalar,
+    }
+}
+
+fn redact_scalar(value: serde_json::Value, key: Option<&str>) -> serde_json::Value {
+    match value {
+        serde_json::Value::String(value) => {
+            if let Ok(identity) = OperationIdentity::parse(&value) {
+                return serde_json::Value::String(identity.as_str().to_owned());
+            }
+            let should_hash = key.is_some_and(is_identity_key)
+                || value.contains('/')
+                || value.contains('\n')
+                || value.contains('\r');
+            if should_hash {
+                serde_json::Value::String(opaque_identity(&value))
+            } else {
+                serde_json::Value::String(value)
+            }
+        }
+        other => other,
+    }
+}
+
+fn is_sensitive_key(key: &str) -> bool {
+    is_identity_key(key)
+        || matches!(
+            key,
+            "path"
+                | "argv"
+                | "env"
+                | "socket"
+                | "pid"
+                | "peer"
+                | "credential"
+                | "secret"
+                | "handle"
+                | "message"
+                | "text"
+        )
+}
+
+fn is_identity_key(key: &str) -> bool {
+    key == "zone"
+        || key == "peer_zone"
+        || key == "operation_id"
+        || key == "correlation_id"
+        || key == "trace_id"
+        || key == "resource_uid"
+        || key == "process_uid"
+        || key == "subject_digest"
+        || key.ends_with("_uid")
+        || key.ends_with("_name")
+        || key.ends_with("_name_hash")
+        || key.ends_with("_name_digest")
+}
+
 fn closed(value: &str, allowed: &[&str]) -> bool {
     allowed.contains(&value)
 }
@@ -757,11 +1047,7 @@ fn validate_fields(fields: &AuditRecordFields) -> Result<(), AuditRecordError> {
                 .bytes()
                 .all(|byte| byte.is_ascii_graphic() && byte != b'/')
     };
-    let valid_digest = |value: &str| {
-        value
-            .strip_prefix("sha256:")
-            .is_some_and(|digest| !digest.is_empty() && valid_digestish(value))
-    };
+    let valid_digest = is_canonical_digest;
     let valid_route_component = |value: &str| {
         !value.is_empty()
             && value.len() <= 128
@@ -794,6 +1080,13 @@ fn validate_fields(fields: &AuditRecordFields) -> Result<(), AuditRecordError> {
                 || !valid_digestish(&fields.resource_uid)
                 || !valid_digest(&fields.subject_digest)
                 || !valid_code(fields.error_code.as_deref())
+                || fields
+                    .mutation_id
+                    .as_deref()
+                    .is_some_and(|value| !valid_digest(value))
+                || fields
+                    .mutation_ordinal
+                    .is_some_and(|ordinal| ordinal >= 1024)
             {
                 return Err(AuditRecordError::FieldInvalid);
             }
@@ -902,7 +1195,18 @@ fn validate_fields(fields: &AuditRecordFields) -> Result<(), AuditRecordError> {
                 || !valid_digest(&fields.subject_digest)
                 || !valid_digest(&fields.execution_context_digest)
                 || !valid_digest(&fields.resource_context_digest)
-                || !closed(&fields.outcome, &["ok", "denied", "error"])
+                || !closed(
+                    &fields.outcome,
+                    &[
+                        "ok",
+                        "denied",
+                        "denied-refused",
+                        "denied-policy",
+                        "denied-unknown",
+                        "error",
+                        "errored",
+                    ],
+                )
                 || !valid_code(fields.error_code.as_deref())
             {
                 return Err(AuditRecordError::FieldInvalid);
@@ -945,17 +1249,6 @@ fn validate_fields(fields: &AuditRecordFields) -> Result<(), AuditRecordError> {
     Ok(())
 }
 
-fn contains_legacy_fields(value: &serde_json::Value) -> bool {
-    match value {
-        serde_json::Value::Object(object) => object.iter().any(|(key, value)| {
-            matches!(key.as_str(), "realm" | "node" | "workload_id")
-                || contains_legacy_fields(value)
-        }),
-        serde_json::Value::Array(values) => values.iter().any(contains_legacy_fields),
-        _ => false,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -974,7 +1267,9 @@ mod tests {
                 provider: "system-core-user".to_owned(),
                 domain: "user".to_owned(),
                 no_isolation: true,
-                execution_ref_digest: "sha256:execution".to_owned(),
+                execution_ref_digest:
+                    "sha256:0000000000000000000000000000000000000000000000000000000000000001"
+                        .to_owned(),
                 process_uid: "uid-digest".to_owned(),
                 outcome: "ok".to_owned(),
                 exit_class: None,
@@ -987,10 +1282,14 @@ mod tests {
     fn v3_record_has_zone_and_no_legacy_fields() {
         let record = record(genesis_hash());
         let value = serde_json::to_value(&record).unwrap();
-        assert_eq!(
-            value.get("zone").and_then(|value| value.as_str()),
-            Some("work")
+        assert!(
+            value
+                .get("zone")
+                .and_then(|value| value.as_str())
+                .is_some_and(|value| value.starts_with("sha256:"))
         );
+        assert!(!serde_json::to_string(&record).unwrap().contains("work"));
+        assert!(!format!("{record:?}").contains("work"));
         assert!(value.get("realm").is_none());
         assert!(value.get("node").is_none());
         assert!(value.get("workload_id").is_none());
@@ -1028,7 +1327,8 @@ mod tests {
             subject_digest: "alice".to_owned(),
             authz_decision: "allowed".to_owned(),
             authz_revision: 1,
-            session_gen_digest: "sha256:generation".to_owned(),
+            session_gen_digest:
+                "sha256:0000000000000000000000000000000000000000000000000000000000000002".to_owned(),
             outcome: "ok".to_owned(),
             error_code: None,
         });
@@ -1046,5 +1346,22 @@ mod tests {
             .unwrap_err(),
             AuditRecordError::FieldInvalid
         );
+    }
+
+    #[test]
+    fn legacy_raw_field_hash_records_reopen_without_breaking_the_chain() {
+        let mut legacy = record(genesis_hash());
+        legacy.schema_version = LEGACY_AUDIT_SCHEMA_VERSION;
+        legacy.zone = "work".to_owned();
+        legacy.operation_id = "legacy-operation".to_owned();
+        legacy.correlation_id = "legacy-correlation".to_owned();
+        legacy.trace_id = Some("legacy-trace".to_owned());
+        legacy.source = "legacy-source".to_owned();
+        legacy.record_hash = legacy.computed_record_hash_legacy_raw().unwrap();
+        let wire = serde_json::to_value(&legacy).unwrap();
+        let reopened: AuditRecord = serde_json::from_value(wire).unwrap();
+        assert_eq!(reopened.schema_version(), LEGACY_AUDIT_SCHEMA_VERSION);
+        reopened.verify(reopened.previous_hash()).unwrap();
+        assert_eq!(reopened.zone(), "work");
     }
 }

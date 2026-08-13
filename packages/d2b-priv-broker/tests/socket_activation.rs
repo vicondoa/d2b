@@ -162,6 +162,7 @@ fn broker_adopts_socket_activated_fd_and_serves_hello() {
         }),
         caller_role: BrokerCallerRole::default(),
         test_peer_uid: Some(current_uid),
+        audit_join: None,
     };
     send_json_frame(client_fd.as_raw_fd(), &envelope).expect("send hello");
 

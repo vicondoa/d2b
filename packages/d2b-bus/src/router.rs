@@ -3875,9 +3875,14 @@ mod tests {
         let identity = watch_store_identity();
         write_provisioning_marker(&mut marker, &identity).unwrap();
         let (issuer, acceptor) = mutation_seal_pair(identity.seal_identity());
-        let store = RedbResourceStore::provision_owned(file, marker, identity, acceptor)
-            .await
-            .unwrap();
+        let audit = Arc::new(
+            d2b_audit::AuditSink::open(directory.path().join("audit"))
+                .expect("open watch audit sink"),
+        );
+        let store =
+            RedbResourceStore::provision_owned_with_audit(file, marker, identity, acceptor, audit)
+                .await
+                .unwrap();
         (directory, Arc::new(store), issuer)
     }
 

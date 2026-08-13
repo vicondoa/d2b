@@ -16,14 +16,15 @@ pub mod values;
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{Read as _, Seek as _, SeekFrom, Write as _};
-use std::os::fd::{AsFd, OwnedFd};
+use std::os::fd::{AsFd, AsRawFd, OwnedFd};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 
 use actor::{ReadPool, SignalCounters, WriterHandle};
 use d2b_audit::{
     AuditHash, AuditRecord, AuditRecordError, AuditRecordFields, AuditSink, AuditWriteClass,
-    AuditWriteOutcome,
+    AuditWriteOutcome, DurabilityEvidence, ZoneOperationKey,
 };
 use d2b_contracts::v3::{
     ConfigurationGeneration, ControllerGeneration, ResourceUid, Timestamp, ZoneId, ZoneRevision,
@@ -45,9 +46,7 @@ use rustix::net::{RecvAncillaryBuffer, RecvAncillaryMessage, RecvFlags, recvmsg}
 use crate::audit::DurableMutationAudit;
 #[cfg(test)]
 use crate::audit::NoopMutationAudit;
-#[cfg(test)]
-use crate::metrics::NoopStoreTelemetry;
-use crate::metrics::{EmitterStoreTelemetry, StoreTelemetry};
+use crate::metrics::{EmitterStoreTelemetry, NoopStoreTelemetry, StoreTelemetry};
 
 pub use actor::{
     BackendSignals, GROUP_COMMIT_MAX, MAX_CONCURRENT_READS, READ_LIFETIME, READ_POOL_THREADS,
@@ -87,30 +86,86 @@ pub use values::{
 /// Bound redb's page cache so database scale cannot turn into process RSS.
 pub(crate) const REDB_CACHE_SIZE: usize = 4 * 1024 * 1024;
 
+/// Synchronized broker terminal evidence shared by every Zone store opened by
+/// one daemon. The index is live: broker responses can be ingested after
+/// startup without rebuilding the store or restarting the daemon.
+pub struct BrokerEvidenceIndex {
+    entries: RwLock<BTreeMap<ZoneOperationKey, DurabilityEvidence>>,
+}
+
+impl core::fmt::Debug for BrokerEvidenceIndex {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("BrokerEvidenceIndex")
+            .field(
+                "entry_count",
+                &self
+                    .entries
+                    .read()
+                    .map(|entries| entries.len())
+                    .unwrap_or(0),
+            )
+            .finish()
+    }
+}
+
+impl Default for BrokerEvidenceIndex {
+    fn default() -> Self {
+        Self::new(BTreeMap::new())
+    }
+}
+
+impl BrokerEvidenceIndex {
+    /// Construct a live index from strict startup evidence.
+    pub fn new(entries: BTreeMap<ZoneOperationKey, DurabilityEvidence>) -> Self {
+        Self {
+            entries: RwLock::new(entries),
+        }
+    }
+
+    /// Insert one terminal broker result before a matching outbox is cleared.
+    pub fn insert(&self, evidence: DurabilityEvidence) -> Result<(), StoreError> {
+        let mut entries = self
+            .entries
+            .write()
+            .map_err(|_| transaction::durability_failure("broker-evidence-index-poisoned"))?;
+        if let Some(existing) = entries.get(&evidence.key)
+            && existing != &evidence
+        {
+            return Err(transaction::durability_failure(
+                "audit-broker-evidence-conflict",
+            ));
+        }
+        entries.insert(evidence.key.clone(), evidence);
+        Ok(())
+    }
+
+    /// Look up one canonical Zone-operation evidence row.
+    pub fn get(&self, key: &ZoneOperationKey) -> Result<Option<DurabilityEvidence>, StoreError> {
+        self.entries
+            .read()
+            .map(|entries| entries.get(key).cloned())
+            .map_err(|_| transaction::durability_failure("broker-evidence-index-poisoned"))
+    }
+
+    /// Return the number of live evidence rows.
+    pub fn len(&self) -> Result<usize, StoreError> {
+        self.entries
+            .read()
+            .map(|entries| entries.len())
+            .map_err(|_| transaction::durability_failure("broker-evidence-index-poisoned"))
+    }
+
+    /// Return whether the live evidence index has no rows.
+    pub fn is_empty(&self) -> Result<bool, StoreError> {
+        self.len().map(|len| len == 0)
+    }
+}
+
 struct StorePorts {
     telemetry: Arc<dyn StoreTelemetry>,
     audit: Arc<dyn DurableMutationAudit>,
-}
-
-/// Production uses the store's durable operation rows as an audit outbox.
-///
-/// The broker owns the database descriptor and its parent directory.  The
-/// Zone runtime is not allowed to infer a sibling audit path from that
-/// descriptor, and it cannot create one under the broker's 0750 directory.
-/// Tests that own an explicitly provisioned audit sink may inject it through
-/// the test seam below; normal production startup keeps the outbox durable in
-/// the database instead.
-#[derive(Debug, Default, Clone, Copy)]
-struct DurableOutboxAudit;
-
-impl DurableMutationAudit for DurableOutboxAudit {
-    fn enabled(&self) -> bool {
-        false
-    }
-
-    fn append_before_commit(&self, _record: &AuditRecord) -> Result<(), AuditRecordError> {
-        Ok(())
-    }
+    broker_evidence: Arc<BrokerEvidenceIndex>,
 }
 
 /// Adapter for an audit sink whose directory was provisioned by its owner.
@@ -143,6 +198,26 @@ impl DurableMutationAudit for StandardAuditSinkMutationAudit {
             }
         }
     }
+
+    fn existing_mutation_hash(
+        &self,
+        key: &ZoneOperationKey,
+        mutation_id: &str,
+    ) -> Result<Option<AuditHash>, AuditRecordError> {
+        self.sink
+            .mutation_record_hash(key, mutation_id)
+            .map_err(|_| AuditRecordError::Serialization)
+    }
+
+    fn existing_mutation_predecessor(
+        &self,
+        key: &ZoneOperationKey,
+        mutation_id: &str,
+    ) -> Result<Option<AuditHash>, AuditRecordError> {
+        self.sink
+            .mutation_record_predecessor(key, mutation_id)
+            .map_err(|_| AuditRecordError::Serialization)
+    }
 }
 
 #[allow(dead_code)]
@@ -172,23 +247,66 @@ fn audit_write_class(record: &AuditRecord) -> AuditWriteClass {
 }
 
 impl StorePorts {
-    fn production(_file: &File) -> Result<Self, StoreError> {
-        let telemetry_emitter = BoundedEmitter::with_default_capacity("/run/d2b/telemetry.sock")
-            .map_err(|_| transaction::durability_failure("telemetry-unavailable"))?;
+    #[cfg(not(test))]
+    fn production(file: &File) -> Result<Self, StoreError> {
+        let state_dir = store_state_dir(file)?;
+        let sink = Arc::new(
+            AuditSink::open(state_dir.join("audit"))
+                .map_err(|_| transaction::durability_failure("audit-owner-unavailable"))?,
+        );
+        Self::production_with_audit_and_telemetry(
+            file,
+            sink,
+            Arc::new(BrokerEvidenceIndex::default()),
+            state_dir.join("telemetry").join("emitter.sock"),
+        )
+    }
+
+    fn production_with_audit(
+        file: &File,
+        sink: Arc<AuditSink>,
+        broker_evidence: Arc<BrokerEvidenceIndex>,
+    ) -> Result<Self, StoreError> {
+        Self::production_with_audit_and_telemetry(
+            file,
+            sink,
+            broker_evidence,
+            store_state_dir(file)?
+                .join("telemetry")
+                .join("emitter.sock"),
+        )
+    }
+
+    fn production_with_audit_and_telemetry(
+        _file: &File,
+        sink: Arc<AuditSink>,
+        broker_evidence: Arc<BrokerEvidenceIndex>,
+        telemetry_path: PathBuf,
+    ) -> Result<Self, StoreError> {
+        let telemetry = match BoundedEmitter::with_default_capacity(telemetry_path) {
+            Ok(emitter) => Arc::new(EmitterStoreTelemetry::new(emitter)) as Arc<dyn StoreTelemetry>,
+            Err(_) => Arc::new(NoopStoreTelemetry) as Arc<dyn StoreTelemetry>,
+        };
         Ok(Self {
-            telemetry: Arc::new(EmitterStoreTelemetry::new(telemetry_emitter)),
-            audit: Arc::new(DurableOutboxAudit),
+            telemetry,
+            audit: Arc::new(StandardAuditSinkMutationAudit { sink }),
+            broker_evidence,
         })
     }
 
     #[cfg(test)]
     fn with_audit_sink(file: &File, sink: Arc<AuditSink>) -> Result<Self, StoreError> {
-        let telemetry_emitter = BoundedEmitter::with_default_capacity("/run/d2b/telemetry.sock")
-            .map_err(|_| transaction::durability_failure("telemetry-unavailable"))?;
+        let telemetry_emitter = BoundedEmitter::with_default_capacity(
+            store_state_dir(file)?
+                .join("telemetry")
+                .join("emitter.sock"),
+        )
+        .map_err(|_| transaction::durability_failure("telemetry-unavailable"))?;
         let _ = file;
         Ok(Self {
             telemetry: Arc::new(EmitterStoreTelemetry::new(telemetry_emitter)),
             audit: Arc::new(StandardAuditSinkMutationAudit { sink }),
+            broker_evidence: Arc::new(BrokerEvidenceIndex::default()),
         })
     }
 
@@ -197,6 +315,7 @@ impl StorePorts {
         Ok(Self {
             telemetry: Arc::new(NoopStoreTelemetry),
             audit: Arc::new(NoopMutationAudit),
+            broker_evidence: Arc::new(BrokerEvidenceIndex::default()),
         })
     }
 
@@ -204,6 +323,19 @@ impl StorePorts {
     fn for_file(file: &File) -> Result<Self, StoreError> {
         Self::production(file)
     }
+}
+
+fn store_state_dir(file: &File) -> Result<PathBuf, StoreError> {
+    let fd_path = Path::new("/proc/self/fd").join(file.as_raw_fd().to_string());
+    let target = std::fs::read_link(fd_path)
+        .map_err(|_| transaction::durability_failure("audit-owner-unavailable"))?;
+    if !target.is_absolute() || target.to_string_lossy().contains(" (deleted)") {
+        return Err(transaction::durability_failure("audit-owner-unavailable"));
+    }
+    target
+        .parent()
+        .map(Path::to_path_buf)
+        .ok_or_else(|| transaction::durability_failure("audit-owner-unavailable"))
 }
 
 /// Immutable identity and generation binding for one already-provisioned store.
@@ -323,6 +455,7 @@ pub struct RedbResourceStore {
     identity: StoreIdentity,
     authority_capability_nonce: u64,
     recovered_after_crash: bool,
+    broker_evidence: Arc<BrokerEvidenceIndex>,
     writer: WriterHandle,
     reads: ReadPool,
     signals: Arc<SignalCounters>,
@@ -348,6 +481,58 @@ impl RedbResourceStore {
         Self::provision_owned_with_ports(file, marker, identity, acceptor, None).await
     }
 
+    /// Provision a Zone store with its production-owned durable audit sink.
+    pub async fn provision_owned_with_audit(
+        file: File,
+        marker: File,
+        identity: StoreIdentity,
+        acceptor: MutationSealAcceptor,
+        audit_sink: Arc<AuditSink>,
+    ) -> Result<Self, StoreError> {
+        Self::provision_owned_with_audit_and_evidence(
+            file,
+            marker,
+            identity,
+            acceptor,
+            audit_sink,
+            Arc::new(BrokerEvidenceIndex::default()),
+        )
+        .await
+    }
+
+    /// Provision a Zone store with audit and broker reconciliation evidence.
+    pub async fn provision_owned_with_audit_and_evidence(
+        file: File,
+        marker: File,
+        identity: StoreIdentity,
+        acceptor: MutationSealAcceptor,
+        audit_sink: Arc<AuditSink>,
+        broker_evidence: Arc<BrokerEvidenceIndex>,
+    ) -> Result<Self, StoreError> {
+        let ports = StorePorts::production_with_audit(&file, audit_sink, broker_evidence)?;
+        Self::provision_owned_with_ports(file, marker, identity, acceptor, Some(ports)).await
+    }
+
+    /// Provision a Zone store with explicitly owned audit and telemetry
+    /// destinations.
+    pub async fn provision_owned_with_audit_and_evidence_and_telemetry(
+        file: File,
+        marker: File,
+        identity: StoreIdentity,
+        acceptor: MutationSealAcceptor,
+        audit_sink: Arc<AuditSink>,
+        broker_evidence: Arc<BrokerEvidenceIndex>,
+        telemetry_path: impl AsRef<Path>,
+    ) -> Result<Self, StoreError> {
+        let ports = StorePorts::production_with_audit_and_telemetry(
+            &file,
+            audit_sink,
+            broker_evidence,
+            telemetry_path.as_ref().to_path_buf(),
+        )?;
+        Self::provision_owned_with_ports(file, marker, identity, acceptor, Some(ports)).await
+    }
+
     #[cfg(test)]
     pub(crate) async fn provision_owned_with_test_ports(
         file: File,
@@ -362,7 +547,11 @@ impl RedbResourceStore {
             marker,
             identity,
             acceptor,
-            Some(StorePorts { telemetry, audit }),
+            Some(StorePorts {
+                telemetry,
+                audit,
+                broker_evidence: Arc::new(BrokerEvidenceIndex::default()),
+            }),
         )
         .await
     }
@@ -424,6 +613,54 @@ impl RedbResourceStore {
         Self::open_owned_with_ports(file, identity, acceptor, None).await
     }
 
+    /// Open a Zone store with its production-owned durable audit sink.
+    pub async fn open_owned_with_audit(
+        file: File,
+        identity: StoreIdentity,
+        acceptor: MutationSealAcceptor,
+        audit_sink: Arc<AuditSink>,
+    ) -> Result<Self, StoreError> {
+        Self::open_owned_with_audit_and_evidence(
+            file,
+            identity,
+            acceptor,
+            audit_sink,
+            Arc::new(BrokerEvidenceIndex::default()),
+        )
+        .await
+    }
+
+    /// Open a Zone store with audit and broker reconciliation evidence.
+    pub async fn open_owned_with_audit_and_evidence(
+        file: File,
+        identity: StoreIdentity,
+        acceptor: MutationSealAcceptor,
+        audit_sink: Arc<AuditSink>,
+        broker_evidence: Arc<BrokerEvidenceIndex>,
+    ) -> Result<Self, StoreError> {
+        let ports = StorePorts::production_with_audit(&file, audit_sink, broker_evidence)?;
+        Self::open_owned_with_ports(file, identity, acceptor, Some(ports)).await
+    }
+
+    /// Open a Zone store with explicitly owned audit and telemetry
+    /// destinations.
+    pub async fn open_owned_with_audit_and_evidence_and_telemetry(
+        file: File,
+        identity: StoreIdentity,
+        acceptor: MutationSealAcceptor,
+        audit_sink: Arc<AuditSink>,
+        broker_evidence: Arc<BrokerEvidenceIndex>,
+        telemetry_path: impl AsRef<Path>,
+    ) -> Result<Self, StoreError> {
+        let ports = StorePorts::production_with_audit_and_telemetry(
+            &file,
+            audit_sink,
+            broker_evidence,
+            telemetry_path.as_ref().to_path_buf(),
+        )?;
+        Self::open_owned_with_ports(file, identity, acceptor, Some(ports)).await
+    }
+
     #[cfg(test)]
     pub(crate) async fn open_owned_with_test_ports(
         file: File,
@@ -436,7 +673,11 @@ impl RedbResourceStore {
             file,
             identity,
             acceptor,
-            Some(StorePorts { telemetry, audit }),
+            Some(StorePorts {
+                telemetry,
+                audit,
+                broker_evidence: Arc::new(BrokerEvidenceIndex::default()),
+            }),
         )
         .await
     }
@@ -472,6 +713,7 @@ impl RedbResourceStore {
                 .create_with_backend(backend)
                 .map_err(transaction::integrity)?;
             transaction::backfill_schema_catalog(&database)?;
+            transaction::normalize_audit_outboxes(&database)?;
             let meta = transaction::validate_identity_for_open(&database, &open_identity)?;
             transaction::validate_consistency(&database)?;
             let recovered_after_crash = !meta.clean_shutdown;
@@ -508,12 +750,14 @@ impl RedbResourceStore {
             Arc::clone(&watch_coordinator),
             ports.telemetry,
             ports.audit,
+            Arc::clone(&ports.broker_evidence),
         )?;
         Ok(Self {
             identity,
             authority_capability_nonce: NEXT_AUTHORITY_CAPABILITY_NONCE
                 .fetch_add(1, Ordering::Relaxed),
             recovered_after_crash,
+            broker_evidence: ports.broker_evidence,
             writer,
             reads,
             signals,
@@ -555,6 +799,16 @@ impl RedbResourceStore {
 
     pub const fn identity(&self) -> &StoreIdentity {
         &self.identity
+    }
+
+    /// Return the live broker evidence index shared with this store.
+    pub fn broker_evidence_index(&self) -> Arc<BrokerEvidenceIndex> {
+        Arc::clone(&self.broker_evidence)
+    }
+
+    /// Ingest one terminal broker result before clearing a matching outbox.
+    pub fn ingest_broker_evidence(&self, evidence: DurabilityEvidence) -> Result<(), StoreError> {
+        self.broker_evidence.insert(evidence)
     }
 
     /// Whether the existing store lacked a clean-shutdown marker when opened.
@@ -675,10 +929,38 @@ impl RedbResourceStore {
     /// staged descriptor remains an fd-relative storage-owner operation.
     pub async fn restore_owned(
         file: File,
+        marker: File,
+        backup: LogicalBackup,
+        identity: StoreIdentity,
+        acceptor: MutationSealAcceptor,
+    ) -> Result<Self, StoreError> {
+        Self::restore_owned_with_ports(file, marker, backup, identity, acceptor, None).await
+    }
+
+    /// Restore a logical image with the production-owned audit sink.
+    pub async fn restore_owned_with_audit(
+        file: File,
+        marker: File,
+        backup: LogicalBackup,
+        identity: StoreIdentity,
+        acceptor: MutationSealAcceptor,
+        audit_sink: Arc<AuditSink>,
+    ) -> Result<Self, StoreError> {
+        let ports = StorePorts::production_with_audit(
+            &file,
+            audit_sink,
+            Arc::new(BrokerEvidenceIndex::default()),
+        )?;
+        Self::restore_owned_with_ports(file, marker, backup, identity, acceptor, Some(ports)).await
+    }
+
+    async fn restore_owned_with_ports(
+        file: File,
         mut marker: File,
         backup: LogicalBackup,
         identity: StoreIdentity,
         acceptor: MutationSealAcceptor,
+        ports: Option<StorePorts>,
     ) -> Result<Self, StoreError> {
         let slot = identity.slot();
         validate_acceptor(&identity, &acceptor)?;
@@ -697,7 +979,9 @@ impl RedbResourceStore {
                 transaction::quarantined_reason("restore-target-not-empty").with_store_slot(slot)
             );
         }
-        let ports = StorePorts::for_file(&file).map_err(|error| error.with_store_slot(slot))?;
+        let ports = ports
+            .map_or_else(|| StorePorts::for_file(&file), Ok)
+            .map_err(|error| error.with_store_slot(slot))?;
         let open_identity = identity.clone();
         let database =
             tokio::task::spawn_blocking(move || backup.restore_file(file, &open_identity))

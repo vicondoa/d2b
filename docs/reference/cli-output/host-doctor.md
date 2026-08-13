@@ -28,7 +28,7 @@ Every entry in `checks[]` has `name`, `status` (`pass`/`warn`/`fail`),
 | ------------------------- | --------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ | ------------------------------------------------------------ |
 | `broker-ready`            | Connects to the broker `SOCK_SEQPACKET` socket (default `/run/d2b/broker.sock`).                       | `pass` on accept, or when an existing bound private socket correctly denies direct unprivileged access; `fail` when absent/unbound/unreachable. | `socket`                                                     |
 | `daemon-ready`            | Connects to the public daemon socket (default `/run/d2b/public.sock`).                                 | `pass` on accept; `warn` on connect error (degraded but doctor is best-effort).             | `socket`                                                     |
-| `metrics-endpoint`        | Loopback HTTP GET against the optional Prometheus scrape URL (default `http://127.0.0.1:9101/metrics`).    | `pass` on `200` or connection failure; `warn` on non-200 HTTP response from a reachable metrics server. | `url`, `status` (optional)                                   |
+| `metrics-endpoint`        | HTTP GET against the optional operator-configured external collector URL.    | `pass` when unset, on `200`, or on connection failure; `warn` on non-200 HTTP response from a reachable collector. | `url`, `status` (optional)                                   |
 | `signoz-ui-endpoint`      | When observability is enabled, reads `_observability.signozUrl` from `vms.json` and probes `/api/v1/health`. | `pass` on `200`; `warn` when manifest/URL/probe is unavailable. Observability remains optional. | `url`, `status` (optional)                                   |
 | `otel-host-bridge-runner` | Looks for a `role: "otel-host-bridge"` entry in `pidfd-table.json`.                                        | `pass` when ≥1 entry; `warn` when absent (observability is optional).                       | `count`, `entries[]`                                         |
 | `usbipd-runners`          | Counts `role: "usbip"` entries (one per env that owns USB).                                                | `pass` (zero or more); `data.count` + per-runner `vm`/`pid`/`startTimeTicks` snapshot.       | `count`, `entries[]`                                         |
@@ -49,7 +49,7 @@ remains usable on fresh hosts.
 | `D2B_BROKER_SOCKET`   | `/run/d2b/broker.sock`               | Probe target for `broker-ready`.                             |
 | `D2B_PUBLIC_SOCKET`   | `/run/d2b/public.sock`               | Probe target for `daemon-ready`.                             |
 | `D2B_DAEMON_STATE_DIR` | `/var/lib/d2b/daemon-state`         | Directory the daemon writes pidfd/module/autostart/storage-lifecycle reports to. |
-| `D2B_METRICS_URL`     | `http://127.0.0.1:9101/metrics`          | URL probed by `metrics-endpoint`.                            |
+| `D2B_METRICS_URL`     | unset                                    | Optional external collector URL probed by `metrics-endpoint`. |
 
 ## Exit-code semantics
 
@@ -68,7 +68,7 @@ remains usable on fresh hosts.
   "mode": "read-only",
   "broker_ready": true,
   "findings": [
-    "metrics-endpoint: unreachable: http://127.0.0.1:9101/metrics",
+    "metrics-endpoint: not configured",
     "signoz-ui-endpoint: unreachable: http://10.40.0.10:8080/api/v1/health",
     "autostart-status: 1 VM(s) degraded"
   ],
@@ -77,7 +77,7 @@ remains usable on fresh hosts.
   "checks": [
     { "name": "broker-ready",            "status": "pass", "detail": "broker socket accepted connection", "data": { "socket": "/run/d2b/broker.sock" } },
     { "name": "daemon-ready",            "status": "pass", "detail": "daemon public socket accepted connection", "data": { "socket": "/run/d2b/public.sock" } },
-    { "name": "metrics-endpoint",        "status": "warn", "detail": "unreachable: http://127.0.0.1:9101/metrics", "data": { "url": "http://127.0.0.1:9101/metrics" } },
+    { "name": "metrics-endpoint",        "status": "pass", "detail": "not configured" },
     { "name": "signoz-ui-endpoint",      "status": "warn", "detail": "SigNoz health endpoint at http://10.40.0.10:8080/api/v1/health unreachable: connect: timed out", "data": { "url": "http://10.40.0.10:8080/api/v1/health" } },
     { "name": "otel-host-bridge-runner", "status": "pass", "detail": "1 OtelHostBridge runner registered", "data": { "count": 1, "entries": [{ "vm": "obs-net", "pid": 1001, "startTimeTicks": 5 }] } },
     { "name": "usbipd-runners",          "status": "pass", "detail": "2 per-env usbipd runner(s) registered", "data": { "count": 2, "entries": [{ "vm": "corp-net", "pid": 1002, "startTimeTicks": 5 }, { "vm": "work-net", "pid": 1003, "startTimeTicks": 5 }] } },

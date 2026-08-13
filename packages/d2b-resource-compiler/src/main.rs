@@ -16,8 +16,8 @@ use std::{
 
 use d2b_contracts::v3::{
     ArtifactDigest, ArtifactId, CanonicalJsonValue, ProviderManifest, canonical_json_bytes,
-    framed_canonical_digest, identity::STANDARD_RESOURCE_TYPES, resource::RESOURCE_API_VERSION,
-    semantic_services::catalog,
+    framed_canonical_digest, identity::STANDARD_RESOURCE_TYPES, is_canonical_digest,
+    resource::RESOURCE_API_VERSION, semantic_services::catalog,
 };
 use d2b_resource_compiler::{
     ArtifactCatalogEntry, CatalogDigests, Diagnostic, StaticPublisherKeys, compile_linux_artifact,
@@ -1508,12 +1508,7 @@ fn validate_x_d2b_metadata(
 }
 
 fn valid_digest(value: &str) -> bool {
-    value.strip_prefix("sha256:").is_some_and(|hex| {
-        hex.len() == 64
-            && hex
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
-    })
+    is_canonical_digest(value)
 }
 
 impl SchemaCache {

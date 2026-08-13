@@ -5,6 +5,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use d2b_audit::OperationIdentity;
+use d2b_audit::{DurabilityEvidence, DurabilityOutcome, Reconciliation, ZoneOperationKey};
 use d2b_contracts::v3::{ResourceRef, ResourceTypeName, ZoneId, ZoneRevision};
 use d2b_resource_store::{
     ExpectedRevision, ResourceMutationKind, StoreError, StoreFilter, StoreGetRequest,
@@ -14,10 +16,14 @@ use d2b_resource_store::{
 use redb::{Database, ReadableDatabase, ReadableTable};
 use tokio::sync::{OwnedSemaphorePermit, mpsc, oneshot};
 
+use crate::BrokerEvidenceIndex;
 use crate::ValueKind;
 #[cfg(test)]
 use crate::audit::NoopMutationAudit;
-use crate::audit::{DurableMutationAudit, opaque_digest, resource_mutation_record};
+use crate::audit::{
+    DurableMutationAudit, opaque_digest, resource_mutation_record,
+    resource_mutation_record_with_identity,
+};
 use crate::backup::LogicalBackup;
 #[cfg(test)]
 use crate::metrics::NoopStoreTelemetry;
@@ -26,9 +32,10 @@ use crate::revision_log::{WatchCoordinator, WatchRegistrationId, WatchSelector, 
 use crate::tracing::{STORE_READ_SPAN, STORE_WRITE_SPAN};
 use crate::transaction::{
     API_SCHEMAS, AuditOutboxRecord, ChangeBatch, CommittedGroup, RESOURCES, ResourceRecord,
-    StoreMeta, VerifiedWrite, apply_group_with_hook, audit_outbox_pending, authority_operations,
-    authority_prepare, authority_update, backpressure, current_meta, decode,
-    mark_audit_outbox_complete, pending_audit_outboxes, resource_key, stored_resource, timeout,
+    StoreMeta, VerifiedWrite, apply_group_with_hook, audit_outbox_for_operation,
+    audit_outbox_pending, authority_operations, authority_prepare, authority_update, backpressure,
+    current_meta, decode, mark_audit_outbox_complete, pending_audit_outboxes, resource_key,
+    stored_resource, timeout,
 };
 use d2b_resource_store::mutation_seal::OpenedMutation;
 
@@ -172,47 +179,154 @@ const fn mutation_audit_verb(kind: ResourceMutationKind) -> &'static str {
 fn recover_pending_audit_outboxes(
     database: &redb::Database,
     audit: &dyn DurableMutationAudit,
+    broker_evidence: &BrokerEvidenceIndex,
 ) -> Result<(), StoreError> {
     if !audit.enabled() {
         return Ok(());
     }
     for outbox in pending_audit_outboxes(database)? {
-        append_audit_outbox(audit, &outbox)?;
+        let key = outbox_join_key(&outbox)?;
+        verify_broker_evidence(&outbox, &key, broker_evidence)?;
+        append_audit_outbox(database, audit, &outbox, &key)?;
         mark_audit_outbox_complete(database, &outbox.operation_id)?;
     }
     Ok(())
 }
 
+fn outbox_join_key(outbox: &AuditOutboxRecord) -> Result<ZoneOperationKey, StoreError> {
+    let operation = outbox
+        .operation_identity
+        .clone()
+        .or_else(|| OperationIdentity::derive(&outbox.operation_id).ok())
+        .ok_or_else(|| crate::transaction::durability_failure("audit-operation-key-invalid"))?;
+    let zone = d2b_audit::ZoneId::derive(&outbox.zone)
+        .map_err(|_| crate::transaction::durability_failure("audit-zone-invalid"))?;
+    Ok(ZoneOperationKey::new(zone, operation))
+}
+
+fn verify_broker_evidence(
+    outbox: &AuditOutboxRecord,
+    key: &ZoneOperationKey,
+    broker_evidence: &BrokerEvidenceIndex,
+) -> Result<(), StoreError> {
+    if !outbox.requires_broker {
+        return Ok(());
+    }
+    let effect_durable = outbox
+        .mutations
+        .iter()
+        .all(|mutation| mutation.outcome == "ok");
+    let resource = DurabilityEvidence {
+        key: key.clone(),
+        outcome: if effect_durable {
+            DurabilityOutcome::Success
+        } else {
+            DurabilityOutcome::Failure
+        },
+        effect_durable,
+    };
+    let broker = broker_evidence
+        .get(key)?
+        .ok_or_else(|| crate::transaction::durability_failure("audit-broker-evidence-missing"))?;
+    if !matches!(
+        d2b_audit::reconcile_durability(Some(&broker), Some(&resource)),
+        Reconciliation::Success | Reconciliation::Failure
+    ) {
+        return Err(crate::transaction::durability_failure(
+            "audit-domain-integrity-failure",
+        ));
+    }
+    Ok(())
+}
+
 fn append_audit_outbox(
+    database: &redb::Database,
     audit: &dyn DurableMutationAudit,
     outbox: &AuditOutboxRecord,
+    join_key: &ZoneOperationKey,
 ) -> Result<(), StoreError> {
+    let operation_identity = join_key.operation().clone();
     let mut previous_hash = audit
         .previous_hash()
         .map_err(|_| crate::transaction::durability_failure("audit-unavailable"))?;
     for mutation in &outbox.mutations {
-        let record = resource_mutation_record(
-            unix_timestamp_ms(),
+        if let Some(record_hash) = mutation.record_hash.as_ref() {
+            let persisted = audit
+                .existing_mutation_hash(join_key, &mutation.mutation_id)
+                .map_err(|_| crate::transaction::durability_failure("audit-unavailable"))?;
+            if persisted.as_ref() != Some(record_hash) {
+                return Err(crate::transaction::durability_failure(
+                    "audit-outbox-progress-membership-mismatch",
+                ));
+            }
+            if let Some(predecessor) = mutation.previous_hash.as_ref() {
+                let persisted_predecessor = audit
+                    .existing_mutation_predecessor(join_key, &mutation.mutation_id)
+                    .map_err(|_| crate::transaction::durability_failure("audit-unavailable"))?;
+                if persisted_predecessor.as_ref() != Some(predecessor) {
+                    return Err(crate::transaction::durability_failure(
+                        "audit-outbox-progress-predecessor-mismatch",
+                    ));
+                }
+            }
+            previous_hash = record_hash.clone();
+            continue;
+        }
+        if let Some(existing) = audit
+            .existing_mutation_hash(join_key, &mutation.mutation_id)
+            .map_err(|_| crate::transaction::durability_failure("audit-unavailable"))?
+        {
+            if let Some(predecessor) = mutation.previous_hash.as_ref() {
+                let persisted_predecessor = audit
+                    .existing_mutation_predecessor(join_key, &mutation.mutation_id)
+                    .map_err(|_| crate::transaction::durability_failure("audit-unavailable"))?;
+                if persisted_predecessor.as_ref() != Some(predecessor) {
+                    return Err(crate::transaction::durability_failure(
+                        "audit-outbox-progress-predecessor-mismatch",
+                    ));
+                }
+            }
+            previous_hash = existing;
+            continue;
+        }
+        let predecessor = mutation
+            .previous_hash
+            .clone()
+            .unwrap_or_else(|| previous_hash.clone());
+        let record = resource_mutation_record_with_identity(
+            mutation.timestamp_ms,
             outbox.zone.clone(),
-            outbox.operation_id.clone(),
+            operation_identity.as_str().to_owned(),
             outbox.correlation_id.clone(),
             "resource-store",
-            previous_hash.clone(),
+            predecessor.clone(),
             mutation.verb.clone(),
             audit_resource_type(&mutation.resource_type),
-            mutation.resource_uid.clone(),
+            mutation
+                .resource_uid
+                .clone()
+                .unwrap_or_else(|| mutation.target_digest.clone()),
             mutation.generation,
             mutation.expected_revision,
             outbox.resulting_revision,
             outbox.subject_digest.clone(),
             outbox.policy_revision,
-            "ok",
-            None,
+            mutation.outcome.clone(),
+            mutation.error_code.clone(),
+            Some(mutation.mutation_id.clone()),
+            Some(mutation.ordinal),
         )
         .map_err(|_| crate::transaction::durability_failure("audit-record-invalid"))?;
         audit
             .append_before_commit(&record)
             .map_err(|_| crate::transaction::durability_failure("audit-unavailable"))?;
+        crate::transaction::mark_audit_outbox_progress(
+            database,
+            &outbox.operation_id,
+            mutation.ordinal,
+            &predecessor,
+            record.record_hash(),
+        )?;
         previous_hash = record.record_hash().clone();
     }
     Ok(())
@@ -259,10 +373,11 @@ impl WriterHandle {
         watch_coordinator: Arc<std::sync::Mutex<WatchCoordinator>>,
         telemetry: Arc<dyn StoreTelemetry>,
         audit: Arc<dyn DurableMutationAudit>,
+        broker_evidence: Arc<BrokerEvidenceIndex>,
     ) -> Result<Self, StoreError> {
         let (sender, receiver) = mpsc::channel(WRITE_QUEUE_CAPACITY);
         crate::transaction::set_clean_shutdown(&database, false)?;
-        recover_pending_audit_outboxes(&database, audit.as_ref())?;
+        recover_pending_audit_outboxes(&database, audit.as_ref(), &broker_evidence)?;
         let actor_signals = Arc::clone(&signals);
         let actor_telemetry = Arc::clone(&telemetry);
         let actor_audit = Arc::clone(&audit);
@@ -271,6 +386,7 @@ impl WriterHandle {
         let quarantined = Arc::new(AtomicBool::new(false));
         let actor_quarantined = Arc::clone(&quarantined);
         let actor_watch_coordinator = Arc::clone(&watch_coordinator);
+        let actor_broker_evidence = Arc::clone(&broker_evidence);
         let thread = std::thread::Builder::new()
             .name("d2b-redb-writer".to_owned())
             .spawn(move || {
@@ -283,6 +399,7 @@ impl WriterHandle {
                     actor_telemetry,
                     actor_audit,
                     actor_audit_intents,
+                    actor_broker_evidence,
                 )
                 .run();
             })
@@ -728,6 +845,7 @@ struct WriterActor {
     telemetry: Arc<dyn StoreTelemetry>,
     audit: Arc<dyn DurableMutationAudit>,
     audit_intents: Arc<std::sync::Mutex<BTreeMap<u64, AuditIntent>>>,
+    broker_evidence: Arc<BrokerEvidenceIndex>,
 }
 
 impl WriterActor {
@@ -748,6 +866,7 @@ impl WriterActor {
             Arc::new(NoopStoreTelemetry),
             Arc::new(NoopMutationAudit),
             Arc::new(std::sync::Mutex::new(BTreeMap::new())),
+            Arc::new(BrokerEvidenceIndex::default()),
         )
     }
 
@@ -761,6 +880,7 @@ impl WriterActor {
         telemetry: Arc<dyn StoreTelemetry>,
         audit: Arc<dyn DurableMutationAudit>,
         audit_intents: Arc<std::sync::Mutex<BTreeMap<u64, AuditIntent>>>,
+        broker_evidence: Arc<BrokerEvidenceIndex>,
     ) -> Self {
         Self {
             database,
@@ -773,6 +893,7 @@ impl WriterActor {
             telemetry,
             audit,
             audit_intents,
+            broker_evidence,
         }
     }
 
@@ -837,7 +958,7 @@ impl WriterActor {
                     self.telemetry.span(
                         STORE_READ_SPAN,
                         BTreeMap::from([
-                            ("op".to_owned(), "scan".to_owned()),
+                            ("operation".to_owned(), "scan".to_owned()),
                             ("outcome".to_owned(), outcome.to_owned()),
                         ]),
                         None,
@@ -1100,6 +1221,11 @@ impl WriterActor {
         })?;
         if !self.audit.enabled() {
             for sequence in sequences {
+                if let Some(intent) = intents.get(sequence)
+                    && audit_outbox_pending(&self.database, &intent.operation_id)?
+                {
+                    mark_audit_outbox_complete(&self.database, &intent.operation_id)?;
+                }
                 intents.remove(sequence);
             }
             return Ok(());
@@ -1168,6 +1294,15 @@ impl WriterActor {
                 Err(_) => committed.resulting_revision,
             };
             if let Some(intent) = intent {
+                if let Some(outbox) =
+                    audit_outbox_for_operation(&self.database, &intent.operation_id)?
+                {
+                    let key = outbox_join_key(&outbox)?;
+                    verify_broker_evidence(&outbox, &key, &self.broker_evidence)?;
+                    append_audit_outbox(&self.database, self.audit.as_ref(), &outbox, &key)?;
+                    mark_audit_outbox_complete(&self.database, &intent.operation_id)?;
+                    continue;
+                }
                 let outbox_pending =
                     result.is_ok() && audit_outbox_pending(&self.database, &intent.operation_id)?;
                 if result.is_ok() && !outbox_pending {
@@ -1462,27 +1597,10 @@ fn commit_outcome(
 }
 
 fn audit_failure_outcome(error: &StoreError) -> &'static str {
-    match error.kind() {
-        d2b_resource_store::StoreErrorKind::ResourceConflict => "conflict",
-        d2b_resource_store::StoreErrorKind::AuthorizationDenied => "denied",
-        d2b_resource_store::StoreErrorKind::ResourceNotFound
-        | d2b_resource_store::StoreErrorKind::ResourceAlreadyExists
-        | d2b_resource_store::StoreErrorKind::ResourceSchemaInvalid
-        | d2b_resource_store::StoreErrorKind::ResourceRefInvalid
-        | d2b_resource_store::StoreErrorKind::ResourceOwnerCycle
-        | d2b_resource_store::StoreErrorKind::ResourceOwnerDepth
-        | d2b_resource_store::StoreErrorKind::ResourceFinalizerDenied
-        | d2b_resource_store::StoreErrorKind::ResourceControllerMismatch
-        | d2b_resource_store::StoreErrorKind::ResourceStatusOwnerMismatch
-        | d2b_resource_store::StoreErrorKind::StatusOversize
-        | d2b_resource_store::StoreErrorKind::StatusProviderSchemaInvalid
-        | d2b_resource_store::StoreErrorKind::StatusProviderOverlap
-        | d2b_resource_store::StoreErrorKind::SpecProviderSchemaInvalid
-        | d2b_resource_store::StoreErrorKind::SpecProviderShadow
-        | d2b_resource_store::StoreErrorKind::UnsupportedCapability
-        | d2b_resource_store::StoreErrorKind::ExpeditedNotAuthorized
-        | d2b_resource_store::StoreErrorKind::ExpeditedQuotaExceeded => "invalid",
-        _ => "error",
+    if error.kind() == d2b_resource_store::StoreErrorKind::AuthorizationDenied {
+        "denied"
+    } else {
+        "error"
     }
 }
 
@@ -1612,7 +1730,7 @@ impl ReadPool {
         self.telemetry.span(
             STORE_READ_SPAN,
             BTreeMap::from([
-                ("op".to_owned(), operation.to_owned()),
+                ("operation".to_owned(), operation.to_owned()),
                 ("outcome".to_owned(), outcome.to_owned()),
             ]),
             None,
@@ -2413,6 +2531,22 @@ mod tests {
                 self.0.fetch_add(1, Ordering::Relaxed);
                 Err(d2b_audit::AuditRecordError::Serialization)
             }
+
+            fn existing_mutation_hash(
+                &self,
+                _key: &d2b_audit::ZoneOperationKey,
+                _mutation_id: &str,
+            ) -> Result<Option<d2b_audit::AuditHash>, d2b_audit::AuditRecordError> {
+                Ok(None)
+            }
+
+            fn existing_mutation_predecessor(
+                &self,
+                _key: &d2b_audit::ZoneOperationKey,
+                _mutation_id: &str,
+            ) -> Result<Option<d2b_audit::AuditHash>, d2b_audit::AuditRecordError> {
+                Ok(None)
+            }
         }
 
         let (_directory, database) = database("audit-before-commit");
@@ -2456,6 +2590,7 @@ mod tests {
             Arc::new(NoopStoreTelemetry),
             audit.clone(),
             Arc::new(std::sync::Mutex::new(BTreeMap::new())),
+            Arc::new(BrokerEvidenceIndex::default()),
         );
         actor.scheduler.push(request);
         actor.flush();

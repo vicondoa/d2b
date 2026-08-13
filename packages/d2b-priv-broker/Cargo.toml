@@ -56,6 +56,7 @@ debug = 2
 debug = 2
 
 [dependencies]
+d2b-audit = { path = "../d2b-audit", version = "0.0.0-bootstrap" }
 d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
 d2b-core = { path = "../d2b-core", version = "0.0.0-bootstrap" }
 d2b-host = { path = "../d2b-host", version = "0.0.0-bootstrap" }

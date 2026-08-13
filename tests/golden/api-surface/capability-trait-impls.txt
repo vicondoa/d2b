@@ -1777,6 +1777,7 @@ d2bd::d2bd::provider_effects::GuestLifecycleRequest	struct	core::core::cmp::Eq	t
 d2bd::d2bd::provider_effects::GuestLifecycleRequest	struct	core::core::cmp::PartialEq	trait	impl core::cmp::PartialEq for d2bd::provider_effects::GuestLifecycleRequest
 d2bd::d2bd::provider_effects::GuestLifecycleRequest	struct	core::core::fmt::Debug	trait	impl core::fmt::Debug for d2bd::provider_effects::GuestLifecycleRequest
 d2bd::d2bd::provider_effects::GuestLifecycleRequest	struct	core::core::marker::StructuralPartialEq	trait	impl core::marker::StructuralPartialEq for d2bd::provider_effects::GuestLifecycleRequest
+d2bd::d2bd::provider_effects::LifecycleMutation	struct	core::core::fmt::Debug	trait	private explicit impl core::fmt::Debug for d2bd::provider_effects::LifecycleMutation negative=false generic-params=0 where-predicates=0
 d2bd::d2bd::provider_effects::ProviderLifecycleDispatch	struct	core::core::fmt::Debug	trait	impl core::fmt::Debug for d2bd::provider_effects::ProviderLifecycleDispatch
 d2bd::d2bd::provider_registry::ActiveProviderRuntime	struct	core::core::fmt::Debug	trait	private explicit impl core::fmt::Debug for d2bd::provider_registry::ActiveProviderRuntime negative=false generic-params=0 where-predicates=0
 d2bd::d2bd::provider_registry::ProviderBinding	struct	core::core::clone::Clone	trait	impl core::clone::Clone for d2bd::provider_registry::ProviderBinding

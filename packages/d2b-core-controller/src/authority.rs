@@ -17,6 +17,7 @@ use std::{
 use d2b_contracts::v3::{
     CanonicalJsonValue, ResourceGeneration, ResourceRef, ResourceUid, UpdateState,
     ifname::IfName,
+    is_canonical_digest,
     network::{
         ExternalNicAdmissionError, ExternalNicAuthorityStatus, ExternalNicClaim, MacvtapMode,
         SharingPolicy, admit_external_nic_claims,
@@ -938,12 +939,7 @@ impl AuthorityKey {
 }
 
 fn valid_authority_digest(value: &str) -> bool {
-    value.strip_prefix("sha256:").is_some_and(|hex| {
-        hex.len() == 64
-            && hex
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
-    })
+    is_canonical_digest(value)
 }
 
 #[doc(hidden)]

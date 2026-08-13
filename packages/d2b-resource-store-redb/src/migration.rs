@@ -179,6 +179,9 @@ pub fn upgrade_owned(
         drop(source);
         return Ok(MigrationOutcome::AlreadyCurrent);
     }
+    // Legacy outboxes intentionally predate the current U4 fields. Validate
+    // the physical envelope and identity here, then normalize the staged
+    // copy before applying current-schema consistency checks.
     validate_database(&source, identity, Some(source_meta.schema_version))?;
     prepare_upgrade_stage(&source, parent, identity, source_meta.schema_version)?;
     drop(source);
@@ -308,6 +311,12 @@ fn prepare_upgrade_stage(
             .map_err(|_| quarantine(identity, "migration-staged-open-failed"))?;
         copy_registered_step(source, &target, from, identity)?;
         drop(target);
+        // Normalize U4 outbox identity, mutation, and timestamp fields in
+        // the staged copy before the strict current-schema validation runs.
+        let staged_database = open_named_database(parent, DEFAULT_STAGED_FILE_NAME, identity)?;
+        crate::transaction::normalize_audit_outboxes(&staged_database)
+            .map_err(|_| quarantine(identity, "migration-audit-outbox-normalization-failed"))?;
+        drop(staged_database);
         validate_named_current(parent, DEFAULT_STAGED_FILE_NAME, identity)?;
         sync_named_stage(parent, identity)
     })();
@@ -656,8 +665,10 @@ fn validate_named_database(
         return Err(unsupported_version(meta.schema_version).with_store_slot(identity.slot()));
     }
     validate_identity_fields(&meta, identity)?;
-    validate_consistency(&database)
-        .map_err(|_| quarantine(identity, "migration-database-corrupt"))?;
+    if meta.schema_version == CURRENT_PHYSICAL_SCHEMA_VERSION {
+        validate_consistency(&database)
+            .map_err(|_| quarantine(identity, "migration-database-corrupt"))?;
+    }
     Ok(())
 }
 
@@ -680,7 +691,11 @@ fn validate_database(
         return Err(unsupported_version(meta.schema_version).with_store_slot(identity.slot()));
     }
     validate_identity_fields(&meta, identity)?;
-    validate_consistency(database).map_err(|_| quarantine(identity, "migration-database-corrupt"))
+    if meta.schema_version == CURRENT_PHYSICAL_SCHEMA_VERSION {
+        validate_consistency(database)
+            .map_err(|_| quarantine(identity, "migration-database-corrupt"))?;
+    }
+    Ok(())
 }
 
 fn validate_table_set(database: &Database, identity: &StoreIdentity) -> Result<(), StoreError> {

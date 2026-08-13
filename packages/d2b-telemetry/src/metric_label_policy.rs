@@ -65,11 +65,22 @@ impl MetricDescriptor {
 }
 
 /// Identity values which must not enter a metric data point.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Clone, Default, PartialEq, Eq)]
 pub struct IdentityCanaries {
     names: BTreeSet<String>,
     uids: BTreeSet<String>,
     refs: BTreeSet<String>,
+}
+
+impl core::fmt::Debug for IdentityCanaries {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("IdentityCanaries")
+            .field("name_count", &self.names.len())
+            .field("uid_count", &self.uids.len())
+            .field("ref_count", &self.refs.len())
+            .finish()
+    }
 }
 
 impl IdentityCanaries {
@@ -224,6 +235,7 @@ pub fn validate_labels(
     if labels.len() > 16 {
         return Err(MetricPolicyError::DescriptorMalformed);
     }
+
     for (key, value) in labels {
         validate_label_key(key)?;
         let Some(allowed) = allowed_values(key) else {
@@ -237,6 +249,41 @@ pub fn validate_labels(
         }
     }
     Ok(())
+}
+
+/// Validate resource attributes with key-specific identity handling.
+pub fn validate_resource_attributes(
+    attributes: &BTreeMap<String, String>,
+) -> Result<(), MetricPolicyError> {
+    for (key, value) in attributes {
+        if !OTEL_RESOURCE_ATTRIBUTES.contains(&key.as_str())
+            || value.is_empty()
+            || value.len() > 256
+            || value
+                .bytes()
+                .any(|byte| !byte.is_ascii_graphic() || byte == b'/')
+        {
+            return Err(MetricPolicyError::DescriptorMalformed);
+        }
+        if matches!(
+            key.as_str(),
+            "d2b.zone"
+                | "d2b.provider"
+                | "d2b.component"
+                | "host.name"
+                | "vm.name"
+                | "vm.env"
+                | "vm.role"
+        ) && !is_canonical_digest(value)
+        {
+            return Err(MetricPolicyError::ValueIdentity);
+        }
+    }
+    Ok(())
+}
+
+fn is_canonical_digest(value: &str) -> bool {
+    d2b_contracts::v3::is_canonical_digest(value)
 }
 
 #[cfg(test)]
@@ -292,5 +339,13 @@ mod tests {
     fn resource_attributes_have_a_separate_allowlist() {
         assert!(OTEL_RESOURCE_ATTRIBUTES.contains(&"d2b.zone"));
         assert!(!OTEL_RESOURCE_ATTRIBUTES.contains(&"zone"));
+        assert!(
+            validate_resource_attributes(&BTreeMap::from([(
+                "d2b.zone".to_owned(),
+                "sha256:0000000000000000000000000000000000000000000000000000000000000001"
+                    .to_owned(),
+            )]))
+            .is_ok()
+        );
     }
 }

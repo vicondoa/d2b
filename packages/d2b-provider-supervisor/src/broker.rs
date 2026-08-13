@@ -9,8 +9,9 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use d2b_contracts::broker_wire::{
-    BrokerRequest, BrokerRequestEnvelope, BrokerResponse, DeregisterRunnerPidfdRequest,
-    OpenPidfdRequest, RunnerRole, RunnerSignal, SignalRunnerRequest, SpawnRunnerRequest,
+    AuditJoinContext, BrokerCallerRole, BrokerRequest, BrokerRequestEnvelope, BrokerResponse,
+    CanonicalAuditDigest, DeregisterRunnerPidfdRequest, OpenPidfdRequest, RunnerRole, RunnerSignal,
+    SignalRunnerRequest, SpawnRunnerRequest,
 };
 use d2b_contracts::types::{BundleOpId, RoleId, VmId};
 use d2b_process::{
@@ -158,6 +159,7 @@ pub struct BrokerProcessBackend<R: BrokerLaunchResolver> {
     resolver: R,
     socket_path: PathBuf,
     io_timeout: Duration,
+    caller_role: BrokerCallerRole,
     observations: Mutex<BTreeMap<ProcessIdentityDigest, BrokerObservedProcess>>,
 }
 
@@ -173,16 +175,40 @@ impl<R: BrokerLaunchResolver> BrokerProcessBackend<R> {
 
     /// Build a backend with an explicit socket path and I/O timeout.
     pub fn with_socket(resolver: R, socket_path: impl Into<PathBuf>, io_timeout: Duration) -> Self {
+        Self::with_socket_and_role(
+            resolver,
+            socket_path,
+            io_timeout,
+            BrokerCallerRole::NotAuthorized,
+        )
+    }
+
+    /// Build a backend with an authenticated broker caller role.
+    pub fn with_socket_and_role(
+        resolver: R,
+        socket_path: impl Into<PathBuf>,
+        io_timeout: Duration,
+        caller_role: BrokerCallerRole,
+    ) -> Self {
         Self {
             resolver,
             socket_path: socket_path.into(),
             io_timeout,
+            caller_role,
             observations: Mutex::new(BTreeMap::new()),
         }
     }
 
     fn request(&self, request: BrokerRequest) -> Result<BrokerFrame, ProcessEffectError> {
-        broker_round_trip(&self.socket_path, self.io_timeout, request)
+        if matches!(self.caller_role, BrokerCallerRole::NotAuthorized) {
+            return Err(ProcessEffectError::LaunchFailed);
+        }
+        broker_round_trip(
+            &self.socket_path,
+            self.io_timeout,
+            request,
+            self.caller_role.clone(),
+        )
     }
 
     fn record(&self, observed: BrokerObservedProcess) -> Result<(), ProcessEffectError> {
@@ -583,6 +609,7 @@ fn broker_round_trip(
     socket_path: &Path,
     io_timeout: Duration,
     request: BrokerRequest,
+    caller_role: BrokerCallerRole,
 ) -> Result<BrokerFrame, ProcessEffectError> {
     let fd = socket_with(
         AddressFamily::UNIX,
@@ -603,10 +630,20 @@ fn broker_round_trip(
     socket
         .set_write_timeout(Some(io_timeout))
         .map_err(|_| ProcessEffectError::LaunchFailed)?;
+    let (zone_id, operation_identity) = request
+        .authoritative_audit_join()
+        .ok_or(ProcessEffectError::LaunchFailed)?;
+    let audit_join = AuditJoinContext {
+        zone_id: CanonicalAuditDigest::parse(zone_id)
+            .map_err(|_| ProcessEffectError::LaunchFailed)?,
+        operation_identity: CanonicalAuditDigest::parse(operation_identity)
+            .map_err(|_| ProcessEffectError::LaunchFailed)?,
+    };
     let envelope = BrokerRequestEnvelope {
         request,
-        caller_role: Default::default(),
+        caller_role,
         test_peer_uid: None,
+        audit_join: Some(audit_join),
     };
     let frame =
         d2b_contracts::encode_frame(&envelope).map_err(|_| ProcessEffectError::LaunchFailed)?;

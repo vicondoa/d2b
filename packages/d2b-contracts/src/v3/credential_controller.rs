@@ -1590,11 +1590,7 @@ fn allowed_telemetry_value(key: &str, value: &str) -> bool {
 }
 
 fn valid_sha256(value: &str) -> bool {
-    value.len() == 71
-        && value.starts_with("sha256:")
-        && value[7..]
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+    super::resource_schema::is_canonical_digest(value)
 }
 
 fn looks_like_uuid(token: &str) -> bool {

@@ -30,6 +30,7 @@ use crate::guest_control_health::{
     AttemptBudget, GuestControlHealthError, TtrpcGuestControlClient, probe_guest_control_health,
 };
 use crate::terminal_session::TerminalBackend;
+use d2b_contracts::broker_wire::BrokerCallerRole;
 use d2b_contracts::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION;
 
 /// Absolute deadline for the whole establish phase (connect + auth handshake:
@@ -49,6 +50,7 @@ pub(crate) const ESTABLISH_TIMEOUT: Duration = Duration::from_secs(20);
 pub struct RealExecConnector {
     params: ProbeParams,
     broker_socket_path: PathBuf,
+    caller_role: BrokerCallerRole,
     deadlines: ExecOpDeadlines,
     /// Test-only: route the connect through the relaxed-directory test policy so
     /// a hermetic test can reach the genuine socket-missing transport branch
@@ -61,11 +63,13 @@ impl RealExecConnector {
     pub fn new(
         params: ProbeParams,
         broker_socket_path: PathBuf,
+        caller_role: BrokerCallerRole,
         deadlines: ExecOpDeadlines,
     ) -> Self {
         Self {
             params,
             broker_socket_path,
+            caller_role,
             deadlines,
             #[cfg(test)]
             allow_test_dirs: false,
@@ -83,6 +87,7 @@ impl RealExecConnector {
         Self {
             params,
             broker_socket_path,
+            caller_role: BrokerCallerRole::NotAuthorized,
             deadlines,
             allow_test_dirs: true,
         }
@@ -108,7 +113,11 @@ impl RealExecConnector {
 impl ExecGuestConnector for RealExecConnector {
     async fn establish(&self, spec: &ExecStartSpec) -> Result<Established, ExecEstablishError> {
         let budget = AttemptBudget::from_now(ESTABLISH_TIMEOUT, GUEST_CONTROL_ATTEMPT_CAP);
-        let signer = BrokerSigner::new(self.broker_socket_path.clone(), budget);
+        let signer = BrokerSigner::with_caller_role(
+            self.broker_socket_path.clone(),
+            budget,
+            self.caller_role.clone(),
+        );
         let nonce = host_nonce().map_err(|_| ExecEstablishError::Transport)?;
         let client = self
             .connect_client(budget)

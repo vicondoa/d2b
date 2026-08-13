@@ -26,7 +26,7 @@ use std::collections::BTreeMap;
 
 use d2b_contracts::v3::{
     AuthenticatedSubjectContext, MAX_BATCH_MUTATIONS, MAX_FILTER_VALUES, MAX_LIST_FILTERS,
-    ReconnectGeneration, ResourceName, ResourceTypeName, ZoneRevision,
+    ReconnectGeneration, ResourceName, ResourceTypeName, ZoneRevision, is_canonical_digest,
     zone_routing::{
         ZONE_ROUTE_INITIAL_HOP_BUDGET, ZonePath, ZoneRouteCapability, ZoneRouteCapabilitySet,
         ZoneRouteFailClosedReason, ZoneRouteHop, ZoneRoutePath,
@@ -99,13 +99,7 @@ fn is_bounded_call_token(value: &str) -> bool {
 }
 
 fn is_sha256_digest(value: &str) -> bool {
-    let Some(hex) = value.strip_prefix("sha256:") else {
-        return false;
-    };
-    hex.len() == 64
-        && hex
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    is_canonical_digest(value)
 }
 
 fn render_sha256(bytes: &[u8]) -> String {

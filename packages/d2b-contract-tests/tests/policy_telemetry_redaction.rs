@@ -111,11 +111,6 @@ const LITERAL_FIELD_EXEMPTIONS: &[LiteralExemption] = &[
     },
     LiteralExemption {
         path: "packages/d2b-audit/src/record_types.rs",
-        snippet: "matches!(key.as_str(), \"realm\" | \"node\" | \"workload_id\")",
-        occurrences: 1,
-    },
-    LiteralExemption {
-        path: "packages/d2b-audit/src/record_types.rs",
         snippet: "value.get(\"realm\")",
         occurrences: 1,
     },
@@ -123,6 +118,56 @@ const LITERAL_FIELD_EXEMPTIONS: &[LiteralExemption] = &[
         path: "packages/d2b-audit/src/record_types.rs",
         snippet: "value.get(\"workload_id\")",
         occurrences: 1,
+    },
+    LiteralExemption {
+        path: "packages/d2b-audit/src/record_types.rs",
+        snippet: "\"path\"",
+        occurrences: 1,
+    },
+    LiteralExemption {
+        path: "packages/d2b-audit/src/record_types.rs",
+        snippet: "\"socket\"",
+        occurrences: 1,
+    },
+    LiteralExemption {
+        path: "packages/d2b-audit/src/record_types.rs",
+        snippet: "\"argv\"",
+        occurrences: 1,
+    },
+    LiteralExemption {
+        path: "packages/d2b-audit/src/record_types.rs",
+        snippet: "\"env\"",
+        occurrences: 1,
+    },
+    LiteralExemption {
+        path: "packages/d2b-audit/src/record_types.rs",
+        snippet: "\"pid\"",
+        occurrences: 1,
+    },
+    LiteralExemption {
+        path: "packages/d2b-provider-observability-otel/src/emitter_socket.rs",
+        snippet: "\"path\"",
+        occurrences: 1,
+    },
+    LiteralExemption {
+        path: "packages/d2b-provider-observability-otel/src/emitter_socket.rs",
+        snippet: "\"socket\"",
+        occurrences: 0,
+    },
+    LiteralExemption {
+        path: "packages/d2b-provider-observability-otel/src/emitter_socket.rs",
+        snippet: "\"argv\"",
+        occurrences: 0,
+    },
+    LiteralExemption {
+        path: "packages/d2b-provider-observability-otel/src/emitter_socket.rs",
+        snippet: "\"env\"",
+        occurrences: 1,
+    },
+    LiteralExemption {
+        path: "packages/d2b-provider-observability-otel/src/emitter_socket.rs",
+        snippet: "\"pid\"",
+        occurrences: 0,
     },
     LiteralExemption {
         path: "packages/d2b-resource-store-redb/src/audit.rs",
@@ -714,6 +759,103 @@ fn metric_policy_data_has_one_definition_and_denies_forks() {
         assert!(
             source.contains("allowed_values"),
             "{path} must re-export the canonical allowed value lookup"
+        );
+    }
+}
+
+#[test]
+fn provider_ownership_boundary_is_checked_at_the_provider_module() {
+    let provider = read_repo_file("packages/d2b-provider-observability-otel/src/lib.rs");
+    let manifest = read_repo_file("packages/d2b-provider-observability-otel/Cargo.toml");
+    let syntax = syn::parse_file(&provider).expect("provider library must parse as Rust");
+    let modules = syntax
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            syn::Item::Mod(module) => Some(module.ident.to_string()),
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
+    for retained in [
+        "agent",
+        "config",
+        "emitter_socket",
+        "ingress_policy",
+        "metric_policy",
+    ] {
+        assert!(
+            modules.contains(retained),
+            "provider AST is missing retained module {retained}"
+        );
+    }
+    for retired in [
+        "authority",
+        "binding",
+        "collector",
+        "controller",
+        "exporter",
+        "forwarder",
+        "journald",
+        "projection",
+        "provider",
+        "service",
+        "share_adapter",
+    ] {
+        assert!(
+            !modules.contains(retired),
+            "provider AST still declares incomplete module {retired}"
+        );
+    }
+    for forbidden in ["AuditSink", "AuditLog", "BoundedEmitter"] {
+        assert!(
+            !provider.contains(forbidden),
+            "provider foundation module must not own {forbidden}"
+        );
+    }
+
+    assert!(
+        !manifest.contains("d2b-audit") && !manifest.contains("d2b-telemetry"),
+        "Provider manifest must not depend on authoritative writers"
+    );
+    assert!(
+        provider.contains("pub mod emitter_socket")
+            && provider.contains("pub mod ingress_policy")
+            && provider.contains("pub mod metric_policy"),
+        "Provider foundation must expose only retained bounded ports"
+    );
+}
+
+#[test]
+fn observability_provider_completion_is_explicitly_deferred() {
+    let readme = read_repo_file("packages/d2b-provider-observability-otel/README.md");
+    for deferred in [
+        "does not claim production OTLP",
+        "ComponentSession",
+        "cross-Zone share support",
+    ] {
+        assert!(
+            readme.contains(deferred),
+            "Provider README must state deferred completion path: {deferred}"
+        );
+    }
+    for module in [
+        "authority.rs",
+        "binding.rs",
+        "collector.rs",
+        "controller.rs",
+        "exporter.rs",
+        "forwarder.rs",
+        "journald.rs",
+        "projection.rs",
+        "provider.rs",
+        "service.rs",
+        "share_adapter.rs",
+    ] {
+        assert!(
+            !repo_path_exists(&format!(
+                "packages/d2b-provider-observability-otel/src/{module}"
+            )),
+            "incomplete Provider module must not be shipped: {module}"
         );
     }
 }

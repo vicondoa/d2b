@@ -7,12 +7,23 @@
 
 use std::io;
 
+use d2b_audit::{DurabilityEvidence, OperationIdentity, ZoneOperationKey};
 use d2b_contracts::broker_wire::{NftablesProjectionAction, RunnerAllocation};
 use d2b_contracts::v3::{ResourceBundleGenerationId, ResourceGeneration};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::ops::store_sync_audit::StoreSyncAuditFields;
+
+/// Discriminator separating Zone durability evidence from diagnostic broker
+/// rows. Legacy rows without this field remain readable as durability rows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum BrokerAuditRecordClass {
+    #[default]
+    Durability,
+    Diagnostic,
+}
 
 /// Terminal disposition of the swtpm-dir hardening step. Path-free.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -856,14 +867,18 @@ fn default_request_fields() -> Value {
     Value::Object(Default::default())
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OwnedOpAuditRecord {
+    #[serde(default)]
+    pub record_class: BrokerAuditRecordClass,
     pub ts_ms: u128,
     pub broker_version: String,
     pub bundle_version: String,
     pub bundle_hash: String,
     pub operation: String,
     pub public_operation_id: String,
+    pub zone_id: d2b_audit::ZoneId,
+    pub operation_identity: OperationIdentity,
     #[serde(default)]
     pub event_id: String,
     pub peer_uid: u32,
@@ -887,16 +902,26 @@ pub struct OwnedOpAuditRecord {
     #[serde(default)]
     pub duration_us: u64,
     pub operation_fields: Option<Value>,
+    pub zone_operation_key: ZoneOperationKey,
 }
 
-#[derive(Debug, Clone, Serialize)]
+impl core::fmt::Debug for OwnedOpAuditRecord {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("OwnedOpAuditRecord(<redacted>)")
+    }
+}
+
+#[derive(Clone, Serialize)]
 pub struct OpAuditRecord<'a> {
+    pub record_class: BrokerAuditRecordClass,
     pub ts_ms: u128,
     pub broker_version: &'a str,
     pub bundle_version: &'a str,
     pub bundle_hash: &'a str,
     pub operation: &'a str,
     pub public_operation_id: &'a str,
+    pub zone_id: &'a d2b_audit::ZoneId,
+    pub operation_identity: &'a OperationIdentity,
     pub event_id: &'a str,
     pub peer_uid: u32,
     pub peer_gid: u32,
@@ -913,12 +938,51 @@ pub struct OpAuditRecord<'a> {
     pub tracing_span_id: Option<&'a str>,
     pub duration_us: u64,
     pub operation_fields: Option<Value>,
+    pub zone_operation_key: ZoneOperationKey,
+}
+
+impl core::fmt::Debug for OpAuditRecord<'_> {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("OpAuditRecord(<redacted>)")
+    }
 }
 
 impl<'a> OpAuditRecord<'a> {
+    /// Derive the shared operation identity used by resource-store audit
+    /// reconciliation.
+    pub fn operation_identity(
+        &self,
+    ) -> Result<OperationIdentity, d2b_audit::OperationIdentityError> {
+        let expected = OperationIdentity::parse(self.public_operation_id)
+            .or_else(|_| OperationIdentity::derive(self.public_operation_id))?;
+        (expected == *self.operation_identity)
+            .then_some(self.operation_identity.clone())
+            .ok_or(d2b_audit::OperationIdentityError::Invalid)
+    }
+
+    /// Return the typed durability evidence for this broker decision.
+    pub fn durability_evidence(
+        &self,
+        _zone: &str,
+    ) -> Result<DurabilityEvidence, d2b_audit::OperationIdentityError> {
+        if self.record_class != BrokerAuditRecordClass::Durability {
+            return Err(d2b_audit::OperationIdentityError::Invalid);
+        }
+        d2b_audit::evidence_from_decision_result(
+            self.zone_id.clone(),
+            self.operation_identity.clone(),
+            Some(&self.zone_operation_key),
+            Some(self.decision),
+            Some(self.result),
+        )
+        .map_err(|_| d2b_audit::OperationIdentityError::Invalid)
+    }
+
     /// Renders one JSONL line (single object + newline).
     pub fn to_jsonl(&self) -> String {
-        let mut s = serde_json::to_string(self).expect("audit record serializes");
+        let value = serde_json::to_value(self).expect("audit record serializes");
+        let mut s = serde_json::to_string(&crate::audit::sanitize_audit_value(value))
+            .expect("sanitized audit record serializes");
         s.push('\n');
         s
     }
@@ -927,12 +991,15 @@ impl<'a> OpAuditRecord<'a> {
 impl From<&OpAuditRecord<'_>> for OwnedOpAuditRecord {
     fn from(value: &OpAuditRecord<'_>) -> Self {
         Self {
+            record_class: value.record_class,
             ts_ms: value.ts_ms,
             broker_version: value.broker_version.to_owned(),
             bundle_version: value.bundle_version.to_owned(),
             bundle_hash: value.bundle_hash.to_owned(),
             operation: value.operation.to_owned(),
             public_operation_id: value.public_operation_id.to_owned(),
+            zone_id: value.zone_id.clone(),
+            operation_identity: value.operation_identity.clone(),
             event_id: value.event_id.to_owned(),
             peer_uid: value.peer_uid,
             peer_gid: value.peer_gid,
@@ -949,7 +1016,40 @@ impl From<&OpAuditRecord<'_>> for OwnedOpAuditRecord {
             tracing_span_id: value.tracing_span_id.map(str::to_owned),
             duration_us: value.duration_us,
             operation_fields: value.operation_fields.clone(),
+            zone_operation_key: value.zone_operation_key.clone(),
         }
+    }
+}
+
+impl OwnedOpAuditRecord {
+    /// Derive the shared operation identity used by resource-store audit
+    /// reconciliation.
+    pub fn operation_identity(
+        &self,
+    ) -> Result<OperationIdentity, d2b_audit::OperationIdentityError> {
+        let expected = OperationIdentity::parse(&self.public_operation_id)
+            .or_else(|_| OperationIdentity::derive(&self.public_operation_id))?;
+        (expected == self.operation_identity)
+            .then_some(self.operation_identity.clone())
+            .ok_or(d2b_audit::OperationIdentityError::Invalid)
+    }
+
+    /// Return typed durability evidence from a persisted broker record.
+    pub fn durability_evidence(
+        &self,
+        _zone: &str,
+    ) -> Result<DurabilityEvidence, d2b_audit::OperationIdentityError> {
+        if self.record_class != BrokerAuditRecordClass::Durability {
+            return Err(d2b_audit::OperationIdentityError::Invalid);
+        }
+        d2b_audit::evidence_from_decision_result(
+            self.zone_id.clone(),
+            self.operation_identity.clone(),
+            Some(&self.zone_operation_key),
+            Some(&self.decision),
+            Some(&self.result),
+        )
+        .map_err(|_| d2b_audit::OperationIdentityError::Invalid)
     }
 }
 

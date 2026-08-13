@@ -30,6 +30,7 @@ pub mod role_binding;
 pub mod semantic_services;
 pub mod services;
 pub mod storage;
+pub mod telemetry_frame;
 pub mod telemetry_policy;
 pub mod user;
 pub mod volume;
@@ -107,7 +108,7 @@ pub use resource_schema::{
     ExtensionSchemaId, ExtensionSchemaLayer, ObjectFieldSchema, ProviderExtensionRegistration,
     RESOURCE_ENVELOPE_DOMAIN_TAG, RESOURCE_SPEC_DOMAIN_TAG, RESOURCE_STATUS_DOMAIN_TAG,
     ResourceSchemaContract, ResourceSchemaError, SCHEMA_DOMAIN_TAG, SchemaVersion,
-    canonical_digest, canonical_json_bytes, framed_canonical_digest,
+    canonical_digest, canonical_json_bytes, framed_canonical_digest, is_canonical_digest,
 };
 pub use resource_status::{
     ConditionState, ProviderStatusExtension, ResourceCondition, ResourceCurrencySet,
@@ -153,6 +154,10 @@ pub use role_binding::{
 pub use services::{
     AuditSegment, ProviderMethod, ResourceMethod, ServiceDescriptor, ServiceDescriptorError,
     V3Service, ZoneMethod, missing_audit_segments,
+};
+pub use telemetry_frame::{
+    MAX_TELEMETRY_FRAME_BYTES, TelemetryFrame, TelemetryFrameError, TelemetrySignal, redact_frame,
+    validate_raw_frame,
 };
 pub use telemetry_policy::{
     FORBIDDEN_LABEL_KEYS, FORBIDDEN_LABEL_SUFFIXES, METRIC_LABEL_POLICY, OTEL_RESOURCE_ATTRIBUTES,

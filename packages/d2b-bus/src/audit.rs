@@ -111,7 +111,7 @@ pub fn route_admission_record_with_trace(
         zone,
         operation_id,
         correlation_id,
-        trace.map(|trace| trace.trace_id().to_owned()),
+        trace.map(TraceContext::exported_trace_id),
         source,
         previous_hash,
         AuditRecordFields::RouteAdmission(RouteAdmissionFields {
@@ -231,7 +231,7 @@ mod tests {
             "d2b.resource.v3",
             "Get",
             "local",
-            "sha256:subject",
+            "sha256:0000000000000000000000000000000000000000000000000000000000000001",
             "denied",
             1,
             "denied",
@@ -253,14 +253,15 @@ mod tests {
             "d2b.resource.v3",
             "Get",
             "local",
-            "sha256:subject",
+            "sha256:0000000000000000000000000000000000000000000000000000000000000001",
             "allowed",
             1,
             "ok",
             Some(&trace),
         )
         .unwrap();
-        assert_eq!(record.trace_id(), Some("trace-id"));
+        let expected_trace = d2b_telemetry::canonical_export_id("trace-id");
+        assert_eq!(record.trace_id(), Some(expected_trace.as_str()));
         assert!(!serde_json::to_string(&record).unwrap().contains("span-id"));
     }
 
@@ -273,7 +274,7 @@ mod tests {
             "correlation",
             "bus",
             genesis_hash(),
-            "sha256:subject",
+            "sha256:0000000000000000000000000000000000000000000000000000000000000001",
             "allowed",
             1,
             None,

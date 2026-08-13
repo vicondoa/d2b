@@ -268,7 +268,11 @@ fn spawn_audit_mock_daemon(path: &Path) -> std::thread::JoinHandle<()> {
             conn,
             &serde_json::json!({
                 "type": "auditResponse",
-                "lines": ["broker audit line 1", "broker audit line 2"],
+                "entries": [
+                    {"sequence": 0, "record": "broker audit line 1"},
+                    {"sequence": 1, "record": "broker audit line 2"},
+                ],
+                "complete": true,
             }),
         );
         let _ = nix::unistd::close(conn);
