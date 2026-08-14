@@ -231,4 +231,36 @@ in
     ];
     expected = true;
   };
+
+  "provider-runtime-contracts-rejects-process-on-wrong-owning-guest" = {
+    expr = hasFailure "must match the owning Provider execution reference" [
+      contractBase
+      ({ ... }: {
+        d2b.zones.local-root.resources.worker = {
+          type = "Process";
+          spec = {
+            providerRef = "Provider/runtime-azure-container-apps";
+            executionRef = "Guest/system-guest";
+          };
+        };
+      })
+    ];
+    expected = true;
+  };
+
+  "provider-runtime-contracts-rejects-missing-required-credential" = {
+    expr = hasFailure "credential scopes must match gatewayExecutionRef" [
+      contractBase
+      ({ ... }: {
+        d2b.zones.local-root.resources.runtime-azure-container-apps.spec.config =
+          lib.mkForce {
+            gatewayExecutionRef = "Guest/gateway";
+            controlCredentialRef = null;
+            pullCredentialRef = "Credential/aca-pull";
+            networkRef = "Network/control-network";
+          };
+      })
+    ];
+    expected = true;
+  };
 }

@@ -82,12 +82,12 @@ let
         else spec.providerRef or "";
       credentialRefs =
         if providerRef == "Provider/runtime-azure-container-apps" then
-          lib.filter (value: value != null) [
+          [
             (providerConfig.controlCredentialRef or null)
             (providerConfig.pullCredentialRef or null)
           ]
         else if providerRef == "Provider/runtime-azure-virtual-machine" then
-          lib.filter (value: value != null) [
+          [
             (providerConfig.armCredentialRef or null)
           ]
         else
@@ -217,15 +217,31 @@ let
   processAssertions = row:
     let spec = row.resource.spec or { };
     providerRef = spec.ownerProviderRef or spec.providerRef or "";
+    provider = resourceFor row providerRef;
+    providerConfig =
+      if provider == null then { } else (provider.spec or { }).config or { };
     isGatewayProvider = lib.elem providerRef [
       "Provider/runtime-azure-container-apps"
       "Provider/runtime-azure-virtual-machine"
     ];
     executionRef = spec.executionRef or null;
+    providerExecutionRef =
+      if providerRef == "Provider/runtime-azure-container-apps"
+      then providerConfig.gatewayExecutionRef or null
+      else providerConfig.controllerExecutionRef or null;
     in (lib.optionals (lib.elem providerRef runtimeProviderRefs) [
       {
         assertion = resolvesAs row "Provider" providerRef;
         message = "${row.path}.spec.providerRef must resolve to an existing same-Zone runtime Provider.";
+      }
+      {
+        assertion = resolvesAs row "Host" providerExecutionRef
+          || resolvesAs row "Guest" providerExecutionRef;
+        message = "${row.path}.spec.owner Provider execution reference must resolve to a same-Zone Host or Guest.";
+      }
+      {
+        assertion = executionRef == providerExecutionRef;
+        message = "${row.path}.spec.executionRef must match the owning Provider execution reference.";
       }
     ]) ++ lib.optionals isGatewayProvider [
       {

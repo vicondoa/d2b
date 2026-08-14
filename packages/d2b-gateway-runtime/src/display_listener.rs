@@ -24,6 +24,7 @@ use d2b_gateway::{
 };
 use d2b_provider_transport_azure_relay::gateway_compat::{RelayCredential, RelayEndpoint};
 use tokio::sync::Notify;
+use tokio::time::{Duration, timeout};
 
 use crate::{
     NowFn, make_prologue_verifier,
@@ -54,6 +55,7 @@ struct ListenerState {
     _thread: std::thread::JoinHandle<()>,
     handshook: Arc<Notify>,
     armed: Arc<AtomicBool>,
+    handshake_timeout: Duration,
 }
 
 impl Drop for ListenerState {
@@ -185,6 +187,8 @@ impl DisplayListener for RelayDisplayListener {
             })
             .map_err(|_| GatewayError::Internal)?;
         let mut guard = self.state.lock().map_err(|_| GatewayError::Internal)?;
+        let now = (self.now)();
+        let handshake_timeout = Duration::from_secs(binding.not_after.saturating_sub(now));
         guard.insert(
             id.clone(),
             ListenerState {
@@ -192,6 +196,7 @@ impl DisplayListener for RelayDisplayListener {
                 _thread: thread,
                 handshook,
                 armed,
+                handshake_timeout,
             },
         );
         Ok(ListenerHandle(id))
@@ -199,10 +204,10 @@ impl DisplayListener for RelayDisplayListener {
 
     async fn await_handshake(&self, handle: &ListenerHandle) -> Result<(), GatewayError> {
         // Snapshot the signal primitives without holding the lock across await.
-        let (handshook, armed) = {
+        let (handshook, armed, handshake_timeout) = {
             let guard = self.state.lock().map_err(|_| GatewayError::Internal)?;
             let st = guard.get(&handle.0).ok_or(GatewayError::Internal)?;
-            (st.handshook.clone(), st.armed.clone())
+            (st.handshook.clone(), st.armed.clone(), st.handshake_timeout)
         };
         if armed.load(Ordering::SeqCst) {
             return Ok(());
@@ -213,7 +218,10 @@ impl DisplayListener for RelayDisplayListener {
         if armed.load(Ordering::SeqCst) {
             return Ok(());
         }
-        waiter.await;
+        if timeout(handshake_timeout, waiter).await.is_err() {
+            self.close(handle).await?;
+            return Err(GatewayError::Timeout);
+        }
         Ok(())
     }
 
@@ -305,6 +313,7 @@ mod tests {
                 _thread: thread,
                 handshook,
                 armed,
+                handshake_timeout: Duration::from_secs(100),
             },
         );
         // armed is already true -> resolves immediately.

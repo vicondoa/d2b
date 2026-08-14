@@ -650,6 +650,8 @@ fn classify_credential_error_message(message: &str) -> &'static str {
 
 static ACA_CIRCUITS: OnceLock<Mutex<BTreeMap<String, Weak<ProviderCircuitBreaker>>>> =
     OnceLock::new();
+static ACA_LIFECYCLE_LOCKS: OnceLock<Mutex<BTreeMap<String, Weak<tokio::sync::Mutex<()>>>>> =
+    OnceLock::new();
 
 fn shared_circuit_for(config: &AcaConfig) -> Arc<ProviderCircuitBreaker> {
     let key = format!(
@@ -665,9 +667,29 @@ fn shared_circuit_for(config: &AcaConfig) -> Arc<ProviderCircuitBreaker> {
     if let Some(existing) = circuits.get(&key).and_then(Weak::upgrade) {
         return existing;
     }
+
     let circuit = Arc::new(ProviderCircuitBreaker::default());
     circuits.insert(key, Arc::downgrade(&circuit));
     circuit
+}
+
+fn shared_lifecycle_lock_for(config: &AcaConfig) -> Arc<tokio::sync::Mutex<()>> {
+    let key = format!(
+        "{}\u{1f}{}\u{1f}{}\u{1f}{}",
+        config.endpoint(),
+        config.subscription,
+        config.resource_group,
+        config.sandbox_group
+    );
+    let registry = ACA_LIFECYCLE_LOCKS.get_or_init(|| Mutex::new(BTreeMap::new()));
+    let mut locks = registry.lock().expect("aca lifecycle registry poisoned");
+    locks.retain(|_, weak| weak.strong_count() > 0);
+    if let Some(existing) = locks.get(&key).and_then(Weak::upgrade) {
+        return existing;
+    }
+    let lock = Arc::new(tokio::sync::Mutex::new(()));
+    locks.insert(key, Arc::downgrade(&lock));
+    lock
 }
 
 #[cfg(test)]
@@ -800,6 +822,7 @@ impl AcaWorkloadProvider {
         credential: Arc<dyn TokenCredential>,
         http: Arc<dyn HttpTransport>,
     ) -> Self {
+        let lifecycle_lock = shared_lifecycle_lock_for(&config);
         Self {
             config,
             credential,
@@ -807,7 +830,7 @@ impl AcaWorkloadProvider {
             node,
             provider_id: ProviderId::parse("aca").expect("valid provider id"),
             sandbox_defaults: None,
-            lifecycle_lock: Arc::new(tokio::sync::Mutex::new(())),
+            lifecycle_lock,
             token_cache: Arc::new(tokio::sync::Mutex::new(None)),
             circuit: Arc::new(ProviderCircuitBreaker::default()),
         }
@@ -867,6 +890,30 @@ impl AcaWorkloadProvider {
     }
 
     async fn request(
+        &self,
+        method: HttpMethod,
+        url: &str,
+        bearer: &str,
+        body: Option<String>,
+    ) -> ProviderResult<HttpResponse> {
+        let retry_body = body.clone();
+        let response = self.request_once(method, url, bearer, body).await?;
+        if matches!(response.status, 401 | 403) {
+            self.invalidate_bearer(bearer).await;
+            let fresh = self.bearer().await?;
+            return self.request_once(method, url, &fresh, retry_body).await;
+        }
+        Ok(response)
+    }
+
+    async fn invalidate_bearer(&self, bearer: &str) {
+        let mut cache = self.token_cache.lock().await;
+        if cache.as_ref().is_some_and(|cached| cached.token == bearer) {
+            *cache = None;
+        }
+    }
+
+    async fn request_once(
         &self,
         method: HttpMethod,
         url: &str,
@@ -982,9 +1029,18 @@ impl AcaWorkloadProvider {
         selector.insert("d2b-workload".to_owned(), workload.as_str().to_owned());
         let labels = labels_selector(&selector);
         let sandboxes = self.list_sandboxes(Some(&labels)).await?;
-        Ok(sandboxes
+        let matches = sandboxes
             .into_iter()
-            .find(|sandbox| labels_match(&sandbox.labels, &selector)))
+            .filter(|sandbox| labels_match(&sandbox.labels, &selector))
+            .collect::<Vec<_>>();
+        match matches.as_slice() {
+            [] => Ok(None),
+            [sandbox] => Ok(Some(sandbox.clone())),
+            _ => Err(ProviderError::new(
+                ErrorKind::ProviderAllocationFailed,
+                "Azure Container Apps workload labels matched multiple sandboxes",
+            )),
+        }
     }
 
     /// Ensure the workload alias has a sandbox, creating the disk image and
@@ -1948,7 +2004,7 @@ mod tests {
 
     #[tokio::test]
     async fn exec_shell_fails_closed_on_non_200() {
-        let (p, _) = provider(403, "forbidden");
+        let (p, _) = provider_seq(vec![(403, "forbidden"), (403, "forbidden")]);
         let err = p.exec_shell("sbx-1", "echo hi").await.unwrap_err();
         assert_eq!(err.kind(), ErrorKind::Unauthorized);
     }
@@ -2458,11 +2514,18 @@ mod tests {
             "x-ms-correlation-request-id".to_owned(),
             "corr-123".to_owned(),
         );
-        let (p, _) = provider_seq_with_headers(vec![(
-            403,
-            r#"{"error":{"code":"AuthorizationFailed","message":"quota denied for sandbox group"}}"#,
-            headers,
-        )]);
+        let (p, _) = provider_seq_with_headers(vec![
+            (
+                403,
+                r#"{"error":{"code":"AuthorizationFailed","message":"quota denied for sandbox group"}}"#,
+                headers.clone(),
+            ),
+            (
+                403,
+                r#"{"error":{"code":"AuthorizationFailed","message":"quota denied for sandbox group"}}"#,
+                headers,
+            ),
+        ]);
         let p = p.with_sandbox_defaults(lifecycle_defaults());
         let err = p.list(ListSelector::All).await.unwrap_err();
         assert_eq!(err.kind(), ErrorKind::Unauthorized);
@@ -2484,7 +2547,7 @@ mod tests {
             (401, ErrorKind::AuthenticationFailed),
             (403, ErrorKind::Unauthorized),
         ] {
-            let (p, _) = provider_seq(vec![(status, "{}")]);
+            let (p, _) = provider_seq(vec![(status, "{}"), (status, "{}")]);
             let err = p.sandbox_reachable("sandbox-1").await.unwrap_err();
             assert_eq!(err.kind(), kind);
             assert!(

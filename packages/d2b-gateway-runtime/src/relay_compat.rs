@@ -20,7 +20,8 @@ use d2b_realm_provider::error::{ProviderError, ProviderResult};
 use d2b_realm_provider::provider::{TransportListener, TransportProvider};
 use d2b_realm_provider::types::{NodeRegistration, SafeLabel, TransportSession, TransportTarget};
 use rustls_pki_types::{CertificateDer, pem::PemObject};
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::{Mutex, Semaphore, mpsc};
+use tokio::time::{Duration, timeout};
 
 #[cfg(test)]
 use d2b_provider_transport_azure_relay::gateway_compat::{MAX_SAS_TTL_SECS, mint_sas};
@@ -690,6 +691,8 @@ pub type PrologueVerifier = std::sync::Arc<dyn Fn(&[u8]) -> bool + Send + Sync>;
 
 /// Max prologue frame body the listener will buffer before rejecting.
 const MAX_PROLOGUE: usize = 16 * 1024;
+const MAX_PENDING_RENDEZVOUS: usize = 128;
+const PROLOGUE_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Try to extract one length-delimited frame (`u32-be length || body`) from the
 /// front of `buf`. Returns `Ok(Some((body, consumed)))` once a full frame is
@@ -754,6 +757,7 @@ pub async fn run_listener_verified(
     let control =
         connect_with_ca(endpoint, RelayRole::Listener, credential, ttl_secs, ca_pem).await?;
     let (mut sink, mut stream) = control.split();
+    let rendezvous_slots = std::sync::Arc::new(Semaphore::new(MAX_PENDING_RENDEZVOUS));
     while let Some(msg) = stream.next().await {
         let msg =
             msg.map_err(|err| RelayConnectError::Handshake(format!("control channel: {err}")))?;
@@ -772,7 +776,12 @@ pub async fn run_listener_verified(
                     let local = local.clone();
                     let ca = ca_pem.map(|c| c.to_vec());
                     let verify = verify.clone();
+                    let Ok(slot) = rendezvous_slots.clone().try_acquire_owned() else {
+                        tracing::warn!("relay rendezvous concurrency bound reached");
+                        continue;
+                    };
                     tokio::spawn(async move {
+                        let _slot = slot;
                         if let Err(err) =
                             accept_one_verified(&address, &local, ca.as_deref(), verify).await
                         {
@@ -799,7 +808,9 @@ async fn accept_one_verified(
 ) -> Result<(), RelayConnectError> {
     use tokio::io::AsyncWriteExt;
     let mut ws = connect_raw(address, ca_pem).await?;
-    let (frame, leftover) = read_prologue(&mut ws).await?;
+    let (frame, leftover) = timeout(PROLOGUE_TIMEOUT, read_prologue(&mut ws))
+        .await
+        .map_err(|_| RelayConnectError::Handshake("prologue timeout".into()))??;
     if !verify(&frame) {
         // Fail closed: never connect the local socket, never forward a byte.
         return Err(RelayConnectError::Handshake("prologue rejected".into()));

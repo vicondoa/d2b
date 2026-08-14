@@ -22,8 +22,9 @@ pub use metrics::{RelayMetricEvent, RelayMetricOutcome};
 pub use reconnect::{ReconnectBackoff, ReconnectDecision};
 pub use relay_transport::{
     AzureRelayTransportProvider, RelayAuthenticatedPeer, RelayConnection, RelayEndpoint,
-    RelayEnrollmentProof, RelayEnrollmentVerifier, RelayFrame, RelayRole, RelaySessionPhase,
-    RelaySocket, RelaySocketConnector, RelayTransportConfig, RelayTransportError,
+    RelayEnrollmentChallenge, RelayEnrollmentProof, RelayEnrollmentVerifier, RelayFrame, RelayRole,
+    RelaySessionPhase, RelaySocket, RelaySocketConnector, RelayTransportConfig,
+    RelayTransportError,
 };
 pub use transport_settings::{RelayTransportSettings, RelayTransportSettingsError};
 

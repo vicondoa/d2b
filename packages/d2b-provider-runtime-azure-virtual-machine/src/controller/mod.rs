@@ -1,6 +1,10 @@
 //! Azure VM lifecycle controller.
 
-use std::{fmt, sync::Arc};
+use std::{
+    fmt,
+    sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use sha2::{Digest, Sha256};
 
@@ -113,6 +117,8 @@ pub struct AzureVmController<E> {
     identity_digest: Option<[u8; 32]>,
     bootstrap_psk: Option<BootstrapPsk>,
     bootstrap_service: BootstrapService,
+    pending_delete_operation_id: Option<String>,
+    bootstrap_started_at_unix_ms: Option<u64>,
 }
 
 impl<E> AzureVmController<E>
@@ -142,6 +148,8 @@ where
             identity_digest: None,
             bootstrap_psk,
             bootstrap_service: BootstrapService::default(),
+            pending_delete_operation_id: None,
+            bootstrap_started_at_unix_ms: None,
         })
     }
 
@@ -229,6 +237,9 @@ where
 
     /// Adopt a running VM only when its d2b tag digest matches.
     pub async fn adopt(&mut self) -> Result<AzureVmReconcileOutcome, AzureVmError> {
+        if !self.finalizer {
+            return Err(AzureVmError::InvalidConfiguration);
+        }
         let (state, handle, tags) = self.effect.get_vm_state(&self.settings).await?;
         if state != AzureVmState::Running {
             return Err(AzureVmError::Transient);
@@ -267,22 +278,38 @@ where
                 self.operation = None;
                 match self.phase {
                     AzureVmPhase::Provisioning => {
-                        let handle = if let Some(handle) = self.vm_handle.clone() {
-                            handle
-                        } else {
-                            let (_, handle, _) = self.effect.get_vm_state(&self.settings).await?;
-                            let Some(handle) = handle else {
-                                self.phase = AzureVmPhase::Failed;
-                                return Err(AzureVmError::Ambiguous);
-                            };
-                            self.vm_handle = Some(handle.clone());
-                            handle
+                        if self.pending_delete_operation_id.is_some() {
+                            self.phase = AzureVmPhase::Deleting;
+                            return self.start_pending_delete().await;
+                        }
+                        let (state, handle, tags) =
+                            self.effect.get_vm_state(&self.settings).await?;
+                        if state != AzureVmState::Running {
+                            self.phase = AzureVmPhase::Failed;
+                            return Err(AzureVmError::ArmProvisioningFailed);
+                        }
+                        let Some(handle) = handle else {
+                            self.phase = AzureVmPhase::Failed;
+                            return Err(AzureVmError::Ambiguous);
                         };
-                        if let Some(psk) = self.bootstrap_psk.take() {
-                            let payload = PskExtensionPayload::from_secret(psk.consume().to_vec())?;
-                            self.operation =
-                                Some(self.effect.put_vm_extension(&handle, payload).await?);
+                        let Some(tags) = tags else {
+                            self.phase = AzureVmPhase::Failed;
+                            return Err(AzureVmError::ArmResourceConflict);
+                        };
+                        if tags != self.expected_tag_digest {
+                            self.phase = AzureVmPhase::Failed;
+                            return Err(AzureVmError::ArmResourceConflict);
+                        }
+                        self.vm_handle = Some(handle.clone());
+                        self.tag_digest = Some(tags);
+                        if let Some(psk) = self.bootstrap_psk.as_ref() {
+                            let payload =
+                                PskExtensionPayload::from_secret(psk.copy_for_delivery().to_vec())?;
+                            let operation = self.effect.put_vm_extension(&handle, payload).await?;
+                            self.bootstrap_psk = None;
+                            self.operation = Some(operation);
                             self.phase = AzureVmPhase::PskDelivering;
+                            self.bootstrap_started_at_unix_ms = Some(now_unix_ms());
                             Ok(AzureVmReconcileOutcome::Progressing { after_ms: 250 })
                         } else {
                             self.phase = AzureVmPhase::Bootstrapping;
@@ -293,16 +320,7 @@ where
                         self.phase = AzureVmPhase::Bootstrapping;
                         Ok(AzureVmReconcileOutcome::Progressing { after_ms: 1_000 })
                     }
-                    AzureVmPhase::Deleting => {
-                        match self.effect.get_vm_state(&self.settings).await? {
-                            (AzureVmState::Absent, _, _) => {
-                                self.finalizer = false;
-                                self.phase = AzureVmPhase::Finalized;
-                                Ok(AzureVmReconcileOutcome::Converged)
-                            }
-                            _ => Ok(AzureVmReconcileOutcome::Progressing { after_ms: 1_000 }),
-                        }
-                    }
+                    AzureVmPhase::Deleting => self.start_pending_delete().await,
                     _ => Ok(AzureVmReconcileOutcome::Converged),
                 }
             }
@@ -319,47 +337,51 @@ where
         if !self.finalizer {
             return Ok(AzureVmReconcileOutcome::Converged);
         }
-        let handle = if let Some(handle) = self.vm_handle.clone() {
-            handle
-        } else {
-            let (state, handle, tags) = self.effect.get_vm_state(&self.settings).await?;
-            match state {
-                AzureVmState::Absent => {
-                    self.finalizer = false;
-                    self.phase = AzureVmPhase::Finalized;
-                    return Ok(AzureVmReconcileOutcome::Converged);
-                }
-                AzureVmState::Running => {
-                    let Some(handle) = handle else {
-                        self.phase = AzureVmPhase::Failed;
-                        return Err(AzureVmError::Ambiguous);
-                    };
-                    let Some(tags) = tags else {
-                        self.phase = AzureVmPhase::Failed;
-                        return Err(AzureVmError::ArmResourceConflict);
-                    };
-                    if tags != self.expected_tag_digest {
-                        self.phase = AzureVmPhase::Failed;
-                        return Err(AzureVmError::ArmResourceConflict);
-                    }
-                    self.vm_handle = Some(handle.clone());
-                    self.tag_digest = Some(tags);
-                    handle
-                }
-                AzureVmState::Provisioning | AzureVmState::Stopped => {
-                    self.phase = AzureVmPhase::Deleting;
-                    return Ok(AzureVmReconcileOutcome::Retry { after_ms: 1_000 });
-                }
-                AzureVmState::Failed | AzureVmState::Unknown => {
+        let delete_operation_id =
+            idempotency::operation_id(zone_uid, guest_uid, generation, "delete");
+        self.pending_delete_operation_id = Some(delete_operation_id.clone());
+        if self.operation.is_some() {
+            self.phase = AzureVmPhase::Deleting;
+            return Ok(AzureVmReconcileOutcome::Progressing { after_ms: 1_000 });
+        }
+        let (state, handle, tags) = self.effect.get_vm_state(&self.settings).await?;
+        let handle = match state {
+            AzureVmState::Absent => {
+                self.finalizer = false;
+                self.phase = AzureVmPhase::Finalized;
+                return Ok(AzureVmReconcileOutcome::Converged);
+            }
+            AzureVmState::Running | AzureVmState::Stopped => {
+                let Some(handle) = handle else {
                     self.phase = AzureVmPhase::Failed;
-                    return Err(AzureVmError::Transient);
+                    return Err(AzureVmError::Ambiguous);
+                };
+                let Some(tags) = tags else {
+                    self.phase = AzureVmPhase::Failed;
+                    return Err(AzureVmError::ArmResourceConflict);
+                };
+                if tags != self.expected_tag_digest {
+                    self.phase = AzureVmPhase::Failed;
+                    return Err(AzureVmError::ArmResourceConflict);
                 }
+                self.vm_handle = Some(handle.clone());
+                self.tag_digest = Some(tags);
+                handle
+            }
+            AzureVmState::Provisioning => {
+                self.phase = AzureVmPhase::Deleting;
+                return Ok(AzureVmReconcileOutcome::Retry { after_ms: 1_000 });
+            }
+            AzureVmState::Failed | AzureVmState::Unknown => {
+                self.phase = AzureVmPhase::Failed;
+                return Err(AzureVmError::Transient);
             }
         };
-        if self.operation.is_none() {
-            let operation_id = idempotency::operation_id(zone_uid, guest_uid, generation, "delete");
-            self.operation = Some(self.effect.start_vm_delete(&handle, &operation_id).await?);
-        }
+        self.operation = Some(
+            self.effect
+                .start_vm_delete(&handle, &delete_operation_id)
+                .await?,
+        );
         self.phase = AzureVmPhase::Deleting;
         Ok(AzureVmReconcileOutcome::Progressing { after_ms: 1_000 })
     }
@@ -376,6 +398,11 @@ where
         presented: &[u8],
         now_unix_ms: u64,
     ) -> Result<(), AzureVmError> {
+        if self.bootstrap_started_at_unix_ms.is_some_and(|started| {
+            now_unix_ms.saturating_sub(started) > self.settings.bootstrap_deadline_ms
+        }) {
+            return Err(AzureVmError::BootstrapFailed);
+        }
         self.bootstrap_service
             .complete_enrollment(admission, presented, now_unix_ms)
     }
@@ -385,6 +412,9 @@ where
         tags: TagDigest,
     ) -> Result<AzureVmReconcileOutcome, AzureVmError> {
         if self.bootstrap_service.state() != BootstrapServiceState::Enrolled {
+            if self.bootstrap_started_at_unix_ms.is_none() {
+                self.bootstrap_started_at_unix_ms = Some(now_unix_ms());
+            }
             self.identity_digest = None;
             self.phase = AzureVmPhase::Bootstrapping;
             return Ok(AzureVmReconcileOutcome::Retry { after_ms: 1_000 });
@@ -393,4 +423,49 @@ where
         self.identity_digest = Some(Sha256::digest(tags.as_bytes()).into());
         Ok(AzureVmReconcileOutcome::Converged)
     }
+
+    async fn start_pending_delete(&mut self) -> Result<AzureVmReconcileOutcome, AzureVmError> {
+        let (state, handle, tags) = self.effect.get_vm_state(&self.settings).await?;
+        match state {
+            AzureVmState::Absent => {
+                self.finalizer = false;
+                self.phase = AzureVmPhase::Finalized;
+                self.pending_delete_operation_id = None;
+                Ok(AzureVmReconcileOutcome::Converged)
+            }
+            AzureVmState::Running | AzureVmState::Stopped => {
+                let Some(handle) = handle else {
+                    return Err(AzureVmError::Ambiguous);
+                };
+                let Some(tags) = tags else {
+                    return Err(AzureVmError::ArmResourceConflict);
+                };
+                if tags != self.expected_tag_digest {
+                    return Err(AzureVmError::ArmResourceConflict);
+                }
+                let operation_id = self
+                    .pending_delete_operation_id
+                    .clone()
+                    .ok_or(AzureVmError::Ambiguous)?;
+                self.operation = Some(self.effect.start_vm_delete(&handle, &operation_id).await?);
+                self.phase = AzureVmPhase::Deleting;
+                Ok(AzureVmReconcileOutcome::Progressing { after_ms: 1_000 })
+            }
+            AzureVmState::Provisioning => {
+                self.phase = AzureVmPhase::Deleting;
+                Ok(AzureVmReconcileOutcome::Retry { after_ms: 1_000 })
+            }
+            AzureVmState::Failed | AzureVmState::Unknown => {
+                self.phase = AzureVmPhase::Failed;
+                Err(AzureVmError::Transient)
+            }
+        }
+    }
+}
+
+fn now_unix_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
+        .unwrap_or(0)
 }

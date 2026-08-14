@@ -183,11 +183,16 @@ async fn sender_roundtrip_is_bounded_and_relay_has_no_local_admin() {
     let connection = provider.open(RelayRole::Sender, 1_000).await.unwrap();
     assert_eq!(
         connection.phase().await,
-        d2b_provider_transport_azure_relay::RelaySessionPhase::Bootstrap
+        d2b_provider_transport_azure_relay::RelaySessionPhase::EnrollmentCommitted
     );
-    let proof =
-        RelayEnrollmentProof::authenticate(&FakeEnrollment, b"authenticated-enrollment").unwrap();
-    connection.enroll(&proof).await.unwrap();
+    let challenge = connection.enrollment_challenge();
+    let proof = RelayEnrollmentProof::authenticate(
+        &FakeEnrollment,
+        b"authenticated-enrollment",
+        &challenge,
+    )
+    .unwrap();
+    connection.enroll(proof).await.unwrap();
     connection
         .send(RelayFrame::new(b"hello".to_vec()).unwrap())
         .await

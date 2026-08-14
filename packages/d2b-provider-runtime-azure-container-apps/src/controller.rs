@@ -300,6 +300,10 @@ where
         deadline_remaining_ms: u32,
     ) -> Result<AcaReconcileOutcome, AcaControllerError> {
         self.ensure_active()?;
+        self.ledger.prune(self.clock.now_unix_ms());
+        if let Some(outcome) = self.completed_outcome(&operation_id) {
+            return Ok(outcome);
+        }
         let query = AcaWorkloadQuery {
             binding: self.binding.clone(),
             profile_id: self.config.profile().profile_id().clone(),
@@ -323,6 +327,7 @@ where
         };
         match candidate {
             Some(record) => {
+                self.ensure_sandbox_generation(&record)?;
                 self.reconcile_observed(operation_id, deadline_remaining_ms, record)
                     .await
             }
@@ -363,6 +368,7 @@ where
             }
         };
         self.observed = Some(candidate.clone());
+        self.ensure_sandbox_generation(&candidate)?;
         if candidate.lifecycle == AcaSandboxLifecycle::Running {
             self.phase = AcaPhase::Ready;
             Ok(AcaReconcileOutcome::Converged)
@@ -400,6 +406,9 @@ where
                 )
                 .await?;
             self.observed = one_candidate(candidates)?;
+            if let Some(record) = self.observed.as_ref() {
+                self.ensure_sandbox_generation(record)?;
+            }
             if self.observed.is_none() {
                 self.finish_finalization();
                 return Ok(());
@@ -516,6 +525,7 @@ where
         let desired_disk = AcaDesiredDiskImage {
             source: self.config.profile().disk_image().clone(),
         };
+        let generation = self.binding.provider_generation;
         let image = self
             .with_lease(
                 operation_id.clone(),
@@ -525,12 +535,16 @@ where
                     let candidates = control
                         .find_disk_images(&lease, &context, &desired_disk)
                         .await?;
-                    if let Some(record) = candidates.as_slice().first().cloned() {
+                    if let Some(record) = one_disk_image(candidates, generation)? {
                         Ok(record)
                     } else {
-                        control
+                        let record = control
                             .create_disk_image(&lease, &context, &desired_disk)
-                            .await
+                            .await?;
+                        if record.generation != generation {
+                            return Err(AcaControlError::new(AcaControlErrorKind::Conflict));
+                        }
+                        Ok(record)
                     }
                 },
             )
@@ -661,6 +675,27 @@ where
         self.finalization_stage = AcaFinalizationStage::Delete;
     }
 
+    fn ensure_sandbox_generation(
+        &self,
+        record: &AcaSandboxRecord,
+    ) -> Result<(), AcaControllerError> {
+        if record.generation == self.binding.provider_generation {
+            Ok(())
+        } else {
+            Err(AcaControllerError::InvalidState)
+        }
+    }
+
+    fn completed_outcome(&self, operation_id: &AcaOperationId) -> Option<AcaReconcileOutcome> {
+        match self.ledger.get(operation_id)? {
+            AcaPhase::Ready => Some(AcaReconcileOutcome::Converged),
+            AcaPhase::Provisioning | AcaPhase::Starting => Some(AcaReconcileOutcome::Progressing {
+                after_ms: self.config.readiness().interval_ms(),
+            }),
+            _ => None,
+        }
+    }
+
     fn ensure_active(&self) -> Result<(), AcaControllerError> {
         if self.finalizer && !matches!(self.phase, AcaPhase::Finalizing | AcaPhase::Finalized) {
             Ok(())
@@ -677,6 +712,20 @@ fn one_candidate(
         [] => Ok(None),
         [candidate] => Ok(Some(candidate.clone())),
         _ => Err(AcaControllerError::AmbiguousAdoption),
+    }
+}
+
+fn one_disk_image(
+    candidates: d2b_contracts::provider_effects::aca::AcaDiskImageCandidates,
+    generation: u64,
+) -> Result<Option<AcaDiskImageRecord>, AcaControlError> {
+    match candidates.as_slice() {
+        [] => Ok(None),
+        [candidate] if candidate.generation == generation => Ok(Some(candidate.clone())),
+        [..] if candidates.as_slice().len() == 1 => {
+            Err(AcaControlError::new(AcaControlErrorKind::Conflict))
+        }
+        _ => Err(AcaControlError::new(AcaControlErrorKind::Ambiguous)),
     }
 }
 

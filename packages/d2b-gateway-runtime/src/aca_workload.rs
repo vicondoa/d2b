@@ -393,9 +393,11 @@ impl GatewayWorkload for AcaGatewayWorkload {
         let (sandbox_id, workdir) =
             decode_agent_handle(handle).ok_or(GatewayError::ProviderAllocationFailed)?;
         let cmd = build_cleanup_command(&workdir);
-        // Best-effort: a cleanup failure must not wedge teardown.
-        let _ = self.provider.exec_shell(&sandbox_id, &cmd).await;
-        Ok(())
+        self.provider
+            .exec_shell(&sandbox_id, &cmd)
+            .await
+            .map(|_| ())
+            .map_err(|_| GatewayError::ProviderAllocationFailed)
     }
 }
 

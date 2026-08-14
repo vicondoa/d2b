@@ -29,6 +29,11 @@ impl BootstrapPsk {
     pub fn consume(self) -> Zeroizing<Vec<u8>> {
         self.0
     }
+
+    /// Copy the bounded secret for an effect attempt without consuming it.
+    pub(crate) fn copy_for_delivery(&self) -> Zeroizing<Vec<u8>> {
+        Zeroizing::new(self.0.to_vec())
+    }
 }
 
 impl fmt::Debug for BootstrapPsk {

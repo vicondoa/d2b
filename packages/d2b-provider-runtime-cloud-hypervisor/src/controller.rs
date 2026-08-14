@@ -1,6 +1,9 @@
 //! Cloud Hypervisor Guest lifecycle controller.
 
-use std::sync::Arc;
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use async_trait::async_trait;
 
@@ -113,6 +116,7 @@ pub struct CloudHypervisorController<E, P> {
     expected_identity: Option<ProcessIdentity>,
     health_failures: u8,
     finalizer: bool,
+    adoption_started: Instant,
 }
 
 impl<E, P> CloudHypervisorController<E, P>
@@ -145,6 +149,7 @@ where
             expected_identity: None,
             health_failures: 0,
             finalizer: true,
+            adoption_started: Instant::now(),
         })
     }
 
@@ -215,6 +220,12 @@ where
         }
         if self.identity.is_none() {
             if let Some(candidate) = self.effect.observe().await? {
+                if self.adoption_started.elapsed()
+                    > Duration::from_millis(u64::from(self.config.adoption_window_ms))
+                {
+                    self.phase = CloudHypervisorPhase::Degraded;
+                    return Err(CloudHypervisorError::AdoptionAmbiguous);
+                }
                 let Some(expected) = self.expected_identity else {
                     self.phase = CloudHypervisorPhase::Degraded;
                     return Err(CloudHypervisorError::AdoptionAmbiguous);
@@ -259,6 +270,15 @@ where
         expected: ProcessIdentity,
         expected_cid: u32,
     ) -> Result<CloudHypervisorReconcileOutcome, CloudHypervisorError> {
+        if !self.finalizer {
+            return Err(CloudHypervisorError::InvalidState);
+        }
+        if self.adoption_started.elapsed()
+            > Duration::from_millis(u64::from(self.config.adoption_window_ms))
+        {
+            self.phase = CloudHypervisorPhase::Degraded;
+            return Err(CloudHypervisorError::AdoptionAmbiguous);
+        }
         let Some(candidate) = self.effect.observe().await? else {
             self.phase = CloudHypervisorPhase::Degraded;
             return Ok(CloudHypervisorReconcileOutcome::Retry { after_ms: 1_000 });
@@ -285,10 +305,23 @@ where
             return Ok(());
         }
         self.phase = CloudHypervisorPhase::Finalizing;
-        if let Some(identity) = self.identity {
-            self.effect.stop(&identity).await?;
-            self.identity = None;
+        let Some(candidate) = self.effect.observe().await? else {
+            self.finalizer = false;
+            self.phase = CloudHypervisorPhase::Finalized;
+            return Ok(());
+        };
+        let Some(expected) = self.expected_identity else {
+            self.phase = CloudHypervisorPhase::Degraded;
+            return Err(CloudHypervisorError::AdoptionAmbiguous);
+        };
+        if verify_identity(&expected, &candidate) != AdoptionOutcome::Adopted {
+            self.phase = CloudHypervisorPhase::Degraded;
+            return Err(CloudHypervisorError::AdoptionAmbiguous);
         }
+        self.effect.open_pidfd(&candidate).await?;
+        self.identity = Some(candidate);
+        self.effect.stop(&candidate).await?;
+        self.identity = None;
         self.finalizer = false;
         self.phase = CloudHypervisorPhase::Finalized;
         Ok(())

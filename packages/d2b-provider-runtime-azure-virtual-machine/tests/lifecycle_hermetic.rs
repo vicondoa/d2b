@@ -44,7 +44,10 @@ impl AzureEffectPort for FakeEffect {
         state.calls.push("provision");
         state.state = AzureVmState::Running;
         state.handle = Some(AzureVmHandle::from_core("opaque-vm").unwrap());
-        state.tags = Some(TagDigest::from_core([8; 32]));
+        state.tags = Some(TagDigest::from_tags(&[(
+            "owner".to_owned(),
+            "d2b".to_owned(),
+        )]));
         Ok(AzureOperationHandle::from_core(b"provision").unwrap())
     }
 

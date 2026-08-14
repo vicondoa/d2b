@@ -1,6 +1,7 @@
 //! Bounded ACA deployment service dispatch.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use d2b_contracts::provider_effects::aca::{
     AcaControl, AcaControlContext, AcaCredentialLease, AcaCredentialLeaseClient,
@@ -10,6 +11,8 @@ use d2b_contracts::provider_effects::aca::{
 };
 
 use crate::controller::{AcaClock, SystemAcaClock};
+use tokio::sync::Semaphore;
+use tokio::time::timeout;
 
 /// Methods exported by the ACA deployment service.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -109,6 +112,7 @@ pub struct AcaDeploymentService<C, L> {
     control: Arc<C>,
     leases: Arc<L>,
     max_in_flight: usize,
+    in_flight: Arc<Semaphore>,
     clock: Arc<dyn AcaClock>,
 }
 
@@ -123,6 +127,7 @@ where
             control,
             leases,
             max_in_flight: 64,
+            in_flight: Arc::new(Semaphore::new(64)),
             clock: Arc::new(SystemAcaClock),
         }
     }
@@ -150,6 +155,13 @@ where
                 crate::AcaControlErrorKind::DeadlineExpired,
             ));
         }
+        let permit = timeout(
+            Duration::from_millis(u64::from(deadline_remaining_ms)),
+            self.in_flight.clone().acquire_owned(),
+        )
+        .await
+        .map_err(|_| AcaServiceError::Effect(crate::AcaControlErrorKind::DeadlineExpired))?
+        .map_err(|_| AcaServiceError::Effect(crate::AcaControlErrorKind::Unavailable))?;
         let (operation_id, purpose) = request_binding(&request, method)?;
         let context = AcaControlContext::new(operation_id.clone(), deadline_remaining_ms);
         let lease_request = AcaCredentialLeaseRequest::new(
@@ -168,11 +180,13 @@ where
             .dispatch_with_lease(method, request, &context, &lease)
             .await;
         let revoked = self.leases.revoke(&lease).await;
-        match (response, revoked) {
+        let result = match (response, revoked) {
             (Ok(value), Ok(())) => Ok(value),
             (Err(error), _) => Err(error),
             (Ok(_), Err(error)) => Err(AcaServiceError::Effect(error.kind())),
-        }
+        };
+        drop(permit);
+        result
     }
 
     async fn dispatch_with_lease(

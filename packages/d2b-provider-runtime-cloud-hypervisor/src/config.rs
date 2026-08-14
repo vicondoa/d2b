@@ -48,6 +48,7 @@ impl CloudHypervisorConfig {
             || !(1..=1024).contains(&self.default_vcpus)
             || !(128..=524_288).contains(&self.default_memory_mb)
             || !matches!(self.default_machine_type.as_str(), "q35" | "microvm")
+            || !(1..=900_000).contains(&self.adoption_window_ms)
             || !(5_000..=300_000).contains(&self.health_check_interval_ms)
             || !(1_000..=60_000).contains(&self.health_check_timeout_ms)
             || self.health_check_failure_threshold == 0
