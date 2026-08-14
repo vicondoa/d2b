@@ -31,7 +31,8 @@ pub use policy::{ALLOWED_MIME_TYPES, ClipboardPolicyError, Policy, SECRET_HINT_M
 pub use rbac::{ClipboardRbac, ClipboardRole, ClipboardRoleBinding};
 pub use service::{
     AuthenticatedClipboardSession, AuthenticatedPasteRoute, ClipboardBridgePort, ClipboardConfig,
-    ClipboardServiceError, ClipdHost, DisplayDependency,
+    ClipboardServiceError, ClipboardServiceRole, ClipdHost, DisplayDependency,
+    VerifiedClipboardAttachments,
 };
 
 /// Canonical Provider reference.

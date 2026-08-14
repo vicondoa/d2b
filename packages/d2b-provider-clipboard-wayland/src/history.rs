@@ -89,6 +89,11 @@ impl ClipboardEntry {
         &self.token
     }
 
+    /// Borrow the authenticated owner label.
+    pub fn owner(&self) -> &str {
+        &self.guest
+    }
+
     /// Return the in-memory byte length.
     pub fn len(&self) -> usize {
         self.bytes.len()
@@ -260,6 +265,28 @@ impl ClipboardHistory {
     /// Whether the history is empty.
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
+    }
+
+    /// Return whether an entry is present, owned by `owner`, and within its
+    /// configured retention window.
+    pub fn entry_owned_and_live(&self, token: &str, owner: &str, now_secs: u64) -> bool {
+        self.entries.get(token).is_some_and(|entry| {
+            entry.guest == owner
+                && now_secs.saturating_sub(entry.created_at) < self.config.guest_entry_ttl_secs()
+        })
+    }
+
+    /// Return the expiry time for one owned, live entry.
+    pub fn entry_expiry(&self, token: &str, owner: &str, now_secs: u64) -> Option<u64> {
+        self.entries.get(token).and_then(|entry| {
+            (entry.guest == owner
+                && now_secs.saturating_sub(entry.created_at) < self.config.guest_entry_ttl_secs())
+            .then_some(
+                entry
+                    .created_at
+                    .saturating_add(self.config.guest_entry_ttl_secs()),
+            )
+        })
     }
 
     fn evict_until(&mut self, incoming: usize) {

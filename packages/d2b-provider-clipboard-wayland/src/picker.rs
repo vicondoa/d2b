@@ -1,7 +1,9 @@
 //! Metadata-only picker session protocol and one-use receipts.
 
+use crate::ClipboardHistory;
 use crate::service::{
-    AuthenticatedClipboardSession, AuthenticatedPasteRoute, operation_id_for_sessions,
+    AuthenticatedClipboardSession, AuthenticatedPasteRoute, entry_owner_for_session,
+    operation_id_for_sessions,
 };
 
 /// Picker request validation failure.
@@ -122,6 +124,7 @@ pub struct PickerReceipt {
     destination_zone: String,
     destination_guest: String,
     entry_digest: String,
+    expires_at: u64,
     source_reconnect_generation: u64,
     reconnect_generation: u64,
 }
@@ -132,6 +135,7 @@ impl PickerReceipt {
         destination: &AuthenticatedClipboardSession,
         request: &PickerRequest,
         entry_digest: String,
+        expires_at: u64,
     ) -> Result<Self, PickerError> {
         if request.destination_guest() != destination.guest_ref()
             || request.source_zone() != source.zone()
@@ -147,6 +151,7 @@ impl PickerReceipt {
             destination_zone: destination.zone().to_owned(),
             destination_guest: destination.guest_ref(),
             entry_digest,
+            expires_at,
             source_reconnect_generation: source.reconnect_generation(),
             reconnect_generation: destination.reconnect_generation(),
         })
@@ -156,6 +161,7 @@ impl PickerReceipt {
         self,
         route: &AuthenticatedPasteRoute,
         entry_digest: &str,
+        now_secs: u64,
     ) -> bool {
         self.source_zone == route.source_zone()
             && self.operation_id == route.operation_id()
@@ -163,6 +169,7 @@ impl PickerReceipt {
             && self.destination_zone == route.destination_zone()
             && self.destination_guest == route.destination_guest()
             && self.entry_digest == entry_digest
+            && self.expires_at > now_secs
             && self.reconnect_generation == route.reconnect_generation()
     }
 
@@ -189,11 +196,17 @@ impl PickerAuthority {
         request: &PickerRequest,
         result: PickerResult,
         entry_digest: impl Into<String>,
+        history: &ClipboardHistory,
+        now_secs: u64,
     ) -> Result<PickerReceipt, PickerError> {
         let entry_digest = entry_digest.into();
         match result {
             PickerResult::Selected(selected) if selected == entry_digest => {
-                PickerReceipt::issue(source, destination, request, entry_digest)
+                let owner = entry_owner_for_session(source);
+                let Some(expires_at) = history.entry_expiry(&entry_digest, &owner, now_secs) else {
+                    return Err(PickerError::ResultMismatch);
+                };
+                PickerReceipt::issue(source, destination, request, entry_digest, expires_at)
             }
             PickerResult::Cancelled | PickerResult::TimedOut | PickerResult::Failed => {
                 Err(PickerError::ResultMismatch)
