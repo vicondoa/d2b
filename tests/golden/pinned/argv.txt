@@ -27,7 +27,6 @@ tests::omits_net_when_no_ifaces
 tests::omits_platform_when_no_oem_strings
 tests::omits_vsock_when_absent
 tests::omits_watchdog_when_disabled
-tests::persistent_tap_missing_ifname_is_rejected
 tests::rejects_empty_ch_binary
 tests::rejects_empty_kernel_path
 tests::rejects_empty_vm_name

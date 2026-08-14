@@ -430,7 +430,7 @@ mod tests {
     }
 
     #[test]
-    fn child_fd_mode_emits_fd_token() {
+    fn tap_fd_mode_emits_fd_token() {
         let input = audit_input();
         let argv = generate_ch_argv(&input).expect("valid tap-fd input");
         let joined = argv.join(" ");
@@ -439,7 +439,7 @@ mod tests {
     }
 
     #[test]
-    fn child_fd_missing_is_rejected() {
+    fn tap_fd_missing_is_rejected() {
         let mut input = audit_input();
         input.net_ifaces[0].tap_fd = -1;
         assert!(matches!(
