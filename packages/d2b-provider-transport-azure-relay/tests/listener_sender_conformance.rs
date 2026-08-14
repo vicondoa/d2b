@@ -63,8 +63,7 @@ impl RelayEnrollmentVerifier for ChallengeBoundEnrollment {
 #[test]
 fn enrollment_transcript_is_bound_to_its_connection_challenge() {
     let first = d2b_provider_transport_azure_relay::RelayEnrollmentChallenge::from_bytes([1; 32]);
-    let second =
-        d2b_provider_transport_azure_relay::RelayEnrollmentChallenge::from_bytes([2; 32]);
+    let second = d2b_provider_transport_azure_relay::RelayEnrollmentChallenge::from_bytes([2; 32]);
     let verifier = ChallengeBoundEnrollment { challenge: [1; 32] };
 
     assert!(RelayEnrollmentProof::authenticate(&verifier, b"enrollment", &first).is_ok());

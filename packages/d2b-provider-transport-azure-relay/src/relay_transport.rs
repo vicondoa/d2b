@@ -161,11 +161,7 @@ impl fmt::Debug for RelayEnrollmentProof {
 /// Verifies the authenticated enrollment transcript.
 pub trait RelayEnrollmentVerifier: Send + Sync {
     /// Verify the transcript and bind it to this connection challenge.
-    fn verify_enrollment(
-        &self,
-        transcript: &[u8],
-        challenge: &RelayEnrollmentChallenge,
-    ) -> bool;
+    fn verify_enrollment(&self, transcript: &[u8], challenge: &RelayEnrollmentChallenge) -> bool;
 }
 
 impl RelayEnrollmentProof {
