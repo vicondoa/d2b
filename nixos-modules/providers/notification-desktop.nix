@@ -20,6 +20,9 @@ let
       && builtins.elemAt parts 0 == expectedType
       && builtins.hasAttr (builtins.elemAt parts 1) cfg.zones.${zoneName}.resources
       && cfg.zones.${zoneName}.resources.${builtins.elemAt parts 1}.type == expectedType;
+  resolvesExact = zoneName: expectedType: expectedName: value:
+    resolves zoneName expectedType value
+    && builtins.elemAt (parseRef value) 1 == expectedName;
   rows = lib.concatMap
     (zoneName:
       lib.mapAttrsToList
@@ -64,7 +67,7 @@ let
       }
       {
         assertion = !dbusEnabled || (
-          resolves row.zoneName "Provider" (c.displayWaylandRef or null)
+          resolvesExact row.zoneName "Provider" "display-wayland" (c.displayWaylandRef or null)
         );
         message = "${row.path}.spec.config.displayWaylandRef must select Provider/display-wayland when D-Bus is enabled.";
       }

@@ -11,6 +11,9 @@ let
       && builtins.elemAt parts 0 == expectedType
       && builtins.hasAttr (builtins.elemAt parts 1) cfg.zones.${zoneName}.resources
       && cfg.zones.${zoneName}.resources.${builtins.elemAt parts 1}.type == expectedType;
+  resolvesExact = zoneName: expectedType: expectedName: value:
+    resolves zoneName expectedType value
+    && builtins.elemAt (parseRef value) 1 == expectedName;
   rows = lib.concatMap
     (zoneName:
       lib.mapAttrsToList
@@ -41,7 +44,7 @@ let
       {
         assertion =
           display == null
-          || resolves row.zoneName "Provider" display;
+          || resolvesExact row.zoneName "Provider" "display-wayland" display;
         message = "${row.path}.spec.config.displayWaylandRef must be null or Provider/display-wayland.";
       }
       {
