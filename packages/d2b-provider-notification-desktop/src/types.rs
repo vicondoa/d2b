@@ -100,11 +100,7 @@ pub enum NotificationUrgency {
 
 /// One bounded action descriptor.
 #[derive(Clone, PartialEq, Eq, Serialize)]
-#[serde(
-    rename_all = "camelCase",
-    deny_unknown_fields,
-    try_from = "ActionSpecWire"
-)]
+#[serde(rename_all = "camelCase")]
 pub struct ActionSpec {
     id: String,
     label: String,
@@ -182,13 +178,19 @@ impl core::fmt::Display for NotificationError {
 
 impl std::error::Error for NotificationError {}
 
+impl<'de> Deserialize<'de> for ActionSpec {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let wire = ActionSpecWire::deserialize(deserializer)?;
+        Self::try_from(wire).map_err(serde::de::Error::custom)
+    }
+}
+
 /// A transient notification request.
 #[derive(Clone, PartialEq, Eq, Serialize)]
-#[serde(
-    rename_all = "camelCase",
-    deny_unknown_fields,
-    try_from = "NotificationRequestWire"
-)]
+#[serde(rename_all = "camelCase")]
 pub struct NotificationRequest {
     summary: String,
     body: Option<String>,
@@ -237,6 +239,16 @@ impl TryFrom<NotificationRequestWire> for NotificationRequest {
             request = request.with_idempotency_key(idempotency_key)?;
         }
         Ok(request)
+    }
+}
+
+impl<'de> Deserialize<'de> for NotificationRequest {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let wire = NotificationRequestWire::deserialize(deserializer)?;
+        Self::try_from(wire).map_err(serde::de::Error::custom)
     }
 }
 

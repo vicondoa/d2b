@@ -140,7 +140,8 @@ impl NotificationSink {
         };
         let request_id = format!("notification-{notification_id}");
         let mut action_nonces = BTreeMap::new();
-        let mut issued_keys = Vec::with_capacity(notification.actions().len());
+        let mut issued_keys: Vec<String> =
+            Vec::with_capacity(notification.actions().len());
         for (action_id, _) in notification.actions() {
             let nonce = match self
                 .nonces
