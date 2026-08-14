@@ -1,6 +1,7 @@
 //! In-memory host notification sink and observer projection.
 
 use crate::{
+    admission::SessionEvidence,
     action_nonce::{ActionNonceError, ActionNonceStore},
     redact::SanitizedNotification,
     types::NotificationRequest,
@@ -92,6 +93,7 @@ pub struct NotificationSink {
     order: VecDeque<String>,
     projection_nonces: BTreeMap<String, Vec<String>>,
     projection_idempotency: BTreeMap<String, (String, String)>,
+    projection_sessions: BTreeMap<String, String>,
     idempotency: BTreeMap<(String, String), (String, NotificationResult)>,
     nonces: ActionNonceStore,
 }
@@ -105,6 +107,7 @@ impl NotificationSink {
             order: VecDeque::new(),
             projection_nonces: BTreeMap::new(),
             projection_idempotency: BTreeMap::new(),
+            projection_sessions: BTreeMap::new(),
             idempotency: BTreeMap::new(),
             nonces: ActionNonceStore::new(nonce_capacity, nonce_ttl_secs),
         }
@@ -114,10 +117,14 @@ impl NotificationSink {
     pub fn deliver<P: DesktopNotificationPort>(
         &mut self,
         port: &mut P,
-        observer_session: &str,
+        observer_session: &SessionEvidence,
         request: NotificationRequest,
         now_secs: u64,
     ) -> Result<NotificationResult, crate::types::NotificationError> {
+        observer_session
+            .admit_observer()
+            .map_err(|_| crate::types::NotificationError::InvalidOpaqueKey)?;
+        let observer_session = observer_session.session_key();
         self.nonces.gc(now_secs);
         self.prune_idempotency_nonces();
         let idempotency_key = request
@@ -159,7 +166,7 @@ impl NotificationSink {
         let mut action_nonces = BTreeMap::new();
         let mut issued_keys: Vec<String> = Vec::with_capacity(notification.actions().len());
         for (action_id, _) in notification.actions() {
-            let nonce = match self.nonces.register(observer_session, action_id, now_secs) {
+            let nonce = match self.nonces.register(&observer_session, action_id, now_secs) {
                 Ok(nonce) => nonce,
                 Err(error) => {
                     for action_key in &issued_keys {
@@ -186,6 +193,8 @@ impl NotificationSink {
             },
         );
         self.projection_nonces.insert(request_id, issued_keys);
+        self.projection_sessions
+            .insert(format!("notification-{notification_id}"), observer_session);
         let result = NotificationResult::Accepted {
             notification_id,
             action_nonces,
@@ -205,10 +214,14 @@ impl NotificationSink {
     pub fn invoke_action(
         &mut self,
         action_key: &str,
-        observer_session: &str,
+        observer_session: &SessionEvidence,
         now_secs: u64,
     ) -> Result<String, ActionNonceError> {
-        let result = self.nonces.consume(action_key, observer_session, now_secs);
+        observer_session
+            .admit_observer()
+            .map_err(|_| ActionNonceError::SessionMismatch)?;
+        let observer_session = observer_session.session_key();
+        let result = self.nonces.consume(action_key, &observer_session, now_secs);
         if result.is_ok() {
             self.forget_consumed_nonce(action_key);
         }
@@ -219,13 +232,20 @@ impl NotificationSink {
     pub fn invoke_action_for(
         &mut self,
         action_key: &str,
-        observer_session: &str,
+        observer_session: &SessionEvidence,
         action_id: &str,
         now_secs: u64,
     ) -> Result<String, ActionNonceError> {
-        let result =
-            self.nonces
-                .consume_for_action(action_key, observer_session, Some(action_id), now_secs);
+        observer_session
+            .admit_observer()
+            .map_err(|_| ActionNonceError::SessionMismatch)?;
+        let observer_session = observer_session.session_key();
+        let result = self.nonces.consume_for_action(
+            action_key,
+            &observer_session,
+            Some(action_id),
+            now_secs,
+        );
         if result.is_ok() {
             self.forget_consumed_nonce(action_key);
         }
@@ -238,7 +258,28 @@ impl NotificationSink {
         self.projections.remove(&request_id);
         self.revoke_projection_nonces(&request_id);
         self.remove_projection_idempotency(&request_id);
+        self.projection_sessions.remove(&request_id);
         self.order.retain(|value| value != &request_id);
+    }
+
+    /// Revoke all projections and action capabilities for a closed session.
+    pub fn close_session(&mut self, observer_session: &SessionEvidence) {
+        let session_key = observer_session.session_key();
+        let request_ids = self
+            .projection_sessions
+            .iter()
+            .filter(|(_, owner)| owner.as_str() == session_key.as_str())
+            .map(|(request_id, _)| request_id.clone())
+            .collect::<Vec<_>>();
+        for request_id in request_ids {
+            if let Some(notification_id) = request_id
+                .strip_prefix("notification-")
+                .and_then(|value| value.parse::<u32>().ok())
+            {
+                self.close(notification_id);
+            }
+        }
+        self.nonces.revoke_session(&session_key);
     }
 
     /// Drain all transient state during restart or shutdown.
@@ -247,6 +288,7 @@ impl NotificationSink {
         self.order.clear();
         self.projection_nonces.clear();
         self.projection_idempotency.clear();
+        self.projection_sessions.clear();
         self.idempotency.clear();
         self.nonces.clear();
     }
@@ -261,6 +303,7 @@ impl NotificationSink {
             self.projections.remove(&request_id);
             self.revoke_projection_nonces(&request_id);
             self.remove_projection_idempotency(&request_id);
+            self.projection_sessions.remove(&request_id);
         }
     }
 
@@ -305,5 +348,107 @@ impl core::fmt::Debug for NotificationSink {
             .field("max_pending", &self.max_pending)
             .field("projection_len", &self.projections.len())
             .finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        admission::{test_observer, test_source},
+        types::{ActionSpec, Category},
+    };
+
+    #[derive(Default)]
+    struct TestPort {
+        next_id: u32,
+        summaries: Vec<String>,
+    }
+
+    impl DesktopNotificationPort for TestPort {
+        fn notify(&mut self, notification: &SanitizedNotification) -> Result<u32, SinkError> {
+            self.next_id = self.next_id.saturating_add(1);
+            self.summaries.push(notification.summary().to_owned());
+            Ok(self.next_id)
+        }
+    }
+
+    fn request_with_action() -> NotificationRequest {
+        NotificationRequest::new("summary", "body", Category::SystemInfo)
+            .unwrap()
+            .with_actions(vec![ActionSpec::new("open", "Open").unwrap()])
+            .unwrap()
+    }
+
+    #[test]
+    fn delivery_requires_observer_purpose_and_returns_opaque_action_state() {
+        let mut sink = NotificationSink::new(2, 2, 10);
+        let mut port = TestPort::default();
+        let source = test_source("guest");
+        assert_eq!(
+            sink.deliver(&mut port, &source, request_with_action(), 100),
+            Err(crate::types::NotificationError::InvalidOpaqueKey)
+        );
+
+        let observer = test_observer("alice");
+        let result = sink
+            .deliver(&mut port, &observer, request_with_action(), 100)
+            .unwrap();
+        let action_key = match result {
+            NotificationResult::Accepted { action_nonces, .. } => action_nonces["open"].clone(),
+            other => panic!("unexpected result: {other:?}"),
+        };
+        assert_eq!(port.summaries, vec!["summary"]);
+        assert_eq!(
+            sink.invoke_action(&action_key, &test_observer("bob"), 101),
+            Err(ActionNonceError::SessionMismatch)
+        );
+        assert_eq!(
+            sink.invoke_action_for(&action_key, &observer, "open", 101),
+            Ok("open".to_owned())
+        );
+        assert_eq!(
+            sink.invoke_action(&action_key, &observer, 101),
+            Err(ActionNonceError::Unavailable)
+        );
+    }
+
+    #[test]
+    fn session_close_revokes_projection_nonces_and_idempotency() {
+        let mut sink = NotificationSink::new(2, 4, 10);
+        let mut port = TestPort::default();
+        let observer = test_observer("alice");
+        let request = request_with_action()
+            .with_idempotency_key("same")
+            .unwrap();
+        let result = sink.deliver(&mut port, &observer, request.clone(), 100).unwrap();
+        let action_key = match result {
+            NotificationResult::Accepted { action_nonces, .. } => action_nonces["open"].clone(),
+            other => panic!("unexpected result: {other:?}"),
+        };
+
+        sink.close_session(&observer);
+        assert_eq!(sink.projection_len(), 0);
+        assert_eq!(
+            sink.invoke_action(&action_key, &observer, 101),
+            Err(ActionNonceError::Unavailable)
+        );
+        let replacement = sink.deliver(&mut port, &observer, request, 102).unwrap();
+        let replacement_key = match replacement {
+            NotificationResult::Accepted {
+                notification_id,
+                action_nonces,
+            } => {
+                assert_eq!(notification_id, 2);
+                action_nonces["open"].clone()
+            }
+            other => panic!("unexpected replacement result: {other:?}"),
+        };
+        assert_ne!(replacement_key, action_key);
+        assert_eq!(
+            sink.invoke_action(&replacement_key, &observer, 103),
+            Ok("open".to_owned())
+        );
+        assert_eq!(port.summaries, vec!["summary", "summary"]);
     }
 }

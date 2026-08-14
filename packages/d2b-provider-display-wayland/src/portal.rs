@@ -35,7 +35,7 @@ impl core::fmt::Display for PortalError {
 impl std::error::Error for PortalError {}
 
 /// Opaque per-session compositor attachment grant.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(PartialEq, Eq)]
 pub struct PortalGrant {
     session_digest: String,
     handle: AttachmentGrantHandle,
@@ -64,7 +64,7 @@ pub struct DisplayUserPortal {
     user_ref: ResourceRef,
     supervisor_uid: u32,
     max_sessions: usize,
-    active: BTreeMap<String, PortalGrant>,
+    active: BTreeMap<String, ()>,
 }
 
 impl DisplayUserPortal {
@@ -110,7 +110,7 @@ impl DisplayUserPortal {
             session_digest: session_digest.clone(),
             handle,
         };
-        self.active.insert(session_digest, grant.clone());
+        self.active.insert(session_digest, ());
         Ok(grant)
     }
 
@@ -120,6 +120,11 @@ impl DisplayUserPortal {
             .remove(session_digest)
             .map(|_| ())
             .ok_or(PortalError::UnknownSession)
+    }
+
+    /// Revoke a session grant idempotently during finalization.
+    pub fn revoke_idempotent(&mut self, session_digest: &str) -> bool {
+        self.active.remove(session_digest).is_some()
     }
 
     /// Return the number of active session grants.
@@ -135,5 +140,35 @@ impl core::fmt::Debug for DisplayUserPortal {
             .field("active_sessions", &self.active.len())
             .field("max_sessions", &self.max_sessions)
             .finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn portal_grants_require_peer_and_revoke_idempotently() {
+        let user = ResourceRef::parse("User/alice").unwrap();
+        let mut portal = DisplayUserPortal::new(user.clone(), 1000, 1).unwrap();
+        assert_eq!(
+            portal.issue_grant(
+                "session",
+                &user,
+                1001,
+                AttachmentGrantHandle::from_supervisor([1; 32]),
+            ),
+            Err(PortalError::PeerMismatch)
+        );
+        assert!(portal
+            .issue_grant(
+                "session",
+                &user,
+                1000,
+                AttachmentGrantHandle::from_supervisor([1; 32]),
+            )
+            .is_ok());
+        assert!(portal.revoke_idempotent("session"));
+        assert!(!portal.revoke_idempotent("session"));
     }
 }

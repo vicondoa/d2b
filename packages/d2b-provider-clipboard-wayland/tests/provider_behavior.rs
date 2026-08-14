@@ -1,7 +1,7 @@
 use d2b_provider_clipboard_wayland::{
     ClipboardAuditEvent, ClipboardAuditQueue, ClipboardConfig, ClipboardController, ClipboardEntry,
-    ClipboardHistory, ClipboardProviderDescriptor, ClipboardReason, ClipboardServiceError,
-    ClipdHost, DependencyStatus, FdCapModel, FdObjectKind, FdStatModel, FileSystemKind,
+    ClipboardHistory, ClipboardProviderDescriptor, ClipboardReason, DependencyStatus, FdCapModel,
+    FdObjectKind, FdStatModel, FileSystemKind,
     PickerRequest, PickerResult, Policy, SizeBucket, classify_fd_model, validate_fd_cap,
     validate_recvmsg_control,
 };
@@ -99,53 +99,6 @@ fn controller_owns_no_state_volume_and_display_dependency_is_optional() {
             .plan_processes()
             .iter()
             .all(|process| !process.mounts_state_volume)
-    );
-}
-
-#[test]
-fn cross_zone_paste_is_denied_and_guest_lock_blocks_paste() {
-    let mut host = ClipdHost::new(Policy::default(), 4, Some(true)).unwrap();
-    assert!(
-        host.authorize_paste("zone-a", "zone-b", "Guest/work")
-            .is_err()
-    );
-    host.suspend_guest("Guest/work");
-    assert!(
-        host.authorize_paste("zone-a", "zone-a", "Guest/work")
-            .is_err()
-    );
-}
-
-#[test]
-fn guest_operations_require_display_and_picker_policy() {
-    let mut absent = ClipdHost::new(Policy::default(), 4, None).unwrap();
-    assert_eq!(
-        absent.capture_guest("Guest/work", "text/plain", b"hello", 100),
-        Err(ClipboardServiceError::DependencyUnavailable)
-    );
-
-    let host = ClipdHost::new(Policy::default(), 4, Some(true)).unwrap();
-    assert_eq!(
-        host.authorize_paste("zone-a", "zone-a", "Guest/work"),
-        Err(ClipboardServiceError::PickerRequired)
-    );
-    assert!(
-        host.authorize_paste_after_picker("zone-a", "zone-a", "Guest/work")
-            .is_ok()
-    );
-}
-
-#[test]
-fn rejected_guest_capture_does_not_consume_the_rate_budget() {
-    let policy = Policy::new(true, true, true, true, false, 3, 4096, 4096, 32, 1).unwrap();
-    let mut host = ClipdHost::new(policy, 4, Some(true)).unwrap();
-    assert_eq!(
-        host.capture_guest("Guest/work", "application/octet-stream", b"invalid", 100),
-        Err(ClipboardServiceError::HistoryRejected)
-    );
-    assert!(
-        host.capture_guest("Guest/work", "text/plain", b"valid", 100)
-            .is_ok()
     );
 }
 

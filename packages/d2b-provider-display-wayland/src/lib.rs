@@ -17,7 +17,8 @@ mod spec;
 pub use audit::{DisplayAuditKind, DisplayAuditOutcome, DisplayAuditRecord};
 pub use controller::{
     DependencyState, DisplayController, FinalizationDecision, FinalizationInput, Phase,
-    ReconcileResult, SessionCondition, WaylandSessionStatus,
+    PrincipalReleaseReceipt, ReconcileResult, SessionCondition, WaylandPolicySnapshot,
+    WaylandSessionStatus,
 };
 pub use descriptor::{DisplayDescriptorError, DisplayProviderDescriptor};
 pub use metrics::{DisplayTelemetryField, DisplayTelemetryFrame, MetricOutcome};
@@ -36,6 +37,8 @@ pub use spec::{DisplayIdentity, DisplayLabelPosition, WaylandSessionSpec, Waylan
 
 /// Canonical Provider reference.
 pub const PROVIDER_REF: &str = "Provider/display-wayland";
+/// Canonical display ComponentSession service package.
+pub const SERVICE_PACKAGE: &str = "d2b.display.v3";
 /// Canonical Provider artifact identifier.
 pub const ARTIFACT_ID: &str = "display-wayland";
 /// Canonical host proxy binary.

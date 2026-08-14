@@ -19,7 +19,10 @@ mod types;
 
 pub use action_nonce::{ActionNonce, ActionNonceError, ActionNonceStore};
 pub use audit::{NotificationAuditKind, NotificationAuditRecord};
-pub use controller::{NotificationController, ProcessPlan};
+pub use controller::{
+    DisplayDependencyEvidence, DisplayDependencyState, GuestSourceConfig, NotificationController,
+    NotificationProviderConfig, ProcessPlan, SourceReconcileResult,
+};
 pub use descriptor::{NotificationDescriptorError, NotificationProviderDescriptor};
 pub use error::ProviderError;
 pub use guest_source::GuestSource;

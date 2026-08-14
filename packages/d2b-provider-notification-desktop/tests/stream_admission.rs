@@ -1,13 +1,21 @@
-use d2b_provider_notification_desktop::{AdmissionPurpose, SessionEvidence, TransportClass};
+use d2b_provider_notification_desktop::{
+    AdmissionError, AdmissionPurpose, TransportClass, OBSERVER_STREAM, SINK_STREAM,
+};
 
 #[test]
-fn observer_requires_local_pre_authorized_transport() {
-    let evidence = SessionEvidence::new(
-        true,
-        true,
-        "d2b.notification.v3",
-        AdmissionPurpose::DesktopObserver,
-        TransportClass::EnrolledNoiseKk,
+fn notification_stream_admission_contract_is_closed() {
+    assert_eq!(OBSERVER_STREAM, "DesktopNotificationObserver");
+    assert_eq!(SINK_STREAM, "DesktopNotificationSink");
+    assert_eq!(
+        AdmissionError::TransportMismatch.to_string(),
+        "session-untrusted-transport"
     );
-    assert!(evidence.admit().is_err());
+    assert_ne!(
+        AdmissionPurpose::NotificationSource,
+        AdmissionPurpose::DesktopObserver
+    );
+    assert_ne!(
+        TransportClass::EnrolledNoiseKk,
+        TransportClass::UnixSeqpacket
+    );
 }

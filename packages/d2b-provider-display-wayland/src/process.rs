@@ -3,12 +3,12 @@
 use serde::{Deserialize, Serialize};
 
 /// Opaque attachment grant handle resolved by ProviderSupervisor.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(PartialEq, Eq)]
 pub struct AttachmentGrantHandle([u8; 32]);
 
 impl AttachmentGrantHandle {
-    /// Construct a handle at the trusted Core/Supervisor boundary.
-    pub const fn from_core(bytes: [u8; 32]) -> Self {
+    /// Construct a handle at the private Core/Supervisor boundary.
+    pub(crate) const fn from_supervisor(bytes: [u8; 32]) -> Self {
         Self(bytes)
     }
 }
@@ -20,15 +20,18 @@ impl core::fmt::Debug for AttachmentGrantHandle {
 }
 
 /// Opaque per-session grants required to launch display workers.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(PartialEq, Eq)]
 pub struct LaunchGrants {
     compositor: AttachmentGrantHandle,
     gpu: AttachmentGrantHandle,
 }
 
 impl LaunchGrants {
-    /// Construct launch grants at the trusted Core/Supervisor boundary.
-    pub const fn new(compositor: AttachmentGrantHandle, gpu: AttachmentGrantHandle) -> Self {
+    /// Construct launch grants at the private Core/Supervisor boundary.
+    pub(crate) const fn from_supervisor(
+        compositor: AttachmentGrantHandle,
+        gpu: AttachmentGrantHandle,
+    ) -> Self {
         Self { compositor, gpu }
     }
 
@@ -40,6 +43,10 @@ impl LaunchGrants {
     /// Borrow the GPU grant.
     pub const fn gpu_grant(&self) -> &AttachmentGrantHandle {
         &self.gpu
+    }
+
+    pub(crate) fn into_parts(self) -> (AttachmentGrantHandle, AttachmentGrantHandle) {
+        (self.compositor, self.gpu)
     }
 }
 
@@ -104,6 +111,8 @@ pub struct ProcessObservation {
     pub frontend_ready: bool,
     /// Consecutive proxy failures in the current retry window.
     pub proxy_failure_count: u8,
+    /// Consecutive Guest frontend failures in the current retry window.
+    pub frontend_failure_count: u8,
     /// Whether the proxy reached a verified terminal phase.
     pub proxy_terminal: bool,
     /// Whether the proxy Process was deleted by its owner.
@@ -119,6 +128,7 @@ impl ProcessObservation {
             proxy_ready: true,
             frontend_ready: true,
             proxy_failure_count: 0,
+            frontend_failure_count: 0,
             proxy_terminal: false,
             proxy_deleted: false,
             volume_deleted: false,
@@ -131,6 +141,7 @@ impl ProcessObservation {
             proxy_ready: false,
             frontend_ready: false,
             proxy_failure_count,
+            frontend_failure_count: proxy_failure_count,
             proxy_terminal: true,
             proxy_deleted: false,
             volume_deleted: false,
@@ -174,11 +185,12 @@ impl ProxyProcessTemplate {
 }
 
 /// Sealed launch ticket composed from opaque attachment handles.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(PartialEq, Eq)]
 pub struct LaunchTicket {
     compositor_grant: AttachmentGrantHandle,
     gpu_grant: AttachmentGrantHandle,
     policy_digest: String,
+    policy_generation: u64,
     identity_label: String,
 }
 
@@ -189,6 +201,23 @@ impl LaunchTicket {
         compositor_grant: AttachmentGrantHandle,
         gpu_grant: AttachmentGrantHandle,
         policy_digest: impl Into<String>,
+        identity_label: impl Into<String>,
+    ) -> Result<Self, &'static str> {
+        Self::new_with_generation(
+            compositor_grant,
+            gpu_grant,
+            policy_digest,
+            0,
+            identity_label,
+        )
+    }
+
+    /// Construct a launch ticket bound to a Core policy generation.
+    pub(crate) fn new_with_generation(
+        compositor_grant: AttachmentGrantHandle,
+        gpu_grant: AttachmentGrantHandle,
+        policy_digest: impl Into<String>,
+        policy_generation: u64,
         identity_label: impl Into<String>,
     ) -> Result<Self, &'static str> {
         let policy_digest = policy_digest.into();
@@ -203,6 +232,7 @@ impl LaunchTicket {
             compositor_grant,
             gpu_grant,
             policy_digest,
+            policy_generation,
             identity_label,
         })
     }
@@ -222,6 +252,11 @@ impl LaunchTicket {
         &self.policy_digest
     }
 
+    /// Return the authenticated policy generation.
+    pub const fn policy_generation(&self) -> u64 {
+        self.policy_generation
+    }
+
     /// Borrow the bounded identity label.
     pub fn identity_label(&self) -> &str {
         &self.identity_label
@@ -231,5 +266,28 @@ impl LaunchTicket {
 impl core::fmt::Debug for LaunchTicket {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str("LaunchTicket(<redacted>)")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn supervisor_grants_are_non_cloneable_and_bind_one_launch_ticket() {
+        let grants = LaunchGrants::from_supervisor(
+            AttachmentGrantHandle::from_supervisor([7; 32]),
+            AttachmentGrantHandle::from_supervisor([8; 32]),
+        );
+        let ticket = LaunchTicket::new_with_generation(
+            grants.compositor,
+            grants.gpu,
+            format!("sha256:{}", "a".repeat(64)),
+            3,
+            "session",
+        )
+        .unwrap();
+        assert_eq!(ticket.policy_generation(), 3);
+        assert_eq!(ticket.identity_label(), "session");
     }
 }

@@ -69,6 +69,8 @@ pub enum ClipboardReason {
     CrossZoneDenied,
     /// The bounded audit queue is full.
     AuditQueueFull,
+    /// A host selection matched a recent Guest-originated digest.
+    EchoSuppressed,
 }
 
 impl ClipboardReason {
@@ -94,6 +96,7 @@ impl ClipboardReason {
             Self::Unauthorized => "unauthorized",
             Self::CrossZoneDenied => "cross-zone-denied",
             Self::AuditQueueFull => "audit-queue-full",
+            Self::EchoSuppressed => "echo-suppressed",
         }
     }
 }

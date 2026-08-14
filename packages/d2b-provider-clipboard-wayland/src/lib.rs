@@ -19,15 +19,17 @@ pub use audit::{
 pub use controller::{ClipboardController, DependencyStatus, ProcessPlan};
 pub use descriptor::{ClipboardDescriptorError, ClipboardProviderDescriptor};
 pub use fd::{
-    AcceptedTransferFdKind, FdCapModel, FdObjectKind, FdSafetyError, FdStatModel, FileSystemKind,
-    classify_fd_model, validate_fd_cap, validate_recvmsg_control,
+    AcceptedTransferFdKind, AttachmentClass, FdCapModel, FdMetadata, FdObjectKind,
+    FdSafetyError, FdStatModel, FileSystemKind, ReceivedFdBatch, classify_fd_model, inspect_fd,
+    validate_fd_cap, validate_fd_metadata, validate_received_fd, validate_recvmsg_control,
 };
 pub use history::{ClipboardEntry, ClipboardHistory, HistoryError};
-pub use picker::{PickerError, PickerRequest, PickerResult};
+pub use picker::{PickerAuthority, PickerError, PickerReceipt, PickerRequest, PickerResult};
 pub use policy::{ALLOWED_MIME_TYPES, ClipboardPolicyError, Policy, SECRET_HINT_MIME_TYPES};
 pub use rbac::{ClipboardRbac, ClipboardRole, ClipboardRoleBinding};
 pub use service::{
-    ClipboardBridgePort, ClipboardConfig, ClipboardServiceError, ClipdHost, DisplayDependency,
+    AuthenticatedClipboardSession, AuthenticatedPasteRoute, ClipboardBridgePort, ClipboardConfig,
+    ClipboardServiceError, ClipdHost, DisplayDependency,
 };
 
 /// Canonical Provider reference.

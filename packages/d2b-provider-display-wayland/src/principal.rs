@@ -30,7 +30,7 @@ impl core::fmt::Display for PrincipalPoolError {
 impl std::error::Error for PrincipalPoolError {}
 
 /// Opaque lease for one pre-provisioned display principal.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(PartialEq, Eq)]
 pub struct PrincipalLease {
     index: usize,
     principal: String,
@@ -121,6 +121,13 @@ impl PrincipalPool {
             index,
             principal: self.dynamic[index].clone(),
         })
+    }
+
+    /// Return whether a lease is currently owned by this pool.
+    pub fn owns(&self, lease: &PrincipalLease) -> bool {
+        lease.index < self.dynamic.len()
+            && self.dynamic[lease.index] == lease.principal
+            && self.occupied.contains(&lease.index)
     }
 
     /// Release a dynamic pool account.

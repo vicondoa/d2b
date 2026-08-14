@@ -4,8 +4,137 @@ use crate::{
     DependencyStatus,
     audit::{ClipboardAuditEvent, ClipboardAuditQueue, ClipboardReason, SizeBucket},
     history::{ClipboardEntry, ClipboardHistory},
+    picker::PickerReceipt,
     policy::Policy,
 };
+use d2b_contracts::v3::{ResourceRef, ZoneId};
+use d2b_session::{AuthenticatedComponentSession, AuthenticatedSessionRouteBinding};
+use std::collections::BTreeMap;
+
+/// A routing identity projected from an authenticated ComponentSession.
+///
+/// The only public constructor consumes the canonical session route binding,
+/// whose fields are private and can only be obtained from a verified session.
+#[derive(PartialEq, Eq)]
+pub struct AuthenticatedClipboardSession {
+    subject_ref: ResourceRef,
+    zone: ZoneId,
+    reconnect_generation: u64,
+}
+
+impl AuthenticatedClipboardSession {
+    /// Derive clipboard identity from a verified ComponentSession.
+    pub fn from_component_session<C>(
+        session: &AuthenticatedComponentSession<C>,
+    ) -> Result<Self, ClipboardServiceError> {
+        Self::from_route_binding(session.route_binding())
+    }
+
+    /// Derive clipboard identity from a canonical authenticated route.
+    pub(crate) fn from_route_binding(
+        route: AuthenticatedSessionRouteBinding,
+    ) -> Result<Self, ClipboardServiceError> {
+        let provider_matches = route
+            .provider_ref()
+            .is_some_and(|provider| provider.to_canonical_string() == crate::PROVIDER_REF);
+        let service_matches = matches!(
+            route.service().as_str(),
+            crate::MANAGEMENT_SERVICE | crate::BRIDGE_SERVICE | crate::PICKER_SERVICE
+        );
+        if !provider_matches || !service_matches || route.provider_generation().is_none() {
+            return Err(ClipboardServiceError::SessionUnauthenticated);
+        }
+        let subject_type = route.subject_ref().resource_type().as_str();
+        if !matches!(subject_type, "Guest" | "User" | "Provider") {
+            return Err(ClipboardServiceError::SessionUnauthenticated);
+        }
+        Ok(Self {
+            subject_ref: route.subject_ref().clone(),
+            zone: route.zone().clone(),
+            reconnect_generation: route.reconnect_generation().get(),
+        })
+    }
+
+    /// Borrow the authenticated subject reference.
+    pub fn subject_ref(&self) -> &ResourceRef {
+        &self.subject_ref
+    }
+
+    /// Borrow the authenticated Zone.
+    pub fn zone(&self) -> &str {
+        self.zone.as_str()
+    }
+
+    /// Borrow the authenticated Guest/User/Provider identity.
+    pub fn guest_ref(&self) -> String {
+        self.subject_ref.to_canonical_string()
+    }
+
+    /// Return the reconnect generation used for replay fencing.
+    pub const fn reconnect_generation(&self) -> u64 {
+        self.reconnect_generation
+    }
+
+    /// Whether the subject is a Guest.
+    pub fn is_guest(&self) -> bool {
+        self.subject_ref.resource_type().as_str() == "Guest"
+    }
+}
+
+impl core::fmt::Debug for AuthenticatedClipboardSession {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("AuthenticatedClipboardSession(REDACTED)")
+    }
+}
+
+/// A paste route bound to two authenticated session identities.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthenticatedPasteRoute {
+    source_zone: String,
+    source_reconnect_generation: u64,
+    destination_zone: String,
+    destination_guest: String,
+    reconnect_generation: u64,
+}
+
+impl AuthenticatedPasteRoute {
+    /// Bind a source and destination session without accepting lexical IDs.
+    pub fn from_sessions(
+        source: &AuthenticatedClipboardSession,
+        destination: &AuthenticatedClipboardSession,
+    ) -> Result<Self, ClipboardServiceError> {
+        if !destination.is_guest() {
+            return Err(ClipboardServiceError::SessionUnauthenticated);
+        }
+        Ok(Self {
+            source_zone: source.zone().to_owned(),
+            source_reconnect_generation: source.reconnect_generation(),
+            destination_zone: destination.zone().to_owned(),
+            destination_guest: destination.subject_ref.to_canonical_string(),
+            reconnect_generation: destination.reconnect_generation(),
+        })
+    }
+
+    pub(crate) fn source_zone(&self) -> &str {
+        &self.source_zone
+    }
+
+    pub(crate) fn destination_zone(&self) -> &str {
+        &self.destination_zone
+    }
+
+    pub(crate) fn source_reconnect_generation(&self) -> u64 {
+        self.source_reconnect_generation
+    }
+
+    pub(crate) fn destination_guest(&self) -> &str {
+        &self.destination_guest
+    }
+
+    pub(crate) fn reconnect_generation(&self) -> u64 {
+        self.reconnect_generation
+    }
+}
 
 /// Typed display dependency observation.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -14,6 +143,23 @@ pub struct DisplayDependency {
     pub status: DependencyStatus,
     /// The typed service contract consumed by clipd-host.
     pub service_contract: &'static str,
+}
+
+/// Authenticated Guest-selection metadata used to suppress a host echo.
+///
+/// The receipt is issued only for a live entry owned by the supplied Guest
+/// session and is consumed by host capture.  Clipboard bytes never cross this
+/// boundary.
+pub struct GuestSelectionEvent {
+    source_zone: ZoneId,
+    entry_digest: String,
+    expires_at: u64,
+}
+
+impl core::fmt::Debug for GuestSelectionEvent {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("GuestSelectionEvent(REDACTED)")
+    }
 }
 
 /// Bridge effect port. Clipboard payloads are represented by attachments in
@@ -45,6 +191,14 @@ pub enum ClipboardServiceError {
     HistoryRejected,
     /// A picker is required before materialization.
     PickerRequired,
+    /// The ComponentSession route was not authenticated for this Provider.
+    SessionUnauthenticated,
+    /// A one-use picker receipt did not match the route or entry.
+    PickerReceiptInvalid,
+    /// Host capture was suppressed as a recent Guest echo.
+    EchoSuppressed,
+    /// Host capture was supplied by a Guest session.
+    HostSessionInvalid,
 }
 
 impl core::fmt::Display for ClipboardServiceError {
@@ -56,6 +210,10 @@ impl core::fmt::Display for ClipboardServiceError {
             Self::AuditUnavailable => "audit-unavailable",
             Self::HistoryRejected => "clipboard-history-rejected",
             Self::PickerRequired => "picker-required",
+            Self::SessionUnauthenticated => "session-unauthenticated",
+            Self::PickerReceiptInvalid => "picker-receipt-invalid",
+            Self::EchoSuppressed => "echo-suppressed",
+            Self::HostSessionInvalid => "host-session-invalid",
         })
     }
 }
@@ -68,6 +226,7 @@ pub struct ClipdHost {
     history: ClipboardHistory,
     audit: ClipboardAuditQueue,
     dependency: DisplayDependency,
+    echo_window: BTreeMap<String, u64>,
 }
 
 impl ClipdHost {
@@ -92,6 +251,7 @@ impl ClipdHost {
                 status,
                 service_contract: "d2b.display.host-clipboard.v3",
             },
+            echo_window: BTreeMap::new(),
         })
     }
 
@@ -103,11 +263,14 @@ impl ClipdHost {
     /// Capture one Guest selection after audit admission.
     pub fn capture_guest(
         &mut self,
-        guest: &str,
+        session: &AuthenticatedClipboardSession,
         mime: &str,
         bytes: &[u8],
         now_secs: u64,
     ) -> Result<String, ClipboardServiceError> {
+        if !session.is_guest() {
+            return Err(ClipboardServiceError::SessionUnauthenticated);
+        }
         if self.dependency.status != DependencyStatus::Ready {
             return Err(ClipboardServiceError::DependencyUnavailable);
         }
@@ -117,10 +280,11 @@ impl ClipdHost {
         if bytes.len() > self.policy.max_item_bytes() {
             return Err(ClipboardServiceError::HistoryRejected);
         }
+        let guest = session.subject_ref().to_canonical_string();
         self.history
-            .check_guest_request(guest, now_secs)
+            .check_guest_request(&guest, now_secs)
             .map_err(|_| ClipboardServiceError::HistoryRejected)?;
-        let entry = ClipboardEntry::new(guest, mime, bytes, now_secs)
+        let entry = ClipboardEntry::new(&guest, mime, bytes, now_secs)
             .map_err(|_| ClipboardServiceError::HistoryRejected)?;
         let token = entry.token().to_owned();
         if self.audit.is_full() {
@@ -130,7 +294,7 @@ impl ClipdHost {
             .insert(entry)
             .map_err(|_| ClipboardServiceError::HistoryRejected)?;
         self.history
-            .record_guest_request(guest, now_secs)
+            .record_guest_request(&guest, now_secs)
             .map_err(|_| ClipboardServiceError::HistoryRejected)?;
         let event = ClipboardAuditEvent::new(
             "guest",
@@ -141,6 +305,103 @@ impl ClipdHost {
         .with_event_type(crate::ClipboardEventType::GuestCapture);
         self.audit
             .push(event)
+            .map_err(|_| ClipboardServiceError::AuditUnavailable)?;
+        self.echo_window
+            .insert(token.clone(), now_secs.saturating_add(5));
+        Ok(token)
+    }
+
+    /// Issue authenticated metadata for a Guest selection event.
+    pub fn guest_selection_event(
+        &self,
+        session: &AuthenticatedClipboardSession,
+        entry_digest: &str,
+        now_secs: u64,
+    ) -> Result<GuestSelectionEvent, ClipboardServiceError> {
+        if !session.is_guest() {
+            return Err(ClipboardServiceError::SessionUnauthenticated);
+        }
+        let Some(expires_at) = self.echo_window.get(entry_digest).copied() else {
+            return Err(ClipboardServiceError::HistoryRejected);
+        };
+        if expires_at <= now_secs {
+            return Err(ClipboardServiceError::HistoryRejected);
+        }
+        Ok(GuestSelectionEvent {
+            source_zone: session.zone().clone(),
+            entry_digest: entry_digest.to_owned(),
+            expires_at,
+        })
+    }
+
+    /// Capture one host selection through an authenticated host session.
+    pub fn capture_host(
+        &mut self,
+        session: &AuthenticatedClipboardSession,
+        mime: &str,
+        bytes: &[u8],
+        source_event: Option<GuestSelectionEvent>,
+        now_secs: u64,
+    ) -> Result<String, ClipboardServiceError> {
+        if session.is_guest() {
+            return Err(ClipboardServiceError::HostSessionInvalid);
+        }
+        if self.dependency.status != DependencyStatus::Ready {
+            return Err(ClipboardServiceError::DependencyUnavailable);
+        }
+        if !self.policy.allow_host_capture() {
+            return Err(ClipboardServiceError::HistoryRejected);
+        }
+        self.echo_window
+            .retain(|_, expires_at| *expires_at > now_secs);
+        if self.policy.suppress_echo()
+            && source_event.as_ref().is_some_and(|event| {
+                event.expires_at > now_secs
+                    && event.source_zone.as_str() == session.zone()
+                    && self.echo_window.contains_key(&event.entry_digest)
+            })
+        {
+            if !self.audit.is_full() {
+                let source_zone = source_event
+                    .as_ref()
+                    .map_or_else(|| session.zone().clone(), |event| event.source_zone.clone());
+                let _ = self
+                    .audit
+                    .push(
+                        ClipboardAuditEvent::new(
+                            source_zone.as_str(),
+                            session.zone(),
+                            ClipboardReason::EchoSuppressed,
+                            SizeBucket::from_len(bytes.len()),
+                        )
+                        .with_event_type(crate::ClipboardEventType::EchoSuppressed),
+                    );
+            }
+            return Err(ClipboardServiceError::EchoSuppressed);
+        }
+        if bytes.len() > self.policy.max_item_bytes() {
+            return Err(ClipboardServiceError::HistoryRejected);
+        }
+        let owner = format!("Host/{}", session.zone());
+        let entry = ClipboardEntry::new(owner, mime, bytes, now_secs)
+            .map_err(|_| ClipboardServiceError::HistoryRejected)?;
+        let token = entry.token().to_owned();
+        if self.audit.is_full() {
+            return Err(ClipboardServiceError::AuditUnavailable);
+        }
+        self.history
+            .insert(entry)
+            .map_err(|_| ClipboardServiceError::HistoryRejected)?;
+        self.audit
+            .push(
+                ClipboardAuditEvent::new(
+                    session.zone(),
+                    session.zone(),
+                    ClipboardReason::Allowed,
+                    SizeBucket::from_len(bytes.len()),
+                )
+                .with_event_type(crate::ClipboardEventType::HostCapture),
+            )
             .map_err(|_| ClipboardServiceError::AuditUnavailable)?;
         Ok(token)
     }
@@ -168,38 +429,37 @@ impl ClipdHost {
     /// Check a paste route before any attachment is requested.
     pub fn authorize_paste(
         &self,
-        source_zone: &str,
-        destination_zone: &str,
-        guest: &str,
+        route: &AuthenticatedPasteRoute,
     ) -> Result<(), ClipboardServiceError> {
-        self.authorize_paste_inner(source_zone, destination_zone, guest, false)
+        self.authorize_paste_inner(route, false)
     }
 
     /// Check a paste route after the authenticated picker completed.
     pub fn authorize_paste_after_picker(
         &self,
-        source_zone: &str,
-        destination_zone: &str,
-        guest: &str,
+        route: &AuthenticatedPasteRoute,
+        receipt: PickerReceipt,
+        entry_digest: &str,
     ) -> Result<(), ClipboardServiceError> {
-        self.authorize_paste_inner(source_zone, destination_zone, guest, true)
+        if !receipt.matches_and_consume(&route, entry_digest) {
+            return Err(ClipboardServiceError::PickerReceiptInvalid);
+        }
+        self.authorize_paste_inner(route, true)
     }
 
     fn authorize_paste_inner(
         &self,
-        source_zone: &str,
-        destination_zone: &str,
-        guest: &str,
+        route: &AuthenticatedPasteRoute,
         picker_completed: bool,
     ) -> Result<(), ClipboardServiceError> {
         if self.dependency.status != DependencyStatus::Ready {
             return Err(ClipboardServiceError::DependencyUnavailable);
         }
-        if source_zone != destination_zone && !self.policy.cross_zone_enabled() {
+        if route.source_zone() != route.destination_zone() && !self.policy.cross_zone_enabled() {
             return Err(ClipboardServiceError::CrossZoneDenied);
         }
         self.history
-            .authorize_guest(guest)
+            .authorize_guest(route.destination_guest())
             .map_err(|_| ClipboardServiceError::GuestSuspended)
             .and_then(|()| {
                 if self.policy.require_picker_for_paste() && !picker_completed {
@@ -277,4 +537,92 @@ impl ClipboardConfig {
     pub const fn guest_entry_ttl_secs(&self) -> u64 {
         self.guest_entry_ttl_secs
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::picker::{PickerAuthority, PickerRequest};
+
+    fn guest(name: &str, zone: &str, generation: u64) -> AuthenticatedClipboardSession {
+        AuthenticatedClipboardSession {
+            subject_ref: ResourceRef::parse(&format!("Guest/{name}")).unwrap(),
+            zone: ZoneId::parse(zone).unwrap(),
+            reconnect_generation: generation,
+        }
+    }
+
+    fn user(zone: &str, generation: u64) -> AuthenticatedClipboardSession {
+        AuthenticatedClipboardSession {
+            subject_ref: ResourceRef::parse("User/alice").unwrap(),
+            zone: ZoneId::parse(zone).unwrap(),
+            reconnect_generation: generation,
+        }
+    }
+
+    #[test]
+    fn paste_routes_are_bound_to_authenticated_sessions_and_one_use_picker_receipts() {
+        let host = ClipdHost::new(Policy::default(), 4, Some(true)).unwrap();
+        let source = user("zone-a", 7);
+        let destination = guest("work", "zone-a", 8);
+        let route = AuthenticatedPasteRoute::from_sessions(&source, &destination).unwrap();
+        assert_eq!(
+            host.authorize_paste(&route),
+            Err(ClipboardServiceError::PickerRequired)
+        );
+
+        let request = PickerRequest::new(
+            "operation-1",
+            "zone-a",
+            "Guest/work",
+            vec!["text/plain".to_owned()],
+        )
+        .unwrap();
+        let digest = format!("sha256:{}", "a".repeat(64));
+        let receipt = PickerAuthority::complete(
+            &destination,
+            &request,
+            crate::picker::PickerResult::Selected(digest.clone()),
+            digest.clone(),
+        )
+        .expect("picker receipt");
+        assert!(host
+            .authorize_paste_after_picker(&route, receipt, &digest)
+            .is_ok());
+    }
+
+    #[test]
+    fn guest_capture_requires_ready_display_and_authenticated_guest() {
+        let guest = guest("work", "zone-a", 1);
+        let user = user("zone-a", 1);
+        let mut absent = ClipdHost::new(Policy::default(), 4, None).unwrap();
+        assert_eq!(
+            absent.capture_guest(&guest, "text/plain", b"hello", 100),
+            Err(ClipboardServiceError::DependencyUnavailable)
+        );
+        let mut host = ClipdHost::new(Policy::default(), 4, Some(true)).unwrap();
+        assert_eq!(
+            host.capture_guest(&user, "text/plain", b"hello", 100),
+            Err(ClipboardServiceError::SessionUnauthenticated)
+        );
+        assert!(host
+            .capture_guest(&guest, "text/plain", b"hello", 100)
+            .is_ok());
+    }
+
+    #[test]
+    fn host_capture_enforces_policy_and_audits_suppressed_echo() {
+        let policy = Policy::new(true, true, true, true, true, 3, 4096, 4096, 32, 60).unwrap();
+        let mut host = ClipdHost::new(policy, 4, Some(true)).unwrap();
+        let guest = guest("work", "zone-a", 1);
+        let token = host
+            .capture_guest(&guest, "text/plain", b"hello", 100)
+            .unwrap();
+        assert_eq!(
+            host.capture_host(&user("zone-a", 1), "text/plain", b"hello", Some(&token), 101),
+            Err(ClipboardServiceError::EchoSuppressed)
+        );
+        assert_eq!(host.history_len(), 1);
+    }
+
 }

@@ -1,8 +1,8 @@
 use d2b_contracts::v3::ResourceRef;
 use d2b_provider_display_wayland::{
-    AttachmentGrantHandle, DisplayAuditKind, DisplayAuditOutcome, DisplayIdentity,
+    DisplayAuditKind, DisplayAuditOutcome, DisplayIdentity,
     DisplayLabelPosition, DisplayProviderDescriptor, DisplayTelemetryField, DisplayTelemetryFrame,
-    DisplayUserPortal, FilterInput, FinalizationInput, LaunchGrants, Phase, PolicyWarning,
+    DisplayUserPortal, FilterInput, FinalizationInput, Phase, PolicyWarning,
     PrincipalPool, ProcessObservation, ProxyReadinessFailure, ProxyReadinessStage,
     ProxyReadinessState, WaylandPolicy, WaylandSessionSpec,
 };
@@ -263,37 +263,6 @@ fn wire_deserialization_reuses_display_validation() {
 }
 
 #[test]
-fn launch_tickets_require_real_per_session_grants() {
-    let (guest, host, user, policy) = refs();
-    let spec = WaylandSessionSpec::new(guest, host, user, policy, identity(), true).unwrap();
-    let mut controller = d2b_provider_display_wayland::DisplayController::new(2);
-    let without_grants = controller
-        .reconcile(
-            &spec,
-            d2b_provider_display_wayland::DependencyState::ready(),
-            ProcessObservation::default(),
-        )
-        .unwrap();
-    assert!(without_grants.launch_ticket.is_none());
-
-    let grants = LaunchGrants::new(
-        AttachmentGrantHandle::from_core([7; 32]),
-        AttachmentGrantHandle::from_core([8; 32]),
-    );
-    let with_grants = controller
-        .reconcile_with_grants(
-            &spec,
-            d2b_provider_display_wayland::DependencyState::ready(),
-            ProcessObservation::default(),
-            Some(&grants),
-        )
-        .unwrap();
-    let ticket = with_grants.launch_ticket.unwrap();
-    assert_eq!(ticket.compositor_grant(), grants.compositor_grant());
-    assert_eq!(ticket.gpu_grant(), grants.gpu_grant());
-}
-
-#[test]
 fn distinct_authenticated_sessions_do_not_share_display_principals() {
     let (_, host, user, policy) = refs();
     let first = WaylandSessionSpec::new(
@@ -337,32 +306,16 @@ fn distinct_authenticated_sessions_do_not_share_display_principals() {
 #[test]
 fn portal_is_same_uid_and_finalizer_is_fail_closed() {
     let user = ResourceRef::parse("User/alice").unwrap();
-    let mut portal = DisplayUserPortal::new(user.clone(), 1000, 1).unwrap();
-    assert!(
-        portal
-            .issue_grant(
-                "session-digest",
-                &user,
-                1001,
-                AttachmentGrantHandle::from_core([3; 32]),
-            )
-            .is_err()
-    );
-    assert!(
-        portal
-            .issue_grant(
-                "session-digest",
-                &user,
-                1000,
-                AttachmentGrantHandle::from_core([3; 32]),
-            )
-            .is_ok()
-    );
+    let portal = DisplayUserPortal::new(user.clone(), 1000, 1).unwrap();
+    assert_eq!(portal.active_sessions(), 0);
+    assert!(DisplayUserPortal::new(ResourceRef::parse("Guest/work").unwrap(), 1000, 1).is_err());
     let ambiguous = d2b_provider_display_wayland::DisplayController::finalize(FinalizationInput {
         stop_requested: true,
         proxy_terminal: false,
         proxy_deleted: false,
         volume_deleted: false,
+        principal_released: false,
+        portal_revoked: false,
         grace_expired: true,
     });
     assert!(ambiguous.ambiguous);
@@ -372,6 +325,8 @@ fn portal_is_same_uid_and_finalizer_is_fail_closed() {
         proxy_terminal: true,
         proxy_deleted: true,
         volume_deleted: true,
+        principal_released: true,
+        portal_revoked: true,
         grace_expired: false,
     });
     assert_eq!(complete.phase, Phase::Terminating);
