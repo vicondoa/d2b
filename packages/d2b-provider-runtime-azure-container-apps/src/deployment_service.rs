@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use d2b_contracts::provider_effects::aca::{
-    AcaControl, AcaControlContext, AcaCredentialLease, AcaCredentialLeaseClient,
+    AcaControl, AcaControlContext, AcaControlHealth, AcaCredentialLease, AcaCredentialLeaseClient,
     AcaCredentialLeaseRequest, AcaCredentialPurpose, AcaDeleteOutcome, AcaDiskImageRecord,
     AcaOperationId, AcaSandboxCandidates, AcaSandboxId, AcaSandboxRecord, AcaTypeError,
     AcaWorkloadQuery,
@@ -64,6 +64,11 @@ pub enum AcaDeploymentRequest {
         /// Sandbox handle.
         sandbox_id: AcaSandboxId,
     },
+    /// Probe the authenticated ACA control endpoint.
+    Health {
+        /// Operation identity.
+        operation_id: AcaOperationId,
+    },
 }
 
 /// Response from the deployment service.
@@ -78,7 +83,7 @@ pub enum AcaDeploymentResponse {
     /// Delete outcome.
     Deleted(AcaDeleteOutcome),
     /// Health result.
-    Health,
+    Health(AcaControlHealth),
 }
 
 /// Deployment service failure.
@@ -176,6 +181,15 @@ where
             .acquire(&lease_request)
             .await
             .map_err(|error| AcaServiceError::Effect(error.kind()))?;
+        if lease.expires_at_unix_ms() <= self.clock.now_unix_ms()
+            || lease.expires_at_unix_ms() < lease_request.requested_expiry_unix_ms()
+        {
+            let _ = self.leases.revoke(&lease).await;
+            drop(permit);
+            return Err(AcaServiceError::Effect(
+                crate::AcaControlErrorKind::DeadlineExpired,
+            ));
+        }
         let response = self
             .dispatch_with_lease(method, request, &context, &lease)
             .await;
@@ -225,6 +239,12 @@ where
                     .map(AcaDeploymentResponse::Deleted)
                     .map_err(|error| AcaServiceError::Effect(error.kind()))
             }
+            (AcaServiceMethod::GuestHealth, AcaDeploymentRequest::Health { .. }) => self
+                .control
+                .health(lease, context)
+                .await
+                .map(AcaDeploymentResponse::Health)
+                .map_err(|error| AcaServiceError::Effect(error.kind())),
             _ => Err(AcaServiceError::MethodMismatch),
         }
     }
@@ -249,6 +269,9 @@ fn request_binding(
         }
         (AcaServiceMethod::GuestDestroy, AcaDeploymentRequest::Destroy { operation_id, .. }) => {
             (operation_id.clone(), AcaCredentialPurpose::Destroy)
+        }
+        (AcaServiceMethod::GuestHealth, AcaDeploymentRequest::Health { operation_id }) => {
+            (operation_id.clone(), AcaCredentialPurpose::Health)
         }
         _ => return Err(AcaServiceError::MethodMismatch),
     };

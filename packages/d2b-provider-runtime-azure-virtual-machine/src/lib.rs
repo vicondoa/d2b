@@ -18,7 +18,10 @@ pub use bootstrap_svc::{BootstrapService, BootstrapServiceState};
 pub use config::{
     AzureVmConfig, AzureVmGuestSettings, BootstrapPskDelivery, DataDiskSpec, DiskSku,
 };
-pub use controller::{AzureVmController, AzureVmPhase, AzureVmReconcileOutcome, AzureVmStatus};
+pub use controller::{
+    AzureVmClock, AzureVmController, AzureVmPhase, AzureVmReconcileOutcome, AzureVmStatus,
+    SystemAzureVmClock,
+};
 pub use effect::{
     AzureCredentialPort, AzureEffectPort, AzureOperationHandle, AzureVmHandle, AzureVmState,
     LroStatus, PskExtensionPayload, TagDigest,

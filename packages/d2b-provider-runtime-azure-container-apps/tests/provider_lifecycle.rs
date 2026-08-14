@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
@@ -14,7 +15,8 @@ use d2b_contracts::{
     v3::{ResourceRef, ResourceUid, credential::CredentialLeaseHandle},
 };
 use d2b_provider_runtime_azure_container_apps::{
-    AcaClock, AcaController, AcaControllerError, AcaPhase, AcaReconcileOutcome,
+    AcaClock, AcaController, AcaControllerError, AcaDeploymentRequest, AcaDeploymentResponse,
+    AcaDeploymentService, AcaPhase, AcaReconcileOutcome, AcaServiceMethod,
 };
 
 #[derive(Default)]
@@ -25,6 +27,7 @@ struct FakeState {
     lease_expiries: Vec<u64>,
     resume_lifecycle: Option<AcaSandboxLifecycle>,
     delete_failures: usize,
+    health: VecDeque<AcaControlHealth>,
 }
 
 struct FakeLeaseClient {
@@ -44,7 +47,7 @@ impl AcaCredentialLeaseClient for FakeLeaseClient {
             .push(request.requested_expiry_unix_ms());
         Ok(AcaCredentialLease::from_metadata(
             CredentialLeaseHandle::parse("aca-test-lease").unwrap(),
-            10_000,
+            request.requested_expiry_unix_ms(),
         ))
     }
 
@@ -65,7 +68,13 @@ impl AcaControl for FakeControl {
         _: &AcaCredentialLease,
         _: &AcaControlContext,
     ) -> Result<AcaControlHealth, AcaControlError> {
-        Ok(AcaControlHealth::Ready)
+        Ok(self
+            .state
+            .lock()
+            .unwrap()
+            .health
+            .pop_front()
+            .unwrap_or(AcaControlHealth::Ready))
     }
 
     async fn find_sandboxes(
@@ -212,7 +221,57 @@ async fn running_sandbox_reaches_ready_without_exposing_identity() {
     );
     assert_eq!(controller.phase(), AcaPhase::Ready);
     assert!(!format!("{:?}", controller.status()).contains("sandbox-1"));
-    assert_eq!(state.lock().unwrap().revoked, 1);
+    assert_eq!(state.lock().unwrap().revoked, 2);
+}
+
+#[tokio::test]
+async fn running_sandbox_requires_authenticated_healthy_control() {
+    let state = Arc::new(Mutex::new(FakeState {
+        candidates: vec![record(AcaSandboxLifecycle::Running)],
+        health: VecDeque::from([AcaControlHealth::Degraded, AcaControlHealth::Ready]),
+        ..FakeState::default()
+    }));
+    let mut controller = controller(Arc::clone(&state));
+    assert!(matches!(
+        controller
+            .reconcile(AcaOperationId::parse("operation-health-1").unwrap(), 1_000)
+            .await
+            .unwrap(),
+        AcaReconcileOutcome::Retry { .. }
+    ));
+    assert_eq!(controller.phase(), AcaPhase::Degraded);
+    assert_eq!(
+        controller
+            .reconcile(AcaOperationId::parse("operation-health-2").unwrap(), 1_000)
+            .await
+            .unwrap(),
+        AcaReconcileOutcome::Converged
+    );
+    assert_eq!(controller.phase(), AcaPhase::Ready);
+}
+
+#[tokio::test]
+async fn deployment_service_dispatches_authenticated_health() {
+    let state = Arc::new(Mutex::new(FakeState::default()));
+    let service = AcaDeploymentService::new(
+        Arc::new(FakeControl {
+            state: Arc::clone(&state),
+        }),
+        Arc::new(FakeLeaseClient { state }),
+    );
+    assert_eq!(
+        service
+            .dispatch(
+                AcaServiceMethod::GuestHealth,
+                AcaDeploymentRequest::Health {
+                    operation_id: AcaOperationId::parse("operation-service-health").unwrap(),
+                },
+                1_000,
+            )
+            .await
+            .unwrap(),
+        AcaDeploymentResponse::Health(AcaControlHealth::Ready)
+    );
 }
 
 #[tokio::test]
@@ -328,7 +387,10 @@ async fn lease_expiry_uses_absolute_unix_time() {
         .reconcile(AcaOperationId::parse("operation-clock").unwrap(), 1_000)
         .await
         .unwrap();
-    assert_eq!(state.lock().unwrap().lease_expiries, vec![1_235_567]);
+    assert_eq!(
+        state.lock().unwrap().lease_expiries,
+        vec![1_235_567, 1_235_567]
+    );
 }
 
 #[tokio::test]

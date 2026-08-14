@@ -3,7 +3,7 @@
 use std::{fmt, future::Future, pin::Pin};
 
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::v3::{
     ResourceRef, ResourceUid,
@@ -57,7 +57,7 @@ fn valid_opaque_id(value: &str, max: usize, lowercase_lead: bool) -> bool {
 
 macro_rules! opaque_id {
     ($name:ident, $max:expr, $lowercase_lead:expr) => {
-        #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+        #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
         #[serde(transparent)]
         pub struct $name(String);
 
@@ -73,6 +73,15 @@ macro_rules! opaque_id {
 
             pub fn as_str(&self) -> &str {
                 &self.0
+            }
+        }
+
+        impl<'de> Deserialize<'de> for $name {
+            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+            where
+                D: Deserializer<'de>,
+            {
+                Self::parse(String::deserialize(deserializer)?).map_err(serde::de::Error::custom)
             }
         }
 
@@ -93,7 +102,7 @@ opaque_id!(AcaSandboxId, MAX_ACA_RESOURCE_ID_LEN, false);
 opaque_id!(AcaDiskImageId, MAX_ACA_RESOURCE_ID_LEN, false);
 opaque_id!(AcaOperationId, 96, true);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AcaCpuMillis(u16);
 
@@ -111,7 +120,16 @@ impl AcaCpuMillis {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+impl<'de> Deserialize<'de> for AcaCpuMillis {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Self::new(u16::deserialize(deserializer)?).map_err(serde::de::Error::custom)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AcaMemoryMib(u32);
 
@@ -129,7 +147,16 @@ impl AcaMemoryMib {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+impl<'de> Deserialize<'de> for AcaMemoryMib {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Self::new(u32::deserialize(deserializer)?).map_err(serde::de::Error::custom)
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub enum AcaDiskImageSource {
     ConfiguredDisk {
@@ -140,6 +167,41 @@ pub enum AcaDiskImageSource {
         disk_name: AcaDiskImageName,
         pull_identity_binding_id: Option<AcaManagedIdentityBindingId>,
     },
+}
+
+impl<'de> Deserialize<'de> for AcaDiskImageSource {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase", deny_unknown_fields)]
+        enum RawAcaDiskImageSource {
+            ConfiguredDisk {
+                binding_id: AcaConfiguredDiskId,
+            },
+            ConfiguredContainerImage {
+                image_binding_id: AcaConfiguredImageId,
+                disk_name: AcaDiskImageName,
+                pull_identity_binding_id: Option<AcaManagedIdentityBindingId>,
+            },
+        }
+
+        match RawAcaDiskImageSource::deserialize(deserializer)? {
+            RawAcaDiskImageSource::ConfiguredDisk { binding_id } => {
+                Ok(Self::ConfiguredDisk { binding_id })
+            }
+            RawAcaDiskImageSource::ConfiguredContainerImage {
+                image_binding_id,
+                disk_name,
+                pull_identity_binding_id,
+            } => Ok(Self::ConfiguredContainerImage {
+                image_binding_id,
+                disk_name,
+                pull_identity_binding_id,
+            }),
+        }
+    }
 }
 
 impl fmt::Debug for AcaDiskImageSource {
@@ -153,7 +215,7 @@ impl fmt::Debug for AcaDiskImageSource {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AcaSandboxProfile {
     profile_id: AcaProfileId,
@@ -162,6 +224,35 @@ pub struct AcaSandboxProfile {
     memory: AcaMemoryMib,
     auto_suspend_secs: u32,
     sandbox_identity_binding_id: Option<AcaManagedIdentityBindingId>,
+}
+
+impl<'de> Deserialize<'de> for AcaSandboxProfile {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase", deny_unknown_fields)]
+        struct RawAcaSandboxProfile {
+            profile_id: AcaProfileId,
+            disk_image: AcaDiskImageSource,
+            cpu: AcaCpuMillis,
+            memory: AcaMemoryMib,
+            auto_suspend_secs: u32,
+            sandbox_identity_binding_id: Option<AcaManagedIdentityBindingId>,
+        }
+
+        let raw = RawAcaSandboxProfile::deserialize(deserializer)?;
+        Self::new(
+            raw.profile_id,
+            raw.disk_image,
+            raw.cpu,
+            raw.memory,
+            raw.auto_suspend_secs,
+            raw.sandbox_identity_binding_id,
+        )
+        .map_err(serde::de::Error::custom)
+    }
 }
 
 impl AcaSandboxProfile {
@@ -174,6 +265,8 @@ impl AcaSandboxProfile {
         auto_suspend_secs: u32,
         sandbox_identity_binding_id: Option<AcaManagedIdentityBindingId>,
     ) -> Result<Self, AcaTypeError> {
+        AcaCpuMillis::new(cpu.get())?;
+        AcaMemoryMib::new(memory.get())?;
         if !(60..=86_400).contains(&auto_suspend_secs) {
             return Err(AcaTypeError::InvalidResourceBounds);
         }
@@ -232,11 +325,28 @@ impl fmt::Debug for AcaSandboxProfile {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AcaReadinessPolicy {
     attempts: u8,
     interval_ms: u32,
+}
+
+impl<'de> Deserialize<'de> for AcaReadinessPolicy {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase", deny_unknown_fields)]
+        struct RawAcaReadinessPolicy {
+            attempts: u8,
+            interval_ms: u32,
+        }
+
+        let raw = RawAcaReadinessPolicy::deserialize(deserializer)?;
+        Self::new(raw.attempts, raw.interval_ms).map_err(serde::de::Error::custom)
+    }
 }
 
 impl AcaReadinessPolicy {
@@ -263,7 +373,7 @@ impl AcaReadinessPolicy {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AcaRuntimeConfig {
     profile: AcaSandboxProfile,
@@ -279,6 +389,16 @@ impl AcaRuntimeConfig {
         plan_ttl_ms: u32,
         completed_operation_capacity: usize,
     ) -> Result<Self, AcaTypeError> {
+        let profile_check = &profile;
+        AcaSandboxProfile::new(
+            profile_check.profile_id().clone(),
+            profile_check.disk_image().clone(),
+            profile_check.cpu(),
+            profile_check.memory(),
+            profile_check.auto_suspend_secs(),
+            profile_check.sandbox_identity_binding_id().cloned(),
+        )?;
+        AcaReadinessPolicy::new(readiness.attempts(), readiness.interval_ms())?;
         if plan_ttl_ms == 0 || plan_ttl_ms > MAX_ACA_PLAN_TTL_MS {
             return Err(AcaTypeError::InvalidPlanTtl);
         }
@@ -310,6 +430,51 @@ impl AcaRuntimeConfig {
     pub const fn completed_operation_capacity(&self) -> usize {
         self.completed_operation_capacity
     }
+
+    /// Revalidate values that may have arrived through a deserializer.
+    pub fn validate(&self) -> Result<(), AcaTypeError> {
+        let profile = self.profile();
+        let profile = AcaSandboxProfile::new(
+            profile.profile_id().clone(),
+            profile.disk_image().clone(),
+            profile.cpu(),
+            profile.memory(),
+            profile.auto_suspend_secs(),
+            profile.sandbox_identity_binding_id().cloned(),
+        )?;
+        Self::new(
+            profile,
+            self.readiness,
+            self.plan_ttl_ms,
+            self.completed_operation_capacity,
+        )
+        .map(|_| ())
+    }
+}
+
+impl<'de> Deserialize<'de> for AcaRuntimeConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase", deny_unknown_fields)]
+        struct RawAcaRuntimeConfig {
+            profile: AcaSandboxProfile,
+            readiness: AcaReadinessPolicy,
+            plan_ttl_ms: u32,
+            completed_operation_capacity: usize,
+        }
+
+        let raw = RawAcaRuntimeConfig::deserialize(deserializer)?;
+        Self::new(
+            raw.profile,
+            raw.readiness,
+            raw.plan_ttl_ms,
+            raw.completed_operation_capacity,
+        )
+        .map_err(serde::de::Error::custom)
+    }
 }
 
 impl fmt::Debug for AcaRuntimeConfig {
@@ -327,7 +492,7 @@ impl fmt::Debug for AcaRuntimeConfig {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AcaProviderConfig {
     pub gateway_execution_ref: ResourceRef,
@@ -369,6 +534,7 @@ impl AcaProviderConfig {
         {
             return Err(AcaTypeError::InvalidExecutionBoundary);
         }
+        defaults.validate()?;
         Ok(Self {
             gateway_execution_ref,
             tenant_id,
@@ -393,6 +559,63 @@ impl AcaProviderConfig {
             return Err(AcaTypeError::InvalidExecutionBoundary);
         }
         Ok(())
+    }
+
+    /// Revalidate a Provider configuration at the admission boundary.
+    pub fn validate(&self) -> Result<(), AcaTypeError> {
+        Self::new(
+            self.gateway_execution_ref.clone(),
+            self.tenant_id.clone(),
+            self.client_id.clone(),
+            self.subscription_id.clone(),
+            self.control_credential_ref.clone(),
+            self.pull_credential_ref.clone(),
+            self.environment_id.clone(),
+            self.resource_group_id.clone(),
+            self.network_ref.clone(),
+            self.sandbox_transport_alias.clone(),
+            self.defaults.clone(),
+        )
+        .map(|_| ())
+    }
+}
+
+impl<'de> Deserialize<'de> for AcaProviderConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase", deny_unknown_fields)]
+        struct RawAcaProviderConfig {
+            gateway_execution_ref: ResourceRef,
+            tenant_id: OpaqueAzureRef,
+            client_id: OpaqueAzureRef,
+            subscription_id: OpaqueAzureRef,
+            control_credential_ref: ResourceRef,
+            pull_credential_ref: Option<ResourceRef>,
+            environment_id: AcaConfiguredImageId,
+            resource_group_id: AcaConfiguredImageId,
+            network_ref: Option<ResourceRef>,
+            sandbox_transport_alias: AcaProfileId,
+            defaults: AcaRuntimeConfig,
+        }
+
+        let raw = RawAcaProviderConfig::deserialize(deserializer)?;
+        Self::new(
+            raw.gateway_execution_ref,
+            raw.tenant_id,
+            raw.client_id,
+            raw.subscription_id,
+            raw.control_credential_ref,
+            raw.pull_credential_ref,
+            raw.environment_id,
+            raw.resource_group_id,
+            raw.network_ref,
+            raw.sandbox_transport_alias,
+            raw.defaults,
+        )
+        .map_err(serde::de::Error::custom)
     }
 }
 
@@ -831,3 +1054,30 @@ pub trait AcaControl: Send + Sync {
 
 pub type BoxAcaFuture<'a, T> =
     Pin<Box<dyn Future<Output = Result<T, AcaControlError>> + Send + 'a>>;
+
+#[cfg(test)]
+mod tests {
+    use super::AcaRuntimeConfig;
+
+    #[test]
+    fn runtime_config_deserialization_revalidates_constructor_bounds() {
+        let valid = r#"{
+            "profile": {
+                "profileId": "default",
+                "diskImage": {"configuredDisk": {"binding_id": "image-1"}},
+                "cpu": 500,
+                "memory": 2048,
+                "autoSuspendSecs": 300,
+                "sandboxIdentityBindingId": null
+            },
+            "readiness": {"attempts": 3, "intervalMs": 10},
+            "planTtlMs": 1000,
+            "completedOperationCapacity": 4
+        }"#;
+        let parsed = serde_json::from_str::<AcaRuntimeConfig>(valid);
+        assert!(parsed.is_ok(), "{parsed:?}");
+
+        let invalid = valid.replace("\"cpu\": 500", "\"cpu\": 251");
+        assert!(serde_json::from_str::<AcaRuntimeConfig>(&invalid).is_err());
+    }
+}

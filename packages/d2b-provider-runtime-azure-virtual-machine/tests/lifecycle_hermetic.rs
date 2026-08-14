@@ -3,10 +3,10 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use d2b_contracts::v3::{ResourceRef, credential::OpaqueAzureRef};
 use d2b_provider_runtime_azure_virtual_machine::{
-    AzureEffectPort, AzureOperationHandle, AzureVmConfig, AzureVmController, AzureVmError,
-    AzureVmGuestSettings, AzureVmHandle, AzureVmPhase, AzureVmReconcileOutcome, AzureVmState,
-    BootstrapAdmission, BootstrapPsk, BootstrapPskDelivery, BootstrapService, DiskSku, LroStatus,
-    PskExtensionPayload, TagDigest,
+    AzureEffectPort, AzureOperationHandle, AzureVmClock, AzureVmConfig, AzureVmController,
+    AzureVmError, AzureVmGuestSettings, AzureVmHandle, AzureVmPhase, AzureVmReconcileOutcome,
+    AzureVmState, BootstrapAdmission, BootstrapPsk, BootstrapPskDelivery, BootstrapService,
+    DiskSku, LroStatus, PskExtensionPayload, TagDigest,
 };
 
 struct FakeState {
@@ -31,6 +31,14 @@ impl Default for FakeState {
 
 struct FakeEffect {
     state: Arc<Mutex<FakeState>>,
+}
+
+struct FixedClock(Arc<Mutex<u64>>);
+
+impl AzureVmClock for FixedClock {
+    fn now_unix_ms(&self) -> u64 {
+        *self.0.lock().unwrap()
+    }
 }
 
 #[async_trait]
@@ -346,4 +354,70 @@ async fn provisioning_lro_delivers_psk_before_bootstrap_phase() {
         .unwrap();
     assert_eq!(controller.phase(), AzureVmPhase::Bootstrapping);
     assert_eq!(state.lock().unwrap().calls, ["provision", "extension"]);
+}
+
+#[tokio::test]
+async fn failed_extension_lro_redelivers_psk_without_losing_secret() {
+    let (provider, settings) = config();
+    let state = Arc::new(Mutex::new(FakeState {
+        state: AzureVmState::Absent,
+        polls: vec![
+            LroStatus::Succeeded,
+            LroStatus::Failed,
+            LroStatus::Succeeded,
+        ],
+        ..FakeState::default()
+    }));
+    let effect = Arc::new(FakeEffect {
+        state: Arc::clone(&state),
+    });
+    let mut controller = AzureVmController::new(
+        provider,
+        settings,
+        effect,
+        Some(BootstrapPsk::from_bytes(b"one-time").unwrap()),
+    )
+    .unwrap();
+    controller.reconcile("zone", "guest", 1).await.unwrap();
+    controller
+        .poll_operation(AzureOperationHandle::from_core(b"provision").unwrap())
+        .await
+        .unwrap();
+    controller
+        .poll_operation(AzureOperationHandle::from_core(b"extension").unwrap())
+        .await
+        .unwrap();
+    assert_eq!(controller.phase(), AzureVmPhase::PskDelivering);
+    controller
+        .poll_operation(AzureOperationHandle::from_core(b"extension").unwrap())
+        .await
+        .unwrap();
+    assert_eq!(controller.phase(), AzureVmPhase::Bootstrapping);
+    assert_eq!(
+        state.lock().unwrap().calls,
+        ["provision", "extension", "extension"]
+    );
+}
+
+#[tokio::test]
+async fn running_vm_fails_closed_at_bootstrap_deadline() {
+    let (provider, settings) = config();
+    let now = Arc::new(Mutex::new(0));
+    let state = Arc::new(Mutex::new(FakeState {
+        state: AzureVmState::Running,
+        handle: Some(AzureVmHandle::from_core("opaque-vm").unwrap()),
+        tags: Some(expected_tag_digest()),
+        ..FakeState::default()
+    }));
+    let effect = Arc::new(FakeEffect { state });
+    let mut controller = AzureVmController::new(provider, settings, effect, None)
+        .unwrap()
+        .with_clock(Arc::new(FixedClock(Arc::clone(&now))));
+    controller.reconcile("zone", "guest", 1).await.unwrap();
+    *now.lock().unwrap() = 60_000;
+    assert_eq!(
+        controller.reconcile("zone", "guest", 2).await.unwrap_err(),
+        AzureVmError::BootstrapFailed
+    );
+    assert_eq!(controller.phase(), AzureVmPhase::Failed);
 }

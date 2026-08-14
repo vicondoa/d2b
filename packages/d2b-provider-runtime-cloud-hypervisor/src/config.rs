@@ -139,7 +139,8 @@ pub enum CloudHypervisorConfigError {
 }
 
 fn valid_token(value: &str) -> bool {
-    value.as_bytes()[0].is_ascii_lowercase()
+    !value.is_empty()
+        && value.as_bytes()[0].is_ascii_lowercase()
         && value
             .bytes()
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')

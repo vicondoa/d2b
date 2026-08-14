@@ -19,6 +19,27 @@ use crate::{
     idempotency,
 };
 
+const MAX_PSK_DELIVERY_ATTEMPTS: u8 = 3;
+
+/// Clock used for bootstrap admission and deadline checks.
+pub trait AzureVmClock: Send + Sync {
+    /// Return the current Unix time in milliseconds.
+    fn now_unix_ms(&self) -> u64;
+}
+
+/// Production wall clock for Azure VM bootstrap deadlines.
+#[derive(Debug, Default)]
+pub struct SystemAzureVmClock;
+
+impl AzureVmClock for SystemAzureVmClock {
+    fn now_unix_ms(&self) -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
+            .unwrap_or(0)
+    }
+}
+
 /// Azure VM Provider phase.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AzureVmPhase {
@@ -119,6 +140,8 @@ pub struct AzureVmController<E> {
     bootstrap_service: BootstrapService,
     pending_delete_operation_id: Option<String>,
     bootstrap_started_at_unix_ms: Option<u64>,
+    psk_delivery_attempts: u8,
+    clock: Arc<dyn AzureVmClock>,
 }
 
 impl<E> AzureVmController<E>
@@ -150,12 +173,20 @@ where
             bootstrap_service: BootstrapService::default(),
             pending_delete_operation_id: None,
             bootstrap_started_at_unix_ms: None,
+            psk_delivery_attempts: 0,
+            clock: Arc::new(SystemAzureVmClock),
         })
     }
 
     /// Inject the durable bootstrap service state recovered by the gateway.
     pub fn with_bootstrap_service(mut self, bootstrap_service: BootstrapService) -> Self {
         self.bootstrap_service = bootstrap_service;
+        self
+    }
+
+    /// Replace the wall clock used for bootstrap deadlines.
+    pub fn with_clock(mut self, clock: Arc<dyn AzureVmClock>) -> Self {
+        self.clock = clock;
         self
     }
 
@@ -218,7 +249,13 @@ where
                 }
                 self.vm_handle = Some(handle);
                 self.tag_digest = Some(tags);
-                self.ready_if_enrolled(tags)
+                if self.bootstrap_psk.is_some()
+                    && self.bootstrap_service.state() != BootstrapServiceState::Enrolled
+                {
+                    self.start_psk_delivery().await
+                } else {
+                    self.ready_if_enrolled(tags)
+                }
             }
             AzureVmState::Provisioning => {
                 self.phase = AzureVmPhase::Provisioning;
@@ -271,6 +308,9 @@ where
             }),
             LroStatus::Failed => {
                 self.operation = None;
+                if self.phase == AzureVmPhase::PskDelivering {
+                    return self.start_psk_delivery().await;
+                }
                 self.phase = AzureVmPhase::Failed;
                 Err(AzureVmError::ArmProvisioningFailed)
             }
@@ -302,21 +342,15 @@ where
                         }
                         self.vm_handle = Some(handle.clone());
                         self.tag_digest = Some(tags);
-                        if let Some(psk) = self.bootstrap_psk.as_ref() {
-                            let payload =
-                                PskExtensionPayload::from_secret(psk.copy_for_delivery().to_vec())?;
-                            let operation = self.effect.put_vm_extension(&handle, payload).await?;
-                            self.bootstrap_psk = None;
-                            self.operation = Some(operation);
-                            self.phase = AzureVmPhase::PskDelivering;
-                            self.bootstrap_started_at_unix_ms = Some(now_unix_ms());
-                            Ok(AzureVmReconcileOutcome::Progressing { after_ms: 250 })
+                        if self.bootstrap_psk.is_some() {
+                            self.start_psk_delivery().await
                         } else {
                             self.phase = AzureVmPhase::Bootstrapping;
                             Ok(AzureVmReconcileOutcome::Progressing { after_ms: 1_000 })
                         }
                     }
                     AzureVmPhase::PskDelivering => {
+                        self.bootstrap_psk = None;
                         self.phase = AzureVmPhase::Bootstrapping;
                         Ok(AzureVmReconcileOutcome::Progressing { after_ms: 1_000 })
                     }
@@ -399,7 +433,7 @@ where
         now_unix_ms: u64,
     ) -> Result<(), AzureVmError> {
         if self.bootstrap_started_at_unix_ms.is_some_and(|started| {
-            now_unix_ms.saturating_sub(started) > self.settings.bootstrap_deadline_ms
+            now_unix_ms.saturating_sub(started) >= self.settings.bootstrap_deadline_ms
         }) {
             return Err(AzureVmError::BootstrapFailed);
         }
@@ -407,18 +441,50 @@ where
             .complete_enrollment(admission, presented, now_unix_ms)
     }
 
+    async fn start_psk_delivery(&mut self) -> Result<AzureVmReconcileOutcome, AzureVmError> {
+        let handle = self.vm_handle.clone().ok_or(AzureVmError::Ambiguous)?;
+        let started = *self
+            .bootstrap_started_at_unix_ms
+            .get_or_insert_with(|| self.clock.now_unix_ms());
+        if self.clock.now_unix_ms().saturating_sub(started) >= self.settings.bootstrap_deadline_ms {
+            self.phase = AzureVmPhase::Failed;
+            return Err(AzureVmError::BootstrapFailed);
+        }
+        if self.psk_delivery_attempts >= MAX_PSK_DELIVERY_ATTEMPTS {
+            self.phase = AzureVmPhase::Failed;
+            return Err(AzureVmError::BootstrapFailed);
+        }
+        let psk = self
+            .bootstrap_psk
+            .as_ref()
+            .ok_or(AzureVmError::BootstrapFailed)?;
+        self.psk_delivery_attempts = self.psk_delivery_attempts.saturating_add(1);
+        let payload = PskExtensionPayload::from_secret(psk.copy_for_delivery().to_vec())?;
+        let operation = self.effect.put_vm_extension(&handle, payload).await?;
+        self.operation = Some(operation);
+        self.phase = AzureVmPhase::PskDelivering;
+        Ok(AzureVmReconcileOutcome::Progressing { after_ms: 250 })
+    }
+
     fn ready_if_enrolled(
         &mut self,
         tags: TagDigest,
     ) -> Result<AzureVmReconcileOutcome, AzureVmError> {
         if self.bootstrap_service.state() != BootstrapServiceState::Enrolled {
-            if self.bootstrap_started_at_unix_ms.is_none() {
-                self.bootstrap_started_at_unix_ms = Some(now_unix_ms());
+            let started = *self
+                .bootstrap_started_at_unix_ms
+                .get_or_insert_with(|| self.clock.now_unix_ms());
+            if self.clock.now_unix_ms().saturating_sub(started)
+                >= self.settings.bootstrap_deadline_ms
+            {
+                self.phase = AzureVmPhase::Failed;
+                return Err(AzureVmError::BootstrapFailed);
             }
             self.identity_digest = None;
             self.phase = AzureVmPhase::Bootstrapping;
             return Ok(AzureVmReconcileOutcome::Retry { after_ms: 1_000 });
         }
+        self.bootstrap_psk = None;
         self.phase = AzureVmPhase::Ready;
         self.identity_digest = Some(Sha256::digest(tags.as_bytes()).into());
         Ok(AzureVmReconcileOutcome::Converged)
@@ -461,11 +527,4 @@ where
             }
         }
     }
-}
-
-fn now_unix_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
-        .unwrap_or(0)
 }

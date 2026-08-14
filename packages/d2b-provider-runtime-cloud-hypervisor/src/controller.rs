@@ -6,6 +6,7 @@ use std::{
 };
 
 use async_trait::async_trait;
+use tokio::time::timeout;
 
 use crate::{
     adoption::{AdoptionOutcome, ProcessIdentity, verify_identity},
@@ -67,6 +68,8 @@ pub enum CloudHypervisorError {
     GuestControl(GuestControlHealthError),
     /// VMM effect failed.
     Effect,
+    /// Launch or initial guest-control probing exceeded the startup deadline.
+    StartupDeadlineExceeded,
     /// Finalization was requested after completion.
     InvalidState,
 }
@@ -79,6 +82,7 @@ impl std::fmt::Display for CloudHypervisorError {
             Self::AdoptionAmbiguous => "process-adoption-ambiguous",
             Self::GuestControl(error) => error.code(),
             Self::Effect => "cloud-hypervisor-effect-failed",
+            Self::StartupDeadlineExceeded => "cloud-hypervisor-startup-deadline-exceeded",
             Self::InvalidState => "cloud-hypervisor-invalid-state",
         })
     }
@@ -117,6 +121,7 @@ pub struct CloudHypervisorController<E, P> {
     health_failures: u8,
     finalizer: bool,
     adoption_started: Instant,
+    startup_started: Option<Instant>,
 }
 
 impl<E, P> CloudHypervisorController<E, P>
@@ -150,6 +155,7 @@ where
             health_failures: 0,
             finalizer: true,
             adoption_started: Instant::now(),
+            startup_started: None,
         })
     }
 
@@ -178,6 +184,7 @@ where
             GuestControlHealth::Ready => {
                 self.health_failures = 0;
                 self.phase = CloudHypervisorPhase::Ready;
+                self.startup_started = None;
                 Ok(CloudHypervisorReconcileOutcome::Converged)
             }
             GuestControlHealth::Degraded => {
@@ -196,6 +203,25 @@ where
                     GuestControlHealthError::AuthenticationFailed,
                 ))
             }
+        }
+    }
+
+    fn startup_remaining(&mut self) -> Result<Duration, CloudHypervisorError> {
+        let started = *self.startup_started.get_or_insert_with(Instant::now);
+        Duration::from_millis(u64::from(self.config.startup_deadline_ms))
+            .checked_sub(started.elapsed())
+            .ok_or(CloudHypervisorError::StartupDeadlineExceeded)
+    }
+
+    fn startup_timeout(&mut self) -> CloudHypervisorError {
+        self.phase = CloudHypervisorPhase::Failed;
+        CloudHypervisorError::StartupDeadlineExceeded
+    }
+
+    fn startup_budget(&mut self) -> Result<Duration, CloudHypervisorError> {
+        match self.startup_remaining() {
+            Ok(remaining) => Ok(remaining),
+            Err(_) => Err(self.startup_timeout()),
         }
     }
 
@@ -243,10 +269,16 @@ where
                 }
             } else {
                 self.phase = CloudHypervisorPhase::Starting;
-                let identity = self
-                    .effect
-                    .launch(&self.graph, &self.config, &self.settings)
-                    .await?;
+                let identity = match timeout(
+                    self.startup_budget()?,
+                    self.effect
+                        .launch(&self.graph, &self.config, &self.settings),
+                )
+                .await
+                {
+                    Ok(result) => result?,
+                    Err(_) => return Err(self.startup_timeout()),
+                };
                 self.expected_identity = Some(identity);
                 self.identity = Some(identity);
                 self.phase = CloudHypervisorPhase::VmmReady;
@@ -255,11 +287,28 @@ where
         if self.phase != CloudHypervisorPhase::Ready {
             self.phase = CloudHypervisorPhase::Bootstrapping;
         }
-        let health = self
-            .probe
-            .probe(expected_cid, self.config.health_check_timeout_ms)
-            .await
-            .map_err(CloudHypervisorError::GuestControl)?;
+        let probe_timeout = if self.phase == CloudHypervisorPhase::Bootstrapping {
+            self.startup_budget()?
+        } else {
+            Duration::from_millis(u64::from(self.config.health_check_timeout_ms))
+        };
+        let health = match timeout(
+            probe_timeout,
+            self.probe
+                .probe(expected_cid, self.config.health_check_timeout_ms),
+        )
+        .await
+        {
+            Ok(result) => result.map_err(CloudHypervisorError::GuestControl)?,
+            Err(_) if self.phase == CloudHypervisorPhase::Bootstrapping => {
+                return Err(self.startup_timeout());
+            }
+            Err(_) => {
+                return Err(CloudHypervisorError::GuestControl(
+                    GuestControlHealthError::Timeout,
+                ));
+            }
+        };
         self.apply_health(health)
     }
 
@@ -291,11 +340,16 @@ where
         self.effect.open_pidfd(&candidate).await?;
         self.identity = Some(candidate);
         self.phase = CloudHypervisorPhase::VmmReady;
-        let health = self
-            .probe
-            .probe(expected_cid, self.config.health_check_timeout_ms)
-            .await
-            .map_err(CloudHypervisorError::GuestControl)?;
+        let health = match timeout(
+            self.startup_budget()?,
+            self.probe
+                .probe(expected_cid, self.config.health_check_timeout_ms),
+        )
+        .await
+        {
+            Ok(result) => result.map_err(CloudHypervisorError::GuestControl)?,
+            Err(_) => return Err(self.startup_timeout()),
+        };
         self.apply_health(health)
     }
 

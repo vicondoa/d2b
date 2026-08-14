@@ -304,6 +304,7 @@ impl RelayConnection {
         if result.is_err() {
             self.credits.lock().await.rollback(size);
             *self.phase.lock().await = RelaySessionPhase::Closed;
+            self.session_permit.lock().await.take();
             let _ = self.socket.close().await;
         }
         result
@@ -311,7 +312,13 @@ impl RelayConnection {
 
     /// Receive one frame.
     pub async fn receive(&self) -> Result<Option<RelayFrame>, RelayTransportError> {
-        self.socket.receive().await
+        let result = self.socket.receive().await;
+        if result.as_ref().is_ok_and(Option::is_none) || result.is_err() {
+            *self.phase.lock().await = RelaySessionPhase::Closed;
+            self.session_permit.lock().await.take();
+            let _ = self.socket.close().await;
+        }
+        result
     }
 
     /// Grant credits from the remote named stream.
@@ -350,6 +357,10 @@ pub enum RelayTransportError {
     InvalidConfiguration,
     /// Credentials were unavailable.
     CredentialUnavailable,
+    /// The credential lease was issued for the wrong relay role.
+    CredentialRoleMismatch,
+    /// The credential lease was already expired.
+    CredentialExpired,
     /// Authentication failed.
     AuthenticationFailed,
     /// Endpoint was not ready.
@@ -371,6 +382,8 @@ impl fmt::Display for RelayTransportError {
         formatter.write_str(match self {
             Self::InvalidConfiguration => "relay-invalid-configuration",
             Self::CredentialUnavailable => "relay-credential-unavailable",
+            Self::CredentialRoleMismatch => "relay-credential-role-mismatch",
+            Self::CredentialExpired => "relay-credential-expired",
             Self::AuthenticationFailed => "relay-authentication-failed",
             Self::Unavailable => "relay-unavailable",
             Self::FrameTooLarge => "relay-frame-too-large",
@@ -444,13 +457,11 @@ where
         if deadline_ms == 0 {
             return Err(RelayTransportError::DeadlineExpired);
         }
-        let session_permit = self
-            .session_slots
-            .clone()
-            .acquire_owned()
-            .await
-            .map_err(|_| RelayTransportError::Unavailable)?;
         let deadline = Instant::now() + Duration::from_millis(u64::from(deadline_ms));
+        let session_permit = timeout_at(deadline, self.session_slots.clone().acquire_owned())
+            .await
+            .map_err(|_| RelayTransportError::DeadlineExpired)?
+            .map_err(|_| RelayTransportError::Unavailable)?;
         let credential_role = match role {
             RelayRole::Listener => RelayCredentialRole::Listen,
             RelayRole::Sender => RelayCredentialRole::Send,
@@ -470,6 +481,18 @@ where
             .await
             .map_err(|_| RelayTransportError::DeadlineExpired)?
             .map_err(|_| RelayTransportError::CredentialUnavailable)?;
+            let now_unix_ms = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_err(|_| RelayTransportError::CredentialExpired)?
+                .as_millis() as u64;
+            if lease.role() != credential_role {
+                let _ = timeout_at(deadline, self.credentials.revoke(lease)).await;
+                return Err(RelayTransportError::CredentialRoleMismatch);
+            }
+            if lease.expires_at_unix_ms() < now_unix_ms.saturating_add(u64::from(remaining_ms)) {
+                let _ = timeout_at(deadline, self.credentials.revoke(lease)).await;
+                return Err(RelayTransportError::CredentialExpired);
+            }
             let connect_deadline = std::cmp::min(
                 deadline,
                 Instant::now()

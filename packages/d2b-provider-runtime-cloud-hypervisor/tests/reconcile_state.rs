@@ -1,4 +1,5 @@
 use std::sync::{Arc, Mutex};
+use tokio::time::{Duration, sleep};
 
 use async_trait::async_trait;
 use d2b_contracts::v3::{ResourceRef, credential::OpaqueAzureRef};
@@ -20,6 +21,7 @@ struct FakeState {
     stopped: bool,
     stop_calls: usize,
     stop_failures: usize,
+    launch_delay_ms: u64,
 }
 
 struct FakeEffect {
@@ -34,6 +36,10 @@ impl CloudHypervisorEffectPort for FakeEffect {
         _: &CloudHypervisorConfig,
         _: &CloudHypervisorGuestSettings,
     ) -> Result<ProcessIdentity, d2b_provider_runtime_cloud_hypervisor::CloudHypervisorError> {
+        let launch_delay_ms = self.state.lock().unwrap().launch_delay_ms;
+        if launch_delay_ms > 0 {
+            sleep(Duration::from_millis(launch_delay_ms)).await;
+        }
         let mut state = self.state.lock().unwrap();
         state.launched = true;
         let identity = identity();
@@ -72,12 +78,21 @@ impl CloudHypervisorEffectPort for FakeEffect {
 
 struct ReadyProbe {
     responses: Arc<Mutex<Vec<GuestControlHealth>>>,
+    delay_ms: u64,
 }
 
 impl ReadyProbe {
     fn scripted(responses: Vec<GuestControlHealth>) -> Self {
         Self {
             responses: Arc::new(Mutex::new(responses)),
+            delay_ms: 0,
+        }
+    }
+
+    fn delayed(responses: Vec<GuestControlHealth>, delay_ms: u64) -> Self {
+        Self {
+            responses: Arc::new(Mutex::new(responses)),
+            delay_ms,
         }
     }
 }
@@ -85,6 +100,9 @@ impl ReadyProbe {
 #[async_trait]
 impl GuestControlProbe for ReadyProbe {
     async fn probe(&self, _: u32, _: u32) -> Result<GuestControlHealth, GuestControlHealthError> {
+        if self.delay_ms > 0 {
+            sleep(Duration::from_millis(self.delay_ms)).await;
+        }
         Ok(self
             .responses
             .lock()
@@ -109,6 +127,14 @@ fn controller_with_probe(
     state: Arc<Mutex<FakeState>>,
     probe: ReadyProbe,
 ) -> CloudHypervisorController<FakeEffect, ReadyProbe> {
+    controller_with_probe_and_deadline(state, probe, 120_000)
+}
+
+fn controller_with_probe_and_deadline(
+    state: Arc<Mutex<FakeState>>,
+    probe: ReadyProbe,
+    startup_deadline_ms: u32,
+) -> CloudHypervisorController<FakeEffect, ReadyProbe> {
     let config = CloudHypervisorConfig {
         controller_execution_ref: ResourceRef::parse("Host/host-system").unwrap(),
         default_vcpus: 2,
@@ -119,7 +145,7 @@ fn controller_with_probe(
         health_check_interval_ms: 30_000,
         health_check_timeout_ms: 5_000,
         health_check_failure_threshold: 3,
-        startup_deadline_ms: 120_000,
+        startup_deadline_ms,
     };
     let settings = CloudHypervisorGuestSettings {
         vcpus: Some(2),
@@ -253,4 +279,31 @@ async fn degraded_health_requires_threshold_before_phase_change() {
         CloudHypervisorReconcileOutcome::Converged
     );
     assert_eq!(controller.phase(), CloudHypervisorPhase::Ready);
+}
+
+#[tokio::test]
+async fn launch_is_cancelled_at_startup_deadline() {
+    let state = Arc::new(Mutex::new(FakeState {
+        launch_delay_ms: 100,
+        ..FakeState::default()
+    }));
+    let mut controller =
+        controller_with_probe_and_deadline(state, ReadyProbe::scripted(Vec::new()), 20);
+    assert_eq!(
+        controller.reconcile(true, true, true, 14).await,
+        Err(d2b_provider_runtime_cloud_hypervisor::CloudHypervisorError::StartupDeadlineExceeded)
+    );
+    assert_eq!(controller.phase(), CloudHypervisorPhase::Failed);
+}
+
+#[tokio::test]
+async fn initial_guest_control_probe_is_cancelled_at_startup_deadline() {
+    let state = Arc::new(Mutex::new(FakeState::default()));
+    let mut controller =
+        controller_with_probe_and_deadline(state, ReadyProbe::delayed(Vec::new(), 100), 20);
+    assert_eq!(
+        controller.reconcile(true, true, true, 14).await,
+        Err(d2b_provider_runtime_cloud_hypervisor::CloudHypervisorError::StartupDeadlineExceeded)
+    );
+    assert_eq!(controller.phase(), CloudHypervisorPhase::Failed);
 }

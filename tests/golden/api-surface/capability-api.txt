@@ -8606,6 +8606,8 @@ d2b_provider_runtime_azure_container_apps	pub d2b_provider_runtime_azure_contain
 d2b_provider_runtime_azure_container_apps	pub d2b_provider_runtime_azure_container_apps::AcaDeploymentRequest::Find
 d2b_provider_runtime_azure_container_apps	pub d2b_provider_runtime_azure_container_apps::AcaDeploymentRequest::Find::operation_id: d2b_contracts::provider_effects::aca::AcaOperationId
 d2b_provider_runtime_azure_container_apps	pub d2b_provider_runtime_azure_container_apps::AcaDeploymentRequest::Find::query: d2b_contracts::provider_effects::aca::AcaWorkloadQuery
+d2b_provider_runtime_azure_container_apps	pub d2b_provider_runtime_azure_container_apps::AcaDeploymentRequest::Health
+d2b_provider_runtime_azure_container_apps	pub d2b_provider_runtime_azure_container_apps::AcaDeploymentRequest::Health::operation_id: d2b_contracts::provider_effects::aca::AcaOperationId
 d2b_provider_runtime_azure_container_apps	pub d2b_provider_runtime_azure_container_apps::AcaDeploymentRequest::Start
 d2b_provider_runtime_azure_container_apps	pub d2b_provider_runtime_azure_container_apps::AcaDeploymentRequest::Start::operation_id: d2b_contracts::provider_effects::aca::AcaOperationId
 d2b_provider_runtime_azure_container_apps	pub d2b_provider_runtime_azure_container_apps::AcaDeploymentRequest::Start::sandbox_id: d2b_contracts::provider_effects::aca::AcaSandboxId
@@ -8617,7 +8619,7 @@ d2b_provider_runtime_azure_container_apps	pub fn d2b_provider_runtime_azure_cont
 d2b_provider_runtime_azure_container_apps	pub fn d2b_provider_runtime_azure_container_apps::AcaDeploymentRequest::clone(&self) -> d2b_provider_runtime_azure_container_apps::AcaDeploymentRequest
 d2b_provider_runtime_azure_container_apps	pub fn d2b_provider_runtime_azure_container_apps::AcaDeploymentRequest::eq(&self, &d2b_provider_runtime_azure_container_apps::AcaDeploymentRequest) -> bool
 d2b_provider_runtime_azure_container_apps	pub fn d2b_provider_runtime_azure_container_apps::AzureContainerAppsRuntimeProvider<C, L>::controller(&self, d2b_contracts::provider_effects::aca::AcaResourceBinding) -> d2b_provider_runtime_azure_container_apps::AcaController<C, L>
-d2b_provider_runtime_azure_container_apps	pub fn d2b_provider_runtime_azure_container_apps::AzureContainerAppsRuntimeProvider<C, L>::new(d2b_contracts::provider_effects::aca::AcaProviderConfig, alloc::sync::Arc<C>, alloc::sync::Arc<L>) -> Self
+d2b_provider_runtime_azure_container_apps	pub fn d2b_provider_runtime_azure_container_apps::AzureContainerAppsRuntimeProvider<C, L>::new(d2b_contracts::provider_effects::aca::AcaProviderConfig, alloc::sync::Arc<C>, alloc::sync::Arc<L>) -> core::result::Result<Self, d2b_contracts::provider_effects::aca::AcaTypeError>
 d2b_provider_runtime_azure_container_apps	pub struct d2b_provider_runtime_azure_container_apps::AcaController<C, L>
 d2b_provider_runtime_azure_container_apps	pub struct d2b_provider_runtime_azure_container_apps::AzureContainerAppsRuntimeProvider<C, L>
 d2b_provider_runtime_azure_container_apps	pub use d2b_provider_runtime_azure_container_apps::AcaControl
@@ -8640,13 +8642,13 @@ d2b_provider_runtime_azure_virtual_machine	impl core::panic::unwind_safe::Unwind
 d2b_provider_runtime_azure_virtual_machine	impl d2b_provider_runtime_azure_virtual_machine::config::AzureVmConfig
 d2b_provider_runtime_azure_virtual_machine	impl serde_core::ser::Serialize for d2b_provider_runtime_azure_virtual_machine::config::AzureVmConfig
 d2b_provider_runtime_azure_virtual_machine	impl<'de> serde_core::de::Deserialize<'de> for d2b_provider_runtime_azure_virtual_machine::config::AzureVmConfig
+d2b_provider_runtime_azure_virtual_machine	impl<E> !core::panic::unwind_safe::RefUnwindSafe for d2b_provider_runtime_azure_virtual_machine::controller::AzureVmController<E>
+d2b_provider_runtime_azure_virtual_machine	impl<E> !core::panic::unwind_safe::UnwindSafe for d2b_provider_runtime_azure_virtual_machine::controller::AzureVmController<E>
 d2b_provider_runtime_azure_virtual_machine	impl<E> core::marker::Freeze for d2b_provider_runtime_azure_virtual_machine::controller::AzureVmController<E>
 d2b_provider_runtime_azure_virtual_machine	impl<E> core::marker::Send for d2b_provider_runtime_azure_virtual_machine::controller::AzureVmController<E> where E: core::marker::Sync + core::marker::Send
 d2b_provider_runtime_azure_virtual_machine	impl<E> core::marker::Sync for d2b_provider_runtime_azure_virtual_machine::controller::AzureVmController<E> where E: core::marker::Sync + core::marker::Send
 d2b_provider_runtime_azure_virtual_machine	impl<E> core::marker::Unpin for d2b_provider_runtime_azure_virtual_machine::controller::AzureVmController<E>
 d2b_provider_runtime_azure_virtual_machine	impl<E> core::marker::UnsafeUnpin for d2b_provider_runtime_azure_virtual_machine::controller::AzureVmController<E>
-d2b_provider_runtime_azure_virtual_machine	impl<E> core::panic::unwind_safe::RefUnwindSafe for d2b_provider_runtime_azure_virtual_machine::controller::AzureVmController<E> where E: core::panic::unwind_safe::RefUnwindSafe
-d2b_provider_runtime_azure_virtual_machine	impl<E> core::panic::unwind_safe::UnwindSafe for d2b_provider_runtime_azure_virtual_machine::controller::AzureVmController<E> where E: core::panic::unwind_safe::RefUnwindSafe
 d2b_provider_runtime_azure_virtual_machine	impl<E> d2b_provider_runtime_azure_virtual_machine::controller::AzureVmController<E> where E: d2b_provider_runtime_azure_virtual_machine::effect::AzureEffectPort + 'static
 d2b_provider_runtime_azure_virtual_machine	impl<T, U> core::convert::Into<U> for d2b_provider_runtime_azure_virtual_machine::config::AzureVmConfig where U: core::convert::From<T>
 d2b_provider_runtime_azure_virtual_machine	impl<T, U> core::convert::Into<U> for d2b_provider_runtime_azure_virtual_machine::controller::AzureVmController<E> where U: core::convert::From<T>

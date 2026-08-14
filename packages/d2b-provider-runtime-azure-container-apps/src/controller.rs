@@ -10,11 +10,11 @@ use std::{
 use sha2::{Digest, Sha256};
 
 use d2b_contracts::provider_effects::aca::{
-    AcaControl, AcaControlContext, AcaControlError, AcaControlErrorKind, AcaCredentialLease,
-    AcaCredentialLeaseClient, AcaCredentialLeaseRequest, AcaCredentialPurpose, AcaDesiredDiskImage,
-    AcaDesiredSandbox, AcaDiskImageRecord, AcaOperationId, AcaProviderConfig, AcaResourceBinding,
-    AcaRuntimeConfig, AcaSandboxCandidates, AcaSandboxLifecycle, AcaSandboxRecord,
-    AcaWorkloadQuery,
+    AcaControl, AcaControlContext, AcaControlError, AcaControlErrorKind, AcaControlHealth,
+    AcaCredentialLease, AcaCredentialLeaseClient, AcaCredentialLeaseRequest, AcaCredentialPurpose,
+    AcaDesiredDiskImage, AcaDesiredSandbox, AcaDiskImageRecord, AcaOperationId, AcaProviderConfig,
+    AcaResourceBinding, AcaRuntimeConfig, AcaSandboxCandidates, AcaSandboxLifecycle,
+    AcaSandboxRecord, AcaTypeError, AcaWorkloadQuery,
 };
 
 /// Provider lifecycle phase.
@@ -351,7 +351,7 @@ where
         };
         let candidates = self
             .with_lease(
-                operation_id,
+                operation_id.clone(),
                 AcaCredentialPurpose::Adopt,
                 deadline_remaining_ms,
                 move |control, lease, context| async move {
@@ -370,8 +370,27 @@ where
         self.observed = Some(candidate.clone());
         self.ensure_sandbox_generation(&candidate)?;
         if candidate.lifecycle == AcaSandboxLifecycle::Running {
-            self.phase = AcaPhase::Ready;
-            Ok(AcaReconcileOutcome::Converged)
+            match self
+                .health(operation_id.clone(), deadline_remaining_ms)
+                .await
+            {
+                Ok(AcaControlHealth::Ready) => {
+                    self.reset_readiness();
+                    self.phase = AcaPhase::Ready;
+                    self.record(operation_id);
+                    Ok(AcaReconcileOutcome::Converged)
+                }
+                Ok(AcaControlHealth::Degraded | AcaControlHealth::Unavailable) => {
+                    self.readiness_retry(AcaSandboxLifecycle::Running)
+                }
+                Err(error) if self.retryable_error(error) => {
+                    self.readiness_retry(AcaSandboxLifecycle::Running)
+                }
+                Err(error) => {
+                    self.phase = AcaPhase::Degraded;
+                    Err(error)
+                }
+            }
         } else {
             self.phase = AcaPhase::Degraded;
             Ok(AcaReconcileOutcome::Retry {
@@ -478,10 +497,27 @@ where
         self.observed = Some(record.clone());
         match record.lifecycle {
             AcaSandboxLifecycle::Running => {
-                self.reset_readiness();
-                self.phase = AcaPhase::Ready;
-                self.record(operation_id);
-                Ok(AcaReconcileOutcome::Converged)
+                match self
+                    .health(operation_id.clone(), deadline_remaining_ms)
+                    .await
+                {
+                    Ok(AcaControlHealth::Ready) => {
+                        self.reset_readiness();
+                        self.phase = AcaPhase::Ready;
+                        self.record(operation_id);
+                        Ok(AcaReconcileOutcome::Converged)
+                    }
+                    Ok(AcaControlHealth::Degraded | AcaControlHealth::Unavailable) => {
+                        self.readiness_retry(AcaSandboxLifecycle::Running)
+                    }
+                    Err(error) if self.retryable_error(error) => {
+                        self.readiness_retry(AcaSandboxLifecycle::Running)
+                    }
+                    Err(error) => {
+                        self.phase = AcaPhase::Degraded;
+                        Err(error)
+                    }
+                }
             }
             AcaSandboxLifecycle::Suspended | AcaSandboxLifecycle::Stopped => {
                 self.phase = AcaPhase::Starting;
@@ -499,10 +535,27 @@ where
                 self.observed = Some(resumed);
                 let resumed = self.observed.as_ref().expect("stored above");
                 if resumed.lifecycle == AcaSandboxLifecycle::Running {
-                    self.reset_readiness();
-                    self.phase = AcaPhase::Ready;
-                    self.record(operation_id);
-                    Ok(AcaReconcileOutcome::Converged)
+                    match self
+                        .health(operation_id.clone(), deadline_remaining_ms)
+                        .await
+                    {
+                        Ok(AcaControlHealth::Ready) => {
+                            self.reset_readiness();
+                            self.phase = AcaPhase::Ready;
+                            self.record(operation_id);
+                            Ok(AcaReconcileOutcome::Converged)
+                        }
+                        Ok(AcaControlHealth::Degraded | AcaControlHealth::Unavailable) => {
+                            self.readiness_retry(AcaSandboxLifecycle::Running)
+                        }
+                        Err(error) if self.retryable_error(error) => {
+                            self.readiness_retry(AcaSandboxLifecycle::Running)
+                        }
+                        Err(error) => {
+                            self.phase = AcaPhase::Degraded;
+                            Err(error)
+                        }
+                    }
                 } else {
                     self.readiness_retry(resumed.lifecycle)
                 }
@@ -575,6 +628,20 @@ where
         })
     }
 
+    async fn health(
+        &self,
+        operation_id: AcaOperationId,
+        deadline_remaining_ms: u32,
+    ) -> Result<AcaControlHealth, AcaControllerError> {
+        self.with_lease(
+            operation_id,
+            AcaCredentialPurpose::Health,
+            deadline_remaining_ms,
+            move |control, lease, context| async move { control.health(&lease, &context).await },
+        )
+        .await
+    }
+
     async fn with_lease<T, F, Fut>(
         &self,
         operation_id: AcaOperationId,
@@ -603,6 +670,14 @@ where
             .acquire(&request)
             .await
             .map_err(|error| AcaControllerError::Effect(error.kind()))?;
+        if lease.expires_at_unix_ms() <= self.clock.now_unix_ms()
+            || lease.expires_at_unix_ms() < request.requested_expiry_unix_ms()
+        {
+            let _ = self.leases.revoke(&lease).await;
+            return Err(AcaControllerError::Effect(
+                AcaControlErrorKind::DeadlineExpired,
+            ));
+        }
         let context = AcaControlContext::new(operation_id, deadline_remaining_ms);
         let result = call(Arc::clone(&self.control), lease.clone(), context).await;
         let revoke = self.leases.revoke(&lease).await;
@@ -650,7 +725,7 @@ where
             AcaSandboxLifecycle::Creating | AcaSandboxLifecycle::Stopping => AcaPhase::Provisioning,
             AcaSandboxLifecycle::Failed | AcaSandboxLifecycle::Unknown => AcaPhase::Degraded,
             AcaSandboxLifecycle::Suspended | AcaSandboxLifecycle::Stopped => AcaPhase::Starting,
-            AcaSandboxLifecycle::Running => AcaPhase::Ready,
+            AcaSandboxLifecycle::Running => AcaPhase::Degraded,
         };
         Ok(
             if matches!(
@@ -665,6 +740,13 @@ where
                     after_ms: self.config.readiness().interval_ms(),
                 }
             },
+        )
+    }
+
+    const fn retryable_error(&self, error: AcaControllerError) -> bool {
+        matches!(
+            error,
+            AcaControllerError::Effect(kind) if kind.retryable()
         )
     }
 
@@ -742,12 +824,17 @@ where
     L: AcaCredentialLeaseClient + 'static,
 {
     /// Construct the provider. No SDK or ambient credential chain is opened.
-    pub fn new(config: AcaProviderConfig, control: Arc<C>, leases: Arc<L>) -> Self {
-        Self {
+    pub fn new(
+        config: AcaProviderConfig,
+        control: Arc<C>,
+        leases: Arc<L>,
+    ) -> Result<Self, AcaTypeError> {
+        config.validate()?;
+        Ok(Self {
             config,
             control,
             leases,
-        }
+        })
     }
 
     /// Borrow the validated root configuration.
