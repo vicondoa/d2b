@@ -50,4 +50,7 @@ pub trait GuestControlProbe: Send + Sync {
         expected_cid: u32,
         deadline_ms: u32,
     ) -> Result<GuestControlHealth, GuestControlHealthError>;
+
+    /// Close the authenticated guest-control session before VMM teardown.
+    async fn close(&self, expected_cid: u32) -> Result<(), GuestControlHealthError>;
 }

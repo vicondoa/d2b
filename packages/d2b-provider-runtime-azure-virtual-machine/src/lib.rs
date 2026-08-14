@@ -19,12 +19,12 @@ pub use config::{
     AzureVmConfig, AzureVmGuestSettings, BootstrapPskDelivery, DataDiskSpec, DiskSku,
 };
 pub use controller::{
-    AzureVmClock, AzureVmController, AzureVmPhase, AzureVmReconcileOutcome, AzureVmStatus,
-    SystemAzureVmClock,
+    AzureVmClock, AzureVmController, AzureVmPhase, AzureVmReconcileOutcome, AzureVmRecoveryState,
+    AzureVmStatus, AzureVmUpdate, SystemAzureVmClock,
 };
 pub use effect::{
-    AzureCredentialPort, AzureEffectPort, AzureOperationHandle, AzureVmHandle, AzureVmState,
-    LroStatus, PskExtensionPayload, TagDigest,
+    AzureAccessToken, AzureCredentialPort, AzureEffectPort, AzureOperationHandle, AzureVmHandle,
+    AzureVmState, LroStatus, PskExtensionPayload, TagDigest,
 };
 pub use error::AzureVmError;
 

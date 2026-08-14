@@ -17,12 +17,16 @@ pub const MAX_DATA_DISKS: usize = 16;
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub enum DiskSku {
     /// Premium SSD.
+    #[serde(rename = "Premium_LRS")]
     PremiumLrs,
     /// Standard SSD.
+    #[serde(rename = "StandardSSD_LRS")]
     StandardSsdLrs,
     /// Standard HDD.
+    #[serde(rename = "Standard_LRS")]
     StandardLrs,
     /// Ultra SSD.
+    #[serde(rename = "UltraSSD_LRS")]
     UltraSsdLrs,
 }
 
@@ -74,8 +78,10 @@ impl fmt::Debug for DataDiskSpec {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub enum BootstrapPskDelivery {
     /// Use an ARM VM extension.
+    #[serde(rename = "vm-extension")]
     VmExtension,
     /// Use cloud-init user data.
+    #[serde(rename = "user-data")]
     UserData,
 }
 

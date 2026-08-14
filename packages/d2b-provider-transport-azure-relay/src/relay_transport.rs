@@ -248,6 +248,7 @@ impl RelayAuthenticatedPeer {
 pub struct RelayConnection {
     socket: Arc<dyn RelaySocket>,
     credits: Mutex<CreditWindow>,
+    write_lock: Mutex<()>,
     phase: Mutex<RelaySessionPhase>,
     challenge: RelayEnrollmentChallenge,
     session_permit: Mutex<Option<OwnedSemaphorePermit>>,
@@ -266,6 +267,7 @@ impl RelayConnection {
                 CreditWindow::new(credit_bytes)
                     .map_err(|_| RelayTransportError::CreditExhausted)?,
             ),
+            write_lock: Mutex::new(()),
             phase: Mutex::new(RelaySessionPhase::EnrollmentCommitted),
             challenge: next_connection_challenge(),
             session_permit: Mutex::new(Some(session_permit)),
@@ -292,6 +294,7 @@ impl RelayConnection {
         if self.phase().await != RelaySessionPhase::EnrolledKk {
             return Err(RelayTransportError::InvalidSessionTransition);
         }
+        let _write_guard = self.write_lock.lock().await;
         let size = frame.as_bytes().len();
         {
             let mut credits = self.credits.lock().await;
@@ -442,7 +445,10 @@ where
         self.open_with_backoff(
             role,
             deadline_ms,
-            ReconnectBackoff::new(4_000, deadline_ms.min(30_000)),
+            // A single Provider open is one bounded lifecycle operation.
+            // Reconnect supervision belongs to the owning runtime so each
+            // attempt can reacquire fresh role-scoped credentials.
+            ReconnectBackoff::with_limits(0, 0, 0, 0),
         )
         .await
     }

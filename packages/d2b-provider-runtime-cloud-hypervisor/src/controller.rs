@@ -1,11 +1,9 @@
 //! Cloud Hypervisor Guest lifecycle controller.
 
-use std::{
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 use tokio::time::timeout;
 
 use crate::{
@@ -16,7 +14,8 @@ use crate::{
 };
 
 /// Cloud Hypervisor lifecycle phase.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum CloudHypervisorPhase {
     /// Dependencies are pending.
     Pending,
@@ -108,6 +107,41 @@ pub trait CloudHypervisorEffectPort: Send + Sync {
     async fn stop(&self, identity: &ProcessIdentity) -> Result<(), CloudHypervisorError>;
 }
 
+/// Clock used for durable lifecycle deadlines.
+pub trait CloudHypervisorClock: Send + Sync {
+    /// Return the current Unix time in milliseconds.
+    fn now_unix_ms(&self) -> u64;
+}
+
+/// System wall clock implementation.
+#[derive(Debug, Default)]
+pub struct SystemCloudHypervisorClock;
+
+impl CloudHypervisorClock for SystemCloudHypervisorClock {
+    fn now_unix_ms(&self) -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
+            .unwrap_or(0)
+    }
+}
+
+/// Non-secret lifecycle state required for restart recovery.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CloudHypervisorRecoveryState {
+    /// Current lifecycle phase.
+    pub phase: CloudHypervisorPhase,
+    /// Whether finalization remains pending.
+    pub finalizer_installed: bool,
+    /// Durable adoption-window start.
+    #[serde(default)]
+    pub adoption_started_at_unix_ms: Option<u64>,
+    /// Durable startup-deadline start.
+    #[serde(default)]
+    pub startup_started_at_unix_ms: Option<u64>,
+}
+
 /// Cloud Hypervisor controller.
 pub struct CloudHypervisorController<E, P> {
     config: CloudHypervisorConfig,
@@ -120,8 +154,10 @@ pub struct CloudHypervisorController<E, P> {
     expected_identity: Option<ProcessIdentity>,
     health_failures: u8,
     finalizer: bool,
-    adoption_started: Instant,
-    startup_started: Option<Instant>,
+    adoption_started_at_unix_ms: Option<u64>,
+    startup_started_at_unix_ms: Option<u64>,
+    guest_control_cid: Option<u32>,
+    clock: Arc<dyn CloudHypervisorClock>,
 }
 
 impl<E, P> CloudHypervisorController<E, P>
@@ -154,8 +190,10 @@ where
             expected_identity: None,
             health_failures: 0,
             finalizer: true,
-            adoption_started: Instant::now(),
-            startup_started: None,
+            adoption_started_at_unix_ms: None,
+            startup_started_at_unix_ms: None,
+            guest_control_cid: None,
+            clock: Arc::new(SystemCloudHypervisorClock),
         })
     }
 
@@ -164,6 +202,37 @@ where
     pub fn with_expected_identity(mut self, expected: ProcessIdentity) -> Self {
         self.expected_identity = Some(expected);
         self
+    }
+
+    /// Replace the clock used for restart-safe deadlines.
+    pub fn with_clock(mut self, clock: Arc<dyn CloudHypervisorClock>) -> Self {
+        self.clock = clock;
+        self
+    }
+
+    /// Export non-secret lifecycle state for restart recovery.
+    pub fn recovery_state(&self) -> CloudHypervisorRecoveryState {
+        CloudHypervisorRecoveryState {
+            phase: self.phase,
+            finalizer_installed: self.finalizer,
+            adoption_started_at_unix_ms: self.adoption_started_at_unix_ms,
+            startup_started_at_unix_ms: self.startup_started_at_unix_ms,
+        }
+    }
+
+    /// Restore non-secret lifecycle state after controller reconstruction.
+    pub fn restore_recovery_state(
+        mut self,
+        recovery: CloudHypervisorRecoveryState,
+    ) -> Result<Self, CloudHypervisorError> {
+        if !recovery.finalizer_installed && recovery.phase != CloudHypervisorPhase::Finalized {
+            return Err(CloudHypervisorError::InvalidConfiguration);
+        }
+        self.phase = recovery.phase;
+        self.finalizer = recovery.finalizer_installed;
+        self.adoption_started_at_unix_ms = recovery.adoption_started_at_unix_ms;
+        self.startup_started_at_unix_ms = recovery.startup_started_at_unix_ms;
+        Ok(self)
     }
 
     /// Return the current phase.
@@ -184,7 +253,8 @@ where
             GuestControlHealth::Ready => {
                 self.health_failures = 0;
                 self.phase = CloudHypervisorPhase::Ready;
-                self.startup_started = None;
+                self.startup_started_at_unix_ms = None;
+                self.adoption_started_at_unix_ms = None;
                 Ok(CloudHypervisorReconcileOutcome::Converged)
             }
             GuestControlHealth::Degraded => {
@@ -207,9 +277,18 @@ where
     }
 
     fn startup_remaining(&mut self) -> Result<Duration, CloudHypervisorError> {
-        let started = *self.startup_started.get_or_insert_with(Instant::now);
+        let now = self.clock.now_unix_ms();
+        let started = match self.startup_started_at_unix_ms {
+            Some(started) => started,
+            None => {
+                self.startup_started_at_unix_ms = Some(now);
+                now
+            }
+        };
         Duration::from_millis(u64::from(self.config.startup_deadline_ms))
-            .checked_sub(started.elapsed())
+            .checked_sub(Duration::from_millis(
+                now.saturating_sub(started),
+            ))
             .ok_or(CloudHypervisorError::StartupDeadlineExceeded)
     }
 
@@ -244,10 +323,13 @@ where
             self.phase = CloudHypervisorPhase::Pending;
             return Ok(CloudHypervisorReconcileOutcome::Retry { after_ms: 500 });
         }
+        let adoption_started = *self
+            .adoption_started_at_unix_ms
+            .get_or_insert_with(|| self.clock.now_unix_ms());
         if self.identity.is_none() {
             if let Some(candidate) = self.effect.observe().await? {
-                if self.adoption_started.elapsed()
-                    > Duration::from_millis(u64::from(self.config.adoption_window_ms))
+                if self.clock.now_unix_ms().saturating_sub(adoption_started)
+                    > u64::from(self.config.adoption_window_ms)
                 {
                     self.phase = CloudHypervisorPhase::Degraded;
                     return Err(CloudHypervisorError::AdoptionAmbiguous);
@@ -279,14 +361,36 @@ where
                     Ok(result) => result?,
                     Err(_) => return Err(self.startup_timeout()),
                 };
+                match timeout(self.startup_budget()?, self.effect.open_pidfd(&identity)).await {
+                    Ok(result) => result?,
+                    Err(_) => return Err(self.startup_timeout()),
+                }
                 self.expected_identity = Some(identity);
                 self.identity = Some(identity);
                 self.phase = CloudHypervisorPhase::VmmReady;
+            }
+        } else {
+            let Some(expected) = self.expected_identity else {
+                self.phase = CloudHypervisorPhase::Degraded;
+                return Err(CloudHypervisorError::AdoptionAmbiguous);
+            };
+            let Some(candidate) = self.effect.observe().await? else {
+                self.phase = CloudHypervisorPhase::Degraded;
+                return Err(CloudHypervisorError::AdoptionAmbiguous);
+            };
+            if verify_identity(&expected, &candidate) != AdoptionOutcome::Adopted
+                || self.identity.is_some_and(|identity| {
+                    verify_identity(&identity, &candidate) != AdoptionOutcome::Adopted
+                })
+            {
+                self.phase = CloudHypervisorPhase::Degraded;
+                return Err(CloudHypervisorError::AdoptionAmbiguous);
             }
         }
         if self.phase != CloudHypervisorPhase::Ready {
             self.phase = CloudHypervisorPhase::Bootstrapping;
         }
+        self.guest_control_cid = Some(expected_cid);
         let probe_timeout = if self.phase == CloudHypervisorPhase::Bootstrapping {
             self.startup_budget()?
         } else {
@@ -322,8 +426,11 @@ where
         if !self.finalizer {
             return Err(CloudHypervisorError::InvalidState);
         }
-        if self.adoption_started.elapsed()
-            > Duration::from_millis(u64::from(self.config.adoption_window_ms))
+        let adoption_started = *self
+            .adoption_started_at_unix_ms
+            .get_or_insert_with(|| self.clock.now_unix_ms());
+        if self.clock.now_unix_ms().saturating_sub(adoption_started)
+            > u64::from(self.config.adoption_window_ms)
         {
             self.phase = CloudHypervisorPhase::Degraded;
             return Err(CloudHypervisorError::AdoptionAmbiguous);
@@ -339,6 +446,7 @@ where
         self.expected_identity = Some(expected);
         self.effect.open_pidfd(&candidate).await?;
         self.identity = Some(candidate);
+        self.guest_control_cid = Some(expected_cid);
         self.phase = CloudHypervisorPhase::VmmReady;
         let health = match timeout(
             self.startup_budget()?,
@@ -374,7 +482,17 @@ where
         }
         self.effect.open_pidfd(&candidate).await?;
         self.identity = Some(candidate);
+        if let Some(cid) = self.guest_control_cid {
+            self.probe
+                .close(cid)
+                .await
+                .map_err(CloudHypervisorError::GuestControl)?;
+        }
         self.effect.stop(&candidate).await?;
+        if self.effect.observe().await?.is_some() {
+            self.phase = CloudHypervisorPhase::Finalizing;
+            return Err(CloudHypervisorError::Effect);
+        }
         self.identity = None;
         self.finalizer = false;
         self.phase = CloudHypervisorPhase::Finalized;

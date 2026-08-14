@@ -16,7 +16,7 @@ use d2b_contracts::{
 };
 use d2b_provider_runtime_azure_container_apps::{
     AcaClock, AcaController, AcaControllerError, AcaDeploymentRequest, AcaDeploymentResponse,
-    AcaDeploymentService, AcaPhase, AcaReconcileOutcome, AcaServiceMethod,
+    AcaDeploymentService, AcaPhase, AcaReconcileOutcome, AcaRecoveryState, AcaServiceMethod,
 };
 
 #[derive(Default)]
@@ -317,6 +317,7 @@ async fn missing_sandbox_uses_disk_and_sandbox_effects_then_finalizes() {
             "create-sandbox"
         ]
     );
+    state.lock().unwrap().candidates = vec![record(AcaSandboxLifecycle::Stopped)];
     controller
         .finalize(AcaOperationId::parse("operation-4").unwrap(), 1_000)
         .await
@@ -324,6 +325,78 @@ async fn missing_sandbox_uses_disk_and_sandbox_effects_then_finalizes() {
     assert_eq!(controller.phase(), AcaPhase::Finalized);
     assert!(!controller.finalizer_installed());
     assert_eq!(state.lock().unwrap().calls.last(), Some(&"delete"));
+}
+
+#[tokio::test]
+async fn finalization_waits_for_a_creating_sandbox_before_stopping() {
+    let state = Arc::new(Mutex::new(FakeState {
+        candidates: vec![record(AcaSandboxLifecycle::Creating)],
+        ..FakeState::default()
+    }));
+    let mut controller = controller(Arc::clone(&state));
+
+    controller
+        .finalize(
+            AcaOperationId::parse("operation-finalize-creating").unwrap(),
+            1_000,
+        )
+        .await
+        .unwrap();
+    assert!(controller.finalizer_installed());
+    assert_eq!(state.lock().unwrap().calls, ["find-sandboxes"]);
+
+    state.lock().unwrap().candidates = vec![record(AcaSandboxLifecycle::Stopped)];
+    controller
+        .finalize(
+            AcaOperationId::parse("operation-finalize-stopped").unwrap(),
+            1_000,
+        )
+        .await
+        .unwrap();
+    assert!(!controller.finalizer_installed());
+    assert_eq!(
+        state.lock().unwrap().calls,
+        ["find-sandboxes", "find-sandboxes", "delete"]
+    );
+}
+
+#[tokio::test]
+async fn finalization_stage_survives_controller_restart() {
+    let state = Arc::new(Mutex::new(FakeState {
+        candidates: vec![record(AcaSandboxLifecycle::Creating)],
+        ..FakeState::default()
+    }));
+    let mut controller = controller(Arc::clone(&state));
+    controller
+        .finalize(
+            AcaOperationId::parse("operation-recovery-first").unwrap(),
+            1_000,
+        )
+        .await
+        .unwrap();
+    let recovery = controller.recovery_state();
+    assert_eq!(recovery.finalization_stage, "stop");
+
+    state.lock().unwrap().candidates = vec![record(AcaSandboxLifecycle::Stopped)];
+    let mut restored = controller(Arc::clone(&state))
+        .restore_recovery_state(AcaRecoveryState {
+            phase: recovery.phase,
+            finalizer_installed: recovery.finalizer_installed,
+            readiness_generation: recovery.readiness_generation,
+            readiness_attempts: recovery.readiness_attempts,
+            readiness_lifecycle: recovery.readiness_lifecycle,
+            finalization_stage: recovery.finalization_stage,
+        })
+        .unwrap();
+    restored
+        .finalize(
+            AcaOperationId::parse("operation-recovery-second").unwrap(),
+            1_000,
+        )
+        .await
+        .unwrap();
+    assert_eq!(restored.phase(), AcaPhase::Finalized);
+    assert!(!restored.finalizer_installed());
 }
 
 #[tokio::test]

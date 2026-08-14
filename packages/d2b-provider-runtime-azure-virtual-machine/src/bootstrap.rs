@@ -22,7 +22,14 @@ impl BootstrapPsk {
 
     /// Compare against a presented PSK without exposing it.
     pub fn matches(&self, presented: &[u8]) -> bool {
-        self.0.as_slice() == presented
+        let mut difference = self.0.len() ^ presented.len();
+        let length = self.0.len().max(presented.len());
+        for index in 0..length {
+            let expected = self.0.get(index).copied().unwrap_or(0);
+            let actual = presented.get(index).copied().unwrap_or(0);
+            difference |= usize::from(expected ^ actual);
+        }
+        difference == 0
     }
 
     /// Consume the secret for a single delivery.
@@ -86,7 +93,7 @@ impl BootstrapAdmission {
             return Err(AzureVmError::BootstrapPskReplayed);
         };
         if !psk.matches(presented) {
-            self.psk = Some(psk);
+            self.state = BootstrapAdmissionState::Consumed;
             return Err(AzureVmError::BootstrapEnrollmentFailed);
         }
         self.state = BootstrapAdmissionState::Consumed;

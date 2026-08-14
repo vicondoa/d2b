@@ -4,16 +4,6 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-/// Network handoff selected by Core.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub enum ChNetHandoff {
-    /// Pass a pre-opened TAP fd.
-    TapFd,
-    /// Use a broker-owned persistent TAP attachment.
-    PersistentTap,
-}
-
 /// One virtiofs share.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -40,10 +30,8 @@ impl fmt::Debug for ChFsShare {
 pub struct ChNetIface {
     /// Guest MAC.
     pub mac: String,
-    /// Persistent TAP name when selected by Core.
-    pub tap_ifname: String,
-    /// Inherited fd slot when selected by Core.
-    pub tap_fd: Option<i32>,
+    /// Inherited child-fd slot passed by the broker.
+    pub tap_fd: i32,
 }
 
 impl fmt::Debug for ChNetIface {
@@ -51,7 +39,6 @@ impl fmt::Debug for ChNetIface {
         formatter
             .debug_struct("ChNetIface")
             .field("mac", &"<redacted>")
-            .field("tap_ifname", &"<redacted>")
             .field("tap_fd", &"<redacted>")
             .finish()
     }
@@ -115,8 +102,6 @@ pub struct ChArgvInput {
     pub api_socket_path: String,
     /// Network interfaces.
     pub net_ifaces: Vec<ChNetIface>,
-    /// Handoff mode.
-    pub net_handoff: ChNetHandoff,
     /// Signed extra args.
     pub extra_args: Vec<String>,
 }
@@ -148,10 +133,8 @@ pub enum ChArgvError {
     ZeroCpus,
     /// Kernel was absent.
     EmptyKernel,
-    /// TAP fd was not supplied.
+    /// Child fd was not supplied.
     TapFdMissing,
-    /// TAP interface was not supplied.
-    TapIfnameMissing,
 }
 
 fn host_input(input: &ChArgvInput) -> d2b_host_argv::ChArgvInput {
@@ -190,14 +173,9 @@ fn host_input(input: &ChArgvInput) -> d2b_host_argv::ChArgvInput {
             .iter()
             .map(|iface| d2b_host_argv::ChNetIface {
                 mac: iface.mac.clone(),
-                tap_ifname: iface.tap_ifname.clone(),
                 tap_fd: iface.tap_fd,
             })
             .collect(),
-        net_handoff: match input.net_handoff {
-            ChNetHandoff::TapFd => d2b_host_argv::ChNetHandoff::TapFd,
-            ChNetHandoff::PersistentTap => d2b_host_argv::ChNetHandoff::PersistentTap,
-        },
         extra_args: input.extra_args.clone(),
     }
 }
@@ -210,6 +188,5 @@ pub fn generate_ch_argv(input: &ChArgvInput) -> Result<Vec<String>, ChArgvError>
         d2b_host_argv::ChArgvError::ZeroCpus => ChArgvError::ZeroCpus,
         d2b_host_argv::ChArgvError::EmptyKernelPath => ChArgvError::EmptyKernel,
         d2b_host_argv::ChArgvError::TapFdMissing { .. } => ChArgvError::TapFdMissing,
-        d2b_host_argv::ChArgvError::TapIfnameMissing { .. } => ChArgvError::TapIfnameMissing,
     })
 }

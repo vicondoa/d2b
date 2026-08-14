@@ -195,19 +195,32 @@ pub trait AzureEffectPort: Send + Sync {
         &self,
         settings: &AzureVmGuestSettings,
         operation_id: &str,
+        token: &AzureAccessToken,
     ) -> Result<AzureOperationHandle, AzureVmError>;
     /// Poll an opaque operation.
-    async fn poll_lro(&self, operation: &AzureOperationHandle) -> Result<LroStatus, AzureVmError>;
+    async fn poll_lro(
+        &self,
+        operation: &AzureOperationHandle,
+        token: &AzureAccessToken,
+    ) -> Result<LroStatus, AzureVmError>;
     /// Re-derive VM state from external reality.
     async fn get_vm_state(
         &self,
         settings: &AzureVmGuestSettings,
+        token: &AzureAccessToken,
     ) -> Result<(AzureVmState, Option<AzureVmHandle>, Option<TagDigest>), AzureVmError>;
     /// Deliver a one-time bootstrap payload.
     async fn put_vm_extension(
         &self,
         handle: &AzureVmHandle,
         payload: PskExtensionPayload,
+        token: &AzureAccessToken,
+    ) -> Result<AzureOperationHandle, AzureVmError>;
+    /// Remove the one-time bootstrap extension.
+    async fn delete_vm_extension(
+        &self,
+        settings: &AzureVmGuestSettings,
+        token: &AzureAccessToken,
     ) -> Result<AzureOperationHandle, AzureVmError>;
     /// Start a resize operation.
     async fn start_vm_resize(
@@ -215,12 +228,21 @@ pub trait AzureEffectPort: Send + Sync {
         handle: &AzureVmHandle,
         size: &str,
         operation_id: &str,
+        token: &AzureAccessToken,
     ) -> Result<AzureOperationHandle, AzureVmError>;
     /// Start VM deletion.
     async fn start_vm_delete(
         &self,
         handle: &AzureVmHandle,
         operation_id: &str,
+        token: &AzureAccessToken,
+    ) -> Result<AzureOperationHandle, AzureVmError>;
+    /// Delete provider-owned child resources after the VM is absent.
+    async fn start_child_resource_cleanup(
+        &self,
+        settings: &AzureVmGuestSettings,
+        operation_id: &str,
+        token: &AzureAccessToken,
     ) -> Result<AzureOperationHandle, AzureVmError>;
     /// Attach a provider-owned data disk.
     async fn start_disk_attach(
@@ -228,6 +250,7 @@ pub trait AzureEffectPort: Send + Sync {
         handle: &AzureVmHandle,
         disk: &DataDiskSpec,
         operation_id: &str,
+        token: &AzureAccessToken,
     ) -> Result<AzureOperationHandle, AzureVmError>;
     /// Detach a provider-owned data disk.
     async fn start_disk_detach(
@@ -235,6 +258,7 @@ pub trait AzureEffectPort: Send + Sync {
         handle: &AzureVmHandle,
         lun: u8,
         operation_id: &str,
+        token: &AzureAccessToken,
     ) -> Result<AzureOperationHandle, AzureVmError>;
     /// Update operator tags.
     async fn update_vm_tags(
@@ -242,6 +266,7 @@ pub trait AzureEffectPort: Send + Sync {
         handle: &AzureVmHandle,
         tags: &[(String, String)],
         operation_id: &str,
+        token: &AzureAccessToken,
     ) -> Result<AzureOperationHandle, AzureVmError>;
 }
 

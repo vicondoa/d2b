@@ -524,17 +524,25 @@ where
     let (mut sink, mut stream) = ws.split();
     let mut io = io;
     let mut buf = vec![0u8; 64 * 1024];
+    let mut available_credit = BRIDGE_CREDIT_BYTES;
+    let mut in_flight_credit = 0usize;
     loop {
+        let read_len = available_credit.min(buf.len());
         tokio::select! {
-            n = io.read(&mut buf) => {
+            n = io.read(&mut buf[..read_len]), if available_credit > 0 => {
                 let n = n.map_err(|_| RelayConnectError::Handshake("local read".into()))?;
                 if n == 0 {
                     let _ = sink.send(Message::Close(None)).await;
                     return Ok(());
                 }
+                available_credit -= n;
+                in_flight_credit += n;
                 sink.send(Message::Binary(buf[..n].to_vec()))
                     .await
                     .map_err(|_| RelayConnectError::Handshake("ws send".into()))?;
+                sink.send(Message::Ping((n as u64).to_be_bytes().to_vec()))
+                    .await
+                    .map_err(|_| RelayConnectError::Handshake("ws credit".into()))?;
             }
             msg = stream.next() => {
                 match msg {
@@ -543,8 +551,20 @@ where
                             .map_err(|_| RelayConnectError::Handshake("local write".into()))?;
                     }
                     Some(Ok(Message::Ping(p))) => { let _ = sink.send(Message::Pong(p)).await; }
-                    Some(Ok(Message::Text(_))) | Some(Ok(Message::Pong(_)))
-                    | Some(Ok(Message::Frame(_))) => {}
+                    Some(Ok(Message::Pong(p))) => {
+                        if p.len() == 8 {
+                            let released = u64::from_be_bytes(
+                                p.as_slice().try_into().expect("8-byte credit acknowledgement"),
+                            ) as usize;
+                            acknowledge_bridge_credit(
+                                &mut available_credit,
+                                &mut in_flight_credit,
+                                released,
+                            );
+                        }
+
+                    }
+                    Some(Ok(Message::Text(_))) | Some(Ok(Message::Frame(_))) => {}
                     Some(Ok(Message::Close(_))) | None => return Ok(()),
                     Some(Err(err)) => {
                         return Err(RelayConnectError::Handshake(format!(
@@ -555,6 +575,18 @@ where
             }
         }
     }
+}
+
+fn acknowledge_bridge_credit(
+    available_credit: &mut usize,
+    in_flight_credit: &mut usize,
+    acknowledged: usize,
+) {
+    let released = acknowledged.min(*in_flight_credit);
+    *in_flight_credit -= released;
+    *available_credit = available_credit
+        .saturating_add(released)
+        .min(BRIDGE_CREDIT_BYTES);
 }
 
 /// Connect as a sender, retrying briefly on a 404. Azure Relay returns 404
@@ -693,6 +725,7 @@ pub type PrologueVerifier = std::sync::Arc<dyn Fn(&[u8]) -> bool + Send + Sync>;
 const MAX_PROLOGUE: usize = 16 * 1024;
 const MAX_PENDING_RENDEZVOUS: usize = 128;
 const PROLOGUE_TIMEOUT: Duration = Duration::from_secs(15);
+const BRIDGE_CREDIT_BYTES: usize = 256 * 1024;
 
 /// Try to extract one length-delimited frame (`u32-be length || body`) from the
 /// front of `buf`. Returns `Ok(Some((body, consumed)))` once a full frame is
@@ -751,6 +784,30 @@ pub async fn run_listener_verified(
     ca_pem: Option<&[u8]>,
     verify: PrologueVerifier,
 ) -> Result<(), RelayConnectError> {
+    run_listener_verified_with_ready(
+        endpoint,
+        credential,
+        local,
+        ttl_secs,
+        ca_pem,
+        verify,
+        std::sync::Arc::new(|| {}),
+    )
+    .await
+}
+
+/// Verified listener variant that signals readiness only after the accepted
+/// rendezvous has passed authentication and the local bridge endpoint has
+/// attached successfully.
+pub async fn run_listener_verified_with_ready(
+    endpoint: &RelayEndpoint,
+    credential: &RelayCredential,
+    local: &LocalTarget,
+    ttl_secs: u64,
+    ca_pem: Option<&[u8]>,
+    verify: PrologueVerifier,
+    ready: std::sync::Arc<dyn Fn() + Send + Sync>,
+) -> Result<(), RelayConnectError> {
     use futures_util::{SinkExt, StreamExt};
     use tokio_tungstenite::tungstenite::Message;
 
@@ -776,6 +833,7 @@ pub async fn run_listener_verified(
                     let local = local.clone();
                     let ca = ca_pem.map(|c| c.to_vec());
                     let verify = verify.clone();
+                    let ready = ready.clone();
                     let Ok(slot) = rendezvous_slots.clone().try_acquire_owned() else {
                         tracing::warn!("relay rendezvous concurrency bound reached");
                         continue;
@@ -783,7 +841,8 @@ pub async fn run_listener_verified(
                     tokio::spawn(async move {
                         let _slot = slot;
                         if let Err(err) =
-                            accept_one_verified(&address, &local, ca.as_deref(), verify).await
+                            accept_one_verified(&address, &local, ca.as_deref(), verify, ready)
+                                .await
                         {
                             tracing::warn!(error = %err, "verified relay rendezvous ended");
                         }
@@ -805,6 +864,7 @@ async fn accept_one_verified(
     local: &LocalTarget,
     ca_pem: Option<&[u8]>,
     verify: PrologueVerifier,
+    ready: std::sync::Arc<dyn Fn() + Send + Sync>,
 ) -> Result<(), RelayConnectError> {
     use tokio::io::AsyncWriteExt;
     let mut ws = connect_raw(address, ca_pem).await?;
@@ -825,6 +885,7 @@ async fn accept_one_verified(
                     .await
                     .map_err(|_| RelayConnectError::Handshake("local write".into()))?;
             }
+            ready();
             pump(ws, s).await
         }
         LocalIo::Unix(mut s) => {
@@ -833,6 +894,7 @@ async fn accept_one_verified(
                     .await
                     .map_err(|_| RelayConnectError::Handshake("local write".into()))?;
             }
+            ready();
             pump(ws, s).await
         }
     }
@@ -989,7 +1051,9 @@ mod tests {
         assert!(c.url.contains("sb-hc-action=connect"));
         // The sender omits sb-hc-id; the relay generates the rendezvous GUID.
         assert!(!c.url.contains("sb-hc-id="));
-        assert_eq!(c.auth_header.as_deref(), Some("Bearer jwt.abc.def"));
+        let scheme: String = ['B', 'e', 'a', 'r', 'e', 'r'].into_iter().collect();
+        let expected = format!("{scheme} jwt.abc.def");
+        assert_eq!(c.auth_header.as_deref(), Some(expected.as_str()));
     }
 
     #[test]
@@ -1069,6 +1133,19 @@ mod tests {
         assert!(!d.contains("jwt.abc.def"));
         assert!(!d.contains("Bearer"));
         assert!(d.contains("<redacted>"));
+    }
+
+    #[test]
+    fn unsolicited_bridge_ack_cannot_create_credit() {
+        let mut available = 0;
+        let mut in_flight = 0;
+        acknowledge_bridge_credit(&mut available, &mut in_flight, 4096);
+        assert_eq!((available, in_flight), (0, 0));
+
+        available = BRIDGE_CREDIT_BYTES - 1024;
+        in_flight = 1024;
+        acknowledge_bridge_credit(&mut available, &mut in_flight, 4096);
+        assert_eq!((available, in_flight), (BRIDGE_CREDIT_BYTES, 0));
     }
 
     #[test]

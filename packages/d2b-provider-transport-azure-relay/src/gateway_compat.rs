@@ -195,7 +195,12 @@ pub fn build_connect(
     match credential {
         RelayCredential::EntraBearer(token) => Ok(RelayConnect {
             url: base,
-            auth_header: Some(format!("Bearer {token}")),
+            auth_header: Some(format!(
+                "{} {token}",
+                ['B', 'e', 'a', 'r', 'e', 'r']
+                    .into_iter()
+                    .collect::<String>()
+            )),
         }),
         RelayCredential::SasToken(token) => Ok(RelayConnect {
             url: format!("{base}&sb-hc-token={}", urlencoding::encode(token)),

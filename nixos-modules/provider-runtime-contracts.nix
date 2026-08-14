@@ -82,7 +82,7 @@ let
         else spec.providerRef or "";
       credentialRefs =
         if providerRef == "Provider/runtime-azure-container-apps" then
-          [
+          lib.filter (ref: ref != null) [
             (providerConfig.controlCredentialRef or null)
             (providerConfig.pullCredentialRef or null)
           ]
@@ -228,6 +228,8 @@ let
     providerExecutionRef =
       if providerRef == "Provider/runtime-azure-container-apps"
       then providerConfig.gatewayExecutionRef or null
+      else if providerRef == "Provider/transport-azure-relay"
+      then providerConfig.executionRef or null
       else providerConfig.controllerExecutionRef or null;
     in (lib.optionals (lib.elem providerRef runtimeProviderRefs) [
       {
@@ -252,8 +254,18 @@ let
 
   zoneLinkAssertions = row:
     let
-      settings = row.resource.spec.transportSettings or { };
-      providerRef = row.resource.spec.transportProviderRef or "";
+      spec = row.resource.spec or { };
+      settings = spec.transportSettings or { };
+      providerRef = spec.transportProviderRef or "";
+      provider = resourceFor row providerRef;
+      providerConfig =
+        if provider == null then { } else (provider.spec or { }).config or { };
+      credentialRefs = spec.transportCredentials or [ ];
+      credentialRows = map (ref: resourceFor row ref) credentialRefs;
+      credentialAudiences = map
+        (credential:
+          if credential == null then null else (credential.spec or { }).audience or null)
+        credentialRows;
       forbidden = [
         "socketPath"
         "hostPath"
@@ -284,13 +296,30 @@ let
         }
         {
           assertion = builtins.isString (settings.relayNamespaceId or null)
-            && builtins.match "^[a-zA-Z0-9][a-zA-Z0-9-]{2,48}[a-zA-Z0-9]$" settings.relayNamespaceId != null;
+            && builtins.match "^[a-zA-Z0-9][a-zA-Z0-9-]{1,48}[a-zA-Z0-9]$" settings.relayNamespaceId != null;
           message = "${row.path}.spec.transportSettings.relayNamespaceId has an invalid Azure Relay namespace shape.";
         }
         {
           assertion = builtins.isString (settings.relayEntityId or null)
             && builtins.match "^[a-z][a-z0-9-]{1,49}$" settings.relayEntityId != null;
           message = "${row.path}.spec.transportSettings.relayEntityId has an invalid Azure Relay entity shape.";
+        }
+        {
+          assertion = builtins.length credentialRefs == 2
+            && builtins.length (lib.unique credentialRefs) == 2
+            && lib.all (credential: credential != null && credential.type == "Credential")
+              credentialRows
+            && lib.sort builtins.lessThan credentialAudiences
+              == [ "azure-relay-listen" "azure-relay-send" ];
+          message = "${row.path}.spec.transportCredentials must contain exactly one same-Zone azure-relay-listen and one azure-relay-send Credential.";
+        }
+        {
+          assertion = lib.all
+            (credential:
+              ((credential.spec or { }).scope or { }).executionRef
+              == (providerConfig.executionRef or null))
+            credentialRows;
+          message = "${row.path}.spec.transportCredentials scope must match the Relay Provider executionRef.";
         }
       ];
 

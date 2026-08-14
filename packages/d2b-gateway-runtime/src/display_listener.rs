@@ -3,11 +3,12 @@
 //! per-session handshake (ADR 0032, P0).
 //!
 //! `arm` spawns a task running
-//! [`run_listener_verified`](crate::relay_compat::run_listener_verified) with
-//! a [`PrologueVerifier`] that (a) verifies the session handshake under the
-//! authorizing binding + secret and (b) signals a [`Notify`] the first time a
-//! handshake verifies, so `await_handshake` resolves exactly when bytes begin
-//! to flow. `close` aborts the task and drops the listener.
+//! [`run_listener_verified_with_ready`](crate::relay_compat::run_listener_verified_with_ready)
+//! with a [`PrologueVerifier`] that verifies the session handshake under the
+//! authorizing binding + secret. Readiness is signalled only after the
+//! authenticated relay has attached to the local display endpoint, so
+//! `await_handshake` resolves exactly when bytes can flow. `close` aborts the
+//! task and drops the listener.
 //!
 //! The verifier-signal composition is a pure helper ([`notifying_verifier`]) so
 //! it is unit-tested with a real handshake frame and no Azure round-trip.
@@ -117,7 +118,14 @@ impl DisplayListener for RelayDisplayListener {
         );
         let handshook = Arc::new(Notify::new());
         let armed = Arc::new(AtomicBool::new(false));
-        let verify = notifying_verifier(inner, handshook.clone(), armed.clone());
+        let ready = {
+            let handshook = handshook.clone();
+            let armed = armed.clone();
+            Arc::new(move || {
+                armed.store(true, Ordering::SeqCst);
+                handshook.notify_waiters();
+            })
+        };
 
         let endpoint = self.endpoint.clone();
         let credential = self.credential.clone();
@@ -158,13 +166,14 @@ impl DisplayListener for RelayDisplayListener {
                                     break;
                                 }
                             }
-                            result = crate::relay_compat::run_listener_verified(
+                            result = crate::relay_compat::run_listener_verified_with_ready(
                                 &endpoint,
                                 &credential,
                                 &target,
                                 ttl,
                                 ca.as_deref(),
-                                verify.clone(),
+                                inner.clone(),
+                                ready.clone(),
                             ) => {
                                 if *cancel_rx.borrow() {
                                     break;

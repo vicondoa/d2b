@@ -1,9 +1,10 @@
 //! Bootstrap service boundary.
 
 use crate::{bootstrap::BootstrapAdmission, error::AzureVmError};
+use serde::{Deserialize, Serialize};
 
 /// Bootstrap service session state.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BootstrapServiceState {
     /// Waiting for one IKpsk2 enrollment.
     Waiting,
@@ -27,6 +28,11 @@ impl Default for BootstrapService {
 }
 
 impl BootstrapService {
+    /// Restore a service state from the sealed controller recovery record.
+    pub const fn from_state(state: BootstrapServiceState) -> Self {
+        Self { state }
+    }
+
     /// Return the current state.
     pub const fn state(&self) -> BootstrapServiceState {
         self.state
@@ -43,8 +49,15 @@ impl BootstrapService {
             self.state = BootstrapServiceState::Failed;
             return Err(AzureVmError::BootstrapPskReplayed);
         }
-        let _psk = admission.consume(presented, now_unix_ms)?;
-        self.state = BootstrapServiceState::Enrolled;
-        Ok(())
+        match admission.consume(presented, now_unix_ms) {
+            Ok(_psk) => {
+                self.state = BootstrapServiceState::Enrolled;
+                Ok(())
+            }
+            Err(error) => {
+                self.state = BootstrapServiceState::Failed;
+                Err(error)
+            }
+        }
     }
 }

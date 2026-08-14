@@ -103,6 +103,20 @@ let
           scope.executionRef = "Guest/gateway";
         };
       };
+      relay-listen = {
+        type = "Credential";
+        spec = {
+          audience = "azure-relay-listen";
+          scope.executionRef = "Guest/gateway";
+        };
+      };
+      relay-send = {
+        type = "Credential";
+        spec = {
+          audience = "azure-relay-send";
+          scope.executionRef = "Guest/gateway";
+        };
+      };
       system-guest = {
         type = "Guest";
         spec = {
@@ -120,7 +134,10 @@ let
             relayNamespaceId = "relay-prod";
             relayEntityId = "gateway";
           };
-          transportCredentials = [ ];
+          transportCredentials = [
+            "Credential/relay-listen"
+            "Credential/relay-send"
+          ];
           disabled = false;
           limits = {
             maxActiveStreams = 32;
@@ -243,6 +260,29 @@ in
             executionRef = "Guest/system-guest";
           };
         };
+      })
+    ];
+    expected = true;
+  };
+
+  "provider-runtime-contracts-allows-aca-without-optional-pull-credential" = {
+    expr = lib.filter (assertion: !assertion.assertion)
+      (mkEvalContracts [
+        contractBase
+        ({ ... }: {
+          d2b.zones.local-root.resources.runtime-azure-container-apps.spec.config.pullCredentialRef =
+            lib.mkForce null;
+        })
+      ]).config.assertions;
+    expected = [ ];
+  };
+
+  "provider-runtime-contracts-rejects-relay-role-credential-shape" = {
+    expr = hasFailure "exactly one same-Zone azure-relay-listen and one azure-relay-send" [
+      contractBase
+      ({ ... }: {
+        d2b.zones.local-root.resources.relay-send.spec.audience =
+          lib.mkForce "azure-relay-listen";
       })
     ];
     expected = true;

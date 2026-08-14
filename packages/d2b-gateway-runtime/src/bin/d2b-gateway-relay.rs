@@ -110,23 +110,40 @@ async fn main() -> Result<(), Err> {
     let mode = std::env::args().nth(1).unwrap_or_default();
     let target = LocalTarget::parse(&env("D2B_RELAY_TARGET")?);
     let endpoint = endpoint()?;
-    let credential = credential()?;
     let ca = ca();
     let (binding, secret) = binding_and_secret()?;
 
     match mode.as_str() {
         "sender" => {
             eprintln!("[d2b-gateway-relay] sender (handshake prologue) -> {target:?}");
-            let prologue = agent_prologue(&secret, binding);
-            d2b_gateway_runtime::relay_compat::run_sender_with_prologue(
-                &endpoint,
-                &credential,
-                &target,
-                600,
-                ca.as_deref(),
-                &prologue,
-            )
-            .await?;
+            let prologue = agent_prologue(&secret, binding.clone());
+            let mut backoff = 1u64;
+            loop {
+                if now_unix() >= binding.not_after {
+                    return Err("relay sender session expired".into());
+                }
+                let credential = credential()?;
+                match d2b_gateway_runtime::relay_compat::run_sender_with_prologue(
+                    &endpoint,
+                    &credential,
+                    &target,
+                    600,
+                    ca.as_deref(),
+                    &prologue,
+                )
+                .await
+                {
+                    Ok(()) => return Ok(()),
+                    Err(err) => {
+                        eprintln!(
+                            "[d2b-gateway-relay] sender disconnected: {err}; \
+                             reacquiring credential and retrying"
+                        );
+                        tokio::time::sleep(std::time::Duration::from_secs(backoff)).await;
+                        backoff = (backoff.saturating_mul(2)).min(30);
+                    }
+                }
+            }
         }
         "listener" => {
             eprintln!("[d2b-gateway-relay] listener (verifying handshake) -> {target:?}");
@@ -134,6 +151,7 @@ async fn main() -> Result<(), Err> {
             let verify = make_prologue_verifier(secret, binding, generation, Arc::new(now_unix));
             loop {
                 eprintln!("[d2b-gateway-relay] arming verified listener...");
+                let credential = credential()?;
                 if let Err(e) = d2b_gateway_runtime::relay_compat::run_listener_verified(
                     &endpoint,
                     &credential,
@@ -155,5 +173,4 @@ async fn main() -> Result<(), Err> {
             );
         }
     }
-    Ok(())
 }

@@ -15,29 +15,13 @@
 //! - vsock CID allocation (daemon may override the manifest value if
 //!   it conflicts with live state - but this generator emits whatever
 //!   CID it is given, allocation lives in the caller);
-//! - TAP fd-passing (`--net 'fd=<N>,mac=...'` when the host probed
-//!   `tap-fd` mode, else `--net 'mac=...,tap=<name>'`).
+//! - TAP fd-passing (`--net 'fd=<N>,mac=...'`) from the broker-owned
+//!   LaunchTicket child-fd handoff.
 //!
 //! Crate invariant `#![forbid(unsafe_code)]` is honoured: the generator
 //! is pure data shuffling with no system calls.
 
 use serde::{Deserialize, Serialize};
-
-/// CH net-handoff mode the broker selected at host-check time, see
-/// `d2b_host::runner_shape::NetHandoffMode` (kept as a string here
-/// to avoid pulling in the probe surface as a dependency of the argv
-/// generator; the daemon translates the runner-shape outcome
-/// before calling [`generate_ch_argv`]).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum ChNetHandoff {
-    /// Broker opened TAP + `/dev/vhost-net`, fds passed via SCM_RIGHTS.
-    /// `--net 'fd=<N>,mac=...'` (no `tap=` token).
-    TapFd,
-    /// Broker created a persistent TAP with `TUNSETOWNER`/`TUNSETGROUP`.
-    /// `--net 'mac=...,tap=<name>'`.
-    PersistentTap,
-}
 
 /// Single `--fs socket=...,tag=...` entry, one per `microvm.shares`
 /// row. Order is preserved by the caller; the audit fixture shows the
@@ -52,22 +36,16 @@ pub struct ChFsShare {
     pub tag: String,
 }
 
-/// Single `--net 'mac=...,(tap|fd)=...'` entry, one per
-/// `microvm.interfaces` row.
+/// Single `--net 'fd=...,mac=...'` entry, one per broker-owned interface.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChNetIface {
     /// IEEE OUI-formatted MAC address (`AA:BB:CC:DD:EE:FF`). The
     /// generator emits it verbatim - case is preserved.
     pub mac: String,
-    /// TAP ifname when [`ChNetHandoff::PersistentTap`] is selected.
-    /// Ignored under [`ChNetHandoff::TapFd`].
-    pub tap_ifname: String,
-    /// File-descriptor slot the broker passes via SCM_RIGHTS under
-    /// [`ChNetHandoff::TapFd`]. Daemon sets this to the post-`dup2`
-    /// fd number it will hand to the runner. Ignored under
-    /// [`ChNetHandoff::PersistentTap`].
-    pub tap_fd: Option<i32>,
+    /// File-descriptor slot the broker passes via SCM_RIGHTS. The daemon
+    /// sets this to the post-`dup2` fd number handed to the runner.
+    pub tap_fd: i32,
 }
 
 /// Vsock transport spec. The audit fixture uses
@@ -141,12 +119,9 @@ pub struct ChArgvInput {
     /// elsewhere (`runner_shape::runner_shape_preflight`) - this
     /// generator only emits the path.
     pub api_socket_path: String,
-    /// Network interfaces; each emits `--net 'mac=...,(tap|fd)=...'`.
+    /// Network interfaces; each emits `--net 'fd=...,mac=...'`.
     #[serde(default)]
     pub net_ifaces: Vec<ChNetIface>,
-    /// Selected TAP handoff mode; controls whether [`ChNetIface`]
-    /// renders `tap=<name>` or `fd=<N>`.
-    pub net_handoff: ChNetHandoff,
     /// Free-form additional CH args (TPM, GPU sockets, audio user
     /// devices, video vhost-user-media). Caller is responsible for
     /// quoting; each entry is emitted as-is in order at the end.
@@ -171,12 +146,8 @@ pub enum ChArgvError {
     /// `kernel_path` was empty. Every supported VM must boot a
     /// d2b-provided kernel; bootloaders are out of scope.
     EmptyKernelPath,
-    /// A [`ChNetIface`] in [`ChNetHandoff::TapFd`] mode was missing
-    /// its `tap_fd`.
+    /// A [`ChNetIface`] was missing a valid child fd.
     TapFdMissing { iface_mac: String },
-    /// A [`ChNetIface`] in [`ChNetHandoff::PersistentTap`] mode was
-    /// missing its `tap_ifname`.
-    TapIfnameMissing { iface_mac: String },
 }
 
 /// Render the CH argv. Returns the full `Vec<String>` starting with
@@ -199,21 +170,10 @@ pub fn generate_ch_argv(input: &ChArgvInput) -> Result<Vec<String>, ChArgvError>
         return Err(ChArgvError::EmptyKernelPath);
     }
     for iface in &input.net_ifaces {
-        match input.net_handoff {
-            ChNetHandoff::TapFd => {
-                if iface.tap_fd.is_none() {
-                    return Err(ChArgvError::TapFdMissing {
-                        iface_mac: iface.mac.clone(),
-                    });
-                }
-            }
-            ChNetHandoff::PersistentTap => {
-                if iface.tap_ifname.is_empty() {
-                    return Err(ChArgvError::TapIfnameMissing {
-                        iface_mac: iface.mac.clone(),
-                    });
-                }
-            }
+        if iface.tap_fd < 3 {
+            return Err(ChArgvError::TapFdMissing {
+                iface_mac: iface.mac.clone(),
+            });
         }
     }
 
@@ -283,16 +243,7 @@ pub fn generate_ch_argv(input: &ChArgvInput) -> Result<Vec<String>, ChArgvError>
     if !input.net_ifaces.is_empty() {
         argv.push("--net".to_owned());
         for iface in &input.net_ifaces {
-            let net_val = match input.net_handoff {
-                ChNetHandoff::TapFd => {
-                    let fd = iface.tap_fd.expect("validated above");
-                    format!("fd={},mac={}", fd, iface.mac)
-                }
-                ChNetHandoff::PersistentTap => {
-                    format!("mac={},tap={}", iface.mac, iface.tap_ifname)
-                }
-            };
-            argv.push(net_val);
+            argv.push(format!("fd={},mac={}", iface.tap_fd, iface.mac));
         }
     }
 
@@ -323,8 +274,8 @@ mod tests {
     ///
     /// - API socket lives at `/run/d2b/vms/corp-vm/ch-api.sock`
     ///   (audit fixture uses the runner-cwd-relative `corp-vm.sock`);
-    /// - net uses [`ChNetHandoff::PersistentTap`] which is the audit's
-    ///   `--net 'mac=...,tap=work-l10'` shape.
+    /// - net uses the broker-owned child-fd form
+    ///   `--net 'fd=...,mac=...'`.
     fn audit_input() -> ChArgvInput {
         ChArgvInput {
             vm_name: "corp-vm".to_owned(),
@@ -367,10 +318,8 @@ mod tests {
             api_socket_path: "corp-vm.sock".to_owned(),
             net_ifaces: vec![ChNetIface {
                 mac: "02:76:53:AE:57:0A".to_owned(),
-                tap_ifname: "work-l10".to_owned(),
-                tap_fd: None,
+                tap_fd: 7,
             }],
-            net_handoff: ChNetHandoff::PersistentTap,
             extra_args: Vec::new(),
         }
     }
@@ -415,7 +364,7 @@ mod tests {
         assert!(joined.contains("socket=corp-vm-virtiofs-d2b-hkeys.sock,tag=d2b-hkeys"));
         assert!(joined.contains("socket=corp-vm-virtiofs-d2b-ssh-host.sock,tag=d2b-ssh-host"));
         assert!(joined.contains("--api-socket corp-vm.sock"));
-        assert!(joined.contains("--net mac=02:76:53:AE:57:0A,tap=work-l10"));
+        assert!(joined.contains("--net fd=7,mac=02:76:53:AE:57:0A"));
     }
 
     #[test]
@@ -481,36 +430,21 @@ mod tests {
     }
 
     #[test]
-    fn tap_fd_mode_emits_fd_token() {
-        let mut input = audit_input();
-        input.net_handoff = ChNetHandoff::TapFd;
-        input.net_ifaces[0].tap_fd = Some(7);
+    fn child_fd_mode_emits_fd_token() {
+        let input = audit_input();
         let argv = generate_ch_argv(&input).expect("valid tap-fd input");
         let joined = argv.join(" ");
         assert!(joined.contains("--net fd=7,mac=02:76:53:AE:57:0A"));
-        assert!(!joined.contains("tap=work-l10"));
+        assert!(!joined.contains("tap="));
     }
 
     #[test]
-    fn tap_fd_missing_is_rejected() {
+    fn child_fd_missing_is_rejected() {
         let mut input = audit_input();
-        input.net_handoff = ChNetHandoff::TapFd;
-        // tap_fd intentionally unset
-        input.net_ifaces[0].tap_fd = None;
+        input.net_ifaces[0].tap_fd = -1;
         assert!(matches!(
             generate_ch_argv(&input),
             Err(ChArgvError::TapFdMissing { .. })
-        ));
-    }
-
-    #[test]
-    fn persistent_tap_missing_ifname_is_rejected() {
-        let mut input = audit_input();
-        input.net_handoff = ChNetHandoff::PersistentTap;
-        input.net_ifaces[0].tap_ifname.clear();
-        assert!(matches!(
-            generate_ch_argv(&input),
-            Err(ChArgvError::TapIfnameMissing { .. })
         ));
     }
 

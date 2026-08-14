@@ -4,9 +4,9 @@ use tokio::time::{Duration, sleep};
 use async_trait::async_trait;
 use d2b_contracts::v3::{ResourceRef, credential::OpaqueAzureRef};
 use d2b_provider_runtime_cloud_hypervisor::{
-    CloudHypervisorConfig, CloudHypervisorController, CloudHypervisorEffectPort,
-    CloudHypervisorGuestSettings, CloudHypervisorPhase, CloudHypervisorReconcileOutcome,
-    ConsoleType, GuestControlHealth, GuestControlProbe,
+    CloudHypervisorClock, CloudHypervisorConfig, CloudHypervisorController,
+    CloudHypervisorEffectPort, CloudHypervisorGuestSettings, CloudHypervisorPhase,
+    CloudHypervisorReconcileOutcome, ConsoleType, GuestControlHealth, GuestControlProbe,
 };
 use d2b_provider_runtime_cloud_hypervisor::{
     adoption::ProcessIdentity,
@@ -17,15 +17,25 @@ use d2b_provider_runtime_cloud_hypervisor::{
 #[derive(Default)]
 struct FakeState {
     identity: Option<ProcessIdentity>,
+    observations: Vec<Option<ProcessIdentity>>,
     launched: bool,
     stopped: bool,
     stop_calls: usize,
     stop_failures: usize,
+    stop_leaves_identity: bool,
     launch_delay_ms: u64,
 }
 
 struct FakeEffect {
     state: Arc<Mutex<FakeState>>,
+}
+
+struct FixedClock(Arc<Mutex<u64>>);
+
+impl CloudHypervisorClock for FixedClock {
+    fn now_unix_ms(&self) -> u64 {
+        *self.0.lock().unwrap()
+    }
 }
 
 #[async_trait]
@@ -51,7 +61,8 @@ impl CloudHypervisorEffectPort for FakeEffect {
         &self,
     ) -> Result<Option<ProcessIdentity>, d2b_provider_runtime_cloud_hypervisor::CloudHypervisorError>
     {
-        Ok(self.state.lock().unwrap().identity)
+        let mut state = self.state.lock().unwrap();
+        Ok(state.observations.pop().unwrap_or(state.identity))
     }
 
     async fn open_pidfd(
@@ -72,6 +83,9 @@ impl CloudHypervisorEffectPort for FakeEffect {
             return Err(d2b_provider_runtime_cloud_hypervisor::CloudHypervisorError::Effect);
         }
         state.stopped = true;
+        if !state.stop_leaves_identity {
+            state.identity = None;
+        }
         Ok(())
     }
 }
@@ -110,6 +124,10 @@ impl GuestControlProbe for ReadyProbe {
             .pop()
             .unwrap_or(GuestControlHealth::Ready))
     }
+
+    async fn close(&self, _: u32) -> Result<(), GuestControlHealthError> {
+        Ok(())
+    }
 }
 
 fn identity() -> ProcessIdentity {
@@ -135,13 +153,22 @@ fn controller_with_probe_and_deadline(
     probe: ReadyProbe,
     startup_deadline_ms: u32,
 ) -> CloudHypervisorController<FakeEffect, ReadyProbe> {
+    controller_with_windows(state, probe, startup_deadline_ms, 30_000)
+}
+
+fn controller_with_windows(
+    state: Arc<Mutex<FakeState>>,
+    probe: ReadyProbe,
+    startup_deadline_ms: u32,
+    adoption_window_ms: u32,
+) -> CloudHypervisorController<FakeEffect, ReadyProbe> {
     let config = CloudHypervisorConfig {
         controller_execution_ref: ResourceRef::parse("Host/host-system").unwrap(),
         default_vcpus: 2,
         default_memory_mb: 512,
         default_machine_type: OpaqueAzureRef::parse("q35").unwrap(),
         watchdog: true,
-        adoption_window_ms: 30_000,
+        adoption_window_ms,
         health_check_interval_ms: 30_000,
         health_check_timeout_ms: 5_000,
         health_check_failure_threshold: 3,
@@ -223,6 +250,66 @@ async fn restart_rejects_stale_generation_before_pidfd_open() {
 }
 
 #[tokio::test]
+async fn adoption_window_is_not_reset_between_retries() {
+    let state = Arc::new(Mutex::new(FakeState {
+        identity: Some(identity()),
+        observations: vec![Some(identity()), None],
+        ..FakeState::default()
+    }));
+    let mut controller = controller_with_windows(
+        Arc::clone(&state),
+        ReadyProbe::scripted(Vec::new()),
+        120_000,
+        20,
+    );
+
+    assert!(matches!(
+        controller.adopt(identity(), 14).await,
+        Ok(CloudHypervisorReconcileOutcome::Retry { .. })
+    ));
+    sleep(Duration::from_millis(30)).await;
+    assert_eq!(
+        controller.adopt(identity(), 14).await,
+        Err(d2b_provider_runtime_cloud_hypervisor::CloudHypervisorError::AdoptionAmbiguous)
+    );
+    assert_eq!(controller.phase(), CloudHypervisorPhase::Degraded);
+}
+
+#[tokio::test]
+async fn adoption_window_survives_controller_restart() {
+    let now = Arc::new(Mutex::new(1_000));
+    let state = Arc::new(Mutex::new(FakeState {
+        identity: Some(identity()),
+        observations: vec![None],
+        ..FakeState::default()
+    }));
+    let mut controller = controller_with_windows(
+        Arc::clone(&state),
+        ReadyProbe::scripted(Vec::new()),
+        120_000,
+        20,
+    )
+    .with_clock(Arc::new(FixedClock(Arc::clone(&now))));
+
+    assert!(matches!(
+        controller.adopt(identity(), 14).await,
+        Ok(CloudHypervisorReconcileOutcome::Retry { .. })
+    ));
+    let recovery = controller.recovery_state();
+    *now.lock().unwrap() = 1_030;
+    let mut restored =
+        controller_with_windows(state, ReadyProbe::scripted(Vec::new()), 120_000, 20)
+            .with_clock(Arc::new(FixedClock(Arc::clone(&now))))
+            .restore_recovery_state(recovery)
+            .unwrap();
+    assert_eq!(
+        restored.adopt(identity(), 14).await,
+        Err(d2b_provider_runtime_cloud_hypervisor::CloudHypervisorError::AdoptionAmbiguous)
+    );
+    assert_eq!(restored.phase(), CloudHypervisorPhase::Degraded);
+}
+
+#[tokio::test]
 async fn observed_process_without_durable_identity_is_rejected() {
     let state = Arc::new(Mutex::new(FakeState {
         identity: Some(identity()),
@@ -251,6 +338,24 @@ async fn failed_stop_retains_identity_for_retry() {
     controller.finalize().await.unwrap();
     assert!(!controller.finalizer_installed());
     assert_eq!(state.lock().unwrap().stop_calls, 2);
+}
+
+#[tokio::test]
+async fn finalization_requires_observing_process_exit() {
+    let state = Arc::new(Mutex::new(FakeState {
+        stop_leaves_identity: true,
+        ..FakeState::default()
+    }));
+    let mut controller = controller(Arc::clone(&state));
+    controller.reconcile(true, true, true, 14).await.unwrap();
+    assert_eq!(
+        controller.finalize().await,
+        Err(d2b_provider_runtime_cloud_hypervisor::CloudHypervisorError::Effect)
+    );
+    assert!(controller.finalizer_installed());
+    state.lock().unwrap().stop_leaves_identity = false;
+    controller.finalize().await.unwrap();
+    assert!(!controller.finalizer_installed());
 }
 
 #[tokio::test]

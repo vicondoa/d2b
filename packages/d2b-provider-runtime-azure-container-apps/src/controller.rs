@@ -7,7 +7,9 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use tokio::time::{Duration, Instant, timeout_at};
 
 use d2b_contracts::provider_effects::aca::{
     AcaControl, AcaControlContext, AcaControlError, AcaControlErrorKind, AcaControlHealth,
@@ -18,7 +20,8 @@ use d2b_contracts::provider_effects::aca::{
 };
 
 /// Provider lifecycle phase.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum AcaPhase {
     /// No remote sandbox has been observed.
     Pending,
@@ -138,7 +141,8 @@ impl fmt::Debug for AcaStatus {
 /// Small bounded completed-operation ledger used by the controller adapter.
 #[derive(Debug, Default)]
 pub struct CompletedOperationLedger {
-    completed: BTreeMap<AcaOperationId, (u64, AcaPhase)>,
+    completed: BTreeMap<AcaOperationId, (u64, AcaPhase, u64)>,
+    next_sequence: u64,
 }
 
 /// Clock used to turn bounded operation deadlines into absolute Unix expiry.
@@ -160,11 +164,30 @@ impl AcaClock for SystemAcaClock {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 enum AcaFinalizationStage {
     Observe,
     Stop,
     Delete,
+}
+
+/// Non-secret ACA lifecycle state required for restart recovery.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AcaRecoveryState {
+    /// Current lifecycle phase.
+    pub phase: AcaPhase,
+    /// Whether the finalizer remains installed.
+    pub finalizer_installed: bool,
+    /// Generation used by the readiness attempt budget.
+    pub readiness_generation: u64,
+    /// Number of readiness attempts consumed for the current lifecycle.
+    pub readiness_attempts: u8,
+    /// Last observed lifecycle used to classify readiness retries.
+    pub readiness_lifecycle: Option<AcaSandboxLifecycle>,
+    /// Durable child-first finalization stage.
+    pub finalization_stage: String,
 }
 
 impl CompletedOperationLedger {
@@ -176,25 +199,51 @@ impl CompletedOperationLedger {
         phase: AcaPhase,
         capacity: usize,
     ) {
+        let sequence = self.next_sequence;
+        self.next_sequence = self.next_sequence.saturating_add(1);
         self.completed
-            .insert(operation_id, (expires_at_unix_ms, phase));
+            .insert(operation_id, (expires_at_unix_ms, phase, sequence));
         while self.completed.len() > capacity {
-            let Some(oldest) = self.completed.keys().next().cloned() else {
+            let Some(oldest) = self
+                .completed
+                .iter()
+                .min_by_key(|(_, (_, _, sequence))| *sequence)
+                .map(|(operation_id, _)| operation_id.clone())
+            else {
                 break;
             };
             self.completed.remove(&oldest);
+        }
+
+        impl AcaFinalizationStage {
+            fn as_str(self) -> &'static str {
+                match self {
+                    Self::Observe => "observe",
+                    Self::Stop => "stop",
+                    Self::Delete => "delete",
+                }
+            }
+
+            fn parse(value: &str) -> Option<Self> {
+                match value {
+                    "observe" => Some(Self::Observe),
+                    "stop" => Some(Self::Stop),
+                    "delete" => Some(Self::Delete),
+                    _ => None,
+                }
+            }
         }
     }
 
     /// Remove expired operation records.
     pub fn prune(&mut self, now_unix_ms: u64) {
         self.completed
-            .retain(|_, (expires_at, _)| *expires_at > now_unix_ms);
+            .retain(|_, (expires_at, _, _)| *expires_at > now_unix_ms);
     }
 
     /// Return a previously completed phase.
     pub fn get(&self, operation_id: &AcaOperationId) -> Option<AcaPhase> {
-        self.completed.get(operation_id).map(|(_, phase)| *phase)
+        self.completed.get(operation_id).map(|(_, phase, _)| *phase)
     }
 
     /// Return the number of retained records.
@@ -261,6 +310,42 @@ where
     pub fn with_clock(mut self, clock: Arc<dyn AcaClock>) -> Self {
         self.clock = clock;
         self
+    }
+
+    /// Export non-secret lifecycle state for restart recovery.
+    pub fn recovery_state(&self) -> AcaRecoveryState {
+        AcaRecoveryState {
+            phase: self.phase,
+            finalizer_installed: self.finalizer,
+            readiness_generation: self.readiness_generation,
+            readiness_attempts: self.readiness_attempts,
+            readiness_lifecycle: self.readiness_lifecycle,
+            finalization_stage: self.finalization_stage.as_str().to_owned(),
+        }
+    }
+
+    /// Restore non-secret lifecycle state after controller reconstruction.
+    pub fn restore_recovery_state(
+        mut self,
+        recovery: AcaRecoveryState,
+    ) -> Result<Self, AcaControllerError> {
+        let Some(finalization_stage) = AcaFinalizationStage::parse(&recovery.finalization_stage)
+        else {
+            return Err(AcaControllerError::InvalidState);
+        };
+        if !recovery.finalizer_installed && recovery.phase != AcaPhase::Finalized {
+            return Err(AcaControllerError::InvalidState);
+        }
+        if recovery.readiness_attempts > self.config.readiness().attempts() {
+            return Err(AcaControllerError::InvalidState);
+        }
+        self.phase = recovery.phase;
+        self.finalizer = recovery.finalizer_installed;
+        self.readiness_generation = recovery.readiness_generation;
+        self.readiness_attempts = recovery.readiness_attempts;
+        self.readiness_lifecycle = recovery.readiness_lifecycle;
+        self.finalization_stage = finalization_stage;
+        Ok(self)
     }
 
     /// Return the current phase.
@@ -409,7 +494,7 @@ where
             return Ok(());
         }
         self.phase = AcaPhase::Finalizing;
-        if self.observed.is_none() {
+        if self.finalization_stage == AcaFinalizationStage::Observe || self.observed.is_none() {
             let query = AcaWorkloadQuery {
                 binding: self.binding.clone(),
                 profile_id: self.config.profile().profile_id().clone(),
@@ -433,16 +518,56 @@ where
                 return Ok(());
             }
         }
-        if self.finalization_stage == AcaFinalizationStage::Observe {
-            self.finalization_stage = if self.observed.as_ref().is_some_and(|record| {
+        if self.finalization_stage == AcaFinalizationStage::Stop
+            && !self.observed.as_ref().is_some_and(|record| {
                 matches!(
                     record.lifecycle,
-                    AcaSandboxLifecycle::Running | AcaSandboxLifecycle::Suspended
+                    AcaSandboxLifecycle::Stopped | AcaSandboxLifecycle::Failed
                 )
-            }) {
-                AcaFinalizationStage::Stop
-            } else {
-                AcaFinalizationStage::Delete
+            })
+        {
+            let query = AcaWorkloadQuery {
+                binding: self.binding.clone(),
+                profile_id: self.config.profile().profile_id().clone(),
+            };
+            let candidates = self
+                .with_lease(
+                    operation_id.clone(),
+                    AcaCredentialPurpose::Destroy,
+                    deadline_remaining_ms,
+                    move |control, lease, context| async move {
+                        control.find_sandboxes(&lease, &context, &query).await
+                    },
+                )
+                .await?;
+            self.observed = one_candidate(candidates)?;
+            let Some(record) = self.observed.as_ref() else {
+                self.finish_finalization();
+                return Ok(());
+            };
+            self.ensure_sandbox_generation(record)?;
+            match record.lifecycle {
+                AcaSandboxLifecycle::Creating | AcaSandboxLifecycle::Stopping => return Ok(()),
+                AcaSandboxLifecycle::Stopped => {
+                    self.finalization_stage = AcaFinalizationStage::Delete;
+                }
+                AcaSandboxLifecycle::Running | AcaSandboxLifecycle::Suspended => {}
+                AcaSandboxLifecycle::Failed | AcaSandboxLifecycle::Unknown => return Ok(()),
+            }
+        }
+        if self.finalization_stage == AcaFinalizationStage::Observe {
+            self.finalization_stage = match self.observed.as_ref().map(|record| record.lifecycle) {
+                Some(AcaSandboxLifecycle::Running | AcaSandboxLifecycle::Suspended) => {
+                    AcaFinalizationStage::Stop
+                }
+                Some(AcaSandboxLifecycle::Stopped) => AcaFinalizationStage::Delete,
+                Some(AcaSandboxLifecycle::Creating | AcaSandboxLifecycle::Stopping) => {
+                    self.finalization_stage = AcaFinalizationStage::Stop;
+                    return Ok(());
+                }
+                Some(AcaSandboxLifecycle::Failed | AcaSandboxLifecycle::Unknown) | None => {
+                    return Ok(());
+                }
             };
         }
         if self.finalization_stage == AcaFinalizationStage::Stop {
@@ -461,13 +586,29 @@ where
                 )
                 .await?;
             self.observed = Some(stopped);
-            self.finalization_stage = AcaFinalizationStage::Delete;
+            match self.observed.as_ref().map(|record| record.lifecycle) {
+                Some(AcaSandboxLifecycle::Stopped) => {
+                    self.finalization_stage = AcaFinalizationStage::Delete;
+                }
+                Some(
+                    AcaSandboxLifecycle::Creating
+                    | AcaSandboxLifecycle::Stopping
+                    | AcaSandboxLifecycle::Running
+                    | AcaSandboxLifecycle::Suspended,
+                ) => return Ok(()),
+                Some(AcaSandboxLifecycle::Failed | AcaSandboxLifecycle::Unknown) | None => {
+                    return Ok(());
+                }
+            }
         }
         if self.finalization_stage == AcaFinalizationStage::Delete {
             let record = self
                 .observed
                 .clone()
                 .ok_or(AcaControllerError::SandboxUnavailable)?;
+            if record.lifecycle == AcaSandboxLifecycle::Stopping {
+                return Ok(());
+            }
             let outcome = self
                 .with_lease(
                     operation_id,
@@ -622,7 +763,6 @@ where
         self.readiness_generation = self.binding.provider_generation;
         self.readiness_attempts = 0;
         self.readiness_lifecycle = None;
-        self.record(operation_id);
         Ok(AcaReconcileOutcome::Progressing {
             after_ms: self.config.readiness().interval_ms(),
         })
@@ -665,26 +805,37 @@ where
                 .now_unix_ms()
                 .saturating_add(u64::from(deadline_remaining_ms)),
         );
-        let lease = self
-            .leases
-            .acquire(&request)
+        let deadline = Instant::now() + Duration::from_millis(u64::from(deadline_remaining_ms));
+        let lease = timeout_at(deadline, self.leases.acquire(&request))
             .await
+            .map_err(|_| AcaControllerError::Effect(AcaControlErrorKind::DeadlineExpired))?
             .map_err(|error| AcaControllerError::Effect(error.kind()))?;
         if lease.expires_at_unix_ms() <= self.clock.now_unix_ms()
             || lease.expires_at_unix_ms() < request.requested_expiry_unix_ms()
         {
-            let _ = self.leases.revoke(&lease).await;
+            let _ = timeout_at(deadline, self.leases.revoke(&lease)).await;
             return Err(AcaControllerError::Effect(
                 AcaControlErrorKind::DeadlineExpired,
             ));
         }
         let context = AcaControlContext::new(operation_id, deadline_remaining_ms);
-        let result = call(Arc::clone(&self.control), lease.clone(), context).await;
-        let revoke = self.leases.revoke(&lease).await;
+        let result = timeout_at(
+            deadline,
+            call(Arc::clone(&self.control), lease.clone(), context),
+        )
+        .await
+        .map_err(|_| AcaControllerError::Effect(AcaControlErrorKind::DeadlineExpired))
+        .and_then(|result| result.map_err(|error| AcaControllerError::Effect(error.kind())));
+        let revoke = timeout_at(deadline, self.leases.revoke(&lease))
+            .await
+            .map_err(|_| AcaControllerError::LeaseCleanup(AcaControlErrorKind::DeadlineExpired))
+            .and_then(|result| {
+                result.map_err(|error| AcaControllerError::LeaseCleanup(error.kind()))
+            });
         match (result, revoke) {
             (Ok(value), Ok(())) => Ok(value),
-            (Err(error), _) => Err(AcaControllerError::Effect(error.kind())),
-            (Ok(_), Err(error)) => Err(AcaControllerError::LeaseCleanup(error.kind())),
+            (Err(error), _) => Err(error),
+            (Ok(_), Err(error)) => Err(error),
         }
     }
 
@@ -771,9 +922,6 @@ where
     fn completed_outcome(&self, operation_id: &AcaOperationId) -> Option<AcaReconcileOutcome> {
         match self.ledger.get(operation_id)? {
             AcaPhase::Ready => Some(AcaReconcileOutcome::Converged),
-            AcaPhase::Provisioning | AcaPhase::Starting => Some(AcaReconcileOutcome::Progressing {
-                after_ms: self.config.readiness().interval_ms(),
-            }),
             _ => None,
         }
     }

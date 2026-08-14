@@ -11,8 +11,8 @@ mod metrics;
 
 pub use audit::{AcaAuditEvent, AcaAuditOutcome, AcaAuditSink};
 pub use controller::{
-    AcaClock, AcaController, AcaControllerError, AcaPhase, AcaReconcileOutcome, AcaStatus,
-    AzureContainerAppsRuntimeProvider, CompletedOperationLedger, SystemAcaClock,
+    AcaClock, AcaController, AcaControllerError, AcaPhase, AcaReconcileOutcome, AcaRecoveryState,
+    AcaStatus, AzureContainerAppsRuntimeProvider, CompletedOperationLedger, SystemAcaClock,
 };
 pub use d2b_contracts::provider_effects::aca::{
     AcaConfiguredDiskId, AcaConfiguredImageId, AcaControl, AcaControlContext, AcaControlError,

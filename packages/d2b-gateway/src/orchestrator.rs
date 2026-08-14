@@ -12,6 +12,7 @@
 //! display runner).
 
 use async_trait::async_trait;
+use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard};
 
 use crate::audit::{GatewayAudit, GatewayAuditEvent, GatewayAuditKind, display_envelope};
@@ -130,6 +131,7 @@ pub struct GatewayDeps {
 pub struct GatewayOrchestrator {
     deps: GatewayDeps,
     ledger: Mutex<SessionLedger>,
+    handles: Mutex<HashMap<DisplaySessionId, (AgentHandle, ListenerHandle)>>,
     ttl_secs: u64,
 }
 
@@ -202,6 +204,7 @@ impl GatewayOrchestrator {
         Self {
             deps,
             ledger: Mutex::new(SessionLedger::new(generation, limits)),
+            handles: Mutex::new(HashMap::new()),
             ttl_secs: DEFAULT_SESSION_TTL_SECS,
         }
     }
@@ -265,12 +268,20 @@ impl GatewayOrchestrator {
         let session_id = match outcome {
             OpOutcome::Replay(id) => {
                 // Idempotent replay: the caller already has a live session for
-                // this operation. Return the original id without re-spawning.
-                // (Empty handles signal "no new resources were created".)
+                // this operation. Return the original handles when this
+                // generation still owns them; after a restart the durable
+                // ledger alone is not enough to fabricate cleanup handles.
+                let handles = self
+                    .handles
+                    .lock()
+                    .map_err(|_| GatewayError::Internal)?
+                    .get(&id)
+                    .cloned()
+                    .ok_or(GatewayError::Busy)?;
                 return Ok(OpenSession {
                     session_id: id,
-                    agent: AgentHandle(String::new()),
-                    listener: ListenerHandle(String::new()),
+                    agent: handles.0,
+                    listener: handles.1,
                 });
             }
             OpOutcome::Accepted(id) => id,
@@ -357,11 +368,16 @@ impl GatewayOrchestrator {
 
         // AwaitingHandshake -> Running
         self.ledger()?.transition(id, SessionState::Running)?;
-        Ok(OpenSession {
+        let open = OpenSession {
             session_id: id.clone(),
             agent,
             listener,
-        })
+        };
+        self.handles
+            .lock()
+            .map_err(|_| GatewayError::Internal)?
+            .insert(id.clone(), (open.agent.clone(), open.listener.clone()));
+        Ok(open)
     }
 
     async fn fail_session(&self, id: &DisplaySessionId) -> Result<(), GatewayError> {
@@ -384,11 +400,22 @@ impl GatewayOrchestrator {
         // Tear down both sides regardless of individual errors.
         let l = self.deps.listener.close(&open.listener).await;
         let a = self.deps.workload.cleanup(&open.agent).await;
-        let _ = self
-            .ledger
-            .lock()
-            .map(|mut ledger| ledger.transition(id, SessionState::Closed));
-        l.and(a)
+        match (l, a) {
+            (Ok(()), Ok(())) => {
+                self.handles
+                    .lock()
+                    .map_err(|_| GatewayError::Internal)?
+                    .remove(id);
+                let _ = self
+                    .ledger
+                    .lock()
+                    .map(|mut ledger| ledger.transition(id, SessionState::Closed));
+                Ok(())
+            }
+            (Err(listener), Ok(())) => Err(listener),
+            (Ok(()), Err(agent)) => Err(agent),
+            (Err(listener), Err(_agent)) => Err(listener),
+        }
     }
 
     fn audit_open_admitted(

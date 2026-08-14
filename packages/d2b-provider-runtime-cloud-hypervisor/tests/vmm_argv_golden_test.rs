@@ -1,6 +1,4 @@
-use d2b_provider_runtime_cloud_hypervisor::{
-    ChArgvInput, ChNetHandoff, ChNetIface, ChVsock, generate_ch_argv,
-};
+use d2b_provider_runtime_cloud_hypervisor::{ChArgvInput, ChNetIface, ChVsock, generate_ch_argv};
 
 #[test]
 fn argv_preserves_broker_owned_order_and_tap_fd_shape() {
@@ -26,10 +24,8 @@ fn argv_preserves_broker_owned_order_and_tap_fd_shape() {
         api_socket_path: "ch-api.sock".to_owned(),
         net_ifaces: vec![ChNetIface {
             mac: "02:00:00:00:00:01".to_owned(),
-            tap_ifname: String::new(),
-            tap_fd: Some(7),
+            tap_fd: 7,
         }],
-        net_handoff: ChNetHandoff::TapFd,
         extra_args: vec!["--pvpanic".to_owned()],
     };
     let argv = generate_ch_argv(&input).unwrap();

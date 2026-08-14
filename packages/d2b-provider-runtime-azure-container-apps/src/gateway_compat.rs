@@ -403,14 +403,18 @@ pub struct ReqwestTransport {
 }
 
 impl ReqwestTransport {
-    /// Build a transport with a default `reqwest` client.
+    /// Build a transport with bounded connect and response deadlines.
     pub fn new() -> ProviderResult<Self> {
-        let client = reqwest::Client::builder().build().map_err(|err| {
-            ProviderError::new(
-                ErrorKind::ProviderAllocationFailed,
-                format!("failed to build http client: {err}"),
-            )
-        })?;
+        let client = reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(30))
+            .build()
+            .map_err(|err| {
+                ProviderError::new(
+                    ErrorKind::ProviderAllocationFailed,
+                    format!("failed to build http client: {err}"),
+                )
+            })?;
         Ok(Self { client })
     }
 }
@@ -1062,20 +1066,40 @@ impl AcaWorkloadProvider {
     }
 
     async fn wait_workload_running(&self, workload: &WorkloadId) -> ProviderResult<AcaSandbox> {
-        for attempt in 0..READY_POLL_ATTEMPTS {
-            if let Some(sandbox) = self.find_workload_sandbox(workload).await?
-                && sandbox_is_running(&sandbox)
-            {
-                return Ok(sandbox);
+        match tokio::time::timeout(Duration::from_secs(READY_POLL_ATTEMPTS as u64 * 2), async {
+            for attempt in 0..READY_POLL_ATTEMPTS {
+                if let Some(sandbox) = self.find_workload_sandbox(workload).await? {
+                    match sandbox_lifecycle(&sandbox) {
+                        SandboxLifecycle::Running => return Ok(sandbox),
+                        SandboxLifecycle::Failed | SandboxLifecycle::Unknown => {
+                            return Err(ProviderError::new(
+                                ErrorKind::ProviderAllocationFailed,
+                                "Azure Container Apps sandbox entered a terminal failure state",
+                            ));
+                        }
+                        SandboxLifecycle::Creating
+                        | SandboxLifecycle::Starting
+                        | SandboxLifecycle::Stopping
+                        | SandboxLifecycle::Idle => {}
+                    }
+                }
+                if attempt + 1 < READY_POLL_ATTEMPTS {
+                    tokio::time::sleep(READY_POLL_INTERVAL).await;
+                }
             }
-            if attempt + 1 < READY_POLL_ATTEMPTS {
-                tokio::time::sleep(READY_POLL_INTERVAL).await;
-            }
+            Err(ProviderError::new(
+                ErrorKind::Timeout,
+                "Azure Container Apps sandbox did not reach Running before the readiness deadline",
+            ))
+        })
+        .await
+        {
+            Ok(result) => result,
+            Err(_) => Err(ProviderError::new(
+                ErrorKind::Timeout,
+                "Azure Container Apps sandbox did not reach Running before the readiness deadline",
+            )),
         }
-        Err(ProviderError::new(
-            ErrorKind::Timeout,
-            "Azure Container Apps sandbox did not reach Running before the readiness deadline",
-        ))
     }
 
     /// List sandboxes, optionally filtered by an Azure Container Apps label selector.
@@ -1295,8 +1319,20 @@ impl WorkloadProvider for AcaWorkloadProvider {
             return Err(ProviderError::capability_denied(Capability::Lifecycle));
         }
         let sandbox = self.ensure_workload_sandbox(&id).await?;
-        if !sandbox_is_running(&sandbox) {
-            self.resume(&sandbox.id, &self.bearer().await?).await?;
+        match sandbox_lifecycle(&sandbox) {
+            SandboxLifecycle::Running => {}
+            SandboxLifecycle::Idle => {
+                self.resume(&sandbox.id, &self.bearer().await?).await?;
+            }
+            SandboxLifecycle::Creating
+            | SandboxLifecycle::Starting
+            | SandboxLifecycle::Stopping => {}
+            SandboxLifecycle::Failed | SandboxLifecycle::Unknown => {
+                return Err(ProviderError::new(
+                    ErrorKind::ProviderAllocationFailed,
+                    "Azure Container Apps sandbox cannot be started from its current state",
+                ));
+            }
         }
         self.wait_workload_running(&id).await?;
         Ok(WorkloadStatus {
@@ -1638,10 +1674,32 @@ fn sandbox_create_body(
 }
 
 fn sandbox_is_running(sandbox: &AcaSandbox) -> bool {
-    sandbox
-        .state
-        .as_deref()
-        .is_some_and(|state| matches!(state.to_ascii_lowercase().as_str(), "running" | "ready"))
+    matches!(sandbox_lifecycle(sandbox), SandboxLifecycle::Running)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SandboxLifecycle {
+    Creating,
+    Starting,
+    Running,
+    Idle,
+    Stopping,
+    Failed,
+    Unknown,
+}
+
+fn sandbox_lifecycle(sandbox: &AcaSandbox) -> SandboxLifecycle {
+    match sandbox.state.as_deref().map(str::to_ascii_lowercase) {
+        Some(state) if state == "running" || state == "ready" => SandboxLifecycle::Running,
+        Some(state) if state == "idle" || state == "suspended" || state == "stopped" => {
+            SandboxLifecycle::Idle
+        }
+        Some(state) if state == "starting" => SandboxLifecycle::Starting,
+        Some(state) if state == "creating" => SandboxLifecycle::Creating,
+        Some(state) if state == "stopping" => SandboxLifecycle::Stopping,
+        Some(state) if state == "failed" || state == "error" => SandboxLifecycle::Failed,
+        _ => SandboxLifecycle::Unknown,
+    }
 }
 
 fn sandbox_state(sandbox: &AcaSandbox) -> d2b_realm_core::WorkloadState {
@@ -1673,6 +1731,42 @@ mod tests {
     use azure_core::credentials::{AccessToken, TokenRequestOptions};
     use std::sync::Mutex;
     use std::time::SystemTime;
+
+    fn sandbox(state: &str) -> AcaSandbox {
+        AcaSandbox {
+            id: "sandbox".into(),
+            state: Some(state.into()),
+            labels: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn sandbox_lifecycle_classifies_terminal_and_resumable_states() {
+        assert_eq!(
+            sandbox_lifecycle(&sandbox("Running")),
+            SandboxLifecycle::Running
+        );
+        assert_eq!(
+            sandbox_lifecycle(&sandbox("Suspended")),
+            SandboxLifecycle::Idle
+        );
+        assert_eq!(
+            sandbox_lifecycle(&sandbox("Creating")),
+            SandboxLifecycle::Creating
+        );
+        assert_eq!(
+            sandbox_lifecycle(&sandbox("Stopping")),
+            SandboxLifecycle::Stopping
+        );
+        assert_eq!(
+            sandbox_lifecycle(&sandbox("Failed")),
+            SandboxLifecycle::Failed
+        );
+        assert_eq!(
+            sandbox_lifecycle(&sandbox("unexpected")),
+            SandboxLifecycle::Unknown
+        );
+    }
 
     fn cfg() -> AcaConfig {
         AcaConfig {
