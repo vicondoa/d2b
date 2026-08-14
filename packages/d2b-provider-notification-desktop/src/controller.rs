@@ -155,7 +155,12 @@ fn display_fingerprint(display: &DisplayDependencyEvidence) -> [u8; 32] {
     digest.update([0]);
     digest.update(display.zone().as_str().as_bytes());
     digest.update([0]);
-    digest.update(display.host_execution_ref().to_canonical_string().as_bytes());
+    digest.update(
+        display
+            .host_execution_ref()
+            .to_canonical_string()
+            .as_bytes(),
+    );
     digest.update([0]);
     digest.update(display.user_ref().to_canonical_string().as_bytes());
     digest.update([0]);
@@ -382,9 +387,7 @@ impl SourceProcessEffectReceipt {
             .expect("complete acknowledgement set must match its plan")
     }
 
-    fn expected_acknowledgements(
-        plan: &SourceReconcileResult,
-    ) -> Vec<SourceEffectAcknowledgement> {
+    fn expected_acknowledgements(plan: &SourceReconcileResult) -> Vec<SourceEffectAcknowledgement> {
         let mut acknowledgements = Vec::new();
         acknowledgements.extend(plan.start_endpoints.iter().map(|endpoint| {
             SourceEffectAcknowledgement::Source {
@@ -1004,11 +1007,7 @@ mod tests {
             ..dependency.clone()
         };
         let route_restarted = controller
-            .reconcile_sources(
-                &changed_display,
-                &second,
-                &[test_source("two")],
-            )
+            .reconcile_sources(&changed_display, &second, &[test_source("two")])
             .unwrap();
         assert!(route_restarted.start_host_sink);
         assert!(route_restarted.stop_host_sink);

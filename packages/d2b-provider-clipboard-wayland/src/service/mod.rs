@@ -409,8 +409,7 @@ impl ClipdHost {
                 display.generation(),
             );
             if next_key < current_key
-                || (next_key == current_key
-                    && display.session_digest() != current.session_digest())
+                || (next_key == current_key && display.session_digest() != current.session_digest())
             {
                 return Err(ClipboardServiceError::DependencyUnavailable);
             }
@@ -1152,9 +1151,10 @@ mod tests {
         let current = display();
         let mut host = ClipdHost::new(Policy::default(), 4, Some(current.clone())).unwrap();
         let guest = guest("work", "zone-a", 1);
-        assert!(host
-            .capture_guest(&guest, "text/plain", b"hello", 100)
-            .is_ok());
+        assert!(
+            host.capture_guest(&guest, "text/plain", b"hello", 100)
+                .is_ok()
+        );
 
         assert_eq!(
             host.reconcile_display_dependency(None),

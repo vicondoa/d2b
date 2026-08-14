@@ -365,10 +365,7 @@ mod tests {
             100,
         ));
         assert_eq!(
-            history
-                .entries
-                .get(&token)
-                .map(|entry| entry.mime()),
+            history.entries.get(&token).map(|entry| entry.mime()),
             Some("text/plain")
         );
     }

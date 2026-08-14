@@ -210,12 +210,7 @@ fn controller_status_transitions_pending_ready_and_failed() {
         &spec,
         d2b_provider_display_wayland::DependencyState::ready(),
         d2b_provider_display_wayland::ProcessObservation::proxy_failed(5),
-        d2b_provider_display_wayland::WorkerRestartEvidence::for_test(
-            1_000,
-            Some(0),
-            None,
-            1,
-        ),
+        d2b_provider_display_wayland::WorkerRestartEvidence::for_test(1_000, Some(0), None, 1),
     )
     .unwrap();
     assert_eq!(failed.status.phase, Phase::Failed);
@@ -250,12 +245,7 @@ fn failed_reconcile_retains_the_session_principal_until_cleanup() {
             &first,
             d2b_provider_display_wayland::DependencyState::ready(),
             ProcessObservation::proxy_failed(5),
-            d2b_provider_display_wayland::WorkerRestartEvidence::for_test(
-                1_000,
-                Some(0),
-                None,
-                1,
-            ),
+            d2b_provider_display_wayland::WorkerRestartEvidence::for_test(1_000, Some(0), None, 1,),
         )
         .unwrap()
         .status

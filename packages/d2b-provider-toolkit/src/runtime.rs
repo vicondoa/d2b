@@ -382,11 +382,7 @@ mod tests {
             Some(1),
         );
         assert_eq!(
-            runtime.validate_authenticated_ready(
-                &registration,
-                &admission,
-                &mismatched,
-            ),
+            runtime.validate_authenticated_ready(&registration, &admission, &mismatched,),
             Err(ProviderRuntimeError::SessionUnauthenticated)
         );
         let other_runtime = ProviderEntrypoint::new("Provider/other").unwrap();

@@ -4,8 +4,8 @@ use async_trait::async_trait;
 use d2b_contracts::v3::{
     AuthenticatedSubjectContext, BindingDigest, ControllerGeneration, EvidenceClass, Locality,
     ReconnectGeneration, ResourceGeneration, ResourceRef, ResourceUid, SchemaFingerprint,
-    ServiceName, SessionPurpose, TranscriptHash,
-    TransportBinding as IdentityTransportBinding, ZoneId,
+    ServiceName, SessionPurpose, TranscriptHash, TransportBinding as IdentityTransportBinding,
+    ZoneId,
     component_session::{
         AuthorizationLease, BootstrapIdentityBinding, ChannelClass, EndpointPolicy, HandshakeOffer,
         HealthState, MetricLabels, MetricReason, MetricResult, NoiseProfile, OperationClass,
@@ -971,8 +971,7 @@ impl AuthenticatedSessionRouteBinding {
         }
         if let Some(generation) = controller_generation {
             context = context.with_controller_generation(
-                ControllerGeneration::new(generation)
-                    .expect("test controller generation is valid"),
+                ControllerGeneration::new(generation).expect("test controller generation is valid"),
             );
         }
         let schema = context.schema_fingerprint().clone();
@@ -990,9 +989,8 @@ impl AuthenticatedSessionRouteBinding {
             provider_ref,
             provider_generation: provider_generation
                 .map(|generation| ResourceGeneration::new(generation).expect("test generation")),
-            controller_generation: controller_generation.map(|generation| {
-                ControllerGeneration::new(generation).expect("test generation")
-            }),
+            controller_generation: controller_generation
+                .map(|generation| ControllerGeneration::new(generation).expect("test generation")),
         }
     }
 }
