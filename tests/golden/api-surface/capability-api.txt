@@ -8608,6 +8608,11 @@ d2b_provider_runtime_azure_container_apps	pub d2b_provider_runtime_azure_contain
 d2b_provider_runtime_azure_container_apps	pub d2b_provider_runtime_azure_container_apps::AcaDeploymentRequest::Find::query: d2b_contracts::provider_effects::aca::AcaWorkloadQuery
 d2b_provider_runtime_azure_container_apps	pub d2b_provider_runtime_azure_container_apps::AcaDeploymentRequest::Health
 d2b_provider_runtime_azure_container_apps	pub d2b_provider_runtime_azure_container_apps::AcaDeploymentRequest::Health::operation_id: d2b_contracts::provider_effects::aca::AcaOperationId
+d2b_provider_runtime_azure_container_apps	pub d2b_provider_runtime_azure_container_apps::AcaDeploymentRequest::Provision
+d2b_provider_runtime_azure_container_apps	pub d2b_provider_runtime_azure_container_apps::AcaDeploymentRequest::Provision::binding: d2b_contracts::provider_effects::aca::AcaResourceBinding
+d2b_provider_runtime_azure_container_apps	pub d2b_provider_runtime_azure_container_apps::AcaDeploymentRequest::Provision::disk_image: d2b_contracts::provider_effects::aca::AcaDesiredDiskImage
+d2b_provider_runtime_azure_container_apps	pub d2b_provider_runtime_azure_container_apps::AcaDeploymentRequest::Provision::operation_id: d2b_contracts::provider_effects::aca::AcaOperationId
+d2b_provider_runtime_azure_container_apps	pub d2b_provider_runtime_azure_container_apps::AcaDeploymentRequest::Provision::profile: d2b_contracts::provider_effects::aca::AcaSandboxProfile
 d2b_provider_runtime_azure_container_apps	pub d2b_provider_runtime_azure_container_apps::AcaDeploymentRequest::Start
 d2b_provider_runtime_azure_container_apps	pub d2b_provider_runtime_azure_container_apps::AcaDeploymentRequest::Start::operation_id: d2b_contracts::provider_effects::aca::AcaOperationId
 d2b_provider_runtime_azure_container_apps	pub d2b_provider_runtime_azure_container_apps::AcaDeploymentRequest::Start::sandbox_id: d2b_contracts::provider_effects::aca::AcaSandboxId
@@ -8684,7 +8689,7 @@ d2b_provider_runtime_azure_virtual_machine	pub fn d2b_provider_runtime_azure_vir
 d2b_provider_runtime_azure_virtual_machine	pub fn d2b_provider_runtime_azure_virtual_machine::config::AzureVmConfig::eq(&self, &d2b_provider_runtime_azure_virtual_machine::config::AzureVmConfig) -> bool
 d2b_provider_runtime_azure_virtual_machine	pub fn d2b_provider_runtime_azure_virtual_machine::config::AzureVmConfig::validate_credential_scope(&self, &d2b_contracts::v3::resource_ref::ResourceRef) -> core::result::Result<(), d2b_provider_runtime_azure_virtual_machine::error::AzureVmError>
 d2b_provider_runtime_azure_virtual_machine	pub fn d2b_provider_runtime_azure_virtual_machine::controller::AzureVmController<E>::controller_execution_ref(&self) -> &d2b_contracts::v3::resource_ref::ResourceRef
-d2b_provider_runtime_azure_virtual_machine	pub fn d2b_provider_runtime_azure_virtual_machine::controller::AzureVmController<E>::new(d2b_provider_runtime_azure_virtual_machine::config::AzureVmConfig, d2b_provider_runtime_azure_virtual_machine::config::AzureVmGuestSettings, alloc::sync::Arc<E>, core::option::Option<d2b_provider_runtime_azure_virtual_machine::bootstrap::BootstrapPsk>) -> core::result::Result<Self, d2b_provider_runtime_azure_virtual_machine::error::AzureVmError>
+d2b_provider_runtime_azure_virtual_machine	pub fn d2b_provider_runtime_azure_virtual_machine::controller::AzureVmController<E>::new(d2b_provider_runtime_azure_virtual_machine::config::AzureVmConfig, d2b_provider_runtime_azure_virtual_machine::config::AzureVmGuestSettings, alloc::sync::Arc<E>, alloc::sync::Arc<dyn d2b_provider_runtime_azure_virtual_machine::effect::AzureCredentialPort>, core::option::Option<d2b_provider_runtime_azure_virtual_machine::bootstrap::BootstrapPsk>) -> core::result::Result<Self, d2b_provider_runtime_azure_virtual_machine::error::AzureVmError>
 d2b_provider_runtime_azure_virtual_machine	pub struct d2b_provider_runtime_azure_virtual_machine::AzureVmConfig
 d2b_provider_runtime_azure_virtual_machine	pub struct d2b_provider_runtime_azure_virtual_machine::AzureVmController<E>
 d2b_provider_runtime_azure_virtual_machine	pub struct d2b_provider_runtime_azure_virtual_machine::config::AzureVmConfig
@@ -8717,13 +8722,13 @@ d2b_provider_runtime_cloud_hypervisor	impl d2b_provider_runtime_cloud_hypervisor
 d2b_provider_runtime_cloud_hypervisor	impl d2b_provider_runtime_cloud_hypervisor::config::CloudHypervisorConfig
 d2b_provider_runtime_cloud_hypervisor	impl serde_core::ser::Serialize for d2b_provider_runtime_cloud_hypervisor::config::CloudHypervisorConfig
 d2b_provider_runtime_cloud_hypervisor	impl<'de> serde_core::de::Deserialize<'de> for d2b_provider_runtime_cloud_hypervisor::config::CloudHypervisorConfig
+d2b_provider_runtime_cloud_hypervisor	impl<E, P> !core::panic::unwind_safe::RefUnwindSafe for d2b_provider_runtime_cloud_hypervisor::controller::CloudHypervisorController<E, P>
+d2b_provider_runtime_cloud_hypervisor	impl<E, P> !core::panic::unwind_safe::UnwindSafe for d2b_provider_runtime_cloud_hypervisor::controller::CloudHypervisorController<E, P>
 d2b_provider_runtime_cloud_hypervisor	impl<E, P> core::marker::Freeze for d2b_provider_runtime_cloud_hypervisor::controller::CloudHypervisorController<E, P>
 d2b_provider_runtime_cloud_hypervisor	impl<E, P> core::marker::Send for d2b_provider_runtime_cloud_hypervisor::controller::CloudHypervisorController<E, P> where E: core::marker::Sync + core::marker::Send, P: core::marker::Sync + core::marker::Send
 d2b_provider_runtime_cloud_hypervisor	impl<E, P> core::marker::Sync for d2b_provider_runtime_cloud_hypervisor::controller::CloudHypervisorController<E, P> where E: core::marker::Sync + core::marker::Send, P: core::marker::Sync + core::marker::Send
 d2b_provider_runtime_cloud_hypervisor	impl<E, P> core::marker::Unpin for d2b_provider_runtime_cloud_hypervisor::controller::CloudHypervisorController<E, P>
 d2b_provider_runtime_cloud_hypervisor	impl<E, P> core::marker::UnsafeUnpin for d2b_provider_runtime_cloud_hypervisor::controller::CloudHypervisorController<E, P>
-d2b_provider_runtime_cloud_hypervisor	impl<E, P> core::panic::unwind_safe::RefUnwindSafe for d2b_provider_runtime_cloud_hypervisor::controller::CloudHypervisorController<E, P> where E: core::panic::unwind_safe::RefUnwindSafe, P: core::panic::unwind_safe::RefUnwindSafe
-d2b_provider_runtime_cloud_hypervisor	impl<E, P> core::panic::unwind_safe::UnwindSafe for d2b_provider_runtime_cloud_hypervisor::controller::CloudHypervisorController<E, P> where E: core::panic::unwind_safe::RefUnwindSafe, P: core::panic::unwind_safe::RefUnwindSafe
 d2b_provider_runtime_cloud_hypervisor	impl<E, P> d2b_provider_runtime_cloud_hypervisor::controller::CloudHypervisorController<E, P> where E: d2b_provider_runtime_cloud_hypervisor::controller::CloudHypervisorEffectPort + 'static, P: d2b_provider_runtime_cloud_hypervisor::health::GuestControlProbe + 'static
 d2b_provider_runtime_cloud_hypervisor	impl<T, U> core::convert::Into<U> for d2b_provider_runtime_cloud_hypervisor::bootstrap_graph::BootstrapGraph where U: core::convert::From<T>
 d2b_provider_runtime_cloud_hypervisor	impl<T, U> core::convert::Into<U> for d2b_provider_runtime_cloud_hypervisor::config::CloudHypervisorConfig where U: core::convert::From<T>

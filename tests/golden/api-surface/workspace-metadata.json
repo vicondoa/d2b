@@ -196,7 +196,7 @@
       "crate_name": "d2b_gateway",
       "private_census": {
         "external_crates": 44,
-        "index_items": 1562,
+        "index_items": 1563,
         "path_items": 4426
       },
       "private_hidden_items": 20,
@@ -212,15 +212,15 @@
       "crate_name": "d2b_gateway_runtime",
       "private_census": {
         "external_crates": 197,
-        "index_items": 2413,
-        "path_items": 15556
+        "index_items": 2417,
+        "path_items": 15571
       },
       "private_hidden_items": 11,
       "private_json_file": "d2b_gateway_runtime.json",
       "public_census": {
         "external_crates": 197,
-        "index_items": 865,
-        "path_items": 15396
+        "index_items": 866,
+        "path_items": 15408
       },
       "public_json_file": "d2b_gateway_runtime.json"
     },
@@ -244,15 +244,15 @@
       "crate_name": "d2b_host",
       "private_census": {
         "external_crates": 62,
-        "index_items": 9768,
-        "path_items": 11458
+        "index_items": 9767,
+        "path_items": 11451
       },
       "private_hidden_items": 189,
       "private_json_file": "d2b_host.json",
       "public_census": {
         "external_crates": 62,
-        "index_items": 6145,
-        "path_items": 11333
+        "index_items": 6144,
+        "path_items": 11326
       },
       "public_json_file": "d2b_host.json"
     },
@@ -260,15 +260,15 @@
       "crate_name": "d2b_host_argv",
       "private_census": {
         "external_crates": 22,
-        "index_items": 248,
-        "path_items": 2600
+        "index_items": 207,
+        "path_items": 2596
       },
-      "private_hidden_items": 7,
+      "private_hidden_items": 5,
       "private_json_file": "d2b_host_argv.json",
       "public_census": {
         "external_crates": 22,
-        "index_items": 234,
-        "path_items": 2577
+        "index_items": 197,
+        "path_items": 2573
       },
       "public_json_file": "d2b_host_argv.json"
     },
@@ -564,15 +564,15 @@
       "crate_name": "d2b_provider_runtime_azure_container_apps",
       "private_census": {
         "external_crates": 173,
-        "index_items": 1981,
-        "path_items": 15038
+        "index_items": 2130,
+        "path_items": 15050
       },
-      "private_hidden_items": 29,
+      "private_hidden_items": 32,
       "private_json_file": "d2b_provider_runtime_azure_container_apps.json",
       "public_census": {
         "external_crates": 173,
-        "index_items": 1075,
-        "path_items": 14924
+        "index_items": 1131,
+        "path_items": 14927
       },
       "public_json_file": "d2b_provider_runtime_azure_container_apps.json"
     },
@@ -580,15 +580,15 @@
       "crate_name": "d2b_provider_runtime_azure_virtual_machine",
       "private_census": {
         "external_crates": 59,
-        "index_items": 1516,
-        "path_items": 10624
+        "index_items": 1682,
+        "path_items": 10633
       },
-      "private_hidden_items": 32,
+      "private_hidden_items": 34,
       "private_json_file": "d2b_provider_runtime_azure_virtual_machine.json",
       "public_census": {
         "external_crates": 59,
-        "index_items": 895,
-        "path_items": 10574
+        "index_items": 1001,
+        "path_items": 10582
       },
       "public_json_file": "d2b_provider_runtime_azure_virtual_machine.json"
     },
@@ -596,15 +596,15 @@
       "crate_name": "d2b_provider_runtime_cloud_hypervisor",
       "private_census": {
         "external_crates": 66,
-        "index_items": 1588,
-        "path_items": 11135
+        "index_items": 1641,
+        "path_items": 11127
       },
-      "private_hidden_items": 41,
+      "private_hidden_items": 40,
       "private_json_file": "d2b_provider_runtime_cloud_hypervisor.json",
       "public_census": {
         "external_crates": 66,
-        "index_items": 952,
-        "path_items": 11088
+        "index_items": 985,
+        "path_items": 11080
       },
       "public_json_file": "d2b_provider_runtime_cloud_hypervisor.json"
     },
@@ -724,14 +724,14 @@
       "crate_name": "d2b_provider_transport_azure_relay",
       "private_census": {
         "external_crates": 69,
-        "index_items": 1830,
+        "index_items": 1832,
         "path_items": 11157
       },
       "private_hidden_items": 43,
       "private_json_file": "d2b_provider_transport_azure_relay.json",
       "public_census": {
         "external_crates": 69,
-        "index_items": 1045,
+        "index_items": 1046,
         "path_items": 11104
       },
       "public_json_file": "d2b_provider_transport_azure_relay.json"
@@ -1061,14 +1061,14 @@
       "private_census": {
         "external_crates": 242,
         "index_items": 41987,
-        "path_items": 21485
+        "path_items": 21489
       },
       "private_hidden_items": 362,
       "private_json_file": "d2bd.json",
       "public_census": {
         "external_crates": 242,
         "index_items": 14482,
-        "path_items": 20200
+        "path_items": 20204
       },
       "public_json_file": "d2bd.json"
     }
