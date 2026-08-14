@@ -95,41 +95,39 @@ impl DisplayAuditRecord {
 
     /// Add a bounded closed warning code and interface name.
     pub fn with_warning(mut self, warning: &str, interface: &str) -> Self {
-            let warning = sanitize_component(warning);
-            let interface = sanitize_component(interface);
-            self.warning = Some(format!("{warning}:{interface}"));
-            self
+        let warning = sanitize_component(warning);
+        let interface = sanitize_component(interface);
+        self.warning = Some(format!("{warning}:{interface}"));
+        self
     }
 
     /// Render a path-free audit payload.
     pub fn to_wire_record(&self) -> String {
-            format!(
-                "kind={} outcome={} zone={} resource={} subject={} operation={} warning={}",
-                self.kind.as_str(),
-                self.outcome.as_str(),
-                self.zone_digest,
-                self.resource_digest,
-                self.subject_digest,
-                self.operation_digest,
-                self.warning.as_deref().unwrap_or("none")
-            )
+        format!(
+            "kind={} outcome={} zone={} resource={} subject={} operation={} warning={}",
+            self.kind.as_str(),
+            self.outcome.as_str(),
+            self.zone_digest,
+            self.resource_digest,
+            self.subject_digest,
+            self.operation_digest,
+            self.warning.as_deref().unwrap_or("none")
+        )
     }
 }
 
 fn sanitize_component(value: &str) -> String {
     value
-            .chars()
-            .map(|character| {
-                if character.is_ascii_alphanumeric()
-                    || matches!(character, '-' | '_' | '.' | '/')
-                {
-                    character
-                } else {
-                    '_'
-                }
-            })
-            .take(63)
-            .collect::<String>()
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.' | '/') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .take(63)
+        .collect::<String>()
 }
 
 impl core::fmt::Debug for DisplayAuditRecord {

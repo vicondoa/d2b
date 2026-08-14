@@ -150,15 +150,13 @@ fn expired_action_nonces_do_not_block_new_capacity() {
         .with_actions(vec![ActionSpec::new("open", "Open").unwrap()])
         .unwrap();
     assert!(matches!(
-        sink.deliver(&mut port, "observer-a", first, 100)
-            .unwrap(),
+        sink.deliver(&mut port, "observer-a", first, 100).unwrap(),
         NotificationResult::Accepted { .. }
     ));
 
     let second = NotificationRequest::new("second", "body", Category::SystemInfo).unwrap();
     assert!(matches!(
-        sink.deliver(&mut port, "observer-a", second, 111)
-            .unwrap(),
+        sink.deliver(&mut port, "observer-a", second, 111).unwrap(),
         NotificationResult::Accepted { .. }
     ));
 }
@@ -176,9 +174,7 @@ fn idempotency_keys_return_the_original_delivery_result() {
     let first = sink
         .deliver(&mut port, "observer-a", request.clone(), 100)
         .unwrap();
-    let second = sink
-        .deliver(&mut port, "observer-a", request, 101)
-        .unwrap();
+    let second = sink.deliver(&mut port, "observer-a", request, 101).unwrap();
     assert_eq!(first, second);
     assert_eq!(port.accepted, vec!["summary"]);
 }
