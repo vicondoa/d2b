@@ -42,11 +42,7 @@ pub enum PolicyWarning {
 
 /// Policy input layer.
 #[derive(Clone, Default, PartialEq, Eq, Serialize)]
-#[serde(
-    rename_all = "camelCase",
-    deny_unknown_fields,
-    try_from = "FilterInputWire"
-)]
+#[serde(rename_all = "camelCase")]
 pub struct FilterInput {
     allow_globals: Vec<String>,
     deny_globals: Vec<String>,
@@ -182,6 +178,16 @@ impl core::fmt::Display for PolicyCompileError {
 }
 
 impl std::error::Error for PolicyCompileError {}
+
+impl<'de> Deserialize<'de> for FilterInput {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let wire = FilterInputWire::deserialize(deserializer)?;
+        Self::try_from(wire).map_err(serde::de::Error::custom)
+    }
+}
 
 /// Compiled, immutable Wayland policy.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]

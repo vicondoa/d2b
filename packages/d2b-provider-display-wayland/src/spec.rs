@@ -58,11 +58,7 @@ pub enum DisplayLabelPosition {
 
 /// Compositor-agnostic display identity metadata.
 #[derive(Clone, PartialEq, Eq, Serialize)]
-#[serde(
-    rename_all = "camelCase",
-    deny_unknown_fields,
-    try_from = "DisplayIdentityWire"
-)]
+#[serde(rename_all = "camelCase")]
 pub struct DisplayIdentity {
     label: String,
     active_color: String,
@@ -102,6 +98,16 @@ impl TryFrom<DisplayIdentityWire> for DisplayIdentity {
         let identity = identity.with_border(value.border_enabled, value.border_width)?;
         let identity = identity.with_label(value.label_enabled, value.label_text)?;
         Ok(identity.with_label_position(value.label_position))
+    }
+}
+
+impl<'de> Deserialize<'de> for DisplayIdentity {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let wire = DisplayIdentityWire::deserialize(deserializer)?;
+        Self::try_from(wire).map_err(serde::de::Error::custom)
     }
 }
 
@@ -263,6 +269,16 @@ impl TryFrom<WaylandSessionSpecWire> for WaylandSessionSpec {
         )?
         .with_virgl_video(value.virgl_video)
         .with_filter(value.filter))
+    }
+}
+
+impl<'de> Deserialize<'de> for WaylandSessionSpec {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let wire = WaylandSessionSpecWire::deserialize(deserializer)?;
+        Self::try_from(wire).map_err(serde::de::Error::custom)
     }
 }
 
