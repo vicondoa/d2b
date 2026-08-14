@@ -2,17 +2,14 @@
 
 use crate::SessionEvidence;
 use d2b_contracts::v3::{EvidenceClass, Locality, ResourceRef, ZoneId};
-use d2b_provider_display_wayland::{
-    DisplayDependencyProof, SERVICE_PACKAGE as DISPLAY_SERVICE_PACKAGE,
-};
-use d2b_session::AuthenticatedSessionRouteBinding;
+use d2b_provider_toolkit::AuthenticatedSessionRouteBinding;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 
 use crate::Category;
 
-#[allow(dead_code)]
-const DISPLAY_PROVIDER_REF: &str = d2b_provider_display_wayland::PROVIDER_REF;
+const DISPLAY_PROVIDER_REF: &str = "Provider/display-wayland";
+const DISPLAY_SERVICE_PACKAGE: &str = "d2b.display.v3";
 const MAX_GUEST_SOURCES: usize = 16;
 
 /// Readiness state reported by the authenticated display dependency.
@@ -41,15 +38,15 @@ pub struct DisplayDependencyEvidence {
 }
 
 impl DisplayDependencyEvidence {
-    /// Project authenticated Ready evidence minted by the display controller.
-    pub fn from_proof(proof: DisplayDependencyProof) -> Self {
-        Self {
-            provider_ref: proof.provider_ref().clone(),
-            zone: proof.zone().clone(),
-            user_ref: proof.user_ref().clone(),
-            generation: proof.generation(),
-            state: DisplayDependencyState::Ready,
-        }
+    /// Project authenticated Ready evidence from the display route.
+    pub fn from_authenticated_route(
+        route: AuthenticatedSessionRouteBinding,
+    ) -> Result<Self, &'static str> {
+        let generation = route
+            .provider_generation()
+            .ok_or("display-dependency-unauthenticated")?
+            .get();
+        Self::from_route(route, DisplayDependencyState::Ready, generation)
     }
 
     /// Resolve one display dependency from an authenticated display route.
@@ -444,13 +441,15 @@ impl NotificationController {
         })
     }
 
-    /// Reconcile from a Core-authenticated display proof.
+    /// Reconcile from a Core-authenticated display route.
     ///
     /// `None` is the fail-closed dependency state and drains every owned
-    /// source/sink endpoint; callers cannot manufacture a Ready boolean.
+    /// source/sink endpoint. A route is accepted only when the sealed
+    /// ComponentSession authority has bound the display Provider, local Unix
+    /// evidence, a User subject, and a non-zero Provider generation.
     pub fn reconcile_authenticated_display(
         &mut self,
-        display: Option<DisplayDependencyProof>,
+        display: Option<AuthenticatedSessionRouteBinding>,
         config: &NotificationProviderConfig,
         source_sessions: &[SessionEvidence],
     ) -> Result<SourceReconcileResult, &'static str> {
@@ -470,7 +469,7 @@ impl NotificationController {
             self.host_sink_generation = None;
             return Ok(result);
         };
-        let evidence = DisplayDependencyEvidence::from_proof(proof);
+        let evidence = DisplayDependencyEvidence::from_authenticated_route(proof)?;
         self.reconcile_sources(&evidence, config, source_sessions)
     }
 

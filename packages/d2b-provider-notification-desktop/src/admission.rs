@@ -1,7 +1,7 @@
 //! ComponentSession admission for notification streams.
 
 use d2b_contracts::v3::{EvidenceClass, ResourceRef, ZoneId};
-use d2b_session::{AuthenticatedComponentSession, AuthenticatedSessionRouteBinding};
+use d2b_provider_toolkit::{AuthenticatedComponentSession, AuthenticatedSessionRouteBinding};
 
 /// Stream admission purpose.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

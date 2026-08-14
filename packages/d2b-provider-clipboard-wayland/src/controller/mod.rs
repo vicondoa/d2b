@@ -1,7 +1,7 @@
 //! Clipboard controller placement and lifecycle projections.
 
-use d2b_contracts::v3::{ResourceRef, ZoneId};
-use d2b_provider_display_wayland::DisplayDependencyProof;
+use d2b_contracts::v3::{EvidenceClass, Locality, ResourceRef, ZoneId};
+use d2b_provider_toolkit::AuthenticatedSessionRouteBinding;
 
 /// Display dependency state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -25,14 +25,37 @@ pub struct DisplayDependencyEvidence {
 }
 
 impl DisplayDependencyEvidence {
-    /// Consume Core-authenticated display readiness evidence.
-    pub fn from_display_proof(proof: DisplayDependencyProof) -> Self {
-        Self {
-            provider_ref: proof.provider_ref().clone(),
-            zone: proof.zone().clone(),
-            user_ref: proof.user_ref().clone(),
-            generation: proof.generation(),
+    /// Consume a Core-authenticated display route.
+    ///
+    /// The route binding is produced by the sealed ComponentSession
+    /// authority. Its Provider generation is the only readiness generation
+    /// accepted here; lexical Provider, User, and Zone values are never
+    /// accepted as authority inputs.
+    pub fn from_authenticated_route(
+        route: AuthenticatedSessionRouteBinding,
+    ) -> Result<Self, &'static str> {
+        let Some(provider_ref) = route.provider_ref() else {
+            return Err("clipboard-display-unauthenticated");
+        };
+        let Some(provider_generation) = route.provider_generation() else {
+            return Err("clipboard-display-unauthenticated");
+        };
+        if provider_ref.to_canonical_string() != "Provider/display-wayland"
+            || route.service().as_str() != "d2b.display.v3"
+            || route.evidence_class() != EvidenceClass::UnixPeer
+            || route.locality() != Locality::Local
+            || route.subject_ref().resource_type().as_str() != "User"
+            || route.reconnect_generation().get() == 0
+            || provider_generation.get() == 0
+        {
+            return Err("clipboard-display-unauthenticated");
         }
+        Ok(Self {
+            provider_ref: provider_ref.clone(),
+            zone: route.zone().clone(),
+            user_ref: route.subject_ref().clone(),
+            generation: provider_generation.get(),
+        })
     }
 
     /// Borrow the authenticated display Provider reference.

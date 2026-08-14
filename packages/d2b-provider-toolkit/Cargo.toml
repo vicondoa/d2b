@@ -5,6 +5,10 @@ edition = "2024"
 publish = false
 license.workspace = true
 
+[features]
+default = ["unix-transport"]
+unix-transport = ["dep:d2b-session-unix", "d2b-session-unix/host-socket"]
+
 [lints]
 workspace = true
 
@@ -12,6 +16,7 @@ workspace = true
 d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
 d2b-provider = { path = "../d2b-provider", version = "0.0.0-bootstrap" }
 d2b-session = { path = "../d2b-session", version = "0.0.0-bootstrap" }
+d2b-session-unix = { path = "../d2b-session-unix", version = "0.0.0-bootstrap", default-features = false, optional = true }
 schemars.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, features = ["sync", "time"] }

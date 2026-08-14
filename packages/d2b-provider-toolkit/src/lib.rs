@@ -72,7 +72,10 @@ pub use audit::{
 pub use bootstrap::{
     AllocatorSessionBinding, PROVIDER_RESOURCE_TYPE, ProviderAgentBootstrap, ProviderAgentIdentity,
 };
-pub use d2b_session::{ComponentSessionDriver, StreamEvent, StreamId};
+pub use d2b_session::{
+    AuthenticatedComponentSession, AuthenticatedSessionRouteBinding, ComponentSessionDriver,
+    StreamEvent, StreamId,
+};
 pub use dispatch::{DispatchLimiter, DispatchPermit, MAX_DISPATCH_IN_FLIGHT};
 pub use error::ProviderToolkitError;
 pub use fixture::{
@@ -96,3 +99,9 @@ pub use values::{
     ProviderHealth, ProviderHealthState, ProviderInspection, ProviderObservability, ProviderValues,
     ValuesError,
 };
+
+/// Audited Unix attachment types used by Provider-specific transport adapters.
+#[cfg(feature = "unix-transport")]
+pub mod unix {
+    pub use d2b_session_unix::{AcceptedAttachment, VerifiedPacket};
+}

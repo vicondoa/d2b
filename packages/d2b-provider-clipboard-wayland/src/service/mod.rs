@@ -9,8 +9,10 @@ use crate::{
     policy::Policy,
 };
 use d2b_contracts::v3::{ResourceRef, ZoneId};
-use d2b_session::{AuthenticatedComponentSession, AuthenticatedSessionRouteBinding};
-use d2b_session_unix::{AcceptedAttachment, VerifiedPacket};
+use d2b_provider_toolkit::{
+    AuthenticatedComponentSession, AuthenticatedSessionRouteBinding,
+    unix::{AcceptedAttachment, VerifiedPacket},
+};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
