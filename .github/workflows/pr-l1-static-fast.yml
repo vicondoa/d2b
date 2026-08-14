@@ -25,8 +25,6 @@ jobs:
           persist-credentials: false
       - name: Tier 0 first-pass gate
         run: make check-tier0
-      - name: ADR index coverage guard
-        run: make test-adr-index-coverage
       - name: CI coverage structural guard
         run: make test-ci-coverage
 

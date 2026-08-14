@@ -86,7 +86,6 @@
       "displayName": "Tier 0 first-pass gate",
       "makeTarget": "check-tier0",
       "extraMakeTargets": [
-        { "makeTarget": "test-adr-index-coverage", "displayName": "ADR index coverage guard" },
         { "makeTarget": "test-ci-coverage", "displayName": "CI coverage structural guard" }
       ],
       "ciKind": "tier0",

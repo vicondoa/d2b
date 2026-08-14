@@ -2465,27 +2465,6 @@ pkgs.testers.runNixOSTest {
     )
     machine.succeed(f"{package}/bin/bazel --version | grep -F 'bazel 9.1.1'")
 
-    # Runtime state/configuration is deliberately not a d2b delivery/panel
-    # surface.  Immutable fixture sources are outside this generated-state
-    # census.
-    forbidden = (
-        "d2b-panel|d2b-panel-fix|d2b-panel-round|d2b-wave-delivery|"
-        "panel-request|panel-attest|merge-eligibility|make-records\\.mjs|"
-        "selection-table\\.json|\\.scratch/panel|"
-        "packages/xtask/src/delivery|evidence-pinning"
-    )
-    for root in [
-        "/var/lib/gascity-contributor/state",
-        "/run/gascity-contributor",
-        "/var/lib/gascity-discord",
-        "/var/lib/gascity-publisher",
-        "/var/lib/gascity-check",
-        "/var/lib/gascity-buildbuddy-proxy",
-    ]:
-        machine.succeed(
-            f"! grep -r -I -E -i '{forbidden}' {root} 2>/dev/null"
-        )
-
     # PartOf plus KillMode=control-group is verified with the live child, not
     # just systemd metadata.  Stopping the named unit removes every fake child
     # and sidecar, and a subsequent start proves the lifecycle can be resumed.

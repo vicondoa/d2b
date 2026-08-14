@@ -57,8 +57,6 @@ run_xtask gen-guest-proto
 run_xtask gen-guest-ttrpc
 run_xtask gen-resource-proto
 run_xtask gen-resource-ttrpc
-run_xtask spec-registry
-run_xtask implementation-graph
 run_xtask gen-zone-schemas
 run_xtask gen-zone-nix-options
 run_xtask gen-provider-packaging
@@ -72,10 +70,6 @@ drift_paths=(
   docs/manpages/
   completions/
   docs/reference/cli-output/
-  docs/specs/ADR-046-spec-set.json
-  docs/specs/ADR-046-work-items.json
-  docs/specs/ADR-046-implementation-graph.json
-  docs/specs/ADR-046-implementation-graph.md
   nixos-modules/generated/
   packages/d2b-contracts/src/generated
   packages/d2b-guestd/src/generated

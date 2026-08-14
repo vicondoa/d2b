@@ -3238,10 +3238,7 @@ wait
         rust_driver = RUST_DRIVER.read_text(encoding="utf-8")
         binaries = [
             "policy_dash_gate",
-            "policy_adr046_work_items",
             "policy_changelog_gate",
-            "policy_adr046_spec_literals",
-            "policy_adr046_envelopes",
             "policy_provider_crates",
             "policy_resource_mutation_seal",
             "policy_docs",

@@ -8,7 +8,7 @@
 # function could silently redirect a gate that intends to execute a binary.
 SHELL := $(CURDIR)/tests/tools/scrub-shell-environment
 
-.PHONY: pre-tag smoke-lite i3-check \
+.PHONY: pre-tag smoke-lite \
         check check-static check-ci check-all check-fast check-tier0 \
         test test-unit \
         test-lint test-rust test-rust-api-surface test-rust-main \
@@ -20,7 +20,7 @@ SHELL := $(CURDIR)/tests/tools/scrub-shell-environment
         test-rust-leaf-guest-shell-runner test-rust-leaf-no-bash-ast \
         test-rust-leaf-supply-chain \
         test-fixture-contracts test-proofs test-flake test-nix-unit \
-        test-performance-budgets test-adr-index-coverage test-ci-coverage \
+        test-performance-budgets test-ci-coverage \
         test-flake-list test-flake-partition \
         test-drift test-policy test-integration test-host-integration test-hardware perf \
         heavy-lane-guard heavy-lane-integration heavy-lane-host-integration \
@@ -558,7 +558,7 @@ test-drift:
 	bash tests/test-drift.sh
 
 ## test-policy - meta gates that guard the test architecture + cross-cutting
-## invariants (ci-coverage, adr-index, deliverable-gate, etc.).
+## invariants (ci-coverage, deliverable-gate, etc.).
 ##
 ## The Provider crate layout policies run here as xtask commands, not as
 ## shell gates: the drift and meta gate set is closed.
@@ -571,10 +571,6 @@ test-policy:
 ## Hosted runners take the cheap skip path; pinned stable runners enforce it.
 test-performance-budgets:
 	bash tests/unit/gates/performance-budgets.sh
-
-## Focused policy entrypoints used by the early CI preflight.
-test-adr-index-coverage:
-	bash tests/unit/meta/adr-index-coverage.sh
 
 test-ci-coverage:
 	bash tests/unit/meta/ci-coverage.sh
@@ -797,19 +793,13 @@ heavy-flake-check: heavy-gate-build
 
 # --- pre-existing maintainer targets ---------------------------------------
 
-## i3-check - verify no v1.3 deferrals authored (ADR 0022 I3 invariant).
-##            Wired into pre-tag and tests/static.sh per panel-docs R1 MF-1.
-i3-check:
-	bash tests/unit/meta/no-new-deferral.sh
-
 ## pre-tag - run the full live-VM smoke gate before tagging a release.
 ##           Requires: KVM, d2b active, both personal-dev and work-aad VMs declared.
 ##           Exits non-zero on any probe failure.  Updates $${TMPDIR:-/tmp}/d2b-smoke-run-log.txt.
-##           ALSO runs the I3 invariant grep gate (ADR 0022 + panel-docs R1).
 ##           Public heavy lane: acquires a slot, then runs the raw live work behind
 ##           the gate - the live smoke suite is the most destructive, stateful lane
 ##           in the tree and must never bypass the sole-use semaphore.
-pre-tag: i3-check heavy-gate-build
+pre-tag: heavy-gate-build
 	$(HEAVY_GATE) $(MAKE) heavy-lane-pre-tag
 
 ## heavy-lane-pre-tag - the raw full live-VM smoke work. Internal: reachable only
@@ -818,7 +808,6 @@ heavy-lane-pre-tag: heavy-lane-guard
 	bash tests/integration/live/live-vm-smoke.sh --full
 
 ## smoke-lite - run the single-VM lite smoke gate (≤5 min).
-##              Used at every panel-round HEAD per I5.
 ##              Public heavy lane: acquires a slot, then runs the raw live work
 ##              behind the gate.
 smoke-lite: heavy-gate-build

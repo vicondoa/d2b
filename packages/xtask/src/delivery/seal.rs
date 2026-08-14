@@ -15,10 +15,7 @@
 //! candidate identities alone. Every prior validator result therefore becomes
 //! stale and each lane must re-import against the new snapshot.
 
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    path::PathBuf,
-};
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -31,7 +28,7 @@ use super::{
         CandidateId, CandidateMaterial, ContentId, SEAL_ARTIFACT_KIND, SnapshotSha256,
         sha256_bytes, validate_identifier, validate_program_wave, validate_sha256,
     },
-    storage::{CandidateDir, SEAL_FILE, StateRoot},
+    storage::{CandidateDir, SEAL_FILE},
 };
 
 /// One lane's accepted validations, as bound into the seal.
@@ -115,27 +112,11 @@ impl SealRecord {
 pub fn run(args: &[String]) -> Result<WorkflowOutput> {
     let mut options = CliOptions::parse(args)?;
     let snapshot_path = options.required_path("--snapshot")?;
-    let (state, repository_roots) = super::prepare_state_with_roots(&mut options)?;
+    let state = super::prepare_state(&mut options)?;
     options.finish()?;
     let snapshot_path = state.resolve_artifact_ref(&snapshot_path);
     let (candidate, snapshot) = super::open_candidate(&state, &snapshot_path)?;
-    super::work_item_state::reject_adr046_w5_mutation(&snapshot.material, "seal")?;
-    seal_checked(&state, &candidate, &snapshot, &repository_roots)
-}
-
-fn seal_checked(
-    state: &StateRoot,
-    candidate: &CandidateDir,
-    snapshot: &SnapshotView,
-    repository_roots: &BTreeMap<String, PathBuf>,
-) -> Result<WorkflowOutput> {
-    super::work_item_state::require_current_wave_merged(&snapshot.material, repository_roots)?;
-    super::work_item_state::require_predecessor_state_for_exit(
-        state,
-        &snapshot.material,
-        repository_roots,
-    )?;
-    seal(candidate, snapshot)
+    seal(&candidate, &snapshot)
 }
 
 /// Binds passing validator lanes to one candidate.
@@ -222,7 +203,6 @@ pub(crate) mod tests {
     use crate::delivery::{
         evidence::EvidenceRecord,
         model::{CandidateMaterial, EVIDENCE_ARTIFACT_KIND, EvidenceResult, fixtures},
-        snapshot::tests::{GitFixture, take},
         storage::tests::Scratch,
         test_support::{candidate_with_snapshot, candidate_with_snapshot_from},
     };
@@ -264,8 +244,7 @@ pub(crate) mod tests {
     }
 
     /// Like [`sealable`], but over a caller-supplied material, so a test can
-    /// seal a wave whose expected pull-request set is not the single-slice
-    /// fixture default.
+    /// seal a wave whose expected pull-request set is richer than the default.
     pub(crate) fn sealable_from(
         scratch: &Scratch,
         material: CandidateMaterial,
@@ -305,116 +284,7 @@ pub(crate) mod tests {
         let record: SealRecord = candidate.read_json(SEAL_FILE).expect("seal record");
         record.validate(&candidate).expect("sealed record is valid");
         assert_eq!(record.candidate_id, snapshot.candidate_id);
-        let serialized = serde_json::to_value(&record).expect("seal JSON");
-        assert!(
-            serialized.get("panel").is_none(),
-            "the seal must not carry panel state"
-        );
         assert_eq!(record.evidence.len(), 2);
-    }
-
-    #[test]
-    fn seal_command_rejects_stale_planned_work_item_state() {
-        let repository = GitFixture::new("seal-planned-state-repository");
-        repository.write(
-            "docs/specs/ADR-046-implementation-graph.json",
-            r#"{"nodes":[{"id":"ADR046-foundation-001","kind":"work-item","wave":"W0"}]}"#,
-        );
-        repository.write(
-            "docs/specs/ADR-046-work-items.json",
-            r#"{"items":[{"workItemId":"ADR046-foundation-001","implementationState":"Planned"}]}"#,
-        );
-        repository.commit("planned work-item state");
-        let material = take(&repository).material;
-
-        let scratch = Scratch::new("seal-planned-state");
-        let (candidate, snapshot) = sealable_from(&scratch, material);
-        let state = StateRoot::for_tests(&scratch.path.join("state")).expect("state root");
-        let roots = BTreeMap::from([("github.com/example/d2b".to_string(), repository.repo())]);
-        let error = seal_checked(&state, &candidate, &snapshot, &roots)
-            .expect_err("a Planned item must block the seal command");
-        assert!(error.message().contains("cannot seal W0"), "{error}");
-        assert!(error.message().contains("ADR046-foundation-001"), "{error}");
-        assert!(
-            error.message().contains("Implementation state to Merged"),
-            "{error}"
-        );
-    }
-
-    /// FR-049: the seal boundary carries the predecessor-merged condition in
-    /// its own right. This wave's own
-    /// items are all `Merged`, so the current-wave leg passes and cannot be
-    /// what refuses; only the prior-wave leg can produce the error below.
-    #[test]
-    fn seal_command_rejects_an_unmerged_prior_wave_item() {
-        let repository = GitFixture::new("seal-prior-wave-repository");
-        repository.write(
-            "docs/specs/ADR-046-implementation-graph.json",
-            "{\"nodes\":[\
-             {\"id\":\"ADR046-foundation-001\",\"kind\":\"work-item\",\"wave\":\"W0\"},\
-             {\"id\":\"ADR046-backend-001\",\"kind\":\"work-item\",\"wave\":\"W1\"}]}\n",
-        );
-        repository.write(
-            "docs/specs/ADR-046-work-items.json",
-            "{\"items\":[\
-             {\"workItemId\":\"ADR046-foundation-001\",\"implementationState\":\"Planned\"},\
-             {\"workItemId\":\"ADR046-backend-001\",\"implementationState\":\"Merged\"}]}\n",
-        );
-        repository.commit("predecessor wave still unmerged");
-        let mut material = take(&repository).material;
-        "W1".clone_into(&mut material.wave);
-
-        let scratch = Scratch::new("seal-prior-wave");
-        let (candidate, snapshot) = sealable_from(&scratch, material);
-        let state = StateRoot::for_tests(&scratch.path.join("state")).expect("state root");
-        let roots = BTreeMap::from([("github.com/example/d2b".to_string(), repository.repo())]);
-        let error = seal_checked(&state, &candidate, &snapshot, &roots)
-            .expect_err("an unmerged prior-wave item must block the seal command");
-        assert!(
-            error.message().contains("cannot seal or merge W1"),
-            "{error}"
-        );
-        assert!(error.message().contains("ADR046-foundation-001"), "{error}");
-        assert!(error.message().contains("in W0 is `Planned`"), "{error}");
-    }
-
-    /// Drives the real `wave seal` entrypoint from its argument vector, so CLI
-    /// parsing, state-root preparation, and snapshot resolution are covered -
-    /// not just the inner `seal_checked` helper.
-    ///
-    /// The state root sits inside the ignored build tree, which
-    /// `StateRoot::prepare` refuses in production, so the test installs the
-    /// `#[cfg(test)]`-only redirection for the duration of the run. The
-    /// production refusal is untouched.
-    #[test]
-    fn the_seal_entrypoint_runs_end_to_end_from_its_argument_vector() {
-        use crate::delivery::{snapshot, storage::test_root_override};
-
-        let repository = GitFixture::new("seal-cli-repository");
-        repository.write(
-            "docs/specs/ADR-046-implementation-graph.json",
-            r#"{"nodes":[{"id":"ADR046-foundation-001","kind":"work-item","wave":"W0"}]}"#,
-        );
-        repository.write(
-            "docs/specs/ADR-046-work-items.json",
-            r#"{"items":[{"workItemId":"ADR046-foundation-001","implementationState":"Planned"}]}"#,
-        );
-        repository.commit("planned work-item state");
-        let _guard = test_root_override::install(&repository.state());
-
-        let snapshot_ref = snapshot::run(&repository.snapshot_args())
-            .expect("wave snapshot")
-            .artifact
-            .expect("snapshot artifact reference");
-        let args = vec![
-            "--snapshot".to_owned(),
-            snapshot_ref,
-            "--repo".to_owned(),
-            format!("github.com/example/d2b={}", repository.repo().display()),
-        ];
-        let error = run(&args).expect_err("the entrypoint must refuse a Planned work item");
-        assert!(error.message().contains("cannot seal W0"), "{error}");
-        assert!(error.message().contains("ADR046-foundation-001"), "{error}");
     }
 
     #[test]

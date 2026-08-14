@@ -127,13 +127,13 @@ F=(
 
 # H: structural/source/doc cross-reference lint (policy scanner).
 H=(
-  adr-0015-presence-eval adr-index-coverage agents-md-rewrite-eval
+  adr-0015-presence-eval agents-md-rewrite-eval
   changelog-v1-cut-eval ci-coverage ci-uses-make cli-contract-coverage
   deliverable-gate-inventory guest-control-auth-nongoals
   guest-control-vsock-helper-static guest-exec-runtime-static host-prep-dag-eval
   kernel-module-matrix-eval kernel-modules-parity-eval l3-pin-consistency
   layer1-self-inventory legacy-group-name-denylist legacy-group-name-denylist-self-test
-  manpage-completeness-eval microvm-nix-absent-eval no-bash-exec-eval no-new-deferral
+  manpage-completeness-eval microvm-nix-absent-eval no-bash-exec-eval
   otel-acl-migration-eval pr-checklist-gate privileges-doc-completeness-eval
   privileges-matrix-completeness processes-json-eval release-tag-eval
   static-rust-dependency-direction stop-dag-reconcile-eval tap-dag-contract-doc-eval
@@ -159,6 +159,7 @@ ORCH=(static static-fast-tier0 static-timing runner preflight-disk-space cli-rus
 GROUP_NAMES=(A B C D E F H GCI GHW PERF ORCH)
 
 declare -A existing_group existing_make_target existing_tier existing_exercised
+declare -A existing_path_by_name
 declare -A migration_status migration_successors
 existing_order=()
 migration_order=()
@@ -167,7 +168,7 @@ PRESERVE_EXERCISED=0
 script_rel_for_name() {
   local name="$1"
   case "$name" in
-    ci-coverage|ci-uses-make|layer1-self-inventory|deliverable-gate-inventory|pr-checklist-gate|no-new-deferral|adr-index-coverage)
+    ci-coverage|ci-uses-make|layer1-self-inventory|deliverable-gate-inventory|pr-checklist-gate)
       printf 'tests/unit/meta/%s.sh' "$name"
       ;;
     drift-check|vms-json-parity|performance-budgets)
@@ -183,6 +184,10 @@ script_rel_for_name() {
       printf 'tests/tools/%s.sh' "$name"
       ;;
     *)
+      if [ "${existing_path_by_name[$name]+set}" = set ]; then
+        printf '%s' "${existing_path_by_name[$name]}"
+        return 0
+      fi
       printf 'tests/%s.sh' "$name"
       ;;
   esac
@@ -211,6 +216,10 @@ group_of() {
       return 0
     fi
   done
+  if [ "${existing_group[$(script_rel_for_name "$name")]+set}" = set ]; then
+    printf '%s' "${existing_group[$(script_rel_for_name "$name")]}"
+    return 0
+  fi
   printf '%s' "?"
 }
 
@@ -277,6 +286,10 @@ load_existing_state() {
     /^exercised_today[[:space:]]*=/ { exercised=unquote(value($0)); next }
     END { flush() }
   ' "$ledger")
+  local existing
+  for existing in "${existing_order[@]}"; do
+    existing_path_by_name["$(basename "$existing" .sh)"]="$existing"
+  done
 }
 
 load_migration_state() {

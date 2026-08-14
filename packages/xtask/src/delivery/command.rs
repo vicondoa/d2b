@@ -795,14 +795,6 @@ mod tests {
     fn an_unknown_stage_is_a_usage_error() {
         let error = dispatch(&args(&["wave", "teleport"])).expect_err("unknown stage");
         assert_eq!(error.kind(), DeliveryErrorKind::Usage);
-        for removed in ["panel-request", "panel-attest"] {
-            let error = dispatch(&args(&["wave", removed])).expect_err("removed stage");
-            assert_eq!(error.kind(), DeliveryErrorKind::Usage);
-            assert!(
-                error.message().contains("unknown delivery wave stage"),
-                "{error}"
-            );
-        }
         let error = dispatch(&args(&["orbit"])).expect_err("unknown group");
         assert_eq!(error.kind(), DeliveryErrorKind::Usage);
         let error = dispatch(&[]).expect_err("no arguments");

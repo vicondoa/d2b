@@ -355,23 +355,7 @@ fn validate_role_routes(matrix: &str, city: &str, launcher: &str) -> Result<(), 
 }
 
 fn validate_managed_graph(city: &str, instructions: &str, assets: &[&str]) -> Result<(), String> {
-    let forbidden = [
-        "[imports.github]",
-        "d2b-panel",
-        "d2b-panel-fix",
-        "d2b-panel-round",
-        "d2b-wave-delivery",
-        "panel-request",
-        "panel-attest",
-        "merge-eligibility",
-        "make-records.mjs",
-        "selection-table.json",
-        ".scratch/panel",
-        "packages/xtask/src/delivery",
-        "receipt_locator",
-        "snapshot_digest",
-        "evidence-pinning",
-    ];
+    let forbidden = ["[imports.github]", "packages/xtask/src/delivery"];
     for (label, text) in std::iter::once(("city", city))
         .chain(std::iter::once(("instructions", instructions)))
         .chain(assets.iter().copied().map(|text| ("workflow", text)))

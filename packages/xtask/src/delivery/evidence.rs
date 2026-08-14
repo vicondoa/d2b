@@ -232,7 +232,6 @@ pub fn run(args: &[String]) -> Result<WorkflowOutput> {
 
 fn run_with_root(request: &ImportRequest, root: &StateRoot) -> Result<WorkflowOutput> {
     let supplied = snapshot::read_file(&request.snapshot_path)?;
-    super::work_item_state::reject_adr046_w5_mutation(&supplied.material, "evidence import")?;
     if let Some(expected) = &request.candidate
         && expected != &supplied.candidate_id
     {
@@ -1032,8 +1031,6 @@ mod tests {
             .expect("the sealed record re-validates");
         assert_eq!(record.candidate_id, view.candidate_id);
         assert_eq!(record.evidence.len(), 2);
-        let serialized = serde_json::to_value(&record).expect("serialize seal");
-        assert!(serialized.get("panel").is_none());
     }
 
     #[test]

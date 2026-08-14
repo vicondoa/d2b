@@ -20,11 +20,7 @@
 // consume them; a stage that has not landed yet leaves its symbols unused.
 #![allow(dead_code, unused_imports)]
 
-use std::{
-    collections::BTreeMap,
-    fmt, fs,
-    path::{Path, PathBuf},
-};
+use std::{fmt, fs, path::Path};
 
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
@@ -36,7 +32,6 @@ pub mod model;
 pub mod seal;
 pub mod snapshot;
 pub mod storage;
-pub mod work_item_state;
 
 use command::CliOptions;
 
@@ -105,17 +100,11 @@ impl SnapshotView {
 /// Resolves the delivery state root from `--state-dir` and the `--repo`
 /// checkouts delivery state must stay outside of.
 pub(crate) fn prepare_state(options: &mut CliOptions) -> Result<StateRoot> {
-    prepare_state_with_roots(options).map(|(state, _)| state)
-}
-
-pub(crate) fn prepare_state_with_roots(
-    options: &mut CliOptions,
-) -> Result<(StateRoot, BTreeMap<String, PathBuf>)> {
     let state_dir = options.optional_path("--state-dir")?;
     let roots = options.repository_roots()?;
     let checkout_paths = roots.values().cloned().collect::<Vec<_>>();
     let state = StateRoot::prepare(&checkout_paths, state_dir.as_deref())?;
-    Ok((state, roots))
+    Ok(state)
 }
 
 pub(crate) fn ensure_artifact_kind(found: &str, expected: &str, label: &str) -> Result<()> {
