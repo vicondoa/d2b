@@ -371,16 +371,16 @@
     {
       "crate_name": "d2b_provider_clipboard_wayland",
       "private_census": {
-        "external_crates": 56,
-        "index_items": 1866,
-        "path_items": 10556
+        "external_crates": 132,
+        "index_items": 2452,
+        "path_items": 13850
       },
-      "private_hidden_items": 43,
+      "private_hidden_items": 50,
       "private_json_file": "d2b_provider_clipboard_wayland.json",
       "public_census": {
-        "external_crates": 56,
-        "index_items": 1079,
-        "path_items": 10501
+        "external_crates": 132,
+        "index_items": 1418,
+        "path_items": 13775
       },
       "public_json_file": "d2b_provider_clipboard_wayland.json"
     },
@@ -499,16 +499,16 @@
     {
       "crate_name": "d2b_provider_display_wayland",
       "private_census": {
-        "external_crates": 56,
-        "index_items": 2620,
-        "path_items": 10565
+        "external_crates": 124,
+        "index_items": 3542,
+        "path_items": 13460
       },
-      "private_hidden_items": 56,
+      "private_hidden_items": 79,
       "private_json_file": "d2b_provider_display_wayland.json",
       "public_census": {
-        "external_crates": 56,
-        "index_items": 1444,
-        "path_items": 10496
+        "external_crates": 124,
+        "index_items": 1920,
+        "path_items": 13372
       },
       "public_json_file": "d2b_provider_display_wayland.json"
     },
@@ -531,16 +531,16 @@
     {
       "crate_name": "d2b_provider_notification_desktop",
       "private_census": {
-        "external_crates": 56,
-        "index_items": 1853,
-        "path_items": 10556
+        "external_crates": 125,
+        "index_items": 2256,
+        "path_items": 13517
       },
-      "private_hidden_items": 35,
+      "private_hidden_items": 42,
       "private_json_file": "d2b_provider_notification_desktop.json",
       "public_census": {
-        "external_crates": 56,
-        "index_items": 970,
-        "path_items": 10486
+        "external_crates": 125,
+        "index_items": 1184,
+        "path_items": 13428
       },
       "public_json_file": "d2b_provider_notification_desktop.json"
     },
@@ -549,14 +549,14 @@
       "private_census": {
         "external_crates": 127,
         "index_items": 1316,
-        "path_items": 13506
+        "path_items": 13512
       },
       "private_hidden_items": 21,
       "private_json_file": "d2b_provider_observability_otel.json",
       "public_census": {
         "external_crates": 127,
         "index_items": 602,
-        "path_items": 13429
+        "path_items": 13435
       },
       "public_json_file": "d2b_provider_observability_otel.json"
     },
@@ -709,14 +709,14 @@
       "private_census": {
         "external_crates": 128,
         "index_items": 580,
-        "path_items": 13473
+        "path_items": 13479
       },
       "private_hidden_items": 8,
       "private_json_file": "d2b_provider_system_systemd.json",
       "public_census": {
         "external_crates": 128,
         "index_items": 331,
-        "path_items": 13413
+        "path_items": 13419
       },
       "public_json_file": "d2b_provider_system_systemd.json"
     },
@@ -724,15 +724,15 @@
       "crate_name": "d2b_provider_toolkit",
       "private_census": {
         "external_crates": 126,
-        "index_items": 2670,
-        "path_items": 13500
+        "index_items": 3042,
+        "path_items": 13529
       },
-      "private_hidden_items": 37,
+      "private_hidden_items": 41,
       "private_json_file": "d2b_provider_toolkit.json",
       "public_census": {
         "external_crates": 126,
-        "index_items": 1516,
-        "path_items": 13418
+        "index_items": 1700,
+        "path_items": 13440
       },
       "public_json_file": "d2b_provider_toolkit.json"
     },
