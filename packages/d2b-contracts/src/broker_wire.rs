@@ -127,6 +127,9 @@ pub enum BrokerRequest {
     /// SCM_RIGHTS; if start-time drifted the broker closes the fd and
     /// surfaces a typed pidfd-race error.
     OpenPidfd(OpenPidfdRequest),
+    /// Observe one broker-owned runner after validating its retained
+    /// pidfd-backed identity against the trusted bundle.
+    ObserveRunner(ObserveRunnerRequest),
     /// Start one trusted non-forking transient systemd unit. The broker
     /// resolves executable, argv, uid/gid, environment, and cgroup
     /// placement from the bundle runner intent.
@@ -319,6 +322,7 @@ impl BrokerRequest {
             Self::QemuMediaAttach(_) => "QemuMediaAttach",
             Self::QemuMediaDetach(_) => "QemuMediaDetach",
             Self::OpenPidfd(_) => "OpenPidfd",
+            Self::ObserveRunner(_) => "ObserveRunner",
             Self::StartSystemdUnit(_) => "StartSystemdUnit",
             Self::ObserveSystemdUnit(_) => "ObserveSystemdUnit",
             Self::OpenSystemdUnitPidfd(_) => "OpenSystemdUnitPidfd",
@@ -567,6 +571,10 @@ impl BrokerRequest {
                 format!("{}:{}:{}", self.op_name(), request.vm_id, request.bus_id),
             ),
             Self::OpenPidfd(request) => (
+                request.vm_id.to_string(),
+                format!("{}:{}:{}", self.op_name(), request.vm_id, request.role_id),
+            ),
+            Self::ObserveRunner(request) => (
                 request.vm_id.to_string(),
                 format!("{}:{}:{}", self.op_name(), request.vm_id, request.role_id),
             ),
@@ -1045,6 +1053,9 @@ pub enum BrokerResponse {
     /// on the same frame; the JSON body confirms which `(pid,
     /// start_time_ticks)` the broker verified.
     OpenPidfd(OpenPidfdResponse),
+    /// Observation of a broker-owned runner. No pidfd is returned because
+    /// the operation is a status query over the broker's retained registry.
+    ObserveRunner(ObserveRunnerResponse),
     /// StartSystemdUnit response. The exact-main pidfd is returned via
     /// SCM_RIGHTS alongside this identity envelope.
     StartSystemdUnit(StartSystemdUnitResponse),
@@ -1786,6 +1797,33 @@ pub struct OpenPidfdResponse {
     /// Always `0` today; reserved for future multi-fd
     /// SCM_RIGHTS handoffs.
     pub pidfd_index: u32,
+}
+
+/// Observe one runner by its trusted `(vm_id, role_id)` identity. The
+/// broker resolves the intent reference again and refuses stale or
+/// ambiguous ownership rather than trusting caller-supplied process data.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ObserveRunnerRequest {
+    pub vm_id: VmId,
+    pub role_id: RoleId,
+    pub role: RunnerRole,
+    pub bundle_runner_intent_ref: BundleOpId,
+    #[serde(default)]
+    pub tracing_span_id: Option<TracingSpanId>,
+}
+
+/// Verified runner observation returned by the broker.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ObserveRunnerResponse {
+    pub vm_id: VmId,
+    pub role_id: RoleId,
+    pub present: bool,
+    pub pid: i32,
+    pub start_time_ticks: u64,
+    pub cgroup_verified: bool,
+    pub executable_verified: bool,
 }
 
 /// Closed systemd execution domain. User-manager execution remains subject to

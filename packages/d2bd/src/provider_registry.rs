@@ -6,7 +6,7 @@
 //! and associates Guest runtime rows with those instances.  It deliberately
 //! does not define a second registry or a second session authority.
 
-use std::{collections::BTreeMap, path::PathBuf, sync::RwLock};
+use std::{collections::BTreeMap, path::PathBuf, sync::{Arc, RwLock}};
 
 use d2b_contracts::{
     broker_wire::BrokerCallerRole,
@@ -32,6 +32,7 @@ use crate::provider_effects::{
     EffectDispatch, GuestLifecycleOperation, GuestLifecycleRequest, ProviderEffectError,
     ProviderLifecycleDispatch, ProviderLifecycleEffectPort,
 };
+use crate::process_provider_runtime::ProductionProcessProviders;
 
 /// Version of the v3 Provider bundle artifact.
 pub const PROVIDER_BUNDLE_VERSION: u32 = 3;
@@ -305,6 +306,7 @@ enum ProviderRuntimeState {
 pub struct ProviderRuntime {
     state: RwLock<ProviderRuntimeState>,
     lifecycle_state_path: Option<PathBuf>,
+    process_providers: RwLock<Option<Arc<ProductionProcessProviders>>>,
 }
 
 impl ProviderRuntime {
@@ -314,6 +316,7 @@ impl ProviderRuntime {
         Self {
             state: RwLock::new(ProviderRuntimeState::Legacy),
             lifecycle_state_path: None,
+            process_providers: RwLock::new(None),
         }
     }
 
@@ -333,6 +336,7 @@ impl ProviderRuntime {
         Ok(Self {
             state: RwLock::new(ProviderRuntimeState::Legacy),
             lifecycle_state_path: Some(state_path),
+            process_providers: RwLock::new(None),
         })
     }
 
@@ -396,7 +400,37 @@ impl ProviderRuntime {
                 lifecycle: ProviderLifecycleDispatch::new(zone),
             })),
             lifecycle_state_path: None,
+            process_providers: RwLock::new(None),
         })
+    }
+
+    /// Attach the daemon-owned concrete process Provider supervisors.
+    pub fn attach_process_providers(
+        &self,
+        providers: Arc<ProductionProcessProviders>,
+    ) -> Result<(), ProviderCompositionError> {
+        self.process_providers
+            .write()
+            .map_err(|_| ProviderCompositionError::StateUnavailable)
+            .map(|mut current| {
+                *current = Some(providers);
+            })
+    }
+
+    /// Whether the fixed process Provider path is composed and available.
+    pub fn process_providers_ready(&self) -> bool {
+        self.process_providers
+            .read()
+            .map(|providers| providers.is_some())
+            .unwrap_or(false)
+    }
+
+    /// Borrow the daemon-owned process Provider composition.
+    pub fn process_providers(&self) -> Option<Arc<ProductionProcessProviders>> {
+        self.process_providers
+            .read()
+            .ok()
+            .and_then(|providers| providers.clone())
     }
 
     /// Whether no v3 catalog has been supplied yet.

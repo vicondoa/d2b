@@ -232,6 +232,7 @@ mod authority_persistence;
 pub mod host_generation;
 pub mod provider_effects;
 pub mod provider_registry;
+pub mod process_provider_runtime;
 pub mod resource_runtime;
 // In-daemon replacement for the
 // `d2b-audit-check.{service,timer}` host singleton + timer that
@@ -1742,7 +1743,21 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
     match load_bundle_resolver(&state) {
         Ok(resolver) => {
             let provider_ready = match state.provider_runtime.configure_from_host(&resolver.host) {
-                Ok(()) => true,
+                Ok(()) => {
+                    let process_providers = Arc::new(
+                        process_provider_runtime::ProductionProcessProviders::new(
+                            resolver.clone(),
+                            broker_socket_path(&state),
+                            BrokerCallerRole::AdminUid {
+                                uid: state.daemon_uid,
+                            },
+                        ),
+                    );
+                    state
+                        .provider_runtime
+                        .attach_process_providers(process_providers)
+                        .is_ok()
+                }
                 Err(error) => {
                     tracing::error!(
                         error = %error,

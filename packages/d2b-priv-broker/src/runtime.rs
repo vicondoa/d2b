@@ -2246,9 +2246,37 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
         RealBrokerRequest::OpenPidfd(req) => {
             // OpenPidfd returns one SCM_RIGHTS-bearing response fd.
             let runner_id = format!("{}:{}", req.vm_id.as_str(), req.role_id.as_str());
+            let resolver = require_resolver(resolver)?;
+            let intent_id = d2b_core::bundle_resolver::intent_id_runner(
+                req.vm_id.as_str(),
+                req.role_id.as_str(),
+            );
+            let intent = resolver
+                .find_runner_intent(&intent_id)
+                .ok_or_else(|| BrokerError::BundleIntentMissing {
+                    kind: "runner",
+                    intent_id: intent_id.clone(),
+                })?;
+            if intent.vm_name != req.vm_id.as_str()
+                || (intent.role_id != req.role_id.as_str()
+                    && !(matches!(
+                        intent.role,
+                        d2b_core::processes::ProcessRole::CloudHypervisorRunner
+                    ) && req.role_id.as_str() == "ch-runner"))
+            {
+                return Err(BrokerError::LiveHandler(
+                    "runner adoption intent mismatch".to_owned(),
+                ));
+            }
             let outcome =
                 backend.open_pidfd(runner_id.as_str(), req.pid, req.expected_start_time_ticks)?;
-            write_success_op_record!(
+            if let Err(error) =
+                register_runner_metadata_from_open(runner_id.as_str(), &req, intent)
+            {
+                remove_runner_registration(runner_id.as_str());
+                return Err(error);
+            }
+            if let Err(error) = write_success_op_record!(
                 audit_log,
                 bundle_metadata,
                 "OpenPidfd",
@@ -2263,7 +2291,11 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                     pid: req.pid,
                     expected_start_time_ticks: req.expected_start_time_ticks,
                 },
-            )?;
+            ) {
+                remove_runner_registration(runner_id.as_str());
+                remove_runner_metadata(runner_id.as_str());
+                return Err(error);
+            }
             let response =
                 BrokerResponse::OpenPidfd(d2b_contracts::broker_wire::OpenPidfdResponse {
                     vm_id: req.vm_id.clone(),
@@ -2273,6 +2305,58 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                     pidfd_index: 0,
                 });
             Ok(DispatchResult::with_fd(response, outcome.pidfd))
+        }
+        RealBrokerRequest::ObserveRunner(req) => {
+            let resolver = require_resolver(resolver)?;
+            let intent = resolver
+                .find_runner_intent(req.bundle_runner_intent_ref.as_str())
+                .ok_or_else(|| BrokerError::BundleIntentMissing {
+                    kind: "runner",
+                    intent_id: req.bundle_runner_intent_ref.as_str().to_owned(),
+                })?;
+            let expected_role = runner_role_for_process_role(&intent.role).ok_or_else(|| {
+                BrokerError::SpawnRunnerIntentMismatch {
+                    field: "role",
+                    requested: req.role.as_str().to_owned(),
+                    resolved: format!("{:?}", intent.role),
+                }
+            })?;
+            if req.vm_id.as_str() != intent.vm_name
+                || req.role != expected_role
+                || req.bundle_runner_intent_ref.as_str() != intent.intent_id
+                || req.role_id.as_str()
+                    != match intent.role {
+                        d2b_core::processes::ProcessRole::CloudHypervisorRunner => "ch-runner",
+                        _ => intent.role_id.as_str(),
+                    }
+            {
+                return Err(BrokerError::LiveHandler(
+                    "runner observation intent mismatch".to_owned(),
+                ));
+            }
+            let response = observe_registered_runner(&req, intent)?;
+            write_success_op_record!(
+                audit_log,
+                bundle_metadata,
+                "ObserveRunner",
+                req.bundle_runner_intent_ref.as_str(),
+                caller_uid,
+                caller_gid,
+                &caller_role,
+                req.vm_id.as_str(),
+                req.role_id.as_str(),
+                tracing_span_id_str(req.tracing_span_id.as_ref()),
+                OperationFields::ObserveRunner {
+                    vm_id: req.vm_id.as_str().to_owned(),
+                    role_id: req.role_id.as_str().to_owned(),
+                    present: response.present,
+                    cgroup_verified: response.cgroup_verified,
+                    executable_verified: response.executable_verified,
+                },
+            )?;
+            Ok(DispatchResult::no_fds(
+                BrokerResponse::ObserveRunner(response),
+            ))
         }
         RealBrokerRequest::StartSystemdUnit(req) => {
             let resolver = require_resolver_ref(resolver.map(std::sync::Arc::as_ref))?;
@@ -2510,6 +2594,7 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                 })?
                 .remove(&runner_id)
                 .is_some();
+            remove_runner_metadata(&runner_id);
             write_success_op_record!(
                 audit_log,
                 bundle_metadata,
@@ -2746,12 +2831,25 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                 }
                 Err(other) => return Err(other),
             };
+            if let Err(error) = register_runner_metadata(
+                runner_id.as_str(),
+                &req,
+                intent,
+                outcome.pid,
+                outcome.start_time_ticks,
+            ) {
+                cleanup_spawned_runner_after_failure(
+                    runner_id.as_str(),
+                    outcome.pidfd.as_fd(),
+                );
+                return Err(error);
+            }
             // On the success path, emit the terminal PrepareSwtpmDir
             // record (for the w1-swtpm role only) BEFORE the SpawnRunner
             // record so an operator sees the hardening disposition that
             // gated the spawn.
             if let Some(swtpm_audit) = &outcome.swtpm_dir_audit {
-                write_success_op_record!(
+                if let Err(error) = write_success_op_record!(
                     audit_log,
                     bundle_metadata,
                     "PrepareSwtpmDir",
@@ -2763,9 +2861,15 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                     req.role_id.as_str(),
                     tracing_span_id_str(req.tracing_span_id.as_ref()),
                     OperationFields::PrepareSwtpmDir(swtpm_audit.clone()),
-                )?;
+                ) {
+                    cleanup_spawned_runner_after_failure(
+                        runner_id.as_str(),
+                        outcome.pidfd.as_fd(),
+                    );
+                    return Err(error);
+                }
             }
-            write_success_op_record!(
+            if let Err(error) = write_success_op_record!(
                 audit_log,
                 bundle_metadata,
                 "SpawnRunner",
@@ -2783,7 +2887,13 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                     role: req.role.as_str().to_owned(),
                     runtime_allocations: req.runtime_allocations.clone(),
                 },
-            )?;
+            ) {
+                cleanup_spawned_runner_after_failure(
+                    runner_id.as_str(),
+                    outcome.pidfd.as_fd(),
+                );
+                return Err(error);
+            }
             let console_fd_index = if outcome.extra_response_fds.is_empty() {
                 None
             } else {
@@ -5308,6 +5418,210 @@ fn runner_pidfd_registry() -> &'static Mutex<HashMap<String, OwnedFd>> {
     REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+#[cfg(not(feature = "layer1-bootstrap"))]
+#[derive(Debug, Clone)]
+struct RunnerRegistration {
+    vm_id: String,
+    role_id: String,
+    role: d2b_contracts::broker_wire::RunnerRole,
+    bundle_runner_intent_ref: String,
+    pid: i32,
+    start_time_ticks: u64,
+    binary_path: PathBuf,
+    cgroup_subtree: String,
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn runner_metadata_registry() -> &'static Mutex<HashMap<String, RunnerRegistration>> {
+    static REGISTRY: OnceLock<Mutex<HashMap<String, RunnerRegistration>>> = OnceLock::new();
+    REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn register_runner_metadata(
+    runner_id: &str,
+    request: &d2b_contracts::broker_wire::SpawnRunnerRequest,
+    intent: &d2b_core::bundle_resolver::ResolvedRunnerIntent,
+    pid: i32,
+    start_time_ticks: u64,
+) -> Result<(), BrokerError> {
+    let mut registry = runner_metadata_registry()
+        .lock()
+        .map_err(|_| BrokerError::Protocol("runner metadata registry mutex poisoned".to_owned()))?;
+    registry.insert(
+        runner_id.to_owned(),
+        RunnerRegistration {
+            vm_id: request.vm_id.as_str().to_owned(),
+            role_id: request.role_id.as_str().to_owned(),
+            role: request.role,
+            bundle_runner_intent_ref: request.bundle_runner_intent_ref.as_str().to_owned(),
+            pid,
+            start_time_ticks,
+            binary_path: intent.binary_path.clone(),
+            cgroup_subtree: intent.cgroup_placement.subtree.clone(),
+        },
+    );
+    Ok(())
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn register_runner_metadata_from_open(
+    runner_id: &str,
+    request: &d2b_contracts::broker_wire::OpenPidfdRequest,
+    intent: &d2b_core::bundle_resolver::ResolvedRunnerIntent,
+) -> Result<(), BrokerError> {
+    let role = runner_role_for_process_role(&intent.role).ok_or_else(|| {
+        BrokerError::SpawnRunnerIntentMismatch {
+            field: "role",
+            requested: request.role_id.as_str().to_owned(),
+            resolved: format!("{:?}", intent.role),
+        }
+    })?;
+    let mut registry = runner_metadata_registry()
+        .lock()
+        .map_err(|_| BrokerError::Protocol("runner metadata registry mutex poisoned".to_owned()))?;
+    registry.insert(
+        runner_id.to_owned(),
+        RunnerRegistration {
+            vm_id: request.vm_id.as_str().to_owned(),
+            role_id: request.role_id.as_str().to_owned(),
+            role,
+            bundle_runner_intent_ref: intent.intent_id.clone(),
+            pid: request.pid,
+            start_time_ticks: request.expected_start_time_ticks,
+            binary_path: intent.binary_path.clone(),
+            cgroup_subtree: intent.cgroup_placement.subtree.clone(),
+        },
+    );
+    Ok(())
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn remove_runner_metadata(runner_id: &str) {
+    if let Ok(mut registry) = runner_metadata_registry().lock() {
+        registry.remove(runner_id);
+    }
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn observe_registered_runner(
+    request: &d2b_contracts::broker_wire::ObserveRunnerRequest,
+    intent: &d2b_core::bundle_resolver::ResolvedRunnerIntent,
+) -> Result<d2b_contracts::broker_wire::ObserveRunnerResponse, BrokerError> {
+    let runner_id = format!("{}:{}", request.vm_id.as_str(), request.role_id.as_str());
+    let registration = {
+        let registry = runner_metadata_registry().lock().map_err(|_| {
+            BrokerError::Protocol("runner metadata registry mutex poisoned".to_owned())
+        })?;
+        registry.get(&runner_id).cloned()
+    };
+    let Some(registration) = registration else {
+        return Ok(d2b_contracts::broker_wire::ObserveRunnerResponse {
+            vm_id: request.vm_id.clone(),
+            role_id: request.role_id.clone(),
+            present: false,
+            pid: 0,
+            start_time_ticks: 0,
+            cgroup_verified: false,
+            executable_verified: false,
+        });
+    };
+
+    let pidfd_registered = runner_pidfd_registry()
+        .lock()
+        .map_err(|_| BrokerError::Protocol("runner pidfd registry mutex poisoned".to_owned()))?
+        .contains_key(&runner_id);
+    if !pidfd_registered
+        || registration.vm_id != request.vm_id.as_str()
+        || registration.role_id != request.role_id.as_str()
+        || registration.role != request.role
+        || registration.bundle_runner_intent_ref != request.bundle_runner_intent_ref.as_str()
+        || registration.pid <= 0
+        || registration.start_time_ticks == 0
+        || registration.binary_path != intent.binary_path
+        || registration.cgroup_subtree != intent.cgroup_placement.subtree
+    {
+        return Err(BrokerError::LiveHandler(
+            "runner registration identity mismatch".to_owned(),
+        ));
+    }
+
+    let Some(start_time_ticks) = read_proc_start_time_ticks(registration.pid)? else {
+        remove_runner_metadata(&runner_id);
+        return Ok(d2b_contracts::broker_wire::ObserveRunnerResponse {
+            vm_id: request.vm_id.clone(),
+            role_id: request.role_id.clone(),
+            present: false,
+            pid: 0,
+            start_time_ticks: 0,
+            cgroup_verified: false,
+            executable_verified: false,
+        });
+    };
+    if start_time_ticks != registration.start_time_ticks {
+        return Err(BrokerError::LiveHandler(
+            "runner process identity changed".to_owned(),
+        ));
+    }
+    let executable_verified = fs::read_link(format!("/proc/{}/exe", registration.pid))
+        .map(|path| path == registration.binary_path)
+        .unwrap_or(false);
+    let cgroup_verified = proc_cgroup_matches(registration.pid, &registration.cgroup_subtree);
+    Ok(d2b_contracts::broker_wire::ObserveRunnerResponse {
+        vm_id: request.vm_id.clone(),
+        role_id: request.role_id.clone(),
+        present: true,
+        pid: registration.pid,
+        start_time_ticks,
+        cgroup_verified,
+        executable_verified,
+    })
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn read_proc_start_time_ticks(pid: i32) -> Result<Option<u64>, BrokerError> {
+    let content = match fs::read_to_string(format!("/proc/{pid}/stat")) {
+        Ok(content) => content,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(BrokerError::LiveHandler(error.to_string())),
+    };
+    let close = content
+        .trim_end_matches('\n')
+        .rfind(')')
+        .ok_or_else(|| BrokerError::LiveHandler("malformed proc stat".to_owned()))?;
+    let mut fields = content[close + 1..].split_whitespace();
+    let state = fields
+        .next()
+        .ok_or_else(|| BrokerError::LiveHandler("malformed proc stat".to_owned()))?;
+    if matches!(state, "Z" | "X") {
+        return Ok(None);
+    }
+    fields
+        .nth(18)
+        .ok_or_else(|| BrokerError::LiveHandler("malformed proc stat".to_owned()))?
+        .parse::<u64>()
+        .map(Some)
+        .map_err(|_| BrokerError::LiveHandler("invalid proc start time".to_owned()))
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn proc_cgroup_matches(pid: i32, expected_subtree: &str) -> bool {
+    if expected_subtree.is_empty() {
+        return false;
+    }
+    let Ok(content) = fs::read_to_string(format!("/proc/{pid}/cgroup")) else {
+        return false;
+    };
+    let expected = expected_subtree.trim_start_matches('/');
+    content.lines().any(|line| {
+        let Some((_, path)) = line.split_once("::") else {
+            return false;
+        };
+        let actual = path.trim_start_matches('/');
+        actual == expected || actual.ends_with(&format!("/{expected}"))
+    })
+}
+
 /// In-memory ring buffer for `ChildReaped` notifications.
 /// Capped at 256 entries (oldest dropped on overflow). Protected by
 /// a `std::sync::Mutex` so both the tokio reap task and the synchronous
@@ -5371,6 +5685,13 @@ fn register_runner_pidfd(runner_id: &str, pidfd: &OwnedFd) -> Result<(), BrokerE
         .map_err(|_| BrokerError::Protocol("runner pidfd registry mutex poisoned".to_owned()))?;
     registry.insert(runner_id.to_owned(), duplicated);
     Ok(())
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn remove_runner_registration(runner_id: &str) {
+    if let Ok(mut registry) = runner_pidfd_registry().lock() {
+        registry.remove(runner_id);
+    }
 }
 
 /// Refuse to start a SECOND live runner for an already-registered
@@ -9900,6 +10221,7 @@ fn reap_all_pidfds(audit_log: &AuditLog) {
                 if let Ok(mut reg) = runner_pidfd_registry().lock() {
                     reg.remove(&runner_id);
                 }
+                remove_runner_metadata(&runner_id);
             }
             Err(err) => {
                 tracing::warn!(runner_id = %runner_id, error = %err, "reap_all_pidfds: waitid failed");
@@ -9994,6 +10316,7 @@ fn targeted_reap_runner(runner_id: &str, pidfd: std::os::fd::BorrowedFd<'_>) {
             if let Ok(mut reg) = runner_pidfd_registry().lock() {
                 reg.remove(runner_id);
             }
+            remove_runner_metadata(runner_id);
         }
         Err(err) => {
             tracing::warn!(runner_id = %runner_id, error = %err, "targeted_reap_runner: waitid failed");
@@ -10018,6 +10341,7 @@ fn deliver_targeted_reap(
             if let Ok(mut reg) = runner_pidfd_registry().lock() {
                 reg.remove(runner_id);
             }
+            remove_runner_metadata(runner_id);
             push_child_reap_notification(notif);
             tracing::info!(
                 runner_id = %runner_id,
@@ -10036,11 +10360,47 @@ fn remove_and_notify(
     if let Ok(mut reg) = runner_pidfd_registry().lock() {
         reg.remove(runner_id);
     }
+    remove_runner_metadata(runner_id);
     if let Err(err) = audit_log.write_child_reaped(&notif) {
         tracing::warn!(runner_id = %runner_id, error = %err, "reap: audit write_child_reaped failed");
     }
     push_child_reap_notification(notif);
     tracing::info!(runner_id = %runner_id, "broker: child reaped via SIGCHLD handler");
+}
+
+/// Kill and synchronously reap a child when a post-spawn commit step fails.
+/// The broker must not return an error while leaving a live process or stale
+/// runner identity behind: the caller will retry the lifecycle operation and
+/// the next attempt must be able to reserve the same runner id.
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn cleanup_spawned_runner_after_failure(
+    runner_id: &str,
+    pidfd: std::os::fd::BorrowedFd<'_>,
+) {
+    remove_runner_metadata(runner_id);
+    if let Err(err) = crate::sys::pidfd_sys::pidfd_send_signal(pidfd, libc::SIGKILL) {
+        tracing::debug!(
+            runner_id = %runner_id,
+            error = %err,
+            "spawn rollback: pidfd SIGKILL failed; child may already have exited"
+        );
+    }
+
+    use nix::errno::Errno;
+    use nix::sys::wait::{waitid, Id, WaitPidFlag};
+    match waitid(Id::PIDFd(pidfd), WaitPidFlag::WEXITED) {
+        Ok(_) | Err(Errno::ECHILD) => {}
+        Err(err) => {
+            tracing::warn!(
+                runner_id = %runner_id,
+                error = %err,
+                "spawn rollback: blocking pidfd reap failed"
+            );
+        }
+    }
+    if let Ok(mut registry) = runner_pidfd_registry().lock() {
+        registry.remove(runner_id);
+    }
 }
 
 #[cfg(test)]

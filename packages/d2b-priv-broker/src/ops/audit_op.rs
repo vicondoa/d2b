@@ -295,6 +295,13 @@ pub enum OperationFields {
         pid: i32,
         expected_start_time_ticks: u64,
     },
+    ObserveRunner {
+        vm_id: String,
+        role_id: String,
+        present: bool,
+        cgroup_verified: bool,
+        executable_verified: bool,
+    },
     /// Transient systemd lifecycle audit fields. Unit names, cgroup paths,
     /// PIDs, and invocation identifiers remain broker-local.
     SystemdUnit {
@@ -684,6 +691,13 @@ impl OperationFields {
             "OpenPidfd" => parse_fields!(value => OpenPidfd {
                 pid: i32,
                 expected_start_time_ticks: u64,
+            }),
+            "ObserveRunner" => parse_fields!(value => ObserveRunner {
+                vm_id: String,
+                role_id: String,
+                present: bool,
+                cgroup_verified: bool,
+                executable_verified: bool,
             }),
             "OpenZoneStore" => parse_fields!(value => OpenZoneStore {
                 zone_store_id: String,

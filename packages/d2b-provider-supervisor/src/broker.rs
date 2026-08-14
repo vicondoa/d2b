@@ -10,8 +10,8 @@ use std::time::Duration;
 
 use d2b_contracts::broker_wire::{
     AuditJoinContext, BrokerCallerRole, BrokerRequest, BrokerRequestEnvelope, BrokerResponse,
-    CanonicalAuditDigest, DeregisterRunnerPidfdRequest, OpenPidfdRequest, RunnerRole, RunnerSignal,
-    SignalRunnerRequest, SpawnRunnerRequest,
+    CanonicalAuditDigest, DeregisterRunnerPidfdRequest, ObserveRunnerRequest, OpenPidfdRequest,
+    RunnerRole, RunnerSignal, SignalRunnerRequest, SpawnRunnerRequest,
 };
 use d2b_contracts::types::{BundleOpId, RoleId, VmId};
 use d2b_core::bundle_resolver::{BundleResolver, intent_id_runner};
@@ -149,12 +149,38 @@ pub trait BrokerLaunchResolver: Send + Sync + 'static {
 #[derive(Clone)]
 pub struct BundleBackedLaunchResolver {
     bundle: BundleResolver,
+    observation: Option<BrokerObservationConfig>,
+}
+
+#[derive(Clone)]
+struct BrokerObservationConfig {
+    socket_path: PathBuf,
+    io_timeout: Duration,
+    caller_role: BrokerCallerRole,
 }
 
 impl BundleBackedLaunchResolver {
     /// Build a resolver from the broker's trusted bundle copy.
     pub fn new(bundle: BundleResolver) -> Self {
-        Self { bundle }
+        Self {
+            bundle,
+            observation: None,
+        }
+    }
+
+    /// Enable authenticated broker-backed runner observation for adoption.
+    pub fn with_observation_socket(
+        mut self,
+        socket_path: impl Into<PathBuf>,
+        io_timeout: Duration,
+        caller_role: BrokerCallerRole,
+    ) -> Self {
+        self.observation = Some(BrokerObservationConfig {
+            socket_path: socket_path.into(),
+            io_timeout,
+            caller_role,
+        });
+        self
     }
 
     fn identity_digest(value: &str, domain: &[u8]) -> [u8; 32] {
@@ -173,6 +199,53 @@ impl std::fmt::Debug for BundleBackedLaunchResolver {
 
 impl BrokerLaunchResolver for BundleBackedLaunchResolver {
     fn resolve(&self, request: &ProcessRequest) -> Result<BrokerLaunchIntent, ProcessEffectError> {
+        self.resolve_intent(request)
+    }
+
+    fn observe(
+        &self,
+        request: &ProcessRequest,
+    ) -> Result<Option<BrokerObservedProcess>, ProcessEffectError> {
+        let Some(observation) = self.observation.as_ref() else {
+            return Ok(None);
+        };
+        let intent = self.resolve_intent(request)?;
+        let frame = broker_round_trip(
+            &observation.socket_path,
+            observation.io_timeout,
+            BrokerRequest::ObserveRunner(ObserveRunnerRequest {
+                vm_id: intent.vm_id.clone(),
+                role_id: intent.role_id.clone(),
+                role: intent.role,
+                bundle_runner_intent_ref: intent.bundle_runner_intent_ref.clone(),
+                tracing_span_id: None,
+            }),
+            observation.caller_role.clone(),
+        )?;
+        let BrokerResponse::ObserveRunner(response) = frame.response else {
+            return Err(ProcessEffectError::ObserveFailed);
+        };
+        if response.vm_id != intent.vm_id || response.role_id != intent.role_id {
+            return Err(ProcessEffectError::IdentityChanged);
+        }
+        if !response.present {
+            return Ok(None);
+        }
+        Ok(Some(BrokerObservedProcess {
+            intent,
+            pid: response.pid,
+            start_time_ticks: response.start_time_ticks,
+            cgroup_verified: response.cgroup_verified,
+            executable_verified: response.executable_verified,
+        }))
+    }
+}
+
+impl BundleBackedLaunchResolver {
+    fn resolve_intent(
+        &self,
+        request: &ProcessRequest,
+    ) -> Result<BrokerLaunchIntent, ProcessEffectError> {
         let ticket = request.ticket();
         if ticket.execution_ref().resource_type().as_str() != "Guest" {
             return Err(ProcessEffectError::UnsupportedProvider);
@@ -204,17 +277,6 @@ impl BrokerLaunchResolver for BundleBackedLaunchResolver {
             ),
             generation: ticket.resource_generation().get(),
         })
-    }
-
-    fn observe(
-        &self,
-        _request: &ProcessRequest,
-    ) -> Result<Option<BrokerObservedProcess>, ProcessEffectError> {
-        // The broker remains the only authority that can discover a live
-        // pidfd-backed runner. Until the corresponding authenticated
-        // observation operation is available, fail closed rather than
-        // guessing from a caller-provided pid or role.
-        Ok(None)
     }
 }
 
