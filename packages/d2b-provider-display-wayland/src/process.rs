@@ -477,6 +477,12 @@ pub struct ProcessObservation {
     pub frontend: WorkerState,
     /// Runtime Volume lifecycle evidence.
     pub volume: VolumeState,
+    /// Policy generation proved by the worker readiness handshakes.
+    pub policy_generation: u64,
+    /// Teardown generation proved by the worker readiness handshakes.
+    pub teardown_generation: u64,
+    /// Session binding digest proved by the worker readiness handshakes.
+    pub session_digest: [u8; 32],
 }
 
 impl Default for ProcessObservation {
@@ -485,6 +491,9 @@ impl Default for ProcessObservation {
             proxy: WorkerState::Starting,
             frontend: WorkerState::Starting,
             volume: VolumeState::Present,
+            policy_generation: 0,
+            teardown_generation: 0,
+            session_digest: [0; 32],
         }
     }
 }
@@ -492,10 +501,31 @@ impl Default for ProcessObservation {
 impl ProcessObservation {
     /// Construct a fully Ready observation.
     pub const fn ready() -> Self {
+        Self::ready_for(0, 0)
+    }
+
+    /// Construct a Ready observation bound to one policy and teardown
+    /// generation.
+    pub const fn ready_for(policy_generation: u64, teardown_generation: u64) -> Self {
         Self {
             proxy: WorkerState::Ready { generation: 1 },
             frontend: WorkerState::Ready { generation: 1 },
             volume: VolumeState::Present,
+            policy_generation,
+            teardown_generation,
+            session_digest: [0; 32],
+        }
+    }
+
+    /// Construct a Ready observation bound to the exact display session.
+    pub fn ready_for_session(
+        spec: &crate::WaylandSessionSpec,
+        policy_generation: u64,
+        teardown_generation: u64,
+    ) -> Self {
+        Self {
+            session_digest: crate::controller::session_digest(spec),
+            ..Self::ready_for(policy_generation, teardown_generation)
         }
     }
 
@@ -509,7 +539,27 @@ impl ProcessObservation {
                 attempts: proxy_failure_count,
             },
             volume: VolumeState::Present,
+            policy_generation: 0,
+            teardown_generation: 0,
+            session_digest: [0; 32],
         }
+    }
+
+    /// Whether both workers proved the requested policy and teardown fence.
+    pub fn workers_ready_for(
+        &self,
+        policy_generation: u64,
+        teardown_generation: u64,
+        session_digest: [u8; 32],
+    ) -> bool {
+        policy_generation != 0
+            && teardown_generation != 0
+            && session_digest != [0; 32]
+            && self.policy_generation == policy_generation
+            && self.teardown_generation == teardown_generation
+            && self.session_digest == session_digest
+            && self.proxy.is_ready()
+            && self.frontend.is_ready()
     }
 }
 
@@ -715,6 +765,9 @@ mod tests {
             proxy: WorkerState::Ready { generation: 4 },
             frontend: WorkerState::Failed { attempts: 1 },
             volume: VolumeState::Present,
+            policy_generation: 1,
+            teardown_generation: 1,
+            session_digest: [0; 32],
         };
         assert_eq!(
             WorkerSupervisor::plan(observation, false),
@@ -729,6 +782,9 @@ mod tests {
             proxy: WorkerState::Ready { generation: 4 },
             frontend: WorkerState::Failed { attempts: 3 },
             volume: VolumeState::Present,
+            policy_generation: 0,
+            teardown_generation: 0,
+            session_digest: [0; 32],
         };
         assert_eq!(
             supervisor.plan_with_budget(observation, false),
@@ -745,6 +801,9 @@ mod tests {
             proxy: WorkerState::Failed { attempts: 1 },
             frontend: WorkerState::Ready { generation: 1 },
             volume: VolumeState::Present,
+            policy_generation: 1,
+            teardown_generation: 1,
+            session_digest: [0; 32],
         };
         let evidence = WorkerRestartEvidence {
             observed_at_ms: 100,

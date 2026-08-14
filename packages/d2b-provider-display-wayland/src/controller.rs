@@ -177,8 +177,14 @@ pub struct ReconcileResult {
 pub struct DisplayDependencyProof {
     provider_ref: ResourceRef,
     zone: ZoneId,
+    guest_ref: ResourceRef,
+    host_ref: ResourceRef,
     user_ref: ResourceRef,
-    generation: u64,
+    provider_generation: u64,
+    reconnect_generation: u64,
+    controller_generation: u64,
+    teardown_generation: u64,
+    session_digest: [u8; 32],
 }
 
 impl DisplayDependencyProof {
@@ -192,14 +198,44 @@ impl DisplayDependencyProof {
         &self.zone
     }
 
+    /// Borrow the authenticated Guest reference.
+    pub const fn guest_ref(&self) -> &ResourceRef {
+        &self.guest_ref
+    }
+
+    /// Borrow the authenticated Host reference.
+    pub const fn host_ref(&self) -> &ResourceRef {
+        &self.host_ref
+    }
+
     /// Borrow the authenticated User reference.
     pub const fn user_ref(&self) -> &ResourceRef {
         &self.user_ref
     }
 
-    /// Return the Ready generation.
+    /// Return the Ready Provider generation.
     pub const fn generation(&self) -> u64 {
-        self.generation
+        self.provider_generation
+    }
+
+    /// Return the authenticated Guest reconnect generation.
+    pub const fn reconnect_generation(&self) -> u64 {
+        self.reconnect_generation
+    }
+
+    /// Return the Core controller generation that fenced readiness.
+    pub const fn controller_generation(&self) -> u64 {
+        self.controller_generation
+    }
+
+    /// Return the supervisor teardown generation that fenced readiness.
+    pub const fn teardown_generation(&self) -> u64 {
+        self.teardown_generation
+    }
+
+    /// Return the opaque digest binding all display session identities.
+    pub const fn session_digest(&self) -> [u8; 32] {
+        self.session_digest
     }
 }
 
@@ -213,8 +249,10 @@ impl core::fmt::Debug for DisplayDependencyProof {
 #[derive(Debug, PartialEq, Eq)]
 pub struct AuthenticatedDisplaySession {
     guest_ref: ResourceRef,
+    host_ref: ResourceRef,
     zone: ZoneId,
     reconnect_generation: u64,
+    controller_generation: u64,
 }
 
 impl AuthenticatedDisplaySession {
@@ -233,16 +271,32 @@ impl AuthenticatedDisplaySession {
         {
             return Err(WaylandSpecError::InvalidReference);
         }
+        let Some(host_ref) = route.context().execution_ref() else {
+            return Err(WaylandSpecError::InvalidReference);
+        };
+        if host_ref.resource_type().as_str() != "Host" {
+            return Err(WaylandSpecError::InvalidReference);
+        }
+        let Some(controller_generation) = route.controller_generation() else {
+            return Err(WaylandSpecError::InvalidReference);
+        };
         Ok(Self {
             guest_ref: route.subject_ref().clone(),
+            host_ref: host_ref.clone(),
             zone: route.zone().clone(),
             reconnect_generation: route.reconnect_generation().get(),
+            controller_generation: controller_generation.get(),
         })
     }
 
     /// Borrow the authenticated Guest reference.
     pub const fn guest_ref(&self) -> &ResourceRef {
         &self.guest_ref
+    }
+
+    /// Borrow the authenticated Host execution reference.
+    pub const fn host_ref(&self) -> &ResourceRef {
+        &self.host_ref
     }
 
     /// Borrow the authenticated Zone.
@@ -253,6 +307,11 @@ impl AuthenticatedDisplaySession {
     /// Return the authenticated reconnect generation.
     pub const fn reconnect_generation(&self) -> u64 {
         self.reconnect_generation
+    }
+
+    /// Return the authenticated Core controller generation.
+    pub const fn controller_generation(&self) -> u64 {
+        self.controller_generation
     }
 }
 
@@ -544,6 +603,7 @@ impl DisplayController {
     ) -> Result<ReconcileResult, WaylandSpecError> {
         let authenticated = AuthenticatedDisplaySession::from_component_session(session)?;
         if authenticated.guest_ref() != spec.guest_ref()
+            || authenticated.host_ref() != spec.host_ref()
             || authenticated.reconnect_generation() != spec.reconnect_generation()
             || authenticated.zone() != policy.zone()
             || dependencies
@@ -611,14 +671,18 @@ impl DisplayController {
             .active_policies
             .get(&session_key)
             .is_some_and(|active| active != &policy_binding);
+        let workers_ready_for_current_fence = observation.workers_ready_for(
+            policy.generation(),
+            supervision.teardown_generation,
+            session_digest(spec),
+        );
         let worker_actions = match self.worker_supervisor.plan_with_evidence(
             observation,
-            policy_changed,
+            policy_changed || !workers_ready_for_current_fence,
             supervision,
         ) {
             Ok(actions) => actions,
             Err(_) => {
-                self.release_principal_if_owned(&session_key)?;
                 self.active_policies.remove(&session_key);
                 self.ready_sessions.remove(&session_key);
                 return Ok(ReconcileResult {
@@ -663,31 +727,19 @@ impl DisplayController {
                 spec.cross_domain_trusted(),
                 SessionCondition::CrossDomainTrusted,
             ),
-            (observation.proxy.is_ready(), SessionCondition::ProxyReady),
             (
-                observation.frontend.is_ready(),
+                observation.proxy.is_ready()
+                    && observation.policy_generation == policy.generation()
+                    && observation.teardown_generation == supervision.teardown_generation,
+                SessionCondition::ProxyReady,
+            ),
+            (
+                observation.frontend.is_ready()
+                    && observation.policy_generation == policy.generation()
+                    && observation.teardown_generation == supervision.teardown_generation,
                 SessionCondition::GuestFrontendReady,
             ),
         ];
-        if observation.proxy.failure_count() >= 5 || observation.frontend.failure_count() >= 5 {
-            self.release_principal_if_owned(&session_key)?;
-            self.active_policies.remove(&session_key);
-            self.ready_sessions.remove(&session_key);
-            return Ok(ReconcileResult {
-                status: self.status(
-                    Phase::Failed,
-                    compiled.digest().to_owned(),
-                    policy.generation(),
-                    String::new(),
-                    conditions
-                        .iter()
-                        .filter_map(|(present, condition)| present.then_some(*condition))
-                        .collect::<Vec<_>>(),
-                ),
-                launch_tickets: Vec::new(),
-                worker_actions: Vec::new(),
-            });
-        }
         if !matches!(dependencies.gpu(), DependencyReadiness::Ready)
             || !matches!(dependencies.portal(), DependencyReadiness::Ready)
         {
@@ -781,13 +833,13 @@ impl DisplayController {
             self.principals.insert(session_key.clone(), lease);
             principal
         };
-        if !needs_worker_launch || !launch_tickets.is_empty() {
+        if (!needs_worker_launch && workers_ready_for_current_fence) || !launch_tickets.is_empty() {
             self.active_policies
                 .insert(session_key.clone(), policy_binding);
         }
         let phase = if !launch_tickets.is_empty() {
             Phase::Pending
-        } else if observation.proxy.is_ready() && observation.frontend.is_ready() {
+        } else if workers_ready_for_current_fence {
             let (Some(proxy_generation), Some(frontend_generation)) = (
                 observation.proxy.generation(),
                 observation.frontend.generation(),
@@ -811,7 +863,7 @@ impl DisplayController {
                     policy_generation: policy.generation(),
                     proxy_generation,
                     frontend_generation,
-                    teardown_generation: 1,
+                    teardown_generation: supervision.teardown_generation,
                 },
             );
             Phase::Ready
@@ -828,7 +880,10 @@ impl DisplayController {
                 conditions
                     .iter()
                     .filter_map(|(present, condition)| present.then_some(*condition))
-                    .chain((!needs_worker_launch).then_some(SessionCondition::PolicyApplied))
+                    .chain(
+                        (!needs_worker_launch && workers_ready_for_current_fence)
+                            .then_some(SessionCondition::PolicyApplied),
+                    )
                     .collect(),
             ),
             launch_tickets,
@@ -848,6 +903,7 @@ impl DisplayController {
     ) -> Result<DisplayDependencyProof, WaylandSpecError> {
         let authenticated = AuthenticatedDisplaySession::from_component_session(session)?;
         if authenticated.guest_ref() != spec.guest_ref()
+            || authenticated.host_ref() != spec.host_ref()
             || authenticated.reconnect_generation() != spec.reconnect_generation()
             || authenticated.zone() != policy.zone()
         {
@@ -879,6 +935,8 @@ impl DisplayController {
                     .frontend
                     .generation()
                     .ok_or(WaylandSpecError::InvalidReference)?
+            || observation.policy_generation != policy.generation()
+            || observation.teardown_generation != ready_session.teardown_generation
             || ready_session.teardown_generation == 0
             || !observation.proxy.is_ready()
             || !observation.frontend.is_ready()
@@ -893,8 +951,14 @@ impl DisplayController {
             provider_ref: ResourceRef::parse(PROVIDER_REF)
                 .map_err(|_| WaylandSpecError::InvalidReference)?,
             zone: policy.zone().clone(),
+            guest_ref: spec.guest_ref().clone(),
+            host_ref: spec.host_ref().clone(),
             user_ref: spec.user_ref().clone(),
-            generation: result.status.policy_generation,
+            provider_generation: result.status.policy_generation,
+            reconnect_generation: spec.reconnect_generation(),
+            controller_generation: authenticated.controller_generation(),
+            teardown_generation: ready_session.teardown_generation,
+            session_digest: session_digest(spec),
         })
     }
 
@@ -1015,18 +1079,6 @@ impl DisplayController {
         })
     }
 
-    fn release_principal_if_owned(&mut self, session_key: &str) -> Result<(), WaylandSpecError> {
-        let Some(lease) = self.principals.remove(session_key) else {
-            return Ok(());
-        };
-        self.active_policies.remove(session_key);
-        self.ready_sessions.remove(session_key);
-        self.principal_pool
-            .release(lease)
-            .map_err(|_| WaylandSpecError::InvalidReference)?;
-        Ok(())
-    }
-
     fn status(
         &self,
         phase: Phase,
@@ -1066,7 +1118,7 @@ fn session_key(spec: &WaylandSessionSpec) -> String {
     )
 }
 
-fn session_digest(spec: &WaylandSessionSpec) -> [u8; 32] {
+pub(crate) fn session_digest(spec: &WaylandSessionSpec) -> [u8; 32] {
     let mut digest = Sha256::new();
     digest.update(spec.guest_ref().to_canonical_string().as_bytes());
     digest.update([0]);
@@ -1099,6 +1151,10 @@ mod tests {
         .unwrap()
     }
 
+    fn ready(spec: &WaylandSessionSpec, policy: &WaylandPolicySnapshot) -> ProcessObservation {
+        ProcessObservation::ready_for_session(spec, policy.generation(), 1)
+    }
+
     #[test]
     fn core_policy_snapshot_and_principal_receipt_are_consumed_by_controller() {
         let spec = session_spec();
@@ -1117,7 +1173,7 @@ mod tests {
             .reconcile_with_policy(
                 &spec,
                 DependencyState::ready(),
-                ProcessObservation::ready(),
+                ready(&spec, &policy),
                 None,
                 &policy,
             )
@@ -1154,7 +1210,7 @@ mod tests {
             .reconcile_with_policy(
                 &spec,
                 DependencyState::ready(),
-                ProcessObservation::ready(),
+                ready(&spec, &first_policy),
                 None,
                 &first_policy,
             )
@@ -1164,7 +1220,7 @@ mod tests {
             .reconcile_with_policy(
                 &spec,
                 DependencyState::ready(),
-                ProcessObservation::ready(),
+                ready(&spec, &first_policy),
                 None,
                 &second_policy,
             )
@@ -1181,7 +1237,7 @@ mod tests {
             .reconcile_with_policy(
                 &spec,
                 DependencyState::ready(),
-                ProcessObservation::ready(),
+                ready(&spec, &first_policy),
                 Some(LaunchGrants::from_supervisor_for_session_with_frontend(
                     AttachmentGrantHandle::from_supervisor([9; 32]),
                     AttachmentGrantHandle::from_supervisor([10; 32]),
@@ -1200,7 +1256,7 @@ mod tests {
             .reconcile_with_policy(
                 &spec,
                 DependencyState::ready(),
-                ProcessObservation::ready(),
+                ready(&spec, &second_policy),
                 None,
                 &second_policy,
             )

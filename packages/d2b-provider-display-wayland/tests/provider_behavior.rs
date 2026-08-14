@@ -46,6 +46,27 @@ fn reconcile(
     controller.reconcile_with_policy(spec, dependencies, observation, None, &policy)
 }
 
+fn reconcile_with_evidence(
+    controller: &mut DisplayController,
+    spec: &WaylandSessionSpec,
+    dependencies: d2b_provider_display_wayland::DependencyState,
+    observation: ProcessObservation,
+    evidence: d2b_provider_display_wayland::WorkerRestartEvidence,
+) -> Result<
+    d2b_provider_display_wayland::ReconcileResult,
+    d2b_provider_display_wayland::WaylandSpecError,
+> {
+    let policy = policy_for(spec);
+    controller.reconcile_with_policy_and_evidence(
+        spec,
+        dependencies,
+        observation,
+        evidence,
+        None,
+        &policy,
+    )
+}
+
 #[test]
 fn session_rejects_untrusted_cross_domain_and_invalid_identity() {
     let (guest, host, user, policy) = refs();
@@ -180,22 +201,28 @@ fn controller_status_transitions_pending_ready_and_failed() {
         &mut controller,
         &spec,
         d2b_provider_display_wayland::DependencyState::ready(),
-        d2b_provider_display_wayland::ProcessObservation::ready(),
+        d2b_provider_display_wayland::ProcessObservation::ready_for_session(&spec, 1, 1),
     )
     .unwrap();
     assert_eq!(ready.status.phase, Phase::Ready);
-    let failed = reconcile(
+    let failed = reconcile_with_evidence(
         &mut controller,
         &spec,
         d2b_provider_display_wayland::DependencyState::ready(),
         d2b_provider_display_wayland::ProcessObservation::proxy_failed(5),
+        d2b_provider_display_wayland::WorkerRestartEvidence {
+            observed_at_ms: 1_000,
+            proxy_last_failure_ms: Some(0),
+            frontend_last_failure_ms: None,
+            teardown_generation: 1,
+        },
     )
     .unwrap();
     assert_eq!(failed.status.phase, Phase::Failed);
 }
 
 #[test]
-fn failed_reconcile_releases_the_session_principal() {
+fn failed_reconcile_retains_the_session_principal_until_cleanup() {
     let (guest, host, user, policy) = refs();
     let first = WaylandSessionSpec::new(guest, host, user, policy, identity(), true).unwrap();
     let second = WaylandSessionSpec::new(
@@ -212,17 +239,23 @@ fn failed_reconcile_releases_the_session_principal() {
         &mut controller,
         &first,
         d2b_provider_display_wayland::DependencyState::ready(),
-        ProcessObservation::ready(),
+        ProcessObservation::ready_for_session(&first, 1, 1),
     )
     .unwrap()
     .status;
     assert!(first_status.principal.is_some());
     assert_eq!(
-        reconcile(
+        reconcile_with_evidence(
             &mut controller,
             &first,
             d2b_provider_display_wayland::DependencyState::ready(),
             ProcessObservation::proxy_failed(5),
+            d2b_provider_display_wayland::WorkerRestartEvidence {
+                observed_at_ms: 1_000,
+                proxy_last_failure_ms: Some(0),
+                frontend_last_failure_ms: None,
+                teardown_generation: 1,
+            },
         )
         .unwrap()
         .status
@@ -234,12 +267,12 @@ fn failed_reconcile_releases_the_session_principal() {
             &mut controller,
             &second,
             d2b_provider_display_wayland::DependencyState::ready(),
-            ProcessObservation::ready(),
+            ProcessObservation::ready_for_session(&second, 1, 1),
         )
         .unwrap()
         .status
         .phase,
-        Phase::Ready
+        Phase::Failed
     );
 }
 
@@ -261,7 +294,7 @@ fn mutable_session_fields_reuse_the_same_principal() {
         &mut controller,
         &first,
         d2b_provider_display_wayland::DependencyState::ready(),
-        ProcessObservation::ready(),
+        ProcessObservation::ready_for_session(&first, 1, 1),
     )
     .unwrap()
     .status
@@ -270,12 +303,40 @@ fn mutable_session_fields_reuse_the_same_principal() {
         &mut controller,
         &changed,
         d2b_provider_display_wayland::DependencyState::ready(),
-        ProcessObservation::ready(),
+        ProcessObservation::ready_for_session(&changed, 1, 1),
     )
     .unwrap()
     .status
     .principal;
     assert_eq!(first_principal, changed_principal);
+}
+
+#[test]
+fn readiness_cannot_be_reused_for_a_different_host_or_user_binding() {
+    let (guest, host, user, policy) = refs();
+    let spec = WaylandSessionSpec::new(guest, host, user, policy, identity(), true).unwrap();
+    let retargeted = WaylandSessionSpec::new(
+        ResourceRef::parse("Guest/work-vm").unwrap(),
+        ResourceRef::parse("Host/other-host").unwrap(),
+        ResourceRef::parse("User/bob").unwrap(),
+        ResourceRef::parse("display-wayland.d2bus.org.WaylandPolicy/default").unwrap(),
+        identity(),
+        true,
+    )
+    .unwrap();
+    let mut controller = d2b_provider_display_wayland::DisplayController::new(2);
+    assert_eq!(
+        reconcile(
+            &mut controller,
+            &retargeted,
+            d2b_provider_display_wayland::DependencyState::ready(),
+            ProcessObservation::ready_for_session(&spec, 1, 1),
+        )
+        .unwrap()
+        .status
+        .phase,
+        Phase::Pending
+    );
 }
 
 #[test]
@@ -312,7 +373,7 @@ fn distinct_authenticated_sessions_do_not_share_display_principals() {
         &mut controller,
         &first,
         d2b_provider_display_wayland::DependencyState::ready(),
-        ProcessObservation::ready(),
+        ProcessObservation::ready_for_session(&first, 1, 1),
     )
     .unwrap()
     .status;
@@ -320,7 +381,7 @@ fn distinct_authenticated_sessions_do_not_share_display_principals() {
         &mut controller,
         &second,
         d2b_provider_display_wayland::DependencyState::ready(),
-        ProcessObservation::ready(),
+        ProcessObservation::ready_for_session(&second, 1, 1),
     )
     .unwrap()
     .status;
