@@ -235,6 +235,7 @@ pub struct NotificationProviderConfig {
     guest_sources: Vec<GuestSourceConfig>,
     host_execution_ref: Option<ResourceRef>,
     host_user_ref: Option<ResourceRef>,
+    dbus_sink_enabled: bool,
 }
 
 impl NotificationProviderConfig {
@@ -253,7 +254,19 @@ impl NotificationProviderConfig {
             guest_sources,
             host_execution_ref: None,
             host_user_ref: None,
+            dbus_sink_enabled: true,
         })
+    }
+
+    /// Enable or disable the host D-Bus sink process.
+    pub const fn with_dbus_sink_enabled(mut self, enabled: bool) -> Self {
+        self.dbus_sink_enabled = enabled;
+        self
+    }
+
+    /// Return whether the host D-Bus sink is configured.
+    pub const fn dbus_sink_enabled(&self) -> bool {
+        self.dbus_sink_enabled
     }
 
     /// Bind the configured processes to the Core-resolved Host and User.
@@ -643,10 +656,10 @@ impl NotificationController {
         let host_execution_ref = config
             .host_execution_ref()
             .ok_or("notification-host-binding-missing")?;
-        let host_user_ref = config
-            .host_user_ref()
-            .ok_or("notification-host-binding-missing")?;
-        if display.host_execution_ref() != host_execution_ref || display.user_ref() != host_user_ref
+        let host_user_ref = config.host_user_ref();
+        if display.host_execution_ref() != host_execution_ref
+            || (config.dbus_sink_enabled()
+                && host_user_ref.is_none_or(|user| display.user_ref() != user))
         {
             return Err("notification-host-binding-mismatch");
         }
@@ -665,7 +678,8 @@ impl NotificationController {
             execution_ref: host_execution_ref.clone(),
             user_ref: None,
         }];
-        if display.is_ready() {
+        if config.dbus_sink_enabled() && display.is_ready() {
+            let host_user_ref = host_user_ref.ok_or("notification-host-binding-missing")?;
             plans.push(ProcessPlan {
                 template: "notification-desktop-host-sink",
                 domain: "user",
@@ -781,10 +795,11 @@ impl NotificationController {
         let generation_changed = self
             .active_display_fingerprint
             .is_some_and(|fingerprint| fingerprint != display_fingerprint);
-        let stop_host_sink =
-            self.host_sink_fingerprint.is_some() && (!display.is_ready() || generation_changed);
-        let start_host_sink =
-            display.is_ready() && (self.host_sink_fingerprint != Some(display_fingerprint));
+        let stop_host_sink = self.host_sink_fingerprint.is_some()
+            && (!config.dbus_sink_enabled() || !display.is_ready() || generation_changed);
+        let start_host_sink = config.dbus_sink_enabled()
+            && display.is_ready()
+            && (self.host_sink_fingerprint != Some(display_fingerprint));
         Ok(SourceReconcileResult {
             start,
             stop,
@@ -810,7 +825,12 @@ impl NotificationController {
         }
         let fingerprint = display.is_ready().then(|| display_fingerprint(display));
         self.active_display_fingerprint = fingerprint;
-        self.host_sink_fingerprint = fingerprint;
+        if result.stop_host_sink {
+            self.host_sink_fingerprint = None;
+        }
+        if result.start_host_sink {
+            self.host_sink_fingerprint = fingerprint;
+        }
     }
 
     /// Reconcile from a Core-authenticated display route.
@@ -969,6 +989,24 @@ mod tests {
             controller.plan(&display(DisplayDependencyState::Ready), &wrong_zone_config),
             Err("notification-source-zone-mismatch")
         );
+    }
+
+    #[test]
+    fn disabled_dbus_sink_never_plans_or_restarts_the_host_sink() {
+        let mut controller = NotificationController::new(crate::PROVIDER_REF).unwrap();
+        let config = bound_config(vec![source("one")]).with_dbus_sink_enabled(false);
+        let dependency = display(DisplayDependencyState::Ready);
+        let plans = controller.plan(&dependency, &config).unwrap();
+        assert!(
+            plans
+                .iter()
+                .all(|plan| plan.template != "notification-desktop-host-sink")
+        );
+        let result = controller
+            .reconcile_sources(&dependency, &config, &[test_source("one")])
+            .unwrap();
+        assert!(!result.start_host_sink);
+        assert!(!result.stop_host_sink);
     }
 
     #[test]

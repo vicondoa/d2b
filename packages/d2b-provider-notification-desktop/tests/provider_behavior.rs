@@ -1,6 +1,8 @@
+use d2b_contracts::v3::{ResourceRef, ZoneId};
 use d2b_provider_notification_desktop::{
-    ActionNonceStore, ActionSpec, Category, NotificationController, NotificationProviderConfig,
-    NotificationProviderDescriptor, NotificationRequest, NotificationUrgency,
+    ActionNonceStore, ActionSpec, Category, GuestSourceConfig, NotificationController,
+    NotificationProviderConfig, NotificationProviderDescriptor, NotificationRequest,
+    NotificationUrgency,
 };
 
 #[test]
@@ -91,6 +93,39 @@ fn controller_has_no_provider_state_volume_and_tracks_display_dependency() {
         "Provider/notification-desktop"
     );
     assert!(NotificationProviderConfig::new(Vec::new()).is_ok());
+}
+
+#[test]
+fn notification_source_configuration_rejects_capacity_duplicates_and_bad_bindings() {
+    let zone = ZoneId::parse("work").unwrap();
+    let source = |name: &str| {
+        GuestSourceConfig::new(
+            ResourceRef::parse(format!("Guest/{name}").as_str()).unwrap(),
+            zone.clone(),
+            [Category::SystemInfo],
+        )
+        .unwrap()
+    };
+    assert_eq!(
+        NotificationProviderConfig::new(vec![source("one"), source("one")]),
+        Err("notification-source-duplicate")
+    );
+    let too_many = (0..17)
+        .map(|index| source(format!("guest-{index}").as_str()))
+        .collect();
+    assert_eq!(
+        NotificationProviderConfig::new(too_many),
+        Err("notification-source-capacity")
+    );
+    assert_eq!(
+        NotificationProviderConfig::new(vec![source("one")])
+            .unwrap()
+            .with_host_binding(
+                ResourceRef::parse("Guest/not-a-host").unwrap(),
+                ResourceRef::parse("User/alice").unwrap(),
+            ),
+        Err("notification-host-binding-invalid")
+    );
 }
 
 #[test]
