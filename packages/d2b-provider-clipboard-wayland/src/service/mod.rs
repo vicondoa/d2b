@@ -126,6 +126,7 @@ impl core::fmt::Debug for AuthenticatedClipboardSession {
 pub struct AuthenticatedPasteRoute {
     operation_id: String,
     source_zone: String,
+    source_guest: Option<String>,
     source_reconnect_generation: u64,
     destination_zone: String,
     destination_guest: String,
@@ -149,6 +150,7 @@ impl AuthenticatedPasteRoute {
         Ok(Self {
             operation_id: operation_id_for_sessions(source, destination),
             source_zone: source.zone().to_owned(),
+            source_guest: source.is_guest().then(|| source.guest_ref()),
             source_reconnect_generation: source.reconnect_generation(),
             destination_zone: destination.zone().to_owned(),
             destination_guest: destination.subject_ref.to_canonical_string(),
@@ -171,6 +173,10 @@ impl AuthenticatedPasteRoute {
 
     pub(crate) fn source_reconnect_generation(&self) -> u64 {
         self.source_reconnect_generation
+    }
+
+    pub(crate) fn source_guest(&self) -> Option<&str> {
+        self.source_guest.as_deref()
     }
 
     pub(crate) fn destination_guest(&self) -> &str {
@@ -349,40 +355,69 @@ impl ClipdHost {
         audit_capacity: usize,
         display: Option<DisplayDependencyEvidence>,
     ) -> Result<Self, ClipboardServiceError> {
-        if display.as_ref().is_some_and(|evidence| {
-            evidence.provider_ref().to_canonical_string() != "Provider/display-wayland"
-                || evidence.host_execution_ref().resource_type().as_str() != "Host"
-                || evidence.reconnect_generation() == 0
-                || evidence.controller_generation() == 0
-                || evidence.generation() == 0
-        }) {
-            return Err(ClipboardServiceError::DependencyUnavailable);
-        }
         let history = ClipboardHistory::new(crate::ClipboardConfig::from_policy(policy.clone()))
             .map_err(|_| ClipboardServiceError::HistoryRejected)?;
-        let status = if display.is_some() {
-            DependencyStatus::Ready
-        } else {
-            DependencyStatus::Absent
-        };
         let max_concurrent_fds = policy.max_concurrent_fds();
-        Ok(Self {
+        let mut host = Self {
             policy,
             history,
             audit: ClipboardAuditQueue::new(audit_capacity),
             dependency: DisplayDependency {
-                status,
+                status: DependencyStatus::Absent,
                 service_contract: "d2b.display.host-clipboard.v3",
-                evidence: display,
+                evidence: None,
             },
             echo_window: BTreeMap::new(),
             fd_permits: FdPermitPool::new(max_concurrent_fds),
-        })
+        };
+        host.reconcile_display_dependency(display)?;
+        Ok(host)
     }
 
     /// Return the typed display dependency state.
     pub const fn dependency(&self) -> &DisplayDependency {
         &self.dependency
+    }
+
+    /// Reconcile the authenticated display dependency and fence stale proofs.
+    ///
+    /// A missing proof is a fail-closed revocation and drains echo metadata.
+    /// New proofs must advance the Core controller, reconnect, or Provider
+    /// generation; an older proof cannot restore clipboard authority.
+    pub fn reconcile_display_dependency(
+        &mut self,
+        display: Option<DisplayDependencyEvidence>,
+    ) -> Result<DependencyStatus, ClipboardServiceError> {
+        let Some(display) = display else {
+            self.dependency.status = DependencyStatus::Absent;
+            self.dependency.evidence = None;
+            self.echo_window.clear();
+            return Ok(DependencyStatus::Absent);
+        };
+        if !Self::valid_display_dependency(&display) {
+            return Err(ClipboardServiceError::DependencyUnavailable);
+        }
+        if let Some(current) = self.dependency.evidence.as_ref() {
+            let current_key = (
+                current.controller_generation(),
+                current.reconnect_generation(),
+                current.generation(),
+            );
+            let next_key = (
+                display.controller_generation(),
+                display.reconnect_generation(),
+                display.generation(),
+            );
+            if next_key < current_key
+                || (next_key == current_key
+                    && display.session_digest() != current.session_digest())
+            {
+                return Err(ClipboardServiceError::DependencyUnavailable);
+            }
+        }
+        self.dependency.status = DependencyStatus::Ready;
+        self.dependency.evidence = Some(display);
+        Ok(DependencyStatus::Ready)
     }
 
     /// Flush acknowledged audit records without exposing clipboard payloads.
@@ -726,6 +761,11 @@ impl ClipdHost {
             .authorize_guest(route.destination_guest())
             .map_err(|_| ClipboardServiceError::GuestSuspended)
             .and_then(|()| {
+                if let Some(source_guest) = route.source_guest() {
+                    self.history
+                        .authorize_guest(source_guest)
+                        .map_err(|_| ClipboardServiceError::GuestSuspended)?;
+                }
                 if self.policy.require_picker_for_paste() && !picker_completed {
                     Err(ClipboardServiceError::PickerRequired)
                 } else {
@@ -744,6 +784,16 @@ impl ClipdHost {
             .evidence
             .as_ref()
             .is_some_and(|evidence| evidence.zone().as_str() == zone && evidence.generation() != 0)
+    }
+
+    fn valid_display_dependency(display: &DisplayDependencyEvidence) -> bool {
+        display.provider_ref().to_canonical_string() == "Provider/display-wayland"
+            && display.host_execution_ref().resource_type().as_str() == "Host"
+            && display.user_ref().resource_type().as_str() == "User"
+            && display.reconnect_generation() != 0
+            && display.controller_generation() != 0
+            && display.generation() != 0
+            && display.session_digest() != [0; 32]
     }
 }
 
@@ -1056,11 +1106,72 @@ mod tests {
     }
 
     #[test]
+    fn suspended_guest_cannot_complete_a_history_picker() {
+        let mut host = ClipdHost::new(Policy::default(), 4, Some(display())).unwrap();
+        let source = guest("source", "zone-a", 1);
+        let destination = guest("work", "zone-a", 1);
+        let digest = host
+            .capture_guest(&source, "text/plain", b"secret", 100)
+            .unwrap();
+        host.suspend_guest("Guest/source");
+        let route = AuthenticatedPasteRoute::from_sessions(&source, &destination).unwrap();
+        let request = PickerRequest::new(
+            route.operation_id(),
+            "zone-a",
+            "Guest/work",
+            vec!["text/plain".to_owned()],
+        )
+        .unwrap();
+        assert_eq!(
+            PickerAuthority::complete(
+                &source,
+                &destination,
+                &request,
+                crate::picker::PickerResult::Selected(digest.clone()),
+                digest,
+                &host.history,
+                100,
+            )
+            .expect_err("suspended source must not mint a receipt"),
+            crate::picker::PickerError::ResultMismatch
+        );
+    }
+
+    #[test]
     fn display_dependency_is_bound_to_the_operation_zone() {
         let mut host = ClipdHost::new(Policy::default(), 4, Some(display())).unwrap();
         let other_zone = guest("work", "personal", 1);
         assert_eq!(
             host.capture_guest(&other_zone, "text/plain", b"hello", 100),
+            Err(ClipboardServiceError::DependencyUnavailable)
+        );
+    }
+
+    #[test]
+    fn display_dependency_revocation_and_generation_fencing_are_fail_closed() {
+        let current = display();
+        let mut host = ClipdHost::new(Policy::default(), 4, Some(current.clone())).unwrap();
+        let guest = guest("work", "zone-a", 1);
+        assert!(host
+            .capture_guest(&guest, "text/plain", b"hello", 100)
+            .is_ok());
+
+        assert_eq!(
+            host.reconcile_display_dependency(None),
+            Ok(DependencyStatus::Absent)
+        );
+        assert_eq!(
+            host.capture_guest(&guest, "text/plain", b"world", 101),
+            Err(ClipboardServiceError::DependencyUnavailable)
+        );
+
+        host.reconcile_display_dependency(Some(DisplayDependencyEvidence {
+            controller_generation: 2,
+            ..current.clone()
+        }))
+        .unwrap();
+        assert_eq!(
+            host.reconcile_display_dependency(Some(current)),
             Err(ClipboardServiceError::DependencyUnavailable)
         );
     }

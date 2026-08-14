@@ -57,7 +57,7 @@ impl ClipboardEntry {
         created_at: u64,
     ) -> Result<Self, HistoryError> {
         let guest = guest.into();
-        let mime = mime.into();
+        let mime = crate::policy::normalize_mime(&mime.into());
         if guest.is_empty() {
             return Err(HistoryError::EntryUnavailable);
         }
@@ -300,7 +300,9 @@ impl ClipboardHistory {
         self.entries.get(token).is_some_and(|entry| {
             entry.guest == owner
                 && now_secs.saturating_sub(entry.created_at) < self.config.guest_entry_ttl_secs()
-                && allowed_mime_types.iter().any(|mime| mime == entry.mime())
+                && allowed_mime_types
+                    .iter()
+                    .any(|mime| crate::policy::normalize_mime(mime) == entry.mime())
         })
     }
 
@@ -338,7 +340,7 @@ impl core::fmt::Debug for ClipboardHistory {
 
 #[cfg(test)]
 mod tests {
-    use super::ClipboardHistory;
+    use super::{ClipboardEntry, ClipboardHistory};
     use crate::ClipboardConfig;
 
     #[test]
@@ -348,5 +350,26 @@ mod tests {
         assert_eq!(history.guest_requests.len(), 1);
         history.gc(160);
         assert!(history.guest_requests.is_empty());
+    }
+
+    #[test]
+    fn history_normalizes_mime_values_before_storage_and_matching() {
+        let mut history = ClipboardHistory::new(ClipboardConfig::default()).unwrap();
+        let entry = ClipboardEntry::new("Guest/work", "TEXT/PLAIN", b"hello", 100).unwrap();
+        let token = entry.token().to_owned();
+        history.insert(entry).unwrap();
+        assert!(history.entry_matches_mime(
+            &token,
+            "Guest/work",
+            &[String::from("text/plain")],
+            100,
+        ));
+        assert_eq!(
+            history
+                .entries
+                .get(&token)
+                .map(|entry| entry.mime()),
+            Some("text/plain")
+        );
     }
 }

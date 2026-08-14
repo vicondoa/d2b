@@ -60,6 +60,10 @@ impl PickerRequest {
         {
             return Err(PickerError::Bounds);
         }
+        let mime_types = mime_types
+            .iter()
+            .map(|mime| crate::policy::normalize_mime(mime))
+            .collect::<Vec<_>>();
         if mime_types
             .iter()
             .any(|mime| !crate::Policy::default().allows_mime(mime))
@@ -204,6 +208,9 @@ impl PickerAuthority {
         match result {
             PickerResult::Selected(selected) if selected == entry_digest => {
                 let owner = entry_owner_for_session(source);
+                if source.is_guest() && history.authorize_guest(&owner).is_err() {
+                    return Err(PickerError::ResultMismatch);
+                }
                 if !history.entry_matches_mime(
                     &entry_digest,
                     &owner,
@@ -222,5 +229,22 @@ impl PickerAuthority {
             }
             PickerResult::Selected(_) => Err(PickerError::ResultMismatch),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PickerRequest;
+
+    #[test]
+    fn picker_normalizes_mime_metadata_before_matching_history() {
+        let request = PickerRequest::new(
+            "operation-1",
+            "zone-a",
+            "Guest/work",
+            vec![" TEXT/PLAIN ".to_owned()],
+        )
+        .unwrap();
+        assert_eq!(request.mime_types(), ["text/plain"]);
     }
 }
