@@ -134,6 +134,7 @@ impl TpmResourceController {
             Ok(value) => value,
             Err(error) => return self.effect_failed(error),
         };
+        self.volume_ref = Some(volume.clone());
         let process = match port
             .request_swtpm_process(&self.device_uid, &volume, &self.execution_ref)
             .await
@@ -141,6 +142,7 @@ impl TpmResourceController {
             Ok(value) => value,
             Err(error) => return self.effect_failed(error),
         };
+        self.process_ref = Some(process.clone());
         let flush = match port
             .request_flush_process(&self.device_uid, &process, &self.execution_ref)
             .await
@@ -148,13 +150,11 @@ impl TpmResourceController {
             Ok(value) => value,
             Err(error) => return self.effect_failed(error),
         };
+        self.flush_ref = Some(flush.clone());
         let endpoint = match port.watch_tpm_endpoint(&process).await {
             Ok(value) => value,
             Err(error) => return self.effect_failed(error),
         };
-        self.volume_ref = Some(volume);
-        self.process_ref = Some(process);
-        self.flush_ref = Some(flush);
         self.endpoint_ref = Some(endpoint);
         self.phase = TpmResourcePhase::Ready;
         Ok(TpmResourceOutcome::Ready)
@@ -168,18 +168,28 @@ impl TpmResourceController {
         if !self.finalizer {
             return Ok(TpmResourceOutcome::VolumeRetained);
         }
-        let process = self
-            .process_ref
-            .as_ref()
-            .ok_or(TpmResourceControllerError::InvalidState)?;
-        port.stop_swtpm_process(process)
-            .await
-            .map_err(TpmResourceControllerError::Effect)?;
-        if let Some(flush) = self.flush_ref.as_ref() {
-            port.delete_flush_process(flush)
-                .await
-                .map_err(TpmResourceControllerError::Effect)?;
+        if self.phase == TpmResourcePhase::Pending
+            && self.volume_ref.is_none()
+            && self.process_ref.is_none()
+            && self.flush_ref.is_none()
+        {
+            return Err(TpmResourceControllerError::InvalidState);
         }
+        if let Some(process) = self.process_ref.take() {
+            if let Err(error) = port.stop_swtpm_process(&process).await {
+                self.process_ref = Some(process);
+                self.phase = TpmResourcePhase::Degraded;
+                return Err(TpmResourceControllerError::Effect(error));
+            }
+        }
+        if let Some(flush) = self.flush_ref.take() {
+            if let Err(error) = port.delete_flush_process(&flush).await {
+                self.flush_ref = Some(flush);
+                self.phase = TpmResourcePhase::Degraded;
+                return Err(TpmResourceControllerError::Effect(error));
+            }
+        }
+        self.endpoint_ref = None;
         self.finalizer = false;
         self.phase = TpmResourcePhase::Finalized;
         Ok(TpmResourceOutcome::VolumeRetained)
