@@ -14,16 +14,18 @@ mod rbac;
 mod service;
 
 pub use audit::{
-    ClipboardAuditEvent, ClipboardAuditQueue, ClipboardEventType, ClipboardReason, SizeBucket,
+    ClipboardAuditEvent, ClipboardAuditQueue, ClipboardAuditSink, ClipboardEventType,
+    ClipboardReason, SizeBucket,
 };
 pub use controller::{
     ClipboardController, DependencyStatus, DisplayDependencyEvidence, ProcessPlan,
 };
 pub use descriptor::{ClipboardDescriptorError, ClipboardProviderDescriptor};
 pub use fd::{
-    AcceptedTransferFdKind, AttachmentClass, FdCapModel, FdMetadata, FdObjectKind, FdSafetyError,
-    FdStatModel, FileSystemKind, ReceivedFdBatch, classify_fd_model, inspect_fd, validate_fd_cap,
-    validate_fd_metadata, validate_received_fd, validate_recvmsg_control,
+    AcceptedTransferFdKind, AttachmentClass, FdCapModel, FdMetadata, FdObjectKind, FdPermitPool,
+    FdReadError, FdSafetyError, FdStatModel, FileSystemKind, ReceivedFdBatch, classify_fd_model,
+    inspect_fd, read_bounded, read_owned_fd_bounded, validate_fd_cap, validate_fd_metadata,
+    validate_received_fd, validate_recvmsg_control,
 };
 pub use history::{ClipboardEntry, ClipboardHistory, HistoryError};
 pub use picker::{PickerAuthority, PickerError, PickerReceipt, PickerRequest, PickerResult};

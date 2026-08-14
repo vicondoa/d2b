@@ -33,7 +33,7 @@ impl ClipboardRbac {
             },
             ClipboardRole {
                 name: "clipboard-viewer",
-                verbs: &["connect", "invoke", "stream"],
+                verbs: &["connect", "stream"],
             },
             ClipboardRole {
                 name: "clipboard-bridge-peer",
@@ -65,5 +65,21 @@ impl ClipboardRbac {
                 role: "clipboard-picker-worker",
             },
         ]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ClipboardRbac;
+
+    #[test]
+    fn viewer_cannot_invoke_clipboard_mutations() {
+        let viewer = ClipboardRbac::roles()
+            .iter()
+            .find(|role| role.name == "clipboard-viewer")
+            .expect("viewer role");
+        assert!(!viewer.verbs.contains(&"invoke"));
+        assert!(viewer.verbs.contains(&"connect"));
+        assert!(viewer.verbs.contains(&"stream"));
     }
 }

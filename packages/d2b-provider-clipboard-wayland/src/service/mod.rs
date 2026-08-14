@@ -2,8 +2,13 @@
 
 use crate::{
     DependencyStatus, DisplayDependencyEvidence,
-    audit::{ClipboardAuditEvent, ClipboardAuditQueue, ClipboardReason, SizeBucket},
-    fd::{AttachmentClass, FdSafetyError, ReceivedFdBatch},
+    audit::{
+        ClipboardAuditEvent, ClipboardAuditQueue, ClipboardAuditSink, ClipboardReason, SizeBucket,
+    },
+    fd::{
+        AttachmentClass, FdPermit, FdPermitPool, FdReadError, FdSafetyError, ReceivedFdBatch,
+        read_owned_fd_bounded,
+    },
     history::{ClipboardEntry, ClipboardHistory},
     picker::PickerReceipt,
     policy::Policy,
@@ -208,17 +213,33 @@ pub struct GuestSelectionEvent {
 pub struct VerifiedClipboardAttachments {
     descriptors: Vec<std::os::fd::OwnedFd>,
     credits: CreditBundle,
+    permit: FdPermit,
+    max_size_bytes: u64,
+}
+
+struct VerifiedReceivedFds<F> {
+    descriptors: Vec<F>,
+    permit: FdPermit,
 }
 
 impl VerifiedClipboardAttachments {
-    /// Borrow the accepted descriptors.
-    pub fn descriptors(&self) -> &[std::os::fd::OwnedFd] {
-        &self.descriptors
+    /// Return the number of accepted descriptors.
+    pub const fn len(&self) -> usize {
+        self.descriptors.len()
     }
 
-    /// Consume the wrapper and return descriptors plus retained credits.
-    pub fn into_parts(self) -> (Vec<std::os::fd::OwnedFd>, CreditBundle) {
-        (self.descriptors, self.credits)
+    /// Consume every descriptor through the authenticated byte bound.
+    pub fn read_all(self) -> Result<Vec<Vec<u8>>, FdReadError> {
+        let Self {
+            descriptors,
+            credits: _credits,
+            permit: _permit,
+            max_size_bytes,
+        } = self;
+        descriptors
+            .into_iter()
+            .map(|descriptor| read_owned_fd_bounded(descriptor, max_size_bytes))
+            .collect()
     }
 }
 
@@ -313,6 +334,7 @@ pub struct ClipdHost {
     audit: ClipboardAuditQueue,
     dependency: DisplayDependency,
     echo_window: BTreeMap<String, EchoSuppression>,
+    fd_permits: FdPermitPool,
 }
 
 impl ClipdHost {
@@ -324,6 +346,9 @@ impl ClipdHost {
     ) -> Result<Self, ClipboardServiceError> {
         if display.as_ref().is_some_and(|evidence| {
             evidence.provider_ref().to_canonical_string() != "Provider/display-wayland"
+                || evidence.host_execution_ref().resource_type().as_str() != "Host"
+                || evidence.reconnect_generation() == 0
+                || evidence.controller_generation() == 0
                 || evidence.generation() == 0
         }) {
             return Err(ClipboardServiceError::DependencyUnavailable);
@@ -335,6 +360,7 @@ impl ClipdHost {
         } else {
             DependencyStatus::Absent
         };
+        let max_concurrent_fds = policy.max_concurrent_fds();
         Ok(Self {
             policy,
             history,
@@ -345,6 +371,7 @@ impl ClipdHost {
                 evidence: display,
             },
             echo_window: BTreeMap::new(),
+            fd_permits: FdPermitPool::new(max_concurrent_fds),
         })
     }
 
@@ -353,17 +380,26 @@ impl ClipdHost {
         &self.dependency
     }
 
+    /// Flush acknowledged audit records without exposing clipboard payloads.
+    pub fn flush_audit<S: ClipboardAuditSink>(
+        &mut self,
+        sink: &mut S,
+        limit: usize,
+    ) -> Result<usize, S::Error> {
+        self.audit.flush_to(sink, limit)
+    }
+
     /// Validate all descriptors from one authenticated attachment packet.
     ///
     /// Control truncation, descriptor metadata, operation direction, and the
     /// configured concurrent-FD bound are checked before ownership escapes the
     /// receive adapter.
-    pub fn accept_received_fds<F>(
+    fn accept_received_fds<F>(
         &self,
         session: &AuthenticatedClipboardSession,
         batch: ReceivedFdBatch<F>,
         attachment_class: AttachmentClass,
-    ) -> Result<Vec<F>, ClipboardServiceError>
+    ) -> Result<VerifiedReceivedFds<F>, ClipboardServiceError>
     where
         F: std::os::fd::AsFd,
     {
@@ -375,20 +411,35 @@ impl ClipdHost {
         {
             return Err(ClipboardServiceError::DependencyUnavailable);
         }
-        let expected_guest = matches!(attachment_class, AttachmentClass::GuestTransfer);
-        if session.is_guest() != expected_guest {
-            return Err(if expected_guest {
-                ClipboardServiceError::SessionUnauthenticated
-            } else {
-                ClipboardServiceError::HostSessionInvalid
-            });
-        }
-        if batch.len() > self.policy.max_concurrent_fds() {
-            return Err(ClipboardServiceError::AttachmentRejected);
-        }
-        batch
+        Self::validate_attachment_subject(session, attachment_class)?;
+        let descriptors = batch
             .validate_control(attachment_class, self.policy.max_item_bytes() as u64)
-            .map_err(|_: FdSafetyError| ClipboardServiceError::AttachmentRejected)
+            .map_err(|_: FdSafetyError| ClipboardServiceError::AttachmentRejected)?;
+        let permit = self
+            .fd_permits
+            .acquire(descriptors.len())
+            .map_err(|_| ClipboardServiceError::AttachmentRejected)?;
+        Ok(VerifiedReceivedFds {
+            descriptors,
+            permit,
+        })
+    }
+
+    fn validate_attachment_subject(
+        session: &AuthenticatedClipboardSession,
+        attachment_class: AttachmentClass,
+    ) -> Result<(), ClipboardServiceError> {
+        match attachment_class {
+            AttachmentClass::GuestTransfer if !session.is_guest() => {
+                Err(ClipboardServiceError::SessionUnauthenticated)
+            }
+            AttachmentClass::HostSelectionRead | AttachmentClass::HostSelectionWrite
+                if session.is_guest() =>
+            {
+                Err(ClipboardServiceError::HostSessionInvalid)
+            }
+            _ => Ok(()),
+        }
     }
 
     /// Admit attachments from the audited Unix session adapter.
@@ -413,7 +464,10 @@ impl ClipdHost {
                 }
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let descriptors = self.accept_received_fds(
+        let VerifiedReceivedFds {
+            descriptors,
+            permit,
+        } = self.accept_received_fds(
             session,
             ReceivedFdBatch::new(descriptors, false),
             attachment_class,
@@ -421,6 +475,8 @@ impl ClipdHost {
         Ok(VerifiedClipboardAttachments {
             descriptors,
             credits,
+            permit,
+            max_size_bytes: self.policy.max_item_bytes() as u64,
         })
     }
 
@@ -548,7 +604,6 @@ impl ClipdHost {
             && source_event.as_ref().is_some_and(|event| {
                 event.expires_at > now_secs
                     && event.source_zone.as_str() == session.zone()
-                    && event.source_generation == session.reconnect_generation
                     && event.source_guest.resource_type().as_str() == "Guest"
                     && self
                         .echo_window
@@ -793,8 +848,12 @@ mod tests {
         DisplayDependencyEvidence {
             provider_ref: ResourceRef::parse("Provider/display-wayland").unwrap(),
             zone: ZoneId::parse("zone-a").unwrap(),
+            host_execution_ref: ResourceRef::parse("Host/display-wayland").unwrap(),
             user_ref: ResourceRef::parse("User/alice").unwrap(),
-            generation: 1,
+            provider_generation: 1,
+            reconnect_generation: 7,
+            controller_generation: 1,
+            session_digest: [7; 32],
         }
     }
 
@@ -922,6 +981,72 @@ mod tests {
         assert_eq!(
             host.guest_selection_event(&guest, &token, 200).err(),
             Some(ClipboardServiceError::HistoryRejected)
+        );
+    }
+
+    #[test]
+    fn echo_suppression_does_not_compare_guest_and_host_generations() {
+        let policy = Policy::new(true, true, true, true, true, 3, 4096, 4096, 32, 60).unwrap();
+        let mut host = ClipdHost::new(policy, 4, Some(display())).unwrap();
+        let guest = guest("work", "zone-a", 7);
+        let token = host
+            .capture_guest(&guest, "text/plain", b"hello", 100)
+            .unwrap();
+        let event = host.guest_selection_event(&guest, &token, 101).unwrap();
+        assert_eq!(
+            host.capture_host(
+                &user("zone-a", 99),
+                "text/plain",
+                b"hello",
+                Some(event),
+                101
+            ),
+            Err(ClipboardServiceError::EchoSuppressed)
+        );
+    }
+
+    #[test]
+    fn host_selection_writes_are_admitted_for_authenticated_user_sessions() {
+        let host = user("zone-a", 99);
+        let guest = guest("work", "zone-a", 7);
+        assert!(
+            ClipdHost::validate_attachment_subject(&host, AttachmentClass::HostSelectionWrite)
+                .is_ok()
+        );
+        assert_eq!(
+            ClipdHost::validate_attachment_subject(&guest, AttachmentClass::HostSelectionWrite),
+            Err(ClipboardServiceError::HostSessionInvalid)
+        );
+    }
+
+    #[test]
+    fn picker_completion_requires_a_requested_mime_type() {
+        let mut host = ClipdHost::new(Policy::default(), 4, Some(display())).unwrap();
+        let source = user("zone-a", 1);
+        let destination = guest("work", "zone-a", 1);
+        let route = AuthenticatedPasteRoute::from_sessions(&source, &destination).unwrap();
+        let request = PickerRequest::new(
+            route.operation_id(),
+            "zone-a",
+            "Guest/work",
+            vec!["image/png".to_owned()],
+        )
+        .unwrap();
+        let digest = host
+            .capture_host(&source, "text/plain", b"hello", None, 100)
+            .unwrap();
+        assert_eq!(
+            PickerAuthority::complete(
+                &source,
+                &destination,
+                &request,
+                crate::picker::PickerResult::Selected(digest.clone()),
+                digest,
+                &host.history,
+                100,
+            )
+            .expect_err("MIME mismatch must refuse picker completion"),
+            crate::picker::PickerError::ResultMismatch
         );
     }
 

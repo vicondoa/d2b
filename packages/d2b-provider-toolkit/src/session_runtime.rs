@@ -126,10 +126,13 @@ where
         if cancellation.is_cancelled() {
             return Ok(());
         }
-        let frame = session
-            .receive_ttrpc()
-            .await
-            .map_err(|_| ProviderToolkitError::SessionClosed)?;
+        let frame = tokio::select! {
+            biased;
+            _ = cancellation.cancelled() => return Ok(()),
+            frame = session.receive_ttrpc() => {
+                frame.map_err(|_| ProviderToolkitError::SessionClosed)?
+            }
+        };
         let route = session.route_binding();
         let request = codec.decode_request(&frame, &route)?;
         let expected_zone = ZonePath::new(vec![
@@ -155,7 +158,8 @@ where
             method,
             payload,
         } = request;
-        if authorization.target_zone() != route.zone()
+        if authorization.service() != route.service()
+            || authorization.target_zone() != route.zone()
             || authorization.target() != Some(expected_provider)
             || authorization.operation() != method.as_str()
         {

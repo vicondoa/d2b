@@ -136,6 +136,15 @@ pub struct ClipboardAuditEvent {
     size_bucket: SizeBucket,
 }
 
+/// A destination that acknowledges payload-free audit events.
+pub trait ClipboardAuditSink {
+    /// Error returned when the destination cannot acknowledge an event.
+    type Error;
+
+    /// Publish one event without taking ownership of the queue entry.
+    fn publish(&mut self, event: &ClipboardAuditEvent) -> Result<(), Self::Error>;
+}
+
 impl ClipboardAuditEvent {
     /// Construct an event with identity digests and a size bucket.
     pub fn new(
@@ -219,8 +228,87 @@ impl ClipboardAuditQueue {
     pub fn is_full(&self) -> bool {
         self.entries.len() >= self.capacity
     }
+
+    /// Deliver and remove up to `limit` events after each publish is
+    /// acknowledged by the destination.
+    pub fn flush_to<S: ClipboardAuditSink>(
+        &mut self,
+        sink: &mut S,
+        limit: usize,
+    ) -> Result<usize, S::Error> {
+        let mut delivered = 0;
+        while delivered < limit {
+            let Some(event) = self.entries.front().cloned() else {
+                break;
+            };
+            sink.publish(&event)?;
+            self.entries.pop_front();
+            delivered += 1;
+        }
+        Ok(delivered)
+    }
 }
 
 fn digest(value: &str) -> String {
     format!("sha256:{:x}", Sha256::digest(value.as_bytes()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Default)]
+    struct RecordingSink {
+        events: Vec<ClipboardAuditEvent>,
+        fail: bool,
+    }
+
+    impl ClipboardAuditSink for RecordingSink {
+        type Error = &'static str;
+
+        fn publish(&mut self, event: &ClipboardAuditEvent) -> Result<(), Self::Error> {
+            if self.fail {
+                return Err("sink-unavailable");
+            }
+            self.events.push(event.clone());
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn failed_audit_delivery_retains_the_head_for_retry() {
+        let mut queue = ClipboardAuditQueue::new(2);
+        queue
+            .push(ClipboardAuditEvent::new(
+                "guest",
+                "host",
+                ClipboardReason::Allowed,
+                SizeBucket::Lt1K,
+            ))
+            .unwrap();
+        let mut sink = RecordingSink {
+            fail: true,
+            ..Default::default()
+        };
+        assert_eq!(queue.flush_to(&mut sink, 1), Err("sink-unavailable"));
+        assert_eq!(queue.len(), 1);
+        assert!(sink.events.is_empty());
+    }
+
+    #[test]
+    fn acknowledged_audit_delivery_releases_capacity() {
+        let mut queue = ClipboardAuditQueue::new(1);
+        queue
+            .push(ClipboardAuditEvent::new(
+                "guest",
+                "host",
+                ClipboardReason::Allowed,
+                SizeBucket::Lt1K,
+            ))
+            .unwrap();
+        let mut sink = RecordingSink::default();
+        assert_eq!(queue.flush_to(&mut sink, 1), Ok(1));
+        assert!(queue.is_empty());
+        assert_eq!(sink.events.len(), 1);
+    }
 }

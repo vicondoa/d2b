@@ -55,6 +55,7 @@ impl PickerRequest {
             || source_zone.len() > 63
             || destination_guest.is_empty()
             || destination_guest.len() > 63
+            || mime_types.is_empty()
             || mime_types.len() > 16
         {
             return Err(PickerError::Bounds);
@@ -203,6 +204,14 @@ impl PickerAuthority {
         match result {
             PickerResult::Selected(selected) if selected == entry_digest => {
                 let owner = entry_owner_for_session(source);
+                if !history.entry_matches_mime(
+                    &entry_digest,
+                    &owner,
+                    request.mime_types(),
+                    now_secs,
+                ) {
+                    return Err(PickerError::ResultMismatch);
+                }
                 let Some(expires_at) = history.entry_expiry(&entry_digest, &owner, now_secs) else {
                     return Err(PickerError::ResultMismatch);
                 };

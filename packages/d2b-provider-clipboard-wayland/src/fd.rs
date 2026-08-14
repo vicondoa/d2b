@@ -1,6 +1,13 @@
 //! FD safety models and the checked Unix attachment adapter.
 
-use std::os::fd::AsFd;
+use std::{
+    io::{Read, Take},
+    os::fd::{AsFd, OwnedFd},
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+};
 
 use rustix::{
     fs::{FileType, fstat, fstatfs},
@@ -146,6 +153,15 @@ pub enum FdSafetyError {
     },
     /// A metadata query failed.
     MetadataIo,
+    /// The process-wide admitted attachment bound was exhausted.
+    ConcurrentLimitExceeded {
+        /// Number of descriptors requested.
+        requested: usize,
+        /// Number of descriptors already admitted.
+        active: usize,
+        /// Configured concurrent descriptor limit.
+        limit: usize,
+    },
 }
 
 impl core::fmt::Display for FdSafetyError {
@@ -161,6 +177,7 @@ impl core::fmt::Display for FdSafetyError {
             | Self::CloseOnExecRequired
             | Self::AttachmentClassMismatch { .. }
             | Self::MetadataIo => "fd-safety-violation",
+            Self::ConcurrentLimitExceeded { .. } => "fd-count-exceeded",
         })
     }
 }
@@ -312,6 +329,139 @@ pub fn validate_received_fd(
     validate_fd_metadata(metadata, attachment_class, max_size_bytes)
 }
 
+/// Failure while consuming an admitted pipe or socket attachment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FdReadError {
+    /// The bounded read returned an I/O error.
+    Io,
+    /// The stream produced more bytes than the authenticated item bound.
+    SizeExceeded {
+        /// Configured byte limit.
+        limit: u64,
+    },
+}
+
+impl core::fmt::Display for FdReadError {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str(match self {
+            Self::Io => "fd-read-failed",
+            Self::SizeExceeded { .. } => "fd-read-size-exceeded",
+        })
+    }
+}
+
+impl std::error::Error for FdReadError {}
+
+/// Read one stream through a hard byte limit.
+pub fn read_bounded<R: Read>(reader: &mut R, max_size_bytes: u64) -> Result<Vec<u8>, FdReadError> {
+    let mut bytes = Vec::new();
+    let read_limit = max_size_bytes.saturating_add(1);
+    let mut limited: Take<&mut R> = reader.take(read_limit);
+    limited
+        .read_to_end(&mut bytes)
+        .map_err(|_| FdReadError::Io)?;
+    if bytes.len() as u64 > max_size_bytes {
+        return Err(FdReadError::SizeExceeded {
+            limit: max_size_bytes,
+        });
+    }
+    Ok(bytes)
+}
+
+/// Consume an admitted descriptor without exposing an unbounded stream.
+pub fn read_owned_fd_bounded(fd: OwnedFd, max_size_bytes: u64) -> Result<Vec<u8>, FdReadError> {
+    let mut file = std::fs::File::from(fd);
+    read_bounded(&mut file, max_size_bytes)
+}
+
+/// Process-local bounded ownership for admitted clipboard descriptors.
+#[derive(Clone)]
+pub struct FdPermitPool {
+    limit: usize,
+    active: Arc<AtomicUsize>,
+}
+
+impl core::fmt::Debug for FdPermitPool {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("FdPermitPool")
+            .field("limit", &self.limit)
+            .field("active", &self.active())
+            .finish()
+    }
+}
+
+impl FdPermitPool {
+    /// Construct a bounded descriptor ownership pool.
+    pub fn new(limit: usize) -> Self {
+        Self {
+            limit,
+            active: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+
+    /// Return the number of currently retained descriptors.
+    pub fn active(&self) -> usize {
+        self.active.load(Ordering::Acquire)
+    }
+
+    /// Reserve ownership for one accepted descriptor batch.
+    pub fn acquire(&self, requested: usize) -> Result<FdPermit, FdSafetyError> {
+        let mut active = self.active.load(Ordering::Acquire);
+        loop {
+            let next =
+                active
+                    .checked_add(requested)
+                    .ok_or(FdSafetyError::ConcurrentLimitExceeded {
+                        requested,
+                        active,
+                        limit: self.limit,
+                    })?;
+            if next > self.limit {
+                return Err(FdSafetyError::ConcurrentLimitExceeded {
+                    requested,
+                    active,
+                    limit: self.limit,
+                });
+            }
+            match self.active.compare_exchange_weak(
+                active,
+                next,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => {
+                    return Ok(FdPermit {
+                        pool: self.clone(),
+                        count: requested,
+                    });
+                }
+                Err(observed) => active = observed,
+            }
+        }
+    }
+}
+
+/// Retained descriptor ownership released when the verified wrapper drops.
+pub struct FdPermit {
+    pool: FdPermitPool,
+    count: usize,
+}
+
+impl core::fmt::Debug for FdPermit {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("FdPermit(REDACTED)")
+    }
+}
+
+impl Drop for FdPermit {
+    fn drop(&mut self) {
+        if self.count != 0 {
+            self.pool.active.fetch_sub(self.count, Ordering::AcqRel);
+        }
+    }
+}
+
 /// A batch of received descriptors whose ownership remains local until
 /// validation succeeds.  Dropping the batch deterministically closes every
 /// descriptor, including descriptors from a truncated control message.
@@ -358,5 +508,30 @@ where
             validated.push(descriptor);
         }
         Ok(validated)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+
+    #[test]
+    fn bounded_reader_rejects_streams_larger_than_the_policy() {
+        let mut reader = Cursor::new(b"hello");
+        assert_eq!(
+            read_bounded(&mut reader, 4),
+            Err(FdReadError::SizeExceeded { limit: 4 })
+        );
+    }
+
+    #[test]
+    fn descriptor_permits_are_released_when_verified_ownership_drops() {
+        let pool = FdPermitPool::new(2);
+        let permit = pool.acquire(2).unwrap();
+        assert_eq!(pool.active(), 2);
+        assert!(pool.acquire(1).is_err());
+        drop(permit);
+        assert_eq!(pool.active(), 0);
     }
 }

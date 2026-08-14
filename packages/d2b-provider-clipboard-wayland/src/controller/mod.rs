@@ -2,6 +2,7 @@
 
 use d2b_contracts::v3::{EvidenceClass, Locality, ResourceRef, ZoneId};
 use d2b_provider_toolkit::AuthenticatedSessionRouteBinding;
+use sha2::{Digest, Sha256};
 
 /// Display dependency state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -20,8 +21,12 @@ pub enum DependencyStatus {
 pub struct DisplayDependencyEvidence {
     pub(crate) provider_ref: ResourceRef,
     pub(crate) zone: ZoneId,
+    pub(crate) host_execution_ref: ResourceRef,
     pub(crate) user_ref: ResourceRef,
-    pub(crate) generation: u64,
+    pub(crate) provider_generation: u64,
+    pub(crate) reconnect_generation: u64,
+    pub(crate) controller_generation: u64,
+    pub(crate) session_digest: [u8; 32],
 }
 
 impl DisplayDependencyEvidence {
@@ -50,11 +55,41 @@ impl DisplayDependencyEvidence {
         {
             return Err("clipboard-display-unauthenticated");
         }
+        let Some(host_execution_ref) = route.context().execution_ref() else {
+            return Err("clipboard-display-unauthenticated");
+        };
+        let Some(controller_generation) = route.controller_generation() else {
+            return Err("clipboard-display-unauthenticated");
+        };
+        if host_execution_ref.resource_type().as_str() != "Host" || controller_generation.get() == 0
+        {
+            return Err("clipboard-display-unauthenticated");
+        }
+        let mut digest = Sha256::new();
+        digest.update(provider_ref.to_canonical_string().as_bytes());
+        digest.update([0]);
+        digest.update(route.zone().as_str().as_bytes());
+        digest.update([0]);
+        digest.update(host_execution_ref.to_canonical_string().as_bytes());
+        digest.update([0]);
+        digest.update(route.subject_ref().to_canonical_string().as_bytes());
+        digest.update([0]);
+        digest.update(provider_generation.get().to_be_bytes());
+        digest.update([0]);
+        digest.update(route.reconnect_generation().get().to_be_bytes());
+        digest.update([0]);
+        digest.update(controller_generation.get().to_be_bytes());
+        let mut session_digest = [0; 32];
+        session_digest.copy_from_slice(&digest.finalize());
         Ok(Self {
             provider_ref: provider_ref.clone(),
             zone: route.zone().clone(),
+            host_execution_ref: host_execution_ref.clone(),
             user_ref: route.subject_ref().clone(),
-            generation: provider_generation.get(),
+            provider_generation: provider_generation.get(),
+            reconnect_generation: route.reconnect_generation().get(),
+            controller_generation: controller_generation.get(),
+            session_digest,
         })
     }
 
@@ -68,6 +103,11 @@ impl DisplayDependencyEvidence {
         &self.zone
     }
 
+    /// Borrow the authenticated Host execution reference.
+    pub const fn host_execution_ref(&self) -> &ResourceRef {
+        &self.host_execution_ref
+    }
+
     /// Borrow the authenticated User.
     pub const fn user_ref(&self) -> &ResourceRef {
         &self.user_ref
@@ -75,7 +115,22 @@ impl DisplayDependencyEvidence {
 
     /// Return the Ready generation.
     pub const fn generation(&self) -> u64 {
-        self.generation
+        self.provider_generation
+    }
+
+    /// Return the display reconnect generation.
+    pub const fn reconnect_generation(&self) -> u64 {
+        self.reconnect_generation
+    }
+
+    /// Return the Core controller generation.
+    pub const fn controller_generation(&self) -> u64 {
+        self.controller_generation
+    }
+
+    /// Return the opaque digest binding this display dependency session.
+    pub const fn session_digest(&self) -> [u8; 32] {
+        self.session_digest
     }
 }
 
@@ -137,6 +192,7 @@ impl ClipboardController {
         };
         if display.provider_ref().resource_type().as_str() == "Provider"
             && display.user_ref() == &self.user_ref
+            && display.host_execution_ref() == &self.execution_ref
             && display.generation() != 0
         {
             DependencyStatus::Ready

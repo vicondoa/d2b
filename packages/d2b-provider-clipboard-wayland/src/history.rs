@@ -289,6 +289,21 @@ impl ClipboardHistory {
         })
     }
 
+    /// Return whether one owned, live entry matches an allowed MIME type.
+    pub fn entry_matches_mime(
+        &self,
+        token: &str,
+        owner: &str,
+        allowed_mime_types: &[String],
+        now_secs: u64,
+    ) -> bool {
+        self.entries.get(token).is_some_and(|entry| {
+            entry.guest == owner
+                && now_secs.saturating_sub(entry.created_at) < self.config.guest_entry_ttl_secs()
+                && allowed_mime_types.iter().any(|mime| mime == entry.mime())
+        })
+    }
+
     fn evict_until(&mut self, incoming: usize) {
         while self.total_bytes.saturating_add(incoming) > self.config.max_total_bytes()
             && !self.entries.is_empty()
