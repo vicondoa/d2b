@@ -1739,7 +1739,7 @@ async fn reconcile_system_core_resources(
     let hosts = list(host_type, "host").await?;
     let users = list(user_type, "user").await?;
 
-    let host_phase = HandlerPhase::Ready;
+    let host_phase = host_phase_for_resource_count(hosts.resources.len());
     for resource in hosts.resources {
         let envelope = d2b_contracts::v3::ResourceEnvelope::from_json(&resource.canonical_json)
             .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
@@ -1796,6 +1796,17 @@ async fn reconcile_system_core_resources(
         host_phase,
         user_phase,
     })
+}
+
+fn host_phase_for_resource_count(count: usize) -> HandlerPhase {
+    if count == 0 {
+        // A Zone without a Host resource has no host authority to bootstrap
+        // dependent Providers. Keep the runtime visible, but do not publish
+        // a falsely ready system-core handler.
+        HandlerPhase::Degraded
+    } else {
+        HandlerPhase::Ready
+    }
 }
 
 fn mark_core_handlers(
@@ -2219,6 +2230,17 @@ mod tests {
         );
         assert_eq!(result, Err(ResourceRuntimeError::HandlerNotReady));
         assert_eq!(core.stage(), StartupStage::ReconcilingSystemCore);
+    }
+
+    #[test]
+    fn system_core_requires_a_host_but_accepts_multiple_host_resources() {
+        assert_eq!(
+            host_phase_for_resource_count(0),
+            HandlerPhase::Degraded,
+            "zero Host resources must not publish a ready handler"
+        );
+        assert_eq!(host_phase_for_resource_count(1), HandlerPhase::Ready);
+        assert_eq!(host_phase_for_resource_count(2), HandlerPhase::Ready);
     }
 
     #[test]
