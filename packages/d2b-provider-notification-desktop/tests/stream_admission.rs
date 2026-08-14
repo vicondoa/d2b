@@ -1,5 +1,5 @@
 use d2b_provider_notification_desktop::{
-    AdmissionError, AdmissionPurpose, TransportClass, OBSERVER_STREAM, SINK_STREAM,
+    AdmissionError, AdmissionPurpose, OBSERVER_STREAM, SINK_STREAM, TransportClass,
 };
 
 #[test]

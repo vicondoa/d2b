@@ -1,8 +1,8 @@
 //! In-memory host notification sink and observer projection.
 
 use crate::{
-    admission::SessionEvidence,
     action_nonce::{ActionNonceError, ActionNonceStore},
+    admission::SessionEvidence,
     redact::SanitizedNotification,
     types::NotificationRequest,
 };
@@ -418,10 +418,10 @@ mod tests {
         let mut sink = NotificationSink::new(2, 4, 10);
         let mut port = TestPort::default();
         let observer = test_observer("alice");
-        let request = request_with_action()
-            .with_idempotency_key("same")
+        let request = request_with_action().with_idempotency_key("same").unwrap();
+        let result = sink
+            .deliver(&mut port, &observer, request.clone(), 100)
             .unwrap();
-        let result = sink.deliver(&mut port, &observer, request.clone(), 100).unwrap();
         let action_key = match result {
             NotificationResult::Accepted { action_nonces, .. } => action_nonces["open"].clone(),
             other => panic!("unexpected result: {other:?}"),

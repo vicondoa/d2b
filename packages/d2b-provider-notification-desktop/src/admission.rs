@@ -42,12 +42,15 @@ impl SessionEvidence {
     pub fn from_component_session<C>(
         session: &AuthenticatedComponentSession<C>,
     ) -> Result<Self, AdmissionError> {
-        Self::from_route_binding(session.route_binding())
+        let evidence = Self::from_route_binding(session.route_binding())?;
+        evidence.admit()?;
+        Ok(evidence)
     }
 
     /// Admit a Guest source from an authenticated enrolled session.
+    #[allow(dead_code)]
     pub(crate) fn from_source_route(
-    route: AuthenticatedSessionRouteBinding,
+        route: AuthenticatedSessionRouteBinding,
     ) -> Result<Self, AdmissionError> {
         validate_route(&route, EvidenceClass::EnrolledKk, false)?;
         Ok(Self {
@@ -60,6 +63,7 @@ impl SessionEvidence {
     }
 
     /// Admit a local desktop observer from authenticated Unix peer evidence.
+    #[allow(dead_code)]
     pub(crate) fn from_observer_route(
         route: AuthenticatedSessionRouteBinding,
     ) -> Result<Self, AdmissionError> {
@@ -82,9 +86,7 @@ impl SessionEvidence {
         }
     }
 
-    fn from_route_binding(
-        route: AuthenticatedSessionRouteBinding,
-    ) -> Result<Self, AdmissionError> {
+    fn from_route_binding(route: AuthenticatedSessionRouteBinding) -> Result<Self, AdmissionError> {
         let subject_type = route.subject_ref().resource_type().as_str();
         let (purpose, transport, expected_evidence, local_only) = match subject_type {
             "Guest" => (
@@ -109,7 +111,7 @@ impl SessionEvidence {
             purpose,
             transport,
         })
-        }
+    }
 
     /// Admit the session specifically for host-observer delivery and action
     /// invocation.
@@ -142,6 +144,16 @@ impl SessionEvidence {
         )
     }
 
+    /// Borrow the authenticated subject reference for exact source binding.
+    pub const fn subject_ref(&self) -> &ResourceRef {
+        &self.subject_ref
+    }
+
+    /// Whether this evidence is a Guest source session.
+    pub const fn is_source(&self) -> bool {
+        matches!(self.purpose, AdmissionPurpose::NotificationSource)
+    }
+
     /// Borrow the authenticated Zone.
     pub fn zone(&self) -> &ZoneId {
         &self.zone
@@ -167,11 +179,16 @@ pub(crate) fn test_observer(subject: &str) -> SessionEvidence {
 
 #[cfg(test)]
 pub(crate) fn test_source(subject: &str) -> SessionEvidence {
+    test_source_at(subject, 1)
+}
+
+#[cfg(test)]
+pub(crate) fn test_source_at(subject: &str, generation: u64) -> SessionEvidence {
     let subject_ref = format!("Guest/{subject}");
     SessionEvidence {
         subject_ref: ResourceRef::parse(&subject_ref).unwrap(),
         zone: ZoneId::parse("work").unwrap(),
-        generation: 1,
+        generation,
         purpose: AdmissionPurpose::NotificationSource,
         transport: TransportClass::EnrolledNoiseKk,
     }
@@ -188,7 +205,7 @@ fn validate_route(
     if route
         .provider_ref()
         .is_none_or(|provider| provider.to_canonical_string() != crate::PROVIDER_REF)
-    || route.provider_generation().is_none()
+        || route.provider_generation().is_none()
     {
         return Err(AdmissionError::SessionUnauthenticated);
     }

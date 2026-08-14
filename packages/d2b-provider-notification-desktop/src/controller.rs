@@ -1,12 +1,17 @@
 //! Process placement controller for desktop notification components.
 
+use crate::SessionEvidence;
 use d2b_contracts::v3::{EvidenceClass, Locality, ResourceRef, ZoneId};
-use d2b_provider_display_wayland::SERVICE_PACKAGE as DISPLAY_SERVICE_PACKAGE;
+use d2b_provider_display_wayland::{
+    DisplayDependencyProof, SERVICE_PACKAGE as DISPLAY_SERVICE_PACKAGE,
+};
 use d2b_session::AuthenticatedSessionRouteBinding;
+use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 
 use crate::Category;
 
+#[allow(dead_code)]
 const DISPLAY_PROVIDER_REF: &str = d2b_provider_display_wayland::PROVIDER_REF;
 const MAX_GUEST_SOURCES: usize = 16;
 
@@ -36,8 +41,20 @@ pub struct DisplayDependencyEvidence {
 }
 
 impl DisplayDependencyEvidence {
+    /// Project authenticated Ready evidence minted by the display controller.
+    pub fn from_proof(proof: DisplayDependencyProof) -> Self {
+        Self {
+            provider_ref: proof.provider_ref().clone(),
+            zone: proof.zone().clone(),
+            user_ref: proof.user_ref().clone(),
+            generation: proof.generation(),
+            state: DisplayDependencyState::Ready,
+        }
+    }
+
     /// Resolve one display dependency from an authenticated display route.
-    pub fn from_route(
+    #[allow(dead_code)]
+    pub(crate) fn from_route(
         route: AuthenticatedSessionRouteBinding,
         state: DisplayDependencyState,
         generation: u64,
@@ -197,6 +214,80 @@ pub struct SourceReconcileResult {
     pub start_host_sink: bool,
     /// Whether the host sink must be drained and stopped in this pass.
     pub stop_host_sink: bool,
+    /// Authenticated endpoints whose source process must be started.
+    pub start_endpoints: Vec<SourceEndpoint>,
+    /// Authenticated endpoints whose source process must be drained.
+    pub stop_endpoints: Vec<SourceEndpoint>,
+}
+
+/// Authenticated Guest source endpoint evidence.
+#[derive(Clone, PartialEq, Eq)]
+pub struct SourceEndpoint {
+    source_ref: ResourceRef,
+    source_generation: u64,
+    display_generation: u64,
+    endpoint_digest: String,
+}
+
+impl SourceEndpoint {
+    fn from_authenticated(
+        source: &GuestSourceConfig,
+        session: &SessionEvidence,
+        display_generation: u64,
+    ) -> Result<Self, &'static str> {
+        session
+            .admit_source()
+            .map_err(|_| "notification-source-unauthenticated")?;
+        if session.subject_ref() != source.source_ref() || session.zone() != source.zone() {
+            return Err("notification-source-binding-mismatch");
+        }
+        let mut digest = Sha256::new();
+        digest.update(source.source_ref().to_canonical_string().as_bytes());
+        digest.update([0]);
+        digest.update(session.generation().to_be_bytes());
+        digest.update([0]);
+        digest.update(display_generation.to_be_bytes());
+        let endpoint_digest = format!(
+            "sha256:{}",
+            digest
+                .finalize()
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
+        );
+        Ok(Self {
+            source_ref: source.source_ref().clone(),
+            source_generation: session.generation(),
+            display_generation,
+            endpoint_digest,
+        })
+    }
+
+    /// Borrow the exact configured Guest reference.
+    pub const fn source_ref(&self) -> &ResourceRef {
+        &self.source_ref
+    }
+
+    /// Return the authenticated Guest reconnect generation.
+    pub const fn source_generation(&self) -> u64 {
+        self.source_generation
+    }
+
+    /// Return the display generation this endpoint consumes.
+    pub const fn display_generation(&self) -> u64 {
+        self.display_generation
+    }
+
+    /// Borrow the opaque endpoint correlation.
+    pub fn endpoint_digest(&self) -> &str {
+        &self.endpoint_digest
+    }
+}
+
+impl core::fmt::Debug for SourceEndpoint {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("SourceEndpoint(REDACTED)")
+    }
 }
 
 /// A planned notification component process.
@@ -215,9 +306,9 @@ pub struct ProcessPlan {
 /// Notification placement controller.
 pub struct NotificationController {
     provider_ref: ResourceRef,
-    active_sources: BTreeSet<ResourceRef>,
+    active_sources: std::collections::BTreeMap<ResourceRef, SourceEndpoint>,
     active_display_generation: Option<u64>,
-    host_sink_active: bool,
+    host_sink_generation: Option<u64>,
 }
 
 impl NotificationController {
@@ -230,9 +321,9 @@ impl NotificationController {
         }
         Ok(Self {
             provider_ref,
-            active_sources: BTreeSet::new(),
+            active_sources: std::collections::BTreeMap::new(),
             active_display_generation: None,
-            host_sink_active: false,
+            host_sink_generation: None,
         })
     }
 
@@ -263,12 +354,14 @@ impl NotificationController {
                 source_ref: None,
             });
         }
-        plans.extend(config.guest_sources().iter().map(|source| ProcessPlan {
-            template: "notification-desktop-guest-source",
-            domain: "guest",
-            mounts_state_volume: false,
-            source_ref: Some(source.source_ref().clone()),
-        }));
+        if display.is_ready() {
+            plans.extend(config.guest_sources().iter().map(|source| ProcessPlan {
+                template: "notification-desktop-guest-source",
+                domain: "guest",
+                mounts_state_volume: false,
+                source_ref: Some(source.source_ref().clone()),
+            }));
+        }
         Ok(plans)
     }
 
@@ -277,45 +370,116 @@ impl NotificationController {
         &mut self,
         display: &DisplayDependencyEvidence,
         config: &NotificationProviderConfig,
+        source_sessions: &[SessionEvidence],
     ) -> Result<SourceReconcileResult, &'static str> {
         self.plan(display, config)?;
-        let configured = config
-            .guest_sources()
+        let endpoints = if display.is_ready() {
+            config
+                .guest_sources()
+                .iter()
+                .map(|source| {
+                    let mut matches = source_sessions
+                        .iter()
+                        .filter(|session| session.subject_ref() == source.source_ref());
+                    let session = matches
+                        .next()
+                        .ok_or("notification-source-unauthenticated")?;
+                    if matches.next().is_some() {
+                        return Err("notification-source-ambiguous");
+                    }
+                    SourceEndpoint::from_authenticated(source, session, display.generation())
+                })
+                .collect::<Result<Vec<_>, _>>()?
+        } else {
+            Vec::new()
+        };
+        let configured = endpoints
             .iter()
-            .map(|source| source.source_ref().clone())
-            .collect::<BTreeSet<_>>();
+            .map(|endpoint| (endpoint.source_ref().clone(), endpoint.clone()))
+            .collect::<std::collections::BTreeMap<_, _>>();
         let start = configured
-            .difference(&self.active_sources)
-            .cloned()
+            .iter()
+            .filter(|(source, endpoint)| {
+                self.active_sources
+                    .get(*source)
+                    .is_none_or(|active| active != *endpoint)
+            })
+            .map(|(source, _)| source.clone())
             .collect::<Vec<_>>();
         let stop = self
             .active_sources
-            .difference(&configured)
-            .cloned()
+            .iter()
+            .filter(|(source, active)| {
+                configured
+                    .get(*source)
+                    .is_none_or(|endpoint| endpoint != *active)
+            })
+            .map(|(source, _)| source.clone())
+            .collect::<Vec<_>>();
+        let start_endpoints = start
+            .iter()
+            .filter_map(|source| configured.get(source).cloned())
+            .collect::<Vec<_>>();
+        let stop_endpoints = stop
+            .iter()
+            .filter_map(|source| self.active_sources.get(source).cloned())
             .collect::<Vec<_>>();
         let generation_changed = self
             .active_display_generation
             .is_some_and(|generation| generation != display.generation());
-        let stop_host_sink = self.host_sink_active
-            && (!display.is_ready() || generation_changed);
-        let start_host_sink = display.is_ready() && (!self.host_sink_active || generation_changed);
+        let stop_host_sink =
+            self.host_sink_generation.is_some() && (!display.is_ready() || generation_changed);
+        let start_host_sink =
+            display.is_ready() && (self.host_sink_generation != Some(display.generation()));
         self.active_sources = configured;
-        self.host_sink_active = display.is_ready();
+        self.host_sink_generation = display.is_ready().then_some(display.generation());
         self.active_display_generation = display.is_ready().then_some(display.generation());
         Ok(SourceReconcileResult {
             start,
             stop,
             start_host_sink,
             stop_host_sink,
+            start_endpoints,
+            stop_endpoints,
         })
+    }
+
+    /// Reconcile from a Core-authenticated display proof.
+    ///
+    /// `None` is the fail-closed dependency state and drains every owned
+    /// source/sink endpoint; callers cannot manufacture a Ready boolean.
+    pub fn reconcile_authenticated_display(
+        &mut self,
+        display: Option<DisplayDependencyProof>,
+        config: &NotificationProviderConfig,
+        source_sessions: &[SessionEvidence],
+    ) -> Result<SourceReconcileResult, &'static str> {
+        let Some(proof) = display else {
+            let stop_endpoints = self.active_sources.values().cloned().collect();
+            let stop = self.active_sources.keys().cloned().collect();
+            let result = SourceReconcileResult {
+                start: Vec::new(),
+                stop,
+                start_host_sink: false,
+                stop_host_sink: self.host_sink_generation.is_some(),
+                start_endpoints: Vec::new(),
+                stop_endpoints,
+            };
+            self.active_sources.clear();
+            self.active_display_generation = None;
+            self.host_sink_generation = None;
+            return Ok(result);
+        };
+        let evidence = DisplayDependencyEvidence::from_proof(proof);
+        self.reconcile_sources(&evidence, config, source_sessions)
     }
 
     /// Drain and forget all source endpoints during shutdown or finalization.
     pub fn drain_sources(&mut self) -> Vec<ResourceRef> {
-        let drained = self.active_sources.iter().cloned().collect();
+        let drained = self.active_sources.keys().cloned().collect();
         self.active_sources.clear();
         self.active_display_generation = None;
-        self.host_sink_active = false;
+        self.host_sink_generation = None;
         drained
     }
 
@@ -339,6 +503,7 @@ impl core::fmt::Debug for NotificationController {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::admission::{test_source, test_source_at};
 
     fn display(state: DisplayDependencyState) -> DisplayDependencyEvidence {
         DisplayDependencyEvidence {
@@ -366,10 +531,12 @@ mod tests {
         let pending_plans = controller
             .plan(&display(DisplayDependencyState::Pending), &config)
             .unwrap();
-        assert_eq!(pending_plans.len(), 2);
-        assert!(pending_plans
-            .iter()
-            .all(|plan| plan.template != "notification-desktop-host-sink"));
+        assert_eq!(pending_plans.len(), 1);
+        assert!(
+            pending_plans
+                .iter()
+                .all(|plan| plan.template != "notification-desktop-host-sink")
+        );
         let wrong_zone = GuestSourceConfig::new(
             ResourceRef::parse("Guest/two").unwrap(),
             ZoneId::parse("personal").unwrap(),
@@ -389,28 +556,41 @@ mod tests {
         let first = NotificationProviderConfig::new(vec![source("one")]).unwrap();
         let second = NotificationProviderConfig::new(vec![source("two")]).unwrap();
         let dependency = display(DisplayDependencyState::Ready);
-        let first_result = controller.reconcile_sources(&dependency, &first).unwrap();
-        assert_eq!(first_result.start, vec![ResourceRef::parse("Guest/one").unwrap()]);
+        let first_result = controller
+            .reconcile_sources(&dependency, &first, &[test_source("one")])
+            .unwrap();
+        assert_eq!(
+            first_result.start,
+            vec![ResourceRef::parse("Guest/one").unwrap()]
+        );
         assert!(first_result.start_host_sink);
         assert!(!first_result.stop_host_sink);
         assert_eq!(
-            controller.reconcile_sources(&dependency, &second).unwrap().stop,
+            controller
+                .reconcile_sources(&dependency, &second, &[test_source("two")])
+                .unwrap()
+                .stop,
             vec![ResourceRef::parse("Guest/one").unwrap()]
         );
         let restarted = controller
             .reconcile_sources(
                 &display(DisplayDependencyState::Ready),
                 &second,
+                &[test_source("two")],
             )
             .unwrap();
         assert!(!restarted.start_host_sink);
         assert!(!restarted.stop_host_sink);
         let unavailable = controller
-            .reconcile_sources(&display(DisplayDependencyState::Pending), &second)
+            .reconcile_sources(&display(DisplayDependencyState::Pending), &second, &[])
             .unwrap();
         assert!(unavailable.stop_host_sink);
         let recovered = controller
-            .reconcile_sources(&display(DisplayDependencyState::Ready), &second)
+            .reconcile_sources(
+                &display(DisplayDependencyState::Ready),
+                &second,
+                &[test_source("two")],
+            )
             .unwrap();
         assert!(recovered.start_host_sink);
         assert_eq!(
@@ -418,5 +598,40 @@ mod tests {
             vec![ResourceRef::parse("Guest/two").unwrap()]
         );
         assert!(controller.drain_sources().is_empty());
+    }
+
+    #[test]
+    fn source_generation_change_drains_and_restarts_the_exact_endpoint() {
+        let mut controller = NotificationController::new(crate::PROVIDER_REF).unwrap();
+        let config = NotificationProviderConfig::new(vec![source("one")]).unwrap();
+        let dependency = display(DisplayDependencyState::Ready);
+        controller
+            .reconcile_sources(&dependency, &config, &[test_source("one")])
+            .unwrap();
+        let changed = controller
+            .reconcile_sources(&dependency, &config, &[test_source_at("one", 2)])
+            .unwrap();
+        assert_eq!(
+            changed.start,
+            vec![ResourceRef::parse("Guest/one").unwrap()]
+        );
+        assert_eq!(changed.stop, vec![ResourceRef::parse("Guest/one").unwrap()]);
+        assert_eq!(changed.start_endpoints[0].source_generation(), 2);
+        assert_eq!(changed.stop_endpoints[0].source_generation(), 1);
+    }
+
+    #[test]
+    fn duplicate_authenticated_source_sessions_are_rejected() {
+        let mut controller = NotificationController::new(crate::PROVIDER_REF).unwrap();
+        let config = NotificationProviderConfig::new(vec![source("one")]).unwrap();
+        let dependency = display(DisplayDependencyState::Ready);
+        assert_eq!(
+            controller.reconcile_sources(
+                &dependency,
+                &config,
+                &[test_source_at("one", 1), test_source_at("one", 2)],
+            ),
+            Err("notification-source-ambiguous")
+        );
     }
 }

@@ -190,7 +190,8 @@ impl ActionNonceStore {
     /// Revoke every capability owned by one authenticated session.
     pub(crate) fn revoke_session(&mut self, session: &str) {
         let digest = session_digest(session);
-        self.entries.retain(|_, nonce| nonce.session_digest != digest);
+        self.entries
+            .retain(|_, nonce| nonce.session_digest != digest);
     }
 
     fn token_from_key(action_key: &str) -> Option<&str> {

@@ -57,14 +57,15 @@ mod tests {
     #[test]
     fn authenticated_source_validation_rejects_observer_reuse() {
         let source = GuestSource::new([Category::SystemInfo]).unwrap();
-        let request =
-            NotificationRequest::new("summary", "body", Category::SystemInfo).unwrap();
+        let request = NotificationRequest::new("summary", "body", Category::SystemInfo).unwrap();
         assert_eq!(
             source.validate_authenticated(&test_observer("alice"), &request),
             Err("notification-source-unauthenticated")
         );
-        assert!(source
-            .validate_authenticated(&test_source("guest"), &request)
-            .is_ok());
+        assert!(
+            source
+                .validate_authenticated(&test_source("guest"), &request)
+                .is_ok()
+        );
     }
 }
