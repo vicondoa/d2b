@@ -212,6 +212,7 @@ impl ProviderEntrypoint {
         let route = session.route_binding();
         if route.provider_ref() != Some(expected_provider)
             || route.service().as_str() != expected_service
+            || route.provider_generation().is_none()
             || route.reconnect_generation().get() == 0
         {
             return Err(ProviderRuntimeError::SessionUnauthenticated);
@@ -227,6 +228,22 @@ impl ProviderEntrypoint {
         session: ProviderSessionAdmission,
         live_session: &AuthenticatedComponentSession<C>,
     ) -> Result<(), ProviderRuntimeError> {
+        let live_route = live_session.route_binding();
+        self.validate_authenticated_ready(registration, &session, &live_route)?;
+        drop(session);
+        self.transition_ready()?;
+        let mut stdout = io::stdout().lock();
+        writeln!(stdout, "D2B_PROVIDER_READY {}", self.name)
+            .and_then(|()| stdout.flush())
+            .map_err(|_| ProviderRuntimeError::ReadinessIo)
+    }
+
+    fn validate_authenticated_ready(
+        &self,
+        registration: &ProviderAdmission,
+        session: &ProviderSessionAdmission,
+        live_route: &AuthenticatedSessionRouteBinding,
+    ) -> Result<(), ProviderRuntimeError> {
         let (lock, _) = &*self.state;
         let state = lock
             .lock()
@@ -234,17 +251,11 @@ impl ProviderEntrypoint {
         if !Arc::ptr_eq(&registration.state, &self.state)
             || state.admitted == 0
             || session.route.reconnect_generation().get() == 0
-            || session.route != live_session.route_binding()
+            || session.route != *live_route
         {
             return Err(ProviderRuntimeError::SessionUnauthenticated);
         }
-        drop(state);
-        let _ = registration;
-        self.transition_ready()?;
-        let mut stdout = io::stdout().lock();
-        writeln!(stdout, "D2B_PROVIDER_READY {}", self.name)
-            .and_then(|()| stdout.flush())
-            .map_err(|_| ProviderRuntimeError::ReadinessIo)
+        Ok(())
     }
 
     fn transition_ready(&self) -> Result<(), ProviderRuntimeError> {
@@ -310,6 +321,7 @@ impl Drop for ProviderAdmission {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use d2b_contracts::v3::ResourceRef;
 
     #[test]
     fn readiness_is_not_published_before_registration() {
@@ -335,5 +347,53 @@ mod tests {
         );
         drop(admission);
         assert!(runtime.drain(Duration::from_millis(10)));
+    }
+
+    #[test]
+    fn authenticated_readiness_requires_the_live_route_and_registration() {
+        let runtime = ProviderEntrypoint::with_provider(
+            "Provider/test",
+            ResourceRef::parse("Provider/test").unwrap(),
+            "d2b.provider.v3",
+        )
+        .unwrap();
+        let registration = runtime.admit().unwrap();
+        let route = AuthenticatedSessionRouteBinding::for_test(
+            Some(ResourceRef::parse("Provider/test").unwrap()),
+            "d2b.provider.v3",
+            1,
+            Some(1),
+            Some(1),
+        );
+        let admission = ProviderSessionAdmission {
+            route: route.clone(),
+        };
+        assert!(
+            runtime
+                .validate_authenticated_ready(&registration, &admission, &route)
+                .is_ok()
+        );
+
+        let mismatched = AuthenticatedSessionRouteBinding::for_test(
+            Some(ResourceRef::parse("Provider/test").unwrap()),
+            "d2b.other.v3",
+            1,
+            Some(1),
+            Some(1),
+        );
+        assert_eq!(
+            runtime.validate_authenticated_ready(
+                &registration,
+                &admission,
+                &mismatched,
+            ),
+            Err(ProviderRuntimeError::SessionUnauthenticated)
+        );
+        let other_runtime = ProviderEntrypoint::new("Provider/other").unwrap();
+        let other_registration = other_runtime.admit().unwrap();
+        assert_eq!(
+            runtime.validate_authenticated_ready(&other_registration, &admission, &route),
+            Err(ProviderRuntimeError::SessionUnauthenticated)
+        );
     }
 }

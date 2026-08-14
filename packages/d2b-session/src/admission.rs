@@ -4,8 +4,8 @@ use async_trait::async_trait;
 use d2b_contracts::v3::{
     AuthenticatedSubjectContext, BindingDigest, ControllerGeneration, EvidenceClass, Locality,
     ReconnectGeneration, ResourceGeneration, ResourceRef, ResourceUid, SchemaFingerprint,
-    ServiceName, SessionPurpose, TranscriptHash, TransportBinding as IdentityTransportBinding,
-    ZoneId,
+    ServiceName, SessionPurpose, TranscriptHash,
+    TransportBinding as IdentityTransportBinding, ZoneId,
     component_session::{
         AuthorizationLease, BootstrapIdentityBinding, ChannelClass, EndpointPolicy, HandshakeOffer,
         HealthState, MetricLabels, MetricReason, MetricResult, NoiseProfile, OperationClass,
@@ -920,6 +920,80 @@ impl AuthenticatedSessionRouteBinding {
 
     pub const fn controller_generation(&self) -> Option<ControllerGeneration> {
         self.controller_generation
+    }
+
+    /// Build redacted route metadata for toolkit unit tests.
+    #[cfg(feature = "test-support")]
+    pub fn for_test(
+        provider_ref: Option<ResourceRef>,
+        service: &str,
+        reconnect_generation: u64,
+        provider_generation: Option<u64>,
+        controller_generation: Option<u64>,
+    ) -> Self {
+        let zone = ZoneId::parse("dev").expect("test Zone is valid");
+        let subject_ref = ResourceRef::parse("Guest/test").expect("test subject is valid");
+        let subject_uid =
+            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").expect("test UID is valid");
+        let service_name = ServiceName::parse(service).expect("test service is valid");
+        let session = d2b_contracts::v3::SessionBinding::new(
+            SchemaFingerprint::parse(
+                "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+            )
+            .expect("test schema is valid"),
+            IdentityTransportBinding::new(
+                Locality::Local,
+                BindingDigest::parse(
+                    "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+                )
+                .expect("test binding is valid"),
+            ),
+            ReconnectGeneration::new(reconnect_generation).expect("test reconnect is valid"),
+            TranscriptHash::from_bytes([0; 32]),
+        );
+        let mut context = AuthenticatedSubjectContext::new(
+            subject_ref.clone(),
+            subject_uid.clone(),
+            ResourceRef::parse("Zone/dev").expect("test Zone ref is valid"),
+            EvidenceClass::UnixPeer,
+            SessionPurpose::parse("provider-invoke").expect("test purpose is valid"),
+            service_name.clone(),
+            session,
+        )
+        .with_execution_ref(ResourceRef::parse("Host/test").expect("test Host is valid"));
+        if let Some(provider_ref) = provider_ref.clone() {
+            context = context.with_provider_ref(provider_ref);
+        }
+        if let Some(generation) = provider_generation {
+            context = context.with_provider_generation(
+                ResourceGeneration::new(generation).expect("test Provider generation is valid"),
+            );
+        }
+        if let Some(generation) = controller_generation {
+            context = context.with_controller_generation(
+                ControllerGeneration::new(generation)
+                    .expect("test controller generation is valid"),
+            );
+        }
+        let schema = context.schema_fingerprint().clone();
+        Self {
+            context,
+            zone,
+            subject_ref,
+            subject_uid,
+            evidence_class: EvidenceClass::UnixPeer,
+            locality: Locality::Local,
+            service: service_name,
+            schema,
+            reconnect_generation: ReconnectGeneration::new(reconnect_generation)
+                .expect("test reconnect is valid"),
+            provider_ref,
+            provider_generation: provider_generation
+                .map(|generation| ResourceGeneration::new(generation).expect("test generation")),
+            controller_generation: controller_generation.map(|generation| {
+                ControllerGeneration::new(generation).expect("test generation")
+            }),
+        }
     }
 }
 
