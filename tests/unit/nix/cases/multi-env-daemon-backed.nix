@@ -18,19 +18,12 @@
 #     `personal` negative control (stays isolated, no east-west opt-in).
 #   * vms.json (manifest) carries no `microvm@work-app` / `d2b@work-app.`
 #     systemd-unit reference.
-#   * processes.json node-level systemd `unit` fields.
+#   * processes.json node-level transient systemd `unit` fields.
 #
 # Spec corrections ("existing code is canon" - ADR 0015 daemon-only):
-#   1. The bash gate (steps 5-6) asserted a supervisor split: the daemon
-#      variant's `work-app` drops node `unit` fields while the
-#      systemd-supervised `personal-app` and the legacy `demo` variant
-#      KEEP `microvm@<vm>.service` unit references. In v1.1 daemon-only the
-#      `d2b.vms.<vm>.supervisor` option is removed and every enabled VM
-#      is daemon-supervised, so the framework emits NO per-VM systemd unit
-#      for ANY node of ANY VM in EITHER variant (verified by probe: every
-#      node's `unit` is null). The cases below assert the real invariant -
-#      zero node-level unit fields across both variants - superseding the
-#      obsolete supervisor-split expectation.
+#   1. The old bash gate asserted a supervisor split. The daemon-only
+#      architecture instead emits only explicit transient unit metadata for
+#      broker-owned auxiliary processes; no VM supervisor unit is materialized.
 #   2. The bash gate (step 5) also asserted processes.json contains no
 #      `microvm@work-app` substring. The current code uses `microvm@<vm>`
 #      as the cloud-hypervisor runner's process-label argv token (not a
@@ -133,9 +126,8 @@ in
     expected = false;
   };
 
-  # ---- processes.json node-level systemd unit fields (ADR 0015) ----
-  # Spec correction #1: daemon-only emits no per-VM systemd unit for any
-  # node of any VM in either variant.
+  # ---- processes.json node-level transient unit fields (ADR 0015) ----
+  # Only explicitly declared transient auxiliary units are emitted.
   "multi-env-daemon/daemon-work-app-unit-count" = {
     expr = unitCount daemonProcs "work-app";
     expected = 0;
