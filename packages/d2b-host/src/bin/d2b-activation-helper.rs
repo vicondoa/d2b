@@ -17,8 +17,10 @@
 //     `ftruncate` to N MiB, `fchown(uid,gid)`, `fchmod(mode)`. If P
 //     already exists as a regular file (not symlink), re-asserts
 //     ownership/mode/size idempotently via O_NOFOLLOW open + fstat
-//     check + fchown/fchmod. If P exists as a symlink or non-regular
-//     file (directory, device, FIFO), refuses and exits 2.
+//     check + ftruncate/fchown/fchmod. A zero size leaves existing content
+//     intact for callers that use zero as the "no resize" sentinel. If P
+//     exists as a symlink or non-regular file (directory, device, FIFO),
+//     refuses and exits 2.
 //   enforce-dir-posture --path P --uid U --gid G --mode M
 //     Open P with `O_DIRECTORY|O_NOFOLLOW`, fstat to confirm it IS
 //     a directory (not a symlink-to-dir), fchown(uid,gid),
@@ -231,7 +233,7 @@ fn cmd_ensure_regular_file(args: &Args) -> ExitCode {
             // RESOLVE_NO_SYMLINKS for full path-safety. O_NONBLOCK
             // keeps FIFO/socket targets from hanging open(2);
             // O_NOFOLLOW is implicit via the helper.
-            let existing_fd = match open_no_symlinks(path, OFlags::RDONLY | OFlags::NONBLOCK) {
+            let existing_fd = match open_no_symlinks(path, OFlags::WRONLY | OFlags::NONBLOCK) {
                 Ok(fd) => fd,
                 Err(e2) if e2.raw_os_error() == Some(libc::ELOOP) => {
                     eprintln!(
@@ -241,6 +243,19 @@ fn cmd_ensure_regular_file(args: &Args) -> ExitCode {
                     return ExitCode::from(2);
                 }
                 Err(e2) => {
+                    if matches!(
+                        e2.raw_os_error(),
+                        Some(code)
+                            if code == libc::EISDIR
+                                || code == libc::ENXIO
+                                || code == libc::EOPNOTSUPP
+                    ) {
+                        eprintln!(
+                            "refusing: {} cannot be opened as a regular file ({e2})",
+                            path.display()
+                        );
+                        return ExitCode::from(2);
+                    }
                     eprintln!("open({}) for re-assert failed: {e2}", path.display());
                     return ExitCode::from(1);
                 }
@@ -261,6 +276,13 @@ fn cmd_ensure_regular_file(args: &Args) -> ExitCode {
                     meta.mode()
                 );
                 return ExitCode::from(2);
+            }
+            let target_size = size_mib.saturating_mul(1024 * 1024);
+            if target_size != 0 {
+                if let Err(e2) = ftruncate(&existing, target_size as i64) {
+                    eprintln!("re-assert ftruncate({}) failed: {e2}", path.display());
+                    return ExitCode::from(1);
+                }
             }
             if let Err(e2) = fchown(
                 existing.as_raw_fd(),

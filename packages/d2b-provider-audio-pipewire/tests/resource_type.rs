@@ -3,6 +3,7 @@ use d2b_provider_audio_pipewire::{
     AudioBindingSpec, AudioServiceRole, AudioServiceSpec, ProviderExtension,
     validate_audio_binding, validate_audio_service,
 };
+use serde_json::json;
 
 #[test]
 fn owner_service_and_binding_are_provider_neutral_at_the_base() {
@@ -23,6 +24,41 @@ fn owner_service_and_binding_are_provider_neutral_at_the_base() {
     assert!(
         d2b_provider_audio_pipewire::validate_audio_binding_in_zone(&binding, "zone-a").is_ok()
     );
+}
+
+#[test]
+fn resource_specs_match_frozen_audio_wire_shape() {
+    let owner = AudioServiceSpec::owner(
+        ResourceRef::parse("Endpoint/audio-authority").unwrap(),
+        "zone-a",
+    )
+    .unwrap();
+    let owner_json = serde_json::to_value(&owner).unwrap();
+    assert_eq!(
+        owner_json["operations"],
+        json!(["playback", "capture"]),
+        "AudioService operations must be present on the wire"
+    );
+    assert!(
+        owner_json.get("zone").is_none(),
+        "Zone belongs to resource metadata, not AudioService.spec"
+    );
+    let decoded_owner: AudioServiceSpec = serde_json::from_value(owner_json).unwrap();
+    assert!(validate_audio_service(&decoded_owner).is_ok());
+
+    let binding = AudioBindingSpec::new(
+        ResourceRef::parse("audio.d2bus.org.AudioService/host-audio").unwrap(),
+        ResourceRef::parse("Guest/dev-vm").unwrap(),
+        "zone-a",
+    )
+    .unwrap();
+    let binding_json = serde_json::to_value(&binding).unwrap();
+    assert!(
+        binding_json.get("zone").is_none(),
+        "Zone belongs to resource metadata, not AudioBinding.spec"
+    );
+    let decoded_binding: AudioBindingSpec = serde_json::from_value(binding_json).unwrap();
+    assert!(validate_audio_binding(&decoded_binding).is_ok());
 }
 
 #[test]

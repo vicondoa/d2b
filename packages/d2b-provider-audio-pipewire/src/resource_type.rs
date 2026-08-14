@@ -47,7 +47,11 @@ pub struct AudioServiceSpec {
     pub service_role: AudioServiceRole,
     /// Same-Zone private implementation Endpoints.
     pub implementation_endpoint_refs: Vec<ResourceRef>,
-    /// Zone identity used by the admission adapter.
+    /// Provider-neutral operations exposed by the service.
+    pub operations: Vec<String>,
+    /// Internal Zone context used by the admission adapter. Resource wire
+    /// envelopes carry Zone in metadata rather than in `spec`.
+    #[serde(skip)]
     pub zone: String,
     /// Optional provider extension. It is rejected by base admission unless
     /// consumed through the signed provider envelope.
@@ -68,6 +72,7 @@ impl AudioServiceSpec {
             provider_ref: PROVIDER_REF.to_owned(),
             service_role: AudioServiceRole::Owner,
             implementation_endpoint_refs: vec![endpoint_ref],
+            operations: vec!["playback".to_owned(), "capture".to_owned()],
             zone: zone.into(),
             provider_extension: None,
         })
@@ -79,6 +84,7 @@ impl AudioServiceSpec {
             provider_ref: PROVIDER_REF.to_owned(),
             service_role: AudioServiceRole::Projection,
             implementation_endpoint_refs: Vec::new(),
+            operations: vec!["playback".to_owned(), "capture".to_owned()],
             zone: zone.into(),
             provider_extension: None,
         })
@@ -95,7 +101,9 @@ pub struct AudioBindingSpec {
     pub service_ref: ResourceRef,
     /// Guest target.
     pub target_ref: ResourceRef,
-    /// Zone identity used by the admission adapter.
+    /// Internal Zone context used by the admission adapter. Resource wire
+    /// envelopes carry Zone in metadata rather than in `spec`.
+    #[serde(skip)]
     pub zone: String,
     /// Durable grant state.
     pub grants: AudioGrants,
@@ -231,9 +239,6 @@ pub fn validate_audio_binding(spec: &AudioBindingSpec) -> Result<(), AudioAdmiss
     {
         return Err(AudioAdmissionError::ReferenceType);
     }
-    if spec.zone.is_empty() {
-        return Err(AudioAdmissionError::CrossZone);
-    }
     if spec.provider_extension.is_some() {
         return Err(AudioAdmissionError::ProviderFieldInBase);
     }
@@ -246,7 +251,7 @@ pub fn validate_audio_binding_in_zone(
     service_zone: &str,
 ) -> Result<(), AudioAdmissionError> {
     validate_audio_binding(spec)?;
-    if spec.zone != service_zone {
+    if !spec.zone.is_empty() && spec.zone != service_zone {
         return Err(AudioAdmissionError::CrossZone);
     }
     Ok(())
