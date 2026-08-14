@@ -1,6 +1,6 @@
 //! Bounded owner-Service audio authority.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 /// Opaque operation-scoped audio lease identity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -82,6 +82,17 @@ impl MicrophoneArbiter {
         self.active
     }
 
+    /// Put a just-promoted lease back at the head of the FIFO queue.
+    ///
+    /// This is used when the host or guest effect rejects a handoff.  The
+    /// lease remains pending rather than being lost or left falsely active.
+    pub(crate) fn requeue_active(&mut self, lease: AudioLeaseId) {
+        if self.active == Some(lease) {
+            self.active = None;
+            self.queue.push_front((lease, String::new()));
+        }
+    }
+
     /// Return the active lease without exposing Zone identity.
     pub const fn active(&self) -> Option<AudioLeaseId> {
         self.active
@@ -97,6 +108,7 @@ impl MicrophoneArbiter {
 #[derive(Debug, Clone, Default)]
 pub struct SpeakerMixer {
     levels: BTreeMap<AudioLeaseId, u8>,
+    grants: BTreeSet<AudioLeaseId>,
     max_consumers: usize,
 }
 
@@ -106,8 +118,50 @@ impl SpeakerMixer {
         assert!(max_consumers > 0);
         Self {
             levels: BTreeMap::new(),
+            grants: BTreeSet::new(),
             max_consumers,
         }
+    }
+
+    /// Grant or revoke one speaker consumer.
+    ///
+    /// The return value is true when the aggregate speaker grant changed
+    /// from no consumers to at least one consumer, or back to none.
+    pub fn set_grant(
+        &mut self,
+        lease: AudioLeaseId,
+        on: bool,
+    ) -> Result<bool, AudioAuthorityError> {
+        if on {
+            if !self.grants.contains(&lease)
+                && !self.levels.contains_key(&lease)
+                && self.consumer_count() >= self.max_consumers
+            {
+                return Err(AudioAuthorityError::ConsumerLimit);
+            }
+            let was_empty = self.grants.is_empty();
+            self.grants.insert(lease);
+            Ok(was_empty)
+        } else {
+            let was_last = self.grants.len() == 1 && self.grants.contains(&lease);
+            self.grants.remove(&lease);
+            Ok(was_last)
+        }
+    }
+
+    /// Return whether one lease currently holds a speaker grant.
+    pub fn has_grant(&self, lease: AudioLeaseId) -> bool {
+        self.grants.contains(&lease)
+    }
+
+    /// Return whether any speaker grant remains active.
+    pub fn has_any_grant(&self) -> bool {
+        !self.grants.is_empty()
+    }
+
+    /// Return whether revoking this lease would remove the last grant.
+    pub fn is_last_grant(&self, lease: AudioLeaseId) -> bool {
+        self.grants.len() == 1 && self.grants.contains(&lease)
     }
 
     /// Set a bounded consumer level.
@@ -126,7 +180,7 @@ impl SpeakerMixer {
         if level > 100 {
             return Err(AudioAuthorityError::LevelOutOfRange);
         }
-        if !self.levels.contains_key(&lease) && self.levels.len() >= self.max_consumers {
+        if !self.levels.contains_key(&lease) && self.consumer_count() >= self.max_consumers {
             return Err(AudioAuthorityError::ConsumerLimit);
         }
         Ok(())
@@ -135,6 +189,15 @@ impl SpeakerMixer {
     /// Remove one consumer.
     pub fn remove(&mut self, lease: AudioLeaseId) {
         self.levels.remove(&lease);
+        self.grants.remove(&lease);
+    }
+
+    fn consumer_count(&self) -> usize {
+        self.levels
+            .keys()
+            .chain(self.grants.iter())
+            .collect::<BTreeSet<_>>()
+            .len()
     }
 
     /// Return the bounded mixed level.

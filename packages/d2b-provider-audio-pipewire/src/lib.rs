@@ -25,8 +25,8 @@ pub use controller::{
 };
 pub use manifest::AudioManifest;
 pub use mediator::{
-    AudioMediator, AudioMediatorError, AudioReadiness, FakeAudioMediator, GuestAudioReadiness,
-    HostAudioReadiness,
+    AudioChannel, AudioMediator, AudioMediatorError, AudioReadiness, FakeAudioMediator,
+    GuestAudioReadiness, HostAudioReadiness,
 };
 pub use resource_type::{
     AudioAdmissionError, AudioBindingSpec, AudioGrants, AudioServiceRole, AudioServiceSpec,

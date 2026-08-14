@@ -103,3 +103,87 @@ fn speaker_admission_rejects_before_mutating_mediator() {
     );
     assert_eq!(controller.mediator().level(), last_level);
 }
+
+#[test]
+fn failed_microphone_effect_rolls_back_the_arbitration_lease() {
+    let mut controller = AudioBindingController::new(FakeAudioMediator::unavailable());
+    let mut requested = binding();
+    requested.grants.mic = AudioGrant::On;
+
+    assert_eq!(
+        controller
+            .reconcile(&requested, "zone-a", AudioLeaseId::new(1))
+            .unwrap_err(),
+        d2b_provider_audio_pipewire::AudioControllerError::Mediator(
+            AudioMediatorError::ProviderSessionUnavailable
+        )
+    );
+    assert_eq!(controller.active_microphone_lease(), None);
+}
+
+#[test]
+fn queued_microphone_reconcile_does_not_mute_the_active_owner() {
+    let mut controller = AudioBindingController::new(FakeAudioMediator::ready());
+    let mut requested = binding();
+    requested.grants.mic = AudioGrant::On;
+    controller
+        .reconcile(&requested, "zone-a", AudioLeaseId::new(1))
+        .unwrap();
+    controller
+        .reconcile(&requested, "zone-a", AudioLeaseId::new(2))
+        .unwrap();
+
+    requested.grants.mic = AudioGrant::Off;
+    controller
+        .reconcile(&requested, "zone-a", AudioLeaseId::new(2))
+        .unwrap();
+
+    assert_eq!(
+        controller.active_microphone_lease(),
+        Some(AudioLeaseId::new(1))
+    );
+    assert_eq!(controller.mediator().grant(), AudioGrant::On);
+}
+
+#[test]
+fn finalization_mutes_before_promoting_the_next_microphone_owner() {
+    let mut controller = AudioBindingController::new(FakeAudioMediator::ready());
+    let mut requested = binding();
+    requested.grants.mic = AudioGrant::On;
+    controller
+        .reconcile(&requested, "zone-a", AudioLeaseId::new(1))
+        .unwrap();
+    controller
+        .reconcile(&requested, "zone-a", AudioLeaseId::new(2))
+        .unwrap();
+
+    assert_eq!(
+        controller.finalize(AudioLeaseId::new(1)).unwrap(),
+        Some(AudioLeaseId::new(2))
+    );
+    assert_eq!(
+        controller.active_microphone_lease(),
+        Some(AudioLeaseId::new(2))
+    );
+    assert_eq!(controller.mediator().grant(), AudioGrant::On);
+}
+
+#[test]
+fn speaker_release_keeps_other_consumers_granted() {
+    let mut controller = AudioBindingController::new(FakeAudioMediator::ready());
+    let mut requested = binding();
+    requested.grants.speaker = AudioGrant::On;
+    controller
+        .reconcile(&requested, "zone-a", AudioLeaseId::new(1))
+        .unwrap();
+    controller
+        .reconcile(&requested, "zone-a", AudioLeaseId::new(2))
+        .unwrap();
+
+    requested.grants.speaker = AudioGrant::Off;
+    controller
+        .reconcile(&requested, "zone-a", AudioLeaseId::new(1))
+        .unwrap();
+
+    assert_eq!(controller.mediator().grant(), AudioGrant::On);
+}

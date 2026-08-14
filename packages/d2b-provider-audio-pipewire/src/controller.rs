@@ -1,9 +1,9 @@
 //! AudioService and AudioBinding reconciliation through typed ports.
 
 use crate::{
-    AudioBindingSpec, AudioGrant, AudioLeaseId, AudioMediator, AudioMediatorError, AudioReadiness,
-    GuestAudioReadiness, HostAudioReadiness, MicDecision, MicrophoneArbiter, SpeakerMixer,
-    validate_audio_binding_in_zone, validate_audio_service,
+    AudioBindingSpec, AudioChannel, AudioGrant, AudioLeaseId, AudioMediator, AudioMediatorError,
+    AudioReadiness, GuestAudioReadiness, HostAudioReadiness, MicDecision, MicrophoneArbiter,
+    SpeakerMixer, validate_audio_binding_in_zone, validate_audio_service,
 };
 
 /// Closed AudioBinding lifecycle phase.
@@ -86,6 +86,11 @@ impl<M: AudioMediator> AudioBindingController<M> {
         &self.mediator
     }
 
+    /// Return the active microphone lease for status and recovery.
+    pub const fn active_microphone_lease(&self) -> Option<AudioLeaseId> {
+        self.microphone.active()
+    }
+
     /// Reconcile one binding without opening a host handle itself.
     pub fn reconcile(
         &mut self,
@@ -102,31 +107,56 @@ impl<M: AudioMediator> AudioBindingController<M> {
         let mut guest_effect_applied = false;
 
         if binding.grants.mic == AudioGrant::On {
+            let already_active = self.microphone.active() == Some(lease);
             let decision = self.microphone.request(lease, binding.zone.clone());
             microphone = Some(decision);
             if decision == MicDecision::Granted {
                 self.mediator
-                    .set_grant(AudioGrant::On)
-                    .map_err(AudioControllerError::Mediator)?;
+                    .set_channel_grant(AudioChannel::Microphone, AudioGrant::On)
+                    .map_err(|error| {
+                        if !already_active {
+                            self.microphone.release(lease);
+                        }
+                        AudioControllerError::Mediator(error)
+                    })?;
                 host_effect_applied = true;
                 guest_effect_applied = guest_readiness == GuestAudioReadiness::Ready;
             }
         } else {
-            self.microphone.release(lease);
-            let _ = self.mediator.set_grant(AudioGrant::Off);
+            self.release_microphone(lease)?;
         }
         if binding.grants.speaker == AudioGrant::On {
-            self.mediator
-                .set_grant(AudioGrant::On)
-                .map_err(AudioControllerError::Mediator)?;
-            host_effect_applied = true;
+            let transition = self
+                .speaker
+                .set_grant(lease, true)
+                .map_err(|_| AudioControllerError::Admission)?;
+            if transition {
+                if let Err(error) = self
+                    .mediator
+                    .set_channel_grant(AudioChannel::Speaker, AudioGrant::On)
+                {
+                    let _ = self.speaker.set_grant(lease, false);
+                    return Err(AudioControllerError::Mediator(error));
+                }
+                host_effect_applied = true;
+            }
+        } else if self.speaker.has_grant(lease) {
+            let last = self.speaker.is_last_grant(lease);
+            if last {
+                self.mediator
+                    .set_channel_grant(AudioChannel::Speaker, AudioGrant::Off)
+                    .map_err(AudioControllerError::Mediator)?;
+            }
+            self.speaker
+                .set_grant(lease, false)
+                .map_err(|_| AudioControllerError::Admission)?;
         }
         if let Some(level) = binding.grants.speaker_level {
             self.speaker
                 .can_set_level(lease, level.get())
                 .map_err(|_| AudioControllerError::Admission)?;
             self.mediator
-                .set_level(level)
+                .set_channel_level(AudioChannel::Speaker, level)
                 .map_err(AudioControllerError::Mediator)?;
             self.speaker
                 .set_level(lease, level.get())
@@ -153,10 +183,43 @@ impl<M: AudioMediator> AudioBindingController<M> {
     }
 
     /// Finalize one binding with mute-before-release ordering.
-    pub fn finalize(&mut self, lease: AudioLeaseId) {
-        self.microphone.release(lease);
+    pub fn finalize(
+        &mut self,
+        lease: AudioLeaseId,
+    ) -> Result<Option<AudioLeaseId>, AudioControllerError> {
+        let promoted = self.release_microphone(lease)?;
+        if self.speaker.is_last_grant(lease) {
+            self.mediator
+                .set_channel_grant(AudioChannel::Speaker, AudioGrant::Off)
+                .map_err(AudioControllerError::Mediator)?;
+        }
         self.speaker.remove(lease);
-        let _ = self.mediator.set_grant(AudioGrant::Off);
+        Ok(promoted)
+    }
+
+    fn release_microphone(
+        &mut self,
+        lease: AudioLeaseId,
+    ) -> Result<Option<AudioLeaseId>, AudioControllerError> {
+        if self.microphone.active() != Some(lease) {
+            self.microphone.release(lease);
+            return Ok(None);
+        }
+        self.mediator
+            .set_channel_grant(AudioChannel::Microphone, AudioGrant::Off)
+            .map_err(AudioControllerError::Mediator)?;
+        self.microphone.release(lease);
+        let Some(next) = self.microphone.next_lease() else {
+            return Ok(None);
+        };
+        if let Err(error) = self
+            .mediator
+            .set_channel_grant(AudioChannel::Microphone, AudioGrant::On)
+        {
+            self.microphone.requeue_active(next);
+            return Err(AudioControllerError::Mediator(error));
+        }
+        Ok(Some(next))
     }
 }
 

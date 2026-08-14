@@ -2,6 +2,15 @@
 
 use crate::{AudioGrant, LevelPercent};
 
+/// Audio stream direction for broker and guest-agent effects.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AudioChannel {
+    /// Guest-to-host capture stream.
+    Microphone,
+    /// Host-to-guest playback stream.
+    Speaker,
+}
+
 /// Host-side mediator readiness.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HostAudioReadiness {
@@ -65,8 +74,28 @@ impl std::error::Error for AudioMediatorError {}
 pub trait AudioMediator {
     /// Apply an on/off grant through the owner mediator.
     fn set_grant(&mut self, grant: AudioGrant) -> Result<(), AudioMediatorError>;
+    /// Apply an on/off grant to one stream direction.
+    ///
+    /// The default preserves compatibility with older mediators that expose
+    /// one aggregate grant while production mediators can keep microphone and
+    /// speaker state independent.
+    fn set_channel_grant(
+        &mut self,
+        _channel: AudioChannel,
+        grant: AudioGrant,
+    ) -> Result<(), AudioMediatorError> {
+        self.set_grant(grant)
+    }
     /// Apply a bounded level through the owner mediator.
     fn set_level(&mut self, level: LevelPercent) -> Result<(), AudioMediatorError>;
+    /// Apply a bounded level to one stream direction.
+    fn set_channel_level(
+        &mut self,
+        _channel: AudioChannel,
+        level: LevelPercent,
+    ) -> Result<(), AudioMediatorError> {
+        self.set_level(level)
+    }
     /// Return combined readiness.
     fn readiness(&self) -> AudioReadiness;
     /// Return host readiness separately from guest readiness.
@@ -142,6 +171,14 @@ impl AudioMediator for FakeAudioMediator {
         Ok(())
     }
 
+    fn set_channel_grant(
+        &mut self,
+        _channel: AudioChannel,
+        grant: AudioGrant,
+    ) -> Result<(), AudioMediatorError> {
+        self.set_grant(grant)
+    }
+
     fn set_level(&mut self, level: LevelPercent) -> Result<(), AudioMediatorError> {
         if !self.owner {
             return Err(AudioMediatorError::ProjectionCannotOpenPipewire);
@@ -151,6 +188,14 @@ impl AudioMediator for FakeAudioMediator {
         }
         self.level = Some(level);
         Ok(())
+    }
+
+    fn set_channel_level(
+        &mut self,
+        _channel: AudioChannel,
+        level: LevelPercent,
+    ) -> Result<(), AudioMediatorError> {
+        self.set_level(level)
     }
 
     fn readiness(&self) -> AudioReadiness {
