@@ -21,7 +21,7 @@ pub use action_nonce::{ActionNonce, ActionNonceError, ActionNonceStore};
 pub use audit::{NotificationAuditKind, NotificationAuditRecord};
 pub use controller::{
     DisplayDependencyEvidence, DisplayDependencyState, GuestSourceConfig, NotificationController,
-    NotificationProviderConfig, ProcessPlan, SourceReconcileResult,
+    NotificationProviderConfig, ProcessPlan, SourceProcessEffectPort, SourceReconcileResult,
 };
 pub use descriptor::{NotificationDescriptorError, NotificationProviderDescriptor};
 pub use error::ProviderError;
@@ -30,7 +30,7 @@ pub use host_sink::{
     DesktopNotificationPort, NotificationProjection, NotificationResult, NotificationSink,
     SinkError,
 };
-pub use metrics::{NotificationTelemetryField, NotificationTelemetryFrame};
+pub use metrics::{NotificationOutcome, NotificationTelemetryField, NotificationTelemetryFrame};
 pub use rbac::{NotificationRbac, NotificationRole};
 pub use redact::{SanitizedNotification, sanitize};
 pub use stream_admission::{AdmissionError, AdmissionPurpose, SessionEvidence, TransportClass};

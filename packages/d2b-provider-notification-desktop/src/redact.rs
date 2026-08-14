@@ -1,6 +1,7 @@
 //! Content sanitization at the presentation boundary.
 
 use crate::types::{MAX_BODY_CHARS, MAX_SUMMARY_CHARS, NotificationError, NotificationRequest};
+use std::collections::BTreeMap;
 
 /// Sanitized notification content used only by the presentation sink.
 #[derive(Clone, PartialEq, Eq)]
@@ -48,6 +49,19 @@ impl SanitizedNotification {
     /// Return D-Bus expiry timeout.
     pub const fn expire_timeout_secs(&self) -> u32 {
         self.expire_timeout_secs
+    }
+
+    pub(crate) fn with_action_keys(
+        mut self,
+        action_keys: &BTreeMap<String, String>,
+    ) -> Result<Self, NotificationError> {
+        for (action_id, _) in &mut self.actions {
+            let Some(key) = action_keys.get(action_id) else {
+                return Err(NotificationError::InvalidActions);
+            };
+            *action_id = key.clone();
+        }
+        Ok(self)
     }
 }
 

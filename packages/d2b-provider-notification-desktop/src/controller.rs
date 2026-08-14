@@ -217,6 +217,16 @@ pub struct SourceReconcileResult {
     pub stop_endpoints: Vec<SourceEndpoint>,
 }
 
+/// Process/effect boundary used to make reconciliation transactional.
+///
+/// The controller computes the complete stop/start set first.  Ownership is
+/// committed only after this port confirms that every requested process
+/// effect was accepted.
+pub trait SourceProcessEffectPort {
+    /// Apply one complete reconciliation plan.
+    fn apply(&mut self, plan: &SourceReconcileResult) -> Result<(), &'static str>;
+}
+
 /// Authenticated Guest source endpoint evidence.
 #[derive(Clone, PartialEq, Eq)]
 pub struct SourceEndpoint {
@@ -241,6 +251,10 @@ impl SourceEndpoint {
         let mut digest = Sha256::new();
         digest.update(source.source_ref().to_canonical_string().as_bytes());
         digest.update([0]);
+        for category in source.categories() {
+            digest.update(category.as_str().as_bytes());
+            digest.update([0]);
+        }
         digest.update(session.generation().to_be_bytes());
         digest.update([0]);
         digest.update(display_generation.to_be_bytes());
@@ -369,6 +383,32 @@ impl NotificationController {
         config: &NotificationProviderConfig,
         source_sessions: &[SessionEvidence],
     ) -> Result<SourceReconcileResult, &'static str> {
+        let result = self.plan_reconciliation(display, config, source_sessions)?;
+        self.commit_reconciliation(display, result.clone());
+        Ok(result)
+    }
+
+    /// Reconcile Guest sources through an effect port, committing ownership
+    /// only after process effects succeed.
+    pub fn reconcile_sources_with_effects<E: SourceProcessEffectPort>(
+        &mut self,
+        display: &DisplayDependencyEvidence,
+        config: &NotificationProviderConfig,
+        source_sessions: &[SessionEvidence],
+        effects: &mut E,
+    ) -> Result<SourceReconcileResult, &'static str> {
+        let result = self.plan_reconciliation(display, config, source_sessions)?;
+        effects.apply(&result)?;
+        self.commit_reconciliation(display, result.clone());
+        Ok(result)
+    }
+
+    fn plan_reconciliation(
+        &self,
+        display: &DisplayDependencyEvidence,
+        config: &NotificationProviderConfig,
+        source_sessions: &[SessionEvidence],
+    ) -> Result<SourceReconcileResult, &'static str> {
         self.plan(display, config)?;
         let endpoints = if display.is_ready() {
             config
@@ -428,9 +468,6 @@ impl NotificationController {
             self.host_sink_generation.is_some() && (!display.is_ready() || generation_changed);
         let start_host_sink =
             display.is_ready() && (self.host_sink_generation != Some(display.generation()));
-        self.active_sources = configured;
-        self.host_sink_generation = display.is_ready().then_some(display.generation());
-        self.active_display_generation = display.is_ready().then_some(display.generation());
         Ok(SourceReconcileResult {
             start,
             stop,
@@ -439,6 +476,22 @@ impl NotificationController {
             start_endpoints,
             stop_endpoints,
         })
+    }
+
+    fn commit_reconciliation(
+        &mut self,
+        display: &DisplayDependencyEvidence,
+        result: SourceReconcileResult,
+    ) {
+        for source in result.stop {
+            self.active_sources.remove(&source);
+        }
+        for endpoint in result.start_endpoints {
+            self.active_sources
+                .insert(endpoint.source_ref().clone(), endpoint);
+        }
+        self.active_display_generation = display.is_ready().then_some(display.generation());
+        self.host_sink_generation = display.is_ready().then_some(display.generation());
     }
 
     /// Reconcile from a Core-authenticated display route.
@@ -471,6 +524,36 @@ impl NotificationController {
         };
         let evidence = DisplayDependencyEvidence::from_authenticated_route(proof)?;
         self.reconcile_sources(&evidence, config, source_sessions)
+    }
+
+    /// Reconcile display and Guest-source ownership through the effect
+    /// boundary, including fail-closed cleanup when the dependency vanishes.
+    pub fn reconcile_authenticated_display_with_effects<E: SourceProcessEffectPort>(
+        &mut self,
+        display: Option<AuthenticatedSessionRouteBinding>,
+        config: &NotificationProviderConfig,
+        source_sessions: &[SessionEvidence],
+        effects: &mut E,
+    ) -> Result<SourceReconcileResult, &'static str> {
+        let Some(proof) = display else {
+            let stop_endpoints = self.active_sources.values().cloned().collect();
+            let stop = self.active_sources.keys().cloned().collect();
+            let result = SourceReconcileResult {
+                start: Vec::new(),
+                stop,
+                start_host_sink: false,
+                stop_host_sink: self.host_sink_generation.is_some(),
+                start_endpoints: Vec::new(),
+                stop_endpoints,
+            };
+            effects.apply(&result)?;
+            self.active_sources.clear();
+            self.active_display_generation = None;
+            self.host_sink_generation = None;
+            return Ok(result);
+        };
+        let evidence = DisplayDependencyEvidence::from_authenticated_route(proof)?;
+        self.reconcile_sources_with_effects(&evidence, config, source_sessions, effects)
     }
 
     /// Drain and forget all source endpoints during shutdown or finalization.
@@ -632,5 +715,39 @@ mod tests {
             ),
             Err("notification-source-ambiguous")
         );
+    }
+
+    struct FailingEffects;
+
+    impl SourceProcessEffectPort for FailingEffects {
+        fn apply(&mut self, _plan: &SourceReconcileResult) -> Result<(), &'static str> {
+            Err("process-effect-failed")
+        }
+    }
+
+    #[test]
+    fn reconciliation_commits_source_ownership_only_after_effects_succeed() {
+        let mut controller = NotificationController::new(crate::PROVIDER_REF).unwrap();
+        let first = NotificationProviderConfig::new(vec![source("one")]).unwrap();
+        let second = NotificationProviderConfig::new(vec![source("two")]).unwrap();
+        let dependency = display(DisplayDependencyState::Ready);
+        controller
+            .reconcile_sources(&dependency, &first, &[test_source("one")])
+            .unwrap();
+        let mut effects = FailingEffects;
+        assert_eq!(
+            controller.reconcile_sources_with_effects(
+                &dependency,
+                &second,
+                &[test_source("two")],
+                &mut effects,
+            ),
+            Err("process-effect-failed")
+        );
+        let retry = controller
+            .reconcile_sources(&dependency, &second, &[test_source("two")])
+            .unwrap();
+        assert_eq!(retry.stop, vec![ResourceRef::parse("Guest/one").unwrap()]);
+        assert_eq!(retry.start, vec![ResourceRef::parse("Guest/two").unwrap()]);
     }
 }

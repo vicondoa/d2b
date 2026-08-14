@@ -1,6 +1,7 @@
 //! In-memory host notification sink and observer projection.
 
 use crate::{
+    GuestSource,
     action_nonce::{ActionNonceError, ActionNonceStore},
     admission::SessionEvidence,
     redact::SanitizedNotification,
@@ -113,14 +114,19 @@ impl NotificationSink {
         }
     }
 
-    /// Deliver one request through the effect port.
+    /// Deliver one authenticated Guest-source request through the effect port
+    /// to one authenticated desktop observer.
     pub fn deliver<P: DesktopNotificationPort>(
         &mut self,
         port: &mut P,
+        source_session: &SessionEvidence,
         observer_session: &SessionEvidence,
         request: NotificationRequest,
         now_secs: u64,
     ) -> Result<NotificationResult, crate::types::NotificationError> {
+        source_session
+            .admit_source()
+            .map_err(|_| crate::types::NotificationError::InvalidOpaqueKey)?;
         observer_session
             .admit_observer()
             .map_err(|_| crate::types::NotificationError::InvalidOpaqueKey)?;
@@ -155,14 +161,9 @@ impl NotificationSink {
         if notification.actions().len() > self.nonces.available_capacity() + evicted_nonce_count {
             return Ok(NotificationResult::CapacityExceeded);
         }
-        let notification_id = match port.notify(&notification) {
-            Ok(id) => id,
-            Err(_) => return Ok(NotificationResult::SinkUnavailable),
-        };
         if self.projections.len() >= self.max_pending {
             self.evict_oldest();
         }
-        let request_id = format!("notification-{notification_id}");
         let mut action_nonces = BTreeMap::new();
         let mut issued_keys: Vec<String> = Vec::with_capacity(notification.actions().len());
         for (action_id, _) in notification.actions() {
@@ -184,6 +185,20 @@ impl NotificationSink {
             issued_keys.push(action_key.clone());
             action_nonces.insert(action_id.clone(), action_key);
         }
+        // D-Bus must receive only the opaque capabilities that were issued
+        // for this observer session; stable caller action IDs never cross the
+        // host presentation boundary.
+        let presentation = notification.clone().with_action_keys(&action_nonces)?;
+        let notification_id = match port.notify(&presentation) {
+            Ok(id) => id,
+            Err(_) => {
+                for action_key in &issued_keys {
+                    self.nonces.revoke(action_key);
+                }
+                return Ok(NotificationResult::SinkUnavailable);
+            }
+        };
+        let request_id = format!("notification-{notification_id}");
         self.order.push_back(request_id.clone());
         self.projections.insert(
             request_id.clone(),
@@ -208,6 +223,22 @@ impl NotificationSink {
                 .insert(format!("notification-{notification_id}"), key);
         }
         Ok(result)
+    }
+
+    /// Deliver after the configured Guest-source category admission.
+    pub fn deliver_from_guest_source<P: DesktopNotificationPort>(
+        &mut self,
+        port: &mut P,
+        source: &GuestSource,
+        source_session: &SessionEvidence,
+        observer_session: &SessionEvidence,
+        request: NotificationRequest,
+        now_secs: u64,
+    ) -> Result<NotificationResult, crate::types::NotificationError> {
+        source
+            .validate_authenticated(source_session, &request)
+            .map_err(|_| crate::types::NotificationError::InvalidOpaqueKey)?;
+        self.deliver(port, source_session, observer_session, request, now_secs)
     }
 
     /// Consume one observer action capability.
@@ -333,10 +364,26 @@ impl NotificationSink {
     }
 
     fn prune_idempotency_nonces(&mut self) {
-        for (_, result) in self.idempotency.values_mut() {
-            if let NotificationResult::Accepted { action_nonces, .. } = result {
-                action_nonces.retain(|_, key| self.nonces.contains(key));
-            }
+        let stale = self
+            .idempotency
+            .iter()
+            .filter_map(|(key, (request_id, result))| {
+                let NotificationResult::Accepted { action_nonces, .. } = result else {
+                    return None;
+                };
+                action_nonces
+                    .values()
+                    .any(|action_key| !self.nonces.contains(action_key))
+                    .then_some((key.clone(), request_id.clone()))
+            })
+            .collect::<Vec<_>>();
+        for (key, request_id) in stale {
+            self.idempotency.remove(&key);
+            self.projections.remove(&request_id);
+            self.revoke_projection_nonces(&request_id);
+            self.projection_idempotency.remove(&request_id);
+            self.projection_sessions.remove(&request_id);
+            self.order.retain(|value| value != &request_id);
         }
     }
 }
@@ -363,12 +410,20 @@ mod tests {
     struct TestPort {
         next_id: u32,
         summaries: Vec<String>,
+        actions: Vec<Vec<String>>,
     }
 
     impl DesktopNotificationPort for TestPort {
         fn notify(&mut self, notification: &SanitizedNotification) -> Result<u32, SinkError> {
             self.next_id = self.next_id.saturating_add(1);
             self.summaries.push(notification.summary().to_owned());
+            self.actions.push(
+                notification
+                    .actions()
+                    .iter()
+                    .map(|(action, _)| action.clone())
+                    .collect(),
+            );
             Ok(self.next_id)
         }
     }
@@ -386,19 +441,20 @@ mod tests {
         let mut port = TestPort::default();
         let source = test_source("guest");
         assert_eq!(
-            sink.deliver(&mut port, &source, request_with_action(), 100),
+            sink.deliver(&mut port, &source, &source, request_with_action(), 100),
             Err(crate::types::NotificationError::InvalidOpaqueKey)
         );
 
         let observer = test_observer("alice");
         let result = sink
-            .deliver(&mut port, &observer, request_with_action(), 100)
+            .deliver(&mut port, &source, &observer, request_with_action(), 100)
             .unwrap();
         let action_key = match result {
             NotificationResult::Accepted { action_nonces, .. } => action_nonces["open"].clone(),
             other => panic!("unexpected result: {other:?}"),
         };
         assert_eq!(port.summaries, vec!["summary"]);
+        assert_ne!(port.actions, vec![vec!["open".to_owned()]]);
         assert_eq!(
             sink.invoke_action(&action_key, &test_observer("bob"), 101),
             Err(ActionNonceError::SessionMismatch)
@@ -418,9 +474,10 @@ mod tests {
         let mut sink = NotificationSink::new(2, 4, 10);
         let mut port = TestPort::default();
         let observer = test_observer("alice");
+        let source = test_source("guest");
         let request = request_with_action().with_idempotency_key("same").unwrap();
         let result = sink
-            .deliver(&mut port, &observer, request.clone(), 100)
+            .deliver(&mut port, &source, &observer, request.clone(), 100)
             .unwrap();
         let action_key = match result {
             NotificationResult::Accepted { action_nonces, .. } => action_nonces["open"].clone(),
@@ -433,7 +490,9 @@ mod tests {
             sink.invoke_action(&action_key, &observer, 101),
             Err(ActionNonceError::Unavailable)
         );
-        let replacement = sink.deliver(&mut port, &observer, request, 102).unwrap();
+        let replacement = sink
+            .deliver(&mut port, &source, &observer, request, 102)
+            .unwrap();
         let replacement_key = match replacement {
             NotificationResult::Accepted {
                 notification_id,
@@ -450,5 +509,28 @@ mod tests {
             Ok("open".to_owned())
         );
         assert_eq!(port.summaries, vec!["summary", "summary"]);
+    }
+
+    #[test]
+    fn idempotent_retry_does_not_return_expired_action_capabilities() {
+        let mut sink = NotificationSink::new(2, 4, 1);
+        let mut port = TestPort::default();
+        let source = test_source("guest");
+        let observer = test_observer("alice");
+        let request = request_with_action().with_idempotency_key("same").unwrap();
+        let first = sink
+            .deliver(&mut port, &source, &observer, request.clone(), 100)
+            .unwrap();
+        assert!(matches!(first, NotificationResult::Accepted { .. }));
+        let second = sink
+            .deliver(&mut port, &source, &observer, request, 102)
+            .unwrap();
+        assert!(matches!(
+            second,
+            NotificationResult::Accepted {
+                notification_id: 2,
+                ..
+            }
+        ));
     }
 }
