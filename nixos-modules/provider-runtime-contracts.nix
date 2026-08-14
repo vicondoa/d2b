@@ -154,6 +154,10 @@ let
           message = "${row.path}.spec.config.gatewayExecutionRef must resolve to the gateway Guest.";
         }
         {
+          assertion = providerConfig.controlCredentialRef or null != null;
+          message = "${row.path}.spec.config.controlCredentialRef is required.";
+        }
+        {
           assertion = lib.all credentialScopeMatches credentialRefs;
           message = "${row.path}.spec.config credential scopes must match gatewayExecutionRef.";
         }

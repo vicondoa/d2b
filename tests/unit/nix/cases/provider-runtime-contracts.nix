@@ -321,7 +321,7 @@ in
   };
 
   "provider-runtime-contracts-rejects-missing-required-credential" = {
-    expr = hasFailure "credential scopes must match gatewayExecutionRef" [
+    expr = hasFailure "controlCredentialRef is required" [
       contractBase
       ({ ... }: {
         d2b.zones.local-root.resources.runtime-azure-container-apps.spec.config =
