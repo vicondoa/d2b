@@ -14,7 +14,7 @@ use super::{
         CandidateId, CandidateMaterial, MAX_WAVE_ORDINAL, RepositoryRecord, qualified_wave_parts,
         sha256_bytes,
     },
-    storage::{MAX_JSON_BYTES, PANEL_REQUEST_FILE, SNAPSHOT_FILE, StateRoot},
+    storage::{MAX_JSON_BYTES, SNAPSHOT_FILE, StateRoot},
 };
 
 const GRAPH_PATH: &str = "docs/specs/ADR-046-implementation-graph.json";
@@ -24,8 +24,6 @@ const CONSTITUTION_PATH: &str = ".specify/memory/constitution.md";
 const ADR046_W5_RETAINED_WAVE: &str = "adr046w5";
 const ADR046_W5_RETAINED_CANDIDATE: &str =
     "d20267eec23f90b9cd6931e4bd322b66e259533849c8170617fbd002381493a4";
-const ADR046_W5_RETAINED_REQUEST_SHA256: &str =
-    "15f49657490410f0fb5530513144c7c2392f567b211eb630551f3110b94633f7";
 const ADR046_W5_RETAINED_SNAPSHOT_FILE_SHA256: &str =
     "dcf4d71a572bdf0766de557dde6b8ede7fd680eb9f85572238575d2ab5c82149";
 const ADR046_W5_MERGED_BOUNDARY: &str = "177235ed37188b3be87525e7f016fb43401574c5";
@@ -42,7 +40,6 @@ struct HistoricalPredecessorPolicy<'a> {
     repository_id: &'a str,
     retained_wave: &'a str,
     retained_candidate_id: &'a str,
-    retained_request_sha256: &'a str,
     retained_snapshot_file_sha256: &'a str,
     predecessor_merge_oid: &'a str,
     constitution_sha256: &'a str,
@@ -55,7 +52,6 @@ const ADR046_W6_HISTORICAL_POLICY: HistoricalPredecessorPolicy<'static> =
         repository_id: D2B_REPOSITORY_ID,
         retained_wave: ADR046_W5_RETAINED_WAVE,
         retained_candidate_id: ADR046_W5_RETAINED_CANDIDATE,
-        retained_request_sha256: ADR046_W5_RETAINED_REQUEST_SHA256,
         retained_snapshot_file_sha256: ADR046_W5_RETAINED_SNAPSHOT_FILE_SHA256,
         predecessor_merge_oid: ADR046_W5_MERGED_BOUNDARY,
         constitution_sha256: ADR046_FR036_CONSTITUTION_SHA256,
@@ -88,8 +84,8 @@ struct WorkItemView {
     work_item_id: String,
 }
 
-/// Rejects a wave's exit boundary - panel request, seal, and merge
-/// eligibility - while any prior-wave item is not `Merged`.
+/// Rejects a wave's exit boundary - seal and merge eligibility - while any
+/// prior-wave item is not `Merged`.
 ///
 /// Under FR-036/FR-048 a wave's *implementation* may start before its
 /// predecessor is sealed and merged, so `wave snapshot` no longer runs this
@@ -168,18 +164,17 @@ pub fn require_predecessor_state_for_exit(
 ///
 /// The ordinary work-item gate proves that every prior item is marked
 /// `Merged`. ADR-046 Wave 6 additionally inherits a known historical delivery
-/// exception: the retained Wave 5 request consumed its binding slot with zero
-/// attestations and no seal before a later tree merged. The constitution
-/// accepts exactly that state, not any equivalent-looking substitute.
+/// exception: the retained Wave 5 candidate had no seal before a later tree
+/// merged. The constitution accepts exactly that state, not any
+/// equivalent-looking substitute.
 ///
-/// This check is re-run at panel request, seal, and merge eligibility. It
-/// binds the exact retained candidate bytes, rejects any added panel or seal
-/// state, proves the Wave 6 base and head descend from the fetched integration
-/// tip, and identifies the first-parent commit that introduced the accepted
-/// constitution bytes. Later constitution amendments remain valid because the
-/// accepted commit stays in the integration ancestry. This is deterministic
-/// workflow validation for signoff tracking, not authentication or a security
-/// boundary.
+/// This check is re-run at seal and merge eligibility. It binds the exact
+/// retained candidate bytes, rejects any added seal state, proves the Wave 6
+/// base and head descend from the fetched integration tip, and identifies the
+/// first-parent commit that introduced the accepted constitution bytes. Later
+/// constitution amendments remain valid because the accepted commit stays in
+/// the integration ancestry. This is deterministic workflow validation, not
+/// authentication or a security boundary.
 pub fn require_adr046_historical_predecessor_for_exit(
     state_root: &StateRoot,
     material: &CandidateMaterial,
@@ -228,8 +223,8 @@ fn is_adr046_post_w5(material: &CandidateMaterial) -> bool {
 /// Freezes the historically dispositioned predecessor phase.
 ///
 /// Its retained state is read-only process evidence. Production delivery
-/// commands must not create a replacement candidate, append evidence, issue
-/// another request, attest, seal, or register close artifacts for it.
+/// commands must not create a replacement candidate, append evidence, seal, or
+/// register close artifacts for it.
 pub fn reject_adr046_w5_mutation(material: &CandidateMaterial, operation: &str) -> Result<()> {
     let historical = (material.program.eq_ignore_ascii_case("ADR046")
         && matches!(material.wave.as_str(), "W5" | "adr046w5"))
@@ -307,7 +302,7 @@ fn validate_historical_predecessor(
         .existing_candidate(policy.retained_wave, &retained_id)
         .map_err(|_| DeliveryError::new("ADR-046 Wave 5 retained candidate is missing"))?;
     let entries = utf8_entries(retained.list_root()?, "ADR-046 Wave 5 retained candidate")?;
-    let expected = ["evidence", PANEL_REQUEST_FILE, SNAPSHOT_FILE]
+    let expected = ["evidence", SNAPSHOT_FILE]
         .into_iter()
         .map(str::to_owned)
         .collect::<BTreeSet<_>>();
@@ -317,12 +312,6 @@ fn validate_historical_predecessor(
         ));
     }
 
-    require_candidate_file_digest(
-        &retained,
-        PANEL_REQUEST_FILE,
-        policy.retained_request_sha256,
-        "retained panel request",
-    )?;
     require_candidate_file_digest(
         &retained,
         SNAPSHOT_FILE,
@@ -488,8 +477,8 @@ pub fn require_current_wave_merged(
 
 #[derive(Clone, Copy)]
 enum Gate {
-    /// Wave exit boundary - panel request, seal, and merge eligibility:
-    /// every prior wave must be `Merged`.
+    /// Wave exit boundary - seal and merge eligibility: every prior wave must
+    /// be `Merged`.
     Exit,
     /// Seal boundary: every item in this wave must be `Merged`.
     Seal,
@@ -630,8 +619,7 @@ fn validate_state_with_disposition(
         if state != "Merged" {
             let action = match gate {
                 Gate::Exit => format!(
-                    "cannot request a panel for, seal, or merge {wave}: prior-wave work item \
-                     `{}` in {} is `{state}`",
+                    "cannot seal or merge {wave}: prior-wave work item `{}` in {} is `{state}`",
                     node.id, node.wave
                 ),
                 Gate::Seal => format!("cannot seal {wave}: work item `{}` is `{state}`", node.id),
@@ -727,8 +715,8 @@ fn read_tree_object(
 
 /// Parses the wave ordinal from either wave form.
 ///
-/// Ordering across waves is what enforces "wave N+1 cannot open a panel request
-/// until wave N has merged", so both the legacy bare `W<N>` form and the
+/// Ordering across waves is what enforces that wave N+1 cannot seal or merge
+/// until wave N has merged, so both the legacy bare `W<N>` form and the
 /// qualified `<program>w<N>` form must yield the same ordinal. The two forms
 /// are never compared against each other in practice, because a work-item graph
 /// belongs to one program, but the ordinal is the only thing this function
@@ -835,10 +823,7 @@ mod tests {
         )
         .expect_err("a Planned prior-wave item must block the wave exit boundary");
         let message = error.message();
-        assert!(
-            message.contains("cannot request a panel for, seal, or merge W1"),
-            "{message}"
-        );
+        assert!(message.contains("cannot seal or merge W1"), "{message}");
         assert!(message.contains("ADR046-foundation-001"), "{message}");
         assert!(message.contains("in W0 is `Planned`"), "{message}");
     }
@@ -860,9 +845,7 @@ mod tests {
         let error = validate_state("W1", Gate::Exit, &graph(), &work_items("Planned", "Merged"))
             .expect_err("an unmerged predecessor wave must block the successor's seal");
         assert!(
-            error
-                .message()
-                .contains("cannot request a panel for, seal, or merge W1"),
+            error.message().contains("cannot seal or merge W1"),
             "{}",
             error.message()
         );
@@ -979,16 +962,6 @@ mod tests {
                 "letcandidate=root.existing_candidate(",
             ),
             (
-                include_str!("panel.rs"),
-                "reject_adr046_w5_mutation(&snapshot.material,\"panelrequest\")",
-                "matchselection_path{",
-            ),
-            (
-                include_str!("panel.rs"),
-                "reject_adr046_w5_mutation(&snapshot.material,\"panelattestation\")",
-                "attest(&candidate,&snapshot,&records_dir)",
-            ),
-            (
                 include_str!("seal.rs"),
                 "reject_adr046_w5_mutation(&snapshot.material,\"seal\")",
                 "seal_checked(&state,&candidate,&snapshot,&repository_roots)",
@@ -1019,7 +992,6 @@ mod tests {
         }
     }
 
-    const RETAINED_REQUEST_BYTES: &[u8] = br#"{"roles":["software","test"]}"#;
     const RETAINED_SNAPSHOT_BYTES: &[u8] = br#"{"snapshot":"retained"}"#;
     const TEST_RETAINED_EVIDENCE: [(&str, &str, &[u8]); 2] = [
         (
@@ -1040,7 +1012,6 @@ mod tests {
         material: CandidateMaterial,
         roots: BTreeMap<String, PathBuf>,
         retained_candidate_id: String,
-        request_sha256: String,
         snapshot_sha256: String,
         predecessor_merge_oid: String,
         constitution_sha256: String,
@@ -1081,9 +1052,6 @@ mod tests {
                 .candidate(ADR046_W5_RETAINED_WAVE, &retained_id)
                 .expect("retained candidate");
             retained
-                .write_bytes(PANEL_REQUEST_FILE, RETAINED_REQUEST_BYTES)
-                .expect("retained request");
-            retained
                 .write_bytes(SNAPSHOT_FILE, RETAINED_SNAPSHOT_BYTES)
                 .expect("retained snapshot");
             for (name, _, bytes) in TEST_RETAINED_EVIDENCE {
@@ -1100,7 +1068,6 @@ mod tests {
                 material,
                 roots,
                 retained_candidate_id,
-                request_sha256: sha256_bytes(RETAINED_REQUEST_BYTES),
                 snapshot_sha256: sha256_bytes(RETAINED_SNAPSHOT_BYTES),
                 predecessor_merge_oid,
                 constitution_sha256: sha256_bytes(b"constitution 3.1.0\n"),
@@ -1113,7 +1080,6 @@ mod tests {
                 repository_id: D2B_REPOSITORY_ID,
                 retained_wave: ADR046_W5_RETAINED_WAVE,
                 retained_candidate_id: &self.retained_candidate_id,
-                retained_request_sha256: &self.request_sha256,
                 retained_snapshot_file_sha256: &self.snapshot_sha256,
                 predecessor_merge_oid: &self.predecessor_merge_oid,
                 constitution_sha256: &self.constitution_sha256,
@@ -1199,21 +1165,6 @@ mod tests {
         );
 
         let retained = fixture.retained();
-        fs::write(retained.path().join(PANEL_REQUEST_FILE), b"wrong roster")
-            .expect("replace request");
-        let error = fixture
-            .validate(&fixture.policy())
-            .expect_err("changed request bytes must fail");
-        assert!(
-            error.message().contains("request digest mismatch"),
-            "{error}"
-        );
-        fs::write(
-            retained.path().join(PANEL_REQUEST_FILE),
-            RETAINED_REQUEST_BYTES,
-        )
-        .expect("restore request");
-
         fs::write(retained.path().join(SNAPSHOT_FILE), b"wrong head").expect("replace snapshot");
         let error = fixture
             .validate(&fixture.policy())
@@ -1268,15 +1219,23 @@ mod tests {
         assert!(error.message().contains("entry set differs"), "{error}");
         fs::remove_file(retained.path().join("seal.json")).expect("remove seal");
 
-        fs::create_dir(retained.path().join("panel")).expect("plant panel directory");
-        fs::write(
-            retained.path().join("panel/software.json"),
-            b"non-unanimous",
-        )
-        .expect("plant verdict");
+        fs::write(retained.path().join("panel-request.json"), b"stale request")
+            .expect("plant stale request");
         let error = fixture
             .validate(&fixture.policy())
-            .expect_err("added panel state must fail");
+            .expect_err("a stale request entry must fail");
+        assert!(error.message().contains("entry set differs"), "{error}");
+        fs::remove_file(retained.path().join("panel-request.json")).expect("remove stale request");
+
+        fs::create_dir(retained.path().join("panel")).expect("plant stale panel directory");
+        fs::write(
+            retained.path().join("panel/software.json"),
+            b"stale panel state",
+        )
+        .expect("plant stale panel state");
+        let error = fixture
+            .validate(&fixture.policy())
+            .expect_err("a stale panel entry must fail");
         assert!(error.message().contains("entry set differs"), "{error}");
     }
 

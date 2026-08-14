@@ -97,14 +97,14 @@ use serde::{Deserialize, Serialize};
 use super::{
     DELIVERY_SCHEMA_VERSION, DeliveryError, Result,
     command::{CliOptions, WaveCommand, WorkflowOutput},
-    evidence,
+    ensure_artifact_kind, evidence,
     history_proof::{self, HistoryVerdict},
     model::{
         CandidateId, CandidateMaterial, ContentId, GitObjectFormat, MAX_PULL_REQUESTS,
         RepositoryRecord, SnapshotSha256, validate_bounded_string, validate_git_ref,
         validate_hash_for_format, validate_repository_id,
     },
-    panel::{ensure_artifact_kind, prepare_state, prepare_state_with_roots, read_json_file},
+    prepare_state, prepare_state_with_roots, read_json_file,
     seal::SealRecord,
     storage::{CandidateDir, HISTORY_PROOF_FILE, SEAL_FILE, StateRoot},
 };
@@ -312,8 +312,7 @@ pub fn evaluate(
     let current_digests = material.digests()?;
 
     // The history proof establishes only that the integrated content is
-    // byte-identical, which keeps the sealed panel attestation valid across a
-    // history-only rebase. It says nothing about the validator lanes: a rebase
+    // byte-identical. It says nothing about the validator lanes: a rebase
     // moves `snapshot_sha256`, which unbinds every prior lane record, so the
     // seal alone must never carry a lane result across it. Re-read the lanes
     // against the current snapshot digest, so a rebased candidate is eligible
@@ -594,9 +593,8 @@ pub fn open_sealed_candidate(
 mod tests {
     use super::*;
     use crate::delivery::{
-        DeliveryErrorKind,
+        DeliveryErrorKind, SnapshotView,
         model::{ExpectedPullRequest, fixtures},
-        panel::SnapshotView,
         seal::{
             seal,
             tests::{sealable, sealable_from},
@@ -649,7 +647,7 @@ mod tests {
                 number: 1,
                 base_ref: "v3".to_owned(),
                 base_oid: base,
-                head_ref: "adr046-w0-panel-seal".to_owned(),
+                head_ref: "adr046-w0-seal".to_owned(),
                 head_oid: head,
                 required_checks: checks(),
             }],
@@ -723,9 +721,7 @@ mod tests {
         let error = evaluate_checked(&state, &candidate, &record, &merge_target, &roots)
             .expect_err("an unmerged prior-wave item must block merge eligibility");
         assert!(
-            error
-                .message()
-                .contains("cannot request a panel for, seal, or merge W1"),
+            error.message().contains("cannot seal or merge W1"),
             "{error}"
         );
         assert!(error.message().contains("ADR046-foundation-001"), "{error}");
@@ -782,29 +778,28 @@ mod tests {
     }
 
     #[test]
-    fn a_history_only_rebase_needs_current_lanes_but_keeps_the_panel() {
+    fn a_history_only_rebase_needs_current_lanes() {
         use crate::delivery::{
             evidence::EvidenceLane,
-            panel::tests::rebased,
             seal::tests::{evidence as lane_evidence, import as import_evidence},
+            test_support::rebased,
         };
 
         let scratch = Scratch::new("eligibility-rebase");
         let (candidate, seal, snapshot) = sealed(&scratch);
 
-        // A history-only rebase preserves the candidate address and its sealed
-        // panel attestation, but it moves `snapshot_sha256`, so every prior
-        // validator-lane record is bound to the stale snapshot. Until the lanes
-        // rerun and re-import against the new snapshot, the candidate is not
-        // eligible - the seal alone never carries a lane result across a rebase.
+        // A history-only rebase preserves the candidate address, but it moves
+        // `snapshot_sha256`, so every prior validator-lane record is bound to
+        // the stale snapshot. Until the lanes rerun and re-import against the
+        // new snapshot, the candidate is not eligible - the seal alone never
+        // carries a lane result across a rebase.
         let error = evaluate(&candidate, &seal, &target(rebased_material()))
             .expect_err("stale lanes must block eligibility");
         assert!(error.message().contains("current snapshot"), "{error}");
 
         // Re-import both lanes bound to the rebased snapshot, exactly as the
         // integrator would after rerunning them, and the candidate becomes
-        // eligible again - proving the panel survived the rebase while the
-        // validator evidence had to be refreshed.
+        // eligible again.
         let rebased_snapshot = rebased(&snapshot);
         import_evidence(
             &candidate,

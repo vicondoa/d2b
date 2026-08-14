@@ -2,9 +2,9 @@
 //! `ADR046-delivery-003`).
 //!
 //! `cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave validate-import` records that one validator lane
-//! ran against one candidate and what it returned. Three lanes report into the
-//! same candidate: required GitHub CI, the heavy-gated local and host
-//! validators, and - through its own tooling - the ten-role panel.
+//! ran against one candidate and what it returned. Two lanes report into the
+//! same candidate: required GitHub CI and the heavy-gated local and host
+//! validators.
 //!
 //! # How raw output is kept out of Git
 //!
@@ -76,21 +76,13 @@ pub enum EvidenceLane {
     GithubCi,
     /// The heavy-gated local and host validators run by the integrator.
     LocalHost,
-    /// The ten-role panel. Its authoritative evidence is the record set;
-    /// a lane record for the panel is accepted but never a substitute.
-    Panel,
 }
 
 /// Every lane, in the order section 12.2 lists them.
-pub const EVIDENCE_LANES: [EvidenceLane; 3] = [
-    EvidenceLane::GithubCi,
-    EvidenceLane::LocalHost,
-    EvidenceLane::Panel,
-];
+pub const EVIDENCE_LANES: [EvidenceLane; 2] = [EvidenceLane::GithubCi, EvidenceLane::LocalHost];
 
 /// Lanes that must each carry at least one passing imported result before a
-/// seal. The panel is not here: its authoritative evidence is the ten
-/// unanimous records, which the seal verifies directly.
+/// seal.
 pub const REQUIRED_EVIDENCE_LANES: [EvidenceLane; 2] =
     [EvidenceLane::GithubCi, EvidenceLane::LocalHost];
 
@@ -99,7 +91,6 @@ impl EvidenceLane {
         match self {
             Self::GithubCi => "github-ci",
             Self::LocalHost => "local-host",
-            Self::Panel => "panel",
         }
     }
 
@@ -109,7 +100,7 @@ impl EvidenceLane {
             .find(|lane| lane.as_str() == value)
             .ok_or_else(|| {
                 DeliveryError::usage(format!(
-                    "--lane must be one of github-ci, local-host, panel; found {value:?}"
+                    "--lane must be one of github-ci or local-host; found {value:?}"
                 ))
             })
     }
@@ -205,9 +196,8 @@ impl EvidenceRecord {
             || &self.snapshot_sha256 != snapshot_sha256
         {
             return Err(DeliveryError::new(format!(
-                "validator evidence for {:?} on lane {} is bound to a stale snapshot; a rebase \
-                 preserves the panel record but never a lane result, so every lane reruns and \
-                 re-imports against the current snapshot",
+                "validator evidence for {:?} on lane {} is bound to a stale snapshot; every lane \
+                 reruns and re-imports against the current snapshot",
                 self.validation,
                 self.lane.as_str()
             )));
@@ -279,8 +269,8 @@ fn run_with_root(request: &ImportRequest, root: &StateRoot) -> Result<WorkflowOu
     if current.snapshot_sha256 != sealed.snapshot_sha256 {
         return Err(DeliveryError::new(format!(
             "candidate {} kept its address but its commit history moved, so the sealed snapshot \
-             digest is stale; a history-only rebase preserves the panel record but never a lane \
-             result, so re-snapshot in place and rerun this lane against the current snapshot",
+             digest is stale; re-snapshot in place and rerun this lane against the current \
+             snapshot",
             sealed.candidate_id
         )));
     }
@@ -389,8 +379,7 @@ pub fn read_lane_records(
 /// and therefore unbinds every prior lane record through
 /// [`EvidenceRecord::ensure_bound`] - is caught identically at seal time and
 /// at the merge gate: the candidate is eligible only once every lane has rerun
-/// and re-imported against the new snapshot. Panel evidence is unaffected
-/// because it binds `candidate_id`/`content_id`, which a rebase preserves.
+/// and re-imported against the new snapshot.
 pub fn require_passing_lanes(
     candidate: &CandidateDir,
     candidate_id: &CandidateId,
@@ -458,13 +447,6 @@ impl ImportRequest {
             Some(value) => EvidenceLane::parse(&value)?,
             None => EvidenceLane::LocalHost,
         };
-        if lane == EvidenceLane::Panel {
-            return Err(DeliveryError::usage(
-                "--lane panel is not importable: the panel lane's evidence is the ten unanimous \
-                 records produced by wave panel-attest, not a validator import; import github-ci \
-                 or local-host",
-            ));
-        }
         let command = options.optional_string("--command")?;
         let log_path = options.optional_path("--log")?;
         let locator = options.optional_string("--locator")?;
@@ -897,16 +879,6 @@ mod tests {
     }
 
     #[test]
-    fn the_panel_lane_cannot_be_imported_through_validate_import() {
-        let fixture = GitFixture::new("evidence-panel-lane");
-        let snapshot = take(&fixture);
-        let error = ImportRequest::parse(&import_args(&fixture, &snapshot, &["--lane", "panel"]))
-            .expect_err("the panel lane is not importable");
-        assert_eq!(error.kind(), DeliveryErrorKind::Usage);
-        assert!(error.message().contains("panel-attest"), "{error}");
-    }
-
-    #[test]
     fn read_all_rejects_a_record_bound_to_another_candidate() {
         let fixture = GitFixture::new("evidence-foreign");
         let snapshot = take(&fixture);
@@ -946,7 +918,6 @@ mod tests {
         let fixture = GitFixture::new("evidence-usage");
         let snapshot = take(&fixture);
         for extra in [
-            vec!["--lane", "panel"],
             vec!["--candidate", "not-a-digest"],
             vec!["--command", "make test\nrm -rf /"],
             vec!["--locator", ""],
@@ -1006,10 +977,10 @@ mod tests {
     }
 
     /// Drives the whole pipeline through the production code paths: `snapshot`
-    /// writes the candidate, `validate-import` writes both validator lanes
-    /// through the real writer (never a fabricated fixture), and the panel is
-    /// requested and attested. The returned candidate is ready for `seal`,
-    /// which consumes exactly what these stages produced. This is the
+    /// writes the candidate and `validate-import` writes both validator lanes
+    /// through the real writer (never a fabricated fixture). The returned
+    /// candidate is ready for `seal`, which consumes exactly what these stages
+    /// produced. This is the
     /// end-to-end proof that the single evidence ABI closes the writer/reader
     /// gap the two divergent lane enums had opened.
     fn drive_to_sealable(
@@ -1018,7 +989,7 @@ mod tests {
         GitFixture,
         StateRoot,
         CandidateDir,
-        crate::delivery::panel::SnapshotView,
+        crate::delivery::SnapshotView,
     ) {
         let fixture = GitFixture::new(name);
         let snapshot = take(&fixture);
@@ -1040,23 +1011,14 @@ mod tests {
             .join("W0")
             .join(snapshot.candidate_id.as_str())
             .join("snapshot.json");
-        let (candidate, view) = crate::delivery::panel::open_candidate(&root, &snapshot_path)
+        let (candidate, view) = crate::delivery::open_candidate(&root, &snapshot_path)
             .expect("open the candidate the snapshot names");
-
-        crate::delivery::panel::request(&candidate, &view).expect("panel request");
-        let files = crate::delivery::panel::tests::record_files(&view);
-        let records_dir = fixture.scratch().join("panel-records");
-        std::fs::create_dir_all(&records_dir).expect("panel records directory");
-        for (record_name, bytes) in &files {
-            std::fs::write(records_dir.join(record_name), bytes).expect("write panel record");
-        }
-        crate::delivery::panel::attest(&candidate, &view, &records_dir).expect("panel attest");
 
         (fixture, root, candidate, view)
     }
 
     #[test]
-    fn snapshot_validate_import_panel_and_seal_complete_end_to_end() {
+    fn snapshot_validate_import_and_seal_complete_end_to_end() {
         let (_fixture, _root, candidate, view) = drive_to_sealable("delivery-e2e-seal");
 
         let output = crate::delivery::seal::seal(&candidate, &view).expect("seal the wave");
@@ -1070,32 +1032,21 @@ mod tests {
             .expect("the sealed record re-validates");
         assert_eq!(record.candidate_id, view.candidate_id);
         assert_eq!(record.evidence.len(), 2);
-        assert_eq!(
-            record.panel.records.len(),
-            crate::delivery::model::PANEL_CURRENT_ROLES.len()
-        );
-        assert!(record.panel.unanimous);
+        let serialized = serde_json::to_value(&record).expect("serialize seal");
+        assert!(serialized.get("panel").is_none());
     }
 
     #[test]
-    fn a_history_only_rebase_invalidates_lane_evidence_while_the_panel_survives() {
+    fn a_history_only_rebase_invalidates_lane_evidence() {
         let (_fixture, _root, candidate, view) = drive_to_sealable("delivery-e2e-rebase");
         crate::delivery::seal::seal(&candidate, &view).expect("seal before the rebase");
 
         // A history-only rebase preserves candidate_id and content_id but moves
         // snapshot_sha256, so the lane evidence goes stale and the seal refuses.
-        let rebased = crate::delivery::panel::tests::rebased(&view);
+        let rebased = crate::delivery::test_support::rebased(&view);
         let error = crate::delivery::seal::seal(&candidate, &rebased)
             .expect_err("lane evidence is stale after a rebase");
         assert!(error.message().contains("stale snapshot"), "{error}");
-
-        // The panel record set still validates against the rebased snapshot: it
-        // binds content identity, not the moved snapshot digest.
-        let request = crate::delivery::panel::stored_request(&candidate, &rebased)
-            .expect("the panel request survives a history-only rebase");
-        let attestation = crate::delivery::panel::attested_records(&candidate, &request)
-            .expect("the panel records survive a history-only rebase");
-        assert!(attestation.unanimous);
     }
 
     #[test]
@@ -1125,20 +1076,8 @@ mod tests {
             .join("W0")
             .join(snapshot.candidate_id.as_str())
             .join("snapshot.json");
-        let (candidate, view) = crate::delivery::panel::open_candidate(&root, &snapshot_path)
+        let (candidate, view) = crate::delivery::open_candidate(&root, &snapshot_path)
             .expect("open the candidate the snapshot names");
-
-        outputs.push(crate::delivery::panel::request(&candidate, &view).expect("panel request"));
-
-        let files = crate::delivery::panel::tests::record_files(&view);
-        let records_dir = fixture.scratch().join("panel-records");
-        std::fs::create_dir_all(&records_dir).expect("panel records directory");
-        for (record_name, bytes) in &files {
-            std::fs::write(records_dir.join(record_name), bytes).expect("write panel record");
-        }
-        outputs.push(
-            crate::delivery::panel::attest(&candidate, &view, &records_dir).expect("panel attest"),
-        );
         outputs.push(crate::delivery::seal::seal(&candidate, &view).expect("seal the wave"));
 
         let state = fixture.state();
