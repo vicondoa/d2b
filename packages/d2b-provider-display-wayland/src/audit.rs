@@ -129,7 +129,7 @@ fn sanitize_component(value: &str) -> String {
                 }
             })
             .take(63)
-            .collect::<String>();
+            .collect::<String>()
 }
 
 impl core::fmt::Debug for DisplayAuditRecord {
