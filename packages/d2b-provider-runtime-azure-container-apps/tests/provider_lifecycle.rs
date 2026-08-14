@@ -328,6 +328,48 @@ async fn missing_sandbox_uses_disk_and_sandbox_effects_then_finalizes() {
 }
 
 #[tokio::test]
+async fn failed_sandbox_is_deleted_during_finalization() {
+    let state = Arc::new(Mutex::new(FakeState {
+        candidates: vec![record(AcaSandboxLifecycle::Failed)],
+        ..FakeState::default()
+    }));
+    let mut controller = controller(Arc::clone(&state));
+
+    controller
+        .finalize(
+            AcaOperationId::parse("operation-finalize-failed").unwrap(),
+            1_000,
+        )
+        .await
+        .unwrap();
+
+    assert!(!controller.finalizer_installed());
+    assert_eq!(state.lock().unwrap().calls, ["find-sandboxes", "delete"]);
+}
+
+#[tokio::test]
+async fn unknown_sandbox_fails_closed_during_finalization() {
+    let state = Arc::new(Mutex::new(FakeState {
+        candidates: vec![record(AcaSandboxLifecycle::Unknown)],
+        ..FakeState::default()
+    }));
+    let mut controller = controller(Arc::clone(&state));
+
+    assert_eq!(
+        controller
+            .finalize(
+                AcaOperationId::parse("operation-finalize-unknown").unwrap(),
+                1_000,
+            )
+            .await,
+        Err(AcaControllerError::Effect(AcaControlErrorKind::Ambiguous))
+    );
+    assert!(controller.finalizer_installed());
+    assert_eq!(controller.phase(), AcaPhase::Degraded);
+    assert_eq!(state.lock().unwrap().calls, ["find-sandboxes"]);
+}
+
+#[tokio::test]
 async fn finalization_waits_for_a_creating_sandbox_before_stopping() {
     let state = Arc::new(Mutex::new(FakeState {
         candidates: vec![record(AcaSandboxLifecycle::Creating)],

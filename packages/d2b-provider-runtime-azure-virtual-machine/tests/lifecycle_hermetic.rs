@@ -16,6 +16,7 @@ struct FakeState {
     tags: Option<TagDigest>,
     calls: Vec<&'static str>,
     polls: Vec<LroStatus>,
+    extension_failures: usize,
 }
 
 impl Default for FakeState {
@@ -26,6 +27,7 @@ impl Default for FakeState {
             tags: None,
             calls: Vec::new(),
             polls: Vec::new(),
+            extension_failures: 0,
         }
     }
 }
@@ -104,7 +106,12 @@ impl AzureEffectPort for FakeEffect {
         _: PskExtensionPayload,
         _: &AzureAccessToken,
     ) -> Result<AzureOperationHandle, AzureVmError> {
-        self.state.lock().unwrap().calls.push("extension");
+        let mut state = self.state.lock().unwrap();
+        state.calls.push("extension");
+        if state.extension_failures > 0 {
+            state.extension_failures -= 1;
+            return Err(AzureVmError::Transient);
+        }
         Ok(AzureOperationHandle::from_core(b"extension").unwrap())
     }
 
@@ -724,6 +731,45 @@ async fn failed_extension_lro_redelivers_psk_without_losing_secret() {
         state.lock().unwrap().calls,
         ["provision", "extension", "extension"]
     );
+}
+
+#[tokio::test]
+async fn transient_extension_failure_does_not_consume_delivery_attempt() {
+    let (provider, settings) = config();
+    let state = Arc::new(Mutex::new(FakeState {
+        state: AzureVmState::Running,
+        handle: Some(AzureVmHandle::from_core("opaque-vm").unwrap()),
+        tags: Some(expected_tag_digest()),
+        extension_failures: 1,
+        ..FakeState::default()
+    }));
+    let effect = Arc::new(FakeEffect {
+        state: Arc::clone(&state),
+    });
+    let mut controller = AzureVmController::new(
+        provider,
+        settings,
+        effect,
+        credential(),
+        Some(BootstrapPsk::from_bytes(b"one-time").unwrap()),
+    )
+    .unwrap();
+
+    assert_eq!(
+        controller.reconcile("zone", "guest", 1).await,
+        Err(AzureVmError::Transient)
+    );
+    let recovery = controller.recovery_state();
+    assert_eq!(recovery.psk_delivery_attempts, 0);
+    assert!(!recovery.bootstrap_extension_present);
+
+    assert!(matches!(
+        controller.reconcile("zone", "guest", 1).await,
+        Ok(AzureVmReconcileOutcome::Progressing { .. })
+    ));
+    let recovery = controller.recovery_state();
+    assert_eq!(recovery.psk_delivery_attempts, 1);
+    assert!(recovery.bootstrap_extension_present);
 }
 
 #[tokio::test]

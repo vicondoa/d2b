@@ -325,7 +325,11 @@ where
             .adoption_started_at_unix_ms
             .get_or_insert_with(|| self.clock.now_unix_ms());
         if self.identity.is_none() {
-            if let Some(candidate) = self.effect.observe().await? {
+            let candidate = match timeout(self.startup_budget()?, self.effect.observe()).await {
+                Ok(result) => result?,
+                Err(_) => return Err(self.startup_timeout()),
+            };
+            if let Some(candidate) = candidate {
                 if self.clock.now_unix_ms().saturating_sub(adoption_started)
                     > u64::from(self.config.adoption_window_ms)
                 {
@@ -338,7 +342,12 @@ where
                 };
                 match verify_identity(&expected, &candidate) {
                     AdoptionOutcome::Adopted => {
-                        self.effect.open_pidfd(&candidate).await?;
+                        match timeout(self.startup_budget()?, self.effect.open_pidfd(&candidate))
+                            .await
+                        {
+                            Ok(result) => result?,
+                            Err(_) => return Err(self.startup_timeout()),
+                        }
                         self.identity = Some(candidate);
                         self.phase = CloudHypervisorPhase::VmmReady;
                     }
@@ -372,7 +381,19 @@ where
                 self.phase = CloudHypervisorPhase::Degraded;
                 return Err(CloudHypervisorError::AdoptionAmbiguous);
             };
-            let Some(candidate) = self.effect.observe().await? else {
+            let candidate = match timeout(
+                Duration::from_millis(u64::from(self.config.health_check_timeout_ms)),
+                self.effect.observe(),
+            )
+            .await
+            {
+                Ok(result) => result?,
+                Err(_) => {
+                    self.phase = CloudHypervisorPhase::Degraded;
+                    return Err(CloudHypervisorError::Effect);
+                }
+            };
+            let Some(candidate) = candidate else {
                 self.phase = CloudHypervisorPhase::Degraded;
                 return Err(CloudHypervisorError::AdoptionAmbiguous);
             };
@@ -433,7 +454,11 @@ where
             self.phase = CloudHypervisorPhase::Degraded;
             return Err(CloudHypervisorError::AdoptionAmbiguous);
         }
-        let Some(candidate) = self.effect.observe().await? else {
+        let candidate = match timeout(self.startup_budget()?, self.effect.observe()).await {
+            Ok(result) => result?,
+            Err(_) => return Err(self.startup_timeout()),
+        };
+        let Some(candidate) = candidate else {
             self.phase = CloudHypervisorPhase::Degraded;
             return Ok(CloudHypervisorReconcileOutcome::Retry { after_ms: 1_000 });
         };
@@ -442,7 +467,10 @@ where
             return Err(CloudHypervisorError::AdoptionAmbiguous);
         }
         self.expected_identity = Some(expected);
-        self.effect.open_pidfd(&candidate).await?;
+        match timeout(self.startup_budget()?, self.effect.open_pidfd(&candidate)).await {
+            Ok(result) => result?,
+            Err(_) => return Err(self.startup_timeout()),
+        }
         self.identity = Some(candidate);
         self.guest_control_cid = Some(expected_cid);
         self.phase = CloudHypervisorPhase::VmmReady;
@@ -465,7 +493,16 @@ where
             return Ok(());
         }
         self.phase = CloudHypervisorPhase::Finalizing;
-        let Some(candidate) = self.effect.observe().await? else {
+        let finalization_timeout =
+            Duration::from_millis(u64::from(self.config.startup_deadline_ms));
+        let candidate = match timeout(finalization_timeout, self.effect.observe()).await {
+            Ok(result) => result?,
+            Err(_) => return Err(CloudHypervisorError::StartupDeadlineExceeded),
+        };
+        let Some(candidate) = candidate else {
+            if let Some(cid) = self.guest_control_cid {
+                let _ = timeout(finalization_timeout, self.probe.close(cid)).await;
+            }
             self.finalizer = false;
             self.phase = CloudHypervisorPhase::Finalized;
             return Ok(());
@@ -478,16 +515,26 @@ where
             self.phase = CloudHypervisorPhase::Degraded;
             return Err(CloudHypervisorError::AdoptionAmbiguous);
         }
-        self.effect.open_pidfd(&candidate).await?;
+        match timeout(finalization_timeout, self.effect.open_pidfd(&candidate)).await {
+            Ok(result) => result?,
+            Err(_) => return Err(CloudHypervisorError::StartupDeadlineExceeded),
+        }
         self.identity = Some(candidate);
         if let Some(cid) = self.guest_control_cid {
-            self.probe
-                .close(cid)
-                .await
-                .map_err(CloudHypervisorError::GuestControl)?;
+            match timeout(finalization_timeout, self.probe.close(cid)).await {
+                Ok(result) => result.map_err(CloudHypervisorError::GuestControl)?,
+                Err(_) => return Err(CloudHypervisorError::StartupDeadlineExceeded),
+            }
         }
-        self.effect.stop(&candidate).await?;
-        if self.effect.observe().await?.is_some() {
+        match timeout(finalization_timeout, self.effect.stop(&candidate)).await {
+            Ok(result) => result?,
+            Err(_) => return Err(CloudHypervisorError::StartupDeadlineExceeded),
+        }
+        let remaining = match timeout(finalization_timeout, self.effect.observe()).await {
+            Ok(result) => result?,
+            Err(_) => return Err(CloudHypervisorError::StartupDeadlineExceeded),
+        };
+        if remaining.is_some() {
             self.phase = CloudHypervisorPhase::Finalizing;
             return Err(CloudHypervisorError::Effect);
         }

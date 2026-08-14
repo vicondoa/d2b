@@ -160,8 +160,12 @@ impl fmt::Debug for RelayEnrollmentProof {
 
 /// Verifies the authenticated enrollment transcript.
 pub trait RelayEnrollmentVerifier: Send + Sync {
-    /// Verify the transcript and admit it for one KK session.
-    fn verify_enrollment(&self, transcript: &[u8]) -> bool;
+    /// Verify the transcript and bind it to this connection challenge.
+    fn verify_enrollment(
+        &self,
+        transcript: &[u8],
+        challenge: &RelayEnrollmentChallenge,
+    ) -> bool;
 }
 
 impl RelayEnrollmentProof {
@@ -172,7 +176,7 @@ impl RelayEnrollmentProof {
         transcript: &[u8],
         challenge: &RelayEnrollmentChallenge,
     ) -> Result<Self, RelayTransportError> {
-        if transcript.is_empty() || !verifier.verify_enrollment(transcript) {
+        if transcript.is_empty() || !verifier.verify_enrollment(transcript, challenge) {
             return Err(RelayTransportError::AuthenticationFailed);
         }
         Ok(Self {
@@ -196,6 +200,12 @@ impl RelayEnrollmentChallenge {
     /// Construct a challenge at an effect boundary.
     pub fn from_bytes(bytes: [u8; 32]) -> Self {
         Self(bytes)
+    }
+
+    /// Borrow the challenge for transcript binding at the authentication
+    /// boundary.
+    pub fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
     }
 }
 
@@ -315,6 +325,9 @@ impl RelayConnection {
 
     /// Receive one frame.
     pub async fn receive(&self) -> Result<Option<RelayFrame>, RelayTransportError> {
+        if self.phase().await != RelaySessionPhase::EnrolledKk {
+            return Err(RelayTransportError::InvalidSessionTransition);
+        }
         let result = self.socket.receive().await;
         if result.as_ref().is_ok_and(Option::is_none) || result.is_err() {
             *self.phase.lock().await = RelaySessionPhase::Closed;

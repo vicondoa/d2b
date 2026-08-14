@@ -64,7 +64,11 @@ fn valid_expiry() -> u64 {
 struct FakeEnrollment;
 
 impl RelayEnrollmentVerifier for FakeEnrollment {
-    fn verify_enrollment(&self, transcript: &[u8]) -> bool {
+    fn verify_enrollment(
+        &self,
+        transcript: &[u8],
+        _: &d2b_provider_transport_azure_relay::RelayEnrollmentChallenge,
+    ) -> bool {
         transcript == b"authenticated-enrollment"
     }
 }
@@ -223,6 +227,15 @@ async fn unauthenticated_connection_cannot_send() {
             .await,
         Err(RelayTransportError::InvalidSessionTransition)
     );
+}
+
+#[tokio::test]
+async fn unauthenticated_connection_cannot_receive() {
+    let connection = provider().open(RelayRole::Sender, 1_000).await.unwrap();
+    assert!(matches!(
+        connection.receive().await,
+        Err(RelayTransportError::InvalidSessionTransition)
+    ));
 }
 
 #[tokio::test]
@@ -511,6 +524,14 @@ async fn eof_closes_the_session_and_releases_the_slot() {
     )
     .unwrap();
     let connection = provider.open(RelayRole::Sender, 1_000).await.unwrap();
+    let challenge = connection.enrollment_challenge();
+    let proof = RelayEnrollmentProof::authenticate(
+        &FakeEnrollment,
+        b"authenticated-enrollment",
+        &challenge,
+    )
+    .unwrap();
+    connection.enroll(proof).await.unwrap();
     assert!(connection.receive().await.unwrap().is_none());
     assert_eq!(
         connection.phase().await,

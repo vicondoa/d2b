@@ -31,6 +31,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub type RelayStream =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
+const RELAY_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// Install the process-global rustls crypto provider (ring) if one is not
 /// already installed. [`connect`] calls this lazily, so consumers normally do
 /// not need to; it is exposed so an application that wants to pick the
@@ -109,10 +111,13 @@ async fn connect_request(
     ca_pem: Option<&[u8]>,
 ) -> Result<RelayStream, RelayConnectError> {
     let connector = tls_connector(ca_pem)?;
-    let (ws, _resp) =
-        tokio_tungstenite::connect_async_tls_with_config(request, None, false, Some(connector))
-            .await
-            .map_err(|err| RelayConnectError::Handshake(err.to_string()))?;
+    let (ws, _resp) = timeout(
+        RELAY_CONNECT_TIMEOUT,
+        tokio_tungstenite::connect_async_tls_with_config(request, None, false, Some(connector)),
+    )
+    .await
+    .map_err(|_| RelayConnectError::Handshake("relay connect timeout".into()))?
+    .map_err(|err| RelayConnectError::Handshake(err.to_string()))?;
     Ok(ws)
 }
 

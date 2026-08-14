@@ -92,6 +92,7 @@ impl CloudHypervisorEffectPort for FakeEffect {
 
 struct ReadyProbe {
     responses: Arc<Mutex<Vec<GuestControlHealth>>>,
+    close_calls: Arc<Mutex<Vec<u32>>>,
     delay_ms: u64,
 }
 
@@ -99,6 +100,7 @@ impl ReadyProbe {
     fn scripted(responses: Vec<GuestControlHealth>) -> Self {
         Self {
             responses: Arc::new(Mutex::new(responses)),
+            close_calls: Arc::new(Mutex::new(Vec::new())),
             delay_ms: 0,
         }
     }
@@ -106,6 +108,7 @@ impl ReadyProbe {
     fn delayed(responses: Vec<GuestControlHealth>, delay_ms: u64) -> Self {
         Self {
             responses: Arc::new(Mutex::new(responses)),
+            close_calls: Arc::new(Mutex::new(Vec::new())),
             delay_ms,
         }
     }
@@ -125,7 +128,8 @@ impl GuestControlProbe for ReadyProbe {
             .unwrap_or(GuestControlHealth::Ready))
     }
 
-    async fn close(&self, _: u32) -> Result<(), GuestControlHealthError> {
+    async fn close(&self, cid: u32) -> Result<(), GuestControlHealthError> {
+        self.close_calls.lock().unwrap().push(cid);
         Ok(())
     }
 }
@@ -355,6 +359,21 @@ async fn finalization_requires_observing_process_exit() {
     assert!(controller.finalizer_installed());
     state.lock().unwrap().stop_leaves_identity = false;
     controller.finalize().await.unwrap();
+    assert!(!controller.finalizer_installed());
+}
+
+#[tokio::test]
+async fn absent_process_still_closes_guest_control() {
+    let state = Arc::new(Mutex::new(FakeState::default()));
+    let probe = ReadyProbe::scripted(Vec::new());
+    let close_calls = Arc::clone(&probe.close_calls);
+    let mut controller = controller_with_probe(Arc::clone(&state), probe);
+    controller.reconcile(true, true, true, 14).await.unwrap();
+    state.lock().unwrap().identity = None;
+
+    controller.finalize().await.unwrap();
+
+    assert_eq!(*close_calls.lock().unwrap(), vec![14]);
     assert!(!controller.finalizer_installed());
 }
 

@@ -5,7 +5,7 @@
 //! paths) and emits the `Vec<String>` argv that `d2bd` will exec
 //! against the packaged Cloud Hypervisor binary.
 //!
-//! The shape MUST track the W0b parity oracle in
+//! The shape MUST track the pinned parity oracle in
 //! `tests/golden/runner-shape/cloud-hypervisor-argv-minimal.txt` for
 //! the headless `examples/minimal` VM, modulo the daemon divergences
 //! enumerated in ADR 0004:
@@ -269,7 +269,7 @@ pub fn exec_arg0(input: &ChArgvInput) -> Result<String, ChArgvError> {
 mod tests {
     use super::*;
 
-    /// Minimal headless VM matching the W0b audit's `corp-vm` shape,
+    /// Minimal headless VM matching the pinned audit's `corp-vm` shape,
     /// except daemon-owned divergences:
     ///
     /// - API socket lives at `/run/d2b/vms/corp-vm/ch-api.sock`
@@ -335,10 +335,10 @@ mod tests {
         );
 
         // Spot-check ordered emission. The pinned unit-test surface
-        // covers the W0b audit contract field-by-field rather than
+        // covers the pinned audit contract field-by-field rather than
         // doing a byte-compare against
         // tests/golden/runner-shape/cloud-hypervisor-argv-minimal.txt;
-        // the W0b audit fixture is a snapshot of microvm.nix's
+        // the audit fixture is a snapshot of microvm.nix's
         // runner shape that includes `${runtime_args:-}` template
         // expansion the daemon does not emit, so a literal
         // byte-compare would always diverge.

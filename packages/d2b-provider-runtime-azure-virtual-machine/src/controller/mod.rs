@@ -746,14 +746,14 @@ where
             .bootstrap_psk
             .as_ref()
             .ok_or(AzureVmError::BootstrapFailed)?;
-        self.psk_delivery_attempts = self.psk_delivery_attempts.saturating_add(1);
         let payload = PskExtensionPayload::from_secret(psk.copy_for_delivery().to_vec())?;
         let token = self.arm_token().await?;
-        self.bootstrap_extension_present = true;
         let operation = self
             .effect
             .put_vm_extension(&handle, payload, &token)
             .await?;
+        self.psk_delivery_attempts = self.psk_delivery_attempts.saturating_add(1);
+        self.bootstrap_extension_present = true;
         self.set_operation(operation);
         self.phase = AzureVmPhase::PskDelivering;
         Ok(AzureVmReconcileOutcome::Progressing { after_ms: 250 })

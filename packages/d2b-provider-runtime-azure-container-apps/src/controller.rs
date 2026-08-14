@@ -552,7 +552,13 @@ where
                     self.finalization_stage = AcaFinalizationStage::Delete;
                 }
                 AcaSandboxLifecycle::Running | AcaSandboxLifecycle::Suspended => {}
-                AcaSandboxLifecycle::Failed | AcaSandboxLifecycle::Unknown => return Ok(()),
+                AcaSandboxLifecycle::Failed => {
+                    self.finalization_stage = AcaFinalizationStage::Delete;
+                }
+                AcaSandboxLifecycle::Unknown => {
+                    self.phase = AcaPhase::Degraded;
+                    return Err(AcaControllerError::Effect(AcaControlErrorKind::Ambiguous));
+                }
             }
         }
         if self.finalization_stage == AcaFinalizationStage::Observe {
@@ -565,7 +571,13 @@ where
                     self.finalization_stage = AcaFinalizationStage::Stop;
                     return Ok(());
                 }
-                Some(AcaSandboxLifecycle::Failed | AcaSandboxLifecycle::Unknown) | None => {
+                Some(AcaSandboxLifecycle::Failed) => AcaFinalizationStage::Delete,
+                Some(AcaSandboxLifecycle::Unknown) => {
+                    self.phase = AcaPhase::Degraded;
+                    return Err(AcaControllerError::Effect(AcaControlErrorKind::Ambiguous));
+                }
+                None => {
+                    self.finish_finalization();
                     return Ok(());
                 }
             };
@@ -596,7 +608,15 @@ where
                     | AcaSandboxLifecycle::Running
                     | AcaSandboxLifecycle::Suspended,
                 ) => return Ok(()),
-                Some(AcaSandboxLifecycle::Failed | AcaSandboxLifecycle::Unknown) | None => {
+                Some(AcaSandboxLifecycle::Failed) => {
+                    self.finalization_stage = AcaFinalizationStage::Delete;
+                }
+                Some(AcaSandboxLifecycle::Unknown) => {
+                    self.phase = AcaPhase::Degraded;
+                    return Err(AcaControllerError::Effect(AcaControlErrorKind::Ambiguous));
+                }
+                None => {
+                    self.finish_finalization();
                     return Ok(());
                 }
             }
