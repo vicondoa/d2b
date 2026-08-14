@@ -24,14 +24,19 @@ use d2b_audit::{AuditSink, DurabilityEvidence};
 use d2b_contracts::v3::{
     DEFAULT_LIST_PAGE_SIZE, MAX_FILTER_VALUES, MAX_LIST_FILTERS, MAX_LIST_PAGE_SIZE,
     MAX_LIST_RESOURCE_TYPES, MAX_PAGE_CURSOR_BYTES, MAX_RESPONSE_CANONICAL_BYTES, ResourceName,
-    ZoneRevision,
 };
 use d2b_contracts::{
     broker_wire::{OpenZoneStoreResponse, ZoneStoreDisposition},
     v3::{
-        ConfigurationGeneration, ControllerGeneration, ResourceError, ResourceErrorKind,
-        ResourceErrorReason, ResourcePhase, ResourceRef, ResourceTypeName, ResourceUid, RetryClass,
-        Timestamp, ZoneId, ZoneStatusResource,
+        BindingDigest, ConfigurationGeneration, ControllerGeneration, ResourceError,
+        ResourceErrorKind, ResourceErrorReason, ResourcePhase, ResourceRef, ResourceTypeName,
+        ResourceUid, RetryClass, Timestamp,
+        ZoneId, ZoneRevision, ZoneStatusResource,
+        component_session::{
+            AttachmentPolicy, EndpointPolicy, EndpointPurpose, EndpointRole,
+            IdentityEvidenceRequirement, LimitProfile, Locality, NoiseProfile, PurposeClass,
+            ServicePackage, TransportBinding, TransportClass,
+        },
     },
 };
 use d2b_core_controller::authority::{
@@ -43,10 +48,17 @@ use d2b_core_controller::main::{
     CoreProcess, RecoverySnapshot, RuntimeReadiness as CoreRuntimeReadiness, StartupError,
     StartupStage,
 };
+use d2b_core_controller::controllers::{
+    CoreHandlerKind, HandlerOutcome, HandlerPhase, HandlerStatus,
+};
 use d2b_core_controller::zone_status::{SystemCoreStatusEmitter, ZoneStatusInput};
 use d2b_resource_api::{
-    RedbBackend, ResourceService,
-    authz::{ApiCatalog, NativeAuthorizer},
+    RedbBackend, ResourceService, UnregisteredBusAdapter,
+    authz::{
+        ApiCatalog, AuthorizationState, BindingScope, BootstrapPhase, BoundSubject, CompiledRole,
+        CompiledRoleBinding, NativeAuthorizer, PolicyRule, PolicySet, RelayGrantAuthority,
+        ResourceVerb, SessionVerb,
+    },
 };
 use d2b_resource_store::{PolicySnapshot, StoreSlot};
 #[cfg(test)]
@@ -59,6 +71,16 @@ use d2b_resource_store_redb::{
 use serde_json::json;
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
+use d2b_bus::{BusAuthorizer, BusConfig, BusIngress, ZoneBus, ZoneRegistrar};
+use d2b_contracts::v3::identity::STANDARD_RESOURCE_TYPES;
+use d2b_session::{
+    HandshakeCredentials, SessionEngine, SessionServerError, TransportEvidence,
+    serve_ttrpc_services,
+};
+use d2b_session_unix::{
+    CreditPool, CreditScopeSet, DescriptorPolicyResolver, PeerIdentityPolicy, SeqpacketSocket,
+    UnixSeqpacketTransport, UnixSessionError, VerifiedUnixPeer, prearmed_seqpacket_pair,
+};
 
 /// Maximum number of Zone runtimes owned by one daemon.
 pub const MAX_ZONE_RUNTIMES: usize = 64;
@@ -210,6 +232,11 @@ pub struct ZoneResourceRuntime {
     store_metadata: StoreRuntimeMetadata,
     backend: Arc<RedbBackend>,
     api: Arc<ResourceService<RedbBackend>>,
+    #[allow(dead_code)]
+    bus: Option<ZoneBus>,
+    registrar: Mutex<Option<ZoneRegistrar>>,
+    ingress: Mutex<Option<BusIngress>>,
+    service_task: Mutex<Option<tokio::task::JoinHandle<Result<(), SessionServerError>>>>,
     core: Mutex<CoreProcess>,
     readiness: ZoneRuntimeReadiness,
     policy_installed: bool,
@@ -471,36 +498,97 @@ impl ZoneResourceRuntime {
         );
 
         let mut core = CoreProcess::new();
-        {
-            let recovered_authority = authority_index.lock().await;
-            let _ = drive_core_startup(
-                &mut core,
-                CoreRuntimeReadiness {
+        let mut bus = None;
+        let mut registrar = None;
+        let mut ingress = None;
+        let mut service_task = None;
+        let (resource_api_ready, local_session_ready, policy_installed,
+            controller_endpoint_registered, watch_admitted, stage, zone_status) =
+            if store_metadata.policy_snapshot.policy_revision == 0 {
+                let _ = core.connect_runtime(CoreRuntimeReadiness {
                     store_ready: true,
                     resource_api_ready: false,
                     local_bus_ready: false,
                     controller_endpoint_registered: false,
                     authenticated_system_core_session: false,
-                },
-                RecoverySnapshot {
-                    startup_epoch: 0,
-                    checkpoint_revision: 0,
-                    active_configuration_revision: store_metadata
-                        .policy_snapshot
-                        .active_configuration_revision
-                        .get(),
-                    provider_lease_count: 0,
-                    controller_lease_count: 0,
-                    ambiguous_operation_count: 0,
-                    watch_admitted: false,
-                },
-                &recovered_authority,
-            );
-        }
-        let stage = core.stage();
-        let zone_status = SystemCoreStatusEmitter::new()
-            .emit(ZoneStatusInput::new(ResourcePhase::Pending, Vec::new()))
-            .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
+                });
+                (
+                    false,
+                    false,
+                    false,
+                    false,
+                    false,
+                    core.stage(),
+                    SystemCoreStatusEmitter::new()
+                        .emit(ZoneStatusInput::new(ResourcePhase::Pending, Vec::new()))
+                        .map_err(|_| ResourceRuntimeError::HandlerNotReady)?,
+                )
+            } else {
+                let (policy, state) = runtime_policy(
+                    &zone,
+                    &store_metadata.policy_snapshot,
+                    store_metadata.current_revision,
+                )?;
+                authorizer
+                    .replace_policy(policy.clone(), &state)
+                    .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?;
+                let bus_authorizer =
+                    BusAuthorizer::from_shared(Arc::clone(&authorizer), state.clone())
+                        .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?;
+                let (zone_bus, mut zone_registrar) =
+                    ZoneBus::new(zone.clone(), bus_authorizer, BusConfig::default())
+                        .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
+                let (zone_ingress, zone_service_task) = register_system_core_session(
+                    &mut zone_registrar,
+                    Arc::clone(&api),
+                    Arc::clone(&authorizer),
+                    state.clone(),
+                )
+                .await?;
+                let stage = {
+                    let recovered_authority = authority_index.lock().await;
+                    core.start_production(
+                        CoreRuntimeReadiness {
+                            store_ready: true,
+                            resource_api_ready: true,
+                            local_bus_ready: true,
+                            controller_endpoint_registered: true,
+                            authenticated_system_core_session: true,
+                        },
+                        RecoverySnapshot {
+                            startup_epoch: 0,
+                            checkpoint_revision: store_metadata.current_revision.get(),
+                            active_configuration_revision: store_metadata
+                                .policy_snapshot
+                                .active_configuration_revision
+                                .get(),
+                            provider_lease_count: 0,
+                            controller_lease_count: 0,
+                            ambiguous_operation_count: 0,
+                            watch_admitted: true,
+                        },
+                        &recovered_authority,
+                    )
+                    .map_err(map_startup_error)?;
+                    mark_core_handlers_ready(&mut core)?;
+                    core.publish_readiness().map_err(map_startup_error)?
+                };
+                bus = Some(zone_bus);
+                registrar = Some(zone_registrar);
+                ingress = Some(zone_ingress);
+                service_task = Some(zone_service_task);
+                (
+                    true,
+                    true,
+                    true,
+                    true,
+                    true,
+                    stage,
+                    SystemCoreStatusEmitter::new()
+                        .emit(ZoneStatusInput::new(ResourcePhase::Ready, Vec::new()))
+                        .map_err(|_| ResourceRuntimeError::HandlerNotReady)?,
+                )
+            };
         Ok(Self {
             zone,
             store_id: expected_store_id,
@@ -508,18 +596,22 @@ impl ZoneResourceRuntime {
             store_metadata,
             backend,
             api,
+            bus,
+            registrar: Mutex::new(registrar),
+            ingress: Mutex::new(ingress),
+            service_task: Mutex::new(service_task),
             core: Mutex::new(core),
             readiness: ZoneRuntimeReadiness {
                 store_ready: true,
-                resource_api_ready: false,
-                local_session_ready: false,
+                resource_api_ready,
+                local_session_ready,
                 provider_path_ready: false,
                 authority_ready: true,
                 core_stage: stage,
             },
-            policy_installed: false,
-            controller_endpoint_registered: false,
-            watch_admitted: false,
+            policy_installed,
+            controller_endpoint_registered,
+            watch_admitted,
             authority_index,
             authority_persistence,
             authority_recovery,
@@ -799,10 +891,28 @@ impl ZoneResourceRuntime {
             store,
             backend,
             api,
+            bus,
+            registrar,
+            ingress,
+            service_task,
             authority_persistence,
             authority_recovery,
             ..
         } = self;
+        if let Some(task) = service_task
+            .into_inner()
+            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?
+        {
+            task.abort();
+            let _ = task.await;
+        }
+        drop(ingress
+            .into_inner()
+            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?);
+        drop(registrar
+            .into_inner()
+            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?);
+        drop(bus);
         drop(api);
         drop(backend);
         drop(authority_persistence);
@@ -1260,6 +1370,239 @@ fn map_startup_error(error: StartupError) -> ResourceRuntimeError {
             ResourceRuntimeError::CoreStartupFailed
         }
     }
+}
+
+fn runtime_policy(
+    zone: &ZoneId,
+    snapshot: &PolicySnapshot,
+    current_revision: ZoneRevision,
+) -> Result<(PolicySet, AuthorizationState), ResourceRuntimeError> {
+    if snapshot.policy_revision == 0
+        || snapshot.api_catalog_revision == 0
+        || snapshot.active_configuration_revision.get() == 0
+    {
+        return Err(ResourceRuntimeError::PolicyUnavailable);
+    }
+    let catalog = ApiCatalog::standard();
+    let resource_types = STANDARD_RESOURCE_TYPES
+        .iter()
+        .map(|name| ResourceTypeName::parse(*name))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?;
+    let resource_verbs = [
+        ResourceVerb::Get,
+        ResourceVerb::List,
+        ResourceVerb::Watch,
+        ResourceVerb::Create,
+        ResourceVerb::UpdateSpec,
+        ResourceVerb::UpdateStatus,
+        ResourceVerb::UpdateMetadata,
+        ResourceVerb::UpdateFinalizers,
+        ResourceVerb::Delete,
+    ];
+    let session_verbs = [
+        SessionVerb::Connect,
+        SessionVerb::Invoke,
+        SessionVerb::OpenStream,
+        SessionVerb::Cancel,
+    ];
+    let mut rules = Vec::new();
+    for chunk in resource_types.chunks(16) {
+        rules.push(
+            PolicyRule::new(
+                &catalog,
+                chunk.iter().cloned(),
+                resource_verbs,
+                session_verbs,
+                [],
+                [],
+                [zone.clone()],
+                [],
+            )
+            .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?,
+        );
+    }
+    let role_ref = ResourceRef::parse("Role/system-core-runtime")
+        .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?;
+    let role = CompiledRole::new(role_ref.clone(), rules)
+        .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?;
+    let binding = CompiledRoleBinding::new(
+        role_ref,
+        [BoundSubject {
+            subject_ref: ResourceRef::parse("Provider/system-core")
+                .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?,
+            subject_uid: ResourceUid::parse("11111111-1111-4111-8111-111111111111")
+                .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?,
+        }],
+        BindingScope {
+            zones: [zone.clone()].into_iter().collect(),
+            ..BindingScope::default()
+        },
+        RelayGrantAuthority::None,
+    )
+    .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?;
+    let policy = PolicySet::new(&catalog, snapshot.policy_revision, vec![role], vec![binding])
+        .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?;
+    let state = AuthorizationState {
+        snapshot: *snapshot,
+        zone_policy_revision: current_revision,
+        bootstrap_phase: BootstrapPhase::Disabled,
+        now_tick: 1,
+    };
+    Ok((policy, state))
+}
+
+fn system_core_endpoint_policy() -> EndpointPolicy {
+    EndpointPolicy {
+        purpose: EndpointPurpose::ResourceService,
+        purpose_class: PurposeClass::Local,
+        initiator_role: EndpointRole::ZoneController,
+        responder_role: EndpointRole::Component,
+        service: ServicePackage::ResourceV3,
+        schema_fingerprint: [0x11; 32],
+        noise_profile: NoiseProfile::Nn25519ChaChaPolySha256,
+        limits: LimitProfile::local_default(),
+        transport_binding: TransportBinding {
+            transport: TransportClass::InheritedSocketpair,
+            locality: Locality::HostLocal,
+            channel_binding: [0x22; 32],
+            identity_evidence: IdentityEvidenceRequirement::DirectionalUnix,
+        },
+        reconnect_generation: 1,
+        attachment_policy: AttachmentPolicy {
+            kind: d2b_contracts::v3::component_session::AttachmentPolicyKind::PacketAtomic,
+            max_per_packet: 1,
+            max_per_request: 1,
+            max_per_operation: 1,
+            max_per_session: 1,
+            credentials_allowed: false,
+        },
+    }
+}
+
+fn unix_transport(
+    socket: SeqpacketSocket,
+    policy: &EndpointPolicy,
+) -> Result<UnixSeqpacketTransport, ResourceRuntimeError> {
+    let expected_peer = socket
+        .acceptor_peer_credentials()
+        .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
+    let credits = CreditScopeSet::new(
+        CreditPool::new(64).map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?,
+        CreditPool::new(64).map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?,
+        CreditPool::new(64).map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?,
+        CreditPool::new(64).map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?,
+        CreditPool::new(64).map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?,
+        CreditPool::new(64).map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?,
+    );
+    let resolver: DescriptorPolicyResolver =
+        std::sync::Arc::new(|_| Err(UnixSessionError::DescriptorMismatch));
+    UnixSeqpacketTransport::new(
+        socket,
+        policy.transport_binding.locality,
+        policy.limits,
+        policy.attachment_policy,
+        credits,
+        resolver,
+        PeerIdentityPolicy::inherited_socketpair(expected_peer),
+    )
+    .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)
+}
+
+async fn register_system_core_session(
+    registrar: &mut ZoneRegistrar,
+    api: Arc<ResourceService<RedbBackend>>,
+    authorizer: Arc<NativeAuthorizer>,
+    authz_state: AuthorizationState,
+) -> Result<
+    (
+        BusIngress,
+        tokio::task::JoinHandle<Result<(), SessionServerError>>,
+    ),
+    ResourceRuntimeError,
+> {
+    let policy = system_core_endpoint_policy();
+    let (initiator_fd, responder_fd) =
+        prearmed_seqpacket_pair().map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
+    let initiator_socket = SeqpacketSocket::from_parent_prearmed(initiator_fd)
+        .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
+    let responder_socket = SeqpacketSocket::from_parent_prearmed(responder_fd)
+        .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
+    let verified_peer = VerifiedUnixPeer::verify_inherited_seqpacket(&initiator_socket)
+        .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
+    let initiator = unix_transport(initiator_socket, &policy)?;
+    let responder = unix_transport(responder_socket, &policy)?;
+    let (initiator, responder) = tokio::join!(
+        SessionEngine::establish_initiator(
+            initiator,
+            policy.clone(),
+            HandshakeCredentials::Nn,
+            std::time::Instant::now(),
+        ),
+        SessionEngine::establish_responder(
+            responder,
+            policy.clone(),
+            HandshakeCredentials::Nn,
+            std::time::Instant::now(),
+        ),
+    );
+    let initiator = initiator.map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
+    let responder = responder.map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
+    let acceptor = registrar
+        .component_session_acceptor(policy.clone(), verified_peer)
+        .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
+    let candidate = acceptor
+        .admit(
+            initiator,
+            TransportEvidence::new(
+                d2b_contracts::v3::EvidenceClass::UnixPeer,
+                BindingDigest::parse(format!("sha256:{}", "22".repeat(32)))
+                    .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?,
+            ),
+            1,
+        )
+        .await
+        .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
+    let subject = authorizer
+        .issue_authenticated_subject(
+            candidate.route_binding().context().clone(),
+            authz_state,
+        )
+        .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?;
+    let service = Arc::new(
+        UnregisteredBusAdapter::bind_unregistered_session(api, subject)
+            .map_err(|_| ResourceRuntimeError::ResourceApiBindFailed)?,
+    );
+    let services = service.unregistered_ttrpc_services();
+    let ingress = registrar
+        .register_component_session(candidate)
+        .await
+        .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
+    let service_task = tokio::spawn(serve_ttrpc_services(
+        Arc::new(responder.into_driver()),
+        services,
+    ));
+    Ok((ingress, service_task))
+}
+
+fn mark_core_handlers_ready(core: &mut CoreProcess) -> Result<(), ResourceRuntimeError> {
+    let status = HandlerStatus {
+        phase: HandlerPhase::Ready,
+        outcome: HandlerOutcome::Converged,
+        observed_generation: 1,
+        queued: 0,
+        running: 0,
+        last_watch_revision: 1,
+        checkpoint_revision: 1,
+        last_reconciled_tick: 1,
+        retry_after_tick: None,
+    };
+    for kind in CoreHandlerKind::ALL {
+        core.handlers_mut()
+            .update(kind, status)
+            .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
+    }
+    Ok(())
 }
 
 fn readiness_resource_error(error: ResourceRuntimeError) -> ResourceError {

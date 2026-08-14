@@ -1057,6 +1057,29 @@ impl NativeAuthorizer {
         self.cache.clear();
     }
 
+    /// Bind an already authenticated transport subject to this authorizer.
+    ///
+    /// The caller must supply claims issued by the ComponentSession
+    /// authority.  This method only creates the Resource API capability after
+    /// the live policy grants the subject a session connection, so generated
+    /// handlers never receive an unbound or caller-authored identity.
+    pub fn issue_authenticated_subject(
+        &self,
+        context: AuthenticatedSubjectContext,
+        state: AuthorizationState,
+    ) -> Result<crate::AuthenticatedSubjectContext, AuthorizationDenial> {
+        let zone = ZoneId::parse(context.zone_ref().name().as_str())
+            .map_err(|_| AuthorizationDenial::ZoneMismatch)?;
+        let capabilities = self.positive_capabilities(&context, &zone, &state)?;
+        if !capabilities.session_verbs.contains(&SessionVerb::Connect) {
+            return Err(AuthorizationDenial::NoMatchingGrant);
+        }
+        Ok(crate::identity::AuthenticatedSubjectContext::issue(
+            std::sync::Arc::new(context),
+            state,
+        ))
+    }
+
     pub fn authorize(
         &self,
         context: &AuthenticatedSubjectContext,

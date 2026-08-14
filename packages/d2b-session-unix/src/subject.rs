@@ -96,6 +96,21 @@ impl VerifiedUnixPeer {
         })
     }
 
+    /// Read credentials from a parent-prearmed socketpair endpoint.
+    ///
+    /// The inherited class is distinct from an accepted pathname socket so
+    /// the transport can require the kernel SCM credentials emitted by the
+    /// prearmed pair without accepting caller-authored identity claims.
+    pub fn verify_inherited_seqpacket(
+        socket: &SeqpacketSocket,
+    ) -> Result<Self, UnixSessionError> {
+        socket.verify_parent_prearmed()?;
+        Ok(Self {
+            observed_peer: socket.acceptor_peer_credentials()?,
+            transport_class: TransportClass::InheritedSocketpair,
+        })
+    }
+
     /// Read peer credentials from one stream endpoint.
     pub fn verify_stream(socket: &StreamSocket) -> Result<Self, UnixSessionError> {
         Ok(Self {

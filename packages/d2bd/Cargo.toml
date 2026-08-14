@@ -21,6 +21,8 @@ d2b-core = { path = "../d2b-core", version = "0.0.0-bootstrap" }
 d2b-core-controller = { path = "../d2b-core-controller", version = "0.0.0-bootstrap" }
 d2b-provider-system-core = { path = "../d2b-provider-system-core", version = "0.0.0-bootstrap" }
 d2b-bus = { path = "../d2b-bus", version = "0.0.0-bootstrap" }
+d2b-session = { path = "../d2b-session", version = "0.0.0-bootstrap" }
+d2b-session-unix = { path = "../d2b-session-unix", version = "0.0.0-bootstrap", features = ["host-socket"] }
 d2b-resource-api = { path = "../d2b-resource-api", version = "0.0.0-bootstrap" }
 d2b-resource-store = { path = "../d2b-resource-store", version = "0.0.0-bootstrap" }
 d2b-resource-store-redb = { path = "../d2b-resource-store-redb", version = "0.0.0-bootstrap" }
