@@ -1226,7 +1226,9 @@ name = "d2b-provider-clipboard-wayland"
 version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts",
+ "d2b-provider-display-wayland",
  "d2b-session",
+ "d2b-session-unix",
  "rustix 0.38.44",
  "serde",
  "serde_json",
@@ -1296,6 +1298,7 @@ name = "d2b-provider-display-wayland"
 version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts",
+ "d2b-session",
  "serde",
  "serde_json",
  "sha2",

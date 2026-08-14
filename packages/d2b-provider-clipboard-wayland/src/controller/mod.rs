@@ -1,6 +1,7 @@
 //! Clipboard controller placement and lifecycle projections.
 
-use d2b_contracts::v3::ResourceRef;
+use d2b_contracts::v3::{ResourceRef, ZoneId};
+use d2b_provider_display_wayland::DisplayDependencyProof;
 
 /// Display dependency state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -11,6 +12,54 @@ pub enum DependencyStatus {
     Absent,
     /// Dependency exists but is not Ready.
     Degraded,
+}
+
+/// Authenticated evidence that the display Provider is Ready for one User
+/// and Zone generation.
+#[derive(Clone, PartialEq, Eq)]
+pub struct DisplayDependencyEvidence {
+    pub(crate) provider_ref: ResourceRef,
+    pub(crate) zone: ZoneId,
+    pub(crate) user_ref: ResourceRef,
+    pub(crate) generation: u64,
+}
+
+impl DisplayDependencyEvidence {
+    /// Consume Core-authenticated display readiness evidence.
+    pub fn from_display_proof(proof: DisplayDependencyProof) -> Self {
+        Self {
+            provider_ref: proof.provider_ref().clone(),
+            zone: proof.zone().clone(),
+            user_ref: proof.user_ref().clone(),
+            generation: proof.generation(),
+        }
+    }
+
+    /// Borrow the authenticated display Provider reference.
+    pub const fn provider_ref(&self) -> &ResourceRef {
+        &self.provider_ref
+    }
+
+    /// Borrow the authenticated Zone.
+    pub const fn zone(&self) -> &ZoneId {
+        &self.zone
+    }
+
+    /// Borrow the authenticated User.
+    pub const fn user_ref(&self) -> &ResourceRef {
+        &self.user_ref
+    }
+
+    /// Return the Ready generation.
+    pub const fn generation(&self) -> u64 {
+        self.generation
+    }
+}
+
+impl core::fmt::Debug for DisplayDependencyEvidence {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("DisplayDependencyEvidence(REDACTED)")
+    }
 }
 
 /// Core-created clipboard Process projection.
@@ -55,12 +104,21 @@ impl ClipboardController {
         })
     }
 
-    /// Return display dependency state for an optional dependency.
-    pub const fn dependency_status(&self, display_ready: Option<bool>) -> DependencyStatus {
-        match display_ready {
-            None => DependencyStatus::Absent,
-            Some(true) => DependencyStatus::Ready,
-            Some(false) => DependencyStatus::Degraded,
+    /// Return display dependency state for authenticated evidence.
+    pub fn dependency_status(
+        &self,
+        display: Option<&DisplayDependencyEvidence>,
+    ) -> DependencyStatus {
+        let Some(display) = display else {
+            return DependencyStatus::Absent;
+        };
+        if display.provider_ref().resource_type().as_str() == "Provider"
+            && display.user_ref() == &self.user_ref
+            && display.generation() != 0
+        {
+            DependencyStatus::Ready
+        } else {
+            DependencyStatus::Degraded
         }
     }
 

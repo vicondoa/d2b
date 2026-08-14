@@ -1,4 +1,4 @@
-//! Fail-closed clipboard controller entrypoint.
+//! Clipboard controller entrypoint.
 
 fn main() -> std::process::ExitCode {
     std::process::ExitCode::from(78)

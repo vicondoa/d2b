@@ -1,6 +1,8 @@
 //! Metadata-only picker session protocol and one-use receipts.
 
-use crate::service::{AuthenticatedClipboardSession, AuthenticatedPasteRoute};
+use crate::service::{
+    AuthenticatedClipboardSession, AuthenticatedPasteRoute, operation_id_for_sessions,
+};
 
 /// Picker request validation failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -133,6 +135,7 @@ impl PickerReceipt {
     ) -> Result<Self, PickerError> {
         if request.destination_guest() != destination.guest_ref()
             || request.source_zone() != source.zone()
+            || request.operation_id() != operation_id_for_sessions(source, destination)
             || !destination.is_guest()
             || !entry_digest.starts_with("sha256:")
         {
@@ -155,6 +158,7 @@ impl PickerReceipt {
         entry_digest: &str,
     ) -> bool {
         self.source_zone == route.source_zone()
+            && self.operation_id == route.operation_id()
             && self.source_reconnect_generation == route.source_reconnect_generation()
             && self.destination_zone == route.destination_zone()
             && self.destination_guest == route.destination_guest()

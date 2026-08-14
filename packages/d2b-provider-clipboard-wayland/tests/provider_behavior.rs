@@ -1,9 +1,8 @@
 use d2b_provider_clipboard_wayland::{
     ClipboardAuditEvent, ClipboardAuditQueue, ClipboardConfig, ClipboardController, ClipboardEntry,
     ClipboardHistory, ClipboardProviderDescriptor, ClipboardReason, DependencyStatus, FdCapModel,
-    FdObjectKind, FdStatModel, FileSystemKind,
-    PickerRequest, PickerResult, Policy, SizeBucket, classify_fd_model, validate_fd_cap,
-    validate_recvmsg_control,
+    FdObjectKind, FdStatModel, FileSystemKind, PickerRequest, PickerResult, Policy, SizeBucket,
+    classify_fd_model, validate_fd_cap, validate_recvmsg_control,
 };
 
 #[test]

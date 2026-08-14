@@ -345,9 +345,18 @@ impl<F> ReceivedFdBatch<F>
 where
     F: AsFd,
 {
-    /// Reject control truncation before exposing any descriptor.
-    pub fn validate_control(self) -> Result<Vec<F>, FdSafetyError> {
+    /// Validate truncation and every descriptor before exposing ownership.
+    pub fn validate_control(
+        self,
+        expected_class: AttachmentClass,
+        max_size_bytes: u64,
+    ) -> Result<Vec<F>, FdSafetyError> {
         validate_recvmsg_control(self.truncated, self.descriptors.len())?;
-        Ok(self.descriptors)
+        let mut validated = Vec::with_capacity(self.descriptors.len());
+        for descriptor in self.descriptors {
+            validate_received_fd(&descriptor, expected_class, max_size_bytes)?;
+            validated.push(descriptor);
+        }
+        Ok(validated)
     }
 }
