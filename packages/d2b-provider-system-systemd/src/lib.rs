@@ -63,14 +63,13 @@ pub struct SystemdProcessProvider<P: ProcessLaunchEffectPort> {
 impl<P: ProcessLaunchEffectPort> SystemdProcessProvider<P> {
     /// Build the controller over an injected process effect port.
     ///
-    /// The production profile is intentionally System-only until the broker
-    /// has a verified per-user manager effect path. Advertising User here
-    /// would make the Provider contract broader than the live broker.
+    /// The broker verifies both system and authenticated user-manager
+    /// transient-unit paths before the effect reaches systemd.
     pub fn new(port: P) -> Self {
         let profile = ProcessProviderProfile::new(
             BoundedToken::parse(PROVIDER_NAME).expect("the frozen provider name is a valid token"),
             WaitReapOwner::ServiceManager,
-            BTreeSet::from([ExecutionDomain::System]),
+            BTreeSet::from([ExecutionDomain::System, ExecutionDomain::User]),
             BTreeSet::from([
                 IdentityBinding::UnitInvocationId,
                 IdentityBinding::Cgroup,
@@ -98,6 +97,9 @@ impl<P: ProcessLaunchEffectPort> SystemdProcessProvider<P> {
         }
         if ticket.operation().cancellation() == CancellationBinding::Cancelled {
             return Err(ProcessConformanceError::Cancelled);
+        }
+        if ticket.domain() == ExecutionDomain::User && ticket.user_ref().is_none() {
+            return Err(ProcessConformanceError::UserRefRequired);
         }
         Ok(())
     }

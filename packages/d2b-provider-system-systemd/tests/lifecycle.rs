@@ -19,6 +19,10 @@ fn restart_policy_is_bounded_and_does_not_restart_clean_exit() {
     assert!(policy.should_restart(ProcessOutcome::crashed()));
     assert!(policy.should_restart(ProcessOutcome::signaled()));
     assert!(!policy.should_restart(ProcessOutcome::crashed()));
+    policy.tick(1000);
+    assert_eq!(policy.attempts(), 0);
+    assert_eq!(policy.healthy_ticks(), 0);
+    assert!(policy.should_restart(ProcessOutcome::crashed()));
 }
 
 #[test]

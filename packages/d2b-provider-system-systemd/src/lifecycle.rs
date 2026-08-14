@@ -77,6 +77,7 @@ pub struct RestartPolicy {
     max_restarts: u32,
     attempts: u32,
     reset_after_ticks: u64,
+    healthy_ticks: u64,
 }
 
 impl RestartPolicy {
@@ -87,11 +88,13 @@ impl RestartPolicy {
             max_restarts,
             attempts: 0,
             reset_after_ticks,
+            healthy_ticks: 0,
         }
     }
 
     /// Decide whether a terminal result may restart the process.
     pub fn should_restart(&mut self, outcome: ProcessOutcome) -> bool {
+        self.healthy_ticks = 0;
         if !self.restart_on_failure || outcome.exit_class == ProcessExitClass::CleanExit {
             return false;
         }
@@ -110,6 +113,26 @@ impl RestartPolicy {
     /// Return the current attempt count.
     pub const fn attempts(&self) -> u32 {
         self.attempts
+    }
+
+    /// Advance the healthy-runtime clock and reset the failure budget once
+    /// the configured stable interval has elapsed.
+    pub fn tick(&mut self, ticks: u64) {
+        if self.reset_after_ticks == 0 {
+            self.attempts = 0;
+            self.healthy_ticks = 0;
+            return;
+        }
+        self.healthy_ticks = self.healthy_ticks.saturating_add(ticks);
+        if self.healthy_ticks >= self.reset_after_ticks {
+            self.attempts = 0;
+            self.healthy_ticks = 0;
+        }
+    }
+
+    /// Return the accumulated healthy-runtime ticks.
+    pub const fn healthy_ticks(&self) -> u64 {
+        self.healthy_ticks
     }
 }
 
