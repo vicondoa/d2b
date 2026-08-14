@@ -126,9 +126,7 @@ impl NotificationSink {
         } else {
             0
         };
-        if notification.actions().len()
-            > self.nonces.available_capacity() + evicted_nonce_count
-        {
+        if notification.actions().len() > self.nonces.available_capacity() + evicted_nonce_count {
             return Ok(NotificationResult::CapacityExceeded);
         }
         if self.projections.len() >= self.max_pending {
@@ -140,13 +138,9 @@ impl NotificationSink {
         };
         let request_id = format!("notification-{notification_id}");
         let mut action_nonces = BTreeMap::new();
-        let mut issued_keys: Vec<String> =
-            Vec::with_capacity(notification.actions().len());
+        let mut issued_keys: Vec<String> = Vec::with_capacity(notification.actions().len());
         for (action_id, _) in notification.actions() {
-            let nonce = match self
-                .nonces
-                .register(observer_session, action_id, now_secs)
-            {
+            let nonce = match self.nonces.register(observer_session, action_id, now_secs) {
                 Ok(nonce) => nonce,
                 Err(error) => {
                     for action_key in &issued_keys {

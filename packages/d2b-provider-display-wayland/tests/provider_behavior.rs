@@ -156,9 +156,7 @@ fn wire_deserialization_reuses_display_validation() {
     let value = serde_json::to_value(identity()).unwrap();
     let mut invalid_identity = value;
     invalid_identity["label"] = serde_json::json!("Work VM");
-    assert!(
-        serde_json::from_value::<DisplayIdentity>(invalid_identity).is_err()
-    );
+    assert!(serde_json::from_value::<DisplayIdentity>(invalid_identity).is_err());
 }
 
 #[test]

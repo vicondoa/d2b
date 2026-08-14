@@ -1,7 +1,7 @@
 use d2b_provider_notification_desktop::{
     ActionNonceStore, ActionSpec, AdmissionPurpose, Category, DesktopNotificationPort,
-    NotificationController, NotificationProviderDescriptor, NotificationRequest, NotificationResult,
-    NotificationSink, NotificationUrgency, SessionEvidence, TransportClass,
+    NotificationController, NotificationProviderDescriptor, NotificationRequest,
+    NotificationResult, NotificationSink, NotificationUrgency, SessionEvidence, TransportClass,
 };
 
 #[derive(Default)]

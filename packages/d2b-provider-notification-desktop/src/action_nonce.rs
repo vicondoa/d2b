@@ -173,11 +173,9 @@ impl ActionNonceStore {
     }
 
     fn token_from_key(action_key: &str) -> Option<&str> {
-        action_key
-            .strip_prefix("d2b-action:")
-            .filter(|token| {
-                token.len() == NONCE_BYTES * 2 && token.bytes().all(|byte| byte.is_ascii_hexdigit())
-            })
+        action_key.strip_prefix("d2b-action:").filter(|token| {
+            token.len() == NONCE_BYTES * 2 && token.bytes().all(|byte| byte.is_ascii_hexdigit())
+        })
     }
 }
 

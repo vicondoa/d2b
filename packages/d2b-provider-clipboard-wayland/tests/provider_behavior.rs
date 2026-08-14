@@ -129,9 +129,10 @@ fn guest_operations_require_display_and_picker_policy() {
         host.authorize_paste("zone-a", "zone-a", "Guest/work"),
         Err(ClipboardServiceError::PickerRequired)
     );
-    assert!(host
-        .authorize_paste_after_picker("zone-a", "zone-a", "Guest/work")
-        .is_ok());
+    assert!(
+        host.authorize_paste_after_picker("zone-a", "zone-a", "Guest/work")
+            .is_ok()
+    );
 }
 
 #[test]
