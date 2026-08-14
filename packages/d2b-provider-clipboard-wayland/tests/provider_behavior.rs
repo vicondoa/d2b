@@ -104,7 +104,7 @@ fn controller_owns_no_state_volume_and_display_dependency_is_optional() {
 
 #[test]
 fn cross_zone_paste_is_denied_and_guest_lock_blocks_paste() {
-    let host = ClipdHost::new(Policy::default(), 4, Some(true)).unwrap();
+    let mut host = ClipdHost::new(Policy::default(), 4, Some(true)).unwrap();
     assert!(
         host.authorize_paste("zone-a", "zone-b", "Guest/work")
             .is_err()
@@ -124,7 +124,7 @@ fn guest_operations_require_display_and_picker_policy() {
         Err(ClipboardServiceError::DependencyUnavailable)
     );
 
-    let mut host = ClipdHost::new(Policy::default(), 4, Some(true)).unwrap();
+    let host = ClipdHost::new(Policy::default(), 4, Some(true)).unwrap();
     assert_eq!(
         host.authorize_paste("zone-a", "zone-a", "Guest/work"),
         Err(ClipboardServiceError::PickerRequired)
