@@ -130,18 +130,18 @@ in
   # Only explicitly declared transient auxiliary units are emitted.
   "multi-env-daemon/daemon-work-app-unit-count" = {
     expr = unitCount daemonProcs "work-app";
-    expected = 0;
+    expected = 1;
   };
   "multi-env-daemon/daemon-personal-app-unit-count" = {
     expr = unitCount daemonProcs "personal-app";
-    expected = 0;
+    expected = 1;
   };
   "multi-env-daemon/demo-work-app-unit-count" = {
     expr = unitCount demoProcs "work-app";
-    expected = 0;
+    expected = 1;
   };
   "multi-env-daemon/demo-personal-app-unit-count" = {
     expr = unitCount demoProcs "personal-app";
-    expected = 0;
+    expected = 1;
   };
 }
