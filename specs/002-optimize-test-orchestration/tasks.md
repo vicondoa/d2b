@@ -47,10 +47,8 @@ valid baseline against committed `v3` behavior.
 **Checkpoint**: Baselines, inventories, and execution boundaries are recorded
 before any target implementation changes.
 
-**Historical Panel Gate (completed)**: The d2b plan panel ran under the
-then-current ten-seat process. Phase 3 began only after all ten seats signed
-off with no recommendations. This remains historical evidence and is not
-selected-roster lifecycle evidence.
+**Historical review checkpoint (completed)**: The baseline was reviewed before
+Phase 3 began. This records historical evidence only.
 
 ---
 
@@ -84,10 +82,8 @@ passes, and achieve a warm median no greater than 50% of baseline.
 **Checkpoint**: Rust validation is independently complete, coverage-equivalent,
 resource-bounded, and at least twice as fast when warm.
 
-**Historical Panel Gate (completed)**: The integrated US1 diff ran under the
-then-current ten-seat d2b work-panel process. Phase 4 began only after all ten
-seats signed off with no recommendations. This remains historical evidence and
-is not selected-roster lifecycle evidence.
+**Historical review checkpoint (completed)**: The integrated US1 diff was
+reviewed before Phase 4 began. This records historical evidence only.
 
 ---
 
@@ -121,10 +117,8 @@ median no greater than 50% of baseline.
 **Checkpoint**: Nix unit validation is independently complete, coverage
 equivalent, free of the Bash worker pool, and at least twice as fast when warm.
 
-**Historical Panel Gate (completed)**: The integrated US2 diff ran under the
-then-current ten-seat d2b work-panel process. Phase 5 became eligible only
-after all ten seats signed off with no recommendations. This remains
-historical evidence and is not selected-roster lifecycle evidence.
+**Historical review checkpoint (completed)**: The integrated US2 diff was
+reviewed before Phase 5 became eligible. This records historical evidence only.
 
 ---
 
@@ -159,13 +153,9 @@ regression.
 equivalent, free of the local Bash shard scheduler, and at least twice as fast
 when warm.
 
-**Current Panel Gate**: Run one selected-roster Discover-Fix-Verify lifecycle
-on the integrated US3 candidate. Run one comprehensive discovery, record every
-actionable finding in one stable shared ledger, batch ledger-scoped fixes, and
-perform scoped verification against the fix delta and full candidate. Rerun
-selection after every fix delta and union it with the lifecycle roster, which
-may only widen. Do not begin Phase 6 until every selected seat signs off with
-zero recommendations (N/N).
+**Review checkpoint**: Review the integrated US3 candidate, record actionable
+findings in one stable ledger, batch scoped fixes, and verify the fix delta
+against the full candidate before Phase 6.
 
 ---
 
@@ -194,13 +184,9 @@ recorded external contention.
 **Checkpoint**: All targets remain stable under default and constrained
 capacity without uncontrolled oversubscription.
 
-**Current Panel Gate**: Run one selected-roster Discover-Fix-Verify lifecycle
-on the integrated US4 candidate. Run one comprehensive discovery, record every
-actionable finding in one stable shared ledger, batch ledger-scoped fixes, and
-perform scoped verification against the fix delta and full candidate. Rerun
-selection after every fix delta and union it with the lifecycle roster, which
-may only widen. Do not begin Phase 7 until every selected seat signs off with
-zero recommendations (N/N).
+**Review checkpoint**: Review the integrated US4 candidate, record actionable
+findings in one stable ledger, batch scoped fixes, and verify the fix delta
+against the full candidate before Phase 7.
 
 ---
 
@@ -226,16 +212,12 @@ removed, combined, or reused operation.
 - [ ] T050 [US5] Commit the evidence, documentation, schema, policy test, and changelog with tag `( spec002w5 )` in `specs/002-optimize-test-orchestration/benchmark-results.md`, `specs/002-optimize-test-orchestration/quickstart.md`, `docs/reference/test-execution-manifest.md`, `docs/reference/schemas/test-execution-manifest-v1.json`, `tests/README.md`, `tests/AGENTS.md`, `docs/contributing/gates-and-lints.md`, `packages/d2b-contract-tests/tests/policy_docs.rs`, and `changelog.d/test-orchestration-speed.md`
 - [ ] T051 [US5] Run `D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts` plus the final targeted policy, drift, Rust, Nix unit, and flake validation commands from `specs/002-optimize-test-orchestration/quickstart.md`; record final evidence references in `specs/002-optimize-test-orchestration/benchmark-results.md`, update the durable deferred-findings register and friction log in `specs/002-optimize-test-orchestration/plan.md`, run the d2b memory workflow for any remaining open entries, and commit the final evidence and register updates with tag `( spec002w5 )`
 
-**Checkpoint**: The speedup is reproducible, reviewable, and ready for the
-d2b plan/work panel gate.
+**Checkpoint**: The speedup is reproducible, reviewable, and ready for
+delivery.
 
-**Current Panel Gate**: Run one selected-roster Discover-Fix-Verify lifecycle
-on the integrated US5 candidate. Run one comprehensive discovery, record every
-actionable finding in one stable shared ledger, batch ledger-scoped fixes, and
-perform scoped verification against the fix delta and full candidate. Rerun
-selection after every fix delta and union it with the lifecycle roster, which
-may only widen. The feature may advance to delivery only after every selected
-seat signs off with zero recommendations (N/N).
+**Review checkpoint**: Review the integrated US5 candidate, record actionable
+findings in one stable ledger, batch scoped fixes, and verify the fix delta
+against the full candidate before delivery.
 
 ---
 
@@ -246,8 +228,8 @@ seat signs off with zero recommendations (N/N).
 - **Setup (Phase 1)**: No dependencies.
 - **Foundational (Phase 2)**: Depends on T001-T004 and blocks implementation.
 - **US1 Rust (Phase 3)**: Depends on T005-T007.
-- **US2 Nix unit (Phase 4)**: Depends on unanimous US1 work-panel sign-off.
-- **US3 Flake (Phase 5)**: Depends on unanimous US2 work-panel sign-off and the
+- **US2 Nix unit (Phase 4)**: Depends on US1 review.
+- **US3 Flake (Phase 5)**: Depends on US2 review and the
   shared `flake.nix` Nix unit graph.
 - **US4 Resources (Phase 6)**: Depends on accepted US1-US3 implementations.
 - **US5 Evidence (Phase 7)**: Depends on US1-US4 and closes the feature.
@@ -259,7 +241,7 @@ Setup -> Foundation -> US1 -> US2 -> US3 -> US4 -> US5
 ```
 
 - **US1** has no implementation dependency on US2 or US3.
-- **US2** is independently testable but starts after the US1 panel gate.
+- **US2** is independently testable but starts after the US1 review checkpoint.
 - **US3** is independently testable but implementation-dependent on the shared
   Nix graph established by US2.
 - **US4** measures and tunes all three completed target implementations.
@@ -338,8 +320,8 @@ Task T040: Add serial-boundary policy assertions in packages/xtask/tests/policy_
 ### Parallel Team Strategy
 
 1. One owner completes Setup and Foundational work.
-2. Implement and panel US1 before dispatching US2.
-3. Implement and panel US2 before dispatching US3.
+2. Implement and review US1 before dispatching US2.
+3. Implement and review US2 before dispatching US3.
 4. Run resource tuning and evidence work only on the converged implementation.
 
 ---
@@ -352,6 +334,6 @@ Task T040: Add serial-boundary policy assertions in packages/xtask/tests/policy_
   than assuming CI layout.
 - Place all throwaway timing and inventory artifacts under `.scratch/`.
 - Commit each story's Nix-visible paths before running its acceptance commands.
-- Update the deferred-findings register and friction log after every panel.
-- Follow the strict phase panel gates above; this plan does not use pipelined
+- Update the deferred-findings register and friction log after every review.
+- Follow the strict phase review checkpoints above; this plan does not use pipelined
   dispatch.

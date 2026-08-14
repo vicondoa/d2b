@@ -54,7 +54,7 @@ re-introduced root-level lifecycle decisions, and could not be
 sandboxed under the minijail profiles the framework ships). Maintaining a
 parallel bash runtime for the deprecation window therefore meant
 maintaining a *less safe* code path purely so operators could
-choose it. ADR 0015 records the panel's decision that the operator
+choose it. ADR 0015 records the design decision that the operator
 ergonomics of a "warn-then-remove" cycle were not worth the
 security and audit-coverage regressions implied by carrying the
 bash runtime through the deprecation window.

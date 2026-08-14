@@ -51,7 +51,7 @@
   block uses a foreign system or remote builder; common cross-system
   configuration pins and drift remain one step. The Layer-1, realized-class,
   and dual-system matrix pins are regenerated. If accepted, Spec 003 must be
-  amended and re-panelled before implementation resumes.
+  amended and reviewed again before implementation resumes.
 - Related: [ADR 0009](0009-rust-toolchain-msrv-and-supply-chain.md) (Rust
   toolchain, MSRV, and supply-chain policy), which keeps its authority
   unchanged and is not superseded;

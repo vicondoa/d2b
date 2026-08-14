@@ -627,7 +627,7 @@ pub fn validate_identifier(value: &str, label: &str) -> Result<()> {
 }
 
 /// The delivery program the legacy wave namespace belongs to: ADR 0046. Spec
-/// section 3.2 (`docs/specs/ADR-046-validation-and-delivery.md`) defines a
+/// section 3.2 of the delivery contract defines a
 /// closed wave namespace `ADR046-W0`..`ADR046-W8`, split there into the fixed
 /// program component and the closed wave component.
 pub const ADR046_PROGRAM: &str = "ADR046";

@@ -6,7 +6,7 @@
 # SKIP-ON-CI (requires KVM / systemd / privileged broker).
 #
 # Modes:
-#   --lite    Single VM (personal-dev), ≤5 min.  For panel-round HEAD.
+#   --lite    Single VM (personal-dev), ≤5 min.  For a quick HEAD check.
 #   --full    Both VMs (personal-dev + work-aad), ≤20 min.  Default.
 #             REQUIRED before any v1.2.* tag (per I5).
 #
@@ -380,7 +380,7 @@ probe_teardown() {
   if [ "$stale_vsocks" -eq 0 ]; then
     pass_check "$vm: no stale vsock_* sockets after stop"
   else
-    fail_check "$vm: ${stale_vsocks} stale vsock_* socket(s) found after stop (panel-virt R0 Q1 #4)"
+    fail_check "$vm: ${stale_vsocks} stale vsock_* socket(s) found after stop (runtime check R0 Q1 #4)"
   fi
 }
 
@@ -438,7 +438,7 @@ probe_bridge_sysctl() {
     local val
     val=$(sysctl -n "net.ipv6.conf.${br}.disable_ipv6" 2>/dev/null || echo "")
     if [ "$val" = "1" ]; then
-      pass_check "bridge $br: disable_ipv6=1 after networkd restart (panel-networking R0 #3)"
+      pass_check "bridge $br: disable_ipv6=1 after networkd restart (runtime check R0 #3)"
     else
       fail_check "bridge $br: disable_ipv6=${val:-missing} after networkd restart (expected 1)"
       sysctl_fail=$((sysctl_fail + 1))
@@ -479,7 +479,7 @@ probe_audio() {
   if [ "${card_count_after:-0}" -ge 1 ]; then
     pass_check "$vm: audio sidecar restart binding: ${card_count_after} card(s) after restart"
   else
-    fail_check "$vm: audio sidecar restart binding: no audio cards after restart (panel-virt R1)"
+    fail_check "$vm: audio sidecar restart binding: no audio cards after restart (runtime check R1)"
   fi
 }
 

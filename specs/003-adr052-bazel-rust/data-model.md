@@ -916,7 +916,7 @@ is reached only by merging and sealing the new `spec003w0` built from current
 The two post-promotion eligibility clocks are independent. spec003w7
 qualification and code preparation may run before spec003w6, but its shared
 documentation/evidence task and merge depend on merged spec003w6. It then
-rebases, revalidates, and obtains a new panel result. This encodes disjoint
+rebases and revalidates. This encodes disjoint
 ownership for every concurrently ready task.
 
 ## Relationships

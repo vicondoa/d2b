@@ -1,6 +1,6 @@
 # Specification Quality Checklist: ADR 0052 Under ADR 0054
 
-**Purpose**: Validate the amended Track A artifact set before plan panel.
+**Purpose**: Validate the amended Track A artifact set before review.
 
 **Amended**: 2026-08-05
 
@@ -384,7 +384,7 @@
 - [x] spec003w6 and spec003w7 eligibility clocks remain independent;
   spec003w7 qualification/code prep may run early, while its shared-file task
   and merge depend on merged spec003w6 and then rebase, revalidate, and
-  re-panel.
+  review again.
 - [x] Task IDs, inline dependencies, and the adjacency graph pass the
   read-only plan-structure validator, which first censuses every unordered,
   ordered, indented, and blockquoted Markdown unchecked task-list form, rejects
@@ -472,12 +472,10 @@
   row and realized artifact, and complete/degraded evidence variants cannot
   contradict their common classification.
 - [x] Required repository validation commands and artifact scans pass.
-- [ ] Selected-roster Track A plan panel applies the versioned selection
-  table's floor and triggers, dispatches exactly the lifecycle selection's
-  roster and per-seat profiles, and returns unanimous signoff with empty
-  recommendations from every selected seat.
+- [ ] Track A release review applies the versioned selection table's floor and
+  triggers and returns with no unresolved recommendations.
 
 ## Readiness
 
-The specification is ready to request the amended plan panel. Implementation
+The specification is ready to request the amended plan review. Implementation
 remains blocked until the final unchecked item passes.

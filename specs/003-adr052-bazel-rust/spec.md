@@ -8,7 +8,7 @@
 
 **Amended**: 2026-08-05
 
-**Status**: Draft amendment awaiting a new plan panel
+**Status**: Draft amendment awaiting review
 
 **Authority**: [ADR 0052](../../docs/adr/0052-bazel-rust-build-and-test.md),
 as amended by
@@ -47,8 +47,7 @@ their own locks, and no Bazel workspace file exists. Parked historical
 branches `spec003-w0-*` and `spec003-w0`, plus the unified Bazel spike, are
 evidence about a validated shape,
 not ancestors to merge or assumptions about the base. Implementation restarts
-from the merged `v3` lineage after this amended artifact set passes a new plan
-panel.
+from the merged `v3` lineage after this amended artifact set passes review.
 
 This remains a Track A feature because it changes the required Rust gate,
 dependency and policy authority, workflow structure, cache behavior, and
@@ -918,8 +917,8 @@ Acceptance:
 - **FR-060**: Release containment and green-run qualification remain
   independent inputs. `spec003w7` qualification and code preparation MAY run
   before `spec003w6`, but its shared documentation/evidence task and merge MUST
-  depend on merged `spec003w6`, then rebase, revalidate, and receive a new
-  panel result. This keeps concurrently ready file ownership disjoint.
+  depend on merged `spec003w6`, then rebase and revalidate. This keeps
+  concurrently ready file ownership disjoint.
 - **FR-061**: Every qualification record MUST carry the explicit camelCase
   fields `bazelRestoreCount`, `bazelSaveCount`, and
   `bazelPublicationCount`. Every cold record MUST additionally carry
@@ -1220,7 +1219,7 @@ Acceptance:
   closed bounds. Unreadable-source and unsupported-argument cases MUST execute
   the actual script as a subprocess and assert status 1 and 2 respectively,
   empty stdout, and byte-exact stderr. It MUST run
-  without production-code changes, be required before every plan panel, and
+  without production-code changes, be required before every review, and
   remain a planning tool rather than a repository gate.
 
 ## Key Entities
@@ -1555,5 +1554,5 @@ Acceptance:
   `aarch64-linux`.
 - The existing eighteen surface IDs and two fixture-backed companion surfaces
   remain unchanged.
-- Implementation may begin only after this amended artifact set receives
-  unanimous Track A plan-panel signoff.
+- Implementation may begin only after this amended artifact set passes the
+  Track A review.

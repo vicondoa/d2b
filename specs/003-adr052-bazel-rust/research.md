@@ -1216,5 +1216,5 @@ Printing `git status` is not evidence.
 
 The post-promotion conditions remain independent. spec003w7 qualification and
 code preparation may run before spec003w6. Its shared-file task and merge wait
-for merged spec003w6, then rebase, rerun whole validation, and obtain a fresh
-panel verdict. This is the static ownership order the plan validator checks.
+for merged spec003w6, then rebase and rerun whole validation. This is the
+static ownership order the plan validator checks.

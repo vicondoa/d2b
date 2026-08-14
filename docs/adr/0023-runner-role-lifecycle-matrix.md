@@ -118,7 +118,7 @@ configuration). The minijail static allowlist cannot express
 confirm the drop happens. v1.2/D4a adds a live-smoke assertion
 (`/proc/<ch-pid>/status CapEff` bit 12 = 0 after ≥10 s running).
 
-**Relationship to version-pinning policy**: the panel-virt R1 note
+**Relationship to version-pinning policy**: the version-pinning review note
 recommends a CH version-pinning policy; that is documented as a
 placeholder in this ADR's §"Future work". Runner-shape snapshot
 tests (D15) catch argv drift in v1.2.
@@ -265,7 +265,7 @@ Negative:
   `RoleProfile` DTOs and the `minijail-profiles.nix` evaluation,
   emitting the 11 fields programmatically. This would close the
   drift risk identified in the Consequences section above.
-- **CH version-pinning policy** (per panel-virt R1 note): document
+- **CH version-pinning policy** (per the version-pinning review note): document
   as a placeholder; runner-shape snapshot tests (D15) catch argv
   drift in v1.2. A formal pinning policy (explicit semver floor,
   CVE-response SLA, changelog review cadence) is a v1.3 candidate.

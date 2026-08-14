@@ -1,5 +1,4 @@
-//! Delivery tooling for the wave workflow described in
-//! `docs/specs/ADR-046-validation-and-delivery.md`.
+//! Delivery tooling for the wave workflow.
 //!
 //! The module is the shared skeleton every delivery subcommand hangs off:
 //!

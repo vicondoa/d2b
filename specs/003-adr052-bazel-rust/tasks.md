@@ -159,17 +159,14 @@ to the same file are explicitly sequential.
   `.scratch/spec003w0-parked-evidence/`; prove none is an ancestor of the base.
 - [ ] T003 [owner: integrator] [files: none] [depends: T002] Run the amended
   read-only plan-structure validator self-tests and positive plan check, then
-  run the Track A plan panel over every artifact in this directory using every
-  trigger and the applicable floor from the versioned selection table. Dispatch
-  exactly the roster and per-seat profiles recorded by the lifecycle selection
-  and require unanimous signoff with empty recommendations from every selected
-  seat.
+  review every artifact in this directory against the Track A triggers and
+  applicable requirements.
 
 ## spec003w0 product workspace and foundation
 
-- [ ] T004 [owner: integrator] [files: none] [depends: T003] Run the
-  spec003w0 pre-implementation panel against the exact ownership map and refuse
-  dispatch until every scope is file-disjoint.
+- [ ] T004 [owner: integrator] [files: none] [depends: T003] Review the
+  spec003w0 pre-implementation ownership map and refuse dispatch until every
+  scope is file-disjoint.
 - [ ] T005 [owner: spec003w0-prep] [files:
   packages/d2b-bazel-exec/tests/provider_handle.rs,
   packages/d2b-bazel-exec/tests/verified_executable_api.rs,
@@ -865,12 +862,9 @@ to the same file are explicitly sequential.
 - [ ] T031 [owner: integrator] [files: none] [depends: T030] Obtain native x86
   and arm results on one stable PR head; require arm six-check realization and
   `make test-rust-supply-chain` plus renderer coverage.
-- [ ] T032 [owner: integrator] [files: none] [depends: T031] Run the
-  selected-roster integrated-diff panel using exactly the roster and per-seat
-  profiles recorded by the lifecycle selection. Across fix verification, rerun
-  selection over the full candidate and every fix delta and only widen the
-  lifecycle roster. Any content fix invalidates affected validation and panel
-  records.
+- [ ] T032 [owner: integrator] [files: none] [depends: T031] Review the
+  integrated diff over the full candidate and every fix delta. Any content fix
+  invalidates affected validation records.
 - [ ] T033 [owner: integrator] [files: none] [depends: T032] Seal
   `spec003w0`, merge to protected `v3`, record the merged SHA, collect garbage,
   and remove finished worktrees.
@@ -878,7 +872,7 @@ to the same file are explicitly sequential.
 ## spec003w1 complete Bazel carriers
 
 - [ ] T034 [owner: integrator] [files: none] [depends: T033] Run the
-  spec003w1 plan panel and require unanimous empty recommendations.
+  spec003w1 review.
 - [ ] T035 [owner: integrator] [files:
   packages/d2b-bazel-runner/Cargo.toml,
   packages/d2b-bazel-runner/src/lib.rs,
@@ -1126,13 +1120,12 @@ to the same file are explicitly sequential.
   exact Cargo compatibility carriers, exact
   Cargo/Bazel census and
   supply-chain-equivalence comparisons, and fixture contracts; then run the
-  integrated-diff panel, seal `spec003w1`, merge, collect garbage, and remove
-  finished worktrees.
+  integrated diff, merge, collect garbage, and remove finished worktrees.
 
 ## spec003w2 operational safety
 
-- [ ] T059 [owner: integrator] [files: none] [depends: T058] Run the
-  spec003w2 plan panel over safety, recovery, and cache contracts.
+- [ ] T059 [owner: integrator] [files: none] [depends: T058] Review the
+  spec003w2 safety, recovery, and cache contracts.
 - [ ] T060 [owner: integrator] [files:
   packages/d2b-bazel-runner/Cargo.toml,
   packages/d2b-bazel-runner/src/lib.rs,
@@ -1267,15 +1260,13 @@ to the same file are explicitly sequential.
 - [ ] T072 [owner: integrator] [files: none] [depends: T071] Run complete
   spec003w2 validation and every required cleanup, provider, process, recovery,
   startup, trim, and no-shell mutation.
-- [ ] T073 [owner: integrator] [files: none] [depends: T072] Run the
-  integrated-diff panel, seal `spec003w2`, merge, collect garbage, and remove
-  finished worktrees.
+- [ ] T073 [owner: integrator] [files: none] [depends: T072] Review the
+  integrated diff, merge, collect garbage, and remove finished worktrees.
 
 ## spec003w3 cache-free shadow
 
-- [ ] T074 [owner: integrator] [files: none] [depends: T073] Run the
-  spec003w3 plan panel over workflow, cache, record, and cold-evidence
-  contracts.
+- [ ] T074 [owner: integrator] [files: none] [depends: T073] Review the
+  spec003w3 workflow, cache, record, and cold-evidence contracts.
 - [ ] T075 [owner: spec003w3-shadow-workflow] [files:
   packages/xtask/tests/bazel_qualification.rs] [depends: T074] Add failing
   record tests proving pull-request runs emit no qualification record and
@@ -1371,14 +1362,13 @@ to the same file are explicitly sequential.
   no-argument fixed-path validator whose record does not exist until
   spec003w4; select only a larger runner or further disjoint split if the
   ceiling fails.
-- [ ] T082 [owner: integrator] [files: none] [depends: T081] Run the
-  integrated-diff panel, seal `spec003w3`, merge, collect garbage, and remove
-  finished worktrees.
+- [ ] T082 [owner: integrator] [files: none] [depends: T081] Review the
+  integrated diff, merge, collect garbage, and remove finished worktrees.
 
 ## spec003w4 immutable qualification
 
-- [ ] T083 [owner: integrator] [files: none] [depends: T082] Run the
-  spec003w4 plan panel over the complete evidence contract.
+- [ ] T083 [owner: integrator] [files: none] [depends: T082] Review the
+  spec003w4 complete evidence contract.
 - [ ] T084 [owner: spec003w4-curator] [files:
   specs/003-adr052-bazel-rust/evidence/qualification.json] [depends: T083]
   Create the one curator worktree and initialize only the qualification
@@ -1460,14 +1450,13 @@ to the same file are explicitly sequential.
   manifest-v1 compatibility, commit the immutable record, and validate both Rust
   aggregates, policy, drift, and fixture companions.
 - [ ] T092 [owner: integrator] [files: none] [depends: T091] Run the
-  integrated-diff panel, seal `spec003w4`, merge, verify the merged digest,
-  collect garbage, and remove measurement worktrees.
+  integrated diff, merge, verify the merged digest, collect garbage, and remove
+  measurement worktrees.
 
 ## spec003w5 promotion and promotion record
 
-- [ ] T093 [owner: integrator] [files: none] [depends: T092] Run the
-  spec003w5 plan panel against the immutable qualification digest and cache
-  contract.
+- [ ] T093 [owner: integrator] [files: none] [depends: T092] Review the
+  spec003w5 immutable qualification digest and cache contract.
 - [ ] T094 [owner: integrator] [files:
   packages/xtask/src/bazel_cache_contract.rs,
   packages/xtask/src/promotion_contract.rs,
@@ -1615,9 +1604,9 @@ to the same file are explicitly sequential.
   candidate parent and complete path diff, revert the exact atomic candidate
   without committing in a disposable worktree, and prove Cargo-authoritative
   Rust plus fixture contracts pass.
-- [ ] T104 [owner: integrator] [files: none] [depends: T103] Run the
-  integrated-diff panel, seal `spec003w5`, merge, and observe ordered
-  maintenance, publication, and the first promoted verdict.
+- [ ] T104 [owner: integrator] [files: none] [depends: T103] Review the
+  integrated diff, merge, and observe ordered maintenance, publication, and
+  the first promoted verdict.
 - [ ] T105 [owner: integrator] [files:
   specs/003-adr052-bazel-rust/evidence/promotion-record.json,
   specs/003-adr052-bazel-rust/evidence/post-promotion.json] [depends: T104]
@@ -1625,14 +1614,13 @@ to the same file are explicitly sequential.
   post-promotion checkpoint and independent clocks. Run
   `cargo xtask bazel-promotion-record-validate` and require the recorded
   promotion SHA to equal the actual protected-`v3` PR merge and the exact
-  sealed `spec003w5` identities. Derive from the complete transient run stream,
+  recorded `spec003w5` identities. Derive from the complete transient run stream,
   but persist only complete pagination state, page/stream counts, the fixed
   checkpoint digest, and final ten normalized units with attempt-history
   digests within schema byte/record bounds; do not write a raw cursor, trust
   eligible/count/run-ID summaries, or append complete attempt history.
   This is the first task that may read `promotion-record.json`. Run the
-  follow-up panel, seal
-  `spec003w5fu1`, merge, and collect garbage.
+  follow-up review, merge, and collect garbage.
 
 ## Independent post-promotion children
 
@@ -1650,7 +1638,7 @@ to the same file are explicitly sequential.
   tag, and object identifiers remain transient and unprinted. A two-component
   tag such as `v1.0`, an unpushed tag, a divergent same-named local and remote
   tag, a draft release, and a prerelease each fail entry. Then run the
-  spec003w6 plan panel without consulting the green-run count.
+  spec003w6 review without consulting the green-run count.
 - [ ] T107 [owner: spec003w6-alias-removal] [files:
   packages/d2b-bazel-runner/tests/make_interface.rs,
   packages/d2b-bazel-runner/tests/diagnostic.rs,
@@ -1719,8 +1707,7 @@ to the same file are explicitly sequential.
   target member.
 - [ ] T110 [owner: spec003w6-alias-removal] [files: none] [depends: T109]
   Validate every public Rust leaf, policy, tier0, drift, and fixture target;
-  run the integrated-diff panel; seal `spec003w6`; then merge and collect
-  garbage.
+  review the integrated diff; then merge and collect garbage.
 
 ### spec003w7 Cargo implementation retirement
 
@@ -1733,7 +1720,7 @@ to the same file are explicitly sequential.
   rerun start time, derive reset positions and the current streak counting each
   unit exactly once, prove the final ten distinct ordered units are successes
   with no intervening failure or cancellation, and run the
-  spec003w7 plan panel without consulting release containment or self-asserted
+  spec003w7 review without consulting release containment or self-asserted
   eligible/count/ID fields. Require the persisted checkpoint and final-ten
   suffix to remain within schema byte/record bounds. This task may complete
   before T106 through T110.
@@ -1768,9 +1755,8 @@ to the same file are explicitly sequential.
   every governed doc and the Cargo-retirement fragment.
 - [ ] T115 [owner: spec003w7-cargo-retirement] [files: none] [depends: T114]
   Run `make check`, Rust, four slices, policy, drift, fixture contracts, and
-  the retirement inventory; run the integrated-diff panel; seal `spec003w7`;
-  then merge and collect garbage. Rebase onto merged spec003w6 before
-  validation and obtain a fresh panel verdict.
+  the retirement inventory; review the integrated diff; then merge and collect
+  garbage. Rebase onto merged spec003w6 before validation and review again.
 
 ## Final analysis
 
@@ -1803,15 +1789,15 @@ to the same file are explicitly sequential.
   use exactly `spec003w0` through `spec003w7` plus `spec003w5fu1` and allow
   historical branch literals only where explicitly labelled parked evidence.
 - [ ] T118 [owner: integrator] [files: none] [depends: T117] Verify every wave
-  and follow-up is merged and sealed, every shared-file second child rebased,
-  revalidated, and re-paneled, evidence contains no raw logs or credentials,
+  and follow-up is merged, every shared-file second child rebased and
+  revalidated, evidence contains no raw logs or credentials,
   shipped docs contain no process markers, the read-only plan-structure
   validator passes, and garbage collection completed.
 
 ## Dependency graph
 
 The following adjacency list is exactly the `depends` clauses above and is
-machine-checked before panel:
+machine-checked before review:
 
 ```text
 T001 <- none

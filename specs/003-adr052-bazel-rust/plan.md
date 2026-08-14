@@ -407,17 +407,9 @@ own the same file.
 
 ## Global Delivery Rules
 
-- Before each implementation wave, run a Track A plan panel using the
-  authoritative lifecycle selection. Apply every trigger and the applicable
-  floor from `.github/skills/d2b-panel-round/selection-table.json`, dispatch
-  exactly the ordered roster and per-seat profiles recorded by the selection,
-  and require unanimous signoff with empty recommendations from every selected
-  seat.
-- For fix verification, rerun selection over the full current candidate and
-  every fix delta, union each result into the lifecycle roster, never remove a
-  selected seat, and dispatch exactly the roster and profiles in the resulting
-  selection.
-- Reviewers inspect supplied validation and do not rerun gates.
+- Complete each implementation wave and its validation before starting a
+  dependent wave.
+- Reviewers inspect supplied validation and do not rerun gates unless asked.
 - Land an integrator prep commit before parallel scopes where shared contracts
   are needed.
 - Prep contracts are complete and green before dispatch. No parallel scope
@@ -1047,8 +1039,6 @@ All must be true:
   0038 unchanged;
 - every mutating check above leaves the candidate clean;
 - Cargo remains the required `test-rust` executor;
-- the selected-roster integrated-diff panel has unanimous signoff with empty
-  recommendations from every seat in its lifecycle selection;
 - the PR is sealed as `spec003w0` and merged.
 
 ## spec003w1 - Complete Bazel Coverage Carriers
@@ -1476,8 +1466,8 @@ identity; and every required containment-validator mutation result;
 record's immutable evidence references and returns success. The record contains
 no pending or incomparable item, binds one candidate commit where required,
 contains all seven containment results and every named validator mutation,
-contains no raw logs or attestations, passes both Rust aggregates and fixture
-companion validation, and is panel-signed, sealed as `spec003w4`, merged, and
+contains no raw logs or evidence payloads, passes both Rust aggregates and fixture
+companion validation, and is sealed as `spec003w4`, merged, and
 immutable.
 
 ## spec003w5 - Promotion and Promotion Record
@@ -1585,7 +1575,7 @@ input.
   current atomic candidate HEAD and the recorded spec003w5 parent, reverts that
   exact atomic commit, and restores Cargo authority; `promotion-record.json`
   is read only after merge;
-- promotion PR is panel-signed, sealed as `spec003w5`, and merged;
+- promotion PR is reviewed, sealed as `spec003w5`, and merged;
 - the post-merge typed promotion-record validator proves the recorded SHA is
   the actual protected-`v3` PR merge and re-derives the exact sealed candidate,
   content, and snapshot identities; old-SHA, candidate-SHA, wrong-seal, and
@@ -1594,7 +1584,7 @@ input.
   page/stream-count, digest checkpoint and final-ten suffix derived from the
   complete transient protected-`v3` stream, persists no raw cursor, and is
   never an append-only full attempt history;
-- follow-up promotion record is panel-signed, sealed as `spec003w5fu1`, and
+- follow-up promotion record is reviewed, sealed as `spec003w5fu1`, and
   merged.
 
 ## spec003w6 - Compatibility Alias Removal
@@ -1711,8 +1701,7 @@ and derived validator result in
 spec003w7 qualification and code preparation may proceed before spec003w6.
 Its shared binding-doc and `post-promotion.json` task waits for merged
 spec003w6, rebases onto it, reruns the entire validation, and receives a new
-unanimous panel verdict from every seat in the widened lifecycle selection
-before merge.
+review before merge.
 
 ### Mechanical done condition
 

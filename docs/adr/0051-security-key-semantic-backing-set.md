@@ -90,10 +90,8 @@ implement export admission and the import-owned projection lifecycle over
 factory metadata. `ADR046-device-004` must publish this family's factory in its
 signed descriptor. All three find three families that work and a fourth that
 returns a typed error, and all three would inherit the mode-blind admission
-shape above. `specs/001-adr046-d2b3-completion/implementation-debt.md` records
-this at `### 13.3 Security-key cannot construct a signed projection factory at
-all` and carries it forward at `### 19.8 The security-key semantic projection is
-not invented` as a specification gap whose remedy is owner work, not slice work.
+shape above. An earlier implementation-debt audit records this as a
+specification gap whose remedy is owner work, not slice work.
 This record is that work.
 
 **The constraint that rules out the obvious answer.** `Device` is the plausible
@@ -1084,28 +1082,6 @@ compare before. Add to the Provider descriptor validation section:
 > `projectionProtocolVersion` is read as declaring the legacy version and is
 > rejected against any newer installed version, with the operator remedy of
 > installing a Provider artifact built for the Core protocol in use.
-
-### H. `specs/001-adr046-d2b3-completion/implementation-debt.md`
-
-Both cited sections exist at this branch's base, verified against the committed
-blob rather than the working tree:
-
-```text
-$ git show origin/v3:specs/001-adr046-d2b3-completion/implementation-debt.md \
-    | grep -n '^### 13.3\|^### 19.8'
-942:### 13.3 Security-key cannot construct a signed projection factory at all
-2019:### 19.8 The security-key semantic projection is not invented
-```
-
-The blob hashes `19e969d0a5cfe4091c9a25172c449342cf668e01a91978933ed1339b7f16e6cd`,
-identical to the worktree copy, and this branch does not modify that file:
-`git diff --name-only origin/v3..HEAD` lists only the three `docs/` files this
-record touches. `origin/v3` is `2c665603`, which is the merge commit for PR #368
-from `adr046-w5`, so the W5 work is merged into `v3` and is not an unmerged
-branch. Both citations stand. Each section gains a closing line naming this ADR
-and the amendment that discharges it. Ownership of that edit belongs to whichever
-wave lands amendments A to G, not to this record, because the debt register
-describes the tree and the tree does not change until then.
 
 ## Tests required to consume this decision
 

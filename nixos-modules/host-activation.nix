@@ -469,7 +469,7 @@ in
         # user/group as orphaned and repair it without disturbing
         # already-correct inodes.
         ${lib.optionalString vmCfg.tpm.enable ''
-          # panel-security R4 high must-fix: orphan
+          # Security fix: orphan
           # ownership repair under runner-writable swtpm dir.
           # Previous code used `find -type d -o -type f -exec
           # bash -c 'stat $f; chown $f'`, vulnerable to swap
@@ -589,7 +589,7 @@ in
             done
           done
           if [ -d /var/lib/d2b/vms/${name} ]; then
-            # panel-kernel + panel-virt R3 must-fix
+            # Security fix: narrow
             # narrow /dev/kvm ACL to only KVM-consuming role UIDs, and
             # keep /dev/vhost-net narrower still. qemu-media is fd-backed:
             # it may receive broker-opened KVM/media fds, but never a
@@ -706,7 +706,7 @@ in
                 ${pkgs.acl}/bin/setfacl -m "u:$uid:rwx" /run/d2b/otel 2>/dev/null || true
                 ${pkgs.acl}/bin/setfacl -d -m "u:$uid:rwx" /run/d2b/otel 2>/dev/null || true
               fi
-              # panel-security R2 must-fix B: /dev/kvm only for
+              # Security fix B: /dev/kvm only for
               # KVM-consuming UIDs; /dev/vhost-net only for roles that
               # still declare a path-backed vhost-net device.
               if echo "$kvm_consuming_uids" | ${pkgs.gnugrep}/bin/grep -qx "$uid"; then
@@ -715,7 +715,7 @@ in
               if echo "$vhost_net_consuming_uids" | ${pkgs.gnugrep}/bin/grep -qx "$uid"; then
                 [ -e /dev/vhost-net ] && ${pkgs.acl}/bin/setfacl -m "u:$uid:rw" /dev/vhost-net 2>/dev/null || true
               fi
-              # panel-software R2 must-fix #1, #3
+              # Review fix #1, #3
               # the *.img ACL grant loop is REMOVED. New files
               # created in the VM dir inherit the per-UID rwx
               # default ACL set on lines 308-309 below
@@ -729,7 +729,7 @@ in
                 ${pkgs.acl}/bin/setfacl -m "u:$uid:rwx" /var/lib/d2b/vms/${name} 2>/dev/null || true
                 ${pkgs.acl}/bin/setfacl -d -m "u:$uid:rwx" /var/lib/d2b/vms/${name} 2>/dev/null || true
               fi
-              # panel-security R4 critical must-fix
+              # Security fix
               # the per-subdir setfacl loop used to do
               # `[ -d "$vm_dir/$sub" ] && setfacl...` on paths
               # under the runner-writable VM root. An attacker
@@ -754,7 +754,7 @@ in
               done
 
               # + v1.1.2fu23
-              # panel-security R4 critical must-fix: per-keyfile
+              # Security fix: per-keyfile
               # ACL grant for ssh_host_*_key. Previously used a
               # shell glob + `[ -f ]` + setfacl, vulnerable to
               # symlink swap by the runner UID with rwx on the
@@ -777,7 +777,7 @@ in
                     2>/dev/null || true
                 done
               fi
-              # panel-security R5 medium must-fix
+              # Security fix
               # default ACL also routes through setfacl-on-path
               # (which uses openat2+RESOLVE_NO_SYMLINKS for full
               # path-component safety). The "default:u:UID:rX"
@@ -1085,7 +1085,7 @@ in
             exit 1
           fi
         else
-          # panel-software R2 must-fix #2: capture
+          # Review fix #2: capture
           # `ip` stderr via command substitution instead of a
           # predictable `/tmp/d2b-altname.err` file. The
           # old approach let any local attacker pre-create

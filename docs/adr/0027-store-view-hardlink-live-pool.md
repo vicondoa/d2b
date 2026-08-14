@@ -1,11 +1,11 @@
 # ADR 0027: Hardlink-backed store-view live pool
 
-- Status: Draft - plan/design panel signed off
+- Status: Draft - plan/design reviewed
 - Date: 2026-06-09
 - Related: ADR 0015 (daemon-only clean break), ADR 0017 (no bash fallbacks), ADR 0018 (microvm.nix removal), ADR 0021 (broker user namespace for virtiofsd)
 
-The d2b default panel has signed off on this ADR and the accompanying
-session plan. Existing worktree diffs before signoff are WIP evidence only.
+The ADR and accompanying session plan were reviewed. Existing worktree diffs
+before review are WIP evidence only.
 
 ## Context
 

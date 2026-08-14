@@ -1,12 +1,8 @@
 # Gas City contributor environment
 
 > **Optional contributor infrastructure only.** Gas City is not a d2b
-> consumer feature and is not the ordinary contributor workflow. Gas City
-> runs do **not** use the d2b panel, selected-roster signoff, wave delivery,
-> wave sealing, attestation, receipt, merge-eligibility, or bespoke
-> evidence-pinning path. Standalone d2b contributors remain governed by
-> [`panel-review.md`](./panel-review.md), the wave process, and the other
-> d2b contributor contracts.
+> consumer feature and is not the ordinary contributor workflow. It owns its
+> own host services, worktrees, checks, and publication lifecycle.
 
 This guide describes the implemented host-native slice exported by this
 repository. It assumes a supported NixOS host and a dedicated repository
@@ -140,8 +136,7 @@ Gas City imports the Gas City, Compound Engineering, Discord, and local
 contributor packs as siblings. The local `d2b-contributor-build` formula
 keeps native Compound planning, review, synthesis, and bounded fixes. Its
 comment-resolution seam separates judgment, native `ce-work` editing,
-verification, and synthesis; this is native Compound behavior, not the d2b
-panel.
+verification, and synthesis; this is native Compound behavior.
 
 Model-backed roles use ACP profiles:
 
@@ -264,8 +259,8 @@ decisions to the supervisor. There is no public HTTPS interaction endpoint.
 Only configured users in the configured guild and channel can answer. The
 first valid answer wins the durable gate transition. Duplicate, late,
 unauthorized, malformed, or unknown answers are no-ops. Reconciliation after
-retry or restart is safe to repeat. This is a product-decision channel, not a
-d2b panel signoff or an approval receipt.
+retry or restart is safe to repeat. This is a product-decision channel with a
+durable operator decision.
 
 ## Pull-request publication
 

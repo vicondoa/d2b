@@ -163,7 +163,7 @@ shape via `nixos-modules/vm-submodule.nix`:
   extends `runner-shape-snapshot.sh` to diff every fixture in
   `tests/golden/runner-shape/` so the v1.1 parity oracle actually
   covers every supported runner shape. The frozen fixtures are
-  refreshed only by panel-approved CH-version bumps.
+  refreshed only by reviewed CH-version bumps.
 
 ### Sidecar/template retirement - full role matrix
 
@@ -329,7 +329,7 @@ RPC channel along with the prctl readbacks. The broker then:
 
 Wrappers that fail any of the five invariants above MUST NOT
 be used by any SpawnRunner role; the per-role wrapper
-configuration in v1.1-P10 is panel-reviewed against this
+configuration in v1.1-P10 is reviewed against this
 contract.
 
 Roles that run **without** a wrapper (the v1.0 default for most
@@ -365,7 +365,7 @@ asserts EVERY enabled SpawnRunner role emits the role-independent
 baseline kinds. Any role that legitimately does not (e.g., a role
 with restart-disabled does not emit `Restarted`) MUST list the
 omitted kind in the role's audit-baseline-exception list with a
-panel-approved rationale.
+reviewed rationale.
 
 #### Disposition matrix (every legacy-unit-denylist entry)
 
@@ -1325,7 +1325,7 @@ enumerated values, mirroring the `error-codes.md` catalog:
   IPC channel errored). Indicates a daemon-internal bug or a
   filesystem fault.
 
-Any future error kinds added by v1.1-Pn or later panel-approved
+Any future error kinds added by v1.1-Pn or later reviewed
 changes MUST extend this enum AND the corresponding
 `error-codes.md` catalog entry; the audit-record schema in
 `packages/d2bd/src/audit.rs` (future) declares the enum
@@ -1656,7 +1656,7 @@ entry explosion):
   helper that enforces the anchored regex patterns inline (not
   post-parse). The implementation lives in
   `tests/tools/baseline-exception-validator/` (a small dev-only
-  Rust binary, panel-reviewed at commit time per the
+  Rust binary, reviewed at commit time per the
   no-bash-ast-walker pattern). YAML parsers that accept
   trailing-junk strings without `deny_unknown_fields` are
   forbidden. The validator runs as part of
@@ -1731,7 +1731,7 @@ entry explosion):
   #      ChildSignalled, PreLaunchHookStarted, PreLaunchHookSucceeded,
   #      PreLaunchHookFailed]
   #   Per-role entries (shape (A)) MAY omit ANY baseline kind with
-  #   panel-approved adr_ref + owner_discipline; predicate-scoped
+  #   reviewed adr_ref + owner_discipline; predicate-scoped
   #   omissions are restricted because they apply to a category of
   #   roles and a category-level omission of a security-load-bearing
   #   kind is too broad.
@@ -1739,7 +1739,7 @@ entry explosion):
   #   Both shapes require:
   #     omitted_kinds: non-empty array of string enum from the role-baseline list
   #     rationale: string, minLength 50
-  #     adr_ref: string matching ^(ADR\s+\d{4}|panel-r\d+-(rust|virt|kernel|security|networking|software|test|product|docs)-r\d+)$
+  #     adr_ref: string matching ^ADR\s+\d{4}$
   #     owner_discipline: string enum [rust, virt, kernel, security, networking, software, test, product, docs]
   #     expires_at: string matching ^(never|\d{4}-\d{2}-\d{2})$
   #
@@ -1760,7 +1760,7 @@ entry explosion):
   #        v1.1 RunnerRole inventory; see the "Disposition matrix"
   #        section in this ADR"
   #     - "adr_ref `<value>` does not match ^(ADR\\s+\\d{4}|...)$"
-  #     - "owner_discipline `<value>` is not one of the 9 panel
+  #     - "owner_discipline `<value>` is not one of the 9 review
   #        disciplines"
   #     - "expires_at `<value>` is not `never` or YYYY-MM-DD"
   #     - "unknown field `<name>` in exception entry"
@@ -1804,11 +1804,10 @@ entry explosion):
       expires_at: never
   ```
 
-  The `owner_discipline` field maps to one of the 9 panel
-  disciplines and assigns review accountability: when an
-  exception is added or modified, the named discipline's
-  reviewer must explicitly sign off as part of the round in
-  which the change lands. The validator rejects entries that
+  The `owner_discipline` field maps to one of the 9 review
+  disciplines and assigns accountability: when an exception is
+  added or modified, the named discipline's reviewer must
+  review the change before it lands. The validator rejects entries that
   set BOTH `role` AND `applies_to`, AND entries that set
   NEITHER, AND entries whose `adr_ref` does not match the
   anchored regex above, AND entries whose `owner_discipline`
@@ -1816,9 +1815,8 @@ entry explosion):
 - `tests/broker-spawn-audit-parity-eval.sh` reads ONLY this file
   as the exception source; ad-hoc inline exceptions in test code
   are forbidden. A new exception lands by editing the file in
-  the same commit that adds the role; the file is itself a panel
-  review surface (every diff to it triggers a full 9-discipline
-  re-review of the affected role).
+  the same commit that adds the role; every diff receives review
+  for the affected role.
 
 ## Alternatives considered
 
@@ -2026,7 +2024,7 @@ v1.1-P8 → P11 (file names are *future* until each phase ships):
   applies to every value in the slice that holds a Nix store
   path. If any slice attribute drifts beyond the normalization,
   the phase is blocked until the drift is eliminated or
-  panel-justified.
+  explicitly justified in review.
 
 - `tests/kernel-modules-parity-eval.sh` (future, v1.1-P9a, per
   [ADR 0014](0014-w3-modules-devices-runner-shape.md)) - see the

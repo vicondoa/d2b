@@ -83,13 +83,6 @@ full Rust and API-census leaves remain authoritative. CI omits the changed-scope
 clippy duplicate because its lint job has no shared Cargo cache; the required
 full Rust shard still runs workspace-wide clippy.
 
-The tier-0 dash scan includes every Caveman provenance blob under
-`third_party/caveman/v1.10.0/`; the vendored prose is normalized to ASCII
-hyphens and has no scan exception. `UPSTREAM.json` pins the normalized blobs.
-`node scripts/copilot/check-bindings.mjs` checks their hashes, the closed vendor
-allowlist, and the communication, feature-editor, panel, and prompt-corpus
-contracts.
-
 `tests/layer1-jobs.json` is authoritative for both the job list and its
 classification. A job is enforcing unless it carries `"enforcement":
 "advisory"`; an advisory entry pairs that field with `advisoryReason` explaining

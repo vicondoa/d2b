@@ -75,10 +75,7 @@ shards plus their integrity check, and the native-system flake check inventory.
   version-agreement policy test - and a schema change is a Track A trigger on
   its own. It also rewires CI manifest authority and the public local-target
   knob surface, and it delivers five qualified waves, `spec002w1` through
-  `spec002w5`, each with its own panel gate and commit tag. Track B is
-  rejected: it permits one panel round on the finished diff and no wave seal,
-  which can express neither five sequentially gated waves nor a versioned
-  schema landing through the delivery tooling. Each wave therefore closes
+  `spec002w5`, each with its own validation and commit tag. Each wave closes
   through the delivery tooling, seal included.
 - **Test-Layer Discipline**: The change modifies existing Layer-1 plumbing and
   does not add a new gate or top-level `tests/*.sh` entrypoint.
@@ -404,30 +401,16 @@ weakening an invariant.
   samples, followed by the smallest Layer-1 jobs covering all changed
   infrastructure.
 
-## Panel Gates and Commit Tags
+## Delivery and Commit Tags
 
 This plan uses strict phase ordering rather than pipelined dispatch.
 
-- The plan gate and the US1 and US2 work gates are completed historical
-  ten-seat evidence. Retain those records as history; do not restate them as
-  selected-roster lifecycle evidence.
-- Each unfinished US3, US4, and US5 work gate uses one current selected-roster
-  Discover-Fix-Verify lifecycle. Run one comprehensive discovery over the full
-  candidate, record every actionable finding in one stable shared ledger,
-  batch ledger-scoped fixes, and perform scoped verification against the fix
-  delta and full candidate. Rerun selection after every fix delta and union it
-  with the lifecycle roster, which may only widen. The gate passes only when
-  every selected seat signs off with zero recommendations (N/N).
-- After each integrated unfinished implementation phase passes that work gate,
-  close the wave through the delivery tooling - PR, merge, seal - before
-  starting the next phase. Track A cannot defer merges: the delivery gate
-  refuses a wave's panel request while any prior wave is unmerged, so one PR
-  per wave is forced rather than chosen.
+- Complete each implementation phase and its validation before starting the
+  next phase.
+- Close each wave through PR, merge, and seal before starting its successor.
 - Use `( spec002w1 )` for Rust commits, `( spec002w2 )` for Nix unit commits,
   `( spec002w3 )` for flake commits, `( spec002w4 )` for resource-tuning
   commits, and `( spec002w5 )` for evidence and documentation commits.
-- Panel-fix commits append the applicable follow-up and finding suffix using
-  the repository's canonical grammar.
 
 ## Deferred Findings Register
 
@@ -439,26 +422,26 @@ This plan uses strict phase ordering rather than pipelined dispatch.
 
 | Category | Phase | Impact | Status |
 |---|---|---|---|
-| Tooling | Plan panel round 1 | The research subagent returned no usable output, so the Nix tool survey was repeated directly against upstream documentation and repositories. | Resolved |
-| Design | Plan panel round 2 | Cargo quota and Make jobserver ownership needed a second clarification pass to cover dynamic constrained-host budgets and cgroup memory limits. | Resolved |
-| Kernel semantics | Plan panel round 3 | The automatic Rust budget needed cache-aware cgroup accounting and explicit jobserver descriptor closure. | Resolved |
-| Interface semantics | Plan panel round 4 | GNU Make does not preserve a reliable numeric top-level `-jN` value for leaf parsing, so target-specific control was narrowed to the documented budget variable. | Resolved |
-| Descriptor ownership | Plan panel round 5 | Numeric jobserver values in `MAKEFLAGS` can be stale after Make closes the descriptors, so leaves must unset metadata without closing ambiguous descriptor numbers. | Resolved |
-| Migration UX | Plan panel round 5 | The changelog task needed to name `D2B_RUST_BUDGET` as the control when top-level Make `-j` does not cap inner Cargo concurrency. | Resolved |
-| Measurement scope | Plan panel round 6 | Nix daemon work is outside the client process tree, so Nix resource evidence now uses daemon-cgroup or externally idle baseline-adjusted host counters. | Resolved |
-| Metric precision | Plan panel round 6 | CPU, PSI, swap, worker, and memory-event acceptance needed exact counters, thresholds, and safely mocked rejection cases. | Resolved |
-| Manifest atomicity | Plan panel round 6 | Concurrent leaves could corrupt or retain stale execution-manifest state, so each target now finalizes run-specific fragments through atomic replacement. | Resolved |
-| Nix attribution | Plan panel round 7 | Nix evaluation and daemon builds require combined accounting, and the shared daemon requires contention invalidation even when its cgroup is readable. | Resolved |
-| Counter semantics | Plan panel round 7 | CPU interval units and hierarchical task counts needed explicit microsecond and `pids.current` definitions. | Resolved |
-| Failure evidence | Plan panel round 7 | A failed or interrupted run must remove the prior requested execution manifest before dispatch so stale success cannot survive. | Resolved |
-| Partial evidence | Plan panel round 8 | Failure paths needed atomic partial manifests, pre-evaluation invalidation, zero-interval handling, and explicit PSI composite rejection tests. | Resolved |
-| Signal lifecycle | Plan panel round 9 | Partial finalization needed bounded process-group shutdown, secure atomic fragments, temporary cleanup, schema versioning, and explicit interruption tests. | Resolved |
-| Evidence path safety | Plan panel round 10 | Manifest ownership needed a persistent lockfile, anchored fd-relative cleanup, Make-owned descriptor closure, injectable shutdown tests, and a binding JSON schema. | Resolved |
-| Lock and schema delivery | Plan panel round 11 | The persistent lock needed OFD and close-on-exec semantics, temp storage needed same-filesystem anchored resolution, and schema/docs/changelog had to ship with the first emitter commit. | Resolved |
-| Descriptor and release closure | Plan panel round 12 | Every evidence fd needed close-on-exec, parent anchoring had to precede relative lock creation, lock telemetry needed a closed code, and each emitter phase had to reconcile schema/docs/changelog. | Resolved |
-| Policy reconciliation | Plan panel round 13 | The lock remedy needed mandatory wording, and later Nix emitter commits needed to carry the schema/prose policy test with their reconciled artifacts. | Resolved |
-| Private actionable errors | Plan panel round 14 | Lock contention needed a mandatory remedy without printing host paths, and every emitter validation needed the fixture-contract lane that executes `policy_docs.rs`. | Resolved |
-| Fixture lane invocation | Plan panel round 15 | Direct fixture-contract invocations needed the required `D2B_ENABLE_FIXTURE_BUILD=1` opt-in that the Layer-1 manifest normally injects. | Resolved |
+| Tooling | Planning review 1 | The research subagent returned no usable output, so the Nix tool survey was repeated directly against upstream documentation and repositories. | Resolved |
+| Design | Planning review 2 | Cargo quota and Make jobserver ownership needed a second clarification pass to cover dynamic constrained-host budgets and cgroup memory limits. | Resolved |
+| Kernel semantics | Planning review 3 | The automatic Rust budget needed cache-aware cgroup accounting and explicit jobserver descriptor closure. | Resolved |
+| Interface semantics | Planning review 4 | GNU Make does not preserve a reliable numeric top-level `-jN` value for leaf parsing, so target-specific control was narrowed to the documented budget variable. | Resolved |
+| Descriptor ownership | Planning review 5 | Numeric jobserver values in `MAKEFLAGS` can be stale after Make closes the descriptors, so leaves must unset metadata without closing ambiguous descriptor numbers. | Resolved |
+| Migration UX | Planning review 5 | The changelog task needed to name `D2B_RUST_BUDGET` as the control when top-level Make `-j` does not cap inner Cargo concurrency. | Resolved |
+| Measurement scope | Planning review 6 | Nix daemon work is outside the client process tree, so Nix resource evidence now uses daemon-cgroup or externally idle baseline-adjusted host counters. | Resolved |
+| Metric precision | Planning review 6 | CPU, PSI, swap, worker, and memory-event acceptance needed exact counters, thresholds, and safely mocked rejection cases. | Resolved |
+| Manifest atomicity | Planning review 6 | Concurrent leaves could corrupt or retain stale execution-manifest state, so each target now finalizes run-specific fragments through atomic replacement. | Resolved |
+| Nix attribution | Planning review 7 | Nix evaluation and daemon builds require combined accounting, and the shared daemon requires contention invalidation even when its cgroup is readable. | Resolved |
+| Counter semantics | Planning review 7 | CPU interval units and hierarchical task counts needed explicit microsecond and `pids.current` definitions. | Resolved |
+| Failure evidence | Planning review 7 | A failed or interrupted run must remove the prior requested execution manifest before dispatch so stale success cannot survive. | Resolved |
+| Partial evidence | Planning review 8 | Failure paths needed atomic partial manifests, pre-evaluation invalidation, zero-interval handling, and explicit PSI composite rejection tests. | Resolved |
+| Signal lifecycle | Planning review 9 | Partial finalization needed bounded process-group shutdown, secure atomic fragments, temporary cleanup, schema versioning, and explicit interruption tests. | Resolved |
+| Evidence path safety | Planning review 10 | Manifest ownership needed a persistent lockfile, anchored fd-relative cleanup, Make-owned descriptor closure, injectable shutdown tests, and a binding JSON schema. | Resolved |
+| Lock and schema delivery | Planning review 11 | The persistent lock needed OFD and close-on-exec semantics, temp storage needed same-filesystem anchored resolution, and schema/docs/changelog had to ship with the first emitter commit. | Resolved |
+| Descriptor and release closure | Planning review 12 | Every evidence fd needed close-on-exec, parent anchoring had to precede relative lock creation, lock telemetry needed a closed code, and each emitter phase had to reconcile schema/docs/changelog. | Resolved |
+| Policy reconciliation | Planning review 13 | The lock remedy needed mandatory wording, and later Nix emitter commits needed to carry the schema/prose policy test with their reconciled artifacts. | Resolved |
+| Private actionable errors | Planning review 14 | Lock contention needed a mandatory remedy without printing host paths, and every emitter validation needed the fixture-contract lane that executes `policy_docs.rs`. | Resolved |
+| Fixture lane invocation | Planning review 15 | Direct fixture-contract invocations needed the required `D2B_ENABLE_FIXTURE_BUILD=1` opt-in that the Layer-1 manifest normally injects. | Resolved |
 
 ## Post-Design Constitution Check
 

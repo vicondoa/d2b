@@ -37,7 +37,7 @@ required pull request flow.
 ## Finish-of-work invariant: merge back into the primary clone
 
 A worktree is a workspace, not a destination. When an agent's scope is done -
-implementation and tests green and panel signed off - the integrator merges
+implementation and tests green - the integrator merges
 the slice into the owned feature/integration branch in the **primary clone
 (`projects/d2b`)** before declaring the slice integrated. Finished side branch
 work still "awaits integration", which the integrator owns. The owned branch is
@@ -46,7 +46,7 @@ then landed in protected `main` or `v3` only through a pull request.
 Concretely, the agent that owns a worktree:
 
 1. Verifies green on the worktree (`cargo test --workspace`, the
-   relevant `tests/*.sh` gates, panel signoff for plan-driven work).
+   relevant `tests/*.sh` gates).
 2. From the primary clone (`/home/paydro/projects/d2b`), fast-forwards (or
    octopus-merges, per the rules above) the worktree's `phase-<name>` branch
    into the owned feature/integration branch.
@@ -81,11 +81,11 @@ Use this shape:
    commits into the owned feature/integration branch. Do not merge locally into
    protected `main` or `v3`, and do not push directly to either protected
    branch. The owned branch lands only through the required GitHub PR flow
-   after local validation, CI, and panel/review gates pass.
-4. PR bodies must list the change, validation evidence, and any substantive
-   panel/review outcomes. Do not include AI/tool/model attribution.
-5. Review and panel agents inspect code, docs, plans, screenshots, and supplied
-   validation evidence. They must not run tests or long gates unless the
+   after local validation and CI pass.
+4. PR bodies must list the change and validation evidence. Do not include
+   AI/tool/model attribution.
+5. Reviewers inspect code, docs, plans, screenshots, and supplied validation
+   evidence. They must not run tests or long gates unless the
    integrator explicitly asks that reviewer to do so.
 6. The integrator owns CI babysitting, retargeting, rebasing, conflict
    resolution, merge order, and branch deletion. If a lower PR merges, retarget
@@ -97,10 +97,6 @@ Use this shape:
    wait-and-merge behavior, they must use `gh`, avoid direct main merges, and
    fail closed on dirty worktrees, failed checks, ambiguous merge state, or
    missing validation evidence.
-
-For stacks that require panel gates, the first PR in the stack usually carries
-the contract/ADR/plan update. Do not dispatch implementation PRs for later
-waves until the plan/ADR panel returns unanimous signoff.
 
 ## Screenshot and visual artifact hygiene
 
@@ -118,9 +114,9 @@ committed to the repository must be redacted before use:
 - Use generic placeholder names (e.g., `alice`, `corp-vm`, `work`) matching the
   conventions in the Don'ts section above.
 
-Do **not** commit unredacted screenshots to the repository. Panel and review
-agents may inspect screenshots as part of validation evidence; the same
-redaction rules apply when attaching screenshots to PR bodies or panel prompts.
+Do **not** commit unredacted screenshots to the repository. Reviewers may
+inspect screenshots as part of validation evidence; the same redaction rules
+apply when attaching screenshots to PR bodies.
 If a screenshot cannot be adequately redacted without losing the information
 being demonstrated, use a text description or a synthetic reproduction instead.
 
@@ -167,11 +163,6 @@ Follow-up rounds use `( W3fu<M> )` for the integrator octopus
 merge and `( W3fu<M> H<N> )` for per-finding hardening commits,
 matching the W2fu4 H10/H18 canonical-tag rules above.
 
-The W3 file-ownership map lives in the wave plan
-(`~/.copilot/session-state/<id>/plan.md` §"W3 file-ownership map"
-for the current wave); scope agents read it before opening their
-worktree and write only to their listed files.
-
 ## Edit → commit → validate
 
 Commit before running `static.sh` / the smoke evals. Two reasons:
@@ -184,13 +175,6 @@ Commit before running `static.sh` / the smoke evals. Two reasons:
    consumer-side concern, but the habit of committing-then-building
    is the right one to carry into framework work too.
 
-For plan-driven multi-phase work, green tests are not enough to
-advance the work. See [Panel review](./panel-review.md): the
-integrator may not dispatch implementation subagents for a phase before its
-plan gate, or begin the next phase's review or binding delivery, until the
-relevant panel gate passes. A successor's implementation may start earlier
-only under the four pipelining conditions documented there.
-
 ## "Existing code is canon"
 
 When the spec, plan, README, or any reference doc disagrees with the
@@ -198,11 +182,7 @@ When the spec, plan, README, or any reference doc disagrees with the
 wins. Document the drift, don't silently re-align the code to the
 prose.
 
-- If you are working in a Copilot CLI session with a `plan.md`
-  under `~/.copilot/session-state/<session-id>/`, add a row to the
-  plan's "Spec corrections" table describing the discrepancy and
-  which side you kept.
-- Otherwise, mention the drift in the commit message body
+- Mention the drift in the commit message body
   (e.g. `Spec correction: docs/reference/cli-contract.md claimed
   exit code 3 for "VM not found"; code returns 2. Kept code.`).
 
@@ -220,10 +200,9 @@ convention in
 in-development commits on those feature branches; `v3` remains the clean-break
 integration lineage and `main` remains a by-release history.
 
-PR bodies record the change, validation evidence, and substantive
-review outcomes only. Do **not** tag or list the AI agent, assistant, or
-model used to author or review a change, and do not add PR-template
-fields that request panel, agent, or model metadata.
+PR bodies record the change, validation evidence, and substantive review
+outcomes only. Do **not** tag or list the AI assistant or model used to author
+or review a change.
 
 
 ## Disk hygiene contract
@@ -363,7 +342,7 @@ fields that request panel, agent, or model metadata.
   input fails the per-example cargo fetch with a transient crates.io
   403 against `libhimmelblau-0.8.18` / `kanidm-hsm-crypto-0.3.6`.
   `tests/static.sh` performs one in-band retry before failing the
-  example; the skip knob is an explicit, panel-justifiable W3
+  example; the skip knob is an explicit, reviewable W3
   carve-out used only after the retry also fails. Added with the W3
   integration merge; re-evaluate once the entra-id input bumps past
   the affected revision.

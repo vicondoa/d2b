@@ -4,7 +4,7 @@
 #
 # Every gate in this lab checks whether a video value is REJECTED. None checked
 # what the rejection RETURNS, and that gap produced four defects across three
-# panel rounds:
+# review rounds:
 #
 #   * zeroing a reply struct also zeroed its sType, which the generated encoder
 #     asserts on, so a guard became a guest-triggerable host assert;

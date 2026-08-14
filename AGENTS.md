@@ -1,7 +1,7 @@
 # AGENTS.md
 
-Operating manual for AI coding agents (Copilot CLI, GitHub Copilot,
-Cursor, …) and human contributors to **`vicondoa/d2b` itself**. If you
+Operating manual for automated coding sessions and human contributors to
+**`vicondoa/d2b` itself**. If you
 *consume* d2b in your NixOS host config, start at [README.md](./README.md).
 
 ## What this is
@@ -33,14 +33,11 @@ row, then read it.
 | Touch **critical subsystem** | index below, then [critical-subsystems.md](./docs/contributing/critical-subsystems.md) |
 | Add, move, or retire test | [`tests/AGENTS.md`](./tests/AGENTS.md) - binding, read it before touching test tree |
 | Run gate, heavy lane, or build that needs debug symbols | [gates-and-lints.md](./docs/contributing/gates-and-lints.md) - what each Layer-1 job covers, heavy-lane semaphore, build profiles, spec-literal lints |
-| Run or respond to panel round | "Panel review" below, then [panel-review.md](./docs/contributing/panel-review.md) |
 | Open worktree, land PR, or reclaim disk | [workflow.md](./docs/contributing/workflow.md) - worktrees, stacked PRs, edit/commit/validate, disk and cache hygiene |
 | Write changelog entry or commit message | [changelog-and-commits.md](./docs/contributing/changelog-and-commits.md) |
 | Add per-VM feature, unit, or broker op | [architecture.md](./docs/contributing/architecture.md) and [ADR 0015](./docs/adr/0015-daemon-only-clean-break.md) |
 | Do anything security-relevant | "Don'ts" below - that section is exhaustive and binding |
-| Run ADR, panel round, or autopilot wave | [copilot-agents.md](./docs/contributing/copilot-agents.md) - agents, skills, model binding, wave ids |
-| Change feature artifact after its first write | `d2b-spec-edit` owns batch; read [copilot-agents.md](./docs/contributing/copilot-agents.md) |
-| Operate optional Gas City contributor infrastructure | [gas-city.md](./docs/contributing/gas-city.md) - host deployment and recovery; it is separate from the d2b panel, wave, and signoff path |
+| Operate optional Gas City contributor infrastructure | [gas-city.md](./docs/contributing/gas-city.md) - host deployment and recovery |
 
 Two rules override everything else:
 
@@ -170,15 +167,6 @@ Short version: spec-literal
 lints honour **no** author-suppression marker, and D116 honours exactly one,
 in one pinned file, exactly once.
 
-Prompt policy is checked locally. Caveman provenance is under
-`third_party/caveman/v1.10.0/`, pinned to tag `v1.10.0` at commit
-`fcf7663366c217dc8f334a11028de52ed950ceab`; `UPSTREAM.json` carries three
-SHA-256 values. Selected delivery and review lanes may use optional full transient
-communication. Explicit `normal` or `off` wins. Mode never changes persisted
-prose, panel verdict JSON, finding bars, or panel requirements, except the
-compressed prompt corpus checked by
-`scripts/copilot/prompt-corpus.mjs`.
-
 ## Development workflow
 
 Detail in [workflow.md](./docs/contributing/workflow.md). Binding rules:
@@ -199,16 +187,6 @@ Detail in [workflow.md](./docs/contributing/workflow.md). Binding rules:
   scratch into the worktree. Stage specific paths.
 - **Put throwaway artifacts in gitignored `.scratch/`**, never beside
   production code or tests.
-- **Route existing feature-artifact writes through `d2b-spec-edit`.** A
-  `speckit-*` command may create only designated absent artifacts: `specify`
-  creates feature directory, initial `spec.md`, and first requirements
-  checklist; `plan` creates absent plan, research, data-model, contracts, or
-  quickstart artifacts; `tasks` creates absent `tasks.md`; `checklist` creates
-  absent checklist. `clarify` batches answers, `analyze` stays read-only,
-  `implement` reports checkbox changes, `converge` prepares exact append
-  content, and
-  `autopilot` and memory fold route feature-directory writes through editor.
-  Once file exists, editor owns every later write and refuses root escape.
 - **Test eval expressions must resolve flake via `git+file://$ROOT`**
   (`d2b_flake_ref` helper), never bare path. bare path makes Nix copy
   entire working tree into store, including multi-GiB cargo artifacts:
@@ -217,34 +195,6 @@ Detail in [workflow.md](./docs/contributing/workflow.md). Binding rules:
   wrapper already falls back to plain rustc when sccache is absent.
 - **Run `nix-collect-garbage` after each wave merge**, and prune old system
   generations periodically; each pins 1-2 GiB.
-
-## Panel review
-
-Detail, including each role's focus and harness notes, in
-[panel-review.md](./docs/contributing/panel-review.md). binding rules:
-
-- Multi-phase work passes a plan gate before implementation and a work gate
-  before advance. `signoff` is `true` iff `recommendations` is `[]`; every
-  selected lifecycle seat must sign off, and green tests never waive the gate.
-- Selection uses the versioned thirteen-seat table. It includes every
-  mandatory and triggered seat, meets the applicable floor, and only widens.
-  Rust depth is a `software` profile; legacy records retain `rust`.
-- One comprehensive discovery produces the stable shared ledger. Fixes are
-  ledger-scoped and batched. Verification receives the full ledger, responses,
-  evidence, fix delta, and full candidate; it checks resolutions and
-  regressions without reopening discovery.
-- Reviewers are read-only and do not rerun validation unless explicitly asked.
-  Missing evidence is a finding. Unrelated defects found during a fix are
-  recorded separately rather than expanding that lifecycle.
-
-Escape hatches are narrow: trivial fixes with no semantic change,
-documentation-only changes that do not describe load-bearing behaviour, and
-time-critical hotfixes, which still require post-fix panel.
-
-The once-per-wave binding panel is enforced in code by
-`packages/xtask/src/delivery/panel.rs`: the request stores the selected roster,
-attestation requires one unanimous candidate-bound record per stored role, and
-strict fixed-ten legacy artifacts remain readable. No override or partial pass.
 
 ## Changelog and commits
 
@@ -262,26 +212,21 @@ binding rules:
 - **Commit subjects are short, imperative, and area-prefixed**
   (`net: fix 10-eth-dhcp neutralization`). Explain *why* in body, wrapped
   at ~72 columns; diff shows what.
-- **Commits on feature branches carry trailing wave tag**, `( W3 )`,
-  `( W2fu1 H3 )`, or qualified form `( spec001w1 )`. Every commit from a
-  panel-fix round must carry relevant tag.
 - **No AI, tool, or model attribution** in commit subjects, bodies, PR
   descriptions, changelog entries, or shipped docs. No `Co-authored-by`
   trailer for AI tools unless explicitly requested.
-- **Sign-offs and GPG signing are not used.**
+- **GPG signing is not used.**
 
 **Process markers stay out of shipped artifacts.** Wave, phase, revision,
-follow-up, round, and finding tags (`W3`, `W4-fu`, `P6`, `D5/P2.3`,
-`( W1fu3 H20 )`) organise work; they are not shipped. Keep them out of source
-comments, shipped docs prose, user-facing CLI and error text, CI job and step
-names, and **every** CHANGELOG section including `[Unreleased]`. They remain
-welcome in planning artifacts, this file and other process docs, ADRs, and
-feature-branch commit messages. ban is enforced by `scan_process_markers`
-in `tests/tools/tier0-first-pass.sh` via `make check-tier0`, against frozen
-allowlist; that script is authoritative for governed paths and exceptions.
-two deliberate functional exceptions: consumer-facing
-`d2b.defaultSwitchReadiness.<wave>` option surface, and delivery tool's
-closed `W0`-`W8` namespace under `packages/xtask/src/delivery/`.
+follow-up, round, and finding tags organise work; they are not shipped. Keep
+them out of source comments, shipped docs prose, user-facing CLI and error
+text, CI job and step names, and **every** CHANGELOG section including
+`[Unreleased]`. They remain welcome in planning artifacts, this file and
+other process docs, ADRs, and feature-branch commit messages. The ban is
+enforced by `scan_process_markers` in `tests/tools/tier0-first-pass.sh` via
+`make check-tier0`, against its frozen allowlist. One deliberate functional
+exception is the consumer-facing `d2b.defaultSwitchReadiness.<wave>` option
+surface.
 
 ## Test layout
 
@@ -430,18 +375,9 @@ is warning, not contract.
   work-item tokenizer treats typographic dash as token separator but a
   plain hyphen as id character, so id range that was spelled with a
   typographic dash fuses into single grammatically valid but nonexistent
-  id when normalized. `spec-registry` fails closed on dangling
-  dependency rather than corrupting graph. Respell such range as an
-  enumeration instead of defeating check; see `Dependency/owner`
-  cell for `ADR046-network-005` in
-  `docs/specs/ADR-046-resources-network.md` for shape that survives
-  normalization.
-- Vendored Caveman prose is normalized to ASCII hyphens and receives no dash
-  exception. The scanner covers every file under
-  `third_party/caveman/v1.10.0/`. `UPSTREAM.json` pins the normalized blobs,
-  and `check-bindings.mjs` rejects a changed blob or extra vendor file. No
-  upstream runtime, script, external install, network access, or content
-  upload is permitted.
+  id when normalized. Respell such ranges as enumerations; see the
+  `Dependency/owner` cell for `ADR046-network-005` in
+  `docs/specs/ADR-046-resources-network.md`.
 - **Don't let host process hold realm credentials, or treat relay
   identity as local auth (ADR 0032).** Realm relay/session/provider
   credentials, remote node registries, and realm audit belong inside
@@ -481,7 +417,7 @@ is warning, not contract.
   leaf, and never mutate delegated subtree as uid 0 after privilege
   drop. host cgroup root is never chowned.
 - **Don't commit unredacted screenshot or visual artifact.** Before a
-  screenshot is committed or attached to PR or panel prompt, remove every
+  screenshot is committed or attached to a PR, remove every
   secret, credential, API key, and token; remove PII (real names, emails,
   employee or user ids); and remove sensitive output such as host paths,
   internal node names, and realm principals. Use generic placeholder
@@ -540,9 +476,8 @@ contract:
 
 Process and contributor docs:
 
-- [`docs/contributing/`](./docs/contributing/) - workflow, panel review,
-  changelog and commits, gates and lints, critical subsystems, architecture
-  conventions.
+- [`docs/contributing/`](./docs/contributing/) - workflow, changelog and
+  commits, gates and lints, critical subsystems, architecture conventions.
 - [`tests/AGENTS.md`](./tests/AGENTS.md) - binding operating manual for the
   test tree. [`tests/README.md`](./tests/README.md) is human quick-start.
 

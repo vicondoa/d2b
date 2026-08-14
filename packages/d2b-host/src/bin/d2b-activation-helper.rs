@@ -1,4 +1,4 @@
-// v1.1.2fu19 panel-security R2 critical must-fix: replace the
+// Security fix: replace the
 // shell-script `[ -L ] / [ -f ] / find -type f` check-then-act
 // patterns in nixos-modules/host-activation.nix with fd-safe
 // operations that cannot be defeated by a runner-UID attacker
@@ -55,7 +55,7 @@ use d2b_host::hardlink_farm::{
     build_store_view, replace_live_top_level_paths,
 };
 
-/// v1.1.2fu24 panel-security R5 critical must-fix: open `path`
+/// Security fix: open `path`
 /// with `openat2(AT_FDCWD, path, { O_NOFOLLOW + ..., RESOLVE_NO_SYMLINKS })`.
 /// `RESOLVE_NO_SYMLINKS` refuses ANY symlink encountered during
 /// path resolution - final segment AND every intermediate
@@ -196,7 +196,7 @@ fn cmd_ensure_regular_file(args: &Args) -> ExitCode {
         }
     };
 
-    // v1.1.2fu24 panel-security R5 critical must-fix: use
+    // Security fix: use
     // openat2 + RESOLVE_NO_SYMLINKS so NO path component
     // (intermediate or final) can be a symlink. Closes the
     // ancestor-swap TOCTOU class. We still try O_EXCL+O_CREAT
@@ -329,7 +329,7 @@ fn cmd_enforce_dir_posture(args: &Args) -> ExitCode {
         }
     };
 
-    // v1.1.2fu24 panel-security R5 critical must-fix: use
+    // Security fix: use
     // openat2 + RESOLVE_NO_SYMLINKS so NO path component
     // (intermediate or final) can be a symlink.
     let dir_fd = match open_no_symlinks(path, OFlags::RDONLY | OFlags::DIRECTORY) {
@@ -395,7 +395,7 @@ fn cmd_enforce_dir_posture(args: &Args) -> ExitCode {
     ExitCode::from(0)
 }
 
-/// v1.1.2fu23 panel-security R4 critical must-fix: fd-safe
+/// Security fix: fd-safe
 /// `setfacl` wrapper that cannot be redirected to attacker-
 /// controlled symlink targets. Opens `--path` with O_PATH +
 /// O_NOFOLLOW (refuses symlinks), fstats to validate the file
@@ -428,7 +428,7 @@ fn cmd_setfacl_on_path(args: &Args) -> ExitCode {
         .clone()
         .unwrap_or_else(|| PathBuf::from("setfacl"));
 
-    // v1.1.2fu24 panel-security R5 critical must-fix: use
+    // Security fix: use
     // openat2 + RESOLVE_NO_SYMLINKS so NO path component
     // (intermediate or final) can be a symlink. O_PATH lets this
     // fd-safe path cover sockets as well as regular files/dirs.
@@ -616,7 +616,7 @@ fn cmd_clear_acl_on_path(args: &Args) -> ExitCode {
     }
 }
 
-/// v1.1.2fu23 panel-security R4 high must-fix: fd-safe chown
+/// Security fix: fd-safe chown
 /// that only fires when the existing owner matches `--if-owner`
 /// (typically "UNKNOWN" for the orphan-repair case). Opens
 /// `--path` with O_PATH + O_NOFOLLOW (refuses symlinks),
@@ -647,7 +647,7 @@ fn cmd_chown_if_orphan(args: &Args) -> ExitCode {
         }
     };
 
-    // v1.1.2fu24 panel-security R5 critical must-fix: use
+    // Security fix: use
     // openat2 + RESOLVE_NO_SYMLINKS so NO path component
     // (intermediate or final) can be a symlink. fchown(2)
     // does NOT work on O_PATH fds (kernel returns EBADF), so

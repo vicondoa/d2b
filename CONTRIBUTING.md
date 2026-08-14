@@ -186,7 +186,7 @@ PR gate. Run them locally when:
   `ApplyNftables` apply, `ApplyNmUnmanaged` apply, `ModprobeIfAllowed`).
 - You bump the L3 distro pin in
   `tests/golden/l3-matrix/w3-{ubuntu,fedora,arch}.txt`. The
-  panel-gated pin requires a fresh L2 run against the new image.
+  pinned image requires a fresh L2 run against the new image.
 - You touch the runner-shape preflight or the minijail version
   check.
 

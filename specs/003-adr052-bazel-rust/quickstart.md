@@ -24,7 +24,7 @@ cargo --version
 cd ..
 ```
 
-Validate the plan structure before a plan panel:
+Validate the plan structure before review:
 
 ```bash
 set -euo pipefail
@@ -1731,8 +1731,8 @@ jq -e '
 After either change, every public Rust Make name, fixture mode, and mandatory
 socket-test Cargo compatibility carrier must still work. spec003w7
 qualification and code preparation may run first, but its shared documentation
-and evidence task waits for merged spec003w6, rebases, reruns complete
-validation, and receives a new panel verdict.
+and evidence task waits for merged spec003w6, rebases, and reruns complete
+validation before review.
 The spec003w6 and spec003w7 docs and semantic changelog fragments repeat the
 exact hybrid surface/case inventory and separate authorization requirement.
 Do not cite container, VM, live-host, hardware, or deployed-host tiers for this

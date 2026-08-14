@@ -2,9 +2,8 @@
 
 Revision 4. Rev 1: **0/7, 25 findings**. Rev 2 answered them but was never
 reviewed and predated any execution. Rev 3 rebased rev 2 onto measured fact and
-returned **0/7 with 21 findings**. Rev 4 answers those; the full disposition,
-including two disputed findings, is in `docs/w3-panel-round1.md` and reviewers
-should read it alongside this plan.
+returned **0/7 with 21 findings**. Rev 4 answers those, including the two
+disputed findings.
 
 Base: lab `efa4b2df`, virglrenderer `114e0304` (spike), Mesa `0f06521a` (spike).
 
@@ -376,8 +375,8 @@ Remaining W3 work here:
 
 ### 4.7 StdVideo content bounds (new)
 
-W1 deep-copies every StdVideo field, so no guest pointer crosses the wire (see
-the D1 rebuttal in `docs/w3-panel-round1.md`). But deep-copying a value is not
+W1 deep-copies every StdVideo field, so no guest pointer crosses the wire. But
+deep-copying a value is not
 validating it, and `security` is right that the *contents* were unchecked.
 
 Bound the guest-controlled indices against their spec ranges before forwarding:
@@ -577,8 +576,6 @@ safe only because the ABI is append-only (abi-gate: 345 ids byte-identical).
 | **new** | **new** | the intended path, measured working. |
 
 ## 11. Questions resolved in round 1
-
-Kept for the record; the reasoning is in `docs/w3-panel-round1.md`.
 
 - **Q1 - Firefox's `HARDWARE_VIDEO_DECODING` blocklist.** Unanimous: a W6
   concern. FFmpeg does not consult it, so nothing in W3 depends on it.

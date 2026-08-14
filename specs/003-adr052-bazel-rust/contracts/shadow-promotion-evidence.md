@@ -408,11 +408,9 @@ semantic release tag matching `v<major>.<minor>.<patch>`. Cargo implementation
 retirement eligibility depends only on ten distinct ordered green promoted
 `v3` run units. Its qualification and code preparation may run first, but its
 shared documentation/evidence task and merge depend on merged alias removal,
-then rebase, rerun complete validation, and obtain a new unanimous
-selected-roster panel result. That lifecycle applies every trigger and the
-applicable floor from the versioned selection table, dispatches exactly its
-recorded roster and per-seat profiles, and only widens across fix verification.
-Neither removes a public Rust Make name.
+then rebase and rerun complete validation. The release review applies every
+trigger and the applicable floor from the versioned selection table. Neither
+removes a public Rust Make name.
 
 ## Typed post-promotion run units
 

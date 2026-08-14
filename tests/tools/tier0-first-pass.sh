@@ -33,11 +33,6 @@ DASHES=(
   $'\u2015' $'\u2212' $'\uFE58' $'\uFF0D'
 )
 
-# Historical regression sentinel, not a scan admission: Caveman LICENSE
-# SHA-256 5eb826cd03151bcc7cce3f80d40e87733237fedfc6c36d6908aca5fd650a0bdb.
-# Vendored prose is normalized to ASCII hyphens and every vendor path is
-# scanned with the rest of the repository.
-
 # A process marker is a delimited wave (`W3`, `W4-fu`, `W1fu3`), phase
 # (`P6`, `P2.3`, `ph6`), follow-up (`fu3`), high finding (`H20`),
 # contextual finding/revision (`finding M2`, `revision R5`), or reviewer finding

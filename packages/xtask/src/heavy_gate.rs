@@ -6,7 +6,7 @@
 //! description locks so concurrent heavy validation cannot oversubscribe the
 //! shared Nix store, cargo target directory, or KVM device.
 //!
-//! Contract, as specified by `docs/specs/ADR-046-validation-and-delivery.md`
+//! Contract for the heavy validation lane.
 //! section 11:
 //!
 //! * Exactly [`SLOT_COUNT`] slots, scoped to the invoking uid, living under the

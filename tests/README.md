@@ -65,7 +65,7 @@ Rust tests (types 2-5: unit, integration, contract, policy-lint) live under
 | `make test-flake-partition` | emit those names split into the eval, realized, and nix-unit dispatch classes (CI matrix plumbing) | CI (dynamic matrix) |
 | `make test-nix-unit` | sharded nix-unit corpus checks, retained as explicit evidence in the manifest-driven local and CI graph | local + CI |
 | `make test-drift` | drift-check + vms-json-parity + flake-check-matrix-sync | local + CI |
-| `make test-policy` | meta gates (ci-coverage, adr-index, deliverable inventory, etc.) | local + CI |
+| `make test-policy` | meta gates (CI coverage, deliverable inventory, etc.) | local + CI |
 | `make test-runtime-ledger` | hermetic execution-budget gate: after a warm build, enforces aggregate per-crate process-CPU p95 budgets, fails any individual census test sample over 60 seconds, and reports shorter per-test wall-clock p95s as advisory diagnostics (holds no baseline; makes no historical-regression claim) | local + CI |
 | `make test-performance-budgets` | advisory performance canary; without `D2B_PERF_STABLE=1` it reports `SKIP` and enforces nothing | local + CI |
 | `make test-integration` | type-9 podman container tests | **local host/manual pre-PR** (podman; not the PR pipeline) |

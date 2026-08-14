@@ -7,7 +7,7 @@
 
 ## Tier model
 
-d2b targets a small, panel-approved set of host platforms. Tiers
+d2b targets a small, explicitly reviewed set of host platforms. Tiers
 are graded by where in the wave plan they entered the supported set
 and what level of pre-merge verification each one carries:
 
