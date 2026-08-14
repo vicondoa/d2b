@@ -121,10 +121,10 @@ impl NotificationSink {
         let idempotency_key = request
             .idempotency_key()
             .map(|key| (observer_session.to_owned(), key.to_owned()));
-        if let Some(key) = &idempotency_key {
-            if let Some((_, result)) = self.idempotency.get(key) {
-                return Ok(result.clone());
-            }
+        if let Some(key) = &idempotency_key
+            && let Some((_, result)) = self.idempotency.get(key)
+        {
+            return Ok(result.clone());
         }
         if self.max_pending == 0 {
             return Ok(NotificationResult::CapacityExceeded);
