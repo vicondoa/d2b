@@ -161,13 +161,16 @@ impl ProviderEntrypoint {
 
     /// Admit one local service registration.
     pub fn admit(&self) -> Result<ProviderAdmission, ProviderRuntimeError> {
-        if self.lifecycle() != ProviderLifecycle::Starting {
-            return Err(ProviderRuntimeError::NotAccepting);
-        }
         let (lock, _) = &*self.state;
         let mut state = lock
             .lock()
             .map_err(|_| ProviderRuntimeError::NotAccepting)?;
+        // Drain takes the lifecycle transition before it waits on this lock.
+        // Checking only before locking would let a registration slip into a
+        // draining process after the supervisor had fenced new work.
+        if self.lifecycle() != ProviderLifecycle::Starting {
+            return Err(ProviderRuntimeError::NotAccepting);
+        }
         state.admitted = state.admitted.saturating_add(1);
         Ok(ProviderAdmission {
             state: Arc::clone(&self.state),
@@ -218,16 +221,21 @@ impl ProviderEntrypoint {
 
     /// Publish readiness only after both local registration and authenticated
     /// ComponentSession route admission have succeeded.
-    pub fn publish_authenticated_ready(
+    pub fn publish_authenticated_ready<C>(
         &self,
         registration: &ProviderAdmission,
         session: ProviderSessionAdmission,
+        live_session: &AuthenticatedComponentSession<C>,
     ) -> Result<(), ProviderRuntimeError> {
         let (lock, _) = &*self.state;
         let state = lock
             .lock()
             .map_err(|_| ProviderRuntimeError::NotAccepting)?;
-        if state.admitted == 0 || session.route.reconnect_generation().get() == 0 {
+        if !Arc::ptr_eq(&registration.state, &self.state)
+            || state.admitted == 0
+            || session.route.reconnect_generation().get() == 0
+            || session.route != live_session.route_binding()
+        {
             return Err(ProviderRuntimeError::SessionUnauthenticated);
         }
         drop(state);

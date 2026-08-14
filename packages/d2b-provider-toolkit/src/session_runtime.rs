@@ -7,8 +7,10 @@
 //! frames through the bounded Provider adapter.
 
 use d2b_contracts::v3::{
-    CanonicalJsonObject, ResourceRef, component_session::RequestId, execution_policy::BoundedToken,
-    zone_routing::ZonePath,
+    CanonicalJsonObject, ResourceRef,
+    component_session::RequestId,
+    execution_policy::BoundedToken,
+    zone_routing::{ZoneLabelId, ZonePath},
 };
 use d2b_session::{
     AuthenticatedComponentSession, AuthenticatedSessionRouteBinding, Cancellation,
@@ -130,6 +132,21 @@ where
             .map_err(|_| ProviderToolkitError::SessionClosed)?;
         let route = session.route_binding();
         let request = codec.decode_request(&frame, &route)?;
+        let expected_zone = ZonePath::new(vec![
+            ZoneLabelId::parse(route.zone().as_str())
+                .map_err(|_| ProviderToolkitError::SessionUnauthenticated)?,
+        ])
+        .map_err(|_| ProviderToolkitError::SessionUnauthenticated)?;
+        let expected_provider = route
+            .provider_ref()
+            .ok_or(ProviderToolkitError::SessionUnauthenticated)?;
+        // The codec may decode target metadata for wire diagnostics, but the
+        // dispatch target is still derived from the live authenticated route.
+        // A frame that tries to retarget another Zone or Provider is refused
+        // before authorization or service dispatch.
+        if request.zone() != &expected_zone || request.provider_ref() != expected_provider {
+            return Err(ProviderToolkitError::SessionUnauthenticated);
+        }
         let AuthenticatedProviderRequest {
             request_id,
             authorization,
@@ -138,6 +155,12 @@ where
             method,
             payload,
         } = request;
+        if authorization.target_zone() != route.zone()
+            || authorization.target() != Some(expected_provider)
+            || authorization.operation() != method.as_str()
+        {
+            return Err(ProviderToolkitError::AuthorizationDenied);
+        }
         let response = session
             .authorize(authorization, now_tick())
             .await
@@ -171,7 +194,7 @@ where
     C: AuthenticatedProviderFrameCodec,
 {
     entrypoint
-        .publish_authenticated_ready(&registration, session_admission)
+        .publish_authenticated_ready(&registration, session_admission, session)
         .map_err(|_| ProviderRuntimeError::NotAccepting)?;
     let adapter = ProviderAgentAdapter::new(service);
     serve_authenticated_component_session(&adapter, session, codec, cancellation, now_tick)
