@@ -39,6 +39,10 @@ use d2b_contracts::{
         },
     },
 };
+use d2b_contracts::v3::{
+    host::{HOST_PROVIDER_REF, HostSpec},
+    user::UserSpec,
+};
 use d2b_core_controller::authority::{
     AuthorityRequest, AuthorityReservation, ExternalNicClaimRequest, ExternalNicRecoveryInventory,
     ExternalNicReservation, HostGlobalAuthorityIndex, TrustedExternalNicInventory,
@@ -60,9 +64,11 @@ use d2b_resource_api::{
         ResourceVerb, SessionVerb,
     },
 };
-use d2b_resource_store::{PolicySnapshot, StoreSlot};
+use d2b_resource_store::{
+    PolicySnapshot, StoreListRequest, StoreOperationContext, StoreProjection, StoreSlot,
+};
 #[cfg(test)]
-use d2b_resource_store::{StoreFilter, StoreListResult, StoreProjection};
+use d2b_resource_store::{StoreFilter, StoreListResult};
 use d2b_resource_store_redb::{
     BrokerEvidenceIndex, RedbResourceStore, StoreIdentity, StoreRuntimeMetadata,
     write_provisioning_marker,
@@ -73,6 +79,11 @@ use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use d2b_bus::{BusAuthorizer, BusConfig, BusIngress, ZoneBus, ZoneRegistrar};
 use d2b_contracts::v3::identity::STANDARD_RESOURCE_TYPES;
+use d2b_provider_system_core::{
+    HostReconciler, UserBinding, UserDiscoveryEffectPort, UserIdentityDigest, UserObservation,
+    UserReconciler,
+};
+use nix::unistd::{Group, User};
 use d2b_session::{
     HandshakeCredentials, SessionEngine, SessionServerError, TransportEvidence,
     serve_ttrpc_services,
@@ -545,6 +556,14 @@ impl ZoneResourceRuntime {
                     state.clone(),
                 )
                 .await?;
+                let system_core = reconcile_system_core_resources(&zone, &store).await?;
+                let aggregate_handler_phase = if system_core.host_phase == HandlerPhase::Ready
+                    && system_core.user_phase == HandlerPhase::Ready
+                {
+                    HandlerPhase::Ready
+                } else {
+                    HandlerPhase::Degraded
+                };
                 let stage = {
                     let recovered_authority = authority_index.lock().await;
                     core.start_production(
@@ -570,7 +589,11 @@ impl ZoneResourceRuntime {
                         &recovered_authority,
                     )
                     .map_err(map_startup_error)?;
-                    mark_core_handlers_ready(&mut core)?;
+                    mark_core_handlers(
+                        &mut core,
+                        aggregate_handler_phase,
+                        store_metadata.current_revision.get(),
+                    )?;
                     core.publish_readiness().map_err(map_startup_error)?
                 };
                 bus = Some(zone_bus);
@@ -585,7 +608,13 @@ impl ZoneResourceRuntime {
                     true,
                     stage,
                     SystemCoreStatusEmitter::new()
-                        .emit(ZoneStatusInput::new(ResourcePhase::Ready, Vec::new()))
+                        .emit(
+                            ZoneStatusInput::new(system_core.core_phase, Vec::new())
+                                .with_system_core_phases(
+                                    handler_phase_to_zone_phase(system_core.host_phase),
+                                    handler_phase_to_zone_phase(system_core.user_phase),
+                                ),
+                        )
                         .map_err(|_| ResourceRuntimeError::HandlerNotReady)?,
                 )
             };
@@ -1585,21 +1614,223 @@ async fn register_system_core_session(
     Ok((ingress, service_task))
 }
 
-fn mark_core_handlers_ready(core: &mut CoreProcess) -> Result<(), ResourceRuntimeError> {
-    let status = HandlerStatus {
-        phase: HandlerPhase::Ready,
-        outcome: HandlerOutcome::Converged,
-        observed_generation: 1,
+#[derive(Debug, Clone, Copy)]
+struct SystemCoreReconcileResult {
+    core_phase: ResourcePhase,
+    host_phase: HandlerPhase,
+    user_phase: HandlerPhase,
+}
+
+fn handler_phase_to_zone_phase(phase: HandlerPhase) -> d2b_contracts::v3::ZoneHandlerPhase {
+    match phase {
+        HandlerPhase::Ready => d2b_contracts::v3::ZoneHandlerPhase::Ready,
+        HandlerPhase::Degraded => d2b_contracts::v3::ZoneHandlerPhase::Degraded,
+        HandlerPhase::Failed => d2b_contracts::v3::ZoneHandlerPhase::Failed,
+        HandlerPhase::Unknown => d2b_contracts::v3::ZoneHandlerPhase::Unknown,
+        HandlerPhase::Pending | HandlerPhase::Recovering => {
+            d2b_contracts::v3::ZoneHandlerPhase::Pending
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct SystemCoreUserDiscovery;
+
+impl UserDiscoveryEffectPort for SystemCoreUserDiscovery {
+    fn discover(
+        &self,
+        user_ref: &ResourceRef,
+        spec: &UserSpec,
+    ) -> impl std::future::Future<
+        Output = Result<
+            Option<d2b_provider_system_core::DiscoveredUser>,
+            d2b_provider_system_core::SystemCoreError,
+        >,
+    > {
+        async move { discover_local_user(user_ref, spec).await }
+    }
+}
+
+async fn discover_local_user(
+    user_ref: &ResourceRef,
+    spec: &UserSpec,
+) -> Result<
+    Option<d2b_provider_system_core::DiscoveredUser>,
+    d2b_provider_system_core::SystemCoreError,
+> {
+    let username = spec.os_username().as_str();
+    let user = User::from_name(username)
+        .map_err(|_| d2b_provider_system_core::SystemCoreError::DiscoveryUnavailable)?;
+    let Some(user) = user else {
+        return Ok(None);
+    };
+
+    let mut digest = Sha256::new();
+    digest.update(b"d2b-system-core-user-v1");
+    digest.update(user_ref.name().as_str().as_bytes());
+    digest.update([0]);
+    digest.update(username.as_bytes());
+    digest.update([0]);
+    digest.update(user.uid.as_raw().to_le_bytes());
+    digest.update(user.gid.as_raw().to_le_bytes());
+
+    let mut verified = std::collections::BTreeSet::from([UserBinding::NssRecord]);
+    if Group::from_gid(user.gid)
+        .map_err(|_| d2b_provider_system_core::SystemCoreError::DiscoveryUnavailable)?
+        .is_some()
+    {
+        verified.insert(UserBinding::PrimaryGroup);
+    }
+
+    let mut groups_verified = true;
+    for group in spec.groups() {
+        let Some(group_record) = Group::from_name(group.as_str())
+            .map_err(|_| d2b_provider_system_core::SystemCoreError::DiscoveryUnavailable)?
+        else {
+            groups_verified = false;
+            continue;
+        };
+        digest.update([0]);
+        digest.update(group.as_str().as_bytes());
+        if !group_record.mem.iter().any(|member| member == username) {
+            groups_verified = false;
+        }
+    }
+    if groups_verified && !spec.groups().is_empty() {
+        verified.insert(UserBinding::GroupMemberships);
+    }
+
+    Ok(Some(d2b_provider_system_core::DiscoveredUser {
+        identity: UserIdentityDigest::from_bytes(digest.finalize().into()),
+        observed: UserObservation::from_verified(verified),
+    }))
+}
+
+async fn reconcile_system_core_resources(
+    zone: &ZoneId,
+    store: &RedbResourceStore,
+) -> Result<SystemCoreReconcileResult, ResourceRuntimeError> {
+    let host_type =
+        ResourceTypeName::parse("Host").map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
+    let user_type =
+        ResourceTypeName::parse("User").map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
+    let operation = |suffix: &str| StoreOperationContext {
+        operation_id: format!("system-core-reconcile:{suffix}"),
+        idempotency_key: None,
+        correlation_id: format!("system-core-reconcile:{suffix}"),
+        trace_id: None,
+        deadline_ms: 10_000,
+    };
+    let list = |resource_type: ResourceTypeName, suffix: &'static str| async move {
+        store
+            .list(StoreListRequest {
+                operation: operation(suffix),
+                zone: zone.clone(),
+                resource_types: vec![resource_type],
+                resource_names: Vec::new(),
+                filters: Vec::new(),
+                page_size: 128,
+                cursor: None,
+                projection: StoreProjection::Full,
+            })
+            .await
+            .map_err(|_| ResourceRuntimeError::StoreReadFailed)
+    };
+    let hosts = list(host_type, "host").await?;
+    let users = list(user_type, "user").await?;
+
+    let host_phase = HandlerPhase::Ready;
+    for resource in hosts.resources {
+        let envelope = d2b_contracts::v3::ResourceEnvelope::from_json(&resource.canonical_json)
+            .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
+        let spec: HostSpec =
+            serde_json::from_slice(&envelope.spec().base().to_canonical_bytes())
+                .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
+        let host_ref = ResourceRef::new(
+            envelope.resource_type().clone(),
+            envelope.metadata().name().clone(),
+        );
+        let provider_ref = envelope
+            .spec()
+            .provider_ref()
+            .ok_or(ResourceRuntimeError::HandlerNotReady)?;
+        if provider_ref.to_canonical_string() != HOST_PROVIDER_REF {
+            return Err(ResourceRuntimeError::HandlerNotReady);
+        }
+        HostReconciler::new()
+            .reconcile(&host_ref, provider_ref, &spec)
+            .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
+    }
+
+    let user_reconciler = UserReconciler::new(SystemCoreUserDiscovery);
+    let mut user_phase = HandlerPhase::Ready;
+    for resource in users.resources {
+        let envelope = d2b_contracts::v3::ResourceEnvelope::from_json(&resource.canonical_json)
+            .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
+        let spec: UserSpec =
+            serde_json::from_slice(&envelope.spec().base().to_canonical_bytes())
+                .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
+        let user_ref = ResourceRef::new(
+            envelope.resource_type().clone(),
+            envelope.metadata().name().clone(),
+        );
+        let status = user_reconciler
+            .reconcile(&user_ref, &spec)
+            .await
+            .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
+        if status.phase != ResourcePhase::Ready {
+            // A User that is absent or drifted is a live, durable condition,
+            // not a store failure. Keep the handler current but degraded.
+            user_phase = HandlerPhase::Degraded;
+        }
+    }
+    let core_phase = if matches!(host_phase, HandlerPhase::Ready)
+        && matches!(user_phase, HandlerPhase::Ready)
+    {
+        ResourcePhase::Ready
+    } else {
+        ResourcePhase::Degraded
+    };
+    Ok(SystemCoreReconcileResult {
+        core_phase,
+        host_phase,
+        user_phase,
+    })
+}
+
+fn mark_core_handlers(
+    core: &mut CoreProcess,
+    phase: HandlerPhase,
+    revision: u64,
+) -> Result<(), ResourceRuntimeError> {
+    let revision = revision.max(1);
+    let status_for = |phase| HandlerStatus {
+        phase,
+        outcome: match phase {
+            HandlerPhase::Ready => HandlerOutcome::Converged,
+            HandlerPhase::Degraded => HandlerOutcome::Failed,
+            HandlerPhase::Pending | HandlerPhase::Recovering => HandlerOutcome::Recovering,
+            HandlerPhase::Failed => HandlerOutcome::Failed,
+            HandlerPhase::Unknown => HandlerOutcome::Ambiguous,
+        },
+        observed_generation: revision,
         queued: 0,
         running: 0,
-        last_watch_revision: 1,
-        checkpoint_revision: 1,
-        last_reconciled_tick: 1,
+        last_watch_revision: revision,
+        checkpoint_revision: revision,
+        last_reconciled_tick: revision,
         retry_after_tick: None,
     };
     for kind in CoreHandlerKind::ALL {
         core.handlers_mut()
-            .update(kind, status)
+            .update(
+                kind,
+                status_for(if kind == CoreHandlerKind::Watches {
+                    HandlerPhase::Ready
+                } else {
+                    phase
+                }),
+            )
             .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
     }
     Ok(())
