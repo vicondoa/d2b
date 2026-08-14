@@ -130,6 +130,11 @@ pub enum BrokerRequest {
     /// Observe one broker-owned runner after validating its retained
     /// pidfd-backed identity against the trusted bundle.
     ObserveRunner(ObserveRunnerRequest),
+    /// Apply one bounded host-side PipeWire effect for a trusted audio
+    /// runner. The broker resolves all executable and runtime details from
+    /// the signed runner intent; the daemon supplies only opaque identities
+    /// and a closed action.
+    PipeWireAudio(PipeWireAudioRequest),
     /// Start one trusted non-forking transient systemd unit. The broker
     /// resolves executable, argv, uid/gid, environment, and cgroup
     /// placement from the bundle runner intent.
@@ -323,6 +328,7 @@ impl BrokerRequest {
             Self::QemuMediaDetach(_) => "QemuMediaDetach",
             Self::OpenPidfd(_) => "OpenPidfd",
             Self::ObserveRunner(_) => "ObserveRunner",
+            Self::PipeWireAudio(_) => "PipeWireAudio",
             Self::StartSystemdUnit(_) => "StartSystemdUnit",
             Self::ObserveSystemdUnit(_) => "ObserveSystemdUnit",
             Self::OpenSystemdUnitPidfd(_) => "OpenSystemdUnitPidfd",
@@ -575,6 +581,10 @@ impl BrokerRequest {
                 format!("{}:{}:{}", self.op_name(), request.vm_id, request.role_id),
             ),
             Self::ObserveRunner(request) => (
+                request.vm_id.to_string(),
+                format!("{}:{}:{}", self.op_name(), request.vm_id, request.role_id),
+            ),
+            Self::PipeWireAudio(request) => (
                 request.vm_id.to_string(),
                 format!("{}:{}:{}", self.op_name(), request.vm_id, request.role_id),
             ),
@@ -1056,6 +1066,9 @@ pub enum BrokerResponse {
     /// Observation of a broker-owned runner. No pidfd is returned because
     /// the operation is a status query over the broker's retained registry.
     ObserveRunner(ObserveRunnerResponse),
+    /// Result of one broker-owned PipeWire effect. Raw node identifiers and
+    /// runtime paths never cross the wire.
+    PipeWireAudio(PipeWireAudioResponse),
     /// StartSystemdUnit response. The exact-main pidfd is returned via
     /// SCM_RIGHTS alongside this identity envelope.
     StartSystemdUnit(StartSystemdUnitResponse),
@@ -1824,6 +1837,59 @@ pub struct ObserveRunnerResponse {
     pub start_time_ticks: u64,
     pub cgroup_verified: bool,
     pub executable_verified: bool,
+}
+
+/// Audio channel selected by a broker-owned PipeWire effect.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum PipeWireAudioChannel {
+    /// Playback stream.
+    Speaker,
+    /// Capture stream.
+    Microphone,
+}
+
+/// Closed host-side PipeWire action.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", content = "value", rename_all = "camelCase")]
+pub enum PipeWireAudioAction {
+    /// Set the stream mute state.
+    SetGrant { on: bool },
+    /// Set the stream level in the inclusive 0..=100 range.
+    SetLevel { percent: u8 },
+}
+
+/// Request one bounded broker-owned PipeWire effect.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PipeWireAudioRequest {
+    /// Opaque VM identity resolved against the trusted bundle.
+    pub vm_id: VmId,
+    /// Opaque audio runner role identity.
+    pub role_id: RoleId,
+    /// Signed runner intent that supplies the PipeWire effect tools and
+    /// runtime environment.
+    pub bundle_runner_intent_ref: BundleOpId,
+    /// Stream direction.
+    pub channel: PipeWireAudioChannel,
+    /// Closed effect action.
+    pub action: PipeWireAudioAction,
+    #[serde(default)]
+    pub tracing_span_id: Option<TracingSpanId>,
+}
+
+/// Response to [`PipeWireAudioRequest`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PipeWireAudioResponse {
+    pub vm_id: VmId,
+    pub role_id: RoleId,
+    /// Whether the requested host effect was applied.
+    pub applied: bool,
+    /// Whether the broker could reach the PipeWire session.
+    pub host_ready: bool,
+    /// Whether exactly one matching stream was found.
+    pub node_present: bool,
 }
 
 /// Closed systemd execution domain. User-manager execution remains subject to
@@ -2974,6 +3040,27 @@ mod tests {
     fn validate_bundle_serializes_with_exact_kind() {
         let json = serde_json::to_value(BrokerRequest::ValidateBundle).expect("serializes");
         assert_eq!(json, serde_json::json!({ "kind": "ValidateBundle" }));
+    }
+
+    #[test]
+    fn pipewire_audio_request_is_opaque_and_closed() {
+        let request = BrokerRequest::PipeWireAudio(PipeWireAudioRequest {
+            vm_id: VmId::new("corp-vm"),
+            role_id: RoleId::new("audio"),
+            bundle_runner_intent_ref: BundleOpId::new("runner:vm:corp-vm:role:audio"),
+            channel: PipeWireAudioChannel::Speaker,
+            action: PipeWireAudioAction::SetLevel { percent: 75 },
+            tracing_span_id: None,
+        });
+        let json = serde_json::to_value(&request).expect("serializes");
+        assert_eq!(json["kind"], "PipeWireAudio");
+        assert_eq!(json["payload"]["vmId"], "corp-vm");
+        assert_eq!(
+            json["payload"]["action"],
+            serde_json::json!({"kind": "setLevel", "value": {"percent": 75}})
+        );
+        assert_eq!(request.op_name(), "PipeWireAudio");
+        assert!(request.authoritative_audit_join().is_some());
     }
 
     #[test]

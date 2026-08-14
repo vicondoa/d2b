@@ -337,8 +337,14 @@ fn build_host_controller(
                     }
                 };
             let audio_node = PipeWireHostController::find_audio_node(&processes, vm_name)?;
-            PipeWireHostController::from_audio_node(audio_node)
-                .map(|ctrl| -> Box<dyn HostAudioController> { Box::new(ctrl) })
+            Some(Box::new(PipeWireHostController::from_audio_node(
+                audio_node,
+                vm_name,
+                crate::broker_socket_path(state),
+                BrokerCallerRole::AdminUid {
+                    uid: state.daemon_uid,
+                },
+            )) as Box<dyn HostAudioController>)
         }
         AudioHostEnforcementKind::QemuAudioBackend => Some(Box::new(QemuAudioController)),
         AudioHostEnforcementKind::None => {

@@ -302,6 +302,16 @@ pub enum OperationFields {
         cgroup_verified: bool,
         executable_verified: bool,
     },
+    /// Path-free result of a broker-owned PipeWire host effect.
+    PipeWireAudio {
+        vm_id: String,
+        role_id: String,
+        channel: String,
+        action: String,
+        applied: bool,
+        host_ready: bool,
+        node_present: bool,
+    },
     /// Transient systemd lifecycle audit fields. Unit names, cgroup paths,
     /// PIDs, and invocation identifiers remain broker-local.
     SystemdUnit {
@@ -698,6 +708,15 @@ impl OperationFields {
                 present: bool,
                 cgroup_verified: bool,
                 executable_verified: bool,
+            }),
+            "PipeWireAudio" => parse_fields!(value => PipeWireAudio {
+                vm_id: String,
+                role_id: String,
+                channel: String,
+                action: String,
+                applied: bool,
+                host_ready: bool,
+                node_present: bool,
             }),
             "OpenZoneStore" => parse_fields!(value => OpenZoneStore {
                 zone_store_id: String,

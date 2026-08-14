@@ -1366,6 +1366,26 @@ fn validate_broker_request(request: &BrokerRequest) -> Result<(), BrokerError> {
                 }
             })
         }
+        BrokerRequest::PipeWireAudio(req) => {
+            validate_small_wire_id(req.vm_id.as_str(), 128, "invalid-vm-id")?;
+            validate_small_wire_id(req.role_id.as_str(), 128, "invalid-role-id")?;
+            validate_bundle_op_id(req.bundle_runner_intent_ref.as_str()).map_err(|reason| {
+                BrokerError::RequestValidation {
+                    operation: "PipeWireAudio",
+                    reason,
+                }
+            })?;
+            if let d2b_contracts::broker_wire::PipeWireAudioAction::SetLevel { percent } =
+                req.action
+                && percent > 100
+            {
+                return Err(BrokerError::RequestValidation {
+                    operation: "PipeWireAudio",
+                    reason: "audio-level-out-of-range",
+                });
+            }
+            Ok(())
+        }
         _ => Ok(()),
     }
 }
@@ -2357,6 +2377,181 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
             Ok(DispatchResult::no_fds(
                 BrokerResponse::ObserveRunner(response),
             ))
+        }
+        RealBrokerRequest::PipeWireAudio(req) => {
+            let resolver = require_resolver(resolver)?;
+            let intent = resolver
+                .find_runner_intent(req.bundle_runner_intent_ref.as_str())
+                .ok_or_else(|| BrokerError::BundleIntentMissing {
+                    kind: "runner",
+                    intent_id: req.bundle_runner_intent_ref.as_str().to_owned(),
+                })?;
+            if req.vm_id.as_str() != intent.vm_name
+                || req.role_id.as_str() != intent.role_id
+                || req.bundle_runner_intent_ref.as_str() != intent.intent_id
+                || intent.role != d2b_core::processes::ProcessRole::Audio
+            {
+                return Err(BrokerError::LiveHandler(
+                    "audio effect intent mismatch".to_owned(),
+                ));
+            }
+
+            let env_value = |key: &str| {
+                intent
+                    .env
+                    .iter()
+                    .find_map(|entry| entry.strip_prefix(&format!("{key}=")))
+            };
+            let response = match (
+                env_value("WPCTL_PATH"),
+                env_value("PW_DUMP_PATH"),
+                env_value("PIPEWIRE_RUNTIME_DIR"),
+            ) {
+                (Some(wpctl_path), Some(pw_dump_path), Some(runtime_dir))
+                    if Path::new(wpctl_path).is_absolute()
+                        && Path::new(pw_dump_path).is_absolute()
+                        && Path::new(runtime_dir).is_absolute() =>
+                {
+                    let dump = std::process::Command::new(pw_dump_path)
+                        .env_clear()
+                        .env("PIPEWIRE_RUNTIME_DIR", runtime_dir)
+                        .env("XDG_RUNTIME_DIR", runtime_dir)
+                        .stdin(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .output();
+                    match dump.ok().filter(|output| output.status.success()) {
+                        None => d2b_contracts::broker_wire::PipeWireAudioResponse {
+                            vm_id: req.vm_id.clone(),
+                            role_id: req.role_id.clone(),
+                            applied: false,
+                            host_ready: false,
+                            node_present: false,
+                        },
+                        Some(dump) => {
+                            let node_id = serde_json::from_slice::<Value>(&dump.stdout)
+                                .ok()
+                                .and_then(|document| {
+                                    let expected_app = format!("d2b-{}", intent.vm_name);
+                                    let expected_class = match req.channel {
+                                        d2b_contracts::broker_wire::PipeWireAudioChannel::Speaker => {
+                                            "Stream/Output/Audio"
+                                        }
+                                        d2b_contracts::broker_wire::PipeWireAudioChannel::Microphone => {
+                                            "Stream/Input/Audio"
+                                        }
+                                    };
+                                    let mut matches =
+                                        document.as_array()?.iter().filter_map(|entry| {
+                                            let props = entry.get("info")?.get("props")?;
+                                            if props.get("application.name")?.as_str()?
+                                                != expected_app
+                                                || props.get("media.class")?.as_str()?
+                                                    != expected_class
+                                            {
+                                                return None;
+                                            }
+                                            entry.get("id").and_then(Value::as_u64)
+                                        });
+                                    let first = matches.next()?;
+                                    if matches.next().is_some() {
+                                        None
+                                    } else {
+                                        Some(first.to_string())
+                                    }
+                                });
+                            match node_id {
+                                None => d2b_contracts::broker_wire::PipeWireAudioResponse {
+                                    vm_id: req.vm_id.clone(),
+                                    role_id: req.role_id.clone(),
+                                    applied: false,
+                                    host_ready: true,
+                                    node_present: false,
+                                },
+                                Some(node_id) => {
+                                    let mut command = std::process::Command::new(wpctl_path);
+                                    command
+                                        .env_clear()
+                                        .env("PIPEWIRE_RUNTIME_DIR", runtime_dir)
+                                        .env("XDG_RUNTIME_DIR", runtime_dir)
+                                        .stdin(std::process::Stdio::null())
+                                        .stdout(std::process::Stdio::null())
+                                        .stderr(std::process::Stdio::null());
+                                    let level_arg;
+                                    match req.action {
+                                        d2b_contracts::broker_wire::PipeWireAudioAction::SetGrant {
+                                            on,
+                                        } => {
+                                            command.args([
+                                                "set-mute",
+                                                &node_id,
+                                                if on { "0" } else { "1" },
+                                            ]);
+                                        }
+                                        d2b_contracts::broker_wire::PipeWireAudioAction::SetLevel {
+                                            percent,
+                                        } => {
+                                            level_arg = format!("{percent}%");
+                                            command.args(["set-volume", &node_id, &level_arg]);
+                                        }
+                                    }
+                                    let applied = command
+                                        .output()
+                                        .map(|output| output.status.success())
+                                        .unwrap_or(false);
+                                    d2b_contracts::broker_wire::PipeWireAudioResponse {
+                                        vm_id: req.vm_id.clone(),
+                                        role_id: req.role_id.clone(),
+                                        applied,
+                                        host_ready: true,
+                                        node_present: true,
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => d2b_contracts::broker_wire::PipeWireAudioResponse {
+                    vm_id: req.vm_id.clone(),
+                    role_id: req.role_id.clone(),
+                    applied: false,
+                    host_ready: false,
+                    node_present: false,
+                },
+            };
+            let action = match req.action {
+                d2b_contracts::broker_wire::PipeWireAudioAction::SetGrant { on } => {
+                    format!("grant:{}", if on { "on" } else { "off" })
+                }
+                d2b_contracts::broker_wire::PipeWireAudioAction::SetLevel { percent } => {
+                    format!("level:{percent}")
+                }
+            };
+            let channel = match req.channel {
+                d2b_contracts::broker_wire::PipeWireAudioChannel::Speaker => "speaker",
+                d2b_contracts::broker_wire::PipeWireAudioChannel::Microphone => "microphone",
+            };
+            write_success_op_record!(
+                audit_log,
+                bundle_metadata,
+                "PipeWireAudio",
+                req.bundle_runner_intent_ref.as_str(),
+                caller_uid,
+                caller_gid,
+                &caller_role,
+                req.vm_id.as_str(),
+                req.role_id.as_str(),
+                tracing_span_id_str(req.tracing_span_id.as_ref()),
+                OperationFields::PipeWireAudio {
+                    vm_id: req.vm_id.as_str().to_owned(),
+                    role_id: req.role_id.as_str().to_owned(),
+                    channel: channel.to_owned(),
+                    action,
+                    applied: response.applied,
+                    host_ready: response.host_ready,
+                    node_present: response.node_present,
+                },
+            )?;
+            Ok(DispatchResult::no_fds(BrokerResponse::PipeWireAudio(response)))
         }
         RealBrokerRequest::StartSystemdUnit(req) => {
             let resolver = require_resolver_ref(resolver.map(std::sync::Arc::as_ref))?;

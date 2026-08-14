@@ -33,12 +33,21 @@
 //! before spawning any subprocess. If the check fails, `Failed` is returned and
 //! the dispatcher does not persist the requested policy as applied.
 
-use std::path::{Path, PathBuf};
-use std::process::Stdio;
+use std::path::PathBuf;
+use std::time::Duration;
 
-use d2b_contracts::public_wire::AudioChannel;
+use d2b_contracts::{
+    broker_wire::{
+        BrokerCallerRole, BrokerRequest, BrokerResponse, PipeWireAudioAction,
+        PipeWireAudioChannel, PipeWireAudioRequest,
+    },
+    public_wire::AudioChannel,
+    types::{BundleOpId, RoleId, VmId},
+};
+use d2b_core::bundle_resolver::intent_id_runner;
 use d2b_core::audio_policy::{AudioGrant, LevelPercent};
 use d2b_core::processes::{ProcessNode, ProcessRole, ProcessesJson, VmProcessDag};
+#[cfg(test)]
 use serde_json::Value;
 
 pub use crate::audio_dispatch::HostEnforcementResult;
@@ -76,38 +85,39 @@ pub trait HostAudioController {
 
 // ── PipeWireHostController ───────────────────────────────────────────────────
 
-/// Absolute path to `wpctl` (from the WirePlumber Nix store derivation).
+/// Daemon-side handle for broker-owned PipeWire effects.
 ///
-/// Extracted from the audio ProcessNode's `env` list under the key
-/// `WPCTL_PATH`. Using a store path avoids PATH lookups and ensures the
-/// binary is the same revision as the PipeWire/WirePlumber session.
+/// The controller retains only opaque bundle identities and the authenticated
+/// broker transport. Tool paths, runtime paths, and node identifiers remain
+/// broker-local.
 #[derive(Debug, Clone)]
 pub struct PipeWireHostController {
-    /// Absolute path to `wpctl` binary (e.g.
-    /// `/nix/store/<hash>-wireplumber-<ver>/bin/wpctl`).
-    wpctl_path: PathBuf,
-    /// Absolute path to `pw-dump` for channel-specific node discovery.
-    pw_dump_path: PathBuf,
-    /// PipeWire runtime directory (e.g. `/run/user/1000`).
-    /// Sourced from `PIPEWIRE_RUNTIME_DIR` in the audio runner env.
-    pipewire_runtime_dir: PathBuf,
+    broker_socket: PathBuf,
+    caller_role: BrokerCallerRole,
+    vm_id: VmId,
+    role_id: RoleId,
+    bundle_runner_intent_ref: BundleOpId,
 }
 
 impl PipeWireHostController {
-    /// Construct from the audio runner [`ProcessNode`] env.
+    /// Construct from the audio runner [`ProcessNode`] identity and the
+    /// daemon's authenticated broker transport.
     ///
-    /// Returns `None` when `WPCTL_PATH`, `PW_DUMP_PATH`, or
-    /// `PIPEWIRE_RUNTIME_DIR` is absent from the node env - caller should fall back to returning
-    /// `Unsupported`.
-    pub fn from_audio_node(node: &ProcessNode) -> Option<Self> {
-        let wpctl_path = extract_env_value(&node.env, "WPCTL_PATH")?;
-        let pw_dump_path = extract_env_value(&node.env, "PW_DUMP_PATH")?;
-        let pipewire_runtime_dir = extract_env_value(&node.env, "PIPEWIRE_RUNTIME_DIR")?;
-        Some(Self {
-            wpctl_path: PathBuf::from(wpctl_path),
-            pw_dump_path: PathBuf::from(pw_dump_path),
-            pipewire_runtime_dir: PathBuf::from(pipewire_runtime_dir),
-        })
+    /// Tool paths, runtime paths, and node identifiers are resolved only by
+    /// the broker from the trusted runner intent.
+    pub fn from_audio_node(
+        node: &ProcessNode,
+        vm_name: &str,
+        broker_socket: PathBuf,
+        caller_role: BrokerCallerRole,
+    ) -> Self {
+        Self {
+            broker_socket,
+            caller_role,
+            vm_id: VmId::new(vm_name),
+            role_id: RoleId::new(node.id.0.clone()),
+            bundle_runner_intent_ref: BundleOpId::new(intent_id_runner(vm_name, &node.id.0)),
+        }
     }
 
     /// Find the audio runner node for a VM in a loaded [`ProcessesJson`].
@@ -124,84 +134,63 @@ impl PipeWireHostController {
             .find(|n| matches!(n.role, ProcessRole::Audio))
     }
 
-    /// Probe whether `d2bd` holds the necessary credentials to reach the
-    /// PipeWire socket.
-    ///
-    /// Uses `rustix::fs::access` with `WRITE_OK` on
-    /// `<pipewire_runtime_dir>/pipewire-0`.  This is an explicit credential
-    /// posture check per ADR 0041 - d2bd MUST NOT traverse `/run/user/<uid>`
-    /// without first confirming access.
-    fn has_pipewire_access(&self) -> bool {
-        let socket = self.pipewire_runtime_dir.join("pipewire-0");
-        // access(2) checks the *process* credentials, not file-descriptor ACLs,
-        // which is exactly what we need: does the current d2bd UID/GID have
-        // write access to the socket? Linux unix(7) requires write permission
-        // on a stream socket path for connect(2).
-        rustix::fs::access(&socket, rustix::fs::Access::WRITE_OK).is_ok()
-    }
-
-    fn resolve_channel_target(&self, vm_name: &str, channel: AudioChannel) -> Option<String> {
-        let output = run_subprocess_capture(&self.pw_dump_path, &[], &self.pipewire_runtime_dir)?;
-        target_node_from_pw_dump(&output, vm_name, channel)
-    }
-
-    /// Run `wpctl set-mute <node-id> <0|1>` as a subprocess.
-    ///
-    /// The subprocess inherits no environment except `PIPEWIRE_RUNTIME_DIR`
-    /// so that `wpctl` can locate the PipeWire socket without needing the
-    /// full user session environment.
-    fn run_wpctl_mute(&self, node_id: &str, mute: bool) -> HostEnforcementResult {
-        let mute_arg = if mute { "1" } else { "0" };
-        run_subprocess(
-            &self.wpctl_path,
-            &["set-mute", node_id, mute_arg],
-            &self.pipewire_runtime_dir,
-        )
-    }
-
-    /// Run `wpctl set-volume <node-id> <level>%` as a subprocess.
-    fn run_wpctl_volume(&self, node_id: &str, level: LevelPercent) -> HostEnforcementResult {
-        let level_arg = format!("{}%", level.get());
-        run_subprocess(
-            &self.wpctl_path,
-            &["set-volume", node_id, &level_arg],
-            &self.pipewire_runtime_dir,
-        )
+    fn dispatch_effect(
+        &self,
+        channel: AudioChannel,
+        action: PipeWireAudioAction,
+    ) -> HostEnforcementResult {
+        let channel = match channel {
+            AudioChannel::Speaker => PipeWireAudioChannel::Speaker,
+            AudioChannel::Microphone => PipeWireAudioChannel::Microphone,
+        };
+        let request = BrokerRequest::PipeWireAudio(PipeWireAudioRequest {
+            vm_id: self.vm_id.clone(),
+            role_id: self.role_id.clone(),
+            bundle_runner_intent_ref: self.bundle_runner_intent_ref.clone(),
+            channel,
+            action,
+            tracing_span_id: None,
+        });
+        match crate::dispatch_broker_request_to_socket(
+            &self.broker_socket,
+            request,
+            self.caller_role.clone(),
+            Some(Duration::from_secs(10)),
+        ) {
+            Ok(BrokerResponse::PipeWireAudio(response)) if response.applied => {
+                HostEnforcementResult::Applied
+            }
+            Ok(BrokerResponse::PipeWireAudio(response)) if !response.host_ready => {
+                HostEnforcementResult::Failed
+            }
+            Ok(BrokerResponse::PipeWireAudio(_)) => HostEnforcementResult::Unsupported,
+            Ok(BrokerResponse::Error(_)) | Err(_) | Ok(_) => HostEnforcementResult::Failed,
+        }
     }
 }
 
 impl HostAudioController for PipeWireHostController {
     fn enforce_grant(
         &self,
-        vm_name: &str,
+        _vm_name: &str,
         grant: AudioGrant,
         channel: AudioChannel,
     ) -> HostEnforcementResult {
-        // Credential posture check: fail immediately if we cannot reach PipeWire.
-        // For `off` this means the host boundary is NOT sealed; callers must
-        // surface degraded state rather than reporting false success.
-        if !self.has_pipewire_access() {
-            return HostEnforcementResult::Failed;
-        }
-        let Some(node_id) = self.resolve_channel_target(vm_name, channel) else {
-            return HostEnforcementResult::Unsupported;
-        };
-        self.run_wpctl_mute(&node_id, !grant.is_on())
+        self.dispatch_effect(channel, PipeWireAudioAction::SetGrant { on: grant.is_on() })
     }
 
     fn enforce_level(
         &self,
-        vm_name: &str,
+        _vm_name: &str,
         level: LevelPercent,
         channel: AudioChannel,
     ) -> HostEnforcementResult {
-        if !self.has_pipewire_access() {
-            return HostEnforcementResult::Failed;
-        }
-        let Some(node_id) = self.resolve_channel_target(vm_name, channel) else {
-            return HostEnforcementResult::Unsupported;
-        };
-        self.run_wpctl_volume(&node_id, level)
+        self.dispatch_effect(
+            channel,
+            PipeWireAudioAction::SetLevel {
+                percent: level.get(),
+            },
+        )
     }
 }
 
@@ -316,12 +305,7 @@ impl HostAudioController for FakeHostController {
 
 // ── private helpers ──────────────────────────────────────────────────────────
 
-/// Extract a `KEY=VALUE` pair from an env list, returning the value slice.
-fn extract_env_value<'a>(env: &'a [String], key: &str) -> Option<&'a str> {
-    let prefix = format!("{key}=");
-    env.iter().find_map(|entry| entry.strip_prefix(&prefix))
-}
-
+#[cfg(test)]
 fn channel_media_class(channel: AudioChannel) -> &'static str {
     match channel {
         AudioChannel::Speaker => "Stream/Output/Audio",
@@ -329,6 +313,7 @@ fn channel_media_class(channel: AudioChannel) -> &'static str {
     }
 }
 
+#[cfg(test)]
 fn target_node_from_pw_dump(bytes: &[u8], vm_name: &str, channel: AudioChannel) -> Option<String> {
     let docs: Value = serde_json::from_slice(bytes).ok()?;
     let array = docs.as_array()?;
@@ -351,61 +336,6 @@ fn target_node_from_pw_dump(bytes: &[u8], vm_name: &str, channel: AudioChannel) 
         return None;
     }
     Some(first)
-}
-
-fn run_subprocess_capture(
-    program: &Path,
-    args: &[&str],
-    pipewire_runtime_dir: &Path,
-) -> Option<Vec<u8>> {
-    let output = std::process::Command::new(program)
-        .args(args)
-        .env_clear()
-        .env("PIPEWIRE_RUNTIME_DIR", pipewire_runtime_dir)
-        .env("XDG_RUNTIME_DIR", pipewire_runtime_dir)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .output()
-        .ok()?;
-    if output.status.success() {
-        Some(output.stdout)
-    } else {
-        None
-    }
-}
-
-/// Spawn a subprocess at `program` with `args`.
-///
-/// The subprocess runs as d2bd using the broker-granted PipeWire socket ACL.
-/// Both `PIPEWIRE_RUNTIME_DIR` and `XDG_RUNTIME_DIR` are set to the runtime
-/// dir path. stderr is not logged because wpctl diagnostics may contain node
-/// identifiers, paths, or volume values.
-///
-/// Returns `Applied` on exit-code 0, `Failed` on any other outcome.
-fn run_subprocess(
-    program: &Path,
-    args: &[&str],
-    pipewire_runtime_dir: &Path,
-) -> HostEnforcementResult {
-    let mut cmd = std::process::Command::new(program);
-    cmd.args(args)
-        .env_clear()
-        .env("PIPEWIRE_RUNTIME_DIR", pipewire_runtime_dir)
-        .env("XDG_RUNTIME_DIR", pipewire_runtime_dir)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    let output = cmd.output();
-
-    match output {
-        Ok(out) if out.status.success() => HostEnforcementResult::Applied,
-        Ok(_) => {
-            tracing::warn!(subsystem = "d2bd-audio", "wpctl subprocess failed");
-            HostEnforcementResult::Failed
-        }
-        Err(_) => HostEnforcementResult::Failed,
-    }
 }
 
 // ── unit tests ────────────────────────────────────────────────────────────────
@@ -504,76 +434,37 @@ mod tests {
     // ── PipeWireHostController construction ─────────────────────────────────
 
     #[test]
-    fn pipewire_controller_builds_from_full_env() {
-        let node = make_audio_node(vec![
-            "PIPEWIRE_RUNTIME_DIR=/run/user/1000".to_owned(),
-            "XDG_RUNTIME_DIR=/run/user/1000".to_owned(),
-            "WPCTL_PATH=/nix/store/test-wpctl/bin/wpctl".to_owned(),
-            "PW_DUMP_PATH=/nix/store/test-pipewire/bin/pw-dump".to_owned(),
-        ]);
-        let ctrl = PipeWireHostController::from_audio_node(&node);
-        assert!(ctrl.is_some(), "should build from full env");
-    }
-
-    #[test]
-    fn pipewire_controller_returns_none_without_wpctl_path() {
-        let node = make_audio_node(vec!["PIPEWIRE_RUNTIME_DIR=/run/user/1000".to_owned()]);
-        let ctrl = PipeWireHostController::from_audio_node(&node);
-        assert!(ctrl.is_none(), "must require WPCTL_PATH");
-    }
-
-    #[test]
-    fn pipewire_controller_returns_none_without_runtime_dir() {
-        let node = make_audio_node(vec![
-            "WPCTL_PATH=/nix/store/test-wpctl/bin/wpctl".to_owned(),
-            "PW_DUMP_PATH=/nix/store/test-pipewire/bin/pw-dump".to_owned(),
-        ]);
-        let ctrl = PipeWireHostController::from_audio_node(&node);
-        assert!(ctrl.is_none(), "must require PIPEWIRE_RUNTIME_DIR");
-    }
-
-    // ── PipeWireHostController credential check ──────────────────────────────
-    // When PIPEWIRE_RUNTIME_DIR points at a non-existent path, access(2) fails
-    // and the controller returns Failed (not Unsupported) for Off, signalling
-    // that the host boundary was NOT sealed.
-
-    #[test]
-    fn pipewire_inaccessible_socket_returns_failed_for_off() {
-        let ctrl = PipeWireHostController {
-            wpctl_path: PathBuf::from("/dev/null/nonexistent/wpctl"),
-            pw_dump_path: PathBuf::from("/dev/null/nonexistent/pw-dump"),
-            pipewire_runtime_dir: PathBuf::from("/nonexistent/pipewire-runtime"),
-        };
-        // Off → boundary must be sealed; if credentials fail, return Failed.
-        let result = ctrl.enforce_grant("corp-vm", AudioGrant::Off, AudioChannel::Speaker);
+    fn pipewire_controller_builds_from_runner_identity() {
+        let node = make_audio_node(Vec::new());
+        let ctrl = PipeWireHostController::from_audio_node(
+            &node,
+            "corp-vm",
+            PathBuf::from("/run/d2b/priv.sock"),
+            BrokerCallerRole::AdminUid { uid: 0 },
+        );
+        assert_eq!(ctrl.vm_id.as_str(), "corp-vm");
+        assert_eq!(ctrl.role_id.as_str(), "audio");
         assert_eq!(
-            result,
-            HostEnforcementResult::Failed,
-            "Off with inaccessible socket must return Failed, not Unsupported"
+            ctrl.bundle_runner_intent_ref.as_str(),
+            intent_id_runner("corp-vm", "audio")
         );
     }
 
     #[test]
-    fn pipewire_inaccessible_socket_returns_failed_for_on() {
-        let ctrl = PipeWireHostController {
-            wpctl_path: PathBuf::from("/dev/null/nonexistent/wpctl"),
-            pw_dump_path: PathBuf::from("/dev/null/nonexistent/pw-dump"),
-            pipewire_runtime_dir: PathBuf::from("/nonexistent/pipewire-runtime"),
-        };
-        let result = ctrl.enforce_grant("corp-vm", AudioGrant::On, AudioChannel::Speaker);
-        assert_eq!(result, HostEnforcementResult::Failed);
-    }
-
-    #[test]
-    fn pipewire_inaccessible_socket_returns_failed_for_level() {
-        let ctrl = PipeWireHostController {
-            wpctl_path: PathBuf::from("/dev/null/nonexistent/wpctl"),
-            pw_dump_path: PathBuf::from("/dev/null/nonexistent/pw-dump"),
-            pipewire_runtime_dir: PathBuf::from("/nonexistent/pipewire-runtime"),
-        };
-        let level = LevelPercent::new(60).unwrap();
-        let result = ctrl.enforce_level("corp-vm", level, AudioChannel::Speaker);
-        assert_eq!(result, HostEnforcementResult::Failed);
+    fn pipewire_broker_unavailable_fails_closed() {
+        let node = make_audio_node(Vec::new());
+        let ctrl = PipeWireHostController::from_audio_node(
+            &node,
+            "corp-vm",
+            PathBuf::from("/nonexistent/d2b-priv.sock"),
+            BrokerCallerRole::AdminUid { uid: 0 },
+        );
+        let result = ctrl.enforce_grant("corp-vm", AudioGrant::Off, AudioChannel::Speaker);
+        assert_eq!(
+            result,
+            HostEnforcementResult::Failed,
+            "broker transport failure must not report an applied host effect"
+        );
     }
 
     // ── find_audio_node ─────────────────────────────────────────────────────
@@ -626,32 +517,6 @@ mod tests {
         let result = PipeWireHostController::find_audio_node(&processes, "corp-vm");
         assert!(result.is_some());
         assert!(matches!(result.unwrap().role, ProcessRole::Audio));
-    }
-
-    // ── extract_env_value ───────────────────────────────────────────────────
-
-    #[test]
-    fn extract_env_value_finds_entry() {
-        let env = vec![
-            "FOO=bar".to_owned(),
-            "PIPEWIRE_RUNTIME_DIR=/run/user/1000".to_owned(),
-        ];
-        assert_eq!(
-            extract_env_value(&env, "PIPEWIRE_RUNTIME_DIR"),
-            Some("/run/user/1000")
-        );
-    }
-
-    #[test]
-    fn extract_env_value_missing_key_returns_none() {
-        let env = vec!["FOO=bar".to_owned()];
-        assert_eq!(extract_env_value(&env, "MISSING_KEY"), None);
-    }
-
-    #[test]
-    fn extract_env_value_empty_value() {
-        let env = vec!["FOO=".to_owned()];
-        assert_eq!(extract_env_value(&env, "FOO"), Some(""));
     }
 
     #[test]
