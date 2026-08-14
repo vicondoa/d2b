@@ -168,7 +168,7 @@ impl NotificationSink {
         self.projections.insert(
             request_id.clone(),
             NotificationProjection {
-                request_id,
+                request_id: request_id.clone(),
                 notification,
             },
         );
