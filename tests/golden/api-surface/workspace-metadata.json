@@ -372,14 +372,14 @@
       "crate_name": "d2b_provider_clipboard_wayland",
       "private_census": {
         "external_crates": 134,
-        "index_items": 2834,
+        "index_items": 2838,
         "path_items": 13905
       },
       "private_hidden_items": 54,
       "private_json_file": "d2b_provider_clipboard_wayland.json",
       "public_census": {
         "external_crates": 134,
-        "index_items": 1566,
+        "index_items": 1567,
         "path_items": 13827
       },
       "public_json_file": "d2b_provider_clipboard_wayland.json"
@@ -500,14 +500,14 @@
       "crate_name": "d2b_provider_display_wayland",
       "private_census": {
         "external_crates": 134,
-        "index_items": 3745,
+        "index_items": 3744,
         "path_items": 13903
       },
       "private_hidden_items": 83,
       "private_json_file": "d2b_provider_display_wayland.json",
       "public_census": {
         "external_crates": 134,
-        "index_items": 2029,
+        "index_items": 2011,
         "path_items": 13814
       },
       "public_json_file": "d2b_provider_display_wayland.json"
@@ -532,15 +532,15 @@
       "crate_name": "d2b_provider_notification_desktop",
       "private_census": {
         "external_crates": 134,
-        "index_items": 2425,
-        "path_items": 13874
+        "index_items": 2538,
+        "path_items": 13879
       },
-      "private_hidden_items": 45,
+      "private_hidden_items": 46,
       "private_json_file": "d2b_provider_notification_desktop.json",
       "public_census": {
         "external_crates": 134,
-        "index_items": 1289,
-        "path_items": 13784
+        "index_items": 1290,
+        "path_items": 13785
       },
       "public_json_file": "d2b_provider_notification_desktop.json"
     },
@@ -724,8 +724,8 @@
       "crate_name": "d2b_provider_toolkit",
       "private_census": {
         "external_crates": 133,
-        "index_items": 3077,
-        "path_items": 13841
+        "index_items": 3079,
+        "path_items": 13842
       },
       "private_hidden_items": 41,
       "private_json_file": "d2b_provider_toolkit.json",
