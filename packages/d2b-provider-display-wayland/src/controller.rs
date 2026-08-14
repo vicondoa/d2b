@@ -5,7 +5,8 @@ use crate::{
     policy::{FilterInput, WaylandPolicy},
     principal::{PrincipalLease, PrincipalPool},
     process::{
-        LaunchTicket, ProcessObservation, VolumeState, WorkerAction, WorkerState, WorkerSupervisor,
+        LaunchTicket, ProcessObservation, VolumeState, WorkerAction, WorkerRestartEvidence,
+        WorkerState, WorkerSupervisor,
     },
     spec::WaylandSessionSpec,
 };
@@ -260,6 +261,7 @@ impl AuthenticatedDisplaySession {
 pub struct FinalizationInput {
     stop_requested: StopRequest,
     proxy: WorkerState,
+    frontend: WorkerState,
     volume: VolumeState,
     authority: CleanupState,
     principal: CleanupState,
@@ -269,10 +271,15 @@ pub struct FinalizationInput {
 
 impl FinalizationInput {
     /// Construct finalization evidence at the Core/Supervisor boundary.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "finalization evidence keeps every owned authority explicit"
+    )]
     #[allow(dead_code)]
     pub(crate) const fn from_supervisor(
         stop_requested: StopRequest,
         proxy: WorkerState,
+        frontend: WorkerState,
         volume: VolumeState,
         authority: CleanupState,
         principal: CleanupState,
@@ -282,6 +289,7 @@ impl FinalizationInput {
         Self {
             stop_requested,
             proxy,
+            frontend,
             volume,
             authority,
             principal,
@@ -291,9 +299,14 @@ impl FinalizationInput {
     }
 
     #[cfg(test)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the test constructor mirrors the Core finalizer boundary"
+    )]
     const fn new(
         stop_requested: StopRequest,
         proxy: WorkerState,
+        frontend: WorkerState,
         volume: VolumeState,
         authority: CleanupState,
         principal: CleanupState,
@@ -303,6 +316,7 @@ impl FinalizationInput {
         Self::from_supervisor(
             stop_requested,
             proxy,
+            frontend,
             volume,
             authority,
             principal,
@@ -344,6 +358,8 @@ pub enum GraceState {
 pub struct FinalizationDecision {
     /// Whether to issue a graceful Process stop.
     pub stop_proxy: bool,
+    /// Whether to issue a graceful Process stop for the Guest frontend.
+    pub stop_frontend: bool,
     /// Whether the runtime Volume may now be deleted.
     pub delete_runtime_volume: bool,
     /// Whether the finalizer may be removed.
@@ -484,12 +500,20 @@ struct PolicyBinding {
     generation: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ReadySession {
+    policy_generation: u64,
+    proxy_generation: u64,
+    frontend_generation: u64,
+    teardown_generation: u64,
+}
+
 /// Zone-local display controller.
 pub struct DisplayController {
     principal_pool: PrincipalPool,
     principals: BTreeMap<String, PrincipalLease>,
     active_policies: BTreeMap<String, PolicyBinding>,
-    ready_sessions: BTreeMap<String, u64>,
+    ready_sessions: BTreeMap<String, ReadySession>,
     worker_supervisor: WorkerSupervisor,
 }
 
@@ -540,6 +564,29 @@ impl DisplayController {
         grants: Option<crate::process::LaunchGrants>,
         policy: &WaylandPolicySnapshot,
     ) -> Result<ReconcileResult, WaylandSpecError> {
+        self.reconcile_with_policy_and_evidence(
+            spec,
+            dependencies,
+            observation,
+            WorkerRestartEvidence::default(),
+            grants,
+            policy,
+        )
+    }
+
+    /// Reconcile with Core-observed retry timing and teardown fencing.
+    pub fn reconcile_with_policy_and_evidence(
+        &mut self,
+        spec: &WaylandSessionSpec,
+        dependencies: DependencyState,
+        observation: ProcessObservation,
+        supervision: WorkerRestartEvidence,
+        grants: Option<crate::process::LaunchGrants>,
+        policy: &WaylandPolicySnapshot,
+    ) -> Result<ReconcileResult, WaylandSpecError> {
+        if supervision.teardown_generation == 0 {
+            return Err(WaylandSpecError::InvalidReference);
+        }
         if !spec.cross_domain_trusted() {
             return Err(WaylandSpecError::CrossDomainUntrusted);
         }
@@ -564,10 +611,11 @@ impl DisplayController {
             .active_policies
             .get(&session_key)
             .is_some_and(|active| active != &policy_binding);
-        let worker_actions = match self
-            .worker_supervisor
-            .plan_with_budget(observation, policy_changed)
-        {
+        let worker_actions = match self.worker_supervisor.plan_with_evidence(
+            observation,
+            policy_changed,
+            supervision,
+        ) {
             Ok(actions) => actions,
             Err(_) => {
                 self.release_principal_if_owned(&session_key)?;
@@ -679,9 +727,10 @@ impl DisplayController {
         }
         let launch_tickets = if needs_worker_launch {
             let grants = grants.expect("launch grants checked before principal allocation");
-            let Some(tickets) = grants.into_worker_tickets(
+            let Some(tickets) = grants.into_worker_tickets_with_fence(
                 session_digest(spec),
                 spec.reconnect_generation(),
+                supervision.teardown_generation,
                 compiled.digest(),
                 policy.generation(),
                 spec.identity().label(),
@@ -739,8 +788,32 @@ impl DisplayController {
         let phase = if !launch_tickets.is_empty() {
             Phase::Pending
         } else if observation.proxy.is_ready() && observation.frontend.is_ready() {
-            self.ready_sessions
-                .insert(session_key.clone(), policy.generation());
+            let (Some(proxy_generation), Some(frontend_generation)) = (
+                observation.proxy.generation(),
+                observation.frontend.generation(),
+            ) else {
+                self.ready_sessions.remove(&session_key);
+                return Ok(ReconcileResult {
+                    status: self.status(
+                        Phase::Pending,
+                        compiled.digest().to_owned(),
+                        policy.generation(),
+                        principal,
+                        Vec::new(),
+                    ),
+                    launch_tickets,
+                    worker_actions,
+                });
+            };
+            self.ready_sessions.insert(
+                session_key.clone(),
+                ReadySession {
+                    policy_generation: policy.generation(),
+                    proxy_generation,
+                    frontend_generation,
+                    teardown_generation: 1,
+                },
+            );
             Phase::Ready
         } else {
             self.ready_sessions.remove(&session_key);
@@ -771,6 +844,7 @@ impl DisplayController {
         spec: &WaylandSessionSpec,
         result: &ReconcileResult,
         policy: &WaylandPolicySnapshot,
+        observation: ProcessObservation,
     ) -> Result<DisplayDependencyProof, WaylandSpecError> {
         let authenticated = AuthenticatedDisplaySession::from_component_session(session)?;
         if authenticated.guest_ref() != spec.guest_ref()
@@ -780,7 +854,7 @@ impl DisplayController {
             return Err(WaylandSpecError::InvalidReference);
         }
         let session_key = session_key(spec);
-        let Some(ready_generation) = self.ready_sessions.get(&session_key) else {
+        let Some(ready_session) = self.ready_sessions.get(&session_key) else {
             return Err(WaylandSpecError::InvalidReference);
         };
         let Some(active_policy) = self.active_policies.get(&session_key) else {
@@ -794,7 +868,20 @@ impl DisplayController {
             .is_some_and(|(reported, lease)| reported == lease.principal());
         if result.status.phase != Phase::Ready
             || result.status.policy_generation != policy.generation()
-            || *ready_generation != policy.generation()
+            || ready_session.policy_generation != policy.generation()
+            || ready_session.proxy_generation
+                != observation
+                    .proxy
+                    .generation()
+                    .ok_or(WaylandSpecError::InvalidReference)?
+            || ready_session.frontend_generation
+                != observation
+                    .frontend
+                    .generation()
+                    .ok_or(WaylandSpecError::InvalidReference)?
+            || ready_session.teardown_generation == 0
+            || !observation.proxy.is_ready()
+            || !observation.frontend.is_ready()
             || active_policy.generation != policy.generation()
             || active_policy.digest != result.status.policy_digest
             || policy.policy_ref() != spec.policy_ref()
@@ -814,10 +901,14 @@ impl DisplayController {
     /// Decide the safe finalizer action for one session.
     pub const fn finalize(input: FinalizationInput) -> FinalizationDecision {
         if matches!(input.grace, GraceState::Expired)
-            && !(input.proxy.is_terminal() && input.proxy.is_deleted())
+            && !(input.proxy.is_terminal()
+                && input.proxy.is_deleted()
+                && input.frontend.is_terminal()
+                && input.frontend.is_deleted())
         {
             return FinalizationDecision {
                 stop_proxy: false,
+                stop_frontend: false,
                 delete_runtime_volume: false,
                 remove_finalizer: false,
                 phase: Phase::Degraded,
@@ -827,15 +918,21 @@ impl DisplayController {
         if matches!(input.stop_requested, StopRequest::Active) {
             return FinalizationDecision {
                 stop_proxy: true,
+                stop_frontend: true,
                 delete_runtime_volume: false,
                 remove_finalizer: false,
                 phase: Phase::Terminating,
                 ambiguous: false,
             };
         }
-        if !input.proxy.is_terminal() || !input.proxy.is_deleted() {
+        if !input.proxy.is_terminal()
+            || !input.proxy.is_deleted()
+            || !input.frontend.is_terminal()
+            || !input.frontend.is_deleted()
+        {
             return FinalizationDecision {
-                stop_proxy: false,
+                stop_proxy: !(input.proxy.is_terminal() && input.proxy.is_deleted()),
+                stop_frontend: !(input.frontend.is_terminal() && input.frontend.is_deleted()),
                 delete_runtime_volume: false,
                 remove_finalizer: false,
                 phase: Phase::Terminating,
@@ -845,6 +942,7 @@ impl DisplayController {
         if !input.volume.is_deleted() {
             return FinalizationDecision {
                 stop_proxy: false,
+                stop_frontend: false,
                 delete_runtime_volume: true,
                 remove_finalizer: false,
                 phase: Phase::Terminating,
@@ -857,6 +955,7 @@ impl DisplayController {
         {
             return FinalizationDecision {
                 stop_proxy: false,
+                stop_frontend: false,
                 delete_runtime_volume: false,
                 remove_finalizer: false,
                 phase: Phase::Terminating,
@@ -865,6 +964,7 @@ impl DisplayController {
         }
         FinalizationDecision {
             stop_proxy: false,
+            stop_frontend: false,
             delete_runtime_volume: false,
             remove_finalizer: true,
             phase: Phase::Terminating,
@@ -1088,6 +1188,7 @@ mod tests {
                     AttachmentGrantHandle::from_supervisor([11; 32]),
                     session_digest(&spec),
                     spec.reconnect_generation(),
+                    1,
                 )),
                 &second_policy,
             )
@@ -1118,6 +1219,7 @@ mod tests {
         let decision = DisplayController::finalize(FinalizationInput::new(
             StopRequest::Requested,
             WorkerState::Starting,
+            WorkerState::Starting,
             VolumeState::Present,
             CleanupState::Pending,
             CleanupState::Pending,
@@ -1134,6 +1236,7 @@ mod tests {
         let decision = DisplayController::finalize(FinalizationInput::new(
             StopRequest::Requested,
             WorkerState::Terminal { deleted: true },
+            WorkerState::Terminal { deleted: true },
             VolumeState::Deleted,
             CleanupState::Complete,
             CleanupState::Complete,
@@ -1149,6 +1252,7 @@ mod tests {
         let decision = DisplayController::finalize(FinalizationInput::new(
             StopRequest::Requested,
             WorkerState::Terminal { deleted: true },
+            WorkerState::Terminal { deleted: true },
             VolumeState::Deleted,
             CleanupState::Pending,
             CleanupState::Complete,
@@ -1156,6 +1260,22 @@ mod tests {
             GraceState::Active,
         ));
         assert!(decision.ambiguous);
+        assert!(!decision.remove_finalizer);
+    }
+
+    #[test]
+    fn finalizer_tracks_frontend_deletion_independently() {
+        let decision = DisplayController::finalize(FinalizationInput::new(
+            StopRequest::Requested,
+            WorkerState::Terminal { deleted: true },
+            WorkerState::Terminal { deleted: false },
+            VolumeState::Present,
+            CleanupState::Complete,
+            CleanupState::Complete,
+            CleanupState::Complete,
+            GraceState::Active,
+        ));
+        assert!(decision.stop_frontend);
         assert!(!decision.remove_finalizer);
     }
 }

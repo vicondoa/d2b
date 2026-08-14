@@ -30,6 +30,14 @@ impl WorkerState {
         matches!(self, Self::Ready { .. })
     }
 
+    /// Return the readiness generation, when the worker is Ready.
+    pub const fn generation(self) -> Option<u64> {
+        match self {
+            Self::Ready { generation } => Some(generation),
+            _ => None,
+        }
+    }
+
     /// Return the current retry count.
     pub const fn failure_count(self) -> u8 {
         match self {
@@ -74,6 +82,30 @@ pub enum WorkerAction {
     EnsureFrontend,
 }
 
+/// Core-observed timing and teardown evidence used for restart fencing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WorkerRestartEvidence {
+    /// Monotonic observation time in milliseconds.
+    pub observed_at_ms: u64,
+    /// Last proxy failure time in the current observation window.
+    pub proxy_last_failure_ms: Option<u64>,
+    /// Last frontend failure time in the current observation window.
+    pub frontend_last_failure_ms: Option<u64>,
+    /// Monotonic teardown generation fencing stale launch actions.
+    pub teardown_generation: u64,
+}
+
+impl Default for WorkerRestartEvidence {
+    fn default() -> Self {
+        Self {
+            observed_at_ms: 0,
+            proxy_last_failure_ms: None,
+            frontend_last_failure_ms: None,
+            teardown_generation: 1,
+        }
+    }
+}
+
 /// Stable worker supervision failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorkerSupervisorError {
@@ -89,18 +121,45 @@ pub enum WorkerSupervisorError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WorkerSupervisor {
     max_attempts: u8,
+    retry_window_ms: u64,
+    retry_backoff_ms: u64,
 }
 
 impl WorkerSupervisor {
     /// Default consecutive restart bound for one worker.
     pub const DEFAULT_MAX_ATTEMPTS: u8 = 5;
+    /// Default bounded retry window.
+    pub const DEFAULT_RETRY_WINDOW_MS: u64 = 30_000;
+    /// Default delay between failed restart attempts.
+    pub const DEFAULT_RETRY_BACKOFF_MS: u64 = 250;
 
     /// Construct a bounded worker supervisor.
     pub const fn new(max_attempts: u8) -> Option<Self> {
         if max_attempts == 0 {
             None
         } else {
-            Some(Self { max_attempts })
+            Some(Self {
+                max_attempts,
+                retry_window_ms: Self::DEFAULT_RETRY_WINDOW_MS,
+                retry_backoff_ms: Self::DEFAULT_RETRY_BACKOFF_MS,
+            })
+        }
+    }
+
+    /// Construct a bounded supervisor with explicit retry timing.
+    pub const fn with_policy(
+        max_attempts: u8,
+        retry_window_ms: u64,
+        retry_backoff_ms: u64,
+    ) -> Option<Self> {
+        if max_attempts == 0 || retry_window_ms == 0 {
+            None
+        } else {
+            Some(Self {
+                max_attempts,
+                retry_window_ms,
+                retry_backoff_ms,
+            })
         }
     }
 
@@ -140,6 +199,48 @@ impl WorkerSupervisor {
         }
         Ok(actions)
     }
+
+    /// Plan actions with Core-observed retry timing and teardown fencing.
+    pub fn plan_with_evidence(
+        &self,
+        observation: ProcessObservation,
+        policy_changed: bool,
+        evidence: WorkerRestartEvidence,
+    ) -> Result<Vec<WorkerAction>, WorkerSupervisorError> {
+        let actions = Self::plan(observation, policy_changed);
+        let mut admissible = Vec::with_capacity(actions.len());
+        for action in actions {
+            let (role, attempts, last_failure) = match action {
+                WorkerAction::EnsureProxy => (
+                    DisplayProcessRole::HostProxy,
+                    observation.proxy.failure_count(),
+                    evidence.proxy_last_failure_ms,
+                ),
+                WorkerAction::EnsureFrontend => (
+                    DisplayProcessRole::GuestFrontend,
+                    observation.frontend.failure_count(),
+                    evidence.frontend_last_failure_ms,
+                ),
+            };
+            let attempts_in_window = if last_failure.is_some_and(|failure| {
+                evidence.observed_at_ms.saturating_sub(failure) <= self.retry_window_ms
+            }) {
+                attempts
+            } else {
+                0
+            };
+            if attempts_in_window >= self.max_attempts {
+                return Err(WorkerSupervisorError::RetryExhausted(role));
+            }
+            if last_failure.is_some_and(|failure| {
+                evidence.observed_at_ms < failure.saturating_add(self.retry_backoff_ms)
+            }) {
+                continue;
+            }
+            admissible.push(action);
+        }
+        Ok(admissible)
+    }
 }
 
 /// Opaque attachment grant handle resolved by ProviderSupervisor.
@@ -168,6 +269,7 @@ pub struct LaunchGrants {
     frontend_gpu: Option<AttachmentGrantHandle>,
     session_digest: [u8; 32],
     reconnect_generation: u64,
+    teardown_generation: u64,
 }
 
 impl LaunchGrants {
@@ -183,6 +285,7 @@ impl LaunchGrants {
             frontend_gpu: None,
             session_digest: [0; 32],
             reconnect_generation: 0,
+            teardown_generation: 1,
         }
     }
 
@@ -200,6 +303,7 @@ impl LaunchGrants {
             frontend_gpu: None,
             session_digest,
             reconnect_generation,
+            teardown_generation: 1,
         }
     }
 
@@ -211,6 +315,7 @@ impl LaunchGrants {
         frontend_gpu: AttachmentGrantHandle,
         session_digest: [u8; 32],
         reconnect_generation: u64,
+        teardown_generation: u64,
     ) -> Self {
         Self {
             compositor,
@@ -218,6 +323,7 @@ impl LaunchGrants {
             frontend_gpu: Some(frontend_gpu),
             session_digest,
             reconnect_generation,
+            teardown_generation,
         }
     }
 
@@ -236,6 +342,7 @@ impl LaunchGrants {
         Some((self.compositor, self.gpu))
     }
 
+    #[allow(dead_code)]
     pub(crate) fn into_worker_tickets(
         self,
         expected_session_digest: [u8; 32],
@@ -245,9 +352,36 @@ impl LaunchGrants {
         identity_label: &str,
         actions: &[WorkerAction],
     ) -> Option<Vec<LaunchTicket>> {
+        self.into_worker_tickets_with_fence(
+            expected_session_digest,
+            expected_reconnect_generation,
+            1,
+            policy_digest,
+            policy_generation,
+            identity_label,
+            actions,
+        )
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the sealed launch boundary keeps all session and fence evidence explicit"
+    )]
+    pub(crate) fn into_worker_tickets_with_fence(
+        self,
+        expected_session_digest: [u8; 32],
+        expected_reconnect_generation: u64,
+        expected_teardown_generation: u64,
+        policy_digest: &str,
+        policy_generation: u64,
+        identity_label: &str,
+        actions: &[WorkerAction],
+    ) -> Option<Vec<LaunchTicket>> {
         if self.session_digest != expected_session_digest
             || self.reconnect_generation != expected_reconnect_generation
+            || self.teardown_generation != expected_teardown_generation
             || self.reconnect_generation == 0
+            || self.teardown_generation == 0
         {
             return None;
         }
@@ -273,6 +407,7 @@ impl LaunchGrants {
                     policy_digest,
                     policy_generation,
                     identity_label,
+                    expected_teardown_generation,
                 )
                 .ok()?,
             );
@@ -422,6 +557,7 @@ pub struct LaunchTicket {
     policy_digest: String,
     policy_generation: u64,
     identity_label: String,
+    teardown_generation: u64,
 }
 
 impl LaunchTicket {
@@ -467,6 +603,7 @@ impl LaunchTicket {
             policy_digest,
             policy_generation,
             identity_label,
+            1,
         )
     }
 
@@ -478,12 +615,14 @@ impl LaunchTicket {
         policy_digest: impl Into<String>,
         policy_generation: u64,
         identity_label: impl Into<String>,
+        teardown_generation: u64,
     ) -> Result<Self, &'static str> {
         let policy_digest = policy_digest.into();
         let identity_label = identity_label.into();
         if !policy_digest.starts_with("sha256:")
             || identity_label.is_empty()
             || identity_label.len() > 64
+            || teardown_generation == 0
             || (role == DisplayProcessRole::HostProxy && compositor_grant.is_none())
         {
             return Err("display-launch-ticket-invalid");
@@ -495,6 +634,7 @@ impl LaunchTicket {
             policy_digest,
             policy_generation,
             identity_label,
+            teardown_generation,
         })
     }
 
@@ -528,6 +668,16 @@ impl LaunchTicket {
     /// Borrow the bounded identity label.
     pub fn identity_label(&self) -> &str {
         &self.identity_label
+    }
+
+    /// Return the teardown generation fencing this launch.
+    pub const fn teardown_generation(&self) -> u64 {
+        self.teardown_generation
+    }
+
+    /// Whether the ticket is current for one Core teardown generation.
+    pub const fn is_current(&self, teardown_generation: u64) -> bool {
+        self.teardown_generation == teardown_generation && teardown_generation != 0
     }
 }
 
@@ -589,6 +739,101 @@ mod tests {
     }
 
     #[test]
+    fn restart_backoff_and_window_are_core_observed() {
+        let supervisor = WorkerSupervisor::with_policy(3, 1_000, 250).unwrap();
+        let observation = ProcessObservation {
+            proxy: WorkerState::Failed { attempts: 1 },
+            frontend: WorkerState::Ready { generation: 1 },
+            volume: VolumeState::Present,
+        };
+        let evidence = WorkerRestartEvidence {
+            observed_at_ms: 100,
+            proxy_last_failure_ms: Some(0),
+            frontend_last_failure_ms: None,
+            teardown_generation: 4,
+        };
+        assert!(
+            supervisor
+                .plan_with_evidence(observation, false, evidence)
+                .unwrap()
+                .is_empty()
+        );
+        let recovered = WorkerRestartEvidence {
+            observed_at_ms: 300,
+            ..evidence
+        };
+        assert_eq!(
+            supervisor
+                .plan_with_evidence(observation, false, recovered)
+                .unwrap(),
+            vec![WorkerAction::EnsureProxy]
+        );
+        let outside_window = WorkerRestartEvidence {
+            observed_at_ms: 2_000,
+            ..evidence
+        };
+        assert_eq!(
+            supervisor
+                .plan_with_evidence(
+                    ProcessObservation {
+                        proxy: WorkerState::Failed { attempts: 3 },
+                        ..observation
+                    },
+                    false,
+                    outside_window,
+                )
+                .unwrap(),
+            vec![WorkerAction::EnsureProxy]
+        );
+    }
+
+    #[test]
+    fn launch_tickets_are_fenced_to_the_teardown_generation() {
+        let grants = LaunchGrants::from_supervisor_for_session_with_frontend(
+            AttachmentGrantHandle::from_supervisor([1; 32]),
+            AttachmentGrantHandle::from_supervisor([2; 32]),
+            AttachmentGrantHandle::from_supervisor([3; 32]),
+            [4; 32],
+            9,
+            2,
+        );
+        assert!(
+            grants
+                .into_worker_tickets_with_fence(
+                    [4; 32],
+                    9,
+                    1,
+                    &format!("sha256:{}", "a".repeat(64)),
+                    2,
+                    "demo",
+                    &[WorkerAction::EnsureProxy],
+                )
+                .is_none()
+        );
+        let grants = LaunchGrants::from_supervisor_for_session_with_frontend(
+            AttachmentGrantHandle::from_supervisor([1; 32]),
+            AttachmentGrantHandle::from_supervisor([2; 32]),
+            AttachmentGrantHandle::from_supervisor([3; 32]),
+            [4; 32],
+            9,
+            2,
+        );
+        let tickets = grants
+            .into_worker_tickets_with_fence(
+                [4; 32],
+                9,
+                2,
+                &format!("sha256:{}", "a".repeat(64)),
+                2,
+                "demo",
+                &[WorkerAction::EnsureProxy],
+            )
+            .unwrap();
+        assert!(tickets[0].is_current(2));
+        assert!(!tickets[0].is_current(1));
+    }
+
+    #[test]
     fn worker_grants_are_consumed_into_independent_role_tickets() {
         let grants = LaunchGrants::from_supervisor_for_session_with_frontend(
             AttachmentGrantHandle::from_supervisor([1; 32]),
@@ -596,6 +841,7 @@ mod tests {
             AttachmentGrantHandle::from_supervisor([3; 32]),
             [4; 32],
             9,
+            1,
         );
         let tickets = grants
             .into_worker_tickets(

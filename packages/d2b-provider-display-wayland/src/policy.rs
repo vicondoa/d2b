@@ -342,6 +342,11 @@ fn validate_layer(layer: &FilterInput) -> Result<(), PolicyCompileError> {
             return Err(PolicyCompileError::UnknownInterface(global.clone()));
         }
     }
+    for interface in layer.max_versions().keys() {
+        if !KNOWN_GLOBALS.contains(&interface.as_str()) {
+            return Err(PolicyCompileError::UnknownInterface(interface.clone()));
+        }
+    }
     if layer
         .dmabuf_allow()
         .iter()
@@ -388,4 +393,25 @@ fn digest(
         hasher.update([0]);
     }
     format!("sha256:{:x}", hasher.finalize())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn max_version_keys_must_be_known_globals() {
+        let layer = FilterInput::new(
+            Vec::<String>::new(),
+            Vec::<String>::new(),
+            [("not-a-wayland-global".to_owned(), 1)],
+            Vec::<String>::new(),
+        )
+        .unwrap();
+        assert!(matches!(
+            WaylandPolicy::compile(&FilterInput::default(), &layer, &FilterInput::default()),
+            Err(PolicyCompileError::UnknownInterface(name))
+                if name == "not-a-wayland-global"
+        ));
+    }
 }

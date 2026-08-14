@@ -32,7 +32,8 @@ pub use principal::{PrincipalLease, PrincipalPool, PrincipalPoolError};
 pub use process::{
     AttachmentGrantHandle, DisplayProcessRole, LaunchGrants, LaunchTicket, ProcessObservation,
     ProxyProcessTemplate, ProxyReadinessFailure, ProxyReadinessStage, ProxyReadinessState,
-    VolumeState, WorkerAction, WorkerState, WorkerSupervisor, WorkerSupervisorError,
+    VolumeState, WorkerAction, WorkerRestartEvidence, WorkerState, WorkerSupervisor,
+    WorkerSupervisorError,
 };
 pub use readiness::ProxyReadinessEvent;
 pub use spec::{DisplayIdentity, DisplayLabelPosition, WaylandSessionSpec, WaylandSpecError};
