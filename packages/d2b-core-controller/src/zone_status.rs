@@ -68,44 +68,41 @@ impl SystemCoreStatusEmitter {
         &self,
         input: ZoneStatusInput,
     ) -> Result<ZoneStatusResource, ZoneStatusProjectionError> {
-        let host_records = input
-            .handlers
-            .iter()
-            .filter(|handler| handler.name() == d2b_contracts::v3::ZoneHandlerName::SystemCoreHost)
-            .collect::<Vec<_>>();
-        let user_records = input
-            .handlers
-            .iter()
-            .filter(|handler| handler.name() == d2b_contracts::v3::ZoneHandlerName::SystemCoreUser)
-            .collect::<Vec<_>>();
-        let (host_phase, user_phase) = if host_records.is_empty() && user_records.is_empty() {
-            (input.host_phase, input.user_phase)
-        } else {
-            if host_records.len() > 1 || user_records.len() > 1 {
-                return Err(ZoneStatusProjectionError::Contract);
+        let ZoneStatusInput {
+            core_phase,
+            handlers: input_handlers,
+            host_phase: configured_host_phase,
+            user_phase: configured_user_phase,
+        } = input;
+        let mut handlers = Vec::with_capacity(input_handlers.len() + 2);
+        let mut host_phase = None;
+        let mut user_phase = None;
+
+        for handler in input_handlers {
+            match handler.name() {
+                d2b_contracts::v3::ZoneHandlerName::SystemCoreHost => {
+                    if host_phase.replace(handler.phase()).is_some() {
+                        return Err(ZoneStatusProjectionError::Contract);
+                    }
+                }
+                d2b_contracts::v3::ZoneHandlerName::SystemCoreUser => {
+                    if user_phase.replace(handler.phase()).is_some() {
+                        return Err(ZoneStatusProjectionError::Contract);
+                    }
+                }
+                _ => handlers.push(handler),
             }
-            (
-                host_records
-                    .first()
-                    .map_or(ZoneHandlerPhase::Pending, |handler| handler.phase()),
-                user_records
-                    .first()
-                    .map_or(ZoneHandlerPhase::Pending, |handler| handler.phase()),
-            )
+        }
+
+        let (host_phase, user_phase) = match (host_phase, user_phase) {
+            (None, None) => (configured_host_phase, configured_user_phase),
+            (host_phase, user_phase) => (
+                host_phase.unwrap_or(ZoneHandlerPhase::Pending),
+                user_phase.unwrap_or(ZoneHandlerPhase::Pending),
+            ),
         };
-        let mut handlers = input
-            .handlers
-            .into_iter()
-            .filter(|handler| {
-                !matches!(
-                    handler.name(),
-                    d2b_contracts::v3::ZoneHandlerName::SystemCoreHost
-                        | d2b_contracts::v3::ZoneHandlerName::SystemCoreUser
-                )
-            })
-            .collect::<Vec<_>>();
         handlers.extend(emit_handler_status(host_phase, user_phase, None));
-        ZoneStatusResource::new(0, 0, 0, input.core_phase, handlers, 0, 0, 0, 1, false, 0)
+        ZoneStatusResource::new(0, 0, 0, core_phase, handlers, 0, 0, 0, 1, false, 0)
             .map_err(|_| ZoneStatusProjectionError::Contract)
     }
 }

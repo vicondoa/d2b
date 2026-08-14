@@ -50,17 +50,6 @@ impl core::fmt::Display for AudioControllerError {
     }
 }
 
-impl AudioMediatorError {
-    fn code(self) -> &'static str {
-        match self {
-            Self::ProjectionCannotOpenPipewire => "audio-projection-pipewire-open-denied",
-            Self::ProviderSessionUnavailable => "audio-provider-session-unavailable",
-            Self::GuestSessionUnavailable => "audio-guest-session-unavailable",
-            Self::LevelOutOfRange => "audio-level-out-of-range",
-        }
-    }
-}
-
 impl std::error::Error for AudioControllerError {}
 
 /// Controller result including separate readiness observations.

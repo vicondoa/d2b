@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, VecDeque};
 pub struct AudioLeaseId(u64);
 
 impl AudioLeaseId {
-    /// Construct a non-zero lease identity.
+    /// Construct an opaque lease identity from a caller-assigned value.
     pub const fn new(value: u64) -> Self {
         Self(value)
     }

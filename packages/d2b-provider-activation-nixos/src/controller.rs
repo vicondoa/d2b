@@ -317,13 +317,3 @@ impl ActivationController {
         }
     }
 }
-
-/// Return whether two references denote the same target.
-pub fn same_execution_target(left: &ResourceRef, right: &ResourceRef) -> bool {
-    left == right
-}
-
-/// Bound a set of names used by retention and telemetry.
-pub fn bounded_generation_names(observations: &[GenerationObservation]) -> BTreeSet<&str> {
-    observations.iter().map(|row| row.name.as_str()).collect()
-}

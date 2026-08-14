@@ -42,14 +42,20 @@ pub enum AudioMediatorError {
     LevelOutOfRange,
 }
 
-impl core::fmt::Display for AudioMediatorError {
-    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        formatter.write_str(match self {
+impl AudioMediatorError {
+    pub(crate) fn code(self) -> &'static str {
+        match self {
             Self::ProjectionCannotOpenPipewire => "audio-projection-pipewire-open-denied",
             Self::ProviderSessionUnavailable => "audio-provider-session-unavailable",
             Self::GuestSessionUnavailable => "audio-guest-session-unavailable",
             Self::LevelOutOfRange => "audio-level-out-of-range",
-        })
+        }
+    }
+}
+
+impl core::fmt::Display for AudioMediatorError {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str(self.code())
     }
 }
 
