@@ -19,6 +19,10 @@ use std::{
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::authority_persistence::RedbAuthorityPersistence;
+use crate::audio_resource_runtime::{
+    AudioBindingRuntimeStatus, AudioResourceRuntime, AudioResourceRuntimeError,
+    audio_watch_request, list_audio_snapshot, run_audio_watch,
+};
 use d2b_audit::{AuditSink, DurabilityEvidence};
 #[cfg(test)]
 use d2b_contracts::v3::{
@@ -257,6 +261,8 @@ pub struct ZoneResourceRuntime {
     authority_persistence: Arc<RedbAuthorityPersistence>,
     authority_recovery: Arc<AuthorityRecoveryCoordinator>,
     zone_status: Mutex<ZoneStatusResource>,
+    audio_runtime: Arc<Mutex<Option<AudioResourceRuntime>>>,
+    audio_watch_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
 impl core::fmt::Debug for ZoneResourceRuntime {
@@ -645,6 +651,8 @@ impl ZoneResourceRuntime {
             authority_persistence,
             authority_recovery,
             zone_status: Mutex::new(zone_status),
+            audio_runtime: Arc::new(Mutex::new(None)),
+            audio_watch_task: Mutex::new(None),
         })
     }
 
@@ -699,6 +707,59 @@ impl ZoneResourceRuntime {
     /// `open` cannot claim this bit from the descriptor alone.
     pub(crate) fn set_provider_path_ready(&mut self, ready: bool) {
         self.readiness.provider_path_ready = ready;
+    }
+
+    /// Relist and reconcile the durable PipeWire resources owned by this
+    /// Zone. The registry is initialized once and survives ordinary
+    /// watch/reconcile cycles; a daemon restart reconstructs it from store
+    /// rows before any public readiness is published.
+    pub(crate) async fn reconcile_audio_resources(
+        &self,
+        state: Arc<crate::ServerState>,
+    ) -> Result<(), ResourceRuntimeError> {
+        if !self.readiness.resource_api_ready {
+            return Ok(());
+        }
+        let snapshot = list_audio_snapshot(&self.store, &self.zone)
+            .await
+            .map_err(|_| ResourceRuntimeError::StoreReadFailed)?;
+        let mut runtime = self
+            .audio_runtime
+            .lock()
+            .map_err(|_| ResourceRuntimeError::CapabilityUnavailable)?;
+        let registry = runtime
+            .get_or_insert_with(|| AudioResourceRuntime::new(self.zone.clone(), state));
+        registry.reconcile(snapshot).map_err(map_audio_runtime_error)?;
+        drop(runtime);
+        let mut watch_task = self
+            .audio_watch_task
+            .lock()
+            .map_err(|_| ResourceRuntimeError::WatchUnavailable)?;
+        if watch_task.is_none() {
+            let watch = d2b_resource_api::watch::WatchService::new(Arc::clone(&self.store))
+                .open(audio_watch_request(&self.zone))
+                .await
+                .map_err(|_| ResourceRuntimeError::WatchUnavailable)?;
+            let store = Arc::clone(&self.store);
+            let zone = self.zone.clone();
+            let registry = Arc::clone(&self.audio_runtime);
+            *watch_task = Some(tokio::spawn(run_audio_watch(
+                watch, store, zone, registry,
+            )));
+        }
+        Ok(())
+    }
+
+    /// Return the current daemon-owned AudioBinding projections.
+    pub(crate) fn audio_binding_statuses(
+        &self,
+    ) -> Result<Vec<AudioBindingRuntimeStatus>, ResourceRuntimeError> {
+        self.audio_runtime
+            .lock()
+            .map_err(|_| ResourceRuntimeError::CapabilityUnavailable)?
+            .as_ref()
+            .map(AudioResourceRuntime::statuses)
+            .ok_or(ResourceRuntimeError::CapabilityUnavailable)
     }
 
     /// Reserve a Host-global claim through the Zone's durable redb owner.
@@ -926,6 +987,8 @@ impl ZoneResourceRuntime {
             service_task,
             authority_persistence,
             authority_recovery,
+            audio_watch_task,
+            audio_runtime,
             ..
         } = self;
         if let Some(task) = service_task
@@ -935,6 +998,14 @@ impl ZoneResourceRuntime {
             task.abort();
             let _ = task.await;
         }
+        if let Some(task) = audio_watch_task
+            .into_inner()
+            .map_err(|_| ResourceRuntimeError::WatchUnavailable)?
+        {
+            task.abort();
+            let _ = task.await;
+        }
+        drop(audio_runtime);
         drop(ingress
             .into_inner()
             .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?);
@@ -1806,6 +1877,16 @@ fn host_phase_for_resource_count(count: usize) -> HandlerPhase {
         HandlerPhase::Degraded
     } else {
         HandlerPhase::Ready
+    }
+}
+
+fn map_audio_runtime_error(error: AudioResourceRuntimeError) -> ResourceRuntimeError {
+    match error {
+        AudioResourceRuntimeError::Controller(_) => ResourceRuntimeError::CapabilityUnavailable,
+        AudioResourceRuntimeError::InvalidResource
+        | AudioResourceRuntimeError::InvalidRelationship => {
+            ResourceRuntimeError::CapabilityUnavailable
+        }
     }
 }
 

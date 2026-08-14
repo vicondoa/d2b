@@ -18,6 +18,7 @@ use std::io;
 use std::os::unix::fs::OpenOptionsExt as _;
 use std::os::unix::io::AsRawFd as _;
 use std::path::Path;
+use std::sync::Arc;
 
 use nix::fcntl::{FcntlArg, fcntl};
 
@@ -437,22 +438,32 @@ pub enum GuestEnforcementResult {
 /// channel-neutral effect port into the existing capability-resolved daemon
 /// controllers, which keep PipeWire mutations broker-owned and guest effects
 /// on the authenticated guest-control transport.
-pub(crate) struct DaemonAudioMediator<'a> {
-    state: &'a ServerState,
+pub(crate) struct DaemonAudioMediator {
+    state: Arc<ServerState>,
     vm_name: String,
     capability: AudioProviderCapability,
     caller_role: BrokerCallerRole,
 }
 
-impl<'a> DaemonAudioMediator<'a> {
+impl std::fmt::Debug for DaemonAudioMediator {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("DaemonAudioMediator")
+            .field("vm_name", &"<opaque>")
+            .field("capability", &self.capability)
+            .finish()
+    }
+}
+
+impl DaemonAudioMediator {
     pub(crate) fn new(
-        state: &'a ServerState,
+        state: &ServerState,
         vm_name: impl Into<String>,
         capability: AudioProviderCapability,
         caller_role: BrokerCallerRole,
     ) -> Self {
         Self {
-            state,
+            state: Arc::new(state.clone()),
             vm_name: vm_name.into(),
             capability,
             caller_role,
@@ -489,7 +500,7 @@ impl<'a> DaemonAudioMediator<'a> {
     }
 }
 
-impl AudioMediator for DaemonAudioMediator<'_> {
+impl AudioMediator for DaemonAudioMediator {
     fn set_grant(&mut self, grant: ProviderAudioGrant) -> Result<(), AudioMediatorError> {
         self.set_channel_grant(ProviderAudioChannel::Speaker, grant)
     }
@@ -501,7 +512,7 @@ impl AudioMediator for DaemonAudioMediator<'_> {
     ) -> Result<(), AudioMediatorError> {
         let wire_channel = Self::wire_channel(channel);
         let host = enforce_host_grant(
-            self.state,
+            &self.state,
             &self.vm_name,
             &self.capability,
             core_audio_grant(grant),
@@ -511,7 +522,7 @@ impl AudioMediator for DaemonAudioMediator<'_> {
         let guest = if self.capability.guest_enforcement == AudioGuestEnforcementKind::GuestdCapable
         {
             enforce_guest_grant(
-                self.state,
+                &self.state,
                 &self.vm_name,
                 self.caller_role.clone(),
                 core_audio_grant(grant),
@@ -527,7 +538,7 @@ impl AudioMediator for DaemonAudioMediator<'_> {
                     ProviderAudioGrant::Off => ProviderAudioGrant::On,
                 };
                 let _ = enforce_host_grant(
-                    self.state,
+                    &self.state,
                     &self.vm_name,
                     &self.capability,
                     core_audio_grant(rollback),
@@ -551,7 +562,7 @@ impl AudioMediator for DaemonAudioMediator<'_> {
         let wire_channel = Self::wire_channel(channel);
         let level = core_audio_level(level)?;
         let host = enforce_host_level(
-            self.state,
+            &self.state,
             &self.vm_name,
             &self.capability,
             level,
@@ -561,7 +572,7 @@ impl AudioMediator for DaemonAudioMediator<'_> {
         let guest = if self.capability.guest_enforcement == AudioGuestEnforcementKind::GuestdCapable
         {
             enforce_guest_level(
-                self.state,
+                &self.state,
                 &self.vm_name,
                 self.caller_role.clone(),
                 level,
@@ -582,7 +593,7 @@ impl AudioMediator for DaemonAudioMediator<'_> {
 
     fn host_readiness(&self) -> HostAudioReadiness {
         if self.capability.host_enforcement == AudioHostEnforcementKind::None
-            || build_host_controller(self.state, &self.vm_name, &self.capability).is_some()
+            || build_host_controller(&self.state, &self.vm_name, &self.capability).is_some()
         {
             HostAudioReadiness::Ready
         } else {
@@ -594,10 +605,10 @@ impl AudioMediator for DaemonAudioMediator<'_> {
         if self.capability.guest_enforcement == AudioGuestEnforcementKind::Unsupported {
             return GuestAudioReadiness::Ready;
         }
-        let ready = crate::load_bundle_resolver(self.state)
+        let ready = crate::load_bundle_resolver(&self.state)
             .ok()
             .and_then(|resolver| {
-                crate::resolve_guest_control_probe_params(self.state, &resolver, &self.vm_name).ok()
+                crate::resolve_guest_control_probe_params(&self.state, &resolver, &self.vm_name).ok()
             })
             .is_some();
         if ready {

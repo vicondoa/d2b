@@ -209,6 +209,7 @@ pub mod usbipd_perenv_autostart;
 // Audio policy dispatch: OFD-locked state I/O, provider capability
 // resolution, host PipeWire enforcement, and guestd RPC dispatch.
 mod audio_dispatch;
+mod audio_resource_runtime;
 // Host-side audio controller strategy (ADR 0041): typed trait plus
 // PipeWireHostController (wpctl subprocess), QemuAudioController (offline),
 // and FakeHostController (test-only).
@@ -13408,7 +13409,16 @@ async fn open_resource_plane(
                 }
             };
         runtime.set_provider_path_ready(provider_ready);
-        if let Err(error) = runtime.require_ready() {
+            if let Err(error) = runtime
+                .reconcile_audio_resources(Arc::new(state.clone()))
+                .await
+            {
+                let _ = runtime.shutdown().await;
+                let _ = plane.shutdown().await;
+                return Err(error);
+            }
+            let _ = runtime.audio_binding_statuses();
+            if let Err(error) = runtime.require_ready() {
             let _ = runtime.shutdown().await;
             let _ = plane.shutdown().await;
             return Err(error);
