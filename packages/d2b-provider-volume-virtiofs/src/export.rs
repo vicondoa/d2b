@@ -64,7 +64,12 @@ impl SocketIdentity {
 
     /// Return the eight-character tag used by the private socket filename.
     pub fn short_tag(self) -> String {
-        self.to_hex()[..8].to_owned()
+        let mut out = String::with_capacity(8);
+        for byte in self.0.into_iter().take(4) {
+            out.push(char::from_digit(u32::from(byte >> 4), 16).unwrap_or('0'));
+            out.push(char::from_digit(u32::from(byte & 0x0f), 16).unwrap_or('0'));
+        }
+        out
     }
 }
 

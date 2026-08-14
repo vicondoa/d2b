@@ -5,6 +5,16 @@ use serde_json::{Value, json};
 
 use crate::resource_effect::TpmResourceEffectError;
 
+fn device_short(device_uid: &ResourceUid) -> String {
+    device_uid
+        .as_str()
+        .bytes()
+        .filter(|byte| byte.is_ascii_hexdigit())
+        .take(12)
+        .map(char::from)
+        .collect()
+}
+
 /// Build the controller-created TPM state Volume spec.
 ///
 /// The returned document contains only opaque policy references. In
@@ -16,13 +26,7 @@ pub fn build_tpm_state_volume_spec(
     if execution_ref.resource_type().as_str() != "Host" {
         return Err(TpmResourceEffectError::InvalidExecutionRef);
     }
-    let short = device_uid
-        .as_str()
-        .bytes()
-        .filter(|byte| byte.is_ascii_hexdigit())
-        .take(12)
-        .map(char::from)
-        .collect::<String>();
+    let short = device_short(device_uid);
     if short.len() != 12 {
         return Err(TpmResourceEffectError::InvalidDevice);
     }
@@ -84,13 +88,7 @@ pub fn build_tpm_state_volume_resource(
     execution_ref: &ResourceRef,
 ) -> Result<Value, TpmResourceEffectError> {
     let spec = build_tpm_state_volume_spec(device_uid, execution_ref)?;
-    let short = device_uid
-        .as_str()
-        .bytes()
-        .filter(|byte| byte.is_ascii_hexdigit())
-        .take(12)
-        .map(char::from)
-        .collect::<String>();
+    let short = device_short(device_uid);
     Ok(json!({
         "apiVersion": "resources.d2bus.org/v3",
         "type": "Volume",
@@ -112,13 +110,7 @@ pub fn build_swtpm_process_spec(
     if execution_ref.resource_type().as_str() != "Host" {
         return Err(TpmResourceEffectError::InvalidExecutionRef);
     }
-    let short = device_uid
-        .as_str()
-        .bytes()
-        .filter(|byte| byte.is_ascii_hexdigit())
-        .take(12)
-        .map(char::from)
-        .collect::<String>();
+    let short = device_short(device_uid);
     Ok(json!({
         "executionRef": execution_ref.to_canonical_string(),
         "domain": "system",
