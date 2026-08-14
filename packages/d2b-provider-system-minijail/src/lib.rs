@@ -50,6 +50,7 @@ pub const PROVIDER_NAME: &str = "system-minijail";
 pub struct MinijailProcessProvider<P: ProcessLaunchEffectPort> {
     port: P,
     profile: ProcessProviderProfile,
+    platform_gate: Option<launch::PlatformGate>,
 }
 
 impl<P: ProcessLaunchEffectPort> MinijailProcessProvider<P> {
@@ -66,6 +67,26 @@ impl<P: ProcessLaunchEffectPort> MinijailProcessProvider<P> {
     /// Build the controller, declaring whether the Provider descriptor
     /// admits user-domain processes.
     pub fn with_user_domain(port: P, descriptor_admits_user_domain: bool) -> Self {
+        Self::with_user_domain_and_platform_gate(port, descriptor_admits_user_domain, None)
+    }
+
+    /// Build the controller with an injected production platform snapshot.
+    ///
+    /// The plain constructors remain useful for conformance tests. Daemon
+    /// composition must use this constructor so production launches are
+    /// rejected unless the runtime kernel and delegated cgroup posture were
+    /// actually observed.
+    pub fn with_platform_gate(port: P, platform_gate: launch::PlatformGate) -> Self {
+        Self::with_user_domain_and_platform_gate(port, false, Some(platform_gate))
+    }
+
+    /// Build the controller with an optional platform gate and user-domain
+    /// descriptor admission.
+    pub fn with_user_domain_and_platform_gate(
+        port: P,
+        descriptor_admits_user_domain: bool,
+        platform_gate: Option<launch::PlatformGate>,
+    ) -> Self {
         let mut domains = BTreeSet::from([ExecutionDomain::System]);
         if descriptor_admits_user_domain {
             domains.insert(ExecutionDomain::User);
@@ -84,7 +105,11 @@ impl<P: ProcessLaunchEffectPort> MinijailProcessProvider<P> {
             ]),
         )
         .expect("the frozen system-minijail profile is well formed");
-        Self { port, profile }
+        Self {
+            port,
+            profile,
+            platform_gate,
+        }
     }
 
     /// Borrow the injected effect port.
@@ -104,6 +129,9 @@ impl<P: ProcessLaunchEffectPort> MinijailProcessProvider<P> {
         }
         if ticket.domain() == ExecutionDomain::User && ticket.user_ref().is_none() {
             return Err(ProcessConformanceError::UserRefRequired);
+        }
+        if let Some(gate) = self.platform_gate {
+            launch::validate_launch_ticket(ticket, gate)?;
         }
         Ok(())
     }

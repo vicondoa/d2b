@@ -30,7 +30,7 @@ use d2b_provider_supervisor::{
     BrokerProcessBackend, BrokerSystemdEffectOwner, BundleBackedLaunchResolver,
     ProviderSupervisor, SystemdProcessBackend,
 };
-use d2b_provider_system_minijail::MinijailProcessProvider;
+use d2b_provider_system_minijail::{MinijailProcessProvider, launch::PlatformGate};
 use d2b_provider_system_systemd::SystemdProcessProvider;
 use sha2::{Digest, Sha256};
 
@@ -168,8 +168,12 @@ impl ProductionProcessProviders {
             Duration::from_secs(10),
             caller_role,
         );
+        let platform_gate = PlatformGate::detect();
         Self {
-            minijail: MinijailProcessProvider::new(ProviderSupervisor::new(minijail_backend)),
+            minijail: MinijailProcessProvider::with_platform_gate(
+                ProviderSupervisor::new(minijail_backend),
+                platform_gate,
+            ),
             systemd: SystemdProcessProvider::new(ProviderSupervisor::new(
                 SystemdProcessBackend::new(systemd_owner),
             )),

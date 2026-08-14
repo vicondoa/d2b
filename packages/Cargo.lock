@@ -1410,6 +1410,7 @@ dependencies = [
  "d2b-process-conformance",
  "d2b-provider-toolkit",
  "serde",
+ "tokio",
 ]
 
 [[package]]
