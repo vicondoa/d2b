@@ -141,6 +141,11 @@ impl FilterInput {
                 .iter()
                 .chain(&self.deny_globals)
                 .any(|value| value.len() > 63)
+            || self
+                .dmabuf_allow
+                .iter()
+                .chain(&self.dmabuf_deny)
+                .any(|value| value.chars().count() > 128)
         {
             return Err(PolicyCompileError::BoundsExceeded);
         }
