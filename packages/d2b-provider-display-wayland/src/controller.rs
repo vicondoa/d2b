@@ -643,6 +643,7 @@ impl DisplayController {
     }
 
     /// Reconcile using the authenticated Core-resolved WaylandPolicy.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn reconcile_with_policy(
         &mut self,
         spec: &WaylandSessionSpec,
@@ -663,6 +664,7 @@ impl DisplayController {
     }
 
     /// Reconcile with Core-observed retry timing and teardown fencing.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn reconcile_with_policy_and_evidence(
         &mut self,
         spec: &WaylandSessionSpec,

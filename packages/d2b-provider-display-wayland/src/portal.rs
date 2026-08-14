@@ -80,8 +80,11 @@ impl DisplayUserPortal {
         supervisor_uid: u32,
         max_sessions: usize,
     ) -> Result<Self, PortalError> {
-        if user_ref.resource_type().as_str() != "User" || max_sessions == 0 {
+        if user_ref.resource_type().as_str() != "User" {
             return Err(PortalError::UserMismatch);
+        }
+        if max_sessions == 0 {
+            return Err(PortalError::Capacity);
         }
         Ok(Self {
             user_ref,
@@ -183,5 +186,13 @@ mod tests {
         let session_digest = DisplayUserPortal::hex_digest([2; 32]);
         assert!(portal.revoke_idempotent(&session_digest));
         assert!(!portal.revoke_idempotent(&session_digest));
+    }
+
+    #[test]
+    fn portal_rejects_zero_capacity_as_capacity_error() {
+        assert!(matches!(
+            DisplayUserPortal::new(ResourceRef::parse("User/alice").unwrap(), 1000, 0),
+            Err(PortalError::Capacity)
+        ));
     }
 }
