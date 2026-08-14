@@ -1723,6 +1723,7 @@ dependencies = [
  "d2b-process",
  "d2b-process-conformance",
  "d2b-provider",
+ "d2b-provider-audio-pipewire",
  "d2b-provider-device-tpm",
  "d2b-provider-runtime-azure-container-apps",
  "d2b-provider-transport-azure-relay",
