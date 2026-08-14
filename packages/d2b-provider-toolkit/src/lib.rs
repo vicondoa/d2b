@@ -50,7 +50,9 @@ mod error;
 mod fixture;
 mod redaction;
 mod registration;
+mod runtime;
 mod server;
+mod session_runtime;
 mod values;
 
 pub mod conformance;
@@ -78,9 +80,17 @@ pub use fixture::{
 };
 pub use redaction::Redacted;
 pub use registration::{ExactRegistration, ToolkitError, register_exact_instances};
+pub use runtime::{
+    ProviderAdmission, ProviderEntrypoint, ProviderLifecycle, ProviderRuntimeError,
+    ProviderSessionAdmission,
+};
 pub use server::{
     GeneratedProviderServiceServer, GeneratedServiceDescriptor, MAX_SERVER_IN_FLIGHT, ServerError,
     ServerRequestPermit,
+};
+pub use session_runtime::{
+    AuthenticatedProviderFrameCodec, AuthenticatedProviderRequest, run_authenticated_provider,
+    serve_authenticated_component_session, validate_provider_route,
 };
 pub use values::{
     ProviderHealth, ProviderHealthState, ProviderInspection, ProviderObservability, ProviderValues,
