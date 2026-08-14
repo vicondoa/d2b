@@ -26,7 +26,8 @@ When in doubt, push the test *down* toward type 1, not up.
 
 ## Taxonomy - name, definition, home, how it runs
 
-### Layer 1 - static gate (hermetic, fast, every PR + local via `make check`)
+### Layer 1 - static gate (hermetic, fast, available in CI and locally via
+`make check`; focused component tests are sufficient for review)
 
 | # | Type | What it is | Lives in |
 |---|------|------------|----------|
@@ -66,8 +67,8 @@ run `make test-policy`.
 
 | # | Type | What it is | Lives in | Runs **where** |
 |---|------|------------|----------|----------------|
-| 9 | **container** | Nix-OCI image under rootless podman; proves a static binary runs on a foreign non-Nix userland | `tests/integration/containers/*.sh` + `containerImages.<sys>.*` | `make test-integration` - **local host/manual pre-PR; not the PR pipeline** |
-| 10 | **VM (runNixOSTest)** | boots a real NixOS VM; asserts live daemon/broker/socket-activation/host-posture/kernel behaviour | `tests/host-integration/*.nix` + `vmChecks.<sys>.*` | `make test-host-integration` - **local NixOS host w/ KVM, manual pre-PR; not the PR pipeline** |
+| 9 | **container** | Nix-OCI image under rootless podman; proves a static binary runs on a foreign non-Nix userland | `tests/integration/containers/*.sh` + `containerImages.<sys>.*` | `make test-integration` - conditional local host lane when the changed surface needs a foreign userland |
+| 10 | **VM (runNixOSTest)** | boots a real NixOS VM; asserts live daemon/broker/socket-activation/host-posture/kernel behaviour | `tests/host-integration/*.nix` + `vmChecks.<sys>.*` | `make test-host-integration` - conditional NixOS/KVM lane when the changed surface needs host behavior |
 | 11 | **live-host** | runs against a **real deployed** d2b host; destructive/stateful | `tests/integration/live/*.sh` | through the `cargo xtask heavy-gate` semaphore; `D2B_LIVE=1` / sudo - **manual, never CI** |
 | 12 | **hardware** | real GPU / YubiKey / hardware-TPM passthrough | `tests/host-integration/hardware/*.sh` | through the `cargo xtask heavy-gate` semaphore - **manual on a host with the devices** |
 
@@ -140,11 +141,11 @@ tests/
 │   ├── meta/                                                       meta gates (closed set)
 │   └── gates/                                                      drift/perf gates (closed set)
 ├── integration/
-│   ├── containers/                                                 type 9 podman (make test-integration; host/manual pre-PR)
+│   ├── containers/                                                 type 9 podman (make test-integration; conditional)
 │   ├── distro-matrix/                                              distro pins/fixtures
 │   └── live/                                                        type 11 D2B_LIVE (manual)
 └── host-integration/
-    ├── *.nix                                                       type 10 runNixOSTest (make test-host-integration; host/manual pre-PR)
+    ├── *.nix                                                       type 10 runNixOSTest (make test-host-integration; conditional)
     └── hardware/                                                   type 12 device tests (manual)
 ```
 
@@ -348,7 +349,7 @@ at 18,181,990 KiB in 777 seconds; its default four-worker run crossed a
 30,000,000 KiB protective cap and was terminated. That exceeds the supported
 16 GiB CI envelope and is a mechanical v3 baseline blocker, not acceptable
 growth to normalize. v3's complete monolithic flake run measured 14,583,722
-KiB in 605 seconds. The refreshed Wave 5 run evaluates 83 attributes and 32
+KiB in 605 seconds. The refreshed run evaluates 83 attributes and 32
 flake checks plus outputs: its Nix-unit peak is 8,563,111 KiB and its flake
 peak is 11,775,682 KiB. Thus the final flake ceiling is only 0.56% above the
 measured v3 flake baseline despite the added checks, while the Nix-unit

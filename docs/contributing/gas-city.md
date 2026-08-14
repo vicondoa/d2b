@@ -376,7 +376,7 @@ their branches are not disposable cache.
 
 ## Verification and acceptance
 
-### Pull-request and pre-PR gates
+### Pull-request and conditional validation
 
 Repository gates use fake services and no real external credentials. They
 cover module evaluation, package metadata, policy boundaries, native
@@ -384,16 +384,16 @@ Compound composition, ACP profile routing, identity and sidecar ownership,
 sandbox and egress behavior, local Nix store placement, BuildBuddy proxy
 protocol, and the absence of excluded d2b delivery surfaces.
 
-Host integration is also fake-credential and fixture based, but it runs
-locally before the pull request because the PR pipeline does not provide the
-required NixOS/KVM host. It is evidence of the boundary, not evidence that a
-live provider accepted a real mutation.
+Run host integration locally when a change touches the Gas City host module,
+NixOS/KVM behavior, or another surface that cannot be covered by focused
+tests. The PR pipeline does not provide that host. It is evidence of the
+boundary, not evidence that a live provider accepted a real mutation.
 
 ### Pre-merge live smoke
 
-After the implementation pull request opens, deploy its revision to a
-disposable acceptance repository with temporary scoped credentials. Before
-human merge, run:
+For changes to the Gas City deployment, provider, or live publication
+surfaces, deploy the revision to a disposable acceptance repository with
+temporary scoped credentials before human merge, and run:
 
 1. one bounded real Copilot ACP request;
 2. one Discord decision;

@@ -8,7 +8,8 @@ that is the binding contract; this file is the human quick-start.
 ## Two layers
 
 - **Layer 1 - static gate.** Hermetic, fast, deterministic; no live host, VM, or
-  container. Runs on every PR and locally via `make check`. This is where the
+  container. Available in CI and locally via `make check`; focused
+  component tests are sufficient when a full aggregate is not needed. This is where the
   overwhelming majority of tests live (Nix eval cases, Rust unit/integration/
   contract/policy-lint tests, flake checks, and a small closed set of drift +
   meta gates). The manifest records which jobs are enforcing and which are
@@ -35,11 +36,11 @@ tests/
 │   ├── meta/                                                    meta gates (guard the test infra; closed set)
 │   └── gates/                                                   drift + perf gates (closed set)
 ├── integration/                   ── Layer 2 ──
-│   ├── containers/                                              type 9: podman (make test-integration; host/manual pre-PR)
+│   ├── containers/                                              type 9: podman (make test-integration; conditional)
 │   ├── distro-matrix/                                           distro pins + fixtures
 │   └── live/                                                    type 11: D2B_LIVE live-host (manual)
 └── host-integration/
-    ├── *.nix                                                    type 10: runNixOSTest (make test-host-integration; host/manual pre-PR)
+    ├── *.nix                                                    type 10: runNixOSTest (make test-host-integration; conditional)
     └── hardware/                                                type 12: real-device tests (manual)
 ```
 
@@ -51,7 +52,7 @@ Rust tests (types 2-5: unit, integration, contract, policy-lint) live under
 | Command | Runs | Where |
 |---------|------|-------|
 | `make test-unit` | **post-preflight L1 umbrella** from `tests/layer1-jobs.json`; `make check` also runs the manifest's preflight jobs | local + CI (parallel jobs) |
-| `make test` | `test-unit` + `test-integration` | local host; still run `make test-host-integration` before opening an agent-owned PR |
+| `make test` | `test-unit` + `test-integration` | local convenience aggregate; use wider lanes when the changed surface needs them |
 | `make check-tier0` | sub-60s syntax + shellcheck gate | local + CI |
 | `make check-inventory` | fail-closed migration-ledger drift check | local + CI |
 | `make test-lint` | serial fail-fast API-pin hint + Rust fmt + local changed-scope clippy + nix-parse + shellcheck; CI leaves clippy to the full Rust shard | local + CI |
@@ -68,8 +69,8 @@ Rust tests (types 2-5: unit, integration, contract, policy-lint) live under
 | `make test-policy` | meta gates (CI coverage, deliverable inventory, etc.) | local + CI |
 | `make test-runtime-ledger` | hermetic execution-budget gate: after a warm build, enforces aggregate per-crate process-CPU p95 budgets, fails any individual census test sample over 60 seconds, and reports shorter per-test wall-clock p95s as advisory diagnostics (holds no baseline; makes no historical-regression claim) | local + CI |
 | `make test-performance-budgets` | advisory performance canary; without `D2B_PERF_STABLE=1` it reports `SKIP` and enforces nothing | local + CI |
-| `make test-integration` | type-9 podman container tests | **local host/manual pre-PR** (podman; not the PR pipeline) |
-| `make test-host-integration` | type-10 runNixOSTest VM checks | **local NixOS host w/ KVM**, manual pre-PR (not the PR pipeline; TCG fallback) |
+| `make test-integration` | type-9 podman container tests | conditional local host lane (podman; not the PR pipeline) |
+| `make test-host-integration` | type-10 runNixOSTest VM checks | conditional local NixOS host lane (KVM; TCG fallback; not the PR pipeline) |
 | `make check-fast` | alias for `test-unit` (backward compat) | local + CI |
 | `make check` | PR-equivalent manifest target set with bounded local parallelism; enforcement classifications come from `tests/layer1-jobs.json` | local |
 | `make check-static` | legacy/full-static monolithic gate (`tests/static.sh`) | local |
@@ -167,17 +168,18 @@ runner, setting `D2B_PERF_STABLE=1` there, and removing the `enforcement` and
 
 The fixture lane is enforcing. It fails when `D2B_ENABLE_FIXTURE_BUILD=1` is
 absent, evaluates both Nix configurations, materializes their artifact data, and
-runs the fixture-dependent contract and CLI tests. The default `test-rust` and
-focused `test-rust-main` include those surfaces once when Nix is available;
-`D2B_SKIP_FIXTURE_BUILD=1` omits them for the Layer-1 graph so this separate
-lane does not duplicate work. Selected hermetic policy files may have separate
+runs the fixture-dependent contract and CLI tests. The Layer-1 `test-rust` job
+excludes those surfaces; run `make test-fixture-contracts` to validate
+`d2b-contract-tests` and its fixture-dependent policy layer. Selected hermetic
+policy files may have separate
 enforcing entrypoints under `test-policy`; the shared list in `tests/lib.sh` is
 excluded from the fixture lane so those repository scans execute once. Inspect
 that target before citing one.
 
 ### Rust DAG budget and execution evidence
 
-`make test-rust` is the only aggregate Rust entrypoint. GNU Make schedules its
+`make test-rust` is the aggregate Rust entrypoint for the non-fixture leaves.
+GNU Make schedules its
 explicit leaves with `--keep-going` and `--output-sync=target`, so independent
 leaves continue after a failure and each target's output remains grouped. The
 broker feature passes stay serial. Fixture/CLI work and the API snapshot
@@ -188,9 +190,9 @@ two jobs, and their split Cargo quotas stay within that leaf's budget. The
 snapshot checker uses its release profile for the measured CPU-bound JSON
 pass. Budgets through nine use one job per active lane; surplus jobs above nine are assigned
 to the measured API long pole while the complete frontier stays bounded.
-Direct calls to `tests/test-rust.sh` require one explicit leaf mode; callers
-that need the complete gate must use `make test-rust`. The focused
-`make test-rust-main` also retains conditional fixture/CLI coverage.
+Direct calls to `tests/test-rust.sh` require one explicit leaf mode. Run
+`make test-fixture-contracts` separately for the complete fixture-dependent
+contract and policy coverage.
 
 Before that aggregate starts, local `make check` runs `make test-lint`
 serially. Its Rust precheck shares the normal target directories, so
@@ -350,10 +352,10 @@ sets `D2B_FLAKE_LOCAL_SHARDS=1` for `make test-flake` and
 `D2B_SKIP_FIXTURE_BUILD=1` for `make test-rust`, matching the PR Rust job. The
 flake shards do not execute `d2b-contract-tests`; the separate enforcing
 fixture-contract lane runs them with evaluated fixtures and fails rather than skipping. Tune
-`D2B_CHECK_JOBS` and `D2B_FLAKE_JOBS` for host capacity. Agent-owned PRs also run
-`make test-integration` and `make test-host-integration` on the host before the
-PR is opened; those manual integration tiers are not replaced by PR pipeline
-jobs.
+`D2B_CHECK_JOBS` and `D2B_FLAKE_JOBS` for host capacity. Run
+`make test-integration` and `make test-host-integration` when the changed
+surface requires container or host coverage; those conditional integration
+tiers are not replaced by PR pipeline jobs.
 
 Useful knobs:
 - `D2B_NO_SCCACHE=1` - disable sccache in the rust gate.

@@ -69,8 +69,8 @@ make check
 # Legacy/full-static monolithic gate retained for explicit use.
 make check-static
 
-# Local Layer 1 + container integration. Still run the explicit
-# host/manual pre-PR targets below before opening an agent-owned PR.
+# Local Layer 1 + container integration. Run wider lanes only when the changed
+# surface requires them.
 make test
 ```
 
@@ -225,9 +225,9 @@ Do not resolve this by deleting the check. The `--backend` and
 check pins what the binary *accepts*, which is what catches an upstream bump
 dropping a flag.
 
-Before opening an agent-owned PR, run the host/manual integration
-targets on the development host; do not rely on the PR pipeline for
-them:
+When a change needs container or NixOS host coverage, run the corresponding
+host/manual integration target on the development host; do not rely on the PR
+pipeline for those conditional lanes:
 
 ```bash
 make test-integration       # Layer 2 container tests; needs podman
@@ -304,8 +304,8 @@ The structure is public-lane-plus-guarded-internal:
 
 Run a heavy lane through its public target (or, for an arbitrary command,
 `cargo run --manifest-path packages/Cargo.toml -p xtask -- heavy-gate --
-<command>`) whenever another heavy lane might be running; the bare internal
-targets stay available only for a serial console. Live-host and hardware
+<command>`) whenever another heavy lane might be running; do not invoke the
+internal targets directly. Live-host and hardware
 tests obey the same rule: use the gated live-VM smoke entrypoints (`make
 pre-tag` for the full gate, `make smoke-lite` for the lite gate) or wrap a
 raw live script as `cargo run --manifest-path packages/Cargo.toml -p xtask
@@ -329,76 +329,6 @@ not trusted, so it cannot bypass the sole-use invariant.
 **A new live, hardware, or performance entrypoint must carry that same
 self-guard block**, or the fail-closed inventory guard
 (`every_live_and_heavy_entrypoint_routes_through_the_gate`) rejects it.
-
-## Spec-literal lint allowlist
-
-The ADR 0046 spec-literal lints (`policy_adr046_spec_literals.rs`) enforce
-three frozen decisions across `docs/specs/**`: D103 (the single 24-byte
-`YYYY-MM-DDTHH:MM:SS.sssZ` datetime spelling), D104 (the single
-`.d2bus.org.` ResourceType qualifier infix), and D108 (the integer
-`retryAfterMs` retry-delay scalar superseding the old `retryAfter`
-duration string). The allowlist is a pinned exact exemption, not an
-author-suppressible marker: an inline `d2b-lint-allow` comment is
-explicitly **not** honored and will not exempt a line - the lint rejects
-that escape hatch by design, because a per-line marker would let any
-future author silently suppress a real violation. The **only** exemption
-is the decision-register table row that *defines* the rule (the `| <code> |`
-row in `docs/specs/ADR-046-decision-register.md`), and that exemption is
-pinned to that one file. Everywhere else, including a rejection
-illustration, must be phrased so it does not embed the exact rejected
-literal; correct the example rather than trying to silence the lint.
-
-The same policy test checks the seven canonical feasibility measurements
-against every Markdown and JSON document under `docs/**` plus `CHANGELOG.md`.
-It inventories class-specific measurement signatures globally, including
-run and group-commit denominators, the ChangeBatch comparison count, the
-crash-boundary count phrase, RSS values with units, and each p95/p99 value
-with its unit. Registered sites additionally pin their exact measurement or
-qualitative outcome summary. The global scan deliberately does not match bare
-numbers such as `13`, `20`, or `48`, because those are common in unrelated
-prose. Consequently, a new copy that preserves a canonical number-and-unit,
-denominator, or class phrase is rejected even in an unregistered document; a
-free paraphrase that omits every inventoried signature remains a review
-concern rather than something this lint claims to detect.
-
-## Envelope policy lint (D116) negative-example marker
-
-Unlike the spec-literal lints above - which honor no author-suppression
-marker at all - the envelope policy lint (`policy_adr046_envelopes`)
-recognizes exactly one deliberately narrow exemption. That lint enforces
-D116 across `docs/specs/**`: a `Host` or `Guest` whose `allowedDomains`
-admits the `user` domain must name a non-null, non-empty `defaultUserRef`
-(D116 is frozen in `docs/specs/ADR-046-decision-register.md`). A block that
-simply omits it is a real violation and must be corrected.
-
-The one exception is an **intentional negative example**: a fenced example
-(typically a Nix block) authored to *teach* the rule by demonstrating the
-eval-time failure that omitting `defaultUserRef` produces. Deleting that
-counter-example would lose correct teaching content, so the lint preserves
-it - but only under three exact conditions it enforces together, not the
-looser "names both `d2b-lint` and `d116`" shape earlier drafts of this
-section described:
-
-- **One exact, case-sensitive marker.** A comment line **inside the fence**
-  whose text, after its `#` or `//` prefix is stripped, equals the marker
-  string exactly. The current spelling is `# d2b-lint: expect-d116-eval-error`;
-  the match is a whole-string, case-sensitive comparison, so a paraphrase or a
-  comment that merely mentions the `d2b-lint` and `d116` tokens does not
-  qualify.
-- **One pinned file.** The marker is honoured only in the single documenting
-  file the lint pins (currently `docs/specs/ADR-046-nix-configuration.md`).
-  The same comment anywhere else exempts nothing and fails closed.
-- **Exactly once.** The marker must appear a single time in that file. A
-  second copy makes the exemption fail closed for the whole file, so every
-  D116 block there is flagged again.
-
-This is an unambiguous authoring signal for one intentional-rejection
-example, never a general suppression switch. Never reach for it to silence a
-D116 failure on a shape that is meant to be valid - correct the shape
-instead. `policy_adr046_envelopes` is the authority for the exact spelling,
-the pinned file, and the single-occurrence scope; a concurrent hardening may
-tighten them further, so if you are adding a legitimate negative example take
-the current requirement from that lint, not from this paragraph.
 
 For where tests live, when to add or retire each kind of test, and
 which pins/ledgers to update, read [`tests/AGENTS.md`](../../tests/AGENTS.md).
