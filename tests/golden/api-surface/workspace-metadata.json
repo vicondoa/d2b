@@ -372,14 +372,14 @@
       "crate_name": "d2b_provider_clipboard_wayland",
       "private_census": {
         "external_crates": 134,
-        "index_items": 2833,
+        "index_items": 2834,
         "path_items": 13905
       },
       "private_hidden_items": 54,
       "private_json_file": "d2b_provider_clipboard_wayland.json",
       "public_census": {
         "external_crates": 134,
-        "index_items": 1565,
+        "index_items": 1566,
         "path_items": 13827
       },
       "public_json_file": "d2b_provider_clipboard_wayland.json"
