@@ -148,24 +148,8 @@ impl NotificationSink {
             return Ok(NotificationResult::CapacityExceeded);
         }
         let notification = request.sanitize()?;
-        let evicted_nonce_count = if self.projections.len() >= self.max_pending {
-            self.order
-                .front()
-                .and_then(|request_id| self.projection_nonces.get(request_id))
-                .map_or(0, |action_keys| {
-                    action_keys
-                        .iter()
-                        .filter(|action_key| self.nonces.contains(action_key))
-                        .count()
-                })
-        } else {
-            0
-        };
-        if notification.actions().len() > self.nonces.available_capacity() + evicted_nonce_count {
+        if notification.actions().len() > self.nonces.available_capacity() {
             return Ok(NotificationResult::CapacityExceeded);
-        }
-        if self.projections.len() >= self.max_pending {
-            self.evict_oldest();
         }
         let mut action_nonces = BTreeMap::new();
         let mut issued_keys: Vec<String> = Vec::with_capacity(notification.actions().len());
@@ -201,6 +185,9 @@ impl NotificationSink {
                 return Ok(NotificationResult::SinkUnavailable);
             }
         };
+        if self.projections.len() >= self.max_pending {
+            self.evict_oldest();
+        }
         let request_id = format!("notification-{notification_id}");
         self.order.push_back(request_id.clone());
         self.projections.insert(
@@ -431,6 +418,14 @@ mod tests {
         }
     }
 
+    struct FailingPort;
+
+    impl DesktopNotificationPort for FailingPort {
+        fn notify(&mut self, _notification: &SanitizedNotification) -> Result<u32, SinkError> {
+            Err(SinkError::Unavailable)
+        }
+    }
+
     fn request_with_action() -> NotificationRequest {
         NotificationRequest::new("summary", "body", Category::SystemInfo)
             .unwrap()
@@ -551,5 +546,43 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn failed_delivery_does_not_evict_the_previous_projection() {
+        let mut sink = NotificationSink::new(1, 2, 10);
+        let mut port = TestPort::default();
+        let source = test_source("guest");
+        let observer = test_observer("alice");
+        let first = sink
+            .deliver(
+                &mut port,
+                &source,
+                &observer,
+                request_with_action(),
+                100,
+            )
+            .unwrap();
+        let action_key = match first {
+            NotificationResult::Accepted { action_nonces, .. } => action_nonces["open"].clone(),
+            other => panic!("unexpected result: {other:?}"),
+        };
+
+        assert_eq!(
+            sink.deliver(
+                &mut FailingPort,
+                &source,
+                &observer,
+                request_with_action(),
+                101,
+            )
+            .unwrap(),
+            NotificationResult::SinkUnavailable
+        );
+        assert_eq!(sink.projection_len(), 1);
+        assert_eq!(
+            sink.invoke_action_for(&action_key, &observer, "open", 102),
+            Ok("open".to_owned())
+        );
     }
 }

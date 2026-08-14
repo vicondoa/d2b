@@ -149,6 +149,25 @@ impl core::fmt::Debug for DisplayDependencyEvidence {
     }
 }
 
+fn display_fingerprint(display: &DisplayDependencyEvidence) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    digest.update(display.provider_ref().to_canonical_string().as_bytes());
+    digest.update([0]);
+    digest.update(display.zone().as_str().as_bytes());
+    digest.update([0]);
+    digest.update(display.host_execution_ref().to_canonical_string().as_bytes());
+    digest.update([0]);
+    digest.update(display.user_ref().to_canonical_string().as_bytes());
+    digest.update([0]);
+    digest.update(display.generation().to_be_bytes());
+    digest.update([0]);
+    digest.update(display.reconnect_generation().to_be_bytes());
+    digest.update([0]);
+    digest.update(display.controller_generation().to_be_bytes());
+    digest.update([display.is_ready() as u8]);
+    digest.finalize().into()
+}
+
 /// One configured Guest notification source.
 #[derive(Clone, PartialEq, Eq)]
 pub struct GuestSourceConfig {
@@ -277,6 +296,7 @@ pub struct SourceReconcileResult {
     pub start_endpoints: Vec<SourceEndpoint>,
     /// Authenticated endpoints whose source process must be drained.
     pub stop_endpoints: Vec<SourceEndpoint>,
+    display_fingerprint: [u8; 32],
 }
 
 impl SourceReconcileResult {
@@ -301,6 +321,7 @@ impl SourceReconcileResult {
             digest.update(endpoint.endpoint_digest().as_bytes());
             digest.update([0]);
         }
+        digest.update(self.display_fingerprint);
         let bytes = digest.finalize();
         let mut result = [0; 32];
         result.copy_from_slice(&bytes);
@@ -308,22 +329,164 @@ impl SourceReconcileResult {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum SourceEffectAcknowledgement {
+    Source {
+        start: bool,
+        endpoint_digest: String,
+        source_generation: u64,
+        display_generation: u64,
+    },
+    HostSink {
+        start: bool,
+        display_fingerprint: [u8; 32],
+    },
+}
+
 /// Typed acknowledgement that a complete source effect plan was applied.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourceProcessEffectReceipt {
     plan_digest: [u8; 32],
+    acknowledgements: Vec<SourceEffectAcknowledgement>,
 }
 
 impl SourceProcessEffectReceipt {
-    /// Mint a receipt at the trusted process-effect adapter boundary.
-    pub fn complete(plan: &SourceReconcileResult) -> Self {
-        Self {
+    /// Start collecting typed acknowledgements for one reconciliation plan.
+    pub fn builder(plan: &SourceReconcileResult) -> SourceProcessEffectReceiptBuilder {
+        SourceProcessEffectReceiptBuilder {
             plan_digest: plan.digest(),
+            display_fingerprint: plan.display_fingerprint,
+            expected: Self::expected_acknowledgements(plan),
+            acknowledgements: Vec::new(),
         }
+    }
+
+    #[cfg(test)]
+    /// Mint a receipt after every requested process effect was observed.
+    pub(crate) fn complete(plan: &SourceReconcileResult) -> Self {
+        let mut builder = Self::builder(plan);
+        for endpoint in &plan.start_endpoints {
+            builder.acknowledge_source_start(endpoint);
+        }
+        for endpoint in &plan.stop_endpoints {
+            builder.acknowledge_source_stop(endpoint);
+        }
+        if plan.start_host_sink {
+            builder.acknowledge_host_sink_start();
+        }
+        if plan.stop_host_sink {
+            builder.acknowledge_host_sink_stop();
+        }
+        builder
+            .finish()
+            .expect("complete acknowledgement set must match its plan")
+    }
+
+    fn expected_acknowledgements(
+        plan: &SourceReconcileResult,
+    ) -> Vec<SourceEffectAcknowledgement> {
+        let mut acknowledgements = Vec::new();
+        acknowledgements.extend(plan.start_endpoints.iter().map(|endpoint| {
+            SourceEffectAcknowledgement::Source {
+                start: true,
+                endpoint_digest: endpoint.endpoint_digest().to_owned(),
+                source_generation: endpoint.source_generation(),
+                display_generation: endpoint.display_generation(),
+            }
+        }));
+        acknowledgements.extend(plan.stop_endpoints.iter().map(|endpoint| {
+            SourceEffectAcknowledgement::Source {
+                start: false,
+                endpoint_digest: endpoint.endpoint_digest().to_owned(),
+                source_generation: endpoint.source_generation(),
+                display_generation: endpoint.display_generation(),
+            }
+        }));
+        if plan.start_host_sink {
+            acknowledgements.push(SourceEffectAcknowledgement::HostSink {
+                start: true,
+                display_fingerprint: plan.display_fingerprint,
+            });
+        }
+        if plan.stop_host_sink {
+            acknowledgements.push(SourceEffectAcknowledgement::HostSink {
+                start: false,
+                display_fingerprint: plan.display_fingerprint,
+            });
+        }
+        acknowledgements.sort();
+        acknowledgements
     }
 
     fn matches(&self, plan: &SourceReconcileResult) -> bool {
         self.plan_digest == plan.digest()
+            && self.acknowledgements == Self::expected_acknowledgements(plan)
+    }
+}
+
+/// Builder for a complete, typed process-effect receipt.
+///
+/// Each acknowledgement method corresponds to one effect in the plan. The
+/// builder refuses to mint a receipt unless the complete expected set was
+/// observed, so an effect adapter cannot acknowledge only a plan digest.
+pub struct SourceProcessEffectReceiptBuilder {
+    plan_digest: [u8; 32],
+    display_fingerprint: [u8; 32],
+    expected: Vec<SourceEffectAcknowledgement>,
+    acknowledgements: Vec<SourceEffectAcknowledgement>,
+}
+
+impl SourceProcessEffectReceiptBuilder {
+    /// Acknowledge a Guest-source process start.
+    pub fn acknowledge_source_start(&mut self, endpoint: &SourceEndpoint) {
+        self.acknowledgements
+            .push(SourceEffectAcknowledgement::Source {
+                start: true,
+                endpoint_digest: endpoint.endpoint_digest().to_owned(),
+                source_generation: endpoint.source_generation(),
+                display_generation: endpoint.display_generation(),
+            });
+    }
+
+    /// Acknowledge a Guest-source process stop.
+    pub fn acknowledge_source_stop(&mut self, endpoint: &SourceEndpoint) {
+        self.acknowledgements
+            .push(SourceEffectAcknowledgement::Source {
+                start: false,
+                endpoint_digest: endpoint.endpoint_digest().to_owned(),
+                source_generation: endpoint.source_generation(),
+                display_generation: endpoint.display_generation(),
+            });
+    }
+
+    /// Acknowledge starting the host sink for this plan.
+    pub fn acknowledge_host_sink_start(&mut self) {
+        self.acknowledgements
+            .push(SourceEffectAcknowledgement::HostSink {
+                start: true,
+                display_fingerprint: self.display_fingerprint,
+            });
+    }
+
+    /// Acknowledge stopping the host sink for this plan.
+    pub fn acknowledge_host_sink_stop(&mut self) {
+        self.acknowledgements
+            .push(SourceEffectAcknowledgement::HostSink {
+                start: false,
+                display_fingerprint: self.display_fingerprint,
+            });
+    }
+
+    /// Finish the receipt only when every planned effect was acknowledged.
+    pub fn finish(mut self) -> Result<SourceProcessEffectReceipt, &'static str> {
+        self.acknowledgements.sort();
+        if self.acknowledgements != self.expected {
+            return Err("notification-process-effect-incomplete");
+        }
+        Ok(SourceProcessEffectReceipt {
+            plan_digest: self.plan_digest,
+            acknowledgements: self.acknowledgements,
+        })
     }
 }
 
@@ -448,8 +611,8 @@ pub struct ProcessPlan {
 pub struct NotificationController {
     provider_ref: ResourceRef,
     active_sources: std::collections::BTreeMap<ResourceRef, SourceEndpoint>,
-    active_display_generation: Option<u64>,
-    host_sink_generation: Option<u64>,
+    active_display_fingerprint: Option<[u8; 32]>,
+    host_sink_fingerprint: Option<[u8; 32]>,
 }
 
 impl NotificationController {
@@ -463,8 +626,8 @@ impl NotificationController {
         Ok(Self {
             provider_ref,
             active_sources: std::collections::BTreeMap::new(),
-            active_display_generation: None,
-            host_sink_generation: None,
+            active_display_fingerprint: None,
+            host_sink_fingerprint: None,
         })
     }
 
@@ -611,13 +774,14 @@ impl NotificationController {
             .iter()
             .filter_map(|source| self.active_sources.get(source).cloned())
             .collect::<Vec<_>>();
+        let display_fingerprint = display_fingerprint(display);
         let generation_changed = self
-            .active_display_generation
-            .is_some_and(|generation| generation != display.generation());
+            .active_display_fingerprint
+            .is_some_and(|fingerprint| fingerprint != display_fingerprint);
         let stop_host_sink =
-            self.host_sink_generation.is_some() && (!display.is_ready() || generation_changed);
+            self.host_sink_fingerprint.is_some() && (!display.is_ready() || generation_changed);
         let start_host_sink =
-            display.is_ready() && (self.host_sink_generation != Some(display.generation()));
+            display.is_ready() && (self.host_sink_fingerprint != Some(display_fingerprint));
         Ok(SourceReconcileResult {
             start,
             stop,
@@ -625,6 +789,7 @@ impl NotificationController {
             stop_host_sink,
             start_endpoints,
             stop_endpoints,
+            display_fingerprint,
         })
     }
 
@@ -640,8 +805,9 @@ impl NotificationController {
             self.active_sources
                 .insert(endpoint.source_ref().clone(), endpoint);
         }
-        self.active_display_generation = display.is_ready().then_some(display.generation());
-        self.host_sink_generation = display.is_ready().then_some(display.generation());
+        let fingerprint = display.is_ready().then(|| display_fingerprint(display));
+        self.active_display_fingerprint = fingerprint;
+        self.host_sink_fingerprint = fingerprint;
     }
 
     /// Reconcile from a Core-authenticated display route.
@@ -664,13 +830,14 @@ impl NotificationController {
                 start: Vec::new(),
                 stop,
                 start_host_sink: false,
-                stop_host_sink: self.host_sink_generation.is_some(),
+                stop_host_sink: self.host_sink_fingerprint.is_some(),
                 start_endpoints: Vec::new(),
                 stop_endpoints,
+                display_fingerprint: [0; 32],
             };
             self.active_sources.clear();
-            self.active_display_generation = None;
-            self.host_sink_generation = None;
+            self.active_display_fingerprint = None;
+            self.host_sink_fingerprint = None;
             return Ok(result);
         };
         let evidence = DisplayDependencyEvidence::from_authenticated_route(proof)?;
@@ -693,17 +860,18 @@ impl NotificationController {
                 start: Vec::new(),
                 stop,
                 start_host_sink: false,
-                stop_host_sink: self.host_sink_generation.is_some(),
+                stop_host_sink: self.host_sink_fingerprint.is_some(),
                 start_endpoints: Vec::new(),
                 stop_endpoints,
+                display_fingerprint: [0; 32],
             };
             let receipt = effects.apply(&result)?;
             if !receipt.matches(&result) {
                 return Err("notification-process-effect-proof-mismatch");
             }
             self.active_sources.clear();
-            self.active_display_generation = None;
-            self.host_sink_generation = None;
+            self.active_display_fingerprint = None;
+            self.host_sink_fingerprint = None;
             return Ok(result);
         };
         let evidence = DisplayDependencyEvidence::from_authenticated_route(proof)?;
@@ -715,8 +883,8 @@ impl NotificationController {
     pub fn drain_sources(&mut self) -> Vec<ResourceRef> {
         let drained = self.active_sources.keys().cloned().collect();
         self.active_sources.clear();
-        self.active_display_generation = None;
-        self.host_sink_generation = None;
+        self.active_display_fingerprint = None;
+        self.host_sink_fingerprint = None;
         drained
     }
 
@@ -831,6 +999,19 @@ mod tests {
             .unwrap();
         assert!(!restarted.start_host_sink);
         assert!(!restarted.stop_host_sink);
+        let changed_display = DisplayDependencyEvidence {
+            controller_generation: 4,
+            ..dependency.clone()
+        };
+        let route_restarted = controller
+            .reconcile_sources(
+                &changed_display,
+                &second,
+                &[test_source("two")],
+            )
+            .unwrap();
+        assert!(route_restarted.start_host_sink);
+        assert!(route_restarted.stop_host_sink);
         let unavailable = controller
             .reconcile_sources(&display(DisplayDependencyState::Pending), &second, &[])
             .unwrap();
@@ -920,5 +1101,29 @@ mod tests {
             .unwrap();
         assert_eq!(retry.stop, vec![ResourceRef::parse("Guest/one").unwrap()]);
         assert_eq!(retry.start, vec![ResourceRef::parse("Guest/two").unwrap()]);
+    }
+
+    #[test]
+    fn effect_receipts_bind_to_the_complete_plan_digest() {
+        let plan = SourceReconcileResult {
+            start: Vec::new(),
+            stop: Vec::new(),
+            start_host_sink: true,
+            stop_host_sink: false,
+            start_endpoints: Vec::new(),
+            stop_endpoints: Vec::new(),
+            display_fingerprint: [7; 32],
+        };
+        let receipt = SourceProcessEffectReceipt::complete(&plan);
+        assert!(receipt.matches(&plan));
+        assert_eq!(
+            SourceProcessEffectReceipt::builder(&plan).finish(),
+            Err("notification-process-effect-incomplete")
+        );
+        let changed = SourceReconcileResult {
+            stop_host_sink: true,
+            ..plan
+        };
+        assert!(!receipt.matches(&changed));
     }
 }

@@ -81,6 +81,16 @@ let
           && (c.actionNonceTtlSecs or 120) <= 600;
         message = "${row.path}.spec.config.actionNonceTtlSecs must be between 30 and 600.";
       }
+      {
+        assertion = lib.length sources <= 16;
+        message = "${row.path}.spec.config.guestSources must contain at most 16 entries.";
+      }
+      {
+        assertion =
+          let guestRefs = map (source: (if builtins.isAttrs source then source else { }).guestRef or null) sources;
+          in lib.length guestRefs == lib.length (lib.unique guestRefs);
+        message = "${row.path}.spec.config.guestSources must not contain duplicate guestRef values.";
+      }
     ] ++ sourceAssertions;
 in
 {
