@@ -228,6 +228,11 @@ impl VerifiedClipboardAttachments {
         self.descriptors.len()
     }
 
+    /// Return whether no descriptors were accepted.
+    pub const fn is_empty(&self) -> bool {
+        self.descriptors.is_empty()
+    }
+
     /// Consume every descriptor through the authenticated byte bound.
     pub fn read_all(self) -> Result<Vec<Vec<u8>>, FdReadError> {
         let Self {
