@@ -14,6 +14,8 @@ use d2b_contracts::broker_wire::{
     SignalRunnerRequest, SpawnRunnerRequest,
 };
 use d2b_contracts::types::{BundleOpId, RoleId, VmId};
+use d2b_core::bundle_resolver::{BundleResolver, intent_id_runner};
+use d2b_core::processes::ProcessRole;
 use d2b_process::{
     BackendLaunch, BackendObservation, IdentityBinding, ObservedIdentity, ProcessEffectBackend,
     ProcessEffectError, ProcessIdentityDigest, ProcessRequest, ProcessStopClass, WaitReapOwner,
@@ -135,6 +137,108 @@ pub trait BrokerLaunchResolver: Send + Sync + 'static {
         &self,
         request: &ProcessRequest,
     ) -> Result<Option<BrokerObservedProcess>, ProcessEffectError>;
+}
+
+/// Bundle-backed resolver for generic Process tickets.
+///
+/// The ticket carries only canonical resource references and bounded
+/// configuration identities. This resolver turns the Guest resource name and
+/// Process resource name into the closed broker runner role and then looks up
+/// the complete launch intent in the trusted bundle. No caller-controlled
+/// executable, argv, uid, cgroup, or legacy role is accepted.
+#[derive(Clone)]
+pub struct BundleBackedLaunchResolver {
+    bundle: BundleResolver,
+}
+
+impl BundleBackedLaunchResolver {
+    /// Build a resolver from the broker's trusted bundle copy.
+    pub fn new(bundle: BundleResolver) -> Self {
+        Self { bundle }
+    }
+
+    fn identity_digest(value: &str, domain: &[u8]) -> [u8; 32] {
+        let mut digest = Sha256::new();
+        digest.update(domain);
+        digest.update(value.as_bytes());
+        digest.finalize().into()
+    }
+}
+
+impl std::fmt::Debug for BundleBackedLaunchResolver {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("BundleBackedLaunchResolver(<redacted>)")
+    }
+}
+
+impl BrokerLaunchResolver for BundleBackedLaunchResolver {
+    fn resolve(&self, request: &ProcessRequest) -> Result<BrokerLaunchIntent, ProcessEffectError> {
+        let ticket = request.ticket();
+        if ticket.execution_ref().resource_type().as_str() != "Guest" {
+            return Err(ProcessEffectError::UnsupportedProvider);
+        }
+        let vm_name = ticket.execution_ref().name().as_str();
+        let role_id = ticket.process_ref().name().as_str();
+        let intent_id = intent_id_runner(vm_name, role_id);
+        let intent = self
+            .bundle
+            .find_runner_intent(&intent_id)
+            .ok_or(ProcessEffectError::UnsupportedProvider)?;
+        let role = runner_role_for_process_role(&intent.role)
+            .ok_or(ProcessEffectError::UnsupportedProvider)?;
+        if intent.vm_name != vm_name || intent.role_id != role_id {
+            return Err(ProcessEffectError::IdentityChanged);
+        }
+        Ok(BrokerLaunchIntent {
+            vm_id: VmId::new(vm_name),
+            role_id: RoleId::new(role_id),
+            role,
+            bundle_runner_intent_ref: BundleOpId::new(intent.intent_id.clone()),
+            provider_identity: Self::identity_digest(
+                ticket.owner_provider().as_str(),
+                b"d2b-process-provider-v1",
+            ),
+            template_identity: Self::identity_digest(
+                ticket.template().as_str(),
+                b"d2b-process-template-v1",
+            ),
+            generation: ticket.resource_generation().get(),
+        })
+    }
+
+    fn observe(
+        &self,
+        _request: &ProcessRequest,
+    ) -> Result<Option<BrokerObservedProcess>, ProcessEffectError> {
+        // The broker remains the only authority that can discover a live
+        // pidfd-backed runner. Until the corresponding authenticated
+        // observation operation is available, fail closed rather than
+        // guessing from a caller-provided pid or role.
+        Ok(None)
+    }
+}
+
+/// Map the open Process role vocabulary to the broker's closed runner role.
+pub fn runner_role_for_process_role(role: &ProcessRole) -> Option<RunnerRole> {
+    match role {
+        ProcessRole::CloudHypervisorRunner => Some(RunnerRole::CloudHypervisor),
+        ProcessRole::QemuMediaRunner => Some(RunnerRole::QemuMedia),
+        ProcessRole::Virtiofsd => Some(RunnerRole::Virtiofsd),
+        ProcessRole::Swtpm => Some(RunnerRole::Swtpm),
+        ProcessRole::SwtpmPreStartFlush => Some(RunnerRole::SwtpmFlush),
+        ProcessRole::Gpu | ProcessRole::GpuRenderNode => Some(RunnerRole::Gpu),
+        ProcessRole::Audio => Some(RunnerRole::Audio),
+        ProcessRole::Video => Some(RunnerRole::Video),
+        ProcessRole::VsockRelay => Some(RunnerRole::VsockRelay),
+        ProcessRole::Usbip => Some(RunnerRole::Usbip),
+        ProcessRole::OtelHostBridge => Some(RunnerRole::OtelHostBridge),
+        ProcessRole::WaylandProxy => Some(RunnerRole::WaylandProxy),
+        ProcessRole::HostReconcile
+        | ProcessRole::StoreVirtiofsPreflight
+        | ProcessRole::GuestSshReadiness
+        | ProcessRole::GuestControlHealth
+        | ProcessRole::SecurityKeyFrontend => None,
+    }
 }
 
 /// Core-local pidfd plus the identity tuple the broker verified.
@@ -447,6 +551,7 @@ fn response_error(response: &BrokerResponse, operation: BrokerOperation<'_>) -> 
 #[allow(clippy::items_after_test_module)]
 mod tests {
     use d2b_contracts::broker_wire::BrokerErrorResponse;
+    use d2b_core::processes::ProcessRole;
 
     use super::*;
 
@@ -568,6 +673,26 @@ mod tests {
         assert_eq!(
             response_error(&response, BrokerOperation::Other),
             ProcessEffectError::LaunchFailed
+        );
+    }
+
+    #[test]
+    fn generic_process_roles_map_only_to_closed_broker_roles() {
+        assert_eq!(
+            runner_role_for_process_role(&ProcessRole::CloudHypervisorRunner),
+            Some(RunnerRole::CloudHypervisor)
+        );
+        assert_eq!(
+            runner_role_for_process_role(&ProcessRole::GpuRenderNode),
+            Some(RunnerRole::Gpu)
+        );
+        assert_eq!(
+            runner_role_for_process_role(&ProcessRole::GuestControlHealth),
+            None
+        );
+        assert_eq!(
+            runner_role_for_process_role(&ProcessRole::SecurityKeyFrontend),
+            None
         );
     }
 

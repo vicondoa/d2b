@@ -1369,6 +1369,7 @@ name = "d2b-provider-supervisor"
 version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts",
+ "d2b-core",
  "d2b-process",
  "d2b-process-conformance",
  "d2b-provider-system-minijail",
