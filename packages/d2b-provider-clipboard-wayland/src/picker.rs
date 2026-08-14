@@ -133,7 +133,6 @@ impl PickerReceipt {
     ) -> Result<Self, PickerError> {
         if request.destination_guest() != destination.guest_ref()
             || request.source_zone() != source.zone()
-            || !source.is_guest()
             || !destination.is_guest()
             || !entry_digest.starts_with("sha256:")
         {

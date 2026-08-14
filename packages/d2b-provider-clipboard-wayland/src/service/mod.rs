@@ -328,7 +328,7 @@ impl ClipdHost {
             return Err(ClipboardServiceError::HistoryRejected);
         }
         Ok(GuestSelectionEvent {
-            source_zone: session.zone().clone(),
+            source_zone: session.zone.clone(),
             entry_digest: entry_digest.to_owned(),
             expires_at,
         })
@@ -364,7 +364,10 @@ impl ClipdHost {
             if !self.audit.is_full() {
                 let source_zone = source_event
                     .as_ref()
-                    .map_or_else(|| session.zone().clone(), |event| event.source_zone.clone());
+                    .map_or_else(
+                        || session.zone.clone(),
+                        |event| event.source_zone.clone(),
+                    );
                 let _ = self
                     .audit
                     .push(
@@ -580,6 +583,7 @@ mod tests {
         .unwrap();
         let digest = format!("sha256:{}", "a".repeat(64));
         let receipt = PickerAuthority::complete(
+            &source,
             &destination,
             &request,
             crate::picker::PickerResult::Selected(digest.clone()),
@@ -618,8 +622,15 @@ mod tests {
         let token = host
             .capture_guest(&guest, "text/plain", b"hello", 100)
             .unwrap();
+        let event = host.guest_selection_event(&guest, &token, 101).unwrap();
         assert_eq!(
-            host.capture_host(&user("zone-a", 1), "text/plain", b"hello", Some(&token), 101),
+            host.capture_host(
+                &user("zone-a", 1),
+                "text/plain",
+                b"hello",
+                Some(event),
+                101
+            ),
             Err(ClipboardServiceError::EchoSuppressed)
         );
         assert_eq!(host.history_len(), 1);
