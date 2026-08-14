@@ -69,6 +69,38 @@ fn runner_failure_preserves_the_source_generation_and_audits_one_code() {
 }
 
 #[test]
+fn prior_generation_reference_must_be_present_in_observations() {
+    let spec = NixosGenerationSpec::new(
+        ResourceRef::parse("Provider/activation-nixos").unwrap(),
+        ResourceRef::parse("Guest/dev-vm").unwrap(),
+        "dev-vm-system",
+        ActivationMode::Switch,
+        Some(ResourceRef::parse("activation-nixos.d2bus.org.NixosGeneration/gen-6").unwrap()),
+    )
+    .unwrap();
+    let controller = ActivationController::new(3);
+    let result = controller.reconcile(
+        &spec,
+        &caller(),
+        &[],
+        GenerationObservation::new("gen-7", GenerationPhase::Pending),
+    );
+    assert_eq!(
+        result.unwrap_err(),
+        d2b_provider_activation_nixos::ActivationError::InvalidSpec
+    );
+    let result = controller
+        .reconcile(
+            &spec,
+            &caller(),
+            &[GenerationObservation::new("gen-6", GenerationPhase::Ready)],
+            GenerationObservation::new("gen-7", GenerationPhase::Pending),
+        )
+        .unwrap();
+    assert_eq!(result.runner_requests().len(), 1);
+}
+
+#[test]
 fn retention_prunes_only_old_terminal_generations_without_ttl() {
     let controller = ActivationController::new(2);
     let observations = vec![

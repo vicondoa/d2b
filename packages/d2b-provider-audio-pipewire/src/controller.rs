@@ -3,7 +3,7 @@
 use crate::{
     AudioBindingSpec, AudioGrant, AudioLeaseId, AudioMediator, AudioMediatorError, AudioReadiness,
     GuestAudioReadiness, HostAudioReadiness, MicDecision, MicrophoneArbiter, SpeakerMixer,
-    validate_audio_binding, validate_audio_service,
+    validate_audio_binding_in_zone, validate_audio_service,
 };
 
 /// Closed AudioBinding lifecycle phase.
@@ -90,9 +90,11 @@ impl<M: AudioMediator> AudioBindingController<M> {
     pub fn reconcile(
         &mut self,
         binding: &AudioBindingSpec,
+        service_zone: &str,
         lease: AudioLeaseId,
     ) -> Result<AudioReconcileResult, AudioControllerError> {
-        validate_audio_binding(binding).map_err(|_| AudioControllerError::Admission)?;
+        validate_audio_binding_in_zone(binding, service_zone)
+            .map_err(|_| AudioControllerError::Admission)?;
         let host_readiness = self.mediator.host_readiness();
         let guest_readiness = self.mediator.guest_readiness();
         let mut microphone = None;
@@ -120,6 +122,9 @@ impl<M: AudioMediator> AudioBindingController<M> {
             host_effect_applied = true;
         }
         if let Some(level) = binding.grants.speaker_level {
+            self.speaker
+                .can_set_level(lease, level.get())
+                .map_err(|_| AudioControllerError::Admission)?;
             self.mediator
                 .set_level(level)
                 .map_err(AudioControllerError::Mediator)?;
@@ -129,10 +134,11 @@ impl<M: AudioMediator> AudioBindingController<M> {
             host_effect_applied = true;
         }
 
-        let phase = if self.mediator.readiness() == AudioReadiness::Ready {
-            AudioBindingPhase::Ready
-        } else {
-            AudioBindingPhase::Degraded
+        let phase = match microphone {
+            Some(MicDecision::Queued) => AudioBindingPhase::Pending,
+            Some(MicDecision::QueueFull) => AudioBindingPhase::Degraded,
+            _ if self.mediator.readiness() == AudioReadiness::Ready => AudioBindingPhase::Ready,
+            _ => AudioBindingPhase::Degraded,
         };
         Ok(AudioReconcileResult {
             status: AudioBindingStatus {

@@ -45,8 +45,11 @@ impl MicrophoneArbiter {
 
     /// Request the exclusive capture lease.
     pub fn request(&mut self, lease: AudioLeaseId, zone: impl Into<String>) -> MicDecision {
-        if self.active == Some(lease) || self.queue.iter().any(|(id, _)| *id == lease) {
+        if self.active == Some(lease) {
             return MicDecision::Granted;
+        }
+        if self.queue.iter().any(|(id, _)| *id == lease) {
+            return MicDecision::Queued;
         }
         if self.active.is_none() {
             self.active = Some(lease);
@@ -109,13 +112,23 @@ impl SpeakerMixer {
 
     /// Set a bounded consumer level.
     pub fn set_level(&mut self, lease: AudioLeaseId, level: u8) -> Result<(), AudioAuthorityError> {
+        self.can_set_level(lease, level)?;
+        self.levels.insert(lease, level);
+        Ok(())
+    }
+
+    /// Check whether a bounded consumer level can be admitted.
+    pub(crate) fn can_set_level(
+        &self,
+        lease: AudioLeaseId,
+        level: u8,
+    ) -> Result<(), AudioAuthorityError> {
         if level > 100 {
             return Err(AudioAuthorityError::LevelOutOfRange);
         }
         if !self.levels.contains_key(&lease) && self.levels.len() >= self.max_consumers {
             return Err(AudioAuthorityError::ConsumerLimit);
         }
-        self.levels.insert(lease, level);
         Ok(())
     }
 

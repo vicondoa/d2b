@@ -47,6 +47,11 @@ impl<P: d2b_process_conformance::ProcessLaunchEffectPort> SystemdProcessControll
         self.config
     }
 
+    /// Borrow the wrapped process Provider for status and test inspection.
+    pub const fn provider(&self) -> &SystemdProcessProvider<P> {
+        &self.provider
+    }
+
     /// Reconcile one action without opening a systemd connection.
     pub async fn reconcile(
         &self,

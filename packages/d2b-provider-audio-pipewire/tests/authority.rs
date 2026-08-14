@@ -24,6 +24,24 @@ fn microphone_is_exclusive_and_fair_with_bounded_queue() {
 }
 
 #[test]
+fn queued_microphone_requests_remain_queued_until_handoff() {
+    let mut arbiter = MicrophoneArbiter::new(1);
+    assert_eq!(
+        arbiter.request(AudioLeaseId::new(1), "zone-a"),
+        MicDecision::Granted
+    );
+    assert_eq!(
+        arbiter.request(AudioLeaseId::new(2), "zone-b"),
+        MicDecision::Queued
+    );
+    assert_eq!(
+        arbiter.request(AudioLeaseId::new(2), "zone-b"),
+        MicDecision::Queued
+    );
+    assert_eq!(arbiter.pending_count(), 1);
+}
+
+#[test]
 fn speaker_mixer_keeps_grants_independent() {
     let mut mixer = SpeakerMixer::new(2);
     mixer.set_level(AudioLeaseId::new(1), 80).unwrap();

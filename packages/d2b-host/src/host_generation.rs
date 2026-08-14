@@ -55,8 +55,10 @@ pub enum ActivationHelperOutcome {
     /// Existing generation recorded.
     Adopted,
     /// Request refused before mutation.
+    #[serde(rename = "helper-refused")]
     Refused,
     /// Target effect failed while source remained intact.
+    #[serde(rename = "helper-failed")]
     Failed,
 }
 

@@ -234,10 +234,17 @@ impl ActivationController {
         &self,
         spec: &NixosGenerationSpec,
         caller: &ActivationCaller,
-        _prior: &[GenerationObservation],
+        prior: &[GenerationObservation],
         observed: GenerationObservation,
     ) -> Result<RunnerResult, ActivationError> {
         caller.authorize(spec)?;
+        if let Some(prior_ref) = spec.prior_generation_ref()
+            && !prior
+                .iter()
+                .any(|generation| generation.name() == prior_ref.name().as_str())
+        {
+            return Err(ActivationError::InvalidSpec);
+        }
         if observed.phase == GenerationPhase::Deleted {
             return Err(ActivationError::AlreadyDeleted);
         }
