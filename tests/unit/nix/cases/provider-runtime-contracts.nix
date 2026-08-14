@@ -47,6 +47,20 @@ let
           config = { };
         };
       };
+      credential-managed-identity = {
+        type = "Provider";
+        spec = {
+          artifactId = "credential-managed-identity";
+          config = { };
+        };
+      };
+      credential-entra = {
+        type = "Provider";
+        spec = {
+          artifactId = "credential-entra";
+          config = { };
+        };
+      };
       runtime-azure-container-apps = {
         type = "Provider";
         spec = {
@@ -88,33 +102,51 @@ let
       aca-control = {
         type = "Credential";
         spec = {
+          providerRef = "Provider/credential-managed-identity";
           scope.executionRef = "Guest/gateway";
+          audience = "https://management.azure.com/";
+          allowedOperations = [ "acquire-token" ];
+          consumerRef = "Provider/runtime-azure-container-apps";
         };
       };
       aca-pull = {
         type = "Credential";
         spec = {
+          providerRef = "Provider/credential-entra";
           scope.executionRef = "Guest/gateway";
+          audience = "https://management.azure.com/";
+          allowedOperations = [ "acquire-token" ];
+          consumerRef = "Provider/runtime-azure-container-apps";
         };
       };
       vm-arm = {
         type = "Credential";
         spec = {
+          providerRef = "Provider/credential-managed-identity";
           scope.executionRef = "Guest/gateway";
+          audience = "https://management.azure.com/";
+          allowedOperations = [ "acquire-token" ];
+          consumerRef = "Provider/runtime-azure-virtual-machine";
         };
       };
       relay-listen = {
         type = "Credential";
         spec = {
+          providerRef = "Provider/credential-managed-identity";
           audience = "azure-relay-listen";
           scope.executionRef = "Guest/gateway";
+          allowedOperations = [ "acquire-token" ];
+          consumerRef = "Provider/transport-azure-relay";
         };
       };
       relay-send = {
         type = "Credential";
         spec = {
+          providerRef = "Provider/credential-entra";
           audience = "azure-relay-send";
           scope.executionRef = "Guest/gateway";
+          allowedOperations = [ "acquire-token" ];
+          consumerRef = "Provider/transport-azure-relay";
         };
       };
       system-guest = {
@@ -299,6 +331,39 @@ in
             pullCredentialRef = "Credential/aca-pull";
             networkRef = "Network/control-network";
           };
+      })
+    ];
+    expected = true;
+  };
+
+  "provider-runtime-contracts-rejects-runtime-credential-with-wrong-provider" = {
+    expr = hasFailure "ARM credential must use a supported Azure credential Provider" [
+      contractBase
+      ({ ... }: {
+        d2b.zones.local-root.resources.vm-arm.spec.providerRef =
+          lib.mkForce "Provider/transport-azure-relay";
+      })
+    ];
+    expected = true;
+  };
+
+  "provider-runtime-contracts-requires-acquire-token-for-runtime-credential" = {
+    expr = hasFailure "credentials must use a supported Azure credential Provider" [
+      contractBase
+      ({ ... }: {
+        d2b.zones.local-root.resources.aca-control.spec.allowedOperations =
+          lib.mkForce [ "refresh-token" ];
+      })
+    ];
+    expected = true;
+  };
+
+  "provider-runtime-contracts-requires-relay-credential-consumer" = {
+    expr = hasFailure "Relay consumerRef" [
+      contractBase
+      ({ ... }: {
+        d2b.zones.local-root.resources.relay-send.spec.consumerRef =
+          lib.mkForce "Provider/runtime-azure-container-apps";
       })
     ];
     expected = true;

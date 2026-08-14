@@ -102,6 +102,26 @@ let
         in
         resolvesAs row "Credential" credentialRef
         && ((credential.spec or { }).scope or { }).executionRef == gatewayRef;
+      credentialBoundaryMatches = credentialRef:
+        let
+          credential = resourceFor row credentialRef;
+        in
+        if credential == null then false else
+        let
+          credentialSpec = credential.spec or { };
+          credentialProviderRef = credentialSpec.providerRef or null;
+          allowedProviders = [
+            "Provider/credential-managed-identity"
+            "Provider/credential-entra"
+          ];
+        in
+          resolvesAs row "Credential" credentialRef
+          && resolvesAs row "Provider" credentialProviderRef
+          && builtins.elem credentialProviderRef allowedProviders
+          && (credentialSpec.consumerRef or null) == providerRef
+          && builtins.elem "acquire-token" (credentialSpec.allowedOperations or [ ])
+          && (credentialSpec.audience or null) == "https://management.azure.com/"
+          && ((credentialSpec.scope or { }).executionRef or null) == gatewayRef;
     in
       (if providerRef == "Provider/runtime-cloud-hypervisor" then [
         {
@@ -119,6 +139,10 @@ let
           message = "${row.path}.spec.config ARM credential scope must match controllerExecutionRef.";
         }
         {
+          assertion = lib.all credentialBoundaryMatches credentialRefs;
+          message = "${row.path}.spec.config ARM credential must use a supported Azure credential Provider, management audience, acquire-token operation, and matching consumerRef.";
+        }
+        {
           assertion = providerConfig.networkRef or null == null
             || resolvesAs row "Network" providerConfig.networkRef;
           message = "${row.path}.spec.config.networkRef must resolve to a same-Zone Network.";
@@ -132,6 +156,10 @@ let
         {
           assertion = lib.all credentialScopeMatches credentialRefs;
           message = "${row.path}.spec.config credential scopes must match gatewayExecutionRef.";
+        }
+        {
+          assertion = lib.all credentialBoundaryMatches credentialRefs;
+          message = "${row.path}.spec.config credentials must use a supported Azure credential Provider, management audience, acquire-token operation, and matching consumerRef.";
         }
         {
           assertion = providerConfig.networkRef or null == null
@@ -266,6 +294,25 @@ let
         (credential:
           if credential == null then null else (credential.spec or { }).audience or null)
         credentialRows;
+      credentialBoundaryMatches = credential:
+        if credential == null then false else
+        let
+          credentialSpec = credential.spec or { };
+          credentialProviderRef = credentialSpec.providerRef or null;
+        in
+          resolvesAs row "Provider" credentialProviderRef
+          && builtins.elem credentialProviderRef [
+            "Provider/credential-managed-identity"
+            "Provider/credential-entra"
+          ]
+          && (credentialSpec.consumerRef or null) == providerRef
+          && builtins.elem "acquire-token" (credentialSpec.allowedOperations or [ ])
+          && builtins.elem (credentialSpec.audience or null) [
+            "azure-relay-listen"
+            "azure-relay-send"
+          ]
+          && ((credentialSpec.scope or { }).executionRef or null)
+            == (providerConfig.executionRef or null);
       forbidden = [
         "socketPath"
         "hostPath"
@@ -320,6 +367,10 @@ let
               == (providerConfig.executionRef or null))
             credentialRows;
           message = "${row.path}.spec.transportCredentials scope must match the Relay Provider executionRef.";
+        }
+        {
+          assertion = lib.all credentialBoundaryMatches credentialRows;
+          message = "${row.path}.spec.transportCredentials must use supported credential Providers, acquire-token, and the Relay consumerRef.";
         }
       ];
 
