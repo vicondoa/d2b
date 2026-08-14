@@ -277,6 +277,7 @@
           "provider-elf-shim.nix"
           "provider-projection-exportability.nix"
           "provider-projection-fields.nix"
+          "provider-system-providers.nix"
           "readiness-waves.nix"
           "resource-sharing.nix"
           "resources-bundle-telemetry.nix"
