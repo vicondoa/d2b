@@ -366,15 +366,15 @@ async fn finalization_stage_survives_controller_restart() {
         candidates: vec![record(AcaSandboxLifecycle::Creating)],
         ..FakeState::default()
     }));
-    let mut controller = controller(Arc::clone(&state));
-    controller
+    let mut first = controller(Arc::clone(&state));
+    first
         .finalize(
             AcaOperationId::parse("operation-recovery-first").unwrap(),
             1_000,
         )
         .await
         .unwrap();
-    let recovery = controller.recovery_state();
+    let recovery = first.recovery_state();
     assert_eq!(recovery.finalization_stage, "stop");
 
     state.lock().unwrap().candidates = vec![record(AcaSandboxLifecycle::Stopped)];

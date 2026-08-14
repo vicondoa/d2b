@@ -286,9 +286,7 @@ where
             }
         };
         Duration::from_millis(u64::from(self.config.startup_deadline_ms))
-            .checked_sub(Duration::from_millis(
-                now.saturating_sub(started),
-            ))
+            .checked_sub(Duration::from_millis(now.saturating_sub(started)))
             .ok_or(CloudHypervisorError::StartupDeadlineExceeded)
     }
 

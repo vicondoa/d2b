@@ -214,25 +214,6 @@ impl CompletedOperationLedger {
             };
             self.completed.remove(&oldest);
         }
-
-        impl AcaFinalizationStage {
-            fn as_str(self) -> &'static str {
-                match self {
-                    Self::Observe => "observe",
-                    Self::Stop => "stop",
-                    Self::Delete => "delete",
-                }
-            }
-
-            fn parse(value: &str) -> Option<Self> {
-                match value {
-                    "observe" => Some(Self::Observe),
-                    "stop" => Some(Self::Stop),
-                    "delete" => Some(Self::Delete),
-                    _ => None,
-                }
-            }
-        }
     }
 
     /// Remove expired operation records.
@@ -254,6 +235,25 @@ impl CompletedOperationLedger {
     /// Return whether no records are retained.
     pub fn is_empty(&self) -> bool {
         self.completed.is_empty()
+    }
+}
+
+impl AcaFinalizationStage {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Observe => "observe",
+            Self::Stop => "stop",
+            Self::Delete => "delete",
+        }
+    }
+
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "observe" => Some(Self::Observe),
+            "stop" => Some(Self::Stop),
+            "delete" => Some(Self::Delete),
+            _ => None,
+        }
     }
 }
 

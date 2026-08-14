@@ -557,7 +557,10 @@ async fn failed_update_lro_honors_pending_delete_intent() {
 #[tokio::test]
 async fn restart_with_pending_delete_never_reprovisions_an_absent_vm() {
     let (provider, settings) = config();
-    let state = Arc::new(Mutex::new(FakeState::default()));
+    let state = Arc::new(Mutex::new(FakeState {
+        polls: vec![LroStatus::Succeeded],
+        ..FakeState::default()
+    }));
     let effect = Arc::new(FakeEffect {
         state: Arc::clone(&state),
     });
