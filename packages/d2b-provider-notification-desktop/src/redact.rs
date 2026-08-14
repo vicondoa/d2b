@@ -59,8 +59,8 @@ impl core::fmt::Debug for SanitizedNotification {
 
 /// Sanitize a request without exposing content to diagnostics.
 pub fn sanitize(request: &NotificationRequest) -> Result<SanitizedNotification, NotificationError> {
-    let summary = sanitize_text(&request_summary(request), MAX_SUMMARY_CHARS);
-    let body = sanitize_text(&request_body(request), MAX_BODY_CHARS);
+    let summary = sanitize_text(request.summary(), MAX_SUMMARY_CHARS);
+    let body = sanitize_text(request.body().unwrap_or_default(), MAX_BODY_CHARS);
     let actions = request
         .actions()
         .iter()
@@ -91,20 +91,4 @@ pub fn sanitize_text(value: &str, max_chars: usize) -> String {
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
-}
-
-fn request_summary(request: &NotificationRequest) -> String {
-    let wire = serde_json::to_value(request).unwrap_or_default();
-    wire.get("summary")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or_default()
-        .to_owned()
-}
-
-fn request_body(request: &NotificationRequest) -> String {
-    let wire = serde_json::to_value(request).unwrap_or_default();
-    wire.get("body")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or_default()
-        .to_owned()
 }

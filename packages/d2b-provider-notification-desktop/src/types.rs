@@ -276,6 +276,14 @@ impl NotificationRequest {
         self.category
     }
 
+    pub(crate) fn summary(&self) -> &str {
+        &self.summary
+    }
+
+    pub(crate) fn body(&self) -> Option<&str> {
+        self.body.as_deref()
+    }
+
     /// Borrow actions.
     pub fn actions(&self) -> &[ActionSpec] {
         &self.actions
