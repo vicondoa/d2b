@@ -683,6 +683,10 @@ impl DisplayController {
         )
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the controller fence keeps every authenticated input explicit"
+    )]
     fn reconcile_with_policy_and_evidence_for_controller(
         &mut self,
         spec: &WaylandSessionSpec,
