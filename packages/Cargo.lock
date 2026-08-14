@@ -1313,6 +1313,7 @@ name = "d2b-provider-notification-desktop"
 version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts",
+ "d2b-provider-display-wayland",
  "d2b-session",
  "getrandom 0.2.17",
  "serde",
