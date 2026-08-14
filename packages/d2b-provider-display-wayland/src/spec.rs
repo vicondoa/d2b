@@ -238,6 +238,7 @@ pub struct WaylandSessionSpec {
     policy_ref: ResourceRef,
     identity: DisplayIdentity,
     cross_domain_trusted: bool,
+    reconnect_generation: u64,
     virgl_video: bool,
     filter: FilterInput,
 }
@@ -251,6 +252,8 @@ struct WaylandSessionSpecWire {
     policy_ref: ResourceRef,
     identity: DisplayIdentity,
     cross_domain_trusted: bool,
+    #[serde(default = "default_reconnect_generation")]
+    reconnect_generation: u64,
     virgl_video: bool,
     filter: FilterInput,
 }
@@ -267,6 +270,7 @@ impl TryFrom<WaylandSessionSpecWire> for WaylandSessionSpec {
             value.identity,
             value.cross_domain_trusted,
         )?
+        .with_reconnect_generation(value.reconnect_generation)?
         .with_virgl_video(value.virgl_video)
         .with_filter(value.filter))
     }
@@ -309,9 +313,24 @@ impl WaylandSessionSpec {
             policy_ref,
             identity,
             cross_domain_trusted,
+            reconnect_generation: 1,
             virgl_video: false,
             filter: FilterInput::default(),
         })
+    }
+
+    /// Bind this desired state to one authenticated reconnect generation.
+    pub fn with_reconnect_generation(mut self, generation: u64) -> Result<Self, WaylandSpecError> {
+        if generation == 0 {
+            return Err(WaylandSpecError::InvalidReference);
+        }
+        self.reconnect_generation = generation;
+        Ok(self)
+    }
+
+    /// Return the authenticated reconnect generation.
+    pub const fn reconnect_generation(&self) -> u64 {
+        self.reconnect_generation
     }
 
     /// Enable the experimental virgl video path.
@@ -401,5 +420,10 @@ fn validate_color(value: &str) -> Result<(), WaylandSpecError> {
     {
         return Err(WaylandSpecError::InvalidColor);
     }
+
     Ok(())
+}
+
+const fn default_reconnect_generation() -> u64 {
+    1
 }

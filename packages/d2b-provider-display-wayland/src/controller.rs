@@ -1,13 +1,17 @@
 //! Display controller lifecycle and finalizer state.
 
 use crate::{
-    FINALIZER, WaylandSpecError,
+    FINALIZER, PROVIDER_REF, WaylandSpecError,
     policy::{FilterInput, WaylandPolicy},
     principal::{PrincipalLease, PrincipalPool},
-    process::{LaunchTicket, ProcessObservation},
+    process::{
+        LaunchTicket, ProcessObservation, VolumeState, WorkerAction, WorkerState, WorkerSupervisor,
+    },
     spec::WaylandSessionSpec,
 };
 use d2b_contracts::v3::{ResourceRef, ZoneId};
+use d2b_session::AuthenticatedComponentSession;
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
 /// Closed display-session lifecycle phase.
@@ -48,31 +52,94 @@ pub enum SessionCondition {
     NoPrincipalAvailable,
 }
 
+/// Typed readiness evidence supplied by Core.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DependencyReadiness {
+    /// The dependency has not completed its authenticated handshake.
+    Pending,
+    /// The dependency completed its authenticated handshake.
+    Ready,
+    /// The dependency failed its bounded startup attempt.
+    Failed,
+}
+
+/// Typed optional capability evidence supplied by Core.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CapabilityReadiness {
+    /// The optional capability is unavailable.
+    Unsupported,
+    /// The optional capability is available.
+    Supported,
+}
+
 /// Dependency observations supplied by Core.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DependencyState {
-    /// GPU cross-domain endpoint status.
-    pub gpu_ready: bool,
-    /// User portal status.
-    pub portal_ready: bool,
-    /// Optional clipboard bridge status.
-    pub clipboard_ready: bool,
-    /// GPU virgl video capability status.
-    pub virgl_video_supported: bool,
-    /// Same-Zone identity observed for Core policy resolution.
-    pub zone: Option<ZoneId>,
+    gpu: DependencyReadiness,
+    portal: DependencyReadiness,
+    clipboard: DependencyReadiness,
+    virgl_video: CapabilityReadiness,
+    zone: Option<ZoneId>,
 }
 
 impl DependencyState {
     /// Construct all required dependencies as Ready.
     pub const fn ready() -> Self {
         Self {
-            gpu_ready: true,
-            portal_ready: true,
-            clipboard_ready: true,
-            virgl_video_supported: true,
+            gpu: DependencyReadiness::Ready,
+            portal: DependencyReadiness::Ready,
+            clipboard: DependencyReadiness::Ready,
+            virgl_video: CapabilityReadiness::Supported,
             zone: None,
         }
+    }
+
+    /// Return the GPU endpoint readiness.
+    pub const fn gpu(&self) -> DependencyReadiness {
+        self.gpu
+    }
+
+    /// Return the user portal readiness.
+    pub const fn portal(&self) -> DependencyReadiness {
+        self.portal
+    }
+
+    /// Return the optional clipboard bridge readiness.
+    pub const fn clipboard(&self) -> DependencyReadiness {
+        self.clipboard
+    }
+
+    /// Return optional virgl video capability evidence.
+    pub const fn virgl_video(&self) -> CapabilityReadiness {
+        self.virgl_video
+    }
+
+    /// Borrow the observed dependency Zone.
+    pub const fn zone(&self) -> Option<&ZoneId> {
+        self.zone.as_ref()
+    }
+
+    /// Bind the Core-observed dependency Zone.
+    pub fn with_zone(mut self, zone: ZoneId) -> Self {
+        self.zone = Some(zone);
+        self
+    }
+
+    /// Construct a typed pending observation.
+    pub const fn pending() -> Self {
+        Self {
+            gpu: DependencyReadiness::Pending,
+            portal: DependencyReadiness::Pending,
+            clipboard: DependencyReadiness::Pending,
+            virgl_video: CapabilityReadiness::Unsupported,
+            zone: None,
+        }
+    }
+}
+
+impl Default for DependencyState {
+    fn default() -> Self {
+        Self::pending()
     }
 }
 
@@ -98,27 +165,178 @@ pub struct WaylandSessionStatus {
 pub struct ReconcileResult {
     /// Projected status.
     pub status: WaylandSessionStatus,
-    /// LaunchTicket when the workers need to be started.
-    pub launch_ticket: Option<LaunchTicket>,
+    /// Role-bound LaunchTickets when workers need to be started.
+    pub launch_tickets: Vec<LaunchTicket>,
+    /// Independent worker actions for the Core-owned supervisor.
+    pub worker_actions: Vec<WorkerAction>,
+}
+
+/// Core-authenticated evidence that the display endpoint is Ready.
+#[derive(PartialEq, Eq)]
+pub struct DisplayDependencyProof {
+    provider_ref: ResourceRef,
+    zone: ZoneId,
+    user_ref: ResourceRef,
+    generation: u64,
+}
+
+impl DisplayDependencyProof {
+    /// Borrow the authenticated Provider reference.
+    pub const fn provider_ref(&self) -> &ResourceRef {
+        &self.provider_ref
+    }
+
+    /// Borrow the authenticated Zone.
+    pub const fn zone(&self) -> &ZoneId {
+        &self.zone
+    }
+
+    /// Borrow the authenticated User reference.
+    pub const fn user_ref(&self) -> &ResourceRef {
+        &self.user_ref
+    }
+
+    /// Return the Ready generation.
+    pub const fn generation(&self) -> u64 {
+        self.generation
+    }
+}
+
+impl core::fmt::Debug for DisplayDependencyProof {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("DisplayDependencyProof(REDACTED)")
+    }
+}
+
+/// Authenticated display-controller session routing evidence.
+#[derive(Debug, PartialEq, Eq)]
+pub struct AuthenticatedDisplaySession {
+    guest_ref: ResourceRef,
+    zone: ZoneId,
+    reconnect_generation: u64,
+}
+
+impl AuthenticatedDisplaySession {
+    /// Project the caller identity from an admitted ComponentSession.
+    pub fn from_component_session<C>(
+        session: &AuthenticatedComponentSession<C>,
+    ) -> Result<Self, WaylandSpecError> {
+        let route = session.route_binding();
+        if route
+            .provider_ref()
+            .is_none_or(|provider| provider.to_canonical_string() != PROVIDER_REF)
+            || route.service().as_str() != crate::SERVICE_PACKAGE
+            || route.subject_ref().resource_type().as_str() != "Guest"
+            || route.provider_generation().is_none()
+            || route.reconnect_generation().get() == 0
+        {
+            return Err(WaylandSpecError::InvalidReference);
+        }
+        Ok(Self {
+            guest_ref: route.subject_ref().clone(),
+            zone: route.zone().clone(),
+            reconnect_generation: route.reconnect_generation().get(),
+        })
+    }
+
+    /// Borrow the authenticated Guest reference.
+    pub const fn guest_ref(&self) -> &ResourceRef {
+        &self.guest_ref
+    }
+
+    /// Borrow the authenticated Zone.
+    pub const fn zone(&self) -> &ZoneId {
+        &self.zone
+    }
+
+    /// Return the authenticated reconnect generation.
+    pub const fn reconnect_generation(&self) -> u64 {
+        self.reconnect_generation
+    }
 }
 
 /// Finalization observations supplied by the Process controller.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FinalizationInput {
-    /// Whether graceful stop was requested.
-    pub stop_requested: bool,
-    /// Whether the proxy reached a verified terminal phase.
-    pub proxy_terminal: bool,
-    /// Whether Process deletion was confirmed.
-    pub proxy_deleted: bool,
-    /// Whether runtime Volume deletion was confirmed.
-    pub volume_deleted: bool,
-    /// Whether Core observed the dynamic principal release.
-    pub principal_released: bool,
-    /// Whether the compositor portal revoke completed.
-    pub portal_revoked: bool,
-    /// Whether the bounded grace period expired.
-    pub grace_expired: bool,
+    stop_requested: StopRequest,
+    proxy: WorkerState,
+    volume: VolumeState,
+    authority: CleanupState,
+    principal: CleanupState,
+    portal: CleanupState,
+    grace: GraceState,
+}
+
+impl FinalizationInput {
+    /// Construct finalization evidence at the Core/Supervisor boundary.
+    #[allow(dead_code)]
+    pub(crate) const fn from_supervisor(
+        stop_requested: StopRequest,
+        proxy: WorkerState,
+        volume: VolumeState,
+        authority: CleanupState,
+        principal: CleanupState,
+        portal: CleanupState,
+        grace: GraceState,
+    ) -> Self {
+        Self {
+            stop_requested,
+            proxy,
+            volume,
+            authority,
+            principal,
+            portal,
+            grace,
+        }
+    }
+
+    #[cfg(test)]
+    const fn new(
+        stop_requested: StopRequest,
+        proxy: WorkerState,
+        volume: VolumeState,
+        authority: CleanupState,
+        principal: CleanupState,
+        portal: CleanupState,
+        grace: GraceState,
+    ) -> Self {
+        Self::from_supervisor(
+            stop_requested,
+            proxy,
+            volume,
+            authority,
+            principal,
+            portal,
+            grace,
+        )
+    }
+}
+
+/// Whether the owning controller requested graceful stop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StopRequest {
+    /// The worker is still serving.
+    Active,
+    /// Graceful stop has been requested.
+    Requested,
+}
+
+/// Cleanup evidence for one Core-owned authority.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CleanupState {
+    /// Cleanup remains outstanding.
+    Pending,
+    /// Cleanup completion was observed.
+    Complete,
+}
+
+/// Whether the bounded finalization grace period has elapsed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GraceState {
+    /// The bounded grace period is still active.
+    Active,
+    /// The bounded grace period elapsed.
+    Expired,
 }
 
 /// Finalizer action decision.
@@ -152,30 +370,60 @@ pub struct WaylandPolicySnapshot {
 }
 
 impl WaylandPolicySnapshot {
-    pub(crate) fn from_core(
+    /// Resolve a policy snapshot for one authenticated Guest session.
+    ///
+    /// The route binding supplies the Zone and Provider identity; callers may
+    /// not substitute a different Zone or service boundary while compiling
+    /// the policy.
+    pub fn from_authenticated_session<C>(
+        session: &AuthenticatedComponentSession<C>,
+        policy_ref: ResourceRef,
+        generation: u64,
+        defaults: FilterInput,
+        zone_policy: FilterInput,
+    ) -> Result<Self, WaylandSpecError> {
+        let route = session.route_binding();
+        if route
+            .provider_ref()
+            .is_none_or(|provider| provider.to_canonical_string() != PROVIDER_REF)
+            || route.service().as_str() != crate::SERVICE_PACKAGE
+            || route.subject_ref().resource_type().as_str() != "Guest"
+            || route.provider_generation().is_none()
+            || generation == 0
+        {
+            return Err(WaylandSpecError::InvalidReference);
+        }
+        Self::from_core(
+            policy_ref,
+            route.zone().clone(),
+            generation,
+            defaults,
+            zone_policy,
+        )
+    }
+
+    /// Construct a snapshot resolved by the Core policy adapter.
+    ///
+    /// The generation is mandatory and must be non-zero; reconciliation
+    /// rejects snapshots whose resource reference or Zone does not match the
+    /// authenticated session.
+    pub fn from_core(
         policy_ref: ResourceRef,
         zone: ZoneId,
         generation: u64,
         defaults: FilterInput,
         zone_policy: FilterInput,
-    ) -> Self {
-        Self {
+    ) -> Result<Self, WaylandSpecError> {
+        if generation == 0 {
+            return Err(WaylandSpecError::InvalidReference);
+        }
+        Ok(Self {
             policy_ref,
             zone,
             generation,
             defaults,
             zone_policy,
-        }
-    }
-
-    fn compatibility(spec: &WaylandSessionSpec) -> Self {
-        Self {
-            policy_ref: spec.policy_ref().clone(),
-            zone: ZoneId::parse("local").expect("compiled compatibility Zone"),
-            generation: 0,
-            defaults: FilterInput::default(),
-            zone_policy: FilterInput::default(),
-        }
+        })
     }
 
     /// Borrow the referenced policy resource.
@@ -200,16 +448,16 @@ impl WaylandPolicySnapshot {
         if self.policy_ref != *spec.policy_ref() {
             return Err(WaylandSpecError::InvalidReference);
         }
-        WaylandPolicy::compile(&self.defaults, &self.zone_policy, spec.filter()).map_err(
-            |error| match error {
+        WaylandPolicy::compile(&self.defaults, &self.zone_policy, spec.filter()).map_err(|error| {
+            match error {
                 crate::policy::PolicyCompileError::UnknownInterface(_) => {
                     WaylandSpecError::UnknownInterface
                 }
                 crate::policy::PolicyCompileError::BoundsExceeded => {
                     WaylandSpecError::InvalidReference
                 }
-            },
-        )
+            }
+        })
     }
 }
 
@@ -241,6 +489,8 @@ pub struct DisplayController {
     principal_pool: PrincipalPool,
     principals: BTreeMap<String, PrincipalLease>,
     active_policies: BTreeMap<String, PolicyBinding>,
+    ready_sessions: BTreeMap<String, u64>,
+    worker_supervisor: WorkerSupervisor,
 }
 
 impl DisplayController {
@@ -251,30 +501,34 @@ impl DisplayController {
                 .expect("display principal pool size is validated by the signed descriptor"),
             principals: BTreeMap::new(),
             active_policies: BTreeMap::new(),
+            ready_sessions: BTreeMap::new(),
+            worker_supervisor: WorkerSupervisor::new(WorkerSupervisor::DEFAULT_MAX_ATTEMPTS)
+                .expect("default worker retry bound is non-zero"),
         }
     }
 
-    /// Reconcile one session from authenticated dependency and worker state.
-    pub fn reconcile(
+    /// Reconcile only after binding the desired state to an authenticated
+    /// Guest ComponentSession.
+    pub fn reconcile_authenticated_session<C>(
         &mut self,
-        spec: &WaylandSessionSpec,
-        dependencies: DependencyState,
-        observation: ProcessObservation,
-    ) -> Result<ReconcileResult, WaylandSpecError> {
-        let policy = WaylandPolicySnapshot::compatibility(spec);
-        self.reconcile_with_policy(spec, dependencies, observation, None, &policy)
-    }
-
-    /// Reconcile one session with grants issued by Core/Supervisor.
-    pub fn reconcile_with_grants(
-        &mut self,
+        session: &AuthenticatedComponentSession<C>,
         spec: &WaylandSessionSpec,
         dependencies: DependencyState,
         observation: ProcessObservation,
         grants: Option<crate::process::LaunchGrants>,
+        policy: &WaylandPolicySnapshot,
     ) -> Result<ReconcileResult, WaylandSpecError> {
-        let policy = WaylandPolicySnapshot::compatibility(spec);
-        self.reconcile_with_policy(spec, dependencies, observation, grants, &policy)
+        let authenticated = AuthenticatedDisplaySession::from_component_session(session)?;
+        if authenticated.guest_ref() != spec.guest_ref()
+            || authenticated.reconnect_generation() != spec.reconnect_generation()
+            || authenticated.zone() != policy.zone()
+            || dependencies
+                .zone()
+                .is_some_and(|zone| zone != policy.zone())
+        {
+            return Err(WaylandSpecError::InvalidReference);
+        }
+        self.reconcile_with_policy(spec, dependencies, observation, grants, policy)
     }
 
     /// Reconcile using the authenticated Core-resolved WaylandPolicy.
@@ -289,8 +543,9 @@ impl DisplayController {
         if !spec.cross_domain_trusted() {
             return Err(WaylandSpecError::CrossDomainUntrusted);
         }
+
         let compiled = policy.compile(spec)?;
-        if let Some(zone) = &dependencies.zone
+        if let Some(zone) = dependencies.zone()
             && zone != policy.zone()
         {
             return Err(WaylandSpecError::InvalidReference);
@@ -309,7 +564,32 @@ impl DisplayController {
             .active_policies
             .get(&session_key)
             .is_some_and(|active| active != &policy_binding);
-        if spec.virgl_video() && !dependencies.virgl_video_supported {
+        let worker_actions = match self
+            .worker_supervisor
+            .plan_with_budget(observation, policy_changed)
+        {
+            Ok(actions) => actions,
+            Err(_) => {
+                self.release_principal_if_owned(&session_key)?;
+                self.active_policies.remove(&session_key);
+                self.ready_sessions.remove(&session_key);
+                return Ok(ReconcileResult {
+                    status: self.status(
+                        Phase::Failed,
+                        compiled.digest().to_owned(),
+                        policy.generation(),
+                        String::new(),
+                        Vec::new(),
+                    ),
+                    launch_tickets: Vec::new(),
+                    worker_actions: Vec::new(),
+                });
+            }
+        };
+        if spec.virgl_video()
+            && !matches!(dependencies.virgl_video(), CapabilityReadiness::Supported)
+        {
+            self.ready_sessions.remove(&session_key);
             return Ok(ReconcileResult {
                 status: self.status(
                     Phase::Degraded,
@@ -318,28 +598,33 @@ impl DisplayController {
                     String::new(),
                     vec![SessionCondition::VirglVideoUnsupported],
                 ),
-                launch_ticket: None,
+                launch_tickets: Vec::new(),
+                worker_actions: Vec::new(),
             });
         }
         let conditions = [
             (
-                dependencies.gpu_ready,
+                matches!(dependencies.gpu(), DependencyReadiness::Ready),
                 SessionCondition::GpuEndpointAvailable,
             ),
-            (dependencies.portal_ready, SessionCondition::UserPortalReady),
+            (
+                matches!(dependencies.portal(), DependencyReadiness::Ready),
+                SessionCondition::UserPortalReady,
+            ),
             (
                 spec.cross_domain_trusted(),
                 SessionCondition::CrossDomainTrusted,
             ),
-            (observation.proxy_ready, SessionCondition::ProxyReady),
+            (observation.proxy.is_ready(), SessionCondition::ProxyReady),
             (
-                observation.frontend_ready,
+                observation.frontend.is_ready(),
                 SessionCondition::GuestFrontendReady,
             ),
         ];
-        if observation.proxy_failure_count >= 5 || observation.frontend_failure_count >= 5 {
+        if observation.proxy.failure_count() >= 5 || observation.frontend.failure_count() >= 5 {
             self.release_principal_if_owned(&session_key)?;
             self.active_policies.remove(&session_key);
+            self.ready_sessions.remove(&session_key);
             return Ok(ReconcileResult {
                 status: self.status(
                     Phase::Failed,
@@ -351,10 +636,14 @@ impl DisplayController {
                         .filter_map(|(present, condition)| present.then_some(*condition))
                         .collect::<Vec<_>>(),
                 ),
-                launch_ticket: None,
+                launch_tickets: Vec::new(),
+                worker_actions: Vec::new(),
             });
         }
-        if !dependencies.gpu_ready || !dependencies.portal_ready {
+        if !matches!(dependencies.gpu(), DependencyReadiness::Ready)
+            || !matches!(dependencies.portal(), DependencyReadiness::Ready)
+        {
+            self.ready_sessions.remove(&session_key);
             return Ok(ReconcileResult {
                 status: self.status(
                     Phase::Pending,
@@ -366,12 +655,13 @@ impl DisplayController {
                         .filter_map(|(present, condition)| present.then_some(*condition))
                         .collect::<Vec<_>>(),
                 ),
-                launch_ticket: None,
+                launch_tickets: Vec::new(),
+                worker_actions: worker_actions.clone(),
             });
         }
-        let needs_worker_launch =
-            policy_changed || !observation.proxy_ready || !observation.frontend_ready;
+        let needs_worker_launch = !worker_actions.is_empty();
         if needs_worker_launch && grants.is_none() {
+            self.ready_sessions.remove(&session_key);
             return Ok(ReconcileResult {
                 status: self.status(
                     Phase::Pending,
@@ -383,15 +673,47 @@ impl DisplayController {
                         .filter_map(|(present, condition)| present.then_some(*condition))
                         .collect::<Vec<_>>(),
                 ),
-                launch_ticket: None,
+                launch_tickets: Vec::new(),
+                worker_actions: worker_actions.clone(),
             });
         }
+        let launch_tickets = if needs_worker_launch {
+            let grants = grants.expect("launch grants checked before principal allocation");
+            let Some(tickets) = grants.into_worker_tickets(
+                session_digest(spec),
+                spec.reconnect_generation(),
+                compiled.digest(),
+                policy.generation(),
+                spec.identity().label(),
+                &worker_actions,
+            ) else {
+                self.ready_sessions.remove(&session_key);
+                return Ok(ReconcileResult {
+                    status: self.status(
+                        Phase::Pending,
+                        compiled.digest().to_owned(),
+                        policy.generation(),
+                        String::new(),
+                        conditions
+                            .iter()
+                            .filter_map(|(present, condition)| present.then_some(*condition))
+                            .collect::<Vec<_>>(),
+                    ),
+                    launch_tickets: Vec::new(),
+                    worker_actions: worker_actions.clone(),
+                });
+            };
+            tickets
+        } else {
+            Vec::new()
+        };
         let principal = if let Some(lease) = self.principals.get(&session_key) {
             lease.principal().to_owned()
         } else {
             let lease = match self.principal_pool.acquire_dynamic() {
                 Ok(lease) => lease,
                 Err(crate::principal::PrincipalPoolError::NoPrincipalAvailable) => {
+                    self.ready_sessions.remove(&session_key);
                     return Ok(ReconcileResult {
                         status: self.status(
                             Phase::Failed,
@@ -400,7 +722,8 @@ impl DisplayController {
                             String::new(),
                             vec![SessionCondition::NoPrincipalAvailable],
                         ),
-                        launch_ticket: None,
+                        launch_tickets: Vec::new(),
+                        worker_actions: Vec::new(),
                     });
                 }
                 Err(_) => return Err(WaylandSpecError::InvalidReference),
@@ -409,31 +732,18 @@ impl DisplayController {
             self.principals.insert(session_key.clone(), lease);
             principal
         };
-        let launch_ticket = if needs_worker_launch {
-            let grants = grants.expect("launch grants checked before principal allocation");
-            let (compositor, gpu) = grants.into_parts();
-            Some(
-                LaunchTicket::new_with_generation(
-                    compositor,
-                    gpu,
-                    compiled.digest().to_owned(),
-                    policy.generation(),
-                    spec.identity().label().to_owned(),
-                )
-                .expect("controller-generated launch ticket uses validated fields"),
-            )
-        } else {
-            None
-        };
-        if !needs_worker_launch || launch_ticket.is_some() {
+        if !needs_worker_launch || !launch_tickets.is_empty() {
             self.active_policies
                 .insert(session_key.clone(), policy_binding);
         }
-        let phase = if launch_ticket.is_some() {
+        let phase = if !launch_tickets.is_empty() {
             Phase::Pending
-        } else if observation.proxy_ready && observation.frontend_ready {
+        } else if observation.proxy.is_ready() && observation.frontend.is_ready() {
+            self.ready_sessions
+                .insert(session_key.clone(), policy.generation());
             Phase::Ready
         } else {
+            self.ready_sessions.remove(&session_key);
             Phase::Pending
         };
         Ok(ReconcileResult {
@@ -448,13 +758,64 @@ impl DisplayController {
                     .chain((!needs_worker_launch).then_some(SessionCondition::PolicyApplied))
                     .collect(),
             ),
-            launch_ticket,
+            launch_tickets,
+            worker_actions,
+        })
+    }
+
+    /// Mint typed dependency evidence only after a Ready reconciliation and
+    /// an authenticated Guest session binding.
+    pub fn dependency_proof<C>(
+        &self,
+        session: &AuthenticatedComponentSession<C>,
+        spec: &WaylandSessionSpec,
+        result: &ReconcileResult,
+        policy: &WaylandPolicySnapshot,
+    ) -> Result<DisplayDependencyProof, WaylandSpecError> {
+        let authenticated = AuthenticatedDisplaySession::from_component_session(session)?;
+        if authenticated.guest_ref() != spec.guest_ref()
+            || authenticated.reconnect_generation() != spec.reconnect_generation()
+            || authenticated.zone() != policy.zone()
+        {
+            return Err(WaylandSpecError::InvalidReference);
+        }
+        let session_key = session_key(spec);
+        let Some(ready_generation) = self.ready_sessions.get(&session_key) else {
+            return Err(WaylandSpecError::InvalidReference);
+        };
+        let Some(active_policy) = self.active_policies.get(&session_key) else {
+            return Err(WaylandSpecError::InvalidReference);
+        };
+        let principal_matches = result
+            .status
+            .principal
+            .as_deref()
+            .zip(self.principals.get(&session_key))
+            .is_some_and(|(reported, lease)| reported == lease.principal());
+        if result.status.phase != Phase::Ready
+            || result.status.policy_generation != policy.generation()
+            || *ready_generation != policy.generation()
+            || active_policy.generation != policy.generation()
+            || active_policy.digest != result.status.policy_digest
+            || policy.policy_ref() != spec.policy_ref()
+            || !principal_matches
+        {
+            return Err(WaylandSpecError::InvalidReference);
+        }
+        Ok(DisplayDependencyProof {
+            provider_ref: ResourceRef::parse(PROVIDER_REF)
+                .map_err(|_| WaylandSpecError::InvalidReference)?,
+            zone: policy.zone().clone(),
+            user_ref: spec.user_ref().clone(),
+            generation: result.status.policy_generation,
         })
     }
 
     /// Decide the safe finalizer action for one session.
     pub const fn finalize(input: FinalizationInput) -> FinalizationDecision {
-        if input.grace_expired && !(input.proxy_terminal && input.proxy_deleted) {
+        if matches!(input.grace, GraceState::Expired)
+            && !(input.proxy.is_terminal() && input.proxy.is_deleted())
+        {
             return FinalizationDecision {
                 stop_proxy: false,
                 delete_runtime_volume: false,
@@ -463,7 +824,7 @@ impl DisplayController {
                 ambiguous: true,
             };
         }
-        if !input.stop_requested {
+        if matches!(input.stop_requested, StopRequest::Active) {
             return FinalizationDecision {
                 stop_proxy: true,
                 delete_runtime_volume: false,
@@ -472,7 +833,7 @@ impl DisplayController {
                 ambiguous: false,
             };
         }
-        if !input.proxy_terminal || !input.proxy_deleted {
+        if !input.proxy.is_terminal() || !input.proxy.is_deleted() {
             return FinalizationDecision {
                 stop_proxy: false,
                 delete_runtime_volume: false,
@@ -481,7 +842,7 @@ impl DisplayController {
                 ambiguous: false,
             };
         }
-        if !input.volume_deleted {
+        if !input.volume.is_deleted() {
             return FinalizationDecision {
                 stop_proxy: false,
                 delete_runtime_volume: true,
@@ -490,7 +851,10 @@ impl DisplayController {
                 ambiguous: false,
             };
         }
-        if !input.principal_released || !input.portal_revoked {
+        if !matches!(input.authority, CleanupState::Complete)
+            || !matches!(input.principal, CleanupState::Complete)
+            || !matches!(input.portal, CleanupState::Complete)
+        {
             return FinalizationDecision {
                 stop_proxy: false,
                 delete_runtime_volume: false,
@@ -534,9 +898,11 @@ impl DisplayController {
             .remove(&receipt.session_key)
             .ok_or(crate::principal::PrincipalPoolError::UnknownLease)?;
         self.active_policies.remove(&receipt.session_key);
+        self.ready_sessions.remove(&receipt.session_key);
         self.principal_pool.release(lease)
     }
 
+    #[allow(dead_code)]
     pub(crate) fn principal_release_receipt(
         &mut self,
         session_key: &str,
@@ -553,6 +919,8 @@ impl DisplayController {
         let Some(lease) = self.principals.remove(session_key) else {
             return Ok(());
         };
+        self.active_policies.remove(session_key);
+        self.ready_sessions.remove(session_key);
         self.principal_pool
             .release(lease)
             .map_err(|_| WaylandSpecError::InvalidReference)?;
@@ -590,11 +958,24 @@ impl core::fmt::Debug for DisplayController {
 
 fn session_key(spec: &WaylandSessionSpec) -> String {
     format!(
-        "{}|{}|{}",
+        "{}|{}|{}|{}",
         spec.guest_ref().to_canonical_string(),
         spec.host_ref().to_canonical_string(),
         spec.user_ref().to_canonical_string(),
+        spec.reconnect_generation(),
     )
+}
+
+fn session_digest(spec: &WaylandSessionSpec) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    digest.update(spec.guest_ref().to_canonical_string().as_bytes());
+    digest.update([0]);
+    digest.update(spec.host_ref().to_canonical_string().as_bytes());
+    digest.update([0]);
+    digest.update(spec.user_ref().to_canonical_string().as_bytes());
+    digest.update([0]);
+    digest.update(spec.reconnect_generation().to_be_bytes());
+    digest.finalize().into()
 }
 
 #[cfg(test)]
@@ -627,7 +1008,8 @@ mod tests {
             7,
             FilterInput::default(),
             FilterInput::default(),
-        );
+        )
+        .unwrap();
         assert_eq!(policy.generation(), 7);
 
         let mut controller = DisplayController::new(1);
@@ -643,7 +1025,7 @@ mod tests {
         assert_eq!(result.status.phase, Phase::Ready);
 
         let receipt = controller
-            .principal_release_receipt("Guest/demo|Host/demo|User/alice")
+            .principal_release_receipt("Guest/demo|Host/demo|User/alice|1")
             .unwrap();
         controller.release_session_principal(receipt).unwrap();
     }
@@ -657,14 +1039,16 @@ mod tests {
             7,
             FilterInput::default(),
             FilterInput::default(),
-        );
+        )
+        .unwrap();
         let second_policy = WaylandPolicySnapshot::from_core(
             spec.policy_ref().clone(),
             ZoneId::parse("local").unwrap(),
             8,
             FilterInput::default(),
             FilterInput::default(),
-        );
+        )
+        .unwrap();
         let mut controller = DisplayController::new(1);
         controller
             .reconcile_with_policy(
@@ -686,24 +1070,29 @@ mod tests {
             )
             .unwrap();
         assert_eq!(pending.status.phase, Phase::Pending);
-        assert!(!pending
-            .status
-            .conditions
-            .contains(&SessionCondition::PolicyApplied));
+        assert!(
+            !pending
+                .status
+                .conditions
+                .contains(&SessionCondition::PolicyApplied)
+        );
 
         let launched = controller
             .reconcile_with_policy(
                 &spec,
                 DependencyState::ready(),
                 ProcessObservation::ready(),
-                Some(LaunchGrants::from_supervisor(
+                Some(LaunchGrants::from_supervisor_for_session_with_frontend(
                     AttachmentGrantHandle::from_supervisor([9; 32]),
                     AttachmentGrantHandle::from_supervisor([10; 32]),
+                    AttachmentGrantHandle::from_supervisor([11; 32]),
+                    session_digest(&spec),
+                    spec.reconnect_generation(),
                 )),
                 &second_policy,
             )
             .unwrap();
-        assert!(launched.launch_ticket.is_some());
+        assert_eq!(launched.launch_tickets.len(), 2);
         assert_eq!(launched.status.phase, Phase::Pending);
 
         let ready = controller
@@ -716,9 +1105,57 @@ mod tests {
             )
             .unwrap();
         assert_eq!(ready.status.phase, Phase::Ready);
-        assert!(ready
-            .status
-            .conditions
-            .contains(&SessionCondition::PolicyApplied));
+        assert!(
+            ready
+                .status
+                .conditions
+                .contains(&SessionCondition::PolicyApplied)
+        );
+    }
+
+    #[test]
+    fn finalizer_retains_ownership_for_ambiguous_process_cleanup() {
+        let decision = DisplayController::finalize(FinalizationInput::new(
+            StopRequest::Requested,
+            WorkerState::Starting,
+            VolumeState::Present,
+            CleanupState::Pending,
+            CleanupState::Pending,
+            CleanupState::Pending,
+            GraceState::Expired,
+        ));
+        assert_eq!(decision.phase, Phase::Degraded);
+        assert!(decision.ambiguous);
+        assert!(!decision.remove_finalizer);
+    }
+
+    #[test]
+    fn finalizer_removes_ownership_only_after_all_cleanup_evidence() {
+        let decision = DisplayController::finalize(FinalizationInput::new(
+            StopRequest::Requested,
+            WorkerState::Terminal { deleted: true },
+            VolumeState::Deleted,
+            CleanupState::Complete,
+            CleanupState::Complete,
+            CleanupState::Complete,
+            GraceState::Active,
+        ));
+        assert_eq!(decision.phase, Phase::Terminating);
+        assert!(decision.remove_finalizer);
+    }
+
+    #[test]
+    fn finalizer_retains_ownership_until_supervisor_authority_is_released() {
+        let decision = DisplayController::finalize(FinalizationInput::new(
+            StopRequest::Requested,
+            WorkerState::Terminal { deleted: true },
+            VolumeState::Deleted,
+            CleanupState::Pending,
+            CleanupState::Complete,
+            CleanupState::Complete,
+            GraceState::Active,
+        ));
+        assert!(decision.ambiguous);
+        assert!(!decision.remove_finalizer);
     }
 }

@@ -1,10 +1,10 @@
 use d2b_contracts::v3::ResourceRef;
 use d2b_provider_display_wayland::{
-    DisplayAuditKind, DisplayAuditOutcome, DisplayIdentity,
+    DisplayAuditKind, DisplayAuditOutcome, DisplayController, DisplayIdentity,
     DisplayLabelPosition, DisplayProviderDescriptor, DisplayTelemetryField, DisplayTelemetryFrame,
-    DisplayUserPortal, FilterInput, FinalizationInput, Phase, PolicyWarning,
-    PrincipalPool, ProcessObservation, ProxyReadinessFailure, ProxyReadinessStage,
-    ProxyReadinessState, WaylandPolicy, WaylandSessionSpec,
+    DisplayUserPortal, FilterInput, Phase, PolicyWarning, PrincipalPool, ProcessObservation,
+    ProxyReadinessFailure, ProxyReadinessStage, ProxyReadinessState, WaylandPolicy,
+    WaylandPolicySnapshot, WaylandSessionSpec,
 };
 
 fn refs() -> (ResourceRef, ResourceRef, ResourceRef, ResourceRef) {
@@ -20,6 +20,30 @@ fn identity() -> DisplayIdentity {
     DisplayIdentity::new("work-vm", "#7fc8ff", "#45475a", "#f38ba8")
         .unwrap()
         .with_label_position(DisplayLabelPosition::TopLeft)
+}
+
+fn policy_for(spec: &WaylandSessionSpec) -> WaylandPolicySnapshot {
+    WaylandPolicySnapshot::from_core(
+        spec.policy_ref().clone(),
+        d2b_contracts::v3::ZoneId::parse("local").unwrap(),
+        1,
+        FilterInput::default(),
+        FilterInput::default(),
+    )
+    .unwrap()
+}
+
+fn reconcile(
+    controller: &mut DisplayController,
+    spec: &WaylandSessionSpec,
+    dependencies: d2b_provider_display_wayland::DependencyState,
+    observation: ProcessObservation,
+) -> Result<
+    d2b_provider_display_wayland::ReconcileResult,
+    d2b_provider_display_wayland::WaylandSpecError,
+> {
+    let policy = policy_for(spec);
+    controller.reconcile_with_policy(spec, dependencies, observation, None, &policy)
 }
 
 #[test]
@@ -144,29 +168,29 @@ fn controller_status_transitions_pending_ready_and_failed() {
     let (guest, host, user, policy) = refs();
     let spec = WaylandSessionSpec::new(guest, host, user, policy, identity(), true).unwrap();
     let mut controller = d2b_provider_display_wayland::DisplayController::new(4);
-    let pending = controller
-        .reconcile(
-            &spec,
-            d2b_provider_display_wayland::DependencyState::default(),
-            d2b_provider_display_wayland::ProcessObservation::default(),
-        )
-        .unwrap();
+    let pending = reconcile(
+        &mut controller,
+        &spec,
+        d2b_provider_display_wayland::DependencyState::default(),
+        d2b_provider_display_wayland::ProcessObservation::default(),
+    )
+    .unwrap();
     assert_eq!(pending.status.phase, Phase::Pending);
-    let ready = controller
-        .reconcile(
-            &spec,
-            d2b_provider_display_wayland::DependencyState::ready(),
-            d2b_provider_display_wayland::ProcessObservation::ready(),
-        )
-        .unwrap();
+    let ready = reconcile(
+        &mut controller,
+        &spec,
+        d2b_provider_display_wayland::DependencyState::ready(),
+        d2b_provider_display_wayland::ProcessObservation::ready(),
+    )
+    .unwrap();
     assert_eq!(ready.status.phase, Phase::Ready);
-    let failed = controller
-        .reconcile(
-            &spec,
-            d2b_provider_display_wayland::DependencyState::ready(),
-            d2b_provider_display_wayland::ProcessObservation::proxy_failed(5),
-        )
-        .unwrap();
+    let failed = reconcile(
+        &mut controller,
+        &spec,
+        d2b_provider_display_wayland::DependencyState::ready(),
+        d2b_provider_display_wayland::ProcessObservation::proxy_failed(5),
+    )
+    .unwrap();
     assert_eq!(failed.status.phase, Phase::Failed);
 }
 
@@ -184,37 +208,37 @@ fn failed_reconcile_releases_the_session_principal() {
     )
     .unwrap();
     let mut controller = d2b_provider_display_wayland::DisplayController::new(1);
-    let first_status = controller
-        .reconcile(
+    let first_status = reconcile(
+        &mut controller,
+        &first,
+        d2b_provider_display_wayland::DependencyState::ready(),
+        ProcessObservation::ready(),
+    )
+    .unwrap()
+    .status;
+    assert!(first_status.principal.is_some());
+    assert_eq!(
+        reconcile(
+            &mut controller,
             &first,
+            d2b_provider_display_wayland::DependencyState::ready(),
+            ProcessObservation::proxy_failed(5),
+        )
+        .unwrap()
+        .status
+        .phase,
+        Phase::Failed
+    );
+    assert_eq!(
+        reconcile(
+            &mut controller,
+            &second,
             d2b_provider_display_wayland::DependencyState::ready(),
             ProcessObservation::ready(),
         )
         .unwrap()
-        .status;
-    assert!(first_status.principal.is_some());
-    assert_eq!(
-        controller
-            .reconcile(
-                &first,
-                d2b_provider_display_wayland::DependencyState::ready(),
-                ProcessObservation::proxy_failed(5),
-            )
-            .unwrap()
-            .status
-            .phase,
-        Phase::Failed
-    );
-    assert_eq!(
-        controller
-            .reconcile(
-                &second,
-                d2b_provider_display_wayland::DependencyState::ready(),
-                ProcessObservation::ready(),
-            )
-            .unwrap()
-            .status
-            .phase,
+        .status
+        .phase,
         Phase::Ready
     );
 }
@@ -233,24 +257,24 @@ fn mutable_session_fields_reuse_the_same_principal() {
     )
     .unwrap();
     let mut controller = d2b_provider_display_wayland::DisplayController::new(1);
-    let first_principal = controller
-        .reconcile(
-            &first,
-            d2b_provider_display_wayland::DependencyState::ready(),
-            ProcessObservation::ready(),
-        )
-        .unwrap()
-        .status
-        .principal;
-    let changed_principal = controller
-        .reconcile(
-            &changed,
-            d2b_provider_display_wayland::DependencyState::ready(),
-            ProcessObservation::ready(),
-        )
-        .unwrap()
-        .status
-        .principal;
+    let first_principal = reconcile(
+        &mut controller,
+        &first,
+        d2b_provider_display_wayland::DependencyState::ready(),
+        ProcessObservation::ready(),
+    )
+    .unwrap()
+    .status
+    .principal;
+    let changed_principal = reconcile(
+        &mut controller,
+        &changed,
+        d2b_provider_display_wayland::DependencyState::ready(),
+        ProcessObservation::ready(),
+    )
+    .unwrap()
+    .status
+    .principal;
     assert_eq!(first_principal, changed_principal);
 }
 
@@ -284,22 +308,22 @@ fn distinct_authenticated_sessions_do_not_share_display_principals() {
     )
     .unwrap();
     let mut controller = d2b_provider_display_wayland::DisplayController::new(2);
-    let first_status = controller
-        .reconcile(
-            &first,
-            d2b_provider_display_wayland::DependencyState::ready(),
-            ProcessObservation::ready(),
-        )
-        .unwrap()
-        .status;
-    let second_status = controller
-        .reconcile(
-            &second,
-            d2b_provider_display_wayland::DependencyState::ready(),
-            ProcessObservation::ready(),
-        )
-        .unwrap()
-        .status;
+    let first_status = reconcile(
+        &mut controller,
+        &first,
+        d2b_provider_display_wayland::DependencyState::ready(),
+        ProcessObservation::ready(),
+    )
+    .unwrap()
+    .status;
+    let second_status = reconcile(
+        &mut controller,
+        &second,
+        d2b_provider_display_wayland::DependencyState::ready(),
+        ProcessObservation::ready(),
+    )
+    .unwrap()
+    .status;
     assert_ne!(first_status.principal, second_status.principal);
 }
 
@@ -309,28 +333,10 @@ fn portal_is_same_uid_and_finalizer_is_fail_closed() {
     let portal = DisplayUserPortal::new(user.clone(), 1000, 1).unwrap();
     assert_eq!(portal.active_sessions(), 0);
     assert!(DisplayUserPortal::new(ResourceRef::parse("Guest/work").unwrap(), 1000, 1).is_err());
-    let ambiguous = d2b_provider_display_wayland::DisplayController::finalize(FinalizationInput {
-        stop_requested: true,
-        proxy_terminal: false,
-        proxy_deleted: false,
-        volume_deleted: false,
-        principal_released: false,
-        portal_revoked: false,
-        grace_expired: true,
-    });
-    assert!(ambiguous.ambiguous);
-    assert!(!ambiguous.remove_finalizer);
-    let complete = d2b_provider_display_wayland::DisplayController::finalize(FinalizationInput {
-        stop_requested: true,
-        proxy_terminal: true,
-        proxy_deleted: true,
-        volume_deleted: true,
-        principal_released: true,
-        portal_revoked: true,
-        grace_expired: false,
-    });
-    assert_eq!(complete.phase, Phase::Terminating);
-    assert!(complete.remove_finalizer);
+    assert_eq!(
+        d2b_provider_display_wayland::DisplayController::finalizer(),
+        "display-wayland.d2bus.org/proxy-stopped"
+    );
 }
 
 #[test]

@@ -37,19 +37,25 @@ impl std::error::Error for PortalError {}
 /// Opaque per-session compositor attachment grant.
 #[derive(PartialEq, Eq)]
 pub struct PortalGrant {
-    session_digest: String,
+    session_digest: [u8; 32],
     handle: AttachmentGrantHandle,
 }
 
 impl PortalGrant {
-    /// Borrow the opaque session digest.
-    pub fn session_digest(&self) -> &str {
-        &self.session_digest
+    #[allow(dead_code)]
+    pub(crate) fn into_parts(self) -> ([u8; 32], AttachmentGrantHandle) {
+        (self.session_digest, self.handle)
     }
+}
 
-    /// Borrow the opaque attachment handle.
-    pub const fn handle(&self) -> &AttachmentGrantHandle {
-        &self.handle
+/// Supervisor-issued identity binding for one display portal grant.
+pub struct PortalSessionBinding([u8; 32]);
+
+impl PortalSessionBinding {
+    /// Construct a binding at the Core/Supervisor boundary.
+    #[allow(dead_code)]
+    pub(crate) const fn from_supervisor(bytes: [u8; 32]) -> Self {
+        Self(bytes)
     }
 }
 
@@ -88,7 +94,7 @@ impl DisplayUserPortal {
     /// Issue one opaque grant after the same-user check.
     pub fn issue_grant(
         &mut self,
-        session_digest: impl Into<String>,
+        session_binding: PortalSessionBinding,
         requested_user: &ResourceRef,
         peer_uid: u32,
         handle: AttachmentGrantHandle,
@@ -99,7 +105,7 @@ impl DisplayUserPortal {
         if requested_user != &self.user_ref {
             return Err(PortalError::UserMismatch);
         }
-        let session_digest = session_digest.into();
+        let session_digest = Self::hex_digest(session_binding.0);
         if self.active.contains_key(&session_digest) {
             return Err(PortalError::SessionExists);
         }
@@ -107,11 +113,15 @@ impl DisplayUserPortal {
             return Err(PortalError::Capacity);
         }
         let grant = PortalGrant {
-            session_digest: session_digest.clone(),
+            session_digest: session_binding.0,
             handle,
         };
         self.active.insert(session_digest, ());
         Ok(grant)
+    }
+
+    fn hex_digest(bytes: [u8; 32]) -> String {
+        bytes.iter().map(|byte| format!("{byte:02x}")).collect()
     }
 
     /// Revoke a grant after the corresponding Process is gone.
@@ -153,22 +163,25 @@ mod tests {
         let mut portal = DisplayUserPortal::new(user.clone(), 1000, 1).unwrap();
         assert_eq!(
             portal.issue_grant(
-                "session",
+                PortalSessionBinding::from_supervisor([2; 32]),
                 &user,
                 1001,
                 AttachmentGrantHandle::from_supervisor([1; 32]),
             ),
             Err(PortalError::PeerMismatch)
         );
-        assert!(portal
-            .issue_grant(
-                "session",
-                &user,
-                1000,
-                AttachmentGrantHandle::from_supervisor([1; 32]),
-            )
-            .is_ok());
-        assert!(portal.revoke_idempotent("session"));
-        assert!(!portal.revoke_idempotent("session"));
+        assert!(
+            portal
+                .issue_grant(
+                    PortalSessionBinding::from_supervisor([2; 32]),
+                    &user,
+                    1000,
+                    AttachmentGrantHandle::from_supervisor([1; 32]),
+                )
+                .is_ok()
+        );
+        let session_digest = DisplayUserPortal::hex_digest([2; 32]);
+        assert!(portal.revoke_idempotent(&session_digest));
+        assert!(!portal.revoke_idempotent(&session_digest));
     }
 }

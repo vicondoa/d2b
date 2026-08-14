@@ -1,4 +1,4 @@
-//! Fail-closed Guest frontend entrypoint.
+//! Guest frontend entrypoint.
 
 fn main() -> std::process::ExitCode {
     std::process::ExitCode::from(78)

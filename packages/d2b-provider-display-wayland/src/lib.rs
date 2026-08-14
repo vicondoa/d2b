@@ -16,9 +16,10 @@ mod spec;
 
 pub use audit::{DisplayAuditKind, DisplayAuditOutcome, DisplayAuditRecord};
 pub use controller::{
-    DependencyState, DisplayController, FinalizationDecision, FinalizationInput, Phase,
-    PrincipalReleaseReceipt, ReconcileResult, SessionCondition, WaylandPolicySnapshot,
-    WaylandSessionStatus,
+    AuthenticatedDisplaySession, CapabilityReadiness, CleanupState, DependencyReadiness,
+    DependencyState, DisplayController, DisplayDependencyProof, FinalizationDecision,
+    FinalizationInput, GraceState, Phase, PrincipalReleaseReceipt, ReconcileResult,
+    SessionCondition, StopRequest, WaylandPolicySnapshot, WaylandSessionStatus,
 };
 pub use descriptor::{DisplayDescriptorError, DisplayProviderDescriptor};
 pub use metrics::{DisplayTelemetryField, DisplayTelemetryFrame, MetricOutcome};
@@ -26,11 +27,12 @@ pub use policy::{
     CompiledWaylandPolicy, FilterInput, KNOWN_GLOBALS, PolicyCompileError, PolicyWarning,
     WaylandPolicy,
 };
-pub use portal::{DisplayUserPortal, PortalError, PortalGrant};
+pub use portal::{DisplayUserPortal, PortalError, PortalGrant, PortalSessionBinding};
 pub use principal::{PrincipalLease, PrincipalPool, PrincipalPoolError};
 pub use process::{
     AttachmentGrantHandle, DisplayProcessRole, LaunchGrants, LaunchTicket, ProcessObservation,
     ProxyProcessTemplate, ProxyReadinessFailure, ProxyReadinessStage, ProxyReadinessState,
+    VolumeState, WorkerAction, WorkerState, WorkerSupervisor, WorkerSupervisorError,
 };
 pub use readiness::ProxyReadinessEvent;
 pub use spec::{DisplayIdentity, DisplayLabelPosition, WaylandSessionSpec, WaylandSpecError};
