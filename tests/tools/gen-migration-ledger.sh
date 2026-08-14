@@ -127,13 +127,13 @@ F=(
 
 # H: structural/source/doc cross-reference lint (policy scanner).
 H=(
-  adr-0015-presence-eval agents-md-rewrite-eval
+  adr-0015-presence-eval adr-index-coverage agents-md-rewrite-eval
   changelog-v1-cut-eval ci-coverage ci-uses-make cli-contract-coverage
   deliverable-gate-inventory guest-control-auth-nongoals
   guest-control-vsock-helper-static guest-exec-runtime-static host-prep-dag-eval
   kernel-module-matrix-eval kernel-modules-parity-eval l3-pin-consistency
   layer1-self-inventory legacy-group-name-denylist legacy-group-name-denylist-self-test
-  manpage-completeness-eval microvm-nix-absent-eval no-bash-exec-eval
+  manpage-completeness-eval microvm-nix-absent-eval no-bash-exec-eval no-new-deferral
   otel-acl-migration-eval pr-checklist-gate privileges-doc-completeness-eval
   privileges-matrix-completeness processes-json-eval release-tag-eval
   static-rust-dependency-direction stop-dag-reconcile-eval tap-dag-contract-doc-eval
@@ -168,7 +168,7 @@ PRESERVE_EXERCISED=0
 script_rel_for_name() {
   local name="$1"
   case "$name" in
-    ci-coverage|ci-uses-make|layer1-self-inventory|deliverable-gate-inventory|pr-checklist-gate)
+    ci-coverage|ci-uses-make|layer1-self-inventory|deliverable-gate-inventory|pr-checklist-gate|no-new-deferral|adr-index-coverage)
       printf 'tests/unit/meta/%s.sh' "$name"
       ;;
     drift-check|vms-json-parity|performance-budgets)
