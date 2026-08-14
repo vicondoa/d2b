@@ -43,6 +43,8 @@ pub enum ClipboardServiceError {
     AuditUnavailable,
     /// History rejected the item.
     HistoryRejected,
+    /// A picker is required before materialization.
+    PickerRequired,
 }
 
 impl core::fmt::Display for ClipboardServiceError {
@@ -53,6 +55,7 @@ impl core::fmt::Display for ClipboardServiceError {
             Self::GuestSuspended => "zone-suspended",
             Self::AuditUnavailable => "audit-unavailable",
             Self::HistoryRejected => "clipboard-history-rejected",
+            Self::PickerRequired => "picker-required",
         })
     }
 }
@@ -105,6 +108,9 @@ impl ClipdHost {
         bytes: &[u8],
         now_secs: u64,
     ) -> Result<String, ClipboardServiceError> {
+        if self.dependency.status != DependencyStatus::Ready {
+            return Err(ClipboardServiceError::DependencyUnavailable);
+        }
         if !self.policy.allow_guest_capture() {
             return Err(ClipboardServiceError::HistoryRejected);
         }
@@ -159,12 +165,42 @@ impl ClipdHost {
         destination_zone: &str,
         guest: &str,
     ) -> Result<(), ClipboardServiceError> {
+        self.authorize_paste_inner(source_zone, destination_zone, guest, false)
+    }
+
+    /// Check a paste route after the authenticated picker completed.
+    pub fn authorize_paste_after_picker(
+        &self,
+        source_zone: &str,
+        destination_zone: &str,
+        guest: &str,
+    ) -> Result<(), ClipboardServiceError> {
+        self.authorize_paste_inner(source_zone, destination_zone, guest, true)
+    }
+
+    fn authorize_paste_inner(
+        &self,
+        source_zone: &str,
+        destination_zone: &str,
+        guest: &str,
+        picker_completed: bool,
+    ) -> Result<(), ClipboardServiceError> {
+        if self.dependency.status != DependencyStatus::Ready {
+            return Err(ClipboardServiceError::DependencyUnavailable);
+        }
         if source_zone != destination_zone && !self.policy.cross_zone_enabled() {
             return Err(ClipboardServiceError::CrossZoneDenied);
         }
         self.history
             .authorize_guest(guest)
             .map_err(|_| ClipboardServiceError::GuestSuspended)
+            .and_then(|()| {
+                if self.policy.require_picker_for_paste() && !picker_completed {
+                    Err(ClipboardServiceError::PickerRequired)
+                } else {
+                    Ok(())
+                }
+            })
     }
 
     /// Return bounded history size.

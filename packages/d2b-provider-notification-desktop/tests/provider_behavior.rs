@@ -1,7 +1,7 @@
 use d2b_provider_notification_desktop::{
-    ActionNonceStore, AdmissionPurpose, Category, DesktopNotificationPort, NotificationController,
-    NotificationProviderDescriptor, NotificationRequest, NotificationResult, NotificationSink,
-    NotificationUrgency, SessionEvidence, TransportClass,
+    ActionNonceStore, ActionSpec, AdmissionPurpose, Category, DesktopNotificationPort,
+    NotificationController, NotificationProviderDescriptor, NotificationRequest, NotificationResult,
+    NotificationSink, NotificationUrgency, SessionEvidence, TransportClass,
 };
 
 #[derive(Default)]
@@ -101,10 +101,67 @@ fn stream_admission_rejects_wrong_profile_and_accepts_enrolled_source() {
 fn host_sink_delivers_redacted_content_and_returns_nonce_metadata_only() {
     let mut sink = NotificationSink::new(4, 2, 10);
     let mut port = RecordingSink::default();
-    let result = sink.deliver(&mut port, "source-a", request(), 100).unwrap();
+    let result = sink
+        .deliver(&mut port, "observer-a", request(), 100)
+        .unwrap();
     assert!(matches!(result, NotificationResult::Accepted { .. }));
     assert_eq!(port.accepted, vec!["hello world"]);
     assert!(!format!("{sink:?}").contains("hello"));
+}
+
+#[test]
+fn action_capabilities_bind_to_observer_and_projection_lifecycle() {
+    let request = NotificationRequest::new("summary", "body", Category::SystemInfo)
+        .unwrap()
+        .with_actions(vec![ActionSpec::new("open", "Open").unwrap()])
+        .unwrap();
+    let mut sink = NotificationSink::new(1, 4, 10);
+    let mut port = RecordingSink::default();
+    let result = sink.deliver(&mut port, "observer-a", request, 100).unwrap();
+    let action_key = match result {
+        NotificationResult::Accepted { action_nonces, .. } => action_nonces["open"].clone(),
+        other => panic!("unexpected result: {other:?}"),
+    };
+    assert_eq!(
+        sink.invoke_action(&action_key, "observer-b", 101),
+        Err(d2b_provider_notification_desktop::ActionNonceError::SessionMismatch)
+    );
+    assert_eq!(
+        sink.invoke_action_for(&action_key, "observer-a", "open", 101),
+        Ok("open".to_owned())
+    );
+
+    let result = sink
+        .deliver(
+            &mut port,
+            "observer-a",
+            NotificationRequest::new("summary", "body", Category::SystemInfo)
+                .unwrap()
+                .with_actions(vec![ActionSpec::new("open", "Open").unwrap()])
+                .unwrap(),
+            102,
+        )
+        .unwrap();
+    let closed_key = match result {
+        NotificationResult::Accepted { action_nonces, .. } => action_nonces["open"].clone(),
+        other => panic!("unexpected result: {other:?}"),
+    };
+    sink.close(2);
+    assert_eq!(
+        sink.invoke_action(&closed_key, "observer-a", 103),
+        Err(d2b_provider_notification_desktop::ActionNonceError::Unavailable)
+    );
+}
+
+#[test]
+fn zero_pending_capacity_fails_closed() {
+    let mut sink = NotificationSink::new(0, 2, 10);
+    let mut port = RecordingSink::default();
+    assert_eq!(
+        sink.deliver(&mut port, "observer-a", request(), 100)
+            .unwrap(),
+        NotificationResult::CapacityExceeded
+    );
 }
 
 #[test]

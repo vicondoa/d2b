@@ -1,8 +1,9 @@
 use d2b_provider_clipboard_wayland::{
     ClipboardAuditEvent, ClipboardAuditQueue, ClipboardConfig, ClipboardController, ClipboardEntry,
-    ClipboardHistory, ClipboardProviderDescriptor, ClipboardReason, ClipdHost, DependencyStatus,
-    FdCapModel, FdObjectKind, FdStatModel, FileSystemKind, PickerRequest, PickerResult, Policy,
-    SizeBucket, classify_fd_model, validate_fd_cap, validate_recvmsg_control,
+    ClipboardHistory, ClipboardProviderDescriptor, ClipboardReason, ClipboardServiceError,
+    ClipdHost, DependencyStatus, FdCapModel, FdObjectKind, FdStatModel, FileSystemKind,
+    PickerRequest, PickerResult, Policy, SizeBucket, classify_fd_model, validate_fd_cap,
+    validate_recvmsg_control,
 };
 
 #[test]
@@ -61,6 +62,20 @@ fn history_is_bounded_ttl_aware_and_purges_guest_state() {
 }
 
 #[test]
+fn duplicate_history_tokens_do_not_double_count_quota() {
+    let policy = Policy::new(true, true, true, true, false, 3, 4096, 4096, 32, 60).unwrap();
+    let config = ClipboardConfig::from_policy(policy);
+    let mut history = ClipboardHistory::new(config).unwrap();
+    let first = ClipboardEntry::new("Guest/work", "text/plain", &[1; 2000], 100).unwrap();
+    let duplicate = ClipboardEntry::new("Guest/work", "text/plain", &[1; 2000], 100).unwrap();
+    let second = ClipboardEntry::new("Guest/work", "text/plain", &[2; 2000], 101).unwrap();
+    history.insert(first).unwrap();
+    history.insert(duplicate).unwrap();
+    history.insert(second).unwrap();
+    assert_eq!(history.len(), 2);
+}
+
+#[test]
 fn audit_queue_fails_closed_and_never_renders_clipboard_bytes() {
     let mut queue = ClipboardAuditQueue::new(1);
     let event = ClipboardAuditEvent::new(
@@ -99,6 +114,24 @@ fn cross_zone_paste_is_denied_and_guest_lock_blocks_paste() {
         host.authorize_paste("zone-a", "zone-a", "Guest/work")
             .is_err()
     );
+}
+
+#[test]
+fn guest_operations_require_display_and_picker_policy() {
+    let mut absent = ClipdHost::new(Policy::default(), 4, None).unwrap();
+    assert_eq!(
+        absent.capture_guest("Guest/work", "text/plain", b"hello", 100),
+        Err(ClipboardServiceError::DependencyUnavailable)
+    );
+
+    let mut host = ClipdHost::new(Policy::default(), 4, Some(true)).unwrap();
+    assert_eq!(
+        host.authorize_paste("zone-a", "zone-a", "Guest/work"),
+        Err(ClipboardServiceError::PickerRequired)
+    );
+    assert!(host
+        .authorize_paste_after_picker("zone-a", "zone-a", "Guest/work")
+        .is_ok());
 }
 
 #[test]

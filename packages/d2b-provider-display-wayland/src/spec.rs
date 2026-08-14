@@ -57,8 +57,12 @@ pub enum DisplayLabelPosition {
 }
 
 /// Compositor-agnostic display identity metadata.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
+#[serde(
+    rename_all = "camelCase",
+    deny_unknown_fields,
+    try_from = "DisplayIdentityWire"
+)]
 pub struct DisplayIdentity {
     label: String,
     active_color: String,
@@ -69,6 +73,36 @@ pub struct DisplayIdentity {
     label_enabled: bool,
     label_text: Option<String>,
     label_position: DisplayLabelPosition,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct DisplayIdentityWire {
+    label: String,
+    active_color: String,
+    inactive_color: String,
+    urgent_color: String,
+    border_enabled: bool,
+    border_width: u32,
+    label_enabled: bool,
+    label_text: Option<String>,
+    label_position: DisplayLabelPosition,
+}
+
+impl TryFrom<DisplayIdentityWire> for DisplayIdentity {
+    type Error = WaylandSpecError;
+
+    fn try_from(value: DisplayIdentityWire) -> Result<Self, Self::Error> {
+        let identity = Self::new(
+            value.label,
+            value.active_color,
+            value.inactive_color,
+            value.urgent_color,
+        )?;
+        let identity = identity.with_border(value.border_enabled, value.border_width)?;
+        let identity = identity.with_label(value.label_enabled, value.label_text)?;
+        Ok(identity.with_label_position(value.label_position))
+    }
 }
 
 impl DisplayIdentity {
@@ -185,8 +219,12 @@ impl core::fmt::Debug for DisplayIdentity {
 }
 
 /// Authenticated desired state for one Wayland display session.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
+#[serde(
+    rename_all = "camelCase",
+    deny_unknown_fields,
+    try_from = "WaylandSessionSpecWire"
+)]
 pub struct WaylandSessionSpec {
     guest_ref: ResourceRef,
     host_ref: ResourceRef,
@@ -196,6 +234,36 @@ pub struct WaylandSessionSpec {
     cross_domain_trusted: bool,
     virgl_video: bool,
     filter: FilterInput,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct WaylandSessionSpecWire {
+    guest_ref: ResourceRef,
+    host_ref: ResourceRef,
+    user_ref: ResourceRef,
+    policy_ref: ResourceRef,
+    identity: DisplayIdentity,
+    cross_domain_trusted: bool,
+    virgl_video: bool,
+    filter: FilterInput,
+}
+
+impl TryFrom<WaylandSessionSpecWire> for WaylandSessionSpec {
+    type Error = WaylandSpecError;
+
+    fn try_from(value: WaylandSessionSpecWire) -> Result<Self, Self::Error> {
+        Ok(Self::new(
+            value.guest_ref,
+            value.host_ref,
+            value.user_ref,
+            value.policy_ref,
+            value.identity,
+            value.cross_domain_trusted,
+        )?
+        .with_virgl_video(value.virgl_video)
+        .with_filter(value.filter))
+    }
 }
 
 impl WaylandSessionSpec {

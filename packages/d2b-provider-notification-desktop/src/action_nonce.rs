@@ -120,12 +120,7 @@ impl ActionNonceStore {
         expected_action: Option<&str>,
         now_secs: u64,
     ) -> Result<String, ActionNonceError> {
-        let token = action_key
-            .strip_prefix("d2b-action:")
-            .filter(|token| {
-                token.len() == NONCE_BYTES * 2 && token.bytes().all(|byte| byte.is_ascii_hexdigit())
-            })
-            .ok_or(ActionNonceError::Unavailable)?;
+        let token = Self::token_from_key(action_key).ok_or(ActionNonceError::Unavailable)?;
         let nonce = self
             .entries
             .get(token)
@@ -143,6 +138,13 @@ impl ActionNonceStore {
         let action = nonce.action.clone();
         self.entries.remove(token);
         Ok(action)
+    }
+
+    /// Revoke one capability without consuming it.
+    pub fn revoke(&mut self, action_key: &str) -> bool {
+        Self::token_from_key(action_key)
+            .and_then(|token| self.entries.remove(token))
+            .is_some()
     }
 
     /// Remove expired entries.
@@ -168,6 +170,14 @@ impl ActionNonceStore {
     /// Clear all in-memory state while preserving the configured bounds.
     pub fn clear(&mut self) {
         self.entries.clear();
+    }
+
+    fn token_from_key(action_key: &str) -> Option<&str> {
+        action_key
+            .strip_prefix("d2b-action:")
+            .filter(|token| {
+                token.len() == NONCE_BYTES * 2 && token.bytes().all(|byte| byte.is_ascii_hexdigit())
+            })
     }
 }
 

@@ -28,7 +28,7 @@ pub use policy::{
 pub use portal::{DisplayUserPortal, PortalError, PortalGrant};
 pub use principal::{PrincipalLease, PrincipalPool, PrincipalPoolError};
 pub use process::{
-    AttachmentGrantHandle, DisplayProcessRole, LaunchTicket, ProcessObservation,
+    AttachmentGrantHandle, DisplayProcessRole, LaunchGrants, LaunchTicket, ProcessObservation,
     ProxyProcessTemplate, ProxyReadinessFailure, ProxyReadinessStage, ProxyReadinessState,
 };
 pub use readiness::ProxyReadinessEvent;

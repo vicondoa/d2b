@@ -139,13 +139,16 @@ impl ClipboardHistory {
         if entry.len() > self.config.max_item_bytes() {
             return Err(HistoryError::ItemTooLarge);
         }
+        let token = entry.token().to_owned();
+        if self.entries.contains_key(&token) {
+            return Ok(());
+        }
         if self.total_bytes.saturating_add(entry.len()) > self.config.max_total_bytes() {
             self.evict_until(entry.len());
         }
         if self.total_bytes.saturating_add(entry.len()) > self.config.max_total_bytes() {
             return Err(HistoryError::TotalQuotaExceeded);
         }
-        let token = entry.token().to_owned();
         self.total_bytes = self.total_bytes.saturating_add(entry.len());
         self.order.push_back(token.clone());
         self.entries.insert(token, entry);

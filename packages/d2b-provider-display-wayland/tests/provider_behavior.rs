@@ -2,9 +2,9 @@ use d2b_contracts::v3::ResourceRef;
 use d2b_provider_display_wayland::{
     AttachmentGrantHandle, DisplayAuditKind, DisplayAuditOutcome, DisplayIdentity,
     DisplayLabelPosition, DisplayProviderDescriptor, DisplayTelemetryField, DisplayTelemetryFrame,
-    DisplayUserPortal, FilterInput, FinalizationInput, Phase, PolicyWarning, PrincipalPool,
-    ProxyReadinessFailure, ProxyReadinessStage, ProxyReadinessState, WaylandPolicy,
-    WaylandSessionSpec,
+    DisplayUserPortal, FilterInput, FinalizationInput, LaunchGrants, Phase, PolicyWarning,
+    PrincipalPool, ProcessObservation, ProxyReadinessFailure, ProxyReadinessStage,
+    ProxyReadinessState, WaylandPolicy, WaylandSessionSpec,
 };
 
 fn refs() -> (ResourceRef, ResourceRef, ResourceRef, ResourceRef) {
@@ -149,6 +149,88 @@ fn controller_status_transitions_pending_ready_and_failed() {
         )
         .unwrap();
     assert_eq!(failed.status.phase, Phase::Failed);
+}
+
+#[test]
+fn wire_deserialization_reuses_display_validation() {
+    let value = serde_json::to_value(identity()).unwrap();
+    let mut invalid_identity = value;
+    invalid_identity["label"] = serde_json::json!("Work VM");
+    assert!(
+        serde_json::from_value::<DisplayIdentity>(invalid_identity).is_err()
+    );
+}
+
+#[test]
+fn launch_tickets_require_real_per_session_grants() {
+    let (guest, host, user, policy) = refs();
+    let spec = WaylandSessionSpec::new(guest, host, user, policy, identity(), true).unwrap();
+    let mut controller = d2b_provider_display_wayland::DisplayController::new(2);
+    let without_grants = controller
+        .reconcile(
+            &spec,
+            d2b_provider_display_wayland::DependencyState::ready(),
+            ProcessObservation::default(),
+        )
+        .unwrap();
+    assert!(without_grants.launch_ticket.is_none());
+
+    let grants = LaunchGrants::new(
+        AttachmentGrantHandle::from_core([7; 32]),
+        AttachmentGrantHandle::from_core([8; 32]),
+    );
+    let with_grants = controller
+        .reconcile_with_grants(
+            &spec,
+            d2b_provider_display_wayland::DependencyState::ready(),
+            ProcessObservation::default(),
+            Some(&grants),
+        )
+        .unwrap();
+    let ticket = with_grants.launch_ticket.unwrap();
+    assert_eq!(ticket.compositor_grant(), grants.compositor_grant());
+    assert_eq!(ticket.gpu_grant(), grants.gpu_grant());
+}
+
+#[test]
+fn distinct_authenticated_sessions_do_not_share_display_principals() {
+    let (_, host, user, policy) = refs();
+    let first = WaylandSessionSpec::new(
+        ResourceRef::parse("Guest/first").unwrap(),
+        host.clone(),
+        user.clone(),
+        policy.clone(),
+        identity(),
+        true,
+    )
+    .unwrap();
+    let second = WaylandSessionSpec::new(
+        ResourceRef::parse("Guest/second").unwrap(),
+        host,
+        user,
+        policy,
+        identity(),
+        true,
+    )
+    .unwrap();
+    let mut controller = d2b_provider_display_wayland::DisplayController::new(2);
+    let first_status = controller
+        .reconcile(
+            &first,
+            d2b_provider_display_wayland::DependencyState::ready(),
+            ProcessObservation::ready(),
+        )
+        .unwrap()
+        .status;
+    let second_status = controller
+        .reconcile(
+            &second,
+            d2b_provider_display_wayland::DependencyState::ready(),
+            ProcessObservation::ready(),
+        )
+        .unwrap()
+        .status;
+    assert_ne!(first_status.principal, second_status.principal);
 }
 
 #[test]

@@ -99,11 +99,30 @@ pub enum NotificationUrgency {
 }
 
 /// One bounded action descriptor.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
+#[serde(
+    rename_all = "camelCase",
+    deny_unknown_fields,
+    try_from = "ActionSpecWire"
+)]
 pub struct ActionSpec {
     id: String,
     label: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ActionSpecWire {
+    id: String,
+    label: String,
+}
+
+impl TryFrom<ActionSpecWire> for ActionSpec {
+    type Error = NotificationError;
+
+    fn try_from(value: ActionSpecWire) -> Result<Self, Self::Error> {
+        Self::new(value.id, value.label)
+    }
 }
 
 impl ActionSpec {
@@ -164,8 +183,12 @@ impl core::fmt::Display for NotificationError {
 impl std::error::Error for NotificationError {}
 
 /// A transient notification request.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
+#[serde(
+    rename_all = "camelCase",
+    deny_unknown_fields,
+    try_from = "NotificationRequestWire"
+)]
 pub struct NotificationRequest {
     summary: String,
     body: Option<String>,
@@ -176,6 +199,45 @@ pub struct NotificationRequest {
     actions: Vec<ActionSpec>,
     correlation_id: Option<String>,
     idempotency_key: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct NotificationRequestWire {
+    summary: String,
+    body: Option<String>,
+    icon_ref: Option<String>,
+    urgency: NotificationUrgency,
+    category: Category,
+    expire_timeout_secs: u32,
+    actions: Vec<ActionSpec>,
+    correlation_id: Option<String>,
+    idempotency_key: Option<String>,
+}
+
+impl TryFrom<NotificationRequestWire> for NotificationRequest {
+    type Error = NotificationError;
+
+    fn try_from(value: NotificationRequestWire) -> Result<Self, Self::Error> {
+        let mut request = Self::new(
+            value.summary,
+            value.body.unwrap_or_default(),
+            value.category,
+        )?
+        .with_urgency(value.urgency)?
+        .with_expire_timeout(value.expire_timeout_secs)?
+        .with_actions(value.actions)?;
+        if let Some(icon_ref) = value.icon_ref {
+            request = request.with_icon_ref(icon_ref)?;
+        }
+        if let Some(correlation_id) = value.correlation_id {
+            request = request.with_correlation_id(correlation_id)?;
+        }
+        if let Some(idempotency_key) = value.idempotency_key {
+            request = request.with_idempotency_key(idempotency_key)?;
+        }
+        Ok(request)
+    }
 }
 
 impl NotificationRequest {

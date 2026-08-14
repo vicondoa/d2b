@@ -4,7 +4,7 @@ use crate::{
     FINALIZER, WaylandSpecError,
     policy::{FilterInput, WaylandPolicy},
     principal::{PrincipalLease, PrincipalPool},
-    process::{AttachmentGrantHandle, LaunchTicket, ProcessObservation},
+    process::{LaunchTicket, ProcessObservation},
     spec::WaylandSessionSpec,
 };
 use std::collections::BTreeMap;
@@ -149,6 +149,17 @@ impl DisplayController {
         dependencies: DependencyState,
         observation: ProcessObservation,
     ) -> Result<ReconcileResult, WaylandSpecError> {
+        self.reconcile_with_grants(spec, dependencies, observation, None)
+    }
+
+    /// Reconcile one session with grants issued by Core/Supervisor.
+    pub fn reconcile_with_grants(
+        &mut self,
+        spec: &WaylandSessionSpec,
+        dependencies: DependencyState,
+        observation: ProcessObservation,
+        grants: Option<&crate::process::LaunchGrants>,
+    ) -> Result<ReconcileResult, WaylandSpecError> {
         if !spec.cross_domain_trusted() {
             return Err(WaylandSpecError::CrossDomainUntrusted);
         }
@@ -218,7 +229,21 @@ impl DisplayController {
                 launch_ticket: None,
             });
         }
-        let session_key = spec.identity().label().to_owned();
+        if !observation.proxy_ready && grants.is_none() {
+            return Ok(ReconcileResult {
+                status: self.status(
+                    Phase::Pending,
+                    compiled.digest().to_owned(),
+                    String::new(),
+                    conditions
+                        .iter()
+                        .filter_map(|(present, condition)| present.then_some(*condition))
+                        .collect::<Vec<_>>(),
+                ),
+                launch_ticket: None,
+            });
+        }
+        let session_key = session_key(spec);
         let principal = if let Some(lease) = self.principals.get(&session_key) {
             lease.principal().to_owned()
         } else {
@@ -242,9 +267,10 @@ impl DisplayController {
             principal
         };
         let launch_ticket = (!observation.proxy_ready).then(|| {
+            let grants = grants.expect("launch grants checked before principal allocation");
             LaunchTicket::new(
-                AttachmentGrantHandle::from_core([1; 32]),
-                AttachmentGrantHandle::from_core([2; 32]),
+                grants.compositor_grant().clone(),
+                grants.gpu_grant().clone(),
                 compiled.digest().to_owned(),
                 spec.identity().label().to_owned(),
             )
@@ -364,4 +390,15 @@ impl core::fmt::Debug for DisplayController {
             .field("available_principals", &self.principal_pool.available())
             .finish()
     }
+}
+
+fn session_key(spec: &WaylandSessionSpec) -> String {
+    format!(
+        "{}|{}|{}|{}|{}",
+        spec.guest_ref().to_canonical_string(),
+        spec.host_ref().to_canonical_string(),
+        spec.user_ref().to_canonical_string(),
+        spec.policy_ref().to_canonical_string(),
+        spec.identity().label()
+    )
 }

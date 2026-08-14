@@ -41,14 +41,44 @@ pub enum PolicyWarning {
 }
 
 /// Policy input layer.
-#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[derive(Clone, Default, PartialEq, Eq, Serialize)]
+#[serde(
+    rename_all = "camelCase",
+    deny_unknown_fields,
+    try_from = "FilterInputWire"
+)]
 pub struct FilterInput {
     allow_globals: Vec<String>,
     deny_globals: Vec<String>,
     max_versions: BTreeMap<String, u32>,
     dmabuf_allow: Vec<String>,
     dmabuf_deny: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct FilterInputWire {
+    allow_globals: Vec<String>,
+    deny_globals: Vec<String>,
+    max_versions: BTreeMap<String, u32>,
+    dmabuf_allow: Vec<String>,
+    dmabuf_deny: Vec<String>,
+}
+
+impl TryFrom<FilterInputWire> for FilterInput {
+    type Error = PolicyCompileError;
+
+    fn try_from(value: FilterInputWire) -> Result<Self, Self::Error> {
+        let filter = Self {
+            allow_globals: value.allow_globals,
+            deny_globals: value.deny_globals,
+            max_versions: value.max_versions,
+            dmabuf_allow: value.dmabuf_allow,
+            dmabuf_deny: value.dmabuf_deny,
+        };
+        filter.validate_bounds()?;
+        Ok(filter)
+    }
 }
 
 impl FilterInput {

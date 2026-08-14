@@ -90,6 +90,7 @@ pub struct NotificationSink {
     max_pending: usize,
     projections: BTreeMap<String, NotificationProjection>,
     order: VecDeque<String>,
+    projection_nonces: BTreeMap<String, Vec<String>>,
     nonces: ActionNonceStore,
 }
 
@@ -100,6 +101,7 @@ impl NotificationSink {
             max_pending,
             projections: BTreeMap::new(),
             order: VecDeque::new(),
+            projection_nonces: BTreeMap::new(),
             nonces: ActionNonceStore::new(nonce_capacity, nonce_ttl_secs),
         }
     }
@@ -108,16 +110,29 @@ impl NotificationSink {
     pub fn deliver<P: DesktopNotificationPort>(
         &mut self,
         port: &mut P,
-        source_session: &str,
+        observer_session: &str,
         request: NotificationRequest,
         now_secs: u64,
     ) -> Result<NotificationResult, crate::types::NotificationError> {
-        if self.projections.len() >= self.max_pending {
-            self.evict_oldest();
+        if self.max_pending == 0 {
+            return Ok(NotificationResult::CapacityExceeded);
         }
         let notification = request.sanitize()?;
-        if notification.actions().len() > self.nonces.available_capacity() {
+        let evicted_nonce_count = if self.projections.len() >= self.max_pending {
+            self.order
+                .front()
+                .and_then(|request_id| self.projection_nonces.get(request_id))
+                .map_or(0, Vec::len)
+        } else {
+            0
+        };
+        if notification.actions().len()
+            > self.nonces.available_capacity() + evicted_nonce_count
+        {
             return Ok(NotificationResult::CapacityExceeded);
+        }
+        if self.projections.len() >= self.max_pending {
+            self.evict_oldest();
         }
         let notification_id = match port.notify(&notification) {
             Ok(id) => id,
@@ -125,15 +140,28 @@ impl NotificationSink {
         };
         let request_id = format!("notification-{notification_id}");
         let mut action_nonces = BTreeMap::new();
+        let mut issued_keys = Vec::with_capacity(notification.actions().len());
         for (action_id, _) in notification.actions() {
-            let nonce = self
+            let nonce = match self
                 .nonces
-                .register(source_session, action_id, now_secs)
-                .map_err(|error| match error {
-                    ActionNonceError::Capacity => crate::types::NotificationError::InvalidActions,
-                    _ => crate::types::NotificationError::InvalidOpaqueKey,
-                })?;
-            action_nonces.insert(action_id.clone(), nonce.action_key());
+                .register(observer_session, action_id, now_secs)
+            {
+                Ok(nonce) => nonce,
+                Err(error) => {
+                    for action_key in &issued_keys {
+                        self.nonces.revoke(action_key);
+                    }
+                    return Err(match error {
+                        ActionNonceError::Capacity => {
+                            crate::types::NotificationError::InvalidActions
+                        }
+                        _ => crate::types::NotificationError::InvalidOpaqueKey,
+                    });
+                }
+            };
+            let action_key = nonce.action_key();
+            issued_keys.push(action_key.clone());
+            action_nonces.insert(action_id.clone(), action_key);
         }
         self.order.push_back(request_id.clone());
         self.projections.insert(
@@ -143,6 +171,7 @@ impl NotificationSink {
                 notification,
             },
         );
+        self.projection_nonces.insert(request_id, issued_keys);
         Ok(NotificationResult::Accepted {
             notification_id,
             action_nonces,
@@ -175,6 +204,7 @@ impl NotificationSink {
     pub fn close(&mut self, notification_id: u32) {
         let request_id = format!("notification-{notification_id}");
         self.projections.remove(&request_id);
+        self.revoke_projection_nonces(&request_id);
         self.order.retain(|value| value != &request_id);
     }
 
@@ -182,6 +212,7 @@ impl NotificationSink {
     pub fn drain(&mut self) {
         self.projections.clear();
         self.order.clear();
+        self.projection_nonces.clear();
         self.nonces.clear();
     }
 
@@ -193,6 +224,15 @@ impl NotificationSink {
     fn evict_oldest(&mut self) {
         if let Some(request_id) = self.order.pop_front() {
             self.projections.remove(&request_id);
+            self.revoke_projection_nonces(&request_id);
+        }
+    }
+
+    fn revoke_projection_nonces(&mut self, request_id: &str) {
+        if let Some(action_keys) = self.projection_nonces.remove(request_id) {
+            for action_key in action_keys {
+                self.nonces.revoke(&action_key);
+            }
         }
     }
 }

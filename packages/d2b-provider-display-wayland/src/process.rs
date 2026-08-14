@@ -17,6 +17,36 @@ impl core::fmt::Debug for AttachmentGrantHandle {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str("AttachmentGrantHandle(REDACTED)")
     }
+
+    /// Opaque per-session grants required to launch display workers.
+    #[derive(Clone, PartialEq, Eq)]
+    pub struct LaunchGrants {
+        compositor: AttachmentGrantHandle,
+        gpu: AttachmentGrantHandle,
+    }
+
+    impl LaunchGrants {
+        /// Construct launch grants at the trusted Core/Supervisor boundary.
+        pub const fn new(compositor: AttachmentGrantHandle, gpu: AttachmentGrantHandle) -> Self {
+            Self { compositor, gpu }
+        }
+
+        /// Borrow the compositor grant.
+        pub const fn compositor_grant(&self) -> &AttachmentGrantHandle {
+            &self.compositor
+        }
+
+        /// Borrow the GPU grant.
+        pub const fn gpu_grant(&self) -> &AttachmentGrantHandle {
+            &self.gpu
+        }
+    }
+
+    impl core::fmt::Debug for LaunchGrants {
+        fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            formatter.write_str("LaunchGrants(<redacted>)")
+        }
+    }
 }
 
 /// Display worker role.
