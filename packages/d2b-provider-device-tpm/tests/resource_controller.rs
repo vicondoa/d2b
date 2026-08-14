@@ -110,30 +110,30 @@ struct ScriptedEffects {
 }
 
 impl TpmResourceEffectPort for ScriptedEffects {
-    fn ensure_state_volume(
+    async fn ensure_state_volume(
         &self,
         _: &ResourceUid,
         _: &ResourceRef,
-    ) -> impl std::future::Future<Output = Result<ResourceRef, TpmResourceEffectError>> + Send {
-        async { Ok(ResourceRef::parse("Volume/device-state").unwrap()) }
+    ) -> Result<ResourceRef, TpmResourceEffectError> {
+        Ok(ResourceRef::parse("Volume/device-state").unwrap())
     }
 
-    fn request_swtpm_process(
+    async fn request_swtpm_process(
         &self,
         _: &ResourceUid,
         _: &ResourceRef,
         _: &ResourceRef,
-    ) -> impl std::future::Future<Output = Result<ResourceRef, TpmResourceEffectError>> + Send {
-        async { Ok(ResourceRef::parse("Process/device-swtpm").unwrap()) }
+    ) -> Result<ResourceRef, TpmResourceEffectError> {
+        Ok(ResourceRef::parse("Process/device-swtpm").unwrap())
     }
 
-    fn request_flush_process(
+    async fn request_flush_process(
         &self,
         _: &ResourceUid,
         _: &ResourceRef,
         _: &ResourceRef,
-    ) -> impl std::future::Future<Output = Result<ResourceRef, TpmResourceEffectError>> + Send {
-        async { Ok(ResourceRef::parse("EphemeralProcess/device-flush").unwrap()) }
+    ) -> Result<ResourceRef, TpmResourceEffectError> {
+        Ok(ResourceRef::parse("EphemeralProcess/device-flush").unwrap())
     }
 
     fn stop_swtpm_process(

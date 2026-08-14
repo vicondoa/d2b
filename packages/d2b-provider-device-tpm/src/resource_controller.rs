@@ -175,19 +175,19 @@ impl TpmResourceController {
         {
             return Err(TpmResourceControllerError::InvalidState);
         }
-        if let Some(process) = self.process_ref.take() {
-            if let Err(error) = port.stop_swtpm_process(&process).await {
-                self.process_ref = Some(process);
-                self.phase = TpmResourcePhase::Degraded;
-                return Err(TpmResourceControllerError::Effect(error));
-            }
+        if let Some(process) = self.process_ref.take()
+            && let Err(error) = port.stop_swtpm_process(&process).await
+        {
+            self.process_ref = Some(process);
+            self.phase = TpmResourcePhase::Degraded;
+            return Err(TpmResourceControllerError::Effect(error));
         }
-        if let Some(flush) = self.flush_ref.take() {
-            if let Err(error) = port.delete_flush_process(&flush).await {
-                self.flush_ref = Some(flush);
-                self.phase = TpmResourcePhase::Degraded;
-                return Err(TpmResourceControllerError::Effect(error));
-            }
+        if let Some(flush) = self.flush_ref.take()
+            && let Err(error) = port.delete_flush_process(&flush).await
+        {
+            self.flush_ref = Some(flush);
+            self.phase = TpmResourcePhase::Degraded;
+            return Err(TpmResourceControllerError::Effect(error));
         }
         self.endpoint_ref = None;
         self.finalizer = false;
