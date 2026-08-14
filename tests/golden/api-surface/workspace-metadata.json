@@ -468,8 +468,8 @@
       "crate_name": "d2b_provider_device_tpm",
       "private_census": {
         "external_crates": 56,
-        "index_items": 1822,
-        "path_items": 10615
+        "index_items": 1823,
+        "path_items": 10616
       },
       "private_hidden_items": 45,
       "private_json_file": "d2b_provider_device_tpm.json",
