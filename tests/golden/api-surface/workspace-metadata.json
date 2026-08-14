@@ -532,15 +532,15 @@
       "crate_name": "d2b_provider_notification_desktop",
       "private_census": {
         "external_crates": 56,
-        "index_items": 1847,
-        "path_items": 10553
+        "index_items": 1850,
+        "path_items": 10556
       },
       "private_hidden_items": 35,
       "private_json_file": "d2b_provider_notification_desktop.json",
       "public_census": {
         "external_crates": 56,
-        "index_items": 969,
-        "path_items": 10485
+        "index_items": 970,
+        "path_items": 10486
       },
       "public_json_file": "d2b_provider_notification_desktop.json"
     },

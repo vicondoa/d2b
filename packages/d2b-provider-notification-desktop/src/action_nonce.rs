@@ -1,15 +1,17 @@
 //! Single-use, in-memory action capabilities.
 
 use getrandom::getrandom;
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
 const NONCE_BYTES: usize = 32;
+const MAX_ACTION_BYTES: usize = 64;
 
 /// An opaque action nonce.
 #[derive(Clone, PartialEq, Eq)]
 pub struct ActionNonce {
     token: String,
-    session: String,
+    session_digest: [u8; NONCE_BYTES],
     action: String,
     expires_at: u64,
 }
@@ -42,6 +44,8 @@ pub enum ActionNonceError {
     SessionMismatch,
     /// The action ID does not match.
     ActionMismatch,
+    /// The action text exceeds the bounded capability representation.
+    Invalid,
 }
 
 impl core::fmt::Display for ActionNonceError {
@@ -52,6 +56,7 @@ impl core::fmt::Display for ActionNonceError {
             Self::Unavailable => "action-capability-unavailable",
             Self::Expired => "action-capability-expired",
             Self::SessionMismatch | Self::ActionMismatch => "action-capability-denied",
+            Self::Invalid => "action-capability-invalid",
         })
     }
 }
@@ -78,13 +83,18 @@ impl ActionNonceStore {
     /// Register one action capability.
     pub fn register(
         &mut self,
-        session: impl Into<String>,
-        action: impl Into<String>,
+        session: impl AsRef<str>,
+        action: impl AsRef<str>,
         now_secs: u64,
     ) -> Result<ActionNonce, ActionNonceError> {
         self.gc(now_secs);
         if self.entries.len() >= self.capacity {
             return Err(ActionNonceError::Capacity);
+        }
+        let session = session.as_ref();
+        let action = action.as_ref();
+        if action.len() > MAX_ACTION_BYTES {
+            return Err(ActionNonceError::Invalid);
         }
         let mut raw = [0_u8; NONCE_BYTES];
         getrandom(&mut raw).map_err(|_| ActionNonceError::Entropy)?;
@@ -94,8 +104,8 @@ impl ActionNonceStore {
             .collect::<String>();
         let nonce = ActionNonce {
             token: token.clone(),
-            session: session.into(),
-            action: action.into(),
+            session_digest: session_digest(session),
+            action: action.to_owned(),
             expires_at: now_secs.saturating_add(self.ttl_secs),
         };
         self.entries.insert(token, nonce.clone());
@@ -129,7 +139,7 @@ impl ActionNonceStore {
             self.entries.remove(token);
             return Err(ActionNonceError::Expired);
         }
-        if nonce.session != session {
+        if nonce.session_digest != session_digest(session) {
             return Err(ActionNonceError::SessionMismatch);
         }
         if expected_action.is_some_and(|action| action != nonce.action) {
@@ -177,6 +187,10 @@ impl ActionNonceStore {
             token.len() == NONCE_BYTES * 2 && token.bytes().all(|byte| byte.is_ascii_hexdigit())
         })
     }
+}
+
+fn session_digest(session: &str) -> [u8; NONCE_BYTES] {
+    Sha256::digest(session.as_bytes()).into()
 }
 
 impl core::fmt::Debug for ActionNonceStore {

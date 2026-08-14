@@ -25,3 +25,7 @@ path = "src/bin/d2b-display-wayland-user-portal.rs"
 [[bin]]
 name = "wl-cross-domain-proxy"
 path = "src/bin/wl-cross-domain-proxy.rs"
+
+[[bin]]
+name = "d2b-display-wayland-host-proxy"
+path = "src/bin/d2b-display-wayland-host-proxy.rs"
