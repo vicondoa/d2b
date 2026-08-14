@@ -429,7 +429,9 @@ impl DisplayController {
             self.active_policies
                 .insert(session_key.clone(), policy_binding);
         }
-        let phase = if observation.proxy_ready && observation.frontend_ready {
+        let phase = if launch_ticket.is_some() {
+            Phase::Pending
+        } else if observation.proxy_ready && observation.frontend_ready {
             Phase::Ready
         } else {
             Phase::Pending
