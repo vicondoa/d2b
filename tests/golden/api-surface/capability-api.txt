@@ -7450,7 +7450,7 @@ d2b_provider_clipboard_wayland	pub fn d2b_provider_clipboard_wayland::DisplayDep
 d2b_provider_clipboard_wayland	pub fn d2b_provider_clipboard_wayland::DisplayDependency::eq(&self, &d2b_provider_clipboard_wayland::DisplayDependency) -> bool
 d2b_provider_clipboard_wayland	pub fn d2b_provider_clipboard_wayland::DisplayDependencyEvidence::clone(&self) -> d2b_provider_clipboard_wayland::DisplayDependencyEvidence
 d2b_provider_clipboard_wayland	pub fn d2b_provider_clipboard_wayland::DisplayDependencyEvidence::eq(&self, &d2b_provider_clipboard_wayland::DisplayDependencyEvidence) -> bool
-d2b_provider_clipboard_wayland	pub fn d2b_provider_clipboard_wayland::DisplayDependencyEvidence::from_display_proof(d2b_provider_display_wayland::controller::DisplayDependencyProof) -> Self
+d2b_provider_clipboard_wayland	pub fn d2b_provider_clipboard_wayland::DisplayDependencyEvidence::from_authenticated_route(d2b_session::admission::AuthenticatedSessionRouteBinding) -> core::result::Result<Self, &'static str>
 d2b_provider_clipboard_wayland	pub fn d2b_provider_clipboard_wayland::PickerAuthority::complete(&d2b_provider_clipboard_wayland::AuthenticatedClipboardSession, &d2b_provider_clipboard_wayland::AuthenticatedClipboardSession, &d2b_provider_clipboard_wayland::PickerRequest, d2b_provider_clipboard_wayland::PickerResult, impl core::convert::Into<alloc::string::String>) -> core::result::Result<d2b_provider_clipboard_wayland::PickerReceipt, d2b_provider_clipboard_wayland::PickerError>
 d2b_provider_clipboard_wayland	pub fn d2b_provider_clipboard_wayland::ProcessPlan::clone(&self) -> d2b_provider_clipboard_wayland::ProcessPlan
 d2b_provider_clipboard_wayland	pub fn d2b_provider_clipboard_wayland::ProcessPlan::eq(&self, &d2b_provider_clipboard_wayland::ProcessPlan) -> bool
@@ -8379,6 +8379,10 @@ d2b_provider_display_wayland	impl d2b_provider_display_wayland::WaylandPolicySna
 d2b_provider_display_wayland	impl d2b_provider_display_wayland::WaylandSessionSpec
 d2b_provider_display_wayland	impl serde_core::ser::Serialize for d2b_provider_display_wayland::WaylandSessionSpec
 d2b_provider_display_wayland	impl<'de> serde_core::de::Deserialize<'de> for d2b_provider_display_wayland::WaylandSessionSpec
+d2b_provider_display_wayland	impl<Q, K> indexmap::equivalent::Equivalent<K> for d2b_provider_display_wayland::AuthenticatedDisplaySession where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+d2b_provider_display_wayland	impl<Q, K> indexmap::equivalent::Equivalent<K> for d2b_provider_display_wayland::DisplayDependencyProof where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+d2b_provider_display_wayland	impl<Q, K> indexmap::equivalent::Equivalent<K> for d2b_provider_display_wayland::WaylandPolicySnapshot where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+d2b_provider_display_wayland	impl<Q, K> indexmap::equivalent::Equivalent<K> for d2b_provider_display_wayland::WaylandSessionSpec where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
 d2b_provider_display_wayland	impl<T, U> core::convert::Into<U> for d2b_provider_display_wayland::AuthenticatedDisplaySession where U: core::convert::From<T>
 d2b_provider_display_wayland	impl<T, U> core::convert::Into<U> for d2b_provider_display_wayland::DisplayDependencyProof where U: core::convert::From<T>
 d2b_provider_display_wayland	impl<T, U> core::convert::Into<U> for d2b_provider_display_wayland::DisplayUserPortal where U: core::convert::From<T>
@@ -8770,6 +8774,12 @@ d2b_provider_notification_desktop	impl d2b_provider_notification_desktop::GuestS
 d2b_provider_notification_desktop	impl d2b_provider_notification_desktop::NotificationController
 d2b_provider_notification_desktop	impl d2b_provider_notification_desktop::NotificationProviderConfig
 d2b_provider_notification_desktop	impl d2b_provider_notification_desktop::SessionEvidence
+d2b_provider_notification_desktop	impl<Q, K> indexmap::equivalent::Equivalent<K> for d2b_provider_notification_desktop::DisplayDependencyEvidence where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+d2b_provider_notification_desktop	impl<Q, K> indexmap::equivalent::Equivalent<K> for d2b_provider_notification_desktop::GuestSourceConfig where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+d2b_provider_notification_desktop	impl<Q, K> indexmap::equivalent::Equivalent<K> for d2b_provider_notification_desktop::NotificationProviderConfig where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+d2b_provider_notification_desktop	impl<Q, K> indexmap::equivalent::Equivalent<K> for d2b_provider_notification_desktop::ProcessPlan where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+d2b_provider_notification_desktop	impl<Q, K> indexmap::equivalent::Equivalent<K> for d2b_provider_notification_desktop::SessionEvidence where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+d2b_provider_notification_desktop	impl<Q, K> indexmap::equivalent::Equivalent<K> for d2b_provider_notification_desktop::SourceReconcileResult where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
 d2b_provider_notification_desktop	impl<T, U> core::convert::Into<U> for d2b_provider_notification_desktop::DisplayDependencyEvidence where U: core::convert::From<T>
 d2b_provider_notification_desktop	impl<T, U> core::convert::Into<U> for d2b_provider_notification_desktop::GuestSourceConfig where U: core::convert::From<T>
 d2b_provider_notification_desktop	impl<T, U> core::convert::Into<U> for d2b_provider_notification_desktop::NotificationController where U: core::convert::From<T>
@@ -8865,14 +8875,14 @@ d2b_provider_notification_desktop	pub d2b_provider_notification_desktop::SourceR
 d2b_provider_notification_desktop	pub d2b_provider_notification_desktop::SourceReconcileResult::stop_host_sink: bool
 d2b_provider_notification_desktop	pub fn d2b_provider_notification_desktop::DisplayDependencyEvidence::clone(&self) -> d2b_provider_notification_desktop::DisplayDependencyEvidence
 d2b_provider_notification_desktop	pub fn d2b_provider_notification_desktop::DisplayDependencyEvidence::eq(&self, &d2b_provider_notification_desktop::DisplayDependencyEvidence) -> bool
-d2b_provider_notification_desktop	pub fn d2b_provider_notification_desktop::DisplayDependencyEvidence::from_proof(d2b_provider_display_wayland::controller::DisplayDependencyProof) -> Self
+d2b_provider_notification_desktop	pub fn d2b_provider_notification_desktop::DisplayDependencyEvidence::from_authenticated_route(d2b_session::admission::AuthenticatedSessionRouteBinding) -> core::result::Result<Self, &'static str>
 d2b_provider_notification_desktop	pub fn d2b_provider_notification_desktop::GuestSource::validate_authenticated(&self, &d2b_provider_notification_desktop::SessionEvidence, &d2b_provider_notification_desktop::NotificationRequest) -> core::result::Result<(), &'static str>
 d2b_provider_notification_desktop	pub fn d2b_provider_notification_desktop::GuestSourceConfig::clone(&self) -> d2b_provider_notification_desktop::GuestSourceConfig
 d2b_provider_notification_desktop	pub fn d2b_provider_notification_desktop::GuestSourceConfig::eq(&self, &d2b_provider_notification_desktop::GuestSourceConfig) -> bool
 d2b_provider_notification_desktop	pub fn d2b_provider_notification_desktop::GuestSourceConfig::new(d2b_contracts::v3::resource_ref::ResourceRef, d2b_contracts::v3::identity::ZoneId, impl core::iter::traits::collect::IntoIterator<Item = d2b_provider_notification_desktop::Category>) -> core::result::Result<Self, &'static str>
 d2b_provider_notification_desktop	pub fn d2b_provider_notification_desktop::NotificationController::drain_sources(&mut self) -> alloc::vec::Vec<d2b_contracts::v3::resource_ref::ResourceRef>
 d2b_provider_notification_desktop	pub fn d2b_provider_notification_desktop::NotificationController::plan(&self, &d2b_provider_notification_desktop::DisplayDependencyEvidence, &d2b_provider_notification_desktop::NotificationProviderConfig) -> core::result::Result<alloc::vec::Vec<d2b_provider_notification_desktop::ProcessPlan>, &'static str>
-d2b_provider_notification_desktop	pub fn d2b_provider_notification_desktop::NotificationController::reconcile_authenticated_display(&mut self, core::option::Option<d2b_provider_display_wayland::controller::DisplayDependencyProof>, &d2b_provider_notification_desktop::NotificationProviderConfig, &[d2b_provider_notification_desktop::SessionEvidence]) -> core::result::Result<d2b_provider_notification_desktop::SourceReconcileResult, &'static str>
+d2b_provider_notification_desktop	pub fn d2b_provider_notification_desktop::NotificationController::reconcile_authenticated_display(&mut self, core::option::Option<d2b_session::admission::AuthenticatedSessionRouteBinding>, &d2b_provider_notification_desktop::NotificationProviderConfig, &[d2b_provider_notification_desktop::SessionEvidence]) -> core::result::Result<d2b_provider_notification_desktop::SourceReconcileResult, &'static str>
 d2b_provider_notification_desktop	pub fn d2b_provider_notification_desktop::NotificationController::reconcile_sources(&mut self, &d2b_provider_notification_desktop::DisplayDependencyEvidence, &d2b_provider_notification_desktop::NotificationProviderConfig, &[d2b_provider_notification_desktop::SessionEvidence]) -> core::result::Result<d2b_provider_notification_desktop::SourceReconcileResult, &'static str>
 d2b_provider_notification_desktop	pub fn d2b_provider_notification_desktop::NotificationProviderConfig::clone(&self) -> d2b_provider_notification_desktop::NotificationProviderConfig
 d2b_provider_notification_desktop	pub fn d2b_provider_notification_desktop::NotificationProviderConfig::eq(&self, &d2b_provider_notification_desktop::NotificationProviderConfig) -> bool
@@ -9261,6 +9271,8 @@ d2b_provider_system_systemd	impl<P> core::marker::UnsafeUnpin for d2b_provider_s
 d2b_provider_system_systemd	impl<P> core::panic::unwind_safe::RefUnwindSafe for d2b_provider_system_systemd::SystemdProcessProvider<P> where P: core::panic::unwind_safe::RefUnwindSafe
 d2b_provider_system_systemd	impl<P> core::panic::unwind_safe::UnwindSafe for d2b_provider_system_systemd::SystemdProcessProvider<P> where P: core::panic::unwind_safe::UnwindSafe
 d2b_provider_system_systemd	impl<P> d2b_process_conformance::port::ProcessLaunchEffectPort for d2b_provider_system_systemd::effect_port::EffectPortAdapter<P> where P: d2b_provider_system_systemd::effect_port::SystemdProcessEffectPort
+d2b_provider_system_systemd	impl<Q, K> indexmap::equivalent::Equivalent<K> for d2b_provider_system_systemd::guest_exec::AttachRequest where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+d2b_provider_system_systemd	impl<Q, K> indexmap::equivalent::Equivalent<K> for d2b_provider_system_systemd::guest_exec::GuestExecRequest where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
 d2b_provider_system_systemd	impl<T, U> core::convert::Into<U> for d2b_provider_system_systemd::SystemdProcessProvider<P> where U: core::convert::From<T>
 d2b_provider_system_systemd	impl<T, U> core::convert::Into<U> for d2b_provider_system_systemd::guest_exec::AttachRequest where U: core::convert::From<T>
 d2b_provider_system_systemd	impl<T, U> core::convert::Into<U> for d2b_provider_system_systemd::guest_exec::GuestExecRequest where U: core::convert::From<T>
@@ -9475,6 +9487,10 @@ d2b_provider_toolkit	impl d2b_provider_toolkit::ProviderValues
 d2b_provider_toolkit	impl d2b_provider_toolkit::SampleLeaseRequest
 d2b_provider_toolkit	impl d2b_provider_toolkit::fakes::FakeBus
 d2b_provider_toolkit	impl<I> d2b_provider_toolkit::ExactRegistration<I> for (d2b_provider::descriptor::ProviderDescriptor, I)
+d2b_provider_toolkit	impl<Q, K> indexmap::equivalent::Equivalent<K> for d2b_provider_toolkit::ProviderAgentAuditEvent where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+d2b_provider_toolkit	impl<Q, K> indexmap::equivalent::Equivalent<K> for d2b_provider_toolkit::ProviderAgentBootstrap where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+d2b_provider_toolkit	impl<Q, K> indexmap::equivalent::Equivalent<K> for d2b_provider_toolkit::ProviderAgentIdentity where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+d2b_provider_toolkit	impl<Q, K> indexmap::equivalent::Equivalent<K> for d2b_provider_toolkit::SampleLeaseRequest where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
 d2b_provider_toolkit	impl<S> !core::marker::Freeze for d2b_provider_toolkit::GeneratedProviderServiceServer<S>
 d2b_provider_toolkit	impl<S> !core::marker::Freeze for d2b_provider_toolkit::ProviderAgentAdapter<S>
 d2b_provider_toolkit	impl<S> core::fmt::Debug for d2b_provider_toolkit::GeneratedProviderServiceServer<S>
@@ -9741,6 +9757,8 @@ d2b_provider_toolkit	pub struct d2b_provider_toolkit::fakes::FakeBus
 d2b_provider_toolkit	pub trait d2b_provider_toolkit::AuthenticatedProviderFrameCodec: core::marker::Send + core::marker::Sync
 d2b_provider_toolkit	pub trait d2b_provider_toolkit::ExactRegistration<I>
 d2b_provider_toolkit	pub trait d2b_provider_toolkit::ProviderFrameCodec: core::marker::Send + core::marker::Sync
+d2b_provider_toolkit	pub use d2b_provider_toolkit::AuthenticatedComponentSession
+d2b_provider_toolkit	pub use d2b_provider_toolkit::AuthenticatedSessionRouteBinding
 d2b_provider_volume_local	impl !core::marker::Sync for d2b_provider_volume_local::lock::LockGuard
 d2b_provider_volume_local	impl !core::marker::Sync for d2b_provider_volume_local::lock::LockSet
 d2b_provider_volume_local	impl !core::panic::unwind_safe::RefUnwindSafe for d2b_provider_volume_local::lock::LockGuard
