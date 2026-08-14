@@ -6,6 +6,7 @@
 pub mod audit;
 pub mod backpressure;
 pub mod credential_client;
+pub mod gateway_compat;
 pub mod metrics;
 pub mod reconnect;
 pub mod relay_transport;
@@ -21,8 +22,8 @@ pub use metrics::{RelayMetricEvent, RelayMetricOutcome};
 pub use reconnect::{ReconnectBackoff, ReconnectDecision};
 pub use relay_transport::{
     AzureRelayTransportProvider, RelayAuthenticatedPeer, RelayConnection, RelayEndpoint,
-    RelayFrame, RelayRole, RelaySessionPhase, RelaySocket, RelaySocketConnector,
-    RelayTransportConfig, RelayTransportError,
+    RelayEnrollmentProof, RelayEnrollmentVerifier, RelayFrame, RelayRole, RelaySessionPhase,
+    RelaySocket, RelaySocketConnector, RelayTransportConfig, RelayTransportError,
 };
 pub use transport_settings::{RelayTransportSettings, RelayTransportSettingsError};
 

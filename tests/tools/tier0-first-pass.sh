@@ -170,7 +170,14 @@ scan_dashes() {
   set +e
   if [ -n "$toplevel" ] && [ "$(cd "$toplevel" && pwd -P)" = "$root" ]; then
     (cd "$root" && git ls-files -z --cached --others --exclude-standard) \
-      | { while IFS= read -r -d '' f; do files+=("$f"); done; }
+      | {
+          while IFS= read -r -d '' f; do
+            # `git ls-files --cached` includes tracked paths deleted in a
+            # shared dirty worktree. Do not hand vanished paths to grep; a
+            # file that disappears after this snapshot still fails closed.
+            [ -e "$root/$f" ] && files+=("$f")
+          done
+        }
   else
     (cd "$root" && find . -name .git -prune -o -name target -prune -o -type f -print0) \
       | { while IFS= read -r -d '' f; do files+=("${f#./}"); done; }
@@ -248,7 +255,11 @@ scan_process_markers() {
   if [ -n "$toplevel" ] && [ "$(cd "$toplevel" && pwd -P)" = "$root" ]; then
     is_repo_root=1
     (cd "$root" && git ls-files -z --cached --others --exclude-standard) \
-      | { while IFS= read -r -d '' f; do files+=("$f"); done; }
+      | {
+          while IFS= read -r -d '' f; do
+            [ -e "$root/$f" ] && files+=("$f")
+          done
+        }
   else
     (cd "$root" && find . -name .git -prune -o -name target -prune -o -type f -print0) \
       | { while IFS= read -r -d '' f; do files+=("$f"); done; }

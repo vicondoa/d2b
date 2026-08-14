@@ -14,7 +14,7 @@ use d2b_contracts::{
     v3::{ResourceRef, ResourceUid, credential::CredentialLeaseHandle},
 };
 use d2b_provider_runtime_azure_container_apps::{
-    AcaController, AcaControllerError, AcaPhase, AcaReconcileOutcome,
+    AcaClock, AcaController, AcaControllerError, AcaPhase, AcaReconcileOutcome,
 };
 
 #[derive(Default)]
@@ -22,6 +22,9 @@ struct FakeState {
     candidates: Vec<AcaSandboxRecord>,
     calls: Vec<&'static str>,
     revoked: usize,
+    lease_expiries: Vec<u64>,
+    resume_lifecycle: Option<AcaSandboxLifecycle>,
+    delete_failures: usize,
 }
 
 struct FakeLeaseClient {
@@ -32,8 +35,13 @@ struct FakeLeaseClient {
 impl AcaCredentialLeaseClient for FakeLeaseClient {
     async fn acquire(
         &self,
-        _: &AcaCredentialLeaseRequest,
+        request: &AcaCredentialLeaseRequest,
     ) -> Result<AcaCredentialLease, AcaControlError> {
+        self.state
+            .lock()
+            .unwrap()
+            .lease_expiries
+            .push(request.requested_expiry_unix_ms());
         Ok(AcaCredentialLease::from_metadata(
             CredentialLeaseHandle::parse("aca-test-lease").unwrap(),
             10_000,
@@ -110,7 +118,13 @@ impl AcaControl for FakeControl {
         _: &AcaSandboxId,
     ) -> Result<AcaSandboxRecord, AcaControlError> {
         self.state.lock().unwrap().calls.push("resume");
-        Ok(record(AcaSandboxLifecycle::Running))
+        let lifecycle = self
+            .state
+            .lock()
+            .unwrap()
+            .resume_lifecycle
+            .unwrap_or(AcaSandboxLifecycle::Running);
+        Ok(record(lifecycle))
     }
 
     async fn stop_sandbox(
@@ -130,6 +144,11 @@ impl AcaControl for FakeControl {
         _: &AcaSandboxId,
     ) -> Result<AcaDeleteOutcome, AcaControlError> {
         self.state.lock().unwrap().calls.push("delete");
+        let mut state = self.state.lock().unwrap();
+        if state.delete_failures > 0 {
+            state.delete_failures -= 1;
+            return Err(AcaControlError::new(AcaControlErrorKind::Unavailable));
+        }
         Ok(AcaDeleteOutcome::Deleted)
     }
 }
@@ -169,6 +188,14 @@ fn controller(state: Arc<Mutex<FakeState>>) -> AcaController<FakeControl, FakeLe
         }),
         Arc::new(FakeLeaseClient { state }),
     )
+}
+
+struct FixedClock(u64);
+
+impl AcaClock for FixedClock {
+    fn now_unix_ms(&self) -> u64 {
+        self.0
+    }
 }
 
 #[tokio::test]
@@ -238,6 +265,106 @@ async fn missing_sandbox_uses_disk_and_sandbox_effects_then_finalizes() {
     assert_eq!(controller.phase(), AcaPhase::Finalized);
     assert!(!controller.finalizer_installed());
     assert_eq!(state.lock().unwrap().calls.last(), Some(&"delete"));
+}
+
+#[tokio::test]
+async fn resume_waits_for_running_lifecycle() {
+    let state = Arc::new(Mutex::new(FakeState {
+        candidates: vec![record(AcaSandboxLifecycle::Suspended)],
+        resume_lifecycle: Some(AcaSandboxLifecycle::Creating),
+        ..FakeState::default()
+    }));
+    let mut controller = controller(state);
+    assert!(matches!(
+        controller
+            .reconcile(AcaOperationId::parse("operation-resume").unwrap(), 1_000)
+            .await
+            .unwrap(),
+        AcaReconcileOutcome::Progressing { .. }
+    ));
+    assert_eq!(controller.phase(), AcaPhase::Provisioning);
+}
+
+#[tokio::test]
+async fn readiness_attempts_are_bounded() {
+    let state = Arc::new(Mutex::new(FakeState {
+        candidates: vec![record(AcaSandboxLifecycle::Creating)],
+        ..FakeState::default()
+    }));
+    let mut controller = controller(state);
+    for index in 0..2 {
+        assert!(matches!(
+            controller
+                .reconcile(
+                    AcaOperationId::parse(format!("operation-ready-{index}")).unwrap(),
+                    1_000
+                )
+                .await
+                .unwrap(),
+            AcaReconcileOutcome::Progressing { .. }
+        ));
+    }
+    assert_eq!(
+        controller
+            .reconcile(
+                AcaOperationId::parse("operation-ready-final").unwrap(),
+                1_000
+            )
+            .await
+            .unwrap_err(),
+        AcaControllerError::ReadinessExhausted
+    );
+    assert_eq!(controller.phase(), AcaPhase::Failed);
+}
+
+#[tokio::test]
+async fn lease_expiry_uses_absolute_unix_time() {
+    let state = Arc::new(Mutex::new(FakeState {
+        candidates: vec![record(AcaSandboxLifecycle::Running)],
+        ..FakeState::default()
+    }));
+    let mut controller = controller(Arc::clone(&state)).with_clock(Arc::new(FixedClock(1_234_567)));
+    controller
+        .reconcile(AcaOperationId::parse("operation-clock").unwrap(), 1_000)
+        .await
+        .unwrap();
+    assert_eq!(state.lock().unwrap().lease_expiries, vec![1_235_567]);
+}
+
+#[tokio::test]
+async fn finalization_retries_after_partial_delete_failure() {
+    let state = Arc::new(Mutex::new(FakeState {
+        candidates: vec![record(AcaSandboxLifecycle::Running)],
+        delete_failures: 1,
+        ..FakeState::default()
+    }));
+    let mut controller = controller(Arc::clone(&state));
+    controller
+        .reconcile(
+            AcaOperationId::parse("operation-finalize-observe").unwrap(),
+            1_000,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        controller
+            .finalize(
+                AcaOperationId::parse("operation-finalize-first").unwrap(),
+                1_000
+            )
+            .await
+            .unwrap_err(),
+        AcaControllerError::Effect(AcaControlErrorKind::Unavailable)
+    );
+    assert!(controller.finalizer_installed());
+    controller
+        .finalize(
+            AcaOperationId::parse("operation-finalize-retry").unwrap(),
+            1_000,
+        )
+        .await
+        .unwrap();
+    assert!(!controller.finalizer_installed());
 }
 
 #[test]

@@ -8545,6 +8545,8 @@ d2b_provider_runtime_azure_container_apps	impl core::marker::Unpin for d2b_provi
 d2b_provider_runtime_azure_container_apps	impl core::marker::UnsafeUnpin for d2b_provider_runtime_azure_container_apps::AcaDeploymentRequest
 d2b_provider_runtime_azure_container_apps	impl core::panic::unwind_safe::RefUnwindSafe for d2b_provider_runtime_azure_container_apps::AcaDeploymentRequest
 d2b_provider_runtime_azure_container_apps	impl core::panic::unwind_safe::UnwindSafe for d2b_provider_runtime_azure_container_apps::AcaDeploymentRequest
+d2b_provider_runtime_azure_container_apps	impl<C, L> !core::panic::unwind_safe::RefUnwindSafe for d2b_provider_runtime_azure_container_apps::AcaController<C, L>
+d2b_provider_runtime_azure_container_apps	impl<C, L> !core::panic::unwind_safe::UnwindSafe for d2b_provider_runtime_azure_container_apps::AcaController<C, L>
 d2b_provider_runtime_azure_container_apps	impl<C, L> core::marker::Freeze for d2b_provider_runtime_azure_container_apps::AcaController<C, L>
 d2b_provider_runtime_azure_container_apps	impl<C, L> core::marker::Freeze for d2b_provider_runtime_azure_container_apps::AzureContainerAppsRuntimeProvider<C, L>
 d2b_provider_runtime_azure_container_apps	impl<C, L> core::marker::Send for d2b_provider_runtime_azure_container_apps::AcaController<C, L> where C: core::marker::Sync + core::marker::Send, L: core::marker::Sync + core::marker::Send
@@ -8555,9 +8557,7 @@ d2b_provider_runtime_azure_container_apps	impl<C, L> core::marker::Unpin for d2b
 d2b_provider_runtime_azure_container_apps	impl<C, L> core::marker::Unpin for d2b_provider_runtime_azure_container_apps::AzureContainerAppsRuntimeProvider<C, L>
 d2b_provider_runtime_azure_container_apps	impl<C, L> core::marker::UnsafeUnpin for d2b_provider_runtime_azure_container_apps::AcaController<C, L>
 d2b_provider_runtime_azure_container_apps	impl<C, L> core::marker::UnsafeUnpin for d2b_provider_runtime_azure_container_apps::AzureContainerAppsRuntimeProvider<C, L>
-d2b_provider_runtime_azure_container_apps	impl<C, L> core::panic::unwind_safe::RefUnwindSafe for d2b_provider_runtime_azure_container_apps::AcaController<C, L> where C: core::panic::unwind_safe::RefUnwindSafe, L: core::panic::unwind_safe::RefUnwindSafe
 d2b_provider_runtime_azure_container_apps	impl<C, L> core::panic::unwind_safe::RefUnwindSafe for d2b_provider_runtime_azure_container_apps::AzureContainerAppsRuntimeProvider<C, L> where C: core::panic::unwind_safe::RefUnwindSafe, L: core::panic::unwind_safe::RefUnwindSafe
-d2b_provider_runtime_azure_container_apps	impl<C, L> core::panic::unwind_safe::UnwindSafe for d2b_provider_runtime_azure_container_apps::AcaController<C, L> where C: core::panic::unwind_safe::RefUnwindSafe, L: core::panic::unwind_safe::RefUnwindSafe
 d2b_provider_runtime_azure_container_apps	impl<C, L> core::panic::unwind_safe::UnwindSafe for d2b_provider_runtime_azure_container_apps::AzureContainerAppsRuntimeProvider<C, L> where C: core::panic::unwind_safe::RefUnwindSafe, L: core::panic::unwind_safe::RefUnwindSafe
 d2b_provider_runtime_azure_container_apps	impl<C, L> d2b_provider_runtime_azure_container_apps::AcaController<C, L> where C: d2b_contracts::provider_effects::aca::AcaControl + 'static, L: d2b_contracts::provider_effects::aca::AcaCredentialLeaseClient + 'static
 d2b_provider_runtime_azure_container_apps	impl<C, L> d2b_provider_runtime_azure_container_apps::AcaDeploymentService<C, L> where C: d2b_contracts::provider_effects::aca::AcaControl + 'static, L: d2b_contracts::provider_effects::aca::AcaCredentialLeaseClient + 'static
@@ -8586,6 +8586,15 @@ d2b_provider_runtime_azure_container_apps	impl<T> core::convert::From<T> for d2b
 d2b_provider_runtime_azure_container_apps	impl<T> core::convert::From<T> for d2b_provider_runtime_azure_container_apps::AcaDeploymentRequest
 d2b_provider_runtime_azure_container_apps	impl<T> core::convert::From<T> for d2b_provider_runtime_azure_container_apps::AzureContainerAppsRuntimeProvider<C, L>
 d2b_provider_runtime_azure_container_apps	impl<T> dyn_clone::DynClone for d2b_provider_runtime_azure_container_apps::AcaDeploymentRequest where T: core::clone::Clone
+d2b_provider_runtime_azure_container_apps	impl<T> tower_http::follow_redirect::policy::PolicyExt for d2b_provider_runtime_azure_container_apps::AcaController<C, L> where T: ?core::marker::Sized
+d2b_provider_runtime_azure_container_apps	impl<T> tower_http::follow_redirect::policy::PolicyExt for d2b_provider_runtime_azure_container_apps::AcaDeploymentRequest where T: ?core::marker::Sized
+d2b_provider_runtime_azure_container_apps	impl<T> tower_http::follow_redirect::policy::PolicyExt for d2b_provider_runtime_azure_container_apps::AzureContainerAppsRuntimeProvider<C, L> where T: ?core::marker::Sized
+d2b_provider_runtime_azure_container_apps	impl<T> tracing::instrument::Instrument for d2b_provider_runtime_azure_container_apps::AcaController<C, L>
+d2b_provider_runtime_azure_container_apps	impl<T> tracing::instrument::Instrument for d2b_provider_runtime_azure_container_apps::AcaDeploymentRequest
+d2b_provider_runtime_azure_container_apps	impl<T> tracing::instrument::Instrument for d2b_provider_runtime_azure_container_apps::AzureContainerAppsRuntimeProvider<C, L>
+d2b_provider_runtime_azure_container_apps	impl<T> tracing::instrument::WithSubscriber for d2b_provider_runtime_azure_container_apps::AcaController<C, L>
+d2b_provider_runtime_azure_container_apps	impl<T> tracing::instrument::WithSubscriber for d2b_provider_runtime_azure_container_apps::AcaDeploymentRequest
+d2b_provider_runtime_azure_container_apps	impl<T> tracing::instrument::WithSubscriber for d2b_provider_runtime_azure_container_apps::AzureContainerAppsRuntimeProvider<C, L>
 d2b_provider_runtime_azure_container_apps	impl<T> typenum::type_operators::Same for d2b_provider_runtime_azure_container_apps::AcaController<C, L>
 d2b_provider_runtime_azure_container_apps	impl<T> typenum::type_operators::Same for d2b_provider_runtime_azure_container_apps::AcaDeploymentRequest
 d2b_provider_runtime_azure_container_apps	impl<T> typenum::type_operators::Same for d2b_provider_runtime_azure_container_apps::AzureContainerAppsRuntimeProvider<C, L>

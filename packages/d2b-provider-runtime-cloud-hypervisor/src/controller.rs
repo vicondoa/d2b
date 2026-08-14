@@ -110,6 +110,8 @@ pub struct CloudHypervisorController<E, P> {
     probe: Arc<P>,
     phase: CloudHypervisorPhase,
     identity: Option<ProcessIdentity>,
+    expected_identity: Option<ProcessIdentity>,
+    health_failures: u8,
     finalizer: bool,
 }
 
@@ -140,8 +142,17 @@ where
             probe,
             phase: CloudHypervisorPhase::Pending,
             identity: None,
+            expected_identity: None,
+            health_failures: 0,
             finalizer: true,
         })
+    }
+
+    /// Bind the controller to the durable process identity used for restart
+    /// adoption.
+    pub fn with_expected_identity(mut self, expected: ProcessIdentity) -> Self {
+        self.expected_identity = Some(expected);
+        self
     }
 
     /// Return the current phase.
@@ -160,16 +171,21 @@ where
     ) -> Result<CloudHypervisorReconcileOutcome, CloudHypervisorError> {
         match health {
             GuestControlHealth::Ready => {
+                self.health_failures = 0;
                 self.phase = CloudHypervisorPhase::Ready;
                 Ok(CloudHypervisorReconcileOutcome::Converged)
             }
             GuestControlHealth::Degraded => {
-                self.phase = CloudHypervisorPhase::Degraded;
+                self.health_failures = self.health_failures.saturating_add(1);
+                if self.health_failures >= self.config.health_check_failure_threshold {
+                    self.phase = CloudHypervisorPhase::Degraded;
+                }
                 Ok(CloudHypervisorReconcileOutcome::Retry {
                     after_ms: self.config.health_check_interval_ms,
                 })
             }
             GuestControlHealth::Failed => {
+                self.health_failures = self.config.health_check_failure_threshold;
                 self.phase = CloudHypervisorPhase::Failed;
                 Err(CloudHypervisorError::GuestControl(
                     GuestControlHealthError::AuthenticationFailed,
@@ -199,7 +215,11 @@ where
         }
         if self.identity.is_none() {
             if let Some(candidate) = self.effect.observe().await? {
-                match verify_identity(&candidate, &candidate) {
+                let Some(expected) = self.expected_identity else {
+                    self.phase = CloudHypervisorPhase::Degraded;
+                    return Err(CloudHypervisorError::AdoptionAmbiguous);
+                };
+                match verify_identity(&expected, &candidate) {
                     AdoptionOutcome::Adopted => {
                         self.effect.open_pidfd(&candidate).await?;
                         self.identity = Some(candidate);
@@ -212,15 +232,18 @@ where
                 }
             } else {
                 self.phase = CloudHypervisorPhase::Starting;
-                self.identity = Some(
-                    self.effect
-                        .launch(&self.graph, &self.config, &self.settings)
-                        .await?,
-                );
+                let identity = self
+                    .effect
+                    .launch(&self.graph, &self.config, &self.settings)
+                    .await?;
+                self.expected_identity = Some(identity);
+                self.identity = Some(identity);
                 self.phase = CloudHypervisorPhase::VmmReady;
             }
         }
-        self.phase = CloudHypervisorPhase::Bootstrapping;
+        if self.phase != CloudHypervisorPhase::Ready {
+            self.phase = CloudHypervisorPhase::Bootstrapping;
+        }
         let health = self
             .probe
             .probe(expected_cid, self.config.health_check_timeout_ms)
@@ -244,6 +267,7 @@ where
             self.phase = CloudHypervisorPhase::Degraded;
             return Err(CloudHypervisorError::AdoptionAmbiguous);
         }
+        self.expected_identity = Some(expected);
         self.effect.open_pidfd(&candidate).await?;
         self.identity = Some(candidate);
         self.phase = CloudHypervisorPhase::VmmReady;
@@ -261,8 +285,9 @@ where
             return Ok(());
         }
         self.phase = CloudHypervisorPhase::Finalizing;
-        if let Some(identity) = self.identity.take() {
+        if let Some(identity) = self.identity {
             self.effect.stop(&identity).await?;
+            self.identity = None;
         }
         self.finalizer = false;
         self.phase = CloudHypervisorPhase::Finalized;

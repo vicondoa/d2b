@@ -46,16 +46,16 @@ impl CreditWindow {
         Ok(())
     }
 
-    /// Return credits after a frame is written.
-    pub fn complete(&mut self, bytes: usize) {
+    /// Release credits after the remote acknowledges the frame.
+    pub fn acknowledge(&mut self, bytes: usize) {
         let returned = bytes.min(self.in_flight);
         self.in_flight -= returned;
-        self.available = (self.available + returned).min(self.max_bytes);
+        self.available = (self.available + returned).min(self.max_bytes - self.in_flight);
     }
 
     /// Grant additional credits from the remote named stream.
     pub fn grant(&mut self, bytes: usize) {
-        self.available = (self.available + bytes).min(self.max_bytes);
+        self.available = (self.available + bytes).min(self.max_bytes - self.in_flight);
     }
 
     /// Return current available credits.

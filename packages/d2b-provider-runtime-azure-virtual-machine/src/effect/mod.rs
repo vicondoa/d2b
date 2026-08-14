@@ -105,6 +105,21 @@ impl TagDigest {
     pub const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
+
+    /// Derive the expected ownership digest from the canonical tag pairs.
+    pub fn from_tags(tags: &[(String, String)]) -> Self {
+        let mut canonical = tags.to_vec();
+        canonical.sort_unstable();
+        let mut digest = Sha256::new();
+        digest.update(b"d2b:azure-vm-tags:v1");
+        for (key, value) in canonical {
+            digest.update([0]);
+            digest.update(key.as_bytes());
+            digest.update([0]);
+            digest.update(value.as_bytes());
+        }
+        Self(digest.finalize().into())
+    }
 }
 
 impl fmt::Debug for TagDigest {

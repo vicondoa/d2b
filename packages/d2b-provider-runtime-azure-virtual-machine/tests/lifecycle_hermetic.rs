@@ -5,7 +5,8 @@ use d2b_contracts::v3::{ResourceRef, credential::OpaqueAzureRef};
 use d2b_provider_runtime_azure_virtual_machine::{
     AzureEffectPort, AzureOperationHandle, AzureVmConfig, AzureVmController, AzureVmError,
     AzureVmGuestSettings, AzureVmHandle, AzureVmPhase, AzureVmReconcileOutcome, AzureVmState,
-    BootstrapPsk, BootstrapPskDelivery, DiskSku, LroStatus, PskExtensionPayload, TagDigest,
+    BootstrapAdmission, BootstrapPsk, BootstrapPskDelivery, BootstrapService, DiskSku, LroStatus,
+    PskExtensionPayload, TagDigest,
 };
 
 struct FakeState {
@@ -87,7 +88,11 @@ impl AzureEffectPort for FakeEffect {
         _: &AzureVmHandle,
         _: &str,
     ) -> Result<AzureOperationHandle, AzureVmError> {
-        self.state.lock().unwrap().calls.push("delete");
+        let mut state = self.state.lock().unwrap();
+        state.calls.push("delete");
+        state.state = AzureVmState::Absent;
+        state.handle = None;
+        state.tags = None;
         Ok(AzureOperationHandle::from_core(b"delete").unwrap())
     }
 
@@ -151,6 +156,20 @@ fn config() -> (AzureVmConfig, AzureVmGuestSettings) {
     )
 }
 
+fn enrolled_service() -> BootstrapService {
+    let mut service = BootstrapService::default();
+    let mut admission =
+        BootstrapAdmission::new(BootstrapPsk::from_bytes(b"enrollment").unwrap(), 10);
+    service
+        .complete_enrollment(&mut admission, b"enrollment", 1)
+        .unwrap();
+    service
+}
+
+fn expected_tag_digest() -> TagDigest {
+    TagDigest::from_tags(&[("owner".to_owned(), "d2b".to_owned())])
+}
+
 #[tokio::test]
 async fn absent_vm_starts_non_blocking_provision() {
     let (provider, settings) = config();
@@ -182,13 +201,15 @@ async fn restart_adopts_only_tagged_running_vm() {
     let state = Arc::new(Mutex::new(FakeState {
         state: AzureVmState::Running,
         handle: Some(AzureVmHandle::from_core("opaque-vm").unwrap()),
-        tags: Some(TagDigest::from_core([8; 32])),
+        tags: Some(expected_tag_digest()),
         ..FakeState::default()
     }));
     let effect = Arc::new(FakeEffect {
         state: Arc::clone(&state),
     });
-    let mut controller = AzureVmController::new(provider, settings, effect, None).unwrap();
+    let mut controller = AzureVmController::new(provider, settings, effect, None)
+        .unwrap()
+        .with_bootstrap_service(enrolled_service());
     assert_eq!(
         controller.adopt().await.unwrap(),
         AzureVmReconcileOutcome::Converged
@@ -203,12 +224,14 @@ async fn delete_keeps_finalizer_until_lro_completion() {
     let state = Arc::new(Mutex::new(FakeState {
         state: AzureVmState::Running,
         handle: Some(AzureVmHandle::from_core("opaque-vm").unwrap()),
-        tags: Some(TagDigest::from_core([8; 32])),
+        tags: Some(expected_tag_digest()),
         polls: vec![LroStatus::Succeeded],
         ..FakeState::default()
     }));
     let effect = Arc::new(FakeEffect { state });
-    let mut controller = AzureVmController::new(provider, settings, effect, None).unwrap();
+    let mut controller = AzureVmController::new(provider, settings, effect, None)
+        .unwrap()
+        .with_bootstrap_service(enrolled_service());
     controller.adopt().await.unwrap();
     assert!(matches!(
         controller.finalize("zone", "guest", 1).await.unwrap(),
@@ -221,6 +244,73 @@ async fn delete_keeps_finalizer_until_lro_completion() {
         .unwrap();
     assert!(!controller.finalizer_installed());
     assert_eq!(controller.phase(), AzureVmPhase::Finalized);
+}
+
+#[tokio::test]
+async fn running_vm_waits_for_authenticated_enrollment() {
+    let (provider, settings) = config();
+    let state = Arc::new(Mutex::new(FakeState {
+        state: AzureVmState::Running,
+        handle: Some(AzureVmHandle::from_core("opaque-vm").unwrap()),
+        tags: Some(expected_tag_digest()),
+        ..FakeState::default()
+    }));
+    let effect = Arc::new(FakeEffect { state });
+    let mut controller = AzureVmController::new(provider, settings, effect, None).unwrap();
+    assert!(matches!(
+        controller.reconcile("zone", "guest", 1).await.unwrap(),
+        AzureVmReconcileOutcome::Retry { .. }
+    ));
+    assert_eq!(controller.phase(), AzureVmPhase::Bootstrapping);
+    assert!(controller.status().identity_digest().is_none());
+}
+
+#[tokio::test]
+async fn foreign_tags_are_not_adopted() {
+    let (provider, settings) = config();
+    let state = Arc::new(Mutex::new(FakeState {
+        state: AzureVmState::Running,
+        handle: Some(AzureVmHandle::from_core("opaque-vm").unwrap()),
+        tags: Some(TagDigest::from_core([9; 32])),
+        ..FakeState::default()
+    }));
+    let effect = Arc::new(FakeEffect { state });
+    let mut controller = AzureVmController::new(provider, settings, effect, None)
+        .unwrap()
+        .with_bootstrap_service(enrolled_service());
+    assert_eq!(
+        controller.adopt().await.unwrap_err(),
+        AzureVmError::ArmResourceConflict
+    );
+    assert_eq!(controller.phase(), AzureVmPhase::Failed);
+}
+
+#[tokio::test]
+async fn restart_finalization_reobserves_before_clearing_finalizer() {
+    let (provider, settings) = config();
+    let state = Arc::new(Mutex::new(FakeState {
+        state: AzureVmState::Running,
+        handle: Some(AzureVmHandle::from_core("opaque-vm").unwrap()),
+        tags: Some(expected_tag_digest()),
+        polls: vec![LroStatus::Succeeded],
+        ..FakeState::default()
+    }));
+    let effect = Arc::new(FakeEffect {
+        state: Arc::clone(&state),
+    });
+    let mut controller = AzureVmController::new(provider, settings, effect, None)
+        .unwrap()
+        .with_bootstrap_service(enrolled_service());
+    assert!(matches!(
+        controller.finalize("zone", "guest", 1).await.unwrap(),
+        AzureVmReconcileOutcome::Progressing { .. }
+    ));
+    assert!(controller.finalizer_installed());
+    controller
+        .poll_operation(AzureOperationHandle::from_core(b"delete").unwrap())
+        .await
+        .unwrap();
+    assert!(!controller.finalizer_installed());
 }
 
 #[tokio::test]

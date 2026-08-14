@@ -14,6 +14,7 @@ pub const MAX_DATA_DISKS: usize = 16;
 
 /// Azure disk SKU allowlist.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub enum DiskSku {
     /// Premium SSD.
     PremiumLrs,
@@ -27,6 +28,7 @@ pub enum DiskSku {
 
 /// One provider-owned data disk intent.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DataDiskSpec {
     /// Azure LUN.
     pub lun: u8,
@@ -69,6 +71,7 @@ impl fmt::Debug for DataDiskSpec {
 
 /// How the one-time bootstrap PSK reaches the VM.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub enum BootstrapPskDelivery {
     /// Use an ARM VM extension.
     VmExtension,
@@ -78,6 +81,7 @@ pub enum BootstrapPskDelivery {
 
 /// Provider root configuration.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AzureVmConfig {
     /// Optional tenant identifier for Entra-backed credentials.
     pub tenant_id: Option<OpaqueAzureRef>,
@@ -136,6 +140,7 @@ impl fmt::Debug for AzureVmConfig {
 
 /// Per-Guest Azure VM settings.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AzureVmGuestSettings {
     /// Azure subscription.
     pub subscription_id: OpaqueAzureRef,

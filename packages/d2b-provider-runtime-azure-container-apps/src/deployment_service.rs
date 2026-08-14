@@ -9,6 +9,8 @@ use d2b_contracts::provider_effects::aca::{
     AcaWorkloadQuery,
 };
 
+use crate::controller::{AcaClock, SystemAcaClock};
+
 /// Methods exported by the ACA deployment service.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AcaServiceMethod {
@@ -107,6 +109,7 @@ pub struct AcaDeploymentService<C, L> {
     control: Arc<C>,
     leases: Arc<L>,
     max_in_flight: usize,
+    clock: Arc<dyn AcaClock>,
 }
 
 impl<C, L> AcaDeploymentService<C, L>
@@ -120,7 +123,14 @@ where
             control,
             leases,
             max_in_flight: 64,
+            clock: Arc::new(SystemAcaClock),
         }
+    }
+
+    /// Replace the wall clock used for lease expiry.
+    pub fn with_clock(mut self, clock: Arc<dyn AcaClock>) -> Self {
+        self.clock = clock;
+        self
     }
 
     /// Return the fixed service concurrency bound.
@@ -142,8 +152,13 @@ where
         }
         let (operation_id, purpose) = request_binding(&request, method)?;
         let context = AcaControlContext::new(operation_id.clone(), deadline_remaining_ms);
-        let lease_request =
-            AcaCredentialLeaseRequest::new(operation_id, purpose, u64::from(deadline_remaining_ms));
+        let lease_request = AcaCredentialLeaseRequest::new(
+            operation_id,
+            purpose,
+            self.clock
+                .now_unix_ms()
+                .saturating_add(u64::from(deadline_remaining_ms)),
+        );
         let lease = self
             .leases
             .acquire(&lease_request)

@@ -1,12 +1,13 @@
 //! Azure Relay byte-stream Provider.
 
-use std::{fmt, sync::Arc};
+use std::{fmt, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use d2b_contracts::v3::ResourceRef;
 use hmac::{Hmac, Mac};
-use sha2::Sha256;
+use sha2::{Digest, Sha256};
 use tokio::sync::Mutex;
+use tokio::time::sleep;
 use zeroize::Zeroizing;
 
 use crate::{
@@ -14,6 +15,7 @@ use crate::{
     credential_client::{
         RelayCredentialLease, RelayCredentialPort, RelayCredentialRole, RelaySecret,
     },
+    reconnect::{ReconnectBackoff, ReconnectDecision},
     transport_settings::RelayTransportSettings,
 };
 
@@ -136,15 +138,49 @@ pub enum RelaySessionPhase {
     Closed,
 }
 
+/// Evidence produced by an authenticated enrollment handshake.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct RelayEnrollmentProof {
+    transcript_digest: [u8; 32],
+}
+
+impl fmt::Debug for RelayEnrollmentProof {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("RelayEnrollmentProof(<redacted>)")
+    }
+}
+
+/// Verifies the authenticated enrollment transcript.
+pub trait RelayEnrollmentVerifier: Send + Sync {
+    /// Verify the transcript and admit it for one KK session.
+    fn verify_enrollment(&self, transcript: &[u8]) -> bool;
+}
+
+impl RelayEnrollmentProof {
+    /// Verify an enrollment transcript and mint an unforgeable proof token.
+    pub fn authenticate<V: RelayEnrollmentVerifier>(
+        verifier: &V,
+        transcript: &[u8],
+    ) -> Result<Self, RelayTransportError> {
+        if transcript.is_empty() || !verifier.verify_enrollment(transcript) {
+            return Err(RelayTransportError::AuthenticationFailed);
+        }
+        Ok(Self {
+            transcript_digest: Sha256::digest(transcript).into(),
+        })
+    }
+}
+
 impl RelaySessionPhase {
-    /// Accept the one-time enrollment transition.
-    pub const fn establish_enrolled_kk(
+    /// Accept the one-time enrollment transition using authenticated proof.
+    pub fn establish_enrolled_kk(
         self,
-        enrollment_committed: bool,
+        proof: &RelayEnrollmentProof,
         offered_bootstrap_continuation: bool,
     ) -> Result<Self, RelayTransportError> {
+        let _ = proof.transcript_digest;
         match self {
-            Self::Bootstrap if !enrollment_committed || offered_bootstrap_continuation => {
+            Self::Bootstrap if offered_bootstrap_continuation => {
                 Err(RelayTransportError::InvalidSessionTransition)
             }
             Self::Bootstrap => Ok(Self::EnrolledKk),
@@ -177,8 +213,8 @@ pub struct RelayConnection {
 }
 
 impl RelayConnection {
-    /// Construct an enrolled connection.
-    pub fn new(
+    /// Construct a connection that is not yet enrolled.
+    pub fn from_socket(
         socket: Arc<dyn RelaySocket>,
         credit_bytes: usize,
     ) -> Result<Self, RelayTransportError> {
@@ -188,27 +224,22 @@ impl RelayConnection {
                 CreditWindow::new(credit_bytes)
                     .map_err(|_| RelayTransportError::CreditExhausted)?,
             ),
-            phase: Mutex::new(RelaySessionPhase::EnrolledKk),
+            phase: Mutex::new(RelaySessionPhase::Bootstrap),
         })
     }
 
-    /// Construct a connection after a distinct enrolled KK handshake.
-    pub fn from_enrolled_kk(
-        socket: Arc<dyn RelaySocket>,
-        credit_bytes: usize,
-        prior_phase: RelaySessionPhase,
-        enrollment_committed: bool,
-    ) -> Result<Self, RelayTransportError> {
-        if prior_phase.establish_enrolled_kk(enrollment_committed, false)?
-            != RelaySessionPhase::EnrolledKk
-        {
-            return Err(RelayTransportError::InvalidSessionTransition);
-        }
-        Self::new(socket, credit_bytes)
+    /// Commit authenticated enrollment before any application frame is sent.
+    pub async fn enroll(&self, proof: &RelayEnrollmentProof) -> Result<(), RelayTransportError> {
+        let mut phase = self.phase.lock().await;
+        *phase = phase.establish_enrolled_kk(proof, false)?;
+        Ok(())
     }
 
     /// Send one frame only when credits are available.
     pub async fn send(&self, frame: RelayFrame) -> Result<(), RelayTransportError> {
+        if self.phase().await != RelaySessionPhase::EnrolledKk {
+            return Err(RelayTransportError::InvalidSessionTransition);
+        }
         let size = frame.as_bytes().len();
         {
             let mut credits = self.credits.lock().await;
@@ -217,9 +248,7 @@ impl RelayConnection {
                 BackpressureError::CreditExhausted => RelayTransportError::CreditExhausted,
             })?;
         }
-        let result = self.socket.send(frame).await;
-        self.credits.lock().await.complete(size);
-        result
+        self.socket.send(frame).await
     }
 
     /// Receive one frame.
@@ -230,6 +259,17 @@ impl RelayConnection {
     /// Grant credits from the remote named stream.
     pub async fn grant(&self, bytes: usize) {
         self.credits.lock().await.grant(bytes);
+    }
+
+    /// Release send credits after a remote acknowledgement.
+    pub async fn acknowledge(&self, bytes: usize) {
+        self.credits.lock().await.acknowledge(bytes);
+    }
+
+    /// Return available and in-flight send credits.
+    pub async fn credit_state(&self) -> (usize, usize) {
+        let credits = self.credits.lock().await;
+        (credits.available(), credits.in_flight())
     }
 
     /// Close the exact connection.
@@ -324,6 +364,21 @@ where
         role: RelayRole,
         deadline_ms: u32,
     ) -> Result<RelayConnection, RelayTransportError> {
+        self.open_with_backoff(
+            role,
+            deadline_ms,
+            ReconnectBackoff::new(4_000, deadline_ms.min(30_000)),
+        )
+        .await
+    }
+
+    /// Open a connection with a finite reconnect policy.
+    pub async fn open_with_backoff(
+        &self,
+        role: RelayRole,
+        deadline_ms: u32,
+        mut backoff: ReconnectBackoff,
+    ) -> Result<RelayConnection, RelayTransportError> {
         if deadline_ms == 0 {
             return Err(RelayTransportError::DeadlineExpired);
         }
@@ -331,16 +386,47 @@ where
             RelayRole::Listener => RelayCredentialRole::Listen,
             RelayRole::Sender => RelayCredentialRole::Send,
         };
-        let lease = self
-            .credentials
-            .acquire(credential_role, deadline_ms)
-            .await
-            .map_err(|_| RelayTransportError::CredentialUnavailable)?;
-        let socket = self.connector.connect(&self.endpoint, role, &lease).await;
-        let revoke = self.credentials.revoke(lease).await;
-        let socket = socket?;
-        revoke.map_err(|_| RelayTransportError::CredentialUnavailable)?;
-        RelayConnection::new(socket, 256 * 1024)
+        let mut elapsed_ms = 0_u32;
+        loop {
+            let remaining_ms = deadline_ms.saturating_sub(elapsed_ms);
+            if remaining_ms == 0 {
+                return Err(RelayTransportError::DeadlineExpired);
+            }
+            let lease = self
+                .credentials
+                .acquire(credential_role, remaining_ms)
+                .await
+                .map_err(|_| RelayTransportError::CredentialUnavailable)?;
+            let socket_result = self.connector.connect(&self.endpoint, role, &lease).await;
+            let revoke_result = self.credentials.revoke(lease).await;
+            let socket = match socket_result {
+                Ok(socket) => socket,
+                Err(error) => {
+                    revoke_result.map_err(|_| RelayTransportError::CredentialUnavailable)?;
+                    if !matches!(error, RelayTransportError::Unavailable) {
+                        return Err(error);
+                    }
+                    match backoff.failed() {
+                        ReconnectDecision::RetryAfter(delay)
+                            if delay <= deadline_ms.saturating_sub(elapsed_ms) =>
+                        {
+                            sleep(Duration::from_millis(u64::from(delay))).await;
+                            elapsed_ms = elapsed_ms.saturating_add(delay);
+                            continue;
+                        }
+                        ReconnectDecision::RetryAfter(_) | ReconnectDecision::Closed => {
+                            return Err(RelayTransportError::Unavailable);
+                        }
+                        ReconnectDecision::OpenNow => continue,
+                    }
+                }
+            };
+            if revoke_result.is_err() {
+                let _ = socket.close().await;
+                return Err(RelayTransportError::CredentialUnavailable);
+            }
+            return RelayConnection::from_socket(socket, 256 * 1024);
+        }
     }
 
     /// Return the gateway execution boundary.

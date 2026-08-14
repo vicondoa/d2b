@@ -29,6 +29,33 @@ let
     let parsed = parseRef value;
     in if parsed == null then null else parsed.type;
 
+  resourceFor = row: value:
+    let
+      parsed = parseRef value;
+      resources = cfg.zones.${row.zone}.resources or { };
+    in
+      if parsed != null && builtins.hasAttr parsed.name resources
+      then resources.${parsed.name}
+      else null;
+
+  resolvesAs = row: expectedType: value:
+    let
+      parsed = parseRef value;
+      resource = resourceFor row value;
+    in
+      builtins.isString value
+      && parsed != null
+      && parsed.type == expectedType
+      && resource != null
+      && resource.type == expectedType;
+
+  runtimeProviderRefs = [
+    "Provider/runtime-azure-container-apps"
+    "Provider/runtime-azure-virtual-machine"
+    "Provider/runtime-cloud-hypervisor"
+    "Provider/transport-azure-relay"
+  ];
+
   providerRows = lib.filter
     (row: row.resource.type == "Provider")
     allResources;
@@ -71,47 +98,54 @@ let
         else providerConfig.controllerExecutionRef or null;
       credentialScopeMatches = credentialRef:
         let
-          parsed = parseRef credentialRef;
-          credential =
-            if parsed != null && builtins.hasAttr parsed.name cfg.zones.${row.zone}.resources
-            then cfg.zones.${row.zone}.resources.${parsed.name}
-            else null;
+          credential = resourceFor row credentialRef;
         in
-        builtins.isString credentialRef
-        && parsed != null
-        && parsed.type == "Credential"
-        && credential != null
-        && (credential.spec.scope.executionRef or null) == gatewayRef;
+        resolvesAs row "Credential" credentialRef
+        && ((credential.spec or { }).scope or { }).executionRef == gatewayRef;
     in
       (if providerRef == "Provider/runtime-cloud-hypervisor" then [
         {
-          assertion = refType (providerConfig.controllerExecutionRef or null) == "Host";
+          assertion = resolvesAs row "Host" (providerConfig.controllerExecutionRef or null);
           message = "${row.path}.spec.config.controllerExecutionRef must resolve to Host.";
         }
       ] else [ ])
       ++ (if providerRef == "Provider/runtime-azure-virtual-machine" then [
         {
-          assertion = refType (providerConfig.controllerExecutionRef or null) == "Guest";
+          assertion = resolvesAs row "Guest" (providerConfig.controllerExecutionRef or null);
           message = "${row.path}.spec.config.controllerExecutionRef must resolve to the gateway Guest.";
+        }
+        {
+          assertion = lib.all credentialScopeMatches credentialRefs;
+          message = "${row.path}.spec.config ARM credential scope must match controllerExecutionRef.";
+        }
+        {
+          assertion = providerConfig.networkRef or null == null
+            || resolvesAs row "Network" providerConfig.networkRef;
+          message = "${row.path}.spec.config.networkRef must resolve to a same-Zone Network.";
         }
       ] else [ ])
       ++ (if providerRef == "Provider/runtime-azure-container-apps" then [
         {
-          assertion = refType (providerConfig.gatewayExecutionRef or null) == "Guest";
+          assertion = resolvesAs row "Guest" (providerConfig.gatewayExecutionRef or null);
           message = "${row.path}.spec.config.gatewayExecutionRef must resolve to the gateway Guest.";
         }
         {
           assertion = lib.all credentialScopeMatches credentialRefs;
           message = "${row.path}.spec.config credential scopes must match gatewayExecutionRef.";
         }
+        {
+          assertion = providerConfig.networkRef or null == null
+            || resolvesAs row "Network" providerConfig.networkRef;
+          message = "${row.path}.spec.config.networkRef must resolve to a same-Zone Network.";
+        }
       ] else [ ])
       ++ (if providerRef == "Provider/transport-azure-relay" then [
         {
-          assertion = refType (providerConfig.executionRef or null) == "Guest";
+          assertion = resolvesAs row "Guest" (providerConfig.executionRef or null);
           message = "${row.path}.spec.config.executionRef must resolve to a gateway Guest.";
         }
         {
-          assertion = refType (providerConfig.networkRef or null) == "Network";
+          assertion = resolvesAs row "Network" (providerConfig.networkRef or null);
           message = "${row.path}.spec.config.networkRef must resolve to a Network.";
         }
       ] else [ ]);
@@ -122,6 +156,13 @@ let
       providerRef = spec.providerRef or "";
       providerEnvelope = spec.provider or { };
       settings = providerEnvelope.settings or { };
+      providerResolution =
+        if lib.elem providerRef runtimeProviderRefs then [
+          {
+            assertion = resolvesAs row "Provider" providerRef;
+            message = "${row.path}.spec.providerRef must resolve to an existing same-Zone runtime Provider.";
+          }
+        ] else [ ];
       forbidden = [
         "hostPath"
         "socketPath"
@@ -138,7 +179,8 @@ let
         (key: builtins.hasAttr key spec)
         [ "parentZone" "childZone" "zoneLink" "routeCursor" "authority" ];
     in
-      (if providerRef == "Provider/runtime-cloud-hypervisor" then [
+      providerResolution
+      ++ (if providerRef == "Provider/runtime-cloud-hypervisor" then [
         {
           assertion = (spec.systemArtifactId or null) != null;
           message = "${row.path}.spec.systemArtifactId is required for runtime-cloud-hypervisor.";
@@ -180,7 +222,12 @@ let
       "Provider/runtime-azure-virtual-machine"
     ];
     executionRef = spec.executionRef or null;
-    in lib.optionals isGatewayProvider [
+    in (lib.optionals (lib.elem providerRef runtimeProviderRefs) [
+      {
+        assertion = resolvesAs row "Provider" providerRef;
+        message = "${row.path}.spec.providerRef must resolve to an existing same-Zone runtime Provider.";
+      }
+    ]) ++ lib.optionals isGatewayProvider [
       {
         assertion = refType executionRef == "Guest";
         message = "${row.path}.spec.executionRef must be the configured gateway Guest; Host placement is forbidden.";
@@ -190,6 +237,7 @@ let
   zoneLinkAssertions = row:
     let
       settings = row.resource.spec.transportSettings or { };
+      providerRef = row.resource.spec.transportProviderRef or "";
       forbidden = [
         "socketPath"
         "hostPath"
@@ -203,12 +251,32 @@ let
         builtins.elem key forbidden
         || lib.hasSuffix "CredRef" key
         || lib.hasSuffix "Credential" key;
+      exactRelaySettings = [
+        "relayEntityId"
+        "relayNamespaceId"
+      ];
     in [
       {
         assertion = lib.all (key: !secretKey key) (lib.attrNames settings);
         message = "${row.path}.spec.transportSettings must not contain credential or locator fields.";
       }
-    ];
+    ]
+      ++ lib.optionals (providerRef == "Provider/transport-azure-relay") [
+        {
+          assertion = lib.sort builtins.lessThan (lib.attrNames settings) == exactRelaySettings;
+          message = "${row.path}.spec.transportSettings must contain exactly relayNamespaceId and relayEntityId.";
+        }
+        {
+          assertion = builtins.isString (settings.relayNamespaceId or null)
+            && builtins.match "^[a-zA-Z0-9][a-zA-Z0-9-]{2,48}[a-zA-Z0-9]$" settings.relayNamespaceId != null;
+          message = "${row.path}.spec.transportSettings.relayNamespaceId has an invalid Azure Relay namespace shape.";
+        }
+        {
+          assertion = builtins.isString (settings.relayEntityId or null)
+            && builtins.match "^[a-z][a-z0-9-]{1,49}$" settings.relayEntityId != null;
+          message = "${row.path}.spec.transportSettings.relayEntityId has an invalid Azure Relay entity shape.";
+        }
+      ];
 
   allAssertions =
     lib.concatMap providerAssertions providerRows

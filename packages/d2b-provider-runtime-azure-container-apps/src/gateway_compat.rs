@@ -1,4 +1,4 @@
-//! `d2b-provider-aca`: the Azure Container Apps **sandbox**
+//! `d2b-provider-runtime-azure-container-apps`: the Azure Container Apps **sandbox**
 //! `WorkloadProvider` implementation for provider-managed sandboxes.
 //!
 //! This productionizes the Azure Container Apps sandbox path: instead of the
@@ -33,7 +33,9 @@
 //!
 //! ```no_run
 //! # use d2b_realm_core::NodeId;
-//! # use d2b_provider_aca::{AcaConfig, AcaWorkloadProvider};
+//! # use d2b_provider_runtime_azure_container_apps::gateway_compat::{
+//! #     AcaConfig, AcaWorkloadProvider,
+//! # };
 //! # fn build(cfg: AcaConfig) -> Result<AcaWorkloadProvider, Box<dyn std::error::Error>> {
 //! let provider = AcaWorkloadProvider::new(cfg, NodeId::parse("gateway")?)?;
 //! # Ok(provider)
@@ -46,7 +48,9 @@
 //!
 //! ```no_run
 //! # use d2b_realm_core::NodeId;
-//! # use d2b_provider_aca::{AcaConfig, AcaWorkloadProvider, ReqwestTransport};
+//! # use d2b_provider_runtime_azure_container_apps::gateway_compat::{
+//! #     AcaConfig, AcaWorkloadProvider, ReqwestTransport,
+//! # };
 //! # use std::sync::Arc;
 //! # fn build_local(cfg: AcaConfig) -> Result<AcaWorkloadProvider, Box<dyn std::error::Error>> {
 //! let credential = azure_identity::AzureCliCredential::new(None)?;
@@ -2132,7 +2136,7 @@ mod tests {
 
     #[test]
     fn aca_source_imports_no_full_host_or_developer_credential_surfaces() {
-        let imports = include_str!("lib.rs")
+        let imports = include_str!("gateway_compat.rs")
             .lines()
             .filter(|line| line.trim_start().starts_with("use "))
             .collect::<Vec<_>>()
@@ -2161,7 +2165,7 @@ mod tests {
 
     #[test]
     fn production_constructor_uses_workload_then_managed_identity_only() {
-        let source = include_str!("lib.rs");
+        let source = include_str!("gateway_compat.rs");
         let impl_start = source
             .find("impl AcaWorkloadProvider {")
             .expect("AcaWorkloadProvider impl present");

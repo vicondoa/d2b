@@ -668,6 +668,13 @@ provider-projection-exportability/matching-fingerprints-do-not-mask-exportabilit
 provider-projection-fields/all-eight-published-fields-match
 provider-projection-fields/every-published-field-mismatch-is-rejected
 provider-projection-fields/legacy-absent-version-is-version-skew
+provider-runtime-contracts/accepts-valid-runtime-provider-bindings
+provider-runtime-contracts-enforces-vm-arm-credential-scope
+provider-runtime-contracts/rejects-cross-zone-provider-reference
+provider-runtime-contracts/rejects-unknown-same-zone-provider-reference
+provider-runtime-contracts-requires-exact-relay-settings
+provider-runtime-contracts-requires-provider-resolution-for-processes
+provider-runtime-contracts-validates-relay-identifiers
 readiness-waves/daemon-auto-default
 readiness-waves/has-p0
 readiness-waves/has-p1

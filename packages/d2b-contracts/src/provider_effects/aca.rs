@@ -94,6 +94,7 @@ opaque_id!(AcaDiskImageId, MAX_ACA_RESOURCE_ID_LEN, false);
 opaque_id!(AcaOperationId, 96, true);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AcaCpuMillis(u16);
 
 impl AcaCpuMillis {
@@ -111,6 +112,7 @@ impl AcaCpuMillis {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AcaMemoryMib(u32);
 
 impl AcaMemoryMib {
@@ -128,6 +130,7 @@ impl AcaMemoryMib {
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub enum AcaDiskImageSource {
     ConfiguredDisk {
         binding_id: AcaConfiguredDiskId,
@@ -151,6 +154,7 @@ impl fmt::Debug for AcaDiskImageSource {
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AcaSandboxProfile {
     profile_id: AcaProfileId,
     disk_image: AcaDiskImageSource,
@@ -229,6 +233,7 @@ impl fmt::Debug for AcaSandboxProfile {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AcaReadinessPolicy {
     attempts: u8,
     interval_ms: u32,
@@ -259,6 +264,7 @@ impl AcaReadinessPolicy {
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AcaRuntimeConfig {
     profile: AcaSandboxProfile,
     readiness: AcaReadinessPolicy,
@@ -322,6 +328,7 @@ impl fmt::Debug for AcaRuntimeConfig {
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AcaProviderConfig {
     pub gateway_execution_ref: ResourceRef,
     pub tenant_id: OpaqueAzureRef,
@@ -471,6 +478,7 @@ impl AcaDiskImageCandidates {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub enum AcaSandboxLifecycle {
     Creating,
     Running,

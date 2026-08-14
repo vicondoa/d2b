@@ -27,6 +27,7 @@ fake-backends = []
 [dependencies]
 d2b-core = { path = "../d2b-core", version = "0.0.0-bootstrap" }
 d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
+d2b-host-argv = { path = "../d2b-host-argv", version = "0.0.0-bootstrap" }
 async-trait = "0.1"
 serde.workspace = true
 serde_json.workspace = true

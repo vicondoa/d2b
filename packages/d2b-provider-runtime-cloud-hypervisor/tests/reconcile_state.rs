@@ -18,6 +18,8 @@ struct FakeState {
     identity: Option<ProcessIdentity>,
     launched: bool,
     stopped: bool,
+    stop_calls: usize,
+    stop_failures: usize,
 }
 
 struct FakeEffect {
@@ -57,17 +59,38 @@ impl CloudHypervisorEffectPort for FakeEffect {
         &self,
         _: &ProcessIdentity,
     ) -> Result<(), d2b_provider_runtime_cloud_hypervisor::CloudHypervisorError> {
-        self.state.lock().unwrap().stopped = true;
+        let mut state = self.state.lock().unwrap();
+        state.stop_calls += 1;
+        if state.stop_failures > 0 {
+            state.stop_failures -= 1;
+            return Err(d2b_provider_runtime_cloud_hypervisor::CloudHypervisorError::Effect);
+        }
+        state.stopped = true;
         Ok(())
     }
 }
 
-struct ReadyProbe;
+struct ReadyProbe {
+    responses: Arc<Mutex<Vec<GuestControlHealth>>>,
+}
+
+impl ReadyProbe {
+    fn scripted(responses: Vec<GuestControlHealth>) -> Self {
+        Self {
+            responses: Arc::new(Mutex::new(responses)),
+        }
+    }
+}
 
 #[async_trait]
 impl GuestControlProbe for ReadyProbe {
     async fn probe(&self, _: u32, _: u32) -> Result<GuestControlHealth, GuestControlHealthError> {
-        Ok(GuestControlHealth::Ready)
+        Ok(self
+            .responses
+            .lock()
+            .unwrap()
+            .pop()
+            .unwrap_or(GuestControlHealth::Ready))
     }
 }
 
@@ -82,7 +105,10 @@ fn identity() -> ProcessIdentity {
     }
 }
 
-fn controller(state: Arc<Mutex<FakeState>>) -> CloudHypervisorController<FakeEffect, ReadyProbe> {
+fn controller_with_probe(
+    state: Arc<Mutex<FakeState>>,
+    probe: ReadyProbe,
+) -> CloudHypervisorController<FakeEffect, ReadyProbe> {
     let config = CloudHypervisorConfig {
         controller_execution_ref: ResourceRef::parse("Host/host-system").unwrap(),
         default_vcpus: 2,
@@ -119,9 +145,13 @@ fn controller(state: Arc<Mutex<FakeState>>) -> CloudHypervisorController<FakeEff
         settings,
         graph,
         Arc::new(FakeEffect { state }),
-        Arc::new(ReadyProbe),
+        Arc::new(probe),
     )
     .unwrap()
+}
+
+fn controller(state: Arc<Mutex<FakeState>>) -> CloudHypervisorController<FakeEffect, ReadyProbe> {
+    controller_with_probe(state, ReadyProbe::scripted(Vec::new()))
 }
 
 #[tokio::test]
@@ -156,7 +186,7 @@ async fn restart_rejects_stale_generation_before_pidfd_open() {
         identity: Some(identity()),
         ..FakeState::default()
     }));
-    let mut controller = controller(state);
+    let mut controller = controller(Arc::clone(&state));
     let mut expected = identity();
     expected.generation = 2;
     assert!(matches!(
@@ -164,4 +194,63 @@ async fn restart_rejects_stale_generation_before_pidfd_open() {
         Err(d2b_provider_runtime_cloud_hypervisor::CloudHypervisorError::AdoptionAmbiguous)
     ));
     assert_eq!(controller.phase(), CloudHypervisorPhase::Degraded);
+}
+
+#[tokio::test]
+async fn observed_process_without_durable_identity_is_rejected() {
+    let state = Arc::new(Mutex::new(FakeState {
+        identity: Some(identity()),
+        ..FakeState::default()
+    }));
+    let mut controller = controller(state);
+    assert!(matches!(
+        controller.reconcile(true, true, true, 14).await,
+        Err(d2b_provider_runtime_cloud_hypervisor::CloudHypervisorError::AdoptionAmbiguous)
+    ));
+}
+
+#[tokio::test]
+async fn failed_stop_retains_identity_for_retry() {
+    let state = Arc::new(Mutex::new(FakeState {
+        stop_failures: 1,
+        ..FakeState::default()
+    }));
+    let mut controller = controller(Arc::clone(&state));
+    controller.reconcile(true, true, true, 14).await.unwrap();
+    assert_eq!(
+        controller.finalize().await,
+        Err(d2b_provider_runtime_cloud_hypervisor::CloudHypervisorError::Effect)
+    );
+    assert!(controller.finalizer_installed());
+    controller.finalize().await.unwrap();
+    assert!(!controller.finalizer_installed());
+    assert_eq!(state.lock().unwrap().stop_calls, 2);
+}
+
+#[tokio::test]
+async fn degraded_health_requires_threshold_before_phase_change() {
+    let state = Arc::new(Mutex::new(FakeState::default()));
+    let mut controller = controller_with_probe(
+        state,
+        ReadyProbe::scripted(vec![
+            GuestControlHealth::Ready,
+            GuestControlHealth::Degraded,
+            GuestControlHealth::Degraded,
+        ]),
+    );
+    assert!(matches!(
+        controller.reconcile(true, true, true, 14).await.unwrap(),
+        CloudHypervisorReconcileOutcome::Retry { .. }
+    ));
+    assert_eq!(controller.phase(), CloudHypervisorPhase::Bootstrapping);
+    assert!(matches!(
+        controller.reconcile(true, true, true, 14).await.unwrap(),
+        CloudHypervisorReconcileOutcome::Retry { .. }
+    ));
+    assert_eq!(controller.phase(), CloudHypervisorPhase::Bootstrapping);
+    assert_eq!(
+        controller.reconcile(true, true, true, 14).await.unwrap(),
+        CloudHypervisorReconcileOutcome::Converged
+    );
+    assert_eq!(controller.phase(), CloudHypervisorPhase::Ready);
 }

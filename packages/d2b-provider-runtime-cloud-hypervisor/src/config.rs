@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 /// Console mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub enum ConsoleType {
     /// Headless console.
     Null,
@@ -16,6 +17,7 @@ pub enum ConsoleType {
 
 /// Provider root configuration.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CloudHypervisorConfig {
     /// Explicit Host execution reference.
     pub controller_execution_ref: ResourceRef,
@@ -80,6 +82,7 @@ impl fmt::Debug for CloudHypervisorConfig {
 
 /// Guest-specific VMM settings.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CloudHypervisorGuestSettings {
     /// VCPU count override.
     pub vcpus: Option<u16>,

@@ -13,7 +13,9 @@ use std::path::{Path, PathBuf};
 use base64::Engine;
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
-use d2b_provider_relay::{MAX_SAS_TTL_SECS, RelayCredential, RelayEndpoint, RelayError, mint_sas};
+use d2b_provider_transport_azure_relay::gateway_compat::{
+    MAX_SAS_TTL_SECS, RelayCredential, RelayEndpoint, RelayError, mint_sas,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 

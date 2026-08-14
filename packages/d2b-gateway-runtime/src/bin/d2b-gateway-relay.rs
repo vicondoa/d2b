@@ -34,8 +34,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use base64::Engine;
 use d2b_gateway::{SECRET_LEN, SessionBinding, SessionSecret};
+use d2b_gateway_runtime::relay_compat::LocalTarget;
 use d2b_gateway_runtime::{agent_prologue, make_prologue_verifier};
-use d2b_provider_relay::{LocalTarget, RelayCredential, RelayEndpoint};
+use d2b_provider_transport_azure_relay::gateway_compat::{RelayCredential, RelayEndpoint};
 
 type Err = Box<dyn std::error::Error>;
 
@@ -117,7 +118,7 @@ async fn main() -> Result<(), Err> {
         "sender" => {
             eprintln!("[d2b-gateway-relay] sender (handshake prologue) -> {target:?}");
             let prologue = agent_prologue(&secret, binding);
-            d2b_provider_relay::run_sender_with_prologue(
+            d2b_gateway_runtime::relay_compat::run_sender_with_prologue(
                 &endpoint,
                 &credential,
                 &target,
@@ -133,7 +134,7 @@ async fn main() -> Result<(), Err> {
             let verify = make_prologue_verifier(secret, binding, generation, Arc::new(now_unix));
             loop {
                 eprintln!("[d2b-gateway-relay] arming verified listener...");
-                if let Err(e) = d2b_provider_relay::run_listener_verified(
+                if let Err(e) = d2b_gateway_runtime::relay_compat::run_listener_verified(
                     &endpoint,
                     &credential,
                     &target,

@@ -1,6 +1,11 @@
 //! ACA Guest lifecycle controller.
 
-use std::{collections::BTreeMap, fmt, sync::Arc};
+use std::{
+    collections::BTreeMap,
+    fmt,
+    sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use sha2::{Digest, Sha256};
 
@@ -65,6 +70,8 @@ pub enum AcaControllerError {
     Effect(AcaControlErrorKind),
     /// Credential cleanup failed after an otherwise successful operation.
     LeaseCleanup(AcaControlErrorKind),
+    /// The sandbox did not become ready within the configured attempt bound.
+    ReadinessExhausted,
 }
 
 impl AcaControllerError {
@@ -76,6 +83,7 @@ impl AcaControllerError {
             Self::DiskImageUnavailable => "aca-disk-image-unavailable",
             Self::SandboxUnavailable => "aca-sandbox-unavailable",
             Self::Effect(kind) | Self::LeaseCleanup(kind) => kind.code(),
+            Self::ReadinessExhausted => "aca-readiness-exhausted",
         }
     }
 }
@@ -133,6 +141,32 @@ pub struct CompletedOperationLedger {
     completed: BTreeMap<AcaOperationId, (u64, AcaPhase)>,
 }
 
+/// Clock used to turn bounded operation deadlines into absolute Unix expiry.
+pub trait AcaClock: Send + Sync {
+    /// Return the current Unix time in milliseconds.
+    fn now_unix_ms(&self) -> u64;
+}
+
+/// Production wall clock for ACA lease expiry.
+#[derive(Debug, Default)]
+pub struct SystemAcaClock;
+
+impl AcaClock for SystemAcaClock {
+    fn now_unix_ms(&self) -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
+            .unwrap_or(0)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AcaFinalizationStage {
+    Observe,
+    Stop,
+    Delete,
+}
+
 impl CompletedOperationLedger {
     /// Record one operation and evict the oldest entries at capacity.
     pub fn record(
@@ -185,6 +219,11 @@ pub struct AcaController<C, L> {
     observed: Option<AcaSandboxRecord>,
     disk_image: Option<AcaDiskImageRecord>,
     ledger: CompletedOperationLedger,
+    clock: Arc<dyn AcaClock>,
+    readiness_generation: u64,
+    readiness_attempts: u8,
+    readiness_lifecycle: Option<AcaSandboxLifecycle>,
+    finalization_stage: AcaFinalizationStage,
 }
 
 impl<C, L> AcaController<C, L>
@@ -199,6 +238,7 @@ where
         control: Arc<C>,
         leases: Arc<L>,
     ) -> Self {
+        let generation = binding.provider_generation;
         Self {
             binding,
             config,
@@ -209,7 +249,18 @@ where
             observed: None,
             disk_image: None,
             ledger: CompletedOperationLedger::default(),
+            clock: Arc::new(SystemAcaClock),
+            readiness_generation: generation,
+            readiness_attempts: 0,
+            readiness_lifecycle: None,
+            finalization_stage: AcaFinalizationStage::Observe,
         }
+    }
+
+    /// Replace the wall clock used for lease expiry and operation retention.
+    pub fn with_clock(mut self, clock: Arc<dyn AcaClock>) -> Self {
+        self.clock = clock;
+        self
     }
 
     /// Return the current phase.
@@ -333,26 +384,79 @@ where
             return Ok(());
         }
         self.phase = AcaPhase::Finalizing;
-        if let Some(record) = self.observed.clone() {
-            self.with_lease(
-                operation_id.clone(),
-                AcaCredentialPurpose::Destroy,
-                deadline_remaining_ms,
-                move |control, lease, context| async move {
-                    if matches!(
-                        record.lifecycle,
-                        AcaSandboxLifecycle::Running | AcaSandboxLifecycle::Suspended
-                    ) {
-                        control.stop_sandbox(&lease, &context, &record.id).await?;
-                    }
-                    control.delete_sandbox(&lease, &context, &record.id).await
-                },
-            )
-            .await?;
+        if self.observed.is_none() {
+            let query = AcaWorkloadQuery {
+                binding: self.binding.clone(),
+                profile_id: self.config.profile().profile_id().clone(),
+            };
+            let candidates = self
+                .with_lease(
+                    operation_id.clone(),
+                    AcaCredentialPurpose::Destroy,
+                    deadline_remaining_ms,
+                    move |control, lease, context| async move {
+                        control.find_sandboxes(&lease, &context, &query).await
+                    },
+                )
+                .await?;
+            self.observed = one_candidate(candidates)?;
+            if self.observed.is_none() {
+                self.finish_finalization();
+                return Ok(());
+            }
         }
-        self.observed = None;
-        self.finalizer = false;
-        self.phase = AcaPhase::Finalized;
+        if self.finalization_stage == AcaFinalizationStage::Observe {
+            self.finalization_stage = if self.observed.as_ref().is_some_and(|record| {
+                matches!(
+                    record.lifecycle,
+                    AcaSandboxLifecycle::Running | AcaSandboxLifecycle::Suspended
+                )
+            }) {
+                AcaFinalizationStage::Stop
+            } else {
+                AcaFinalizationStage::Delete
+            };
+        }
+        if self.finalization_stage == AcaFinalizationStage::Stop {
+            let record = self
+                .observed
+                .clone()
+                .ok_or(AcaControllerError::SandboxUnavailable)?;
+            let stopped = self
+                .with_lease(
+                    operation_id.clone(),
+                    AcaCredentialPurpose::Stop,
+                    deadline_remaining_ms,
+                    move |control, lease, context| async move {
+                        control.stop_sandbox(&lease, &context, &record.id).await
+                    },
+                )
+                .await?;
+            self.observed = Some(stopped);
+            self.finalization_stage = AcaFinalizationStage::Delete;
+        }
+        if self.finalization_stage == AcaFinalizationStage::Delete {
+            let record = self
+                .observed
+                .clone()
+                .ok_or(AcaControllerError::SandboxUnavailable)?;
+            let outcome = self
+                .with_lease(
+                    operation_id,
+                    AcaCredentialPurpose::Destroy,
+                    deadline_remaining_ms,
+                    move |control, lease, context| async move {
+                        control.delete_sandbox(&lease, &context, &record.id).await
+                    },
+                )
+                .await?;
+            match outcome {
+                d2b_contracts::provider_effects::aca::AcaDeleteOutcome::Deleted
+                | d2b_contracts::provider_effects::aca::AcaDeleteOutcome::AlreadyAbsent => {
+                    self.finish_finalization();
+                }
+            }
+        }
         Ok(())
     }
 
@@ -365,6 +469,7 @@ where
         self.observed = Some(record.clone());
         match record.lifecycle {
             AcaSandboxLifecycle::Running => {
+                self.reset_readiness();
                 self.phase = AcaPhase::Ready;
                 self.record(operation_id);
                 Ok(AcaReconcileOutcome::Converged)
@@ -383,21 +488,21 @@ where
                     )
                     .await?;
                 self.observed = Some(resumed);
-                self.phase = AcaPhase::Ready;
-                self.record(operation_id);
-                Ok(AcaReconcileOutcome::Converged)
+                let resumed = self.observed.as_ref().expect("stored above");
+                if resumed.lifecycle == AcaSandboxLifecycle::Running {
+                    self.reset_readiness();
+                    self.phase = AcaPhase::Ready;
+                    self.record(operation_id);
+                    Ok(AcaReconcileOutcome::Converged)
+                } else {
+                    self.readiness_retry(resumed.lifecycle)
+                }
             }
             AcaSandboxLifecycle::Creating | AcaSandboxLifecycle::Stopping => {
-                self.phase = AcaPhase::Provisioning;
-                Ok(AcaReconcileOutcome::Progressing {
-                    after_ms: self.config.readiness().interval_ms(),
-                })
+                self.readiness_retry(record.lifecycle)
             }
             AcaSandboxLifecycle::Failed | AcaSandboxLifecycle::Unknown => {
-                self.phase = AcaPhase::Degraded;
-                Ok(AcaReconcileOutcome::Retry {
-                    after_ms: self.config.readiness().interval_ms(),
-                })
+                self.readiness_retry(record.lifecycle)
             }
         }
     }
@@ -447,6 +552,9 @@ where
             )
             .await?;
         self.observed = Some(created);
+        self.readiness_generation = self.binding.provider_generation;
+        self.readiness_attempts = 0;
+        self.readiness_lifecycle = None;
         self.record(operation_id);
         Ok(AcaReconcileOutcome::Progressing {
             after_ms: self.config.readiness().interval_ms(),
@@ -472,7 +580,9 @@ where
         let request = AcaCredentialLeaseRequest::new(
             operation_id.clone(),
             purpose,
-            u64::from(deadline_remaining_ms),
+            self.clock
+                .now_unix_ms()
+                .saturating_add(u64::from(deadline_remaining_ms)),
         );
         let lease = self
             .leases
@@ -492,10 +602,63 @@ where
     fn record(&mut self, operation_id: AcaOperationId) {
         self.ledger.record(
             operation_id,
-            u64::from(self.config.plan_ttl_ms()),
+            self.clock
+                .now_unix_ms()
+                .saturating_add(u64::from(self.config.plan_ttl_ms())),
             self.phase,
             self.config.completed_operation_capacity(),
         );
+    }
+
+    fn reset_readiness(&mut self) {
+        self.readiness_generation = self.binding.provider_generation;
+        self.readiness_attempts = 0;
+        self.readiness_lifecycle = None;
+    }
+
+    fn readiness_retry(
+        &mut self,
+        lifecycle: AcaSandboxLifecycle,
+    ) -> Result<AcaReconcileOutcome, AcaControllerError> {
+        if self.readiness_generation != self.binding.provider_generation
+            || self.readiness_lifecycle != Some(lifecycle)
+        {
+            self.readiness_generation = self.binding.provider_generation;
+            self.readiness_attempts = 0;
+            self.readiness_lifecycle = Some(lifecycle);
+        }
+        self.readiness_attempts = self.readiness_attempts.saturating_add(1);
+        if self.readiness_attempts >= self.config.readiness().attempts() {
+            self.phase = AcaPhase::Failed;
+            return Err(AcaControllerError::ReadinessExhausted);
+        }
+        self.phase = match lifecycle {
+            AcaSandboxLifecycle::Creating | AcaSandboxLifecycle::Stopping => AcaPhase::Provisioning,
+            AcaSandboxLifecycle::Failed | AcaSandboxLifecycle::Unknown => AcaPhase::Degraded,
+            AcaSandboxLifecycle::Suspended | AcaSandboxLifecycle::Stopped => AcaPhase::Starting,
+            AcaSandboxLifecycle::Running => AcaPhase::Ready,
+        };
+        Ok(
+            if matches!(
+                lifecycle,
+                AcaSandboxLifecycle::Creating | AcaSandboxLifecycle::Stopping
+            ) {
+                AcaReconcileOutcome::Progressing {
+                    after_ms: self.config.readiness().interval_ms(),
+                }
+            } else {
+                AcaReconcileOutcome::Retry {
+                    after_ms: self.config.readiness().interval_ms(),
+                }
+            },
+        )
+    }
+
+    fn finish_finalization(&mut self) {
+        self.observed = None;
+        self.finalizer = false;
+        self.phase = AcaPhase::Finalized;
+        self.finalization_stage = AcaFinalizationStage::Delete;
     }
 
     fn ensure_active(&self) -> Result<(), AcaControllerError> {
