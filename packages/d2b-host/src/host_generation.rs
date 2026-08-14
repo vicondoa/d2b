@@ -1,6 +1,6 @@
 //! Structured activation-helper JSON protocol.
 
-use d2b_contracts::v3::ActivationMode;
+use d2b_contracts::v3::{ActivationMode, ArtifactId};
 use serde::{Deserialize, Serialize};
 
 /// Maximum helper request bytes.
@@ -19,22 +19,9 @@ pub struct ActivationHelperRequest {
 impl ActivationHelperRequest {
     /// Validate the request without resolving a path.
     pub fn validate(&self) -> Result<(), ActivationHelperProtocolError> {
-        if self.system_artifact_id.is_empty()
-            || self.system_artifact_id.len() > 128
-            || self.system_artifact_id.contains('/')
-            || !self
-                .system_artifact_id
-                .bytes()
-                .enumerate()
-                .all(|(index, byte)| {
-                    (index == 0 && byte.is_ascii_lowercase())
-                        || (index > 0
-                            && (byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-'))
-                })
-        {
-            return Err(ActivationHelperProtocolError::ArtifactIdInvalid);
-        }
-        Ok(())
+        ArtifactId::parse(self.system_artifact_id.as_str())
+            .map(|_| ())
+            .map_err(|_| ActivationHelperProtocolError::ArtifactIdInvalid)
     }
 }
 

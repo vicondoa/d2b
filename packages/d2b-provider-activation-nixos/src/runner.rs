@@ -1,6 +1,6 @@
 //! Structured activation-runner boundary.
 
-use d2b_contracts::v3::{ActivationMode, ActivationOutcomeCode, ResourceRef};
+use d2b_contracts::v3::{ActivationMode, ActivationOutcomeCode, ArtifactId, ResourceRef};
 use serde::{Deserialize, Serialize};
 
 /// Target-local request with no executable or store path.
@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ActivationRunnerRequest {
     /// Private-catalog artifact identifier.
-    pub system_artifact_id: String,
+    pub system_artifact_id: ArtifactId,
     /// Host or Guest target.
     pub execution_ref: ResourceRef,
     /// Requested activation mode.
@@ -93,14 +93,10 @@ impl ActivationRunner {
         request: &ActivationRunnerRequest,
         helper: &H,
     ) -> Result<ActivationRunnerResult, ActivationRunnerError> {
-        if request.system_artifact_id.is_empty()
-            || request.system_artifact_id.contains('/')
-            || request.system_artifact_id.len() > 128
-            || !matches!(
-                request.execution_ref.resource_type().as_str(),
-                "Host" | "Guest"
-            )
-        {
+        if !matches!(
+            request.execution_ref.resource_type().as_str(),
+            "Host" | "Guest"
+        ) {
             return Err(ActivationRunnerError::InvalidRequest);
         }
         let outcome = helper.activate(request)?;

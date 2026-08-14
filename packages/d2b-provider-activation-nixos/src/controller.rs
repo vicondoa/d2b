@@ -3,7 +3,8 @@
 use std::collections::BTreeSet;
 
 use d2b_contracts::v3::{
-    ActivationMode, ActivationOutcomeCode, NixosGenerationSpec, ResourcePhase, ResourceRef,
+    ActivationMode, ActivationOutcomeCode, ArtifactId, NixosGenerationSpec, ResourcePhase,
+    ResourceRef,
 };
 
 /// Caller role derived from the authenticated daemon request.
@@ -129,7 +130,7 @@ pub struct RunnerRequest {
     /// Target execution context.
     pub execution_ref: ResourceRef,
     /// Private-catalog artifact identifier.
-    pub system_artifact_id: String,
+    pub system_artifact_id: ArtifactId,
     /// Requested activation mode.
     pub activation_mode: ActivationMode,
     /// Activation runners always start in their target's root namespace.
@@ -255,7 +256,7 @@ impl ActivationController {
         {
             vec![RunnerRequest {
                 execution_ref: spec.execution_ref().clone(),
-                system_artifact_id: spec.system_artifact_id().as_str().to_owned(),
+                system_artifact_id: spec.system_artifact_id().clone(),
                 activation_mode: spec.activation_mode(),
                 start_root: true,
             }]

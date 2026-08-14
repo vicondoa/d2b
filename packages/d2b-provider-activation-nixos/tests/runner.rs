@@ -1,4 +1,4 @@
-use d2b_contracts::v3::{ActivationMode, ResourceRef};
+use d2b_contracts::v3::{ActivationMode, ArtifactId, ResourceRef};
 use d2b_provider_activation_nixos::{
     ActivationHelper, ActivationRunner, ActivationRunnerError, ActivationRunnerRequest,
     RunnerOutcomeCode,
@@ -18,7 +18,7 @@ impl ActivationHelper for FixedHelper {
 
 fn request(execution_ref: &str) -> ActivationRunnerRequest {
     ActivationRunnerRequest {
-        system_artifact_id: "dev-vm-system".to_owned(),
+        system_artifact_id: ArtifactId::parse("dev-vm-system").unwrap(),
         execution_ref: ResourceRef::parse(execution_ref).expect("valid execution reference"),
         activation_mode: ActivationMode::Switch,
     }
@@ -27,13 +27,6 @@ fn request(execution_ref: &str) -> ActivationRunnerRequest {
 #[test]
 fn runner_rejects_invalid_requests_before_helper_dispatch() {
     let runner = ActivationRunner;
-    let mut invalid = request("Host/dev");
-    invalid.system_artifact_id = "/nix/store/system".to_owned();
-    assert_eq!(
-        runner.run(&invalid, &FixedHelper(Ok(RunnerOutcomeCode::Succeeded))),
-        Err(ActivationRunnerError::InvalidRequest)
-    );
-
     let invalid_target = request("User/alice");
     assert_eq!(
         runner.run(
