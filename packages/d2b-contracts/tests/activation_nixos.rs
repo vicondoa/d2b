@@ -73,6 +73,14 @@ fn compatibility_floor_and_handoff_preserve_source_on_refusal_or_failure() {
     assert_eq!(floor.protocol(), "source-handoff-v1");
     assert!(floor.validate_target(6, [0x11; 32]).is_err());
 
+    let mut wrong_generation = floor.begin_handoff(7, 8).unwrap();
+    assert_eq!(
+        wrong_generation.validate_target(9, [0x11; 32]),
+        Err(HandoffError::TargetGenerationMismatch)
+    );
+    assert!(wrong_generation.source_remains_usable());
+    assert_eq!(wrong_generation.state(), HandoffState::Refused);
+
     let mut handoff = floor.begin_handoff(7, 8).unwrap();
     assert_eq!(handoff.state(), HandoffState::Recorded);
     assert_eq!(

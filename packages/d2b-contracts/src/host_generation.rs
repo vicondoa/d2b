@@ -172,6 +172,8 @@ pub enum HandoffError {
     GenerationTooOld,
     /// The closure fingerprint was not the authenticated target.
     TargetFingerprintMismatch,
+    /// The observed generation was not the authenticated target generation.
+    TargetGenerationMismatch,
     /// Source and target are not a strict generation transition.
     GenerationAncestryInvalid,
     /// The handoff was not in the required phase.
@@ -184,6 +186,7 @@ impl core::fmt::Display for HandoffError {
             Self::CompatibilityFloorInvalid => "handoff-compatibility-floor-invalid",
             Self::GenerationTooOld => "handoff-generation-too-old",
             Self::TargetFingerprintMismatch => "handoff-target-fingerprint-mismatch",
+            Self::TargetGenerationMismatch => "handoff-target-generation-mismatch",
             Self::GenerationAncestryInvalid => "handoff-generation-ancestry-invalid",
             Self::InvalidTransition => "handoff-invalid-transition",
         })
@@ -231,6 +234,10 @@ impl HandoffCoordinator {
     ) -> Result<(), HandoffError> {
         if self.state != HandoffState::Recorded {
             return Err(HandoffError::InvalidTransition);
+        }
+        if generation != self.target_generation {
+            self.state = HandoffState::Refused;
+            return Err(HandoffError::TargetGenerationMismatch);
         }
         if let Err(error) = self.floor.validate_target(generation, fingerprint) {
             self.state = HandoffState::Refused;

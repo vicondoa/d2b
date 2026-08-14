@@ -33,3 +33,12 @@ fn ephemeral_process_maps_exit_and_ttl_without_pid1_ownership() {
     assert!(process.cleanup_eligible());
     assert!(!process.owns_persistent_unit());
 }
+
+#[test]
+fn repeated_terminal_observation_does_not_extend_cleanup_ttl() {
+    let mut process = EphemeralProcessController::new(10, false);
+    process.observe(ProcessOutcome::exited(0).unwrap());
+    process.tick(4);
+    process.observe(ProcessOutcome::crashed());
+    assert_eq!(process.ttl_remaining(), Some(6));
+}

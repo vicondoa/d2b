@@ -69,6 +69,20 @@ fn runner_failure_preserves_the_source_generation_and_audits_one_code() {
 }
 
 #[test]
+fn adopted_outcome_is_rejected_for_switch_mode() {
+    let controller = ActivationController::new(3);
+    let result = controller.apply_runner_result(
+        &spec(),
+        ActivationOutcomeCode::Adopted,
+        GenerationObservation::new("gen-6", GenerationPhase::Ready),
+    );
+    assert_eq!(
+        result.unwrap_err(),
+        d2b_provider_activation_nixos::ActivationError::OutcomeMismatch
+    );
+}
+
+#[test]
 fn prior_generation_reference_must_be_present_in_observations() {
     let spec = NixosGenerationSpec::new(
         ResourceRef::parse("Provider/activation-nixos").unwrap(),

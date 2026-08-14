@@ -136,7 +136,9 @@ impl EphemeralProcessController {
     /// Consume a typed terminal outcome.
     pub fn observe(&mut self, outcome: ProcessOutcome) -> ProcessExitClass {
         self.terminal = Some(outcome.exit_class);
-        self.ttl_remaining = Some(self.ttl_seconds);
+        if self.ttl_remaining.is_none() {
+            self.ttl_remaining = Some(self.ttl_seconds);
+        }
         outcome.exit_class
     }
 

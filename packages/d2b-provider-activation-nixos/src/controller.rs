@@ -278,9 +278,11 @@ impl ActivationController {
         outcome: ActivationOutcomeCode,
         source: GenerationObservation,
     ) -> Result<RunnerResult, ActivationError> {
-        if spec.activation_mode() == ActivationMode::Adopt
-            && !matches!(outcome, ActivationOutcomeCode::Adopted)
-        {
+        let outcome_matches_mode = match spec.activation_mode() {
+            ActivationMode::Adopt => matches!(outcome, ActivationOutcomeCode::Adopted),
+            _ => !matches!(outcome, ActivationOutcomeCode::Adopted),
+        };
+        if !outcome_matches_mode {
             return Err(ActivationError::OutcomeMismatch);
         }
         let phase = if outcome.is_success() {
