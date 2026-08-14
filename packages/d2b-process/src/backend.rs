@@ -210,6 +210,18 @@ pub trait ProcessEffectBackend: Send + Sync + 'static {
         request: ProcessRequest,
     ) -> Result<Option<BackendObservation>, ProcessEffectError>;
 
+    /// Probe a candidate without retaining an adoption observation.
+    ///
+    /// Production effect owners override this when their ordinary
+    /// [`Self::observe`] path stages an observation for a later pidfd open.
+    /// Readiness and liveness callers must use this non-mutating seam.
+    fn probe(
+        &self,
+        request: ProcessRequest,
+    ) -> Result<Option<BackendObservation>, ProcessEffectError> {
+        self.observe(request)
+    }
+
     /// Re-verify an observation and open fresh local authority.
     fn open_pidfd(
         &self,
@@ -226,6 +238,15 @@ pub trait ProcessEffectBackend: Send + Sync + 'static {
         handle: &Self::Handle,
         class: ProcessStopClass,
     ) -> Result<(), ProcessEffectError>;
+
+    /// Release broker or service-manager registration after terminal exit.
+    ///
+    /// This is deliberately separate from [`Self::stop`]: a process can exit
+    /// naturally without a stop request, but the core-owned effect owner must
+    /// still remove its exact registration before the identity is forgotten.
+    fn finalize(&self, _handle: &Self::Handle) -> Result<(), ProcessEffectError> {
+        Ok(())
+    }
 }
 
 #[cfg(test)]

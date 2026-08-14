@@ -343,6 +343,37 @@ impl<B: ProcessEffectBackend> ProviderSupervisor<B> {
             .await
     }
 
+    /// Finalize one exact process identity after observation says it exited.
+    ///
+    /// The local handle remains private to the supervisor while the backend
+    /// removes its broker or service-manager registration. Only after that
+    /// effect succeeds is the identity forgotten from the supervisor table.
+    pub async fn finalize_identity(
+        &self,
+        identity: &ProcessIdentityDigest,
+    ) -> Result<(), ProcessConformanceError> {
+        let handle = self.handle(identity).map_err(map_error)?;
+        let finalize_handle = Arc::clone(&handle);
+        let finalize_identity = *identity;
+        let state = Arc::clone(&self.inner.state);
+        let result = self
+            .blocking(self.inner.default_timeout, move |backend| {
+                backend.finalize(finalize_handle.as_ref())?;
+                let mut state = state.lock().map_err(|_| ProcessEffectError::StopFailed)?;
+                if state
+                    .handles
+                    .get(&finalize_identity)
+                    .is_some_and(|retained| Arc::ptr_eq(retained, &finalize_handle))
+                {
+                    state.handles.remove(&finalize_identity);
+                    state.quarantined_identities.remove(&finalize_identity);
+                }
+                Ok(())
+            })
+            .await;
+        result.map_err(map_error)
+    }
+
     fn remember(
         &self,
         identity: ProcessIdentityDigest,
@@ -589,6 +620,23 @@ impl<B: ProcessEffectBackend> ProcessLaunchEffectPort for ProviderSupervisor<B> 
             identity: observation.identity(),
             observed: observation.observed().clone(),
             wait_reap_owner: observation.wait_reap_owner(),
+        }))
+    }
+
+    async fn probe(
+        &self,
+        ticket: &LaunchTicket,
+    ) -> Result<Option<AdoptionCandidate>, ProcessConformanceError> {
+        let request = ProcessRequest::new(ticket.clone());
+        let timeout = Duration::from_millis(u64::from(ticket.operation().deadline_ms()));
+        let observation = self
+        .blocking(timeout, move |backend| backend.probe(request))
+        .await
+        .map_err(map_error)?;
+        Ok(observation.map(|observation| AdoptionCandidate {
+        identity: observation.identity(),
+        observed: observation.observed().clone(),
+        wait_reap_owner: observation.wait_reap_owner(),
         }))
     }
 
@@ -1026,5 +1074,83 @@ mod tests {
             block_on(supervisor.stop(&launched.identity, StopClass::Terminate)).unwrap();
             assert!(supervisor.inner.state.lock().unwrap().handles.is_empty());
         }
+    }
+
+    #[test]
+    fn terminal_finalization_retires_a_naturally_exited_handle() {
+        let (_unused_sender, release_receiver) = channel();
+        let supervisor = ProviderSupervisor::new(ControlledBackend {
+            started: Mutex::new(None),
+            release: Mutex::new(release_receiver),
+            live: Arc::new(AtomicBool::new(false)),
+            stop_fails: false,
+            next_identity: AtomicU8::new(1),
+        });
+        let ticket = fixtures::ticket_builder().build().unwrap();
+        let launched = block_on(supervisor.launch(&ticket)).unwrap();
+        block_on(supervisor.finalize_identity(&launched.identity)).unwrap();
+        assert!(supervisor.inner.state.lock().unwrap().handles.is_empty());
+    }
+
+    struct ProbeOnlyBackend {
+        observe_calls: Arc<AtomicU8>,
+        probe_calls: Arc<AtomicU8>,
+    }
+
+    impl ProcessEffectBackend for ProbeOnlyBackend {
+        type Handle = ();
+
+        fn launch(
+            &self,
+            _request: ProcessRequest,
+        ) -> Result<d2b_process::BackendLaunch<Self::Handle>, ProcessEffectError> {
+            unreachable!("probe-only backend is not used for launch")
+        }
+
+        fn observe(
+            &self,
+            _request: ProcessRequest,
+        ) -> Result<Option<BackendObservation>, ProcessEffectError> {
+            self.observe_calls.fetch_add(1, Ordering::Relaxed);
+            Ok(None)
+        }
+
+        fn probe(
+            &self,
+            _request: ProcessRequest,
+        ) -> Result<Option<BackendObservation>, ProcessEffectError> {
+            self.probe_calls.fetch_add(1, Ordering::Relaxed);
+            Ok(None)
+        }
+
+        fn open_pidfd(
+            &self,
+            _observation: BackendObservation,
+        ) -> Result<Self::Handle, ProcessEffectError> {
+            unreachable!("probe-only backend is not used for pidfd opens")
+        }
+
+        fn stop(
+            &self,
+            _handle: &Self::Handle,
+            _class: ProcessStopClass,
+        ) -> Result<(), ProcessEffectError> {
+            unreachable!("probe-only backend is not used for stops")
+        }
+    }
+
+    #[test]
+    fn probe_uses_the_non_mutating_backend_seam() {
+        let observe_calls = Arc::new(AtomicU8::new(0));
+        let probe_calls = Arc::new(AtomicU8::new(0));
+        let supervisor = ProviderSupervisor::new(ProbeOnlyBackend {
+            observe_calls: Arc::clone(&observe_calls),
+            probe_calls: Arc::clone(&probe_calls),
+        });
+        let ticket = fixtures::ticket_builder().build().unwrap();
+
+        assert_eq!(block_on(supervisor.probe(&ticket)).unwrap(), None);
+        assert_eq!(probe_calls.load(Ordering::Relaxed), 1);
+        assert_eq!(observe_calls.load(Ordering::Relaxed), 0);
     }
 }

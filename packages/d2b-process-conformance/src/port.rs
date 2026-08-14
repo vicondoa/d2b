@@ -107,6 +107,19 @@ pub trait ProcessLaunchEffectPort: Send + Sync {
         ticket: &LaunchTicket,
     ) -> impl Future<Output = Result<Option<AdoptionCandidate>, ProcessConformanceError>> + Send;
 
+    /// Probe whether the exact process is present without retaining any
+    /// adoption handle or staged observation.
+    ///
+    /// The default delegates to [`Self::observe`] for test ports and simple
+    /// effect owners. Production adapters override it when adoption
+    /// observation is stateful.
+    fn probe(
+        &self,
+        ticket: &LaunchTicket,
+    ) -> impl Future<Output = Result<Option<AdoptionCandidate>, ProcessConformanceError>> + Send {
+        self.observe(ticket)
+    }
+
     /// Open a verified pidfd for a candidate whose identity the caller has
     /// already fully verified.
     fn open_pidfd(

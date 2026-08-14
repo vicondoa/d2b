@@ -1367,8 +1367,18 @@ fn validate_broker_request(request: &BrokerRequest) -> Result<(), BrokerError> {
             })
         }
         BrokerRequest::PipeWireAudio(req) => {
-            validate_small_wire_id(req.vm_id.as_str(), 128, "invalid-vm-id")?;
-            validate_small_wire_id(req.role_id.as_str(), 128, "invalid-role-id")?;
+            validate_small_wire_id(req.vm_id.as_str(), 128, "invalid-vm-id").map_err(|reason| {
+                BrokerError::RequestValidation {
+                    operation: "PipeWireAudio",
+                    reason,
+                }
+            })?;
+            validate_small_wire_id(req.role_id.as_str(), 128, "invalid-role-id").map_err(
+                |reason| BrokerError::RequestValidation {
+                    operation: "PipeWireAudio",
+                    reason,
+                },
+            )?;
             validate_bundle_op_id(req.bundle_runner_intent_ref.as_str()).map_err(|reason| {
                 BrokerError::RequestValidation {
                     operation: "PipeWireAudio",
@@ -5711,15 +5721,7 @@ fn observe_registered_runner(
         registry.get(&runner_id).cloned()
     };
     let Some(registration) = registration else {
-        return Ok(d2b_contracts::broker_wire::ObserveRunnerResponse {
-            vm_id: request.vm_id.clone(),
-            role_id: request.role_id.clone(),
-            present: false,
-            pid: 0,
-            start_time_ticks: 0,
-            cgroup_verified: false,
-            executable_verified: false,
-        });
+        return discover_runner_candidate(request, intent);
     };
 
     let pidfd_registered = runner_pidfd_registry()
@@ -5736,9 +5738,7 @@ fn observe_registered_runner(
         || registration.binary_path != intent.binary_path
         || registration.cgroup_subtree != intent.cgroup_placement.subtree
     {
-        return Err(BrokerError::LiveHandler(
-            "runner registration identity mismatch".to_owned(),
-        ));
+        return discover_runner_candidate(request, intent);
     }
 
     let Some(start_time_ticks) = read_proc_start_time_ticks(registration.pid)? else {
@@ -5770,6 +5770,58 @@ fn observe_registered_runner(
         start_time_ticks,
         cgroup_verified,
         executable_verified,
+    })
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn discover_runner_candidate(
+    request: &d2b_contracts::broker_wire::ObserveRunnerRequest,
+    intent: &d2b_core::bundle_resolver::ResolvedRunnerIntent,
+) -> Result<d2b_contracts::broker_wire::ObserveRunnerResponse, BrokerError> {
+    let mut candidate = None;
+    let entries = fs::read_dir("/proc")
+        .map_err(|error| BrokerError::LiveHandler(error.to_string()))?;
+    for entry in entries {
+        let entry = entry.map_err(|error| BrokerError::LiveHandler(error.to_string()))?;
+        let name = entry.file_name();
+        let Some(pid) = name.to_str().and_then(|value| value.parse::<i32>().ok()) else {
+            continue;
+        };
+        if pid <= 0 || !proc_cgroup_matches(pid, &intent.cgroup_placement.subtree) {
+            continue;
+        }
+        let executable = fs::read_link(format!("/proc/{pid}/exe")).ok();
+        if executable.as_deref() != Some(intent.binary_path.as_path()) {
+            continue;
+        }
+        let Some(start_time_ticks) = read_proc_start_time_ticks(pid)? else {
+            continue;
+        };
+        if candidate.replace((pid, start_time_ticks)).is_some() {
+            return Err(BrokerError::LiveHandler(
+                "runner adoption candidate ambiguous".to_owned(),
+            ));
+        }
+    }
+    let Some((pid, start_time_ticks)) = candidate else {
+        return Ok(d2b_contracts::broker_wire::ObserveRunnerResponse {
+            vm_id: request.vm_id.clone(),
+            role_id: request.role_id.clone(),
+            present: false,
+            pid: 0,
+            start_time_ticks: 0,
+            cgroup_verified: false,
+            executable_verified: false,
+        });
+    };
+    Ok(d2b_contracts::broker_wire::ObserveRunnerResponse {
+        vm_id: request.vm_id.clone(),
+        role_id: request.role_id.clone(),
+        present: true,
+        pid,
+        start_time_ticks,
+        cgroup_verified: true,
+        executable_verified: true,
     })
 }
 

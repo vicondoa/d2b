@@ -137,6 +137,14 @@ pub trait BrokerLaunchResolver: Send + Sync + 'static {
         &self,
         request: &ProcessRequest,
     ) -> Result<Option<BrokerObservedProcess>, ProcessEffectError>;
+
+    /// Probe a running candidate without staging it for pidfd adoption.
+    fn probe(
+        &self,
+        request: &ProcessRequest,
+    ) -> Result<Option<BrokerObservedProcess>, ProcessEffectError> {
+        self.observe(request)
+    }
 }
 
 /// Bundle-backed resolver for generic Process tickets.
@@ -251,15 +259,19 @@ impl BundleBackedLaunchResolver {
             return Err(ProcessEffectError::UnsupportedProvider);
         }
         let vm_name = ticket.execution_ref().name().as_str();
-        let role_id = ticket.process_ref().name().as_str();
-        let intent_id = intent_id_runner(vm_name, role_id);
+        let process_role_id = ticket.process_ref().name().as_str();
+        let intent_id = intent_id_runner(vm_name, process_role_id);
         let intent = self
             .bundle
             .find_runner_intent(&intent_id)
             .ok_or(ProcessEffectError::UnsupportedProvider)?;
         let role = runner_role_for_process_role(&intent.role)
             .ok_or(ProcessEffectError::UnsupportedProvider)?;
-        if intent.vm_name != vm_name || intent.role_id != role_id {
+        let role_id = match &intent.role {
+            ProcessRole::CloudHypervisorRunner => "ch-runner",
+            _ => intent.role_id.as_str(),
+        };
+        if intent.vm_name != vm_name || intent.role_id != process_role_id {
             return Err(ProcessEffectError::IdentityChanged);
         }
         Ok(BrokerLaunchIntent {
@@ -471,6 +483,17 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
         Ok(Some(observation))
     }
 
+    fn probe(
+        &self,
+        request: ProcessRequest,
+    ) -> Result<Option<BackendObservation>, ProcessEffectError> {
+        let Some(observed) = self.resolver.probe(&request)? else {
+            return Ok(None);
+        };
+        observed.validate()?;
+        Ok(Some(observed.observation()))
+    }
+
     fn open_pidfd(
         &self,
         observation: BackendObservation,
@@ -547,6 +570,25 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
             }
         }
         Ok(())
+    }
+
+    fn finalize(&self, handle: &Self::Handle) -> Result<(), ProcessEffectError> {
+        let frame = self.request(BrokerRequest::DeregisterRunnerPidfd(
+            DeregisterRunnerPidfdRequest {
+                vm_id: handle.observed.intent.vm_id.clone(),
+                role_id: handle.observed.intent.role_id.clone(),
+                tracing_span_id: None,
+            },
+        ))?;
+        match frame.response {
+            BrokerResponse::DeregisterRunnerPidfd(response)
+                if response.vm_id == handle.observed.intent.vm_id
+                    && response.role_id == handle.observed.intent.role_id =>
+            {
+                Ok(())
+            }
+            _ => Err(ProcessEffectError::StopFailed),
+        }
     }
 }
 

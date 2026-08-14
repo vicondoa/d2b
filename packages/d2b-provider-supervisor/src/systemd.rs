@@ -191,6 +191,11 @@ pub trait SystemdEffectOwner: Send + Sync + 'static {
         handle: &Self::Handle,
         class: ProcessStopClass,
     ) -> Result<(), ProcessEffectError>;
+
+    /// Forget a terminal unit identity after the unit is no longer active.
+    fn finalize(&self, _handle: &Self::Handle) -> Result<(), ProcessEffectError> {
+        Ok(())
+    }
 }
 
 /// [`ProcessEffectBackend`] over a real service-manager effect owner.
@@ -350,6 +355,16 @@ impl<O: SystemdEffectOwner> ProcessEffectBackend for SystemdProcessBackend<O> {
         Ok(Some(observation))
     }
 
+    fn probe(
+        &self,
+        request: ProcessRequest,
+    ) -> Result<Option<BackendObservation>, ProcessEffectError> {
+        let Some(identity) = self.owner.observe(request)? else {
+            return Ok(None);
+        };
+        Ok(Some(identity.observation()))
+    }
+
     fn open_pidfd(
         &self,
         observation: BackendObservation,
@@ -369,6 +384,10 @@ impl<O: SystemdEffectOwner> ProcessEffectBackend for SystemdProcessBackend<O> {
         class: ProcessStopClass,
     ) -> Result<(), ProcessEffectError> {
         self.owner.stop(handle, class)
+    }
+
+    fn finalize(&self, handle: &Self::Handle) -> Result<(), ProcessEffectError> {
+        self.owner.finalize(handle)
     }
 }
 
@@ -615,6 +634,13 @@ impl SystemdEffectOwner for BrokerSystemdEffectOwner {
             return Err(ProcessEffectError::StopFailed);
         }
         let _ = &handle.pidfd;
+        if class == ProcessStopClass::Terminate {
+            let _ = self.take_request(&handle.identity)?;
+        }
+        Ok(())
+    }
+
+    fn finalize(&self, handle: &Self::Handle) -> Result<(), ProcessEffectError> {
         let _ = self.take_request(&handle.identity)?;
         Ok(())
     }

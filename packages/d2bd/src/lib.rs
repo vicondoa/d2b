@@ -2228,6 +2228,30 @@ impl supervisor::state::PidfdOpener for BrokerPidfdOpener<'_> {
 }
 
 fn adopt_orphaned_runners_on_startup(state: &ServerState) {
+    if let Some(providers) = state.provider_runtime.process_providers() {
+        let result = block_on_future(async move {
+            for vm in providers.vm_ids() {
+                providers.adopt_vm(&vm).await?;
+                let _guard = state.pidfd_table.mutation_guard();
+                for role in providers.managed_role_ids(&vm) {
+                    let _ = state.pidfd_table.deregister(&vm, &role);
+                    remove_runner_snapshot(state, &vm, &role);
+                }
+                state
+                    .pidfd_table
+                    .snapshot()
+                    .map_err(|error| format!("provider-legacy-authority-cleanup:{error}"))?;
+            }
+            Ok::<(), String>(())
+        });
+        if let Err(error) = result {
+            tracing::warn!(
+                error = %error,
+                "Provider startup adoption failed; ambiguous processes remain quarantined"
+            );
+        }
+        return;
+    }
     let store = supervisor::state::FilesystemSnapshotStore::new(&state.daemon_state_dir);
     let proc_reader = supervisor::state::SystemProcReader;
     let opener = BrokerPidfdOpener { state };
@@ -2400,6 +2424,10 @@ impl autostart::VmStarter for BrokerVmStarter {
         // Idempotency check mirrors the duplicate-pidfd guard in
         // `dispatch_broker_vm_start`: if the ch-runner role is
         // already registered, the VM is supervised.
+        if let Some(providers) = self.state.provider_runtime.process_providers() {
+            return providers.has_active_role(vm, VM_RUNNER_ROLE_ID)
+                || providers.has_active_vm(vm);
+        }
         self.state.pidfd_table.contains(vm, VM_RUNNER_ROLE_ID)
     }
 
@@ -13660,6 +13688,12 @@ enum VmStartNodeMode {
     LongLived(RunnerRole),
 }
 
+#[derive(Debug)]
+enum VmRunnerLaunch {
+    Legacy(d2b_contracts::broker_wire::SpawnRunnerResponse),
+    Provider,
+}
+
 fn vm_start_node_mode(role: &ProcessRole) -> VmStartNodeMode {
     match role {
         ProcessRole::SwtpmPreStartFlush => VmStartNodeMode::OneShot(RunnerRole::SwtpmFlush),
@@ -13817,7 +13851,7 @@ impl VmStartRunner<'_> {
         node: &ProcessNode,
         runner_role: RunnerRole,
         timeout: Duration,
-    ) -> Result<d2b_contracts::broker_wire::SpawnRunnerResponse, String> {
+    ) -> Result<VmRunnerLaunch, String> {
         let intent_id = intent_id_runner(vm, &node.id.0);
         let intent = self
             .resolver
@@ -13886,6 +13920,15 @@ impl VmStartRunner<'_> {
                 }
             }
         }
+        if process_provider_runtime::ProductionProcessProviders::supports_node(node) {
+            let providers = self
+                .state
+                .provider_runtime
+                .process_providers()
+                .ok_or_else(|| "provider-runtime-unavailable".to_owned())?;
+            block_on_future(providers.launch_node(vm, node, timeout))?;
+            return Ok(VmRunnerLaunch::Provider);
+        }
         match dispatch_broker_request_with_fds_timeout_as(
             self.state,
             BrokerRequest::SpawnRunner(BrokerSpawnRunnerRequest {
@@ -13916,7 +13959,7 @@ impl VmStartRunner<'_> {
                     return Err(error);
                 }
                 close_received_fds(&received_fds);
-                Ok(response)
+                Ok(VmRunnerLaunch::Legacy(response))
             }
             Ok((BrokerResponse::Error(error), received_fds)) => {
                 close_received_fds(&received_fds);
@@ -14246,18 +14289,55 @@ impl supervisor::dag::NodeRunner for VmStartRunner<'_> {
                 wait_for_readiness(node, readiness, budget.readiness, None)
             }
             VmStartNodeMode::OneShot(runner_role) => {
-                let response = self.spawn_runner(vm, node, runner_role, budget.spawn)?;
-                wait_for_one_shot_exit(response.pid, response.start_time_ticks, budget.readiness)
+                match self.spawn_runner(vm, node, runner_role, budget.spawn)? {
+                    VmRunnerLaunch::Legacy(response) => {
+                        wait_for_one_shot_exit(
+                            response.pid,
+                            response.start_time_ticks,
+                            budget.readiness,
+                        )
+                    }
+                    VmRunnerLaunch::Provider => {
+                        let providers = self
+                            .state
+                            .provider_runtime
+                            .process_providers()
+                            .ok_or_else(|| "provider-runtime-unavailable".to_owned())?;
+                        block_on_future(providers.wait_for_exit(vm, node, budget.readiness))
+                    }
+                }
             }
             VmStartNodeMode::LongLived(runner_role) => {
-                let response = self.spawn_runner(vm, node, runner_role, budget.spawn)?;
-                let liveness = supervisor::readiness_liveness::PidfdLivenessProbe::new(
-                    &self.state.pidfd_table,
-                    &self.state.broker_reap_log,
-                    vm,
-                    tracked_role_id(node),
-                );
-                wait_for_readiness(node, readiness, budget.readiness, Some(&liveness))?;
+                let launch = self.spawn_runner(vm, node, runner_role, budget.spawn)?;
+                let provider_liveness;
+                let legacy_liveness;
+                let liveness: &dyn supervisor::readiness_liveness::LivenessProbe =
+                    match &launch {
+                        VmRunnerLaunch::Provider => {
+                            let providers = self
+                                .state
+                                .provider_runtime
+                                .process_providers()
+                                .ok_or_else(|| "provider-runtime-unavailable".to_owned())?;
+                            provider_liveness =
+                                process_provider_runtime::ProviderLivenessProbe::new(
+                                    providers.clone(),
+                                    vm,
+                                    node,
+                                );
+                            &provider_liveness
+                        }
+                        VmRunnerLaunch::Legacy(_) => {
+                            legacy_liveness = supervisor::readiness_liveness::PidfdLivenessProbe::new(
+                                &self.state.pidfd_table,
+                                &self.state.broker_reap_log,
+                                vm,
+                                tracked_role_id(node),
+                            );
+                            &legacy_liveness
+                        }
+                    };
+                wait_for_readiness(node, readiness, budget.readiness, Some(liveness))?;
                 if node.role == ProcessRole::QemuMediaRunner {
                     self.boot_qemu_media(vm, node, budget.readiness)?;
                 }
@@ -14265,8 +14345,7 @@ impl supervisor::dag::NodeRunner for VmStartRunner<'_> {
                     vm = %vm,
                     node = %node.id.0,
                     role_id = %tracked_role_id(node),
-                    pid = response.pid,
-                    start_time_ticks = response.start_time_ticks,
+                    provider_managed = matches!(launch, VmRunnerLaunch::Provider),
                     "vm start node registered and ready"
                 );
                 Ok(())
@@ -14282,13 +14361,12 @@ impl supervisor::dag::NodeRunner for VmStartRunner<'_> {
     ) -> Result<(), String> {
         match vm_start_node_mode(&node.role) {
             VmStartNodeMode::LongLived(runner_role) => {
-                let response = self.spawn_runner(vm, node, runner_role, budget.spawn)?;
+                let launch = self.spawn_runner(vm, node, runner_role, budget.spawn)?;
                 tracing::info!(
                     vm = %vm,
                     node = %node.id.0,
                     role_id = %tracked_role_id(node),
-                    pid = response.pid,
-                    start_time_ticks = response.start_time_ticks,
+                    provider_managed = matches!(launch, VmRunnerLaunch::Provider),
                     "vm start node registered and process-alive"
                 );
                 Ok(())
@@ -14308,13 +14386,31 @@ impl supervisor::dag::NodeRunner for VmStartRunner<'_> {
         // long-lived runner, so wire in the liveness probe: a runner that
         // dies before the api-ready socket appears surfaces as an Error
         // (runner-exited / runner-reused) instead of a full-budget Timeout.
-        let liveness = supervisor::readiness_liveness::PidfdLivenessProbe::new(
-            &self.state.pidfd_table,
-            &self.state.broker_reap_log,
-            vm,
-            tracked_role_id(node),
-        );
-        match wait_for_readiness(node, readiness, timeout, Some(&liveness)) {
+        let provider_liveness;
+        let legacy_liveness;
+        let liveness: &dyn supervisor::readiness_liveness::LivenessProbe =
+            if process_provider_runtime::ProductionProcessProviders::supports_node(node) {
+                let Some(providers) = self.state.provider_runtime.process_providers() else {
+                    return supervisor::dag::ApiReadyState::Error {
+                        reason: "provider-runtime-unavailable".to_owned(),
+                    };
+                };
+                provider_liveness = process_provider_runtime::ProviderLivenessProbe::new(
+                    providers,
+                    vm,
+                    node,
+                );
+                &provider_liveness
+            } else {
+                legacy_liveness = supervisor::readiness_liveness::PidfdLivenessProbe::new(
+                    &self.state.pidfd_table,
+                    &self.state.broker_reap_log,
+                    vm,
+                    tracked_role_id(node),
+                );
+                &legacy_liveness
+            };
+        match wait_for_readiness(node, readiness, timeout, Some(liveness)) {
             Ok(()) => supervisor::dag::ApiReadyState::Yes,
             Err(error) if error == format!("readiness-timeout:{}", node.id.0) => {
                 supervisor::dag::ApiReadyState::Timeout
@@ -15154,6 +15250,15 @@ fn existing_vm_start_response_if_ready(
     vm: &str,
     runner_role_id: &str,
 ) -> Option<Value> {
+    if let Some(providers) = state.provider_runtime.process_providers() {
+        if providers.has_active_role(vm, runner_role_id) || providers.has_active_vm(vm) {
+            return Some(applied_response(
+                "vm start",
+                format!("vm.{vm}: already running; Provider identity is live"),
+            ));
+        }
+        return None;
+    }
     if !state.pidfd_table.contains(vm, runner_role_id) {
         return None;
     }
@@ -15645,7 +15750,23 @@ fn vm_stop_role_priority(role: Option<RunnerRole>) -> u8 {
 
 fn ordered_vm_stop_entries(state: &ServerState, vm: &str) -> Vec<PidfdRegistration> {
     let role_index = load_vm_stop_role_index(state, vm);
-    let mut entries = state.pidfd_table.list_for_vm(vm);
+    let provider_roles = state
+        .provider_runtime
+        .process_providers()
+        .map(|providers| providers.active_role_ids(vm).into_iter().collect::<BTreeSet<_>>())
+        .unwrap_or_default();
+    let mut entries = state
+        .pidfd_table
+        .list_for_vm(vm)
+        .into_iter()
+        .filter(|entry| !provider_roles.contains(&entry.role))
+        .collect::<Vec<_>>();
+    entries.extend(provider_roles.into_iter().map(|role| PidfdRegistration {
+        vm: vm.to_owned(),
+        role,
+        pid: 0,
+        start_time_ticks: 0,
+    }));
     entries.sort_by(|left, right| {
         let left_role = role_index
             .get(&left.role)
@@ -16433,6 +16554,19 @@ fn stop_vmm_runner_with_provider(
     state: &ServerState,
     input: ProviderStopInputs<'_>,
 ) -> Option<Result<VmStopRoleReport, Value>> {
+    if let Some(providers) = state.provider_runtime.process_providers()
+        && providers.has_active_role(input.vm, input.role_id)
+    {
+        return Some(stop_vm_pidfd_role(
+            state,
+            input.caller_role.clone(),
+            input.verb,
+            input.vm,
+            input.role_id,
+            input.term_timeout,
+            input.kill_timeout,
+        ));
+    }
     let manifest_entry = manifest_entry_for_vm(state, input.vm)?;
     let target = provider_shutdown_target_for_role(&manifest_entry, input.vm, input.role_id)?;
     let graceful_timeout = graceful_shutdown_timeout_for(state, &manifest_entry);
@@ -16684,6 +16818,43 @@ fn stop_vm_pidfd_role(
     term_timeout: Duration,
     kill_timeout: Duration,
 ) -> Result<VmStopRoleReport, Value> {
+    if let Some(providers) = state.provider_runtime.process_providers()
+        && providers.has_active_role(vm, role_id)
+    {
+        let node = providers.node_for_role(vm, role_id).ok_or_else(|| {
+            daemon_failure_response(
+                verb,
+                format!("vm stop {vm}: Provider node missing for {role_id}"),
+            )
+        })?;
+        let required_sigkill = match block_on_future(providers.stop_node(
+            vm,
+            &node,
+            term_timeout,
+            kill_timeout,
+        )) {
+            Ok(required_sigkill) => required_sigkill,
+            Err(error) if error == "provider-process-not-found" => {
+                return Err(invalid_request_response(
+                    verb,
+                    format!("vm '{vm}' has no registered Provider process for {role_id}"),
+                ));
+            }
+            Err(error) => {
+                return Err(daemon_failure_response(
+                    verb,
+                    format!("vm stop {vm}: Provider stop failed for {role_id}: {error}"),
+                ));
+            }
+        };
+        let cgroup_empty =
+            prove_role_cgroup_empty_or_escalate(state, caller_role, vm, role_id);
+        return Ok(VmStopRoleReport {
+            role_id: role_id.to_owned(),
+            required_sigkill,
+            shutdown_outcome: (!cgroup_empty).then_some(VmShutdownOutcome::CleanupFailed),
+        });
+    }
     tracing::info!(vm = %vm, role = %role_id, signal = "SIGTERM", "sending pidfd stop signal");
     match state.pidfd_table.signal(vm, role_id, libc::SIGTERM) {
         Ok(()) => {}
