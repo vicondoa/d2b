@@ -271,6 +271,76 @@ struct EchoSuppression {
     expires_at: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct DisplayDependencyFence {
+    controller_generation: u64,
+    reconnect_generation: u64,
+    provider_generation: u64,
+    session_digest: [u8; 32],
+}
+
+impl DisplayDependencyFence {
+    fn from_evidence(evidence: &DisplayDependencyEvidence) -> Self {
+        Self {
+            controller_generation: evidence.controller_generation(),
+            reconnect_generation: evidence.reconnect_generation(),
+            provider_generation: evidence.generation(),
+            session_digest: evidence.session_digest(),
+        }
+    }
+
+    fn accepts(&self, next: &Self) -> bool {
+        let current_generation = (
+            self.controller_generation,
+            self.reconnect_generation,
+            self.provider_generation,
+        );
+        let next_generation = (
+            next.controller_generation,
+            next.reconnect_generation,
+            next.provider_generation,
+        );
+        next_generation > current_generation
+            || (next_generation == current_generation && next.session_digest == self.session_digest)
+    }
+
+    fn next_is_strictly_newer(&self, next: &Self) -> bool {
+        (
+            next.controller_generation,
+            next.reconnect_generation,
+            next.provider_generation,
+        ) > (
+            self.controller_generation,
+            self.reconnect_generation,
+            self.provider_generation,
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DisplayDependencyFenceState {
+    NeverObserved,
+    Active(DisplayDependencyFence),
+    Revoked(DisplayDependencyFence),
+}
+
+impl DisplayDependencyFenceState {
+    fn accepts(&self, next: &DisplayDependencyFence) -> bool {
+        match self {
+            Self::NeverObserved => true,
+            Self::Active(current) => current.accepts(next),
+            Self::Revoked(current) => current.next_is_strictly_newer(next),
+        }
+    }
+
+    fn revoke(self) -> Self {
+        match self {
+            Self::NeverObserved => Self::NeverObserved,
+            Self::Active(current) | Self::Revoked(current) => Self::Revoked(current),
+        }
+    }
+}
+
 impl core::fmt::Debug for GuestSelectionEvent {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str("GuestSelectionEvent(REDACTED)")
@@ -346,6 +416,7 @@ pub struct ClipdHost {
     dependency: DisplayDependency,
     echo_window: BTreeMap<String, EchoSuppression>,
     fd_permits: FdPermitPool,
+    display_fence: DisplayDependencyFenceState,
 }
 
 impl ClipdHost {
@@ -369,6 +440,7 @@ impl ClipdHost {
             },
             echo_window: BTreeMap::new(),
             fd_permits: FdPermitPool::new(max_concurrent_fds),
+            display_fence: DisplayDependencyFenceState::NeverObserved,
         };
         host.reconcile_display_dependency(display)?;
         Ok(host)
@@ -392,30 +464,19 @@ impl ClipdHost {
             self.dependency.status = DependencyStatus::Absent;
             self.dependency.evidence = None;
             self.echo_window.clear();
+            self.display_fence = self.display_fence.revoke();
             return Ok(DependencyStatus::Absent);
         };
         if !Self::valid_display_dependency(&display) {
             return Err(ClipboardServiceError::DependencyUnavailable);
         }
-        if let Some(current) = self.dependency.evidence.as_ref() {
-            let current_key = (
-                current.controller_generation(),
-                current.reconnect_generation(),
-                current.generation(),
-            );
-            let next_key = (
-                display.controller_generation(),
-                display.reconnect_generation(),
-                display.generation(),
-            );
-            if next_key < current_key
-                || (next_key == current_key && display.session_digest() != current.session_digest())
-            {
-                return Err(ClipboardServiceError::DependencyUnavailable);
-            }
+        let next_fence = DisplayDependencyFence::from_evidence(&display);
+        if !self.display_fence.accepts(&next_fence) {
+            return Err(ClipboardServiceError::DependencyUnavailable);
         }
         self.dependency.status = DependencyStatus::Ready;
         self.dependency.evidence = Some(display);
+        self.display_fence = DisplayDependencyFenceState::Active(next_fence);
         Ok(DependencyStatus::Ready)
     }
 
@@ -601,6 +662,7 @@ impl ClipdHost {
         };
         if suppression.expires_at <= now_secs
             || suppression.guest != owner
+            || self.history.authorize_guest(&owner).is_err()
             || !self
                 .history
                 .entry_owned_and_live(entry_digest, &owner, now_secs)
@@ -1147,6 +1209,53 @@ mod tests {
     }
 
     #[test]
+    fn suspended_guest_cannot_issue_selection_event_for_live_entry() {
+        let mut host = ClipdHost::new(Policy::default(), 4, Some(display())).unwrap();
+        let guest = guest("work", "zone-a", 1);
+        let token = host
+            .capture_guest(&guest, "text/plain", b"hello", 100)
+            .unwrap();
+        host.suspend_guest("Guest/work");
+        assert!(matches!(
+            host.guest_selection_event(&guest, &token, 101),
+            Err(ClipboardServiceError::HistoryRejected)
+        ));
+    }
+
+    #[test]
+    fn picker_cancellation_results_never_mint_receipts() {
+        let host = ClipdHost::new(Policy::default(), 4, Some(display())).unwrap();
+        let source = guest("source", "zone-a", 1);
+        let destination = guest("work", "zone-a", 1);
+        let route = AuthenticatedPasteRoute::from_sessions(&source, &destination).unwrap();
+        let request = PickerRequest::new(
+            route.operation_id(),
+            "zone-a",
+            "Guest/work",
+            vec!["text/plain".to_owned()],
+        )
+        .unwrap();
+        for result in [
+            crate::picker::PickerResult::Cancelled,
+            crate::picker::PickerResult::TimedOut,
+            crate::picker::PickerResult::Failed,
+        ] {
+            assert!(matches!(
+                PickerAuthority::complete(
+                    &source,
+                    &destination,
+                    &request,
+                    result,
+                    "sha256:entry",
+                    &host.history,
+                    100,
+                ),
+                Err(crate::picker::PickerError::ResultMismatch)
+            ));
+        }
+    }
+
+    #[test]
     fn display_dependency_revocation_and_generation_fencing_are_fail_closed() {
         let current = display();
         let mut host = ClipdHost::new(Policy::default(), 4, Some(current.clone())).unwrap();
@@ -1159,6 +1268,10 @@ mod tests {
         assert_eq!(
             host.reconcile_display_dependency(None),
             Ok(DependencyStatus::Absent)
+        );
+        assert_eq!(
+            host.reconcile_display_dependency(Some(current.clone())),
+            Err(ClipboardServiceError::DependencyUnavailable)
         );
         assert_eq!(
             host.capture_guest(&guest, "text/plain", b"world", 101),
