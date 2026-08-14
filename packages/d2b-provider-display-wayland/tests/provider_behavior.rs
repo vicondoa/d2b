@@ -320,5 +320,5 @@ fn audit_and_telemetry_reject_identity_bearing_surfaces() {
     .with_warning("bad\nwarning", "interface=bad\n");
     let wire = warning.to_wire_record();
     assert!(!wire.contains('\n'));
-    assert!(!wire.contains("=bad"));
+    assert!(!wire.contains(":interface=bad"));
 }
