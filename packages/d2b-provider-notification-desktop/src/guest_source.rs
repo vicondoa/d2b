@@ -1,21 +1,38 @@
 //! Guest-source stream validation.
 
-use crate::{Category, NotificationRequest, SessionEvidence};
+use crate::{Category, GuestSourceConfig, NotificationRequest, SessionEvidence};
+use d2b_contracts::v3::{ResourceRef, ZoneId};
 use std::collections::BTreeSet;
 
 /// A Guest source bound to an allowlisted category set.
 pub struct GuestSource {
+    source_ref: ResourceRef,
+    zone: ZoneId,
     categories: BTreeSet<Category>,
 }
 
 impl GuestSource {
-    /// Construct a Guest source. An empty category set is never admitted.
+    /// Construct a configured Guest source from Core-owned configuration.
+    pub fn from_config(config: &GuestSourceConfig) -> Self {
+        Self {
+            source_ref: config.source_ref().clone(),
+            zone: config.zone().clone(),
+            categories: config.categories().clone(),
+        }
+    }
+
+    /// Construct an unbound source for unit tests only.
+    #[cfg(test)]
     pub fn new(categories: impl IntoIterator<Item = Category>) -> Result<Self, &'static str> {
         let categories = categories.into_iter().collect::<BTreeSet<_>>();
         if categories.is_empty() {
             return Err("notification-category-set-empty");
         }
-        Ok(Self { categories })
+        Ok(Self {
+            source_ref: ResourceRef::parse("Guest/test").unwrap(),
+            zone: ZoneId::parse("test").unwrap(),
+            categories,
+        })
     }
 
     /// Validate a request before opening a sink stream.
@@ -36,6 +53,9 @@ impl GuestSource {
         session
             .admit_source()
             .map_err(|_| "notification-source-unauthenticated")?;
+        if session.subject_ref() != &self.source_ref || session.zone() != &self.zone {
+            return Err("notification-source-binding-mismatch");
+        }
         self.validate(request)
     }
 }
@@ -56,7 +76,13 @@ mod tests {
 
     #[test]
     fn authenticated_source_validation_rejects_observer_reuse() {
-        let source = GuestSource::new([Category::SystemInfo]).unwrap();
+        let config = GuestSourceConfig::new(
+            ResourceRef::parse("Guest/guest").unwrap(),
+            ZoneId::parse("work").unwrap(),
+            [Category::SystemInfo],
+        )
+        .unwrap();
+        let source = GuestSource::from_config(&config);
         let request = NotificationRequest::new("summary", "body", Category::SystemInfo).unwrap();
         assert_eq!(
             source.validate_authenticated(&test_observer("alice"), &request),
@@ -66,6 +92,10 @@ mod tests {
             source
                 .validate_authenticated(&test_source("guest"), &request)
                 .is_ok()
+        );
+        assert_eq!(
+            source.validate_authenticated(&crate::admission::test_source("other"), &request),
+            Err("notification-source-binding-mismatch")
         );
     }
 }

@@ -116,7 +116,7 @@ impl NotificationSink {
 
     /// Deliver one authenticated Guest-source request through the effect port
     /// to one authenticated desktop observer.
-    pub fn deliver<P: DesktopNotificationPort>(
+    pub(crate) fn deliver<P: DesktopNotificationPort>(
         &mut self,
         port: &mut P,
         source_session: &SessionEvidence,
@@ -130,6 +130,9 @@ impl NotificationSink {
         observer_session
             .admit_observer()
             .map_err(|_| crate::types::NotificationError::InvalidOpaqueKey)?;
+        if source_session.zone() != observer_session.zone() {
+            return Err(crate::types::NotificationError::InvalidOpaqueKey);
+        }
         let observer_session = observer_session.session_key();
         self.nonces.gc(now_secs);
         self.prune_idempotency_nonces();
@@ -402,7 +405,7 @@ impl core::fmt::Debug for NotificationSink {
 mod tests {
     use super::*;
     use crate::{
-        admission::{test_observer, test_source},
+        admission::{test_observer, test_source, test_source_at_zone},
         types::{ActionSpec, Category},
     };
 
@@ -466,6 +469,22 @@ mod tests {
         assert_eq!(
             sink.invoke_action(&action_key, &observer, 101),
             Err(ActionNonceError::Unavailable)
+        );
+    }
+
+    #[test]
+    fn delivery_rejects_cross_zone_source_and_observer_sessions() {
+        let mut sink = NotificationSink::new(2, 2, 10);
+        let mut port = TestPort::default();
+        assert_eq!(
+            sink.deliver(
+                &mut port,
+                &test_source_at_zone("guest", 1, "other"),
+                &test_observer("alice"),
+                request_with_action(),
+                100,
+            ),
+            Err(crate::types::NotificationError::InvalidOpaqueKey)
         );
     }
 

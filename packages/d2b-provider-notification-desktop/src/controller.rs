@@ -32,8 +32,11 @@ pub enum DisplayDependencyState {
 pub struct DisplayDependencyEvidence {
     provider_ref: ResourceRef,
     zone: ZoneId,
+    host_execution_ref: ResourceRef,
     user_ref: ResourceRef,
-    generation: u64,
+    provider_generation: u64,
+    reconnect_generation: u64,
+    controller_generation: u64,
     state: DisplayDependencyState,
 }
 
@@ -42,11 +45,11 @@ impl DisplayDependencyEvidence {
     pub fn from_authenticated_route(
         route: AuthenticatedSessionRouteBinding,
     ) -> Result<Self, &'static str> {
-        let generation = route
+        let provider_generation = route
             .provider_generation()
             .ok_or("display-dependency-unauthenticated")?
             .get();
-        Self::from_route(route, DisplayDependencyState::Ready, generation)
+        Self::from_route(route, DisplayDependencyState::Ready, provider_generation)
     }
 
     /// Resolve one display dependency from an authenticated display route.
@@ -65,17 +68,31 @@ impl DisplayDependencyEvidence {
             || provider.to_canonical_string() != DISPLAY_PROVIDER_REF
             || route.subject_ref().resource_type().as_str() != "User"
             || generation == 0
+            || route.reconnect_generation().get() == 0
             || route
                 .provider_generation()
                 .is_none_or(|observed| observed.get() != generation)
         {
             return Err("display-dependency-unauthenticated");
         }
+        let Some(host_execution_ref) = route.context().execution_ref() else {
+            return Err("display-dependency-unauthenticated");
+        };
+        let Some(controller_generation) = route.controller_generation() else {
+            return Err("display-dependency-unauthenticated");
+        };
+        if host_execution_ref.resource_type().as_str() != "Host" || controller_generation.get() == 0
+        {
+            return Err("display-dependency-unauthenticated");
+        }
         Ok(Self {
             provider_ref: provider.clone(),
             zone: route.zone().clone(),
+            host_execution_ref: host_execution_ref.clone(),
             user_ref: route.subject_ref().clone(),
-            generation,
+            provider_generation: generation,
+            reconnect_generation: route.reconnect_generation().get(),
+            controller_generation: controller_generation.get(),
             state,
         })
     }
@@ -90,6 +107,11 @@ impl DisplayDependencyEvidence {
         &self.zone
     }
 
+    /// Borrow the authenticated Host execution reference.
+    pub const fn host_execution_ref(&self) -> &ResourceRef {
+        &self.host_execution_ref
+    }
+
     /// Borrow the authenticated display user.
     pub const fn user_ref(&self) -> &ResourceRef {
         &self.user_ref
@@ -97,7 +119,17 @@ impl DisplayDependencyEvidence {
 
     /// Return the Core-observed display readiness generation.
     pub const fn generation(&self) -> u64 {
-        self.generation
+        self.provider_generation
+    }
+
+    /// Return the display reconnect generation.
+    pub const fn reconnect_generation(&self) -> u64 {
+        self.reconnect_generation
+    }
+
+    /// Return the Core controller generation.
+    pub const fn controller_generation(&self) -> u64 {
+        self.controller_generation
     }
 
     /// Return the dependency readiness state.
@@ -177,6 +209,8 @@ impl core::fmt::Debug for GuestSourceConfig {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NotificationProviderConfig {
     guest_sources: Vec<GuestSourceConfig>,
+    host_execution_ref: Option<ResourceRef>,
+    host_user_ref: Option<ResourceRef>,
 }
 
 impl NotificationProviderConfig {
@@ -191,12 +225,40 @@ impl NotificationProviderConfig {
                 return Err("notification-source-duplicate");
             }
         }
-        Ok(Self { guest_sources })
+        Ok(Self {
+            guest_sources,
+            host_execution_ref: None,
+            host_user_ref: None,
+        })
+    }
+
+    /// Bind the configured processes to the Core-resolved Host and User.
+    pub fn with_host_binding(
+        mut self,
+        host_execution_ref: ResourceRef,
+        host_user_ref: ResourceRef,
+    ) -> Result<Self, &'static str> {
+        if host_execution_ref.resource_type().as_str() != "Host"
+            || host_user_ref.resource_type().as_str() != "User"
+        {
+            return Err("notification-host-binding-invalid");
+        }
+        self.host_execution_ref = Some(host_execution_ref);
+        self.host_user_ref = Some(host_user_ref);
+        Ok(self)
     }
 
     /// Borrow configured Guest sources.
     pub fn guest_sources(&self) -> &[GuestSourceConfig] {
         &self.guest_sources
+    }
+
+    fn host_execution_ref(&self) -> Option<&ResourceRef> {
+        self.host_execution_ref.as_ref()
+    }
+
+    fn host_user_ref(&self) -> Option<&ResourceRef> {
+        self.host_user_ref.as_ref()
     }
 }
 
@@ -217,6 +279,54 @@ pub struct SourceReconcileResult {
     pub stop_endpoints: Vec<SourceEndpoint>,
 }
 
+impl SourceReconcileResult {
+    fn digest(&self) -> [u8; 32] {
+        let mut digest = Sha256::new();
+        for source in &self.start {
+            digest.update(source.to_canonical_string().as_bytes());
+            digest.update([0]);
+        }
+        digest.update([1]);
+        for source in &self.stop {
+            digest.update(source.to_canonical_string().as_bytes());
+            digest.update([0]);
+        }
+        digest.update([self.start_host_sink as u8, self.stop_host_sink as u8]);
+        for endpoint in &self.start_endpoints {
+            digest.update(endpoint.endpoint_digest().as_bytes());
+            digest.update([0]);
+        }
+        digest.update([2]);
+        for endpoint in &self.stop_endpoints {
+            digest.update(endpoint.endpoint_digest().as_bytes());
+            digest.update([0]);
+        }
+        let bytes = digest.finalize();
+        let mut result = [0; 32];
+        result.copy_from_slice(&bytes);
+        result
+    }
+}
+
+/// Typed acknowledgement that a complete source effect plan was applied.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceProcessEffectReceipt {
+    plan_digest: [u8; 32],
+}
+
+impl SourceProcessEffectReceipt {
+    /// Mint a receipt at the trusted process-effect adapter boundary.
+    pub fn complete(plan: &SourceReconcileResult) -> Self {
+        Self {
+            plan_digest: plan.digest(),
+        }
+    }
+
+    fn matches(&self, plan: &SourceReconcileResult) -> bool {
+        self.plan_digest == plan.digest()
+    }
+}
+
 /// Process/effect boundary used to make reconciliation transactional.
 ///
 /// The controller computes the complete stop/start set first.  Ownership is
@@ -224,7 +334,10 @@ pub struct SourceReconcileResult {
 /// effect was accepted.
 pub trait SourceProcessEffectPort {
     /// Apply one complete reconciliation plan.
-    fn apply(&mut self, plan: &SourceReconcileResult) -> Result<(), &'static str>;
+    fn apply(
+        &mut self,
+        plan: &SourceReconcileResult,
+    ) -> Result<SourceProcessEffectReceipt, &'static str>;
 }
 
 /// Authenticated Guest source endpoint evidence.
@@ -240,7 +353,7 @@ impl SourceEndpoint {
     fn from_authenticated(
         source: &GuestSourceConfig,
         session: &SessionEvidence,
-        display_generation: u64,
+        display: &DisplayDependencyEvidence,
     ) -> Result<Self, &'static str> {
         session
             .admit_source()
@@ -257,7 +370,20 @@ impl SourceEndpoint {
         }
         digest.update(session.generation().to_be_bytes());
         digest.update([0]);
-        digest.update(display_generation.to_be_bytes());
+        digest.update(display.generation().to_be_bytes());
+        digest.update([0]);
+        digest.update(display.controller_generation().to_be_bytes());
+        digest.update([0]);
+        digest.update(display.reconnect_generation().to_be_bytes());
+        digest.update([0]);
+        digest.update(
+            display
+                .host_execution_ref()
+                .to_canonical_string()
+                .as_bytes(),
+        );
+        digest.update([0]);
+        digest.update(display.user_ref().to_canonical_string().as_bytes());
         let endpoint_digest = format!(
             "sha256:{}",
             digest
@@ -269,7 +395,7 @@ impl SourceEndpoint {
         Ok(Self {
             source_ref: source.source_ref().clone(),
             source_generation: session.generation(),
-            display_generation,
+            display_generation: display.generation(),
             endpoint_digest,
         })
     }
@@ -312,6 +438,10 @@ pub struct ProcessPlan {
     pub mounts_state_volume: bool,
     /// Guest source reference for source processes, if this is a source plan.
     pub source_ref: Option<ResourceRef>,
+    /// Authenticated execution reference for the process.
+    pub execution_ref: ResourceRef,
+    /// Authenticated User identity for user-domain processes.
+    pub user_ref: Option<ResourceRef>,
 }
 
 /// Notification placement controller.
@@ -344,6 +474,16 @@ impl NotificationController {
         display: &DisplayDependencyEvidence,
         config: &NotificationProviderConfig,
     ) -> Result<Vec<ProcessPlan>, &'static str> {
+        let host_execution_ref = config
+            .host_execution_ref()
+            .ok_or("notification-host-binding-missing")?;
+        let host_user_ref = config
+            .host_user_ref()
+            .ok_or("notification-host-binding-missing")?;
+        if display.host_execution_ref() != host_execution_ref || display.user_ref() != host_user_ref
+        {
+            return Err("notification-host-binding-mismatch");
+        }
         if config
             .guest_sources()
             .iter()
@@ -356,6 +496,8 @@ impl NotificationController {
             domain: "system",
             mounts_state_volume: false,
             source_ref: None,
+            execution_ref: host_execution_ref.clone(),
+            user_ref: None,
         }];
         if display.is_ready() {
             plans.push(ProcessPlan {
@@ -363,6 +505,8 @@ impl NotificationController {
                 domain: "user",
                 mounts_state_volume: false,
                 source_ref: None,
+                execution_ref: host_execution_ref.clone(),
+                user_ref: Some(host_user_ref.clone()),
             });
         }
         if display.is_ready() {
@@ -371,12 +515,15 @@ impl NotificationController {
                 domain: "guest",
                 mounts_state_volume: false,
                 source_ref: Some(source.source_ref().clone()),
+                execution_ref: source.source_ref().clone(),
+                user_ref: None,
             }));
         }
         Ok(plans)
     }
 
     /// Reconcile configured Guest source endpoints and the host sink.
+    #[cfg(test)]
     pub fn reconcile_sources(
         &mut self,
         display: &DisplayDependencyEvidence,
@@ -398,7 +545,10 @@ impl NotificationController {
         effects: &mut E,
     ) -> Result<SourceReconcileResult, &'static str> {
         let result = self.plan_reconciliation(display, config, source_sessions)?;
-        effects.apply(&result)?;
+        let receipt = effects.apply(&result)?;
+        if !receipt.matches(&result) {
+            return Err("notification-process-effect-proof-mismatch");
+        }
         self.commit_reconciliation(display, result.clone());
         Ok(result)
     }
@@ -424,7 +574,7 @@ impl NotificationController {
                     if matches.next().is_some() {
                         return Err("notification-source-ambiguous");
                     }
-                    SourceEndpoint::from_authenticated(source, session, display.generation())
+                    SourceEndpoint::from_authenticated(source, session, display)
                 })
                 .collect::<Result<Vec<_>, _>>()?
         } else {
@@ -500,6 +650,7 @@ impl NotificationController {
     /// source/sink endpoint. A route is accepted only when the sealed
     /// ComponentSession authority has bound the display Provider, local Unix
     /// evidence, a User subject, and a non-zero Provider generation.
+    #[cfg(test)]
     pub fn reconcile_authenticated_display(
         &mut self,
         display: Option<AuthenticatedSessionRouteBinding>,
@@ -546,7 +697,10 @@ impl NotificationController {
                 start_endpoints: Vec::new(),
                 stop_endpoints,
             };
-            effects.apply(&result)?;
+            let receipt = effects.apply(&result)?;
+            if !receipt.matches(&result) {
+                return Err("notification-process-effect-proof-mismatch");
+            }
             self.active_sources.clear();
             self.active_display_generation = None;
             self.host_sink_generation = None;
@@ -557,6 +711,7 @@ impl NotificationController {
     }
 
     /// Drain and forget all source endpoints during shutdown or finalization.
+    #[cfg(test)]
     pub fn drain_sources(&mut self) -> Vec<ResourceRef> {
         let drained = self.active_sources.keys().cloned().collect();
         self.active_sources.clear();
@@ -591,8 +746,11 @@ mod tests {
         DisplayDependencyEvidence {
             provider_ref: ResourceRef::parse(DISPLAY_PROVIDER_REF).unwrap(),
             zone: ZoneId::parse("work").unwrap(),
+            host_execution_ref: ResourceRef::parse("Host/host-system").unwrap(),
             user_ref: ResourceRef::parse("User/alice").unwrap(),
-            generation: 4,
+            provider_generation: 4,
+            reconnect_generation: 2,
+            controller_generation: 3,
             state,
         }
     }
@@ -606,10 +764,20 @@ mod tests {
         .unwrap()
     }
 
+    fn bound_config(sources: Vec<GuestSourceConfig>) -> NotificationProviderConfig {
+        NotificationProviderConfig::new(sources)
+            .unwrap()
+            .with_host_binding(
+                ResourceRef::parse("Host/host-system").unwrap(),
+                ResourceRef::parse("User/alice").unwrap(),
+            )
+            .unwrap()
+    }
+
     #[test]
     fn planning_requires_ready_same_zone_display_evidence() {
         let controller = NotificationController::new(crate::PROVIDER_REF).unwrap();
-        let config = NotificationProviderConfig::new(vec![source("one")]).unwrap();
+        let config = bound_config(vec![source("one")]);
         let pending_plans = controller
             .plan(&display(DisplayDependencyState::Pending), &config)
             .unwrap();
@@ -625,7 +793,7 @@ mod tests {
             [Category::SystemInfo],
         )
         .unwrap();
-        let wrong_zone_config = NotificationProviderConfig::new(vec![wrong_zone]).unwrap();
+        let wrong_zone_config = bound_config(vec![wrong_zone]);
         assert_eq!(
             controller.plan(&display(DisplayDependencyState::Ready), &wrong_zone_config),
             Err("notification-source-zone-mismatch")
@@ -635,8 +803,8 @@ mod tests {
     #[test]
     fn source_reconciliation_starts_stops_and_drains_exact_endpoints() {
         let mut controller = NotificationController::new(crate::PROVIDER_REF).unwrap();
-        let first = NotificationProviderConfig::new(vec![source("one")]).unwrap();
-        let second = NotificationProviderConfig::new(vec![source("two")]).unwrap();
+        let first = bound_config(vec![source("one")]);
+        let second = bound_config(vec![source("two")]);
         let dependency = display(DisplayDependencyState::Ready);
         let first_result = controller
             .reconcile_sources(&dependency, &first, &[test_source("one")])
@@ -685,7 +853,7 @@ mod tests {
     #[test]
     fn source_generation_change_drains_and_restarts_the_exact_endpoint() {
         let mut controller = NotificationController::new(crate::PROVIDER_REF).unwrap();
-        let config = NotificationProviderConfig::new(vec![source("one")]).unwrap();
+        let config = bound_config(vec![source("one")]);
         let dependency = display(DisplayDependencyState::Ready);
         controller
             .reconcile_sources(&dependency, &config, &[test_source("one")])
@@ -705,7 +873,7 @@ mod tests {
     #[test]
     fn duplicate_authenticated_source_sessions_are_rejected() {
         let mut controller = NotificationController::new(crate::PROVIDER_REF).unwrap();
-        let config = NotificationProviderConfig::new(vec![source("one")]).unwrap();
+        let config = bound_config(vec![source("one")]);
         let dependency = display(DisplayDependencyState::Ready);
         assert_eq!(
             controller.reconcile_sources(
@@ -720,7 +888,10 @@ mod tests {
     struct FailingEffects;
 
     impl SourceProcessEffectPort for FailingEffects {
-        fn apply(&mut self, _plan: &SourceReconcileResult) -> Result<(), &'static str> {
+        fn apply(
+            &mut self,
+            _plan: &SourceReconcileResult,
+        ) -> Result<SourceProcessEffectReceipt, &'static str> {
             Err("process-effect-failed")
         }
     }
@@ -728,8 +899,8 @@ mod tests {
     #[test]
     fn reconciliation_commits_source_ownership_only_after_effects_succeed() {
         let mut controller = NotificationController::new(crate::PROVIDER_REF).unwrap();
-        let first = NotificationProviderConfig::new(vec![source("one")]).unwrap();
-        let second = NotificationProviderConfig::new(vec![source("two")]).unwrap();
+        let first = bound_config(vec![source("one")]);
+        let second = bound_config(vec![source("two")]);
         let dependency = display(DisplayDependencyState::Ready);
         controller
             .reconcile_sources(&dependency, &first, &[test_source("one")])

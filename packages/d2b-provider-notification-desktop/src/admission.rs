@@ -184,10 +184,15 @@ pub(crate) fn test_source(subject: &str) -> SessionEvidence {
 
 #[cfg(test)]
 pub(crate) fn test_source_at(subject: &str, generation: u64) -> SessionEvidence {
+    test_source_at_zone(subject, generation, "work")
+}
+
+#[cfg(test)]
+pub(crate) fn test_source_at_zone(subject: &str, generation: u64, zone: &str) -> SessionEvidence {
     let subject_ref = format!("Guest/{subject}");
     SessionEvidence {
         subject_ref: ResourceRef::parse(&subject_ref).unwrap(),
-        zone: ZoneId::parse("work").unwrap(),
+        zone: ZoneId::parse(zone).unwrap(),
         generation,
         purpose: AdmissionPurpose::NotificationSource,
         transport: TransportClass::EnrolledNoiseKk,
