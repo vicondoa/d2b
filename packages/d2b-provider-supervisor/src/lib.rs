@@ -19,5 +19,6 @@ pub use broker::{
     BrokerProcessBackend, BundleBackedLaunchResolver, runner_role_for_process_role,
 };
 pub use systemd::{
-    SystemdEffectLaunch, SystemdEffectOwner, SystemdInvocationIdentity, SystemdProcessBackend,
+    BrokerSystemdEffectOwner, BrokerSystemdPidfdHandle, SystemdEffectLaunch, SystemdEffectOwner,
+    SystemdInvocationIdentity, SystemdProcessBackend,
 };

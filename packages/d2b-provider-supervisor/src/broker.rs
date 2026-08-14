@@ -501,13 +501,13 @@ fn wait_pidfd_exit(pidfd: &OwnedFd, timeout: Duration) -> Result<(), ProcessEffe
     }
 }
 
-struct BrokerFrame {
-    response: BrokerResponse,
+pub(crate) struct BrokerFrame {
+    pub(crate) response: BrokerResponse,
     fds: Mutex<Vec<Option<OwnedFd>>>,
 }
 
 impl BrokerFrame {
-    fn take_fd(&self, index: u32) -> Result<OwnedFd, ProcessEffectError> {
+    pub(crate) fn take_fd(&self, index: u32) -> Result<OwnedFd, ProcessEffectError> {
         self.fds
             .lock()
             .map_err(|_| ProcessEffectError::PidfdUnavailable)?
@@ -730,7 +730,7 @@ fn read_proc_start_time(pid: i32) -> Result<Option<u64>, ProcessEffectError> {
         .map_err(|_| ProcessEffectError::ObserveFailed)
 }
 
-fn broker_round_trip(
+pub(crate) fn broker_round_trip(
     socket_path: &Path,
     io_timeout: Duration,
     request: BrokerRequest,

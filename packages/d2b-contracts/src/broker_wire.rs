@@ -127,6 +127,16 @@ pub enum BrokerRequest {
     /// SCM_RIGHTS; if start-time drifted the broker closes the fd and
     /// surfaces a typed pidfd-race error.
     OpenPidfd(OpenPidfdRequest),
+    /// Start one trusted non-forking transient systemd unit. The broker
+    /// resolves executable, argv, uid/gid, environment, and cgroup
+    /// placement from the bundle runner intent.
+    StartSystemdUnit(StartSystemdUnitRequest),
+    /// Observe one trusted transient systemd unit without opening a pidfd.
+    ObserveSystemdUnit(ObserveSystemdUnitRequest),
+    /// Re-open a pidfd after re-verifying a trusted transient unit identity.
+    OpenSystemdUnitPidfd(OpenSystemdUnitPidfdRequest),
+    /// Stop one exact transient systemd unit identity.
+    StopSystemdUnit(StopSystemdUnitRequest),
     /// Resolve one signed Zone storage-row id against the trusted bundle,
     /// provision or open its database inode, and return the owned database
     /// descriptor via `SCM_RIGHTS`. No path, mode, owner, or marker value
@@ -309,6 +319,10 @@ impl BrokerRequest {
             Self::QemuMediaAttach(_) => "QemuMediaAttach",
             Self::QemuMediaDetach(_) => "QemuMediaDetach",
             Self::OpenPidfd(_) => "OpenPidfd",
+            Self::StartSystemdUnit(_) => "StartSystemdUnit",
+            Self::ObserveSystemdUnit(_) => "ObserveSystemdUnit",
+            Self::OpenSystemdUnitPidfd(_) => "OpenSystemdUnitPidfd",
+            Self::StopSystemdUnit(_) => "StopSystemdUnit",
             Self::OpenZoneStore(_) => "OpenZoneStore",
             Self::OpenVhostNet(_) => "OpenVhostNet",
             Self::PauseBroker => "PauseBroker",
@@ -555,6 +569,32 @@ impl BrokerRequest {
             Self::OpenPidfd(request) => (
                 request.vm_id.to_string(),
                 format!("{}:{}:{}", self.op_name(), request.vm_id, request.role_id),
+            ),
+            Self::StartSystemdUnit(request) => (
+                request.vm_id.to_string(),
+                format!("{}:{}:{}", self.op_name(), request.vm_id, request.role_id),
+            ),
+            Self::ObserveSystemdUnit(request) => (
+                request.vm_id.to_string(),
+                format!("{}:{}:{}", self.op_name(), request.vm_id, request.role_id),
+            ),
+            Self::OpenSystemdUnitPidfd(request) => (
+                request.unit.vm_id.to_string(),
+                format!(
+                    "{}:{}:{}",
+                    self.op_name(),
+                    request.unit.vm_id,
+                    request.unit.role_id
+                ),
+            ),
+            Self::StopSystemdUnit(request) => (
+                request.unit.vm_id.to_string(),
+                format!(
+                    "{}:{}:{}",
+                    self.op_name(),
+                    request.unit.vm_id,
+                    request.unit.role_id
+                ),
             ),
             Self::SignalRunner(request) => (
                 request.vm_id.to_string(),
@@ -1005,6 +1045,16 @@ pub enum BrokerResponse {
     /// on the same frame; the JSON body confirms which `(pid,
     /// start_time_ticks)` the broker verified.
     OpenPidfd(OpenPidfdResponse),
+    /// StartSystemdUnit response. The exact-main pidfd is returned via
+    /// SCM_RIGHTS alongside this identity envelope.
+    StartSystemdUnit(StartSystemdUnitResponse),
+    /// Observation of a transient systemd unit. `None` is represented by
+    /// `present = false` and a zero identity.
+    ObserveSystemdUnit(ObserveSystemdUnitResponse),
+    /// Re-open response for a previously verified transient unit.
+    OpenSystemdUnitPidfd(OpenSystemdUnitPidfdResponse),
+    /// Stop response for an exact transient unit identity.
+    StopSystemdUnit(StopSystemdUnitResponse),
     /// `OpenZoneStore` response. The database descriptor is the sole
     /// `SCM_RIGHTS` attachment on the same frame; the JSON body contains
     /// only opaque identity and disposition metadata.
@@ -1736,6 +1786,146 @@ pub struct OpenPidfdResponse {
     /// Always `0` today; reserved for future multi-fd
     /// SCM_RIGHTS handoffs.
     pub pidfd_index: u32,
+}
+
+/// Closed systemd execution domain. User-manager execution remains subject to
+/// same-UID verification by the broker; no manager address crosses the wire.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum SystemdUnitDomain {
+    /// The host system manager.
+    System,
+    /// The verified per-user manager.
+    User,
+}
+
+/// Stable systemd identity returned only after the broker has queried the
+/// manager and re-read the process start time under the pidfd boundary.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SystemdUnitIdentity {
+    /// systemd's 16-byte InvocationID.
+    pub invocation_id: [u8; 16],
+    /// Digest of the exact ControlGroup path; the path never crosses IPC.
+    pub cgroup_identity: [u8; 32],
+    /// MainPID verified against the unit and `/proc`.
+    pub main_pid: u32,
+    /// `/proc/<pid>/stat` field-22 start time.
+    pub start_time_ticks: u64,
+    /// Owning Provider digest bound to the unit identity.
+    pub provider_identity: [u8; 32],
+    /// Component template digest bound to the unit identity.
+    pub template_identity: [u8; 32],
+    /// Process resource generation bound to the unit identity.
+    pub generation: u64,
+}
+
+/// Shared trusted request fields for systemd unit operations.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SystemdUnitRequest {
+    /// Execution target represented by the trusted runner intent.
+    pub vm_id: VmId,
+    /// Process role identifier within the execution target.
+    pub role_id: RoleId,
+    /// Closed runner role selecting the trusted bundle launch plan.
+    pub role: RunnerRole,
+    /// Opaque bundle reference resolved only by the broker.
+    pub bundle_runner_intent_ref: BundleOpId,
+    /// Process Provider identity digest.
+    pub provider_identity: [u8; 32],
+    /// Component template identity digest.
+    pub template_identity: [u8; 32],
+    /// Nonzero Process resource generation.
+    pub generation: u64,
+    /// System or verified user manager.
+    pub domain: SystemdUnitDomain,
+    #[serde(default)]
+    pub tracing_span_id: Option<TracingSpanId>,
+}
+
+/// Request to start one transient systemd unit.
+pub type StartTransientUnitRequest = SystemdUnitRequest;
+/// Compatibility spelling used by the BrokerRequest variant.
+pub type StartSystemdUnitRequest = StartTransientUnitRequest;
+
+/// Request to observe one transient systemd unit.
+pub type ObserveSystemdUnitRequest = SystemdUnitRequest;
+
+/// Request to re-open a pidfd after identity re-verification.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OpenSystemdUnitPidfdRequest {
+    /// Trusted unit selector and binding inputs.
+    #[serde(flatten)]
+    pub unit: SystemdUnitRequest,
+    /// Identity observed before the local descriptor was requested.
+    pub expected: SystemdUnitIdentity,
+}
+
+/// Request to stop one exact transient systemd unit.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StopSystemdUnitRequest {
+    /// Trusted unit selector and binding inputs.
+    #[serde(flatten)]
+    pub unit: SystemdUnitRequest,
+    /// Identity that must still match before the stop is sent.
+    pub expected: SystemdUnitIdentity,
+    /// Graceful drain or forced termination.
+    pub class: SystemdStopClass,
+}
+
+/// Stop class for transient systemd units.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum SystemdStopClass {
+    /// Request systemd to stop the unit and wait for it to become inactive.
+    Drain,
+    /// Kill the exact unit cgroup and verify it becomes inactive.
+    Terminate,
+}
+
+/// Start response. The exact-main pidfd is the first SCM_RIGHTS fd.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StartTransientUnitResponse {
+    pub vm_id: VmId,
+    pub role_id: RoleId,
+    pub identity: SystemdUnitIdentity,
+    pub pidfd_index: u32,
+}
+/// Compatibility spelling used by the BrokerResponse variant.
+pub type StartSystemdUnitResponse = StartTransientUnitResponse;
+
+/// Observation response. `present = false` has no identity payload.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ObserveSystemdUnitResponse {
+    pub vm_id: VmId,
+    pub role_id: RoleId,
+    pub present: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity: Option<SystemdUnitIdentity>,
+}
+
+/// Re-open response. The exact-main pidfd is the first SCM_RIGHTS fd.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OpenSystemdUnitPidfdResponse {
+    pub vm_id: VmId,
+    pub role_id: RoleId,
+    pub identity: SystemdUnitIdentity,
+    pub pidfd_index: u32,
+}
+
+/// Stop response after systemd confirmed the unit is inactive.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StopSystemdUnitResponse {
+    pub vm_id: VmId,
+    pub role_id: RoleId,
+    pub stopped: bool,
 }
 
 /// Open one broker-resolved Zone resource store. The request is deliberately

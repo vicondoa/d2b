@@ -2274,6 +2274,147 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                 });
             Ok(DispatchResult::with_fd(response, outcome.pidfd))
         }
+        RealBrokerRequest::StartSystemdUnit(req) => {
+            let resolver = require_resolver_ref(resolver.map(std::sync::Arc::as_ref))?;
+            let (identity, pidfd) = backend.start_systemd_unit(resolver, &req)?;
+            write_success_op_record!(
+                audit_log,
+                bundle_metadata,
+                "StartSystemdUnit",
+                req.role_id.as_str(),
+                caller_uid,
+                caller_gid,
+                &caller_role,
+                req.vm_id.as_str(),
+                req.role_id.as_str(),
+                tracing_span_id_str(req.tracing_span_id.as_ref()),
+                OperationFields::SystemdUnit {
+                    vm_id: req.vm_id.as_str().to_owned(),
+                    role_id: req.role_id.as_str().to_owned(),
+                    role: req.role.as_str().to_owned(),
+                    bundle_runner_intent_ref: req.bundle_runner_intent_ref.as_str().to_owned(),
+                    domain: systemd_domain_name(req.domain).to_owned(),
+                    action: "start".to_owned(),
+                    stopped: None,
+                },
+            )?;
+            Ok(DispatchResult::with_fd(
+                BrokerResponse::StartSystemdUnit(
+                    d2b_contracts::broker_wire::StartTransientUnitResponse {
+                        vm_id: req.vm_id,
+                        role_id: req.role_id,
+                        identity,
+                        pidfd_index: 0,
+                    },
+                ),
+                pidfd,
+            ))
+        }
+        RealBrokerRequest::ObserveSystemdUnit(req) => {
+            let resolver = require_resolver_ref(resolver.map(std::sync::Arc::as_ref))?;
+            let identity = backend.observe_systemd_unit(resolver, &req)?;
+            write_success_op_record!(
+                audit_log,
+                bundle_metadata,
+                "ObserveSystemdUnit",
+                req.role_id.as_str(),
+                caller_uid,
+                caller_gid,
+                &caller_role,
+                req.vm_id.as_str(),
+                req.role_id.as_str(),
+                tracing_span_id_str(req.tracing_span_id.as_ref()),
+                OperationFields::SystemdUnit {
+                    vm_id: req.vm_id.as_str().to_owned(),
+                    role_id: req.role_id.as_str().to_owned(),
+                    role: req.role.as_str().to_owned(),
+                    bundle_runner_intent_ref: req.bundle_runner_intent_ref.as_str().to_owned(),
+                    domain: systemd_domain_name(req.domain).to_owned(),
+                    action: "observe".to_owned(),
+                    stopped: None,
+                },
+            )?;
+            Ok(DispatchResult::no_fds(
+                BrokerResponse::ObserveSystemdUnit(
+                    d2b_contracts::broker_wire::ObserveSystemdUnitResponse {
+                        vm_id: req.vm_id,
+                        role_id: req.role_id,
+                        present: identity.is_some(),
+                        identity,
+                    },
+                ),
+            ))
+        }
+        RealBrokerRequest::OpenSystemdUnitPidfd(req) => {
+            let resolver = require_resolver_ref(resolver.map(std::sync::Arc::as_ref))?;
+            let (identity, pidfd) = backend.reopen_systemd_unit(resolver, &req)?;
+            write_success_op_record!(
+                audit_log,
+                bundle_metadata,
+                "OpenSystemdUnitPidfd",
+                req.unit.role_id.as_str(),
+                caller_uid,
+                caller_gid,
+                &caller_role,
+                req.unit.vm_id.as_str(),
+                req.unit.role_id.as_str(),
+                tracing_span_id_str(req.unit.tracing_span_id.as_ref()),
+                OperationFields::SystemdUnit {
+                    vm_id: req.unit.vm_id.as_str().to_owned(),
+                    role_id: req.unit.role_id.as_str().to_owned(),
+                    role: req.unit.role.as_str().to_owned(),
+                    bundle_runner_intent_ref: req.unit.bundle_runner_intent_ref.as_str().to_owned(),
+                    domain: systemd_domain_name(req.unit.domain).to_owned(),
+                    action: "reopen".to_owned(),
+                    stopped: None,
+                },
+            )?;
+            Ok(DispatchResult::with_fd(
+                BrokerResponse::OpenSystemdUnitPidfd(
+                    d2b_contracts::broker_wire::OpenSystemdUnitPidfdResponse {
+                        vm_id: req.unit.vm_id,
+                        role_id: req.unit.role_id,
+                        identity,
+                        pidfd_index: 0,
+                    },
+                ),
+                pidfd,
+            ))
+        }
+        RealBrokerRequest::StopSystemdUnit(req) => {
+            let resolver = require_resolver_ref(resolver.map(std::sync::Arc::as_ref))?;
+            backend.stop_systemd_unit(resolver, &req)?;
+            write_success_op_record!(
+                audit_log,
+                bundle_metadata,
+                "StopSystemdUnit",
+                req.unit.role_id.as_str(),
+                caller_uid,
+                caller_gid,
+                &caller_role,
+                req.unit.vm_id.as_str(),
+                req.unit.role_id.as_str(),
+                tracing_span_id_str(req.unit.tracing_span_id.as_ref()),
+                OperationFields::SystemdUnit {
+                    vm_id: req.unit.vm_id.as_str().to_owned(),
+                    role_id: req.unit.role_id.as_str().to_owned(),
+                    role: req.unit.role.as_str().to_owned(),
+                    bundle_runner_intent_ref: req.unit.bundle_runner_intent_ref.as_str().to_owned(),
+                    domain: systemd_domain_name(req.unit.domain).to_owned(),
+                    action: "stop".to_owned(),
+                    stopped: Some(true),
+                },
+            )?;
+            Ok(DispatchResult::no_fds(
+                BrokerResponse::StopSystemdUnit(
+                    d2b_contracts::broker_wire::StopSystemdUnitResponse {
+                        vm_id: req.unit.vm_id,
+                        role_id: req.unit.role_id,
+                        stopped: true,
+                    },
+                ),
+            ))
+        }
         RealBrokerRequest::OpenZoneStore(req) => {
             // OpenZoneStore resolves one signed storage-row id and returns
             // exactly one owned database descriptor. The row and all path
@@ -5143,6 +5284,16 @@ fn runner_signal_name(signal: d2b_contracts::broker_wire::RunnerSignal) -> &'sta
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
+fn systemd_domain_name(
+    domain: d2b_contracts::broker_wire::SystemdUnitDomain,
+) -> &'static str {
+    match domain {
+        d2b_contracts::broker_wire::SystemdUnitDomain::System => "system",
+        d2b_contracts::broker_wire::SystemdUnitDomain::User => "user",
+    }
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
 fn runner_signal_number(signal: d2b_contracts::broker_wire::RunnerSignal) -> i32 {
     match signal {
         d2b_contracts::broker_wire::RunnerSignal::Term => libc::SIGTERM,
@@ -5351,6 +5502,30 @@ trait DispatchBackend {
         pid: i32,
         expected_start_time_ticks: u64,
     ) -> Result<crate::live_handlers::OpenPidfdResult, BrokerError>;
+
+    fn start_systemd_unit(
+        &self,
+        resolver: &BundleResolver,
+        request: &d2b_contracts::broker_wire::StartTransientUnitRequest,
+    ) -> Result<(d2b_contracts::broker_wire::SystemdUnitIdentity, OwnedFd), BrokerError>;
+
+    fn observe_systemd_unit(
+        &self,
+        resolver: &BundleResolver,
+        request: &d2b_contracts::broker_wire::ObserveSystemdUnitRequest,
+    ) -> Result<Option<d2b_contracts::broker_wire::SystemdUnitIdentity>, BrokerError>;
+
+    fn reopen_systemd_unit(
+        &self,
+        resolver: &BundleResolver,
+        request: &d2b_contracts::broker_wire::OpenSystemdUnitPidfdRequest,
+    ) -> Result<(d2b_contracts::broker_wire::SystemdUnitIdentity, OwnedFd), BrokerError>;
+
+    fn stop_systemd_unit(
+        &self,
+        resolver: &BundleResolver,
+        request: &d2b_contracts::broker_wire::StopSystemdUnitRequest,
+    ) -> Result<(), BrokerError>;
 
     fn signal_runner(
         &self,
@@ -5729,6 +5904,42 @@ impl DispatchBackend for LiveDispatchBackend {
             .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
         register_runner_pidfd(runner_id, &outcome.pidfd)?;
         Ok(outcome)
+    }
+
+    fn start_systemd_unit(
+        &self,
+        resolver: &BundleResolver,
+        request: &d2b_contracts::broker_wire::StartTransientUnitRequest,
+    ) -> Result<(d2b_contracts::broker_wire::SystemdUnitIdentity, OwnedFd), BrokerError> {
+        crate::ops::systemd::start(resolver, request)
+            .map_err(|error| BrokerError::LiveHandler(error.to_string()))
+    }
+
+    fn observe_systemd_unit(
+        &self,
+        resolver: &BundleResolver,
+        request: &d2b_contracts::broker_wire::ObserveSystemdUnitRequest,
+    ) -> Result<Option<d2b_contracts::broker_wire::SystemdUnitIdentity>, BrokerError> {
+        crate::ops::systemd::observe(resolver, request)
+            .map_err(|error| BrokerError::LiveHandler(error.to_string()))
+    }
+
+    fn reopen_systemd_unit(
+        &self,
+        resolver: &BundleResolver,
+        request: &d2b_contracts::broker_wire::OpenSystemdUnitPidfdRequest,
+    ) -> Result<(d2b_contracts::broker_wire::SystemdUnitIdentity, OwnedFd), BrokerError> {
+        crate::ops::systemd::reopen(resolver, request)
+            .map_err(|error| BrokerError::LiveHandler(error.to_string()))
+    }
+
+    fn stop_systemd_unit(
+        &self,
+        resolver: &BundleResolver,
+        request: &d2b_contracts::broker_wire::StopSystemdUnitRequest,
+    ) -> Result<(), BrokerError> {
+        crate::ops::systemd::stop(resolver, request)
+            .map_err(|error| BrokerError::LiveHandler(error.to_string()))
     }
 
     fn signal_runner(
@@ -11195,6 +11406,50 @@ mod tests {
                 pidfd: dummy_fd(),
                 pid,
                 verified_start_time_ticks: expected_start_time_ticks,
+            })
+        }
+
+        fn start_systemd_unit(
+            &self,
+            _resolver: &BundleResolver,
+            _request: &d2b_contracts::broker_wire::StartTransientUnitRequest,
+        ) -> Result<(d2b_contracts::broker_wire::SystemdUnitIdentity, OwnedFd), BrokerError> {
+            Err(BrokerError::Unimplemented {
+                operation: "StartSystemdUnit",
+                target_wave: "W6",
+            })
+        }
+
+        fn observe_systemd_unit(
+            &self,
+            _resolver: &BundleResolver,
+            _request: &d2b_contracts::broker_wire::ObserveSystemdUnitRequest,
+        ) -> Result<Option<d2b_contracts::broker_wire::SystemdUnitIdentity>, BrokerError> {
+            Err(BrokerError::Unimplemented {
+                operation: "ObserveSystemdUnit",
+                target_wave: "W6",
+            })
+        }
+
+        fn reopen_systemd_unit(
+            &self,
+            _resolver: &BundleResolver,
+            _request: &d2b_contracts::broker_wire::OpenSystemdUnitPidfdRequest,
+        ) -> Result<(d2b_contracts::broker_wire::SystemdUnitIdentity, OwnedFd), BrokerError> {
+            Err(BrokerError::Unimplemented {
+                operation: "OpenSystemdUnitPidfd",
+                target_wave: "W6",
+            })
+        }
+
+        fn stop_systemd_unit(
+            &self,
+            _resolver: &BundleResolver,
+            _request: &d2b_contracts::broker_wire::StopSystemdUnitRequest,
+        ) -> Result<(), BrokerError> {
+            Err(BrokerError::Unimplemented {
+                operation: "StopSystemdUnit",
+                target_wave: "W6",
             })
         }
 

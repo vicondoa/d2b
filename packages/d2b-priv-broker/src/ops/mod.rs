@@ -96,6 +96,8 @@ pub mod disk_init;
 // qemu-media physical USB enrollment/open by opaque ref. Raw device identity
 // stays in root-only registry/runtime artifacts outside the Nix store.
 pub mod media;
+// Broker-owned transient systemd unit lifecycle.
+pub mod systemd;
 
 use std::fmt;
 use std::path::PathBuf;

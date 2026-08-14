@@ -295,6 +295,17 @@ pub enum OperationFields {
         pid: i32,
         expected_start_time_ticks: u64,
     },
+    /// Transient systemd lifecycle audit fields. Unit names, cgroup paths,
+    /// PIDs, and invocation identifiers remain broker-local.
+    SystemdUnit {
+        vm_id: String,
+        role_id: String,
+        role: String,
+        bundle_runner_intent_ref: String,
+        domain: String,
+        action: String,
+        stopped: Option<bool>,
+    },
     /// `OpenZoneStore` audit fields. The broker records only the opaque
     /// storage-row id, the closed disposition, the derived store identity,
     /// and the exact descriptor count. No database, marker, or parent path
