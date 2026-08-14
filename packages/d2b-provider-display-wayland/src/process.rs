@@ -529,6 +529,7 @@ impl Default for ProcessObservation {
 }
 
 impl ProcessObservation {
+    #[allow(dead_code)]
     pub(crate) const fn from_supervisor(
         proxy: WorkerState,
         frontend: WorkerState,
