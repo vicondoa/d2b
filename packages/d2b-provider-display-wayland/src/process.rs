@@ -86,23 +86,51 @@ pub enum WorkerAction {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WorkerRestartEvidence {
     /// Monotonic observation time in milliseconds.
-    pub observed_at_ms: u64,
+    pub(crate) observed_at_ms: u64,
     /// Last proxy failure time in the current observation window.
-    pub proxy_last_failure_ms: Option<u64>,
+    pub(crate) proxy_last_failure_ms: Option<u64>,
     /// Last frontend failure time in the current observation window.
-    pub frontend_last_failure_ms: Option<u64>,
+    pub(crate) frontend_last_failure_ms: Option<u64>,
     /// Monotonic teardown generation fencing stale launch actions.
-    pub teardown_generation: u64,
+    pub(crate) teardown_generation: u64,
 }
 
+impl WorkerRestartEvidence {
+    pub(crate) const fn from_supervisor(
+        observed_at_ms: u64,
+        proxy_last_failure_ms: Option<u64>,
+        frontend_last_failure_ms: Option<u64>,
+        teardown_generation: u64,
+    ) -> Self {
+        Self {
+            observed_at_ms,
+            proxy_last_failure_ms,
+            frontend_last_failure_ms,
+            teardown_generation,
+        }
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    /// Construct bounded retry evidence for hermetic model tests.
+    pub const fn for_test(
+        observed_at_ms: u64,
+        proxy_last_failure_ms: Option<u64>,
+        frontend_last_failure_ms: Option<u64>,
+        teardown_generation: u64,
+    ) -> Self {
+        Self::from_supervisor(
+            observed_at_ms,
+            proxy_last_failure_ms,
+            frontend_last_failure_ms,
+            teardown_generation,
+        )
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
 impl Default for WorkerRestartEvidence {
     fn default() -> Self {
-        Self {
-            observed_at_ms: 0,
-            proxy_last_failure_ms: None,
-            frontend_last_failure_ms: None,
-            teardown_generation: 1,
-        }
+        Self::for_test(0, None, None, 1)
     }
 }
 
@@ -223,7 +251,8 @@ impl WorkerSupervisor {
                 ),
             };
             let attempts_in_window = if last_failure.is_some_and(|failure| {
-                evidence.observed_at_ms.saturating_sub(failure) <= self.retry_window_ms
+                failure <= evidence.observed_at_ms
+                    && evidence.observed_at_ms.saturating_sub(failure) <= self.retry_window_ms
             }) {
                 attempts
             } else {
@@ -472,19 +501,20 @@ pub enum ProxyReadinessFailure {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProcessObservation {
     /// Host proxy lifecycle evidence.
-    pub proxy: WorkerState,
+    pub(crate) proxy: WorkerState,
     /// Guest frontend lifecycle evidence.
-    pub frontend: WorkerState,
+    pub(crate) frontend: WorkerState,
     /// Runtime Volume lifecycle evidence.
-    pub volume: VolumeState,
+    pub(crate) volume: VolumeState,
     /// Policy generation proved by the worker readiness handshakes.
-    pub policy_generation: u64,
+    pub(crate) policy_generation: u64,
     /// Teardown generation proved by the worker readiness handshakes.
-    pub teardown_generation: u64,
+    pub(crate) teardown_generation: u64,
     /// Session binding digest proved by the worker readiness handshakes.
-    pub session_digest: [u8; 32],
+    pub(crate) session_digest: [u8; 32],
 }
 
+#[cfg(any(test, feature = "test-support"))]
 impl Default for ProcessObservation {
     fn default() -> Self {
         Self {
@@ -499,24 +529,45 @@ impl Default for ProcessObservation {
 }
 
 impl ProcessObservation {
+    pub(crate) const fn from_supervisor(
+        proxy: WorkerState,
+        frontend: WorkerState,
+        volume: VolumeState,
+        policy_generation: u64,
+        teardown_generation: u64,
+        session_digest: [u8; 32],
+    ) -> Self {
+        Self {
+            proxy,
+            frontend,
+            volume,
+            policy_generation,
+            teardown_generation,
+            session_digest,
+        }
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
     /// Construct a fully Ready observation.
     pub const fn ready() -> Self {
         Self::ready_for(0, 0)
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     /// Construct a Ready observation bound to one policy and teardown
     /// generation.
     pub const fn ready_for(policy_generation: u64, teardown_generation: u64) -> Self {
-        Self {
-            proxy: WorkerState::Ready { generation: 1 },
-            frontend: WorkerState::Ready { generation: 1 },
-            volume: VolumeState::Present,
+        Self::from_supervisor(
+            WorkerState::Ready { generation: 1 },
+            WorkerState::Ready { generation: 1 },
+            VolumeState::Present,
             policy_generation,
             teardown_generation,
-            session_digest: [0; 32],
-        }
+            [0; 32],
+        )
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     /// Construct a Ready observation bound to the exact display session.
     pub fn ready_for_session(
         spec: &crate::WaylandSessionSpec,
@@ -524,25 +575,26 @@ impl ProcessObservation {
         teardown_generation: u64,
     ) -> Self {
         Self {
-            session_digest: crate::controller::session_digest(spec),
+            session_digest: crate::controller::session_digest(spec, 0),
             ..Self::ready_for(policy_generation, teardown_generation)
         }
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     /// Construct a failed observation after the supplied retry count.
     pub const fn proxy_failed(proxy_failure_count: u8) -> Self {
-        Self {
-            proxy: WorkerState::Failed {
+        Self::from_supervisor(
+            WorkerState::Failed {
                 attempts: proxy_failure_count,
             },
-            frontend: WorkerState::Failed {
+            WorkerState::Failed {
                 attempts: proxy_failure_count,
             },
-            volume: VolumeState::Present,
-            policy_generation: 0,
-            teardown_generation: 0,
-            session_digest: [0; 32],
-        }
+            VolumeState::Present,
+            0,
+            0,
+            [0; 32],
+        )
     }
 
     /// Whether both workers proved the requested policy and teardown fence.
@@ -843,6 +895,30 @@ mod tests {
                 )
                 .unwrap(),
             vec![WorkerAction::EnsureProxy]
+        );
+    }
+
+    #[test]
+    fn future_failure_evidence_does_not_exhaust_the_retry_window() {
+        let supervisor = WorkerSupervisor::with_policy(3, 1_000, 250).unwrap();
+        let observation = ProcessObservation {
+            proxy: WorkerState::Failed { attempts: 3 },
+            frontend: WorkerState::Ready { generation: 1 },
+            volume: VolumeState::Present,
+            policy_generation: 1,
+            teardown_generation: 1,
+            session_digest: [0; 32],
+        };
+        let evidence = WorkerRestartEvidence {
+            observed_at_ms: 100,
+            proxy_last_failure_ms: Some(200),
+            frontend_last_failure_ms: None,
+            teardown_generation: 1,
+        };
+        assert!(
+            supervisor
+                .plan_with_evidence(observation, false, evidence)
+                .is_ok()
         );
     }
 

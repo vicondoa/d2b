@@ -181,6 +181,7 @@ pub struct DisplayDependencyProof {
     host_ref: ResourceRef,
     user_ref: ResourceRef,
     provider_generation: u64,
+    policy_generation: u64,
     reconnect_generation: u64,
     controller_generation: u64,
     teardown_generation: u64,
@@ -216,6 +217,11 @@ impl DisplayDependencyProof {
     /// Return the Ready Provider generation.
     pub const fn generation(&self) -> u64 {
         self.provider_generation
+    }
+
+    /// Return the Core policy-resource generation applied by the workers.
+    pub const fn policy_generation(&self) -> u64 {
+        self.policy_generation
     }
 
     /// Return the authenticated Guest reconnect generation.
@@ -482,7 +488,7 @@ impl WaylandPolicySnapshot {
     /// The generation is mandatory and must be non-zero; reconciliation
     /// rejects snapshots whose resource reference or Zone does not match the
     /// authenticated session.
-    pub fn from_core(
+    pub(crate) fn from_core(
         policy_ref: ResourceRef,
         zone: ZoneId,
         generation: u64,
@@ -499,6 +505,18 @@ impl WaylandPolicySnapshot {
             defaults,
             zone_policy,
         })
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    /// Construct a policy snapshot for hermetic model tests.
+    pub fn from_test_core(
+        policy_ref: ResourceRef,
+        zone: ZoneId,
+        generation: u64,
+        defaults: FilterInput,
+        zone_policy: FilterInput,
+    ) -> Result<Self, WaylandSpecError> {
+        Self::from_core(policy_ref, zone, generation, defaults, zone_policy)
     }
 
     /// Borrow the referenced policy resource.
@@ -565,6 +583,7 @@ struct ReadySession {
     proxy_generation: u64,
     frontend_generation: u64,
     teardown_generation: u64,
+    controller_generation: u64,
 }
 
 /// Zone-local display controller.
@@ -612,7 +631,15 @@ impl DisplayController {
         {
             return Err(WaylandSpecError::InvalidReference);
         }
-        self.reconcile_with_policy(spec, dependencies, observation, grants, policy)
+        self.reconcile_with_policy_and_evidence_for_controller(
+            spec,
+            dependencies,
+            observation,
+            WorkerRestartEvidence::from_supervisor(0, None, None, 1),
+            grants,
+            policy,
+            authenticated.controller_generation(),
+        )
     }
 
     /// Reconcile using the authenticated Core-resolved WaylandPolicy.
@@ -624,13 +651,14 @@ impl DisplayController {
         grants: Option<crate::process::LaunchGrants>,
         policy: &WaylandPolicySnapshot,
     ) -> Result<ReconcileResult, WaylandSpecError> {
-        self.reconcile_with_policy_and_evidence(
+        self.reconcile_with_policy_and_evidence_for_controller(
             spec,
             dependencies,
             observation,
-            WorkerRestartEvidence::default(),
+            WorkerRestartEvidence::from_supervisor(0, None, None, 1),
             grants,
             policy,
+            0,
         )
     }
 
@@ -643,6 +671,27 @@ impl DisplayController {
         supervision: WorkerRestartEvidence,
         grants: Option<crate::process::LaunchGrants>,
         policy: &WaylandPolicySnapshot,
+    ) -> Result<ReconcileResult, WaylandSpecError> {
+        self.reconcile_with_policy_and_evidence_for_controller(
+            spec,
+            dependencies,
+            observation,
+            supervision,
+            grants,
+            policy,
+            0,
+        )
+    }
+
+    fn reconcile_with_policy_and_evidence_for_controller(
+        &mut self,
+        spec: &WaylandSessionSpec,
+        dependencies: DependencyState,
+        observation: ProcessObservation,
+        supervision: WorkerRestartEvidence,
+        grants: Option<crate::process::LaunchGrants>,
+        policy: &WaylandPolicySnapshot,
+        controller_generation: u64,
     ) -> Result<ReconcileResult, WaylandSpecError> {
         if supervision.teardown_generation == 0 {
             return Err(WaylandSpecError::InvalidReference);
@@ -657,7 +706,8 @@ impl DisplayController {
         {
             return Err(WaylandSpecError::InvalidReference);
         }
-        let session_key = session_key(spec);
+        let session_key = session_key(spec, controller_generation);
+        let session_digest = session_digest(spec, controller_generation);
         let policy_binding = PolicyBinding {
             digest: compiled.digest().to_owned(),
             generation: policy.generation(),
@@ -674,7 +724,7 @@ impl DisplayController {
         let workers_ready_for_current_fence = observation.workers_ready_for(
             policy.generation(),
             supervision.teardown_generation,
-            session_digest(spec),
+            session_digest,
         );
         let worker_actions = match self.worker_supervisor.plan_with_evidence(
             observation,
@@ -780,7 +830,7 @@ impl DisplayController {
         let launch_tickets = if needs_worker_launch {
             let grants = grants.expect("launch grants checked before principal allocation");
             let Some(tickets) = grants.into_worker_tickets_with_fence(
-                session_digest(spec),
+                session_digest,
                 spec.reconnect_generation(),
                 supervision.teardown_generation,
                 compiled.digest(),
@@ -864,6 +914,7 @@ impl DisplayController {
                     proxy_generation,
                     frontend_generation,
                     teardown_generation: supervision.teardown_generation,
+                    controller_generation,
                 },
             );
             Phase::Ready
@@ -909,7 +960,9 @@ impl DisplayController {
         {
             return Err(WaylandSpecError::InvalidReference);
         }
-        let session_key = session_key(spec);
+        let controller_generation = authenticated.controller_generation();
+        let session_key = session_key(spec, controller_generation);
+        let session_digest = session_digest(spec, controller_generation);
         let Some(ready_session) = self.ready_sessions.get(&session_key) else {
             return Err(WaylandSpecError::InvalidReference);
         };
@@ -938,8 +991,10 @@ impl DisplayController {
             || observation.policy_generation != policy.generation()
             || observation.teardown_generation != ready_session.teardown_generation
             || ready_session.teardown_generation == 0
+            || ready_session.controller_generation != controller_generation
             || !observation.proxy.is_ready()
             || !observation.frontend.is_ready()
+            || observation.session_digest != session_digest
             || active_policy.generation != policy.generation()
             || active_policy.digest != result.status.policy_digest
             || policy.policy_ref() != spec.policy_ref()
@@ -954,11 +1009,16 @@ impl DisplayController {
             guest_ref: spec.guest_ref().clone(),
             host_ref: spec.host_ref().clone(),
             user_ref: spec.user_ref().clone(),
-            provider_generation: result.status.policy_generation,
+            provider_generation: session
+                .route_binding()
+                .provider_generation()
+                .ok_or(WaylandSpecError::InvalidReference)?
+                .get(),
+            policy_generation: policy.generation(),
             reconnect_generation: spec.reconnect_generation(),
-            controller_generation: authenticated.controller_generation(),
+            controller_generation,
             teardown_generation: ready_session.teardown_generation,
-            session_digest: session_digest(spec),
+            session_digest,
         })
     }
 
@@ -1108,17 +1168,18 @@ impl core::fmt::Debug for DisplayController {
     }
 }
 
-fn session_key(spec: &WaylandSessionSpec) -> String {
+fn session_key(spec: &WaylandSessionSpec, controller_generation: u64) -> String {
     format!(
-        "{}|{}|{}|{}",
+        "{}|{}|{}|{}|{}",
         spec.guest_ref().to_canonical_string(),
         spec.host_ref().to_canonical_string(),
         spec.user_ref().to_canonical_string(),
         spec.reconnect_generation(),
+        controller_generation,
     )
 }
 
-pub(crate) fn session_digest(spec: &WaylandSessionSpec) -> [u8; 32] {
+pub(crate) fn session_digest(spec: &WaylandSessionSpec, controller_generation: u64) -> [u8; 32] {
     let mut digest = Sha256::new();
     digest.update(spec.guest_ref().to_canonical_string().as_bytes());
     digest.update([0]);
@@ -1127,6 +1188,8 @@ pub(crate) fn session_digest(spec: &WaylandSessionSpec) -> [u8; 32] {
     digest.update(spec.user_ref().to_canonical_string().as_bytes());
     digest.update([0]);
     digest.update(spec.reconnect_generation().to_be_bytes());
+    digest.update([0]);
+    digest.update(controller_generation.to_be_bytes());
     digest.finalize().into()
 }
 
@@ -1181,7 +1244,7 @@ mod tests {
         assert_eq!(result.status.phase, Phase::Ready);
 
         let receipt = controller
-            .principal_release_receipt("Guest/demo|Host/demo|User/alice|1")
+            .principal_release_receipt("Guest/demo|Host/demo|User/alice|1|0")
             .unwrap();
         controller.release_session_principal(receipt).unwrap();
     }
@@ -1242,7 +1305,7 @@ mod tests {
                     AttachmentGrantHandle::from_supervisor([9; 32]),
                     AttachmentGrantHandle::from_supervisor([10; 32]),
                     AttachmentGrantHandle::from_supervisor([11; 32]),
-                    session_digest(&spec),
+                    session_digest(&spec, 0),
                     spec.reconnect_generation(),
                     1,
                 )),

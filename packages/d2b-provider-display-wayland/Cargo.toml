@@ -5,6 +5,9 @@ edition = "2024"
 publish = false
 license.workspace = true
 
+[features]
+test-support = []
+
 [lints]
 workspace = true
 
@@ -30,3 +33,8 @@ path = "src/bin/wl-cross-domain-proxy.rs"
 [[bin]]
 name = "d2b-display-wayland-host-proxy"
 path = "src/bin/d2b-display-wayland-host-proxy.rs"
+
+[[test]]
+name = "provider_behavior"
+path = "tests/provider_behavior.rs"
+required-features = ["test-support"]

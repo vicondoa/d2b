@@ -23,7 +23,7 @@ fn identity() -> DisplayIdentity {
 }
 
 fn policy_for(spec: &WaylandSessionSpec) -> WaylandPolicySnapshot {
-    WaylandPolicySnapshot::from_core(
+    WaylandPolicySnapshot::from_test_core(
         spec.policy_ref().clone(),
         d2b_contracts::v3::ZoneId::parse("local").unwrap(),
         1,
@@ -210,12 +210,12 @@ fn controller_status_transitions_pending_ready_and_failed() {
         &spec,
         d2b_provider_display_wayland::DependencyState::ready(),
         d2b_provider_display_wayland::ProcessObservation::proxy_failed(5),
-        d2b_provider_display_wayland::WorkerRestartEvidence {
-            observed_at_ms: 1_000,
-            proxy_last_failure_ms: Some(0),
-            frontend_last_failure_ms: None,
-            teardown_generation: 1,
-        },
+        d2b_provider_display_wayland::WorkerRestartEvidence::for_test(
+            1_000,
+            Some(0),
+            None,
+            1,
+        ),
     )
     .unwrap();
     assert_eq!(failed.status.phase, Phase::Failed);
@@ -250,12 +250,12 @@ fn failed_reconcile_retains_the_session_principal_until_cleanup() {
             &first,
             d2b_provider_display_wayland::DependencyState::ready(),
             ProcessObservation::proxy_failed(5),
-            d2b_provider_display_wayland::WorkerRestartEvidence {
-                observed_at_ms: 1_000,
-                proxy_last_failure_ms: Some(0),
-                frontend_last_failure_ms: None,
-                teardown_generation: 1,
-            },
+            d2b_provider_display_wayland::WorkerRestartEvidence::for_test(
+                1_000,
+                Some(0),
+                None,
+                1,
+            ),
         )
         .unwrap()
         .status
