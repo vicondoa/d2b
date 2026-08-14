@@ -114,8 +114,11 @@ impl ClipdHost {
         if !self.policy.allow_guest_capture() {
             return Err(ClipboardServiceError::HistoryRejected);
         }
+        if bytes.len() > self.policy.max_item_bytes() {
+            return Err(ClipboardServiceError::HistoryRejected);
+        }
         self.history
-            .record_guest_request(guest, now_secs)
+            .check_guest_request(guest, now_secs)
             .map_err(|_| ClipboardServiceError::HistoryRejected)?;
         let entry = ClipboardEntry::new(guest, mime, bytes, now_secs)
             .map_err(|_| ClipboardServiceError::HistoryRejected)?;
@@ -126,12 +129,16 @@ impl ClipdHost {
         self.history
             .insert(entry)
             .map_err(|_| ClipboardServiceError::HistoryRejected)?;
+        self.history
+            .record_guest_request(guest, now_secs)
+            .map_err(|_| ClipboardServiceError::HistoryRejected)?;
         let event = ClipboardAuditEvent::new(
             "guest",
             "host",
             ClipboardReason::Allowed,
             SizeBucket::from_len(bytes.len()),
-        );
+        )
+        .with_event_type(crate::ClipboardEventType::GuestCapture);
         self.audit
             .push(event)
             .map_err(|_| ClipboardServiceError::AuditUnavailable)?;

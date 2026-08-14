@@ -41,12 +41,7 @@ let
       {
         assertion =
           display == null
-          || (
-            let parts = parseRef display;
-            in lib.length parts == 2
-              && builtins.elemAt parts 0 == "Provider"
-              && builtins.elemAt parts 1 == "display-wayland"
-          );
+          || resolves row.zoneName "Provider" display;
         message = "${row.path}.spec.config.displayWaylandRef must be null or Provider/display-wayland.";
       }
       {

@@ -85,7 +85,7 @@ fn audit_queue_fails_closed_and_never_renders_clipboard_bytes() {
         SizeBucket::Lt1K,
     );
     queue.push(event.clone()).unwrap();
-    assert!(queue.push(event).is_err());
+    assert_eq!(queue.push(event), Err(ClipboardReason::AuditQueueFull));
     assert!(!queue.to_wire().contains("hello"));
 }
 
@@ -131,6 +131,20 @@ fn guest_operations_require_display_and_picker_policy() {
     );
     assert!(
         host.authorize_paste_after_picker("zone-a", "zone-a", "Guest/work")
+            .is_ok()
+    );
+}
+
+#[test]
+fn rejected_guest_capture_does_not_consume_the_rate_budget() {
+    let policy = Policy::new(true, true, true, true, false, 3, 4096, 4096, 32, 1).unwrap();
+    let mut host = ClipdHost::new(policy, 4, Some(true)).unwrap();
+    assert_eq!(
+        host.capture_guest("Guest/work", "application/octet-stream", b"invalid", 100),
+        Err(ClipboardServiceError::HistoryRejected)
+    );
+    assert!(
+        host.capture_guest("Guest/work", "text/plain", b"valid", 100)
             .is_ok()
     );
 }

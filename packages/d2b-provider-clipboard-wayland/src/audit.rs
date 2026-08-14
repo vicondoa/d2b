@@ -67,6 +67,8 @@ pub enum ClipboardReason {
     Unauthorized,
     /// Cross-Zone transfer is denied.
     CrossZoneDenied,
+    /// The bounded audit queue is full.
+    AuditQueueFull,
 }
 
 impl ClipboardReason {
@@ -91,6 +93,7 @@ impl ClipboardReason {
             Self::ZoneSuspended => "zone-suspended",
             Self::Unauthorized => "unauthorized",
             Self::CrossZoneDenied => "cross-zone-denied",
+            Self::AuditQueueFull => "audit-queue-full",
         }
     }
 }
@@ -184,7 +187,7 @@ impl ClipboardAuditQueue {
     /// Append an event, refusing the operation when the queue is full.
     pub fn push(&mut self, event: ClipboardAuditEvent) -> Result<(), ClipboardReason> {
         if self.entries.len() >= self.capacity {
-            return Err(ClipboardReason::FdCountExceeded);
+            return Err(ClipboardReason::AuditQueueFull);
         }
         self.entries.push_back(event);
         Ok(())

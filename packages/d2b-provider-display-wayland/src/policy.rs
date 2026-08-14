@@ -196,6 +196,8 @@ pub struct CompiledWaylandPolicy {
     allowed_globals: BTreeSet<String>,
     denied_globals: BTreeSet<String>,
     max_versions: BTreeMap<String, u32>,
+    dmabuf_allowed: BTreeSet<String>,
+    dmabuf_denied: BTreeSet<String>,
     warnings: Vec<PolicyWarning>,
     digest: String,
 }
@@ -220,6 +222,21 @@ impl CompiledWaylandPolicy {
     pub fn max_version(&self, interface: &str) -> Option<u32> {
         self.max_versions.get(interface).copied()
     }
+
+    /// Borrow the effective dmabuf allow rules.
+    pub fn dmabuf_allowed(&self) -> &BTreeSet<String> {
+        &self.dmabuf_allowed
+    }
+
+    /// Borrow the effective dmabuf deny rules.
+    pub fn dmabuf_denied(&self) -> &BTreeSet<String> {
+        &self.dmabuf_denied
+    }
+
+    /// Check whether a dmabuf rule is admitted.
+    pub fn is_dmabuf_allowed(&self, rule: &str) -> bool {
+        self.dmabuf_allowed.contains(rule) && !self.dmabuf_denied.contains(rule)
+    }
 }
 
 /// The policy compiler used by display-controller.
@@ -242,6 +259,8 @@ impl WaylandPolicy {
         let mut denied_globals = BTreeSet::new();
         let mut warnings = Vec::new();
         let mut max_versions = BTreeMap::new();
+        let mut dmabuf_allowed = BTreeSet::new();
+        let mut dmabuf_denied = BTreeSet::new();
         for layer in [defaults, zone, session] {
             for global in layer.allow_globals() {
                 if CLIPBOARD_GLOBALS.contains(&global.as_str()) {
@@ -266,6 +285,14 @@ impl WaylandPolicy {
                     .iter()
                     .map(|(key, value)| (key.clone(), *value)),
             );
+            for rule in layer.dmabuf_allow() {
+                dmabuf_allowed.insert(rule.clone());
+                dmabuf_denied.remove(rule);
+            }
+            for rule in layer.dmabuf_deny() {
+                dmabuf_denied.insert(rule.clone());
+                dmabuf_allowed.remove(rule);
+            }
         }
         for required in REQUIRED_GLOBALS {
             denied_globals.remove(*required);
@@ -273,14 +300,34 @@ impl WaylandPolicy {
         }
         warnings.sort_unstable_by_key(|warning| *warning as u8);
         warnings.dedup();
-        let digest = digest(&allowed_globals, &denied_globals, &max_versions);
+        let digest = digest(
+            &allowed_globals,
+            &denied_globals,
+            &max_versions,
+            &dmabuf_allowed,
+            &dmabuf_denied,
+        );
         Ok(CompiledWaylandPolicy {
             allowed_globals,
             denied_globals,
             max_versions,
+            dmabuf_allowed,
+            dmabuf_denied,
             warnings,
             digest,
         })
+    }
+}
+
+impl FilterInput {
+    /// Add bounded dmabuf deny rules to this policy layer.
+    pub fn with_dmabuf_deny(
+        mut self,
+        rules: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Result<Self, PolicyCompileError> {
+        self.dmabuf_deny = rules.into_iter().map(Into::into).collect();
+        self.validate_bounds()?;
+        Ok(self)
     }
 }
 
@@ -290,6 +337,14 @@ fn validate_layer(layer: &FilterInput) -> Result<(), PolicyCompileError> {
             return Err(PolicyCompileError::UnknownInterface(global.clone()));
         }
     }
+    if layer
+        .dmabuf_allow()
+        .iter()
+        .chain(layer.dmabuf_deny())
+        .any(|rule| rule.chars().count() > 128)
+    {
+        return Err(PolicyCompileError::BoundsExceeded);
+    }
     Ok(())
 }
 
@@ -297,6 +352,8 @@ fn digest(
     allowed: &BTreeSet<String>,
     denied: &BTreeSet<String>,
     versions: &BTreeMap<String, u32>,
+    dmabuf_allowed: &BTreeSet<String>,
+    dmabuf_denied: &BTreeSet<String>,
 ) -> String {
     let mut hasher = Sha256::new();
     for value in allowed {
@@ -314,6 +371,16 @@ fn digest(
         hasher.update(key.as_bytes());
         hasher.update([0]);
         hasher.update(value.to_le_bytes());
+    }
+    for value in dmabuf_allowed {
+        hasher.update(b"dmabuf-allow\0");
+        hasher.update(value.as_bytes());
+        hasher.update([0]);
+    }
+    for value in dmabuf_denied {
+        hasher.update(b"dmabuf-deny\0");
+        hasher.update(value.as_bytes());
+        hasher.update([0]);
     }
     format!("sha256:{:x}", hasher.finalize())
 }

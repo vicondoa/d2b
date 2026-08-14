@@ -82,6 +82,25 @@ fn policy_layering_is_closed_and_clipboard_globals_are_virtualized() {
 }
 
 #[test]
+fn dmabuf_rules_are_compiled_and_digest_bound() {
+    let defaults = FilterInput::default();
+    let zone = FilterInput::new(
+        Vec::<String>::new(),
+        Vec::<String>::new(),
+        Vec::<(String, u32)>::new(),
+        ["format-x"],
+    )
+    .unwrap()
+    .with_dmabuf_deny(["format-y"])
+    .unwrap();
+    let compiled = WaylandPolicy::compile(&defaults, &zone, &defaults).unwrap();
+    assert!(compiled.dmabuf_allowed().contains(&"format-x".to_owned()));
+    assert!(compiled.dmabuf_denied().contains(&"format-y".to_owned()));
+    assert!(compiled.is_dmabuf_allowed("format-x"));
+    assert!(!compiled.is_dmabuf_allowed("format-y"));
+}
+
+#[test]
 fn principal_pool_is_opaque_and_fails_closed_when_exhausted() {
     let mut pool = PrincipalPool::new(["corp-vm"], 1).unwrap();
     assert_eq!(
@@ -290,4 +309,16 @@ fn audit_and_telemetry_reject_identity_bearing_surfaces() {
         }])
         .is_err()
     );
+    let warning = d2b_provider_display_wayland::DisplayAuditRecord::new(
+        DisplayAuditKind::PolicyAdvisory,
+        DisplayAuditOutcome::Denied,
+        "dev",
+        "resource",
+        "alice",
+        "operation-1",
+    )
+    .with_warning("bad\nwarning", "interface=bad\n");
+    let wire = warning.to_wire_record();
+    assert!(!wire.contains('\n'));
+    assert!(!wire.contains('=bad'));
 }

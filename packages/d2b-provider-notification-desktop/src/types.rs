@@ -9,7 +9,8 @@ pub const MAX_SUMMARY_CHARS: usize = 256;
 pub const MAX_BODY_CHARS: usize = 2048;
 /// Maximum actions per request.
 pub const MAX_ACTIONS: usize = 4;
-const MAX_ID_CHARS: usize = 64;
+const MAX_ACTION_ID_CHARS: usize = 32;
+const MAX_ACTION_LABEL_CHARS: usize = 64;
 const MAX_ICON_CHARS: usize = 64;
 
 /// Closed notification category set.
@@ -126,7 +127,10 @@ impl ActionSpec {
     pub fn new(id: impl Into<String>, label: impl Into<String>) -> Result<Self, NotificationError> {
         let id = id.into();
         let label = label.into();
-        if !valid_id(&id) || label.chars().count() > MAX_ID_CHARS {
+        if !valid_id(&id)
+            || id.chars().count() > MAX_ACTION_ID_CHARS
+            || label.chars().count() > MAX_ACTION_LABEL_CHARS
+        {
             return Err(NotificationError::FieldBounds);
         }
         Ok(Self { id, label })
@@ -207,14 +211,25 @@ pub struct NotificationRequest {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct NotificationRequestWire {
     summary: String,
+    #[serde(default)]
     body: Option<String>,
+    #[serde(default)]
     icon_ref: Option<String>,
+    #[serde(default = "default_notification_urgency")]
     urgency: NotificationUrgency,
     category: Category,
+    #[serde(default)]
     expire_timeout_secs: u32,
+    #[serde(default)]
     actions: Vec<ActionSpec>,
+    #[serde(default)]
     correlation_id: Option<String>,
+    #[serde(default)]
     idempotency_key: Option<String>,
+}
+
+fn default_notification_urgency() -> NotificationUrgency {
+    NotificationUrgency::Normal
 }
 
 impl TryFrom<NotificationRequestWire> for NotificationRequest {
@@ -376,6 +391,11 @@ impl NotificationRequest {
     /// Borrow the optional icon ID.
     pub fn icon_ref(&self) -> Option<&str> {
         self.icon_ref.as_deref()
+    }
+
+    /// Borrow the optional idempotency key.
+    pub(crate) fn idempotency_key(&self) -> Option<&str> {
+        self.idempotency_key.as_deref()
     }
 }
 

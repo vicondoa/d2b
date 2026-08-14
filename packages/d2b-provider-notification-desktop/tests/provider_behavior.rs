@@ -19,6 +19,17 @@ impl DesktopNotificationPort for RecordingSink {
     }
 }
 
+struct FailingSink;
+
+impl DesktopNotificationPort for FailingSink {
+    fn notify(
+        &mut self,
+        _notification: &d2b_provider_notification_desktop::SanitizedNotification,
+    ) -> Result<u32, d2b_provider_notification_desktop::SinkError> {
+        Err(d2b_provider_notification_desktop::SinkError::Unavailable)
+    }
+}
+
 fn request() -> NotificationRequest {
     NotificationRequest::new(
         "hello\nworld",
@@ -42,6 +53,27 @@ fn request_bounds_and_sanitization_are_closed() {
             .with_icon_ref("../secret")
             .is_err()
     );
+}
+
+#[test]
+fn action_ids_use_the_machine_id_bound() {
+    assert!(ActionSpec::new("a".repeat(32), "label").is_ok());
+    assert!(ActionSpec::new("a".repeat(33), "label").is_err());
+    assert!(ActionSpec::new("open", "l".repeat(64)).is_ok());
+    assert!(ActionSpec::new("open", "l".repeat(65)).is_err());
+}
+
+#[test]
+fn wire_defaults_match_the_notification_contract() {
+    let request: NotificationRequest = serde_json::from_value(serde_json::json!({
+        "summary": "hello",
+        "category": "system-info"
+    }))
+    .unwrap();
+    assert_eq!(request.urgency(), NotificationUrgency::Normal);
+    assert_eq!(request.expire_timeout_secs(), 0);
+    assert!(request.actions().is_empty());
+    assert!(request.icon_ref().is_none());
 }
 
 #[test]
@@ -107,6 +139,69 @@ fn host_sink_delivers_redacted_content_and_returns_nonce_metadata_only() {
     assert!(matches!(result, NotificationResult::Accepted { .. }));
     assert_eq!(port.accepted, vec!["hello world"]);
     assert!(!format!("{sink:?}").contains("hello"));
+}
+
+#[test]
+fn expired_action_nonces_do_not_block_new_capacity() {
+    let mut sink = NotificationSink::new(2, 1, 10);
+    let mut port = RecordingSink::default();
+    let first = NotificationRequest::new("first", "body", Category::SystemInfo)
+        .unwrap()
+        .with_actions(vec![ActionSpec::new("open", "Open").unwrap()])
+        .unwrap();
+    assert!(matches!(
+        sink.deliver(&mut port, "observer-a", first, 100)
+            .unwrap(),
+        NotificationResult::Accepted { .. }
+    ));
+
+    let second = NotificationRequest::new("second", "body", Category::SystemInfo).unwrap();
+    assert!(matches!(
+        sink.deliver(&mut port, "observer-a", second, 111)
+            .unwrap(),
+        NotificationResult::Accepted { .. }
+    ));
+}
+
+#[test]
+fn idempotency_keys_return_the_original_delivery_result() {
+    let mut sink = NotificationSink::new(4, 4, 10);
+    let mut port = RecordingSink::default();
+    let request = NotificationRequest::new("summary", "body", Category::SystemInfo)
+        .unwrap()
+        .with_actions(vec![ActionSpec::new("open", "Open").unwrap()])
+        .unwrap()
+        .with_idempotency_key("same-request")
+        .unwrap();
+    let first = sink
+        .deliver(&mut port, "observer-a", request.clone(), 100)
+        .unwrap();
+    let second = sink
+        .deliver(&mut port, "observer-a", request, 101)
+        .unwrap();
+    assert_eq!(first, second);
+    assert_eq!(port.accepted, vec!["summary"]);
+}
+
+#[test]
+fn sink_failure_does_not_evict_the_existing_projection() {
+    let mut sink = NotificationSink::new(1, 4, 10);
+    let mut recording = RecordingSink::default();
+    let first = NotificationRequest::new("first", "body", Category::SystemInfo).unwrap();
+    assert!(matches!(
+        sink.deliver(&mut recording, "observer-a", first, 100)
+            .unwrap(),
+        NotificationResult::Accepted { .. }
+    ));
+
+    let second = NotificationRequest::new("second", "body", Category::SystemInfo).unwrap();
+    let mut failing = FailingSink;
+    assert_eq!(
+        sink.deliver(&mut failing, "observer-a", second, 101)
+            .unwrap(),
+        NotificationResult::SinkUnavailable
+    );
+    assert_eq!(sink.projection_len(), 1);
 }
 
 #[test]

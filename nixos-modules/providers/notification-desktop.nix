@@ -64,10 +64,7 @@ let
       }
       {
         assertion = !dbusEnabled || (
-          let parts = parseRef (c.displayWaylandRef or null);
-          in lib.length parts == 2
-            && builtins.elemAt parts 0 == "Provider"
-            && builtins.elemAt parts 1 == "display-wayland"
+          resolves row.zoneName "Provider" (c.displayWaylandRef or null)
         );
         message = "${row.path}.spec.config.displayWaylandRef must select Provider/display-wayland when D-Bus is enabled.";
       }

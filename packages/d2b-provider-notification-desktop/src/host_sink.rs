@@ -91,6 +91,8 @@ pub struct NotificationSink {
     projections: BTreeMap<String, NotificationProjection>,
     order: VecDeque<String>,
     projection_nonces: BTreeMap<String, Vec<String>>,
+    projection_idempotency: BTreeMap<String, (String, String)>,
+    idempotency: BTreeMap<(String, String), (String, NotificationResult)>,
     nonces: ActionNonceStore,
 }
 
@@ -102,6 +104,8 @@ impl NotificationSink {
             projections: BTreeMap::new(),
             order: VecDeque::new(),
             projection_nonces: BTreeMap::new(),
+            projection_idempotency: BTreeMap::new(),
+            idempotency: BTreeMap::new(),
             nonces: ActionNonceStore::new(nonce_capacity, nonce_ttl_secs),
         }
     }
@@ -114,9 +118,18 @@ impl NotificationSink {
         request: NotificationRequest,
         now_secs: u64,
     ) -> Result<NotificationResult, crate::types::NotificationError> {
+        let idempotency_key = request
+            .idempotency_key()
+            .map(|key| (observer_session.to_owned(), key.to_owned()));
+        if let Some(key) = &idempotency_key {
+            if let Some((_, result)) = self.idempotency.get(key) {
+                return Ok(result.clone());
+            }
+        }
         if self.max_pending == 0 {
             return Ok(NotificationResult::CapacityExceeded);
         }
+        self.nonces.gc(now_secs);
         let notification = request.sanitize()?;
         let evicted_nonce_count = if self.projections.len() >= self.max_pending {
             self.order
@@ -129,13 +142,13 @@ impl NotificationSink {
         if notification.actions().len() > self.nonces.available_capacity() + evicted_nonce_count {
             return Ok(NotificationResult::CapacityExceeded);
         }
-        if self.projections.len() >= self.max_pending {
-            self.evict_oldest();
-        }
         let notification_id = match port.notify(&notification) {
             Ok(id) => id,
             Err(_) => return Ok(NotificationResult::SinkUnavailable),
         };
+        if self.projections.len() >= self.max_pending {
+            self.evict_oldest();
+        }
         let request_id = format!("notification-{notification_id}");
         let mut action_nonces = BTreeMap::new();
         let mut issued_keys: Vec<String> = Vec::with_capacity(notification.actions().len());
@@ -167,10 +180,19 @@ impl NotificationSink {
             },
         );
         self.projection_nonces.insert(request_id, issued_keys);
-        Ok(NotificationResult::Accepted {
+        let result = NotificationResult::Accepted {
             notification_id,
             action_nonces,
-        })
+        };
+        if let Some(key) = idempotency_key {
+            self.idempotency.insert(
+                key.clone(),
+                (format!("notification-{notification_id}"), result.clone()),
+            );
+            self.projection_idempotency
+                .insert(format!("notification-{notification_id}"), key);
+        }
+        Ok(result)
     }
 
     /// Consume one observer action capability.
@@ -200,6 +222,7 @@ impl NotificationSink {
         let request_id = format!("notification-{notification_id}");
         self.projections.remove(&request_id);
         self.revoke_projection_nonces(&request_id);
+        self.remove_projection_idempotency(&request_id);
         self.order.retain(|value| value != &request_id);
     }
 
@@ -208,6 +231,8 @@ impl NotificationSink {
         self.projections.clear();
         self.order.clear();
         self.projection_nonces.clear();
+        self.projection_idempotency.clear();
+        self.idempotency.clear();
         self.nonces.clear();
     }
 
@@ -220,6 +245,7 @@ impl NotificationSink {
         if let Some(request_id) = self.order.pop_front() {
             self.projections.remove(&request_id);
             self.revoke_projection_nonces(&request_id);
+            self.remove_projection_idempotency(&request_id);
         }
     }
 
@@ -228,6 +254,12 @@ impl NotificationSink {
             for action_key in action_keys {
                 self.nonces.revoke(&action_key);
             }
+        }
+    }
+
+    fn remove_projection_idempotency(&mut self, request_id: &str) {
+        if let Some(key) = self.projection_idempotency.remove(request_id) {
+            self.idempotency.remove(&key);
         }
     }
 }

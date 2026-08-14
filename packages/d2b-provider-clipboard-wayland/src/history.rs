@@ -169,7 +169,7 @@ impl ClipboardHistory {
 
     /// Record one guest materialization request under a sliding window.
     pub fn record_guest_request(&mut self, guest: &str, now_secs: u64) -> Result<(), HistoryError> {
-        self.authorize_guest(guest)?;
+        self.check_guest_request(guest, now_secs)?;
         let requests = self.guest_requests.entry(guest.to_owned()).or_default();
         while requests
             .front()
@@ -182,6 +182,26 @@ impl ClipboardHistory {
         }
         requests.push_back(now_secs);
         Ok(())
+    }
+
+    /// Check whether one Guest request can consume rate-limit capacity.
+    pub fn check_guest_request(&self, guest: &str, now_secs: u64) -> Result<(), HistoryError> {
+        self.authorize_guest(guest)?;
+        let active_requests = self
+            .guest_requests
+            .get(guest)
+            .map(|requests| {
+                requests
+                    .iter()
+                    .filter(|timestamp| now_secs.saturating_sub(**timestamp) < 60)
+                    .count()
+            })
+            .unwrap_or(0);
+        if active_requests >= self.config.max_guest_rate_per_min() as usize {
+            Err(HistoryError::RateLimitExceeded)
+        } else {
+            Ok(())
+        }
     }
 
     /// Suspend one Guest.
