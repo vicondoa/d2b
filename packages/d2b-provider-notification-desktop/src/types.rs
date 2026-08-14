@@ -18,44 +18,64 @@ const MAX_ICON_CHARS: usize = 64;
 #[serde(rename_all = "kebab-case")]
 pub enum Category {
     /// A device became available.
+    #[serde(rename = "device.added")]
     DeviceAdded,
     /// A device was removed.
+    #[serde(rename = "device.removed")]
     DeviceRemoved,
     /// A device reported an error.
+    #[serde(rename = "device.error")]
     DeviceError,
     /// A network connection was established.
+    #[serde(rename = "network.connected")]
     NetworkConnected,
     /// A network connection ended.
+    #[serde(rename = "network.disconnected")]
     NetworkDisconnected,
     /// A network error occurred.
+    #[serde(rename = "network.error")]
     NetworkError,
     /// A presence session came online.
+    #[serde(rename = "presence.online")]
     PresenceOnline,
     /// A presence session went offline.
+    #[serde(rename = "presence.offline")]
     PresenceOffline,
     /// A security event occurred.
+    #[serde(rename = "security.event")]
     SecurityEvent,
     /// A security error occurred.
+    #[serde(rename = "security.error")]
     SecurityError,
     /// A transfer completed.
+    #[serde(rename = "transfer.complete")]
     TransferComplete,
     /// A transfer failed.
+    #[serde(rename = "transfer.error")]
     TransferError,
     /// A transfer was cancelled.
+    #[serde(rename = "transfer.cancelled")]
     TransferCancelled,
     /// An update is available.
+    #[serde(rename = "update.available")]
     UpdateAvailable,
     /// An update is downloading.
+    #[serde(rename = "update.downloading")]
     UpdateDownloading,
     /// An update is ready.
+    #[serde(rename = "update.ready")]
     UpdateReady,
     /// An update failed.
+    #[serde(rename = "update.error")]
     UpdateError,
     /// Informational system event.
+    #[serde(rename = "system.info")]
     SystemInfo,
     /// Warning system event.
+    #[serde(rename = "system.warning")]
     SystemWarning,
     /// Error system event.
+    #[serde(rename = "system.error")]
     SystemError,
 }
 

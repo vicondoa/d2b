@@ -118,6 +118,8 @@ impl NotificationSink {
         request: NotificationRequest,
         now_secs: u64,
     ) -> Result<NotificationResult, crate::types::NotificationError> {
+        self.nonces.gc(now_secs);
+        self.prune_idempotency_nonces();
         let idempotency_key = request
             .idempotency_key()
             .map(|key| (observer_session.to_owned(), key.to_owned()));
@@ -129,13 +131,17 @@ impl NotificationSink {
         if self.max_pending == 0 {
             return Ok(NotificationResult::CapacityExceeded);
         }
-        self.nonces.gc(now_secs);
         let notification = request.sanitize()?;
         let evicted_nonce_count = if self.projections.len() >= self.max_pending {
             self.order
                 .front()
                 .and_then(|request_id| self.projection_nonces.get(request_id))
-                .map_or(0, Vec::len)
+                .map_or(0, |action_keys| {
+                    action_keys
+                        .iter()
+                        .filter(|action_key| self.nonces.contains(action_key))
+                        .count()
+                })
         } else {
             0
         };
@@ -202,7 +208,11 @@ impl NotificationSink {
         observer_session: &str,
         now_secs: u64,
     ) -> Result<String, ActionNonceError> {
-        self.nonces.consume(action_key, observer_session, now_secs)
+        let result = self.nonces.consume(action_key, observer_session, now_secs);
+        if result.is_ok() {
+            self.forget_consumed_nonce(action_key);
+        }
+        result
     }
 
     /// Consume an action capability with an explicit action ID check.
@@ -213,8 +223,13 @@ impl NotificationSink {
         action_id: &str,
         now_secs: u64,
     ) -> Result<String, ActionNonceError> {
-        self.nonces
-            .consume_for_action(action_key, observer_session, Some(action_id), now_secs)
+        let result =
+            self.nonces
+                .consume_for_action(action_key, observer_session, Some(action_id), now_secs);
+        if result.is_ok() {
+            self.forget_consumed_nonce(action_key);
+        }
+        result
     }
 
     /// Evict a projection when its desktop notification closes.
@@ -260,6 +275,25 @@ impl NotificationSink {
     fn remove_projection_idempotency(&mut self, request_id: &str) {
         if let Some(key) = self.projection_idempotency.remove(request_id) {
             self.idempotency.remove(&key);
+        }
+    }
+
+    fn forget_consumed_nonce(&mut self, action_key: &str) {
+        for action_keys in self.projection_nonces.values_mut() {
+            action_keys.retain(|key| key != action_key);
+        }
+        for (_, result) in self.idempotency.values_mut() {
+            if let NotificationResult::Accepted { action_nonces, .. } = result {
+                action_nonces.retain(|_, key| key != action_key);
+            }
+        }
+    }
+
+    fn prune_idempotency_nonces(&mut self) {
+        for (_, result) in self.idempotency.values_mut() {
+            if let NotificationResult::Accepted { action_nonces, .. } = result {
+                action_nonces.retain(|_, key| self.nonces.contains(key));
+            }
         }
     }
 }

@@ -174,6 +174,7 @@ impl DisplayController {
             }
             crate::policy::PolicyCompileError::BoundsExceeded => WaylandSpecError::InvalidReference,
         })?;
+        let session_key = session_key(spec);
         if spec.virgl_video() && !dependencies.virgl_video_supported {
             return Ok(ReconcileResult {
                 status: self.status(
@@ -202,6 +203,7 @@ impl DisplayController {
             ),
         ];
         if observation.proxy_failure_count >= 5 {
+            self.release_principal_if_owned(&session_key)?;
             return Ok(ReconcileResult {
                 status: self.status(
                     Phase::Failed,
@@ -243,7 +245,6 @@ impl DisplayController {
                 launch_ticket: None,
             });
         }
-        let session_key = session_key(spec);
         let principal = if let Some(lease) = self.principals.get(&session_key) {
             lease.principal().to_owned()
         } else {
@@ -338,7 +339,7 @@ impl DisplayController {
             stop_proxy: false,
             delete_runtime_volume: false,
             remove_finalizer: true,
-            phase: Phase::Ready,
+            phase: Phase::Terminating,
             ambiguous: false,
         }
     }
@@ -363,6 +364,17 @@ impl DisplayController {
             .remove(session_key)
             .ok_or(crate::principal::PrincipalPoolError::UnknownLease)?;
         self.principal_pool.release(lease)
+    }
+
+    fn release_principal_if_owned(&mut self, session_key: &str) -> Result<(), WaylandSpecError> {
+        let Some(lease) = self.principals.get(session_key).cloned() else {
+            return Ok(());
+        };
+        self.principal_pool
+            .release(lease)
+            .map_err(|_| WaylandSpecError::InvalidReference)?;
+        self.principals.remove(session_key);
+        Ok(())
     }
 
     fn status(
@@ -394,11 +406,9 @@ impl core::fmt::Debug for DisplayController {
 
 fn session_key(spec: &WaylandSessionSpec) -> String {
     format!(
-        "{}|{}|{}|{}|{}",
+        "{}|{}|{}",
         spec.guest_ref().to_canonical_string(),
         spec.host_ref().to_canonical_string(),
         spec.user_ref().to_canonical_string(),
-        spec.policy_ref().to_canonical_string(),
-        spec.identity().label()
     )
 }

@@ -167,6 +167,11 @@ impl ActionNonceStore {
         self.entries.len()
     }
 
+    /// Whether an action key is still live in the store.
+    pub(crate) fn contains(&self, action_key: &str) -> bool {
+        Self::token_from_key(action_key).is_some_and(|token| self.entries.contains_key(token))
+    }
+
     /// Return how many additional entries can be registered.
     pub fn available_capacity(&self) -> usize {
         self.capacity.saturating_sub(self.entries.len())

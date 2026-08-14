@@ -240,6 +240,16 @@ impl ClipboardHistory {
         for token in tokens {
             self.remove(&token);
         }
+        for requests in self.guest_requests.values_mut() {
+            while requests
+                .front()
+                .is_some_and(|timestamp| now_secs.saturating_sub(*timestamp) >= 60)
+            {
+                requests.pop_front();
+            }
+        }
+        self.guest_requests
+            .retain(|_, requests| !requests.is_empty());
     }
 
     /// Return the number of entries.
@@ -281,5 +291,20 @@ impl core::fmt::Debug for ClipboardHistory {
             .field("entry_count", &self.entries.len())
             .field("total_bytes", &self.total_bytes)
             .finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ClipboardHistory;
+    use crate::ClipboardConfig;
+
+    #[test]
+    fn gc_prunes_idle_guest_rate_buckets() {
+        let mut history = ClipboardHistory::new(ClipboardConfig::default()).unwrap();
+        history.record_guest_request("Guest/work", 100).unwrap();
+        assert_eq!(history.guest_requests.len(), 1);
+        history.gc(160);
+        assert!(history.guest_requests.is_empty());
     }
 }

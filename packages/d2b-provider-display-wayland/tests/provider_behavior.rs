@@ -171,6 +171,90 @@ fn controller_status_transitions_pending_ready_and_failed() {
 }
 
 #[test]
+fn failed_reconcile_releases_the_session_principal() {
+    let (guest, host, user, policy) = refs();
+    let first = WaylandSessionSpec::new(guest, host, user, policy, identity(), true).unwrap();
+    let second = WaylandSessionSpec::new(
+        ResourceRef::parse("Guest/second").unwrap(),
+        ResourceRef::parse("Host/host-system").unwrap(),
+        ResourceRef::parse("User/alice").unwrap(),
+        ResourceRef::parse("display-wayland.d2bus.org.WaylandPolicy/default").unwrap(),
+        DisplayIdentity::new("second", "#7fc8ff", "#45475a", "#f38ba8").unwrap(),
+        true,
+    )
+    .unwrap();
+    let mut controller = d2b_provider_display_wayland::DisplayController::new(1);
+    let first_status = controller
+        .reconcile(
+            &first,
+            d2b_provider_display_wayland::DependencyState::ready(),
+            ProcessObservation::ready(),
+        )
+        .unwrap()
+        .status;
+    assert!(first_status.principal.is_some());
+    assert_eq!(
+        controller
+            .reconcile(
+                &first,
+                d2b_provider_display_wayland::DependencyState::ready(),
+                ProcessObservation::proxy_failed(5),
+            )
+            .unwrap()
+            .status
+            .phase,
+        Phase::Failed
+    );
+    assert_eq!(
+        controller
+            .reconcile(
+                &second,
+                d2b_provider_display_wayland::DependencyState::ready(),
+                ProcessObservation::ready(),
+            )
+            .unwrap()
+            .status
+            .phase,
+        Phase::Ready
+    );
+}
+
+#[test]
+fn mutable_session_fields_reuse_the_same_principal() {
+    let (guest, host, user, policy) = refs();
+    let first = WaylandSessionSpec::new(guest, host, user, policy, identity(), true).unwrap();
+    let changed = WaylandSessionSpec::new(
+        ResourceRef::parse("Guest/work-vm").unwrap(),
+        ResourceRef::parse("Host/host-system").unwrap(),
+        ResourceRef::parse("User/alice").unwrap(),
+        ResourceRef::parse("display-wayland.d2bus.org.WaylandPolicy/changed").unwrap(),
+        DisplayIdentity::new("work-vm", "#a6e3a1", "#45475a", "#f38ba8").unwrap(),
+        true,
+    )
+    .unwrap();
+    let mut controller = d2b_provider_display_wayland::DisplayController::new(1);
+    let first_principal = controller
+        .reconcile(
+            &first,
+            d2b_provider_display_wayland::DependencyState::ready(),
+            ProcessObservation::ready(),
+        )
+        .unwrap()
+        .status
+        .principal;
+    let changed_principal = controller
+        .reconcile(
+            &changed,
+            d2b_provider_display_wayland::DependencyState::ready(),
+            ProcessObservation::ready(),
+        )
+        .unwrap()
+        .status
+        .principal;
+    assert_eq!(first_principal, changed_principal);
+}
+
+#[test]
 fn wire_deserialization_reuses_display_validation() {
     let value = serde_json::to_value(identity()).unwrap();
     let mut invalid_identity = value;
@@ -283,6 +367,15 @@ fn portal_is_same_uid_and_finalizer_is_fail_closed() {
     });
     assert!(ambiguous.ambiguous);
     assert!(!ambiguous.remove_finalizer);
+    let complete = d2b_provider_display_wayland::DisplayController::finalize(FinalizationInput {
+        stop_requested: true,
+        proxy_terminal: true,
+        proxy_deleted: true,
+        volume_deleted: true,
+        grace_expired: false,
+    });
+    assert_eq!(complete.phase, Phase::Terminating);
+    assert!(complete.remove_finalizer);
 }
 
 #[test]

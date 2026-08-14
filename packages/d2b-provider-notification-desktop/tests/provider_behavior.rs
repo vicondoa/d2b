@@ -67,13 +67,17 @@ fn action_ids_use_the_machine_id_bound() {
 fn wire_defaults_match_the_notification_contract() {
     let request: NotificationRequest = serde_json::from_value(serde_json::json!({
         "summary": "hello",
-        "category": "system-info"
+        "category": "system.info"
     }))
     .unwrap();
     assert_eq!(request.urgency(), NotificationUrgency::Normal);
     assert_eq!(request.expire_timeout_secs(), 0);
     assert!(request.actions().is_empty());
     assert!(request.icon_ref().is_none());
+    assert_eq!(
+        serde_json::to_value(request.category()).unwrap(),
+        serde_json::json!("system.info")
+    );
 }
 
 #[test]
@@ -177,6 +181,78 @@ fn idempotency_keys_return_the_original_delivery_result() {
     let second = sink.deliver(&mut port, "observer-a", request, 101).unwrap();
     assert_eq!(first, second);
     assert_eq!(port.accepted, vec!["summary"]);
+}
+
+#[test]
+fn consumed_action_keys_are_removed_from_idempotent_results() {
+    let mut sink = NotificationSink::new(2, 4, 10);
+    let mut port = RecordingSink::default();
+    let request = NotificationRequest::new("summary", "body", Category::SystemInfo)
+        .unwrap()
+        .with_actions(vec![ActionSpec::new("open", "Open").unwrap()])
+        .unwrap()
+        .with_idempotency_key("same-request")
+        .unwrap();
+    let first = sink
+        .deliver(&mut port, "observer-a", request.clone(), 100)
+        .unwrap();
+    let action_key = match first {
+        NotificationResult::Accepted { action_nonces, .. } => action_nonces["open"].clone(),
+        other => panic!("unexpected result: {other:?}"),
+    };
+    assert_eq!(
+        sink.invoke_action(&action_key, "observer-a", 101),
+        Ok("open".to_owned())
+    );
+    let duplicate = sink.deliver(&mut port, "observer-a", request, 102).unwrap();
+    assert_eq!(
+        duplicate,
+        NotificationResult::Accepted {
+            notification_id: 1,
+            action_nonces: std::collections::BTreeMap::new(),
+        }
+    );
+    assert_eq!(port.accepted, vec!["summary"]);
+}
+
+#[test]
+fn capacity_preflight_counts_only_live_evicted_nonces() {
+    let mut sink = NotificationSink::new(1, 3, 10);
+    let mut port = RecordingSink::default();
+    let first = NotificationRequest::new("first", "body", Category::SystemInfo)
+        .unwrap()
+        .with_actions(
+            ["a", "b"]
+                .into_iter()
+                .map(|id| ActionSpec::new(id, id).unwrap())
+                .collect(),
+        )
+        .unwrap();
+    let result = sink.deliver(&mut port, "observer-a", first, 100).unwrap();
+    let consumed = match result {
+        NotificationResult::Accepted { action_nonces, .. } => action_nonces["a"].clone(),
+        other => panic!("unexpected result: {other:?}"),
+    };
+    assert_eq!(
+        sink.invoke_action(&consumed, "observer-a", 101),
+        Ok("a".to_owned())
+    );
+
+    let second = NotificationRequest::new("second", "body", Category::SystemInfo)
+        .unwrap()
+        .with_actions(
+            ["a", "b", "c", "d"]
+                .into_iter()
+                .map(|id| ActionSpec::new(id, id).unwrap())
+                .collect(),
+        )
+        .unwrap();
+    assert_eq!(
+        sink.deliver(&mut port, "observer-a", second, 102).unwrap(),
+        NotificationResult::CapacityExceeded
+    );
+    assert_eq!(sink.projection_len(), 1);
+    assert_eq!(port.accepted, vec!["first"]);
 }
 
 #[test]
