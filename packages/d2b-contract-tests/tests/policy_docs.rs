@@ -11,7 +11,12 @@
 //!   * tests/kernel-module-matrix-eval.sh -> kernel_module_matrix_source_doc_parity
 //!     + kernel_module_missing_typed_error_contract
 
-use std::{collections::BTreeSet, fmt, path::Path, sync::OnceLock};
+use std::{
+    collections::BTreeSet,
+    fmt, fs,
+    path::{Component, Path},
+    sync::OnceLock,
+};
 
 use d2b_contract_tests::{read_repo_file, repo_path_exists};
 use regex::Regex;
@@ -332,7 +337,7 @@ fn contributing_doc_enumeration_fault_debug_redacts_the_directory_and_the_detail
 /// rather than in a doc the agent opens when it needs it.
 #[test]
 fn agents_md_stays_within_its_context_budget() {
-    const BUDGET: usize = 40_000;
+    const BUDGET: usize = 20_000;
     let bytes = read_repo_file("AGENTS.md").len();
     assert!(
         bytes <= BUDGET,
@@ -342,24 +347,316 @@ fn agents_md_stays_within_its_context_budget() {
     );
 }
 
+fn markdown_anchor_slug(heading: &str) -> String {
+    let mut slug = String::new();
+    let mut pending_dash = false;
+    for ch in heading.trim().chars() {
+        if ch.is_ascii_alphanumeric() || ch == '_' {
+            if pending_dash && !slug.is_empty() {
+                slug.push('-');
+            }
+            pending_dash = false;
+            slug.push(ch.to_ascii_lowercase());
+        } else if ch == '-' || ch.is_whitespace() {
+            pending_dash = true;
+        }
+    }
+    slug
+}
+
+fn markdown_has_anchor(content: &str, anchor: &str) -> bool {
+    let expected = anchor.trim_start_matches('#').to_ascii_lowercase();
+    content.lines().any(|line| {
+        let heading = line.trim_start_matches('#');
+        line.starts_with('#') && markdown_anchor_slug(heading) == expected
+    }) || content.contains(&format!("id=\"{expected}\""))
+        || content.contains(&format!("id='{expected}'"))
+}
+
+fn markdown_repo_path_is_contained(path: &str) -> bool {
+    path.is_empty()
+        || (!path.contains(':')
+            && !Path::new(path).is_absolute()
+            && Path::new(path)
+                .components()
+                .all(|component| matches!(component, Component::CurDir | Component::Normal(_))))
+}
+
+fn markdown_link_is_external(target: &str) -> bool {
+    target.starts_with("mailto:")
+        || target.starts_with("//")
+        || target.starts_with("http://")
+        || target.starts_with("https://")
+}
+
+fn resolved_repo_path_is_contained(root: &Path, path: &str) -> bool {
+    let canonical_root = fs::canonicalize(root)
+        .unwrap_or_else(|error| panic!("cannot resolve repo root {}: {error}", root.display()));
+    fs::canonicalize(root.join(path.trim_start_matches("./")))
+        .map(|target| target.starts_with(canonical_root))
+        .unwrap_or(false)
+}
+
+fn markdown_uses_reference_link_syntax(content: &str) -> bool {
+    let reference_use = Regex::new(r"\]\s*\[[^]]*\]").expect("valid reference-style link regex");
+    let reference_definition =
+        Regex::new(r"(?m)^[ \t]{0,3}\[[^]]+\]:").expect("valid link definition regex");
+    reference_use.is_match(content) || reference_definition.is_match(content)
+}
+
+#[test]
+fn markdown_repo_paths_reject_absolute_and_parent_escape() {
+    for invalid in [
+        "/etc/passwd",
+        "../outside.md",
+        "docs/../README.md",
+        "file:///etc/passwd",
+        "C:/Windows/System32",
+    ] {
+        assert!(
+            !markdown_repo_path_is_contained(invalid),
+            "repository Markdown path must reject escape: {invalid}"
+        );
+    }
+    for valid in [
+        "",
+        "README.md",
+        "./README.md",
+        "docs/contributing/workflow.md",
+    ] {
+        assert!(
+            markdown_repo_path_is_contained(valid),
+            "repository Markdown path must accept contained target: {valid}"
+        );
+    }
+}
+
+#[test]
+fn markdown_repo_paths_reject_symlink_escape() {
+    let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join("policy-doc-links");
+    let outside = Path::new(env!("CARGO_TARGET_TMPDIR")).join("policy-doc-outside.md");
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(root.join("docs")).expect("create Markdown link fixture root");
+    fs::write(&outside, "outside\n").expect("write outside Markdown fixture");
+    std::os::unix::fs::symlink(&outside, root.join("escape.md"))
+        .expect("create escaping Markdown symlink");
+    std::os::unix::fs::symlink(&outside, root.join("docs/README.md"))
+        .expect("create escaping Markdown directory index");
+
+    assert!(
+        !resolved_repo_path_is_contained(&root, "escape.md"),
+        "repository Markdown path must reject a symlink resolving outside its root"
+    );
+    assert!(
+        !resolved_repo_path_is_contained(&root, "docs/README.md"),
+        "repository Markdown directory index must remain inside its root"
+    );
+}
+
+#[test]
+fn markdown_reference_links_are_rejected_in_all_forms() {
+    for invalid in [
+        "[Workflow][guide]\n\n[guide]: docs/contributing/workflow.md\n",
+        "[Workflow][]\n\n[Workflow]: docs/contributing/workflow.md\n",
+        "[Workflow]\n\n[Workflow]: ../outside.md\n",
+        "[Workflow]:\n../outside.md\n\nSee [Workflow].\n",
+    ] {
+        assert!(
+            markdown_uses_reference_link_syntax(invalid),
+            "reference-style Markdown link must be detected: {invalid}"
+        );
+    }
+    assert!(
+        !markdown_uses_reference_link_syntax("[Workflow](docs/contributing/workflow.md)\n"),
+        "inline Markdown link must remain supported"
+    );
+}
+
 /// A router whose links rot is worse than the monolith it replaced: the rule
-/// looks documented while the detail is unreachable.
+/// looks documented while the detail is unreachable. Validate local Markdown
+/// paths in all supported forms and validate anchors in the linked document.
 #[test]
 fn agents_md_routes_to_paths_that_exist() {
     let agents = read_repo_file("AGENTS.md");
-    let link_re = Regex::new(r"\]\((\./[^)#]+)").expect("valid link regex");
+    assert!(
+        !markdown_uses_reference_link_syntax(&agents),
+        "AGENTS.md must use inline Markdown links so every destination is validated"
+    );
+    let link_re = Regex::new(r"\]\(([^)\s]+)").expect("valid link regex");
     let mut missing: Vec<String> = Vec::new();
     for caps in link_re.captures_iter(&agents) {
-        let rel = caps[1].trim_start_matches("./");
-        if !repo_path_exists(rel) {
-            missing.push(rel.to_string());
+        let target = &caps[1];
+        if markdown_link_is_external(target) {
+            continue;
+        }
+
+        let (path, anchor) = target.split_once('#').unwrap_or((target, ""));
+        if !markdown_repo_path_is_contained(path) {
+            missing.push(target.to_string());
+            continue;
+        }
+        let rel = path.trim_start_matches("./");
+        let link_path = if rel.is_empty() { "AGENTS.md" } else { rel };
+        if !repo_path_exists(link_path)
+            || !resolved_repo_path_is_contained(&d2b_contract_tests::repo_root(), link_path)
+        {
+            missing.push(target.to_string());
+            continue;
+        }
+        if !anchor.is_empty() {
+            let target_path = d2b_contract_tests::repo_root().join(link_path);
+            let content = if link_path == "AGENTS.md" {
+                agents.clone()
+            } else if target_path.is_file() {
+                read_repo_file(link_path)
+            } else if target_path.is_dir() {
+                let index = target_path.join("README.md");
+                index
+                    .is_file()
+                    .then(|| {
+                        index
+                            .strip_prefix(d2b_contract_tests::repo_root())
+                            .expect("Markdown directory index stays in repo")
+                            .to_string_lossy()
+                            .into_owned()
+                    })
+                    .filter(|index| {
+                        resolved_repo_path_is_contained(&d2b_contract_tests::repo_root(), index)
+                    })
+                    .map(|index| read_repo_file(&index))
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            };
+            if content.is_empty() || !markdown_has_anchor(&content, anchor) {
+                missing.push(target.to_string());
+            }
         }
     }
     assert!(
         missing.is_empty(),
-        "AGENTS.md links to {} path(s) that do not exist: {}",
+        "AGENTS.md links to {} missing path(s) or anchor(s): {}",
         missing.len(),
         missing.join(", ")
+    );
+}
+
+#[test]
+fn agents_md_defines_the_single_authority_and_tiered_routes() {
+    let agents = read_repo_file("AGENTS.md");
+    for required in [
+        "single operational authority",
+        "Every code change uses Compound Engineering",
+        "Clear bounded change",
+        "Open-ended bug",
+        "Larger or product-ambiguous work",
+        "ce-work",
+        "ce-debug",
+        "ce-brainstorm",
+        "ce-plan",
+        "Ponytail",
+        "Caveman",
+        "transient communication only",
+    ] {
+        assert!(
+            agents.contains(required),
+            "AGENTS.md is missing contributor workflow anchor: {required}"
+        );
+    }
+}
+
+#[test]
+fn agents_md_defines_model_preferences_and_exact_ce_profile() {
+    let agents = read_repo_file("AGENTS.md");
+    for required in [
+        "gpt-5.6-sol",
+        "xhigh reasoning and long context",
+        "gpt-5.6-luna",
+        "strongest native",
+        "record that substitution only in the transient handoff",
+        "\nce-work\nce-work mode:return-to-caller <plan-path>\n",
+        "ce-code-review mode:agent",
+        "ce-commit-push-pr branding:off babysit:off",
+        "ce-babysit-pr posture:target",
+    ] {
+        assert!(
+            agents.contains(required),
+            "AGENTS.md is missing model/profile anchor: {required}"
+        );
+    }
+}
+
+#[test]
+fn agents_md_defines_reviewed_head_and_guarded_merge_contract() {
+    let agents = read_repo_file("AGENTS.md");
+    for required in [
+        "independent review",
+        "fresh review",
+        "Missing review evidence fails closed",
+        "ce-babysit-pr",
+        "expected-head guard",
+        "normal squash",
+        "Never use admin, auto-merge, bypass",
+        "observed base",
+        "nix/gas-city-contributor/**",
+        "managed authority unchanged",
+    ] {
+        assert!(
+            agents.contains(required),
+            "AGENTS.md is missing reviewed-head or boundary anchor: {required}"
+        );
+    }
+}
+
+#[test]
+fn strategy_is_concise_product_direction_without_operational_policy() {
+    const BUDGET: usize = 4_000;
+    let strategy = read_repo_file("STRATEGY.md");
+    assert!(
+        strategy.len() <= BUDGET,
+        "STRATEGY.md is {} bytes, over its {BUDGET}-byte product-direction budget",
+        strategy.len()
+    );
+    for required in [
+        "Product purpose",
+        "Target user and outcome",
+        "daemon-only control plane",
+        "Isolation and security posture",
+        "Declarative contract",
+        "Current direction",
+        "d2bd",
+        "d2b-priv-broker",
+        "microVM",
+    ] {
+        assert!(
+            strategy.contains(required),
+            "STRATEGY.md is missing product anchor: {required}"
+        );
+    }
+    for forbidden in [
+        "Ponytail",
+        "Caveman",
+        "skill",
+        "model",
+        "ce-work",
+        "gpt-5.6",
+        "pull request",
+        "expected-head",
+        "ce-code-review",
+    ] {
+        assert!(
+            !strategy.contains(forbidden),
+            "STRATEGY.md must not carry operational policy: {forbidden}"
+        );
+    }
+}
+
+#[test]
+fn strategy_is_governed_by_the_process_marker_gate() {
+    let gate = read_repo_file("tests/tools/tier0-first-pass.sh");
+    assert!(
+        gate.contains("README.md|SECURITY.md|STRATEGY.md|docs/reference/*"),
+        "STRATEGY.md must remain in the process-marker gate's full-file shipped-prose class"
     );
 }
 
