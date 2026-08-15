@@ -383,6 +383,10 @@ pub(crate) struct DeviceTpmControllerRegistration {
 }
 
 impl DeviceTpmControllerRegistration {
+    pub(crate) const fn is_registered(self) -> bool {
+        self.registered
+    }
+
     /// Reconcile one Core-admitted Device through the live broker executor.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn reconcile(

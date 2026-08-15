@@ -550,8 +550,7 @@ impl ZoneResourceRuntime {
 
     /// Whether the production Device TPM reconcile entry point is registered.
     pub(crate) const fn device_tpm_controller_registered(&self) -> bool {
-        let _ = self.device_tpm_controller;
-        true
+        self.device_tpm_controller.is_registered()
     }
 
     /// Borrow the registered Device TPM reconcile entry point.
