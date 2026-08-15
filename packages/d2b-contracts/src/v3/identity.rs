@@ -625,12 +625,10 @@ impl ServiceName {
         };
         let valid_remaining = !remaining.is_empty()
             && remaining.iter().all(|segment| {
+                let mut bytes = segment.bytes();
                 !segment.is_empty()
-                    && segment
-                        .bytes()
-                        .next()
-                        .is_some_and(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
-                    && segment.bytes().all(|byte| {
+                    && matches!(bytes.next(), Some(b'a'..=b'z' | b'0'..=b'9'))
+                    && bytes.all(|byte| {
                         byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-'
                     })
             });

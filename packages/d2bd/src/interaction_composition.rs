@@ -279,7 +279,6 @@ pub struct InteractionComposition<S, G = UnavailableGuestFrontendEffects>
 where
     S: ProcessLaunchEffectPort + Clone + Send + Sync + 'static,
     G: GuestFrontendEffectPort + 'static,
-    G: GuestFrontendEffectPort + 'static,
 {
     registrar: ZoneRegistrar,
     supervisor: S,
@@ -894,9 +893,9 @@ where
             .await?;
             return Ok(());
         }
-        let Some(entry) =
-            operation_catalog_entry(service, &request.method, d2b_session::OperationKind::Method)
-        else {
+        if operation_catalog_entry(service, &request.method, d2b_session::OperationKind::Method)
+            .is_none()
+        {
             self.send_component_response(
                 service,
                 encode_interaction_response(
@@ -969,7 +968,6 @@ where
                 .await
                 .map_err(|_| "interaction-finalization-failed")?;
         }
-        let _ = entry;
         Ok(())
     }
 
