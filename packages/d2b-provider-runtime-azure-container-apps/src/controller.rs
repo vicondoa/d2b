@@ -18,6 +18,7 @@ use d2b_contracts::provider_effects::aca::{
     AcaResourceBinding, AcaRuntimeConfig, AcaSandboxCandidates, AcaSandboxLifecycle,
     AcaSandboxRecord, AcaTypeError, AcaWorkloadQuery,
 };
+use d2b_contracts::v3::ResourceRef;
 
 /// Provider lifecycle phase.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -261,6 +262,8 @@ impl AcaFinalizationStage {
 pub struct AcaController<C, L> {
     binding: AcaResourceBinding,
     config: AcaRuntimeConfig,
+    network_ref: Option<ResourceRef>,
+    sandbox_transport_alias: d2b_contracts::provider_effects::aca::AcaProfileId,
     control: Arc<C>,
     leases: Arc<L>,
     phase: AcaPhase,
@@ -288,9 +291,12 @@ where
         leases: Arc<L>,
     ) -> Self {
         let generation = binding.provider_generation;
+        let sandbox_transport_alias = config.profile().profile_id().clone();
         Self {
             binding,
             config,
+            network_ref: None,
+            sandbox_transport_alias,
             control,
             leases,
             phase: AcaPhase::Pending,
@@ -309,6 +315,17 @@ where
     /// Replace the wall clock used for lease expiry and operation retention.
     pub fn with_clock(mut self, clock: Arc<dyn AcaClock>) -> Self {
         self.clock = clock;
+        self
+    }
+
+    /// Bind provider-level network and sandbox transport settings to effects.
+    pub fn with_provider_settings(
+        mut self,
+        network_ref: Option<ResourceRef>,
+        sandbox_transport_alias: d2b_contracts::provider_effects::aca::AcaProfileId,
+    ) -> Self {
+        self.network_ref = network_ref;
+        self.sandbox_transport_alias = sandbox_transport_alias;
         self
     }
 
@@ -622,6 +639,14 @@ where
             }
         }
         if self.finalization_stage == AcaFinalizationStage::Delete {
+            if self
+                .observed
+                .as_ref()
+                .is_some_and(|record| record.lifecycle == AcaSandboxLifecycle::Stopping)
+            {
+                self.finalization_stage = AcaFinalizationStage::Stop;
+                return Ok(());
+            }
             let record = self
                 .observed
                 .clone()
@@ -768,6 +793,8 @@ where
             binding: self.binding.clone(),
             profile: self.config.profile().clone(),
             disk_image: image,
+            network_ref: self.network_ref.clone(),
+            sandbox_transport_alias: self.sandbox_transport_alias.clone(),
         };
         let created = self
             .with_lease(
@@ -1017,6 +1044,10 @@ where
             self.config.defaults.clone(),
             Arc::clone(&self.control),
             Arc::clone(&self.leases),
+        )
+        .with_provider_settings(
+            self.config.network_ref.clone(),
+            self.config.sandbox_transport_alias.clone(),
         )
     }
 }

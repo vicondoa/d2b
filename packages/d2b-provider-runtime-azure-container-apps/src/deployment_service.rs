@@ -5,7 +5,7 @@ use std::sync::Arc;
 use d2b_contracts::provider_effects::aca::{
     AcaControl, AcaControlContext, AcaControlHealth, AcaCredentialLease, AcaCredentialLeaseClient,
     AcaCredentialLeaseRequest, AcaCredentialPurpose, AcaDeleteOutcome, AcaDesiredDiskImage,
-    AcaDesiredSandbox, AcaDiskImageRecord, AcaOperationId, AcaResourceBinding,
+    AcaDesiredSandbox, AcaDiskImageRecord, AcaOperationId, AcaProfileId, AcaResourceBinding,
     AcaSandboxCandidates, AcaSandboxId, AcaSandboxProfile, AcaSandboxRecord, AcaTypeError,
     AcaWorkloadQuery,
 };
@@ -50,9 +50,13 @@ pub enum AcaDeploymentRequest {
         /// Provider binding.
         binding: AcaResourceBinding,
         /// Desired sandbox profile.
-        profile: AcaSandboxProfile,
+        profile: Box<AcaSandboxProfile>,
         /// Desired disk image.
         disk_image: AcaDesiredDiskImage,
+        /// Optional provider network reference.
+        network_ref: Option<d2b_contracts::v3::ResourceRef>,
+        /// Provider-selected sandbox transport alias.
+        sandbox_transport_alias: AcaProfileId,
     },
     /// Start a candidate.
     Start {
@@ -232,6 +236,8 @@ where
                     binding,
                     profile,
                     disk_image,
+                    network_ref,
+                    sandbox_transport_alias,
                     ..
                 },
             ) => {
@@ -264,8 +270,10 @@ where
                         context,
                         &AcaDesiredSandbox {
                             binding,
-                            profile,
+                            profile: *profile,
                             disk_image: image,
+                            network_ref,
+                            sandbox_transport_alias,
                         },
                     )
                     .await

@@ -80,9 +80,6 @@ pub enum BootstrapPskDelivery {
     /// Use an ARM VM extension.
     #[serde(rename = "vm-extension")]
     VmExtension,
-    /// Use cloud-init user data.
-    #[serde(rename = "user-data")]
-    UserData,
 }
 
 /// Provider root configuration.
@@ -197,7 +194,6 @@ impl AzureVmGuestSettings {
             || !valid_admin_user(&self.admin_user)
             || self.data_disks.len() > MAX_DATA_DISKS
             || !(60_000..=3_600_000).contains(&self.bootstrap_deadline_ms)
-            || self.bootstrap_psk_delivery == BootstrapPskDelivery::UserData
             || self.azure_tags.len() > MAX_AZURE_TAGS
         {
             return Err(AzureVmError::InvalidConfiguration);

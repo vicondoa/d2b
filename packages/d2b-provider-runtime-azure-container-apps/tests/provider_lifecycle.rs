@@ -28,6 +28,7 @@ struct FakeState {
     resume_lifecycle: Option<AcaSandboxLifecycle>,
     delete_failures: usize,
     health: VecDeque<AcaControlHealth>,
+    desired_sandbox: Option<AcaDesiredSandbox>,
 }
 
 struct FakeLeaseClient {
@@ -114,9 +115,10 @@ impl AcaControl for FakeControl {
         &self,
         _: &AcaCredentialLease,
         _: &AcaControlContext,
-        _: &AcaDesiredSandbox,
+        desired: &AcaDesiredSandbox,
     ) -> Result<AcaSandboxRecord, AcaControlError> {
         self.state.lock().unwrap().calls.push("create-sandbox");
+        self.state.lock().unwrap().desired_sandbox = Some(desired.clone());
         Ok(record(AcaSandboxLifecycle::Creating))
     }
 
@@ -328,6 +330,37 @@ async fn missing_sandbox_uses_disk_and_sandbox_effects_then_finalizes() {
 }
 
 #[tokio::test]
+async fn provider_settings_reach_the_sandbox_effect() {
+    let state = Arc::new(Mutex::new(FakeState::default()));
+    let mut controller = controller(Arc::clone(&state)).with_provider_settings(
+        Some(ResourceRef::parse("Network/egress").unwrap()),
+        AcaProfileId::parse("relay").unwrap(),
+    );
+
+    controller
+        .reconcile(
+            AcaOperationId::parse("operation-provider-settings").unwrap(),
+            1_000,
+        )
+        .await
+        .unwrap();
+    let desired = state
+        .lock()
+        .unwrap()
+        .desired_sandbox
+        .clone()
+        .expect("sandbox effect should receive desired settings");
+    assert_eq!(
+        desired.network_ref,
+        Some(ResourceRef::parse("Network/egress").unwrap())
+    );
+    assert_eq!(
+        desired.sandbox_transport_alias,
+        AcaProfileId::parse("relay").unwrap()
+    );
+}
+
+#[tokio::test]
 async fn failed_sandbox_is_deleted_during_finalization() {
     let state = Arc::new(Mutex::new(FakeState {
         candidates: vec![record(AcaSandboxLifecycle::Failed)],
@@ -439,6 +472,45 @@ async fn finalization_stage_survives_controller_restart() {
         .unwrap();
     assert_eq!(restored.phase(), AcaPhase::Finalized);
     assert!(!restored.finalizer_installed());
+}
+
+#[tokio::test]
+async fn restored_delete_stage_rechecks_a_stopping_sandbox() {
+    let state = Arc::new(Mutex::new(FakeState {
+        candidates: vec![record(AcaSandboxLifecycle::Stopping)],
+        ..FakeState::default()
+    }));
+    let mut controller = controller(Arc::clone(&state))
+        .restore_recovery_state(AcaRecoveryState {
+            phase: AcaPhase::Finalizing,
+            finalizer_installed: true,
+            readiness_generation: 1,
+            readiness_attempts: 0,
+            readiness_lifecycle: None,
+            finalization_stage: "delete".to_owned(),
+        })
+        .unwrap();
+
+    controller
+        .finalize(
+            AcaOperationId::parse("operation-recovery-stopping").unwrap(),
+            1_000,
+        )
+        .await
+        .unwrap();
+    assert_eq!(controller.recovery_state().finalization_stage, "stop");
+    assert!(controller.finalizer_installed());
+
+    state.lock().unwrap().candidates = vec![record(AcaSandboxLifecycle::Stopped)];
+    controller
+        .finalize(
+            AcaOperationId::parse("operation-recovery-stopped").unwrap(),
+            1_000,
+        )
+        .await
+        .unwrap();
+    assert_eq!(controller.phase(), AcaPhase::Finalized);
+    assert_eq!(state.lock().unwrap().calls.last(), Some(&"delete"));
 }
 
 #[tokio::test]

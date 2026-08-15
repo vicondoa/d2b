@@ -666,6 +666,8 @@ pub struct AcaDesiredSandbox {
     pub binding: AcaResourceBinding,
     pub profile: AcaSandboxProfile,
     pub disk_image: AcaDiskImageRecord,
+    pub network_ref: Option<ResourceRef>,
+    pub sandbox_transport_alias: AcaProfileId,
 }
 
 #[derive(Clone, PartialEq, Eq)]

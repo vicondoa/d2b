@@ -34,7 +34,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use base64::Engine;
 use d2b_gateway::{SECRET_LEN, SessionBinding, SessionSecret};
-use d2b_gateway_runtime::relay_compat::LocalTarget;
+use d2b_gateway_runtime::relay_compat::{LocalTarget, RelayConnectError};
 use d2b_gateway_runtime::{agent_prologue, make_prologue_verifier};
 use d2b_provider_transport_azure_relay::gateway_compat::{RelayCredential, RelayEndpoint};
 
@@ -105,6 +105,10 @@ fn now_unix() -> u64 {
         .unwrap_or(0)
 }
 
+fn retry_sender_error(error: &RelayConnectError) -> bool {
+    !matches!(error, RelayConnectError::Bridge(_))
+}
+
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
 async fn main() -> Result<(), Err> {
     let mode = std::env::args().nth(1).unwrap_or_default();
@@ -134,6 +138,7 @@ async fn main() -> Result<(), Err> {
                 .await
                 {
                     Ok(()) => return Ok(()),
+                    Err(err) if !retry_sender_error(&err) => return Err(err.into()),
                     Err(err) => {
                         eprintln!(
                             "[d2b-gateway-relay] sender disconnected: {err}; \
@@ -167,10 +172,27 @@ async fn main() -> Result<(), Err> {
                 tokio::time::sleep(std::time::Duration::from_secs(1)).await;
             }
         }
+
         other => {
             return Err(
                 format!("usage: d2b-gateway-relay <sender|listener>; got {other:?}").into(),
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::retry_sender_error;
+    use d2b_gateway_runtime::relay_compat::RelayConnectError;
+
+    #[test]
+    fn authenticated_bridge_failures_are_not_retried() {
+        assert!(!retry_sender_error(&RelayConnectError::Bridge(
+            "websocket closed".into()
+        )));
+        assert!(retry_sender_error(&RelayConnectError::Handshake(
+            "404".into()
+        )));
     }
 }

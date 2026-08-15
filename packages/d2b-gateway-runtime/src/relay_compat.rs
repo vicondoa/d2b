@@ -152,6 +152,9 @@ pub enum RelayConnectError {
     /// the credential is unauthorized). The message is the bounded tungstenite
     /// error class; it never carries the token.
     Handshake(String),
+    /// The authenticated bridge ended. The session prologue has already been
+    /// consumed, so retrying it would be a replay and must not be attempted.
+    Bridge(String),
 }
 
 impl fmt::Display for RelayConnectError {
@@ -160,6 +163,7 @@ impl fmt::Display for RelayConnectError {
             RelayConnectError::Auth(e) => write!(f, "relay auth: {e}"),
             RelayConnectError::BadRequest => write!(f, "relay connect request was malformed"),
             RelayConnectError::Handshake(m) => write!(f, "relay websocket handshake failed: {m}"),
+            RelayConnectError::Bridge(m) => write!(f, "relay bridge ended: {m}"),
         }
     }
 }
@@ -399,7 +403,8 @@ fn relay_provider_error(err: RelayConnectError) -> ProviderError {
     let kind = match err {
         RelayConnectError::Auth(_)
         | RelayConnectError::BadRequest
-        | RelayConnectError::Handshake(_) => ErrorKind::RelayUnavailable,
+        | RelayConnectError::Handshake(_)
+        | RelayConnectError::Bridge(_) => ErrorKind::RelayUnavailable,
     };
     ProviderError::new(kind, err.to_string())
 }
@@ -931,8 +936,10 @@ pub async fn run_sender_with_prologue(
         let (stream, _) = listener
             .accept()
             .await
-            .map_err(|_| RelayConnectError::Handshake("accept unix-listen".into()))?;
-        return pump(ws, stream).await;
+            .map_err(|_| RelayConnectError::Bridge("accept unix-listen".into()))?;
+        return pump(ws, stream)
+            .await
+            .map_err(|error| RelayConnectError::Bridge(error.to_string()));
     }
     let mut ws = connect_sender_retrying(endpoint, credential, ttl_secs, ca_pem).await?;
     ws.send(frame)
@@ -940,10 +947,14 @@ pub async fn run_sender_with_prologue(
         .map_err(|_| RelayConnectError::Handshake("prologue send".into()))?;
     let io = connect_local(local)
         .await
-        .map_err(|_| RelayConnectError::Handshake("local connect".into()))?;
+        .map_err(|_| RelayConnectError::Bridge("local connect".into()))?;
     match io {
-        LocalIo::Tcp(s) => pump(ws, s).await,
-        LocalIo::Unix(s) => pump(ws, s).await,
+        LocalIo::Tcp(s) => pump(ws, s)
+            .await
+            .map_err(|error| RelayConnectError::Bridge(error.to_string())),
+        LocalIo::Unix(s) => pump(ws, s)
+            .await
+            .map_err(|error| RelayConnectError::Bridge(error.to_string())),
     }
 }
 
@@ -1191,6 +1202,12 @@ mod tests {
     #[test]
     fn relay_provider_bad_request_is_transport_unavailable() {
         let err = relay_provider_error(RelayConnectError::BadRequest);
+        assert_eq!(err.kind(), ErrorKind::RelayUnavailable);
+    }
+
+    #[test]
+    fn relay_provider_bridge_failure_is_transport_unavailable() {
+        let err = relay_provider_error(RelayConnectError::Bridge("closed".into()));
         assert_eq!(err.kind(), ErrorKind::RelayUnavailable);
     }
 

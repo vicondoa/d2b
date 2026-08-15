@@ -382,6 +382,9 @@ where
         }
         if self.bootstrap_deadline_failed && self.pending_delete_operation_id.is_none() {
             self.phase = AzureVmPhase::Failed;
+            if self.bootstrap_extension_present {
+                return self.start_extension_cleanup().await;
+            }
             return Err(AzureVmError::BootstrapFailed);
         }
         if self.pending_delete_operation_id.is_some() {
@@ -773,7 +776,7 @@ where
                 self.phase = AzureVmPhase::Failed;
                 self.bootstrap_deadline_failed = true;
                 if self.bootstrap_extension_present {
-                    let _ = self.start_extension_cleanup().await;
+                    return self.start_extension_cleanup().await;
                 }
                 return Err(AzureVmError::BootstrapFailed);
             }

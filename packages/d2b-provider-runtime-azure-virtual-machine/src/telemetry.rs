@@ -40,6 +40,12 @@ impl AzureVmMetricEvent {
                 | "bootstrap-enrollment-failed"
                 | "bootstrap-failed"
                 | "credential-unavailable"
+                | "azure-operation-handle-invalid"
+                | "azure-vm-config-invalid"
+                | "transient"
+                | "cancelled"
+                | "deadline-expired"
+                | "azure-operation-ambiguous"
                 | "deletion-ambiguous"
                 | "child-zone-drain-timeout"
                 | "image-change-requires-confirm"
@@ -77,6 +83,12 @@ mod tests {
             "bootstrap-enrollment-failed",
             "bootstrap-failed",
             "credential-unavailable",
+            "azure-operation-handle-invalid",
+            "azure-vm-config-invalid",
+            "transient",
+            "cancelled",
+            "deadline-expired",
+            "azure-operation-ambiguous",
             "deletion-ambiguous",
             "child-zone-drain-timeout",
             "image-change-requires-confirm",

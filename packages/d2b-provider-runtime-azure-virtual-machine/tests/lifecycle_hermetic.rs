@@ -17,6 +17,7 @@ struct FakeState {
     calls: Vec<&'static str>,
     polls: Vec<LroStatus>,
     extension_failures: usize,
+    extension_delete_failures: usize,
 }
 
 impl Default for FakeState {
@@ -28,6 +29,7 @@ impl Default for FakeState {
             calls: Vec::new(),
             polls: Vec::new(),
             extension_failures: 0,
+            extension_delete_failures: 0,
         }
     }
 }
@@ -120,7 +122,12 @@ impl AzureEffectPort for FakeEffect {
         _: &AzureVmGuestSettings,
         _: &AzureAccessToken,
     ) -> Result<AzureOperationHandle, AzureVmError> {
-        self.state.lock().unwrap().calls.push("extension-delete");
+        let mut state = self.state.lock().unwrap();
+        state.calls.push("extension-delete");
+        if state.extension_delete_failures > 0 {
+            state.extension_delete_failures -= 1;
+            return Err(AzureVmError::Transient);
+        }
         Ok(AzureOperationHandle::from_core(b"extension-delete").unwrap())
     }
 
@@ -249,6 +256,7 @@ fn azure_wire_enums_use_adr_values() {
         serde_json::to_string(&BootstrapPskDelivery::VmExtension).unwrap(),
         "\"vm-extension\""
     );
+    assert!(serde_json::from_str::<BootstrapPskDelivery>("\"user-data\"").is_err());
     assert_eq!(
         serde_json::from_str::<DiskSku>("\"StandardSSD_LRS\"").unwrap(),
         DiskSku::StandardSsdLrs
@@ -793,4 +801,55 @@ async fn running_vm_fails_closed_at_bootstrap_deadline() {
         AzureVmError::BootstrapFailed
     );
     assert_eq!(controller.phase(), AzureVmPhase::Failed);
+}
+
+#[tokio::test]
+async fn bootstrap_deadline_retries_failed_extension_cleanup() {
+    let (provider, settings) = config();
+    let state = Arc::new(Mutex::new(FakeState {
+        extension_delete_failures: 1,
+        polls: vec![LroStatus::Succeeded],
+        ..FakeState::default()
+    }));
+    let effect = Arc::new(FakeEffect {
+        state: Arc::clone(&state),
+    });
+    let now = Arc::new(Mutex::new(60_000));
+    let controller = AzureVmController::new(provider, settings, effect, credential(), None)
+        .unwrap()
+        .with_clock(Arc::new(FixedClock(now)));
+    let recovery = AzureVmRecoveryState {
+        phase: AzureVmPhase::Failed,
+        finalizer_installed: true,
+        operation: None,
+        pending_delete_operation_id: None,
+        bootstrap_started_at_unix_ms: Some(0),
+        psk_delivery_attempts: 0,
+        operation_started_at_unix_ms: None,
+        pending_update: None,
+        bootstrap_service_state: BootstrapService::default().state(),
+        bootstrap_extension_present: true,
+        vm_delete_confirmed: false,
+        child_cleanup_complete: false,
+        bootstrap_deadline_failed: true,
+    };
+    let mut controller = controller.restore_recovery_state(recovery).unwrap();
+
+    assert_eq!(
+        controller.reconcile("zone", "guest", 1).await,
+        Err(AzureVmError::Transient)
+    );
+    assert!(controller.recovery_state().bootstrap_extension_present);
+
+    assert!(matches!(
+        controller.reconcile("zone", "guest", 1).await,
+        Ok(AzureVmReconcileOutcome::Progressing { .. })
+    ));
+    assert_eq!(
+        controller
+            .poll_operation(AzureOperationHandle::from_core(b"extension-delete").unwrap())
+            .await,
+        Err(AzureVmError::BootstrapFailed)
+    );
+    assert!(!controller.recovery_state().bootstrap_extension_present);
 }

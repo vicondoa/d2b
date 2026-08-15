@@ -368,12 +368,31 @@ where
                     Ok(result) => result?,
                     Err(_) => return Err(self.startup_timeout()),
                 };
-                match timeout(self.startup_budget()?, self.effect.open_pidfd(&identity)).await {
-                    Ok(result) => result?,
-                    Err(_) => return Err(self.startup_timeout()),
-                }
                 self.expected_identity = Some(identity);
                 self.identity = Some(identity);
+                let pidfd_result = match timeout(
+                    self.startup_budget()?,
+                    self.effect.open_pidfd(&identity),
+                )
+                .await
+                {
+                    Ok(result) => result,
+                    Err(_) => Err(CloudHypervisorError::StartupDeadlineExceeded),
+                };
+                if let Err(error) = pidfd_result {
+                    let cleanup_budget = self
+                        .startup_remaining()
+                        .unwrap_or_else(|_| Duration::from_millis(1));
+                    let stopped = timeout(cleanup_budget, self.effect.stop(&identity))
+                        .await
+                        .is_ok_and(|result| result.is_ok());
+                    if stopped {
+                        self.expected_identity = None;
+                        self.identity = None;
+                    }
+                    self.phase = CloudHypervisorPhase::Failed;
+                    return Err(error);
+                }
                 self.phase = CloudHypervisorPhase::VmmReady;
             }
         } else {

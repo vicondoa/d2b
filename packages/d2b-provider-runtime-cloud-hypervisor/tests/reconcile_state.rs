@@ -24,6 +24,7 @@ struct FakeState {
     stop_failures: usize,
     stop_leaves_identity: bool,
     launch_delay_ms: u64,
+    pidfd_failures: usize,
 }
 
 struct FakeEffect {
@@ -69,6 +70,11 @@ impl CloudHypervisorEffectPort for FakeEffect {
         &self,
         _: &ProcessIdentity,
     ) -> Result<(), d2b_provider_runtime_cloud_hypervisor::CloudHypervisorError> {
+        let mut state = self.state.lock().unwrap();
+        if state.pidfd_failures > 0 {
+            state.pidfd_failures -= 1;
+            return Err(d2b_provider_runtime_cloud_hypervisor::CloudHypervisorError::Effect);
+        }
         Ok(())
     }
 
@@ -235,6 +241,26 @@ async fn launch_requires_authenticated_guest_control_before_ready() {
     controller.finalize().await.unwrap();
     assert!(state.lock().unwrap().stopped);
     assert!(!controller.finalizer_installed());
+}
+
+#[tokio::test]
+async fn failed_pidfd_open_stops_the_newly_launched_vmm() {
+    let state = Arc::new(Mutex::new(FakeState {
+        pidfd_failures: 1,
+        ..FakeState::default()
+    }));
+    let mut controller = controller(Arc::clone(&state));
+
+    assert_eq!(
+        controller.reconcile(true, true, true, 14).await,
+        Err(d2b_provider_runtime_cloud_hypervisor::CloudHypervisorError::Effect)
+    );
+    let state = state.lock().unwrap();
+    assert_eq!(state.stop_calls, 1);
+    assert!(state.stopped);
+    assert!(
+        !controller.finalizer_installed() || controller.phase() == CloudHypervisorPhase::Failed
+    );
 }
 
 #[tokio::test]

@@ -400,22 +400,21 @@ impl GatewayOrchestrator {
         // Tear down both sides regardless of individual errors.
         let l = self.deps.listener.close(&open.listener).await;
         let a = self.deps.workload.cleanup(&open.agent).await;
-        match (l, a) {
-            (Ok(()), Ok(())) => {
-                self.handles
-                    .lock()
-                    .map_err(|_| GatewayError::Internal)?
-                    .remove(id);
-                let _ = self
-                    .ledger
-                    .lock()
-                    .map(|mut ledger| ledger.transition(id, SessionState::Closed));
-                Ok(())
-            }
-            (Err(listener), Ok(())) => Err(listener),
-            (Ok(()), Err(agent)) => Err(agent),
-            (Err(listener), Err(_agent)) => Err(listener),
-        }
+        let error = match (l, a) {
+            (Ok(()), Ok(())) => None,
+            (Err(listener), Ok(())) => Some(listener),
+            (Ok(()), Err(agent)) => Some(agent),
+            (Err(listener), Err(_agent)) => Some(listener),
+        };
+        self.handles
+            .lock()
+            .map_err(|_| GatewayError::Internal)?
+            .remove(id);
+        let _ = self
+            .ledger
+            .lock()
+            .map(|mut ledger| ledger.transition(id, SessionState::Closed));
+        error.map_or(Ok(()), Err)
     }
 
     fn audit_open_admitted(
@@ -520,6 +519,7 @@ mod tests {
         spawns: AtomicUsize,
         cleanups: AtomicUsize,
         fail_spawn: bool,
+        fail_cleanup: bool,
     }
     #[async_trait]
     impl GatewayWorkload for MockWorkload {
@@ -532,6 +532,9 @@ mod tests {
         }
         async fn cleanup(&self, _h: &AgentHandle) -> Result<(), GatewayError> {
             self.cleanups.fetch_add(1, Ordering::SeqCst);
+            if self.fail_cleanup {
+                return Err(GatewayError::ProviderAllocationFailed);
+            }
             Ok(())
         }
     }
@@ -806,6 +809,25 @@ mod tests {
         assert_eq!(orch.state(&open.session_id), Some(SessionState::Closed));
         assert_eq!(l.closes.load(Ordering::SeqCst), 1);
         assert_eq!(w.cleanups.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn close_marks_closed_even_when_agent_cleanup_fails() {
+        let w = Arc::new(MockWorkload {
+            fail_cleanup: true,
+            ..Default::default()
+        });
+        let l = Arc::new(MockListener::default());
+        let orch = GatewayOrchestrator::new(deps(w, l), 1, LedgerLimits::default());
+        let (tk, cs, app) = seed();
+        let open = orch.open(tk, cs, app, 42).await.unwrap();
+
+        assert_eq!(
+            orch.close(&open).await,
+            Err(GatewayError::ProviderAllocationFailed)
+        );
+        assert_eq!(orch.state(&open.session_id), Some(SessionState::Closed));
+        assert!(orch.list_sessions().unwrap().is_empty());
     }
 
     #[tokio::test]
