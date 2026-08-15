@@ -863,7 +863,7 @@ impl ZoneResourceRuntime {
             registry.set_status_client(Arc::clone(status_client));
         }
         registry
-            .reconcile(state, snapshot)
+            .reconcile(Arc::clone(&state), snapshot)
             .await
             .map_err(map_activation_runtime_error)?;
         drop(runtime);
