@@ -181,6 +181,23 @@ fn display_fingerprint(display: &DisplayDependencyEvidence) -> [u8; 32] {
     digest.finalize().into()
 }
 
+fn sink_fingerprint(config: &NotificationProviderConfig) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    digest.update([config.dbus_sink_enabled() as u8]);
+    digest.update(config.max_pending_notifications().to_be_bytes());
+    digest.update(config.action_nonce_store_size().to_be_bytes());
+    digest.update(config.action_nonce_ttl_secs().to_be_bytes());
+    digest.update(config.acknowledge_timeout_secs().to_be_bytes());
+    digest.update([config.observer_enabled() as u8]);
+    for reference in [config.host_execution_ref(), config.host_user_ref()] {
+        if let Some(reference) = reference {
+            digest.update(reference.to_canonical_string().as_bytes());
+        }
+        digest.update([0]);
+    }
+    digest.finalize().into()
+}
+
 /// One configured Guest notification source.
 #[derive(Clone, PartialEq, Eq)]
 pub struct GuestSourceConfig {
@@ -441,6 +458,8 @@ pub struct SourceReconcileResult {
     /// Authenticated endpoints whose source process must be drained.
     pub stop_endpoints: Vec<SourceEndpoint>,
     display_fingerprint: [u8; 32],
+    host_sink_fingerprint: [u8; 32],
+    source_error: Option<&'static str>,
 }
 
 impl SourceReconcileResult {
@@ -466,6 +485,10 @@ impl SourceReconcileResult {
             digest.update([0]);
         }
         digest.update(self.display_fingerprint);
+        digest.update(self.host_sink_fingerprint);
+        if let Some(error) = self.source_error {
+            digest.update(error.as_bytes());
+        }
         let bytes = digest.finalize();
         let mut result = [0; 32];
         result.copy_from_slice(&bytes);
@@ -484,6 +507,7 @@ enum SourceEffectAcknowledgement {
     HostSink {
         start: bool,
         display_fingerprint: [u8; 32],
+        sink_fingerprint: [u8; 32],
     },
 }
 
@@ -500,6 +524,7 @@ impl SourceProcessEffectReceipt {
         SourceProcessEffectReceiptBuilder {
             plan_digest: plan.digest(),
             display_fingerprint: plan.display_fingerprint,
+            sink_fingerprint: plan.host_sink_fingerprint,
             expected: Self::expected_acknowledgements(plan),
             acknowledgements: Vec::new(),
         }
@@ -548,12 +573,14 @@ impl SourceProcessEffectReceipt {
             acknowledgements.push(SourceEffectAcknowledgement::HostSink {
                 start: true,
                 display_fingerprint: plan.display_fingerprint,
+                sink_fingerprint: plan.host_sink_fingerprint,
             });
         }
         if plan.stop_host_sink {
             acknowledgements.push(SourceEffectAcknowledgement::HostSink {
                 start: false,
                 display_fingerprint: plan.display_fingerprint,
+                sink_fingerprint: plan.host_sink_fingerprint,
             });
         }
         acknowledgements.sort();
@@ -574,6 +601,7 @@ impl SourceProcessEffectReceipt {
 pub struct SourceProcessEffectReceiptBuilder {
     plan_digest: [u8; 32],
     display_fingerprint: [u8; 32],
+    sink_fingerprint: [u8; 32],
     expected: Vec<SourceEffectAcknowledgement>,
     acknowledgements: Vec<SourceEffectAcknowledgement>,
 }
@@ -607,6 +635,7 @@ impl SourceProcessEffectReceiptBuilder {
             .push(SourceEffectAcknowledgement::HostSink {
                 start: true,
                 display_fingerprint: self.display_fingerprint,
+                sink_fingerprint: self.sink_fingerprint,
             });
     }
 
@@ -616,6 +645,7 @@ impl SourceProcessEffectReceiptBuilder {
             .push(SourceEffectAcknowledgement::HostSink {
                 start: false,
                 display_fingerprint: self.display_fingerprint,
+                sink_fingerprint: self.sink_fingerprint,
             });
     }
 
@@ -846,9 +876,16 @@ impl NotificationController {
         config: &NotificationProviderConfig,
         source_sessions: &[SessionEvidence],
     ) -> Result<SourceReconcileResult, &'static str> {
-        let result = self.plan_reconciliation(display, config, source_sessions)?;
+        let result = match self.plan_reconciliation(display, config, source_sessions) {
+            Ok(result) => result,
+            Err(error) => {
+                self.clear_reconciliation();
+                return Err(error);
+            }
+        };
+        let source_error = result.source_error;
         self.commit_reconciliation(display, result.clone());
-        Ok(result)
+        source_error.map_or(Ok(result), Err)
     }
 
     /// Reconcile Guest sources through an effect port, committing ownership
@@ -860,13 +897,20 @@ impl NotificationController {
         source_sessions: &[SessionEvidence],
         effects: &mut E,
     ) -> Result<SourceReconcileResult, &'static str> {
-        let result = self.plan_reconciliation(display, config, source_sessions)?;
+        let result = match self.plan_reconciliation(display, config, source_sessions) {
+            Ok(result) => result,
+            Err(error) => {
+                self.apply_drain_with_effects(effects)?;
+                return Err(error);
+            }
+        };
         let receipt = effects.apply(&result)?;
         if !receipt.matches(&result) {
             return Err("notification-process-effect-proof-mismatch");
         }
+        let source_error = result.source_error;
         self.commit_reconciliation(display, result.clone());
-        Ok(result)
+        source_error.map_or(Ok(result), Err)
     }
 
     fn plan_reconciliation(
@@ -876,30 +920,40 @@ impl NotificationController {
         source_sessions: &[SessionEvidence],
     ) -> Result<SourceReconcileResult, &'static str> {
         self.plan(display, config)?;
-        let endpoints = if display.is_ready() {
-            config
-                .guest_sources()
-                .iter()
-                .map(|source| {
-                    let mut matches = source_sessions
-                        .iter()
-                        .filter(|session| session.subject_ref() == source.source_ref());
-                    let session = matches
-                        .next()
-                        .ok_or("notification-source-unauthenticated")?;
-                    if matches.next().is_some() {
-                        return Err("notification-source-ambiguous");
+        let mut endpoints = Vec::new();
+        let mut source_error = None;
+        if display.is_ready() {
+            for source in config.guest_sources() {
+                let mut matches = source_sessions
+                    .iter()
+                    .filter(|session| session.subject_ref() == source.source_ref());
+                let Some(session) = matches.next() else {
+                    source_error.get_or_insert("notification-source-unauthenticated");
+                    continue;
+                };
+                if matches.next().is_some() {
+                    source_error.get_or_insert("notification-source-ambiguous");
+                    continue;
+                }
+                match SourceEndpoint::from_authenticated(source, session, display) {
+                    Ok(endpoint) => endpoints.push(endpoint),
+                    Err(error) => {
+                        source_error.get_or_insert(error);
                     }
-                    SourceEndpoint::from_authenticated(source, session, display)
-                })
-                .collect::<Result<Vec<_>, _>>()?
+                }
+            }
+        }
+        let configured = if source_error.is_some() {
+            // A partial authenticated source set must never start the subset
+            // that happened to validate.  Drain all owned source processes
+            // until every configured source has fresh, unambiguous evidence.
+            std::collections::BTreeMap::new()
         } else {
-            Vec::new()
+            endpoints
+                .into_iter()
+                .map(|endpoint| (endpoint.source_ref().clone(), endpoint))
+                .collect::<std::collections::BTreeMap<_, _>>()
         };
-        let configured = endpoints
-            .iter()
-            .map(|endpoint| (endpoint.source_ref().clone(), endpoint.clone()))
-            .collect::<std::collections::BTreeMap<_, _>>();
         let start = configured
             .iter()
             .filter(|(source, endpoint)| {
@@ -928,15 +982,19 @@ impl NotificationController {
             .filter_map(|source| self.active_sources.get(source).cloned())
             .collect::<Vec<_>>();
         let display_fingerprint = display_fingerprint(display);
+        let host_sink_fingerprint = sink_fingerprint(config);
         let generation_changed = self
             .active_display_fingerprint
             .is_some_and(|fingerprint| fingerprint != display_fingerprint);
         let stop_host_sink = self.host_sink_fingerprint.is_some()
-            && (!config.dbus_sink_enabled() || !display.is_ready() || generation_changed);
+            && (!config.dbus_sink_enabled()
+                || !display.is_ready()
+                || generation_changed
+                || self.host_sink_fingerprint != Some(host_sink_fingerprint));
         let start_host_sink = config.dbus_sink_enabled()
             && display.is_ready()
-            && (self.host_sink_fingerprint != Some(display_fingerprint));
-        Ok(SourceReconcileResult {
+            && (generation_changed || self.host_sink_fingerprint != Some(host_sink_fingerprint));
+        let result = SourceReconcileResult {
             start,
             stop,
             start_host_sink,
@@ -944,7 +1002,43 @@ impl NotificationController {
             start_endpoints,
             stop_endpoints,
             display_fingerprint,
-        })
+            host_sink_fingerprint,
+            source_error,
+        };
+        Ok(result)
+    }
+
+    fn drain_plan(&self) -> SourceReconcileResult {
+        SourceReconcileResult {
+            start: Vec::new(),
+            stop: self.active_sources.keys().cloned().collect(),
+            start_host_sink: false,
+            stop_host_sink: self.host_sink_fingerprint.is_some(),
+            start_endpoints: Vec::new(),
+            stop_endpoints: self.active_sources.values().cloned().collect(),
+            display_fingerprint: [0; 32],
+            host_sink_fingerprint: [0; 32],
+            source_error: None,
+        }
+    }
+
+    fn clear_reconciliation(&mut self) {
+        self.active_sources.clear();
+        self.active_display_fingerprint = None;
+        self.host_sink_fingerprint = None;
+    }
+
+    fn apply_drain_with_effects<E: SourceProcessEffectPort>(
+        &mut self,
+        effects: &mut E,
+    ) -> Result<(), &'static str> {
+        let result = self.drain_plan();
+        let receipt = effects.apply(&result)?;
+        if !receipt.matches(&result) {
+            return Err("notification-process-effect-proof-mismatch");
+        }
+        self.clear_reconciliation();
+        Ok(())
     }
 
     fn commit_reconciliation(
@@ -965,7 +1059,7 @@ impl NotificationController {
             self.host_sink_fingerprint = None;
         }
         if result.start_host_sink {
-            self.host_sink_fingerprint = fingerprint;
+            self.host_sink_fingerprint = Some(result.host_sink_fingerprint);
         }
     }
 
@@ -983,23 +1077,17 @@ impl NotificationController {
         source_sessions: &[SessionEvidence],
     ) -> Result<SourceReconcileResult, &'static str> {
         let Some(proof) = display else {
-            let stop_endpoints = self.active_sources.values().cloned().collect();
-            let stop = self.active_sources.keys().cloned().collect();
-            let result = SourceReconcileResult {
-                start: Vec::new(),
-                stop,
-                start_host_sink: false,
-                stop_host_sink: self.host_sink_fingerprint.is_some(),
-                start_endpoints: Vec::new(),
-                stop_endpoints,
-                display_fingerprint: [0; 32],
-            };
-            self.active_sources.clear();
-            self.active_display_fingerprint = None;
-            self.host_sink_fingerprint = None;
+            let result = self.drain_plan();
+            self.clear_reconciliation();
             return Ok(result);
         };
-        let evidence = DisplayDependencyEvidence::from_authenticated_route(proof)?;
+        let evidence = match DisplayDependencyEvidence::from_authenticated_route(proof) {
+            Ok(evidence) => evidence,
+            Err(error) => {
+                self.clear_reconciliation();
+                return Err(error);
+            }
+        };
         self.reconcile_sources(&evidence, config, source_sessions)
     }
 
@@ -1013,27 +1101,21 @@ impl NotificationController {
         effects: &mut E,
     ) -> Result<SourceReconcileResult, &'static str> {
         let Some(proof) = display else {
-            let stop_endpoints = self.active_sources.values().cloned().collect();
-            let stop = self.active_sources.keys().cloned().collect();
-            let result = SourceReconcileResult {
-                start: Vec::new(),
-                stop,
-                start_host_sink: false,
-                stop_host_sink: self.host_sink_fingerprint.is_some(),
-                start_endpoints: Vec::new(),
-                stop_endpoints,
-                display_fingerprint: [0; 32],
-            };
+            let result = self.drain_plan();
             let receipt = effects.apply(&result)?;
             if !receipt.matches(&result) {
                 return Err("notification-process-effect-proof-mismatch");
             }
-            self.active_sources.clear();
-            self.active_display_fingerprint = None;
-            self.host_sink_fingerprint = None;
+            self.clear_reconciliation();
             return Ok(result);
         };
-        let evidence = DisplayDependencyEvidence::from_authenticated_route(proof)?;
+        let evidence = match DisplayDependencyEvidence::from_authenticated_route(proof) {
+            Ok(evidence) => evidence,
+            Err(error) => {
+                self.apply_drain_with_effects(effects)?;
+                return Err(error);
+            }
+        };
         self.reconcile_sources_with_effects(&evidence, config, source_sessions, effects)
     }
 
@@ -1041,9 +1123,7 @@ impl NotificationController {
     #[cfg(test)]
     pub fn drain_sources(&mut self) -> Vec<ResourceRef> {
         let drained = self.active_sources.keys().cloned().collect();
-        self.active_sources.clear();
-        self.active_display_fingerprint = None;
-        self.host_sink_fingerprint = None;
+        self.clear_reconciliation();
         drained
     }
 
@@ -1290,6 +1370,98 @@ mod tests {
         }
     }
 
+    struct CompletingEffects;
+
+    impl SourceProcessEffectPort for CompletingEffects {
+        fn apply(
+            &mut self,
+            plan: &SourceReconcileResult,
+        ) -> Result<SourceProcessEffectReceipt, &'static str> {
+            Ok(SourceProcessEffectReceipt::complete(plan))
+        }
+    }
+
+    #[test]
+    fn missing_authenticated_source_stops_owned_endpoint_before_refusing() {
+        let mut controller = NotificationController::new(crate::PROVIDER_REF).unwrap();
+        let config = bound_config(vec![source("one")]);
+        let dependency = display(DisplayDependencyState::Ready);
+        controller
+            .reconcile_sources(&dependency, &config, &[test_source("one")])
+            .unwrap();
+        let mut effects = CompletingEffects;
+        assert_eq!(
+            controller.reconcile_sources_with_effects(&dependency, &config, &[], &mut effects),
+            Err("notification-source-unauthenticated")
+        );
+        assert!(controller.drain_sources().is_empty());
+    }
+
+    struct RecordingEffects {
+        plans: Vec<SourceReconcileResult>,
+    }
+
+    impl SourceProcessEffectPort for RecordingEffects {
+        fn apply(
+            &mut self,
+            plan: &SourceReconcileResult,
+        ) -> Result<SourceProcessEffectReceipt, &'static str> {
+            self.plans.push(plan.clone());
+            Ok(SourceProcessEffectReceipt::complete(plan))
+        }
+    }
+
+    #[test]
+    fn partial_source_evidence_drains_without_starting_a_valid_subset() {
+        let mut controller = NotificationController::new(crate::PROVIDER_REF).unwrap();
+        let config = bound_config(vec![source("one"), source("two")]);
+        let dependency = display(DisplayDependencyState::Ready);
+        controller
+            .reconcile_sources(
+                &dependency,
+                &bound_config(vec![source("one")]),
+                &[test_source("one")],
+            )
+            .unwrap();
+        let mut effects = RecordingEffects { plans: Vec::new() };
+        assert_eq!(
+            controller.reconcile_sources_with_effects(
+                &dependency,
+                &config,
+                &[test_source("one")],
+                &mut effects,
+            ),
+            Err("notification-source-unauthenticated")
+        );
+        let plan = &effects.plans[0];
+        assert!(plan.start.is_empty());
+        assert_eq!(plan.stop, vec![ResourceRef::parse("Guest/one").unwrap()]);
+        assert!(plan.start_endpoints.is_empty());
+        assert_eq!(
+            plan.stop_endpoints
+                .iter()
+                .map(|endpoint| endpoint.source_ref().clone())
+                .collect::<Vec<_>>(),
+            vec![ResourceRef::parse("Guest/one").unwrap()]
+        );
+    }
+
+    #[test]
+    fn sink_policy_changes_restart_the_owned_host_sink() {
+        let mut controller = NotificationController::new(crate::PROVIDER_REF).unwrap();
+        let config = bound_config(vec![source("one")]);
+        let dependency = display(DisplayDependencyState::Ready);
+        controller
+            .reconcile_sources(&dependency, &config, &[test_source("one")])
+            .unwrap();
+        let changed = config.clone().with_observer_enabled(false);
+        let result = controller
+            .reconcile_sources(&dependency, &changed, &[test_source("one")])
+            .unwrap();
+        assert!(result.stop_host_sink);
+        assert!(result.start_host_sink);
+    }
+
     #[test]
     fn reconciliation_commits_source_ownership_only_after_effects_succeed() {
         let mut controller = NotificationController::new(crate::PROVIDER_REF).unwrap();
@@ -1326,6 +1498,8 @@ mod tests {
             start_endpoints: Vec::new(),
             stop_endpoints: Vec::new(),
             display_fingerprint: [7; 32],
+            host_sink_fingerprint: [8; 32],
+            source_error: None,
         };
         let receipt = SourceProcessEffectReceipt::complete(&plan);
         assert!(receipt.matches(&plan));
