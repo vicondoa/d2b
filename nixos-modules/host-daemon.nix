@@ -8,6 +8,15 @@ let
   # filter out `target/` dev caches from the source
   # so the Nix copy stays small (workspace target alone is ~17 GB).
   packagesSrc = d2bLib.cleanRustPackagesSource ../packages;
+  # d2bd and d2b-gateway-runtime compile the relay transport crate, whose
+  # schema is embedded from the repository-level docs tree.
+  providerPackagesSrc = pkgs.runCommand "d2b-provider-rust-src" { } ''
+    mkdir -p $out/packages
+    cp -r ${packagesSrc}/. $out/packages/
+    mkdir -p $out/docs/reference/schemas/v3/providers
+    cp ${../docs/reference/schemas/v3/providers/transport-azure-relay.transport-settings.json} \
+      $out/docs/reference/schemas/v3/providers/transport-azure-relay.transport-settings.json
+  '';
   cargoLock = {
     lockFile = ../packages/Cargo.lock;
     outputHashes."wl-proxy-0.1.2" = "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";
@@ -16,7 +25,8 @@ let
   d2bdSourcePackage = pkgs.rustPlatform.buildRustPackage {
     pname = "d2bd";
     version = "0.0.0-bootstrap";
-    src = packagesSrc;
+    src = providerPackagesSrc;
+    sourceRoot = "d2b-provider-rust-src/packages";
     inherit cargoLock;
     cargoBuildFlags = [ "--package" "d2bd" ];
     doCheck = false;
@@ -168,7 +178,8 @@ EOF
   d2bGatewayRuntimeSourcePackage = pkgs.rustPlatform.buildRustPackage {
     pname = "d2b-gateway-runtime";
     version = "0.0.0-bootstrap";
-    src = packagesSrc;
+    src = providerPackagesSrc;
+    sourceRoot = "d2b-provider-rust-src/packages";
     inherit cargoLock;
     cargoBuildFlags = [ "--package" "d2b-gateway-runtime" ];
     doCheck = false;

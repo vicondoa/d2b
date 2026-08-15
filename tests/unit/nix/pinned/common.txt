@@ -838,6 +838,7 @@ store-overlay-emit/first-op-target-suffix
 store-overlay-emit/planops-count
 test-infrastructure/own-shard-registration-unique
 test-infrastructure/pin-integrity-complete
+test-infrastructure/provider-runtime-schema-is-staged-with-rust-sources
 test-infrastructure/shared-corpus-duplicate-name-rejected
 test-infrastructure/shared-corpus-missing-file-rejected
 usbip-gating/disabled-backend-absent

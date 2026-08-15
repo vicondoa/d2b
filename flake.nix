@@ -425,6 +425,9 @@
         rustPackagesSrc = pkgs.runCommand "d2b-rust-src" { } ''
           mkdir -p $out/packages
           cp -r ${./packages}/. $out/packages/
+          mkdir -p $out/docs/reference/schemas/v3/providers
+          cp ${./docs/reference/schemas/v3/providers/transport-azure-relay.transport-settings.json} \
+            $out/docs/reference/schemas/v3/providers/transport-azure-relay.transport-settings.json
         '';
         rustWorkspace = args: pkgs.rustPlatform.buildRustPackage ({
           pname = "d2b-rust-workspace";
@@ -1115,7 +1118,8 @@
         # (compile-time
         # include_str! goldens) and tests/fixtures/ (compile-time +
         # runtime fixture-path reads from unit/integration tests).
-        # Compose a sandbox src that holds packages/ plus those fixture
+        # Compose a sandbox src that holds packages/, the runtime schemas
+        # embedded by provider crates, plus those fixture
         # trees so the cargo workspace never reads outside its packaged
         # source in the Nix sandbox. Operators running cargo OUTSIDE
         # the sandbox use the raw ./packages tree and the same relative
@@ -1123,6 +1127,9 @@
         rustPackagesSrc = pkgs.runCommand "d2b-rust-src" { } ''
           mkdir -p $out/packages
           cp -r ${./packages}/. $out/packages/
+          mkdir -p $out/docs/reference/schemas/v3/providers
+          cp ${./docs/reference/schemas/v3/providers/transport-azure-relay.transport-settings.json} \
+            $out/docs/reference/schemas/v3/providers/transport-azure-relay.transport-settings.json
           mkdir -p $out/tests
           cp -r ${./tests/golden} $out/tests/golden
           cp -r ${./tests/fixtures} $out/tests/fixtures
