@@ -124,6 +124,7 @@ pub struct ClipboardHistory {
     total_bytes: usize,
     suspended: BTreeSet<String>,
     guest_requests: BTreeMap<String, VecDeque<u64>>,
+    picker_completions: BTreeMap<String, u64>,
 }
 
 impl ClipboardHistory {
@@ -136,6 +137,7 @@ impl ClipboardHistory {
             total_bytes: 0,
             suspended: BTreeSet::new(),
             guest_requests: BTreeMap::new(),
+            picker_completions: BTreeMap::new(),
         })
     }
 
@@ -231,6 +233,8 @@ impl ClipboardHistory {
             self.remove(&token);
         }
         self.guest_requests.remove(guest);
+        self.picker_completions
+            .retain(|key, _| !key.split('|').any(|component| component == guest));
     }
 
     /// Remove expired entries.
@@ -255,6 +259,25 @@ impl ClipboardHistory {
         }
         self.guest_requests
             .retain(|_, requests| !requests.is_empty());
+        self.picker_completions
+            .retain(|_, expires_at| *expires_at > now_secs);
+    }
+
+    /// Atomically claim one picker completion until its receipt expires.
+    pub(crate) fn claim_picker_completion(
+        &mut self,
+        key: String,
+        expires_at: u64,
+        now_secs: u64,
+    ) -> bool {
+        self.gc(now_secs);
+        if self.picker_completions.contains_key(&key)
+            || self.picker_completions.len() >= self.config.max_history_entries()
+        {
+            return false;
+        }
+        self.picker_completions.insert(key, expires_at);
+        true
     }
 
     /// Return the number of entries.
@@ -368,5 +391,14 @@ mod tests {
             history.entries.get(&token).map(|entry| entry.mime()),
             Some("text/plain")
         );
+    }
+
+    #[test]
+    fn purging_a_guest_releases_its_picker_completion_keys() {
+        let mut history = ClipboardHistory::new(ClipboardConfig::default()).unwrap();
+        let key = "operation|zone|Guest/work|1|zone|Guest/destination|1".to_owned();
+        assert!(history.claim_picker_completion(key.clone(), 200, 100));
+        history.purge_guest("Guest/work");
+        assert!(history.claim_picker_completion(key, 200, 100));
     }
 }

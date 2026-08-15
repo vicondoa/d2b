@@ -1,22 +1,29 @@
 //! FD safety models and the checked Unix attachment adapter.
 
 use std::{
-    io::{Read, Take},
+    io::{self, Read, Take},
     os::fd::{AsFd, OwnedFd},
     sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
     },
+    time::{Duration, Instant},
 };
 
 use rustix::{
+    event::{PollFd, PollFlags, poll},
     fs::{FileType, fstat, fstatfs},
+    fs::{OFlags, fcntl_getfl, fcntl_setfl},
     io::{FdFlags, fcntl_getfd},
 };
 
 const TMPFS_MAGIC: i64 = 0x0102_1994;
 const RAMFS_MAGIC: i64 = 0x8584_58f6u32 as i64;
 const HUGETLBFS_MAGIC: i64 = 0x9584_58f6u32 as i64;
+const NFS_SUPER_MAGIC: i64 = 0x0000_6969;
+const CIFS_MAGIC_NUMBER: i64 = 0xFF53_4D42u32 as i64;
+const SMB2_MAGIC_NUMBER: i64 = 0xFE53_4D42u32 as i64;
+pub const DEFAULT_FD_READ_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Object type reported by `fstat`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,6 +53,8 @@ pub enum FileSystemKind {
     MemoryBacked,
     /// A disk-backed filesystem.
     DiskBacked,
+    /// A network-backed filesystem.
+    NetworkBacked,
     /// A filesystem not recognized by the adapter.
     Unknown,
 }
@@ -70,6 +79,17 @@ pub enum AttachmentClass {
     HostSelectionWrite,
 }
 
+/// Kernel access mode observed for an attachment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FdAccessMode {
+    /// The descriptor can only be read.
+    ReadOnly,
+    /// The descriptor can only be written.
+    WriteOnly,
+    /// The descriptor can be read and written.
+    ReadWrite,
+}
+
 /// Metadata observed by the authenticated attachment adapter.
 ///
 /// The model is intentionally separate from [`FdStatModel`], which remains a
@@ -91,6 +111,8 @@ pub struct FdMetadata {
     pub close_on_exec: bool,
     /// Operation class asserted by the authenticated stream.
     pub attachment_class: AttachmentClass,
+    /// Kernel access mode observed from `F_GETFL`.
+    pub access_mode: FdAccessMode,
 }
 
 /// Allowed attachment object class.
@@ -151,6 +173,13 @@ pub enum FdSafetyError {
         /// Observed class.
         observed: AttachmentClass,
     },
+    /// The descriptor access mode is not safe for the operation.
+    AccessModeMismatch {
+        /// Expected operation class.
+        attachment_class: AttachmentClass,
+        /// Observed kernel access mode.
+        observed: FdAccessMode,
+    },
     /// A metadata query failed.
     MetadataIo,
     /// The process-wide admitted attachment bound was exhausted.
@@ -176,6 +205,7 @@ impl core::fmt::Display for FdSafetyError {
             | Self::UnsafeMode { .. }
             | Self::CloseOnExecRequired
             | Self::AttachmentClassMismatch { .. }
+            | Self::AccessModeMismatch { .. }
             | Self::MetadataIo => "fd-safety-violation",
             Self::ConcurrentLimitExceeded { .. } => "fd-count-exceeded",
         })
@@ -273,6 +303,24 @@ pub fn validate_fd_metadata(
             observed: metadata.attachment_class,
         });
     }
+    let direction_allowed = match expected_class {
+        AttachmentClass::GuestTransfer => matches!(
+            metadata.access_mode,
+            FdAccessMode::ReadOnly | FdAccessMode::WriteOnly
+        ),
+        AttachmentClass::HostSelectionRead => {
+            matches!(metadata.access_mode, FdAccessMode::ReadOnly)
+        }
+        AttachmentClass::HostSelectionWrite => {
+            matches!(metadata.access_mode, FdAccessMode::WriteOnly)
+        }
+    };
+    if !direction_allowed {
+        return Err(FdSafetyError::AccessModeMismatch {
+            attachment_class: expected_class,
+            observed: metadata.access_mode,
+        });
+    }
     classify_fd_model(FdStatModel {
         object_kind: metadata.object_kind,
         filesystem_kind: metadata.filesystem_kind,
@@ -302,12 +350,21 @@ pub fn inspect_fd(
         let filesystem = fstatfs(fd.as_fd()).map_err(|_| FdSafetyError::MetadataIo)?;
         match filesystem.f_type as i64 {
             TMPFS_MAGIC | RAMFS_MAGIC | HUGETLBFS_MAGIC => FileSystemKind::MemoryBacked,
+            NFS_SUPER_MAGIC | CIFS_MAGIC_NUMBER | SMB2_MAGIC_NUMBER => {
+                FileSystemKind::NetworkBacked
+            }
             _ => FileSystemKind::DiskBacked,
         }
     } else {
         FileSystemKind::Unknown
     };
     let flags = fcntl_getfd(fd.as_fd()).map_err(|_| FdSafetyError::MetadataIo)?;
+    let access_flags = fcntl_getfl(fd.as_fd()).map_err(|_| FdSafetyError::MetadataIo)?;
+    let access_mode = match access_flags & OFlags::ACCMODE {
+        OFlags::WRONLY => FdAccessMode::WriteOnly,
+        OFlags::RDWR => FdAccessMode::ReadWrite,
+        _ => FdAccessMode::ReadOnly,
+    };
     Ok(FdMetadata {
         object_kind,
         filesystem_kind,
@@ -316,6 +373,7 @@ pub fn inspect_fd(
         mode: stat.st_mode,
         close_on_exec: flags.contains(FdFlags::CLOEXEC),
         attachment_class,
+        access_mode,
     })
 }
 
@@ -334,6 +392,8 @@ pub fn validate_received_fd(
 pub enum FdReadError {
     /// The bounded read returned an I/O error.
     Io,
+    /// The admitted stream did not complete before the read deadline.
+    Timeout,
     /// The stream produced more bytes than the authenticated item bound.
     SizeExceeded {
         /// Configured byte limit.
@@ -351,6 +411,7 @@ impl core::fmt::Display for FdReadError {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str(match self {
             Self::Io => "fd-read-failed",
+            Self::Timeout => "fd-read-timeout",
             Self::SizeExceeded { .. } => "fd-read-size-exceeded",
             Self::AggregateSizeExceeded { .. } => "fd-read-total-size-exceeded",
         })
@@ -377,8 +438,57 @@ pub fn read_bounded<R: Read>(reader: &mut R, max_size_bytes: u64) -> Result<Vec<
 
 /// Consume an admitted descriptor without exposing an unbounded stream.
 pub fn read_owned_fd_bounded(fd: OwnedFd, max_size_bytes: u64) -> Result<Vec<u8>, FdReadError> {
+    read_owned_fd_bounded_with_timeout(fd, max_size_bytes, DEFAULT_FD_READ_TIMEOUT)
+}
+
+pub(crate) fn read_owned_fd_bounded_with_timeout(
+    fd: OwnedFd,
+    max_size_bytes: u64,
+    timeout: Duration,
+) -> Result<Vec<u8>, FdReadError> {
     let mut file = std::fs::File::from(fd);
-    read_bounded(&mut file, max_size_bytes)
+    let flags = fcntl_getfl(&file).map_err(|_| FdReadError::Io)?;
+    fcntl_setfl(&file, flags | OFlags::NONBLOCK).map_err(|_| FdReadError::Io)?;
+    let mut bytes = Vec::new();
+    let mut buffer = [0_u8; 8192];
+    let deadline = Instant::now() + timeout;
+    loop {
+        match file.read(&mut buffer) {
+            Ok(0) => return Ok(bytes),
+            Ok(read) => {
+                bytes.extend_from_slice(&buffer[..read]);
+                if bytes.len() as u64 > max_size_bytes {
+                    return Err(FdReadError::SizeExceeded {
+                        limit: max_size_bytes,
+                    });
+                }
+            }
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                let timeout_ms = remaining.as_millis().min(i32::MAX as u128) as i32;
+                if timeout_ms == 0 {
+                    return Err(FdReadError::Timeout);
+                }
+                let mut poll_fds = [PollFd::new(
+                    &file,
+                    PollFlags::IN | PollFlags::HUP | PollFlags::ERR,
+                )];
+                match poll(&mut poll_fds, timeout_ms) {
+                    Ok(0) => return Err(FdReadError::Timeout),
+                    Ok(_)
+                        if poll_fds[0]
+                            .revents()
+                            .intersects(PollFlags::ERR | PollFlags::NVAL) =>
+                    {
+                        return Err(FdReadError::Io);
+                    }
+                    Ok(_) => {}
+                    Err(_) => return Err(FdReadError::Io),
+                }
+            }
+            Err(_) => return Err(FdReadError::Io),
+        }
+    }
 }
 
 /// Process-local bounded ownership for admitted clipboard descriptors.
@@ -487,6 +597,16 @@ impl<F> ReceivedFdBatch<F> {
         }
     }
 
+    /// Construct a batch from
+    /// [`d2b_provider_toolkit::unix::VerifiedPacket`] attachments.
+    ///
+    /// The Unix ComponentSession receiver rejects `MSG_CTRUNC` before it can
+    /// produce a `VerifiedPacket`, so this constructor carries that transport
+    /// proof into the Provider-specific metadata boundary.
+    pub fn from_verified_transport(descriptors: Vec<F>) -> Self {
+        Self::new(descriptors, false)
+    }
+
     /// Return the number of descriptors retained by the batch.
     pub fn len(&self) -> usize {
         self.descriptors.len()
@@ -521,6 +641,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rustix::net::{AddressFamily, SocketFlags, SocketType, socketpair};
     use std::io::Cursor;
 
     #[test]
@@ -538,6 +659,7 @@ mod tests {
             FdReadError::SizeExceeded { limit: 4 }.to_string(),
             "fd-read-size-exceeded"
         );
+        assert_eq!(FdReadError::Timeout.to_string(), "fd-read-timeout");
         assert_eq!(
             FdReadError::AggregateSizeExceeded { limit: 8 }.to_string(),
             "fd-read-total-size-exceeded"
@@ -552,5 +674,47 @@ mod tests {
         assert!(pool.acquire(1).is_err());
         drop(permit);
         assert_eq!(pool.active(), 0);
+    }
+
+    #[test]
+    fn attachment_metadata_rejects_bidirectional_and_network_regular_fds() {
+        let metadata = FdMetadata {
+            object_kind: FdObjectKind::Regular,
+            filesystem_kind: FileSystemKind::MemoryBacked,
+            link_count: 1,
+            size_bytes: 4,
+            mode: 0o100600,
+            close_on_exec: true,
+            attachment_class: AttachmentClass::GuestTransfer,
+            access_mode: FdAccessMode::ReadWrite,
+        };
+        assert!(matches!(
+            validate_fd_metadata(metadata, AttachmentClass::GuestTransfer, 8),
+            Err(FdSafetyError::AccessModeMismatch { .. })
+        ));
+        assert!(matches!(
+            classify_fd_model(FdStatModel {
+                object_kind: FdObjectKind::Regular,
+                filesystem_kind: FileSystemKind::NetworkBacked,
+            }),
+            Err(FdSafetyError::RegularNotMemoryBacked(
+                FileSystemKind::NetworkBacked
+            ))
+        ));
+    }
+
+    #[test]
+    fn held_open_attachment_times_out_instead_of_retaining_the_fd_permit() {
+        let (reader, _writer) = socketpair(
+            AddressFamily::UNIX,
+            SocketType::STREAM,
+            SocketFlags::CLOEXEC,
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            read_owned_fd_bounded_with_timeout(reader, 16, Duration::from_millis(1)),
+            Err(FdReadError::Timeout)
+        );
     }
 }

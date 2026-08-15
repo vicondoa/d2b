@@ -129,6 +129,7 @@ pub struct PickerReceipt {
     destination_zone: String,
     destination_guest: String,
     entry_digest: String,
+    entry_owner: String,
     expires_at: u64,
     source_reconnect_generation: u64,
     reconnect_generation: u64,
@@ -145,6 +146,10 @@ impl PickerReceipt {
         if request.destination_guest() != destination.guest_ref()
             || request.source_zone() != source.zone()
             || request.operation_id() != operation_id_for_sessions(source, destination)
+            || !matches!(
+                source.subject_ref().resource_type().as_str(),
+                "Guest" | "User"
+            )
             || !destination.is_guest()
             || !entry_digest.starts_with("sha256:")
         {
@@ -156,14 +161,15 @@ impl PickerReceipt {
             destination_zone: destination.zone().to_owned(),
             destination_guest: destination.guest_ref(),
             entry_digest,
+            entry_owner: entry_owner_for_session(source),
             expires_at,
             source_reconnect_generation: source.reconnect_generation(),
             reconnect_generation: destination.reconnect_generation(),
         })
     }
 
-    pub(crate) fn matches_and_consume(
-        self,
+    pub(crate) fn matches(
+        &self,
         route: &AuthenticatedPasteRoute,
         entry_digest: &str,
         now_secs: u64,
@@ -176,6 +182,10 @@ impl PickerReceipt {
             && self.entry_digest == entry_digest
             && self.expires_at > now_secs
             && self.reconnect_generation == route.reconnect_generation()
+    }
+
+    pub(crate) fn source_owner(&self) -> &str {
+        &self.entry_owner
     }
 
     /// Borrow the operation correlation without exposing content.
@@ -201,7 +211,7 @@ impl PickerAuthority {
         request: &PickerRequest,
         result: PickerResult,
         entry_digest: impl Into<String>,
-        history: &ClipboardHistory,
+        history: &mut ClipboardHistory,
         now_secs: u64,
     ) -> Result<PickerReceipt, PickerError> {
         let entry_digest = entry_digest.into();
@@ -222,7 +232,22 @@ impl PickerAuthority {
                 let Some(expires_at) = history.entry_expiry(&entry_digest, &owner, now_secs) else {
                     return Err(PickerError::ResultMismatch);
                 };
-                PickerReceipt::issue(source, destination, request, entry_digest, expires_at)
+                let receipt =
+                    PickerReceipt::issue(source, destination, request, entry_digest, expires_at)?;
+                let completion_key = format!(
+                    "{}|{}|{}|{}|{}|{}|{}",
+                    request.operation_id(),
+                    source.zone(),
+                    source.subject_ref().to_canonical_string(),
+                    source.reconnect_generation(),
+                    destination.zone(),
+                    destination.guest_ref(),
+                    destination.reconnect_generation(),
+                );
+                if !history.claim_picker_completion(completion_key, expires_at, now_secs) {
+                    return Err(PickerError::ResultMismatch);
+                }
+                Ok(receipt)
             }
             PickerResult::Cancelled | PickerResult::TimedOut | PickerResult::Failed => {
                 Err(PickerError::ResultMismatch)
