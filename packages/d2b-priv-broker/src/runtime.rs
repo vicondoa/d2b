@@ -2287,7 +2287,12 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
         }
         RealBrokerRequest::OpenPidfd(req) => {
             // OpenPidfd returns one SCM_RIGHTS-bearing response fd.
-            let runner_id = format!("{}:{}", req.vm_id.as_str(), req.role_id.as_str());
+            let runner_id = runner_registry_key(
+                req.vm_id.as_str(),
+                req.role_id.as_str(),
+                req.resource_ref.as_ref(),
+                req.resource_uid.as_ref(),
+            );
             let resolver = require_resolver(resolver)?;
             let intent_id = d2b_core::bundle_resolver::intent_id_runner(
                 req.vm_id.as_str(),
@@ -2806,7 +2811,29 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
             // constrained by the broker-owned pidfd registry: only registered
             // runner_ids can be signaled, with unknown ids rejected as NoPidfd
             // by the backend.
-            let runner_id = format!("{}:{}", req.vm_id.as_str(), req.role_id.as_str());
+            let runner_id = runner_registry_key(
+                req.vm_id.as_str(),
+                req.role_id.as_str(),
+                req.resource_ref.as_ref(),
+                req.resource_uid.as_ref(),
+            );
+            if let Some(registration) = runner_metadata_registry()
+                .lock()
+                .map_err(|_| {
+                    BrokerError::Protocol("runner metadata registry mutex poisoned".to_owned())
+                })?
+                .get(&runner_id)
+                .cloned()
+                && !registration_matches(
+                    &registration,
+                    req.resource_ref.as_ref(),
+                    req.resource_uid.as_ref(),
+                    req.pid,
+                    req.expected_start_time_ticks,
+                )
+            {
+                return Err(BrokerError::NoPidfd { runner_id });
+            }
             match backend.signal_runner(runner_id.as_str(), req.signal) {
                 Ok(()) => {}
                 Err(BrokerError::NoPidfd { .. }) => {
@@ -2856,15 +2883,42 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
             // intentionally returns `removed: false` for unknown ids,
             // preserving idempotent cleanup without widening the registry
             // surface.
-            let runner_id = format!("{}:{}", req.vm_id.as_str(), req.role_id.as_str());
+            let runner_id = runner_registry_key(
+                req.vm_id.as_str(),
+                req.role_id.as_str(),
+                req.resource_ref.as_ref(),
+                req.resource_uid.as_ref(),
+            );
             let removed = runner_pidfd_registry()
                 .lock()
                 .map_err(|_| {
                     BrokerError::Protocol("runner pidfd registry mutex poisoned".to_owned())
                 })?
-                .remove(&runner_id)
-                .is_some();
-            remove_runner_metadata(&runner_id);
+                .get(&runner_id)
+                .is_some_and(|_| {
+                    runner_metadata_registry()
+                        .lock()
+                        .ok()
+                        .and_then(|registry| registry.get(&runner_id).cloned())
+                        .is_some_and(|registration| {
+                            registration_matches(
+                                &registration,
+                                req.resource_ref.as_ref(),
+                                req.resource_uid.as_ref(),
+                                req.pid,
+                                req.expected_start_time_ticks,
+                            )
+                        })
+                });
+            if removed {
+                runner_pidfd_registry()
+                    .lock()
+                    .map_err(|_| {
+                        BrokerError::Protocol("runner pidfd registry mutex poisoned".to_owned())
+                    })?
+                    .remove(&runner_id);
+                remove_runner_metadata(&runner_id);
+            }
             write_success_op_record!(
                 audit_log,
                 bundle_metadata,
@@ -2899,6 +2953,62 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                     kind: "runner",
                     intent_id: req.bundle_runner_intent_ref.as_str().to_owned(),
                 })?;
+            if req.resource_ref.is_some() {
+                let Some(bundle_content_identity) = req.bundle_content_identity.as_deref() else {
+                    return Err(BrokerError::SpawnRunnerIntentMismatch {
+                        field: "bundle_content_identity",
+                        requested: "missing".to_owned(),
+                        resolved: "required".to_owned(),
+                    });
+                };
+                let resolved_bundle_content_identity =
+                    resolver.bundle.bundle_hash.as_deref().ok_or_else(|| {
+                        BrokerError::SpawnRunnerIntentMismatch {
+                            field: "bundle_content_identity",
+                            requested: bundle_content_identity.to_owned(),
+                            resolved: "missing".to_owned(),
+                        }
+                    })?;
+                if bundle_content_identity != resolved_bundle_content_identity {
+                    return Err(BrokerError::SpawnRunnerIntentMismatch {
+                        field: "bundle_content_identity",
+                        requested: bundle_content_identity.to_owned(),
+                        resolved: resolved_bundle_content_identity.to_owned(),
+                    });
+                }
+            }
+            if req.generation.is_some_and(|generation| generation == 0) {
+                return Err(BrokerError::SpawnRunnerIntentMismatch {
+                    field: "generation",
+                    requested: "0".to_owned(),
+                    resolved: "nonzero".to_owned(),
+                });
+            }
+            if req.resource_ref.is_some() && req.sandbox_plan.is_none() {
+                return Err(BrokerError::SpawnRunnerIntentMismatch {
+                    field: "sandbox_plan",
+                    requested: "missing".to_owned(),
+                    resolved: "required-for-generic-process".to_owned(),
+                });
+            }
+            if req.resource_ref.is_some()
+                && (req.execution_ref.is_none()
+                    || req.execution_domain.is_none()
+                    || req.resource_uid.is_none()
+                    || req
+                        .provider_identity
+                        .is_none_or(|identity| identity == [0; 32])
+                    || req
+                        .template_identity
+                        .is_none_or(|identity| identity == [0; 32])
+                    || req.generation.is_none())
+            {
+                return Err(BrokerError::SpawnRunnerIntentMismatch {
+                    field: "process_identity",
+                    requested: "incomplete".to_owned(),
+                    resolved: "resource/provider/template/generation-required".to_owned(),
+                });
+            }
             if let Err(err) = resolver.validate_minijail_profiles() {
                 write_decision_op_record!(
                     audit_log,
@@ -2926,6 +3036,9 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                 });
             }
             validate_spawn_runner_request_matches_intent(&req, intent)?;
+            if let Some(plan) = &req.sandbox_plan {
+                validate_sandbox_launch_plan(&req, intent, plan)?;
+            }
             // When the daemon asks the broker to spawn the OtelHostBridge
             // runner (the replacement for the singleton
             // `d2b-otel-host-bridge.service`), the bundle-resolved
@@ -2973,57 +3086,20 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                 req.vm_id.as_str(),
                 req.role_id.as_str(),
             )?;
-            // v1.1.1 defense-in-depth: the canonical Rust argv
-            // regenerator (`d2b_host::runner_argv_regenerator::regenerate_argv`)
-            // is wired here as a no-op tamper check. The v1.1.1
-            // bundle still carries `intent.argv` as a prebuilt
-            // `Vec<String>` (Nix-side processes-json.nix is the
-            // single source of truth for argv at v1.1.1), so the
-            // typed `RunnerArgvExtra` inputs that the regenerator
-            // requires (ChArgvInput / VirtiofsdArgvInput / etc.)
-            // are intentionally empty here and the regenerator
-            // returns `Err(MissingInput)` for every populated
-            // bundle row. The v1.1.2 wire-cleanup will (a) extend
-            // the bundle schema with typed argv inputs per role,
-            // (b) populate `RunnerArgvExtra` from those typed
-            // inputs at this point, (c) call `regenerate_argv`
-            // and assert byte-equality against `intent.argv` as
-            // a defense-in-depth tamper check. The call is wired
-            // now so the wire is exercised end-to-end (the
-            // regenerator's MissingInput arm IS exercised in the
-            // v1.1.1 broker integration tests) rather than living
-            // as dead code on the v1.1.1 release branch.
             let regenerator_extra = d2b_host::runner_argv_regenerator::RunnerArgvExtra::default();
-            match d2b_host::runner_argv_regenerator::regenerate_argv(intent, &regenerator_extra) {
-                Ok(regenerated) => {
-                    if regenerated != intent.argv {
-                        tracing::warn!(
-                            vm_id = %req.vm_id.as_str(),
-                            role_id = %req.role_id.as_str(),
-                            "regenerate_argv: bundle argv differs from Rust regenerator output; \
-                             v1.1.1 trusts bundle argv (Nix-side processes-json.nix is source of truth); \
-                             diff will become a hard failure in v1.1.2 once typed argv inputs land"
-                        );
-                    }
-                }
-                Err(d2b_host::runner_argv_regenerator::RegenerateArgvError::MissingInput {
-                    ..
-                })
-                | Err(d2b_host::runner_argv_regenerator::RegenerateArgvError::NotYetWired(_)) => {
-                    // Expected at v1.1.1: bundle does not yet
-                    // carry typed argv inputs. Fall through to
-                    // the bundle-argv path. v1.1.2 will populate
-                    // `RunnerArgvExtra` and this arm will be
-                    // removed.
-                }
-                Err(other) => {
-                    tracing::warn!(
-                        vm_id = %req.vm_id.as_str(),
-                        role_id = %req.role_id.as_str(),
-                        error = %other,
-                        "regenerate_argv: unexpected regenerator failure; falling through to bundle argv"
-                    );
-                }
+            let regenerated =
+                d2b_host::runner_argv_regenerator::regenerate_argv(intent, &regenerator_extra)
+                    .map_err(|error| BrokerError::SpawnRunnerIntentMismatch {
+                        field: "argv_comparison_inputs",
+                        requested: "required".to_owned(),
+                        resolved: error.to_string(),
+                    })?;
+            if regenerated != intent.argv {
+                return Err(BrokerError::SpawnRunnerIntentMismatch {
+                    field: "argv",
+                    requested: "bundle-and-regenerator-match".to_owned(),
+                    resolved: "mismatch".to_owned(),
+                });
             }
             let mut mount_policy = intent.mount_policy.clone();
             extend_usbip_backend_device_binds(
@@ -3067,7 +3143,12 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                 }),
                 umask: intent.umask,
             };
-            let runner_id = format!("{}:{}", req.vm_id.as_str(), req.role_id.as_str());
+            let runner_id = runner_registry_key(
+                req.vm_id.as_str(),
+                req.role_id.as_str(),
+                req.resource_ref.as_ref(),
+                req.resource_uid.as_ref(),
+            );
             let outcome = match backend.spawn_runner(
                 runner_id.as_str(),
                 &plan_input,
@@ -3115,8 +3196,8 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
             // record (for the w1-swtpm role only) BEFORE the SpawnRunner
             // record so an operator sees the hardening disposition that
             // gated the spawn.
-            if let Some(swtpm_audit) = &outcome.swtpm_dir_audit {
-                if let Err(error) = write_success_op_record!(
+            if let Some(swtpm_audit) = &outcome.swtpm_dir_audit
+                && let Err(error) = write_success_op_record!(
                     audit_log,
                     bundle_metadata,
                     "PrepareSwtpmDir",
@@ -3128,10 +3209,10 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                     req.role_id.as_str(),
                     tracing_span_id_str(req.tracing_span_id.as_ref()),
                     OperationFields::PrepareSwtpmDir(swtpm_audit.clone()),
-                ) {
-                    cleanup_spawned_runner_after_failure(runner_id.as_str(), outcome.pidfd.as_fd());
-                    return Err(error);
-                }
+                )
+            {
+                cleanup_spawned_runner_after_failure(runner_id.as_str(), outcome.pidfd.as_fd());
+                return Err(error);
             }
             if let Err(error) = write_success_op_record!(
                 audit_log,
@@ -3165,6 +3246,13 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                     vm_id: req.vm_id.clone(),
                     role_id: req.role_id.clone(),
                     role: req.role,
+                    execution_ref: req.execution_ref.clone(),
+                    execution_domain: req.execution_domain,
+                    user_ref: req.user_ref.clone(),
+                    provider_identity: req.provider_identity,
+                    template_identity: req.template_identity,
+                    generation: req.generation,
+                    bundle_content_identity: req.bundle_content_identity.clone(),
                     pid: outcome.pid,
                     start_time_ticks: outcome.start_time_ticks,
                     pidfd_index: 0,
@@ -5741,6 +5829,8 @@ fn runner_pidfd_registry() -> &'static Mutex<HashMap<String, OwnedFd>> {
 struct RunnerRegistration {
     vm_id: String,
     role_id: String,
+    resource_ref: Option<d2b_contracts::v3::ResourceRef>,
+    resource_uid: Option<d2b_contracts::v3::ResourceUid>,
     role: d2b_contracts::broker_wire::RunnerRole,
     bundle_runner_intent_ref: String,
     pid: i32,
@@ -5771,6 +5861,8 @@ fn register_runner_metadata(
         RunnerRegistration {
             vm_id: request.vm_id.as_str().to_owned(),
             role_id: request.role_id.as_str().to_owned(),
+            resource_ref: request.resource_ref.clone(),
+            resource_uid: request.resource_uid.clone(),
             role: request.role,
             bundle_runner_intent_ref: request.bundle_runner_intent_ref.as_str().to_owned(),
             pid,
@@ -5803,6 +5895,8 @@ fn register_runner_metadata_from_open(
         RunnerRegistration {
             vm_id: request.vm_id.as_str().to_owned(),
             role_id: request.role_id.as_str().to_owned(),
+            resource_ref: request.resource_ref.clone(),
+            resource_uid: request.resource_uid.clone(),
             role,
             bundle_runner_intent_ref: intent.intent_id.clone(),
             pid: request.pid,
@@ -5812,6 +5906,37 @@ fn register_runner_metadata_from_open(
         },
     );
     Ok(())
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn runner_registry_key(
+    vm_id: &str,
+    role_id: &str,
+    resource_ref: Option<&d2b_contracts::v3::ResourceRef>,
+    resource_uid: Option<&d2b_contracts::v3::ResourceUid>,
+) -> String {
+    match (resource_ref, resource_uid) {
+        (Some(resource_ref), Some(resource_uid)) => format!(
+            "{vm_id}:{role_id}:{}:{}",
+            resource_ref.to_canonical_string(),
+            resource_uid.as_str()
+        ),
+        _ => format!("{vm_id}:{role_id}"),
+    }
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn registration_matches(
+    registration: &RunnerRegistration,
+    resource_ref: Option<&d2b_contracts::v3::ResourceRef>,
+    resource_uid: Option<&d2b_contracts::v3::ResourceUid>,
+    pid: Option<i32>,
+    start_time_ticks: Option<u64>,
+) -> bool {
+    registration.resource_ref.as_ref() == resource_ref
+        && registration.resource_uid.as_ref() == resource_uid
+        && pid.is_none_or(|pid| registration.pid == pid)
+        && start_time_ticks.is_none_or(|ticks| registration.start_time_ticks == ticks)
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
@@ -5826,7 +5951,12 @@ fn observe_registered_runner(
     request: &d2b_contracts::broker_wire::ObserveRunnerRequest,
     intent: &d2b_core::bundle_resolver::ResolvedRunnerIntent,
 ) -> Result<d2b_contracts::broker_wire::ObserveRunnerResponse, BrokerError> {
-    let runner_id = format!("{}:{}", request.vm_id.as_str(), request.role_id.as_str());
+    let runner_id = runner_registry_key(
+        request.vm_id.as_str(),
+        request.role_id.as_str(),
+        request.resource_ref.as_ref(),
+        request.resource_uid.as_ref(),
+    );
     let registration = {
         let registry = runner_metadata_registry().lock().map_err(|_| {
             BrokerError::Protocol("runner metadata registry mutex poisoned".to_owned())
@@ -5845,6 +5975,13 @@ fn observe_registered_runner(
         || registration.vm_id != request.vm_id.as_str()
         || registration.role_id != request.role_id.as_str()
         || registration.role != request.role
+        || !registration_matches(
+            &registration,
+            request.resource_ref.as_ref(),
+            request.resource_uid.as_ref(),
+            None,
+            None,
+        )
         || registration.bundle_runner_intent_ref != request.bundle_runner_intent_ref.as_str()
         || registration.pid <= 0
         || registration.start_time_ticks == 0
@@ -8477,7 +8614,6 @@ fn build_usbip_explicit_firewall_decision(
     .map_err(|err| BrokerError::LiveHandler(err.to_string()))
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn runner_role_for_process_role(
     role: &d2b_core::processes::ProcessRole,
 ) -> Option<d2b_contracts::broker_wire::RunnerRole> {
@@ -8506,6 +8642,169 @@ fn runner_role_for_process_role(
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn validate_sandbox_launch_plan(
+    req: &d2b_contracts::broker_wire::SpawnRunnerRequest,
+    intent: &d2b_core::bundle_resolver::ResolvedRunnerIntent,
+    plan: &d2b_contracts::broker_wire::SandboxLaunchPlan,
+) -> Result<(), BrokerError> {
+    if plan.domain
+        != req
+            .execution_domain
+            .unwrap_or(d2b_contracts::v3::execution_policy::ExecutionDomain::System)
+    {
+        return Err(BrokerError::SpawnRunnerIntentMismatch {
+            field: "sandbox_plan.domain",
+            requested: format!("{:?}", plan.domain),
+            resolved: "request-domain".to_owned(),
+        });
+    }
+    if !plan.no_new_privileges {
+        return Err(BrokerError::SpawnRunnerIntentMismatch {
+            field: "sandbox_plan.no_new_privileges",
+            requested: "false".to_owned(),
+            resolved: "true".to_owned(),
+        });
+    }
+    if plan.start_root != intent.root_carve_out {
+        return Err(BrokerError::SpawnRunnerIntentMismatch {
+            field: "sandbox_plan.start_root",
+            requested: plan.start_root.to_string(),
+            resolved: intent.root_carve_out.to_string(),
+        });
+    }
+    if !plan.read_only_root {
+        return Err(BrokerError::SpawnRunnerIntentMismatch {
+            field: "sandbox_plan.read_only_root",
+            requested: "false".to_owned(),
+            resolved: "unsupported".to_owned(),
+        });
+    }
+    if plan.oom_score_adj != 0 {
+        return Err(BrokerError::SpawnRunnerIntentMismatch {
+            field: "sandbox_plan.oom_score_adj",
+            requested: plan.oom_score_adj.to_string(),
+            resolved: "unsupported".to_owned(),
+        });
+    }
+    if plan.environment_class != d2b_contracts::v3::process::EnvironmentClass::Minimal {
+        return Err(BrokerError::SpawnRunnerIntentMismatch {
+            field: "sandbox_plan.environment_class",
+            requested: format!("{:?}", plan.environment_class),
+            resolved: "minimal-only".to_owned(),
+        });
+    }
+    let expected_namespaces = &intent.namespaces;
+    let requested_namespaces = |class| match class {
+        d2b_contracts::v3::process::NamespaceClass::User => expected_namespaces.user,
+        d2b_contracts::v3::process::NamespaceClass::Pid => expected_namespaces.pid,
+        d2b_contracts::v3::process::NamespaceClass::Mount => expected_namespaces.mount,
+        d2b_contracts::v3::process::NamespaceClass::Ipc => expected_namespaces.ipc,
+        d2b_contracts::v3::process::NamespaceClass::Uts => expected_namespaces.uts,
+        d2b_contracts::v3::process::NamespaceClass::Network => expected_namespaces.net,
+        d2b_contracts::v3::process::NamespaceClass::Cgroup
+        | d2b_contracts::v3::process::NamespaceClass::Time => false,
+    };
+    for class in &plan.namespace_classes {
+        if !requested_namespaces(*class) {
+            return Err(BrokerError::SpawnRunnerIntentMismatch {
+                field: "sandbox_plan.namespace_classes",
+                requested: format!("{class:?}"),
+                resolved: "bundle-profile".to_owned(),
+            });
+        }
+    }
+    if plan
+        .namespace_classes
+        .iter()
+        .any(|class| matches!(class, d2b_contracts::v3::process::NamespaceClass::User))
+        != expected_namespaces.user
+    {
+        return Err(BrokerError::SpawnRunnerIntentMismatch {
+            field: "sandbox_plan.namespace_classes",
+            requested: "user".to_owned(),
+            resolved: "bundle-profile".to_owned(),
+        });
+    }
+    if plan.user_namespace.is_some() != intent.user_namespace.is_some()
+        || plan.user_namespace.is_some_and(|spec| {
+            spec.mapping_class != d2b_contracts::v3::process::MappingClass::ProcessPrincipalRoot
+        })
+    {
+        return Err(BrokerError::SpawnRunnerIntentMismatch {
+            field: "sandbox_plan.user_namespace",
+            requested: format!("{:?}", plan.user_namespace),
+            resolved: "bundle-profile".to_owned(),
+        });
+    }
+    if let Some(umask) = &plan.umask {
+        let parsed =
+            u32::from_str_radix(umask, 8).map_err(|_| BrokerError::SpawnRunnerIntentMismatch {
+                field: "sandbox_plan.umask",
+                requested: umask.clone(),
+                resolved: "valid-octal".to_owned(),
+            })?;
+        if intent.umask != Some(parsed) {
+            return Err(BrokerError::SpawnRunnerIntentMismatch {
+                field: "sandbox_plan.umask",
+                requested: umask.clone(),
+                resolved: intent
+                    .umask
+                    .map_or_else(|| "inherit".to_owned(), |value| format!("{value:o}")),
+            });
+        }
+    } else if intent.umask.is_some() {
+        return Err(BrokerError::SpawnRunnerIntentMismatch {
+            field: "sandbox_plan.umask",
+            requested: "inherit".to_owned(),
+            resolved: "bundle-profile".to_owned(),
+        });
+    }
+    if plan.capability_classes.iter().any(|class| {
+        !intent
+            .capabilities
+            .iter()
+            .any(|capability| capability_matches(*class, capability))
+    }) {
+        return Err(BrokerError::SpawnRunnerIntentMismatch {
+            field: "sandbox_plan.capability_classes",
+            requested: "mismatch".to_owned(),
+            resolved: "bundle-profile".to_owned(),
+        });
+    }
+    if plan.seccomp_class.as_str().is_empty() || intent.seccomp_policy_ref.is_none() {
+        return Err(BrokerError::SpawnRunnerIntentMismatch {
+            field: "sandbox_plan.seccomp_class",
+            requested: plan.seccomp_class.as_str().to_owned(),
+            resolved: "broker-profile".to_owned(),
+        });
+    }
+    Ok(())
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn capability_matches(
+    class: d2b_contracts::v3::process::CapabilityClass,
+    capability: &str,
+) -> bool {
+    let expected = match class {
+        d2b_contracts::v3::process::CapabilityClass::NetworkBind => "CAP_NET_BIND_SERVICE",
+        d2b_contracts::v3::process::CapabilityClass::NetworkRaw => "CAP_NET_RAW",
+        d2b_contracts::v3::process::CapabilityClass::NetworkAdmin => "CAP_NET_ADMIN",
+        d2b_contracts::v3::process::CapabilityClass::SysTime => "CAP_SYS_TIME",
+        d2b_contracts::v3::process::CapabilityClass::SysPtrace => "CAP_SYS_PTRACE",
+        d2b_contracts::v3::process::CapabilityClass::SysAdmin => "CAP_SYS_ADMIN",
+        d2b_contracts::v3::process::CapabilityClass::DacOverride => "CAP_DAC_OVERRIDE",
+        d2b_contracts::v3::process::CapabilityClass::Fowner => "CAP_FOWNER",
+        d2b_contracts::v3::process::CapabilityClass::Chown => "CAP_CHOWN",
+        d2b_contracts::v3::process::CapabilityClass::Setuid => "CAP_SETUID",
+        d2b_contracts::v3::process::CapabilityClass::Setgid => "CAP_SETGID",
+        d2b_contracts::v3::process::CapabilityClass::AuditWrite => "CAP_AUDIT_WRITE",
+        d2b_contracts::v3::process::CapabilityClass::Kill => "CAP_KILL",
+    };
+    capability == expected
+}
+
 fn validate_spawn_runner_request_matches_intent(
     req: &d2b_contracts::broker_wire::SpawnRunnerRequest,
     intent: &d2b_core::bundle_resolver::ResolvedRunnerIntent,
@@ -8517,6 +8816,59 @@ fn validate_spawn_runner_request_matches_intent(
             resolved: intent.vm_name.clone(),
         });
     }
+    if let Some(execution_ref) = &req.execution_ref {
+        let expected =
+            d2b_contracts::v3::ResourceRef::parse(&intent.execution_ref).map_err(|_| {
+                BrokerError::SpawnRunnerIntentMismatch {
+                    field: "execution_ref",
+                    requested: execution_ref.to_canonical_string(),
+                    resolved: "invalid-bundle-reference".to_owned(),
+                }
+            })?;
+        if execution_ref != &expected {
+            return Err(BrokerError::SpawnRunnerIntentMismatch {
+                field: "execution_ref",
+                requested: execution_ref.to_canonical_string(),
+                resolved: expected.to_canonical_string(),
+            });
+        }
+    }
+    let expected_domain = match intent.execution_domain {
+        d2b_core::processes::ProcessExecutionDomain::System => {
+            d2b_contracts::v3::execution_policy::ExecutionDomain::System
+        }
+        d2b_core::processes::ProcessExecutionDomain::User => {
+            d2b_contracts::v3::execution_policy::ExecutionDomain::User
+        }
+    };
+    if req
+        .execution_domain
+        .is_some_and(|domain| domain != expected_domain)
+    {
+        return Err(BrokerError::SpawnRunnerIntentMismatch {
+            field: "execution_domain",
+            requested: format!("{:?}", req.execution_domain),
+            resolved: format!("{expected_domain:?}"),
+        });
+    }
+    let expected_user = intent
+        .user_ref
+        .as_deref()
+        .map(d2b_contracts::v3::ResourceRef::parse)
+        .transpose()
+        .map_err(|_| BrokerError::SpawnRunnerIntentMismatch {
+            field: "user_ref",
+            requested: "invalid-bundle-reference".to_owned(),
+            resolved: "invalid-bundle-reference".to_owned(),
+        })?;
+    if req.user_ref != expected_user {
+        return Err(BrokerError::SpawnRunnerIntentMismatch {
+            field: "user_ref",
+            requested: format!("{:?}", req.user_ref),
+            resolved: format!("{expected_user:?}"),
+        });
+    }
+
     let expected_role_id = match intent.role {
         d2b_core::processes::ProcessRole::CloudHypervisorRunner => "ch-runner",
         _ => intent.role_id.as_str(),
@@ -12973,6 +13325,8 @@ mod tests {
                 role_id: RoleId::new("ch-runner"),
                 pid: 4242,
                 expected_start_time_ticks: 123456,
+                resource_ref: None,
+                resource_uid: None,
                 tracing_span_id: Some(TracingSpanId::new("span-pidfd")),
             }),
             "OpenPidfd",
@@ -13000,6 +13354,8 @@ mod tests {
                 signal: RunnerSignal::Term,
                 pid: None,
                 expected_start_time_ticks: None,
+                resource_ref: None,
+                resource_uid: None,
                 tracing_span_id: Some(TracingSpanId::new("span-signal")),
             }),
             "SignalRunner",
@@ -13024,6 +13380,13 @@ mod tests {
                 execution_ref: None,
                 execution_domain: None,
                 user_ref: None,
+                resource_ref: None,
+                resource_uid: None,
+                bundle_content_identity: None,
+                provider_identity: None,
+                template_identity: None,
+                generation: None,
+                sandbox_plan: None,
                 workload_identity: None,
                 vm_id: VmId::new("corp-vm"),
                 role_id: RoleId::new("ch-runner"),
@@ -13460,6 +13823,13 @@ mod tests {
             execution_ref: None,
             execution_domain: None,
             user_ref: None,
+            resource_ref: None,
+            resource_uid: None,
+            bundle_content_identity: None,
+            provider_identity: None,
+            template_identity: None,
+            generation: None,
+            sandbox_plan: None,
             workload_identity: None,
             vm_id: VmId::new("corp-vm"),
             role_id: RoleId::new("ch-runner"),
@@ -14156,6 +14526,13 @@ mod tests {
             execution_ref: None,
             execution_domain: None,
             user_ref: None,
+            resource_ref: None,
+            resource_uid: None,
+            bundle_content_identity: None,
+            provider_identity: None,
+            template_identity: None,
+            generation: None,
+            sandbox_plan: None,
             workload_identity: None,
             vm_id: VmId::new("corp-vm"),
             role_id: RoleId::new("ch-runner"),
@@ -14287,6 +14664,13 @@ mod tests {
             execution_ref: None,
             execution_domain: None,
             user_ref: None,
+            resource_ref: None,
+            resource_uid: None,
+            bundle_content_identity: None,
+            provider_identity: None,
+            template_identity: None,
+            generation: None,
+            sandbox_plan: None,
             workload_identity: None,
             vm_id: VmId::new("corp-vm"),
             role_id: RoleId::new("otel-host-bridge"),
@@ -14364,6 +14748,8 @@ mod tests {
                 signal: RunnerSignal::Term,
                 pid: None,
                 expected_start_time_ticks: None,
+                resource_ref: None,
+                resource_uid: None,
                 tracing_span_id: None,
             });
         let audit_context = DispatchAuditContext::from_request(&request, 5151, &caller_role)

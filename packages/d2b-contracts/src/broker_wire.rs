@@ -13,6 +13,7 @@ use crate::types::{
     BundleClosureRef, BundleOpId, MediaRef, PathClass, RoleId, ScopeId, SubjectId, TracingSpanId,
     VmId,
 };
+use crate::v3::process::{CapabilityClass, EnvironmentClass, NamespaceClass, UserNamespaceSpec};
 use crate::v3::{
     ResourceBundleGenerationId, ResourceGeneration, ResourceRef, ResourceUid,
     execution_policy::ExecutionDomain, storage::ZoneStoreId,
@@ -1841,6 +1842,12 @@ pub struct OpenPidfdRequest {
     /// 22 AFTER `pidfd_open` and compares; mismatch means the pid
     /// was reused.
     pub expected_start_time_ticks: u64,
+    /// Optional generic Process identity binding. Legacy VM runner callers
+    /// omit these fields and retain the historical VM/role key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_ref: Option<ResourceRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_uid: Option<ResourceUid>,
     #[serde(default)]
     pub tracing_span_id: Option<TracingSpanId>,
 }
@@ -1872,6 +1879,11 @@ pub struct ObserveRunnerRequest {
     pub role_id: RoleId,
     pub role: RunnerRole,
     pub bundle_runner_intent_ref: BundleOpId,
+    /// Optional generic Process identity binding.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_ref: Option<ResourceRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_uid: Option<ResourceUid>,
     #[serde(default)]
     pub tracing_span_id: Option<TracingSpanId>,
 }
@@ -1982,6 +1994,12 @@ pub struct SystemdUnitRequest {
     pub vm_id: VmId,
     /// Process role identifier within the execution target.
     pub role_id: RoleId,
+    /// Optional generic Process identity binding used in unit names and
+    /// authorization. Legacy VM runner callers omit these fields.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_ref: Option<ResourceRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_uid: Option<ResourceUid>,
     /// Closed runner role selecting the trusted bundle launch plan.
     pub role: RunnerRole,
     /// Opaque bundle reference resolved only by the broker.
@@ -2001,6 +2019,10 @@ pub struct SystemdUnitRequest {
     /// Canonical User resource bound to a user-domain launch.
     #[serde(default)]
     pub user_ref: Option<ResourceRef>,
+    /// Typed sandbox requirements enforced by the broker's systemd launch
+    /// adapter. Legacy VM runner callers omit this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sandbox_plan: Option<SandboxLaunchPlan>,
     #[serde(default)]
     pub tracing_span_id: Option<TracingSpanId>,
 }
@@ -2589,6 +2611,11 @@ pub struct SignalRunnerRequest {
     pub pid: Option<i32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expected_start_time_ticks: Option<u64>,
+    /// Optional generic Process identity binding.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_ref: Option<ResourceRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_uid: Option<ResourceUid>,
     #[serde(default)]
     pub tracing_span_id: Option<TracingSpanId>,
 }
@@ -2615,6 +2642,16 @@ pub struct CgroupKillRequest {
 pub struct DeregisterRunnerPidfdRequest {
     pub vm_id: VmId,
     pub role_id: RoleId,
+    /// Optional exact process identity. Deregistration must not remove a
+    /// replacement runner that reused the VM/role tuple.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pid: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_start_time_ticks: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_ref: Option<ResourceRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_uid: Option<ResourceUid>,
     #[serde(default)]
     pub tracing_span_id: Option<TracingSpanId>,
 }
@@ -2680,6 +2717,25 @@ pub enum RunnerRole {
     WaylandProxy,
 }
 
+/// Typed semantic sandbox plan compiled by the daemon and re-validated by
+/// the privileged broker before a runner is spawned.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SandboxLaunchPlan {
+    pub digest: String,
+    pub domain: ExecutionDomain,
+    pub namespace_classes: Vec<NamespaceClass>,
+    pub capability_classes: Vec<CapabilityClass>,
+    pub seccomp_class: crate::v3::execution_policy::BoundedToken,
+    pub no_new_privileges: bool,
+    pub start_root: bool,
+    pub environment_class: EnvironmentClass,
+    pub read_only_root: bool,
+    pub umask: Option<String>,
+    pub oom_score_adj: i32,
+    pub user_namespace: Option<UserNamespaceSpec>,
+}
+
 impl RunnerRole {
     pub fn as_str(self) -> &'static str {
         match self {
@@ -2708,6 +2764,25 @@ pub struct SpawnRunnerRequest {
     /// active runners - the daemon's pidfd table is keyed on
     /// `(vm_id, role_id)` and a duplicate registration fails closed.
     pub role_id: RoleId,
+    /// Optional generic Process identity binding. These fields are part of
+    /// the registry key and prevent distinct Process resources from
+    /// colliding on the legacy VM/role tuple.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_ref: Option<ResourceRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_uid: Option<ResourceUid>,
+    /// Content identity of the daemon's trusted bundle snapshot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bundle_content_identity: Option<String>,
+    /// Provider/template identity expected by the daemon.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_identity: Option<[u8; 32]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub template_identity: Option<[u8; 32]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generation: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sandbox_plan: Option<SandboxLaunchPlan>,
     /// Role selector - picks the argv generator the broker applies to
     /// the bundle row anchored by `bundle_runner_intent_ref`.
     pub role: RunnerRole,
@@ -2788,6 +2863,22 @@ pub struct SpawnRunnerResponse {
     pub vm_id: VmId,
     pub role_id: RoleId,
     pub role: RunnerRole,
+    /// Resolved execution binding and content identities echoed by the
+    /// broker after validating the request against its trusted bundle.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_ref: Option<ResourceRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_domain: Option<ExecutionDomain>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_ref: Option<ResourceRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_identity: Option<[u8; 32]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub template_identity: Option<[u8; 32]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generation: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bundle_content_identity: Option<String>,
     /// Child PID. The daemon validates this against the pidfd it
     /// received and against `/proc/<pid>/stat` field 22
     /// (`start_time`).
@@ -4076,6 +4167,13 @@ mod tests {
             start_time_ticks: 987_654_321,
             pidfd_index: 0,
             console_fd_index: None,
+            execution_ref: None,
+            execution_domain: None,
+            user_ref: None,
+            provider_identity: None,
+            template_identity: None,
+            generation: None,
+            bundle_content_identity: None,
         });
         let frame = encode_frame(&response).expect("encodes");
         let decoded = decode_frame::<BrokerResponse>("BrokerResponse", &frame).expect("decodes");

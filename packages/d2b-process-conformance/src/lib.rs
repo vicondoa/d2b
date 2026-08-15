@@ -43,7 +43,7 @@ pub use identity::{
 };
 pub use port::{AdoptionCandidate, LaunchedProcess, ProcessLaunchEffectPort, StopClass};
 pub use provider::{AdoptionOutcome, ProcessProvider, ProcessProviderProfile};
-pub use sandbox::{CompiledSandbox, SandboxCompiler, StopProof, validate_stop_proof};
+pub use sandbox::{CompiledSandbox, SandboxCompiler, SandboxPlan, StopProof, validate_stop_proof};
 pub use status::{
     AdoptionCondition, ExitClass, ExitObservation, ProcessPhaseClass, ProcessStatusReport,
 };

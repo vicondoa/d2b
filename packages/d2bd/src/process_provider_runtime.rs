@@ -26,7 +26,7 @@ use d2b_core::{
 use d2b_process_conformance::{
     AdoptionOutcome, CompiledDigests, ConfigurationDigest, IdentityBinding, LaunchTicket,
     OperationBinding, ProcessConformanceError, ProcessIdentityDigest, ProcessLaunchEffectPort,
-    ProcessProvider, ProcessStatusReport, ReadinessExpectation, StopClass,
+    ProcessProvider, ProcessStatusReport, ReadinessExpectation, SandboxCompiler, StopClass,
 };
 use d2b_provider_supervisor::{
     BrokerProcessBackend, BrokerSystemdEffectOwner, BundleBackedLaunchResolver, ProviderSupervisor,
@@ -1195,7 +1195,16 @@ fn resource_ticket(
         required_identity(provider),
     )
     .map_err(|error| format!("provider-ticket:{}", error.code()))?;
-    Ok(ticket.with_readiness(ReadinessExpectation::None))
+    let sandbox = SandboxCompiler
+        .compile_plan(
+            execution.sandbox(),
+            execution.domain().unwrap_or(ExecutionDomain::System),
+            false,
+        )
+        .map_err(|error| format!("provider-ticket:{}", error.code()))?;
+    Ok(ticket
+        .with_sandbox_plan(sandbox)
+        .with_readiness(ReadinessExpectation::None))
 }
 
 fn compiled_resource_digests(

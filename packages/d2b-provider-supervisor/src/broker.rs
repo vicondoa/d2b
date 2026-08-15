@@ -11,7 +11,7 @@ use std::time::Duration;
 use d2b_contracts::broker_wire::{
     AuditJoinContext, BrokerCallerRole, BrokerRequest, BrokerRequestEnvelope, BrokerResponse,
     CanonicalAuditDigest, DeregisterRunnerPidfdRequest, ObserveRunnerRequest, OpenPidfdRequest,
-    RunnerRole, RunnerSignal, SignalRunnerRequest, SpawnRunnerRequest,
+    RunnerRole, RunnerSignal, SandboxLaunchPlan, SignalRunnerRequest, SpawnRunnerRequest,
 };
 use d2b_contracts::types::{BundleOpId, RoleId, VmId};
 use d2b_contracts::v3::ResourceRef;
@@ -55,6 +55,14 @@ pub struct BrokerLaunchIntent {
     pub template_identity: [u8; 32],
     /// Nonzero Process resource generation bound to this launch.
     pub generation: u64,
+    /// Exact generic Process identity carried through broker lifecycle calls.
+    pub resource_ref: ResourceRef,
+    /// Immutable resource UID used to separate same-name generations.
+    pub resource_uid: d2b_contracts::v3::ResourceUid,
+    /// Content identity of the trusted bundle snapshot.
+    pub bundle_content_identity: String,
+    /// Complete semantic sandbox plan for generic Process launches.
+    pub sandbox_plan: Option<SandboxLaunchPlan>,
 }
 
 impl std::fmt::Debug for BrokerLaunchIntent {
@@ -234,6 +242,8 @@ impl BrokerLaunchResolver for BundleBackedLaunchResolver {
                 role_id: intent.role_id.clone(),
                 role: intent.role,
                 bundle_runner_intent_ref: intent.bundle_runner_intent_ref.clone(),
+                resource_ref: Some(intent.resource_ref.clone()),
+                resource_uid: Some(intent.resource_uid.clone()),
                 tracing_span_id: None,
             }),
             observation.caller_role.clone(),
@@ -341,6 +351,31 @@ impl BundleBackedLaunchResolver {
                 b"d2b-process-template-v1",
             ),
             generation: ticket.resource_generation().get(),
+            resource_ref: ticket.process_ref().clone(),
+            resource_uid: ticket.process_uid().clone(),
+            bundle_content_identity: self
+                .bundle
+                .bundle
+                .bundle_hash
+                .clone()
+                .ok_or(ProcessEffectError::IdentityChanged)?,
+            sandbox_plan: ticket.sandbox_plan().map(|plan| {
+                let spec = plan.spec();
+                SandboxLaunchPlan {
+                    digest: plan.compiled().digest().to_hex(),
+                    domain: ticket.domain(),
+                    namespace_classes: spec.namespace_classes().to_vec(),
+                    capability_classes: spec.capability_classes().to_vec(),
+                    seccomp_class: spec.seccomp_class().clone(),
+                    no_new_privileges: spec.no_new_privileges(),
+                    start_root: spec.start_root(),
+                    environment_class: spec.environment_class(),
+                    read_only_root: spec.read_only_root(),
+                    umask: spec.umask().map(str::to_owned),
+                    oom_score_adj: spec.oom_score_adj(),
+                    user_namespace: spec.user_namespace().copied(),
+                }
+            }),
         })
     }
 }
@@ -490,6 +525,13 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
             user_ref: intent.user_ref.clone(),
             vm_id: intent.vm_id.clone(),
             role_id: intent.role_id.clone(),
+            resource_ref: Some(intent.resource_ref.clone()),
+            resource_uid: Some(intent.resource_uid.clone()),
+            bundle_content_identity: Some(intent.bundle_content_identity.clone()),
+            provider_identity: Some(intent.provider_identity),
+            template_identity: Some(intent.template_identity),
+            generation: Some(intent.generation),
+            sandbox_plan: intent.sandbox_plan.clone(),
             role: intent.role,
             bundle_runner_intent_ref: intent.bundle_runner_intent_ref.clone(),
             runtime_allocations: Vec::new(),
@@ -504,6 +546,14 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
             || response.role != intent.role
             || response.pid <= 0
             || response.start_time_ticks == 0
+            || response.execution_ref.as_ref() != Some(&intent.execution_ref)
+            || response.execution_domain != Some(intent.domain)
+            || response.user_ref.as_ref() != intent.user_ref.as_ref()
+            || response.provider_identity != Some(intent.provider_identity)
+            || response.template_identity != Some(intent.template_identity)
+            || response.generation != Some(intent.generation)
+            || response.bundle_content_identity.as_deref()
+                != Some(intent.bundle_content_identity.as_str())
         {
             return Err(ProcessEffectError::IdentityChanged);
         }
@@ -558,6 +608,8 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
         let frame = self.request(BrokerRequest::OpenPidfd(OpenPidfdRequest {
             vm_id: observed.intent.vm_id.clone(),
             role_id: observed.intent.role_id.clone(),
+            resource_ref: Some(observed.intent.resource_ref.clone()),
+            resource_uid: Some(observed.intent.resource_uid.clone()),
             pid: observed.pid,
             expected_start_time_ticks: observed.start_time_ticks,
             tracing_span_id: None,
@@ -594,6 +646,8 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
         let frame = self.request(BrokerRequest::SignalRunner(SignalRunnerRequest {
             vm_id: handle.observed.intent.vm_id.clone(),
             role_id: handle.observed.intent.role_id.clone(),
+            resource_ref: Some(handle.observed.intent.resource_ref.clone()),
+            resource_uid: Some(handle.observed.intent.resource_uid.clone()),
             signal,
             pid: Some(handle.observed.pid),
             expected_start_time_ticks: Some(handle.observed.start_time_ticks),
@@ -615,6 +669,10 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
                 DeregisterRunnerPidfdRequest {
                     vm_id: handle.observed.intent.vm_id.clone(),
                     role_id: handle.observed.intent.role_id.clone(),
+                    pid: Some(handle.observed.pid),
+                    expected_start_time_ticks: Some(handle.observed.start_time_ticks),
+                    resource_ref: Some(handle.observed.intent.resource_ref.clone()),
+                    resource_uid: Some(handle.observed.intent.resource_uid.clone()),
                     tracing_span_id: None,
                 },
             ))?;
@@ -633,6 +691,10 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
             DeregisterRunnerPidfdRequest {
                 vm_id: handle.observed.intent.vm_id.clone(),
                 role_id: handle.observed.intent.role_id.clone(),
+                pid: Some(handle.observed.pid),
+                expected_start_time_ticks: Some(handle.observed.start_time_ticks),
+                resource_ref: Some(handle.observed.intent.resource_ref.clone()),
+                resource_uid: Some(handle.observed.intent.resource_uid.clone()),
                 tracing_span_id: None,
             },
         ))?;
@@ -746,6 +808,13 @@ mod tests {
                 provider_identity: [1; 32],
                 template_identity: [2; 32],
                 generation: 1,
+                resource_ref: ResourceRef::parse("Process/worker").unwrap(),
+                resource_uid: d2b_contracts::v3::ResourceUid::parse(
+                    "00000000-0000-4000-8000-000000000001",
+                )
+                .unwrap(),
+                bundle_content_identity: "bundle".to_owned(),
+                sandbox_plan: None,
             },
             pid: i32::from(seed) + 1,
             start_time_ticks: u64::from(seed) + 1,

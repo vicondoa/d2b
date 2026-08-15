@@ -46,3 +46,22 @@ fn repeated_terminal_observation_does_not_extend_cleanup_ttl() {
     process.observe(ProcessOutcome::crashed());
     assert_eq!(process.ttl_remaining(), Some(6));
 }
+
+#[test]
+fn zero_reset_interval_clears_restart_budget_immediately() {
+    let mut policy = RestartPolicy::on_failure(2, 0);
+    assert!(policy.should_restart(ProcessOutcome::crashed()));
+    assert_eq!(policy.attempts(), 1);
+    policy.tick(0);
+    assert_eq!(policy.attempts(), 0);
+    assert_eq!(policy.healthy_ticks(), 0);
+}
+
+#[test]
+fn incident_hold_blocks_ephemeral_cleanup_after_ttl_expiry() {
+    let mut process = EphemeralProcessController::new(3, true);
+    process.observe(ProcessOutcome::exited(0).unwrap());
+    process.tick(3);
+    assert_eq!(process.ttl_remaining(), Some(0));
+    assert!(!process.cleanup_eligible());
+}

@@ -2190,6 +2190,8 @@ impl supervisor::state::PidfdOpener for BrokerPidfdOpener<'_> {
                 role_id: RoleId::new(role_id),
                 pid,
                 expected_start_time_ticks,
+                resource_ref: None,
+                resource_uid: None,
                 tracing_span_id: None,
             }),
             Duration::from_secs(10),
@@ -2659,6 +2661,13 @@ impl usbipd_perenv_autostart::PerEnvUsbipdSpawner for BrokerPerEnvUsbipdSpawner 
             workload_identity: None,
             vm_id: VmId::new(spec.vm_id.clone()),
             role_id: RoleId::new(spec.role.role_id().to_owned()),
+            resource_ref: None,
+            resource_uid: None,
+            bundle_content_identity: None,
+            provider_identity: None,
+            template_identity: None,
+            generation: None,
+            sandbox_plan: None,
             role: usbipd_perenv_autostart::spawn_runner_role(spec),
             bundle_runner_intent_ref: BundleOpId::new(spec.intent_id()),
             runtime_allocations: vec![],
@@ -13412,6 +13421,19 @@ async fn open_resource_plane(
                 }
             };
         runtime.set_provider_path_ready(provider_ready);
+        let installed_provider_count = state
+            .provider_runtime
+            .registered_provider_count()
+            .try_into()
+            .unwrap_or(u32::MAX);
+        let _ = runtime.publish_provider_counts(
+            installed_provider_count,
+            if provider_ready {
+                installed_provider_count
+            } else {
+                0
+            },
+        );
         if let Err(error) = runtime
             .reconcile_process_resources(Arc::new(state.clone()))
             .await
@@ -13719,7 +13741,7 @@ enum VmStartNodeMode {
 
 #[derive(Debug)]
 enum VmRunnerLaunch {
-    Legacy(d2b_contracts::broker_wire::SpawnRunnerResponse),
+    Legacy(Box<d2b_contracts::broker_wire::SpawnRunnerResponse>),
     Provider,
 }
 
@@ -13967,6 +13989,13 @@ impl VmStartRunner<'_> {
                 workload_identity: self.workload_identity.clone(),
                 vm_id: VmId::new(vm),
                 role_id: RoleId::new(role_id.clone()),
+                resource_ref: None,
+                resource_uid: None,
+                bundle_content_identity: None,
+                provider_identity: None,
+                template_identity: None,
+                generation: None,
+                sandbox_plan: None,
                 role: runner_role,
                 bundle_runner_intent_ref: BundleOpId::new(intent.intent_id.clone()),
                 runtime_allocations: vec![],
@@ -13991,7 +14020,7 @@ impl VmStartRunner<'_> {
                     return Err(error);
                 }
                 close_received_fds(&received_fds);
-                Ok(VmRunnerLaunch::Legacy(response))
+                Ok(VmRunnerLaunch::Legacy(Box::new(response)))
             }
             Ok((BrokerResponse::Error(error), received_fds)) => {
                 close_received_fds(&received_fds);
@@ -15114,6 +15143,8 @@ fn signal_unregistered_spawned_runner(
         signal,
         pid: Some(response.pid),
         expected_start_time_ticks: Some(response.start_time_ticks),
+        resource_ref: None,
+        resource_uid: None,
         tracing_span_id: None,
     });
     match dispatch_broker_request_as(state, request, caller_role) {
@@ -15854,6 +15885,8 @@ fn signal_via_broker(
         signal,
         pid: registration.as_ref().map(|entry| entry.pid),
         expected_start_time_ticks: registration.as_ref().map(|entry| entry.start_time_ticks),
+        resource_ref: None,
+        resource_uid: None,
         tracing_span_id: None,
     });
     match dispatch_broker_request_as(state, request, caller_role) {
@@ -15906,6 +15939,20 @@ fn deregister_runner_pidfd_via_broker(
     let request = BrokerRequest::DeregisterRunnerPidfd(DeregisterRunnerPidfdRequest {
         vm_id: VmId::new(vm),
         role_id: RoleId::new(role_id),
+        pid: state
+            .pidfd_table
+            .list_for_vm(vm)
+            .into_iter()
+            .find(|entry| entry.role == role_id)
+            .map(|entry| entry.pid),
+        expected_start_time_ticks: state
+            .pidfd_table
+            .list_for_vm(vm)
+            .into_iter()
+            .find(|entry| entry.role == role_id)
+            .map(|entry| entry.start_time_ticks),
+        resource_ref: None,
+        resource_uid: None,
         tracing_span_id: None,
     });
     match dispatch_broker_request_as(state, request, caller_role) {
@@ -28855,6 +28902,13 @@ mod broker_dispatch_tests {
                     vm_id: VmId::new("vm-a"),
                     role_id: RoleId::new(VM_RUNNER_ROLE_ID),
                     role: RunnerRole::CloudHypervisor,
+                    execution_ref: None,
+                    execution_domain: None,
+                    user_ref: None,
+                    provider_identity: None,
+                    template_identity: None,
+                    generation: None,
+                    bundle_content_identity: None,
                     pid: child.child().id() as i32,
                     start_time_ticks: read_child_start_time(child.child()),
                     pidfd_index: 0,
@@ -29131,6 +29185,13 @@ mod broker_dispatch_tests {
                         vm_id: VmId::new("vm-a"),
                         role_id: RoleId::new(request.role_id.as_str()),
                         role: expected_runner_role,
+                        execution_ref: None,
+                        execution_domain: None,
+                        user_ref: None,
+                        provider_identity: None,
+                        template_identity: None,
+                        generation: None,
+                        bundle_content_identity: None,
                         pid: child.child().id() as i32,
                         start_time_ticks: read_child_start_time(child.child()),
                         pidfd_index: 0,
@@ -30195,6 +30256,13 @@ mod broker_dispatch_tests {
                 vm_id: VmId::new(vm),
                 role_id: RoleId::new(role),
                 role: RunnerRole::Video,
+                execution_ref: None,
+                execution_domain: None,
+                user_ref: None,
+                provider_identity: None,
+                template_identity: None,
+                generation: None,
+                bundle_content_identity: None,
                 pid,
                 start_time_ticks,
                 pidfd_index: 0,

@@ -176,6 +176,14 @@ pub trait SystemdEffectOwner: Send + Sync + 'static {
         request: ProcessRequest,
     ) -> Result<Option<SystemdInvocationIdentity>, ProcessEffectError>;
 
+    /// Probe a transient unit without retaining adoption state.
+    fn probe(
+        &self,
+        request: ProcessRequest,
+    ) -> Result<Option<SystemdInvocationIdentity>, ProcessEffectError> {
+        self.observe(request)
+    }
+
     /// Open local authority and atomically re-query the unit identity.
     fn reopen(
         &self,
@@ -365,7 +373,7 @@ impl<O: SystemdEffectOwner> ProcessEffectBackend for SystemdProcessBackend<O> {
         &self,
         request: ProcessRequest,
     ) -> Result<Option<BackendObservation>, ProcessEffectError> {
-        let Some(identity) = self.owner.observe(request)? else {
+        let Some(identity) = self.owner.probe(request)? else {
             return Ok(None);
         };
         Ok(Some(identity.observation()))
@@ -472,12 +480,15 @@ impl BrokerSystemdEffectOwner {
             user_ref: intent.user_ref.clone(),
             vm_id: intent.vm_id.clone(),
             role_id: intent.role_id.clone(),
+            resource_ref: Some(intent.resource_ref.clone()),
+            resource_uid: Some(intent.resource_uid.clone()),
             role: intent.role,
             bundle_runner_intent_ref: intent.bundle_runner_intent_ref.clone(),
             provider_identity: intent.provider_identity,
             template_identity: intent.template_identity,
             generation: intent.generation,
             domain,
+            sandbox_plan: intent.sandbox_plan.clone(),
             tracing_span_id: None,
         };
         Ok((intent, unit))
@@ -599,6 +610,24 @@ impl SystemdEffectOwner for BrokerSystemdEffectOwner {
         let identity = self.identity(&wire, &intent)?;
         self.remember(&identity, unit)?;
         Ok(Some(identity))
+    }
+
+    fn probe(
+        &self,
+        request: ProcessRequest,
+    ) -> Result<Option<SystemdInvocationIdentity>, ProcessEffectError> {
+        let (intent, unit) = self.intent(&request)?;
+        let frame = self.request(BrokerRequest::ObserveSystemdUnit(unit.clone()))?;
+        let BrokerResponse::ObserveSystemdUnit(response) = frame.response else {
+            return Err(response_error(&frame.response));
+        };
+        if response.vm_id != unit.vm_id || response.role_id != unit.role_id {
+            return Err(ProcessEffectError::IdentityChanged);
+        }
+        let Some(wire) = response.identity else {
+            return Ok(None);
+        };
+        self.identity(&wire, &intent).map(Some)
     }
 
     fn reopen(

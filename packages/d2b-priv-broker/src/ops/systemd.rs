@@ -110,6 +110,11 @@ fn validate_request(
     if request.domain != expected_domain {
         return Err(SystemdError::IdentityMismatch);
     }
+    if request.sandbox_plan.is_some() {
+        return Err(SystemdError::InvalidRequest(
+            "sandbox-plan-systemd-unsupported",
+        ));
+    }
     let expected_user = intent
         .user_ref
         .as_deref()
@@ -199,6 +204,14 @@ fn unit_name(request: &d2b_contracts::broker_wire::SystemdUnitRequest) -> String
     digest.update(request.vm_id.as_str().as_bytes());
     digest.update([0]);
     digest.update(request.role_id.as_str().as_bytes());
+    digest.update([0]);
+    if let Some(resource_ref) = &request.resource_ref {
+        digest.update(resource_ref.to_canonical_string().as_bytes());
+    }
+    digest.update([0]);
+    if let Some(resource_uid) = &request.resource_uid {
+        digest.update(resource_uid.as_str().as_bytes());
+    }
     digest.update([0]);
     digest.update(request.bundle_runner_intent_ref.as_str().as_bytes());
     digest.update(request.provider_identity);
@@ -505,6 +518,7 @@ mod tests {
     use super::*;
     use d2b_contracts::broker_wire::{RunnerRole, SystemdUnitRequest};
     use d2b_contracts::types::{BundleOpId, RoleId, VmId};
+    use d2b_contracts::v3::{ResourceRef, ResourceUid};
 
     fn request() -> SystemdUnitRequest {
         SystemdUnitRequest {
@@ -512,12 +526,15 @@ mod tests {
             user_ref: None,
             vm_id: VmId::new("vm"),
             role_id: RoleId::new("role"),
+            resource_ref: None,
+            resource_uid: None,
             role: RunnerRole::Audio,
             bundle_runner_intent_ref: BundleOpId::new("intent"),
             provider_identity: [1; 32],
             template_identity: [2; 32],
             generation: 3,
             domain: SystemdUnitDomain::System,
+            sandbox_plan: None,
             tracing_span_id: None,
         }
     }
@@ -532,6 +549,23 @@ mod tests {
                 .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'.')
         );
         assert_eq!(name, unit_name(&request()));
+    }
+
+    #[test]
+    fn generic_resource_identity_changes_unit_name() {
+        let mut first = request();
+        first.resource_ref = Some(ResourceRef::parse("Process/worker").unwrap());
+        first.resource_uid =
+            Some(ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap());
+
+        let mut second = first.clone();
+        second.resource_uid =
+            Some(ResourceUid::parse("123e4567-e89b-42d3-a456-426614174001").unwrap());
+        assert_ne!(unit_name(&first), unit_name(&second));
+
+        let mut third = first.clone();
+        third.resource_ref = Some(ResourceRef::parse("Process/other-worker").unwrap());
+        assert_ne!(unit_name(&first), unit_name(&third));
     }
 
     #[test]

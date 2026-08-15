@@ -218,6 +218,11 @@ impl SandboxSpec {
         self.oom_score_adj
     }
 
+    /// Borrow the optional file-creation mask.
+    pub fn umask(&self) -> Option<&str> {
+        self.umask.as_deref()
+    }
+
     /// Borrow the user-namespace request.
     pub const fn user_namespace(&self) -> Option<&UserNamespaceSpec> {
         self.user_namespace.as_ref()
