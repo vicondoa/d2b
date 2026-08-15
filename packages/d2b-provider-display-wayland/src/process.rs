@@ -118,6 +118,21 @@ impl WorkerRestartEvidence {
         }
     }
 
+    /// Return the daemon monotonic observation time.
+    pub const fn observed_at_ms(self) -> u64 {
+        self.observed_at_ms
+    }
+
+    /// Return the last proxy failure in the current retry window.
+    pub const fn proxy_last_failure_ms(self) -> Option<u64> {
+        self.proxy_last_failure_ms
+    }
+
+    /// Return the last frontend failure in the current retry window.
+    pub const fn frontend_last_failure_ms(self) -> Option<u64> {
+        self.frontend_last_failure_ms
+    }
+
     #[cfg(any(test, feature = "test-support"))]
     /// Construct bounded retry evidence for hermetic model tests.
     pub const fn for_test(

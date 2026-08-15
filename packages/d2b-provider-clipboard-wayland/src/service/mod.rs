@@ -147,8 +147,10 @@ impl AuthenticatedPasteRoute {
         if !source.is_guest() && !source.is_user() {
             return Err(ClipboardServiceError::SessionUnauthenticated);
         }
-        if source.role() != ClipboardServiceRole::Bridge
-            || destination.role() != ClipboardServiceRole::Bridge
+        if !matches!(
+            source.role(),
+            ClipboardServiceRole::Bridge | ClipboardServiceRole::Picker
+        ) || destination.role() != ClipboardServiceRole::Bridge
         {
             return Err(ClipboardServiceError::SessionUnauthenticated);
         }
@@ -839,6 +841,12 @@ impl ClipdHost {
             .retain(|_, suppression| suppression.guest != guest);
     }
 
+    /// Purge every retained payload and associated authority metadata.
+    pub fn purge_all(&mut self) {
+        self.history.purge_all();
+        self.echo_window.clear();
+    }
+
     fn prune_echo_window(&mut self, now_secs: u64) {
         self.echo_window
             .retain(|_, suppression| suppression.expires_at > now_secs);
@@ -874,6 +882,25 @@ impl ClipdHost {
         }
 
         self.authorize_paste_inner(route, true)
+    }
+
+    /// Materialize one selected entry after the one-use receipt has authorized
+    /// the exact authenticated paste route.
+    pub fn materialize_after_picker(
+        &mut self,
+        route: &AuthenticatedPasteRoute,
+        receipt: PickerReceipt,
+        entry_digest: &str,
+        now_secs: u64,
+    ) -> Result<Vec<u8>, ClipboardServiceError> {
+        self.authorize_paste_after_picker(route, receipt, entry_digest, now_secs)?;
+        self.history
+            .materialize(
+                entry_digest,
+                route.source_subject().to_canonical_string().as_str(),
+                now_secs,
+            )
+            .map_err(|_| ClipboardServiceError::PickerReceiptInvalid)
     }
 
     /// Complete one authenticated picker operation and mint its one-use

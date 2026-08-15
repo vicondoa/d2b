@@ -191,6 +191,20 @@ impl<E: ClipboardProcessEffectPort> ClipboardRuntime<E> {
             .map_err(ClipboardRuntimeError::Service)
     }
 
+    /// Issue an authenticated, opaque echo-suppression event for one live
+    /// Guest selection.
+    pub fn guest_selection_event_route(
+        &mut self,
+        route: AuthenticatedSessionRouteBinding,
+        entry_digest: &str,
+        now_secs: u64,
+    ) -> Result<GuestSelectionEvent, ClipboardRuntimeError> {
+        let authenticated = self.admit_route(route)?;
+        self.host
+            .guest_selection_event(&authenticated, entry_digest, now_secs)
+            .map_err(ClipboardRuntimeError::Service)
+    }
+
     /// Capture one host selection after authenticating the bound User bridge.
     pub fn capture_host<C>(
         &mut self,
@@ -237,6 +251,19 @@ impl<E: ClipboardProcessEffectPort> ClipboardRuntime<E> {
             .map_err(ClipboardRuntimeError::Service)
     }
 
+    /// Consume a picker receipt and materialize the selected bounded payload.
+    pub fn materialize_after_picker(
+        &mut self,
+        route: &AuthenticatedPasteRoute,
+        receipt: crate::PickerReceipt,
+        entry_digest: &str,
+        now_secs: u64,
+    ) -> Result<Vec<u8>, ClipboardRuntimeError> {
+        self.host
+            .materialize_after_picker(route, receipt, entry_digest, now_secs)
+            .map_err(ClipboardRuntimeError::Service)
+    }
+
     /// Complete one picker operation using two authenticated clipboard
     /// projections.  The returned receipt is one-use and is minted only after
     /// the history claim succeeds.
@@ -262,7 +289,7 @@ impl<E: ClipboardProcessEffectPort> ClipboardRuntime<E> {
     }
 
     /// Flush bounded audit records through the daemon-owned sink.
-    pub fn flush_audit<S: ClipboardAuditSink>(
+    pub fn flush_audit_to<S: ClipboardAuditSink>(
         &mut self,
         sink: &mut S,
         limit: usize,
@@ -293,8 +320,13 @@ impl<E: ClipboardProcessEffectPort> ClipboardRuntime<E> {
         self.effects
             .drain()
             .map_err(ClipboardRuntimeError::Service)?;
+        let mut had_guest = false;
         for guest in guests {
+            had_guest = true;
             self.host.purge_guest(&guest);
+        }
+        if !had_guest {
+            self.host.purge_all();
         }
         self.host
             .reconcile_display_dependency(None)
@@ -307,6 +339,16 @@ impl<E: ClipboardProcessEffectPort> ClipboardRuntime<E> {
             drained: true,
             authority_released: true,
         })
+    }
+}
+
+impl<E: ClipboardProcessEffectPort + ClipboardAuditSink> ClipboardRuntime<E> {
+    /// Flush queued redacted audit events through the daemon-owned effect
+    /// sink, retaining the head when the sink cannot durably accept it.
+    pub fn flush_audit(&mut self, limit: usize) -> Result<usize, ClipboardRuntimeError> {
+        self.host
+            .flush_audit(&mut self.effects, limit)
+            .map_err(|_| ClipboardRuntimeError::Service(ClipboardServiceError::AuditUnavailable))
     }
 }
 

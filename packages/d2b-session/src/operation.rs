@@ -121,6 +121,10 @@ pub const GENERATED_OPERATION_CATALOG: &[OperationCatalogEntry] = &[
         "d2b.clipboard.picker-coord.v3",
         "ClipboardPickerService/Complete",
     ),
+    interaction(
+        "d2b.clipboard.picker-coord.v3",
+        "ClipboardPickerService/Materialize",
+    ),
     interaction("d2b.notification.v3", "NotificationService/Reconcile"),
     interaction("d2b.notification.v3", "NotificationService/Deliver"),
     interaction("d2b.notification.v3", "NotificationService/InvokeAction"),

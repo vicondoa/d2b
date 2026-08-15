@@ -6,17 +6,17 @@
 //! retain a persistent service unit.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, VecDeque},
     future::Future,
     os::fd::AsFd,
-    os::unix::fs::{FileTypeExt, PermissionsExt},
+    os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt},
     path::PathBuf,
     sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        Arc, Mutex, OnceLock,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     thread,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use d2b_bus::{
@@ -28,9 +28,10 @@ use d2b_contracts::v3::{
     ControllerGeneration, EvidenceClass, ResourceGeneration, ResourceRef, ResourceUid, ServiceName,
     ZoneId, ZoneRevision,
     component_session::{
-        AttachmentPolicy, AttachmentPolicyKind, EndpointPolicy, EndpointPurpose, EndpointRole,
-        IdentityEvidenceRequirement, LimitProfile, Locality as TransportLocality, NoiseProfile,
-        PurposeClass, ServicePackage, TransportBinding, TransportClass,
+        AttachmentKind, AttachmentPolicy, AttachmentPolicyKind, AttachmentPurpose, EndpointPolicy,
+        EndpointPurpose, EndpointRole, IdentityEvidenceRequirement, LimitProfile,
+        Locality as TransportLocality, NoiseProfile, PurposeClass, ServicePackage,
+        TransportBinding, TransportClass,
     },
     execution_policy::{BoundedToken, ExecutionDomain},
 };
@@ -47,7 +48,9 @@ use d2b_process::{
     ProcessIdentityDigest, ProcessLaunchEffectPort, ProcessRequest, StopClass,
 };
 use d2b_process_conformance::ReadinessExpectation;
-use d2b_provider_clipboard_wayland::{ClipboardProcessEffectPort, ClipboardServiceError};
+use d2b_provider_clipboard_wayland::{
+    AttachmentClass, ClipboardProcessEffectPort, ClipboardServiceError,
+};
 use d2b_provider_display_wayland::{
     AuthenticatedDisplaySession, CleanupState, DependencyState, DisplayController,
     DisplayDependencyProof, DisplayLaunchBinding, DisplayProcessEffectPort, DisplayProcessRole,
@@ -69,14 +72,15 @@ use d2b_resource_api::authz::{
 };
 use d2b_resource_store::PolicySnapshot;
 use d2b_session::{
-    AuthenticatedSessionRouteBinding, OwnedTransport, SessionAcceptor, SessionEngine,
-    TransportEvidence, operation_catalog_entry, ttrpc_stream_id,
+    AuthenticatedSessionRouteBinding, OwnedAttachment, OwnedTransport, SessionAcceptor,
+    SessionEngine, TransportEvidence, operation_catalog_entry, ttrpc_stream_id,
 };
 use d2b_session_unix::{
     CreditPool, CreditScopeSet, PeerIdentityPolicy, SeqpacketSocket, UnixSeqpacketTransport,
-    UnixSessionError, VerifiedUnixPeer,
+    UnixSessionError, VerifiedPacket, VerifiedUnixPeer,
 };
 use nix::unistd::{Group, getgid};
+use notify_rust::{Notification as DesktopNotification, Urgency};
 use protobuf::Message;
 use rustix::net::{SocketFlags, accept_with};
 use serde::Deserialize;
@@ -289,8 +293,97 @@ where
     notification:
         Option<d2b_provider_notification_desktop::NotificationRuntime<InteractionDrainEffects>>,
     pending_picker_receipts: BTreeMap<String, d2b_provider_clipboard_wayland::PickerReceipt>,
-    notification_port: InteractionNotificationPort,
+    pending_guest_selection_events:
+        BTreeMap<String, d2b_provider_clipboard_wayland::GuestSelectionEvent>,
+    notification_port: Arc<Mutex<Box<dyn DesktopNotificationPort + Send>>>,
     display_resource_evidence: Option<CoreDisplayResourceEvidence>,
+}
+
+/// Daemon-owned collection of independently Zone-bound compositions.
+pub struct InteractionRuntimeSet<S, G = UnavailableGuestFrontendEffects>
+where
+    S: ProcessLaunchEffectPort + Clone + Send + Sync + 'static,
+    G: GuestFrontendEffectPort + 'static,
+{
+    runtimes: BTreeMap<String, InteractionComposition<S, G>>,
+}
+
+impl<S, G> core::fmt::Debug for InteractionRuntimeSet<S, G>
+where
+    S: ProcessLaunchEffectPort + Clone + Send + Sync + 'static,
+    G: GuestFrontendEffectPort + 'static,
+{
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("InteractionRuntimeSet")
+            .field("zone_count", &self.runtimes.len())
+            .finish()
+    }
+}
+
+impl<S, G> InteractionRuntimeSet<S, G>
+where
+    S: ProcessLaunchEffectPort + Clone + Send + Sync + 'static,
+    G: GuestFrontendEffectPort + 'static,
+{
+    /// Construct an empty Zone runtime set.
+    pub fn new() -> Self {
+        Self {
+            runtimes: BTreeMap::new(),
+        }
+    }
+
+    /// Insert one fully Zone-bound runtime.
+    pub fn insert(&mut self, zone: ZoneId, runtime: InteractionComposition<S, G>) {
+        self.runtimes.insert(zone.as_str().to_owned(), runtime);
+    }
+
+    /// Return whether any Zone runtime is installed.
+    pub fn is_empty(&self) -> bool {
+        self.runtimes.is_empty()
+    }
+
+    fn runtime_for(&self, zone: &ZoneId) -> Option<&InteractionComposition<S, G>> {
+        self.runtimes.get(zone.as_str())
+    }
+
+    fn runtime_for_mut(&mut self, zone: &ZoneId) -> Option<&mut InteractionComposition<S, G>> {
+        self.runtimes.get_mut(zone.as_str())
+    }
+
+    async fn remove_service_session(&mut self, zone: &ZoneId, service: &str) -> Result<(), String> {
+        self.runtime_for_mut(zone)
+            .ok_or_else(|| "interaction runtime unavailable".to_owned())?
+            .remove_service_session(service)
+            .await
+    }
+
+    /// Finalize every Zone composition, retaining failed state for retry.
+    pub async fn finalize_async(
+        &mut self,
+        grace: d2b_provider_display_wayland::GraceState,
+    ) -> Result<(), InteractionFinalizeError> {
+        let zones = self.runtimes.keys().cloned().collect::<Vec<_>>();
+        let mut failure = None;
+        for zone in zones {
+            if let Some(runtime) = self.runtimes.get_mut(&zone)
+                && let Err(error) = runtime.finalize_async(grace).await
+            {
+                failure.get_or_insert(error);
+            }
+        }
+        failure.map_or(Ok(()), Err)
+    }
+}
+
+impl<S, G> Default for InteractionRuntimeSet<S, G>
+where
+    S: ProcessLaunchEffectPort + Clone + Send + Sync + 'static,
+    G: GuestFrontendEffectPort + 'static,
+{
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -549,8 +642,10 @@ impl InteractionDispatchError {
 #[derive(Debug, Deserialize)]
 struct ClipboardCaptureRequest {
     mime: String,
-    bytes: Vec<u8>,
-    now_secs: u64,
+    #[serde(default)]
+    bytes: Option<Vec<u8>>,
+    #[serde(default)]
+    source_entry_digest: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -558,19 +653,37 @@ struct PickerCompletionRequest {
     entry_digest: String,
     mime_types: Vec<String>,
     selected_digest: Option<String>,
-    now_secs: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct PickerMaterializeRequest {
+    operation_id: String,
+    entry_digest: String,
 }
 
 #[derive(Debug, Deserialize)]
 struct NotificationDeliverRequest {
     request: NotificationRequest,
-    now_secs: u64,
 }
 
 #[derive(Debug, Deserialize)]
 struct NotificationActionRequest {
     action_key: String,
-    now_secs: u64,
+}
+
+fn daemon_now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_secs())
+}
+
+fn daemon_monotonic_ms() -> u64 {
+    static START: OnceLock<Instant> = OnceLock::new();
+    START
+        .get_or_init(Instant::now)
+        .elapsed()
+        .as_millis()
+        .min(u128::from(u64::MAX)) as u64
 }
 
 #[derive(Debug, Deserialize)]
@@ -707,7 +820,6 @@ impl<S, G> core::fmt::Debug for InteractionComposition<S, G>
 where
     S: ProcessLaunchEffectPort + Clone + Send + Sync + 'static,
     G: GuestFrontendEffectPort + 'static,
-    G: GuestFrontendEffectPort + 'static,
 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -726,16 +838,33 @@ where
 {
     /// Join one daemon-owned registrar to its supervisor effect owner.
     pub fn new(registrar: ZoneRegistrar, supervisor: S) -> Self {
+        Self::new_with_notification_port(
+            registrar,
+            supervisor,
+            UnavailableGuestFrontendEffects,
+            Box::new(InteractionNotificationPort::default()),
+        )
+    }
+
+    /// Join one daemon-owned registrar to its supervisor and presentation
+    /// effect owner.
+    pub fn new_with_notification_port(
+        registrar: ZoneRegistrar,
+        supervisor: S,
+        guest_frontend: UnavailableGuestFrontendEffects,
+        notification_port: Box<dyn DesktopNotificationPort + Send>,
+    ) -> Self {
         Self {
             registrar,
             supervisor,
-            guest_frontend: UnavailableGuestFrontendEffects,
+            guest_frontend,
             sessions: BTreeMap::new(),
             display: None,
             clipboard: None,
             notification: None,
             pending_picker_receipts: BTreeMap::new(),
-            notification_port: InteractionNotificationPort::default(),
+            pending_guest_selection_events: BTreeMap::new(),
+            notification_port: Arc::new(Mutex::new(notification_port)),
             display_resource_evidence: None,
         }
     }
@@ -753,6 +882,22 @@ where
         supervisor: S,
         guest_frontend: G,
     ) -> Self {
+        Self::new_with_guest_frontend_and_notification_port(
+            registrar,
+            supervisor,
+            guest_frontend,
+            Box::new(InteractionNotificationPort::default()),
+        )
+    }
+
+    /// Join daemon-owned effects with an injected desktop presentation
+    /// adapter.
+    pub fn new_with_guest_frontend_and_notification_port(
+        registrar: ZoneRegistrar,
+        supervisor: S,
+        guest_frontend: G,
+        notification_port: Box<dyn DesktopNotificationPort + Send>,
+    ) -> Self {
         Self {
             registrar,
             supervisor,
@@ -762,7 +907,8 @@ where
             clipboard: None,
             notification: None,
             pending_picker_receipts: BTreeMap::new(),
-            notification_port: InteractionNotificationPort::default(),
+            pending_guest_selection_events: BTreeMap::new(),
+            notification_port: Arc::new(Mutex::new(notification_port)),
             display_resource_evidence: None,
         }
     }
@@ -860,6 +1006,18 @@ where
         service: &str,
         frame: Vec<u8>,
     ) -> Result<(), String> {
+        self.dispatch_component_request_with_attachments(service, frame, Vec::new())
+            .await
+    }
+
+    /// Dispatch one authenticated request together with its separately
+    /// demultiplexed attachment batch.
+    pub async fn dispatch_component_request_with_attachments(
+        &mut self,
+        service: &str,
+        frame: Vec<u8>,
+        attachments: Vec<OwnedAttachment>,
+    ) -> Result<(), String> {
         let stream_id = ttrpc_stream_id(&frame).map_err(|_| "invalid-request-frame")?;
         let payload = frame
             .get(ttrpc::proto::MESSAGE_HEADER_LENGTH..)
@@ -948,13 +1106,14 @@ where
                 return Ok(());
             }
         };
-        let (code, response_payload, finalize_after_response) =
-            match self.dispatch_interaction_operation(service, &request.method, &request.payload) {
-                Ok((payload, finalize_after_response)) => {
-                    (TtrpcCode::OK, payload, finalize_after_response)
-                }
-                Err(error) => (error.code(), Vec::new(), false),
-            };
+        let (code, response_payload, finalize_after_response) = match self
+            .dispatch_interaction_operation(service, &request.method, &request.payload, attachments)
+        {
+            Ok((payload, finalize_after_response)) => {
+                (TtrpcCode::OK, payload, finalize_after_response)
+            }
+            Err(error) => (error.code(), Vec::new(), false),
+        };
         self.send_component_response(
             service,
             encode_interaction_response(stream_id, code, response_payload)
@@ -986,6 +1145,7 @@ where
         service: &str,
         method: &str,
         payload: &[u8],
+        attachments: Vec<OwnedAttachment>,
     ) -> Result<(Vec<u8>, bool), InteractionDispatchError> {
         match (service, method) {
             (d2b_provider_display_wayland::SERVICE_PACKAGE, "DisplayService/Observe") => Ok((
@@ -1030,9 +1190,31 @@ where
             ) => {
                 let request: ClipboardCaptureRequest = serde_json::from_slice(payload)
                     .map_err(|_| InteractionDispatchError::InvalidPayload)?;
-                let token = self
-                    .capture_guest_clipboard(&request.mime, &request.bytes, request.now_secs)
+                let bytes = self
+                    .clipboard_payload(request.bytes, attachments, AttachmentClass::GuestTransfer)
                     .map_err(|_| InteractionDispatchError::RuntimeFailure)?;
+                let token = self
+                    .capture_guest_clipboard(&request.mime, &bytes, daemon_now_secs())
+                    .map_err(|_| InteractionDispatchError::RuntimeFailure)?;
+                let bridge_route = self
+                    .route_for_service(d2b_provider_clipboard_wayland::BRIDGE_SERVICE)
+                    .cloned()
+                    .ok_or(InteractionDispatchError::SessionUnavailable)?;
+                if let Some(clipboard) = self.clipboard.as_mut() {
+                    let event = clipboard
+                        .guest_selection_event_route(bridge_route, &token, daemon_now_secs())
+                        .map_err(|_| InteractionDispatchError::RuntimeFailure)?;
+                    if self.pending_guest_selection_events.len() >= 128 {
+                        self.pending_guest_selection_events.pop_first();
+                    }
+                    self.pending_guest_selection_events
+                        .insert(token.clone(), event);
+                }
+                if let Some(clipboard) = self.clipboard.as_mut() {
+                    clipboard
+                        .flush_audit(16)
+                        .map_err(|_| InteractionDispatchError::RuntimeFailure)?;
+                }
                 Ok((
                     serde_json::to_vec(&serde_json::json!({"entry_digest": token}))
                         .map_err(|_| InteractionDispatchError::RuntimeFailure)?,
@@ -1045,15 +1227,32 @@ where
             ) => {
                 let request: ClipboardCaptureRequest = serde_json::from_slice(payload)
                     .map_err(|_| InteractionDispatchError::InvalidPayload)?;
-                let token = self
-                    .capture_host_clipboard(&request.mime, &request.bytes, None, request.now_secs)
+                let source_event = request
+                    .source_entry_digest
+                    .as_deref()
+                    .and_then(|digest| self.pending_guest_selection_events.remove(digest));
+                let bytes = self
+                    .clipboard_payload(
+                        request.bytes,
+                        attachments,
+                        AttachmentClass::HostSelectionWrite,
+                    )
                     .map_err(|_| InteractionDispatchError::RuntimeFailure)?;
+                let token = self
+                    .capture_host_clipboard(&request.mime, &bytes, source_event, daemon_now_secs())
+                    .map_err(|_| InteractionDispatchError::RuntimeFailure)?;
+                if let Some(clipboard) = self.clipboard.as_mut() {
+                    clipboard
+                        .flush_audit(16)
+                        .map_err(|_| InteractionDispatchError::RuntimeFailure)?;
+                }
                 Ok((
                     serde_json::to_vec(&serde_json::json!({"entry_digest": token}))
                         .map_err(|_| InteractionDispatchError::RuntimeFailure)?,
                     false,
                 ))
             }
+
             (d2b_provider_clipboard_wayland::MANAGEMENT_SERVICE, "ClipboardService/Drain")
             | (d2b_provider_clipboard_wayland::BRIDGE_SERVICE, "ClipboardBridgeService/Drain") => {
                 if !payload.is_empty() {
@@ -1120,7 +1319,7 @@ where
                         &picker_request,
                         result,
                         request.entry_digest,
-                        request.now_secs,
+                        daemon_now_secs(),
                     )
                     .map_err(|_| InteractionDispatchError::RuntimeFailure)?;
                 let operation_id = receipt.operation_id().to_owned();
@@ -1130,6 +1329,62 @@ where
                     serde_json::to_vec(&serde_json::json!({
                         "completed": true,
                         "operation_id": operation_id,
+                    }))
+                    .map_err(|_| InteractionDispatchError::RuntimeFailure)?,
+                    false,
+                ))
+            }
+            (
+                d2b_provider_clipboard_wayland::PICKER_SERVICE,
+                "ClipboardPickerService/Materialize",
+            ) => {
+                let request: PickerMaterializeRequest = serde_json::from_slice(payload)
+                    .map_err(|_| InteractionDispatchError::InvalidPayload)?;
+                let receipt = self
+                    .pending_picker_receipts
+                    .remove(&request.operation_id)
+                    .ok_or(InteractionDispatchError::SessionUnavailable)?;
+                let source_route = self
+                    .route_for_service(d2b_provider_clipboard_wayland::PICKER_SERVICE)
+                    .cloned()
+                    .ok_or(InteractionDispatchError::SessionUnavailable)?;
+                let destination_route = self
+                    .route_for_service(d2b_provider_clipboard_wayland::BRIDGE_SERVICE)
+                    .cloned()
+                    .ok_or(InteractionDispatchError::SessionUnavailable)?;
+                let source = self
+                    .ensure_clipboard()
+                    .map_err(|_| InteractionDispatchError::RuntimeFailure)?
+                    .admit_route(source_route)
+                    .map_err(|_| InteractionDispatchError::SessionUnavailable)?;
+                let destination = self
+                    .clipboard
+                    .as_ref()
+                    .expect("clipboard runtime was just admitted")
+                    .admit_route(destination_route)
+                    .map_err(|_| InteractionDispatchError::SessionUnavailable)?;
+                let paste_route =
+                    d2b_provider_clipboard_wayland::AuthenticatedPasteRoute::from_sessions(
+                        &source,
+                        &destination,
+                    )
+                    .map_err(|_| InteractionDispatchError::SessionUnavailable)?;
+                let bytes = self
+                    .clipboard
+                    .as_mut()
+                    .expect("clipboard runtime was just admitted")
+                    .materialize_after_picker(
+                        &paste_route,
+                        receipt,
+                        &request.entry_digest,
+                        daemon_now_secs(),
+                    )
+                    .map_err(|_| InteractionDispatchError::RuntimeFailure)?;
+                Ok((
+                    serde_json::to_vec(&serde_json::json!({
+                        "materialized": true,
+                        "entry_digest": request.entry_digest,
+                        "bytes": bytes,
                     }))
                     .map_err(|_| InteractionDispatchError::RuntimeFailure)?,
                     false,
@@ -1163,6 +1418,13 @@ where
                     .route_for_service(d2b_provider_display_wayland::SERVICE_PACKAGE)
                     .cloned()
                     .ok_or(InteractionDispatchError::SessionUnavailable)?;
+                if !self
+                    .display
+                    .as_ref()
+                    .is_some_and(|display| display.is_ready())
+                {
+                    return Err(InteractionDispatchError::RuntimeFailure);
+                }
                 let source_evidence =
                     d2b_provider_notification_desktop::SessionEvidence::from_daemon_route(
                         source_route.clone(),
@@ -1179,16 +1441,20 @@ where
                     .map_err(|_| InteractionDispatchError::SessionUnavailable)?;
                 self.ensure_notification_for_source(&source_route)
                     .map_err(|_| InteractionDispatchError::RuntimeFailure)?;
+                let mut notification_port = self
+                    .notification_port
+                    .lock()
+                    .map_err(|_| InteractionDispatchError::RuntimeFailure)?;
                 let result = self
                     .notification
                     .as_mut()
                     .expect("notification runtime was just installed")
                     .deliver_evidence(
-                        &mut self.notification_port,
+                        &mut **notification_port,
                         &source_evidence,
                         &observer_evidence,
                         request.request,
-                        request.now_secs,
+                        daemon_now_secs(),
                     )
                     .map_err(|_| InteractionDispatchError::RuntimeFailure)?;
                 let response = match result {
@@ -1227,6 +1493,13 @@ where
                     .route_for_service(d2b_provider_display_wayland::SERVICE_PACKAGE)
                     .cloned()
                     .ok_or(InteractionDispatchError::SessionUnavailable)?;
+                if !self
+                    .display
+                    .as_ref()
+                    .is_some_and(|display| display.is_ready())
+                {
+                    return Err(InteractionDispatchError::RuntimeFailure);
+                }
                 let observer_user_ref = self
                     .display_resource_evidence
                     .as_ref()
@@ -1239,7 +1512,7 @@ where
                 let action = self
                     .ensure_notification()
                     .map_err(|_| InteractionDispatchError::RuntimeFailure)?
-                    .invoke_action_evidence(&request.action_key, &observer, request.now_secs)
+                    .invoke_action_evidence(&request.action_key, &observer, daemon_now_secs())
                     .map_err(|_| InteractionDispatchError::RuntimeFailure)?;
                 Ok((
                     serde_json::to_vec(&serde_json::json!({"action": action}))
@@ -1308,6 +1581,55 @@ where
         }
     }
 
+    fn clipboard_payload(
+        &mut self,
+        inline: Option<Vec<u8>>,
+        attachments: Vec<OwnedAttachment>,
+        attachment_class: AttachmentClass,
+    ) -> Result<Vec<u8>, ClipboardServiceError> {
+        if attachments.is_empty() {
+            return inline.ok_or(ClipboardServiceError::AttachmentRejected);
+        }
+        if inline.is_some() {
+            return Err(ClipboardServiceError::AttachmentRejected);
+        }
+        for attachment in &attachments {
+            let descriptor = attachment
+                .descriptor()
+                .ok_or(ClipboardServiceError::AttachmentRejected)?;
+            if descriptor.service != ServicePackage::ClipboardBridgeV3
+                || descriptor.kind != AttachmentKind::FileDescriptor
+                || descriptor.purpose != AttachmentPurpose::ClipboardTransfer
+            {
+                return Err(ClipboardServiceError::AttachmentRejected);
+            }
+        }
+        let route = self
+            .route_for_service(d2b_provider_clipboard_wayland::BRIDGE_SERVICE)
+            .cloned()
+            .ok_or(ClipboardServiceError::SessionUnauthenticated)?;
+        let packet = VerifiedPacket::from_bound_attachments(attachments)
+            .map_err(|_| ClipboardServiceError::AttachmentRejected)?;
+        let clipboard = self.ensure_clipboard()?;
+        let session = clipboard
+            .admit_route(route)
+            .map_err(|_| ClipboardServiceError::SessionUnauthenticated)?;
+        let verified =
+            clipboard
+                .host()
+                .accept_verified_packet(&session, packet, attachment_class)?;
+        let payloads = verified
+            .read_all()
+            .map_err(|_| ClipboardServiceError::AttachmentRejected)?;
+        if payloads.len() != 1 {
+            return Err(ClipboardServiceError::AttachmentRejected);
+        }
+        payloads
+            .into_iter()
+            .next()
+            .ok_or(ClipboardServiceError::AttachmentRejected)
+    }
+
     /// Project the retained authenticated route into the clipboard service
     /// identity without reconstructing ComponentSession authority.
     pub fn clipboard_session(
@@ -1369,15 +1691,11 @@ where
         &'static str,
     > {
         if self.notification.is_none() {
-            let config =
-                d2b_provider_notification_desktop::NotificationProviderConfig::new(Vec::new())?;
-            self.notification = Some(
-                d2b_provider_notification_desktop::NotificationRuntime::new(
-                    config,
-                    InteractionDrainEffects::default(),
-                )
-                .map_err(|_| "notification-runtime-unavailable")?,
-            );
+            let source_route = self
+                .route_for_service(d2b_provider_notification_desktop::SERVICE_PACKAGE)
+                .cloned()
+                .ok_or("notification-source-session-unavailable")?;
+            self.ensure_notification_for_source(&source_route)?;
         }
         Ok(self
             .notification
@@ -1399,8 +1717,27 @@ where
                 source_route.zone().clone(),
                 Category::ALL,
             )?;
+            let display_route = self
+                .route_for_service(d2b_provider_display_wayland::SERVICE_PACKAGE)
+                .ok_or("notification-display-session-unavailable")?;
+            let host_execution_ref = display_route
+                .context()
+                .execution_ref()
+                .cloned()
+                .ok_or("notification-host-binding-missing")?;
+            let observer_user_ref = self
+                .display_resource_evidence
+                .as_ref()
+                .ok_or("notification-display-evidence-unavailable")?
+                .observer_user_ref
+                .clone();
             let config =
-                d2b_provider_notification_desktop::NotificationProviderConfig::new(vec![source])?;
+                d2b_provider_notification_desktop::NotificationProviderConfig::new(vec![source])?
+                    .with_host_binding(host_execution_ref, observer_user_ref)?
+                    .with_display_wayland_ref(Some(
+                        ResourceRef::parse("Provider/display-wayland")
+                            .map_err(|_| "notification-display-provider-invalid")?,
+                    ))?;
             self.notification = Some(
                 d2b_provider_notification_desktop::NotificationRuntime::new(
                     config,
@@ -1418,6 +1755,23 @@ where
     /// Reconcile the dependent clipboard and notification runtimes after the
     /// display route has supplied a current authenticated dependency.
     pub fn reconcile_dependents(&mut self) -> Result<(), InteractionDependencyError> {
+        if !self
+            .display
+            .as_ref()
+            .is_some_and(|display| display.is_ready())
+        {
+            if let Some(clipboard) = self.clipboard.as_mut() {
+                clipboard
+                    .reconcile_display(None)
+                    .map_err(InteractionDependencyError::Clipboard)?;
+            }
+            if let Some(notification) = self.notification.as_mut() {
+                notification
+                    .reconcile_daemon_routes(None, &[])
+                    .map_err(InteractionDependencyError::Notification)?;
+            }
+            return Err(InteractionDependencyError::DisplayUnavailable);
+        }
         let route = self
             .route_for_service(d2b_provider_display_wayland::SERVICE_PACKAGE)
             .ok_or(InteractionDependencyError::SessionUnauthenticated)?
@@ -1574,11 +1928,17 @@ where
             evidence.zone_policy.clone(),
         )
         .map_err(|_| DisplayRuntimeError::InvalidPolicy)?;
+        let supervision = if let Some(display) = self.display.as_mut() {
+            display.refresh_supervision();
+            display.supervision()
+        } else {
+            WorkerRestartEvidence::from_supervisor(daemon_monotonic_ms(), None, None, 1)
+        };
         self.reconcile_display(
             DisplayController::new(8),
             &request.spec,
             evidence.dependencies.clone(),
-            WorkerRestartEvidence::from_supervisor(1, None, None, 1),
+            supervision,
             &policy,
         )
     }
@@ -1612,8 +1972,11 @@ where
         {
             failure.get_or_insert(InteractionFinalizeError::Notification(error));
         }
-        self.pending_picker_receipts.clear();
-        self.sessions.clear();
+        if failure.is_none() {
+            self.pending_picker_receipts.clear();
+            self.pending_guest_selection_events.clear();
+            self.sessions.clear();
+        }
         failure.map_or(Ok(report), Err)
     }
 
@@ -1650,28 +2013,92 @@ where
         {
             failure.get_or_insert(InteractionFinalizeError::Notification(error));
         }
-        self.pending_picker_receipts.clear();
-        let sessions = std::mem::take(&mut self.sessions);
-        let mut registration_failed = false;
-        for (_, session) in sessions {
-            if self.registrar.revoke(session.ingress).await.is_err() {
-                registration_failed = true;
+        if failure.is_none() {
+            let services = self.sessions.keys().cloned().collect::<Vec<_>>();
+            for service in services {
+                let revoked = if let Some(session) = self.sessions.get_mut(&service) {
+                    self.registrar
+                        .revoke_in_place(&mut session.ingress)
+                        .await
+                        .is_ok()
+                } else {
+                    true
+                };
+                if !revoked {
+                    failure.get_or_insert(InteractionFinalizeError::Registration);
+                    break;
+                }
+                self.sessions.remove(&service);
             }
         }
-        if registration_failed {
-            failure.get_or_insert(InteractionFinalizeError::Registration);
+        if failure.is_none() {
+            self.pending_picker_receipts.clear();
+            self.pending_guest_selection_events.clear();
         }
         failure.map_or(Ok(report), Err)
     }
 
     async fn remove_service_session(&mut self, service: &str) -> Result<(), String> {
-        let Some(session) = self.sessions.remove(service) else {
+        let Some(_session) = self.sessions.get(service) else {
             return Ok(());
         };
+        let service_cleanup = match service {
+            d2b_provider_display_wayland::SERVICE_PACKAGE => {
+                if let Some(display) = self.display.as_mut() {
+                    display
+                        .finalize(d2b_provider_display_wayland::GraceState::Expired)
+                        .map_err(|_| "display-finalization-failed".to_owned())?;
+                } else {
+                    self.display_resource_evidence = None;
+                }
+                self.display_resource_evidence = None;
+                self.clipboard.as_mut().map_or(Ok(()), |clipboard| {
+                    clipboard
+                        .reconcile_display(None)
+                        .map_err(|_| "clipboard-disconnect-reconcile-failed".to_owned())
+                })?;
+                self.notification.as_mut().map_or(Ok(()), |notification| {
+                    notification
+                        .reconcile_daemon_routes(None, &[])
+                        .map(|_| ())
+                        .map_err(|_| "notification-disconnect-reconcile-failed".to_owned())
+                })
+            }
+            d2b_provider_clipboard_wayland::MANAGEMENT_SERVICE
+            | d2b_provider_clipboard_wayland::BRIDGE_SERVICE
+            | d2b_provider_clipboard_wayland::PICKER_SERVICE => {
+                self.clipboard.as_mut().map_or(Ok(()), |clipboard| {
+                    clipboard
+                        .finalize(std::iter::empty())
+                        .map(|_| ())
+                        .map_err(|_| "clipboard-finalization-failed".to_owned())
+                })
+            }
+            d2b_provider_notification_desktop::SERVICE_PACKAGE => {
+                self.notification.as_mut().map_or(Ok(()), |notification| {
+                    notification
+                        .finalize()
+                        .map(|_| ())
+                        .map_err(|_| "notification-finalization-failed".to_owned())
+                })
+            }
+            _ => Ok(()),
+        };
+        service_cleanup.map_err(|_| "interaction-provider-cleanup-failed".to_owned())?;
+        let session = self
+            .sessions
+            .get_mut(service)
+            .expect("session still retained");
         self.registrar
-            .revoke(session.ingress)
+            .revoke_in_place(&mut session.ingress)
             .await
-            .map_err(|_| "interaction-session-revocation-failed".to_owned())
+            .map_err(|_| "interaction-session-revocation-failed".to_owned())?;
+        self.sessions.remove(service);
+        if service.starts_with("d2b.clipboard.") {
+            self.pending_picker_receipts.clear();
+            self.pending_guest_selection_events.clear();
+        }
+        Ok(())
     }
 }
 
@@ -1734,12 +2161,15 @@ pub struct DisplaySupervisorEffects<S, G = UnavailableGuestFrontendEffects> {
     identities: BTreeMap<DisplayProcessRole, LiveWorker>,
     guest_worker: Option<GuestWorker>,
     consumed_grants: BTreeMap<[u8; 32], u64>,
+    tickets: BTreeMap<DisplayProcessRole, ProcessLaunchTicket>,
+    last_failures: BTreeMap<DisplayProcessRole, u64>,
     session_digest: [u8; 32],
     reconnect_generation: u64,
     policy_generation: u64,
     teardown_generation: u64,
 }
 
+#[derive(Clone, Copy)]
 struct LiveWorker {
     identity: ProcessIdentityDigest,
     policy_generation: u64,
@@ -1747,6 +2177,7 @@ struct LiveWorker {
     session_digest: [u8; 32],
 }
 
+#[derive(Clone, Copy)]
 struct GuestWorker {
     policy_generation: u64,
     teardown_generation: u64,
@@ -1766,6 +2197,8 @@ where
             identities: BTreeMap::new(),
             guest_worker: None,
             consumed_grants: BTreeMap::new(),
+            tickets: BTreeMap::new(),
+            last_failures: BTreeMap::new(),
             session_digest: [0; 32],
             reconnect_generation: 0,
             policy_generation: 0,
@@ -1794,6 +2227,8 @@ where
             identities: BTreeMap::new(),
             guest_worker: None,
             consumed_grants: BTreeMap::new(),
+            tickets: BTreeMap::new(),
+            last_failures: BTreeMap::new(),
             session_digest: [0; 32],
             reconnect_generation: 0,
             policy_generation: 0,
@@ -1807,6 +2242,45 @@ where
     S: ProcessLaunchEffectPort + Clone + Send + Sync + 'static,
     G: GuestFrontendEffectPort + 'static,
 {
+    fn current_supervision(&mut self) -> WorkerRestartEvidence {
+        let observed_at_ms = daemon_monotonic_ms();
+        for role in [
+            DisplayProcessRole::HostProxy,
+            DisplayProcessRole::GuestFrontend,
+        ] {
+            let Some(ticket) = self.tickets.get(&role).cloned() else {
+                continue;
+            };
+            let supervisor = self.supervisor.clone();
+            let alive = run_effect(move || async move {
+                let Some(candidate) = supervisor
+                    .observe(&ticket)
+                    .await
+                    .map_err(|_| WorkerEffectError::WorkerUnavailable)?
+                else {
+                    return Ok(false);
+                };
+                Ok(supervisor.open_pidfd(&candidate).await.is_ok())
+            })
+            .unwrap_or(false);
+            if alive {
+                self.last_failures.remove(&role);
+            } else {
+                self.last_failures.insert(role, observed_at_ms);
+            }
+        }
+        WorkerRestartEvidence::from_supervisor(
+            observed_at_ms,
+            self.last_failures
+                .get(&DisplayProcessRole::HostProxy)
+                .copied(),
+            self.last_failures
+                .get(&DisplayProcessRole::GuestFrontend)
+                .copied(),
+            self.teardown_generation.max(1),
+        )
+    }
+
     fn issue_launch_grants(
         &mut self,
         session: &AuthenticatedDisplaySession,
@@ -1861,7 +2335,7 @@ where
                 .as_ref()
                 .ok_or(WorkerEffectError::WorkerUnavailable)?
                 .clone();
-            if let Some(previous) = self.guest_worker.take() {
+            if let Some(previous) = self.guest_worker {
                 self.guest_frontend
                     .stop(
                         &guest,
@@ -1870,6 +2344,7 @@ where
                         previous.session_digest,
                     )
                     .map_err(|_| WorkerEffectError::CleanupIncomplete)?;
+                self.guest_worker = None;
             }
             let receipt = self.guest_frontend.ensure(
                 &guest,
@@ -1886,7 +2361,7 @@ where
         }
         let process_ticket = process_ticket(&binding)?;
         let role = binding.role();
-        if let Some(previous) = self.identities.remove(&role) {
+        if let Some(previous) = self.identities.get(&role).copied() {
             let supervisor = self.supervisor.clone();
             run_effect(move || async move {
                 supervisor
@@ -1894,22 +2369,27 @@ where
                     .await
                     .map_err(|_| WorkerEffectError::CleanupIncomplete)
             })?;
+            self.identities.remove(&role);
         }
         let supervisor = self.supervisor.clone();
+        let adoption_ticket = process_ticket.clone();
         let adopted = run_effect(move || {
             let supervisor = supervisor.clone();
-            let process_ticket = process_ticket.clone();
+            let process_ticket = adoption_ticket.clone();
             async move {
                 if let Some(candidate) = supervisor
                     .observe(&process_ticket)
                     .await
                     .map_err(|_| WorkerEffectError::WorkerUnavailable)?
                 {
-                    supervisor
-                        .open_pidfd(&candidate)
-                        .await
-                        .map_err(|_| WorkerEffectError::WorkerUnavailable)?;
-                    Ok(candidate.identity)
+                    match supervisor.open_pidfd(&candidate).await {
+                        Ok(_) => Ok(candidate.identity),
+                        Err(_) => Ok(supervisor
+                            .launch(&process_ticket)
+                            .await
+                            .map_err(|_| WorkerEffectError::LaunchRejected)?
+                            .identity),
+                    }
                 } else {
                     Ok(supervisor
                         .launch(&process_ticket)
@@ -1928,6 +2408,7 @@ where
                 session_digest: self.session_digest,
             },
         );
+        self.tickets.insert(role, process_ticket);
         Ok(WorkerLaunchReceipt::from_supervisor(
             role,
             WorkerState::Ready { generation: 1 },
@@ -1939,7 +2420,7 @@ where
 
     fn stop(&mut self, role: DisplayProcessRole) -> Result<WorkerLaunchReceipt, WorkerEffectError> {
         if role == DisplayProcessRole::GuestFrontend {
-            let Some(worker) = self.guest_worker.take() else {
+            let Some(worker) = self.guest_worker else {
                 return Ok(WorkerLaunchReceipt::from_supervisor(
                     role,
                     WorkerState::Terminal { deleted: true },
@@ -1953,14 +2434,16 @@ where
                 .as_ref()
                 .ok_or(WorkerEffectError::WorkerUnavailable)?
                 .clone();
-            return self.guest_frontend.stop(
+            let receipt = self.guest_frontend.stop(
                 &guest,
                 worker.policy_generation,
                 worker.teardown_generation,
                 worker.session_digest,
-            );
+            )?;
+            self.guest_worker = None;
+            return Ok(receipt);
         }
-        let Some(worker) = self.identities.remove(&role) else {
+        let Some(worker) = self.identities.get(&role).copied() else {
             return Ok(WorkerLaunchReceipt::from_supervisor(
                 role,
                 WorkerState::Terminal { deleted: true },
@@ -1976,6 +2459,9 @@ where
                 .await
                 .map_err(|_| WorkerEffectError::CleanupIncomplete)
         })?;
+        self.identities.remove(&role);
+        self.tickets.remove(&role);
+        self.last_failures.remove(&role);
         Ok(WorkerLaunchReceipt::from_supervisor(
             role,
             WorkerState::Terminal { deleted: true },
@@ -2011,7 +2497,9 @@ where
 pub struct InteractionDrainEffects {
     drained: bool,
     authority_released: bool,
-    source_effects: usize,
+    active_sources: std::collections::BTreeSet<String>,
+    host_sink_active: bool,
+    audit_events: usize,
 }
 
 /// Daemon-owned presentation adapter for the bounded desktop sink.  It
@@ -2020,15 +2508,67 @@ pub struct InteractionDrainEffects {
 #[derive(Debug, Default)]
 pub struct InteractionNotificationPort {
     next_id: u32,
+    presented: VecDeque<d2b_provider_notification_desktop::SanitizedNotification>,
 }
 
 impl DesktopNotificationPort for InteractionNotificationPort {
     fn notify(
         &mut self,
-        _notification: &d2b_provider_notification_desktop::SanitizedNotification,
+        notification: &d2b_provider_notification_desktop::SanitizedNotification,
     ) -> Result<u32, d2b_provider_notification_desktop::SinkError> {
+        if self.presented.len() >= 64 {
+            return Err(d2b_provider_notification_desktop::SinkError::Unavailable);
+        }
+        self.presented.push_back(notification.clone());
         self.next_id = self.next_id.wrapping_add(1).max(1);
         Ok(self.next_id)
+    }
+}
+
+/// Daemon-owned desktop presentation effect backed by the authenticated
+/// session notification service.
+#[derive(Debug, Default)]
+pub struct NotifyRustNotificationPort {
+    handles: VecDeque<notify_rust::NotificationHandle>,
+}
+
+impl DesktopNotificationPort for NotifyRustNotificationPort {
+    fn notify(
+        &mut self,
+        notification: &d2b_provider_notification_desktop::SanitizedNotification,
+    ) -> Result<u32, d2b_provider_notification_desktop::SinkError> {
+        let mut desktop = DesktopNotification::new();
+        desktop
+            .appname("d2bd")
+            .summary(notification.summary())
+            .body(notification.body())
+            .urgency(match notification.urgency() {
+                d2b_provider_notification_desktop::NotificationUrgency::Low => Urgency::Low,
+                d2b_provider_notification_desktop::NotificationUrgency::Normal => Urgency::Normal,
+                d2b_provider_notification_desktop::NotificationUrgency::Critical => {
+                    Urgency::Critical
+                }
+            })
+            .timeout(Duration::from_secs(u64::from(
+                notification.expire_timeout_secs(),
+            )));
+        if let Some(icon) = notification.icon_ref() {
+            desktop.icon(icon);
+        }
+        for (action_key, label) in notification.actions() {
+            desktop.action(action_key, label);
+        }
+        let handle = desktop
+            .show()
+            .map_err(|_| d2b_provider_notification_desktop::SinkError::Unavailable)?;
+        let id = handle.id();
+        if self.handles.len() >= 64
+            && let Some(old) = self.handles.pop_front()
+        {
+            old.close();
+        }
+        self.handles.push_back(handle);
+        Ok(id)
     }
 }
 
@@ -2059,25 +2599,57 @@ impl ClipboardProcessEffectPort for InteractionDrainEffects {
     }
 }
 
+impl d2b_provider_clipboard_wayland::ClipboardAuditSink for InteractionDrainEffects {
+    type Error = &'static str;
+
+    fn publish(
+        &mut self,
+        event: &d2b_provider_clipboard_wayland::ClipboardAuditEvent,
+    ) -> Result<(), Self::Error> {
+        if event.to_wire().is_empty() {
+            return Err("clipboard-audit-empty");
+        }
+        self.audit_events = self.audit_events.saturating_add(1);
+        Ok(())
+    }
+}
+
 impl SourceProcessEffectPort for InteractionDrainEffects {
     fn apply(
         &mut self,
         plan: &SourceReconcileResult,
     ) -> Result<SourceProcessEffectReceipt, &'static str> {
-        self.source_effects = self
-            .source_effects
-            .saturating_add(plan.start_endpoints.len() + plan.stop_endpoints.len());
-        SourceProcessEffectReceipt::from_daemon(plan)
+        let mut receipt = SourceProcessEffectReceipt::builder(plan);
+        for endpoint in &plan.stop_endpoints {
+            self.active_sources.remove(endpoint.endpoint_digest());
+        }
+        for endpoint in &plan.start_endpoints {
+            self.active_sources
+                .insert(endpoint.endpoint_digest().to_owned());
+            receipt.acknowledge_source_start(endpoint);
+        }
+        for endpoint in &plan.stop_endpoints {
+            receipt.acknowledge_source_stop(endpoint);
+        }
+        if plan.start_host_sink {
+            self.host_sink_active = true;
+            receipt.acknowledge_host_sink_start();
+        }
+        if plan.stop_host_sink {
+            self.host_sink_active = false;
+            receipt.acknowledge_host_sink_stop();
+        }
+        receipt.finish()
     }
 }
 
 impl NotificationProcessEffectPort for InteractionDrainEffects {
     fn release_authority(&mut self) -> Result<(), &'static str> {
-        if self.source_effects > 0 || self.drained {
+        if self.active_sources.is_empty() && !self.host_sink_active {
             self.authority_released = true;
             Ok(())
         } else {
-            Ok(())
+            Err("notification-authority-release-incomplete")
         }
     }
 }
@@ -2483,10 +3055,11 @@ pub fn production_interaction_composition(
         daemon_uid,
         expected_state_root_gid,
     );
-    let mut composition = InteractionComposition::new_with_guest_frontend(
+    let mut composition = InteractionComposition::new_with_guest_frontend_and_notification_port(
         registrar,
         production_display_supervisor(bundle, daemon_uid, observation_path),
         guest_frontend,
+        Box::new(NotifyRustNotificationPort::default()),
     );
     let policy_ref = ResourceRef::parse("display-wayland.d2bus.org.WaylandPolicy/display-wayland")
         .map_err(|_| BusError::InvalidConfig)?;
@@ -2528,7 +3101,7 @@ fn unix_guest_subject_uid(uid: u32) -> ResourceUid {
 /// interaction Provider service packages.  Providers do not open these
 /// sockets and no Provider-owned service unit is created.
 pub fn spawn_interaction_listeners<S, G>(
-    runtime: Arc<AsyncMutex<Option<InteractionComposition<S, G>>>>,
+    runtime: Arc<AsyncMutex<Option<InteractionRuntimeSet<S, G>>>>,
     state_dir: PathBuf,
     zone: ZoneId,
     expected_peer_uid: u32,
@@ -2537,33 +3110,109 @@ where
     S: ProcessLaunchEffectPort + Clone + Send + Sync + 'static,
     G: GuestFrontendEffectPort + 'static,
 {
-    std::fs::create_dir_all(&state_dir).map_err(|error| error.to_string())?;
+    spawn_interaction_listeners_with_stop(
+        runtime,
+        state_dir,
+        zone,
+        expected_peer_uid,
+        Arc::new(AtomicBool::new(false)),
+    )
+}
+
+/// Bind listeners using an existing shutdown token so independently
+/// Zone-bound listener sets can be stopped as one daemon-owned group.
+pub fn spawn_interaction_listeners_with_stop<S, G>(
+    runtime: Arc<AsyncMutex<Option<InteractionRuntimeSet<S, G>>>>,
+    state_dir: PathBuf,
+    zone: ZoneId,
+    expected_peer_uid: u32,
+    stop: Arc<AtomicBool>,
+) -> Result<InteractionListenerSet, String>
+where
+    S: ProcessLaunchEffectPort + Clone + Send + Sync + 'static,
+    G: GuestFrontendEffectPort + 'static,
+{
+    ensure_owned_state_dir(&state_dir, expected_peer_uid).map_err(|error| error.to_string())?;
+    let state_metadata =
+        std::fs::symlink_metadata(&state_dir).map_err(|error| error.to_string())?;
+    if state_metadata.file_type().is_symlink()
+        || !state_metadata.is_dir()
+        || state_metadata.uid() != expected_peer_uid
+        || state_metadata.mode() & 0o022 != 0
+    {
+        return Err("interaction-listener-state-directory-ownership".to_owned());
+    }
+
+    fn ensure_owned_state_dir(path: &std::path::Path, expected_uid: u32) -> std::io::Result<()> {
+        match std::fs::symlink_metadata(path) {
+            Ok(metadata) => {
+                if metadata.file_type().is_symlink()
+                    || !metadata.is_dir()
+                    || metadata.uid() != expected_uid
+                    || metadata.mode() & 0o022 != 0
+                {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::PermissionDenied,
+                        "interaction listener state directory is not daemon-owned",
+                    ));
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                if let Some(parent) = path.parent() {
+                    let parent_metadata = std::fs::symlink_metadata(parent)?;
+                    if parent_metadata.file_type().is_symlink()
+                        || !parent_metadata.is_dir()
+                        || parent_metadata.mode() & 0o002 != 0
+                    {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::PermissionDenied,
+                            "interaction listener parent directory is unsafe",
+                        ));
+                    }
+                }
+                std::fs::create_dir_all(path)?;
+                let metadata = std::fs::symlink_metadata(path)?;
+                if metadata.file_type().is_symlink()
+                    || !metadata.is_dir()
+                    || metadata.uid() != expected_uid
+                    || metadata.mode() & 0o022 != 0
+                {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::PermissionDenied,
+                        "interaction listener state directory ownership changed",
+                    ));
+                }
+            }
+            Err(error) => return Err(error),
+        }
+        Ok(())
+    }
     let mut paths = Vec::with_capacity(INTERACTION_SERVICES.len());
-    let stop = Arc::new(AtomicBool::new(false));
+    let handlers = Arc::new(Mutex::new(Vec::new()));
+    let active_handlers = Arc::new(AtomicUsize::new(0));
     let mut threads = Vec::with_capacity(INTERACTION_SERVICES.len());
     for (service, _) in INTERACTION_SERVICES {
         let slug = service.replace('.', "-");
         let path = state_dir.join(format!("interaction-{slug}.sock"));
-        let listener = bind_interaction_listener(&path)
+        let listener = bind_interaction_listener(&path, expected_peer_uid)
             .map_err(|error| format!("bind interaction listener {}: {error}", path.display()))?;
         let runtime = Arc::clone(&runtime);
         let zone = zone.clone();
         let service = (*service).to_owned();
-        let thread_stop = Arc::clone(&stop);
         let failure_stop = Arc::clone(&stop);
         let thread_name = format!("d2bd-interaction-{}", service.replace('.', "-"));
+        let context = InteractionAcceptContext {
+            runtime,
+            zone,
+            service,
+            expected_peer_uid,
+            stop: Arc::clone(&stop),
+            handlers: Arc::clone(&handlers),
+            active_handlers: Arc::clone(&active_handlers),
+        };
         thread::Builder::new()
             .name(thread_name)
-            .spawn(move || {
-                interaction_accept_loop(
-                    listener,
-                    runtime,
-                    zone,
-                    service,
-                    expected_peer_uid,
-                    thread_stop,
-                )
-            })
+            .spawn(move || interaction_accept_loop(listener, context))
             .map(|thread| threads.push(thread))
             .map_err(|error| {
                 failure_stop.store(true, Ordering::Release);
@@ -2574,18 +3223,44 @@ where
             })?;
         paths.push(path);
     }
+    let socket_identities = paths
+        .iter()
+        .map(|path| {
+            let metadata = std::fs::symlink_metadata(path).map_err(|error| error.to_string())?;
+            Ok((metadata.dev(), metadata.ino()))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let parent_identities = paths
+        .iter()
+        .map(|path| {
+            let parent = path
+                .parent()
+                .ok_or_else(|| "interaction-listener-parent-missing".to_owned())?;
+            let metadata = std::fs::symlink_metadata(parent).map_err(|error| error.to_string())?;
+            if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                return Err("interaction-listener-parent-invalid".to_owned());
+            }
+            Ok((metadata.dev(), metadata.ino()))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
     Ok(InteractionListenerSet {
         paths,
+        socket_identities,
+        parent_identities,
         stop,
         threads: Mutex::new(threads),
+        handlers,
     })
 }
 
 /// Daemon-owned handles for the interaction listener set.
 pub struct InteractionListenerSet {
     paths: Vec<PathBuf>,
+    socket_identities: Vec<(u64, u64)>,
+    parent_identities: Vec<(u64, u64)>,
     stop: Arc<AtomicBool>,
     threads: Mutex<Vec<thread::JoinHandle<()>>>,
+    handlers: Arc<Mutex<Vec<thread::JoinHandle<()>>>>,
 }
 
 impl core::fmt::Debug for InteractionListenerSet {
@@ -2604,6 +3279,34 @@ impl InteractionListenerSet {
         &self.paths
     }
 
+    /// Borrow the shared daemon shutdown token.
+    pub fn stop_token(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.stop)
+    }
+
+    /// Append another independently Zone-bound listener set.
+    pub fn extend(&mut self, mut other: Self) {
+        self.paths.append(&mut other.paths);
+        self.socket_identities.append(&mut other.socket_identities);
+        self.parent_identities.append(&mut other.parent_identities);
+        let other_threads = std::mem::replace(&mut other.threads, Mutex::new(Vec::new()))
+            .into_inner()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        self.threads
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .extend(other_threads);
+        self.handlers
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .append(
+                &mut other
+                    .handlers
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()),
+            );
+    }
+
     /// Stop accepting new sessions and join all listener loops.
     pub fn stop(&self) {
         self.stop.store(true, Ordering::Release);
@@ -2614,13 +3317,37 @@ impl InteractionListenerSet {
         for thread in threads.drain(..) {
             let _ = thread.join();
         }
+        let mut handlers = self
+            .handlers
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        for handler in handlers.drain(..) {
+            let _ = handler.join();
+        }
         self.remove_socket_paths();
     }
 
     fn remove_socket_paths(&self) {
-        for path in &self.paths {
-            if std::fs::symlink_metadata(path)
-                .is_ok_and(|metadata| metadata.file_type().is_socket())
+        for ((path, (device, inode)), (parent_device, parent_inode)) in self
+            .paths
+            .iter()
+            .zip(&self.socket_identities)
+            .zip(&self.parent_identities)
+        {
+            let parent_owned = path.parent().and_then(|parent| {
+                std::fs::symlink_metadata(parent).ok().filter(|metadata| {
+                    metadata.is_dir()
+                        && !metadata.file_type().is_symlink()
+                        && metadata.dev() == *parent_device
+                        && metadata.ino() == *parent_inode
+                })
+            });
+            if parent_owned.is_some()
+                && std::fs::symlink_metadata(path).is_ok_and(|metadata| {
+                    metadata.file_type().is_socket()
+                        && metadata.dev() == *device
+                        && metadata.ino() == *inode
+                })
             {
                 let _ = std::fs::remove_file(path);
             }
@@ -2638,9 +3365,33 @@ impl Drop for InteractionListenerSet {
         for thread in threads.drain(..) {
             let _ = thread.join();
         }
-        for path in &self.paths {
-            if std::fs::symlink_metadata(path)
-                .is_ok_and(|metadata| metadata.file_type().is_socket())
+        let mut handlers = self
+            .handlers
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        for handler in handlers.drain(..) {
+            let _ = handler.join();
+        }
+        for ((path, (device, inode)), (parent_device, parent_inode)) in self
+            .paths
+            .iter()
+            .zip(&self.socket_identities)
+            .zip(&self.parent_identities)
+        {
+            let parent_owned = path.parent().and_then(|parent| {
+                std::fs::symlink_metadata(parent).ok().filter(|metadata| {
+                    metadata.is_dir()
+                        && !metadata.file_type().is_symlink()
+                        && metadata.dev() == *parent_device
+                        && metadata.ino() == *parent_inode
+                })
+            });
+            if parent_owned.is_some()
+                && std::fs::symlink_metadata(path).is_ok_and(|metadata| {
+                    metadata.file_type().is_socket()
+                        && metadata.dev() == *device
+                        && metadata.ino() == *inode
+                })
             {
                 let _ = std::fs::remove_file(path);
             }
@@ -2648,9 +3399,11 @@ impl Drop for InteractionListenerSet {
     }
 }
 
-fn bind_interaction_listener(path: &std::path::Path) -> std::io::Result<Socket> {
+fn bind_interaction_listener(path: &std::path::Path, expected_uid: u32) -> std::io::Result<Socket> {
     match std::fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.file_type().is_socket() => std::fs::remove_file(path)?,
+        Ok(metadata) if metadata.file_type().is_socket() && metadata.uid() == expected_uid => {
+            std::fs::remove_file(path)?
+        }
         Ok(_) => {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::AlreadyExists,
@@ -2668,17 +3421,35 @@ fn bind_interaction_listener(path: &std::path::Path) -> std::io::Result<Socket> 
     Ok(listener)
 }
 
-fn interaction_accept_loop<S, G>(
-    listener: Socket,
-    runtime: Arc<AsyncMutex<Option<InteractionComposition<S, G>>>>,
+#[derive(Clone)]
+struct InteractionAcceptContext<S, G>
+where
+    S: ProcessLaunchEffectPort + Clone + Send + Sync + 'static,
+    G: GuestFrontendEffectPort + 'static,
+{
+    runtime: Arc<AsyncMutex<Option<InteractionRuntimeSet<S, G>>>>,
     zone: ZoneId,
     service: String,
     expected_peer_uid: u32,
     stop: Arc<AtomicBool>,
-) where
+    handlers: Arc<Mutex<Vec<thread::JoinHandle<()>>>>,
+    active_handlers: Arc<AtomicUsize>,
+}
+
+fn interaction_accept_loop<S, G>(listener: Socket, context: InteractionAcceptContext<S, G>)
+where
     S: ProcessLaunchEffectPort + Clone + Send + Sync + 'static,
     G: GuestFrontendEffectPort + 'static,
 {
+    let InteractionAcceptContext {
+        runtime,
+        zone,
+        service,
+        expected_peer_uid,
+        stop,
+        handlers,
+        active_handlers,
+    } = context;
     while !stop.load(Ordering::Acquire) {
         let socket = match accept_with(
             listener.as_fd(),
@@ -2698,7 +3469,13 @@ fn interaction_accept_loop<S, G>(
         let runtime = Arc::clone(&runtime);
         let zone = zone.clone();
         let service = service.clone();
-        let _ = thread::Builder::new()
+        if active_handlers.load(Ordering::Acquire) >= 64 {
+            continue;
+        }
+        active_handlers.fetch_add(1, Ordering::AcqRel);
+        let handler_active = Arc::clone(&active_handlers);
+        let handler_stop = Arc::clone(&stop);
+        let handler = thread::Builder::new()
             .name("d2bd-interaction-session".to_owned())
             .spawn(move || {
                 let result = tokio::runtime::Builder::new_current_thread()
@@ -2712,21 +3489,32 @@ fn interaction_accept_loop<S, G>(
                             zone,
                             service,
                             expected_peer_uid,
+                            handler_stop,
                         ))
                     });
                 if let Err(error) = result {
                     tracing::debug!(%error, "interaction ComponentSession refused");
                 }
+                handler_active.fetch_sub(1, Ordering::AcqRel);
             });
+        if let Ok(handler) = handler {
+            handlers
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push(handler);
+        } else {
+            active_handlers.fetch_sub(1, Ordering::AcqRel);
+        }
     }
 }
 
 async fn admit_interaction_socket<S, G>(
     socket: std::os::fd::OwnedFd,
-    runtime: Arc<AsyncMutex<Option<InteractionComposition<S, G>>>>,
+    runtime: Arc<AsyncMutex<Option<InteractionRuntimeSet<S, G>>>>,
     zone: ZoneId,
     service: String,
     expected_peer_uid: u32,
+    stop: Arc<AtomicBool>,
 ) -> Result<(), String>
 where
     S: ProcessLaunchEffectPort + Clone + Send + Sync + 'static,
@@ -2749,8 +3537,22 @@ where
         CreditPool::new(8).map_err(|error| format!("{error:?}"))?,
         CreditPool::new(8).map_err(|error| format!("{error:?}"))?,
     );
-    let resolver: d2b_session_unix::DescriptorPolicyResolver =
-        Arc::new(|_| Err(UnixSessionError::DescriptorMismatch));
+    let resolver: d2b_session_unix::DescriptorPolicyResolver = Arc::new(|descriptor| {
+        let clipboard_service = matches!(
+            descriptor.service,
+            ServicePackage::ClipboardV3
+                | ServicePackage::ClipboardBridgeV3
+                | ServicePackage::ClipboardPickerCoordV3
+        );
+        if clipboard_service
+            && descriptor.kind == AttachmentKind::FileDescriptor
+            && descriptor.purpose == AttachmentPurpose::ClipboardTransfer
+        {
+            Ok(d2b_session_unix::DescriptorPolicy::ProviderValidatedFile)
+        } else {
+            Err(UnixSessionError::DescriptorMismatch)
+        }
+    });
     let transport = UnixSeqpacketTransport::new(
         seqpacket,
         TransportLocality::HostLocal,
@@ -2761,18 +3563,23 @@ where
         PeerIdentityPolicy::accepted(expected_peer),
     )
     .map_err(|error| error.to_string())?;
-    let engine = SessionEngine::establish_responder(
-        transport,
-        policy.clone(),
-        d2b_session::HandshakeCredentials::Nn,
-        Instant::now(),
+    let engine = tokio::time::timeout(
+        Duration::from_secs(5),
+        SessionEngine::establish_responder(
+            transport,
+            policy.clone(),
+            d2b_session::HandshakeCredentials::Nn,
+            Instant::now(),
+        ),
     )
     .await
+    .map_err(|_| "interaction-handshake-timeout".to_owned())?
     .map_err(|error| error.to_string())?;
     let acceptor = {
         let guard = runtime.lock().await;
         let composition = guard
             .as_ref()
+            .and_then(|set| set.runtime_for(&zone))
             .ok_or_else(|| "interaction runtime unavailable".to_owned())?;
         composition
             .registrar()
@@ -2790,6 +3597,7 @@ where
         let mut guard = runtime.lock().await;
         let composition = guard
             .as_mut()
+            .and_then(|set| set.runtime_for_mut(&zone))
             .ok_or_else(|| "interaction runtime unavailable".to_owned())?;
         let registered = composition
             .admit_and_register(acceptor, engine, evidence, 1)
@@ -2798,16 +3606,33 @@ where
         registered.request_receiver()
     };
     loop {
-        let frame = match request_receiver.recv().await {
-            Ok(frame) => frame,
-            Err(_) => break,
+        let frame = tokio::select! {
+            frame = request_receiver.recv() => match frame {
+                Ok(frame) => frame,
+                Err(_) => break,
+            },
+            _ = tokio::time::sleep(Duration::from_millis(50)) => {
+                if stop.load(Ordering::Acquire) {
+                    break;
+                }
+                continue;
+            }
         };
         let mut guard = runtime.lock().await;
         let composition = guard
             .as_mut()
+            .and_then(|set| set.runtime_for_mut(&zone))
             .ok_or_else(|| "interaction runtime unavailable".to_owned())?;
+        let attachments = if request_accepts_clipboard_attachments(&frame) {
+            request_receiver
+                .recv_attachments()
+                .await
+                .map_err(|_| "interaction-attachment-receive-failed".to_owned())?
+        } else {
+            Vec::new()
+        };
         if let Err(error) = composition
-            .dispatch_component_request(&service, frame)
+            .dispatch_component_request_with_attachments(&service, frame, attachments)
             .await
         {
             tracing::debug!(%error, service = %service, "interaction request rejected");
@@ -2817,12 +3642,29 @@ where
         }
     }
     let mut guard = runtime.lock().await;
-    let composition = guard
+    guard
         .as_mut()
-        .ok_or_else(|| "interaction runtime unavailable".to_owned())?;
-    composition.remove_service_session(&service).await?;
-    let _ = zone;
+        .ok_or_else(|| "interaction runtime unavailable".to_owned())?
+        .remove_service_session(&zone, &service)
+        .await?;
     Ok(())
+}
+
+fn request_accepts_clipboard_attachments(frame: &[u8]) -> bool {
+    let Some(payload) = frame.get(ttrpc::proto::MESSAGE_HEADER_LENGTH..) else {
+        return false;
+    };
+    let Ok(request) = TtrpcRequest::parse_from_bytes(payload) else {
+        return false;
+    };
+    if !matches!(
+        request.method.as_str(),
+        "ClipboardBridgeService/CaptureGuest" | "ClipboardBridgeService/CaptureHost"
+    ) {
+        return false;
+    }
+    serde_json::from_slice::<ClipboardCaptureRequest>(&request.payload)
+        .is_ok_and(|request| request.bytes.is_none())
 }
 
 fn configuration_digest(
@@ -2963,7 +3805,7 @@ mod tests {
     struct TestGuestFrontend;
 
     type TestInteractionRuntime = Arc<
-        AsyncMutex<Option<InteractionComposition<ProviderSupervisor<Backend>, TestGuestFrontend>>>,
+        AsyncMutex<Option<InteractionRuntimeSet<ProviderSupervisor<Backend>, TestGuestFrontend>>>,
     >;
 
     impl GuestFrontendEffectPort for TestGuestFrontend {
@@ -3045,6 +3887,32 @@ mod tests {
     }
 
     #[test]
+    fn display_supervision_refresh_uses_live_worker_observation() {
+        let backend = Backend::default();
+        let supervisor = d2b_provider_supervisor::ProviderSupervisor::new(backend.clone());
+        let mut effects = DisplaySupervisorEffects::new(supervisor);
+        effects.policy_generation = 1;
+        effects.teardown_generation = 1;
+        effects.session_digest = [10; 32];
+        let ticket = d2b_provider_display_wayland::LaunchTicket::new_for_daemon(
+            DisplayProcessRole::HostProxy,
+            Some(d2b_provider_display_wayland::AttachmentGrantHandle::from_daemon([5; 32])),
+            d2b_provider_display_wayland::AttachmentGrantHandle::from_daemon([6; 32]),
+            "sha256:".to_owned() + &"c".repeat(64),
+            1,
+            "session",
+            1,
+        )
+        .unwrap();
+        effects.launch(ticket).unwrap();
+        let observation_before_refresh = daemon_monotonic_ms();
+        let evidence = effects.current_supervision();
+        assert!(evidence.observed_at_ms() >= observation_before_refresh);
+        assert!(evidence.proxy_last_failure_ms().is_some());
+        assert!(backend.observes.load(Ordering::Acquire) >= 2);
+    }
+
+    #[test]
     fn display_stop_is_idempotent_when_worker_was_already_adopted_elsewhere() {
         let supervisor = d2b_provider_supervisor::ProviderSupervisor::new(Backend::default());
         let mut effects = DisplaySupervisorEffects::new(supervisor);
@@ -3118,12 +3986,20 @@ mod tests {
     fn listener_stop_removes_daemon_owned_socket_paths() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("interaction.sock");
-        let listener = bind_interaction_listener(&path).expect("listener socket");
+        let listener = bind_interaction_listener(&path, rustix::process::geteuid().as_raw())
+            .expect("listener socket");
         drop(listener);
+        let metadata = std::fs::symlink_metadata(&path).unwrap();
         let listeners = InteractionListenerSet {
             paths: vec![path.clone()],
+            socket_identities: vec![(metadata.dev(), metadata.ino())],
+            parent_identities: {
+                let parent = std::fs::symlink_metadata(directory.path()).unwrap();
+                vec![(parent.dev(), parent.ino())]
+            },
             stop: Arc::new(AtomicBool::new(false)),
             threads: Mutex::new(Vec::new()),
+            handlers: Arc::new(Mutex::new(Vec::new())),
         };
 
         assert!(path.exists());
@@ -3236,6 +4112,15 @@ mod tests {
         composition
     }
 
+    fn test_interaction_runtime(
+        zone: &ZoneId,
+        uid: u32,
+    ) -> InteractionRuntimeSet<ProviderSupervisor<Backend>, TestGuestFrontend> {
+        let mut runtimes = InteractionRuntimeSet::new();
+        runtimes.insert(zone.clone(), test_interaction_composition(zone, uid));
+        runtimes
+    }
+
     fn test_unix_transport(
         socket: SeqpacketSocket,
         peer: d2b_session_unix::PeerCredentials,
@@ -3315,8 +4200,15 @@ mod tests {
         let server_zone = zone.clone();
         let server_service = service.to_owned();
         let server = tokio::spawn(async move {
-            admit_interaction_socket(accepted, server_runtime, server_zone, server_service, uid)
-                .await
+            admit_interaction_socket(
+                accepted,
+                server_runtime,
+                server_zone,
+                server_service,
+                uid,
+                Arc::new(AtomicBool::new(false)),
+            )
+            .await
         });
 
         let policy = interaction_endpoint_policy(service, 1).unwrap();
@@ -3361,9 +4253,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let zone = ZoneId::parse("work").unwrap();
         let uid = nix::unistd::getuid().as_raw();
-        let runtime = Arc::new(AsyncMutex::new(Some(test_interaction_composition(
-            &zone, uid,
-        ))));
+        let runtime = Arc::new(AsyncMutex::new(Some(test_interaction_runtime(&zone, uid))));
         let services = [
             d2b_provider_display_wayland::SERVICE_PACKAGE,
             d2b_provider_clipboard_wayland::BRIDGE_SERVICE,
@@ -3376,7 +4266,7 @@ mod tests {
                 .path()
                 .join(service.replace('.', "-"))
                 .with_extension("sock");
-            let listener = bind_interaction_listener(&path).unwrap();
+            let listener = bind_interaction_listener(&path, uid).unwrap();
             let (client, server) =
                 establish_test_client(&listener, &runtime, &zone, service, uid, &path).await;
             clients.push((service, path, listener, client, server));
@@ -3461,10 +4351,32 @@ mod tests {
         )
         .await;
         assert_eq!(completion.status().code(), TtrpcCode::OK);
-        let replay = dispatch_test_request(
+        let completion_value: serde_json::Value =
+            serde_json::from_slice(&completion.payload).unwrap();
+        let operation_id = completion_value["operation_id"].as_str().unwrap();
+        let materialized = dispatch_test_request(
             picker,
             picker_service,
             104,
+            "ClipboardPickerService/Materialize",
+            serde_json::to_vec(&serde_json::json!({
+                "operation_id": operation_id,
+                "entry_digest": entry_digest,
+            }))
+            .unwrap(),
+        )
+        .await;
+        assert_eq!(materialized.status().code(), TtrpcCode::OK);
+        let materialized_value: serde_json::Value =
+            serde_json::from_slice(&materialized.payload).unwrap();
+        assert_eq!(
+            materialized_value["bytes"],
+            serde_json::json!([99, 108, 105, 112])
+        );
+        let replay = dispatch_test_request(
+            picker,
+            picker_service,
+            105,
             "ClipboardPickerService/Complete",
             completion_payload,
         )
@@ -3475,7 +4387,7 @@ mod tests {
         let deliver = dispatch_test_request(
             notification,
             notification_service,
-            105,
+            106,
             "NotificationService/Deliver",
             serde_json::to_vec(&serde_json::json!({
                 "request": {
@@ -3501,7 +4413,7 @@ mod tests {
         let action = dispatch_test_request(
             notification,
             notification_service,
-            106,
+            107,
             "NotificationService/InvokeAction",
             serde_json::to_vec(&serde_json::json!({
                 "action_key": action_key,
@@ -3514,7 +4426,7 @@ mod tests {
         let close = dispatch_test_request(
             notification,
             notification_service,
-            107,
+            108,
             "NotificationService/CloseObserver",
             Vec::new(),
         )
@@ -3524,7 +4436,7 @@ mod tests {
         let finalize = dispatch_test_request(
             display,
             display_service,
-            108,
+            109,
             "DisplayService/Finalize",
             Vec::new(),
         )
@@ -3533,19 +4445,56 @@ mod tests {
         for (_, _, _, _, server) in clients {
             assert!(server.await.unwrap().is_ok());
         }
-        assert_eq!(runtime.lock().await.as_ref().unwrap().session_count(), 0);
+        assert_eq!(
+            runtime
+                .lock()
+                .await
+                .as_ref()
+                .and_then(|set| set.runtime_for(&zone))
+                .map_or(0, InteractionComposition::session_count),
+            0
+        );
+    }
+
+    #[test]
+    fn notification_presentation_effect_consumes_sanitized_payload_and_bounds_queue() {
+        let request =
+            NotificationRequest::new("Update", "A bounded body", Category::SystemInfo).unwrap();
+        let sanitized = d2b_provider_notification_desktop::sanitize(&request).unwrap();
+        let mut port = InteractionNotificationPort::default();
+        for _ in 0..64 {
+            port.notify(&sanitized).unwrap();
+        }
+        assert_eq!(port.presented.len(), 64);
+        assert_eq!(port.presented.front().unwrap().summary(), "Update");
+        assert_eq!(
+            port.notify(&sanitized),
+            Err(d2b_provider_notification_desktop::SinkError::Unavailable)
+        );
+    }
+
+    #[test]
+    fn notification_authority_release_refuses_active_effects() {
+        let mut effects = InteractionDrainEffects::default();
+        effects.active_sources.insert("source".to_owned());
+
+        assert_eq!(
+            d2b_provider_notification_desktop::NotificationProcessEffectPort::release_authority(
+                &mut effects
+            ),
+            Err("notification-authority-release-incomplete")
+        );
+        assert!(!effects.authority_released());
     }
 
     #[tokio::test(flavor = "current_thread")]
     async fn hermetic_listener_authenticates_dispatches_finalizes_and_refuses_replay() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("interaction.sock");
-        let listener = bind_interaction_listener(&path).unwrap();
         let zone = ZoneId::parse("work").unwrap();
         let uid = nix::unistd::getuid().as_raw();
-        let runtime = Arc::new(AsyncMutex::new(Some(test_interaction_composition(
-            &zone, uid,
-        ))));
+        let listener = bind_interaction_listener(&path, uid).unwrap();
+        let runtime = Arc::new(AsyncMutex::new(Some(test_interaction_runtime(&zone, uid))));
 
         let client_socket =
             Socket::new(Domain::UNIX, Type::from(libc::SOCK_SEQPACKET), None).unwrap();
@@ -3572,6 +4521,7 @@ mod tests {
                 server_zone,
                 d2b_provider_display_wayland::SERVICE_PACKAGE.to_owned(),
                 uid,
+                Arc::new(AtomicBool::new(false)),
             )
             .await
         });
@@ -3640,7 +4590,15 @@ mod tests {
         let finalize = TtrpcResponse::parse_from_bytes(finalize_payload).unwrap();
         assert_eq!(finalize.status().code(), TtrpcCode::OK);
         assert!(server.await.unwrap().is_ok());
-        assert_eq!(runtime.lock().await.as_ref().unwrap().session_count(), 0);
+        assert_eq!(
+            runtime
+                .lock()
+                .await
+                .as_ref()
+                .and_then(|set| set.runtime_for(&zone))
+                .map_or(0, InteractionComposition::session_count),
+            0
+        );
 
         let replay_frame = request_frame_for_test(
             d2b_provider_display_wayland::SERVICE_PACKAGE,
@@ -3659,7 +4617,8 @@ mod tests {
     async fn unix_listener_observes_real_peer_credentials_before_session_admission() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("interaction.sock");
-        let listener = bind_interaction_listener(&path).expect("listener socket");
+        let listener = bind_interaction_listener(&path, nix::unistd::getuid().as_raw())
+            .expect("listener socket");
         let client = Socket::new(Domain::UNIX, Type::from(libc::SOCK_SEQPACKET), None).unwrap();
         client.connect(&SockAddr::unix(&path).unwrap()).unwrap();
         let accepted = loop {

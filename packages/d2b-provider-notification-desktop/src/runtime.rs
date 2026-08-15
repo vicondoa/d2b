@@ -89,7 +89,7 @@ impl<E: NotificationProcessEffectPort> NotificationRuntime<E> {
 
     /// Deliver one request through the authenticated source and observer
     /// sessions, using only the configured source category set.
-    pub fn deliver<P: DesktopNotificationPort, C>(
+    pub fn deliver<P: DesktopNotificationPort + ?Sized, C>(
         &mut self,
         port: &mut P,
         source_session: &AuthenticatedComponentSession<C>,
@@ -123,7 +123,7 @@ impl<E: NotificationProcessEffectPort> NotificationRuntime<E> {
 
     /// Deliver using route projections already authenticated and retained by
     /// the daemon.  This is the production dispatcher entry point.
-    pub fn deliver_evidence<P: DesktopNotificationPort>(
+    pub fn deliver_evidence<P: DesktopNotificationPort + ?Sized>(
         &mut self,
         port: &mut P,
         source_session: &SessionEvidence,
@@ -293,7 +293,7 @@ impl<E: NotificationProcessEffectPort> NotificationRuntime<E> {
             .map(|route| self.daemon_source_route_evidence(route))
             .collect::<Result<Vec<_>, _>>()?;
         self.controller
-            .reconcile_authenticated_display_with_effects(
+            .reconcile_daemon_display_with_effects(
                 display,
                 &self.config,
                 &source_evidence,

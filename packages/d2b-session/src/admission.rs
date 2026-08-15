@@ -743,6 +743,16 @@ impl AuthenticatedTtrpcHandle {
         self.driver.receive_ttrpc().await
     }
 
+    /// Receive the next authenticated attachment batch.
+    ///
+    /// Attachment packets are kept on their own bounded driver queue because
+    /// ComponentSession carries descriptor metadata separately from ttrpc
+    /// frames. Callers must pair the batch with the operation/request ids in
+    /// the authenticated descriptors before handing it to a Provider.
+    pub async fn receive_attachments(&self) -> Result<Vec<crate::OwnedAttachment>> {
+        self.driver.receive_attachments().await
+    }
+
     /// Send one response frame for an authenticated inbound request.
     ///
     /// The Zone bus owns the request authorization and correlation fence

@@ -27,7 +27,7 @@ type InteractionSupervisor = d2b_provider_supervisor::ProviderSupervisor<
         interaction_composition::BundleDisplayLaunchResolver,
     >,
 >;
-type InteractionRuntime = interaction_composition::InteractionComposition<
+type InteractionRuntime = interaction_composition::InteractionRuntimeSet<
     InteractionSupervisor,
     interaction_composition::AuthenticatedGuestFrontendEffects,
 >;
@@ -1807,17 +1807,6 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
                                 }
                             })?;
                         }
-                        let interaction_zone = plane.zone_ids().into_iter().next();
-                        let interaction_evidence = interaction_zone.as_ref().and_then(|zone| {
-                            plane.zone(zone).ok().map(|runtime| {
-                                (
-                                    zone.clone(),
-                                    runtime.committed_policy_snapshot(),
-                                    runtime.current_revision(),
-                                    runtime.require_ready().is_ok(),
-                                )
-                            })
-                        });
                         if let Ok(mut slot) = state.resource_plane.lock() {
                             *slot = Some(Arc::clone(&plane));
                         } else {
@@ -1826,50 +1815,81 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
                                 detail: "resource-plane state lock unavailable".to_owned(),
                             });
                         }
-                        if let Some((zone, committed_policy, resource_revision, resource_ready)) =
-                            interaction_evidence
-                        {
+                        let mut runtimes = InteractionRuntime::new();
+                        let mut listener_set: Option<
+                            interaction_composition::InteractionListenerSet,
+                        > = None;
+                        for zone in plane.zone_ids() {
+                            let Some(resource) = plane.zone(&zone).ok() else {
+                                continue;
+                            };
+                            if resource.require_ready().is_err() {
+                                continue;
+                            }
                             match interaction_composition::production_interaction_composition(
                                 resolver.clone(),
                                 state.daemon_uid,
                                 state
                                     .daemon_state_dir
-                                    .join("interaction-display-observations.json"),
+                                    .join(format!("interaction-display-observations-{zone}.json")),
                                 zone.clone(),
-                                committed_policy,
-                                resource_revision,
-                                resource_ready,
+                                resource.committed_policy_snapshot(),
+                                resource.current_revision(),
+                                true,
                             ) {
                                 Ok(runtime) => {
-                                    *state.interaction_runtime.lock().await = Some(runtime);
-                                    match interaction_composition::spawn_interaction_listeners(
-                                        Arc::clone(&state.interaction_runtime),
-                                        state.daemon_state_dir.join("interaction"),
-                                        zone,
-                                        state.daemon_uid,
-                                    ) {
-                                        Ok(listeners) => {
-                                            let paths = listeners.paths().to_owned();
-                                            *state
-                                                .interaction_listeners
-                                                .lock()
-                                                .expect("interaction listener lock") =
-                                                Some(listeners);
-                                            tracing::info!(
-                                                listener_count = paths.len(),
-                                                "interaction Provider ComponentSession listeners ready",
-                                            );
-                                        }
-                                        Err(error) => tracing::error!(
-                                            %error,
-                                            "interaction Provider listeners failed closed during startup",
-                                        ),
-                                    }
+                                    runtimes.insert(zone.clone(), runtime);
                                 }
                                 Err(error) => tracing::error!(
                                     error = ?error,
+                                    zone = %zone,
                                     "interaction Provider composition failed closed during startup",
                                 ),
+                            }
+                        }
+                        if !runtimes.is_empty() {
+                            *state.interaction_runtime.lock().await = Some(runtimes);
+                            let shared_stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+                            for zone in plane.zone_ids() {
+                                let Some(resource) = plane.zone(&zone).ok() else {
+                                    continue;
+                                };
+                                if resource.require_ready().is_err() {
+                                    continue;
+                                }
+                                match interaction_composition::spawn_interaction_listeners_with_stop(
+                                    Arc::clone(&state.interaction_runtime),
+                                    state
+                                        .daemon_state_dir
+                                        .join("interaction")
+                                        .join(zone.as_str()),
+                                    zone,
+                                    state.daemon_uid,
+                                    Arc::clone(&shared_stop),
+                                ) {
+                                    Ok(listeners) => {
+                                        if let Some(existing) = listener_set.as_mut() {
+                                            existing.extend(listeners);
+                                        } else {
+                                            listener_set = Some(listeners);
+                                        }
+                                    }
+                                    Err(error) => tracing::error!(
+                                        %error,
+                                        "interaction Provider listeners failed closed during startup",
+                                    ),
+                                }
+                            }
+                            if let Some(listeners) = listener_set {
+                                let paths = listeners.paths().to_owned();
+                                *state
+                                    .interaction_listeners
+                                    .lock()
+                                    .expect("interaction listener lock") = Some(listeners);
+                                tracing::info!(
+                                    listener_count = paths.len(),
+                                    "interaction Provider ComponentSession listeners ready",
+                                );
                             }
                         } else {
                             tracing::error!(
@@ -2214,7 +2234,7 @@ async fn finalize_daemon_interactions(state: &ServerState) -> Result<(), TypedEr
     {
         listeners.stop();
     }
-    if let Some(mut runtime) = state.interaction_runtime.lock().await.take()
+    if let Some(runtime) = state.interaction_runtime.lock().await.as_mut()
         && let Err(error) = runtime
             .finalize_async(d2b_provider_display_wayland::GraceState::Expired)
             .await

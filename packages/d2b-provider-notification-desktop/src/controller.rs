@@ -60,6 +60,51 @@ impl DisplayDependencyEvidence {
         Self::from_route(route, DisplayDependencyState::Ready, provider_generation)
     }
 
+    /// Project daemon-local display evidence when the ComponentSession route
+    /// is bound to the authenticated Guest frontend and Core supplies the
+    /// corresponding host User resource separately.
+    pub fn from_daemon_route(
+        route: AuthenticatedSessionRouteBinding,
+        user_ref: ResourceRef,
+    ) -> Result<Self, &'static str> {
+        let provider_generation = route
+            .provider_generation()
+            .ok_or("display-dependency-unauthenticated")?
+            .get();
+        let Some(provider) = route.provider_ref() else {
+            return Err("display-dependency-unauthenticated");
+        };
+        let Some(host_execution_ref) = route.context().execution_ref() else {
+            return Err("display-dependency-unauthenticated");
+        };
+        let Some(controller_generation) = route.controller_generation() else {
+            return Err("display-dependency-unauthenticated");
+        };
+        if provider.to_canonical_string() != DISPLAY_PROVIDER_REF
+            || route.service().as_str() != DISPLAY_SERVICE_PACKAGE
+            || route.evidence_class() != EvidenceClass::UnixPeer
+            || route.locality() != Locality::Local
+            || route.subject_ref().resource_type().as_str() != "Guest"
+            || user_ref.resource_type().as_str() != "User"
+            || host_execution_ref.resource_type().as_str() != "Host"
+            || provider_generation == 0
+            || route.reconnect_generation().get() == 0
+            || controller_generation.get() == 0
+        {
+            return Err("display-dependency-unauthenticated");
+        }
+        Ok(Self {
+            provider_ref: provider.clone(),
+            zone: route.zone().clone(),
+            host_execution_ref: host_execution_ref.clone(),
+            user_ref,
+            provider_generation,
+            reconnect_generation: route.reconnect_generation().get(),
+            controller_generation: controller_generation.get(),
+            state: DisplayDependencyState::Ready,
+        })
+    }
+
     /// Resolve one display dependency from an authenticated display route.
     #[allow(dead_code)]
     pub(crate) fn from_route(
@@ -437,7 +482,8 @@ impl NotificationProviderConfig {
         self.host_execution_ref.as_ref()
     }
 
-    fn host_user_ref(&self) -> Option<&ResourceRef> {
+    /// Borrow the committed Host User binding.
+    pub fn host_user_ref(&self) -> Option<&ResourceRef> {
         self.host_user_ref.as_ref()
     }
 }
@@ -1114,6 +1160,38 @@ impl NotificationController {
             return Ok(result);
         };
         let evidence = match DisplayDependencyEvidence::from_authenticated_route(proof) {
+            Ok(evidence) => evidence,
+            Err(error) => {
+                self.apply_drain_with_effects(effects)?;
+                return Err(error);
+            }
+        };
+        self.reconcile_sources_with_effects(&evidence, config, source_sessions, effects)
+    }
+
+    /// Reconcile daemon-retained Guest display routes with Core's Host User
+    /// binding while preserving all normal readiness and generation checks.
+    pub fn reconcile_daemon_display_with_effects<E: SourceProcessEffectPort>(
+        &mut self,
+        display: Option<AuthenticatedSessionRouteBinding>,
+        config: &NotificationProviderConfig,
+        source_sessions: &[SessionEvidence],
+        effects: &mut E,
+    ) -> Result<SourceReconcileResult, &'static str> {
+        let Some(proof) = display else {
+            let result = self.drain_plan();
+            let receipt = effects.apply(&result)?;
+            if !receipt.matches(&result) {
+                return Err("notification-process-effect-proof-mismatch");
+            }
+            self.clear_reconciliation();
+            return Ok(result);
+        };
+        let user_ref = config
+            .host_user_ref()
+            .ok_or("notification-host-binding-missing")?
+            .clone();
+        let evidence = match DisplayDependencyEvidence::from_daemon_route(proof, user_ref) {
             Ok(evidence) => evidence,
             Err(error) => {
                 self.apply_drain_with_effects(effects)?;

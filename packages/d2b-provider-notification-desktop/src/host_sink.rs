@@ -36,6 +36,12 @@ pub trait DesktopNotificationPort {
     fn notify(&mut self, notification: &SanitizedNotification) -> Result<u32, SinkError>;
 }
 
+impl<T: DesktopNotificationPort + ?Sized> DesktopNotificationPort for Box<T> {
+    fn notify(&mut self, notification: &SanitizedNotification) -> Result<u32, SinkError> {
+        (**self).notify(notification)
+    }
+}
+
 /// The result returned to the source stream.
 #[derive(Clone, PartialEq, Eq)]
 pub enum NotificationResult {
@@ -150,7 +156,7 @@ impl NotificationSink {
 
     /// Deliver one authenticated Guest-source request through the effect port
     /// to one authenticated desktop observer.
-    pub(crate) fn deliver<P: DesktopNotificationPort>(
+    pub(crate) fn deliver<P: DesktopNotificationPort + ?Sized>(
         &mut self,
         port: &mut P,
         source_session: &SessionEvidence,
@@ -258,7 +264,7 @@ impl NotificationSink {
     }
 
     /// Deliver after the configured Guest-source category admission.
-    pub fn deliver_from_guest_source<P: DesktopNotificationPort>(
+    pub fn deliver_from_guest_source<P: DesktopNotificationPort + ?Sized>(
         &mut self,
         port: &mut P,
         source: &GuestSource,

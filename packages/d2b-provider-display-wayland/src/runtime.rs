@@ -149,6 +149,14 @@ impl WorkerLaunchReceipt {
 /// `d2b-provider-supervisor` and the existing typed process effect adapter.
 /// The Provider receives no pidfd, socket path, argv, or broker handle.
 pub trait DisplayProcessEffectPort {
+    /// Read current daemon-owned retry/adoption evidence before reconciliation.
+    ///
+    /// Production effect owners obtain this from the persisted supervisor
+    /// observation; hermetic effect ports may retain the bounded default.
+    fn current_supervision(&mut self) -> WorkerRestartEvidence {
+        WorkerRestartEvidence::from_supervisor(0, None, None, 1)
+    }
+
     /// Issue one fresh, session-bound launch grant bundle.
     fn issue_launch_grants(
         &mut self,
@@ -228,6 +236,11 @@ where
         self.observation
     }
 
+    /// Borrow the latest supervisor retry/adoption evidence.
+    pub const fn supervision(&self) -> WorkerRestartEvidence {
+        self.supervision
+    }
+
     /// Whether both supervised workers are ready for the current fence.
     pub fn is_ready(&self) -> bool {
         self.observation.is_ready()
@@ -241,6 +254,11 @@ where
     /// Mutably borrow the effect owner for daemon composition.
     pub const fn effects_mut(&mut self) -> &mut E {
         &mut self.effects
+    }
+
+    /// Refresh retry/adoption evidence from the daemon-owned effect owner.
+    pub fn refresh_supervision(&mut self) {
+        self.supervision = self.effects.current_supervision();
     }
 
     /// Project the authenticated display dependency only after both workers
@@ -310,7 +328,7 @@ where
             .map_err(|_| DisplayRuntimeError::InvalidPolicy)?;
         if !result.worker_actions.is_empty() {
             let fence = grant_fence(&authenticated, supervision);
-            if !self.issued_grants.insert(fence) {
+            if self.issued_grants.contains(&fence) {
                 return Err(DisplayRuntimeError::Effect(
                     WorkerEffectError::GrantUnavailable,
                 ));
@@ -328,7 +346,7 @@ where
                     supervision.teardown_generation,
                 )
                 .map_err(DisplayRuntimeError::Effect)?;
-            for ticket in self
+            let launch_tickets = self
                 .controller
                 .reconcile_authenticated_session(
                     session,
@@ -340,8 +358,22 @@ where
                     policy,
                 )
                 .map_err(|_| DisplayRuntimeError::InvalidPolicy)?
-                .launch_tickets
-            {
+                .launch_tickets;
+            if launch_tickets.is_empty() {
+                return self
+                    .controller
+                    .reconcile_authenticated_session(
+                        session,
+                        spec,
+                        dependencies,
+                        self.observation,
+                        supervision,
+                        None,
+                        policy,
+                    )
+                    .map_err(|_| DisplayRuntimeError::InvalidPolicy);
+            }
+            for ticket in launch_tickets {
                 let receipt = self
                     .effects
                     .launch(ticket)
@@ -353,6 +385,7 @@ where
                 }
                 self.observe_receipt(receipt);
             }
+            self.issued_grants.insert(fence);
             result = self
                 .controller
                 .reconcile_authenticated_session(
@@ -404,7 +437,7 @@ where
             .map_err(|_| DisplayRuntimeError::InvalidPolicy)?;
         if !result.worker_actions.is_empty() {
             let fence = grant_fence(&authenticated, supervision);
-            if !self.issued_grants.insert(fence) {
+            if self.issued_grants.contains(&fence) {
                 return Err(DisplayRuntimeError::Effect(
                     WorkerEffectError::GrantUnavailable,
                 ));
@@ -423,7 +456,7 @@ where
                     supervision.teardown_generation,
                 )
                 .map_err(DisplayRuntimeError::Effect)?;
-            for ticket in self
+            let launch_tickets = self
                 .controller
                 .reconcile_authenticated_route(
                     route,
@@ -435,8 +468,22 @@ where
                     policy,
                 )
                 .map_err(|_| DisplayRuntimeError::InvalidPolicy)?
-                .launch_tickets
-            {
+                .launch_tickets;
+            if launch_tickets.is_empty() {
+                return self
+                    .controller
+                    .reconcile_authenticated_route(
+                        route,
+                        spec,
+                        dependencies,
+                        self.observation,
+                        supervision,
+                        None,
+                        policy,
+                    )
+                    .map_err(|_| DisplayRuntimeError::InvalidPolicy);
+            }
+            for ticket in launch_tickets {
                 let receipt = self
                     .effects
                     .launch(ticket)
@@ -448,6 +495,7 @@ where
                 }
                 self.observe_receipt(receipt);
             }
+            self.issued_grants.insert(fence);
             result = self
                 .controller
                 .reconcile_authenticated_route(

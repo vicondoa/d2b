@@ -1641,6 +1641,7 @@ impl ZoneRegistrar {
             session,
             closed: false,
             incoming: empty_component_requests(),
+            attachments: None,
         })
     }
 
@@ -1688,6 +1689,7 @@ impl ZoneRegistrar {
             session,
             closed: false,
             incoming: empty_component_requests(),
+            attachments: None,
         })
     }
 }
@@ -2376,7 +2378,7 @@ impl ZoneRegistrar {
         let response_task = responses.spawn();
         let endpoint: Arc<dyn crate::registry::BusEndpoint> = Arc::new(ComponentEndpoint {
             session: AsyncMutex::new(session),
-            ttrpc,
+            ttrpc: ttrpc.clone(),
             responses,
             _response_task: response_task,
             clock: Arc::clone(&self.core.clock),
@@ -2405,6 +2407,7 @@ impl ZoneRegistrar {
             session,
             closed: false,
             incoming,
+            attachments: Some(ttrpc),
         })
     }
 
@@ -2431,7 +2434,7 @@ impl ZoneRegistrar {
         let response_task = responses.spawn();
         let endpoint: Arc<dyn crate::registry::BusEndpoint> = Arc::new(ComponentEndpoint {
             session: AsyncMutex::new(session),
-            ttrpc,
+            ttrpc: ttrpc.clone(),
             responses,
             _response_task: response_task,
             clock: Arc::clone(&self.core.clock),
@@ -2474,6 +2477,7 @@ impl ZoneRegistrar {
             session,
             closed: false,
             incoming,
+            attachments: Some(ttrpc),
         })
     }
 
@@ -2540,6 +2544,13 @@ fn routes_for_admitted_session(
 impl ZoneRegistrar {
     /// Revoke a session, its routes, operations, and streams.
     pub async fn revoke(&mut self, mut ingress: BusIngress) -> Result<(), BusError> {
+        self.revoke_in_place(&mut ingress).await
+    }
+
+    /// Revoke a session while retaining the caller's ingress when the
+    /// authority check fails.  Daemon finalizers use this form so a
+    /// transient cleanup/revocation failure does not discard retry authority.
+    pub async fn revoke_in_place(&mut self, ingress: &mut BusIngress) -> Result<(), BusError> {
         if !Arc::ptr_eq(&self.core, &ingress.core) || ingress.closed {
             return Err(BusError::SessionMismatch);
         }
@@ -2561,12 +2572,14 @@ pub struct BusIngress {
     session: SessionId,
     closed: bool,
     incoming: Arc<AsyncMutex<mpsc::Receiver<Vec<u8>>>>,
+    attachments: Option<AuthenticatedTtrpcHandle>,
 }
 
 /// Receiver for request frames demultiplexed from one admitted ComponentSession.
 #[derive(Clone)]
 pub struct ComponentRequestReceiver {
     incoming: Arc<AsyncMutex<mpsc::Receiver<Vec<u8>>>>,
+    attachments: Option<AuthenticatedTtrpcHandle>,
 }
 
 impl ComponentRequestReceiver {
@@ -2574,6 +2587,18 @@ impl ComponentRequestReceiver {
     pub async fn recv(&self) -> Result<Vec<u8>, BusError> {
         let mut incoming = self.incoming.lock().await;
         incoming.recv().await.ok_or(BusError::SessionMismatch)
+    }
+
+    /// Receive the next authenticated attachment batch from the same
+    /// ComponentSession. The caller is responsible for checking descriptor
+    /// request/service/method identity before consuming it.
+    pub async fn recv_attachments(&self) -> Result<Vec<d2b_session::OwnedAttachment>, BusError> {
+        self.attachments
+            .as_ref()
+            .ok_or(BusError::SessionMismatch)?
+            .receive_attachments()
+            .await
+            .map_err(|_| BusError::SessionMismatch)
     }
 }
 
@@ -2646,6 +2671,7 @@ impl BusIngress {
     pub fn component_request_receiver(&self) -> ComponentRequestReceiver {
         ComponentRequestReceiver {
             incoming: Arc::clone(&self.incoming),
+            attachments: self.attachments.clone(),
         }
     }
 

@@ -108,6 +108,11 @@ impl ClipboardEntry {
     pub fn is_empty(&self) -> bool {
         self.bytes.is_empty()
     }
+
+    /// Return a bounded copy for an already-authorized materialization.
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
 }
 
 impl core::fmt::Debug for ClipboardEntry {
@@ -232,9 +237,39 @@ impl ClipboardHistory {
         for token in tokens {
             self.remove(&token);
         }
+
         self.guest_requests.remove(guest);
         self.picker_completions
             .retain(|key, _| !key.split('|').any(|component| component == guest));
+    }
+
+    /// Purge all retained payloads and replay/rate-limit state.
+    pub fn purge_all(&mut self) {
+        self.entries.clear();
+        self.order.clear();
+        self.total_bytes = 0;
+        self.guest_requests.clear();
+        self.picker_completions.clear();
+        self.suspended.clear();
+    }
+
+    /// Return a bounded copy of one live entry owned by `owner`.
+    pub fn materialize(
+        &self,
+        token: &str,
+        owner: &str,
+        now_secs: u64,
+    ) -> Result<Vec<u8>, HistoryError> {
+        let entry = self
+            .entries
+            .get(token)
+            .ok_or(HistoryError::EntryUnavailable)?;
+        if entry.owner() != owner
+            || now_secs.saturating_sub(entry.created_at) >= self.config.guest_entry_ttl_secs()
+        {
+            return Err(HistoryError::EntryUnavailable);
+        }
+        Ok(entry.bytes().to_vec())
     }
 
     /// Remove expired entries.
