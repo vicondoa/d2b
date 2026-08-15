@@ -2072,17 +2072,15 @@ fn map_process_runtime_error(error: ProcessResourceRuntimeError) -> ResourceRunt
         | ProcessResourceRuntimeError::InvalidResource => {
             ResourceRuntimeError::CapabilityUnavailable
         }
+    }
+}
 
-        fn map_activation_runtime_error(error: ActivationResourceRuntimeError) -> ResourceRuntimeError {
-            match error {
-                ActivationResourceRuntimeError::Store => ResourceRuntimeError::StoreReadFailed,
-                ActivationResourceRuntimeError::InvalidResource
-                | ActivationResourceRuntimeError::Policy
-                | ActivationResourceRuntimeError::Effect => {
-                    ResourceRuntimeError::CapabilityUnavailable
-                }
-            }
-        }
+fn map_activation_runtime_error(error: ActivationResourceRuntimeError) -> ResourceRuntimeError {
+    match error {
+        ActivationResourceRuntimeError::Store => ResourceRuntimeError::StoreReadFailed,
+        ActivationResourceRuntimeError::InvalidResource
+        | ActivationResourceRuntimeError::Policy
+        | ActivationResourceRuntimeError::Effect => ResourceRuntimeError::CapabilityUnavailable,
     }
 }
 
