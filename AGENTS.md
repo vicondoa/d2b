@@ -119,6 +119,8 @@ settings or claim atomic base binding.
   container integration. Do not cite an advisory skip as validation evidence.
 - Every code change ships a valid changelog entry or a fragment under
   [`changelog.d/`](./changelog.d/).
+- Leave `nix/gas-city-contributor/**` and its managed authority unchanged;
+  ordinary repo skill policy makes no visibility claim for managed sessions.
 - `main` and `v3` are protected and land only through reviewed pull requests.
   Use short imperative area-prefixed commit subjects and no AI, tool, or model
   attribution.
