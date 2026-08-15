@@ -66,7 +66,7 @@ use d2b_contracts::{
     guest_proto as pb,
     public_wire::{self, AuthRole, AuthStatusResponse, DeniedCommandHint, SocketReachability},
     types::{BundleClosureRef, BundleOpId, MediaRef, RoleId, ScopeId, TracingSpanId, VmId},
-    v3::{ResourceUid, ZoneId},
+    v3::{ResourceRef, ResourceUid, ZoneId},
 };
 use d2b_core::bundle::Bundle;
 use d2b_core::bundle_resolver::{
@@ -3707,6 +3707,12 @@ fn dispatch_device_tpm_reconcile(
         .and_then(Value::as_str)
         .and_then(|value| ResourceUid::parse(value).ok())
         .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+    let device_ref = request
+        .get("deviceRef")
+        .and_then(Value::as_str)
+        .and_then(|value| ResourceRef::parse(value).ok())
+        .filter(|reference| reference.resource_type().as_str() == "Device")
+        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
     let operation_id = request
         .get("operationId")
         .and_then(Value::as_str)
@@ -3730,14 +3736,20 @@ fn dispatch_device_tpm_reconcile(
         .and_then(|plane| plane.clone())
         .ok_or(resource_runtime::ResourceRuntimeError::PlaneUnavailable)?;
     let runtime = plane.zone(&zone)?;
+    if !block_on_future(runtime.tpm_device_is_admitted(&device_uid, &device_ref, operation_id))? {
+        return Err(resource_runtime::ResourceRuntimeError::AuthenticationUnavailable);
+    }
     let resolver = load_bundle_resolver(state)
         .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+    if resolver.resolve_legacy_swtpm_intent(vm_id).is_none() {
+        return Err(resource_runtime::ResourceRuntimeError::RequestInvalid);
+    }
     let intent = tpm_state_intent(&device_uid, vm_id);
     let binary = d2b_provider_device_tpm::SignedBinaryRef::from_core(
         d2b_provider_device_tpm::BinaryKind::Swtpm,
         tpm_opaque_bytes("d2b:tpm-binary/v1", vm_id),
     );
-    let decision = d2b_core_controller::migration::LegacyTpmMigrationDecision::not_applicable(
+    let decision = d2b_core_controller::migration::LegacyTpmMigrationDecision::adoption_required(
         vm_id,
         operation_id,
     );

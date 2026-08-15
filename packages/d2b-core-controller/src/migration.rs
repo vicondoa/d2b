@@ -27,6 +27,21 @@ pub struct LegacyTpmMigrationDecision {
 }
 
 impl LegacyTpmMigrationDecision {
+    /// Construct the conservative production decision used when Core has not
+    /// yet materialized a legacy-state inventory row for the request.
+    ///
+    /// The broker remains the authority on whether a source exists: a
+    /// `NotApplicable` result is safe, while any ambiguous or failed result
+    /// blocks the first ensure.  Keeping this decision on the migration path
+    /// avoids silently bypassing the broker's journal and replay protocol.
+    pub fn adoption_required(vm_id: &str, intent_ref: &str) -> Self {
+        Self::from_anchored_inventory(
+            Some(LegacyTpmStateId::from_anchored_inventory([0; 32])),
+            vm_id,
+            intent_ref,
+        )
+    }
+
     /// Construct the Core-owned no-migration decision for a Device proven
     /// never to have a legacy state row.
     pub fn not_applicable(vm_id: &str, intent_ref: &str) -> Self {
@@ -93,5 +108,13 @@ mod tests {
         assert!(decision.validates_binding("work", "legacy-swtpm:vm:work"));
         assert!(!decision.validates_binding("other", "legacy-swtpm:vm:work"));
         assert!(!decision.validates_binding("work", "legacy-swtpm:vm:other"));
+    }
+
+    #[test]
+    fn adoption_required_keeps_the_broker_migration_path_active() {
+        let decision =
+            LegacyTpmMigrationDecision::adoption_required("work", "legacy-swtpm:vm:work");
+        assert!(decision.requires_migration());
+        assert!(decision.validates_binding("work", "legacy-swtpm:vm:work"));
     }
 }

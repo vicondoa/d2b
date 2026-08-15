@@ -74,6 +74,8 @@ pub(crate) struct LiveTpmEffectExecutor<'a> {
     resolver: &'a BundleResolver,
     vm_id: VmId,
     caller_role: BrokerCallerRole,
+    prepared_flush_ticket: Option<FlushLaunchTicket>,
+    prepared_swtpm_ticket: Option<SwtpmStartLaunchTicket>,
 }
 
 impl<'a> LiveTpmEffectExecutor<'a> {
@@ -88,13 +90,21 @@ impl<'a> LiveTpmEffectExecutor<'a> {
             resolver,
             vm_id,
             caller_role,
+            prepared_flush_ticket: None,
+            prepared_swtpm_ticket: None,
         }
     }
 
-    fn ticket_bytes(&self, domain: &str) -> [u8; 16] {
-        let digest = Sha256::digest(
-            format!("{domain}:{}:{}", self.vm_id.as_str(), self.vm_id.as_str()).as_bytes(),
-        );
+    fn ticket_bytes(&self, domain: &str, intent: &StateDirIntent) -> [u8; 16] {
+        let mut hasher = Sha256::new();
+        hasher.update(domain.as_bytes());
+        hasher.update([0]);
+        hasher.update(self.vm_id.as_str().as_bytes());
+        hasher.update([0]);
+        hasher.update(intent.directory().as_bytes());
+        hasher.update(intent.marker().as_bytes());
+        hasher.update(intent.owner().as_bytes());
+        let digest = hasher.finalize();
         let mut out = [0; 16];
         out.copy_from_slice(&digest[..16]);
         out
@@ -153,7 +163,7 @@ impl<'a> LiveTpmEffectExecutor<'a> {
 impl CoreTpmEffectExecutor for LiveTpmEffectExecutor<'_> {
     fn prepare_state_dir(
         &mut self,
-        _intent: &StateDirIntent,
+        intent: &StateDirIntent,
     ) -> Result<TpmStatePreparationResult, TpmEffectError> {
         let response = crate::dispatch_broker_request_as(
             self.state,
@@ -168,20 +178,25 @@ impl CoreTpmEffectExecutor for LiveTpmEffectExecutor<'_> {
         if !matches!(response, BrokerResponse::Ack(_)) {
             return Err(TpmEffectError::StateIntegrity);
         }
+        let flush_ticket =
+            FlushLaunchTicket::from_core(self.ticket_bytes("d2b:tpm-flush-ticket/v2", intent));
+        let swtpm_ticket =
+            SwtpmStartLaunchTicket::from_core(self.ticket_bytes("d2b:tpm-start-ticket/v2", intent));
+        self.prepared_flush_ticket = Some(flush_ticket.clone());
+        self.prepared_swtpm_ticket = Some(swtpm_ticket.clone());
         Ok(TpmStatePreparationResult {
             observation: TpmStateObservation::from_core(
                 TpmStateObservationKind::ExistingWithMarker,
             ),
-            flush_ticket: FlushLaunchTicket::from_core(
-                self.ticket_bytes("d2b:tpm-flush-ticket/v1"),
-            ),
-            swtpm_ticket: SwtpmStartLaunchTicket::from_core(
-                self.ticket_bytes("d2b:tpm-start-ticket/v1"),
-            ),
+            flush_ticket,
+            swtpm_ticket,
         })
     }
 
-    fn flush(&mut self, _ticket: &FlushLaunchTicket) -> Result<(), TpmEffectError> {
+    fn flush(&mut self, ticket: &FlushLaunchTicket) -> Result<(), TpmEffectError> {
+        if self.prepared_flush_ticket.as_ref() != Some(ticket) {
+            return Err(TpmEffectError::StateIntegrity);
+        }
         let intent = self.runner_intent("swtpm-flush")?;
         let (response, fds) = self.spawn(
             RunnerRole::SwtpmFlush,
@@ -200,11 +215,15 @@ impl CoreTpmEffectExecutor for LiveTpmEffectExecutor<'_> {
 
     fn start(
         &mut self,
-        _ticket: &SwtpmStartLaunchTicket,
-        _settings: SwtpmSettings,
+        ticket: &SwtpmStartLaunchTicket,
+        settings: SwtpmSettings,
         binary: &SignedBinaryRef,
     ) -> Result<(), TpmEffectError> {
-        if binary.kind() != BinaryKind::Swtpm {
+        if self.prepared_swtpm_ticket.as_ref() != Some(ticket)
+            || binary.kind() != BinaryKind::Swtpm
+            || settings.validate().is_err()
+            || d2b_provider_device_tpm::SwtpmArgv::for_settings(settings).is_err()
+        {
             return Err(TpmEffectError::SpawnRejected);
         }
         let intent = self.runner_intent("swtpm")?;
@@ -359,7 +378,9 @@ pub(crate) fn reconcile_device_tpm(
 
 /// Registered production Device controller entry point.
 #[derive(Debug, Clone, Copy, Default)]
-pub(crate) struct DeviceTpmControllerRegistration;
+pub(crate) struct DeviceTpmControllerRegistration {
+    registered: bool,
+}
 
 impl DeviceTpmControllerRegistration {
     /// Reconcile one Core-admitted Device through the live broker executor.
@@ -393,7 +414,7 @@ impl DeviceTpmControllerRegistration {
 /// Register the real Device TPM controller at the daemon/Core composition
 /// boundary. The returned registration is retained by the Zone runtime.
 pub(crate) fn register_device_tpm_controller() -> DeviceTpmControllerRegistration {
-    DeviceTpmControllerRegistration
+    DeviceTpmControllerRegistration { registered: true }
 }
 
 #[cfg(test)]

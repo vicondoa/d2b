@@ -44,10 +44,12 @@ use d2b_core_controller::main::{
     StartupStage,
 };
 use d2b_resource_api::{
-    RedbBackend, ResourceService,
+    RedbBackend, ResourceService, ResourceStoreBackend,
     authz::{ApiCatalog, NativeAuthorizer},
 };
-use d2b_resource_store::{PolicySnapshot, StoreSlot};
+use d2b_resource_store::{
+    PolicySnapshot, StoreGetRequest, StoreOperationContext, StoreProjection, StoreSlot,
+};
 #[cfg(test)]
 use d2b_resource_store::{StoreFilter, StoreListResult, StoreProjection};
 use d2b_resource_store_redb::{
@@ -760,6 +762,50 @@ impl ZoneResourceRuntime {
         Ok(resource_error_envelope(&readiness_resource_error(
             ResourceRuntimeError::AuthenticationUnavailable,
         )))
+    }
+
+    /// Verify the trusted persisted Device row used by the TPM reconcile
+    /// adapter. This is intentionally narrower than the public Resource API:
+    /// it proves the UID, Zone, resource type, and frozen provider identity
+    /// before any host effect is dispatched.
+    pub(crate) async fn tpm_device_is_admitted(
+        &self,
+        device_uid: &ResourceUid,
+        device_ref: &ResourceRef,
+        operation_id: &str,
+    ) -> Result<bool, ResourceRuntimeError> {
+        let resource = self
+            .backend
+            .get(StoreGetRequest {
+                operation: StoreOperationContext {
+                    operation_id: operation_id.to_owned(),
+                    idempotency_key: None,
+                    correlation_id: operation_id.to_owned(),
+                    trace_id: None,
+                    deadline_ms: 30_000,
+                },
+                zone: self.zone.clone(),
+                target: device_ref.clone(),
+                expected_uid: Some(device_uid.clone()),
+                projection: StoreProjection::Full,
+            })
+            .await
+            .ok();
+        Ok(resource.is_some_and(|resource| {
+            resource.uid == *device_uid
+                && resource.resource_ref == *device_ref
+                && resource.resource_ref.resource_type().as_str() == "Device"
+                && serde_json::from_slice::<Value>(&resource.canonical_json)
+                    .ok()
+                    .and_then(|value| {
+                        value
+                            .get("spec")
+                            .and_then(Value::as_object)
+                            .and_then(|spec| spec.get("providerRef"))
+                            .and_then(Value::as_str)
+                    })
+                    == Some("Provider/device-tpm")
+        }))
     }
 
     /// Publish terminal broker evidence into the live store join index.
