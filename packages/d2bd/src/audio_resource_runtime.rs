@@ -189,35 +189,38 @@ impl AudioResourceRuntime {
             let service = services
                 .get(&spec.service_ref.to_canonical_string())
                 .ok_or(AudioResourceRuntimeError::InvalidRelationship)?;
-            if self
-                .bindings
-                .get(&key)
-                .is_some_and(|record| record.spec == spec)
-                && service.service_role == AudioServiceRole::Projection
-            {
+            if service.service_role == AudioServiceRole::Projection {
+                let mut projection_binding = false;
                 let promoted = if let Some(record) = self.bindings.get_mut(&key) {
-                    if let Some(controller) = record.controller.as_mut() {
-                        controller
-                            .finalize_shared(record.lease)
-                            .map_err(AudioResourceRuntimeError::Controller)?
+                    if record.spec == spec {
+                        projection_binding = true;
+                        if let Some(controller) = record.controller.as_mut() {
+                            controller
+                                .finalize_shared(record.lease)
+                                .map_err(AudioResourceRuntimeError::Controller)?
+                        } else {
+                            None
+                        }
                     } else {
                         None
                     }
                 } else {
                     None
                 };
-                if let Some(promoted) = promoted {
-                    self.activate_promoted(promoted)?;
+                if projection_binding {
+                    if let Some(promoted) = promoted {
+                        self.activate_promoted(promoted)?;
+                    }
+                    if let Some(record) = self.bindings.get_mut(&key) {
+                        record.controller = None;
+                        record.status = unavailable_status(
+                            AudioBindingPhase::Degraded,
+                            HostAudioReadiness::Unavailable,
+                            GuestAudioReadiness::Unavailable,
+                        );
+                    }
+                    continue;
                 }
-                if let Some(record) = self.bindings.get_mut(&key) {
-                    record.controller = None;
-                    record.status = unavailable_status(
-                        AudioBindingPhase::Degraded,
-                        HostAudioReadiness::Unavailable,
-                        GuestAudioReadiness::Unavailable,
-                    );
-                }
-                continue;
             }
             if let Some(record) = self.bindings.get_mut(&key)
                 && record.spec == spec
