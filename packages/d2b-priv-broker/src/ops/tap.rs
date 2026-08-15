@@ -938,6 +938,7 @@ mod tests {
         };
         let host = BundleHostJson {
             schema_version: "v2".to_owned(),
+            security_key_selectors: Vec::new(),
             site: SitePolicy {
                 allow_unsafe_east_west: false,
             },

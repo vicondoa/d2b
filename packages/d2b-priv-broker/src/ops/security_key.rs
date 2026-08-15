@@ -21,6 +21,7 @@
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::path::{Path, PathBuf};
 
+use d2b_core::host::SecurityKeySelector;
 use nix::sys::stat::{SFlag, fstat};
 
 use super::OpError;
@@ -37,7 +38,8 @@ pub const DEVICE_CLASS_HIDRAW_FIDO: &str = "hidraw-fido";
 pub struct ResolvedSecurityKeySelector {
     /// Opaque selector label (no raw path) for audit/response.
     pub selector_label: String,
-    /// Resolved absolute path to the hidraw node.
+    /// Resolved absolute `/dev` path to the hidraw node. The path is derived
+    /// from the trusted sysfs entry name and is never supplied by the caller.
     pub hidraw_path: PathBuf,
     /// True when the HID report descriptor was readable and explicitly matched
     /// the FIDO usage page.
@@ -57,10 +59,15 @@ pub struct LiveOpenHidrawSecurityKeyOutcome {
 /// record and wire response.
 pub fn live_open_hidraw_security_key(
     req: &d2b_contracts::broker_wire::OpenHidrawSecurityKeyRequest,
+    selectors: &[SecurityKeySelector],
     _audit_log: &crate::audit::AuditLog,
 ) -> Result<LiveOpenHidrawSecurityKeyOutcome, OpError> {
     validate_device_authority(req)?;
-    let resolved = resolve_selector(req.selector_id.as_str())?;
+    let resolved = resolve_selector(
+        req.selector_id.as_str(),
+        selectors,
+        Path::new("/sys/class/hidraw"),
+    )?;
     let fd = open_and_validate_hidraw(&resolved.hidraw_path, resolved.descriptor_verified)?;
     Ok(LiveOpenHidrawSecurityKeyOutcome {
         fd,
@@ -92,10 +99,13 @@ pub(crate) fn validate_device_authority(
 
 /// Resolve a configured stable selector.
 ///
-/// Raw `hidraw-N` identifiers are deliberately rejected. The stable
-/// vendor/product/serial selector registry is not available to this legacy
-/// broker entry point, so it fails closed rather than guessing a node.
-pub(crate) fn resolve_selector(selector_id: &str) -> Result<ResolvedSecurityKeySelector, OpError> {
+/// Raw `hidraw-N` identifiers are deliberately rejected. Resolution is
+/// limited to the trusted vendor/product/serial selector registry.
+pub(crate) fn resolve_selector(
+    selector_id: &str,
+    selectors: &[SecurityKeySelector],
+    sysfs_root: &Path,
+) -> Result<ResolvedSecurityKeySelector, OpError> {
     if selector_id.is_empty()
         || selector_id.len() > 63
         || !selector_id.bytes().enumerate().all(|(index, byte)| {
@@ -110,10 +120,80 @@ pub(crate) fn resolve_selector(selector_id: &str) -> Result<ResolvedSecurityKeyS
             subject: selector_id.to_owned(),
         });
     }
-    Err(OpError::UnknownSubject {
-        operation: "OpenHidrawSecurityKey",
-        subject: selector_id.to_owned(),
+    let Some(selector) = selectors
+        .iter()
+        .find(|selector| selector.selector_id == selector_id)
+    else {
+        return Err(OpError::UnknownSubject {
+            operation: "OpenHidrawSecurityKey",
+            subject: selector_id.to_owned(),
+        });
+    };
+
+    let mut matches = Vec::new();
+    let entries = std::fs::read_dir(sysfs_root).map_err(|error| OpError::Io {
+        path: sysfs_root.to_owned(),
+        detail: error.to_string(),
+    })?;
+    for entry in entries {
+        let entry = entry.map_err(|error| OpError::Io {
+            path: sysfs_root.to_owned(),
+            detail: error.to_string(),
+        })?;
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !name.starts_with("hidraw") {
+            continue;
+        }
+        let path = entry.path();
+        let Some((vendor_id, product_id, serial)) = hidraw_identity(&path) else {
+            continue;
+        };
+        if vendor_id == selector.vendor_id
+            && product_id == selector.product_id
+            && selector
+                .serial
+                .as_deref()
+                .is_none_or(|expected| serial.as_deref() == Some(expected))
+            && fido_device_match(&path).is_some()
+        {
+            matches.push(PathBuf::from("/dev").join(name.as_ref()));
+        }
+    }
+
+    let [hidraw_path] = matches.as_slice() else {
+        return Err(OpError::UnknownSubject {
+            operation: "OpenHidrawSecurityKey",
+            subject: selector_id.to_owned(),
+        });
+    };
+    Ok(ResolvedSecurityKeySelector {
+        selector_label: selector.label.clone(),
+        hidraw_path: hidraw_path.clone(),
+        descriptor_verified: true,
     })
+}
+
+fn hidraw_identity(path: &Path) -> Option<(u16, u16, Option<String>)> {
+    let mut current = std::fs::canonicalize(path.join("device")).ok()?;
+    for _ in 0..8 {
+        let vendor = read_hex_attr(&current.join("idVendor"));
+        let product = read_hex_attr(&current.join("idProduct"));
+        if let (Some(vendor), Some(product)) = (vendor, product) {
+            let serial = std::fs::read_to_string(current.join("serial"))
+                .ok()
+                .map(|value| value.trim_end_matches(['\r', '\n']).to_owned());
+            return Some((vendor, product, serial));
+        }
+        current = current.parent()?.to_owned();
+    }
+    None
+}
+
+fn read_hex_attr(path: &Path) -> Option<u16> {
+    let value = std::fs::read_to_string(path).ok()?;
+    let value = value.trim();
+    u16::from_str_radix(value.strip_prefix("0x").unwrap_or(value), 16).ok()
 }
 
 /// Check whether a sysfs hidraw entry is a FIDO-class device.
@@ -198,28 +278,74 @@ mod tests {
     use super::*;
 
     #[test]
-    fn selector_not_found_or_sysfs_absent_is_safe() {
-        // In a hermetic test environment /sys/class/hidraw may be
-        // absent or contain no FIDO devices; the resolver must return
-        // a typed error, never panic.
-        match resolve_selector("test-selector") {
-            Err(OpError::UnknownSubject { subject, .. }) => {
-                assert_eq!(subject, "test-selector");
-            }
-            Err(OpError::Io { .. }) => {
-                // /sys/class/hidraw absent in this sandbox: acceptable.
-            }
-            Ok(_) => {
-                // A real FIDO device happened to be present; fine too.
-            }
-            Err(other) => panic!("unexpected error: {other}"),
-        }
+    fn unconfigured_selector_is_rejected_before_sysfs_lookup() {
+        assert!(matches!(
+            resolve_selector("test-selector", &[], Path::new("/sys/class/hidraw")),
+            Err(OpError::UnknownSubject { subject, .. }) if subject == "test-selector"
+        ));
+    }
+
+    #[test]
+    fn configured_selector_reports_sysfs_io_errors() {
+        let selector = SecurityKeySelector {
+            selector_id: "test-selector".to_owned(),
+            label: "test-selector".to_owned(),
+            vendor_id: 0x1050,
+            product_id: 0x0407,
+            serial: None,
+        };
+        assert!(matches!(
+            resolve_selector(
+                "test-selector",
+                std::slice::from_ref(&selector),
+                Path::new("/does-not-exist"),
+            ),
+            Err(OpError::Io { .. })
+        ));
     }
 
     #[test]
     fn raw_hidraw_selector_is_rejected() {
         assert!(matches!(
-            resolve_selector("hidraw-0"),
+            resolve_selector("hidraw-0", &[], Path::new("/sys/class/hidraw")),
+            Err(OpError::UnknownSubject { .. })
+        ));
+    }
+
+    #[test]
+    fn trusted_selector_resolves_one_fido_hidraw_and_refuses_ambiguity() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = tmp.path().join("hidraw");
+        std::fs::create_dir_all(root.join("hidraw0/device")).expect("hidraw0");
+        std::fs::write(root.join("hidraw0/device/idVendor"), "1050\n").expect("vendor");
+        std::fs::write(root.join("hidraw0/device/idProduct"), "0407\n").expect("product");
+        std::fs::write(
+            root.join("hidraw0/device/report_descriptor"),
+            [0x06, 0xD0, 0xF1],
+        )
+        .expect("descriptor");
+        let selector = SecurityKeySelector {
+            selector_id: "primary".to_owned(),
+            label: "primary".to_owned(),
+            vendor_id: 0x1050,
+            product_id: 0x0407,
+            serial: None,
+        };
+        let resolved =
+            resolve_selector("primary", std::slice::from_ref(&selector), &root).expect("resolve");
+        assert_eq!(resolved.selector_label, "primary");
+        assert!(resolved.descriptor_verified);
+
+        std::fs::create_dir_all(root.join("hidraw1/device")).expect("hidraw1");
+        std::fs::write(root.join("hidraw1/device/idVendor"), "1050\n").expect("vendor");
+        std::fs::write(root.join("hidraw1/device/idProduct"), "0407\n").expect("product");
+        std::fs::write(
+            root.join("hidraw1/device/report_descriptor"),
+            [0x06, 0xD0, 0xF1],
+        )
+        .expect("descriptor");
+        assert!(matches!(
+            resolve_selector("primary", &[selector], &root),
             Err(OpError::UnknownSubject { .. })
         ));
     }

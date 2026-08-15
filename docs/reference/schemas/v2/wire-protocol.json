@@ -6994,7 +6994,9 @@
         "not-applicable",
         "pending",
         "failed",
-        "ambiguous"
+        "ambiguous",
+        "adoption-required",
+        "never-provisioned"
       ]
     },
     "LevelPercent": {
@@ -7164,7 +7166,7 @@
       "additionalProperties": false
     },
     "MigrateLegacySwtpmStateRequest": {
-      "description": "Opaque request for one trusted legacy swtpm migration.",
+      "description": "Opaque request for one trusted legacy swtpm migration or broker-locked inventory probe.",
       "type": "object",
       "required": [
         "bundleLegacySwtpmIntentRef",
@@ -7173,6 +7175,10 @@
       "properties": {
         "bundleLegacySwtpmIntentRef": {
           "type": "string"
+        },
+        "probeOnly": {
+          "default": false,
+          "type": "boolean"
         },
         "tracingSpanId": {
           "default": null,

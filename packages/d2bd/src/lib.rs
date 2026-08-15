@@ -335,6 +335,37 @@ fn resolve_max_inflight_connections() -> usize {
         .unwrap_or(DEFAULT_MAX_INFLIGHT_CONNECTIONS)
 }
 
+#[cfg(test)]
+mod tpm_migration_inventory_tests {
+    use super::{LegacySwtpmMigrationOutcome, trusted_tpm_migration_anchor};
+
+    #[test]
+    fn only_broker_proven_inventory_selects_the_core_migration_path() {
+        let intent = "legacy-swtpm:vm:vm-a";
+        assert_eq!(
+            trusted_tpm_migration_anchor(intent, LegacySwtpmMigrationOutcome::NeverProvisioned),
+            Ok(None)
+        );
+        assert_eq!(
+            trusted_tpm_migration_anchor(intent, LegacySwtpmMigrationOutcome::AlreadyMigrated),
+            Ok(None)
+        );
+        assert_eq!(
+            trusted_tpm_migration_anchor(intent, LegacySwtpmMigrationOutcome::AdoptionRequired),
+            Ok(Some(intent))
+        );
+        for outcome in [
+            LegacySwtpmMigrationOutcome::Pending,
+            LegacySwtpmMigrationOutcome::Failed,
+            LegacySwtpmMigrationOutcome::Ambiguous,
+            LegacySwtpmMigrationOutcome::Migrated,
+            LegacySwtpmMigrationOutcome::NotApplicable,
+        ] {
+            assert_eq!(trusted_tpm_migration_anchor(intent, outcome), Err(()));
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ArtifactPaths {
@@ -3736,22 +3767,28 @@ fn dispatch_device_tpm_reconcile(
         .and_then(|plane| plane.clone())
         .ok_or(resource_runtime::ResourceRuntimeError::PlaneUnavailable)?;
     let runtime = plane.zone(&zone)?;
-    if !block_on_future(runtime.tpm_device_is_admitted(&device_uid, &device_ref, operation_id))? {
-        return Err(resource_runtime::ResourceRuntimeError::AuthenticationUnavailable);
-    }
     let resolver = load_bundle_resolver(state)
         .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
-    if resolver.resolve_legacy_swtpm_intent(vm_id).is_none() {
-        return Err(resource_runtime::ResourceRuntimeError::RequestInvalid);
-    }
+    let migration_intent = format!("legacy-swtpm:vm:{vm_id}");
+    let inventory = dispatch_broker_legacy_tpm_inventory(
+        state,
+        VmId::new(vm_id),
+        BundleOpId::new(migration_intent.clone()),
+    )
+    .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+    let legacy_intent_anchor = trusted_tpm_migration_anchor(&migration_intent, inventory)
+        .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+    let decision = block_on_future(runtime.tpm_device_is_admitted(
+        &device_uid,
+        &device_ref,
+        vm_id,
+        operation_id,
+        legacy_intent_anchor,
+    ))?;
     let intent = tpm_state_intent(&device_uid, vm_id);
     let binary = d2b_provider_device_tpm::SignedBinaryRef::from_core(
         d2b_provider_device_tpm::BinaryKind::Swtpm,
         tpm_opaque_bytes("d2b:tpm-binary/v1", vm_id),
-    );
-    let decision = d2b_core_controller::migration::LegacyTpmMigrationDecision::adoption_required(
-        vm_id,
-        operation_id,
     );
     let outcome = runtime
         .device_tpm_controller()
@@ -3759,7 +3796,7 @@ fn dispatch_device_tpm_reconcile(
             state,
             &resolver,
             VmId::new(vm_id),
-            BundleOpId::new(operation_id),
+            BundleOpId::new(migration_intent),
             decision,
             intent,
             d2b_provider_device_tpm::SwtpmSettings { log_level },
@@ -3772,6 +3809,22 @@ fn dispatch_device_tpm_reconcile(
         "provider": "Provider/device-tpm",
         "outcome": format!("{outcome:?}").to_lowercase()
     }))
+}
+
+fn trusted_tpm_migration_anchor(
+    intent: &str,
+    inventory: LegacySwtpmMigrationOutcome,
+) -> Result<Option<&str>, ()> {
+    match inventory {
+        LegacySwtpmMigrationOutcome::NeverProvisioned
+        | LegacySwtpmMigrationOutcome::AlreadyMigrated => Ok(None),
+        LegacySwtpmMigrationOutcome::AdoptionRequired => Ok(Some(intent)),
+        LegacySwtpmMigrationOutcome::Pending
+        | LegacySwtpmMigrationOutcome::Failed
+        | LegacySwtpmMigrationOutcome::Ambiguous
+        | LegacySwtpmMigrationOutcome::Migrated
+        | LegacySwtpmMigrationOutcome::NotApplicable => Err(()),
+    }
 }
 
 fn tpm_opaque_bytes(domain: &str, value: &str) -> [u8; 32] {
@@ -12720,6 +12773,7 @@ pub(crate) fn dispatch_broker_legacy_tpm_migration(
         BrokerRequest::MigrateLegacySwtpmState(MigrateLegacySwtpmStateRequest {
             bundle_legacy_swtpm_intent_ref: intent_ref,
             vm_id,
+            probe_only: false,
             tracing_span_id: None,
         }),
         caller_role,
@@ -12732,6 +12786,59 @@ pub(crate) fn dispatch_broker_legacy_tpm_migration(
         _ => Err(TypedError::InternalBrokerUnavailable {
             path: broker_socket_path(state),
             detail: "legacy TPM migration response mismatch".to_owned(),
+        }),
+    }
+}
+
+/// Probe the broker-owned legacy swtpm inventory before Core seals the
+/// migration decision. The Provider never receives this response directly.
+#[allow(dead_code)]
+pub(crate) fn dispatch_broker_legacy_tpm_inventory(
+    state: &ServerState,
+    vm_id: VmId,
+    intent_ref: BundleOpId,
+) -> Result<LegacySwtpmMigrationOutcome, TypedError> {
+    let caller_role = BrokerCallerRole::AdminUid {
+        uid: state.daemon_uid,
+    };
+    match dispatch_broker_request_as(
+        state,
+        BrokerRequest::Hello(HelloRequest {
+            client_version: d2b_contracts::PROTOCOL_VERSION.to_string(),
+            supported_features: vec!["MigrateLegacySwtpmState".to_owned()],
+        }),
+        caller_role.clone(),
+    )? {
+        BrokerResponse::Hello(response)
+            if response
+                .capabilities
+                .iter()
+                .any(|capability| capability == "MigrateLegacySwtpmState") => {}
+        _ => {
+            return Err(TypedError::InternalBrokerUnavailable {
+                path: broker_socket_path(state),
+                detail: "broker did not advertise legacy TPM inventory".to_owned(),
+            });
+        }
+    }
+    match dispatch_broker_request_as(
+        state,
+        BrokerRequest::MigrateLegacySwtpmState(MigrateLegacySwtpmStateRequest {
+            bundle_legacy_swtpm_intent_ref: intent_ref,
+            vm_id,
+            probe_only: true,
+            tracing_span_id: None,
+        }),
+        caller_role,
+    )? {
+        BrokerResponse::MigrateLegacySwtpmState(response) => Ok(response.outcome),
+        BrokerResponse::Error(error) => Err(TypedError::InternalBrokerUnavailable {
+            path: broker_socket_path(state),
+            detail: error.message,
+        }),
+        _ => Err(TypedError::InternalBrokerUnavailable {
+            path: broker_socket_path(state),
+            detail: "legacy TPM inventory response mismatch".to_owned(),
         }),
     }
 }

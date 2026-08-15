@@ -3057,15 +3057,40 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
             ))
         }
         RealBrokerRequest::OpenHidrawSecurityKey(req) => {
-            // The legacy wire operation has no bundle-backed stable selector
-            // registry or production Provider session binding. Refuse it
-            // rather than allowing an admin caller to turn a shape-only
-            // authority proof into a physical hidraw open.
-            let _ = req;
-            Err(BrokerError::Unimplemented {
-                operation: "OpenHidrawSecurityKey",
-                target_wave: "security-key-provider",
-            })
+            let resolver = require_resolver(resolver)?;
+            let outcome = crate::ops::security_key::live_open_hidraw_security_key(
+                &req,
+                &resolver.host.security_key_selectors,
+                audit_log,
+            )
+            .map_err(|error| BrokerError::LiveHandler(error.to_string()))?;
+            write_success_op_record!(
+                audit_log,
+                bundle_metadata,
+                "OpenHidrawSecurityKey",
+                req.vm_id.as_str(),
+                caller_uid,
+                caller_gid,
+                &caller_role,
+                req.vm_id.as_str(),
+                req.selector_id.as_str(),
+                tracing_span_id_str(req.tracing_span_id.as_ref()),
+                OperationFields::OpenHidrawSecurityKey {
+                    vm_id: req.vm_id.as_str().to_owned(),
+                    selector_id: outcome.selector_label.clone(),
+                    device_class: outcome.device_class.clone(),
+                    resolved: true,
+                },
+            )?;
+            Ok(DispatchResult::with_fd(
+                BrokerResponse::OpenHidrawSecurityKey(
+                    d2b_contracts::broker_wire::OpenHidrawSecurityKeyResponse {
+                        selector_resolved: outcome.selector_label,
+                        device_class: outcome.device_class,
+                    },
+                ),
+                outcome.fd,
+            ))
         }
         RealBrokerRequest::SecurityKeyOpenDevice(_) => Err(BrokerError::Unimplemented {
             operation: "SecurityKeyOpenDevice",
@@ -3425,28 +3450,56 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                 (intent.owner_uid, intent.owner_gid),
             )
             .map_err(|error| BrokerError::LiveHandler(error.to_string()))?;
-            let outcome = match crate::ops::swtpm_migration::migrate(&paths) {
-                Ok(outcome) => outcome,
-                Err(_) => crate::ops::swtpm_migration::LegacyMigrationOutcome::Failed,
-            };
-            let wire_outcome = match outcome {
-                crate::ops::swtpm_migration::LegacyMigrationOutcome::Migrated => {
-                    d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::Migrated
+            let wire_outcome = if req.probe_only {
+                match crate::ops::swtpm_migration::probe(&paths) {
+                    Ok(crate::ops::swtpm_migration::LegacyInventoryState::NeverProvisioned) => {
+                        d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::NeverProvisioned
+                    }
+                    Ok(crate::ops::swtpm_migration::LegacyInventoryState::ValidLegacy) => {
+                        d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::AdoptionRequired
+                    }
+                    Ok(crate::ops::swtpm_migration::LegacyInventoryState::AlreadyCommitted) => {
+                        d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::AlreadyMigrated
+                    }
+                    Ok(
+                        crate::ops::swtpm_migration::LegacyInventoryState::Missing
+                        | crate::ops::swtpm_migration::LegacyInventoryState::Replaced
+                        | crate::ops::swtpm_migration::LegacyInventoryState::Ambiguous
+                        | crate::ops::swtpm_migration::LegacyInventoryState::Foreign,
+                    )
+                    | Err(crate::ops::swtpm_migration::LegacyMigrationError::InventoryInvalid)
+                    | Err(crate::ops::swtpm_migration::LegacyMigrationError::ForeignOwner) => {
+                        d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::Ambiguous
+                    }
+                    Err(crate::ops::swtpm_migration::LegacyMigrationError::LockUnavailable) => {
+                        d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::Pending
+                    }
+                    Err(_) => d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::Failed,
                 }
-                crate::ops::swtpm_migration::LegacyMigrationOutcome::AlreadyMigrated => {
-                    d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::AlreadyMigrated
-                }
-                crate::ops::swtpm_migration::LegacyMigrationOutcome::NotApplicable => {
-                    d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::NotApplicable
-                }
-                crate::ops::swtpm_migration::LegacyMigrationOutcome::Pending => {
-                    d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::Pending
-                }
-                crate::ops::swtpm_migration::LegacyMigrationOutcome::Failed => {
-                    d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::Failed
-                }
-                crate::ops::swtpm_migration::LegacyMigrationOutcome::Ambiguous => {
-                    d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::Ambiguous
+            } else {
+                let outcome = match crate::ops::swtpm_migration::migrate(&paths) {
+                    Ok(outcome) => outcome,
+                    Err(_) => crate::ops::swtpm_migration::LegacyMigrationOutcome::Failed,
+                };
+                match outcome {
+                    crate::ops::swtpm_migration::LegacyMigrationOutcome::Migrated => {
+                        d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::Migrated
+                    }
+                    crate::ops::swtpm_migration::LegacyMigrationOutcome::AlreadyMigrated => {
+                        d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::AlreadyMigrated
+                    }
+                    crate::ops::swtpm_migration::LegacyMigrationOutcome::NotApplicable => {
+                        d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::NotApplicable
+                    }
+                    crate::ops::swtpm_migration::LegacyMigrationOutcome::Pending => {
+                        d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::Pending
+                    }
+                    crate::ops::swtpm_migration::LegacyMigrationOutcome::Failed => {
+                        d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::Failed
+                    }
+                    crate::ops::swtpm_migration::LegacyMigrationOutcome::Ambiguous => {
+                        d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::Ambiguous
+                    }
                 }
             };
             write_success_op_record!(
@@ -10369,6 +10422,7 @@ mod tests {
 
         let host = HostJson {
             schema_version: "v2".to_owned(),
+            security_key_selectors: Vec::new(),
             site: SitePolicy {
                 allow_unsafe_east_west: false,
             },

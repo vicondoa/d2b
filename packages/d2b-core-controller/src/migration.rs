@@ -6,15 +6,19 @@ use d2b_contracts::v3::canonical_digest;
 /// Opaque identity of one legacy TPM state row.
 ///
 /// The type has no public constructor or deserialization implementation.
-/// Only the trusted Core inventory adapter in this crate can mint it.
+/// Only an anchored Core inventory value can mint it.
 #[derive(Clone, PartialEq, Eq)]
 pub struct LegacyTpmStateId([u8; 32]);
 
 impl LegacyTpmStateId {
     /// Mint a receipt from an anchored, already-validated Core inventory row.
-    #[allow(dead_code)]
-    pub(crate) const fn from_anchored_inventory(bytes: [u8; 32]) -> Self {
-        Self(bytes)
+    pub(crate) fn from_anchored_inventory(anchor: &str) -> Self {
+        use sha2::{Digest, Sha256};
+
+        let mut digest = Sha256::new();
+        digest.update(b"d2b:legacy-tpm-state/v1:");
+        digest.update(anchor.as_bytes());
+        Self(digest.finalize().into())
     }
 }
 
@@ -27,16 +31,14 @@ pub struct LegacyTpmMigrationDecision {
 }
 
 impl LegacyTpmMigrationDecision {
-    /// Construct the conservative production decision used when Core has not
-    /// yet materialized a legacy-state inventory row for the request.
+    /// Construct a migration decision from the trusted Core bundle inventory.
     ///
-    /// The broker remains the authority on whether a source exists: a
-    /// `NotApplicable` result is safe, while any ambiguous or failed result
-    /// blocks the first ensure.  Keeping this decision on the migration path
-    /// avoids silently bypassing the broker's journal and replay protocol.
-    pub fn adoption_required(vm_id: &str, intent_ref: &str) -> Self {
+    /// The anchor is supplied only by Core's bundle resolver, never by the
+    /// reconcile request. The broker remains authoritative for source-state
+    /// inspection and replay.
+    pub fn adoption_required(vm_id: &str, intent_ref: &str, inventory_anchor: &str) -> Self {
         Self::from_anchored_inventory(
-            Some(LegacyTpmStateId::from_anchored_inventory([0; 32])),
+            Some(LegacyTpmStateId::from_anchored_inventory(inventory_anchor)),
             vm_id,
             intent_ref,
         )
@@ -90,14 +92,16 @@ mod tests {
 
     #[test]
     fn inventory_adapter_mints_only_an_opaque_receipt() {
-        let receipt = LegacyTpmStateId::from_anchored_inventory([7; 32]);
+        let receipt = LegacyTpmStateId::from_anchored_inventory("legacy-swtpm:vm:work");
         assert_eq!(format!("{receipt:?}"), "LegacyTpmStateId(<redacted>)");
     }
 
     #[test]
     fn migration_decision_binds_vm_and_intent() {
         let decision = LegacyTpmMigrationDecision::from_anchored_inventory(
-            Some(LegacyTpmStateId::from_anchored_inventory([7; 32])),
+            Some(LegacyTpmStateId::from_anchored_inventory(
+                "legacy-swtpm:vm:work",
+            )),
             "work",
             "legacy-swtpm:vm:work",
         );
@@ -112,8 +116,11 @@ mod tests {
 
     #[test]
     fn adoption_required_keeps_the_broker_migration_path_active() {
-        let decision =
-            LegacyTpmMigrationDecision::adoption_required("work", "legacy-swtpm:vm:work");
+        let decision = LegacyTpmMigrationDecision::adoption_required(
+            "work",
+            "legacy-swtpm:vm:work",
+            "legacy-swtpm:vm:work",
+        );
         assert!(decision.requires_migration());
         assert!(decision.validates_binding("work", "legacy-swtpm:vm:work"));
     }

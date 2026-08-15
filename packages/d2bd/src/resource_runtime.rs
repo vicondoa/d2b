@@ -43,6 +43,7 @@ use d2b_core_controller::main::{
     CoreProcess, RecoverySnapshot, RuntimeReadiness as CoreRuntimeReadiness, StartupError,
     StartupStage,
 };
+use d2b_core_controller::migration::LegacyTpmMigrationDecision;
 use d2b_resource_api::{
     RedbBackend, ResourceService, ResourceStoreBackend,
     authz::{ApiCatalog, NativeAuthorizer},
@@ -764,15 +765,18 @@ impl ZoneResourceRuntime {
     }
 
     /// Verify the trusted persisted Device row used by the TPM reconcile
-    /// adapter. This is intentionally narrower than the public Resource API:
-    /// it proves the UID, Zone, resource type, and frozen provider identity
-    /// before any host effect is dispatched.
+    /// adapter and return Core's sealed legacy-state decision. The VM binding
+    /// is read from the authenticated Device record, while the legacy-state
+    /// decision comes from the trusted Core bundle resolver; request fields
+    /// cannot select either independently.
     pub(crate) async fn tpm_device_is_admitted(
         &self,
         device_uid: &ResourceUid,
         device_ref: &ResourceRef,
+        vm_id: &str,
         operation_id: &str,
-    ) -> Result<bool, ResourceRuntimeError> {
+        legacy_intent_anchor: Option<&str>,
+    ) -> Result<LegacyTpmMigrationDecision, ResourceRuntimeError> {
         let resource = self
             .backend
             .get(StoreGetRequest {
@@ -790,21 +794,31 @@ impl ZoneResourceRuntime {
             })
             .await
             .ok();
-        Ok(resource.is_some_and(|resource| {
+        let Some(resource) = resource.filter(|resource| {
             resource.uid == *device_uid
                 && resource.resource_ref == *device_ref
                 && resource.resource_ref.resource_type().as_str() == "Device"
-                && serde_json::from_slice::<Value>(&resource.canonical_json)
-                    .ok()
-                    .is_some_and(|value| {
-                        value
-                            .get("spec")
-                            .and_then(Value::as_object)
-                            .and_then(|spec| spec.get("providerRef"))
-                            .and_then(Value::as_str)
-                            == Some("Provider/device-tpm")
-                    })
-        }))
+        }) else {
+            return Err(ResourceRuntimeError::AuthenticationUnavailable);
+        };
+        let value = serde_json::from_slice::<Value>(&resource.canonical_json)
+            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
+        let spec = value
+            .get("spec")
+            .and_then(Value::as_object)
+            .ok_or(ResourceRuntimeError::AuthenticationUnavailable)?;
+        if spec.get("providerRef").and_then(Value::as_str) != Some("Provider/device-tpm") {
+            return Err(ResourceRuntimeError::AuthenticationUnavailable);
+        }
+        if !Self::tpm_device_targets_vm(&value, vm_id) {
+            return Err(ResourceRuntimeError::AuthenticationUnavailable);
+        }
+        let intent = format!("legacy-swtpm:vm:{vm_id}");
+        Ok(Self::tpm_migration_decision(
+            vm_id,
+            &intent,
+            legacy_intent_anchor,
+        ))
     }
 
     /// Publish terminal broker evidence into the live store join index.
@@ -815,6 +829,28 @@ impl ZoneResourceRuntime {
         self.store
             .ingest_broker_evidence(evidence)
             .map_err(|_| ResourceRuntimeError::StoreOpenFailed)
+    }
+
+    fn tpm_device_targets_vm(resource: &Value, vm_id: &str) -> bool {
+        resource
+            .get("metadata")
+            .and_then(Value::as_object)
+            .and_then(|metadata| metadata.get("ownerRef"))
+            .and_then(Value::as_str)
+            .and_then(|owner| owner.strip_prefix("Guest/"))
+            == Some(vm_id)
+    }
+
+    fn tpm_migration_decision(
+        vm_id: &str,
+        intent: &str,
+        legacy_intent_anchor: Option<&str>,
+    ) -> LegacyTpmMigrationDecision {
+        if let Some(anchor) = legacy_intent_anchor {
+            LegacyTpmMigrationDecision::adoption_required(vm_id, intent, anchor)
+        } else {
+            LegacyTpmMigrationDecision::not_applicable(vm_id, intent)
+        }
     }
 
     /// Close the production redb workers before the runtime is discarded.
@@ -1644,6 +1680,39 @@ mod tests {
     }
 
     #[test]
+    fn tpm_device_binding_requires_the_authenticated_guest_owner() {
+        let matching = json!({ "metadata": { "ownerRef": "Guest/vm-a" } });
+        let mismatched = json!({ "metadata": { "ownerRef": "Guest/vm-b" } });
+        let absent = json!({ "metadata": {} });
+
+        assert!(ZoneResourceRuntime::tpm_device_targets_vm(
+            &matching, "vm-a"
+        ));
+        assert!(!ZoneResourceRuntime::tpm_device_targets_vm(
+            &mismatched,
+            "vm-a"
+        ));
+        assert!(!ZoneResourceRuntime::tpm_device_targets_vm(&absent, "vm-a"));
+    }
+
+    #[test]
+    fn trusted_bundle_inventory_selects_fresh_or_legacy_tpm_path() {
+        let fresh =
+            ZoneResourceRuntime::tpm_migration_decision("vm-a", "legacy-swtpm:vm:vm-a", None);
+        assert!(!fresh.requires_migration());
+        assert!(fresh.validates_binding("vm-a", "legacy-swtpm:vm:vm-a"));
+
+        let legacy = ZoneResourceRuntime::tpm_migration_decision(
+            "vm-a",
+            "legacy-swtpm:vm:vm-a",
+            Some("legacy-swtpm:vm:vm-a"),
+        );
+        assert!(legacy.requires_migration());
+        assert!(legacy.validates_binding("vm-a", "legacy-swtpm:vm:vm-a"));
+        assert!(!legacy.validates_binding("vm-b", "legacy-swtpm:vm:vm-a"));
+    }
+
+    #[test]
     fn core_progression_reaches_handler_gate_before_readiness_check() {
         let mut core = CoreProcess::new();
         let authority = HostGlobalAuthorityIndex::new_for_tests_ready();
@@ -1856,6 +1925,7 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(runtime.zone(), &zone);
+        assert!(runtime.device_tpm_controller_registered());
         assert!(runtime.readiness().store_ready);
         assert!(!runtime.readiness().resource_api_ready);
         assert!(!runtime.readiness().local_session_ready);

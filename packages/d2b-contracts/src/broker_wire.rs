@@ -1838,12 +1838,17 @@ pub struct PrepareDirRequest {
     pub tracing_span_id: Option<TracingSpanId>,
 }
 
-/// Opaque request for one trusted legacy swtpm migration.
+/// Opaque request for one trusted legacy swtpm migration or inventory probe.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MigrateLegacySwtpmStateRequest {
     pub bundle_legacy_swtpm_intent_ref: BundleOpId,
     pub vm_id: VmId,
+    /// When true, inspect the broker-owned legacy inventory without mutating
+    /// state. The closed outcome is used by Core to seal the migration
+    /// decision before the Provider reconcile starts.
+    #[serde(default)]
+    pub probe_only: bool,
     #[serde(default)]
     pub tracing_span_id: Option<TracingSpanId>,
 }
@@ -1858,6 +1863,11 @@ pub enum LegacySwtpmMigrationOutcome {
     Pending,
     Failed,
     Ambiguous,
+    /// The broker inventory proves that legacy state exists and adoption is
+    /// required before a new TPM state can be ensured.
+    AdoptionRequired,
+    /// The broker inventory proves that no prior state exists.
+    NeverProvisioned,
 }
 
 impl LegacySwtpmMigrationOutcome {
@@ -1869,6 +1879,8 @@ impl LegacySwtpmMigrationOutcome {
             Self::Pending => "pending",
             Self::Failed => "failed",
             Self::Ambiguous => "ambiguous",
+            Self::AdoptionRequired => "adoption-required",
+            Self::NeverProvisioned => "never-provisioned",
         }
     }
 }
