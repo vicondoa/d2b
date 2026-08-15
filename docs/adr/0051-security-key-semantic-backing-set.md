@@ -1352,29 +1352,27 @@ Nix admission, owned by `ADR046-nix-configuration` and
   without repinning is the standard way this corpus regresses, so it is named
   here rather than left to the wave to rediscover.
 
-API surface, for decision 6's mint-surface widening and the new error variants:
+Public API contract, for decision 6's mint-surface widening and the new error
+variants:
 
 - `admits_backing_ref` is a new public method on `ProjectionFactory`, a type
-  already carried in `packages/d2b-bus/tests/approved-capability-api.txt`;
-  `admits_export_target`'s signature changes; `ProjectionFactory` gains a
-  `projection_protocol_version` accessor; `SemanticProjectionProtocolVersion`
-  and `LEGACY_ABSENT_PROTOCOL_VERSION` are new public items; and
-  `ProviderContractError` gains `ImportOwnedOriginRejected` and
-  `ProjectionProtocolVersionMismatch` while `SemanticContractError` loses
-  `BackingRefTypesUndetermined`. Every one of those is a two-way census entry,
-  and the removal is as census-visible as the additions. The implementing wave
-  runs `make api-surface-pin` to regenerate `tests/golden/api-surface/` and the
-  approved capability list, and `make test-rust-api-surface` to prove the
-  regenerated census matches. The regeneration is a deliberate trust-boundary
-  change whose stated reason is this record; the census must not be pinned
-  without citing it.
+  already covered by the defining-crate compiler assertions and public wire/API
+  contract tests; `admits_export_target`'s signature changes;
+  `ProjectionFactory` gains a `projection_protocol_version` accessor;
+  `SemanticProjectionProtocolVersion` and `LEGACY_ABSENT_PROTOCOL_VERSION` are
+  new public items; and `ProviderContractError` gains
+  `ImportOwnedOriginRejected` and `ProjectionProtocolVersionMismatch` while
+  `SemanticContractError` loses `BackingRefTypesUndetermined`. The
+  implementing wave must update those retained assertions and contract tests
+  for the deliberate trust-boundary change.
 
 Lanes that must be green for the implementing wave: `make test-rust`,
-`make test-rust-api-surface`, `make test-drift`, `make test-fixture-contracts`,
-`make test-nix-unit`, `make check-tier0`, `make test-policy`. Two regeneration
-commands run in the same commits as the changes that require them:
-`make api-surface-pin` for the census delta above, and `make nix-unit-pin` for
-the two new nix-unit cases.
+`make test-drift`, `make test-fixture-contracts`, `make test-nix-unit`,
+`make check-tier0`, and `make test-policy`. The defining-crate compiler
+assertions, compile-fail examples, resource mutation seals, external-seal UI
+tests, and public wire/API contract tests cover the capability boundary; the
+only regeneration command needed here is `make nix-unit-pin` for the two new
+nix-unit cases.
 
 ## Invariants this decision creates
 

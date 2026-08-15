@@ -195,7 +195,8 @@ directly prohibited by Principle I and ADR 0015, and the specs already chose par
 Current readiness is established by focused tests for the changed component, fixture-backed
 contract checks where applicable, and conditional container, host, live, hardware, or
 performance lanes. An advisory result is not enforcing evidence. Generated product schemas
-and API snapshots still use their owning ecosystem generators and move with source contracts.
+still use their owning ecosystem generators and move with source contracts. Rust capability
+boundaries use retained defining-crate compiler assertions and focused contract tests.
 
 ## R7: Toolchain, platform, and scale parameters
 

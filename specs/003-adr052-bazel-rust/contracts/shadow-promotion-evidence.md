@@ -74,8 +74,8 @@ generated-artifact reference (generated path plus digest). The validator:
 - derives the five newest qualifying cold records from the complete ordered
   stream rather than trusting a curated five-record subset;
 - resolves each threshold by counting or comparing the referenced evidence, so
-  a threshold such as ten matching records, twenty broker executions, eighteen
-  isolated failures, five cold measurements, or four slice durations is a
+  a threshold such as ten matching records, twenty broker executions, seventeen
+  isolated failures, five cold measurements, or three slice durations is a
   property of the references, never of a stated number;
 - refuses an omitted reference for any threshold it must derive;
 - refuses a forged or ill-formed reference: a run ID, SHA, digest, or path that
@@ -143,7 +143,6 @@ The threshold class is a closed enum, not record text:
 | Threshold class | Exact correction |
 | --- | --- |
 | Main carrier, runner, manifest, or sink | `make test-bazel-rust-main` |
-| API census | `make test-bazel-rust-api` |
 | Broker topology or repetition | `make test-bazel-rust-broker` |
 | Guest, schema, inventory, no-shell, or auxiliary carrier | `make test-bazel-rust-aux` |
 | Package policy, yanked state, or compatibility census | `make test-rust-supply-chain` |
@@ -255,10 +254,10 @@ It also proves:
 
 `qualification.json` is qualified only with:
 
-1. exact eighteen-surface coverage;
+1. exact seventeen-surface coverage;
 2. ten consecutive matching qualification records;
-3. eighteen isolated surface failures;
-4. exact test, companion, scan, schema, and API censuses;
+3. seventeen isolated surface failures;
+4. exact test, companion, scan, and schema censuses;
 5. main and guest per-case topology and broker per-binary topology proof,
    including literal `tags = ["exclusive"]`, no overlap with any other test,
    and a passing tag-removal mutation;
@@ -298,7 +297,7 @@ It also proves:
     `no-shell-inventory-planted-shell`;
 17. a successful `cargo xtask bazel-qualification-validate` verdict derived
     from the references above.
-18. manifest evidence that `test-flake-aarch64`, all four promoted Rust slice
+18. manifest evidence that `test-flake-aarch64`, all three promoted Rust slices
     jobs, and the `test-rust` rollup are enforcing and not advisory, plus
     advisory-classification mutations for each class;
 19. exact same-commit Cargo compatibility-carrier verdicts for every mandatory
@@ -314,7 +313,7 @@ It also proves:
     and negative authorization fixture;
 22. exact Bazel 8.6.0 source, Linux sandbox patch, fixed-policy, output NAR,
     executable, and capability-ABI hashes; startup capability result;
-    configured-target plus `aquery` stable/nightly action-kind and sandbox
+    configured-target plus `aquery` Rust action-kind and sandbox
     strategy inventories; patch-removal, wrong-output, filter-load, and
     setup-before-payload results; inherited socket/ring/SQPOLL/fixed-socket
     preflight; every closed stage diagnostic; all eight pre-action plants; and

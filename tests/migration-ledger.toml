@@ -62,15 +62,6 @@ successor_ids = []
 exercised_today = "yes"
 
 [[script]]
-name = "tests/unit/meta/pr-checklist-gate.sh"
-group = "H"
-make_target = "test-policy"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "yes"
-
-[[script]]
 name = "tests/integration/live/audio.sh"
 group = "GCI"
 make_target = "test-integration"
@@ -141,6 +132,15 @@ tier = "scheduled"
 status = "legacy"      # legacy | porting | ported
 successor_ids = []
 exercised_today = "manual"
+
+[[script]]
+name = "tests/unit/meta/pr-checklist-gate.sh"
+group = "H"
+make_target = "test-policy"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["focused-pr-evidence"]
+exercised_today = "yes"
 
 [[script]]
 name = "tests/unit/meta/ci-uses-make.sh"

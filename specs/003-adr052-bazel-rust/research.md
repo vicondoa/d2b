@@ -366,7 +366,7 @@ descendants inherit the filter. No action-wrapper claim is involved.
 The exact Bazel source, patch, policy, output NAR, executable, and capability
 ABI hashes are committed. A startup probe against that Nix output refuses a
 missing capability before starting the server. Configured-target, `aquery`,
-and strategy inventories cover every stable/nightly action kind and allow only
+and strategy inventories cover every governed Rust action kind and allow only
 the patched Linux `sandboxed` strategy; process, local, standalone, worker,
 remote, and every fallback are forbidden. Patch-removal, wrong-output,
 filter-load, and setup-before-payload plants bind this placement.
@@ -476,7 +476,7 @@ evidence.
 
 ADR 0054 does not change:
 
-- the eighteen execution-manifest IDs;
+- the seventeen execution-manifest IDs;
 - total and unambiguous carrier mapping;
 - main and guest process-per-case topology;
 - broker serial process-per-binary topology;
@@ -503,14 +503,11 @@ paths retain `RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS|RESOLVE_NO_MAGICLINKS`.
 Every auxiliary descriptor is close-on-exec and a child descriptor-table test
 proves inheritance behavior.
 
-The verified handle is sealed at compile time. The existing compiler-derived
-API census becomes authoritative for its opaque public type, empty inherent
-API, empty locally-authored explicit trait-impl allowlist, and exact
-compiler-emitted auto/blanket set. It rejects descriptor extraction or access,
-`Deref`, descriptor `Borrow`, fd traits, `Debug`/`Display`, serialization,
-construction, conversion, duplication, defaulting, or minting. Focused rustdoc
-`compile_fail` examples prove downstream type-system absence; Cargo-shelling
-fixtures are not used.
+The verified handle is sealed at compile time. Defining-crate compiler
+ambiguity assertions and focused rustdoc `compile_fail` examples reject
+descriptor extraction or access, `Deref`, descriptor `Borrow`, fd traits,
+`Debug`/`Display`, serialization, construction, conversion, duplication,
+defaulting, or minting. Cargo-shelling fixtures are not used.
 
 The runfiles/worktree helper design and the runner-local unsafe quarantine are
 both rejected. The first permits rebind and previously overloaded stdin. The
@@ -825,7 +822,7 @@ rest of `bazel/generated/`; slices preview under `.scratch/` only.
 
 `APPROVED_MAKE_TARGETS` in `packages/xtask/tests/policy_ci.rs` is measured to
 be the only workflow allowlist, and nothing today asserts that an approved name
-is a real Makefile rule. All six shadow targets therefore enter the allowlist
+is a real Makefile rule. All five shadow targets therefore enter the allowlist
 in the same wave that introduces them, owned by one exact spec003w1 slice, with
 a positive Makefile-rule and accepted-workflow test and negative
 unapproved-call and rule-less-approval tests.
@@ -887,9 +884,9 @@ CI-rust-cache-sync gates rather than deleting them.
 
 ## Decision 18: Separate CI slices from stable public leaves
 
-Promotion introduces `test-rust-slice-main`, `test-rust-slice-api`,
-`test-rust-slice-broker`, and `test-rust-slice-aux`. Generated jobs call only
-those targets. The eight existing public leaves retain their exact carrier
+Promotion introduces `test-rust-slice-main`, `test-rust-slice-broker`, and
+`test-rust-slice-aux`. Generated jobs call only those targets. The seven
+existing public leaves retain their exact carrier
 subsets and `test-rust-main` keeps conditional fixture behavior.
 
 The Bazel aggregate alias forwards to `test-rust`; each Bazel slice alias
@@ -902,7 +899,7 @@ Retry diagnostics use a versioned closed command enum. Before alias removal,
 version 1 names the existing shadow aggregate and slice targets. The alias-
 removal change removes those targets and atomically changes every diagnostic
 and byte-exact message test to version 2, which names only `test-rust` and the
-enduring `test-rust-slice-{main,api,broker,aux}` targets. Its semantic
+enduring `test-rust-slice-{main,broker,aux}` targets. Its semantic
 changelog records the transition. No repository state names an absent target.
 
 ## Decision 19: Derive post-promotion eligibility from run units
@@ -1187,7 +1184,7 @@ Version-sensitive mechanics remain those measured for ADR 0052:
 - Bazel 8.6.0;
 - `rules_rust` 0.73.0;
 - `cargo-bazel` 0.18.0;
-- Rust 1.97.0 and the separately pinned nightly API toolchain;
+- Rust 1.97.0;
 - `lockfile`, `cargo_lockfile`, and
   `skip_cargo_lockfile_overwrite = True` on every hub;
 - repository-owned module lock refresh and hub repin;

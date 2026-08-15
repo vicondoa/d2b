@@ -106,8 +106,7 @@ internal closed telemetry-label values only and MUST NOT appear in serialized
 
 The owning technical specifications define the `Version` metadata and correct
 their handler-name language in the same commit as the Rust enum, unit/serialization and
-closed-list tests, compiler-derived public and private API snapshots regenerated only by
-`make api-surface-pin`, the existing lowest-layer contract/policy guard, and
+closed-list tests, the existing lowest-layer contract/policy guard, and
 `docs/reference/resource-plane-runtime.md`. No `apiVersion`, JSON `schemaVersion`,
 `manifestVersion`, or `bundleVersion` bump is made because no desired-state field or
 ResourceType schema changes. The generated

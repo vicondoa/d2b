@@ -72,8 +72,8 @@ serialized status names, while the committed v3 `ZoneHandlerName` closed enum us
 wire serialization and still omits those variants. The retained implementation requirement is
 to add `ZoneHandlerName::SystemCoreHost` and `ZoneHandlerName::SystemCoreUser`, serialize them
 only as `system-core-host` and `system-core-user`, retain the underscore spellings only as
-internal telemetry labels, and update every paired compiler-derived API snapshot, Rust
-serialization and duplicate/underscore-rejection test, lowest-layer contract/policy guard,
+internal telemetry labels, and update the Rust serialization and
+duplicate/underscore-rejection tests, lowest-layer contract/policy guard,
 and reference status surface.
 
 The C1 correction record adds no field or operation and changes no desired-state ResourceType
@@ -390,8 +390,9 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   one private, sealed, non-`Clone`, non-`Copy`, one-shot `PolicyBootstrapRead` capability
   owned by that runtime and minted only by one private issuer. It MUST expose no public
   constructor, field, accessor, `Default`, conversion, capability trait implementation, or
-  reconstruction path, and compiler/API-surface/external compile-fail seals MUST enforce
-  those absences. The capability MAY read only the Zone's policy-input resource envelopes at the
+  reconstruction path, and defining-crate compiler ambiguity assertions plus external
+  compile-fail seals MUST enforce those absences. The capability MAY read only the Zone's
+  policy-input resource envelopes at the
   exact durable nonzero policy revision needed to construct the first immutable `PolicySet`;
   it MUST carry no public Resource API subject, expose no general resource read or mutation
   operation, and become unusable when that installation attempt consumes it.
@@ -1072,8 +1073,9 @@ is an authority for architecture or release eligibility.
   mismatch, and ambiguity are denied. The typed broker operation and approved `sys.rs` FFI
   quarantine pass exact-optlen, no-panic, returned-fd cleanup, `FD_CLOEXEC`, ancillary-fd
   count, and `OwnedFd` ownership tests. A new project FFI crate, `nix` wrapper, or local
-  session fallback fails the criterion. API-surface and compile-fail seals expose no public
-  registrar issuer, peer credential/evidence accessor, or bootstrap-identity mint path.
+  session fallback fails the criterion. Defining-crate compiler assertions,
+  `packages/d2b-bus/tests/public_mint_surface.rs`, and external compile-fail seals expose no
+  public registrar issuer, peer credential/evidence accessor, or bootstrap-identity mint path.
 - **SC-031**: Crash injection at every boundary from generation commit through effect
   completion leaves zero lost effects and zero lost cleanup intents after restart. Every
   stale, zero, or wrong-UID cleanup completion is denied without changing durable state.

@@ -191,7 +191,6 @@ The initial DAG is:
 
 ```text
 test-rust
-├── rust-api-surface
 ├── rust-main-workspace
 │   └── rust-schema-reproducibility
 │       └── rust-inventory-and-stub

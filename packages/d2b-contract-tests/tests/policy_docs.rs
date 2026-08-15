@@ -1139,7 +1139,6 @@ fn execution_manifest_schema_and_prose_agree_with_non_empty_discovery() {
     let benchmark = read_repo_file("specs/002-optimize-test-orchestration/benchmark-results.md");
     let nix_jobs = read_repo_file("tests/unit/nix/eval-jobs.nix");
     let flake = read_repo_file("flake.nix");
-    let api_driver = read_repo_file("tests/tools/api-surface-json.sh");
     assert_eq!(
         schema.get("$id").and_then(Value::as_str),
         Some("https://vicondoa.github.io/d2b/schemas/test-execution-manifest-v1.json"),
@@ -1212,7 +1211,6 @@ fn execution_manifest_schema_and_prose_agree_with_non_empty_discovery() {
     );
 
     let rust_baseline_leaves = [
-        "rust-api-surface",
         "rust-main-format",
         "rust-main-clippy",
         "rust-main-workspace-tests",
@@ -1263,19 +1261,6 @@ fn execution_manifest_schema_and_prose_agree_with_non_empty_discovery() {
             && rust_driver.contains("fixture_target_dir=\"$workspace_target_dir\"")
             && rust_driver.contains("${D2B_RUST_COLD_PROFILE:-0}"),
         "execution-manifest-policy: fixture warm/shared target selection drifted"
-    );
-    assert!(
-        api_driver.contains("public_target=\"$target_root/public-census\"")
-            && api_driver.contains("private_target=\"$target_root/private-census\"")
-            && api_driver.contains("public_target=\"$target_root/census\"")
-            && api_driver.contains("shared_census=1")
-            && api_driver.contains("checker_target=\"$target_root/checker\"")
-            && api_driver.contains("CARGO_BUILD_JOBS=\"$public_jobs\"")
-            && api_driver.contains("CARGO_BUILD_JOBS=\"$private_jobs\"")
-            && api_driver.contains(
-                "CARGO_TARGET_DIR=\"$checker_target\" cargo run --quiet --release --locked"
-            ),
-        "execution-manifest-policy: API census targets or split quotas drifted"
     );
     assert!(
         makefile.contains("D2B_RUST_BROKER_PREREQS_aggregate := test-rust-leaf-inventory")

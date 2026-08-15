@@ -110,8 +110,8 @@ or starting review.
 `nix develop` provides the toolchain every gate expects. Gate scripts bootstrap
 a private toolchain when missing, so a dev shell skips that setup.
 
-CI runs eight independent Rust leaf jobs - API, main workspace, broker, guest
-shell runner, no-bash AST, schema, inventory, and supply chain - behind the
+CI runs seven independent Rust leaf jobs - main workspace, broker, guest shell
+runner, no-bash AST, schema, inventory, and supply chain - behind the
 required `test-rust` rollup. Each leaf gets full runner budget and no local-only
 dependency edges. `make test-rust` remains the local aggregate; use
 `make test-rust-<leaf>` to rerun one CI leaf. See
@@ -288,7 +288,7 @@ is warning, not contract.
 | [Zone message bus boundary](docs/contributing/critical-subsystems.md#zone-message-bus-boundary) | `packages/d2b-bus/src/{router,registry,authorization,streams,operations}.rs` | Registration consumes single-owner capability admission; comparing clonable token is insufficient. |
 | [Resource mutation seal](docs/contributing/critical-subsystems.md#resource-mutation-seal) | `packages/d2b-resource-store/src/mutation_seal.rs` + `packages/d2b-resource-store-redb/src/` + `packages/d2b-resource-api/src/` | Verified resource writes consume concrete, store-instance-bound seal by value; no generic view or unbound mutation path may return. |
 | [Authoritative subject resolution](docs/contributing/critical-subsystems.md#authoritative-subject-resolution) | `packages/d2b-bus/src/router.rs` (`ZoneRegistrar`) | `ZoneRegistrar` **exclusively owns and consumes** subject resolution: peer is mapped to subject from registrar-private state using verified peer evidence. Never accept caller-supplied subject. |
-| [Capability mint surface allowlist](docs/contributing/critical-subsystems.md#capability-mint-surface-allowlist) | `packages/d2b-api-surface/`, `tests/golden/api-surface/`, `packages/d2b-bus/tests/public_mint_surface.rs`, `packages/d2b-resource-store/` | **enforcing compiler leg** uses stable trait-solver ambiguity assertions in defining crates. |
+| [Capability mint surface allowlist](docs/contributing/critical-subsystems.md#capability-mint-surface-allowlist) | `packages/{d2b-bus,d2b-session,d2b-session-unix}/` defining crates, `packages/d2b-bus/tests/public_mint_surface.rs`, `packages/d2b-resource-store/` | Stable trait-solver ambiguity assertions, compile-fail seals, public contract tests, and resource mutation tests enforce the boundary. |
 | [Resource controller effects boundary](docs/contributing/critical-subsystems.md#resource-controller-effects-boundary) | `packages/d2b-controller-toolkit/src/` + `packages/d2b-core-controller/src/` | Controller and core-reconciliation engines are test-only and unwired from absent production store/watch dispatcher. |
 | [Unsafe-local provider, launcher, and persistent-shell helper](docs/contributing/critical-subsystems.md#unsafe-local-provider-launcher-and-persistent-shell-helper) | `nixos-modules/options-realms-workloads.nix` | `unsafe-local` is explicit and default-denied. |
 | [Manifest contract](docs/contributing/critical-subsystems.md#manifest-contract) | `docs/reference/manifest-schema.{md,json}` + `nixos-modules/manifest.nix` | Version-pinned via `manifestVersion`. |

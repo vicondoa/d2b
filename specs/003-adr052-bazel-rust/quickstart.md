@@ -896,19 +896,17 @@ product workspace.
 set -euo pipefail
 make test-bazel-rust
 make test-bazel-rust-main
-make test-bazel-rust-api
 make test-bazel-rust-broker
 make test-bazel-rust-aux
 ```
 
-All six shadow names must be approved in the same wave that introduces them:
+All five shadow names must be approved in the same wave that introduces them:
 
 ```bash
 set -euo pipefail
 for target in \
   test-bazel-rust \
   test-bazel-rust-main \
-  test-bazel-rust-api \
   test-bazel-rust-broker \
   test-bazel-rust-aux \
   bazel-shutdown
@@ -977,7 +975,7 @@ jq -e '
   .version == 1 and
   .target == "test-rust" and
   .run_status == "passed" and
-  (.completed_leaves | length) == 18 and
+  (.completed_leaves | length) == 17 and
   (.failed_surfaces | length) == 0
 ' .scratch/spec003-bazel-pass.json
 ```
@@ -991,7 +989,7 @@ Inspect:
 - broker process-per-binary topology;
 - forbidden-value absence and committed byte/record bounds across JUnit,
   sanitized `test.log`, emitted evidence, and exporter diagnostics;
-- exact schema, no-bash, companion, API, and pinned-test censuses.
+- exact schema, no-bash, companion, and pinned-test censuses.
 - two independent nonempty schema generations, with empty and mismatch plants;
 - stub missing-executable, wrong-identity, and runtime-state plants, with no
   socket-denial plant assigned to the stub carrier;
@@ -1043,7 +1041,7 @@ output NAR, executable, and capability-ABI hashes must match
 Bazel server starts. Patch-removal, wrong-output, and filter-load fixtures must
 refuse before any governed action.
 
-Configured-target, `aquery`, and strategy inventories cover stable/nightly
+Configured-target, `aquery`, and strategy inventories cover all governed Rust
 Rustc, metadata, Clippy, rustdoc, doctest compile/run, rustfmt, unpretty,
 build-script, repository, setup, and test actions. Every governed action uses
 the patched Linux `sandboxed` strategy. Process, local, standalone, worker,
@@ -1127,9 +1125,8 @@ Run targeted tests for:
 - a provider mutation that reintroduces `RESOLVE_BENEATH`, while strict
   result and cleanup paths retain
   `RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS|RESOLVE_NO_MAGICLINKS`.
-- compiler-derived API snapshots showing `VerifiedExecutable` has an empty
-  public inherent API, empty locally-authored explicit-trait allowlist, and
-  exact auto/blanket set, plus focused rustdoc compile-fail examples for
+- defining-crate compiler ambiguity assertions, external-seal tests, and
+  focused rustdoc compile-fail examples for
   construction, descriptor extraction/access, Deref/Borrow/fd traits,
   formatting/serialization, conversion, duplication/default, and minting;
 - co-location of `VerifiedExecutable` and its only consuming public API in one
@@ -1232,7 +1229,7 @@ Inspect exact recovery bytes:
   `D2B-BZLEVIDENCE-RETENTION`, `D2B-BZLEVIDENCE-PUBLISH`, and
   `D2B-BZLEVIDENCE-NO-VERDICT`: name the stable repository-relative input or
   carrier/workflow, the corrective action, and one literal
-  `make test-bazel-rust-{main,api,broker,aux}` or fixed qualification command.
+  `make test-bazel-rust-{main,broker,aux}` or fixed qualification command.
   They preserve `testVerdict`, emit the structurally valid degraded variant,
   and contain no planted value.
 
@@ -1240,7 +1237,7 @@ Before alias removal these byte-exact diagnostics use command version 1 and
 name existing `test-bazel-rust*` targets. The alias-removal change must
 atomically update every renderer and exact-message test to command version 2,
 which names only `make test-rust` or
-`make test-rust-slice-{main,api,broker,aux}`. No intermediate or merged state
+`make test-rust-slice-{main,broker,aux}`. No intermediate or merged state
 may name a target that does not exist.
 
 Also inspect the provider table in `contracts/runner-environment.md`: every
@@ -1278,7 +1275,6 @@ Before review:
 ```bash
 set -euo pipefail
 make test-bazel-rust-main
-make test-bazel-rust-api
 make test-bazel-rust-broker
 make test-bazel-rust-aux
 make test-rust-main
@@ -1343,9 +1339,9 @@ descriptors, paths, process output, and opaque identities refuse.
 set -euo pipefail
 jq -e '
   .status == "qualified" and
-  .coverage.exact_surface_count == 18 and
+  .coverage.exact_surface_count == 17 and
   .coverage.unmapped_count == 0 and
-  (.seeded_failures | length) == 18 and
+  (.seeded_failures | length) == 17 and
   .package_policy.context_count == 4 and
   .package_policy.package_check_wrapper_count == 8 and
   .package_policy.all_selected_source_censuses_exact and
@@ -1361,7 +1357,7 @@ jq -e '
   .action_network.startup_capability_probe_passed and
   .action_network.sandbox_load_before_action_exec and
   .action_network.inherited_capability_preflight_exact and
-  .action_network.stable_nightly_action_inventory_exact and
+  .action_network.rust_action_inventory_exact and
   .action_network.sandbox_strategy_inventory_exact and
   .action_network.no_process_local_standalone_worker_remote_fallback and
   .action_network.setup_before_payload_plant_denied and
@@ -1465,11 +1461,11 @@ D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts
 After promotion:
 
 - required context is still `test-rust`;
-- eighteen surfaces use Bazel;
+- seventeen surfaces use Bazel;
 - fixture surfaces use the existing path;
-- generated CI calls only `test-rust-slice-main`, `test-rust-slice-api`,
-  `test-rust-slice-broker`, and `test-rust-slice-aux`;
-- all eight public Rust leaf names remain;
+- generated CI calls only `test-rust-slice-main`, `test-rust-slice-broker`,
+  and `test-rust-slice-aux`;
+- all seven public Rust leaf names remain;
 - each public leaf maps to its exact carrier subset and `test-rust-main` keeps
   conditional fixture behavior;
 - every Bazel compatibility alias prints its exact stderr replacement line,
@@ -1488,7 +1484,7 @@ After promotion:
   prefix.
 - the table-driven cache test mutates every bound input and changes every
   applicable action/repository key without collapsing namespaces.
-- `test-flake-aarch64`, all four Rust slices, and the `test-rust` rollup are
+- `test-flake-aarch64`, all three Rust slices, and the `test-rust` rollup are
   non-advisory; advisory-classification mutations fail.
 
 The alias replacements are exactly:
@@ -1496,7 +1492,6 @@ The alias replacements are exactly:
 ```text
 test-bazel-rust -> test-rust
 test-bazel-rust-main -> test-rust-slice-main
-test-bazel-rust-api -> test-rust-slice-api
 test-bazel-rust-broker -> test-rust-slice-broker
 test-bazel-rust-aux -> test-rust-slice-aux
 ```
@@ -1507,7 +1502,7 @@ Each stderr line has the exact form
 The promotion integrator records the spec003w5 parent, integrates or squashes
 all spec003w5 scope results into exactly one atomic candidate, and asserts the
 complete path diff relative to that parent. Promotion docs and the semantic
-changelog list all five Bazel alias replacements and every exact surface ID
+changelog list all four Bazel alias replacements and every exact surface ID
 from `cargoCompatibilityCarriers`. They call those surfaces permanently hybrid
 under this specification, list the retained socket-using Cargo cases and
 public executor, and state that separate authorization is required before
@@ -1515,7 +1510,7 @@ retirement. The same change updates
 `AGENTS.md`, `tests/AGENTS.md`,
 `docs/contributing/gates-and-lints.md`, `tests/README.md`, and
 `docs/reference/test-execution-manifest.md`, because the last two also
-describe the eight CI jobs:
+describe the seven CI jobs:
 
 ```bash
 set -euo pipefail
@@ -1527,28 +1522,15 @@ for doc in \
   docs/reference/test-execution-manifest.md
 do
   grep -Fq 'test-rust-slice-main' "$doc"
+  grep -Fq 'test-rust-slice-broker' "$doc"
+  grep -Fq 'test-rust-slice-aux' "$doc"
 done
-assert_no_fixed() {
-  pattern=$1
-  shift
-  if grep -Fq -- "$pattern" "$@"; then
-    return 1
-  else
-    status=$?
-    test "$status" -eq 1
-  fi
-}
 test -r tests/README.md
 test -r docs/reference/test-execution-manifest.md
-assert_no_fixed 'eight CI leaf targets' tests/README.md
-assert_no_fixed \
-  'runs API, main, broker, guest, no-bash, schema, inventory and supply chain' \
-  docs/reference/test-execution-manifest.md
 ```
 
-Those two literals are the current committed sentences that assert eight Rust
-CI jobs; both must be gone, and all eight public leaf names must remain
-documented.
+The binding docs must describe the three promoted slices and keep all seven
+public leaf names documented.
 
 Run the enforcing hybrid-disclosure policy after the promotion fragment and
 all five fixed docs are present:
@@ -1670,7 +1652,6 @@ else
 fi
 make test-rust
 make test-rust-slice-main
-make test-rust-slice-api
 make test-rust-slice-broker
 make test-rust-slice-aux
 ```

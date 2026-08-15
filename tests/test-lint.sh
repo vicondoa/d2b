@@ -2,7 +2,6 @@
 # tests/test-lint.sh - `make test-lint`: fail-fast lint before long Layer-1 jobs.
 #
 #   * preflight disk-space guard (fail closed before the Nix-heavy siblings)
-#   * compiler-derived API input fingerprint drift
 #   * Rust formatting across every gated workspace
 #   * changed-scope clippy for the main and guest-shell-runner workspaces
 #   * nix-instantiate --parse on every .nix file
@@ -60,17 +59,6 @@ resolve_lint_base() {
 
 lint_base=$(resolve_lint_base)
 export D2B_LINT_BASE="$lint_base"
-
-# --- compiler-derived API input fingerprint -------------------------------
-# The authoritative census still runs in test-rust-api-surface. This generated
-# fingerprint proves that make api-surface-pin ran for the exact workspace
-# source state before the expensive census starts.
-log "--> compiler-derived API pin precheck"
-bash "$ROOT/tests/tools/api-surface-input-fingerprint.sh" --check || {
-  fail "compiler-derived API pin is stale"
-  exit 1
-}
-ok "compiler-derived API pin precheck"
 
 # --- Rust format + changed-scope clippy ----------------------------------
 log "--> Rust format + changed-scope clippy"

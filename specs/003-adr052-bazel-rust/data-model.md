@@ -358,7 +358,6 @@ wrappers.
 The existing fixed set remains:
 
 ```text
-rust-api-surface
 rust-main-format
 rust-main-clippy
 rust-main-workspace-tests
@@ -378,7 +377,7 @@ rust-audit-broker
 rust-audit-guest
 ```
 
-Each surface has a nonempty carrier set, one verdict owner, one of four slices,
+Each surface has a nonempty carrier set, one verdict owner, one of three slices,
 and an exact generated census where applicable. Fixture-backed IDs are not
 members.
 
@@ -428,7 +427,7 @@ count of twenty consecutive executions for its own context.
 | `execution` | The sole safe Rust consuming API maps the verified open file description to a private fd; immutable static C `d2b-bazel-exec-supervisor` forks once, uses the exec-error pipe only for failure, and proves the exact `execveat(private_fd, "", argv, envp, AT_EMPTY_PATH)` through a kernel `PTRACE_EVENT_EXEC` followed by zero-signal detach before `EXECUTED`. |
 | `enosys` | Named refusal requiring a kernel with `execveat`; no fallback. |
 | `auxiliary_descriptors` | All close-on-exec and proven by child descriptor-table behavior. |
-| `api_seal` | Private fields and minting trait; empty public inherent API and empty locally-authored explicit trait-impl allowlists; exact compiler-derived public, hidden, auto, and blanket API snapshots; no descriptor/path accessor or extraction, `Deref`, descriptor `Borrow`, `AsFd`, raw-fd trait, formatting, serialization, conversion, default, or duplication API. |
+| `api_seal` | Private fields and minting trait; defining-crate compiler ambiguity assertions plus focused compile-fail and external-seal tests reject descriptor/path access or extraction, `Deref`, descriptor `Borrow`, `AsFd`, raw-fd traits, formatting, serialization, conversion, default, duplication, and unauthorized construction or minting. |
 | `owner` | One dependency-leaf crate owns the type and the only public API that consumes it. |
 | `execution_transfer` | The public API consumes the handle by value and uses the exact pinned reviewed safe `command-fds` mapping dependency to install the verified description at a fixed private fd while leaving declared stdin/stdout/stderr unchanged. Under the one process-wide serialization guard, its spawning thread uses safe `nix::sys::signal::SigSet` to capture its mask, block the full managed set before spawn, and attempt exact restoration after successful or failed spawn before unlocking. Capture, block, poison, restoration, per-launch-guard, and unlock-before-restoration mutations refuse. |
 | `helper_identity` | Exact immutable dedicated Nix store artifact, bound by C source, derivation dependency closure, output NAR, executable, protocol, and native-system hashes; runfiles, worktree, copied, symlinked, missing, and wrong outputs refuse. |
@@ -496,10 +495,11 @@ continuation, event, and detach codes exist only after spawn.
 | `PendingKernelCleanup` | If a consuming wait has not proved namespace members and PID 1 reaped at the userspace ceiling, the original live outer `linux-sandbox` monitor remains the sole wait owner and records `pending-kernel-cleanup`. Sandbox and outputs are quarantined; success, reuse, retry, reboot, replacement wait ownership, and manual release are prohibited while non-consuming observation continues. The fixed diagnostic links to `docs/contributing/critical-subsystems.md#bazel-pending-kernel-cleanup-quarantine`. |
 | `Closed` | The original monitor's consuming wait proved PID 1 reaped and published the fixed release. Cleanup is `complete` or `complete-after-quarantine`; a quarantined action remains failed. No host PID, PID file, cgroup, host process group, or operator action is a fallback. |
 
-The public API census is primary. Focused rustdoc `compile_fail` examples prove
-downstream construction, descriptor access/extraction, trait coercion,
-formatting/serialization, duplication/conversion, and mint-trait absence.
-Cargo-shelling compile fixtures are not part of this entity.
+Defining-crate compiler ambiguity assertions are primary. Focused rustdoc
+`compile_fail` examples and external-seal tests prove downstream construction,
+descriptor access/extraction, trait coercion, formatting/serialization,
+duplication/conversion, and mint-trait absence. Cargo-shelling compile fixtures
+are not part of this entity.
 
 Strict result, execution-manifest, JUnit-parent, and cleanup entities are a
 different path variant and retain
@@ -617,7 +617,7 @@ qualification, and promotion.
 | Field | Rule |
 | --- | --- |
 | `sandboxProvider` | Exact Nix-pinned Bazel 8.6.0 upstream source, Linux sandbox patch, fixed-policy, output NAR, executable, and capability-ABI hashes. |
-| `actionKinds` | Exact stable/nightly Rustc, metadata, Clippy, rustdoc, doctest compile/run, rustfmt, unpretty, build-script, repository, setup, and test coverage from configured-target and `aquery` inventories. |
+| `actionKinds` | Exact Rustc, metadata, Clippy, rustdoc, doctest compile/run, rustfmt, unpretty, build-script, repository, setup, and test coverage from configured-target and `aquery` inventories. |
 | `strategyInventory` | Every governed action uses the patched Linux `sandboxed` strategy; process, local, standalone, worker, remote, and every fallback are absent. |
 | `loadPoint` | Sandbox child verifies and loads the fixed filter after sandbox construction and before exec of the full action command, covering compile/build commands, test setup, tests, and descendants. |
 | `startupProbe` | The exact Nix output reports the fixed capability ABI and denies a planted syscall before any server or governed action starts. |
@@ -683,7 +683,7 @@ Qualification additionally binds:
 - broker `exclusive` tags, no-overlap mutation, and twenty-run result for each
   context;
 - exact patched-Bazel source/patch/policy/output/executable/capability
-  identities, startup probe, configured-target plus `aquery` stable/nightly
+  identities, startup probe, configured-target plus `aquery` Rust
   action-kind inventory, strategy inventory, patch-removal/filter-load/
   setup-before-payload/inherited-capability/fallback results, eight pre-action
   socket/io_uring plants, external-egress and live-index plants, and exact
@@ -829,8 +829,8 @@ bounded and complete-stream verdicts equal.
 
 | Version | Valid repository state | Closed commands |
 | --- | --- | --- |
-| `bazel-diagnostic-v1` | Shadow through promoted aliases | `make test-bazel-rust`, `make test-bazel-rust-main`, `make test-bazel-rust-api`, `make test-bazel-rust-broker`, `make test-bazel-rust-aux` |
-| `bazel-diagnostic-v2` | Alias removal and later | `make test-rust`, `make test-rust-slice-main`, `make test-rust-slice-api`, `make test-rust-slice-broker`, `make test-rust-slice-aux` |
+| `bazel-diagnostic-v1` | Shadow through promoted aliases | `make test-bazel-rust`, `make test-bazel-rust-main`, `make test-bazel-rust-broker`, `make test-bazel-rust-aux` |
+| `bazel-diagnostic-v2` | Alias removal and later | `make test-rust`, `make test-rust-slice-main`, `make test-rust-slice-broker`, `make test-rust-slice-aux` |
 
 Alias removal owns the only transition. It updates every production provider,
 sandbox-policy, qualification-threshold, evidence/publication, cleanup, and
@@ -933,7 +933,7 @@ Package Policy Graph 1 -- 1 Selected Source Census
 Package Policy Context 1 -- many Package Policy Results
 Nix Artifact Context 1 -- 1 Package Policy Context
 Flake Check Wrapper 1 -- 1 exact system-and-target policy input
-Coverage Map 1 -- 18 Rust Surfaces
+Coverage Map 1 -- 17 Rust Surfaces
 Rust Surface 1 -- 1..n Carrier Targets
 Qualification Evidence 1 -- 4 Package Policy Contexts
 Qualification Evidence 1 -- 3 Supply Chain Equivalence Results

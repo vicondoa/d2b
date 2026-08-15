@@ -808,14 +808,10 @@ for _gate in \
   fi
 done
 unset _gate
-# deliverable-gate-inventory + pr-checklist-gate are invoked literally (not via
-# the loop above) so tests/unit/meta/layer1-self-inventory.sh's invocation grep resolves
-# them.
+# deliverable-gate-inventory is invoked literally (not via the loop above) so
+# tests/unit/meta/layer1-self-inventory.sh's invocation grep resolves it.
 if [ -x "$ROOT/tests/unit/meta/deliverable-gate-inventory.sh" ]; then
   d2b_static_parallel_script_gate "tests/unit/meta/deliverable-gate-inventory.sh" "$ROOT/tests/unit/meta/deliverable-gate-inventory.sh"
-fi
-if [ -x "$ROOT/tests/unit/meta/pr-checklist-gate.sh" ]; then
-  d2b_static_parallel_script_gate "tests/unit/meta/pr-checklist-gate.sh" "$ROOT/tests/unit/meta/pr-checklist-gate.sh"
 fi
 # ci-coverage.sh structural guard (must run after all other tests
 # are registered above so it can verify the full set is wired).

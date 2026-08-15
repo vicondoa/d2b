@@ -55,10 +55,10 @@ Rust tests (types 2-5: unit, integration, contract, policy-lint) live under
 | `make test` | `test-unit` + `test-integration` | local convenience aggregate; use wider lanes when the changed surface needs them |
 | `make check-tier0` | sub-60s syntax + shellcheck gate | local + CI |
 | `make check-inventory` | fail-closed migration-ledger drift check | local + CI |
-| `make test-lint` | serial fail-fast API-pin hint + Rust fmt + local changed-scope clippy + nix-parse + shellcheck; CI leaves clippy to the full Rust shard | local + CI |
+| `make test-lint` | serial fail-fast Rust fmt + local changed-scope clippy + nix-parse + shellcheck; CI leaves clippy to the full Rust shard | local + CI |
 | `make test-changelog` | require release notes for code changes and validate every changelog fragment | local + CI |
-| `make test-rust` | bounded Make DAG for the Rust leaves (API, fmt, clippy, workspace tests, conditional fixture/CLI, broker x3, deny/audit, schema, inventory, and no-bash); fixture/CLI are included once when Nix is available | local + CI |
-| `make test-rust-<leaf>` | eight CI leaf targets (API, main, broker, guest shell runner, no-bash AST, schema, inventory, supply chain) behind the stable `test-rust` rollup; each receives the full runner budget | CI (local for a focused rerun) |
+| `make test-rust` | bounded Make DAG for the Rust leaves (fmt, clippy, workspace tests, conditional fixture/CLI, broker x3, deny/audit, schema, inventory, and no-bash); fixture/CLI are included once when Nix is available | local + CI |
+| `make test-rust-<leaf>` | seven CI leaf targets (main, broker, guest shell runner, no-bash AST, schema, inventory, supply chain) behind the stable `test-rust` rollup; each receives the full runner budget | CI (local for a focused rerun) |
 | `make test-fixture-contracts` | enforcing eval-rendered lane: materializes `D2B_FIXTURES` from evaluated Nix artifact data, then runs `d2b-contract-tests` and the CLI-contract cases; both lanes set `D2B_ENABLE_FIXTURE_BUILD=1`, and invoking it without that variable fails rather than skipping | local + CI |
 | `make test-proofs` | standalone proofs/ crates | local + CI |
 | `make test-flake` | `nix flake check --no-build` (native system); `D2B_FLAKE_CHECK=<name>` instantiates one check, `D2B_FLAKE_OUTPUTS=1` sweeps non-`checks` outputs, `D2B_FLAKE_LOCAL_SHARDS=1` runs the local bounded shard fan-out | local + CI (x86 sharded per-check matrix; aarch64 PR job runs a lightweight smoke eval) |
@@ -182,34 +182,25 @@ that target before citing one.
 GNU Make schedules its
 explicit leaves with `--keep-going` and `--output-sync=target`, so independent
 leaves continue after a failure and each target's output remains grouped. The
-broker feature passes stay serial. Fixture/CLI work and the API snapshot
-checker use isolated stable targets below `.scratch/rust-test-cache`, so they
-can overlap the main workspace without sharing mutable Cargo state. The public
-and private rustdoc censuses overlap only when the API leaf receives at least
-two jobs, and their split Cargo quotas stay within that leaf's budget. The
-snapshot checker uses its release profile for the measured CPU-bound JSON
-pass. Budgets through nine use one job per active lane; surplus jobs above nine are assigned
-to the measured API long pole while the complete frontier stays bounded.
+broker feature passes stay serial. Fixture/CLI work uses an isolated stable
+target below `.scratch/rust-test-cache`, so it can overlap the main workspace
+without sharing mutable Cargo state. The complete frontier remains bounded by
+the requested Rust budget.
 Direct calls to `tests/test-rust.sh` require one explicit leaf mode. Run
 `make test-fixture-contracts` separately for the complete fixture-dependent
 contract and policy coverage.
 
 Before that aggregate starts, local `make check` runs `make test-lint`
-serially. Its Rust precheck shares the normal target directories, so
-changed-package clippy both reports common failures before the long parallel
-phase and warms the later full workspace gate. The API check compares a
-generated fingerprint over the main workspace's census inputs; the later
-compiler-derived census remains the authoritative snapshot check.
+serially. Its changed-package clippy reports common failures before the long
+parallel phase and warms the later full workspace gate.
 
 CI invokes one Make target per Rust leaf, so local-only dependency edges do
 not repeat schema or inventory work in the main and broker jobs. A cold local
 aggregate (detected when `packages/target` is absent) restores the shared
-workspace target layout and retains the warm-local split API census cache
-across `make clean`. A bounded API/main/broker prebuild frontier runs first;
-fixture, inventory and schema then run as a full-budget chain so discovery
+workspace target layout. Fixture, inventory and schema then run as a full-budget
+chain so discovery
 reuses all prior builds before schema generation. Warm local runs retain the
-parallel isolated-target profile, while CI alone uses the shared API census
-target.
+parallel isolated-target profile.
 
 Use `D2B_RUST_BUDGET=<positive-integer>` to request a Rust budget. It is an
 upper bound, not a host-capacity bypass. The default is the smaller of logical

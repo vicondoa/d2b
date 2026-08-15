@@ -54,11 +54,9 @@
   owns. The documentation-test runner that the Rust build rules generate on a
   stable toolchain is recorded as a known difference. The rule that the shipped
   `d2b` command line never invokes a shell is unchanged and is not widened.
-- The nightly toolchain the public-API inventory needs is selected for that
-  part of the build graph only, so the whole Rust suite stays one invocation
-  and no other crate compiles on nightly. The inventory is rendered by a
-  repository-owned rule that emits the toolchain version it actually used,
-  checked against the committed pin, rather than asserting the pin file alone.
+- Capability-boundary evidence remains in defining-crate compiler assertions,
+  compile-fail tests, and public contract tests; the Rust scheduler transition
+  does not add a separate generated surface lane.
 - Coverage-map enforcement is split so each half runs where it can actually
   execute: a mapped label that does not exist fails when the build graph is
   analysed, and completeness across the graph is checked by the existing drift

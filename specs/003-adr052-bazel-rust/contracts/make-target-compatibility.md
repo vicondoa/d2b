@@ -2,26 +2,25 @@
 
 ## Shadow stage
 
-Cargo remains authoritative for `make test-rust` and the eight existing leaf
+Cargo remains authoritative for `make test-rust` and the seven existing leaf
 names. The Bazel shadow adds:
 
 ```text
 make test-bazel-rust
 make test-bazel-rust-main
-make test-bazel-rust-api
 make test-bazel-rust-broker
 make test-bazel-rust-aux
 make bazel-shutdown
 ```
 
-The aggregate covers exactly eighteen IDs. Slice targets cover only their
+The aggregate covers exactly seventeen IDs. Slice targets cover only their
 mapped rows. Workflows call approved Make targets, never Bazel directly.
 
-All six shadow names enter `APPROVED_MAKE_TARGETS` in
+All five shadow names enter `APPROVED_MAKE_TARGETS` in
 `packages/xtask/tests/policy_ci.rs` in the same wave that introduces them,
 owned by one exact spec003w1 slice. The allowlist change carries:
 
-- a positive test that each of the six approved shadow names resolves to a real
+- a positive test that each of the five approved shadow names resolves to a real
   Makefile rule and that a workflow step calling it is accepted by the
   ci-uses-make guard;
 - a negative test that a workflow step calling an unapproved
@@ -30,7 +29,7 @@ owned by one exact spec003w1 slice. The allowlist change carries:
   rejected.
 
 The Makefile-rule assertion is written test-first and is red until the
-integrator adds the six entry points; it must be green on the integrated
+integrator adds the five entry points; it must be green on the integrated
 candidate.
 
 `D2B_EXECUTION_MANIFEST` and `D2B_RUST_BUDGET` keep their existing meanings.
@@ -102,19 +101,18 @@ hub repin, yanked refresh/check, policy generation, or evidence mutation.
 ## Promotion
 
 - Required context stays `test-rust`.
-- `make test-rust` routes eighteen surfaces through Bazel and retains the
+- `make test-rust` routes seventeen surfaces through Bazel and retains the
   Cargo and Nix fixture path.
 - Generated CI calls exactly:
 
   ```text
   make test-rust-slice-main
-  make test-rust-slice-api
   make test-rust-slice-broker
   make test-rust-slice-aux
   ```
 
-- All eight public leaf names remain with their existing semantics:
-  `test-rust-api-surface`, `test-rust-main`, `test-rust-broker`,
+- All seven public leaf names remain with their existing semantics:
+  `test-rust-main`, `test-rust-broker`,
   `test-rust-guest-shell-runner`, `test-rust-no-bash-ast`,
   `test-rust-schema`, `test-rust-inventory`, and
   `test-rust-supply-chain`.
@@ -131,9 +129,6 @@ hub repin, yanked refresh/check, policy generation, or evidence mutation.
   test-bazel-rust-main -> test-rust-slice-main
   make: test-bazel-rust-main is deprecated; use test-rust-slice-main
 
-  test-bazel-rust-api -> test-rust-slice-api
-  make: test-bazel-rust-api is deprecated; use test-rust-slice-api
-
   test-bazel-rust-broker -> test-rust-slice-broker
   make: test-bazel-rust-broker is deprecated; use test-rust-slice-broker
 
@@ -147,9 +142,9 @@ hub repin, yanked refresh/check, policy generation, or evidence mutation.
 - `make bazel-shutdown` remains.
 - The same implementation change updates `AGENTS.md`, `tests/AGENTS.md`,
   `docs/contributing/gates-and-lints.md`, `tests/README.md`, and
-  `docs/reference/test-execution-manifest.md` from eight Rust CI leaves to
-  four Bazel slices while retaining the stable rollup language. The last two
-  are included because they also describe the eight CI jobs.
+  `docs/reference/test-execution-manifest.md` from seven Rust CI leaves to
+  three Bazel slices while retaining the stable rollup language. The last two
+  are included because they also describe the seven CI jobs.
 - Promotion documentation and its semantic changelog fragment list every exact
   replacement above. They also list the exact surface IDs reported by
   `cargoCompatibilityCarriers`, call those surfaces permanently hybrid under
@@ -168,10 +163,10 @@ hub repin, yanked refresh/check, policy generation, or evidence mutation.
 Diagnostics never carry a free-form Make target. The closed mapping has two
 versions:
 
-| Diagnostic version | Repository state | Aggregate | Main | API | Broker | Aux |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| `bazel-diagnostic-v1` | Shadow through promoted aliases | `make test-bazel-rust` | `make test-bazel-rust-main` | `make test-bazel-rust-api` | `make test-bazel-rust-broker` | `make test-bazel-rust-aux` |
-| `bazel-diagnostic-v2` | Alias removal and later | `make test-rust` | `make test-rust-slice-main` | `make test-rust-slice-api` | `make test-rust-slice-broker` | `make test-rust-slice-aux` |
+| Diagnostic version | Repository state | Aggregate | Main | Broker | Aux |
+| --- | --- | --- | --- | --- | --- | --- |
+| `bazel-diagnostic-v1` | Shadow through promoted aliases | `make test-bazel-rust` | `make test-bazel-rust-main` | `make test-bazel-rust-broker` | `make test-bazel-rust-aux` |
+| `bazel-diagnostic-v2` | Alias removal and later | `make test-rust` | `make test-rust-slice-main` | `make test-rust-slice-broker` | `make test-rust-slice-aux` |
 
 Before promotion and while aliases exist, every provider, sandbox-policy,
 qualification threshold/table, evidence/publication, cleanup, and recovery
@@ -239,7 +234,7 @@ evidence/publication path, exact-message test, governed doc, evidence record,
 and semantic fragment; removal is incomplete if any post-change member names
 a shadow target or any phase/state selects a target absent from that state.
 
-Cargo implementations for the eighteen migrated surfaces may be removed only
+Cargo implementations for the seventeen migrated surfaces may be removed only
 after ten distinct ordered green promoted `v3` run units, where a unit is one
 push-created (run ID, head SHA) pair and never an attempt. Retirement does not
 remove:

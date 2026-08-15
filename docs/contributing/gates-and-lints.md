@@ -76,10 +76,8 @@ make test
 
 Local `make check` runs `test-lint` as a serial fail-fast phase before
 inventory and the long parallel jobs. That lane checks every gated Rust
-workspace with `cargo fmt --check`, runs clippy only for changed main-workspace
-and guest-shell-runner packages, and compares the exact main-workspace API
-census inputs with the fingerprint written by `make api-surface-pin`. The later
-full Rust and API-census leaves remain authoritative. CI omits the changed-scope
+workspace with `cargo fmt --check` and runs clippy only for changed
+main-workspace and guest-shell-runner packages. CI omits the changed-scope
 clippy duplicate because its lint job has no shared Cargo cache; the required
 full Rust shard still runs workspace-wide clippy.
 
@@ -119,36 +117,21 @@ and are excluded from the fixture lane through the shared list in
 `tests/lib.sh`. The focused `test-rust-main` target retains the same conditional
 fixture behavior.
 
-### The API census shard
+### Rust leaves
 
-CI runs eight independent Rust leaf jobs behind the stable required
-`test-rust` rollup context: API, main workspace, broker, guest shell runner,
-no-bash AST, schema, inventory and supply chain. Each focused target receives
-the full runner budget and drops local-only dependency edges, so a shard does
-not repeat another shard's work. `make test-rust` remains the local aggregate.
-
-The API census is a separate shard because it shares nothing with the
-workspace build: it renders through the separately pinned nightly toolchain in
-`packages/d2b-api-surface/rust-toolchain.toml` into its own target directory
-under `.scratch/rust-test-cache/`, so it neither consumes nor produces
-artifacts that fmt, clippy or nextest use. Its cost is rustdoc rendering rather
-than dependency compilation, so it does not need a cache entry of its own; do
-not give it one. `test-rust-main` remains the single rust-cache writer.
+CI runs seven independent Rust leaf jobs behind the stable required
+`test-rust` rollup context: main workspace, broker, guest shell runner, no-bash
+AST, schema, inventory, and supply chain. Each focused target receives the
+full runner budget and drops local-only dependency edges, so a shard does not
+repeat another shard's work. `make test-rust` remains the local aggregate.
 
 ### Rust budget and execution manifest
 
 The local Rust aggregate is the GNU Make DAG behind `make test-rust`. It uses
 `--keep-going` and `--output-sync=target` and keeps broker feature passes
-serial. Fixture/CLI work and the API snapshot checker use isolated stable
-targets below `.scratch/rust-test-cache`, so they overlap the main workspace
-without sharing mutable Cargo state. The public and private rustdoc censuses
-also use separate stable targets and overlap only when the API leaf has at
-least two admitted Cargo jobs; their split job shares never exceed that leaf's
-quota. The snapshot checker runs from Cargo's release profile because its
-measured long pole is CPU-bound JSON processing, not compilation. Budgets
-through nine use one job per active lane; surplus jobs above
-nine are assigned to the measured API long pole while the full nine-lane
-frontier stays within the effective budget. Direct calls to
+serial. Fixture/CLI work uses isolated stable targets below
+`.scratch/rust-test-cache`, so it overlaps the main workspace without sharing
+mutable Cargo state. Direct calls to
 `tests/test-rust.sh` require one explicit leaf mode and are not aggregate
 schedulers. A passing Rust manifest retains
 the exact baseline sub-surface IDs documented in the execution-manifest
@@ -157,12 +140,9 @@ fixture and CLI IDs.
 
 The local warm aggregate keeps that parallel profile. When its normal Cargo
 target is absent, it selects a cold profile that reuses the workspace target
-for fixture/CLI work while retaining the warm-local split API census targets
-across `make clean`. A four-lane bounded prebuild frontier overlaps API, main,
-broker and light independent work. Fixture, inventory and schema then run as a
-full-budget dependency chain, so inventory reuses every prior build before
-schema generation. CI alone
-uses the shared API census target and dispatches each Rust leaf as its own job.
+for fixture/CLI work. Fixture, inventory and schema then run as a full-budget
+dependency chain, so inventory reuses every prior build before schema
+generation. CI dispatches each Rust leaf as its own job.
 
 `D2B_RUST_BUDGET` is the supported local Rust control. It must be a positive
 integer when set and is only a requested upper bound. The automatic budget is

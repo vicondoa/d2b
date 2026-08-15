@@ -1,12 +1,11 @@
 # Coverage Map Contract
 
-`tests/golden/bazel-rust-coverage.json` binds the existing eighteen
+`tests/golden/bazel-rust-coverage.json` binds the existing seventeen
 execution-manifest IDs to Bazel carriers. It does not replace manifest v1.
 
 ## Exact ID set
 
 ```text
-rust-api-surface
 rust-main-format
 rust-main-clippy
 rust-main-workspace-tests
@@ -40,9 +39,9 @@ generated, spec003w0 covers these supporting selection surfaces:
 | Supported shell and Make Cargo builds | `workspace-and-tool-pinning.md` closed Cargo build call-site census | T012 | T013 | Exact path census, including `Makefile` `heavy-gate-build` with literal `--manifest-path packages/Cargo.toml --locked -p xtask --bin xtask`, plus locked package/bin/default-feature/feature or generic-exclusion mutations in `tests/unit/meta/ci-runner-regression.py`. |
 | Generic and dedicated Nix builds | The Nix rows of the same census | T018 | T019 | `bazel-package-policy.nix` and `policy_bazel_nix.rs` assert frozen root-lock generic exclusions and dedicated broker/guest selections while unchanged package-selected runtime builders remain unchanged. |
 | Release build and cache identity | The release order and six-row matrix in the same contract | T021 | T023 | Retained fail-closed workflow gates and CI regression fixtures reject ambient or late toolchain activation, wrong `rustc`/`cargo` version assertions, cache-before-toolchain, unlocked builds, and selector drift. |
-| API and Bazel generated snapshots | Joined product membership after T006 | T027 | T027 | `make api-surface-pin`, `gen-bazel --check`, the API checker, and clean-diff assertions consume the corrected member set. |
+| Bazel generated outputs | Joined product membership after T006 | T027 | T027 | `gen-bazel --check`, retained defining-crate capability-seal tests, and clean-diff assertions consume the corrected member set. |
 
-This table is exact. It supplements the eighteen execution surfaces rather
+This table is exact. It supplements the seventeen execution surfaces rather
 than claiming that a build helper is a new test carrier. T012, T018, and T021
 must all be green before T027 can commit membership-derived API and Bazel
 outputs.
@@ -69,7 +68,7 @@ Each row contains:
   source for every tool, advisory database, yanked record, and vendored crate;
 - `sandboxPolicy`, naming the exact Nix-patched Bazel output, capability ABI,
   fixed policy digest, patched Linux sandbox strategy, and load-before-action-
-  exec result for every stable/nightly compile, build, setup, and test action;
+  exec result for every governed Rust compile, build, setup, and test action;
 - `cargoCompatibilityCarriers`, an exact sorted census of mandatory
   socket-using Rust tests that cannot run as Bazel actions under ADR 0052.
   Each entry binds its existing surface ID, Cargo selector, test identity,
@@ -135,7 +134,7 @@ equivalent first test action command, the test, and every descendant. No
 action wrapper or `--run_under` claim is used.
 
 Generated configured-target queries, `aquery` snapshots, and a strategy
-inventory cover stable/nightly `Rustc`, `RustcMetadata`, Clippy, rustdoc,
+inventory cover `Rustc`, `RustcMetadata`, Clippy, rustdoc,
 rustdoc-test compile/run, rustfmt, unpretty, `CargoBuildScript`, repository,
 setup, and test actions. Every governed action must select the patched Linux
 `sandboxed` strategy. `process`, `local`, `standalone`, `worker`, `remote`,
@@ -228,7 +227,7 @@ The retry command is the versioned typed enum from
 `make-target-compatibility.md`. Before alias removal it renders exactly one
 existing shadow slice target. Alias removal atomically changes the renderer and
 all byte-exact tests to the corresponding enduring
-`make test-rust-slice-{main,api,broker,aux}` target. No placeholder,
+`make test-rust-slice-{main,broker,aux}` target. No placeholder,
 nonexistent target, or free-form string reaches a message. Every diagnostic contains only its
 fixed code, the repository-relative
 `bazel/generated/action-network-policy.json` row, that row's SHA-256, the
@@ -239,7 +238,7 @@ environment values, and process, user, run, attempt, candidate, or tag
 identifiers.
 
 The action inventory rejects a missing or wrong patched Bazel output,
-capability mismatch, missing patch, policy mismatch, a stable/nightly
+capability mismatch, missing patch, policy mismatch, a Rust
 toolchain gap, an uncovered build-script, setup, or doctest action, an
 action-level URL, live-index input, downloader, network-enabling tag,
 process/local/standalone/worker/remote/no-sandbox strategy, fallback, or
@@ -332,17 +331,15 @@ Promotion introduces exactly four authoritative CI slice targets:
 
 ```text
 test-rust-slice-main
-test-rust-slice-api
 test-rust-slice-broker
 test-rust-slice-aux
 ```
 
-Generated CI calls those names only. The eight existing public leaves retain
+Generated CI calls those names only. The seven existing public leaves retain
 their current surface semantics and forward to these exact carrier subsets:
 
 | Public leaf | Bazel subset after promotion |
 | --- | --- |
-| `test-rust-api-surface` | `//ci/rust:api_census`. |
 | `test-rust-main` | `//ci/rust:fmt`, `//ci/rust:clippy`, `//ci/rust:main_tests`, `//ci/rust:main_doctests`, and `//ci/rust:main_harness_free`, plus the unchanged conditional Cargo/Nix fixture and CLI path. |
 | `test-rust-broker` | `//ci/rust:broker_default`, `//ci/rust:broker_layer1`, and `//ci/rust:broker_fakebackends`. |
 | `test-rust-guest-shell-runner` | `//ci/rust:guest_shell_runner`. |
@@ -379,8 +376,6 @@ server.
 
 Exactly once:
 
-- per-target nightly transition;
-- `rustdoc_json` rule;
 - pinned vendor repository rule;
 - package-policy carriers and selected-source census checker;
 - product and walker hub containment checker;
@@ -406,7 +401,7 @@ toolchain activation and version assertions, a release compiler or Cargo
 version mismatch; any first-party target represented as an external
 generated crate; a broker tag removal or overlap; a missing/wrong patched
 Bazel output, source/patch/policy/output/capability mismatch, failed startup
-probe, patch removal, stable/nightly/build-script/setup/doctest action-kind
+probe, patch removal, Rust, build-script, setup, or doctest action-kind
 gap, process/local/standalone/worker/remote or other strategy fallback,
 preflight or filter fallback, inherited socket, inherited ordinary or SQPOLL
 ring, registered fixed-socket ring state, setup-before-payload or any of the

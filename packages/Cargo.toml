@@ -22,7 +22,6 @@ members = [
     "d2b-telemetry",
     "d2b-contracts",
     "d2b-bus",
-    "d2b-api-surface",
     "d2b-zone-routing",
     "d2b-resource-client",
     "d2b-resource-compiler",

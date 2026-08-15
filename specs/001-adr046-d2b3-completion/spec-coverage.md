@@ -49,7 +49,7 @@ conditional on the changed surface.
   operator and Guest acceptance; T480 revalidates the resulting records and tree identity.
 - The recovery validator is shared by every cutover stage and is not copied into local
   predicates.
-- Generated schemas, API snapshots, Nix outputs, documentation, tests, and changelog entries
+- Generated schemas, Nix outputs, documentation, tests, and changelog entries
   move together when their owning contract changes.
 
 ## Validation policy

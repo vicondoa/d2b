@@ -101,10 +101,10 @@ Making this reachable is the core of User Story 1 and the precondition for SC-02
   `ZoneHandlerName::SystemCoreHost` and `ZoneHandlerName::SystemCoreUser` serialize only as
   `system-core-host` and `system-core-user`; `system_core_host` and `system_core_user` remain
   internal telemetry labels only. T605 keeps the governing contract references and
-  implementation snapshots synchronized with those values.
+  focused implementation tests synchronized with those values.
   No desired Zone field or schema changes, and v3 is unreleased, so no `apiVersion`, JSON
   `schemaVersion`, `manifestVersion`, or `bundleVersion` changes. T605 must still prove
-  current API snapshots and a byte-identical generated desired Zone schema.
+  focused Rust contract behavior and a byte-identical generated desired Zone schema.
 - **Effect and audit recovery precede publication.** A committed effect intent and an
   immutable authoritative audit journal row survive restart; neither may be forgotten,
   bypassed, or treated as ready. Export completion is separate. Audit row constructors accept
@@ -144,7 +144,8 @@ Making this reachable is the core of User Story 1 and the precondition for SC-02
   identity, PID reuse, dead fd, credential/generation/cgroup mismatch, ambiguity, and a stale
   pre-restart pidfd are also refused. Missing or extra ancillary fds, a raw-fd field, unsafe
   outside broker `sys.rs`, a missing per-block `SAFETY:` justification, a new project FFI
-  crate, or a local session syscall blocks T593. API-surface/compile-fail checks expose no
+  crate, or a local session syscall blocks T593. Defining-crate compiler assertions,
+  `packages/d2b-bus/tests/public_mint_surface.rs`, and external compile-fail checks expose no
   public issuer, verifier, clone, or peer evidence accessor.
 - Conformance evidence shows a registered backend mutates only through verified admission and
   exposes no independent write path, plus a recorded security review of each registered

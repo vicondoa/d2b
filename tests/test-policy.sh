@@ -5,7 +5,6 @@
 #   * ci-coverage             - every tests/*.sh is wired into CI / an aggregator
 #   * deliverable-gate-inventory - required gate scripts exist
 #   * layer1-self-inventory   - Layer-1 driver scripts are accounted for
-#   * pr-checklist-gate       - PR template checklist is well-formed
 #
 # CI runs this as its own job; locally it is one prerequisite of `make test-unit`.
 
@@ -165,8 +164,6 @@ run_guest_workspace_guard() {
 run_policy_gate "w0-dep-direction"          tests/unit/meta/w0-dep-direction.sh
 run_policy_gate "deliverable-gate-inventory" tests/unit/meta/deliverable-gate-inventory.sh
 run_policy_gate "layer1-self-inventory"     tests/unit/meta/layer1-self-inventory.sh
-run_policy_gate "pr-checklist-gate"         tests/unit/meta/pr-checklist-gate.sh .github/PULL_REQUEST_TEMPLATE.md
-
 # ci-coverage must run LAST: it verifies that every other test is wired into a
 # workflow or aggregator, so it has to observe the final reference set.
 run_policy_gate "ci-coverage"               tests/unit/meta/ci-coverage.sh

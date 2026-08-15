@@ -110,7 +110,6 @@
           "completed_leaves": {
             "items": {
               "enum": [
-                "rust-api-surface",
                 "rust-main-format",
                 "rust-main-clippy",
                 "rust-main-workspace-tests",

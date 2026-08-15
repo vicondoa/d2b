@@ -106,8 +106,6 @@ fails while walking on-disk scripts and the Makefile.
 5. **Asserting a generated artifact is up to date (docs/schemas/CLI)?** → it is
    already covered by a **drift gate**; regenerate with the matching
    `cargo run -p xtask -- gen-*` and commit - do **not** add a new gate. The
-   compiler-derived capability API snapshots are regenerated explicitly with
-   `make api-surface-pin`.
 6. **Genuinely needs a foreign userland / real systemd boot / live host /
    device?** → the matching Layer-2 tier (9-12). Justify why Layer 1 cannot
    cover it; reach for the *lowest* tier that works (a native fd-passing test
@@ -189,32 +187,23 @@ process-per-test safe, and it runs 528 tests in about 1.4 s, so nextest has
 nothing to win there.
 
 `make test-rust` owns the bounded local GNU Make DAG. Its stable leaves cover
-the API, main format/clippy/workspace, conditional fixture/CLI, broker,
+the main format/clippy/workspace, conditional fixture/CLI, broker,
 guest-shell-runner, no-bash AST, schema, supply-chain, stub, and pinned-test
 surfaces. Fixture and CLI leaves use an isolated stable target below
 `.scratch/rust-test-cache`, so they can overlap the main workspace without
 sharing mutable Cargo state; `D2B_SKIP_FIXTURE_BUILD=1` omits them for the
 Layer-1 graph. The focused `make test-rust-main` retains the same conditional
-fixture behavior. The public and private rustdoc censuses use separate stable
-targets and overlap only when the API leaf has at least two admitted jobs,
-with split Cargo quotas bounded by that leaf's budget. The snapshot checker
-uses its release profile for the measured CPU-bound JSON pass. Budgets through
-nine admit one job per active lane; surplus jobs above nine go to the measured
-API long pole while the full nine-lane frontier remains within budget. Direct
-`tests/test-rust.sh` calls require exactly one leaf mode and must not be used
-as an aggregate scheduler. The broker passes remain
+fixture behavior. Direct `tests/test-rust.sh` calls require exactly one leaf
+mode and must not be used as an aggregate scheduler. The broker passes remain
 serial, and the main workspace, schema, and inventory leaves retain their
 dependency edges.
 
-Those dependency edges are warm-local-profile only. CI dispatches API, main,
-broker, guest, no-bash, schema, inventory and supply-chain Make targets as
-eight separate jobs, each with the full runner budget. When a local aggregate
-starts without `packages/target`, its cold profile restores shared
-workspace targets while retaining the warm-local split API census cache across
-`make clean`. It overlaps a bounded API/main/broker prebuild frontier, then
-runs fixture, inventory and schema as a full-budget chain so discovery reuses
-all prior builds before schema generation. CI alone uses the shared API census
-target.
+Those dependency edges are warm-local-profile only. CI dispatches main, broker,
+guest, no-bash, schema, inventory and supply-chain Make targets as seven
+separate jobs, each with the full runner budget. When a local aggregate starts
+without `packages/target`, its cold profile restores shared workspace targets.
+It runs fixture, inventory and schema as a full-budget chain so discovery
+reuses all prior builds before schema generation.
 
 The local Rust budget control is `D2B_RUST_BUDGET`, a positive requested upper
 bound. Its automatic cap uses logical CPUs and cache-adjusted available memory,
@@ -366,27 +355,20 @@ the compilation but not any output whose freshness the test asserts on.
 ### External compile-fail test policy
 
 External compile-fail tests are a high-latency exception, not a general API
-visibility test mechanism. Before adding one, first use the compiler-derived
-rustdoc JSON census and snapshots under `tests/golden/api-surface/`. That
-census owns unexpected exports, public members, hidden-public items, and
-approved capability trait implementations without launching one Cargo build
-per probe.
-
-Add an external compile-fail fixture only when it proves a downstream
-type-system or trust-boundary property that rustdoc JSON and doctests cannot
-prove. The public capability types have explicit rustdoc `compile_fail`
+visibility test mechanism. Add one only when it proves a downstream type-system
+or trust-boundary property that defining-crate compiler assertions and doctests
+cannot prove. The public capability types have explicit rustdoc `compile_fail`
 examples for every prohibited `Clone`, `Default`, and `From<()>` case, and the
 private `SessionAuthority` trait has an explicit doctest proving it is not
 available downstream. The test comment and changelog entry must state which
 semantic property requires a downstream crate. Do not add fixtures solely for
 private fields, private modules, constructors, sealed public traits, missing
-re-exports, or absent methods; those belong in the API census or a small
-rustdoc `compile_fail` example.
+re-exports, or absent methods; those belong in the defining crate's compiler
+assertions, public contract tests, or a small rustdoc `compile_fail` example.
 
 The resource API external seal retains one forced-`cfg(test)` downstream probe
-because rustdoc JSON does not render test-configuration exports. Its redundant
-export/private-member probes were removed in favor of the compiler-derived API
-census and rustdoc examples. Keep new cargo-shelling tests under
+because the production boundary differs from the test configuration. Keep new
+cargo-shelling tests under
 `rust-test-cache/` unless their tree is large enough to justify a different
 cache trade, and document that trade.
 

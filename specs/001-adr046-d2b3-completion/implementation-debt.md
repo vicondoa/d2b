@@ -147,7 +147,6 @@ also invisible until wired, so it must not be mistaken for working behaviour.
 | Debt | Detail | Owner |
 | --- | --- | --- |
 | `flake.nix` zone-schema-drift check | The work item asks for `checks.<system>.zone-schema-drift` plus a matrix pin refresh. Not added. | W2 |
-| `public_mint_surface` runtime | Renders rustdoc for every workspace member sequentially into isolated target dirs; roughly 30 minutes and growing with every crate added. Its earlier characterization here - that the render phase is parallelizable and the dependency ordering is only needed for the analysis phase - is corrected below; the ordering is needed by the render itself. | **Ruled: W3.** See section 9 |
 | Unknown-spec-field rejection | Cannot be enforced while the shared `spec` type injects execution-policy defaults into every resource. Needs the generated per-type submodule to replace the freeform type, which requires editing a file the generator slice does not own. `nix-unit: zone-link-closed-spec` cannot pass until then. | W2 |
 | Two engine refusal branches unreachable from outside | The contract constructors already reject the shapes that would trip them, so they guard only the deserialization path. Exercising them needs a deserialization-based vector, a different surface than the vector suite owns. | focused contract review to rule |
 | Enrollment validation obligations | Four obligations unmet, blocked on the session contract. | W2, with routing-007/009 |
@@ -159,8 +158,6 @@ also invisible until wired, so it must not be mistaken for working behaviour.
 Recorded as closed rather than deleted, so a reader can tell the difference
 between debt that was paid and debt that was never real.
 
-- The capability and public-API snapshots were regenerated and reviewed, with
-  the widening carrying a stated reason.
 - The drift check now runs both Zone generators and compares
   `nixos-modules/generated/`, so the header those artifacts carry promising
   byte-for-byte comparison is now true rather than aspirational.
@@ -369,7 +366,7 @@ and `routing-016` other than bootstrap and enroll.
 
 ## 9. Provider implementation debt and scope
 
-Three items are in scope and one named group is explicitly not.
+Two items are in scope and one named group is explicitly not.
 
 ### In scope
 
@@ -380,39 +377,7 @@ Destination caveats recorded against `ADR046-routing-014` and
 routing implementation delivery claim. Nothing else in the register turns those two rows from
 partial to complete.
 
-**2. The `public_mint_surface` check runtime.** The owning implementation pays
-this because adding crates makes it more expensive. The check's cost scales
-with workspace member count, and the implementation adds at least
-`packages/d2b-provider-system-core/` (destination of `ADR046-provider-003`,
-absent from `packages/Cargo.toml` today) and possibly several more through
-`ADR046-provider-002`'s skeleton generator, which emits one
-`packages/d2b-provider-<base>-<implementation>/` crate per Provider. An
-implementation that adds crates to a per-crate-linear check must account for
-the check's shape.
-
-The register's earlier characterization was verified against
-`packages/d2b-bus/tests/public_mint_surface.rs` and is **partly wrong**, which
-matters because the wrong half was the argument that the fix is cheap:
-
-- Confirmed: `render_workspace_docs` loops over `dependency_order(packages)`
-  and runs one `cargo doc --no-deps -p <package>` per workspace member, in
-  sequence, into a per-crate isolated render directory.
-- Corrected: the dependency ordering is **not** needed only by the analysis
-  phase. Before rendering a package, the loop calls
-  `plant_dependency_doc_link` for every already-rendered crate
-  (`external_docs.iter().chain(docs.iter())`), symlinking those render roots
-  into the package's own doc root. A render therefore consumes the output of
-  the renders before it, and a flat parallel render would not have them.
-- Consequence for the fix: a render/analyze split is **not** available in the
-  form the register claimed. What is genuinely available is (a) hoisting the
-  pure source scans - `hidden_public_api` and
-  `source_capability_inventory_with_externals` - out of the render loop, since
-  neither reads rendered output, and (b) parallelising the render *within* each
-  level of the dependency order rather than across the whole workspace. Both
-  are real wins; neither is the flat parallelisation the old wording implied.
-  The owning slice must scope to the corrected shape.
-
-**3. A build-level determinism check for the generated Nix
+**2. A build-level determinism check for the generated Nix
 catalog.** Section 8 records that the flake-check layer - proving a generator
 emits identical output across two independent evaluations - is the one thing
 neither construction-time tests nor the drift check cover. The drift gate
@@ -424,7 +389,7 @@ repeat the gap it can see in the implementation phase before it.
 
 ### Not in scope
 
-**4. The missing nix-unit eval cases and host-integration checks recorded
+**3. The missing nix-unit eval cases and host-integration checks recorded
 against `ADR046-routing-011`, `ADR046-routing-012`, `ADR046-routing-013` and
 `ADR046-primitives-003`.** These stay where section 8 puts them.
 
@@ -1255,7 +1220,7 @@ W5.**
 
 ### 14.7 What debt controller implementation takes on
 
-Three items are in scope, each with the reason it belongs to this implementation phase rather
+Two items are in scope, each with the reason it belongs to this implementation phase rather
 than to a later one.
 
 **1. `ADR046-process-001` discharges provider implementation's largest recorded gap.** Verified
@@ -1270,34 +1235,7 @@ crates proven only over scripted ports, with no production caller and
 `ProcessLaunchEffectPort` production adapter is what turns a green provider implementation gate
 from evidence about internal consistency into evidence about behaviour.
 
-**2. The `public_mint_surface` gate runtime, in the corrected fix shape.**
-Section 9 assigned this to provider implementation on the argument that the implementation phase making a
-per-crate-linear gate worse should pay for its shape. provider implementation did not pay it, and
-controller implementation adds roughly eight crates - the `d2b-provider-network-local` and
-credential and provider-state destinations across three groups - so the same
-argument now points here, more strongly.
-
-The fix shape is the corrected one section 9 already established, and it must
-not be re-derived as the flat parallelisation the register originally claimed. A
-flat parallel render is **not available**: before rendering a package the loop
-calls `plant_dependency_doc_link` for every already-rendered crate, symlinking
-those render roots into the package's own doc root, so a render consumes the
-output of the renders before it. What is available is (a) hoisting the two pure
-source scans out of the render loop, since neither reads rendered output, and
-(b) parallelising the render *within* each level of the dependency order.
-
-**Verified: no provider implementation commit paid it, and the one commit that touched the file
-did something else.** `packages/d2b-bus/tests/public_mint_surface.rs` was last
-touched 18 commits before this branch tip, by a commit that moved the Rust gate
-to nextest and cached what it was rebuilding. That is a genuine runtime
-mitigation - renders and compiled artifacts now persist across runs - but it is
-cross-run caching, not the recorded fix: `render_workspace_docs` still loops
-sequentially over `dependency_order(packages)`, and `hidden_public_api` and
-`source_capability_inventory_with_externals` are both still called inside that
-loop. Neither half of the corrected shape has been done, and the cold-run cost
-the register recorded is unchanged.
-
-**3. Importing `nixos-modules/resources-volume.nix`.** Section 3 records the
+**2. Importing `nixos-modules/resources-volume.nix`.** Section 3 records the
 Volume assertions as imported by no module, so they do not run, and section 8
 records the matching eval-case obligation as blocked behind that import. It is
 one line in `nixos-modules/index.nix`.
@@ -1362,7 +1300,6 @@ conformance scenario to cite. Both need a specification amendment before
 | Its module is `packages/d2b-contracts/src/generation_bundle.rs` with `ZoneBundle`, `BundleResource`, `BundleMetadata`; `ADR046-pstate-010`'s `ZoneResourceBundle` is the same type and its `contentHash` is a member of it, not a second DTO. Prep is unblocked | Ruled | W4 prep |
 | `ADR046-cli-011` and `ADR046-volume-006` name two further module spellings for that same DTO and must be reconciled onto it | Specification correction, owed by W5 | W5 |
 | `ADR046-process-001` closes provider implementation's largest gap: three crates with no production caller, proven only over scripted ports | Unmet obligation, in scope | W4 |
-| `public_mint_surface` runtime: hoist the two pure source scans out of the render loop and parallelise within each dependency level. Verified unpaid by provider implementation; the one commit touching the file added cross-run caching, not this | Unmet obligation, in scope | W4 |
 | `nixos-modules/resources-volume.nix` imported by nothing; one line in `index.nix`, which exactly one W4 item opens | Unmet obligation, in scope | W4, assigned to `ADR046-network-004`'s slice |
 
 ## 15. Added after controller implementation Round A
@@ -1504,9 +1441,6 @@ again.
   both Process Providers run their shared conformance suite through it. The
   stronger Host/Guest/user and real-boundary obligations remain open as recorded
   above. A production adapter and a production caller are different claims.
-- **Still open:** the `public_mint_surface` cold-run shape is unchanged.
-  `render_workspace_docs` still calls both pure source scans inside its sequential
-  package loop.
 - **Still open:** `nixos-modules/resources-volume.nix` is still imported by no
   module; `nixos-modules/index.nix` contains no import for it.
 - **Still open:** the prior `ADR046-primitives-002` Host/Guest/user integration
@@ -2163,8 +2097,7 @@ substitution are rejected. `ProviderLifecycle` remains a distinct allowed value 
 substitute for either required record.
 
 The implementation plan also covers focused Rust round-trip/list coverage, the ownership-compatible
-`packages/d2b-contract-tests/tests/policy_contracts.rs` guard, compiler-regenerated public
-and private snapshots under `tests/golden/api-surface/` via `make api-surface-pin` only, and
+`packages/d2b-contract-tests/tests/policy_contracts.rs` guard and
 the existing paired `docs/reference/resource-plane-runtime.md`. It treats
 `packages/xtask/src/zone_schema.rs` and
 `docs/reference/schemas/v3/core.d2bus.org_Zone.schema.json` as read-only proof inputs and must
@@ -2174,7 +2107,7 @@ and evidence import follow authoritative member specifications and focused check
 
 No `apiVersion`, `schemaVersion`, `manifestVersion`, `bundleVersion`, or wire-field version
 bump is required: no field or operation changes, the desired-state Zone schema is unchanged,
-and v3 is unreleased. Ownership of paired Rust contract changes, tests, API snapshots,
+and v3 is unreleased. Ownership of paired Rust contract changes, tests,
 reference status docs, consumers/emitters, and generator no-drift proof resolves only from
 authoritative member specifications and focused checks.
 

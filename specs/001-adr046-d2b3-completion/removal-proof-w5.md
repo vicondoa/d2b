@@ -238,16 +238,15 @@ $ git grep -l -e 'd2b-userd' -e 'd2b_userd' -e 'userd' 2e92622f \
 2e92622f:packages/Cargo.guest.lock
 2e92622f:packages/d2b-contract-tests/tests/policy_contracts.rs
 2e92622f:tests/fixtures/guest-rust-workspace/Cargo.toml
-2e92622f:tests/golden/api-surface/workspace-metadata.json
 2e92622f:tests/migration-ledger.toml
 2e92622f:tests/migration-state.d/guest-exec-policy-eval.toml
 2e92622f:tests/migration-state.d/guest-exec-runtime-static.toml
 2e92622f:tests/unit/nix/eval-cases/guest-exec-policy-eval.nix
 ```
 
-Ten surfaces, not zero. This is the case the Cargo-only check would have
+Nine surfaces, not zero. This is the case the Cargo-only check would have
 missed, and it is why (E) exists as a separate command rather than as a
-formality after (D). One of the ten is a false positive:
+formality after (D). One of the nine is a false positive:
 `nixos-modules/net.nix:476` matches inside the comment "useradd/userdel at
 runtime" and is not a `d2b-userd` reference at all. The other nine were genuine
 packaging, lock, fixture, golden and policy surfaces, and `442172a5` with its

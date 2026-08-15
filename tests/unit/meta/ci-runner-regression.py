@@ -29,9 +29,6 @@ MAKEFILE = ROOT / "Makefile"
 RUST_DRIVER = ROOT / "tests" / "test-rust.sh"
 NIX_UNIT_DRIVER = ROOT / "tests" / "test-nix-unit.sh"
 EXECUTION_MANIFEST_HELPER = ROOT / "tests" / "tools" / "execution-manifest.pl"
-API_INPUT_FINGERPRINT = (
-    ROOT / "tests" / "tools" / "api-surface-input-fingerprint.sh"
-)
 RELEASE_WORKFLOW = ROOT / ".github" / "workflows" / "release-host-binaries.yml"
 RELEASE_BINARY_SELECTORS = (
     ("d2bd", "d2bd", "packages/Cargo.toml"),
@@ -927,94 +924,6 @@ class CiRunnerRegressionTests(unittest.TestCase):
             check=False,
         )
 
-    def make_api_fingerprint_tree(self) -> pathlib.Path:
-        tree = self.scratch / "api-fingerprint-tree"
-        fixture_files = {
-            "packages/Cargo.toml": (
-                '[workspace]\nmembers = ["example", "d2b-api-surface"]\n'
-                'resolver = "2"\n'
-            ),
-            "packages/Cargo.lock": "# fixture lock\n",
-            "packages/.cargo/config.toml": "[build]\n",
-            "packages/rust-toolchain.toml": (
-                '[toolchain]\nchannel = "1.97.0"\n'
-            ),
-            "packages/d2b-api-surface/rust-toolchain.toml": (
-                '[toolchain]\nchannel = "nightly-test"\n'
-            ),
-            "packages/d2b-api-surface/Cargo.toml": (
-                '[package]\nname = "d2b-api-surface"\nversion = "0.0.0"\n'
-            ),
-            "packages/example/Cargo.toml": (
-                '[package]\nname = "example"\nversion = "0.0.0"\n'
-            ),
-            "packages/example/src/lib.rs": "pub struct Example;\n",
-            "tests/golden/api-surface/roots.json": "{}\n",
-            "tests/tools/api-surface-json.sh": "#!/usr/bin/env bash\n",
-            "tests/tools/gen-api-surface-metadata.sh": "#!/usr/bin/env bash\n",
-        }
-        for relative, content in fixture_files.items():
-            path = tree / relative
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(content, encoding="utf-8")
-        tool_dir = tree / "test-bin"
-        tool_dir.mkdir()
-        cargo = tool_dir / "cargo"
-        cargo.write_text(
-            "#!/usr/bin/env sh\n"
-            'if [ "${1:-}" = metadata ]; then\n'
-            "  printf '{\"workspace_root\":\"%s/packages\","
-            "\"workspace_members\":[\"path+file://%s/packages/example#0.0.0\","
-            "\"path+file://%s/packages/d2b-api-surface#0.0.0\"],"
-            "\"packages\":[{\"id\":\"path+file://%s/packages/example#0.0.0\","
-            "\"name\":\"example\","
-            "\"manifest_path\":\"%s/packages/example/Cargo.toml\"},"
-            "{\"id\":\"path+file://%s/packages/d2b-api-surface#0.0.0\","
-            "\"name\":\"d2b-api-surface\","
-            "\"manifest_path\":\"%s/packages/d2b-api-surface/Cargo.toml\"}]}\\n' "
-            '"$ROOT" "$ROOT" "$ROOT" "$ROOT" "$ROOT" "$ROOT" "$ROOT"\n'
-            "  exit 0\n"
-            "fi\n"
-            "exit 91\n",
-            encoding="utf-8",
-        )
-        cargo.chmod(0o755)
-        fingerprint = tree / "tests/tools/api-surface-input-fingerprint.sh"
-        shutil.copy2(API_INPUT_FINGERPRINT, fingerprint)
-        return tree
-
-    def run_api_fingerprint(
-        self,
-        tree: pathlib.Path,
-        mode: str,
-        *,
-        path_prefix: pathlib.Path | None = None,
-    ) -> subprocess.CompletedProcess[str]:
-        path = os.environ.get("PATH", "")
-        fixture_tools = tree / "test-bin"
-        path = f"{fixture_tools}{os.pathsep}{path}"
-        if path_prefix is not None:
-            path = f"{path_prefix}{os.pathsep}{path}"
-        env = {
-            "HOME": str(self.scratch),
-            "LC_ALL": "C",
-            "PATH": path,
-            "ROOT": str(tree),
-        }
-        return subprocess.run(
-            [
-                "bash",
-                str(tree / "tests/tools/api-surface-input-fingerprint.sh"),
-                mode,
-            ],
-            cwd=tree,
-            env=env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            check=False,
-        )
-
     def test_shell_bootstrap_rejects_bash_startup_poison(self) -> None:
         layer1_jobs = load_layer1_jobs()
         bootstrap = shlex.split(layer1_jobs.SCRUBBED_BASH)
@@ -1197,135 +1106,14 @@ set -euo pipefail
         self.assertIn('D2B_LINT_CHANGED_CLIPPY: "0"', lint_workflow)
 
         lint_driver = (ROOT / "tests" / "test-lint.sh").read_text(encoding="utf-8")
-        self.assertIn("compiler-derived API pin precheck", lint_driver)
-        self.assertIn("api-surface-input-fingerprint.sh", lint_driver)
         self.assertIn("tests/test-rust.sh\" fast-lint", lint_driver)
         self.assertIn("run_fast_lint_gate", RUST_DRIVER.read_text(encoding="utf-8"))
-
-    def test_api_fingerprint_rejects_stale_and_missing_pins(self) -> None:
-        tree = self.make_api_fingerprint_tree()
-        update = self.run_api_fingerprint(tree, "--write")
-        self.assertEqual(update.returncode, 0, msg=update.stderr)
-
-        source = tree / "packages/example/src/lib.rs"
-        original_source = source.read_text(encoding="utf-8")
-        source.write_text(f"{original_source}pub struct Changed;\n", encoding="utf-8")
-        stale = self.run_api_fingerprint(tree, "--check")
-        self.assertNotEqual(stale.returncode, 0)
-        self.assertIn("api-surface inputs changed", stale.stderr)
-        self.assertIn("make api-surface-pin", stale.stderr)
-
-        source.write_text(original_source, encoding="utf-8")
-        (tree / "tests/golden/api-surface/input-fingerprint.txt").unlink()
-        missing = self.run_api_fingerprint(tree, "--check")
-        self.assertNotEqual(missing.returncode, 0)
-        self.assertIn("api-surface inputs changed", missing.stderr)
-        self.assertIn("make api-surface-pin", missing.stderr)
-
-    def test_api_fingerprint_tracks_toolchain_and_cargo_config_independently(
-        self,
-    ) -> None:
-        for relative in (
-            "packages/.cargo/config.toml",
-            "packages/d2b-api-surface/rust-toolchain.toml",
-        ):
-            tree = self.make_api_fingerprint_tree()
-            update = self.run_api_fingerprint(tree, "--write")
-            self.assertEqual(update.returncode, 0, msg=update.stderr)
-            path = tree / relative
-            original = path.read_text(encoding="utf-8")
-            path.write_text(f"{original}# independent mutation\n", encoding="utf-8")
-            stale = self.run_api_fingerprint(tree, "--check")
-            self.assertNotEqual(stale.returncode, 0, msg=relative)
-            self.assertIn("api-surface inputs changed", stale.stderr)
-            self.assertIn("make api-surface-pin", stale.stderr)
-            shutil.rmtree(tree)
-
-    def test_api_fingerprint_rejects_unknown_top_level_and_nested_workspaces(
-        self,
-    ) -> None:
-        for name, relative in (
-            (
-                "unknown-top-level-workspace",
-                "packages/unknown-workspace/src/lib.rs",
-            ),
-            (
-                "unknown-nested-workspace",
-                "packages/example/unknown-workspace/src/lib.rs",
-            ),
-        ):
-            tree = self.make_api_fingerprint_tree()
-            update = self.run_api_fingerprint(tree, "--write")
-            self.assertEqual(update.returncode, 0, msg=update.stderr)
-            source = tree / relative
-            source.parent.mkdir(parents=True, exist_ok=True)
-            (source.parent / "Cargo.toml").write_text(
-                "[workspace]\n",
-                encoding="utf-8",
-            )
-            source.write_text("pub struct Unknown;\n", encoding="utf-8")
-            stale = self.run_api_fingerprint(tree, "--check")
-            self.assertNotEqual(stale.returncode, 0, msg=name)
-            self.assertIn(
-                "api-surface unknown independent workspace root",
-                stale.stderr,
-            )
-            shutil.rmtree(tree)
-
-    def test_api_fingerprint_rejects_enumerator_failures_and_special_entries(
-        self,
-    ) -> None:
-        tree = self.make_api_fingerprint_tree()
-        update = self.run_api_fingerprint(tree, "--write")
-        self.assertEqual(update.returncode, 0, msg=update.stderr)
-
-        shim_dir = self.scratch / "failing-enumerator"
-        shim_dir.mkdir()
-        find_shim = shim_dir / "find"
-        find_shim.write_text("#!/bin/sh\nexit 73\n", encoding="utf-8")
-        find_shim.chmod(0o755)
-        producer_failure = self.run_api_fingerprint(
-            tree,
-            "--check",
-            path_prefix=shim_dir,
-        )
-        self.assertNotEqual(producer_failure.returncode, 0)
-        self.assertIn(
-            "api-surface package enumeration failed",
-            producer_failure.stderr,
-        )
-
-        generated_entry = tree / "packages/policy-inputs"
-        generated_entry.mkdir()
-        generated = self.run_api_fingerprint(tree, "--check")
-        self.assertEqual(generated.returncode, 0, msg=generated.stderr)
-        generated_entry.rmdir()
-
-        unexpected_entry = tree / "packages/unexpected-entry"
-        os.mkfifo(unexpected_entry)
-        unknown_entry = self.run_api_fingerprint(tree, "--check")
-        self.assertNotEqual(unknown_entry.returncode, 0)
-        self.assertIn(
-            "api-surface package entry is not a workspace member",
-            unknown_entry.stderr,
-        )
-        unexpected_entry.unlink()
-
-        source_link = tree / "packages/example/src/linked.rs"
-        source_link.symlink_to("lib.rs")
-        linked_source = self.run_api_fingerprint(tree, "--check")
-        self.assertNotEqual(linked_source.returncode, 0)
-        self.assertIn(
-            "api-surface input has an unexpected type: "
-            "packages/example/src/linked.rs",
-            linked_source.stderr,
-        )
 
     def test_fast_lint_changed_scope_selection_is_hermetic(self) -> None:
         driver = RUST_DRIVER.read_text(encoding="utf-8")
         function_start = driver.index("run_fast_lint_gate() {")
         function_end = driver.index(
-            "\n}\n\n# The compiler-derived API census",
+            "\n}\n\nrun_main_workspace_gate",
             function_start,
         )
         fast_lint_function = driver[function_start : function_end + 2]
@@ -1643,14 +1431,13 @@ cargo() {
                 any(command.startswith("clippy ") for command in commands)
             )
 
-    def test_rust_gate_is_three_required_shards_with_one_stable_rollup(self) -> None:
+    def test_rust_gate_has_seven_required_shards_with_one_stable_rollup(self) -> None:
         layer1_jobs = load_layer1_jobs()
         manifest = layer1_jobs.load_manifest()
         workflow = layer1_jobs.render_workflow(manifest)
 
         rust_rollup = manifest["jobs"]["test-rust"]
         rust_shards = [
-            "test-rust-api-surface",
             "test-rust-main",
             "test-rust-broker",
             "test-rust-guest-shell-runner",
@@ -1668,23 +1455,20 @@ cargo() {
             self.assertIn(f"run: make {shard}", workflow)
             self.assertIn(f"{shard}=$result", workflow)
         self.assertNotIn("  test-rust-remaining:", workflow)
-        self.assertEqual(workflow.count('[ "$result" = success ] || failed=1'), 8)
+        self.assertEqual(workflow.count('[ "$result" = success ] || failed=1'), 7)
         self.assertIn('[ "$failed" -eq 0 ] || exit 1', workflow)
         self.assertIn('echo "All Rust gate shards passed."', workflow)
         main_job = workflow.split("  test-rust-main:", 1)[1].split(
             "\n  test-rust-broker:",
             1,
         )[0]
-        self.assertIn("Prune warm-local-only Rust cache trees", main_job)
-        self.assertIn("public-census", main_job)
-        self.assertIn("private-census", main_job)
-        self.assertEqual(workflow.count("Prune warm-local-only Rust cache trees"), 1)
+        self.assertNotIn("Prune warm-local-only Rust cache trees", main_job)
         self.assertEqual(manifest["ci"]["rollupNeeds"].count("test-rust"), 1)
 
     def test_expensive_rust_cache_surface_is_present(self) -> None:
         workflow = load_layer1_jobs().render_workflow(load_layer1_jobs().load_manifest())
         self.assertIn(".scratch/rust-test-cache", workflow)
-        self.assertIn('prefix-key: "v2-rust-api-json"', workflow)
+        self.assertIn('prefix-key: "v3-rust"', workflow)
 
     def test_fixture_lane_owns_the_only_bounded_nix_store_cache(self) -> None:
         workflow = load_layer1_jobs().render_workflow(load_layer1_jobs().load_manifest())
@@ -2703,40 +2487,6 @@ wait
         )
         self.assertIn("docker system prune -af || true", workflow)
 
-    def test_api_surface_json_gate_is_enforcing_and_cacheable(self) -> None:
-        driver = (ROOT / "tests" / "test-rust.sh").read_text(encoding="utf-8")
-        api_driver = (ROOT / "tests" / "tools" / "api-surface-json.sh").read_text(
-            encoding="utf-8"
-        )
-        workflow = load_layer1_jobs().render_workflow(load_layer1_jobs().load_manifest())
-
-        self.assertIn('bash "$ROOT/tests/tools/api-surface-json.sh"', driver)
-        self.assertNotIn("D2B_SKIP_API_SURFACE", driver)
-        self.assertIn('export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-D warnings"', driver)
-        self.assertIn('export RUSTDOCFLAGS="${RUSTDOCFLAGS:+$RUSTDOCFLAGS }-D warnings"', driver)
-        self.assertIn("nightly-2026-02-16", api_driver)
-        self.assertEqual(api_driver.count('RUSTDOCFLAGS="-D warnings '), 2)
-        self.assertIn("--document-hidden-items", api_driver)
-        self.assertIn("--document-private-items", api_driver)
-        self.assertIn(
-            'cargo "+$pin" metadata --locked --offline --no-deps --format-version 1',
-            api_driver,
-        )
-        self.assertIn("workspace_doc_args+=(--package \"$package_name\")", api_driver)
-        self.assertIn('"${workspace_doc_args[@]}" --lib --no-deps', api_driver)
-        self.assertIn(
-            '--package "$api_surface_package" --bin d2b-api-surface '
-            '--no-default-features',
-            api_driver,
-        )
-        self.assertIn(".scratch/rust-test-cache/api-surface-", api_driver)
-        self.assertIn('D2B_API_SURFACE_TARGET_DIR must be an absolute path', api_driver)
-        self.assertIn('D2B_API_SURFACE_UPDATE must be 0 or 1', api_driver)
-        makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
-        self.assertIn("api-surface-pin:", makefile)
-        self.assertIn("D2B_API_SURFACE_UPDATE=1 bash tests/tools/api-surface-json.sh", makefile)
-        self.assertIn('prefix-key: "v2-rust-api-json"', workflow)
-
     def test_release_workflow_is_manual_identity_bound_and_feature_safe(self) -> None:
         workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
         self.assertEqual(
@@ -3122,7 +2872,6 @@ wait
         self.assertIn("--keep-going", aggregate)
         self.assertIn("--output-sync=target", aggregate)
         for leaf in (
-            "test-rust-leaf-api-surface",
             "test-rust-leaf-main-workspace",
             "test-rust-leaf-schema",
             "test-rust-leaf-inventory",
@@ -3141,7 +2890,6 @@ wait
     def test_rust_manifest_preserves_baseline_subsurfaces(self) -> None:
         driver = RUST_DRIVER.read_text(encoding="utf-8")
         baseline_leaves = (
-            "rust-api-surface",
             "rust-main-format",
             "rust-main-clippy",
             "rust-main-workspace-tests",
@@ -3201,35 +2949,6 @@ wait
         self.assertEqual(driver.count("run_fixture_contract_tests\n"), 1)
         self.assertEqual(driver.count("run_cli_contract_tests \"$contract_fixtures\""), 1)
 
-        api_driver = (ROOT / "tests" / "tools" / "api-surface-json.sh").read_text(
-            encoding="utf-8"
-        )
-        self.assertIn(
-            'd2b_mktemp ".scratch/.d2b-api-surface.XXXXXX"',
-            api_driver,
-        )
-        self.assertLess(
-            api_driver.index('mkdir -p "$ROOT/.scratch"'),
-            api_driver.index('d2b_mktemp ".scratch/.d2b-api-surface.XXXXXX"'),
-        )
-        self.assertIn('public_target="$target_root/public-census"', api_driver)
-        self.assertIn('private_target="$target_root/private-census"', api_driver)
-        self.assertIn('public_target="$target_root/census"', api_driver)
-        self.assertIn('private_target="$target_root/census"', api_driver)
-        self.assertIn('rm -rf "$target_root/census"', api_driver)
-        self.assertNotIn('${D2B_RUST_COLD_PROFILE:-0}', api_driver)
-        self.assertIn('if [ "$shared_census" = 1 ]', api_driver)
-        self.assertIn('checker_target="$target_root/checker"', api_driver)
-        self.assertIn(
-            'CARGO_TARGET_DIR="$checker_target" cargo run --quiet --release --locked',
-            api_driver,
-        )
-        self.assertIn('CARGO_BUILD_JOBS="$public_jobs"', api_driver)
-        self.assertIn('CARGO_BUILD_JOBS="$private_jobs"', api_driver)
-        self.assertIn("run_public_census &", api_driver)
-        self.assertIn("run_private_census &", api_driver)
-        self.assertIn('if [ "$api_jobs" -ge 2 ]', api_driver)
-
     def test_fixture_contracts_exclude_policy_binaries_owned_by_test_policy(self) -> None:
         library = (ROOT / "tests" / "lib.sh").read_text(encoding="utf-8")
         policy_driver = (ROOT / "tests" / "test-policy.sh").read_text(
@@ -3281,38 +3000,6 @@ wait
             rust_driver,
         )
         self.assertIn('-E "$fixture_contract_filter"', rust_driver)
-
-    def test_api_surface_scratch_creation_works_without_existing_parent(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="api-scratch-parent.") as raw_dir:
-            root = pathlib.Path(raw_dir) / "repo"
-            root.mkdir()
-            self.assertFalse((root / ".scratch").exists())
-            script = r"""
-set -euo pipefail
-ROOT="$1"
-export ROOT
-. "$2"
-mkdir -p "$ROOT/.scratch"
-scratch=$(d2b_mktemp ".scratch/.d2b-api-surface.XXXXXX")
-test -d "$scratch"
-case "$scratch" in
-  "$ROOT/.scratch/"*) ;;
-  *) exit 90 ;;
-esac
-"""
-            result = subprocess.run(
-                ["bash", "-c", script, "bash", str(root), str(ROOT / "tests/lib.sh")],
-                cwd=ROOT,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                check=False,
-            )
-            self.assertEqual(
-                result.returncode,
-                0,
-                msg=f"scratch allocation failed\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}",
-            )
 
     def test_rust_fixture_leaf_sets_internal_opt_in_but_public_target_stays_closed(self) -> None:
         makefile = MAKEFILE.read_text(encoding="utf-8")
@@ -3396,15 +3083,6 @@ esac
 
     def test_rust_ci_profiles_use_full_runner_budgets_without_duplicate_leaves(self) -> None:
         cases = (
-            (
-                "test-rust-api-surface",
-                {"D2B_RUST_BUDGET": "4"},
-                (
-                    "1 active lane(s), api profile",
-                    "bash tests/test-rust.sh api-surface",
-                ),
-                (),
-            ),
             (
                 "test-rust-main",
                 {
@@ -3528,14 +3206,11 @@ esac
     def test_rust_cold_profile_restores_shared_target_bounded_execution(self) -> None:
         makefile = MAKEFILE.read_text(encoding="utf-8")
         driver = RUST_DRIVER.read_text(encoding="utf-8")
-        api_driver = (ROOT / "tests/tools/api-surface-json.sh").read_text(
-            encoding="utf-8"
-        )
         self.assertIn(
             'if [ "$$profile" = aggregate ] && [ ! -d packages/target ]',
             makefile,
         )
-        cold_block = makefile.split("  cold) \\", 1)[1].split("  api) \\", 1)[0]
+        cold_block = makefile.split("  cold) \\", 1)[1].split("  main) \\", 1)[0]
         self.assertIn('[ "$$active_lanes" -le 4 ] || active_lanes=4;', cold_block)
         self.assertIn("while [ \"$$surplus\" -gt 0 ]", cold_block)
         self.assertIn('quota_fixture="$$runtime_budget";', cold_block)
@@ -3543,8 +3218,8 @@ esac
         self.assertIn('quota_inventory="$$runtime_budget";', cold_block)
         self.assertIn('"D2B_RUST_COLD_PROFILE=$$cold_profile"', makefile)
         cold_order = (
-            "test-rust-leaf-api-surface test-rust-leaf-main-workspace "
-            "test-rust-leaf-fixture-contracts test-rust-leaf-broker "
+            "test-rust-leaf-main-workspace test-rust-leaf-fixture-contracts "
+            "test-rust-leaf-broker "
             "test-rust-leaf-guest-shell-runner test-rust-leaf-no-bash-ast "
             "test-rust-leaf-schema test-rust-leaf-supply-chain "
             "test-rust-leaf-inventory"
@@ -3552,25 +3227,22 @@ esac
         self.assertIn(cold_order, makefile)
         self.assertIn(
             "D2B_RUST_FIXTURE_PREREQS_cold := "
-            "test-rust-leaf-api-surface test-rust-leaf-main-workspace "
-            "test-rust-leaf-broker test-rust-leaf-guest-shell-runner "
+            "test-rust-leaf-main-workspace test-rust-leaf-broker "
+            "test-rust-leaf-guest-shell-runner "
             "test-rust-leaf-no-bash-ast test-rust-leaf-supply-chain",
             makefile,
         )
         self.assertIn('fixture_target_dir="$workspace_target_dir"', driver)
-        self.assertIn('public_target="$target_root/public-census"', api_driver)
-        self.assertIn('private_target="$target_root/private-census"', api_driver)
-        self.assertIn('rm -rf "$target_root/census"', api_driver)
 
     def test_rust_cold_frontier_fits_budgets_one_through_twelve(self) -> None:
         for budget in range(1, 13):
             active_lanes = min(budget, 4)
-            quotas = {"main": 1, "broker": 1, "api": 1}
+            quotas = {"main": 1, "broker": 1}
             for turn in range(budget - active_lanes):
-                quotas[("main", "broker", "api")[turn % 3]] += 1
-            if active_lanes < 3:
+                quotas[("main", "broker")[turn % 2]] += 1
+            if active_lanes < 2:
                 frontier = active_lanes
-            elif active_lanes == 3:
+            elif active_lanes == 2:
                 frontier = sum(quotas.values())
             else:
                 frontier = sum(quotas.values()) + 1
@@ -3607,162 +3279,6 @@ esac
         self.assertIn('"${cargo_profile[@]}"', command)
         self.assertNotIn("--test-threads", command)
         self.assertFalse(command.rstrip().endswith(" --"))
-
-    def test_rust_exit_cleanup_and_nix_reentry_are_executable_without_duplicate_fragments(self) -> None:
-        tree = self.scratch / "rust-reentry-tree"
-        for relative in (
-            "tests/tools",
-            "packages/.cargo",
-        ):
-            (tree / relative).mkdir(parents=True, exist_ok=True)
-        for relative in (
-            "tests/test-rust.sh",
-            "tests/lib.sh",
-            "tests/tools/execution-manifest.pl",
-        ):
-            destination = tree / relative
-            shutil.copy2(ROOT / relative, destination)
-        (tree / "tests/test-rust.sh").chmod(0o755)
-        (tree / "tests/tools/execution-manifest.pl").chmod(0o755)
-
-        for relative in (
-            "packages/Cargo.toml",
-            "packages/Cargo.lock",
-            "packages/deny.toml",
-            "packages/d2b-priv-broker/Cargo.toml",
-            "packages/d2b-priv-broker/Cargo.lock",
-            "packages/d2b-priv-broker/deny.toml",
-            "packages/d2b-guest-shell-runner/Cargo.toml",
-            "packages/d2b-guest-shell-runner/Cargo.lock",
-            "packages/d2b-guest-shell-runner/deny.toml",
-        ):
-            path = tree / relative
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.touch()
-        (tree / "packages/.cargo/config.toml").write_text(
-            "[build]\n",
-            encoding="utf-8",
-        )
-        for relative in (
-            "packages/d2b-priv-broker/.cargo/config.toml",
-            "packages/d2b-guest-shell-runner/.cargo/config.toml",
-        ):
-            config = tree / relative
-            config.parent.mkdir(parents=True, exist_ok=True)
-            config.write_text("[build]\n", encoding="utf-8")
-        (tree / "packages/rust-toolchain.toml").write_text(
-            '[toolchain]\nchannel = "1.97.0"\n',
-            encoding="utf-8",
-        )
-
-        api_surface = tree / "tests/tools/api-surface-json.sh"
-        api_surface.write_text(
-            "#!/usr/bin/env bash\n"
-            'exit "${D2B_TEST_RUST_PROBE_STATUS:?}"\n',
-            encoding="utf-8",
-        )
-        api_surface.chmod(0o755)
-
-        outer_bin = self.scratch / "rust-reentry-bin"
-        child_bin = self.scratch / "rust-reentry-child-bin"
-        outer_bin.mkdir()
-        child_bin.mkdir()
-        nix = outer_bin / "nix"
-        nix.write_text(
-            "#!/bin/sh\n"
-            'while [ "$#" -gt 0 ]; do\n'
-            '  if [ "$1" = "--command" ]; then\n'
-            "    shift\n"
-            '    export PATH="$D2B_TEST_RUST_CHILD_BIN:$PATH"\n'
-            "    unset D2B_CLEANUPS_FILE\n"
-            '    exec "$@"\n'
-            "  fi\n"
-            "  shift\n"
-            "done\n"
-            "exit 91\n",
-            encoding="utf-8",
-        )
-        nix.chmod(0o755)
-        rustup = child_bin / "rustup"
-        rustup.write_text(
-            "#!/bin/sh\n"
-            'if [ "$1" = "toolchain" ]; then exit 0; fi\n'
-            'if [ "$1" = "run" ] && [ "$3" = "cargo" ]; then\n'
-            '  printf "cargo 1.97.0\\n"\n'
-            "  exit 0\n"
-            "fi\n"
-            'if [ "$1" = "run" ] && [ "$3" = "rustc" ]; then\n'
-            '  printf "rustc 1.97.0\\n"\n'
-            "  exit 0\n"
-            "fi\n"
-            "exit 92\n",
-            encoding="utf-8",
-        )
-        rustup.chmod(0o755)
-
-        manifest = self.scratch / "rust-reentry-evidence.json"
-        fragment_dir = self.scratch / ".rust-reentry-evidence.json.fragments"
-        fragment_dir.mkdir(mode=0o700)
-        cleanup_file = self.scratch / "parent-cleanups"
-        cleanup_marker = self.scratch / "parent-cleanup-ran"
-        cleanup_file.write_text(
-            f'printf "%s" cleaned > "{cleanup_marker}"\n',
-            encoding="utf-8",
-        )
-
-        for probe_status, expected_status in ((0, 0), (37, 37)):
-            for fragment in fragment_dir.iterdir():
-                fragment.unlink()
-            cleanup_marker.unlink(missing_ok=True)
-            cleanup_file.write_text(
-                f'printf "%s" cleaned > "{cleanup_marker}"\n',
-                encoding="utf-8",
-            )
-            env = os.environ.copy()
-            env.update(
-                {
-                    "ROOT": str(tree),
-                    "PATH": f"{outer_bin}:/run/current-system/sw/bin:/usr/bin:/bin",
-                    "D2B_EXECUTION_MANIFEST": str(manifest),
-                    "D2B_CLEANUPS_FILE": str(cleanup_file),
-                    "D2B_TEST_RUST_CHILD_BIN": str(child_bin),
-                    "D2B_TEST_RUST_PROBE_STATUS": str(probe_status),
-                    "D2B_LOG": str(self.scratch / f"rust-reentry-{probe_status}.log"),
-                }
-            )
-            result = subprocess.run(
-                ["bash", str(tree / "tests/test-rust.sh"), "api-surface"],
-                cwd=tree,
-                env=env,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                check=False,
-            )
-            self.assertEqual(
-                result.returncode,
-                expected_status,
-                msg=(
-                    f"Rust re-entry probe status mismatch for {probe_status}\n"
-                    f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
-                ),
-            )
-            self.assertTrue(
-                cleanup_marker.is_file(),
-                "the parent EXIT handler did not chain run_cleanups",
-            )
-            fragments = sorted(fragment_dir.glob("fragment.*"))
-            self.assertEqual(
-                len(fragments),
-                1,
-                "nested Rust invocation must be the sole fragment producer",
-            )
-            evidence = json.loads(fragments[0].read_text(encoding="utf-8"))
-            self.assertEqual(evidence["leaf"], "rust-api-surface")
-            self.assertEqual(
-                evidence["run_status"],
-                "passed" if probe_status == 0 else "failed",
-            )
 
     def test_rust_exit_handler_disables_recursion_before_chaining_cleanup(self) -> None:
         driver = RUST_DRIVER.read_text(encoding="utf-8")
@@ -4098,18 +3614,11 @@ esac
 
     def test_rust_runtime_frontier_fits_budgets_one_through_twelve(self) -> None:
         makefile = MAKEFILE.read_text(encoding="utf-8")
-        self.assertIn("quota_api=$$((runtime_budget - lane_count + 1))", makefile)
-        self.assertIn("frontier_quota=$$((quota_api + active_lanes - 1))", makefile)
-        api_quotas = {}
+        self.assertIn("frontier_quota=$$((quota_main + active_lanes - 1))", makefile)
         for budget in range(1, 13):
-            active_lanes = min(budget, 9)
-            api_quota = budget - 8 if budget > 9 else 1
-            frontier = api_quota + active_lanes - 1
+            active_lanes = min(budget, 8)
+            frontier = 1 + active_lanes - 1
             self.assertLessEqual(frontier, budget)
-            api_quotas[budget] = api_quota
-        self.assertEqual(api_quotas[1], 1)
-        self.assertEqual(api_quotas[9], 1)
-        self.assertEqual(api_quotas[12], 4)
 
     def test_rust_nextest_quota_naming_is_consistent(self) -> None:
         makefile = MAKEFILE.read_text(encoding="utf-8")
@@ -4123,7 +3632,6 @@ esac
     def test_rust_leaf_recipes_are_ordinary_and_drop_make_metadata_immediately(self) -> None:
         makefile = MAKEFILE.read_text(encoding="utf-8")
         for leaf in (
-            "test-rust-leaf-api-surface",
             "test-rust-leaf-main-workspace",
             "test-rust-leaf-schema",
             "test-rust-leaf-inventory",
