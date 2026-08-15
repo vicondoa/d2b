@@ -161,7 +161,7 @@ impl SecurityKeyLease {
             .clone()
             .ok_or(SecurityKeyLeaseError::AuthorizationDenied)?;
         self.state = LeaseState::AwaitingLease;
-        let authority_lease = match port.claim_physical_backing(backing) {
+        let authority_lease = match port.claim_physical_backing(&backing) {
             Ok(lease) => lease,
             Err(error) => {
                 self.state = LeaseState::Idle;

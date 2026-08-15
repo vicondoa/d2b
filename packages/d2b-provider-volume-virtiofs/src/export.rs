@@ -9,12 +9,12 @@ use std::fmt;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-use d2b_contracts::v3::ResourceRef;
 use d2b_contracts::v3::execution_policy::BoundedToken;
 use d2b_contracts::v3::volume::{
-    AttachmentAccess, AttachmentSettings, AttachmentTransport, MAX_LAYOUT_PATH_BYTES,
-    VolumeAttachment,
+    AttachmentAccess, AttachmentSettings, AttachmentTransport, VolumeAttachment,
+    MAX_LAYOUT_PATH_BYTES,
 };
+use d2b_contracts::v3::ResourceRef;
 
 use crate::error::VirtiofsExportError;
 
@@ -183,7 +183,7 @@ impl ExportSpec {
         mount_path: impl Into<String>,
     ) -> Result<Self, VirtiofsExportError> {
         let mount_path = mount_path.into();
-        if !valid_mount_path(&mount_path) {
+        if !Self::valid_mount_path(&mount_path) {
             return Err(VirtiofsExportError::InvalidExport);
         }
         self.mount_path = mount_path;
