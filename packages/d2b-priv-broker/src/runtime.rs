@@ -2293,12 +2293,12 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                 req.vm_id.as_str(),
                 req.role_id.as_str(),
             );
-            let intent = resolver
-                .find_runner_intent(&intent_id)
-                .ok_or_else(|| BrokerError::BundleIntentMissing {
+            let intent = resolver.find_runner_intent(&intent_id).ok_or_else(|| {
+                BrokerError::BundleIntentMissing {
                     kind: "runner",
                     intent_id: intent_id.clone(),
-                })?;
+                }
+            })?;
             if intent.vm_name != req.vm_id.as_str()
                 || (intent.role_id != req.role_id.as_str()
                     && !(matches!(
@@ -2312,8 +2312,7 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
             }
             let outcome =
                 backend.open_pidfd(runner_id.as_str(), req.pid, req.expected_start_time_ticks)?;
-            if let Err(error) =
-                register_runner_metadata_from_open(runner_id.as_str(), &req, intent)
+            if let Err(error) = register_runner_metadata_from_open(runner_id.as_str(), &req, intent)
             {
                 remove_runner_registration(runner_id.as_str());
                 return Err(error);
@@ -2396,9 +2395,9 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                     executable_verified: response.executable_verified,
                 },
             )?;
-            Ok(DispatchResult::no_fds(
-                BrokerResponse::ObserveRunner(response),
-            ))
+            Ok(DispatchResult::no_fds(BrokerResponse::ObserveRunner(
+                response,
+            )))
         }
         RealBrokerRequest::PipeWireAudio(req) => {
             let resolver = require_resolver(resolver)?;
@@ -2573,7 +2572,9 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                     node_present: response.node_present,
                 },
             )?;
-            Ok(DispatchResult::no_fds(BrokerResponse::PipeWireAudio(response)))
+            Ok(DispatchResult::no_fds(BrokerResponse::PipeWireAudio(
+                response,
+            )))
         }
         RealBrokerRequest::StartSystemdUnit(req) => {
             let resolver = require_resolver_ref(resolver.map(std::sync::Arc::as_ref))?;
@@ -2669,16 +2670,14 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                     stopped: None,
                 },
             )?;
-            Ok(DispatchResult::no_fds(
-                BrokerResponse::ObserveSystemdUnit(
-                    d2b_contracts::broker_wire::ObserveSystemdUnitResponse {
-                        vm_id: req.vm_id,
-                        role_id: req.role_id,
-                        present: identity.is_some(),
-                        identity,
-                    },
-                ),
-            ))
+            Ok(DispatchResult::no_fds(BrokerResponse::ObserveSystemdUnit(
+                d2b_contracts::broker_wire::ObserveSystemdUnitResponse {
+                    vm_id: req.vm_id,
+                    role_id: req.role_id,
+                    present: identity.is_some(),
+                    identity,
+                },
+            )))
         }
         RealBrokerRequest::OpenSystemdUnitPidfd(req) => {
             let resolver = require_resolver_ref(resolver.map(std::sync::Arc::as_ref))?;
@@ -2740,15 +2739,13 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                     stopped: Some(true),
                 },
             )?;
-            Ok(DispatchResult::no_fds(
-                BrokerResponse::StopSystemdUnit(
-                    d2b_contracts::broker_wire::StopSystemdUnitResponse {
-                        vm_id: req.unit.vm_id,
-                        role_id: req.unit.role_id,
-                        stopped: true,
-                    },
-                ),
-            ))
+            Ok(DispatchResult::no_fds(BrokerResponse::StopSystemdUnit(
+                d2b_contracts::broker_wire::StopSystemdUnitResponse {
+                    vm_id: req.unit.vm_id,
+                    role_id: req.unit.role_id,
+                    stopped: true,
+                },
+            )))
         }
         RealBrokerRequest::OpenZoneStore(req) => {
             // OpenZoneStore resolves one signed storage-row id and returns
@@ -3111,10 +3108,7 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                 outcome.pid,
                 outcome.start_time_ticks,
             ) {
-                cleanup_spawned_runner_after_failure(
-                    runner_id.as_str(),
-                    outcome.pidfd.as_fd(),
-                );
+                cleanup_spawned_runner_after_failure(runner_id.as_str(), outcome.pidfd.as_fd());
                 return Err(error);
             }
             // On the success path, emit the terminal PrepareSwtpmDir
@@ -3135,10 +3129,7 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                     tracing_span_id_str(req.tracing_span_id.as_ref()),
                     OperationFields::PrepareSwtpmDir(swtpm_audit.clone()),
                 ) {
-                    cleanup_spawned_runner_after_failure(
-                        runner_id.as_str(),
-                        outcome.pidfd.as_fd(),
-                    );
+                    cleanup_spawned_runner_after_failure(runner_id.as_str(), outcome.pidfd.as_fd());
                     return Err(error);
                 }
             }
@@ -3161,10 +3152,7 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                     runtime_allocations: req.runtime_allocations.clone(),
                 },
             ) {
-                cleanup_spawned_runner_after_failure(
-                    runner_id.as_str(),
-                    outcome.pidfd.as_fd(),
-                );
+                cleanup_spawned_runner_after_failure(runner_id.as_str(), outcome.pidfd.as_fd());
                 return Err(error);
             }
             let console_fd_index = if outcome.extra_response_fds.is_empty() {
@@ -5726,9 +5714,7 @@ fn runner_signal_name(signal: d2b_contracts::broker_wire::RunnerSignal) -> &'sta
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn systemd_domain_name(
-    domain: d2b_contracts::broker_wire::SystemdUnitDomain,
-) -> &'static str {
+fn systemd_domain_name(domain: d2b_contracts::broker_wire::SystemdUnitDomain) -> &'static str {
     match domain {
         d2b_contracts::broker_wire::SystemdUnitDomain::System => "system",
         d2b_contracts::broker_wire::SystemdUnitDomain::User => "user",
@@ -5906,8 +5892,8 @@ fn discover_runner_candidate(
     intent: &d2b_core::bundle_resolver::ResolvedRunnerIntent,
 ) -> Result<d2b_contracts::broker_wire::ObserveRunnerResponse, BrokerError> {
     let mut candidate = None;
-    let entries = fs::read_dir("/proc")
-        .map_err(|error| BrokerError::LiveHandler(error.to_string()))?;
+    let entries =
+        fs::read_dir("/proc").map_err(|error| BrokerError::LiveHandler(error.to_string()))?;
     for entry in entries {
         let entry = entry.map_err(|error| BrokerError::LiveHandler(error.to_string()))?;
         let name = entry.file_name();
@@ -6267,10 +6253,7 @@ trait DispatchBackend {
         state_dir: &std::path::Path,
         helper_path: &std::path::Path,
         request: &d2b_contracts::host_generation::ApplyHostGenerationHandoff,
-    ) -> Result<
-        d2b_contracts::broker_wire::ApplyHostGenerationHandoffResponse,
-        BrokerError,
-    >;
+    ) -> Result<d2b_contracts::broker_wire::ApplyHostGenerationHandoffResponse, BrokerError>;
 
     fn run_gc(
         &self,
@@ -6768,16 +6751,9 @@ impl DispatchBackend for LiveDispatchBackend {
         state_dir: &std::path::Path,
         helper_path: &std::path::Path,
         request: &d2b_contracts::host_generation::ApplyHostGenerationHandoff,
-    ) -> Result<
-        d2b_contracts::broker_wire::ApplyHostGenerationHandoffResponse,
-        BrokerError,
-    > {
-        crate::ops::host_generation_handoff::apply_with_helper(
-            state_dir,
-            helper_path,
-            request,
-        )
-        .map_err(|error| BrokerError::LiveHandler(error.to_string()))
+    ) -> Result<d2b_contracts::broker_wire::ApplyHostGenerationHandoffResponse, BrokerError> {
+        crate::ops::host_generation_handoff::apply_with_helper(state_dir, helper_path, request)
+            .map_err(|error| BrokerError::LiveHandler(error.to_string()))
     }
 
     fn run_gc(
@@ -10792,10 +10768,7 @@ fn remove_and_notify(
 /// runner identity behind: the caller will retry the lifecycle operation and
 /// the next attempt must be able to reserve the same runner id.
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn cleanup_spawned_runner_after_failure(
-    runner_id: &str,
-    pidfd: std::os::fd::BorrowedFd<'_>,
-) {
+fn cleanup_spawned_runner_after_failure(runner_id: &str, pidfd: std::os::fd::BorrowedFd<'_>) {
     remove_runner_metadata(runner_id);
     if let Err(err) = crate::sys::pidfd_sys::pidfd_send_signal(pidfd, libc::SIGKILL) {
         tracing::debug!(
@@ -10806,7 +10779,7 @@ fn cleanup_spawned_runner_after_failure(
     }
 
     use nix::errno::Errno;
-    use nix::sys::wait::{waitid, Id, WaitPidFlag};
+    use nix::sys::wait::{Id, WaitPidFlag, waitid};
     match waitid(Id::PIDFd(pidfd), WaitPidFlag::WEXITED) {
         Ok(_) | Err(Errno::ECHILD) => {}
         Err(err) => {
@@ -12202,7 +12175,8 @@ mod tests {
             &self,
             _resolver: &BundleResolver,
             _request: &d2b_contracts::broker_wire::StartTransientUnitRequest,
-        ) -> Result<(d2b_contracts::broker_wire::SystemdUnitIdentity, OwnedFd), BrokerError> {
+        ) -> Result<(d2b_contracts::broker_wire::SystemdUnitIdentity, OwnedFd), BrokerError>
+        {
             Err(BrokerError::Unimplemented {
                 operation: "StartSystemdUnit",
                 target_wave: "W6",
@@ -12235,7 +12209,8 @@ mod tests {
             &self,
             _resolver: &BundleResolver,
             _request: &d2b_contracts::broker_wire::OpenSystemdUnitPidfdRequest,
-        ) -> Result<(d2b_contracts::broker_wire::SystemdUnitIdentity, OwnedFd), BrokerError> {
+        ) -> Result<(d2b_contracts::broker_wire::SystemdUnitIdentity, OwnedFd), BrokerError>
+        {
             Err(BrokerError::Unimplemented {
                 operation: "OpenSystemdUnitPidfd",
                 target_wave: "W6",
@@ -12355,10 +12330,8 @@ mod tests {
             state_dir: &std::path::Path,
             helper_path: &std::path::Path,
             request: &d2b_contracts::host_generation::ApplyHostGenerationHandoff,
-        ) -> Result<
-            d2b_contracts::broker_wire::ApplyHostGenerationHandoffResponse,
-            BrokerError,
-        > {
+        ) -> Result<d2b_contracts::broker_wire::ApplyHostGenerationHandoffResponse, BrokerError>
+        {
             crate::ops::host_generation_handoff::apply_with_helper(state_dir, helper_path, request)
                 .map_err(|error| BrokerError::LiveHandler(error.to_string()))
         }

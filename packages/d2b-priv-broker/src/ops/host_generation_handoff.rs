@@ -13,8 +13,7 @@ use std::sync::{Mutex, OnceLock};
 
 use d2b_contracts::broker_wire::ApplyHostGenerationHandoffResponse;
 use d2b_contracts::host_generation::{
-    ApplyHostGenerationHandoff, HandoffCoordinator, HandoffError, HandoffState,
-    target_fingerprint,
+    ApplyHostGenerationHandoff, HandoffCoordinator, HandoffError, HandoffState, target_fingerprint,
 };
 use d2b_host::host_generation::{
     ActivationHelperOutcome, ActivationHelperRequest, ActivationHelperResponse,
@@ -72,11 +71,13 @@ impl HandoffEffect for SuccessfulHandoffEffect {
         &self,
         request: &ApplyHostGenerationHandoff,
     ) -> Result<ActivationHelperOutcome, HandoffOperationError> {
-        Ok(if request.intent.activation_mode == d2b_contracts::v3::ActivationMode::Adopt {
-            ActivationHelperOutcome::Adopted
-        } else {
-            ActivationHelperOutcome::Succeeded
-        })
+        Ok(
+            if request.intent.activation_mode == d2b_contracts::v3::ActivationMode::Adopt {
+                ActivationHelperOutcome::Adopted
+            } else {
+                ActivationHelperOutcome::Succeeded
+            },
+        )
     }
 }
 
@@ -162,7 +163,11 @@ pub fn apply_with_helper(
     helper_path: &Path,
     request: &ApplyHostGenerationHandoff,
 ) -> Result<ApplyHostGenerationHandoffResponse, HandoffOperationError> {
-    apply_with_effect(state_dir, request, &ActivationHelperEffect::new(helper_path))
+    apply_with_effect(
+        state_dir,
+        request,
+        &ActivationHelperEffect::new(helper_path),
+    )
 }
 
 /// Apply or replay one deterministic handoff for compatibility callers.
@@ -178,9 +183,7 @@ fn apply_locked<E: HandoffEffect>(
     request: &ApplyHostGenerationHandoff,
     effect: &E,
 ) -> Result<ApplyHostGenerationHandoffResponse, HandoffOperationError> {
-    request
-        .validate()
-        .map_err(HandoffOperationError::Invalid)?;
+    request.validate().map_err(HandoffOperationError::Invalid)?;
     let fingerprint = target_fingerprint(
         &request.target,
         &request.intent.system_artifact_id,
@@ -332,8 +335,7 @@ fn sync_parent(path: &Path) -> io::Result<()> {
 mod tests {
     use super::*;
     use d2b_contracts::host_generation::{
-        HandoffCallerRole, HostGenerationHandoffIntent,
-        SourceGenerationCompatibilityFloorV1,
+        HandoffCallerRole, HostGenerationHandoffIntent, SourceGenerationCompatibilityFloorV1,
     };
     use d2b_contracts::v3::{ActivationMode, ArtifactId, ResourceRef};
 
@@ -350,8 +352,7 @@ mod tests {
                 target_generation: generation,
                 system_artifact_id: artifact,
                 activation_mode: ActivationMode::Switch,
-                compatibility: SourceGenerationCompatibilityFloorV1::new(7, fingerprint)
-                    .unwrap(),
+                compatibility: SourceGenerationCompatibilityFloorV1::new(7, fingerprint).unwrap(),
             },
         }
     }
@@ -374,10 +375,8 @@ mod tests {
 
     #[test]
     fn target_substitution_is_refused_before_journal_mutation() {
-        let directory = PathBuf::from("target").join(format!(
-            "d2b-handoff-substitution-{}",
-            std::process::id()
-        ));
+        let directory = PathBuf::from("target")
+            .join(format!("d2b-handoff-substitution-{}", std::process::id()));
         let mut request = request();
         request.target = ResourceRef::parse("Host/other").unwrap();
         assert!(matches!(

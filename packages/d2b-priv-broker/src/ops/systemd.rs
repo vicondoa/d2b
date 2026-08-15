@@ -19,9 +19,9 @@ use d2b_contracts::broker_wire::{
 };
 use d2b_core::bundle_resolver::{BundleResolver, ResolvedRunnerIntent};
 use sha2::{Digest, Sha256};
-use zbus::blocking::{connection, Connection, Proxy};
-use zbus::zvariant::{OwnedObjectPath, Value};
 use zbus::Address;
+use zbus::blocking::{Connection, Proxy, connection};
+use zbus::zvariant::{OwnedObjectPath, Value};
 
 const SYSTEMD_DESTINATION: &str = "org.freedesktop.systemd1";
 const SYSTEMD_MANAGER_PATH: &str = "/org/freedesktop/systemd1";
@@ -527,21 +527,24 @@ mod tests {
         let name = unit_name(&request());
         assert!(name.starts_with("d2b-process-"));
         assert!(name.ends_with(".service"));
-        assert!(name
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'.'));
+        assert!(
+            name.bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'.')
+        );
         assert_eq!(name, unit_name(&request()));
     }
 
     #[test]
     fn cgroup_identity_rejects_foreign_unit_leaves() {
-        assert!(cgroup_identity(
-            "/d2b.slice/d2b-process-good.service",
-            "d2b-process-good.service",
-            SystemdUnitDomain::System,
-            1000,
-        )
-        .is_ok());
+        assert!(
+            cgroup_identity(
+                "/d2b.slice/d2b-process-good.service",
+                "d2b-process-good.service",
+                SystemdUnitDomain::System,
+                1000,
+            )
+            .is_ok()
+        );
         assert!(matches!(
             cgroup_identity(
                 "/d2b.slice/foreign.service",
@@ -555,13 +558,15 @@ mod tests {
 
     #[test]
     fn cgroup_identity_binds_user_manager_and_slice() {
-        assert!(cgroup_identity(
-            "/user.slice/user-1000.slice/user@1000.service/app.slice/d2b-process-good.service",
-            "d2b-process-good.service",
-            SystemdUnitDomain::User,
-            1000,
-        )
-        .is_ok());
+        assert!(
+            cgroup_identity(
+                "/user.slice/user-1000.slice/user@1000.service/app.slice/d2b-process-good.service",
+                "d2b-process-good.service",
+                SystemdUnitDomain::User,
+                1000,
+            )
+            .is_ok()
+        );
         assert!(matches!(
             cgroup_identity(
                 "/user.slice/user-1001.slice/user@1001.service/app.slice/d2b-process-good.service",
