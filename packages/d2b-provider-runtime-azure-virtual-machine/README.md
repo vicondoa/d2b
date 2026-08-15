@@ -1,62 +1,54 @@
 # `d2b-provider-runtime-azure-virtual-machine`
 
-This is the canonical crate root for
-`Provider/runtime-azure-virtual-machine`. It is a compile-safe scaffold;
-semantic Provider behavior is intentionally not present here.
-
-See [Create a Provider](../../docs/how-to/create-provider.md) and the
-[runtime-azure-virtual-machine dossier](../../docs/specs/providers/ADR-046-provider-runtime-azure-virtual-machine.md)
-for the implementation contract.
+Canonical implementation of `Provider/runtime-azure-virtual-machine`.
 
 ## Provider identity
 
-| Field | Value |
-| --- | --- |
-| Provider name | `runtime-azure-virtual-machine` |
-| Provider reference | `Provider/runtime-azure-virtual-machine` |
-| Package | `packages/d2b-provider-runtime-azure-virtual-machine/` |
+The implementation identifier is `azure-vm`. It reconciles cloud-backed Guest
+resources through an opaque Azure effect port.
 
 ## Config schema
 
-The Provider-specific configuration is defined by the
-runtime-azure-virtual-machine dossier. This scaffold does not publish a
-configuration schema.
+`AzureVmConfig` requires a gateway Guest execution boundary and an ARM
+Credential ref. `AzureVmGuestSettings` validates placement, VM shape, bounded
+data disks, bootstrap delivery, and operator tag rules.
 
 ## Exported resource types
 
-The resource types are defined by the dossier. This scaffold exports no
-resource implementation.
+The Provider reconciles `Guest`. Azure VM resources and operation handles stay
+inside the effect adapter and are represented externally only by digests.
 
 ## Controllers / services / workers / binaries
 
-None are implemented in this scaffold. Controllers, services, workers, and
-binaries belong to the owning Provider implementation.
+`AzureVmController` implements non-blocking LRO provisioning, bootstrap
+delivery, restart adoption, and finalization. `BootstrapService` performs the
+one-time PSK admission transition to enrolled KK.
 
 ## Placement and dependencies
 
-No runtime placement is declared, and the scaffold has no workspace
-dependencies.
+ARM credentials and bootstrap state are gateway-Guest local. The Host does not
+hold realm credentials, ARM URLs, PSKs, or remote node registries.
 
 ## RBAC requirements
 
-The scaffold requests no permissions and performs no resource or effect
-operations.
+Every operation has a deterministic idempotency key and uses injected typed
+effect and credential ports. Finalizers remain installed through ambiguous or
+incomplete deletion.
 
 ## Security posture
 
-No host, broker, filesystem, network, process, credential, or device effect is
-reachable from this scaffold.
+Operation handles, VM handles, tags, PSKs, and tokens have redacted Debug
+implementations. Bootstrap PSKs are zeroized and single-use.
 
 ## State and telemetry
 
-The scaffold owns no state and emits no telemetry.
+Guest status stores only bounded lifecycle and digest projections. ARM LRO
+polling is requeue-driven, and metric labels are a closed semantic allowlist.
 
 ## Build and test
 
-```bash
-cargo check -p d2b-provider-runtime-azure-virtual-machine
+```text
 cargo test -p d2b-provider-runtime-azure-virtual-machine
 ```
 
-The current test targets are structural compile checks. Executable scenarios
-belong to the owning implementation.
+Tests use scripted effect ports and do not contact Azure or a host daemon.

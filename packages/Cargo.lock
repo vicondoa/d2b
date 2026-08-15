@@ -994,6 +994,7 @@ dependencies = [
 name = "d2b-contracts"
 version = "0.0.0-bootstrap"
 dependencies = [
+ "async-trait",
  "d2b-core",
  "d2b-realm-core",
  "protobuf",
@@ -1091,19 +1092,24 @@ dependencies = [
  "base64",
  "chacha20poly1305",
  "d2b-gateway",
- "d2b-provider-aca",
- "d2b-provider-relay",
+ "d2b-provider-runtime-azure-container-apps",
+ "d2b-provider-transport-azure-relay",
  "d2b-realm-core",
  "d2b-realm-provider",
+ "futures-util",
  "getrandom 0.2.17",
  "libc",
+ "rustls",
+ "rustls-pki-types",
  "serde",
  "serde_json",
  "sha2",
  "tempfile",
  "tokio",
+ "tokio-tungstenite",
  "tracing",
  "tracing-subscriber",
+ "webpki-roots 0.26.11",
 ]
 
 [[package]]
@@ -1131,6 +1137,7 @@ dependencies = [
  "async-trait",
  "d2b-contracts",
  "d2b-core",
+ "d2b-host-argv",
  "libc",
  "miniz_oxide",
  "nix 0.29.0",
@@ -1149,6 +1156,14 @@ name = "d2b-host-activation-helper"
 version = "0.0.0-bootstrap"
 dependencies = [
  "libc",
+]
+
+[[package]]
+name = "d2b-host-argv"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -1184,23 +1199,6 @@ dependencies = [
  "d2b-contracts",
  "d2b-zone-routing",
  "tokio",
-]
-
-[[package]]
-name = "d2b-provider-aca"
-version = "0.0.0-bootstrap"
-dependencies = [
- "async-trait",
- "azure_core",
- "azure_identity",
- "d2b-realm-core",
- "d2b-realm-provider",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "sha2",
- "tokio",
- "tracing",
 ]
 
 [[package]]
@@ -1323,39 +1321,50 @@ dependencies = [
 ]
 
 [[package]]
-name = "d2b-provider-relay"
+name = "d2b-provider-runtime-azure-container-apps"
 version = "0.0.0-bootstrap"
 dependencies = [
  "async-trait",
- "base64",
+ "azure_core",
+ "azure_identity",
+ "d2b-contracts",
  "d2b-realm-core",
  "d2b-realm-provider",
- "futures-util",
- "hmac",
- "libc",
- "rustls",
- "rustls-pki-types",
+ "reqwest 0.12.28",
+ "serde",
  "serde_json",
  "sha2",
- "tempfile",
  "tokio",
- "tokio-tungstenite",
  "tracing",
- "urlencoding",
- "webpki-roots 0.26.11",
 ]
-
-[[package]]
-name = "d2b-provider-runtime-azure-container-apps"
-version = "0.0.0-bootstrap"
 
 [[package]]
 name = "d2b-provider-runtime-azure-virtual-machine"
 version = "0.0.0-bootstrap"
+dependencies = [
+ "async-trait",
+ "base64",
+ "d2b-contracts",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "zeroize",
+]
 
 [[package]]
 name = "d2b-provider-runtime-cloud-hypervisor"
 version = "0.0.0-bootstrap"
+dependencies = [
+ "async-trait",
+ "d2b-contracts",
+ "d2b-host-argv",
+ "d2b-process-conformance",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+]
 
 [[package]]
 name = "d2b-provider-runtime-qemu-media"
@@ -1426,6 +1435,21 @@ dependencies = [
 [[package]]
 name = "d2b-provider-transport-azure-relay"
 version = "0.0.0-bootstrap"
+dependencies = [
+ "async-trait",
+ "base64",
+ "d2b-contracts",
+ "d2b-realm-core",
+ "d2b-realm-provider",
+ "hmac",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "tokio",
+ "urlencoding",
+ "zeroize",
+]
 
 [[package]]
 name = "d2b-provider-transport-unix"
@@ -1705,13 +1729,13 @@ dependencies = [
  "d2b-process",
  "d2b-process-conformance",
  "d2b-provider",
- "d2b-provider-aca",
  "d2b-provider-clipboard-wayland",
  "d2b-provider-device-tpm",
  "d2b-provider-display-wayland",
  "d2b-provider-notification-desktop",
- "d2b-provider-relay",
+ "d2b-provider-runtime-azure-container-apps",
  "d2b-provider-supervisor",
+ "d2b-provider-transport-azure-relay",
  "d2b-realm-core",
  "d2b-realm-provider",
  "d2b-realm-router",

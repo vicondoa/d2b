@@ -12,24 +12,29 @@ doctest = false
 workspace = true
 
 # Top-level gateway composition (ADR 0032): ties the codec-neutral
-# d2b-gateway orchestrator/handshake to the concrete Azure Relay transport
-# (d2b-provider-relay) and the ACA workload provider (d2b-provider-aca).
+# d2b-gateway orchestrator/handshake to the canonical Azure Relay transport
+# and ACA runtime Provider crates.
 # This is the only crate that depends on both the gateway and the providers; it
 # is where the per-session handshake becomes the relay prologue that gates the
 # display byte stream. Nothing else depends on it (it is the composition root
 # consumed by the gateway-mode daemon).
 [dependencies]
 d2b-gateway = { path = "../d2b-gateway", version = "0.0.0-bootstrap" }
-d2b-provider-relay = { path = "../d2b-provider-relay", version = "0.0.0-bootstrap" }
-d2b-provider-aca = { path = "../d2b-provider-aca", version = "0.0.0-bootstrap" }
+futures-util = "0.3"
+d2b-provider-transport-azure-relay = { path = "../d2b-provider-transport-azure-relay", version = "0.0.0-bootstrap" }
+d2b-provider-runtime-azure-container-apps = { path = "../d2b-provider-runtime-azure-container-apps", version = "0.0.0-bootstrap" }
 d2b-realm-core = { path = "../d2b-realm-core", version = "0.0.0-bootstrap" }
 d2b-realm-provider = { path = "../d2b-realm-provider", version = "0.0.0-bootstrap" }
 async-trait = "0.1"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync", "time"] }
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
+webpki-roots = "0.26"
 base64 = "0.22"
 chacha20poly1305 = "0.10"
 getrandom = "0.2"
 libc = "0.2"
+rustls = { version = "0.23", features = ["ring"] }
+rustls-pki-types = "1"
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }

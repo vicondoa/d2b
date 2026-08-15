@@ -1,7 +1,11 @@
-# Integration fixtures
+# Azure VM Provider integration
 
-This directory reserves the integration fixture surface for
-`Provider/runtime-azure-virtual-machine`. The current crate root has no
-executable integration behavior. The placeholder scenario declaration is
-required by the repository layout policy; replace it with the dossier's real
-fixture when implementation lands.
+The normal suite is hermetic and uses injected effect and credential ports:
+
+```text
+cargo test -p d2b-provider-runtime-azure-virtual-machine
+```
+
+No test requires Azure credentials, ARM access, a host socket, or a running
+daemon. Live ARM and VM enrollment checks are manual-only and must be gated by
+the deployment harness.

@@ -8,6 +8,7 @@ pub mod broker_wire;
 pub mod generated;
 pub mod generation_bundle;
 pub mod guest_auth;
+pub mod provider_effects;
 pub mod guest_proto {
     pub use crate::generated::guest_control::*;
 }
