@@ -2,10 +2,11 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::OnceLock;
 
 use serde_json::Value;
 
-const BAZEL_TEST_TOOL_PATH: &str = "/run/current-system/sw/bin:/bin:/usr/bin";
+const EXPECTED_BAZEL_VERSION: &str = "bazel 9.2.0";
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -21,9 +22,82 @@ fn read_repo_file(relative: &str) -> String {
 }
 
 fn bazel_binary() -> PathBuf {
-    std::env::var_os("D2B_BAZEL_BIN")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("bazel"))
+    static BAZEL: OnceLock<PathBuf> = OnceLock::new();
+    BAZEL.get_or_init(resolve_bazel_binary).clone()
+}
+
+fn resolve_bazel_binary() -> PathBuf {
+    if let Some(path) = std::env::var_os("D2B_BAZEL_BIN").map(PathBuf::from) {
+        assert_exact_bazel(&path, "D2B_BAZEL_BIN");
+        return path;
+    }
+
+    let ambient = PathBuf::from("bazel");
+    if bazel_version(&ambient).as_deref() == Some(EXPECTED_BAZEL_VERSION) {
+        return ambient;
+    }
+
+    if let Some(path) = nix_bazel_provider() {
+        assert_exact_bazel(&path, "the repository Bazel provider");
+        return path;
+    }
+
+    panic!(
+        "Bazel {EXPECTED_BAZEL_VERSION} is required, but the ambient Bazel is unavailable or \
+         wrong; run `nix develop .#bazel -c cargo test --manifest-path packages/Cargo.toml \
+         -p xtask --test bazel_compatibility` or set D2B_BAZEL_BIN to an exact provider"
+    );
+}
+
+fn bazel_version(path: &Path) -> Option<String> {
+    let output = Command::new(path).arg("--version").output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+}
+
+fn assert_exact_bazel(path: &Path, source: &str) {
+    let version = bazel_version(path).unwrap_or_else(|| {
+        panic!(
+            "Bazel provider from {source} could not execute: {}",
+            path.display()
+        )
+    });
+    assert_eq!(
+        version, EXPECTED_BAZEL_VERSION,
+        "Bazel provider from {source} must be exactly {EXPECTED_BAZEL_VERSION}"
+    );
+}
+
+fn nix_bazel_provider() -> Option<PathBuf> {
+    let system = match std::env::consts::ARCH {
+        "x86_64" => "x86_64-linux",
+        "aarch64" => "aarch64-linux",
+        _ => return None,
+    };
+    let attribute = format!(".#packages.{system}.bazel-9_2_0");
+    let output = Command::new("nix")
+        .args([
+            "build",
+            "--no-link",
+            "--no-write-lock-file",
+            "--print-out-paths",
+            &attribute,
+        ])
+        .current_dir(repo_root())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let output_stdout = String::from_utf8_lossy(&output.stdout);
+    let store_path = output_stdout
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .last()?;
+    let bazel = PathBuf::from(store_path.trim()).join("bin/bazel");
+    bazel.is_file().then_some(bazel)
 }
 
 fn bazel_output_user_root() -> PathBuf {
@@ -43,8 +117,18 @@ fn bazel_shell_executable() -> PathBuf {
     repo_root().join("tests/fixtures/bazel/compat/tools/bazel-shell")
 }
 
+fn bazel_test_tool_path() -> String {
+    std::env::var("D2B_BAZEL_TEST_PATH").unwrap_or_else(|_| {
+        panic!(
+            "D2B_BAZEL_TEST_PATH is required for upstream Bazel shell/test scripts; \
+             run the compatibility command inside `nix develop .#bazel`"
+        )
+    })
+}
+
 fn run_bazel_output(arguments: &[&str]) -> std::process::Output {
     let mut command = Command::new(bazel_binary());
+    let tool_path = bazel_test_tool_path();
     command
         .current_dir(repo_root())
         .arg(format!(
@@ -52,6 +136,7 @@ fn run_bazel_output(arguments: &[&str]) -> std::process::Output {
             bazel_output_user_root().display()
         ))
         .arg(arguments.first().expect("Bazel command is non-empty"))
+        .arg(format!("--action_env=PATH={tool_path}"))
         .arg("--lockfile_mode=error")
         .arg("--repo_contents_cache=")
         .arg("--symlink_prefix=.scratch/bazel-")
@@ -60,12 +145,7 @@ fn run_bazel_output(arguments: &[&str]) -> std::process::Output {
             bazel_shell_executable().display()
         ));
     if arguments.first() == Some(&"test") {
-        command.arg(format!("--test_env=PATH={BAZEL_TEST_TOOL_PATH}"));
-    }
-    if arguments.first() == Some(&"run") {
-        command.arg(format!(
-            "--run_under=/run/current-system/sw/bin/env PATH={BAZEL_TEST_TOOL_PATH}"
-        ));
+        command.arg(format!("--test_env=PATH={tool_path}"));
     }
     command.args(&arguments[1..]);
     command
@@ -164,6 +244,61 @@ fn protobuf_controls_are_pinned_and_reject_archived_or_direct_compilers() {
 }
 
 #[test]
+fn nix_surface_pins_the_official_bazel_9_2_0_provider_for_supported_systems() {
+    let package = read_repo_file("pkgs/bazel-9.2.0/default.nix");
+    for required in [
+        "version = \"9.2.0\"",
+        "x86_64-linux",
+        "aarch64-linux",
+        "https://github.com/bazelbuild/bazel/releases/download/9.2.0/bazel-9.2.0-linux-x86_64",
+        "https://github.com/bazelbuild/bazel/releases/download/9.2.0/bazel-9.2.0-linux-arm64",
+        "7668a95db1250f12c40407251e4e203b4ec8bf39bc495d2f485b2d8c99048694",
+        "049dd21f40ad979db11c3ee68c96a42ce75f1185e69ac61ab20de1501427a410",
+        "dontUnpack = true",
+        "dontStrip = true",
+        "dontPatchELF = true",
+        "fetchurl",
+    ] {
+        assert!(
+            package.contains(required),
+            "the Bazel provider is missing `{required}`"
+        );
+    }
+    for forbidden in [
+        "toolchains_protoc",
+        "rules_proto",
+        "applyPatches",
+        "overrideAttrs",
+        "patches =",
+    ] {
+        assert!(
+            !package.contains(forbidden),
+            "the Bazel provider must not use `{forbidden}`"
+        );
+    }
+
+    let flake = read_repo_file("flake.nix");
+    for required in [
+        "bazel920For = system:",
+        "import ./pkgs/bazel-9.2.0",
+        "bazel-9_2_0 = bazel920",
+        "bazel = pkgs.mkShellNoCC",
+        "export D2B_BAZEL_BIN=",
+        "export D2B_BAZEL_TEST_PATH=",
+        "bazel-9_2_0-provider-smoke",
+    ] {
+        assert!(
+            flake.contains(required),
+            "flake.nix is missing Bazel provider wiring `{required}`"
+        );
+    }
+    assert!(
+        !flake.contains("/run/current-system/sw/bin") && !flake.contains("--test_env=PATH=$PATH"),
+        "Bazel compatibility wiring must not capture host PATH fragments"
+    );
+}
+
+#[test]
 fn compatibility_fixture_declares_prebuilt_protoc_probe_without_cpp_targets() {
     let build = read_repo_file("tests/fixtures/bazel/compat/proto/BUILD.bazel");
     assert!(
@@ -199,7 +334,7 @@ fn exact_bazel_version_resolves_prebuilt_protoc_without_external_cpp() {
     );
     assert_eq!(
         String::from_utf8_lossy(&version.stdout).trim(),
-        "bazel 9.2.0",
+        EXPECTED_BAZEL_VERSION,
         "U1 must analyze the fixture with the exact pinned Bazel version"
     );
 
@@ -294,7 +429,7 @@ fn exact_bazel_version_analyzes_and_runs_the_upstream_compatibility_fixture() {
     );
     assert_eq!(
         String::from_utf8_lossy(&version.stdout).trim(),
-        "bazel 9.2.0",
+        EXPECTED_BAZEL_VERSION,
         "U1 must run the exact pinned Bazel version"
     );
 
@@ -369,11 +504,12 @@ fn fixture_shell_adapter_is_checked_in_and_does_not_use_host_path() {
         "the fixture shell adapter must delegate ordinary shell execution to Bash"
     );
     assert!(
-        shell.contains("TOOL_DIR=") && shell.contains("/run/current-system/sw/bin:/bin:/usr/bin"),
+        shell.contains("TOOL_DIR=")
+            && shell.contains("PATH=\"$TOOL_DIR/bin:${PATH:?PATH is required}\""),
         "the fixture shell adapter must use a fixed tool root"
     );
     assert!(
-        !shell.contains("$PATH") && !shell.contains("env |") && !shell.contains("export -f"),
+        !shell.contains("env |") && !shell.contains("export -f"),
         "the fixture shell adapter must not import host PATH fragments"
     );
 }

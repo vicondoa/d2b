@@ -1,6 +1,7 @@
 # Flake-check pin: full names of flake.checks.x86_64-linux.*.
 # The hosted-runner dynamic matrix may intentionally filter this set.
 # Regenerate with: make flake-matrix-pin
+bazel-9_2_0-provider-smoke
 eval-fixture-contracts
 eval-graphics
 eval-minimal

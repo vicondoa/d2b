@@ -53,6 +53,10 @@
       nixpkgsFor = forAllSystems (system: import nixpkgs { inherit system; });
       gasCityNixpkgsFor =
         forAllSystems (system: import nixpkgs-gas-city { inherit system; });
+      bazel920For = system:
+        import ./pkgs/bazel-9.2.0 {
+          pkgs = nixpkgsFor.${system};
+        };
 
       # The current Gas City source and the package-only nixpkgs input both
       # require Go 1.26.5. Keep the package set explicit so a future update
@@ -364,6 +368,7 @@
       devShells = forAllSystems (system: let
         pkgs = nixpkgsFor.${system};
         gasCityContributor = gasCityContributorFor system;
+        bazel920 = bazel920For system;
       in {
         default = pkgs.mkShell {
           name = "d2b-dev";
@@ -400,6 +405,25 @@
             jq
           ];
         };
+        # Focused U1 shell: the compatibility proof must use the exact
+        # official Bazel release rather than an ambient or Gas City Bazel.
+        bazel = pkgs.mkShellNoCC {
+          name = "d2b-bazel-compat";
+          packages = with pkgs; [
+            bazel920
+            bash
+            coreutils
+            findutils
+            gnugrep
+            gnused
+            rustup
+          ];
+          shellHook = ''
+            export D2B_BAZEL_BIN="${bazel920}/bin/bazel"
+            export D2B_BAZEL_TEST_PATH="${pkgs.bash}/bin:${pkgs.coreutils}/bin:${pkgs.findutils}/bin:${pkgs.gnugrep}/bin:${pkgs.gnused}/bin"
+            echo "d2b Bazel compatibility shell: $(${bazel920}/bin/bazel --version)"
+          '';
+        };
         # Contributor shell: the closure is the only source of executable
         # inputs, so entering this shell does not depend on the host PATH.
         gas-city = pkgs.mkShell {
@@ -415,6 +439,7 @@
 
       packages = forAllSystems (system: let
         pkgs = nixpkgsFor.${system};
+        bazel920 = bazel920For system;
         gascity = gascityFor system;
         dolt = doltFor system;
         beads = beadsFor system;
@@ -612,6 +637,7 @@
         signoz = import ./pkgs/signoz { inherit pkgs; };
         signozOtelCollector = import ./pkgs/signoz-otel-collector { inherit pkgs; };
         signozSchemaMigrator = import ./pkgs/signoz-schema-migrator { inherit pkgs; };
+        bazel-9_2_0 = bazel920;
         inherit gascity dolt beads copilot gasCityContributor;
         gas-city-contributor = gasCityContributor;
       });
@@ -721,6 +747,7 @@
       # local to this check.
       checks = forAllSystems (system: let
         pkgs = nixpkgsFor.${system};
+        bazel920 = bazel920For system;
         d2bModule = import ./nixos-modules { inherit inputs; };
         mkEval = modules: nixpkgs.lib.nixosSystem {
           inherit system;
@@ -1281,6 +1308,10 @@
         # Unlike the existing eval-only fixture checks, this one deliberately
         # realizes every pinned executable and the immutable pack closure.
         gas-city-package-smoke = gasCityPackageSmokeFor system;
+        bazel-9_2_0-provider-smoke =
+          import ./tests/unit/smoke/bazel-provider.nix {
+            inherit pkgs bazel920 system;
+          };
 
         # Feature-rich fixture for the per-role minijail-validator contract
         # tests. x86_64-linux only (graphics platform gate); on other systems
