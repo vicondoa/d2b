@@ -192,6 +192,12 @@ pub trait SystemdEffectOwner: Send + Sync + 'static {
         class: ProcessStopClass,
     ) -> Result<(), ProcessEffectError>;
 
+    /// Check the trusted per-user systemd manager without retaining a
+    /// connection or process handle.
+    fn check_user_manager(&self, _request: ProcessRequest) -> Result<bool, ProcessEffectError> {
+        Err(ProcessEffectError::UnsupportedProvider)
+    }
+
     /// Forget a terminal unit identity after the unit is no longer active.
     fn finalize(&self, _handle: &Self::Handle) -> Result<(), ProcessEffectError> {
         Ok(())
@@ -391,6 +397,14 @@ impl<O: SystemdEffectOwner> ProcessEffectBackend for SystemdProcessBackend<O> {
     }
 }
 
+impl<O: SystemdEffectOwner> SystemdProcessBackend<O> {
+    /// Check the trusted per-user manager through the broker-owned effect
+    /// owner.
+    pub fn check_user_manager(&self, request: ProcessRequest) -> Result<bool, ProcessEffectError> {
+        self.owner.check_user_manager(request)
+    }
+}
+
 /// Broker-backed systemd effect owner used by the daemon's fixed supervisor.
 ///
 /// The owner translates only typed systemd lifecycle requests to the broker.
@@ -454,6 +468,8 @@ impl BrokerSystemdEffectOwner {
             ExecutionDomain::User => SystemdUnitDomain::User,
         };
         let unit = SystemdUnitRequest {
+            execution_ref: Some(intent.execution_ref.clone()),
+            user_ref: intent.user_ref.clone(),
             vm_id: intent.vm_id.clone(),
             role_id: intent.role_id.clone(),
             role: intent.role,
@@ -638,6 +654,22 @@ impl SystemdEffectOwner for BrokerSystemdEffectOwner {
             let _ = self.take_request(&handle.identity)?;
         }
         Ok(())
+    }
+
+    fn check_user_manager(&self, request: ProcessRequest) -> Result<bool, ProcessEffectError> {
+        let (intent, mut unit) = self.intent(&request)?;
+        if unit.domain != SystemdUnitDomain::User {
+            return Err(ProcessEffectError::UnsupportedProvider);
+        }
+        unit.tracing_span_id = None;
+        let frame = self.request(BrokerRequest::CheckSystemdUserManager(unit.clone()))?;
+        let BrokerResponse::CheckSystemdUserManager(response) = frame.response else {
+            return Err(response_error(&frame.response));
+        };
+        if response.vm_id != intent.vm_id || response.role_id != intent.role_id {
+            return Err(ProcessEffectError::IdentityChanged);
+        }
+        Ok(response.available)
     }
 
     fn finalize(&self, handle: &Self::Handle) -> Result<(), ProcessEffectError> {

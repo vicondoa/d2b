@@ -38,14 +38,14 @@ use std::time::Duration;
 
 use d2b_contracts::{
     broker_wire::{
-        BrokerCallerRole, BrokerRequest, BrokerResponse, PipeWireAudioAction,
-        PipeWireAudioChannel, PipeWireAudioRequest,
+        BrokerCallerRole, BrokerRequest, BrokerResponse, PipeWireAudioAction, PipeWireAudioChannel,
+        PipeWireAudioRequest,
     },
     public_wire::AudioChannel,
     types::{BundleOpId, RoleId, VmId},
 };
-use d2b_core::bundle_resolver::intent_id_runner;
 use d2b_core::audio_policy::{AudioGrant, LevelPercent};
+use d2b_core::bundle_resolver::intent_id_runner;
 use d2b_core::processes::{ProcessNode, ProcessRole, ProcessesJson, VmProcessDag};
 #[cfg(test)]
 use serde_json::Value;
@@ -554,6 +554,9 @@ mod tests {
         use d2b_core::processes::{NodeId, ProcessRole, RoleProfile};
 
         ProcessNode {
+            execution_ref: None,
+            execution_domain: None,
+            user_ref: None,
             id: NodeId("audio".to_owned()),
             role: ProcessRole::Audio,
             unit: None,

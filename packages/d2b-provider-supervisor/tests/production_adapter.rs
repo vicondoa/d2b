@@ -560,6 +560,9 @@ fn broker_backend_uses_the_production_spawn_wire_and_pidfd_handoff() {
 
     let intent = BrokerLaunchIntent {
         vm_id,
+        execution_ref: d2b_contracts::v3::ResourceRef::parse("Guest/corp-vm").unwrap(),
+        domain: d2b_contracts::v3::execution_policy::ExecutionDomain::System,
+        user_ref: None,
         role_id,
         role: RunnerRole::Virtiofsd,
         bundle_runner_intent_ref: BundleOpId::new("runner:vm:corp-vm:role:worker"),

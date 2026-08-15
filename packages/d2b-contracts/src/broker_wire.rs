@@ -14,7 +14,8 @@ use crate::types::{
     VmId,
 };
 use crate::v3::{
-    ResourceBundleGenerationId, ResourceGeneration, ResourceUid, storage::ZoneStoreId,
+    ResourceBundleGenerationId, ResourceGeneration, ResourceRef, ResourceUid,
+    execution_policy::ExecutionDomain, storage::ZoneStoreId,
 };
 use d2b_core::host::IfName;
 use d2b_core::workload_identity::WorkloadIdentity;
@@ -25,6 +26,10 @@ use serde_json::Value;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", content = "payload")]
 pub enum BrokerRequest {
+    /// Authenticate and apply one source-to-target NixOS generation
+    /// handoff. The broker resolves all host effects from its trusted
+    /// installed-generation state; no path or command crosses the wire.
+    ApplyHostGenerationHandoff(crate::host_generation::ApplyHostGenerationHandoff),
     ApplyNftables(ApplyNftablesRequest),
     /// Apply or remove one Provider-owned nftables projection.
     ///
@@ -139,6 +144,10 @@ pub enum BrokerRequest {
     /// resolves executable, argv, uid/gid, environment, and cgroup
     /// placement from the bundle runner intent.
     StartSystemdUnit(StartSystemdUnitRequest),
+    /// Check whether the exact user manager selected by the trusted runner
+    /// intent is reachable. The manager connection never crosses the broker
+    /// boundary.
+    CheckSystemdUserManager(CheckSystemdUserManagerRequest),
     /// Observe one trusted transient systemd unit without opening a pidfd.
     ObserveSystemdUnit(ObserveSystemdUnitRequest),
     /// Re-open a pidfd after re-verifying a trusted transient unit identity.
@@ -202,6 +211,10 @@ pub enum BrokerRequest {
     SetBridgePortFlags(SetBridgePortFlagsRequest),
     SetSocketAcl(SetSocketAclRequest),
     SetupMountNamespace(SetupMountNamespaceRequest),
+    /// Kill exactly one trusted runner cgroup leaf during intentional
+    /// teardown. The broker resolves the leaf from its trusted runner
+    /// intent; callers never provide a cgroup path.
+    CgroupKill(CgroupKillRequest),
     SignalRunner(SignalRunnerRequest),
     DeregisterRunnerPidfd(DeregisterRunnerPidfdRequest),
     SpawnRunner(SpawnRunnerRequest),
@@ -285,6 +298,18 @@ pub enum BrokerRequest {
     SecurityKeyApplyUdevRules(crate::security_key::SecurityKeyApplyUdevRulesRequest),
 }
 
+/// Path-free result of a source-to-target generation handoff.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ApplyHostGenerationHandoffResponse {
+    pub target: crate::v3::ResourceRef,
+    pub state: crate::host_generation::HandoffState,
+    pub source_generation: u64,
+    pub target_generation: u64,
+    pub source_remains_usable: bool,
+    pub summary: String,
+}
+
 impl BrokerRequest {
     /// Stable operation name for audit records.
     ///
@@ -294,6 +319,7 @@ impl BrokerRequest {
     /// transition.
     pub fn op_name(&self) -> &'static str {
         match self {
+            Self::ApplyHostGenerationHandoff(_) => "ApplyHostGenerationHandoff",
             Self::ApplyNftables(_) => "ApplyNftables",
             Self::ApplyNftablesProjection(_) => "ApplyNftablesProjection",
             Self::ApplyNmUnmanaged(_) => "ApplyNmUnmanaged",
@@ -330,6 +356,7 @@ impl BrokerRequest {
             Self::ObserveRunner(_) => "ObserveRunner",
             Self::PipeWireAudio(_) => "PipeWireAudio",
             Self::StartSystemdUnit(_) => "StartSystemdUnit",
+            Self::CheckSystemdUserManager(_) => "CheckSystemdUserManager",
             Self::ObserveSystemdUnit(_) => "ObserveSystemdUnit",
             Self::OpenSystemdUnitPidfd(_) => "OpenSystemdUnitPidfd",
             Self::StopSystemdUnit(_) => "StopSystemdUnit",
@@ -358,6 +385,7 @@ impl BrokerRequest {
             Self::SetBridgePortFlags(_) => "SetBridgePortFlags",
             Self::SetSocketAcl(_) => "SetSocketAcl",
             Self::SetupMountNamespace(_) => "SetupMountNamespace",
+            Self::CgroupKill(_) => "CgroupKill",
             Self::SignalRunner(_) => "SignalRunner",
             Self::DeregisterRunnerPidfd(_) => "DeregisterRunnerPidfd",
             Self::SpawnRunner(_) => "SpawnRunner",
@@ -592,6 +620,10 @@ impl BrokerRequest {
                 request.vm_id.to_string(),
                 format!("{}:{}:{}", self.op_name(), request.vm_id, request.role_id),
             ),
+            Self::CheckSystemdUserManager(request) => (
+                request.vm_id.to_string(),
+                format!("{}:{}:{}", self.op_name(), request.vm_id, request.role_id),
+            ),
             Self::ObserveSystemdUnit(request) => (
                 request.vm_id.to_string(),
                 format!("{}:{}:{}", self.op_name(), request.vm_id, request.role_id),
@@ -613,6 +645,10 @@ impl BrokerRequest {
                     request.unit.vm_id,
                     request.unit.role_id
                 ),
+            ),
+            Self::CgroupKill(request) => (
+                request.vm_id.to_string(),
+                format!("{}:{}:{}", self.op_name(), request.vm_id, request.role_id),
             ),
             Self::SignalRunner(request) => (
                 request.vm_id.to_string(),
@@ -683,6 +719,16 @@ impl BrokerRequest {
             Self::RunMigrate(request) => (
                 request.bundle_migrate_intent_ref.to_string(),
                 format!("{}:{}", self.op_name(), request.bundle_migrate_intent_ref),
+            ),
+            Self::ApplyHostGenerationHandoff(request) => (
+                request.target.to_canonical_string(),
+                format!(
+                    "{}:{}:{}:{}",
+                    self.op_name(),
+                    request.target.to_canonical_string(),
+                    request.intent.source_generation,
+                    request.intent.target_generation
+                ),
             ),
             Self::RunActivation(request) => (
                 request.vm.clone(),
@@ -1021,6 +1067,8 @@ pub struct HelloRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", content = "payload")]
 pub enum BrokerResponse {
+    /// Result of one source-to-target generation handoff.
+    ApplyHostGenerationHandoff(ApplyHostGenerationHandoffResponse),
     Ack(AckResponse),
     CreatePersistentTap(TapReadyResponse),
     CreateTapFd(TapReadyResponse),
@@ -1072,6 +1120,8 @@ pub enum BrokerResponse {
     /// StartSystemdUnit response. The exact-main pidfd is returned via
     /// SCM_RIGHTS alongside this identity envelope.
     StartSystemdUnit(StartSystemdUnitResponse),
+    /// Result of a same-UID user-manager reachability check.
+    CheckSystemdUserManager(CheckSystemdUserManagerResponse),
     /// Observation of a transient systemd unit. `None` is represented by
     /// `present = false` and a zero identity.
     ObserveSystemdUnit(ObserveSystemdUnitResponse),
@@ -1944,6 +1994,13 @@ pub struct SystemdUnitRequest {
     pub generation: u64,
     /// System or verified user manager.
     pub domain: SystemdUnitDomain,
+    /// Canonical Host or Guest execution target, when supplied by a v3
+    /// Process ticket. Legacy VM runner callers omit this field.
+    #[serde(default)]
+    pub execution_ref: Option<ResourceRef>,
+    /// Canonical User resource bound to a user-domain launch.
+    #[serde(default)]
+    pub user_ref: Option<ResourceRef>,
     #[serde(default)]
     pub tracing_span_id: Option<TracingSpanId>,
 }
@@ -1952,6 +2009,8 @@ pub struct SystemdUnitRequest {
 pub type StartTransientUnitRequest = SystemdUnitRequest;
 /// Compatibility spelling used by the BrokerRequest variant.
 pub type StartSystemdUnitRequest = StartTransientUnitRequest;
+/// Request to check the trusted per-user systemd manager.
+pub type CheckSystemdUserManagerRequest = SystemdUnitRequest;
 
 /// Request to observe one transient systemd unit.
 pub type ObserveSystemdUnitRequest = SystemdUnitRequest;
@@ -2001,6 +2060,15 @@ pub struct StartTransientUnitResponse {
 }
 /// Compatibility spelling used by the BrokerResponse variant.
 pub type StartSystemdUnitResponse = StartTransientUnitResponse;
+
+/// Response from a same-UID per-user manager reachability check.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CheckSystemdUserManagerResponse {
+    pub vm_id: VmId,
+    pub role_id: RoleId,
+    pub available: bool,
+}
 
 /// Observation response. `present = false` has no identity payload.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -2535,6 +2603,15 @@ pub struct SignalRunnerResponse {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CgroupKillRequest {
+    pub vm_id: VmId,
+    pub role_id: RoleId,
+    #[serde(default)]
+    pub tracing_span_id: Option<TracingSpanId>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DeregisterRunnerPidfdRequest {
     pub vm_id: VmId,
     pub role_id: RoleId,
@@ -2640,6 +2717,16 @@ pub struct SpawnRunnerRequest {
     /// cgroup placement, mount namespace, environment) and feeds it
     /// to the matching argv generator.
     pub bundle_runner_intent_ref: BundleOpId,
+    /// Canonical Host or Guest execution target bound by the Process ticket.
+    /// Legacy VM runner callers omit this additive field.
+    #[serde(default)]
+    pub execution_ref: Option<ResourceRef>,
+    /// Canonical execution domain bound by the Process ticket.
+    #[serde(default)]
+    pub execution_domain: Option<ExecutionDomain>,
+    /// Canonical User resource bound to a user-domain launch.
+    #[serde(default)]
+    pub user_ref: Option<ResourceRef>,
     /// Optional vsock CID / TAP fd slot allocated by the daemon at
     /// host-prepare time. The broker validates each entry against the
     /// bundle row and refuses any unexpected allocation slot. None
@@ -3911,6 +3998,50 @@ mod tests {
             }
             other => panic!("expected SignalRunner, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn cgroup_kill_request_round_trips() {
+        let frame = encode_frame(&serde_json::json!({
+            "kind": "CgroupKill",
+            "payload": {
+                "vmId": "corp-vm",
+                "roleId": "ch-runner"
+            }
+        }))
+        .expect("encodes");
+        let decoded = decode_frame::<BrokerRequest>("BrokerRequest", &frame).expect("decodes");
+        match decoded {
+            BrokerRequest::CgroupKill(req) => {
+                assert_eq!(req.vm_id.as_str(), "corp-vm");
+                assert_eq!(req.role_id.as_str(), "ch-runner");
+            }
+            other => panic!("expected CgroupKill, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn user_manager_check_round_trips() {
+        let frame = encode_frame(&serde_json::json!({
+            "kind": "CheckSystemdUserManager",
+            "payload": {
+                "vmId": "guest-vm",
+                "roleId": "audio",
+                "role": "audio",
+                "bundleRunnerIntentRef": "intent",
+                "providerIdentity": vec![1_u8; 32],
+                "templateIdentity": vec![2_u8; 32],
+                "generation": 3,
+                "domain": "user"
+            }
+        }))
+        .expect("encodes");
+        let decoded = decode_frame::<BrokerRequest>("BrokerRequest", &frame).expect("decodes");
+        assert!(matches!(
+            decoded,
+            BrokerRequest::CheckSystemdUserManager(request)
+                if request.domain == SystemdUnitDomain::User
+        ));
     }
 
     #[test]

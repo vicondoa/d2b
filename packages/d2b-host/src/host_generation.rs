@@ -12,6 +12,9 @@ pub const MAX_HELPER_REQUEST_BYTES: usize = 2048;
 pub struct ActivationHelperRequest {
     /// Private artifact identifier resolved by the target integrity channel.
     pub system_artifact_id: String,
+    /// Target generation ordinal. The helper refuses an unbound activation
+    /// request even when the artifact identifier is otherwise valid.
+    pub target_generation: u64,
     /// Closed activation mode.
     pub activation_mode: ActivationMode,
 }
@@ -19,6 +22,9 @@ pub struct ActivationHelperRequest {
 impl ActivationHelperRequest {
     /// Validate the request without resolving a path.
     pub fn validate(&self) -> Result<(), ActivationHelperProtocolError> {
+        if self.target_generation == 0 {
+            return Err(ActivationHelperProtocolError::GenerationInvalid);
+        }
         ArtifactId::parse(self.system_artifact_id.as_str())
             .map(|_| ())
             .map_err(|_| ActivationHelperProtocolError::ArtifactIdInvalid)
@@ -58,6 +64,8 @@ pub enum ActivationHelperProtocolError {
     InvalidJson,
     /// Artifact ID did not satisfy the closed grammar.
     ArtifactIdInvalid,
+    /// The target generation ordinal was missing or zero.
+    GenerationInvalid,
 }
 
 impl core::fmt::Display for ActivationHelperProtocolError {
@@ -66,6 +74,7 @@ impl core::fmt::Display for ActivationHelperProtocolError {
             Self::TooLarge => "activation-helper-request-too-large",
             Self::InvalidJson => "activation-helper-request-invalid",
             Self::ArtifactIdInvalid => "activation-helper-artifact-invalid",
+            Self::GenerationInvalid => "activation-helper-generation-invalid",
         })
     }
 }

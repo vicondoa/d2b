@@ -327,6 +327,7 @@ fn build_host_controller(
     state: &ServerState,
     vm_name: &str,
     cap: &AudioProviderCapability,
+    caller_role: BrokerCallerRole,
 ) -> Option<Box<dyn HostAudioController>> {
     match cap.host_enforcement {
         AudioHostEnforcementKind::PipeWireVhostUserSound => {
@@ -347,9 +348,7 @@ fn build_host_controller(
                 audio_node,
                 vm_name,
                 crate::broker_socket_path(state),
-                BrokerCallerRole::AdminUid {
-                    uid: state.daemon_uid,
-                },
+                caller_role,
             )) as Box<dyn HostAudioController>)
         }
         AudioHostEnforcementKind::QemuAudioBackend => Some(Box::new(QemuAudioController)),
@@ -370,10 +369,11 @@ pub fn enforce_host_grant(
     state: &ServerState,
     vm_name: &str,
     cap: &AudioProviderCapability,
+    caller_role: BrokerCallerRole,
     grant: AudioGrant,
     channel: AudioChannel,
 ) -> HostEnforcementResult {
-    match build_host_controller(state, vm_name, cap) {
+    match build_host_controller(state, vm_name, cap, caller_role) {
         Some(ctrl) => ctrl.enforce_grant(vm_name, grant, channel),
         None => HostEnforcementResult::Unsupported,
     }
@@ -386,10 +386,11 @@ pub fn enforce_host_level(
     state: &ServerState,
     vm_name: &str,
     cap: &AudioProviderCapability,
+    caller_role: BrokerCallerRole,
     level: LevelPercent,
     channel: AudioChannel,
 ) -> HostEnforcementResult {
-    match build_host_controller(state, vm_name, cap) {
+    match build_host_controller(state, vm_name, cap, caller_role) {
         Some(ctrl) => ctrl.enforce_level(vm_name, level, channel),
         None => HostEnforcementResult::Unsupported,
     }
@@ -515,6 +516,7 @@ impl AudioMediator for DaemonAudioMediator {
             &self.state,
             &self.vm_name,
             &self.capability,
+            self.caller_role.clone(),
             core_audio_grant(grant),
             wire_channel,
         );
@@ -541,6 +543,7 @@ impl AudioMediator for DaemonAudioMediator {
                     &self.state,
                     &self.vm_name,
                     &self.capability,
+                    self.caller_role.clone(),
                     core_audio_grant(rollback),
                     wire_channel,
                 );
@@ -565,6 +568,7 @@ impl AudioMediator for DaemonAudioMediator {
             &self.state,
             &self.vm_name,
             &self.capability,
+            self.caller_role.clone(),
             level,
             wire_channel,
         );
@@ -593,7 +597,13 @@ impl AudioMediator for DaemonAudioMediator {
 
     fn host_readiness(&self) -> HostAudioReadiness {
         if self.capability.host_enforcement == AudioHostEnforcementKind::None
-            || build_host_controller(&self.state, &self.vm_name, &self.capability).is_some()
+            || build_host_controller(
+                &self.state,
+                &self.vm_name,
+                &self.capability,
+                self.caller_role.clone(),
+            )
+            .is_some()
         {
             HostAudioReadiness::Ready
         } else {
@@ -608,7 +618,8 @@ impl AudioMediator for DaemonAudioMediator {
         let ready = crate::load_bundle_resolver(&self.state)
             .ok()
             .and_then(|resolver| {
-                crate::resolve_guest_control_probe_params(&self.state, &resolver, &self.vm_name).ok()
+                crate::resolve_guest_control_probe_params(&self.state, &resolver, &self.vm_name)
+                    .ok()
             })
             .is_some();
         if ready {
@@ -980,7 +991,8 @@ fn dispatch_audio_set_volume(
     }
 
     let host_result = if cap.host_enforcement == AudioHostEnforcementKind::PipeWireVhostUserSound {
-        let result = enforce_host_level(state, vm_name, &cap, level, channel);
+        let result =
+            enforce_host_level(state, vm_name, &cap, caller_role.clone(), level, channel);
         if level_increase && matches!(result, HostEnforcementResult::Failed) {
             return Err(TypedError::InternalIo {
                 context: "audio host enforcement".to_owned(),
@@ -1002,7 +1014,7 @@ fn dispatch_audio_set_volume(
     }
 
     let host_result = if cap.host_enforcement == AudioHostEnforcementKind::QemuAudioBackend {
-        enforce_host_level(state, vm_name, &cap, level, channel)
+        enforce_host_level(state, vm_name, &cap, caller_role.clone(), level, channel)
     } else {
         host_result
     };
@@ -1095,7 +1107,8 @@ fn dispatch_audio_mute(
     }
 
     let host_result = if cap.host_enforcement == AudioHostEnforcementKind::PipeWireVhostUserSound {
-        let result = enforce_host_grant(state, vm_name, &cap, grant, channel);
+        let result =
+            enforce_host_grant(state, vm_name, &cap, caller_role.clone(), grant, channel);
         if grant == AudioGrant::On && matches!(result, HostEnforcementResult::Failed) {
             return Err(TypedError::InternalIo {
                 context: "audio host enforcement".to_owned(),
@@ -1117,7 +1130,7 @@ fn dispatch_audio_mute(
     }
 
     let host_result = if cap.host_enforcement == AudioHostEnforcementKind::QemuAudioBackend {
-        enforce_host_grant(state, vm_name, &cap, grant, channel)
+        enforce_host_grant(state, vm_name, &cap, caller_role.clone(), grant, channel)
     } else {
         host_result
     };

@@ -2,13 +2,14 @@
 //!
 //! The daemon supplies only a trusted bundle runner reference and opaque
 //! identity digests. This module resolves the executable, arguments, user,
-//! environment, and unit name from the broker's bundle copy, performs all
-//! manager calls, and returns only a closed identity tuple plus an optional
-//! pidfd.
+//! environment, and unit name from the broker's bundle copy, selects either
+//! the system manager or an exact same-UID user manager, performs all manager
+//! calls, and returns only a closed identity tuple plus an optional pidfd.
 
 use std::num::NonZeroU32;
 use std::os::fd::OwnedFd;
-use std::path::Path;
+use std::os::unix::fs::{FileTypeExt, MetadataExt};
+use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -18,8 +19,9 @@ use d2b_contracts::broker_wire::{
 };
 use d2b_core::bundle_resolver::{BundleResolver, ResolvedRunnerIntent};
 use sha2::{Digest, Sha256};
-use zbus::blocking::{Connection, Proxy, connection};
+use zbus::blocking::{connection, Connection, Proxy};
 use zbus::zvariant::{OwnedObjectPath, Value};
+use zbus::Address;
 
 const SYSTEMD_DESTINATION: &str = "org.freedesktop.systemd1";
 const SYSTEMD_MANAGER_PATH: &str = "/org/freedesktop/systemd1";
@@ -36,7 +38,7 @@ pub enum SystemdError {
     InvalidRequest(&'static str),
     /// The trusted bundle runner intent was absent or inconsistent.
     BundleIntent,
-    /// The user manager is not supported by this root-owned broker session.
+    /// The per-user manager is unavailable or failed same-UID verification.
     UserManagerUnavailable,
     /// The system manager or unit query failed.
     Query,
@@ -80,9 +82,6 @@ fn validate_request(
     {
         return Err(SystemdError::InvalidRequest("identity"));
     }
-    if request.domain != SystemdUnitDomain::System {
-        return Err(SystemdError::UserManagerUnavailable);
-    }
     let intent = resolver
         .find_runner_intent(request.bundle_runner_intent_ref.as_str())
         .ok_or(SystemdError::BundleIntent)?;
@@ -95,7 +94,75 @@ fn validate_request(
     {
         return Err(SystemdError::BundleIntent);
     }
+    let expected_execution = d2b_contracts::v3::ResourceRef::parse(&intent.execution_ref)
+        .map_err(|_| SystemdError::IdentityMismatch)?;
+    if request
+        .execution_ref
+        .as_ref()
+        .is_some_and(|execution| execution != &expected_execution)
+    {
+        return Err(SystemdError::IdentityMismatch);
+    }
+    let expected_domain = match intent.execution_domain {
+        d2b_core::processes::ProcessExecutionDomain::System => SystemdUnitDomain::System,
+        d2b_core::processes::ProcessExecutionDomain::User => SystemdUnitDomain::User,
+    };
+    if request.domain != expected_domain {
+        return Err(SystemdError::IdentityMismatch);
+    }
+    let expected_user = intent
+        .user_ref
+        .as_deref()
+        .map(d2b_contracts::v3::ResourceRef::parse)
+        .transpose()
+        .map_err(|_| SystemdError::IdentityMismatch)?;
+    if request.user_ref != expected_user {
+        return Err(SystemdError::IdentityMismatch);
+    }
     Ok(intent.clone())
+}
+
+fn user_bus_path(uid: u32) -> PathBuf {
+    PathBuf::from("/run/user").join(uid.to_string()).join("bus")
+}
+
+/// Connect to the manager selected by the trusted runner intent.
+///
+/// The user bus address is derived only from the broker-resolved UID.  Before
+/// connecting, both the runtime directory and bus socket must be owned by
+/// that UID.  This prevents a caller from selecting an arbitrary session bus
+/// while still allowing the broker to keep manager connections out of the
+/// daemon and Provider processes.
+fn manager_connection(
+    intent: &ResolvedRunnerIntent,
+    domain: SystemdUnitDomain,
+) -> Result<Connection, SystemdError> {
+    match domain {
+        SystemdUnitDomain::System => system_connection(),
+        SystemdUnitDomain::User => {
+            let runtime_dir = PathBuf::from("/run/user").join(intent.uid.to_string());
+            let bus_path = user_bus_path(intent.uid);
+            let runtime_metadata = std::fs::metadata(&runtime_dir)
+                .map_err(|_| SystemdError::UserManagerUnavailable)?;
+            let bus_metadata =
+                std::fs::metadata(&bus_path).map_err(|_| SystemdError::UserManagerUnavailable)?;
+            if !runtime_metadata.is_dir()
+                || runtime_metadata.uid() != intent.uid
+                || !bus_metadata.file_type().is_socket()
+                || bus_metadata.uid() != intent.uid
+            {
+                return Err(SystemdError::UserManagerUnavailable);
+            }
+            let address_text = format!("unix:path={}", bus_path.display());
+            let address = Address::try_from(address_text.as_str())
+                .map_err(|_| SystemdError::UserManagerUnavailable)?;
+            connection::Builder::address(address)
+                .map_err(|_| SystemdError::UserManagerUnavailable)?
+                .method_timeout(SYSTEMD_METHOD_TIMEOUT)
+                .build()
+                .map_err(|_| SystemdError::UserManagerUnavailable)
+        }
+    }
 }
 
 fn role_matches(
@@ -171,6 +238,27 @@ fn is_no_such_unit(error: &zbus::Error) -> bool {
     )
 }
 
+/// Verify reachability of the trusted per-user systemd manager without
+/// exposing its connection or accepting a caller-supplied bus address.
+pub fn check_user_manager(
+    resolver: &BundleResolver,
+    request: &d2b_contracts::broker_wire::CheckSystemdUserManagerRequest,
+) -> Result<bool, SystemdError> {
+    if request.domain != SystemdUnitDomain::User {
+        return Err(SystemdError::InvalidRequest("user-manager-domain"));
+    }
+    let intent = validate_request(resolver, request)?;
+    let connection = manager_connection(&intent, request.domain)?;
+    let manager = manager_proxy(&connection)?;
+    let result: Result<OwnedObjectPath, zbus::Error> =
+        manager.call("GetUnit", &(unit_name(request)));
+    match result {
+        Ok(_) => Ok(true),
+        Err(error) if is_no_such_unit(&error) => Ok(true),
+        Err(_) => Err(SystemdError::UserManagerUnavailable),
+    }
+}
+
 fn unit_proxy<'a>(manager: &Proxy<'a>, name: &str) -> Result<OwnedObjectPath, SystemdError> {
     manager.call("GetUnit", &(name)).map_err(|error| {
         if is_no_such_unit(&error) {
@@ -181,7 +269,12 @@ fn unit_proxy<'a>(manager: &Proxy<'a>, name: &str) -> Result<OwnedObjectPath, Sy
     })
 }
 
-fn cgroup_identity(control_group: &str, name: &str) -> Result<[u8; 32], SystemdError> {
+fn cgroup_identity(
+    control_group: &str,
+    name: &str,
+    domain: SystemdUnitDomain,
+    uid: u32,
+) -> Result<[u8; 32], SystemdError> {
     if control_group.is_empty()
         || !control_group.starts_with('/')
         || Path::new(control_group)
@@ -189,6 +282,24 @@ fn cgroup_identity(control_group: &str, name: &str) -> Result<[u8; 32], SystemdE
             .and_then(|value| value.to_str())
             != Some(name)
     {
+        return Err(SystemdError::IdentityMismatch);
+    }
+    let components = control_group
+        .split('/')
+        .filter(|component| !component.is_empty())
+        .collect::<Vec<_>>();
+    let placement_valid = match domain {
+        SystemdUnitDomain::System => components.first() == Some(&"d2b.slice"),
+        SystemdUnitDomain::User => {
+            let user_manager = format!("user@{uid}.service");
+            components
+                .iter()
+                .position(|component| *component == user_manager)
+                .and_then(|index| components.get(index + 1))
+                == Some(&"app.slice")
+        }
+    };
+    if !placement_valid {
         return Err(SystemdError::IdentityMismatch);
     }
     let mut digest = Sha256::new();
@@ -199,6 +310,7 @@ fn cgroup_identity(control_group: &str, name: &str) -> Result<[u8; 32], SystemdE
 
 fn read_identity(
     request: &d2b_contracts::broker_wire::SystemdUnitRequest,
+    intent: &ResolvedRunnerIntent,
     connection: &Connection,
     name: &str,
 ) -> Result<Option<SystemdUnitIdentity>, SystemdError> {
@@ -230,7 +342,7 @@ fn read_identity(
     let control_group: String = unit
         .get_property("ControlGroup")
         .map_err(|_| SystemdError::Query)?;
-    let cgroup_identity = cgroup_identity(&control_group, name)?;
+    let cgroup_identity = cgroup_identity(&control_group, name, request.domain, intent.uid)?;
     let main_pid: u32 = unit
         .get_property("MainPID")
         .map_err(|_| SystemdError::Query)?;
@@ -250,12 +362,13 @@ fn read_identity(
 
 fn wait_identity(
     request: &d2b_contracts::broker_wire::SystemdUnitRequest,
+    intent: &ResolvedRunnerIntent,
     connection: &Connection,
     name: &str,
 ) -> Result<SystemdUnitIdentity, SystemdError> {
     let deadline = Instant::now() + IDENTITY_READY_TIMEOUT;
     loop {
-        if let Some(identity) = read_identity(request, connection, name)? {
+        if let Some(identity) = read_identity(request, intent, connection, name)? {
             return Ok(identity);
         }
         if Instant::now() >= deadline {
@@ -283,24 +396,32 @@ pub fn start(
 ) -> Result<(SystemdUnitIdentity, OwnedFd), SystemdError> {
     let intent = validate_request(resolver, request)?;
     let name = unit_name(request);
-    let connection = system_connection()?;
+    let connection = manager_connection(&intent, request.domain)?;
     let manager = manager_proxy(&connection)?;
     let exec_start = vec![(
         intent.binary_path.to_string_lossy().into_owned(),
-        intent.argv,
+        intent.argv.clone(),
         false,
     )];
-    let properties = vec![
+    let mut properties = vec![
         ("Type", Value::from("exec")),
         ("ExecStart", Value::from(exec_start)),
-        ("User", Value::from(intent.uid.to_string())),
-        ("Group", Value::from(intent.gid.to_string())),
-        ("Environment", Value::from(intent.env)),
-        ("Slice", Value::from("d2b.slice")),
+        ("Environment", Value::from(intent.env.clone())),
+        (
+            "Slice",
+            Value::from(match request.domain {
+                SystemdUnitDomain::System => "d2b.slice",
+                SystemdUnitDomain::User => "app.slice",
+            }),
+        ),
         ("KillMode", Value::from("control-group")),
         ("CollectMode", Value::from("inactive-or-failed")),
         ("NoNewPrivileges", Value::from(true)),
     ];
+    if request.domain == SystemdUnitDomain::System {
+        properties.push(("User", Value::from(intent.uid.to_string())));
+        properties.push(("Group", Value::from(intent.gid.to_string())));
+    }
     let auxiliary: Vec<(&str, Vec<(&str, Value<'_>)>)> = Vec::new();
     let _: OwnedObjectPath = manager
         .call(
@@ -308,7 +429,7 @@ pub fn start(
             &(name.as_str(), "replace", properties, auxiliary),
         )
         .map_err(|_| SystemdError::Start)?;
-    let identity = wait_identity(request, &connection, &name)?;
+    let identity = wait_identity(request, &intent, &connection, &name)?;
     let pidfd =
         crate::live_handlers::live_open_pidfd(identity.main_pid as i32, identity.start_time_ticks)
             .map_err(|_| SystemdError::Pidfd)?
@@ -321,9 +442,9 @@ pub fn observe(
     resolver: &BundleResolver,
     request: &d2b_contracts::broker_wire::ObserveSystemdUnitRequest,
 ) -> Result<Option<SystemdUnitIdentity>, SystemdError> {
-    validate_request(resolver, request)?;
-    let connection = system_connection()?;
-    read_identity(request, &connection, &unit_name(request))
+    let intent = validate_request(resolver, request)?;
+    let connection = manager_connection(&intent, request.domain)?;
+    read_identity(request, &intent, &connection, &unit_name(request))
 }
 
 /// Re-query a trusted unit, verify its identity, and open a fresh pidfd.
@@ -331,9 +452,14 @@ pub fn reopen(
     resolver: &BundleResolver,
     request: &OpenSystemdUnitPidfdRequest,
 ) -> Result<(SystemdUnitIdentity, OwnedFd), SystemdError> {
-    validate_request(resolver, &request.unit)?;
-    let connection = system_connection()?;
-    let actual = wait_identity(&request.unit, &connection, &unit_name(&request.unit))?;
+    let intent = validate_request(resolver, &request.unit)?;
+    let connection = manager_connection(&intent, request.unit.domain)?;
+    let actual = wait_identity(
+        &request.unit,
+        &intent,
+        &connection,
+        &unit_name(&request.unit),
+    )?;
     expected_matches(&actual, &request.expected)?;
     let pidfd =
         crate::live_handlers::live_open_pidfd(actual.main_pid as i32, actual.start_time_ticks)
@@ -347,11 +473,11 @@ pub fn stop(
     resolver: &BundleResolver,
     request: &StopSystemdUnitRequest,
 ) -> Result<(), SystemdError> {
-    validate_request(resolver, &request.unit)?;
+    let intent = validate_request(resolver, &request.unit)?;
     let name = unit_name(&request.unit);
-    let connection = system_connection()?;
-    let actual =
-        read_identity(&request.unit, &connection, &name)?.ok_or(SystemdError::IdentityMismatch)?;
+    let connection = manager_connection(&intent, request.unit.domain)?;
+    let actual = read_identity(&request.unit, &intent, &connection, &name)?
+        .ok_or(SystemdError::IdentityMismatch)?;
     expected_matches(&actual, &request.expected)?;
     let manager = manager_proxy(&connection)?;
     if request.class == SystemdStopClass::Terminate {
@@ -364,7 +490,7 @@ pub fn stop(
         .map_err(|_| SystemdError::Stop)?;
     let deadline = Instant::now() + IDENTITY_READY_TIMEOUT;
     loop {
-        match read_identity(&request.unit, &connection, &name) {
+        match read_identity(&request.unit, &intent, &connection, &name) {
             Ok(None) => return Ok(()),
             Ok(Some(_)) if Instant::now() >= deadline => return Err(SystemdError::Timeout),
             Ok(Some(_)) => thread::sleep(IDENTITY_RETRY_INTERVAL),
@@ -382,6 +508,8 @@ mod tests {
 
     fn request() -> SystemdUnitRequest {
         SystemdUnitRequest {
+            execution_ref: None,
+            user_ref: None,
             vm_id: VmId::new("vm"),
             role_id: RoleId::new("role"),
             role: RunnerRole::Audio,
@@ -399,24 +527,48 @@ mod tests {
         let name = unit_name(&request());
         assert!(name.starts_with("d2b-process-"));
         assert!(name.ends_with(".service"));
-        assert!(
-            name.bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'.')
-        );
+        assert!(name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'.'));
         assert_eq!(name, unit_name(&request()));
     }
 
     #[test]
     fn cgroup_identity_rejects_foreign_unit_leaves() {
-        assert!(
-            cgroup_identity(
-                "/d2b.slice/d2b-process-good.service",
-                "d2b-process-good.service"
-            )
-            .is_ok()
-        );
+        assert!(cgroup_identity(
+            "/d2b.slice/d2b-process-good.service",
+            "d2b-process-good.service",
+            SystemdUnitDomain::System,
+            1000,
+        )
+        .is_ok());
         assert!(matches!(
-            cgroup_identity("/d2b.slice/foreign.service", "d2b-process-good.service"),
+            cgroup_identity(
+                "/d2b.slice/foreign.service",
+                "d2b-process-good.service",
+                SystemdUnitDomain::System,
+                1000
+            ),
+            Err(SystemdError::IdentityMismatch)
+        ));
+    }
+
+    #[test]
+    fn cgroup_identity_binds_user_manager_and_slice() {
+        assert!(cgroup_identity(
+            "/user.slice/user-1000.slice/user@1000.service/app.slice/d2b-process-good.service",
+            "d2b-process-good.service",
+            SystemdUnitDomain::User,
+            1000,
+        )
+        .is_ok());
+        assert!(matches!(
+            cgroup_identity(
+                "/user.slice/user-1001.slice/user@1001.service/app.slice/d2b-process-good.service",
+                "d2b-process-good.service",
+                SystemdUnitDomain::User,
+                1000,
+            ),
             Err(SystemdError::IdentityMismatch)
         ));
     }

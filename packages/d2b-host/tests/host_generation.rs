@@ -6,7 +6,8 @@ use d2b_host::host_generation::{
 
 #[test]
 fn helper_json_is_bounded_and_redacts_store_details() {
-    let request = br#"{"systemArtifactId":"dev-vm-system","activationMode":"switch"}"#;
+    let request =
+        br#"{"systemArtifactId":"dev-vm-system","targetGeneration":2,"activationMode":"switch"}"#;
     let parsed = parse_request(request).unwrap();
     assert_eq!(parsed.activation_mode, ActivationMode::Switch);
     let response = encode_response(ActivationHelperResponse {
@@ -20,7 +21,9 @@ fn helper_json_is_bounded_and_redacts_store_details() {
 #[test]
 fn helper_json_rejects_paths_unknown_fields_and_oversize() {
     assert_eq!(
-        parse_request(br#"{"systemArtifactId":"/nix/store/x","activationMode":"switch"}"#)
+        parse_request(
+            br#"{"systemArtifactId":"/nix/store/x","targetGeneration":2,"activationMode":"switch"}"#
+        )
             .unwrap_err(),
         ActivationHelperProtocolError::ArtifactIdInvalid
     );
@@ -36,6 +39,7 @@ fn helper_json_rejects_paths_unknown_fields_and_oversize() {
     assert!(
         ActivationHelperRequest {
             system_artifact_id: "dev".to_owned(),
+            target_generation: 2,
             activation_mode: ActivationMode::Switch,
         }
         .validate()

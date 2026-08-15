@@ -630,13 +630,13 @@ impl<B: ProcessEffectBackend> ProcessLaunchEffectPort for ProviderSupervisor<B> 
         let request = ProcessRequest::new(ticket.clone());
         let timeout = Duration::from_millis(u64::from(ticket.operation().deadline_ms()));
         let observation = self
-        .blocking(timeout, move |backend| backend.probe(request))
-        .await
-        .map_err(map_error)?;
+            .blocking(timeout, move |backend| backend.probe(request))
+            .await
+            .map_err(map_error)?;
         Ok(observation.map(|observation| AdoptionCandidate {
-        identity: observation.identity(),
-        observed: observation.observed().clone(),
-        wait_reap_owner: observation.wait_reap_owner(),
+            identity: observation.identity(),
+            observed: observation.observed().clone(),
+            wait_reap_owner: observation.wait_reap_owner(),
         }))
     }
 

@@ -46,10 +46,7 @@ impl BusAuthorizer {
             return Err(AuthorizationError::PolicyRevisionZero);
         }
         Ok(Self {
-            runtime: Mutex::new(AuthorizationRuntime {
-                native,
-                state,
-            }),
+            runtime: Mutex::new(AuthorizationRuntime { native, state }),
         })
     }
 

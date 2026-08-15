@@ -153,6 +153,10 @@ pub enum OperationFields {
     DelegateCgroupV2 {
         scope_id: String,
     },
+    CgroupKill {
+        vm_id: String,
+        role_id: String,
+    },
     OpenCgroupDir {
         scope_id: String,
         path_class: String,
@@ -479,6 +483,12 @@ pub enum OperationFields {
         mode: String,
         vm: String,
     },
+    ApplyHostGenerationHandoff {
+        target: String,
+        source_generation: u64,
+        target_generation: u64,
+        state: String,
+    },
     RunGc {
         bundle_gc_intent_ref: String,
         keep_generations: Option<u32>,
@@ -578,6 +588,10 @@ impl OperationFields {
             }),
             "DelegateCgroupV2" => parse_fields!(value => DelegateCgroupV2 {
                 scope_id: String,
+            }),
+            "CgroupKill" => parse_fields!(value => CgroupKill {
+                vm_id: String,
+                role_id: String,
             }),
             "OpenCgroupDir" => parse_fields!(value => OpenCgroupDir {
                 scope_id: String,
@@ -849,6 +863,12 @@ impl OperationFields {
                 bundle_activation_intent_ref: String,
                 mode: String,
                 vm: String,
+            }),
+            "ApplyHostGenerationHandoff" => parse_fields!(value => ApplyHostGenerationHandoff {
+                target: String,
+                source_generation: u64,
+                target_generation: u64,
+                state: String,
             }),
             "RunGc" => parse_fields!(value => RunGc {
                 bundle_gc_intent_ref: String,
@@ -1505,12 +1525,30 @@ mod tests {
         }
     );
     roundtrip_test!(
+        cgroup_kill_round_trip,
+        "CgroupKill",
+        OperationFields::CgroupKill {
+            vm_id: "corp-vm".to_owned(),
+            role_id: "ch-runner".to_owned(),
+        }
+    );
+    roundtrip_test!(
         run_activation_round_trip,
         "RunActivation",
         OperationFields::RunActivation {
             bundle_activation_intent_ref: "activation:corp-vm".to_owned(),
             mode: "switch".to_owned(),
             vm: "corp-vm".to_owned(),
+        }
+    );
+    roundtrip_test!(
+        apply_host_generation_handoff_round_trip,
+        "ApplyHostGenerationHandoff",
+        OperationFields::ApplyHostGenerationHandoff {
+            target: "Host/host-system".to_owned(),
+            source_generation: 7,
+            target_generation: 8,
+            state: "completed".to_owned(),
         }
     );
     roundtrip_test!(

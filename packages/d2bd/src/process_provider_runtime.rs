@@ -13,10 +13,11 @@ use std::{
 };
 
 use d2b_contracts::broker_wire::BrokerCallerRole;
+use d2b_contracts::v3::execution_policy::{BoundedToken, ExecutionDomain};
 use d2b_contracts::v3::{
     ControllerGeneration, ResourceGeneration, ResourceRef, ResourceUid,
+    process::{EphemeralProcessSpec, ProcessSpec},
 };
-use d2b_contracts::v3::execution_policy::{BoundedToken, ExecutionDomain};
 use d2b_core::{
     bundle_resolver::BundleResolver,
     processes::{ProcessNode, ProcessRole},
@@ -27,8 +28,8 @@ use d2b_process_conformance::{
     ProcessProvider, ProcessStatusReport, ReadinessExpectation, StopClass,
 };
 use d2b_provider_supervisor::{
-    BrokerProcessBackend, BrokerSystemdEffectOwner, BundleBackedLaunchResolver,
-    ProviderSupervisor, SystemdProcessBackend,
+    BrokerProcessBackend, BrokerSystemdEffectOwner, BundleBackedLaunchResolver, ProviderSupervisor,
+    SystemdProcessBackend,
 };
 use d2b_provider_system_minijail::{MinijailProcessProvider, launch::PlatformGate};
 use d2b_provider_system_systemd::SystemdProcessProvider;
@@ -37,10 +38,8 @@ use sha2::{Digest, Sha256};
 /// The fixed process Provider names wired by the daemon.
 pub const FIXED_PROCESS_PROVIDER_NAMES: [&str; 2] = ["system-minijail", "system-systemd"];
 
-type BrokerProcessSupervisor =
-    ProviderSupervisor<BrokerProcessBackend<BundleBackedLaunchResolver>>;
-type BrokerSystemdSupervisor =
-    ProviderSupervisor<SystemdProcessBackend<BrokerSystemdEffectOwner>>;
+type BrokerProcessSupervisor = ProviderSupervisor<BrokerProcessBackend<BundleBackedLaunchResolver>>;
+type BrokerSystemdSupervisor = ProviderSupervisor<SystemdProcessBackend<BrokerSystemdEffectOwner>>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ManagedProvider {
@@ -52,6 +51,14 @@ enum ManagedProvider {
 struct ManagedProcess {
     provider: ManagedProvider,
     identity: ProcessIdentityDigest,
+}
+
+#[derive(Debug, Clone)]
+struct ManagedResource {
+    provider: ManagedProvider,
+    identity: ProcessIdentityDigest,
+    uid: ResourceUid,
+    generation: ResourceGeneration,
 }
 
 /// Result of a Provider-backed launch, carrying only opaque process identity.
@@ -132,6 +139,7 @@ pub struct ProductionProcessProviders {
     systemd: SystemdProcessProvider<BrokerSystemdSupervisor>,
     bundle: BundleResolver,
     managed: Mutex<BTreeMap<(String, String), ManagedProcess>>,
+    managed_resources: Mutex<BTreeMap<ResourceRef, ManagedResource>>,
 }
 
 impl std::fmt::Debug for ProductionProcessProviders {
@@ -179,6 +187,7 @@ impl ProductionProcessProviders {
             )),
             bundle,
             managed: Mutex::new(BTreeMap::new()),
+            managed_resources: Mutex::new(BTreeMap::new()),
         }
     }
 
@@ -219,8 +228,7 @@ impl ProductionProcessProviders {
 
     /// Return whether this node remains supervised after its start step.
     pub fn is_long_lived(node: &ProcessNode) -> bool {
-        !matches!(node.role, ProcessRole::SwtpmPreStartFlush)
-            && Self::supports_node(node)
+        !matches!(node.role, ProcessRole::SwtpmPreStartFlush) && Self::supports_node(node)
     }
 
     /// Return the stable role key used by the broker and daemon stop paths.
@@ -309,16 +317,675 @@ impl ProductionProcessProviders {
                 .launch(&ticket)
                 .await
                 .map_err(provider_error)?,
-            ManagedProvider::Systemd => self
-                .systemd
-                .launch(&ticket)
-                .await
-                .map_err(provider_error)?,
+            ManagedProvider::Systemd => {
+                self.systemd.launch(&ticket).await.map_err(provider_error)?
+            }
         };
         self.remember(vm, node, report.identity)?;
         Ok(ProviderLaunch {
             identity: report.identity,
         })
+    }
+
+    /// Launch one durable or ephemeral v3 Process resource.
+    ///
+    /// The resource spec supplies only the typed execution binding and
+    /// template name. Executable, argv, sandbox, and identity data remain
+    /// resolved from the private trusted bundle by the broker resolver.
+    pub async fn launch_resource(
+        &self,
+        resource_ref: &ResourceRef,
+        resource_uid: &ResourceUid,
+        resource_generation: ResourceGeneration,
+        provider_ref: &ResourceRef,
+        spec: &ProcessSpec,
+        timeout: Duration,
+    ) -> Result<ProviderLaunch, String> {
+        self.launch_resource_with_controller_generation(
+            resource_ref,
+            resource_uid,
+            resource_generation,
+            provider_ref,
+            spec,
+            default_controller_generation(),
+            timeout,
+        )
+        .await
+    }
+
+    /// Launch one durable Process resource with the controller generation
+    /// rehydrated from the owning Zone store.
+    pub async fn launch_resource_with_controller_generation(
+        &self,
+        resource_ref: &ResourceRef,
+        resource_uid: &ResourceUid,
+        resource_generation: ResourceGeneration,
+        provider_ref: &ResourceRef,
+        spec: &ProcessSpec,
+        controller_generation: ControllerGeneration,
+        timeout: Duration,
+    ) -> Result<ProviderLaunch, String> {
+        let provider = managed_provider_from_ref(provider_ref)?;
+        let ticket = resource_ticket(
+            &self.bundle,
+            resource_ref,
+            resource_uid,
+            resource_generation,
+            provider_ref,
+            spec.execution(),
+            &serde_json::to_vec(spec).map_err(|_| "provider-ticket:serialization".to_owned())?,
+            provider,
+            controller_generation,
+            timeout,
+        )?;
+        let report = match provider {
+            ManagedProvider::Minijail => self
+                .minijail
+                .launch(&ticket)
+                .await
+                .map_err(provider_error)?,
+            ManagedProvider::Systemd => {
+                self.systemd.launch(&ticket).await.map_err(provider_error)?
+            }
+        };
+        self.remember_resource(
+            resource_ref,
+            resource_uid,
+            resource_generation,
+            provider,
+            report.identity,
+        )?;
+        Ok(ProviderLaunch {
+            identity: report.identity,
+        })
+    }
+
+    /// Launch one ephemeral v3 Process resource.
+    pub async fn launch_ephemeral_resource(
+        &self,
+        resource_ref: &ResourceRef,
+        resource_uid: &ResourceUid,
+        resource_generation: ResourceGeneration,
+        provider_ref: &ResourceRef,
+        spec: &EphemeralProcessSpec,
+        timeout: Duration,
+    ) -> Result<ProviderLaunch, String> {
+        self.launch_ephemeral_resource_with_controller_generation(
+            resource_ref,
+            resource_uid,
+            resource_generation,
+            provider_ref,
+            spec,
+            default_controller_generation(),
+            timeout,
+        )
+        .await
+    }
+
+    /// Launch one ephemeral Process resource with the controller generation
+    /// rehydrated from the owning Zone store.
+    pub async fn launch_ephemeral_resource_with_controller_generation(
+        &self,
+        resource_ref: &ResourceRef,
+        resource_uid: &ResourceUid,
+        resource_generation: ResourceGeneration,
+        provider_ref: &ResourceRef,
+        spec: &EphemeralProcessSpec,
+        controller_generation: ControllerGeneration,
+        timeout: Duration,
+    ) -> Result<ProviderLaunch, String> {
+        let provider = managed_provider_from_ref(provider_ref)?;
+        let ticket = resource_ticket(
+            &self.bundle,
+            resource_ref,
+            resource_uid,
+            resource_generation,
+            provider_ref,
+            spec.execution(),
+            &serde_json::to_vec(spec).map_err(|_| "provider-ticket:serialization".to_owned())?,
+            provider,
+            controller_generation,
+            timeout,
+        )?;
+        let report = match provider {
+            ManagedProvider::Minijail => self
+                .minijail
+                .launch(&ticket)
+                .await
+                .map_err(provider_error)?,
+            ManagedProvider::Systemd => {
+                self.systemd.launch(&ticket).await.map_err(provider_error)?
+            }
+        };
+        self.remember_resource(
+            resource_ref,
+            resource_uid,
+            resource_generation,
+            provider,
+            report.identity,
+        )?;
+        Ok(ProviderLaunch {
+            identity: report.identity,
+        })
+    }
+
+    /// Adopt one durable Process resource after daemon restart.
+    pub async fn adopt_resource(
+        &self,
+        resource_ref: &ResourceRef,
+        resource_uid: &ResourceUid,
+        resource_generation: ResourceGeneration,
+        provider_ref: &ResourceRef,
+        spec: &ProcessSpec,
+    ) -> Result<ProviderAdoption, String> {
+        self.adopt_resource_with_controller_generation(
+            resource_ref,
+            resource_uid,
+            resource_generation,
+            provider_ref,
+            spec,
+            default_controller_generation(),
+        )
+        .await
+    }
+
+    /// Adopt one durable Process resource with the controller generation
+    /// rehydrated from the owning Zone store.
+    pub async fn adopt_resource_with_controller_generation(
+        &self,
+        resource_ref: &ResourceRef,
+        resource_uid: &ResourceUid,
+        resource_generation: ResourceGeneration,
+        provider_ref: &ResourceRef,
+        spec: &ProcessSpec,
+        controller_generation: ControllerGeneration,
+    ) -> Result<ProviderAdoption, String> {
+        self.adopt_resource_with_execution(
+            resource_ref,
+            resource_uid,
+            resource_generation,
+            provider_ref,
+            spec.execution(),
+            &serde_json::to_vec(spec).map_err(|_| "provider-ticket:serialization".to_owned())?,
+            controller_generation,
+        )
+        .await
+    }
+
+    /// Adopt one ephemeral Process resource during continuation recovery.
+    pub async fn adopt_ephemeral_resource(
+        &self,
+        resource_ref: &ResourceRef,
+        resource_uid: &ResourceUid,
+        resource_generation: ResourceGeneration,
+        provider_ref: &ResourceRef,
+        spec: &EphemeralProcessSpec,
+    ) -> Result<ProviderAdoption, String> {
+        self.adopt_ephemeral_resource_with_controller_generation(
+            resource_ref,
+            resource_uid,
+            resource_generation,
+            provider_ref,
+            spec,
+            default_controller_generation(),
+        )
+        .await
+    }
+
+    /// Adopt one ephemeral Process resource with the controller generation
+    /// rehydrated from the owning Zone store.
+    pub async fn adopt_ephemeral_resource_with_controller_generation(
+        &self,
+        resource_ref: &ResourceRef,
+        resource_uid: &ResourceUid,
+        resource_generation: ResourceGeneration,
+        provider_ref: &ResourceRef,
+        spec: &EphemeralProcessSpec,
+        controller_generation: ControllerGeneration,
+    ) -> Result<ProviderAdoption, String> {
+        self.adopt_resource_with_execution(
+            resource_ref,
+            resource_uid,
+            resource_generation,
+            provider_ref,
+            spec.execution(),
+            &serde_json::to_vec(spec).map_err(|_| "provider-ticket:serialization".to_owned())?,
+            controller_generation,
+        )
+        .await
+    }
+
+    /// Probe one durable Process resource without retaining a new handle.
+    pub async fn probe_resource(
+        &self,
+        resource_ref: &ResourceRef,
+        resource_uid: &ResourceUid,
+        resource_generation: ResourceGeneration,
+        provider_ref: &ResourceRef,
+        spec: &ProcessSpec,
+    ) -> Result<ProviderLiveness, String> {
+        self.probe_resource_with_controller_generation(
+            resource_ref,
+            resource_uid,
+            resource_generation,
+            provider_ref,
+            spec,
+            default_controller_generation(),
+        )
+        .await
+    }
+
+    /// Probe one durable Process resource with the controller generation
+    /// rehydrated from the owning Zone store.
+    pub async fn probe_resource_with_controller_generation(
+        &self,
+        resource_ref: &ResourceRef,
+        resource_uid: &ResourceUid,
+        resource_generation: ResourceGeneration,
+        provider_ref: &ResourceRef,
+        spec: &ProcessSpec,
+        controller_generation: ControllerGeneration,
+    ) -> Result<ProviderLiveness, String> {
+        self.probe_resource_with_execution(
+            resource_ref,
+            resource_uid,
+            resource_generation,
+            provider_ref,
+            spec.execution(),
+            &serde_json::to_vec(spec).map_err(|_| "provider-ticket:serialization".to_owned())?,
+            controller_generation,
+        )
+        .await
+    }
+
+    /// Probe one ephemeral Process resource without retaining a new handle.
+    pub async fn probe_ephemeral_resource(
+        &self,
+        resource_ref: &ResourceRef,
+        resource_uid: &ResourceUid,
+        resource_generation: ResourceGeneration,
+        provider_ref: &ResourceRef,
+        spec: &EphemeralProcessSpec,
+    ) -> Result<ProviderLiveness, String> {
+        self.probe_ephemeral_resource_with_controller_generation(
+            resource_ref,
+            resource_uid,
+            resource_generation,
+            provider_ref,
+            spec,
+            default_controller_generation(),
+        )
+        .await
+    }
+
+    /// Probe one ephemeral Process resource with the controller generation
+    /// rehydrated from the owning Zone store.
+    pub async fn probe_ephemeral_resource_with_controller_generation(
+        &self,
+        resource_ref: &ResourceRef,
+        resource_uid: &ResourceUid,
+        resource_generation: ResourceGeneration,
+        provider_ref: &ResourceRef,
+        spec: &EphemeralProcessSpec,
+        controller_generation: ControllerGeneration,
+    ) -> Result<ProviderLiveness, String> {
+        self.probe_resource_with_execution(
+            resource_ref,
+            resource_uid,
+            resource_generation,
+            provider_ref,
+            spec.execution(),
+            &serde_json::to_vec(spec).map_err(|_| "provider-ticket:serialization".to_owned())?,
+            controller_generation,
+        )
+        .await
+    }
+
+    /// Stop one exact generic Process identity and finalize it.
+    pub async fn stop_resource(
+        &self,
+        resource_ref: &ResourceRef,
+        resource_uid: &ResourceUid,
+        resource_generation: ResourceGeneration,
+        provider_ref: &ResourceRef,
+        spec: &ProcessSpec,
+        term_timeout: Duration,
+        kill_timeout: Duration,
+    ) -> Result<bool, String> {
+        self.stop_resource_with_controller_generation(
+            resource_ref,
+            resource_uid,
+            resource_generation,
+            provider_ref,
+            spec,
+            default_controller_generation(),
+            term_timeout,
+            kill_timeout,
+        )
+        .await
+    }
+
+    /// Stop one exact generic Process identity with the controller
+    /// generation rehydrated from the owning Zone store.
+    pub async fn stop_resource_with_controller_generation(
+        &self,
+        resource_ref: &ResourceRef,
+        resource_uid: &ResourceUid,
+        resource_generation: ResourceGeneration,
+        provider_ref: &ResourceRef,
+        spec: &ProcessSpec,
+        controller_generation: ControllerGeneration,
+        term_timeout: Duration,
+        kill_timeout: Duration,
+    ) -> Result<bool, String> {
+        self.stop_resource_with_execution(
+            resource_ref,
+            resource_uid,
+            resource_generation,
+            provider_ref,
+            spec.execution(),
+            &serde_json::to_vec(spec).map_err(|_| "provider-ticket:serialization".to_owned())?,
+            controller_generation,
+            term_timeout,
+            kill_timeout,
+        )
+        .await
+    }
+
+    /// Stop one exact generic EphemeralProcess identity and finalize it.
+    pub async fn stop_ephemeral_resource(
+        &self,
+        resource_ref: &ResourceRef,
+        resource_uid: &ResourceUid,
+        resource_generation: ResourceGeneration,
+        provider_ref: &ResourceRef,
+        spec: &EphemeralProcessSpec,
+        term_timeout: Duration,
+        kill_timeout: Duration,
+    ) -> Result<bool, String> {
+        self.stop_ephemeral_resource_with_controller_generation(
+            resource_ref,
+            resource_uid,
+            resource_generation,
+            provider_ref,
+            spec,
+            default_controller_generation(),
+            term_timeout,
+            kill_timeout,
+        )
+        .await
+    }
+
+    /// Stop one exact generic EphemeralProcess identity with the controller
+    /// generation rehydrated from the owning Zone store.
+    pub async fn stop_ephemeral_resource_with_controller_generation(
+        &self,
+        resource_ref: &ResourceRef,
+        resource_uid: &ResourceUid,
+        resource_generation: ResourceGeneration,
+        provider_ref: &ResourceRef,
+        spec: &EphemeralProcessSpec,
+        controller_generation: ControllerGeneration,
+        term_timeout: Duration,
+        kill_timeout: Duration,
+    ) -> Result<bool, String> {
+        self.stop_resource_with_execution(
+            resource_ref,
+            resource_uid,
+            resource_generation,
+            provider_ref,
+            spec.execution(),
+            &serde_json::to_vec(spec).map_err(|_| "provider-ticket:serialization".to_owned())?,
+            controller_generation,
+            term_timeout,
+            kill_timeout,
+        )
+        .await
+    }
+
+    /// Finalize one terminal generic Process identity.
+    pub async fn finalize_resource(&self, resource_ref: &ResourceRef) -> Result<(), String> {
+        let Some(managed) = self
+            .managed_resources
+            .lock()
+            .map_err(|_| "provider-managed-state-poisoned".to_owned())?
+            .get(resource_ref)
+            .cloned()
+        else {
+            return Ok(());
+        };
+        let result = match managed.provider {
+            ManagedProvider::Minijail => self
+                .minijail
+                .port()
+                .finalize_identity(&managed.identity)
+                .await
+                .map_err(provider_error),
+            ManagedProvider::Systemd => self
+                .systemd
+                .port()
+                .finalize_identity(&managed.identity)
+                .await
+                .map_err(provider_error),
+        };
+        match result {
+            Ok(()) => {
+                self.forget_resource(resource_ref);
+                Ok(())
+            }
+            Err(error) if error == "pidfd-unavailable" || error == "process-vanished" => {
+                self.forget_resource(resource_ref);
+                Ok(())
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Return whether a generic resource retains a verified identity.
+    pub fn has_active_resource(&self, resource_ref: &ResourceRef) -> bool {
+        self.managed_resources
+            .lock()
+            .map(|managed| managed.contains_key(resource_ref))
+            .unwrap_or(false)
+    }
+
+    async fn adopt_resource_with_execution(
+        &self,
+        resource_ref: &ResourceRef,
+        resource_uid: &ResourceUid,
+        resource_generation: ResourceGeneration,
+        provider_ref: &ResourceRef,
+        execution: &d2b_contracts::v3::process::ExecutionSpec,
+        spec_bytes: &[u8],
+        controller_generation: ControllerGeneration,
+    ) -> Result<ProviderAdoption, String> {
+        let provider = managed_provider_from_ref(provider_ref)?;
+        let ticket = resource_ticket(
+            &self.bundle,
+            resource_ref,
+            resource_uid,
+            resource_generation,
+            provider_ref,
+            execution,
+            spec_bytes,
+            provider,
+            controller_generation,
+            Duration::from_secs(30),
+        )?;
+        let outcome = match provider {
+            ManagedProvider::Minijail => {
+                self.minijail.adopt(&ticket).await.map_err(provider_error)?
+            }
+            ManagedProvider::Systemd => {
+                self.systemd.adopt(&ticket).await.map_err(provider_error)?
+            }
+        };
+        match outcome {
+            AdoptionOutcome::Absent => Ok(ProviderAdoption::Absent),
+            AdoptionOutcome::Adopted(report) => {
+                self.remember_resource(
+                    resource_ref,
+                    resource_uid,
+                    resource_generation,
+                    provider,
+                    report.identity,
+                )?;
+                Ok(ProviderAdoption::Adopted(report))
+            }
+            AdoptionOutcome::Quarantined(report) => {
+                self.forget_resource(resource_ref);
+                Ok(ProviderAdoption::Quarantined(report))
+            }
+        }
+    }
+
+    async fn probe_resource_with_execution(
+        &self,
+        resource_ref: &ResourceRef,
+        resource_uid: &ResourceUid,
+        resource_generation: ResourceGeneration,
+        provider_ref: &ResourceRef,
+        execution: &d2b_contracts::v3::process::ExecutionSpec,
+        spec_bytes: &[u8],
+        controller_generation: ControllerGeneration,
+    ) -> Result<ProviderLiveness, String> {
+        let provider = managed_provider_from_ref(provider_ref)?;
+        let ticket = resource_ticket(
+            &self.bundle,
+            resource_ref,
+            resource_uid,
+            resource_generation,
+            provider_ref,
+            execution,
+            spec_bytes,
+            provider,
+            controller_generation,
+            Duration::from_secs(30),
+        )?;
+        let candidate = match provider {
+            ManagedProvider::Minijail => self
+                .minijail
+                .port()
+                .probe(&ticket)
+                .await
+                .map_err(provider_error)?,
+            ManagedProvider::Systemd => self
+                .systemd
+                .port()
+                .probe(&ticket)
+                .await
+                .map_err(provider_error)?,
+        };
+        let Some(candidate) = candidate else {
+            return Ok(ProviderLiveness::Exited);
+        };
+        let (expected_owner, required) = match provider {
+            ManagedProvider::Minijail => (
+                self.minijail.profile().wait_reap_owner(),
+                self.minijail.profile().required_identity_bindings(),
+            ),
+            ManagedProvider::Systemd => (
+                self.systemd.profile().wait_reap_owner(),
+                self.systemd.profile().required_identity_bindings(),
+            ),
+        };
+        if candidate.wait_reap_owner != expected_owner || candidate.validate(required).is_err() {
+            Ok(ProviderLiveness::Unknown)
+        } else {
+            Ok(ProviderLiveness::Alive)
+        }
+    }
+
+    async fn stop_resource_with_execution(
+        &self,
+        resource_ref: &ResourceRef,
+        resource_uid: &ResourceUid,
+        resource_generation: ResourceGeneration,
+        provider_ref: &ResourceRef,
+        execution: &d2b_contracts::v3::process::ExecutionSpec,
+        spec_bytes: &[u8],
+        controller_generation: ControllerGeneration,
+        term_timeout: Duration,
+        kill_timeout: Duration,
+    ) -> Result<bool, String> {
+        let managed = self
+            .managed_resources
+            .lock()
+            .map_err(|_| "provider-managed-state-poisoned".to_owned())?
+            .get(resource_ref)
+            .cloned()
+            .ok_or_else(|| "provider-process-not-found".to_owned())?;
+        if managed.uid != *resource_uid || managed.generation != resource_generation {
+            return Err("provider-process-identity-changed".to_owned());
+        }
+        match self
+            .stop_resource_identity(&managed, StopClass::Drain)
+            .await
+        {
+            Ok(()) => {}
+            Err(error) if error == "pidfd-unavailable" || error == "process-vanished" => {}
+            Err(error) => return Err(error),
+        }
+        let deadline = Instant::now() + term_timeout;
+        loop {
+            match self
+                .probe_resource_with_execution(
+                    resource_ref,
+                    resource_uid,
+                    resource_generation,
+                    provider_ref,
+                    execution,
+                    spec_bytes,
+                    controller_generation,
+                )
+                .await?
+            {
+                ProviderLiveness::Exited => {
+                    self.finalize_resource(resource_ref).await?;
+                    return Ok(false);
+                }
+                ProviderLiveness::Alive => {}
+                ProviderLiveness::Unknown if Instant::now() >= deadline => break,
+                ProviderLiveness::Unknown => {}
+            }
+            if Instant::now() >= deadline {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        match self
+            .stop_resource_identity(&managed, StopClass::Terminate)
+            .await
+        {
+            Ok(()) => {}
+            Err(error) if error == "pidfd-unavailable" || error == "process-vanished" => {}
+            Err(error) => return Err(error),
+        }
+        let kill_deadline = Instant::now() + kill_timeout;
+        loop {
+            match self
+                .probe_resource_with_execution(
+                    resource_ref,
+                    resource_uid,
+                    resource_generation,
+                    provider_ref,
+                    execution,
+                    spec_bytes,
+                    controller_generation,
+                )
+                .await?
+            {
+                ProviderLiveness::Exited => {
+                    self.finalize_resource(resource_ref).await?;
+                    return Ok(true);
+                }
+                ProviderLiveness::Alive | ProviderLiveness::Unknown => {}
+            }
+            if Instant::now() >= kill_deadline {
+                return Err("provider-process-kill-timeout".to_owned());
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
     }
 
     /// Adopt one trusted process node after a daemon restart.
@@ -329,16 +996,12 @@ impl ProductionProcessProviders {
     ) -> Result<ProviderAdoption, String> {
         let ticket = self.ticket(vm, node)?;
         let outcome = match self.provider_for(node) {
-            ManagedProvider::Minijail => self
-                .minijail
-                .adopt(&ticket)
-                .await
-                .map_err(provider_error)?,
-            ManagedProvider::Systemd => self
-                .systemd
-                .adopt(&ticket)
-                .await
-                .map_err(provider_error)?,
+            ManagedProvider::Minijail => {
+                self.minijail.adopt(&ticket).await.map_err(provider_error)?
+            }
+            ManagedProvider::Systemd => {
+                self.systemd.adopt(&ticket).await.map_err(provider_error)?
+            }
         };
         match outcome {
             AdoptionOutcome::Absent => Ok(ProviderAdoption::Absent),
@@ -574,29 +1237,73 @@ impl ProductionProcessProviders {
         Ok(())
     }
 
+    fn remember_resource(
+        &self,
+        resource_ref: &ResourceRef,
+        uid: &ResourceUid,
+        generation: ResourceGeneration,
+        provider: ManagedProvider,
+        identity: ProcessIdentityDigest,
+    ) -> Result<(), String> {
+        self.managed_resources
+            .lock()
+            .map_err(|_| "provider-managed-state-poisoned".to_owned())?
+            .insert(
+                resource_ref.clone(),
+                ManagedResource {
+                    provider,
+                    identity,
+                    uid: uid.clone(),
+                    generation,
+                },
+            );
+        Ok(())
+    }
+
     fn forget(&self, vm: &str, node: &ProcessNode) {
         if let Ok(mut managed) = self.managed.lock() {
             managed.remove(&(vm.to_owned(), Self::tracked_role_id(node)));
         }
     }
 
-    async fn stop_identity(
+    fn forget_resource(&self, resource_ref: &ResourceRef) {
+        if let Ok(mut managed) = self.managed_resources.lock() {
+            managed.remove(resource_ref);
+        }
+    }
+
+    async fn stop_provider_identity(
         &self,
-        managed: ManagedProcess,
+        provider: ManagedProvider,
+        identity: &ProcessIdentityDigest,
         class: StopClass,
     ) -> Result<(), String> {
-        match managed.provider {
+        match provider {
             ManagedProvider::Minijail => self
                 .minijail
-                .stop(&managed.identity, class)
+                .stop(identity, class)
                 .await
                 .map_err(provider_error),
             ManagedProvider::Systemd => self
                 .systemd
-                .stop(&managed.identity, class)
+                .stop(identity, class)
                 .await
                 .map_err(provider_error),
         }
+    }
+
+    async fn stop_identity(&self, managed: ManagedProcess, class: StopClass) -> Result<(), String> {
+        self.stop_provider_identity(managed.provider, &managed.identity, class)
+            .await
+    }
+
+    async fn stop_resource_identity(
+        &self,
+        managed: &ManagedResource,
+        class: StopClass,
+    ) -> Result<(), String> {
+        self.stop_provider_identity(managed.provider, &managed.identity, class)
+            .await
     }
 
     fn ticket(&self, vm: &str, node: &ProcessNode) -> Result<LaunchTicket, String> {
@@ -609,19 +1316,121 @@ impl ProductionProcessProviders {
         node: &ProcessNode,
         timeout: Duration,
     ) -> Result<LaunchTicket, String> {
-        build_ticket(
-            &self.bundle,
-            vm,
-            node,
-            self.provider_for(node),
-            timeout,
-        )
+        build_ticket(&self.bundle, vm, node, self.provider_for(node), timeout)
             .map_err(|error| format!("provider-ticket:{}", error.code()))
     }
 }
 
 fn provider_error(error: ProcessConformanceError) -> String {
     error.code().to_owned()
+}
+
+fn managed_provider_from_ref(provider_ref: &ResourceRef) -> Result<ManagedProvider, String> {
+    match provider_ref.name().as_str() {
+        "system-minijail" => Ok(ManagedProvider::Minijail),
+        "system-systemd" => Ok(ManagedProvider::Systemd),
+        _ => Err("provider-ticket:unsupported-provider".to_owned()),
+    }
+}
+
+fn default_controller_generation() -> ControllerGeneration {
+    ControllerGeneration::new(1).expect("controller generation one is valid")
+}
+
+fn resource_ticket(
+    bundle: &BundleResolver,
+    resource_ref: &ResourceRef,
+    resource_uid: &ResourceUid,
+    resource_generation: ResourceGeneration,
+    provider_ref: &ResourceRef,
+    execution: &d2b_contracts::v3::process::ExecutionSpec,
+    spec_bytes: &[u8],
+    provider: ManagedProvider,
+    controller_generation: ControllerGeneration,
+    timeout: Duration,
+) -> Result<LaunchTicket, String> {
+    let execution_domain = match execution.domain().unwrap_or(ExecutionDomain::System) {
+        ExecutionDomain::System => d2b_core::processes::ProcessExecutionDomain::System,
+        ExecutionDomain::User => d2b_core::processes::ProcessExecutionDomain::User,
+    };
+    let user_ref = execution.user_ref().map(ResourceRef::to_canonical_string);
+    if bundle
+        .find_runner_intent_for_process(
+            &execution.execution_ref().to_canonical_string(),
+            execution_domain,
+            user_ref.as_deref(),
+            execution.template().as_str(),
+        )
+        .is_none()
+    {
+        return Err("provider-ticket:template-not-found".to_owned());
+    }
+    let provider_name = provider_ref.name().as_str();
+    let owner_provider =
+        BoundedToken::parse(provider_name).map_err(|_| "provider-ticket:invalid-provider")?;
+    let component = BoundedToken::parse("process-controller")
+        .map_err(|_| "provider-ticket:invalid-component")?;
+    let generation = resource_generation.get();
+    let operation_uid = stable_uid(
+        "operation",
+        &resource_ref.to_canonical_string(),
+        resource_uid.as_str(),
+        generation,
+    );
+    let deadline_ms = timeout.as_millis().clamp(1, 900_000) as u32;
+    let ticket = LaunchTicket::new(
+        resource_ref.clone(),
+        resource_uid.clone(),
+        resource_generation,
+        controller_generation,
+        owner_provider.clone(),
+        component,
+        execution.template().clone(),
+        execution.execution_ref().clone(),
+        execution.domain().unwrap_or(ExecutionDomain::System),
+        execution.user_ref().cloned(),
+        owner_provider,
+        compiled_resource_digests(bundle, resource_ref, provider, spec_bytes),
+        OperationBinding::new(operation_uid, deadline_ms)
+            .map_err(|_| "provider-ticket:invalid-operation")?,
+        required_identity(provider),
+    )
+    .map_err(|error| format!("provider-ticket:{}", error.code()))?;
+    Ok(ticket.with_readiness(ReadinessExpectation::None))
+}
+
+fn compiled_resource_digests(
+    bundle: &BundleResolver,
+    resource_ref: &ResourceRef,
+    provider: ManagedProvider,
+    spec_bytes: &[u8],
+) -> CompiledDigests {
+    fn digest(label: &str, bytes: &[u8]) -> ConfigurationDigest {
+        let mut hasher = Sha256::new();
+        hasher.update(b"d2bd-provider-resource-ticket-v1");
+        hasher.update(label.as_bytes());
+        hasher.update([0]);
+        hasher.update(bytes);
+        ConfigurationDigest::from_bytes(hasher.finalize().into())
+    }
+    let context = format!(
+        "{}:{}:{}",
+        resource_ref.to_canonical_string(),
+        match provider {
+            ManagedProvider::Minijail => "system-minijail",
+            ManagedProvider::Systemd => "system-systemd",
+        },
+        bundle.bundle.bundle_hash.as_deref().unwrap_or("bundle"),
+    );
+    CompiledDigests {
+        sandbox: digest(&format!("{context}:sandbox"), spec_bytes),
+        budget: digest(&format!("{context}:budget"), spec_bytes),
+        mounts: digest(&format!("{context}:mounts"), spec_bytes),
+        devices: digest(&format!("{context}:devices"), spec_bytes),
+        network: digest(&format!("{context}:network"), spec_bytes),
+        endpoints: digest(&format!("{context}:endpoints"), spec_bytes),
+        fd_table: digest(&format!("{context}:fd-table"), spec_bytes),
+    }
 }
 
 fn build_ticket(
@@ -659,10 +1468,8 @@ fn build_ticket(
     let ticket = LaunchTicket::new(
         process_ref,
         stable_uid("process", vm, &node.id.0, generation),
-        ResourceGeneration::new(generation)
-            .map_err(|_| ProcessConformanceError::InvalidTicket)?,
-        ControllerGeneration::new(1)
-            .map_err(|_| ProcessConformanceError::InvalidTicket)?,
+        ResourceGeneration::new(generation).map_err(|_| ProcessConformanceError::InvalidTicket)?,
+        ControllerGeneration::new(1).map_err(|_| ProcessConformanceError::InvalidTicket)?,
         owner_provider,
         component,
         template,
@@ -763,8 +1570,22 @@ fn stable_uid(label: &str, vm: &str, role: &str, generation: u64) -> ResourceUid
     bytes[8] = (bytes[8] & 0x3f) | 0x80;
     let rendered = format!(
         "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
-        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
-        bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15],
+        bytes[0],
+        bytes[1],
+        bytes[2],
+        bytes[3],
+        bytes[4],
+        bytes[5],
+        bytes[6],
+        bytes[7],
+        bytes[8],
+        bytes[9],
+        bytes[10],
+        bytes[11],
+        bytes[12],
+        bytes[13],
+        bytes[14],
+        bytes[15],
     );
     ResourceUid::parse(rendered).expect("stable provider uid")
 }

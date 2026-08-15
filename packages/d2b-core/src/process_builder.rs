@@ -145,6 +145,9 @@ impl ProcessNodeBuilder {
             }
         }
         Ok(ProcessNode {
+            execution_ref: None,
+            execution_domain: None,
+            user_ref: None,
             id,
             role: self.role,
             unit: self.unit,

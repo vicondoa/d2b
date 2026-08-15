@@ -14,6 +14,8 @@ use d2b_contracts::broker_wire::{
     RunnerRole, RunnerSignal, SignalRunnerRequest, SpawnRunnerRequest,
 };
 use d2b_contracts::types::{BundleOpId, RoleId, VmId};
+use d2b_contracts::v3::ResourceRef;
+use d2b_contracts::v3::execution_policy::ExecutionDomain;
 use d2b_core::bundle_resolver::{BundleResolver, intent_id_runner};
 use d2b_core::processes::ProcessRole;
 use d2b_process::{
@@ -35,6 +37,12 @@ const MAX_PENDING_OBSERVATIONS: usize = 1024;
 pub struct BrokerLaunchIntent {
     /// Broker VM scope.
     pub vm_id: VmId,
+    /// Canonical Host or Guest execution target.
+    pub execution_ref: ResourceRef,
+    /// Canonical execution domain.
+    pub domain: ExecutionDomain,
+    /// Canonical User identity for a user-domain launch.
+    pub user_ref: Option<ResourceRef>,
     /// Broker role scope.
     pub role_id: RoleId,
     /// Existing closed broker runner role selecting its trusted argv compiler.
@@ -255,27 +263,72 @@ impl BundleBackedLaunchResolver {
         request: &ProcessRequest,
     ) -> Result<BrokerLaunchIntent, ProcessEffectError> {
         let ticket = request.ticket();
-        if ticket.execution_ref().resource_type().as_str() != "Guest" {
+        if !matches!(
+            ticket.execution_ref().resource_type().as_str(),
+            "Host" | "Guest"
+        ) {
             return Err(ProcessEffectError::UnsupportedProvider);
         }
         let vm_name = ticket.execution_ref().name().as_str();
         let process_role_id = ticket.process_ref().name().as_str();
         let intent_id = intent_id_runner(vm_name, process_role_id);
-        let intent = self
-            .bundle
-            .find_runner_intent(&intent_id)
-            .ok_or(ProcessEffectError::UnsupportedProvider)?;
+        let expected_execution_ref = ticket.execution_ref().to_canonical_string();
+        let expected_execution_domain = match ticket.domain() {
+            ExecutionDomain::System => d2b_core::processes::ProcessExecutionDomain::System,
+            ExecutionDomain::User => d2b_core::processes::ProcessExecutionDomain::User,
+        };
+        let expected_user_ref = ticket.user_ref().map(ResourceRef::to_canonical_string);
+        let legacy_intent = self.bundle.find_runner_intent(&intent_id);
+        let generic_intent = self.bundle.find_runner_intent_for_process(
+            &expected_execution_ref,
+            expected_execution_domain,
+            expected_user_ref.as_deref(),
+            ticket.template().as_str(),
+        );
+        let (intent, legacy_identity) = match ticket.component().as_str() {
+            "vm-process" => (
+                legacy_intent.ok_or(ProcessEffectError::UnsupportedProvider)?,
+                true,
+            ),
+            "process-controller" => (
+                generic_intent.ok_or(ProcessEffectError::UnsupportedProvider)?,
+                false,
+            ),
+            _ => return Err(ProcessEffectError::UnsupportedProvider),
+        };
         let role = runner_role_for_process_role(&intent.role)
             .ok_or(ProcessEffectError::UnsupportedProvider)?;
         let role_id = match &intent.role {
             ProcessRole::CloudHypervisorRunner => "ch-runner",
             _ => intent.role_id.as_str(),
         };
-        if intent.vm_name != vm_name || intent.role_id != process_role_id {
+        if intent.vm_name != vm_name || (legacy_identity && intent.role_id != process_role_id) {
+            return Err(ProcessEffectError::IdentityChanged);
+        }
+        if intent.execution_ref != expected_execution_ref {
+            return Err(ProcessEffectError::IdentityChanged);
+        }
+        let expected_domain = match intent.execution_domain {
+            d2b_core::processes::ProcessExecutionDomain::System => ExecutionDomain::System,
+            d2b_core::processes::ProcessExecutionDomain::User => ExecutionDomain::User,
+        };
+        if ticket.domain() != expected_domain {
+            return Err(ProcessEffectError::IdentityChanged);
+        }
+        let expected_user_ref = intent
+            .user_ref
+            .as_deref()
+            .map(ResourceRef::parse)
+            .transpose()
+            .map_err(|_| ProcessEffectError::IdentityChanged)?;
+        if ticket.user_ref() != expected_user_ref.as_ref() {
             return Err(ProcessEffectError::IdentityChanged);
         }
         Ok(BrokerLaunchIntent {
             vm_id: VmId::new(vm_name),
+            execution_ref: ticket.execution_ref().clone(),
+            domain: ticket.domain(),
+            user_ref: ticket.user_ref().cloned(),
             role_id: RoleId::new(role_id),
             role,
             bundle_runner_intent_ref: BundleOpId::new(intent.intent_id.clone()),
@@ -432,6 +485,9 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
     ) -> Result<BackendLaunch<Self::Handle>, ProcessEffectError> {
         let intent = self.resolver.resolve(&request)?;
         let frame = self.request(BrokerRequest::SpawnRunner(SpawnRunnerRequest {
+            execution_ref: Some(intent.execution_ref.clone()),
+            execution_domain: Some(intent.domain),
+            user_ref: intent.user_ref.clone(),
             vm_id: intent.vm_id.clone(),
             role_id: intent.role_id.clone(),
             role: intent.role,
@@ -681,6 +737,9 @@ mod tests {
         BrokerObservedProcess {
             intent: BrokerLaunchIntent {
                 vm_id: VmId::new("corp-vm"),
+                execution_ref: ResourceRef::parse("Host/local").unwrap(),
+                domain: ExecutionDomain::System,
+                user_ref: None,
                 role_id: RoleId::new("worker"),
                 role: RunnerRole::Virtiofsd,
                 bundle_runner_intent_ref: BundleOpId::new("runner:vm:corp-vm:role:worker"),

@@ -85,11 +85,13 @@ const DEFAULT_BUNDLE_PATH: &str = "/var/lib/d2b/current-bundle/manifest.json";
 const DEFAULT_REALM_CONTROLLERS_PATH: &str = "/etc/d2b/realm-controllers.json";
 const DEFAULT_REALM_IDENTITY_PATH: &str = "/etc/d2b/realm-identity.json";
 const DEFAULT_STATE_DIR: &str = "/var/lib/d2b";
+const DEFAULT_ACTIVATION_HELPER_PATH: &str = "/run/current-system/sw/bin/d2b-activation-helper";
 const CAPABILITIES: &[&str] = &[
     "Hello",
     "ValidateBundle",
     "ExportBrokerAudit",
     "MigrateLegacySwtpmState",
+    "ApplyHostGenerationHandoff",
 ];
 const DEFAULT_IPC_REQUESTS_PER_UID_PER_SECOND: u32 = 512;
 const IPC_RATE_LIMIT_WINDOW: Duration = Duration::from_secs(1);
@@ -115,6 +117,9 @@ pub struct ServerConfig {
     /// fingerprints only; loading it does not enable trust sessions.
     pub realm_identity_path: PathBuf,
     pub state_dir: PathBuf,
+    /// Trusted target-local activation helper. The daemon never supplies
+    /// this path on the wire.
+    pub activation_helper_path: PathBuf,
     pub d2bd_uid: u32,
     pub d2bd_gid: u32,
     /// Directory for the StoreSync-only observability JSONL export
@@ -351,6 +356,7 @@ where
             let mut realm_controllers_path = PathBuf::from(DEFAULT_REALM_CONTROLLERS_PATH);
             let mut realm_identity_path = PathBuf::from(DEFAULT_REALM_IDENTITY_PATH);
             let mut state_dir = PathBuf::from(DEFAULT_STATE_DIR);
+            let mut activation_helper_path = PathBuf::from(DEFAULT_ACTIVATION_HELPER_PATH);
             let mut store_sync_export_dir =
                 PathBuf::from(crate::ops::store_sync_export::DEFAULT_STORE_SYNC_EXPORT_DIR);
             let mut d2bd_uid = None;
@@ -400,6 +406,11 @@ where
                     "--state-dir" => {
                         index += 1;
                         state_dir = PathBuf::from(expect_arg(&rest, index, "--state-dir")?);
+                    }
+                    "--activation-helper-path" => {
+                        index += 1;
+                        activation_helper_path =
+                            PathBuf::from(expect_arg(&rest, index, "--activation-helper-path")?);
                     }
                     "--store-sync-export-dir" => {
                         index += 1;
@@ -468,6 +479,7 @@ where
                 realm_controllers_path,
                 realm_identity_path,
                 state_dir,
+                activation_helper_path,
                 d2bd_uid: d2bd_uid.unwrap_or(fallback_uid),
                 d2bd_gid: d2bd_gid.unwrap_or(fallback_gid),
                 store_sync_export_dir,
@@ -2599,6 +2611,40 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                 pidfd,
             ))
         }
+        RealBrokerRequest::CheckSystemdUserManager(req) => {
+            let resolver = require_resolver_ref(resolver.map(std::sync::Arc::as_ref))?;
+            let available = backend.check_systemd_user_manager(resolver, &req)?;
+            write_success_op_record!(
+                audit_log,
+                bundle_metadata,
+                "CheckSystemdUserManager",
+                req.role_id.as_str(),
+                caller_uid,
+                caller_gid,
+                &caller_role,
+                req.vm_id.as_str(),
+                req.role_id.as_str(),
+                tracing_span_id_str(req.tracing_span_id.as_ref()),
+                OperationFields::SystemdUnit {
+                    vm_id: req.vm_id.as_str().to_owned(),
+                    role_id: req.role_id.as_str().to_owned(),
+                    role: req.role.as_str().to_owned(),
+                    bundle_runner_intent_ref: req.bundle_runner_intent_ref.as_str().to_owned(),
+                    domain: systemd_domain_name(req.domain).to_owned(),
+                    action: "check-user-manager".to_owned(),
+                    stopped: None,
+                },
+            )?;
+            Ok(DispatchResult::no_fds(
+                BrokerResponse::CheckSystemdUserManager(
+                    d2b_contracts::broker_wire::CheckSystemdUserManagerResponse {
+                        vm_id: req.vm_id,
+                        role_id: req.role_id,
+                        available,
+                    },
+                ),
+            ))
+        }
         RealBrokerRequest::ObserveSystemdUnit(req) => {
             let resolver = require_resolver_ref(resolver.map(std::sync::Arc::as_ref))?;
             let identity = backend.observe_systemd_unit(resolver, &req)?;
@@ -2733,6 +2779,28 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                 BrokerResponse::OpenZoneStore(outcome.response),
                 outcome.database_fd,
             ))
+        }
+        RealBrokerRequest::CgroupKill(req) => {
+            let resolver = require_resolver(resolver)?;
+            crate::ops::cgroup::live_kill_runner_cgroup(resolver, &req)
+                .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
+            write_success_op_record!(
+                audit_log,
+                bundle_metadata,
+                "CgroupKill",
+                &format!("{}:{}", req.vm_id.as_str(), req.role_id.as_str()),
+                caller_uid,
+                caller_gid,
+                &caller_role,
+                req.vm_id.as_str(),
+                req.role_id.as_str(),
+                tracing_span_id_str(req.tracing_span_id.as_ref()),
+                OperationFields::CgroupKill {
+                    vm_id: req.vm_id.as_str().to_owned(),
+                    role_id: req.role_id.as_str().to_owned(),
+                },
+            )?;
+            Ok(DispatchResult::no_fds(ack_response("CgroupKill")))
         }
         RealBrokerRequest::SignalRunner(req) => {
             // Boundary note: d2bd owns operator authz classification; the
@@ -4327,6 +4395,65 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                     notes: outcome.notes,
                 },
             )))
+        }
+        RealBrokerRequest::ApplyHostGenerationHandoff(req) => {
+            let target = req.target.to_canonical_string();
+            let fields = OperationFields::ApplyHostGenerationHandoff {
+                target: target.clone(),
+                source_generation: req.intent.source_generation,
+                target_generation: req.intent.target_generation,
+                state: "requested".to_owned(),
+            };
+            if !caller_role_is_admin(&caller_role)
+                || !matches!(
+                    req.caller_role,
+                    d2b_contracts::host_generation::HandoffCallerRole::Lifecycle
+                        | d2b_contracts::host_generation::HandoffCallerRole::Admin
+                )
+            {
+                write_decision_op_record!(
+                    audit_log,
+                    bundle_metadata,
+                    "ApplyHostGenerationHandoff",
+                    &target,
+                    caller_uid,
+                    caller_gid,
+                    &caller_role,
+                    &target,
+                    "host-generation",
+                    None,
+                    "denied-refused",
+                    Some("handoff-requires-admin"),
+                    fields,
+                )?;
+                return Err(BrokerError::AuditRequiresAdmin);
+            }
+            let response = backend.apply_host_generation_handoff(
+                &config.state_dir,
+                &config.activation_helper_path,
+                &req,
+            )?;
+            write_success_op_record!(
+                audit_log,
+                bundle_metadata,
+                "ApplyHostGenerationHandoff",
+                &response.target.to_canonical_string(),
+                caller_uid,
+                caller_gid,
+                &caller_role,
+                &response.target.to_canonical_string(),
+                "host-generation",
+                None,
+                OperationFields::ApplyHostGenerationHandoff {
+                    target,
+                    source_generation: response.source_generation,
+                    target_generation: response.target_generation,
+                    state: format!("{:?}", response.state).to_lowercase(),
+                },
+            )?;
+            Ok(DispatchResult::no_fds(
+                BrokerResponse::ApplyHostGenerationHandoff(response),
+            ))
         }
         RealBrokerRequest::RunActivation(req) => {
             let resolver = require_resolver(resolver)?;
@@ -6077,6 +6204,12 @@ trait DispatchBackend {
         request: &d2b_contracts::broker_wire::StartTransientUnitRequest,
     ) -> Result<(d2b_contracts::broker_wire::SystemdUnitIdentity, OwnedFd), BrokerError>;
 
+    fn check_systemd_user_manager(
+        &self,
+        resolver: &BundleResolver,
+        request: &d2b_contracts::broker_wire::CheckSystemdUserManagerRequest,
+    ) -> Result<bool, BrokerError>;
+
     fn observe_systemd_unit(
         &self,
         resolver: &BundleResolver,
@@ -6128,6 +6261,16 @@ trait DispatchBackend {
         phase: d2b_contracts::broker_wire::ActivationPhase,
         mode: d2b_contracts::broker_wire::ActivationMode,
     ) -> Result<crate::live_handlers::ActivationOutcome, BrokerError>;
+
+    fn apply_host_generation_handoff(
+        &self,
+        state_dir: &std::path::Path,
+        helper_path: &std::path::Path,
+        request: &d2b_contracts::host_generation::ApplyHostGenerationHandoff,
+    ) -> Result<
+        d2b_contracts::broker_wire::ApplyHostGenerationHandoffResponse,
+        BrokerError,
+    >;
 
     fn run_gc(
         &self,
@@ -6483,6 +6626,15 @@ impl DispatchBackend for LiveDispatchBackend {
             .map_err(|error| BrokerError::LiveHandler(error.to_string()))
     }
 
+    fn check_systemd_user_manager(
+        &self,
+        resolver: &BundleResolver,
+        request: &d2b_contracts::broker_wire::CheckSystemdUserManagerRequest,
+    ) -> Result<bool, BrokerError> {
+        crate::ops::systemd::check_user_manager(resolver, request)
+            .map_err(|error| BrokerError::LiveHandler(error.to_string()))
+    }
+
     fn observe_systemd_unit(
         &self,
         resolver: &BundleResolver,
@@ -6609,6 +6761,23 @@ impl DispatchBackend for LiveDispatchBackend {
         let exec = crate::ops::exec_reconcile::SystemReconcileExecutor;
         crate::live_handlers::live_run_activation(&exec, intent, store_view_intent, phase, mode)
             .map_err(map_activation_live_error)
+    }
+
+    fn apply_host_generation_handoff(
+        &self,
+        state_dir: &std::path::Path,
+        helper_path: &std::path::Path,
+        request: &d2b_contracts::host_generation::ApplyHostGenerationHandoff,
+    ) -> Result<
+        d2b_contracts::broker_wire::ApplyHostGenerationHandoffResponse,
+        BrokerError,
+    > {
+        crate::ops::host_generation_handoff::apply_with_helper(
+            state_dir,
+            helper_path,
+            request,
+        )
+        .map_err(|error| BrokerError::LiveHandler(error.to_string()))
     }
 
     fn run_gc(
@@ -9355,7 +9524,10 @@ fn caller_role_is_admin(caller_role: &CallerRole) -> bool {
     }
     #[cfg(not(feature = "layer1-bootstrap"))]
     {
-        matches!(caller_role, CallerRole::AdminUid { .. })
+        matches!(
+            caller_role,
+            CallerRole::AdminUid { .. } | CallerRole::RootUid { .. }
+        )
     }
 }
 
@@ -11308,6 +11480,9 @@ mod tests {
                     workload_identity: None,
                     vm: "corp-vm".to_owned(),
                     nodes: vec![ProcessNode {
+                        execution_ref: None,
+                        execution_domain: None,
+                        user_ref: None,
                         id: NodeId("ch-runner".to_owned()),
                         role: ProcessRole::CloudHypervisorRunner,
                         unit: Some("d2b@corp-vm.service".to_owned()),
@@ -11350,6 +11525,9 @@ mod tests {
                     workload_identity: None,
                     vm: "sys-work-usbipd".to_owned(),
                     nodes: vec![ProcessNode {
+                        execution_ref: None,
+                        execution_domain: None,
+                        user_ref: None,
                         id: NodeId("backend".to_owned()),
                         role: ProcessRole::Usbip,
                         unit: None,
@@ -11560,6 +11738,9 @@ mod tests {
             serde_json::from_slice(&fs::read(&bundle.processes_path).expect("read processes.json"))
                 .expect("parse processes.json");
         processes.vms[0].nodes.push(ProcessNode {
+            execution_ref: None,
+            execution_domain: None,
+            user_ref: None,
             id: NodeId("video".to_owned()),
             role: ProcessRole::Video,
             unit: None,
@@ -11680,6 +11861,7 @@ mod tests {
             realm_controllers_path: root.join("realm-controllers.json"),
             realm_identity_path: root.join("realm-identity.json"),
             state_dir: root.join("state"),
+            activation_helper_path: root.join("activation-helper"),
             d2bd_uid: 1000,
             d2bd_gid: Gid::current().as_raw(),
             store_sync_export_dir: root.join("observability").join("store-sync"),
@@ -12027,6 +12209,17 @@ mod tests {
             })
         }
 
+        fn check_systemd_user_manager(
+            &self,
+            _resolver: &BundleResolver,
+            _request: &d2b_contracts::broker_wire::CheckSystemdUserManagerRequest,
+        ) -> Result<bool, BrokerError> {
+            Err(BrokerError::Unimplemented {
+                operation: "CheckSystemdUserManager",
+                target_wave: "W6",
+            })
+        }
+
         fn observe_systemd_unit(
             &self,
             _resolver: &BundleResolver,
@@ -12155,6 +12348,19 @@ mod tests {
                         .or(Some(store_view_intent.generation))
                 },
             })
+        }
+
+        fn apply_host_generation_handoff(
+            &self,
+            state_dir: &std::path::Path,
+            helper_path: &std::path::Path,
+            request: &d2b_contracts::host_generation::ApplyHostGenerationHandoff,
+        ) -> Result<
+            d2b_contracts::broker_wire::ApplyHostGenerationHandoffResponse,
+            BrokerError,
+        > {
+            crate::ops::host_generation_handoff::apply_with_helper(state_dir, helper_path, request)
+                .map_err(|error| BrokerError::LiveHandler(error.to_string()))
         }
 
         fn run_gc(
@@ -12842,6 +13048,9 @@ mod tests {
 
         let spawn_runner = assert_dispatch(
             BrokerRequest::SpawnRunner(d2b_contracts::broker_wire::SpawnRunnerRequest {
+                execution_ref: None,
+                execution_domain: None,
+                user_ref: None,
                 workload_identity: None,
                 vm_id: VmId::new("corp-vm"),
                 role_id: RoleId::new("ch-runner"),
@@ -13275,6 +13484,9 @@ mod tests {
         let caller_role = BrokerCallerRole::AdminUid { uid: 1000 };
         let caller_gid = Gid::current().as_raw();
         let request = BrokerRequest::SpawnRunner(d2b_contracts::broker_wire::SpawnRunnerRequest {
+            execution_ref: None,
+            execution_domain: None,
+            user_ref: None,
             workload_identity: None,
             vm_id: VmId::new("corp-vm"),
             role_id: RoleId::new("ch-runner"),
@@ -13968,6 +14180,9 @@ mod tests {
         let caller_role = BrokerCallerRole::AdminUid { uid: 1000 };
         let caller_gid = Gid::current().as_raw();
         let request = BrokerRequest::SpawnRunner(d2b_contracts::broker_wire::SpawnRunnerRequest {
+            execution_ref: None,
+            execution_domain: None,
+            user_ref: None,
             workload_identity: None,
             vm_id: VmId::new("corp-vm"),
             role_id: RoleId::new("ch-runner"),
@@ -14038,6 +14253,9 @@ mod tests {
             serde_json::from_slice(&fs::read(&bundle.processes_path).expect("read processes.json"))
                 .expect("parse processes.json");
         processes.vms[0].nodes.push(ProcessNode {
+            execution_ref: None,
+            execution_domain: None,
+            user_ref: None,
             id: NodeId("otel-host-bridge".to_owned()),
             role: ProcessRole::OtelHostBridge,
             unit: None,
@@ -14093,6 +14311,9 @@ mod tests {
         let caller_gid = Gid::current().as_raw();
         let intent_ref = intent_id_runner("corp-vm", "otel-host-bridge");
         let request = BrokerRequest::SpawnRunner(d2b_contracts::broker_wire::SpawnRunnerRequest {
+            execution_ref: None,
+            execution_domain: None,
+            user_ref: None,
             workload_identity: None,
             vm_id: VmId::new("corp-vm"),
             role_id: RoleId::new("otel-host-bridge"),

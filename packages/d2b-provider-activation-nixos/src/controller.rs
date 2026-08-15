@@ -133,7 +133,7 @@ pub struct RunnerRequest {
     pub system_artifact_id: ArtifactId,
     /// Requested activation mode.
     pub activation_mode: ActivationMode,
-    /// Activation runners always start in their target's root namespace.
+    /// Activation runners start without an in-namespace root UID.
     pub start_root: bool,
 }
 

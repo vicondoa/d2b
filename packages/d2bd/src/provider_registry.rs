@@ -6,7 +6,11 @@
 //! and associates Guest runtime rows with those instances.  It deliberately
 //! does not define a second registry or a second session authority.
 
-use std::{collections::BTreeMap, path::PathBuf, sync::{Arc, RwLock}};
+use std::{
+    collections::BTreeMap,
+    path::PathBuf,
+    sync::{Arc, RwLock},
+};
 
 use d2b_contracts::{
     broker_wire::BrokerCallerRole,
@@ -28,11 +32,11 @@ use d2b_provider::{
 };
 use sha2::{Digest, Sha256};
 
+use crate::process_provider_runtime::ProductionProcessProviders;
 use crate::provider_effects::{
     EffectDispatch, GuestLifecycleOperation, GuestLifecycleRequest, ProviderEffectError,
     ProviderLifecycleDispatch, ProviderLifecycleEffectPort,
 };
-use crate::process_provider_runtime::ProductionProcessProviders;
 
 /// Version of the v3 Provider bundle artifact.
 pub const PROVIDER_BUNDLE_VERSION: u32 = 3;

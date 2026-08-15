@@ -40,7 +40,9 @@
 // only exposes via the `unix::OpenOptionsExt::custom_flags()` API
 // which IS safe; we use that.
 
+use std::collections::BTreeSet;
 use std::fs::File;
+use std::io::Read;
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::path::PathBuf;
@@ -51,12 +53,265 @@ use nix::unistd::{Gid, Uid, fchown, ftruncate};
 use rustix::fs::{CWD, Mode as RxMode, OFlags, ResolveFlags};
 use rustix::mount::{MountPropagationFlags, UnmountFlags, mount_change, unmount};
 use rustix::thread::{UnshareFlags, unshare};
+use sha2::{Digest, Sha256};
 
 use d2b_host::hardlink_farm::{
     BuildStoreViewFarmRequest, BuildStoreViewRequest, ReplaceLivePathsRequest, build_farm,
     build_store_view, replace_live_top_level_paths,
 };
 use d2b_host::host_generation::{ActivationHelperOutcome, ActivationHelperResponse, parse_request};
+
+const PRIVATE_ARTIFACT_CATALOG: &str = "/etc/d2b/artifact-catalog.json";
+const EXPECTED_SYSTEM_ARTIFACT_TYPE: &str = "nixos-system";
+const MAX_ARTIFACT_CATALOG_BYTES: usize = 4 * 1024 * 1024;
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ArtifactCatalog {
+    schema_version: u32,
+    entries: Vec<ArtifactCatalogEntry>,
+    #[allow(dead_code)]
+    catalog_digest: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ArtifactCatalogEntry {
+    artifact_id: String,
+    #[serde(rename = "type")]
+    artifact_type: String,
+    store_path: String,
+    package_digest: String,
+    #[allow(dead_code)]
+    closure_digest: String,
+    #[allow(dead_code)]
+    closure_size: u64,
+}
+
+#[derive(Debug)]
+enum CatalogError {
+    Io,
+    Unsafe,
+    Invalid,
+    DigestMismatch,
+    ArtifactMissing,
+    ArtifactType,
+    StorePath,
+    PackageDigest,
+    ActiveGeneration,
+}
+
+impl core::fmt::Display for CatalogError {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str(match self {
+            Self::Io => "activation-catalog-io",
+            Self::Unsafe => "activation-catalog-unsafe-file",
+            Self::Invalid => "activation-catalog-invalid",
+            Self::DigestMismatch => "activation-catalog-digest-mismatch",
+            Self::ArtifactMissing => "activation-catalog-artifact-missing",
+            Self::ArtifactType => "activation-catalog-artifact-type",
+            Self::StorePath => "activation-catalog-store-path",
+            Self::PackageDigest => "activation-catalog-package-digest",
+            Self::ActiveGeneration => "activation-active-generation-mismatch",
+        })
+    }
+}
+
+fn canonical_json(value: &serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Object(object) => {
+            let mut keys = object.keys().cloned().collect::<Vec<_>>();
+            keys.sort();
+            let mut canonical = serde_json::Map::new();
+            for key in keys {
+                canonical.insert(key.clone(), canonical_json(&object[&key]));
+            }
+            serde_json::Value::Object(canonical)
+        }
+        serde_json::Value::Array(values) => {
+            serde_json::Value::Array(values.iter().map(canonical_json).collect())
+        }
+        other => other.clone(),
+    }
+}
+
+fn framed_digest(domain: &str, payload: &[u8]) -> Result<String, CatalogError> {
+    let payload = std::str::from_utf8(payload).map_err(|_| CatalogError::Invalid)?;
+    let frame = serde_json::json!({
+        "domain": domain,
+        "framing": "d2b-digest/v1",
+        "payload": payload,
+    });
+    let encoded = serde_json::to_vec(&canonical_json(&frame)).map_err(|_| CatalogError::Invalid)?;
+    Ok(format!("sha256:{:x}", Sha256::digest(encoded)))
+}
+
+fn read_private_catalog(path: &std::path::Path) -> Result<ArtifactCatalog, CatalogError> {
+    let fd = open_no_symlinks(path, OFlags::RDONLY).map_err(|_| CatalogError::Unsafe)?;
+    let file = File::from(fd);
+    let metadata = file.metadata().map_err(|_| CatalogError::Io)?;
+    if !metadata.is_file() || metadata.uid() != 0 || metadata.mode() & 0o777 != 0o640 {
+        return Err(CatalogError::Unsafe);
+    }
+    let mut bytes = Vec::new();
+    file.take((MAX_ARTIFACT_CATALOG_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)
+        .map_err(|_| CatalogError::Io)?;
+    if bytes.len() > MAX_ARTIFACT_CATALOG_BYTES {
+        return Err(CatalogError::Invalid);
+    }
+    let raw: serde_json::Value =
+        serde_json::from_slice(&bytes).map_err(|_| CatalogError::Invalid)?;
+    let object = raw.as_object().ok_or(CatalogError::Invalid)?;
+    let supplied_digest = object
+        .get("catalogDigest")
+        .and_then(serde_json::Value::as_str)
+        .ok_or(CatalogError::Invalid)?;
+    let mut preimage = raw.clone();
+    preimage
+        .as_object_mut()
+        .ok_or(CatalogError::Invalid)?
+        .remove("catalogDigest");
+    let preimage_bytes =
+        serde_json::to_vec(&canonical_json(&preimage)).map_err(|_| CatalogError::Invalid)?;
+    let expected_digest = framed_digest("d2b:v3:artifact-catalog", &preimage_bytes)?;
+    if supplied_digest != expected_digest {
+        return Err(CatalogError::DigestMismatch);
+    }
+    let catalog: ArtifactCatalog =
+        serde_json::from_value(raw).map_err(|_| CatalogError::Invalid)?;
+    if catalog.schema_version != 3 {
+        return Err(CatalogError::Invalid);
+    }
+    let mut ids = BTreeSet::new();
+    for entry in &catalog.entries {
+        if !ids.insert(entry.artifact_id.clone()) {
+            return Err(CatalogError::Invalid);
+        }
+    }
+    Ok(catalog)
+}
+
+fn validate_store_path(path: &std::path::Path) -> Result<(), CatalogError> {
+    if !path.is_absolute()
+        || path.parent() != Some(std::path::Path::new("/nix/store"))
+        || path.file_name().is_none()
+        || path
+            .components()
+            .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return Err(CatalogError::StorePath);
+    }
+    let fd = open_no_symlinks(path, OFlags::PATH).map_err(|_| CatalogError::StorePath)?;
+    let metadata = File::from(fd)
+        .metadata()
+        .map_err(|_| CatalogError::StorePath)?;
+    if !metadata.is_dir() {
+        return Err(CatalogError::StorePath);
+    }
+    Ok(())
+}
+
+fn digest_store_path(path: &std::path::Path) -> Result<String, CatalogError> {
+    digest_store_path_with_root(path, std::path::Path::new("/nix/store"))
+}
+
+fn digest_store_path_with_root(
+    path: &std::path::Path,
+    store_root: &std::path::Path,
+) -> Result<String, CatalogError> {
+    fn visit(
+        root: &std::path::Path,
+        current: &std::path::Path,
+        store_root: &std::path::Path,
+        digest: &mut Sha256,
+    ) -> Result<(), CatalogError> {
+        let mut children = std::fs::read_dir(current)
+            .map_err(|_| CatalogError::PackageDigest)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| CatalogError::PackageDigest)?;
+        children.sort_by_key(|entry| entry.file_name());
+        for entry in children {
+            let path = entry.path();
+            let file_type = entry.file_type().map_err(|_| CatalogError::PackageDigest)?;
+            if file_type.is_symlink() {
+                let Ok(target) = std::fs::canonicalize(&path) else {
+                    continue;
+                };
+                if !target.is_file() {
+                    continue;
+                }
+                if !target.starts_with(store_root) {
+                    return Err(CatalogError::PackageDigest);
+                }
+                let relative = path
+                    .strip_prefix(root)
+                    .map_err(|_| CatalogError::PackageDigest)?;
+                let mut file = File::open(&path).map_err(|_| CatalogError::PackageDigest)?;
+                digest.update(relative.to_string_lossy().as_bytes());
+                digest.update([0]);
+                let mut bytes = Vec::new();
+                file.read_to_end(&mut bytes)
+                    .map_err(|_| CatalogError::PackageDigest)?;
+                digest.update(bytes);
+            } else if file_type.is_dir() {
+                visit(root, &path, store_root, digest)?;
+            } else if file_type.is_file() {
+                let relative = path
+                    .strip_prefix(root)
+                    .map_err(|_| CatalogError::PackageDigest)?;
+                let mut file = File::open(&path).map_err(|_| CatalogError::PackageDigest)?;
+                digest.update(relative.to_string_lossy().as_bytes());
+                digest.update([0]);
+                let mut bytes = Vec::new();
+                file.read_to_end(&mut bytes)
+                    .map_err(|_| CatalogError::PackageDigest)?;
+                digest.update(bytes);
+            }
+        }
+        Ok(())
+    }
+
+    let mut digest = Sha256::new();
+    visit(path, path, store_root, &mut digest)?;
+    Ok(format!("sha256:{:x}", digest.finalize()))
+}
+
+fn active_system_path() -> Result<std::path::PathBuf, CatalogError> {
+    let target =
+        std::fs::read_link("/run/current-system").map_err(|_| CatalogError::ActiveGeneration)?;
+    let absolute = if target.is_absolute() {
+        target
+    } else {
+        std::path::Path::new("/run").join(target)
+    };
+    if absolute.parent() != Some(std::path::Path::new("/nix/store"))
+        || absolute.file_name().is_none()
+    {
+        return Err(CatalogError::ActiveGeneration);
+    }
+    Ok(absolute)
+}
+
+fn resolve_system_artifact(
+    request: &d2b_host::host_generation::ActivationHelperRequest,
+) -> Result<std::path::PathBuf, CatalogError> {
+    let catalog = read_private_catalog(std::path::Path::new(PRIVATE_ARTIFACT_CATALOG))?;
+    let entry = catalog
+        .entries
+        .iter()
+        .find(|entry| entry.artifact_id == request.system_artifact_id)
+        .ok_or(CatalogError::ArtifactMissing)?;
+    if entry.artifact_type != EXPECTED_SYSTEM_ARTIFACT_TYPE {
+        return Err(CatalogError::ArtifactType);
+    }
+    let store_path = std::path::PathBuf::from(&entry.store_path);
+    validate_store_path(&store_path)?;
+    if digest_store_path(&store_path)? != entry.package_digest {
+        return Err(CatalogError::PackageDigest);
+    }
+    Ok(store_path)
+}
 
 /// Security fix: open `path`
 /// with `openat2(AT_FDCWD, path, { O_NOFOLLOW + ..., RESOLVE_NO_SYMLINKS })`.
@@ -154,6 +409,7 @@ fn print_help() {
            d2b-activation-helper chown-if-orphan --path P --uid U --gid G\n  \
            d2b-activation-helper build-store-view-farm   (request JSON on stdin)\n  \
            d2b-activation-helper build-store-view        (request JSON on stdin)\n\
+           d2b-activation-helper apply-generation       (request JSON on stdin)\n\
          \n\
          EXIT CODES:\n  \
            0 success / already-correct\n  \
@@ -796,22 +1052,61 @@ fn cmd_apply_generation() -> ExitCode {
             return ExitCode::from(1);
         }
     };
-    // The target-local mutation is admitted only through the typed parent
-    // effect adapter. Adopt has no mutation and can be acknowledged here;
-    // other modes are refused rather than falling back to a raw command.
-    let outcome = match request.activation_mode {
-        d2b_contracts::v3::ActivationMode::Adopt => ActivationHelperOutcome::Adopted,
-        d2b_contracts::v3::ActivationMode::Switch
-        | d2b_contracts::v3::ActivationMode::Boot
-        | d2b_contracts::v3::ActivationMode::Test => ActivationHelperOutcome::Refused,
+    // Resolve the selected NixOS system only through the root-owned private
+    // catalog. The helper never executes the currently active system's
+    // switch script for a different requested artifact.
+    let outcome = match resolve_system_artifact(&request) {
+        Err(error) => {
+            eprintln!("activation-helper: {error}");
+            ActivationHelperOutcome::Refused
+        }
+        Ok(store_path) => {
+            let active = active_system_path().ok();
+            if request.activation_mode == d2b_contracts::v3::ActivationMode::Adopt {
+                if active.as_ref() == Some(&store_path) {
+                    ActivationHelperOutcome::Adopted
+                } else {
+                    ActivationHelperOutcome::Refused
+                }
+            } else {
+                let script = store_path.join("bin/switch-to-configuration");
+                let script_fd = open_no_symlinks(&script, OFlags::RDONLY);
+                let script_is_executable = script_fd
+                    .ok()
+                    .and_then(|fd| File::from(fd).metadata().ok())
+                    .is_some_and(|metadata| metadata.is_file() && metadata.mode() & 0o111 != 0);
+                if !script_is_executable {
+                    ActivationHelperOutcome::Refused
+                } else {
+                    let mode_arg = match request.activation_mode {
+                        d2b_contracts::v3::ActivationMode::Switch => "switch",
+                        d2b_contracts::v3::ActivationMode::Boot => "boot",
+                        d2b_contracts::v3::ActivationMode::Test => "test",
+                        d2b_contracts::v3::ActivationMode::Adopt => unreachable!(),
+                    };
+                    match Command::new(&script).arg(mode_arg).status() {
+                        Ok(status) if status.success() => {
+                            if active_system_path().ok().as_ref() == Some(&store_path) {
+                                ActivationHelperOutcome::Succeeded
+                            } else {
+                                ActivationHelperOutcome::Failed
+                            }
+                        }
+                        Ok(_) | Err(_) => ActivationHelperOutcome::Failed,
+                    }
+                }
+            }
+        }
     };
     match serde_json::to_vec(&ActivationHelperResponse { outcome }) {
         Ok(response) => {
             println!("{}", String::from_utf8_lossy(&response));
-            if outcome == ActivationHelperOutcome::Refused {
-                ExitCode::from(2)
-            } else {
-                ExitCode::from(0)
+            match outcome {
+                ActivationHelperOutcome::Refused => ExitCode::from(2),
+                ActivationHelperOutcome::Failed => ExitCode::from(1),
+                ActivationHelperOutcome::Succeeded | ActivationHelperOutcome::Adopted => {
+                    ExitCode::from(0)
+                }
             }
         }
         Err(_) => ExitCode::from(1),
@@ -972,5 +1267,39 @@ fn main() -> ExitCode {
             print_help();
             ExitCode::from(1)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn package_digest_includes_bytes_read_through_store_symlinks() {
+        let directory = PathBuf::from("target")
+            .join(format!("activation-helper-digest-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&directory);
+        fs::create_dir_all(&directory).expect("create digest fixture");
+        let target = directory.join("target");
+        let link = directory.join("linked");
+        let directory_target = directory.join("directory-target");
+        let directory_link = directory.join("directory-link");
+        fs::write(&target, b"first").expect("write digest target");
+        fs::create_dir(&directory_target).expect("create digest directory target");
+        std::os::unix::fs::symlink("target", &link).expect("create digest symlink");
+        std::os::unix::fs::symlink("directory-target", &directory_link)
+            .expect("create digest directory symlink");
+        let directory = fs::canonicalize(directory).expect("canonical store root");
+        let store_root = directory.clone();
+
+        let first =
+            digest_store_path_with_root(&directory, &store_root).expect("digest first fixture");
+        fs::write(&target, b"second").expect("rewrite digest target");
+        let second =
+            digest_store_path_with_root(&directory, &store_root).expect("digest second fixture");
+
+        assert_ne!(first, second);
+        let _ = fs::remove_dir_all(directory);
     }
 }

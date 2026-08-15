@@ -3,7 +3,9 @@
 //! This module contains only the pure contract and replay-safe state machine.
 //! The broker remains the only owner of durable records and host mutation.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::v3::{ActivationMode, ArtifactId, ResourceRef};
 
@@ -13,8 +15,27 @@ pub const APPLY_HOST_GENERATION_HANDOFF: &str = "ApplyHostGenerationHandoff";
 /// Stable protocol identifier for the source-generation handoff.
 pub const SOURCE_HANDOFF_PROTOCOL: &str = "source-handoff-v1";
 
+/// Derive the broker-visible closure identity for one authenticated target.
+///
+/// The digest is deliberately derived from opaque contract identities rather
+/// than a host path. Both sides of the handoff use this helper, so a target,
+/// artifact, or generation substitution cannot pass validation.
+pub fn target_fingerprint(
+    target: &ResourceRef,
+    artifact: &ArtifactId,
+    generation: u64,
+) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(target.to_canonical_string().as_bytes());
+    hasher.update([0]);
+    hasher.update(artifact.as_str().as_bytes());
+    hasher.update([0]);
+    hasher.update(generation.to_be_bytes());
+    hasher.finalize().into()
+}
+
 /// Compatibility floor negotiated before a generation handoff.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SourceGenerationCompatibilityFloorV1 {
     minimum_generation: u64,
@@ -44,6 +65,11 @@ impl SourceGenerationCompatibilityFloorV1 {
     /// Return the minimum source generation.
     pub const fn minimum_generation(&self) -> u64 {
         self.minimum_generation
+    }
+
+    /// Return the authenticated target closure fingerprint.
+    pub const fn target_fingerprint(&self) -> [u8; 32] {
+        self.target_fingerprint
     }
 
     /// Validate a target generation and closure fingerprint.
@@ -84,7 +110,7 @@ impl SourceGenerationCompatibilityFloorV1 {
 }
 
 /// Typed activation intent recorded by the source broker.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HostGenerationHandoffIntent {
     /// Source generation ordinal.
@@ -100,7 +126,7 @@ pub struct HostGenerationHandoffIntent {
 }
 
 /// Caller-derived broker role for the handoff operation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum HandoffCallerRole {
     /// Lifecycle-authorized operator.
@@ -111,7 +137,7 @@ pub enum HandoffCallerRole {
 
 /// Typed broker request. The broker derives its target from this authenticated
 /// request and never accepts a path, command, or authority token.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ApplyHostGenerationHandoff {
     /// Caller-derived role.
@@ -144,7 +170,7 @@ impl ApplyHostGenerationHandoff {
 }
 
 /// Durable handoff phase.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum HandoffState {
     /// Intent was durably recorded.
@@ -196,7 +222,7 @@ impl core::fmt::Display for HandoffError {
 impl std::error::Error for HandoffError {}
 
 /// Pure replay-safe coordinator used by the broker adapter.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HandoffCoordinator {
     floor: SourceGenerationCompatibilityFloorV1,
     source_generation: u64,

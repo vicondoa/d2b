@@ -116,7 +116,8 @@ pub trait ProcessLaunchEffectPort: Send + Sync {
     fn probe(
         &self,
         ticket: &LaunchTicket,
-    ) -> impl Future<Output = Result<Option<AdoptionCandidate>, ProcessConformanceError>> + Send {
+    ) -> impl Future<Output = Result<Option<AdoptionCandidate>, ProcessConformanceError>> + Send
+    {
         self.observe(ticket)
     }
 

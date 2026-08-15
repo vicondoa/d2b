@@ -56,6 +56,8 @@ pub mod exec_reconcile;
 
 // Audit-helper introduced by s2; reusable by s1/s3/s4 going forward.
 pub mod audit_op;
+// Broker-owned source-to-target NixOS generation handoff journal and replay.
+pub mod host_generation_handoff;
 
 // Typed broker op that hardlink-farms per-VM closures into
 // `/var/lib/d2b/vms/<vm>/store/` and atomically swaps the `current`
