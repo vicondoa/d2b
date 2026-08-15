@@ -534,6 +534,15 @@ fn strategy_is_concise_product_direction_without_operational_policy() {
     }
 }
 
+#[test]
+fn strategy_is_governed_by_the_process_marker_gate() {
+    let gate = read_repo_file("tests/tools/tier0-first-pass.sh");
+    assert!(
+        gate.contains("README.md|SECURITY.md|STRATEGY.md|docs/reference/*"),
+        "STRATEGY.md must remain in the process-marker gate's full-file shipped-prose class"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Migrated from tests/manpage-completeness-eval.sh.
 //

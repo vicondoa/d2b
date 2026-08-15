@@ -1,10 +1,9 @@
 # Gates and lints
 
 Reference for the heavy-lane semaphore and policy lints whose exemptions are
-easy to get wrong. The binding summary, Layer-1 job list, and
-enforcing/advisory rule live in
-[`../../AGENTS.md`](../../AGENTS.md) under "Build and validate"; read that
-first. This file covers the parts needing more than a rule.
+easy to get wrong. The binding summary and enforcing/advisory rule live under
+[worktree, validation, and landing rules](../../AGENTS.md#worktree-validation-and-landing-rules);
+read that first. This file covers the parts needing more than a rule.
 
 `tests/layer1-jobs.json` remains authoritative for the job list and its
 enforcement classification. Where this file disagrees with that manifest or

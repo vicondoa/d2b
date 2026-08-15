@@ -414,7 +414,7 @@ scan_process_markers() {
       # exempt by accident rather than by decision.
       AGENTS.md|docs/contributing/*|docs/adr/*|docs/specs/*|changelog.d/*)
         ;;
-      README.md|SECURITY.md|docs/reference/*|docs/how-to/*|docs/explanation/*|examples/*/README*)
+      README.md|SECURITY.md|STRATEGY.md|docs/reference/*|docs/how-to/*|docs/explanation/*|examples/*/README*)
         full_files+=("$f")
         filename_files+=("$f")
         ;;
