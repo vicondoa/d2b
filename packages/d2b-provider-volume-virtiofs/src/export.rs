@@ -9,12 +9,12 @@ use std::fmt;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
+use d2b_contracts::v3::ResourceRef;
 use d2b_contracts::v3::execution_policy::BoundedToken;
 use d2b_contracts::v3::volume::{
-    AttachmentAccess, AttachmentSettings, AttachmentTransport, VolumeAttachment,
-    MAX_LAYOUT_PATH_BYTES,
+    AttachmentAccess, AttachmentSettings, AttachmentTransport, MAX_LAYOUT_PATH_BYTES,
+    VolumeAttachment,
 };
-use d2b_contracts::v3::ResourceRef;
 
 use crate::error::VirtiofsExportError;
 
