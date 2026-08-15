@@ -378,10 +378,7 @@ fn agents_md_routes_to_paths_that_exist() {
     let mut missing: Vec<String> = Vec::new();
     for caps in link_re.captures_iter(&agents) {
         let target = &caps[1];
-        if target.starts_with("mailto:")
-            || target.starts_with("//")
-            || target.contains("://")
-        {
+        if target.starts_with("mailto:") || target.starts_with("//") || target.contains("://") {
             continue;
         }
 

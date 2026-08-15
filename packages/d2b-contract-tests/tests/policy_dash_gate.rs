@@ -167,7 +167,9 @@ fn fixture_tree(name: &str, body: &str) -> PathBuf {
 fn make_executable(path: &Path) {
     use std::os::unix::fs::PermissionsExt;
 
-    let mut permissions = fs::metadata(path).expect("read executable metadata").permissions();
+    let mut permissions = fs::metadata(path)
+        .expect("read executable metadata")
+        .permissions();
     permissions.set_mode(0o755);
     fs::set_permissions(path, permissions).expect("make fixture executable");
 }
@@ -308,24 +310,18 @@ fn scan_rejects_lookalikes_unapproved_assets_and_ordinary_files() {
     write_dash_file(&root.join("docs/plans/entry.md"));
     write_dash_file(&root.join("changelog.d/entry.md"));
     write_dash_file(&root.join("config.nix"));
-    write_dash_file(&root.join(
-        "third_party/agent-skills/other/v4.9.0/skills/ponytail/SKILL.md",
-    ));
-    write_dash_file(&root.join(
-        "third_party/agent-skills/ponytail/v4.9.1/skills/ponytail/SKILL.md",
-    ));
-    write_dash_file(&root.join(
-        "third_party/agent-skills/ponytail/v4.9.0/skills/ponytail-extra/SKILL.md",
-    ));
-    write_dash_file(&root.join(
-        "third_party/agent-skills/caveman/v2.0.0/skills/caveman-compress/SKILL.md",
-    ));
-    write_dash_file(&root.join(
-        "third_party/agent-skills/caveman/v2.0.1/LICENSE",
-    ));
-    write_dash_file(&root.join(
-        "third_party/agent-skills/caveman/v2.0.0/LICENSING.md",
-    ));
+    write_dash_file(&root.join("third_party/agent-skills/other/v4.9.0/skills/ponytail/SKILL.md"));
+    write_dash_file(
+        &root.join("third_party/agent-skills/ponytail/v4.9.1/skills/ponytail/SKILL.md"),
+    );
+    write_dash_file(
+        &root.join("third_party/agent-skills/ponytail/v4.9.0/skills/ponytail-extra/SKILL.md"),
+    );
+    write_dash_file(
+        &root.join("third_party/agent-skills/caveman/v2.0.0/skills/caveman-compress/SKILL.md"),
+    );
+    write_dash_file(&root.join("third_party/agent-skills/caveman/v2.0.1/LICENSE"));
+    write_dash_file(&root.join("third_party/agent-skills/caveman/v2.0.0/LICENSING.md"));
 
     write_dash_file(&root.join(".agents/skills/not-approved"));
     write_dash_file(&root.join(".agents/skills/ponytail/SKILL.md"));
