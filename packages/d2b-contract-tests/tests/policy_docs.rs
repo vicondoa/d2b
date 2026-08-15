@@ -11,7 +11,12 @@
 //!   * tests/kernel-module-matrix-eval.sh -> kernel_module_matrix_source_doc_parity
 //!     + kernel_module_missing_typed_error_contract
 
-use std::{collections::BTreeSet, fmt, path::Path, sync::OnceLock};
+use std::{
+    collections::BTreeSet,
+    fmt,
+    path::{Component, Path},
+    sync::OnceLock,
+};
 
 use d2b_contract_tests::{read_repo_file, repo_path_exists};
 use regex::Regex;
@@ -368,6 +373,35 @@ fn markdown_has_anchor(content: &str, anchor: &str) -> bool {
         || content.contains(&format!("id='{expected}'"))
 }
 
+fn markdown_repo_path_is_contained(path: &str) -> bool {
+    path.is_empty()
+        || (!Path::new(path).is_absolute()
+            && Path::new(path)
+                .components()
+                .all(|component| matches!(component, Component::CurDir | Component::Normal(_))))
+}
+
+#[test]
+fn markdown_repo_paths_reject_absolute_and_parent_escape() {
+    for invalid in ["/etc/passwd", "../outside.md", "docs/../README.md"] {
+        assert!(
+            !markdown_repo_path_is_contained(invalid),
+            "repository Markdown path must reject escape: {invalid}"
+        );
+    }
+    for valid in [
+        "",
+        "README.md",
+        "./README.md",
+        "docs/contributing/workflow.md",
+    ] {
+        assert!(
+            markdown_repo_path_is_contained(valid),
+            "repository Markdown path must accept contained target: {valid}"
+        );
+    }
+}
+
 /// A router whose links rot is worse than the monolith it replaced: the rule
 /// looks documented while the detail is unreachable. Validate local Markdown
 /// paths in all supported forms and validate anchors in the linked document.
@@ -383,6 +417,10 @@ fn agents_md_routes_to_paths_that_exist() {
         }
 
         let (path, anchor) = target.split_once('#').unwrap_or((target, ""));
+        if !markdown_repo_path_is_contained(path) {
+            missing.push(target.to_string());
+            continue;
+        }
         let rel = path.trim_start_matches("./");
         let link_path = if rel.is_empty() { "AGENTS.md" } else { rel };
         if !repo_path_exists(link_path) {
