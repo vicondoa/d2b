@@ -291,7 +291,7 @@ impl AttachmentGrantHandle {
     }
 
     /// Construct an opaque fixture handle for daemon conformance tests.
-    #[cfg(any(feature = "daemon-support", test))]
+    #[cfg(feature = "test-support")]
     pub const fn from_daemon(bytes: [u8; 32]) -> Self {
         Self::from_supervisor(bytes)
     }
@@ -315,6 +315,44 @@ pub struct LaunchGrants {
 }
 
 impl LaunchGrants {
+    /// Issue single-use commitments for one authenticated display session.
+    ///
+    /// The daemon supplies only the already-authenticated session binding;
+    /// grant commitments are generated inside the display/supervisor boundary
+    /// and cannot be selected by callers.
+    pub fn issue_for_supervisor(
+        session_digest: [u8; 32],
+        reconnect_generation: u64,
+        teardown_generation: u64,
+    ) -> Result<Self, &'static str> {
+        if reconnect_generation == 0 || teardown_generation == 0 || session_digest == [0; 32] {
+            return Err("display-grant-session-invalid");
+        }
+        Ok(Self::from_supervisor_for_session_with_frontend(
+            AttachmentGrantHandle::from_supervisor(grant_commitment(
+                b"compositor",
+                session_digest,
+                reconnect_generation,
+                teardown_generation,
+            )),
+            AttachmentGrantHandle::from_supervisor(grant_commitment(
+                b"gpu",
+                session_digest,
+                reconnect_generation,
+                teardown_generation,
+            )),
+            AttachmentGrantHandle::from_supervisor(grant_commitment(
+                b"frontend-gpu",
+                session_digest,
+                reconnect_generation,
+                teardown_generation,
+            )),
+            session_digest,
+            reconnect_generation,
+            teardown_generation,
+        ))
+    }
+
     /// Construct launch grants at the private Core/Supervisor boundary.
     #[allow(dead_code)]
     pub(crate) const fn from_supervisor(
@@ -375,7 +413,7 @@ impl LaunchGrants {
     /// hermetic tests).  The values are opaque grant commitments; they are
     /// consumed into a single [`LaunchTicket`] before a process effect is
     /// attempted.
-    #[cfg(any(feature = "daemon-support", feature = "test-support"))]
+    #[cfg(feature = "test-support")]
     pub const fn from_daemon(
         compositor: [u8; 32],
         gpu: [u8; 32],
@@ -489,7 +527,6 @@ impl LaunchGrants {
 /// The attachment grants are reduced to commitments before crossing into the
 /// daemon composition layer.  No file descriptor, path, process handle, or
 /// raw attachment authority is exposed.
-#[cfg(any(feature = "daemon-support", feature = "test-support"))]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct DisplayLaunchBinding {
     role: DisplayProcessRole,
@@ -499,7 +536,6 @@ pub struct DisplayLaunchBinding {
     teardown_generation: u64,
 }
 
-#[cfg(any(feature = "daemon-support", feature = "test-support"))]
 impl DisplayLaunchBinding {
     /// Consume one ticket into a daemon-owned commitment.
     pub fn from_ticket(ticket: LaunchTicket) -> Self {
@@ -547,18 +583,32 @@ impl DisplayLaunchBinding {
     }
 }
 
-#[cfg(any(feature = "daemon-support", feature = "test-support"))]
 impl core::fmt::Debug for DisplayLaunchBinding {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str("DisplayLaunchBinding(<redacted>)")
     }
 }
 
-#[cfg(any(feature = "daemon-support", feature = "test-support"))]
 fn digest_policy(policy_digest: &[u8]) -> [u8; 32] {
     let mut digest = Sha256::new();
     digest.update(b"d2b-display-policy-binding-v1");
     digest.update(policy_digest);
+    digest.finalize().into()
+}
+
+fn grant_commitment(
+    label: &[u8],
+    session_digest: [u8; 32],
+    reconnect_generation: u64,
+    teardown_generation: u64,
+) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    digest.update(b"d2b-display-supervisor-grant-v2");
+    digest.update(label);
+    digest.update([0]);
+    digest.update(session_digest);
+    digest.update(reconnect_generation.to_be_bytes());
+    digest.update(teardown_generation.to_be_bytes());
     digest.finalize().into()
 }
 
@@ -868,7 +918,7 @@ impl LaunchTicket {
     }
 
     /// Construct an opaque role ticket for daemon conformance tests.
-    #[cfg(any(feature = "daemon-support", test))]
+    #[cfg(feature = "test-support")]
     pub fn new_for_daemon(
         role: DisplayProcessRole,
         compositor_grant: Option<AttachmentGrantHandle>,
@@ -958,6 +1008,14 @@ mod tests {
         .unwrap();
         assert_eq!(ticket.policy_generation(), 3);
         assert_eq!(ticket.identity_label(), "session");
+    }
+
+    #[test]
+    fn supervisor_grant_issuer_rejects_unbound_sessions() {
+        assert!(LaunchGrants::issue_for_supervisor([0; 32], 1, 1).is_err());
+        assert!(LaunchGrants::issue_for_supervisor([7; 32], 0, 1).is_err());
+        let grants = LaunchGrants::issue_for_supervisor([7; 32], 2, 3).unwrap();
+        assert!(grants.into_parts([7; 32], 2).is_some());
     }
 
     #[test]

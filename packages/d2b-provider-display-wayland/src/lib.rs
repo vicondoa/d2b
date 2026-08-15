@@ -30,7 +30,6 @@ pub use policy::{
 };
 pub use portal::{DisplayUserPortal, PortalError, PortalGrant, PortalSessionBinding};
 pub use principal::{PrincipalLease, PrincipalPool, PrincipalPoolError};
-#[cfg(any(feature = "daemon-support", feature = "test-support"))]
 pub use process::DisplayLaunchBinding;
 pub use process::{
     AttachmentGrantHandle, DisplayProcessRole, LaunchGrants, LaunchTicket, ProcessObservation,
