@@ -96,7 +96,14 @@ pub struct WorkerRestartEvidence {
 }
 
 impl WorkerRestartEvidence {
-    pub(crate) const fn from_supervisor(
+    /// Construct restart evidence emitted by the Core-owned worker
+    /// supervisor.
+    ///
+    /// The controller consumes this typed observation for retry-window and
+    /// teardown fencing. It is not a readiness or identity grant; those
+    /// remain bound to the authenticated ComponentSession and worker
+    /// handshakes.
+    pub const fn from_supervisor(
         observed_at_ms: u64,
         proxy_last_failure_ms: Option<u64>,
         frontend_last_failure_ms: Option<u64>,

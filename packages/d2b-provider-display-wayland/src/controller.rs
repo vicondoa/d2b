@@ -611,12 +611,17 @@ impl DisplayController {
 
     /// Reconcile only after binding the desired state to an authenticated
     /// Guest ComponentSession.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the authenticated controller fence keeps every authority input explicit"
+    )]
     pub fn reconcile_authenticated_session<C>(
         &mut self,
         session: &AuthenticatedComponentSession<C>,
         spec: &WaylandSessionSpec,
         dependencies: DependencyState,
         observation: ProcessObservation,
+        supervision: WorkerRestartEvidence,
         grants: Option<crate::process::LaunchGrants>,
         policy: &WaylandPolicySnapshot,
     ) -> Result<ReconcileResult, WaylandSpecError> {
@@ -635,7 +640,7 @@ impl DisplayController {
             spec,
             dependencies,
             observation,
-            WorkerRestartEvidence::from_supervisor(0, None, None, 1),
+            supervision,
             grants,
             policy,
             authenticated.controller_generation(),

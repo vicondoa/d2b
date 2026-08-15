@@ -39,6 +39,8 @@ pub use service::{
 
 /// Canonical Provider reference.
 pub const PROVIDER_REF: &str = "Provider/clipboard-wayland";
+/// Canonical display Provider dependency reference.
+pub(crate) const DISPLAY_PROVIDER_REF: &str = "Provider/display-wayland";
 /// Canonical Provider artifact identifier.
 pub const ARTIFACT_ID: &str = "clipboard-wayland";
 /// Canonical clipboard bridge service package.

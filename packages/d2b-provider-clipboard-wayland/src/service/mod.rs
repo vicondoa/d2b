@@ -1,7 +1,7 @@
 //! clipd-host service boundary and display dependency.
 
 use crate::{
-    DependencyStatus, DisplayDependencyEvidence,
+    DISPLAY_PROVIDER_REF, DependencyStatus, DisplayDependencyEvidence,
     audit::{
         ClipboardAuditEvent, ClipboardAuditQueue, ClipboardAuditSink, ClipboardReason, SizeBucket,
     },
@@ -848,7 +848,7 @@ impl ClipdHost {
     }
 
     fn valid_display_dependency(display: &DisplayDependencyEvidence) -> bool {
-        display.provider_ref().to_canonical_string() == "Provider/display-wayland"
+        display.provider_ref().to_canonical_string() == DISPLAY_PROVIDER_REF
             && display.host_execution_ref().resource_type().as_str() == "Host"
             && display.user_ref().resource_type().as_str() == "User"
             && display.reconnect_generation() != 0

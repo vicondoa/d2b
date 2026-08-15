@@ -1,5 +1,6 @@
 //! Clipboard controller placement and lifecycle projections.
 
+use crate::DISPLAY_PROVIDER_REF;
 use d2b_contracts::v3::{EvidenceClass, Locality, ResourceRef, ZoneId};
 use d2b_provider_toolkit::AuthenticatedSessionRouteBinding;
 use sha2::{Digest, Sha256};
@@ -45,7 +46,7 @@ impl DisplayDependencyEvidence {
         let Some(provider_generation) = route.provider_generation() else {
             return Err("clipboard-display-unauthenticated");
         };
-        if provider_ref.to_canonical_string() != "Provider/display-wayland"
+        if provider_ref.to_canonical_string() != DISPLAY_PROVIDER_REF
             || route.service().as_str() != "d2b.display.v3"
             || route.evidence_class() != EvidenceClass::UnixPeer
             || route.locality() != Locality::Local
@@ -190,7 +191,7 @@ impl ClipboardController {
         let Some(display) = display else {
             return DependencyStatus::Absent;
         };
-        if display.provider_ref().resource_type().as_str() == "Provider"
+        if display.provider_ref().to_canonical_string() == DISPLAY_PROVIDER_REF
             && display.user_ref() == &self.user_ref
             && display.host_execution_ref() == &self.execution_ref
             && display.generation() != 0
@@ -230,5 +231,36 @@ impl ClipboardController {
 impl core::fmt::Debug for ClipboardController {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str("ClipboardController(<redacted>)")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn dependency(provider_ref: &str) -> DisplayDependencyEvidence {
+        DisplayDependencyEvidence {
+            provider_ref: ResourceRef::parse(provider_ref).unwrap(),
+            zone: ZoneId::parse("work").unwrap(),
+            host_execution_ref: ResourceRef::parse("Host/host-system").unwrap(),
+            user_ref: ResourceRef::parse("User/alice").unwrap(),
+            provider_generation: 1,
+            reconnect_generation: 1,
+            controller_generation: 1,
+            session_digest: [1; 32],
+        }
+    }
+
+    #[test]
+    fn dependency_status_requires_the_canonical_display_provider() {
+        let controller = ClipboardController::new("Host/host-system", "User/alice").unwrap();
+        assert_eq!(
+            controller.dependency_status(Some(&dependency(DISPLAY_PROVIDER_REF))),
+            DependencyStatus::Ready
+        );
+        assert_eq!(
+            controller.dependency_status(Some(&dependency("Provider/other"))),
+            DependencyStatus::Degraded
+        );
     }
 }
