@@ -87,9 +87,9 @@ in
           "Provider/not-display";
       });
     expected = [
-        "d2b.zones.work.resources.notification-desktop: every ResourceRef must be canonical and resolve in the same Zone."
-        "d2b.zones.work.resources.notification-desktop.spec.config.displayWaylandRef must select Provider/display-wayland when D-Bus is enabled."
-      ];
+      "d2b.zones.work.resources.notification-desktop: every ResourceRef must be canonical and resolve in the same Zone."
+      "d2b.zones.work.resources.notification-desktop.spec.config.displayWaylandRef must select Provider/display-wayland when D-Bus is enabled."
+    ];
   };
 
   "interaction-providers/notification-invalid-nonce-store-size" = {
