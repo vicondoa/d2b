@@ -337,11 +337,9 @@
       #
       # Future work will populate the remaining surface:
       #   packages.<sys>       - patched cloud-hypervisor, crosvm, etc.
-      #   apps.<sys>           - the `d2b` CLI as a runnable app
       #   templates.default    - `nix flake init -t github:vicondoa/d2b`
       #   checks.<sys>         - flake-eval CI gates
       #   lib                  - re-exported helpers (subnetIp, mkMac, …)
-      #   overlays.default     - adds vhostDeviceSound, crosvmPatched, …
       nixosModules.default = import ./nixos-modules { inherit inputs; };
       # U4's contributor environment is a separate consumer module.  The
       # generic framework module above remains unchanged.
@@ -620,8 +618,6 @@
         inherit gascity dolt beads copilot gasCityContributor;
         gas-city-contributor = gasCityContributor;
       });
-
-      apps = forAllSystems (system: { });
 
       # Container-based integration test images (the type-G layer), built by
       # Nix and run with podman, rootless. Exposed under `containerImages`,
@@ -1796,6 +1792,5 @@
         buildProviderElfShim = providerElfShim;
       });
 
-      overlays.default = _final: _prev: { };
     };
 }

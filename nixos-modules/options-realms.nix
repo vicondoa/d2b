@@ -365,11 +365,6 @@ in
               description = "Optional absolute runtime path to a realm policy bundle artifact.";
             };
 
-            defaultDeny = lib.mkOption {
-              type = lib.types.bool;
-              default = true;
-              description = "Future realm policy starts from default-deny unless a later policy bundle says otherwise.";
-            };
           };
 
           keys = {

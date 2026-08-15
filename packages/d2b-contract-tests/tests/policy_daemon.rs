@@ -92,78 +92,16 @@ fn broker_systemd_unit_declarations() {
 // ---------------------------------------------------------------------------
 #[test]
 fn stop_dag_reconcile_surface() {
-    // ==> stop-DAG owner module surface
     let module_rel = "packages/d2bd/src/supervisor/stop_dag.rs";
     assert!(
-        repo_path_exists(module_rel),
-        "stop-dag-reconcile-eval: missing {module_rel}"
+        !repo_path_exists(module_rel),
+        "stop-dag leftover must stay deleted: {module_rel}"
     );
-    let module = read_repo_file(module_rel);
-    for sym in [
-        "pub struct StopDagOwner",
-        "pub struct ObservedHostState",
-        "pub struct ReconcileReport",
-        "pub struct NftablesReconcileAction",
-        "pub struct UsbipReconcileAction",
-        "pub enum NftablesDriftReason",
-        "pub enum UsbipDriftReason",
-        "pub fn reconcile_on_restart",
-        "pub fn reconcile(",
-    ] {
-        assert!(
-            module.contains(sym),
-            "stop-dag-reconcile-eval: stop_dag.rs missing '{sym}'"
-        );
-    }
-
-    // ==> supervisor mod wires stop_dag
     let mod_rs = read_repo_file("packages/d2bd/src/supervisor/mod.rs");
     assert!(
-        mod_rs.contains("pub mod stop_dag;"),
-        "stop-dag-reconcile-eval: supervisor/mod.rs does not declare stop_dag module"
+        !mod_rs.contains("pub mod stop_dag;"),
+        "supervisor/mod.rs must not declare leftover stop_dag"
     );
-
-    // ==> planner uses only existing broker ops (no new wire variants).
-    // The planner must not introduce a new BrokerRequest variant; assert the
-    // three ops it composes against are present (reused, not redeclared).
-    let wire = read_repo_file("packages/d2b-contracts/src/broker_wire.rs");
-    for variant in ["ApplyNftables", "UsbipBind", "UsbipUnbind"] {
-        assert!(
-            wire.contains(&format!("{variant}({variant}Request)")),
-            "stop-dag-reconcile-eval: broker_wire.rs missing pre-existing BrokerRequest::{variant}"
-        );
-    }
-
-    // Negative: the stop_dag module must not declare a `pub enum` / `pub struct`
-    // that ends in `Request` (that would be a wire-shape addition smuggled in
-    // via the planner).
-    assert!(
-        !any_line_matches(&module, r"pub (struct|enum) [A-Za-z]+Request\b"),
-        "stop-dag-reconcile-eval: stop_dag.rs declares a *Request type; it must dispatch \
-         through existing broker wire variants"
-    );
-
-    // ==> documentation
-    let doc_rel = "docs/reference/stop-dag-reconcile.md";
-    assert!(
-        repo_path_exists(doc_rel),
-        "stop-dag-reconcile-eval: missing {doc_rel}"
-    );
-    let doc = read_repo_file(doc_rel);
-    for marker in [
-        "stop-dag-reconcile",
-        "StopDagOwner",
-        "ApplyNftables",
-        "UsbipBind",
-        "UsbipUnbind",
-        "reconcile_on_restart",
-        "ObservedHostState",
-    ] {
-        assert!(
-            doc.contains(marker),
-            "stop-dag-reconcile-eval: stop-dag-reconcile.md missing '{marker}'"
-        );
-    }
 }
 
 // ---------------------------------------------------------------------------

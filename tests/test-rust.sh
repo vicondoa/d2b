@@ -838,7 +838,6 @@ run_fast_lint_gate() {
     packages/d2b-guest-shell-runner
     packages/d2b-priv-broker
     packages/d2b-resource-api/tests/ui/external-seals
-    packages/d2b-wlproxy-spike
   )
   declare -A main_packages=()
   declare -A main_package_roots=()
