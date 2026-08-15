@@ -77,6 +77,39 @@
       "additionalProperties": false
     },
     "ActivationMode": {
+      "description": "Target-local activation mode.",
+      "oneOf": [
+        {
+          "description": "Activate immediately for the running target.",
+          "type": "string",
+          "enum": [
+            "switch"
+          ]
+        },
+        {
+          "description": "Select the generation for the next boot.",
+          "type": "string",
+          "enum": [
+            "boot"
+          ]
+        },
+        {
+          "description": "Activate temporarily until the next boot.",
+          "type": "string",
+          "enum": [
+            "test"
+          ]
+        },
+        {
+          "description": "Record an already active generation without running a helper.",
+          "type": "string",
+          "enum": [
+            "adopt"
+          ]
+        }
+      ]
+    },
+    "ActivationMode2": {
       "type": "string",
       "enum": [
         "switch",
@@ -114,6 +147,79 @@
         },
         "vm": {
           "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ApplyHostGenerationHandoff": {
+      "description": "Typed broker request. The broker derives its target from this authenticated request and never accepts a path, command, or authority token.",
+      "type": "object",
+      "required": [
+        "callerRole",
+        "intent",
+        "target"
+      ],
+      "properties": {
+        "callerRole": {
+          "description": "Caller-derived role.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/HandoffCallerRole"
+            }
+          ]
+        },
+        "intent": {
+          "description": "Durable handoff intent.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/HostGenerationHandoffIntent"
+            }
+          ]
+        },
+        "target": {
+          "description": "Authenticated target resource.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ResourceRef"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "ApplyHostGenerationHandoffResponse": {
+      "description": "Path-free result of a source-to-target generation handoff.",
+      "type": "object",
+      "required": [
+        "sourceGeneration",
+        "sourceRemainsUsable",
+        "state",
+        "summary",
+        "target",
+        "targetGeneration"
+      ],
+      "properties": {
+        "sourceGeneration": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "sourceRemainsUsable": {
+          "type": "boolean"
+        },
+        "state": {
+          "$ref": "#/definitions/HandoffState"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/definitions/ResourceRef"
+        },
+        "targetGeneration": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
         }
       },
       "additionalProperties": false
@@ -277,6 +383,11 @@
         }
       },
       "additionalProperties": false
+    },
+    "ArtifactId": {
+      "type": "string",
+      "maxLength": 63,
+      "minLength": 1
     },
     "AudioChannel": {
       "description": "An audio channel controlled by a single operation.",
@@ -1071,6 +1182,11 @@
       },
       "additionalProperties": false
     },
+    "BoundedToken": {
+      "type": "string",
+      "maxLength": 63,
+      "minLength": 1
+    },
     "BridgeCheck": {
       "type": "object",
       "required": [
@@ -1212,6 +1328,25 @@
     },
     "BrokerRequest": {
       "oneOf": [
+        {
+          "description": "Authenticate and apply one source-to-target NixOS generation handoff. The broker resolves all host effects from its trusted installed-generation state; no path or command crosses the wire.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "ApplyHostGenerationHandoff"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/ApplyHostGenerationHandoff"
+            }
+          }
+        },
         {
           "type": "object",
           "required": [
@@ -1822,6 +1957,139 @@
           }
         },
         {
+          "description": "Observe one broker-owned runner after validating its retained pidfd-backed identity against the trusted bundle.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "ObserveRunner"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/ObserveRunnerRequest"
+            }
+          }
+        },
+        {
+          "description": "Apply one bounded host-side PipeWire effect for a trusted audio runner. The broker resolves all executable and runtime details from the signed runner intent; the daemon supplies only opaque identities and a closed action.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "PipeWireAudio"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/PipeWireAudioRequest"
+            }
+          }
+        },
+        {
+          "description": "Start one trusted non-forking transient systemd unit. The broker resolves executable, argv, uid/gid, environment, and cgroup placement from the bundle runner intent.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "StartSystemdUnit"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/SystemdUnitRequest"
+            }
+          }
+        },
+        {
+          "description": "Check whether the exact user manager selected by the trusted runner intent is reachable. The manager connection never crosses the broker boundary.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "CheckSystemdUserManager"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/SystemdUnitRequest"
+            }
+          }
+        },
+        {
+          "description": "Observe one trusted transient systemd unit without opening a pidfd.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "ObserveSystemdUnit"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/SystemdUnitRequest"
+            }
+          }
+        },
+        {
+          "description": "Re-open a pidfd after re-verifying a trusted transient unit identity.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "OpenSystemdUnitPidfd"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/OpenSystemdUnitPidfdRequest"
+            }
+          }
+        },
+        {
+          "description": "Stop one exact transient systemd unit identity.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "StopSystemdUnit"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/StopSystemdUnitRequest"
+            }
+          }
+        },
+        {
           "description": "Resolve one signed Zone storage-row id against the trusted bundle, provision or open its database inode, and return the owned database descriptor via `SCM_RIGHTS`. No path, mode, owner, or marker value crosses this boundary.",
           "type": "object",
           "required": [
@@ -2268,6 +2536,25 @@
           }
         },
         {
+          "description": "Kill exactly one trusted runner cgroup leaf during intentional teardown. The broker resolves the leaf from its trusted runner intent; callers never provide a cgroup path.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "CgroupKill"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/CgroupKillRequest"
+            }
+          }
+        },
+        {
           "type": "object",
           "required": [
             "kind",
@@ -2600,6 +2887,25 @@
     },
     "BrokerResponse": {
       "oneOf": [
+        {
+          "description": "Result of one source-to-target generation handoff.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "ApplyHostGenerationHandoff"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/ApplyHostGenerationHandoffResponse"
+            }
+          }
+        },
         {
           "type": "object",
           "required": [
@@ -3038,6 +3344,139 @@
           }
         },
         {
+          "description": "Observation of a broker-owned runner. No pidfd is returned because the operation is a status query over the broker's retained registry.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "ObserveRunner"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/ObserveRunnerResponse"
+            }
+          }
+        },
+        {
+          "description": "Result of one broker-owned PipeWire effect. Raw node identifiers and runtime paths never cross the wire.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "PipeWireAudio"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/PipeWireAudioResponse"
+            }
+          }
+        },
+        {
+          "description": "StartSystemdUnit response. The exact-main pidfd is returned via SCM_RIGHTS alongside this identity envelope.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "StartSystemdUnit"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/StartTransientUnitResponse"
+            }
+          }
+        },
+        {
+          "description": "Result of a same-UID user-manager reachability check.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "CheckSystemdUserManager"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/CheckSystemdUserManagerResponse"
+            }
+          }
+        },
+        {
+          "description": "Observation of a transient systemd unit. `None` is represented by `present = false` and a zero identity.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "ObserveSystemdUnit"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/ObserveSystemdUnitResponse"
+            }
+          }
+        },
+        {
+          "description": "Re-open response for a previously verified transient unit.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "OpenSystemdUnitPidfd"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/OpenSystemdUnitPidfdResponse"
+            }
+          }
+        },
+        {
+          "description": "Stop response for an exact transient unit identity.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "StopSystemdUnit"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/StopSystemdUnitResponse"
+            }
+          }
+        },
+        {
           "description": "`OpenZoneStore` response. The database descriptor is the sole `SCM_RIGHTS` attachment on the same frame; the JSON body contains only opaque identity and disposition metadata.",
           "type": "object",
           "required": [
@@ -3290,6 +3729,25 @@
       },
       "additionalProperties": false
     },
+    "CapabilityClass": {
+      "description": "Semantic capability grant.",
+      "type": "string",
+      "enum": [
+        "network-bind",
+        "network-raw",
+        "network-admin",
+        "sys-time",
+        "sys-ptrace",
+        "sys-admin",
+        "dac-override",
+        "fowner",
+        "chown",
+        "setuid",
+        "setgid",
+        "audit-write",
+        "kill"
+      ]
+    },
     "CapabilitySet": {
       "type": "array",
       "items": {
@@ -3297,6 +3755,50 @@
       },
       "maxItems": 64,
       "uniqueItems": true
+    },
+    "CgroupKillRequest": {
+      "type": "object",
+      "required": [
+        "roleId",
+        "vmId"
+      ],
+      "properties": {
+        "roleId": {
+          "type": "string"
+        },
+        "tracingSpanId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "vmId": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "CheckSystemdUserManagerResponse": {
+      "description": "Response from a same-UID per-user manager reachability check.",
+      "type": "object",
+      "required": [
+        "available",
+        "roleId",
+        "vmId"
+      ],
+      "properties": {
+        "available": {
+          "type": "boolean"
+        },
+        "roleId": {
+          "type": "string"
+        },
+        "vmId": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
     },
     "ChildExitKind": {
       "description": "Exit status kind for a broker-reaped child.\n\n- `Exited`: child called `_exit(n)` / `exit(n)`. - `Signaled`: child was killed by a signal that is NOT SIGKILL. - `Killed`: child was killed specifically by SIGKILL (unexpected termination).",
@@ -4112,6 +4614,42 @@
         "vmId"
       ],
       "properties": {
+        "expectedStartTimeTicks": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "pid": {
+          "description": "Optional exact process identity. Deregistration must not remove a replacement runner that reused the VM/role tuple.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "resourceRef": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resourceUid": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceUid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "roleId": {
           "type": "string"
         },
@@ -4192,6 +4730,15 @@
             "not-applicable"
           ]
         }
+      ]
+    },
+    "EnvironmentClass": {
+      "description": "Semantic environment inheritance class.",
+      "type": "string",
+      "enum": [
+        "minimal",
+        "safe-inherited",
+        "provider-defined"
       ]
     },
     "EnvironmentPosture": {
@@ -5580,6 +6127,14 @@
       },
       "additionalProperties": false
     },
+    "ExecutionDomain": {
+      "description": "The plain execution domain enumeration shared by Host, Guest, and Process.",
+      "type": "string",
+      "enum": [
+        "system",
+        "user"
+      ]
+    },
     "ExecutionIdentityPosture": {
       "description": "OS identity under which a workload executes.",
       "oneOf": [
@@ -6347,6 +6902,79 @@
       },
       "additionalProperties": false
     },
+    "HandoffCallerRole": {
+      "description": "Caller-derived broker role for the handoff operation.",
+      "oneOf": [
+        {
+          "description": "Lifecycle-authorized operator.",
+          "type": "string",
+          "enum": [
+            "lifecycle"
+          ]
+        },
+        {
+          "description": "Administrator.",
+          "type": "string",
+          "enum": [
+            "admin"
+          ]
+        }
+      ]
+    },
+    "HandoffState": {
+      "description": "Durable handoff phase.",
+      "oneOf": [
+        {
+          "description": "Intent was durably recorded.",
+          "type": "string",
+          "enum": [
+            "recorded"
+          ]
+        },
+        {
+          "description": "Target closure and ancestry passed validation.",
+          "type": "string",
+          "enum": [
+            "validated"
+          ]
+        },
+        {
+          "description": "Target mutation is in progress.",
+          "type": "string",
+          "enum": [
+            "mutating"
+          ]
+        },
+        {
+          "description": "Ownership transferred to the target broker.",
+          "type": "string",
+          "enum": [
+            "transferred"
+          ]
+        },
+        {
+          "description": "Target completed and source may be retired.",
+          "type": "string",
+          "enum": [
+            "completed"
+          ]
+        },
+        {
+          "description": "Source was retained after refusal or rollback.",
+          "type": "string",
+          "enum": [
+            "rolled-back"
+          ]
+        },
+        {
+          "description": "Request was refused before mutation.",
+          "type": "string",
+          "enum": [
+            "refused"
+          ]
+        }
+      ]
+    },
     "Hello": {
       "type": "object",
       "required": [
@@ -6538,6 +7166,56 @@
         "Warn",
         "Fail"
       ]
+    },
+    "HostGenerationHandoffIntent": {
+      "description": "Typed activation intent recorded by the source broker.",
+      "type": "object",
+      "required": [
+        "activationMode",
+        "compatibility",
+        "sourceGeneration",
+        "systemArtifactId",
+        "targetGeneration"
+      ],
+      "properties": {
+        "activationMode": {
+          "description": "Target activation mode.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ActivationMode"
+            }
+          ]
+        },
+        "compatibility": {
+          "description": "Negotiated compatibility floor.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/SourceGenerationCompatibilityFloorV1"
+            }
+          ]
+        },
+        "sourceGeneration": {
+          "description": "Source generation ordinal.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "systemArtifactId": {
+          "description": "Private-catalog artifact identifier.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ArtifactId"
+            }
+          ]
+        },
+        "targetGeneration": {
+          "description": "Target generation ordinal.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
     },
     "HostInstallRequest": {
       "description": "Common flags every mutating-verb request carries. The daemon rejects requests that set neither `dry_run` nor `apply`.",
@@ -7163,6 +7841,13 @@
       },
       "additionalProperties": false
     },
+    "MappingClass": {
+      "description": "Frozen semantic user-namespace mapping class.\n\nNo numeric host UID or GID appears in the public spec; core resolves the exact identifiers into private launch state only.",
+      "type": "string",
+      "enum": [
+        "process-principal-root"
+      ]
+    },
     "MigrateLegacySwtpmStateRequest": {
       "description": "Opaque request for one trusted legacy swtpm migration.",
       "type": "object",
@@ -7292,6 +7977,20 @@
       },
       "additionalProperties": false
     },
+    "NamespaceClass": {
+      "description": "Semantic namespace isolation request.",
+      "type": "string",
+      "enum": [
+        "user",
+        "pid",
+        "mount",
+        "ipc",
+        "uts",
+        "network",
+        "cgroup",
+        "time"
+      ]
+    },
     "NftablesProjectionAction": {
       "description": "The action an [`ApplyNftablesProjectionRequest`] carries.\n\nClosed on purpose: the framework's own nftables op spells its two directions as a `destroy` boolean, which leaves \"neither\" and \"both\" expressible in a future field pair. A projection names exactly one of two directions and nothing else.",
       "oneOf": [
@@ -7310,6 +8009,130 @@
           ]
         }
       ]
+    },
+    "ObserveRunnerRequest": {
+      "description": "Observe one runner by its trusted `(vm_id, role_id)` identity. The broker resolves the intent reference again and refuses stale or ambiguous ownership rather than trusting caller-supplied process data.",
+      "type": "object",
+      "required": [
+        "bundleRunnerIntentRef",
+        "role",
+        "roleId",
+        "vmId"
+      ],
+      "properties": {
+        "bundleRunnerIntentRef": {
+          "type": "string"
+        },
+        "resourceRef": {
+          "description": "Optional generic Process identity binding.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resourceUid": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceUid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "role": {
+          "$ref": "#/definitions/RunnerRole"
+        },
+        "roleId": {
+          "type": "string"
+        },
+        "tracingSpanId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "vmId": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ObserveRunnerResponse": {
+      "description": "Verified runner observation returned by the broker.",
+      "type": "object",
+      "required": [
+        "cgroupVerified",
+        "executableVerified",
+        "pid",
+        "present",
+        "roleId",
+        "startTimeTicks",
+        "vmId"
+      ],
+      "properties": {
+        "cgroupVerified": {
+          "type": "boolean"
+        },
+        "executableVerified": {
+          "type": "boolean"
+        },
+        "pid": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "present": {
+          "type": "boolean"
+        },
+        "roleId": {
+          "type": "string"
+        },
+        "startTimeTicks": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "vmId": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ObserveSystemdUnitResponse": {
+      "description": "Observation response. `present = false` has no identity payload.",
+      "type": "object",
+      "required": [
+        "present",
+        "roleId",
+        "vmId"
+      ],
+      "properties": {
+        "identity": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SystemdUnitIdentity"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "present": {
+          "type": "boolean"
+        },
+        "roleId": {
+          "type": "string"
+        },
+        "vmId": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
     },
     "OpenCgroupDirRequest": {
       "type": "object",
@@ -7461,6 +8284,27 @@
           "type": "integer",
           "format": "int32"
         },
+        "resourceRef": {
+          "description": "Optional generic Process identity binding. Legacy VM runner callers omit these fields and retain the historical VM/role key.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resourceUid": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceUid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "roleId": {
           "description": "Per-VM role identifier (matches the daemon-side `PidfdKey::role_id`).",
           "type": "string"
@@ -7508,6 +8352,183 @@
           "type": "integer",
           "format": "uint64",
           "minimum": 0.0
+        },
+        "vmId": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "OpenSystemdUnitPidfdRequest": {
+      "description": "Request to re-open a pidfd after identity re-verification.",
+      "type": "object",
+      "required": [
+        "bundleContentIdentity",
+        "bundleRunnerIntentRef",
+        "domain",
+        "expected",
+        "generation",
+        "providerIdentity",
+        "role",
+        "roleId",
+        "templateIdentity",
+        "vmId"
+      ],
+      "properties": {
+        "bundleContentIdentity": {
+          "description": "Content identity the broker must resolve for this unit.",
+          "type": "string"
+        },
+        "bundleRunnerIntentRef": {
+          "description": "Opaque bundle reference resolved only by the broker.",
+          "type": "string"
+        },
+        "domain": {
+          "description": "System or verified user manager.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/SystemdUnitDomain"
+            }
+          ]
+        },
+        "executionRef": {
+          "description": "Canonical Host or Guest execution target, when supplied by a v3 Process ticket. Legacy VM runner callers omit this field.",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "expected": {
+          "description": "Identity observed before the local descriptor was requested.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/SystemdUnitIdentity"
+            }
+          ]
+        },
+        "generation": {
+          "description": "Nonzero Process resource generation.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "providerIdentity": {
+          "description": "Process Provider identity digest.",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0.0
+          },
+          "maxItems": 32,
+          "minItems": 32
+        },
+        "resourceRef": {
+          "description": "Optional generic Process identity binding used in unit names and authorization. Legacy VM runner callers omit these fields.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resourceUid": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceUid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "role": {
+          "description": "Closed runner role selecting the trusted bundle launch plan.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/RunnerRole"
+            }
+          ]
+        },
+        "roleId": {
+          "description": "Process role identifier within the execution target.",
+          "type": "string"
+        },
+        "sandboxPlan": {
+          "description": "Typed sandbox requirements enforced by the broker's systemd launch adapter. Legacy VM runner callers omit this field.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SandboxLaunchPlan"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "templateIdentity": {
+          "description": "Component template identity digest.",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0.0
+          },
+          "maxItems": 32,
+          "minItems": 32
+        },
+        "tracingSpanId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "userRef": {
+          "description": "Canonical User resource bound to a user-domain launch.",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "vmId": {
+          "description": "Execution target represented by the trusted runner intent.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "OpenSystemdUnitPidfdResponse": {
+      "description": "Re-open response. The exact-main pidfd is the first SCM_RIGHTS fd.",
+      "type": "object",
+      "required": [
+        "identity",
+        "pidfdIndex",
+        "roleId",
+        "vmId"
+      ],
+      "properties": {
+        "identity": {
+          "$ref": "#/definitions/SystemdUnitIdentity"
+        },
+        "pidfdIndex": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "roleId": {
+          "type": "string"
         },
         "vmId": {
           "type": "string"
@@ -7618,6 +8639,167 @@
           ]
         }
       ]
+    },
+    "PipeWireAudioAction": {
+      "description": "Closed host-side PipeWire action.",
+      "oneOf": [
+        {
+          "description": "Set the stream mute state.",
+          "type": "object",
+          "required": [
+            "kind",
+            "value"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "setGrant"
+              ]
+            },
+            "value": {
+              "type": "object",
+              "required": [
+                "on"
+              ],
+              "properties": {
+                "on": {
+                  "type": "boolean"
+                }
+              }
+            }
+          }
+        },
+        {
+          "description": "Set the stream level in the inclusive 0..=100 range.",
+          "type": "object",
+          "required": [
+            "kind",
+            "value"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "setLevel"
+              ]
+            },
+            "value": {
+              "type": "object",
+              "required": [
+                "percent"
+              ],
+              "properties": {
+                "percent": {
+                  "type": "integer",
+                  "format": "uint8",
+                  "minimum": 0.0
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "PipeWireAudioChannel": {
+      "description": "Audio channel selected by a broker-owned PipeWire effect.",
+      "oneOf": [
+        {
+          "description": "Playback stream.",
+          "type": "string",
+          "enum": [
+            "speaker"
+          ]
+        },
+        {
+          "description": "Capture stream.",
+          "type": "string",
+          "enum": [
+            "microphone"
+          ]
+        }
+      ]
+    },
+    "PipeWireAudioRequest": {
+      "description": "Request one bounded broker-owned PipeWire effect.",
+      "type": "object",
+      "required": [
+        "action",
+        "bundleRunnerIntentRef",
+        "channel",
+        "roleId",
+        "vmId"
+      ],
+      "properties": {
+        "action": {
+          "description": "Closed effect action.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/PipeWireAudioAction"
+            }
+          ]
+        },
+        "bundleRunnerIntentRef": {
+          "description": "Signed runner intent that supplies the PipeWire effect tools and runtime environment.",
+          "type": "string"
+        },
+        "channel": {
+          "description": "Stream direction.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/PipeWireAudioChannel"
+            }
+          ]
+        },
+        "roleId": {
+          "description": "Opaque audio runner role identity.",
+          "type": "string"
+        },
+        "tracingSpanId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "vmId": {
+          "description": "Opaque VM identity resolved against the trusted bundle.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "PipeWireAudioResponse": {
+      "description": "Response to [`PipeWireAudioRequest`].",
+      "type": "object",
+      "required": [
+        "applied",
+        "hostReady",
+        "nodePresent",
+        "roleId",
+        "vmId"
+      ],
+      "properties": {
+        "applied": {
+          "description": "Whether the requested host effect was applied.",
+          "type": "boolean"
+        },
+        "hostReady": {
+          "description": "Whether the broker could reach the PipeWire session.",
+          "type": "boolean"
+        },
+        "nodePresent": {
+          "description": "Whether exactly one matching stream was found.",
+          "type": "boolean"
+        },
+        "roleId": {
+          "type": "string"
+        },
+        "vmId": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
     },
     "PollChildReapedResponse": {
       "description": "Response to `BrokerRequest::PollChildReaped`. Drains and returns all buffered `ChildReaped` notifications in FIFO order.",
@@ -9334,6 +10516,22 @@
       "type": "integer",
       "minimum": 1.0
     },
+    "ResourceRef": {
+      "oneOf": [
+        {
+          "type": "string",
+          "maxLength": 80,
+          "minLength": 6,
+          "pattern": "^(Zone|ZoneLink|Provider|Role|RoleBinding|Quota|EmergencyPolicy|Host|Guest|Process|EphemeralProcess|Volume|Network|Device|User|Credential|Endpoint|ResourceExport|ResourceImport)/[a-z][a-z0-9-]{0,62}$"
+        },
+        {
+          "type": "string",
+          "maxLength": 201,
+          "minLength": 15,
+          "pattern": "^[a-z][a-z0-9-]{0,62}\\.d2bus\\.org\\.[A-Z][A-Za-z0-9]{0,62}/[a-z][a-z0-9-]{0,62}$"
+        }
+      ]
+    },
     "ResourceUid": {
       "type": "string",
       "maxLength": 36,
@@ -9377,13 +10575,25 @@
           "type": "string"
         },
         "mode": {
-          "$ref": "#/definitions/ActivationMode"
+          "$ref": "#/definitions/ActivationMode2"
         },
         "phase": {
           "default": "metadata-only",
           "allOf": [
             {
               "$ref": "#/definitions/ActivationPhase"
+            }
+          ]
+        },
+        "systemArtifactId": {
+          "description": "Durable generation artifact selected by the caller.",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ArtifactId"
+            },
+            {
+              "type": "null"
             }
           ]
         },
@@ -9424,7 +10634,7 @@
           ]
         },
         "mode": {
-          "$ref": "#/definitions/ActivationMode"
+          "$ref": "#/definitions/ActivationMode2"
         },
         "summary": {
           "type": "string"
@@ -10095,6 +11305,78 @@
       },
       "additionalProperties": false
     },
+    "SandboxLaunchPlan": {
+      "description": "Typed semantic sandbox plan compiled by the daemon and re-validated by the privileged broker before a runner is spawned.",
+      "type": "object",
+      "required": [
+        "capabilityClasses",
+        "digest",
+        "domain",
+        "environmentClass",
+        "namespaceClasses",
+        "noNewPrivileges",
+        "oomScoreAdj",
+        "readOnlyRoot",
+        "seccompClass",
+        "startRoot"
+      ],
+      "properties": {
+        "capabilityClasses": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/CapabilityClass"
+          }
+        },
+        "digest": {
+          "type": "string"
+        },
+        "domain": {
+          "$ref": "#/definitions/ExecutionDomain"
+        },
+        "environmentClass": {
+          "$ref": "#/definitions/EnvironmentClass"
+        },
+        "namespaceClasses": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/NamespaceClass"
+          }
+        },
+        "noNewPrivileges": {
+          "type": "boolean"
+        },
+        "oomScoreAdj": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "readOnlyRoot": {
+          "type": "boolean"
+        },
+        "seccompClass": {
+          "$ref": "#/definitions/BoundedToken"
+        },
+        "startRoot": {
+          "type": "boolean"
+        },
+        "umask": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "userNamespace": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/UserNamespaceSpec"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
     "SecretByIdRequest": {
       "type": "object",
       "required": [
@@ -10642,6 +11924,27 @@
           ],
           "format": "int32"
         },
+        "resourceRef": {
+          "description": "Optional generic Process identity binding.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resourceUid": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceUid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "roleId": {
           "type": "string"
         },
@@ -10725,6 +12028,32 @@
       },
       "additionalProperties": false
     },
+    "SourceGenerationCompatibilityFloorV1": {
+      "description": "Compatibility floor negotiated before a generation handoff.",
+      "type": "object",
+      "required": [
+        "minimumGeneration",
+        "targetFingerprint"
+      ],
+      "properties": {
+        "minimumGeneration": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "targetFingerprint": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0.0
+          },
+          "maxItems": 32,
+          "minItems": 32
+        }
+      },
+      "additionalProperties": false
+    },
     "SpawnRunnerRequest": {
       "type": "object",
       "required": [
@@ -10734,9 +12063,83 @@
         "vmId"
       ],
       "properties": {
+        "bundleContentIdentity": {
+          "description": "Content identity of the daemon's trusted bundle snapshot.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "bundleRunnerIntentRef": {
           "description": "Opaque reference into the trusted bundle's runner-intent table. The broker resolves this to the full launch context (binary path, argv inputs, uid/gid, capabilities, seccomp policy ref, cgroup placement, mount namespace, environment) and feeds it to the matching argv generator.",
           "type": "string"
+        },
+        "executionDomain": {
+          "description": "Canonical execution domain bound by the Process ticket.",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ExecutionDomain"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "executionRef": {
+          "description": "Canonical Host or Guest execution target bound by the Process ticket. Legacy VM runner callers omit this additive field.",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "generation": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "providerIdentity": {
+          "description": "Provider/template identity expected by the daemon.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0.0
+          },
+          "maxItems": 32,
+          "minItems": 32
+        },
+        "resourceRef": {
+          "description": "Optional generic Process identity binding. These fields are part of the registry key and prevent distinct Process resources from colliding on the legacy VM/role tuple.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resourceUid": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceUid"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "role": {
           "description": "Role selector - picks the argv generator the broker applies to the bundle row anchored by `bundle_runner_intent_ref`.",
@@ -10758,11 +12161,46 @@
             "$ref": "#/definitions/RunnerAllocation"
           }
         },
+        "sandboxPlan": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SandboxLaunchPlan"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "templateIdentity": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0.0
+          },
+          "maxItems": 32,
+          "minItems": 32
+        },
         "tracingSpanId": {
           "default": null,
           "type": [
             "string",
             "null"
+          ]
+        },
+        "userRef": {
+          "description": "Canonical User resource bound to a user-domain launch.",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceRef"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "vmId": {
@@ -10795,6 +12233,12 @@
         "vmId"
       ],
       "properties": {
+        "bundleContentIdentity": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "consoleFdIndex": {
           "description": "Optional index into the SCM_RIGHTS fd vector for a provider-specific console stream. qemu-media uses this for the daemon-owned peer of the socketpair whose other end was passed to QEMU.",
           "type": [
@@ -10802,6 +12246,35 @@
             "null"
           ],
           "format": "uint32",
+          "minimum": 0.0
+        },
+        "executionDomain": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ExecutionDomain"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "executionRef": {
+          "description": "Resolved execution binding and content identities echoed by the broker after validating the request against its trusted bundle.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "generation": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
           "minimum": 0.0
         },
         "pid": {
@@ -10815,6 +12288,19 @@
           "format": "uint32",
           "minimum": 0.0
         },
+        "providerIdentity": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0.0
+          },
+          "maxItems": 32,
+          "minItems": 32
+        },
         "role": {
           "$ref": "#/definitions/RunnerRole"
         },
@@ -10826,6 +12312,29 @@
           "type": "integer",
           "format": "uint64",
           "minimum": 0.0
+        },
+        "templateIdentity": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0.0
+          },
+          "maxItems": 32,
+          "minItems": 32
+        },
+        "userRef": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "vmId": {
           "type": "string"
@@ -10846,6 +12355,33 @@
             "string",
             "null"
           ]
+        },
+        "vmId": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "StartTransientUnitResponse": {
+      "description": "Start response. The exact-main pidfd is the first SCM_RIGHTS fd.",
+      "type": "object",
+      "required": [
+        "identity",
+        "pidfdIndex",
+        "roleId",
+        "vmId"
+      ],
+      "properties": {
+        "identity": {
+          "$ref": "#/definitions/SystemdUnitIdentity"
+        },
+        "pidfdIndex": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "roleId": {
+          "type": "string"
         },
         "vmId": {
           "type": "string"
@@ -10890,6 +12426,186 @@
               "type": "null"
             }
           ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "StopSystemdUnitRequest": {
+      "description": "Request to stop one exact transient systemd unit.",
+      "type": "object",
+      "required": [
+        "bundleContentIdentity",
+        "bundleRunnerIntentRef",
+        "class",
+        "domain",
+        "expected",
+        "generation",
+        "providerIdentity",
+        "role",
+        "roleId",
+        "templateIdentity",
+        "vmId"
+      ],
+      "properties": {
+        "bundleContentIdentity": {
+          "description": "Content identity the broker must resolve for this unit.",
+          "type": "string"
+        },
+        "bundleRunnerIntentRef": {
+          "description": "Opaque bundle reference resolved only by the broker.",
+          "type": "string"
+        },
+        "class": {
+          "description": "Graceful drain or forced termination.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/SystemdStopClass"
+            }
+          ]
+        },
+        "domain": {
+          "description": "System or verified user manager.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/SystemdUnitDomain"
+            }
+          ]
+        },
+        "executionRef": {
+          "description": "Canonical Host or Guest execution target, when supplied by a v3 Process ticket. Legacy VM runner callers omit this field.",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "expected": {
+          "description": "Identity that must still match before the stop is sent.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/SystemdUnitIdentity"
+            }
+          ]
+        },
+        "generation": {
+          "description": "Nonzero Process resource generation.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "providerIdentity": {
+          "description": "Process Provider identity digest.",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0.0
+          },
+          "maxItems": 32,
+          "minItems": 32
+        },
+        "resourceRef": {
+          "description": "Optional generic Process identity binding used in unit names and authorization. Legacy VM runner callers omit these fields.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resourceUid": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceUid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "role": {
+          "description": "Closed runner role selecting the trusted bundle launch plan.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/RunnerRole"
+            }
+          ]
+        },
+        "roleId": {
+          "description": "Process role identifier within the execution target.",
+          "type": "string"
+        },
+        "sandboxPlan": {
+          "description": "Typed sandbox requirements enforced by the broker's systemd launch adapter. Legacy VM runner callers omit this field.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SandboxLaunchPlan"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "templateIdentity": {
+          "description": "Component template identity digest.",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0.0
+          },
+          "maxItems": 32,
+          "minItems": 32
+        },
+        "tracingSpanId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "userRef": {
+          "description": "Canonical User resource bound to a user-domain launch.",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "vmId": {
+          "description": "Execution target represented by the trusted runner intent.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "StopSystemdUnitResponse": {
+      "description": "Stop response after systemd confirmed the unit is inactive.",
+      "type": "object",
+      "required": [
+        "roleId",
+        "stopped",
+        "vmId"
+      ],
+      "properties": {
+        "roleId": {
+          "type": "string"
+        },
+        "stopped": {
+          "type": "boolean"
+        },
+        "vmId": {
+          "type": "string"
         }
       },
       "additionalProperties": false
@@ -11106,6 +12822,268 @@
         "older_host_generation",
         "generation_identity_unavailable"
       ]
+    },
+    "SystemdStopClass": {
+      "description": "Stop class for transient systemd units.",
+      "oneOf": [
+        {
+          "description": "Request systemd to stop the unit and wait for it to become inactive.",
+          "type": "string",
+          "enum": [
+            "drain"
+          ]
+        },
+        {
+          "description": "Kill the exact unit cgroup and verify it becomes inactive.",
+          "type": "string",
+          "enum": [
+            "terminate"
+          ]
+        }
+      ]
+    },
+    "SystemdUnitDomain": {
+      "description": "Closed systemd execution domain. User-manager execution remains subject to same-UID verification by the broker; no manager address crosses the wire.",
+      "oneOf": [
+        {
+          "description": "The host system manager.",
+          "type": "string",
+          "enum": [
+            "system"
+          ]
+        },
+        {
+          "description": "The verified per-user manager.",
+          "type": "string",
+          "enum": [
+            "user"
+          ]
+        }
+      ]
+    },
+    "SystemdUnitIdentity": {
+      "description": "Stable systemd identity returned only after the broker has queried the manager and re-read the process start time under the pidfd boundary.",
+      "type": "object",
+      "required": [
+        "bundleContentIdentity",
+        "cgroupIdentity",
+        "generation",
+        "invocationId",
+        "mainPid",
+        "providerIdentity",
+        "startTimeTicks",
+        "templateIdentity"
+      ],
+      "properties": {
+        "bundleContentIdentity": {
+          "description": "Content identity of the broker-resolved trusted bundle.",
+          "type": "string"
+        },
+        "cgroupIdentity": {
+          "description": "Digest of the exact ControlGroup path; the path never crosses IPC.",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0.0
+          },
+          "maxItems": 32,
+          "minItems": 32
+        },
+        "generation": {
+          "description": "Process resource generation bound to the unit identity.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "invocationId": {
+          "description": "systemd's 16-byte InvocationID.",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0.0
+          },
+          "maxItems": 16,
+          "minItems": 16
+        },
+        "mainPid": {
+          "description": "MainPID verified against the unit and `/proc`.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "providerIdentity": {
+          "description": "Owning Provider digest bound to the unit identity.",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0.0
+          },
+          "maxItems": 32,
+          "minItems": 32
+        },
+        "startTimeTicks": {
+          "description": "`/proc/<pid>/stat` field-22 start time.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "templateIdentity": {
+          "description": "Component template digest bound to the unit identity.",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0.0
+          },
+          "maxItems": 32,
+          "minItems": 32
+        }
+      },
+      "additionalProperties": false
+    },
+    "SystemdUnitRequest": {
+      "description": "Shared trusted request fields for systemd unit operations.",
+      "type": "object",
+      "required": [
+        "bundleContentIdentity",
+        "bundleRunnerIntentRef",
+        "domain",
+        "generation",
+        "providerIdentity",
+        "role",
+        "roleId",
+        "templateIdentity",
+        "vmId"
+      ],
+      "properties": {
+        "bundleContentIdentity": {
+          "description": "Content identity the broker must resolve for this unit.",
+          "type": "string"
+        },
+        "bundleRunnerIntentRef": {
+          "description": "Opaque bundle reference resolved only by the broker.",
+          "type": "string"
+        },
+        "domain": {
+          "description": "System or verified user manager.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/SystemdUnitDomain"
+            }
+          ]
+        },
+        "executionRef": {
+          "description": "Canonical Host or Guest execution target, when supplied by a v3 Process ticket. Legacy VM runner callers omit this field.",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "generation": {
+          "description": "Nonzero Process resource generation.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "providerIdentity": {
+          "description": "Process Provider identity digest.",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0.0
+          },
+          "maxItems": 32,
+          "minItems": 32
+        },
+        "resourceRef": {
+          "description": "Optional generic Process identity binding used in unit names and authorization. Legacy VM runner callers omit these fields.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resourceUid": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceUid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "role": {
+          "description": "Closed runner role selecting the trusted bundle launch plan.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/RunnerRole"
+            }
+          ]
+        },
+        "roleId": {
+          "description": "Process role identifier within the execution target.",
+          "type": "string"
+        },
+        "sandboxPlan": {
+          "description": "Typed sandbox requirements enforced by the broker's systemd launch adapter. Legacy VM runner callers omit this field.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SandboxLaunchPlan"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "templateIdentity": {
+          "description": "Component template identity digest.",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0.0
+          },
+          "maxItems": 32,
+          "minItems": 32
+        },
+        "tracingSpanId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "userRef": {
+          "description": "Canonical User resource bound to a user-domain launch.",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "vmId": {
+          "description": "Execution target represented by the trusted runner intent.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
     },
     "TapReadyResponse": {
       "type": "object",
@@ -11773,6 +13751,19 @@
           "items": {
             "$ref": "#/definitions/UsbipProbeEntry"
           }
+        }
+      },
+      "additionalProperties": false
+    },
+    "UserNamespaceSpec": {
+      "description": "The single-entry user namespace pre-established before exec.",
+      "type": "object",
+      "required": [
+        "mappingClass"
+      ],
+      "properties": {
+        "mappingClass": {
+          "$ref": "#/definitions/MappingClass"
         }
       },
       "additionalProperties": false

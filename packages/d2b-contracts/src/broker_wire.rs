@@ -13,8 +13,10 @@ use crate::types::{
     BundleClosureRef, BundleOpId, MediaRef, PathClass, RoleId, ScopeId, SubjectId, TracingSpanId,
     VmId,
 };
+use crate::v3::process::{CapabilityClass, EnvironmentClass, NamespaceClass, UserNamespaceSpec};
 use crate::v3::{
-    ResourceBundleGenerationId, ResourceGeneration, ResourceUid, storage::ZoneStoreId,
+    ArtifactId, ResourceBundleGenerationId, ResourceGeneration, ResourceRef, ResourceUid,
+    execution_policy::ExecutionDomain, storage::ZoneStoreId,
 };
 use d2b_core::host::IfName;
 use d2b_core::workload_identity::WorkloadIdentity;
@@ -25,6 +27,10 @@ use serde_json::Value;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", content = "payload")]
 pub enum BrokerRequest {
+    /// Authenticate and apply one source-to-target NixOS generation
+    /// handoff. The broker resolves all host effects from its trusted
+    /// installed-generation state; no path or command crosses the wire.
+    ApplyHostGenerationHandoff(crate::host_generation::ApplyHostGenerationHandoff),
     ApplyNftables(ApplyNftablesRequest),
     /// Apply or remove one Provider-owned nftables projection.
     ///
@@ -127,6 +133,28 @@ pub enum BrokerRequest {
     /// SCM_RIGHTS; if start-time drifted the broker closes the fd and
     /// surfaces a typed pidfd-race error.
     OpenPidfd(OpenPidfdRequest),
+    /// Observe one broker-owned runner after validating its retained
+    /// pidfd-backed identity against the trusted bundle.
+    ObserveRunner(ObserveRunnerRequest),
+    /// Apply one bounded host-side PipeWire effect for a trusted audio
+    /// runner. The broker resolves all executable and runtime details from
+    /// the signed runner intent; the daemon supplies only opaque identities
+    /// and a closed action.
+    PipeWireAudio(PipeWireAudioRequest),
+    /// Start one trusted non-forking transient systemd unit. The broker
+    /// resolves executable, argv, uid/gid, environment, and cgroup
+    /// placement from the bundle runner intent.
+    StartSystemdUnit(StartSystemdUnitRequest),
+    /// Check whether the exact user manager selected by the trusted runner
+    /// intent is reachable. The manager connection never crosses the broker
+    /// boundary.
+    CheckSystemdUserManager(CheckSystemdUserManagerRequest),
+    /// Observe one trusted transient systemd unit without opening a pidfd.
+    ObserveSystemdUnit(ObserveSystemdUnitRequest),
+    /// Re-open a pidfd after re-verifying a trusted transient unit identity.
+    OpenSystemdUnitPidfd(OpenSystemdUnitPidfdRequest),
+    /// Stop one exact transient systemd unit identity.
+    StopSystemdUnit(StopSystemdUnitRequest),
     /// Resolve one signed Zone storage-row id against the trusted bundle,
     /// provision or open its database inode, and return the owned database
     /// descriptor via `SCM_RIGHTS`. No path, mode, owner, or marker value
@@ -184,6 +212,10 @@ pub enum BrokerRequest {
     SetBridgePortFlags(SetBridgePortFlagsRequest),
     SetSocketAcl(SetSocketAclRequest),
     SetupMountNamespace(SetupMountNamespaceRequest),
+    /// Kill exactly one trusted runner cgroup leaf during intentional
+    /// teardown. The broker resolves the leaf from its trusted runner
+    /// intent; callers never provide a cgroup path.
+    CgroupKill(CgroupKillRequest),
     SignalRunner(SignalRunnerRequest),
     DeregisterRunnerPidfd(DeregisterRunnerPidfdRequest),
     SpawnRunner(SpawnRunnerRequest),
@@ -267,6 +299,18 @@ pub enum BrokerRequest {
     SecurityKeyApplyUdevRules(crate::security_key::SecurityKeyApplyUdevRulesRequest),
 }
 
+/// Path-free result of a source-to-target generation handoff.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ApplyHostGenerationHandoffResponse {
+    pub target: crate::v3::ResourceRef,
+    pub state: crate::host_generation::HandoffState,
+    pub source_generation: u64,
+    pub target_generation: u64,
+    pub source_remains_usable: bool,
+    pub summary: String,
+}
+
 impl BrokerRequest {
     /// Stable operation name for audit records.
     ///
@@ -276,6 +320,7 @@ impl BrokerRequest {
     /// transition.
     pub fn op_name(&self) -> &'static str {
         match self {
+            Self::ApplyHostGenerationHandoff(_) => "ApplyHostGenerationHandoff",
             Self::ApplyNftables(_) => "ApplyNftables",
             Self::ApplyNftablesProjection(_) => "ApplyNftablesProjection",
             Self::ApplyNmUnmanaged(_) => "ApplyNmUnmanaged",
@@ -309,6 +354,13 @@ impl BrokerRequest {
             Self::QemuMediaAttach(_) => "QemuMediaAttach",
             Self::QemuMediaDetach(_) => "QemuMediaDetach",
             Self::OpenPidfd(_) => "OpenPidfd",
+            Self::ObserveRunner(_) => "ObserveRunner",
+            Self::PipeWireAudio(_) => "PipeWireAudio",
+            Self::StartSystemdUnit(_) => "StartSystemdUnit",
+            Self::CheckSystemdUserManager(_) => "CheckSystemdUserManager",
+            Self::ObserveSystemdUnit(_) => "ObserveSystemdUnit",
+            Self::OpenSystemdUnitPidfd(_) => "OpenSystemdUnitPidfd",
+            Self::StopSystemdUnit(_) => "StopSystemdUnit",
             Self::OpenZoneStore(_) => "OpenZoneStore",
             Self::OpenVhostNet(_) => "OpenVhostNet",
             Self::PauseBroker => "PauseBroker",
@@ -334,6 +386,7 @@ impl BrokerRequest {
             Self::SetBridgePortFlags(_) => "SetBridgePortFlags",
             Self::SetSocketAcl(_) => "SetSocketAcl",
             Self::SetupMountNamespace(_) => "SetupMountNamespace",
+            Self::CgroupKill(_) => "CgroupKill",
             Self::SignalRunner(_) => "SignalRunner",
             Self::DeregisterRunnerPidfd(_) => "DeregisterRunnerPidfd",
             Self::SpawnRunner(_) => "SpawnRunner",
@@ -556,6 +609,48 @@ impl BrokerRequest {
                 request.vm_id.to_string(),
                 format!("{}:{}:{}", self.op_name(), request.vm_id, request.role_id),
             ),
+            Self::ObserveRunner(request) => (
+                request.vm_id.to_string(),
+                format!("{}:{}:{}", self.op_name(), request.vm_id, request.role_id),
+            ),
+            Self::PipeWireAudio(request) => (
+                request.vm_id.to_string(),
+                format!("{}:{}:{}", self.op_name(), request.vm_id, request.role_id),
+            ),
+            Self::StartSystemdUnit(request) => (
+                request.vm_id.to_string(),
+                format!("{}:{}:{}", self.op_name(), request.vm_id, request.role_id),
+            ),
+            Self::CheckSystemdUserManager(request) => (
+                request.vm_id.to_string(),
+                format!("{}:{}:{}", self.op_name(), request.vm_id, request.role_id),
+            ),
+            Self::ObserveSystemdUnit(request) => (
+                request.vm_id.to_string(),
+                format!("{}:{}:{}", self.op_name(), request.vm_id, request.role_id),
+            ),
+            Self::OpenSystemdUnitPidfd(request) => (
+                request.unit.vm_id.to_string(),
+                format!(
+                    "{}:{}:{}",
+                    self.op_name(),
+                    request.unit.vm_id,
+                    request.unit.role_id
+                ),
+            ),
+            Self::StopSystemdUnit(request) => (
+                request.unit.vm_id.to_string(),
+                format!(
+                    "{}:{}:{}",
+                    self.op_name(),
+                    request.unit.vm_id,
+                    request.unit.role_id
+                ),
+            ),
+            Self::CgroupKill(request) => (
+                request.vm_id.to_string(),
+                format!("{}:{}:{}", self.op_name(), request.vm_id, request.role_id),
+            ),
             Self::SignalRunner(request) => (
                 request.vm_id.to_string(),
                 format!("{}:{}:{}", self.op_name(), request.vm_id, request.role_id),
@@ -625,6 +720,16 @@ impl BrokerRequest {
             Self::RunMigrate(request) => (
                 request.bundle_migrate_intent_ref.to_string(),
                 format!("{}:{}", self.op_name(), request.bundle_migrate_intent_ref),
+            ),
+            Self::ApplyHostGenerationHandoff(request) => (
+                request.target.to_canonical_string(),
+                format!(
+                    "{}:{}:{}:{}",
+                    self.op_name(),
+                    request.target.to_canonical_string(),
+                    request.intent.source_generation,
+                    request.intent.target_generation
+                ),
             ),
             Self::RunActivation(request) => (
                 request.vm.clone(),
@@ -856,6 +961,9 @@ pub enum ActivationPhase {
 pub struct RunActivationRequest {
     pub bundle_activation_intent_ref: BundleOpId,
     pub mode: ActivationMode,
+    /// Durable generation artifact selected by the caller.
+    #[serde(default)]
+    pub system_artifact_id: Option<ArtifactId>,
     #[serde(default)]
     pub phase: ActivationPhase,
     pub vm: String,
@@ -963,6 +1071,8 @@ pub struct HelloRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", content = "payload")]
 pub enum BrokerResponse {
+    /// Result of one source-to-target generation handoff.
+    ApplyHostGenerationHandoff(ApplyHostGenerationHandoffResponse),
     Ack(AckResponse),
     CreatePersistentTap(TapReadyResponse),
     CreateTapFd(TapReadyResponse),
@@ -1005,6 +1115,24 @@ pub enum BrokerResponse {
     /// on the same frame; the JSON body confirms which `(pid,
     /// start_time_ticks)` the broker verified.
     OpenPidfd(OpenPidfdResponse),
+    /// Observation of a broker-owned runner. No pidfd is returned because
+    /// the operation is a status query over the broker's retained registry.
+    ObserveRunner(ObserveRunnerResponse),
+    /// Result of one broker-owned PipeWire effect. Raw node identifiers and
+    /// runtime paths never cross the wire.
+    PipeWireAudio(PipeWireAudioResponse),
+    /// StartSystemdUnit response. The exact-main pidfd is returned via
+    /// SCM_RIGHTS alongside this identity envelope.
+    StartSystemdUnit(StartSystemdUnitResponse),
+    /// Result of a same-UID user-manager reachability check.
+    CheckSystemdUserManager(CheckSystemdUserManagerResponse),
+    /// Observation of a transient systemd unit. `None` is represented by
+    /// `present = false` and a zero identity.
+    ObserveSystemdUnit(ObserveSystemdUnitResponse),
+    /// Re-open response for a previously verified transient unit.
+    OpenSystemdUnitPidfd(OpenSystemdUnitPidfdResponse),
+    /// Stop response for an exact transient unit identity.
+    StopSystemdUnit(StopSystemdUnitResponse),
     /// `OpenZoneStore` response. The database descriptor is the sole
     /// `SCM_RIGHTS` attachment on the same frame; the JSON body contains
     /// only opaque identity and disposition metadata.
@@ -1717,6 +1845,12 @@ pub struct OpenPidfdRequest {
     /// 22 AFTER `pidfd_open` and compares; mismatch means the pid
     /// was reused.
     pub expected_start_time_ticks: u64,
+    /// Optional generic Process identity binding. Legacy VM runner callers
+    /// omit these fields and retain the historical VM/role key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_ref: Option<ResourceRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_uid: Option<ResourceUid>,
     #[serde(default)]
     pub tracing_span_id: Option<TracingSpanId>,
 }
@@ -1736,6 +1870,263 @@ pub struct OpenPidfdResponse {
     /// Always `0` today; reserved for future multi-fd
     /// SCM_RIGHTS handoffs.
     pub pidfd_index: u32,
+}
+
+/// Observe one runner by its trusted `(vm_id, role_id)` identity. The
+/// broker resolves the intent reference again and refuses stale or
+/// ambiguous ownership rather than trusting caller-supplied process data.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ObserveRunnerRequest {
+    pub vm_id: VmId,
+    pub role_id: RoleId,
+    pub role: RunnerRole,
+    pub bundle_runner_intent_ref: BundleOpId,
+    /// Optional generic Process identity binding.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_ref: Option<ResourceRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_uid: Option<ResourceUid>,
+    #[serde(default)]
+    pub tracing_span_id: Option<TracingSpanId>,
+}
+
+/// Verified runner observation returned by the broker.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ObserveRunnerResponse {
+    pub vm_id: VmId,
+    pub role_id: RoleId,
+    pub present: bool,
+    pub pid: i32,
+    pub start_time_ticks: u64,
+    pub cgroup_verified: bool,
+    pub executable_verified: bool,
+}
+
+/// Audio channel selected by a broker-owned PipeWire effect.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum PipeWireAudioChannel {
+    /// Playback stream.
+    Speaker,
+    /// Capture stream.
+    Microphone,
+}
+
+/// Closed host-side PipeWire action.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", content = "value", rename_all = "camelCase")]
+pub enum PipeWireAudioAction {
+    /// Set the stream mute state.
+    SetGrant { on: bool },
+    /// Set the stream level in the inclusive 0..=100 range.
+    SetLevel { percent: u8 },
+}
+
+/// Request one bounded broker-owned PipeWire effect.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PipeWireAudioRequest {
+    /// Opaque VM identity resolved against the trusted bundle.
+    pub vm_id: VmId,
+    /// Opaque audio runner role identity.
+    pub role_id: RoleId,
+    /// Signed runner intent that supplies the PipeWire effect tools and
+    /// runtime environment.
+    pub bundle_runner_intent_ref: BundleOpId,
+    /// Stream direction.
+    pub channel: PipeWireAudioChannel,
+    /// Closed effect action.
+    pub action: PipeWireAudioAction,
+    #[serde(default)]
+    pub tracing_span_id: Option<TracingSpanId>,
+}
+
+/// Response to [`PipeWireAudioRequest`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PipeWireAudioResponse {
+    pub vm_id: VmId,
+    pub role_id: RoleId,
+    /// Whether the requested host effect was applied.
+    pub applied: bool,
+    /// Whether the broker could reach the PipeWire session.
+    pub host_ready: bool,
+    /// Whether exactly one matching stream was found.
+    pub node_present: bool,
+}
+
+/// Closed systemd execution domain. User-manager execution remains subject to
+/// same-UID verification by the broker; no manager address crosses the wire.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum SystemdUnitDomain {
+    /// The host system manager.
+    System,
+    /// The verified per-user manager.
+    User,
+}
+
+/// Stable systemd identity returned only after the broker has queried the
+/// manager and re-read the process start time under the pidfd boundary.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SystemdUnitIdentity {
+    /// systemd's 16-byte InvocationID.
+    pub invocation_id: [u8; 16],
+    /// Digest of the exact ControlGroup path; the path never crosses IPC.
+    pub cgroup_identity: [u8; 32],
+    /// MainPID verified against the unit and `/proc`.
+    pub main_pid: u32,
+    /// `/proc/<pid>/stat` field-22 start time.
+    pub start_time_ticks: u64,
+    /// Owning Provider digest bound to the unit identity.
+    pub provider_identity: [u8; 32],
+    /// Component template digest bound to the unit identity.
+    pub template_identity: [u8; 32],
+    /// Process resource generation bound to the unit identity.
+    pub generation: u64,
+    /// Content identity of the broker-resolved trusted bundle.
+    pub bundle_content_identity: String,
+}
+
+/// Shared trusted request fields for systemd unit operations.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SystemdUnitRequest {
+    /// Execution target represented by the trusted runner intent.
+    pub vm_id: VmId,
+    /// Process role identifier within the execution target.
+    pub role_id: RoleId,
+    /// Optional generic Process identity binding used in unit names and
+    /// authorization. Legacy VM runner callers omit these fields.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_ref: Option<ResourceRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_uid: Option<ResourceUid>,
+    /// Closed runner role selecting the trusted bundle launch plan.
+    pub role: RunnerRole,
+    /// Opaque bundle reference resolved only by the broker.
+    pub bundle_runner_intent_ref: BundleOpId,
+    /// Content identity the broker must resolve for this unit.
+    pub bundle_content_identity: String,
+    /// Process Provider identity digest.
+    pub provider_identity: [u8; 32],
+    /// Component template identity digest.
+    pub template_identity: [u8; 32],
+    /// Nonzero Process resource generation.
+    pub generation: u64,
+    /// System or verified user manager.
+    pub domain: SystemdUnitDomain,
+    /// Canonical Host or Guest execution target, when supplied by a v3
+    /// Process ticket. Legacy VM runner callers omit this field.
+    #[serde(default)]
+    pub execution_ref: Option<ResourceRef>,
+    /// Canonical User resource bound to a user-domain launch.
+    #[serde(default)]
+    pub user_ref: Option<ResourceRef>,
+    /// Typed sandbox requirements enforced by the broker's systemd launch
+    /// adapter. Legacy VM runner callers omit this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sandbox_plan: Option<SandboxLaunchPlan>,
+    #[serde(default)]
+    pub tracing_span_id: Option<TracingSpanId>,
+}
+
+/// Request to start one transient systemd unit.
+pub type StartTransientUnitRequest = SystemdUnitRequest;
+/// Compatibility spelling used by the BrokerRequest variant.
+pub type StartSystemdUnitRequest = StartTransientUnitRequest;
+/// Request to check the trusted per-user systemd manager.
+pub type CheckSystemdUserManagerRequest = SystemdUnitRequest;
+
+/// Request to observe one transient systemd unit.
+pub type ObserveSystemdUnitRequest = SystemdUnitRequest;
+
+/// Request to re-open a pidfd after identity re-verification.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OpenSystemdUnitPidfdRequest {
+    /// Trusted unit selector and binding inputs.
+    #[serde(flatten)]
+    pub unit: SystemdUnitRequest,
+    /// Identity observed before the local descriptor was requested.
+    pub expected: SystemdUnitIdentity,
+}
+
+/// Request to stop one exact transient systemd unit.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StopSystemdUnitRequest {
+    /// Trusted unit selector and binding inputs.
+    #[serde(flatten)]
+    pub unit: SystemdUnitRequest,
+    /// Identity that must still match before the stop is sent.
+    pub expected: SystemdUnitIdentity,
+    /// Graceful drain or forced termination.
+    pub class: SystemdStopClass,
+}
+
+/// Stop class for transient systemd units.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum SystemdStopClass {
+    /// Request systemd to stop the unit and wait for it to become inactive.
+    Drain,
+    /// Kill the exact unit cgroup and verify it becomes inactive.
+    Terminate,
+}
+
+/// Start response. The exact-main pidfd is the first SCM_RIGHTS fd.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StartTransientUnitResponse {
+    pub vm_id: VmId,
+    pub role_id: RoleId,
+    pub identity: SystemdUnitIdentity,
+    pub pidfd_index: u32,
+}
+/// Compatibility spelling used by the BrokerResponse variant.
+pub type StartSystemdUnitResponse = StartTransientUnitResponse;
+
+/// Response from a same-UID per-user manager reachability check.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CheckSystemdUserManagerResponse {
+    pub vm_id: VmId,
+    pub role_id: RoleId,
+    pub available: bool,
+}
+
+/// Observation response. `present = false` has no identity payload.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ObserveSystemdUnitResponse {
+    pub vm_id: VmId,
+    pub role_id: RoleId,
+    pub present: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity: Option<SystemdUnitIdentity>,
+}
+
+/// Re-open response. The exact-main pidfd is the first SCM_RIGHTS fd.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OpenSystemdUnitPidfdResponse {
+    pub vm_id: VmId,
+    pub role_id: RoleId,
+    pub identity: SystemdUnitIdentity,
+    pub pidfd_index: u32,
+}
+
+/// Stop response after systemd confirmed the unit is inactive.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StopSystemdUnitResponse {
+    pub vm_id: VmId,
+    pub role_id: RoleId,
+    pub stopped: bool,
 }
 
 /// Open one broker-resolved Zone resource store. The request is deliberately
@@ -2227,6 +2618,11 @@ pub struct SignalRunnerRequest {
     pub pid: Option<i32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expected_start_time_ticks: Option<u64>,
+    /// Optional generic Process identity binding.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_ref: Option<ResourceRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_uid: Option<ResourceUid>,
     #[serde(default)]
     pub tracing_span_id: Option<TracingSpanId>,
 }
@@ -2241,9 +2637,28 @@ pub struct SignalRunnerResponse {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CgroupKillRequest {
+    pub vm_id: VmId,
+    pub role_id: RoleId,
+    #[serde(default)]
+    pub tracing_span_id: Option<TracingSpanId>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DeregisterRunnerPidfdRequest {
     pub vm_id: VmId,
     pub role_id: RoleId,
+    /// Optional exact process identity. Deregistration must not remove a
+    /// replacement runner that reused the VM/role tuple.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pid: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_start_time_ticks: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_ref: Option<ResourceRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_uid: Option<ResourceUid>,
     #[serde(default)]
     pub tracing_span_id: Option<TracingSpanId>,
 }
@@ -2309,6 +2724,25 @@ pub enum RunnerRole {
     WaylandProxy,
 }
 
+/// Typed semantic sandbox plan compiled by the daemon and re-validated by
+/// the privileged broker before a runner is spawned.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SandboxLaunchPlan {
+    pub digest: String,
+    pub domain: ExecutionDomain,
+    pub namespace_classes: Vec<NamespaceClass>,
+    pub capability_classes: Vec<CapabilityClass>,
+    pub seccomp_class: crate::v3::execution_policy::BoundedToken,
+    pub no_new_privileges: bool,
+    pub start_root: bool,
+    pub environment_class: EnvironmentClass,
+    pub read_only_root: bool,
+    pub umask: Option<String>,
+    pub oom_score_adj: i32,
+    pub user_namespace: Option<UserNamespaceSpec>,
+}
+
 impl RunnerRole {
     pub fn as_str(self) -> &'static str {
         match self {
@@ -2337,6 +2771,25 @@ pub struct SpawnRunnerRequest {
     /// active runners - the daemon's pidfd table is keyed on
     /// `(vm_id, role_id)` and a duplicate registration fails closed.
     pub role_id: RoleId,
+    /// Optional generic Process identity binding. These fields are part of
+    /// the registry key and prevent distinct Process resources from
+    /// colliding on the legacy VM/role tuple.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_ref: Option<ResourceRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_uid: Option<ResourceUid>,
+    /// Content identity of the daemon's trusted bundle snapshot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bundle_content_identity: Option<String>,
+    /// Provider/template identity expected by the daemon.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_identity: Option<[u8; 32]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub template_identity: Option<[u8; 32]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generation: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sandbox_plan: Option<SandboxLaunchPlan>,
     /// Role selector - picks the argv generator the broker applies to
     /// the bundle row anchored by `bundle_runner_intent_ref`.
     pub role: RunnerRole,
@@ -2346,6 +2799,16 @@ pub struct SpawnRunnerRequest {
     /// cgroup placement, mount namespace, environment) and feeds it
     /// to the matching argv generator.
     pub bundle_runner_intent_ref: BundleOpId,
+    /// Canonical Host or Guest execution target bound by the Process ticket.
+    /// Legacy VM runner callers omit this additive field.
+    #[serde(default)]
+    pub execution_ref: Option<ResourceRef>,
+    /// Canonical execution domain bound by the Process ticket.
+    #[serde(default)]
+    pub execution_domain: Option<ExecutionDomain>,
+    /// Canonical User resource bound to a user-domain launch.
+    #[serde(default)]
+    pub user_ref: Option<ResourceRef>,
     /// Optional vsock CID / TAP fd slot allocated by the daemon at
     /// host-prepare time. The broker validates each entry against the
     /// bundle row and refuses any unexpected allocation slot. None
@@ -2407,6 +2870,22 @@ pub struct SpawnRunnerResponse {
     pub vm_id: VmId,
     pub role_id: RoleId,
     pub role: RunnerRole,
+    /// Resolved execution binding and content identities echoed by the
+    /// broker after validating the request against its trusted bundle.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_ref: Option<ResourceRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_domain: Option<ExecutionDomain>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_ref: Option<ResourceRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_identity: Option<[u8; 32]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub template_identity: Option<[u8; 32]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generation: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bundle_content_identity: Option<String>,
     /// Child PID. The daemon validates this against the pidfd it
     /// received and against `/proc/<pid>/stat` field 22
     /// (`start_time`).
@@ -2749,6 +3228,27 @@ mod tests {
     }
 
     #[test]
+    fn pipewire_audio_request_is_opaque_and_closed() {
+        let request = BrokerRequest::PipeWireAudio(PipeWireAudioRequest {
+            vm_id: VmId::new("corp-vm"),
+            role_id: RoleId::new("audio"),
+            bundle_runner_intent_ref: BundleOpId::new("runner:vm:corp-vm:role:audio"),
+            channel: PipeWireAudioChannel::Speaker,
+            action: PipeWireAudioAction::SetLevel { percent: 75 },
+            tracing_span_id: None,
+        });
+        let json = serde_json::to_value(&request).expect("serializes");
+        assert_eq!(json["kind"], "PipeWireAudio");
+        assert_eq!(json["payload"]["vmId"], "corp-vm");
+        assert_eq!(
+            json["payload"]["action"],
+            serde_json::json!({"kind": "setLevel", "value": {"percent": 75}})
+        );
+        assert_eq!(request.op_name(), "PipeWireAudio");
+        assert!(request.authoritative_audit_join().is_some());
+    }
+
+    #[test]
     fn broker_caller_role_default_is_not_authorized() {
         assert!(matches!(
             BrokerCallerRole::default(),
@@ -2846,6 +3346,7 @@ mod tests {
         let req = RunActivationRequest {
             bundle_activation_intent_ref: BundleOpId::new("activation:vm:corp-vm"),
             mode: ActivationMode::Switch,
+            system_artifact_id: None,
             phase: ActivationPhase::Prepare,
             vm: "corp-vm".to_owned(),
             tracing_span_id: None,
@@ -3599,6 +4100,51 @@ mod tests {
     }
 
     #[test]
+    fn cgroup_kill_request_round_trips() {
+        let frame = encode_frame(&serde_json::json!({
+            "kind": "CgroupKill",
+            "payload": {
+                "vmId": "corp-vm",
+                "roleId": "ch-runner"
+            }
+        }))
+        .expect("encodes");
+        let decoded = decode_frame::<BrokerRequest>("BrokerRequest", &frame).expect("decodes");
+        match decoded {
+            BrokerRequest::CgroupKill(req) => {
+                assert_eq!(req.vm_id.as_str(), "corp-vm");
+                assert_eq!(req.role_id.as_str(), "ch-runner");
+            }
+            other => panic!("expected CgroupKill, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn user_manager_check_round_trips() {
+        let frame = encode_frame(&serde_json::json!({
+            "kind": "CheckSystemdUserManager",
+            "payload": {
+                "vmId": "guest-vm",
+                "roleId": "audio",
+                "role": "audio",
+                "bundleRunnerIntentRef": "intent",
+                "bundleContentIdentity": "bundle",
+                "providerIdentity": vec![1_u8; 32],
+                "templateIdentity": vec![2_u8; 32],
+                "generation": 3,
+                "domain": "user"
+            }
+        }))
+        .expect("encodes");
+        let decoded = decode_frame::<BrokerRequest>("BrokerRequest", &frame).expect("decodes");
+        assert!(matches!(
+            decoded,
+            BrokerRequest::CheckSystemdUserManager(request)
+                if request.domain == SystemdUnitDomain::User
+        ));
+    }
+
+    #[test]
     fn signal_runner_response_round_trips() {
         let response = BrokerResponse::SignalRunner(SignalRunnerResponse {
             signaled: false,
@@ -3630,6 +4176,13 @@ mod tests {
             start_time_ticks: 987_654_321,
             pidfd_index: 0,
             console_fd_index: None,
+            execution_ref: None,
+            execution_domain: None,
+            user_ref: None,
+            provider_identity: None,
+            template_identity: None,
+            generation: None,
+            bundle_content_identity: None,
         });
         let frame = encode_frame(&response).expect("encodes");
         let decoded = decode_frame::<BrokerResponse>("BrokerResponse", &frame).expect("decodes");

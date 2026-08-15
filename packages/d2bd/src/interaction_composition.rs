@@ -34,9 +34,10 @@ use d2b_contracts::v3::{
         TransportBinding, TransportClass,
     },
     execution_policy::{BoundedToken, ExecutionDomain},
+    process::{CapabilityClass, EnvironmentClass, MappingClass, NamespaceClass, UserNamespaceSpec},
 };
 use d2b_contracts::{
-    broker_wire::{BrokerCallerRole, RunnerRole},
+    broker_wire::{BrokerCallerRole, RunnerRole, SandboxLaunchPlan},
     types::{BundleOpId, RoleId, VmId},
 };
 use d2b_core::{
@@ -48,6 +49,7 @@ use d2b_process::{
     ProcessIdentityDigest, ProcessLaunchEffectPort, ProcessRequest, StopClass,
 };
 use d2b_process_conformance::ReadinessExpectation;
+use d2b_process_conformance::SandboxCompiler;
 use d2b_provider_clipboard_wayland::{
     AttachmentClass, ClipboardProcessEffectPort, ClipboardServiceError,
 };
@@ -2723,6 +2725,82 @@ fn process_ticket(
     .map_err(|_| WorkerEffectError::LaunchRejected)
 }
 
+fn display_sandbox_plan(
+    intent: &ResolvedRunnerIntent,
+    domain: ExecutionDomain,
+) -> Result<SandboxLaunchPlan, ProcessEffectError> {
+    let namespace_classes = [
+        (intent.namespaces.user, NamespaceClass::User),
+        (intent.namespaces.pid, NamespaceClass::Pid),
+        (intent.namespaces.mount, NamespaceClass::Mount),
+        (intent.namespaces.ipc, NamespaceClass::Ipc),
+        (intent.namespaces.uts, NamespaceClass::Uts),
+        (intent.namespaces.net, NamespaceClass::Network),
+    ]
+    .into_iter()
+    .filter_map(|(enabled, class)| enabled.then_some(class))
+    .collect();
+    let capability_classes = intent
+        .capabilities
+        .iter()
+        .map(|capability| match capability.as_str() {
+            "CAP_NET_BIND_SERVICE" => Ok(CapabilityClass::NetworkBind),
+            "CAP_NET_RAW" => Ok(CapabilityClass::NetworkRaw),
+            "CAP_NET_ADMIN" => Ok(CapabilityClass::NetworkAdmin),
+            "CAP_SYS_TIME" => Ok(CapabilityClass::SysTime),
+            "CAP_SYS_PTRACE" => Ok(CapabilityClass::SysPtrace),
+            "CAP_SYS_ADMIN" => Ok(CapabilityClass::SysAdmin),
+            "CAP_DAC_OVERRIDE" => Ok(CapabilityClass::DacOverride),
+            "CAP_FOWNER" => Ok(CapabilityClass::Fowner),
+            "CAP_CHOWN" => Ok(CapabilityClass::Chown),
+            "CAP_SETUID" => Ok(CapabilityClass::Setuid),
+            "CAP_SETGID" => Ok(CapabilityClass::Setgid),
+            "CAP_AUDIT_WRITE" => Ok(CapabilityClass::AuditWrite),
+            "CAP_KILL" => Ok(CapabilityClass::Kill),
+            _ => Err(ProcessEffectError::ResolutionFailed),
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let seccomp_class = intent
+        .seccomp_policy_ref
+        .as_deref()
+        .ok_or(ProcessEffectError::ResolutionFailed)
+        .and_then(|reference| {
+            BoundedToken::parse(reference).map_err(|_| ProcessEffectError::ResolutionFailed)
+        })?;
+    let spec = d2b_contracts::v3::process::SandboxSpec::new(
+        namespace_classes,
+        capability_classes,
+        seccomp_class,
+        true,
+        intent.root_carve_out,
+        EnvironmentClass::Minimal,
+        true,
+        intent.umask.map(|umask| format!("{umask:o}")),
+        0,
+        intent.user_namespace.map(|_| UserNamespaceSpec {
+            mapping_class: MappingClass::ProcessPrincipalRoot,
+        }),
+    )
+    .map_err(|_| ProcessEffectError::ResolutionFailed)?;
+    let compiled = SandboxCompiler
+        .compile_plan(&spec, domain, false)
+        .map_err(|_| ProcessEffectError::ResolutionFailed)?;
+    Ok(SandboxLaunchPlan {
+        digest: compiled.compiled().digest().to_hex(),
+        domain,
+        namespace_classes: spec.namespace_classes().to_vec(),
+        capability_classes: spec.capability_classes().to_vec(),
+        seccomp_class: spec.seccomp_class().clone(),
+        no_new_privileges: spec.no_new_privileges(),
+        start_root: spec.start_root(),
+        environment_class: spec.environment_class(),
+        read_only_root: spec.read_only_root(),
+        umask: spec.umask().map(str::to_owned),
+        oom_score_adj: spec.oom_score_adj(),
+        user_namespace: spec.user_namespace().copied(),
+    })
+}
+
 /// Daemon-owned resolver for display worker tickets.
 ///
 /// The generic Process ticket intentionally contains no executable or broker
@@ -2808,9 +2886,16 @@ impl BundleDisplayLaunchResolver {
                     .bundle_runner_intent_ref
                     .as_str()
                     .to_owned(),
+                execution_ref: observed.intent.execution_ref.clone(),
+                domain: observed.intent.domain,
+                user_ref: observed.intent.user_ref.clone(),
                 provider_identity: observed.intent.provider_identity,
                 template_identity: observed.intent.template_identity,
                 generation: observed.intent.generation,
+                resource_ref: observed.intent.resource_ref.clone(),
+                resource_uid: observed.intent.resource_uid.clone(),
+                bundle_content_identity: observed.intent.bundle_content_identity.clone(),
+                sandbox_plan: observed.intent.sandbox_plan.clone(),
                 pid: observed.pid,
                 start_time_ticks: observed.start_time_ticks,
                 cgroup_verified: observed.cgroup_verified,
@@ -2840,14 +2925,22 @@ impl BrokerLaunchResolver for BundleDisplayLaunchResolver {
         let intent = self.resolve_intent()?;
         let provider_identity = digest_identity("provider", ticket.owner_provider().as_str());
         let template_identity = digest_identity("template", ticket.template().as_str());
+        let sandbox_plan = display_sandbox_plan(intent, ticket.domain())?;
         Ok(BrokerLaunchIntent {
             vm_id: VmId::new(intent.vm_name.clone()),
+            execution_ref: ticket.execution_ref().clone(),
+            domain: ticket.domain(),
+            user_ref: ticket.user_ref().cloned(),
             role_id: RoleId::new(intent.role_id.clone()),
             role: RunnerRole::WaylandProxy,
             bundle_runner_intent_ref: BundleOpId::new(intent.intent_id.clone()),
             provider_identity,
             template_identity,
             generation: ticket.resource_generation().get(),
+            resource_ref: ticket.process_ref().clone(),
+            resource_uid: ticket.process_uid().clone(),
+            bundle_content_identity: self.bundle.audit_bundle_hash().to_owned(),
+            sandbox_plan: Some(sandbox_plan),
         })
     }
 
@@ -2891,12 +2984,19 @@ impl BrokerLaunchResolver for BundleDisplayLaunchResolver {
 struct PersistedObservation {
     process_uid: String,
     vm_id: String,
+    execution_ref: ResourceRef,
+    domain: ExecutionDomain,
+    user_ref: Option<ResourceRef>,
     role_id: String,
     role: RunnerRole,
     bundle_runner_intent_ref: String,
     provider_identity: [u8; 32],
     template_identity: [u8; 32],
     generation: u64,
+    resource_ref: ResourceRef,
+    resource_uid: ResourceUid,
+    bundle_content_identity: String,
+    sandbox_plan: Option<SandboxLaunchPlan>,
     pid: i32,
     start_time_ticks: u64,
     cgroup_verified: bool,
@@ -2919,12 +3019,19 @@ fn load_observations(
             let observed = BrokerObservedProcess {
                 intent: BrokerLaunchIntent {
                     vm_id: VmId::new(record.vm_id),
+                    execution_ref: record.execution_ref,
+                    domain: record.domain,
+                    user_ref: record.user_ref,
                     role_id: RoleId::new(record.role_id),
                     role: record.role,
                     bundle_runner_intent_ref: BundleOpId::new(record.bundle_runner_intent_ref),
                     provider_identity: record.provider_identity,
                     template_identity: record.template_identity,
                     generation: record.generation,
+                    resource_ref: record.resource_ref,
+                    resource_uid: record.resource_uid,
+                    bundle_content_identity: record.bundle_content_identity,
+                    sandbox_plan: record.sandbox_plan,
                 },
                 pid: record.pid,
                 start_time_ticks: record.start_time_ticks,
@@ -3966,12 +4073,19 @@ mod tests {
         let record = PersistedObservation {
             process_uid: "11111111-1111-4111-8111-111111111111".to_owned(),
             vm_id: "guest-a".to_owned(),
+            execution_ref: ResourceRef::parse("Host/host-system").unwrap(),
+            domain: ExecutionDomain::System,
+            user_ref: None,
             role_id: "wayland-proxy".to_owned(),
             role: RunnerRole::WaylandProxy,
             bundle_runner_intent_ref: "runner:guest-a:wayland-proxy".to_owned(),
             provider_identity: [1; 32],
             template_identity: [2; 32],
             generation: 3,
+            resource_ref: ResourceRef::parse("EphemeralProcess/display-host-proxy").unwrap(),
+            resource_uid: ResourceUid::parse("22222222-2222-4222-8222-222222222222").unwrap(),
+            bundle_content_identity: "sha256:test".to_owned(),
+            sandbox_plan: None,
             pid: 42,
             start_time_ticks: 99,
             cgroup_verified: true,
@@ -3986,6 +4100,30 @@ mod tests {
         assert_eq!(observed.pid, 42);
         assert_eq!(observed.start_time_ticks, 99);
         assert_eq!(observed.intent.role, RunnerRole::WaylandProxy);
+        assert_eq!(
+            observed.intent.execution_ref.to_canonical_string(),
+            "Host/host-system"
+        );
+        assert_eq!(
+            observed.intent.resource_ref.to_canonical_string(),
+            "EphemeralProcess/display-host-proxy"
+        );
+    }
+
+    #[test]
+    fn display_sandbox_plan_is_derived_from_trusted_runner_intent() {
+        let intent = d2b_core::test_support::ResolvedRunnerIntentBuilder::new()
+            .with_capabilities(vec!["CAP_NET_RAW".to_owned()])
+            .with_seccomp_policy_ref(Some("strict"))
+            .build();
+
+        let plan = display_sandbox_plan(&intent, ExecutionDomain::System).unwrap();
+
+        assert_eq!(plan.domain, ExecutionDomain::System);
+        assert_eq!(plan.capability_classes, vec![CapabilityClass::NetworkRaw]);
+        assert_eq!(plan.seccomp_class.as_str(), "strict");
+        assert!(plan.no_new_privileges);
+        assert!(plan.read_only_root);
     }
 
     #[test]

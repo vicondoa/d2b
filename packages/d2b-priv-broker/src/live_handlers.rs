@@ -494,32 +494,56 @@ fn commit_activation_metadata(
     let hardlink_farm_path = &store_view_intent.hardlink_farm_path;
     verify_generation_ready(hardlink_farm_path, target_generation)?;
     let previous_current = read_current_generation(hardlink_farm_path)?;
+    let previous_state_id = hardlink_farm::read_state_current_id(hardlink_farm_path);
+    let previous_meta_id = hardlink_farm::read_meta_current_id(hardlink_farm_path);
+    let previous_rollback = read_rollback_marker(hardlink_farm_path)?;
     let mut rollback_marker_written = None;
     let mut current_generation_updated = None;
-    match mode {
-        ActivationMode::Test => {
-            if let Some(previous_generation) = previous_current.filter(|g| *g != target_generation)
-            {
-                write_rollback_marker(hardlink_farm_path, previous_generation)?;
-                rollback_marker_written = Some(previous_generation);
+    let result: Result<(), LiveHandlerError> = (|| {
+        match mode {
+            ActivationMode::Test => {
+                if let Some(previous_generation) =
+                    previous_current.filter(|g| *g != target_generation)
+                {
+                    write_rollback_marker(hardlink_farm_path, previous_generation)?;
+                    rollback_marker_written = Some(previous_generation);
+                }
+            }
+            ActivationMode::Switch | ActivationMode::Boot => {
+                if let Some(previous_generation) =
+                    previous_current.filter(|g| *g != target_generation)
+                {
+                    write_rollback_marker(hardlink_farm_path, previous_generation)?;
+                    rollback_marker_written = Some(previous_generation);
+                }
+                swap_current_generation(hardlink_farm_path, target_generation)?;
+                publish_split_activation_metadata(store_view_intent)?;
+                current_generation_updated = Some(target_generation);
+            }
+            ActivationMode::Rollback => {
+                swap_current_generation(hardlink_farm_path, target_generation)?;
+                publish_split_activation_metadata(store_view_intent)?;
+                current_generation_updated = Some(target_generation);
+                clear_rollback_marker(hardlink_farm_path)?;
             }
         }
-        ActivationMode::Switch | ActivationMode::Boot => {
-            if let Some(previous_generation) = previous_current.filter(|g| *g != target_generation)
-            {
-                write_rollback_marker(hardlink_farm_path, previous_generation)?;
-                rollback_marker_written = Some(previous_generation);
-            }
-            swap_current_generation(hardlink_farm_path, target_generation)?;
-            publish_split_activation_metadata(store_view_intent)?;
-            current_generation_updated = Some(target_generation);
+        Ok(())
+    })();
+    if let Err(error) = result {
+        if let Err(restore_error) = restore_activation_metadata(
+            hardlink_farm_path,
+            previous_current,
+            previous_state_id.as_deref(),
+            previous_meta_id.as_deref(),
+            previous_rollback,
+        ) {
+            tracing::error!(
+                store_root = %hardlink_farm_path.display(),
+                error = %restore_error,
+                "activation rollback could not restore the source generation metadata"
+            );
         }
-        ActivationMode::Rollback => {
-            swap_current_generation(hardlink_farm_path, target_generation)?;
-            publish_split_activation_metadata(store_view_intent)?;
-            current_generation_updated = Some(target_generation);
-            clear_rollback_marker(hardlink_farm_path)?;
-        }
+        return Err(error);
     }
     if current_generation_updated.is_some() {
         let mut retain = vec![target_generation];
@@ -559,6 +583,73 @@ fn commit_activation_metadata(
         rollback_marker_written,
         current_generation_updated,
     })
+}
+
+fn restore_activation_metadata(
+    hardlink_farm_path: &Path,
+    previous_current: Option<u64>,
+    previous_state_id: Option<&str>,
+    previous_meta_id: Option<&str>,
+    previous_rollback: Option<u64>,
+) -> Result<(), LiveHandlerError> {
+    match previous_current {
+        Some(generation) => swap_current_generation(hardlink_farm_path, generation)?,
+        None => {
+            let current = hardlink_farm_path.join("current");
+            match fs::remove_file(&current) {
+                Ok(()) => {}
+                Err(error) => {
+                    if error.kind() == std::io::ErrorKind::NotFound {
+                        return Ok(());
+                    }
+                    return Err(LiveHandlerError::Activation(format!(
+                        "remove current generation pointer {}: {error}",
+                        current.display()
+                    )));
+                }
+            }
+        }
+    }
+    restore_split_pointer(
+        hardlink_farm_path,
+        "state",
+        previous_state_id,
+        hardlink_farm::swap_state_current,
+    )?;
+    restore_split_pointer(
+        hardlink_farm_path,
+        "meta",
+        previous_meta_id,
+        hardlink_farm::swap_meta_current,
+    )?;
+    match previous_rollback {
+        Some(generation) => write_rollback_marker(hardlink_farm_path, generation)?,
+        None => clear_rollback_marker(hardlink_farm_path)?,
+    }
+    Ok(())
+}
+
+fn restore_split_pointer(
+    hardlink_farm_path: &Path,
+    label: &str,
+    previous_id: Option<&str>,
+    swap: fn(&Path, &str) -> Result<(), d2b_host::hardlink_farm::HardlinkFarmError>,
+) -> Result<(), LiveHandlerError> {
+    match previous_id {
+        Some(id) => swap(hardlink_farm_path, id)
+            .map_err(|error| LiveHandlerError::Activation(error.to_string())),
+        None => {
+            let current = hardlink_farm_path.join(label).join("current");
+            match fs::remove_file(&current) {
+                Ok(()) => Ok(()),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(error) => Err(LiveHandlerError::Activation(format!(
+                    "remove {label} generation pointer {}: {error}",
+                    current.display()
+                ))),
+            }
+        }
+    }
 }
 
 fn cleanup_obsolete_legacy_generations(

@@ -1,20 +1,15 @@
 //! The `system-systemd` Process Provider controller.
 //!
-//! A process is a **non-forking transient system unit or scope**, or - for
-//! the user domain - a verified transient user scope created through the
-//! fixed user supervisor. Identity is the unit InvocationID bound together
+//! A process is a **non-forking transient system unit or scope**. Identity is
+//! the unit InvocationID bound together
 //! with the cgroup, the unit main process, that process's start time, and
 //! the Provider, template, and generation triple. A unit name alone is
 //! never identity, so it is neither an identity binding nor public status.
 //! systemd owns `wait` and reap; this Provider holds only a locally
 //! verified pidfd.
 //!
-//! Adapted from the existing unsafe-local helper's `VerifiedScope`
-//! (`packages/d2b-unsafe-local-helper/src/systemd.rs`), which already binds
-//! a transient user scope by unit, InvocationID, and ControlGroup and fails
-//! closed on a mismatch, and from the guest exec runner's non-forking
-//! `systemd-run` transient-unit launch
-//! (`packages/d2b-guestd/src/detached.rs`).
+//! Adapted from the guest exec runner's non-forking `systemd-run`
+//! transient-unit launch (`packages/d2b-guestd/src/detached.rs`).
 //!
 //! This crate performs no privileged mutation: it opens no D-Bus or systemd
 //! socket, spawns no process, and resolves no unit name or path. It
@@ -25,15 +20,26 @@
 #![deny(missing_docs)]
 
 pub mod adoption;
+pub mod audit;
+pub mod controller;
+pub mod drain;
 pub mod effect_port;
+pub mod error;
 pub mod guest_exec;
 pub mod launch;
+pub mod lifecycle;
+pub mod manifest;
+pub mod metrics;
 pub mod sandbox;
 
 pub use guest_exec::{
     AttachRequest, ComponentSessionAttachment, GuestExecError, GuestExecPort, GuestExecRequest,
     NamedAttachmentStream, TtySize,
 };
+pub use lifecycle::{
+    EphemeralProcessController, RestartPolicy, SystemdConfigError, SystemdProviderConfig,
+};
+pub use manifest::SystemdManifest;
 
 use std::collections::BTreeSet;
 
@@ -57,9 +63,8 @@ pub struct SystemdProcessProvider<P: ProcessLaunchEffectPort> {
 impl<P: ProcessLaunchEffectPort> SystemdProcessProvider<P> {
     /// Build the controller over an injected process effect port.
     ///
-    /// The profile is fixed: both execution domains are supported, because
-    /// the user domain is served by a verified transient user scope through
-    /// the fixed user supervisor.
+    /// The broker verifies both system and authenticated user-manager
+    /// transient-unit paths before the effect reaches systemd.
     pub fn new(port: P) -> Self {
         let profile = ProcessProviderProfile::new(
             BoundedToken::parse(PROVIDER_NAME).expect("the frozen provider name is a valid token"),
@@ -93,8 +98,6 @@ impl<P: ProcessLaunchEffectPort> SystemdProcessProvider<P> {
         if ticket.operation().cancellation() == CancellationBinding::Cancelled {
             return Err(ProcessConformanceError::Cancelled);
         }
-        // A user-domain process runs in a verified transient user scope, so
-        // the exact identity must already be resolved on the ticket.
         if ticket.domain() == ExecutionDomain::User && ticket.user_ref().is_none() {
             return Err(ProcessConformanceError::UserRefRequired);
         }

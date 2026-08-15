@@ -357,6 +357,29 @@ impl HostReconciler {
         })
     }
 
+    /// Reconcile a Host and emit its redacted ResourceReconciled record.
+    pub fn reconcile_with_audit(
+        &self,
+        host_ref: &ResourceRef,
+        provider_ref: &ResourceRef,
+        spec: &HostSpec,
+    ) -> Result<(HostStatusReport, crate::ResourceReconciledAudit), SystemCoreError> {
+        let status = self.reconcile(host_ref, provider_ref, spec)?;
+        let outcome = match status.phase {
+            ResourcePhase::Ready => crate::ReconcileOutcome::Converged,
+            ResourcePhase::Degraded => crate::ReconcileOutcome::Degraded,
+            _ => crate::ReconcileOutcome::Failed,
+        };
+        Ok((
+            status,
+            crate::ResourceReconciledAudit::host(
+                host_ref.name().as_str(),
+                outcome,
+                "host-reconciled",
+            ),
+        ))
+    }
+
     /// Reject a submitted status that carries a reconciler-owned field.
     ///
     /// This is the enforcement half of "operators cannot suppress or

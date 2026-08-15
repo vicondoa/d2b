@@ -53,6 +53,19 @@ pub struct NodeId(pub String);
 pub struct ProcessNode {
     /// Stable node id used by edges.
     pub id: NodeId,
+    /// Canonical Host or Guest execution target for this trusted runner.
+    ///
+    /// Omitted by legacy bundles, which resolve to `Guest/<vm>`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_ref: Option<String>,
+    /// Canonical execution domain for this trusted runner.
+    ///
+    /// Omitted by legacy bundles, which resolve to the system domain.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_domain: Option<ProcessExecutionDomain>,
+    /// Canonical User resource bound to a user-domain runner.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_ref: Option<String>,
     /// Role kind used by orchestration and minijail profile selection.
     pub role: ProcessRole,
     /// Optional systemd unit backing this node.
@@ -91,6 +104,16 @@ pub struct ProcessNode {
     pub profile: RoleProfile,
     /// Readiness predicates that mark the role available.
     pub readiness: Vec<ReadinessPredicate>,
+}
+
+/// Trusted execution domain carried by a private process artifact.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProcessExecutionDomain {
+    /// The host system manager or system sandbox.
+    System,
+    /// The exact broker-resolved per-user manager or sandbox identity.
+    User,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

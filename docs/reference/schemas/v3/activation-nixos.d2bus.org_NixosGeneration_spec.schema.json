@@ -1,0 +1,36 @@
+{
+  "$id": "https://d2bus.org/schemas/v3/activation-nixos.d2bus.org/NixosGeneration/spec",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "activationMode": {
+      "enum": ["switch", "boot", "test", "adopt"],
+      "type": "string"
+    },
+    "executionRef": {
+      "pattern": "^(?:Host|Guest)/[a-z][a-z0-9-]{0,62}$",
+      "type": "string"
+    },
+    "priorGenerationRef": {
+      "pattern": "^activation-nixos\\.d2bus\\.org\\.NixosGeneration/[a-z][a-z0-9-]{0,62}$",
+      "type": "string"
+    },
+    "providerRef": {
+      "const": "Provider/activation-nixos",
+      "type": "string"
+    },
+    "systemArtifactId": {
+      "pattern": "^[a-z][a-z0-9-]{0,127}$",
+      "type": "string"
+    }
+  },
+  "required": [
+    "activationMode",
+    "executionRef",
+    "providerRef",
+    "systemArtifactId"
+  ],
+  "title": "activation-nixos.d2bus.org/NixosGeneration/spec",
+  "type": "object",
+  "x-d2b-resource-type": "activation-nixos.d2bus.org.NixosGeneration"
+}

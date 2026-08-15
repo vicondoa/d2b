@@ -76,6 +76,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "signal", "sync"] }
 sha2 = "0.10"
+zbus = { version = "5.16", features = ["blocking-api"] }
 
 [dev-dependencies]
 # Dev-only override to enable d2b-host's `fake-backends` feature

@@ -880,6 +880,9 @@ mod tests {
                     vm: "corp-vm".to_owned(),
                     workload_identity: None,
                     nodes: vec![ProcessNode {
+                        execution_ref: None,
+                        execution_domain: None,
+                        user_ref: None,
                         id: NodeId("swtpm".to_owned()),
                         role: ProcessRole::Swtpm,
                         unit: None,

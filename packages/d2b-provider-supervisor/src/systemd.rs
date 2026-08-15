@@ -2,13 +2,25 @@
 
 use std::collections::BTreeMap;
 use std::num::NonZeroU32;
+use std::os::fd::OwnedFd;
 use std::sync::Mutex;
 
+use d2b_contracts::broker_wire::{
+    BrokerCallerRole, BrokerRequest, BrokerResponse, OpenSystemdUnitPidfdRequest,
+    StopSystemdUnitRequest, SystemdStopClass, SystemdUnitDomain, SystemdUnitIdentity,
+    SystemdUnitRequest,
+};
+use d2b_contracts::v3::execution_policy::ExecutionDomain;
 use d2b_process::{
     BackendLaunch, BackendObservation, IdentityBinding, ObservedIdentity, ProcessEffectBackend,
     ProcessEffectError, ProcessIdentityDigest, ProcessRequest, ProcessStopClass, WaitReapOwner,
 };
 use sha2::{Digest, Sha256};
+
+use crate::broker::{
+    BrokerFrame, BrokerLaunchIntent, BrokerLaunchResolver, BundleBackedLaunchResolver,
+    broker_round_trip,
+};
 
 const MAX_PENDING_OBSERVATIONS: usize = 1024;
 
@@ -27,6 +39,31 @@ pub struct SystemdInvocationIdentity {
     provider_identity: [u8; 32],
     template_identity: [u8; 32],
     generation: u64,
+    bundle_content_identity: String,
+}
+
+/// Immutable bundle binding carried by a systemd runtime identity.
+#[derive(Clone, PartialEq, Eq)]
+pub struct SystemdIdentityContext {
+    generation: u64,
+    bundle_content_identity: String,
+}
+
+impl SystemdIdentityContext {
+    /// Construct the bundle-bound portion of a systemd identity.
+    pub fn new(
+        generation: u64,
+        bundle_content_identity: impl Into<String>,
+    ) -> Result<Self, ProcessEffectError> {
+        let bundle_content_identity = bundle_content_identity.into();
+        if generation == 0 || bundle_content_identity.is_empty() {
+            return Err(ProcessEffectError::IdentityChanged);
+        }
+        Ok(Self {
+            generation,
+            bundle_content_identity,
+        })
+    }
 }
 
 impl SystemdInvocationIdentity {
@@ -38,14 +75,13 @@ impl SystemdInvocationIdentity {
         start_time_ticks: u64,
         provider_identity: [u8; 32],
         template_identity: [u8; 32],
-        generation: u64,
+        context: SystemdIdentityContext,
     ) -> Result<Self, ProcessEffectError> {
         if invocation_id == [0; 16]
             || cgroup_identity == [0; 32]
             || start_time_ticks == 0
             || provider_identity == [0; 32]
             || template_identity == [0; 32]
-            || generation == 0
         {
             return Err(ProcessEffectError::IdentityChanged);
         }
@@ -56,7 +92,8 @@ impl SystemdInvocationIdentity {
             start_time_ticks,
             provider_identity,
             template_identity,
-            generation,
+            generation: context.generation,
+            bundle_content_identity: context.bundle_content_identity,
         })
     }
 
@@ -70,6 +107,7 @@ impl SystemdInvocationIdentity {
         digest.update(self.provider_identity);
         digest.update(self.template_identity);
         digest.update(self.generation.to_le_bytes());
+        digest.update(self.bundle_content_identity.as_bytes());
         ProcessIdentityDigest::from_bytes(digest.finalize().into())
     }
 
@@ -85,6 +123,34 @@ impl SystemdInvocationIdentity {
                 IdentityBinding::Generation,
             ]),
             WaitReapOwner::ServiceManager,
+        )
+    }
+
+    pub(crate) fn wire_identity(&self) -> SystemdUnitIdentity {
+        SystemdUnitIdentity {
+            invocation_id: self.invocation_id,
+            cgroup_identity: self.cgroup_identity,
+            main_pid: self.main_pid.get(),
+            start_time_ticks: self.start_time_ticks,
+            provider_identity: self.provider_identity,
+            template_identity: self.template_identity,
+            generation: self.generation,
+            bundle_content_identity: self.bundle_content_identity.clone(),
+        }
+    }
+
+    pub(crate) fn from_wire(identity: &SystemdUnitIdentity) -> Result<Self, ProcessEffectError> {
+        Self::new(
+            identity.invocation_id,
+            identity.cgroup_identity,
+            NonZeroU32::new(identity.main_pid).ok_or(ProcessEffectError::IdentityChanged)?,
+            identity.start_time_ticks,
+            identity.provider_identity,
+            identity.template_identity,
+            SystemdIdentityContext::new(
+                identity.generation,
+                identity.bundle_content_identity.clone(),
+            )?,
         )
     }
 }
@@ -140,6 +206,14 @@ pub trait SystemdEffectOwner: Send + Sync + 'static {
         request: ProcessRequest,
     ) -> Result<Option<SystemdInvocationIdentity>, ProcessEffectError>;
 
+    /// Probe a transient unit without retaining adoption state.
+    fn probe(
+        &self,
+        request: ProcessRequest,
+    ) -> Result<Option<SystemdInvocationIdentity>, ProcessEffectError> {
+        self.observe(request)
+    }
+
     /// Open local authority and atomically re-query the unit identity.
     fn reopen(
         &self,
@@ -155,6 +229,17 @@ pub trait SystemdEffectOwner: Send + Sync + 'static {
         handle: &Self::Handle,
         class: ProcessStopClass,
     ) -> Result<(), ProcessEffectError>;
+
+    /// Check the trusted per-user systemd manager without retaining a
+    /// connection or process handle.
+    fn check_user_manager(&self, _request: ProcessRequest) -> Result<bool, ProcessEffectError> {
+        Err(ProcessEffectError::UnsupportedProvider)
+    }
+
+    /// Forget a terminal unit identity after the unit is no longer active.
+    fn finalize(&self, _handle: &Self::Handle) -> Result<(), ProcessEffectError> {
+        Ok(())
+    }
 }
 
 /// [`ProcessEffectBackend`] over a real service-manager effect owner.
@@ -251,7 +336,7 @@ mod tests {
             u64::from(seed) + 1,
             [2; 32],
             [3; 32],
-            1,
+            SystemdIdentityContext::new(1, "bundle").unwrap(),
         )
         .unwrap()
     }
@@ -280,6 +365,15 @@ mod tests {
             format!("{:?}", identity(41)),
             "SystemdInvocationIdentity(<redacted>)"
         );
+    }
+
+    #[test]
+    fn systemd_adoption_identity_binds_bundle_content_identity() {
+        let mut first = identity(41);
+        let mut second = identity(41);
+        first.bundle_content_identity = "bundle-a".to_owned();
+        second.bundle_content_identity = "bundle-b".to_owned();
+        assert_ne!(first.digest(), second.digest());
     }
 }
 
@@ -314,6 +408,16 @@ impl<O: SystemdEffectOwner> ProcessEffectBackend for SystemdProcessBackend<O> {
         Ok(Some(observation))
     }
 
+    fn probe(
+        &self,
+        request: ProcessRequest,
+    ) -> Result<Option<BackendObservation>, ProcessEffectError> {
+        let Some(identity) = self.owner.probe(request)? else {
+            return Ok(None);
+        };
+        Ok(Some(identity.observation()))
+    }
+
     fn open_pidfd(
         &self,
         observation: BackendObservation,
@@ -333,5 +437,320 @@ impl<O: SystemdEffectOwner> ProcessEffectBackend for SystemdProcessBackend<O> {
         class: ProcessStopClass,
     ) -> Result<(), ProcessEffectError> {
         self.owner.stop(handle, class)
+    }
+
+    fn finalize(&self, handle: &Self::Handle) -> Result<(), ProcessEffectError> {
+        self.owner.finalize(handle)
+    }
+}
+
+impl<O: SystemdEffectOwner> SystemdProcessBackend<O> {
+    /// Check the trusted per-user manager through the broker-owned effect
+    /// owner.
+    pub fn check_user_manager(&self, request: ProcessRequest) -> Result<bool, ProcessEffectError> {
+        self.owner.check_user_manager(request)
+    }
+}
+
+/// Broker-backed systemd effect owner used by the daemon's fixed supervisor.
+///
+/// The owner translates only typed systemd lifecycle requests to the broker.
+/// Unit names, manager connections, cgroup paths, and process descriptors
+/// remain on the broker side; the returned handle is retained here solely for
+/// exact stop authority.
+pub struct BrokerSystemdEffectOwner {
+    resolver: BundleBackedLaunchResolver,
+    socket_path: std::path::PathBuf,
+    io_timeout: std::time::Duration,
+    caller_role: BrokerCallerRole,
+    requests: Mutex<BTreeMap<ProcessIdentityDigest, SystemdUnitRequest>>,
+}
+
+impl BrokerSystemdEffectOwner {
+    /// Build a broker-backed owner from the trusted bundle resolver.
+    pub fn new(resolver: BundleBackedLaunchResolver) -> Self {
+        Self::with_socket(
+            resolver,
+            d2b_contracts::BROKER_SOCKET_PATH,
+            std::time::Duration::from_secs(10),
+            BrokerCallerRole::NotAuthorized,
+        )
+    }
+
+    /// Build an owner with explicit broker transport settings.
+    pub fn with_socket(
+        resolver: BundleBackedLaunchResolver,
+        socket_path: impl Into<std::path::PathBuf>,
+        io_timeout: std::time::Duration,
+        caller_role: BrokerCallerRole,
+    ) -> Self {
+        Self {
+            resolver,
+            socket_path: socket_path.into(),
+            io_timeout,
+            caller_role,
+            requests: Mutex::new(BTreeMap::new()),
+        }
+    }
+
+    fn request(&self, request: BrokerRequest) -> Result<BrokerFrame, ProcessEffectError> {
+        if matches!(self.caller_role, BrokerCallerRole::NotAuthorized) {
+            return Err(ProcessEffectError::LaunchFailed);
+        }
+        broker_round_trip(
+            &self.socket_path,
+            self.io_timeout,
+            request,
+            self.caller_role.clone(),
+        )
+    }
+
+    fn intent(
+        &self,
+        request: &ProcessRequest,
+    ) -> Result<(BrokerLaunchIntent, SystemdUnitRequest), ProcessEffectError> {
+        let intent = self.resolver.resolve(request)?;
+        let domain = match request.ticket().domain() {
+            ExecutionDomain::System => SystemdUnitDomain::System,
+            ExecutionDomain::User => SystemdUnitDomain::User,
+        };
+        let unit = SystemdUnitRequest {
+            execution_ref: Some(intent.execution_ref.clone()),
+            user_ref: intent.user_ref.clone(),
+            vm_id: intent.vm_id.clone(),
+            role_id: intent.role_id.clone(),
+            resource_ref: Some(intent.resource_ref.clone()),
+            resource_uid: Some(intent.resource_uid.clone()),
+            role: intent.role,
+            bundle_runner_intent_ref: intent.bundle_runner_intent_ref.clone(),
+            bundle_content_identity: intent.bundle_content_identity.clone(),
+            provider_identity: intent.provider_identity,
+            template_identity: intent.template_identity,
+            generation: intent.generation,
+            domain,
+            sandbox_plan: intent.sandbox_plan.clone(),
+            tracing_span_id: None,
+        };
+        Ok((intent, unit))
+    }
+
+    fn remember(
+        &self,
+        identity: &SystemdInvocationIdentity,
+        request: SystemdUnitRequest,
+    ) -> Result<(), ProcessEffectError> {
+        self.requests
+            .lock()
+            .map_err(|_| ProcessEffectError::ObserveFailed)?
+            .insert(identity.digest(), request);
+        Ok(())
+    }
+
+    fn request_for(
+        &self,
+        identity: &SystemdInvocationIdentity,
+    ) -> Result<SystemdUnitRequest, ProcessEffectError> {
+        self.requests
+            .lock()
+            .map_err(|_| ProcessEffectError::ObserveFailed)?
+            .get(&identity.digest())
+            .cloned()
+            .ok_or(ProcessEffectError::IdentityChanged)
+    }
+
+    fn take_request(
+        &self,
+        identity: &SystemdInvocationIdentity,
+    ) -> Result<SystemdUnitRequest, ProcessEffectError> {
+        self.requests
+            .lock()
+            .map_err(|_| ProcessEffectError::StopFailed)?
+            .remove(&identity.digest())
+            .ok_or(ProcessEffectError::IdentityChanged)
+    }
+
+    fn identity(
+        &self,
+        wire: &SystemdUnitIdentity,
+        intent: &BrokerLaunchIntent,
+    ) -> Result<SystemdInvocationIdentity, ProcessEffectError> {
+        if wire.provider_identity != intent.provider_identity
+            || wire.template_identity != intent.template_identity
+            || wire.generation != intent.generation
+            || wire.bundle_content_identity != intent.bundle_content_identity
+            || wire.main_pid == 0
+        {
+            return Err(ProcessEffectError::IdentityChanged);
+        }
+        SystemdInvocationIdentity::from_wire(wire)
+    }
+}
+
+impl std::fmt::Debug for BrokerSystemdEffectOwner {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("BrokerSystemdEffectOwner(<redacted>)")
+    }
+}
+
+/// Core-local systemd pidfd handle.
+pub struct BrokerSystemdPidfdHandle {
+    pidfd: OwnedFd,
+    request: SystemdUnitRequest,
+    identity: SystemdInvocationIdentity,
+}
+
+impl std::fmt::Debug for BrokerSystemdPidfdHandle {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("BrokerSystemdPidfdHandle(<redacted>)")
+    }
+}
+
+impl SystemdEffectOwner for BrokerSystemdEffectOwner {
+    type Handle = BrokerSystemdPidfdHandle;
+
+    fn launch(
+        &self,
+        request: ProcessRequest,
+    ) -> Result<SystemdEffectLaunch<Self::Handle>, ProcessEffectError> {
+        let (intent, unit) = self.intent(&request)?;
+        let frame = self.request(BrokerRequest::StartSystemdUnit(unit.clone()))?;
+        let BrokerResponse::StartSystemdUnit(ref response) = frame.response else {
+            return Err(response_error(&frame.response));
+        };
+        if response.vm_id != unit.vm_id || response.role_id != unit.role_id {
+            return Err(ProcessEffectError::IdentityChanged);
+        }
+        let identity = self.identity(&response.identity, &intent)?;
+        let pidfd = frame.take_fd(response.pidfd_index)?;
+        self.remember(&identity, unit.clone())?;
+        Ok(SystemdEffectLaunch::new(
+            identity.clone(),
+            BrokerSystemdPidfdHandle {
+                pidfd,
+                request: unit,
+                identity,
+            },
+        ))
+    }
+
+    fn observe(
+        &self,
+        request: ProcessRequest,
+    ) -> Result<Option<SystemdInvocationIdentity>, ProcessEffectError> {
+        let (intent, unit) = self.intent(&request)?;
+        let frame = self.request(BrokerRequest::ObserveSystemdUnit(unit.clone()))?;
+        let BrokerResponse::ObserveSystemdUnit(response) = frame.response else {
+            return Err(response_error(&frame.response));
+        };
+        if response.vm_id != unit.vm_id || response.role_id != unit.role_id {
+            return Err(ProcessEffectError::IdentityChanged);
+        }
+        let Some(wire) = response.identity else {
+            return Ok(None);
+        };
+        let identity = self.identity(&wire, &intent)?;
+        self.remember(&identity, unit)?;
+        Ok(Some(identity))
+    }
+
+    fn probe(
+        &self,
+        request: ProcessRequest,
+    ) -> Result<Option<SystemdInvocationIdentity>, ProcessEffectError> {
+        let (intent, unit) = self.intent(&request)?;
+        let frame = self.request(BrokerRequest::ObserveSystemdUnit(unit.clone()))?;
+        let BrokerResponse::ObserveSystemdUnit(response) = frame.response else {
+            return Err(response_error(&frame.response));
+        };
+        if response.vm_id != unit.vm_id || response.role_id != unit.role_id {
+            return Err(ProcessEffectError::IdentityChanged);
+        }
+        let Some(wire) = response.identity else {
+            return Ok(None);
+        };
+        self.identity(&wire, &intent).map(Some)
+    }
+
+    fn reopen(
+        &self,
+        expected: &SystemdInvocationIdentity,
+    ) -> Result<SystemdEffectLaunch<Self::Handle>, ProcessEffectError> {
+        let unit = self.request_for(expected)?;
+        let frame = self.request(BrokerRequest::OpenSystemdUnitPidfd(
+            OpenSystemdUnitPidfdRequest {
+                unit: unit.clone(),
+                expected: expected.wire_identity(),
+            },
+        ))?;
+        let BrokerResponse::OpenSystemdUnitPidfd(ref response) = frame.response else {
+            return Err(response_error(&frame.response));
+        };
+        let actual = SystemdInvocationIdentity::from_wire(&response.identity)?;
+        if actual != *expected || response.vm_id != unit.vm_id || response.role_id != unit.role_id {
+            return Err(ProcessEffectError::IdentityChanged);
+        }
+        let pidfd = frame.take_fd(response.pidfd_index)?;
+        Ok(SystemdEffectLaunch::new(
+            actual.clone(),
+            BrokerSystemdPidfdHandle {
+                pidfd,
+                request: unit,
+                identity: actual,
+            },
+        ))
+    }
+
+    fn stop(
+        &self,
+        handle: &Self::Handle,
+        class: ProcessStopClass,
+    ) -> Result<(), ProcessEffectError> {
+        let frame = self.request(BrokerRequest::StopSystemdUnit(StopSystemdUnitRequest {
+            unit: handle.request.clone(),
+            expected: handle.identity.wire_identity(),
+            class: match class {
+                ProcessStopClass::Drain => SystemdStopClass::Drain,
+                ProcessStopClass::Terminate => SystemdStopClass::Terminate,
+            },
+        }))?;
+        let BrokerResponse::StopSystemdUnit(response) = frame.response else {
+            return Err(response_error(&frame.response));
+        };
+        if !response.stopped {
+            return Err(ProcessEffectError::StopFailed);
+        }
+        let _ = &handle.pidfd;
+        if class == ProcessStopClass::Terminate {
+            let _ = self.take_request(&handle.identity)?;
+        }
+        Ok(())
+    }
+
+    fn check_user_manager(&self, request: ProcessRequest) -> Result<bool, ProcessEffectError> {
+        let (intent, mut unit) = self.intent(&request)?;
+        if unit.domain != SystemdUnitDomain::User {
+            return Err(ProcessEffectError::UnsupportedProvider);
+        }
+        unit.tracing_span_id = None;
+        let frame = self.request(BrokerRequest::CheckSystemdUserManager(unit.clone()))?;
+        let BrokerResponse::CheckSystemdUserManager(response) = frame.response else {
+            return Err(response_error(&frame.response));
+        };
+        if response.vm_id != intent.vm_id || response.role_id != intent.role_id {
+            return Err(ProcessEffectError::IdentityChanged);
+        }
+        Ok(response.available)
+    }
+
+    fn finalize(&self, handle: &Self::Handle) -> Result<(), ProcessEffectError> {
+        let _ = self.take_request(&handle.identity)?;
+        Ok(())
+    }
+}
+
+fn response_error(response: &BrokerResponse) -> ProcessEffectError {
+    match response {
+        BrokerResponse::Error(_) => ProcessEffectError::LaunchFailed,
+        _ => ProcessEffectError::ObserveFailed,
     }
 }

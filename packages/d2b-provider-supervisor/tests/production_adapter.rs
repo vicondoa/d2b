@@ -20,8 +20,8 @@ use d2b_process_conformance::{
 };
 use d2b_provider_supervisor::{
     BrokerLaunchIntent, BrokerLaunchResolver, BrokerObservedProcess, BrokerProcessBackend,
-    ProviderSupervisor, SystemdEffectLaunch, SystemdEffectOwner, SystemdInvocationIdentity,
-    SystemdProcessBackend,
+    ProviderSupervisor, SystemdEffectLaunch, SystemdEffectOwner, SystemdIdentityContext,
+    SystemdInvocationIdentity, SystemdProcessBackend,
 };
 use d2b_provider_system_minijail::{MinijailProcessProvider, PROVIDER_NAME as MINIJAIL};
 use d2b_provider_system_systemd::{PROVIDER_NAME as SYSTEMD, SystemdProcessProvider};
@@ -382,7 +382,7 @@ fn invocation(start_time: u64) -> SystemdInvocationIdentity {
         start_time,
         [3; 32],
         [4; 32],
-        1,
+        SystemdIdentityContext::new(1, "bundle").unwrap(),
     )
     .unwrap()
 }
@@ -545,6 +545,13 @@ fn broker_backend_uses_the_production_spawn_wire_and_pidfd_handoff() {
             start_time_ticks,
             pidfd_index: 0,
             console_fd_index: None,
+            execution_ref: Some(d2b_contracts::v3::ResourceRef::parse("Guest/corp-vm").unwrap()),
+            execution_domain: Some(d2b_contracts::v3::execution_policy::ExecutionDomain::System),
+            user_ref: None,
+            provider_identity: Some([0x11; 32]),
+            template_identity: Some([0x22; 32]),
+            generation: Some(1),
+            bundle_content_identity: Some("bundle-content-test".to_owned()),
         });
         let frame = d2b_contracts::encode_frame(&response).unwrap();
         let iov = [IoSlice::new(&frame)];
@@ -560,12 +567,20 @@ fn broker_backend_uses_the_production_spawn_wire_and_pidfd_handoff() {
 
     let intent = BrokerLaunchIntent {
         vm_id,
+        execution_ref: d2b_contracts::v3::ResourceRef::parse("Guest/corp-vm").unwrap(),
+        domain: d2b_contracts::v3::execution_policy::ExecutionDomain::System,
+        user_ref: None,
         role_id,
         role: RunnerRole::Virtiofsd,
         bundle_runner_intent_ref: BundleOpId::new("runner:vm:corp-vm:role:worker"),
         provider_identity: [0x11; 32],
         template_identity: [0x22; 32],
         generation: 1,
+        resource_ref: d2b_contracts::v3::ResourceRef::parse("Process/corp-vm-worker").unwrap(),
+        resource_uid: d2b_contracts::v3::ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000")
+            .unwrap(),
+        bundle_content_identity: "bundle-content-test".to_owned(),
+        sandbox_plan: None,
     };
     let backend = BrokerProcessBackend::with_socket_and_role(
         FixedBrokerResolver { intent },

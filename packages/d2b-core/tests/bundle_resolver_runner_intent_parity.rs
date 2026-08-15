@@ -277,3 +277,36 @@ fn bundle_resolver_runner_intents_match_typed_process_node_helper_for_runner_rol
     }
     assert_eq!(resolver.runner_intent_ids().count(), nodes.len());
 }
+
+#[test]
+fn generic_process_template_lookup_does_not_require_resource_name_to_match_role_id() {
+    let nodes = runner_nodes();
+    let processes = ProcessesJson {
+        schema_version: "v2".to_owned(),
+        vms: vec![VmProcessDag {
+            workload_identity: None,
+            vm: VM.to_owned(),
+            nodes: nodes.clone(),
+            edges: Vec::new(),
+            invariants: VmProcessInvariants {
+                swtpm_pre_start_flush: false,
+                per_vm_audit_pipeline: false,
+                usbip_gating: true,
+                tpm_ownership_migration_without_running_vm_mutation: true,
+            },
+        }],
+    };
+    let resolver = BundleResolver::from_artifacts(bundle(), host(), processes, manifest());
+
+    let resource_name = "audio-resource";
+    let intent = resolver
+        .find_runner_intent_for_process(
+            "Guest/test-vm",
+            d2b_core::processes::ProcessExecutionDomain::System,
+            None,
+            "audio",
+        )
+        .expect("trusted template resolves for a generic resource");
+    assert_eq!(intent.role_id, "audio");
+    assert_ne!(intent.role_id, resource_name);
+}
