@@ -184,18 +184,8 @@ impl ProviderEntrypoint {
     /// callers must use [`Self::publish_authenticated_ready`].
     #[cfg(test)]
     fn publish_ready(&self) -> Result<(), ProviderRuntimeError> {
-        let (lock, _) = &*self.state;
-        let state = lock
-            .lock()
-            .map_err(|_| ProviderRuntimeError::NotAccepting)?;
-        if state.admitted == 0 {
-            return Err(ProviderRuntimeError::NotAccepting);
-        }
-        self.transition_ready()?;
         let mut stdout = io::stdout().lock();
-        writeln!(stdout, "D2B_PROVIDER_READY {}", self.name)
-            .and_then(|()| stdout.flush())
-            .map_err(|_| ProviderRuntimeError::ReadinessIo)
+        self.publish_ready_to(&mut stdout)
     }
 
     /// Derive a route-bound session admission from an authenticated session.
@@ -231,11 +221,22 @@ impl ProviderEntrypoint {
         let live_route = live_session.route_binding();
         self.validate_authenticated_ready(registration, &session, &live_route)?;
         drop(session);
-        self.transition_ready()?;
         let mut stdout = io::stdout().lock();
-        writeln!(stdout, "D2B_PROVIDER_READY {}", self.name)
-            .and_then(|()| stdout.flush())
-            .map_err(|_| ProviderRuntimeError::ReadinessIo)
+        self.publish_ready_to(&mut stdout)
+    }
+
+    fn publish_ready_to<W: Write>(&self, writer: &mut W) -> Result<(), ProviderRuntimeError> {
+        let (lock, _) = &*self.state;
+        let state = lock
+            .lock()
+            .map_err(|_| ProviderRuntimeError::NotAccepting)?;
+        if state.admitted == 0 || self.lifecycle() != ProviderLifecycle::Starting {
+            return Err(ProviderRuntimeError::NotAccepting);
+        }
+        writeln!(writer, "D2B_PROVIDER_READY {}", self.name)
+            .and_then(|()| writer.flush())
+            .map_err(|_| ProviderRuntimeError::ReadinessIo)?;
+        self.transition_ready()
     }
 
     fn validate_authenticated_ready(
@@ -271,15 +272,15 @@ impl ProviderEntrypoint {
 
     /// Stop accepting registrations and wait for local registrations to drain.
     pub fn drain(&self, timeout: Duration) -> bool {
-        let prior = self.lifecycle.swap(DRAINING, Ordering::AcqRel);
-        if prior == STOPPED {
-            return true;
-        }
         let (lock, idle) = &*self.state;
         let guard = lock.lock();
         let Ok(mut state) = guard else {
             return false;
         };
+        let prior = self.lifecycle.swap(DRAINING, Ordering::AcqRel);
+        if prior == STOPPED {
+            return true;
+        }
         let result = idle
             .wait_timeout_while(state, timeout, |state| state.admitted != 0)
             .ok();
@@ -333,6 +334,30 @@ mod tests {
         drop(admission);
         assert!(runtime.drain(Duration::from_millis(10)));
         assert_eq!(runtime.lifecycle(), ProviderLifecycle::Stopped);
+    }
+
+    #[test]
+    fn readiness_io_failure_does_not_enter_ready_state() {
+        struct FailingWriter;
+
+        impl Write for FailingWriter {
+            fn write(&mut self, _buffer: &[u8]) -> io::Result<usize> {
+                Err(io::Error::other("readiness output failed"))
+            }
+
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let runtime = ProviderEntrypoint::new("Provider/test").unwrap();
+        let _admission = runtime.admit().unwrap();
+        let mut writer = FailingWriter;
+        assert_eq!(
+            runtime.publish_ready_to(&mut writer),
+            Err(ProviderRuntimeError::ReadinessIo)
+        );
+        assert_eq!(runtime.lifecycle(), ProviderLifecycle::Starting);
     }
 
     #[test]
