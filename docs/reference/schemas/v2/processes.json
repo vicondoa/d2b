@@ -187,6 +187,25 @@
       },
       "additionalProperties": false
     },
+    "ProcessExecutionDomain": {
+      "description": "Trusted execution domain carried by a private process artifact.",
+      "oneOf": [
+        {
+          "description": "The host system manager or system sandbox.",
+          "type": "string",
+          "enum": [
+            "system"
+          ]
+        },
+        {
+          "description": "The exact broker-resolved per-user manager or sandbox identity.",
+          "type": "string",
+          "enum": [
+            "user"
+          ]
+        }
+      ]
+    },
     "ProcessMacvtapInterface": {
       "type": "object",
       "required": [
@@ -286,6 +305,24 @@
             "type": "string"
           }
         },
+        "executionDomain": {
+          "description": "Canonical execution domain for this trusted runner.\n\nOmitted by legacy bundles, which resolve to the system domain.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ProcessExecutionDomain"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "executionRef": {
+          "description": "Canonical Host or Guest execution target for this trusted runner.\n\nOmitted by legacy bundles, which resolve to `Guest/<vm>`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "id": {
           "description": "Stable node id used by edges.",
           "type": "string"
@@ -329,6 +366,13 @@
         },
         "unit": {
           "description": "Optional systemd unit backing this node.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "userRef": {
+          "description": "Canonical User resource bound to a user-domain runner.",
           "type": [
             "string",
             "null"
