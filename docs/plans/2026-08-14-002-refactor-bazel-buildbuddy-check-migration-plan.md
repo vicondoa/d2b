@@ -29,7 +29,7 @@ Lightweight local preflight remains part of `make check`, while coverage requiri
 
 ### Product Contract Preservation
 
-Changed: R17-R19, F3, AE5, Success Criteria, and related scope text - the user replaced custom test-category directories and a custom generator with Cargo/Gazelle-standard locations, upstream Gazelle, `crate_universe`, and explicit checked-in exceptional BUILD targets.
+Changed: R17-R19, R36-R39, F3, F6, AE5, AE9, Success Criteria, and related scope text - the user replaced custom test-category directories and a custom generator with Cargo/Gazelle-standard locations, upstream Gazelle, `crate_universe`, and explicit checked-in exceptional BUILD targets, then added a mandatory local cache-transfer optimization gate before any BuildBuddy experiment.
 
 ### Problem Frame
 
@@ -47,6 +47,7 @@ That design does not address the main opportunity: one remotely reusable graph w
 - **Pin Bazel 9.2.0 and update it manually.** (session-settled: user-directed - chosen over floating or automated 9.x updates: each toolchain change should be deliberate.) Governs R7.
 - **Use one repository-root product Cargo workspace.** (session-settled: user-directed - chosen over nested broker and guest workspaces: common Cargo, Gazelle, and `crate_universe` authority reduces duplicated resolution while selected closures preserve isolation.) Governs R30 and R31.
 - **Use `crate_universe` and Gazelle at separate boundaries.** (session-settled: user-approved - chosen over treating either tool as a complete Cargo-to-Bazel generator: `crate_universe` owns third-party resolution and unmodified `gazelle_rust` owns ordinary first-party targets.) Governs R19 and R32.
+- **Optimize cache-transfer locally before enabling BuildBuddy.** (session-settled: user-directed - chosen over learning transfer inefficiencies against the provider allowance: a successful complete local graph must be measured and optimized from Bazel execution logs before remote cache or RBE experiments begin.) Governs R36-R39.
 - **Use CE delivery with Luna max throughout.** Planning, review, implementation, and fixes use `gpt-5.6-luna` at `max` reasoning in a dedicated worktree based on `v3`. Governs R27-R29.
 
 <!-- ce-section: work-relationships -->
@@ -91,6 +92,10 @@ The surrounding breakdown is current context, not a committed roadmap.
 - R14. Remote output handling must avoid downloading outputs that no local action or requested final result needs.
 - R15. Every qualification run must report wall time, action-cache and CAS behavior, remote executions, provider-accounted uploaded and downloaded bytes, repository traffic, BES traffic, retry traffic, and local Nix time.
 - R16. Qualification must publish the number of equivalent monthly runs supported by an 80 GB working transfer budget using a conservative provider-accounted transfer percentile, leaving 20 GB of the stated 100 GB allowance as operating headroom without adding an automatic quota stop.
+- R36. BuildBuddy remote cache and remote-execution experiments must not begin until the complete intended Bazel graph passes locally and a separate local cache-transfer optimization milestone has completed.
+- R37. The local transfer analyzer must consume a representative unsorted Bazel JSON execution log and report per-action, per-mnemonic, and whole-graph gross inputs, digest-deduplicated unique inputs, outputs, largest artifacts, fan-out, responsible targets, and local-to-remote boundary crossings for each execution class.
+- R38. Transfer optimization must use measured evidence to reduce unnecessary Rust compilation inputs, runtime data promotion, runfiles, debug and link outputs, stamping, high-fan-out dependencies, generated trees, and repeated boundary crossings without removing legitimate declared inputs or weakening hermeticity.
+- R39. Baseline and optimized machine-readable measurements must be preserved with their delta and a repeatable repository command; the initial milestone establishes observed values without arbitrary hard thresholds, and later BuildBuddy qualification compares provider-observed transfer with the local best-case and pessimistic models.
 
 **Test placement and standalone tools**
 
@@ -138,7 +143,7 @@ flowchart TB
   - **Trigger:** A1 or A2 runs `make check` with valid BuildBuddy authentication.
   - **Actors:** A1 or A2, A3.
   - **Steps:** Local preflight runs, Bazel analyzes the complete graph, per-crate suites use remote execution and cache, required local outputs are downloaded, and invocation evidence is reported.
-  - **Covered by:** R1-R4, R10-R16.
+  - **Covered by:** R1-R4, R10-R16, R36-R39.
 - F2. Local fallback
   - **Trigger:** BuildBuddy authentication or service connectivity is unavailable before action dispatch.
   - **Actors:** A1.
@@ -159,11 +164,16 @@ flowchart TB
   - **Actors:** A1.
   - **Steps:** Bazel-specific records and their index, policy, and cross-reference projections are deleted in the cutover while incidental non-Bazel authority remains.
   - **Covered by:** R25 and R26.
+- F6. Optimize transfer before remote use
+  - **Trigger:** The complete intended Bazel graph passes with local execution.
+  - **Actors:** A1.
+  - **Steps:** A representative clean local invocation emits an execution log, the analyzer separates RBE, cache-only, and local actions, measured input/output and fan-out hotspots are optimized, and baseline plus optimized reports are committed before BuildBuddy is enabled.
+  - **Covered by:** R36-R39.
 
 ### Acceptance Examples
 
 - AE1. **Populated-cache performance**
-  - **Covers R11-R16.**
+  - **Covers R11-R16 and R36-R39.**
   - **Given:** CI has populated BuildBuddy for the exact commit and toolchain.
   - **When:** A fresh checkout runs `make check` on the reference environment.
   - **Then:** The complete run passes in under three minutes and reports cache and transfer evidence.
@@ -202,6 +212,11 @@ flowchart TB
   - **Given:** Planning identifies a Bazel-specific ADR or spec and a separate architecture record that only mentions remote execution incidentally.
   - **When:** The cleanup lands.
   - **Then:** The Bazel-specific artifact and dependent references are deleted while the unrelated architecture record remains.
+- AE9. **Local transfer gate**
+  - **Covers R36-R39.**
+  - **Given:** The full intended Bazel graph passes locally and no BuildBuddy profile has been enabled.
+  - **When:** A representative clean local run produces the transfer report and measured graph optimizations are applied.
+  - **Then:** Two consecutive reports preserve baseline and optimized metrics, identify the material reductions and boundary crossings, and permit U6 to begin without claiming that either local estimate is exact provider transfer.
 
 ### Success Criteria
 
@@ -210,6 +225,7 @@ flowchart TB
 - Every crate exposes separate preflight, unit-test, and integration-test suites, and failures remain attributable per crate.
 - An unchanged populated-cache run has no unexplained cacheable action execution and downloads no unneeded outputs.
 - Qualification reports transfer evidence and the safe monthly run count under the 80 GB working budget.
+- A checked-in local execution-log analyzer and repeatable Make target preserve baseline and optimized RBE transfer estimates before the first BuildBuddy experiment.
 - Cargo test, nextest, and fmt remain independently usable.
 - Ordinary crate and test targets are generated by unmodified upstream Gazelle, while every exceptional BUILD rule is explicit and inventoried.
 - Broker and guest selected production closures reject every unapproved package, source, checksum, feature, target condition, or edge-kind change.
@@ -224,6 +240,7 @@ flowchart TB
 - Per-crate Bazel suite attribution, `crate_universe` dependency generation, upstream Gazelle generation, and explicit BUILD exceptions.
 - Cargo-standard test placement and its contributor contract.
 - BuildBuddy remote execution, remote caching, direct authentication, observability, and transfer qualification.
+- Local execution-log transfer analysis, measured rules_rust/action-graph optimization, and regression-ready machine-readable reports before BuildBuddy use.
 - Deletion of every Bazel-specific ADR and spec artifact and its dependent references.
 
 **Out of scope**
@@ -265,6 +282,7 @@ flowchart TB
 - [BuildBuddy Cloud metrics](https://www.buildbuddy.io/docs/prometheus-metrics-for-cloud/)
 - [rules_rust crate_universe](https://bazelbuild.github.io/rules_rust/crate_universe_bzlmod.html)
 - [gazelle_rust](https://github.com/Calsign/gazelle_rust)
+- User-provided local cache-transfer optimization stage brief (2026-08-15)
 
 ---
 
@@ -284,6 +302,7 @@ flowchart TB
 - KTD10. **Switch authority once.** Candidate qualification may compare current and Bazel paths on the feature branch, but the merged cutover changes Make, CI, documentation, and obsolete authority together. Rollback is a revert, not a retained shadow scheduler. Governs R23-R26.
 - KTD11. **Keep Make and CI as thin stable facades.** Public Make targets and the generated workflow continue to provide stable entry points and result contexts while Bazel owns scheduling. Governs R2, R3, and R20-R24.
 - KTD12. **Delete only Bazel-specific authority.** ADR 0052 and Spec 003 are deleted. ADR 0054 keeps its non-Bazel Cargo and selected-closure decisions while losing obsolete Bazel sections and references. Governs R25 and R26.
+- KTD13. **Model and optimize transfer locally before provider use.** (session-settled: user-directed - chosen over discovering avoidable fan-out against the BuildBuddy allowance: the full local graph first emits a Bazel JSON execution log, then an xtask analyzer measures RBE-eligible action inputs, outputs, digest fan-out, and boundary crossings before any remote profile is enabled.) The analyzer is metrics tooling, not BUILD generation, and must preserve both optimistic unique-byte and pessimistic gross-byte estimates without presenting either as provider billing. Governs R36-R39.
 
 ### High-Level Technical Design
 
@@ -300,7 +319,9 @@ flowchart TB
   RustTargets --> Aggregate
   Policy[Approved selected closures] --> Aggregate
   Nix[Nix evaluation and realization carriers] --> Aggregate
-  Aggregate --> Eligibility{Remote eligibility}
+  Aggregate --> Transfer[Local execution-log transfer analysis]
+  Transfer --> Optimize[Measured input, output, and fan-out optimization]
+  Optimize --> Eligibility{Remote eligibility}
   Eligibility -->|eligible| BuildBuddy[BuildBuddy RBE and cache]
   Eligibility -->|local-only| Local[Local Bazel execution]
   BuildBuddy --> Evidence[Coverage, cache, transfer, and result evidence]
@@ -320,8 +341,10 @@ stateDiagram-v2
   [*] --> Compatibility
   Compatibility --> Candidate: Bazel, rules, Gazelle, worker, and account proofs pass
   Compatibility --> Blocked: Any upstream tool requires a fork or patch
-  Candidate --> RemoteRun: BuildBuddy profile available
-  Candidate --> LocalRun: Remote profile unavailable
+  Candidate --> LocalTransfer: Complete intended graph passes locally
+  LocalTransfer --> TransferOptimized: Baseline, optimization, and repeat report pass
+  TransferOptimized --> RemoteRun: BuildBuddy profile available
+  TransferOptimized --> LocalRun: Remote profile unavailable
   RemoteRun --> LocalRun: Proven pre-dispatch auth, endpoint, worker, or transport failure
   RemoteRun --> Failed: Post-dispatch transport uncertainty
   RemoteRun --> Failed: Test, analysis, policy, or build failure
@@ -355,6 +378,7 @@ No long-lived shadow workflow survives cutover.
 ├── MODULE.bazel.lock
 ├── BUILD.bazel
 ├── bazel/
+│   ├── cache-transfer/
 │   ├── checks/
 │   ├── exceptions/
 │   ├── platforms/
@@ -362,6 +386,7 @@ No long-lived shadow workflow survives cutover.
 │   └── toolchains/
 ├── packages/
 │   ├── policy-inputs/
+│   ├── xtask/src/bazel_cache_transfer.rs
 │   └── <crate>/BUILD.bazel
 ├── tests/
 │   ├── fixtures/bazel/
@@ -410,6 +435,9 @@ Exceptional BUILD rules remain explicit and inventoried.
 | Trusted cache is poisoned or disclosed across trust levels | Partition credentials and instances by trust, reject endpoint or namespace redirection, and disable local-result uploads outside trusted seed contexts |
 | Read-only keys cannot execute cache misses | Qualify the actual account; use a scoped execution key only in trusted contexts or fall back locally |
 | Cache eviction or platform drift exhausts transfer | Use stable compatibility instances, immutable images, aged-cache tests, and provider-accounted P99 transfer |
+| Local transfer estimates are mistaken for provider billing | Label unique bytes as an optimistic warm-executor bound and gross bytes as a pessimistic cold-executor bound, then validate both against provider-observed upload and download in U6-U7 |
+| Transfer optimization removes legitimate inputs | Require clean local graph results before and after each measured optimization and reject undeclared-input or hermeticity regressions |
+| Local-only artifacts distort RBE measurements | Filter reports by execution class and separately flag only artifacts that cross a local-to-remote boundary |
 | Remote retry hides a real failure | Limit fallback to typed infrastructure classes and preserve both diagnostics |
 | Selected-closure generator self-approves a privileged dependency | Require independent recomputation, explicit approval metadata, and protected review for closure authority changes |
 | Filtered audit input omits a reachable dependency | Prove a lossless projection from locked Cargo metadata and reject every missing, extra, changed-source, changed-feature, target, cfg, or edge entry |
@@ -428,8 +456,9 @@ flowchart LR
   U3 --> U4
   U2 --> U5[U5 Nix and remaining checks]
   U3 --> U5
-  U4 --> U6[U6 BuildBuddy and fallback]
-  U5 --> U6
+  U4 --> U9[U9 Local transfer optimization]
+  U5 --> U9
+  U9 --> U6[U6 BuildBuddy and fallback]
   U6 --> U7[U7 Candidate qualification]
   U7 --> U8[U8 Atomic cutover and cleanup]
 ```
@@ -439,6 +468,7 @@ flowchart LR
 - Document root Cargo commands, generated versus explicit BUILD ownership, remote eligibility, local fallback, and per-crate labels.
 - Document direct BuildBuddy authentication without embedding a secret value or credential path.
 - Document trusted seeding, stable instance identity, minimal downloads, provider-accounted transfer, and eviction qualification.
+- Document the local execution-log model, its optimistic and pessimistic bounds, before/after measurements, high-fan-out artifacts, and local-to-remote boundaries separately from provider billing.
 - Preserve all existing Layer-2 and heavy-lane operating instructions.
 - Ship a changelog fragment for code changes and delete or rewrite obsolete Bazel fragments with their owning authority.
 
@@ -651,11 +681,51 @@ flowchart LR
 - **Execution note:** Characterize pure evaluation, derivation realization, and fixture production separately before assigning any remote eligibility.
 - **Verification:** The complete check inventory has one carrier or explicit integration successor, with no proxy claim that Nix realization is remote-safe before proof.
 
+### U9. Analyzing and optimizing local cache transfer
+
+- **Goal:** Measure and reduce the potential CAS transfer of the complete intended remote graph before consuming BuildBuddy cache or execution capacity.
+- **Requirements:** R11, R14-R16, R36-R39.
+- **Dependencies:** U4, U5.
+- **Files:**
+  - `Makefile`
+  - `bazel/cache-transfer/BUILD.bazel`
+  - `packages/xtask/src/bazel_cache_transfer.rs`
+  - `packages/xtask/src/main.rs`
+  - `packages/xtask/tests/bazel_cache_transfer.rs`
+  - `tests/fixtures/bazel/cache-transfer/`
+  - `tests/golden/bazel/cache-transfer-schema.json`
+  - `tests/golden/bazel/cache-transfer-baseline.json`
+  - `tests/golden/bazel/cache-transfer-optimized.json`
+  - `docs/reference/bazel-cache-transfer.md`
+- **Approach:**
+  1. Require the complete intended Bazel graph to build and test successfully with local execution before recording the baseline.
+  2. Emit an unsorted JSON execution log from a representative clean local invocation using the same compilation mode, features, toolchain, and platform intended for BuildBuddy.
+  3. Add an xtask analyzer and `make bazel-cache-transfer-report` facade that classify actions as RBE, remote-cache-only, or fully local and calculate per-action, per-mnemonic, and whole-graph gross inputs, digest-deduplicated unique inputs, outputs, largest artifacts, target ownership, and fan-out.
+  4. Treat unique inputs as an approximate warm-executor lower bound and gross inputs as a pessimistic cold-executor upper bound; never present either as exact BuildBuddy transfer.
+  5. Detect local-generated artifacts that cross into remote actions, exclude unrelated KVM, VM, hardware, Nix, fixture, and image artifacts from the RBE totals, and report every large local-to-remote or remote-to-local boundary.
+  6. Optimize measured hotspots: enable supported rules_rust pipelining and metadata dependencies, prevent runtime `data` and transitive data from becoming compile inputs, narrow `compile_data` and test runfiles, keep ordinary stamping disabled, avoid unnecessary PR debug information and cross-crate LTO, and reduce high-fan-out or repeated large outputs where correctness permits.
+  7. Regenerate the report after each material graph change, preserve baseline and optimized machine-readable summaries, and explain the delta for gross and unique RBE inputs, outputs, mnemonic fan-out, the largest 20 actions, and the highest-exposure 20 artifacts.
+  8. Establish observed initial values without arbitrary fail thresholds; make the schema suitable for later CI ratchets after U6-U7 compare local predictions with provider evidence.
+- **Patterns to follow:** Use existing xtask JSON schemas, generated ownership headers, eligibility metadata, Make facades, and drift tests. This analyzer measures the graph and must not become a BUILD generator or second scheduler.
+- **Test scenarios:**
+  1. A synthetic execution log reports exact per-action gross inputs, digest-deduplicated unique inputs, outputs, largest artifacts, and target labels.
+  2. Repeated digests across actions increase gross exposure and fan-out without increasing unique bytes.
+  3. Mnemonic summaries aggregate action count, gross and unique inputs, outputs, and fan-out ratio correctly.
+  4. RBE, cache-only, and fully local classifications produce separate totals; a large local-only VM image does not distort RBE totals.
+  5. A large local artifact consumed by an RBE action is flagged as a boundary crossing.
+  6. Missing target labels, digests, sizes, execution classes, duplicate records, malformed JSON, overflow, and non-finite ratios fail explicitly.
+  7. Baseline and optimized reports reject graph, configuration, platform, toolchain, eligibility, or schema mismatches.
+  8. An optimization that drops a legitimate compile input or runfile fails the full local Bazel graph even when the transfer metric improves.
+  9. The optimized report shows measured reductions or records why a hotspot is legitimate and retained.
+  10. No BuildBuddy endpoint, credential, remote cache, or RBE flag is used while this milestone runs.
+- **Execution note:** Capture the successful full-local baseline before optimizing, then make one measured graph change at a time and preserve the resulting evidence.
+- **Verification:** Two clean local graph runs and two schema-valid reports prove the baseline and optimized graph, explain every material delta, and leave BuildBuddy profiles disabled until the committed analyzer and evidence pass.
+
 ### U6. Integrating BuildBuddy, advanced cache policy, and typed fallback
 
 - **Goal:** Add direct BuildBuddy execution and cache reuse with bounded transfer, credential isolation, stable cache identity, and complete local fallback.
-- **Requirements:** R4-R16, R33, R35.
-- **Dependencies:** U4, U5.
+- **Requirements:** R4-R16, R33, R35-R39.
+- **Dependencies:** U9.
 - **Files:**
   - `.bazelrc`
   - `.bazelrc.user.example`
@@ -671,16 +741,18 @@ flowchart LR
   - `tests/golden/bazel/cache-policy.json`
   - `docs/reference/bazel-buildbuddy.md`
 - **Approach:**
-  1. Define common, local, remote, trusted-seed, and qualification profiles over the same target set.
-  2. Give untrusted pull-request jobs no BuildBuddy credential; inject a trusted key only after CI verifies the protected `v3` ref and an allowlisted digest of Bazel security configuration.
-  3. Keep the API key only in private user configuration or trusted CI setup and pass it as a remote header without exporting it to repository rules, actions, tests, or platform properties.
-  4. Use one stable remote instance per compatible architecture, trust, toolchain, platform, and immutable image contract.
-  5. Use `--remote_download_outputs=minimal` and targeted output selection; qualify stable compression against provider-accounted transfer.
-  6. Keep experimental output service, chunking, repository-content cache, and eviction features out of baseline.
-  7. Seed only from trusted CI, disable asynchronous seed uploads or verify their drain, and disable writes and shared-cache reads in untrusted contexts.
-  8. Require provider-observed worker image, platform, uid, capabilities, network, system, and target identity before trusted cache writes.
-  9. Collect separate AC, CAS, output, stdout/stderr, BES, repository, retry, and provider-billed transfer evidence.
-  10. Retry once locally only when evidence proves the typed infrastructure failure occurred before action dispatch; post-dispatch uncertainty fails closed.
+  1. Refuse BuildBuddy setup or experimentation unless U9's committed optimized report matches the current target set, configuration, platform, toolchain, and eligibility digests.
+  2. Define common, local, remote, trusted-seed, and qualification profiles over the same target set.
+  3. Give untrusted pull-request jobs no BuildBuddy credential; inject a trusted key only after CI verifies the protected `v3` ref and an allowlisted digest of Bazel security configuration.
+  4. Keep the API key only in private user configuration or trusted CI setup and pass it as a remote header without exporting it to repository rules, actions, tests, or platform properties.
+  5. Use one stable remote instance per compatible architecture, trust, toolchain, platform, and immutable image contract.
+  6. Use `--remote_download_outputs=minimal` and targeted output selection; qualify stable compression against provider-accounted transfer.
+  7. Keep experimental output service, chunking, repository-content cache, and eviction features out of baseline.
+  8. Seed only from trusted CI, disable asynchronous seed uploads or verify their drain, and disable writes and shared-cache reads in untrusted contexts.
+  9. Require provider-observed worker image, platform, uid, capabilities, network, system, and target identity before trusted cache writes.
+  10. Collect separate AC, CAS, output, stdout/stderr, BES, repository, retry, provider-billed transfer, and local U9 predicted-bound evidence.
+  11. Compare the first provider-observed upload and download with U9's unique-input, gross-input, and output estimates without requiring an exact match.
+  12. Retry once locally only when evidence proves the typed infrastructure failure occurred before action dispatch; post-dispatch uncertainty fails closed.
 - **Patterns to follow:** Follow official Bazel remote flags and BuildBuddy auth, RBE, cache, metrics, and troubleshooting guidance. Keep the Gas City proxy separate.
 - **Test scenarios:**
   1. Plain, encoded, and split sentinel keys are absent from argv, canonical options, BEP, logs, actions, tests, CAS-visible output, invocation views, and evidence.
@@ -696,12 +768,14 @@ flowchart LR
   11. Compression, eviction, and aged-cache runs report provider-accounted upload and download separately from BES and repository traffic.
   12. Missing or paid-only metrics block qualification rather than becoming zero.
   13. A secret-dependent target remains local and non-cacheable unless per-target secret injection and cache/log redaction are proven.
+  14. Missing, stale, or mismatched U9 baseline/optimized evidence blocks all BuildBuddy profiles.
+  15. Provider transfer outside the local predicted bounds is reported with executor-cache, action-cache, chunking, or scheduling evidence rather than silently rewriting the local baseline.
 - **Verification:** The remote and local profiles produce equivalent complete results, credentials remain isolated, and provider evidence supports the 80 GB working-budget calculation.
 
 ### U7. Building candidate qualification and cutover evidence
 
 - **Goal:** Produce immutable evidence that the full graph can replace the current scheduler without coverage, policy, cache, fallback, or performance regression.
-- **Requirements:** R1-R16, R23-R35.
+- **Requirements:** R1-R16, R23-R39.
 - **Dependencies:** U4, U5, U6.
 - **Files:**
   - `packages/xtask/src/bazel_qualification.rs`
@@ -720,8 +794,9 @@ flowchart LR
   5. Verify trusted seed completeness with `--remote_cache_async=false` or prove all expected asynchronous uploads drained before warm samples.
   6. Measure empty, exact-warm, unchanged, source invalidation, toolchain/image/feature/lock/platform invalidation, cross-machine, architecture, compression, retry, aged-cache, eviction, and fallback cases.
   7. Record AC lookups and results separately from CAS input/output blobs, stdout/stderr, test logs, requested outputs, BES, repository traffic, and retries.
-  8. Use provider-accounted P99 upload plus download for `floor(80 GB / P99 transfer)` and report sample count, P50, P95, P99, and maximum.
-  9. Reject missing, stale, duplicate, replayed, forged, path-bearing, secret-bearing, client-supplied, or cross-commit evidence.
+  8. Compare provider-observed upload and download distributions with U9's local unique-input, gross-input, output, fan-out, and boundary predictions and explain material divergence.
+  9. Use provider-accounted P99 upload plus download for `floor(80 GB / P99 transfer)` and report sample count, P50, P95, P99, and maximum.
+  10. Reject missing, stale, duplicate, replayed, forged, path-bearing, secret-bearing, client-supplied, cross-commit, or mismatched local-model evidence.
 - **Patterns to follow:** Use current execution-manifest lifecycle and immutable evidence patterns without adding a second scheduler or persisted progress state.
 - **Test scenarios:**
   1. Current and Bazel evidence from different commits fails.
@@ -734,6 +809,7 @@ flowchart LR
   8. Replayed invocation IDs, forged provider counters, wrong worker images, and post-hash evidence mutation fail.
   9. Absolute paths, credentials, host identifiers, PIDs, socket paths, or raw API responses fail redaction.
   10. The configured independent sample set has P95 wall time under three minutes for a fresh checkout of the exact populated commit.
+  11. A provider-observed transfer result with no matching U9 local model, or unexplained divergence from its predicted bounds, blocks qualification.
 - **Verification:** One candidate has complete, reproducible, sanitized evidence for coverage, closure, cache, transfer, fallback, and latency.
 
 ### U8. Cutting over Make and CI and deleting obsolete authority
@@ -810,6 +886,7 @@ flowchart LR
 | Fixture contracts | `D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts` | U5 onward | Fixture-dependent assertions remain enforcing |
 | Policy and drift | `make test-policy test-drift` | U2 onward | Closure, generated artifacts, docs, workflow, and authority remain synchronized |
 | Local Bazel | `bazel test //... --config=local` | U5 onward | Complete eligible graph passes locally with required local-only carriers |
+| Local transfer model | `make bazel-cache-transfer-report` | U9 onward, before any BuildBuddy use | A clean execution log produces schema-valid baseline and optimized RBE/cache/local metrics, measured deltas, fan-out and boundary reports, with no remote endpoint or credential |
 | Remote Bazel | `bazel test //... --config=remote` | U6 onward | Eligible graph passes with BuildBuddy and equivalent result semantics |
 | Secret sentinel | `cargo test -p xtask --test buildbuddy_config --test bazel_evidence` | U6 onward, new tests | No sentinel appears in command line, BEP, logs, action environment, invocation view, or evidence |
 | Typed fallback | `cargo test -p xtask --test bazel_qualification typed_fallback` | U7 onward, new test | Only proven pre-dispatch remote infrastructure classes retry once; post-dispatch uncertainty and real failures fail directly |
@@ -838,6 +915,7 @@ The advisory performance-budget job is not acceptance evidence.
 - Untrusted pull requests receive no shared BuildBuddy credential, and trusted injection verifies the protected ref plus the allowlisted Bazel security configuration.
 - Provider-authenticated invocation evidence binds commit, target set, configuration, selected closure, namespace, and worker image and rejects replay or client-supplied counters.
 - Local and remote profiles run the same target set and return equivalent results.
+- BuildBuddy remains disabled until the complete local graph, execution-log analyzer, measured optimization pass, and committed baseline/optimized reports are current for the candidate configuration.
 - An unchanged populated-cache run executes no unexplained cacheable action and downloads no unneeded output.
 - Provider-accounted P99 transfer supports the 80 GB working budget with 20 GB headroom.
 - Independent fresh-worktree samples have P95 wall time under three minutes for the exact populated commit.
@@ -855,6 +933,7 @@ The advisory performance-budget job is not acceptance evidence.
 | U3 | Bzlmod, `crate_universe`, Gazelle, generated BUILD files, and explicit exceptions are deterministic and fork-free |
 | U4 | Every Rust surface has Cargo/Bazel parity for source, features, process topology, runfiles, and result attribution |
 | U5 | Every remaining Layer-1 surface has a carrier or explicit integration successor, with Nix placement proven |
+| U9 | The complete local graph has committed baseline and optimized transfer reports, measured fan-out reductions, precise boundary crossings, and a repeatable analyzer command |
 | U6 | BuildBuddy remote execution, cache, secret handling, cache identity, eviction, metrics, and typed fallback pass |
 | U7 | Candidate qualification proves coverage, closure, transfer, fallback, redaction, and latency on one commit |
 | U8 | One atomic cutover leaves Bazel authoritative, generated CI current, obsolete authority deleted, and rollback verified |
