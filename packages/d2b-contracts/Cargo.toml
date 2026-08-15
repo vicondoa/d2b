@@ -9,6 +9,7 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+async-trait = "0.1"
 d2b-core = { path = "../d2b-core", version = "0.0.0-bootstrap" }
 d2b-realm-core = { path = "../d2b-realm-core", version = "0.0.0-bootstrap" }
 serde.workspace = true

@@ -240,7 +240,7 @@ provider:
     # list of DataDiskSpec; max 16 entries; see below
 
     # Bootstrap
-    bootstrapPskDelivery: "vm-extension"  # enum: vm-extension|user-data
+    bootstrapPskDelivery: "vm-extension"  # enum: vm-extension
     bootstrapDeadlineMs: 600000
 
     # Optional child Zone hosting
@@ -268,7 +268,7 @@ provider:
 | `subnetName` | OpaqueAzureRef | Yes | - | Max 80 | Subnet name. |
 | `assignPublicIp` | bool | No | `false` | - | Discouraged for production. |
 | `dataDisks` | list | No | `[]` | 0..16; LUN 0..63 unique | Provider-owned ARM child disk intents. No Volume ResourceRef. No cloud resource URI. See DataDiskSpec. |
-| `bootstrapPskDelivery` | enum | No | `vm-extension` | `vm-extension`\|`user-data` | One-time PSK delivery mechanism over ARM control plane. |
+| `bootstrapPskDelivery` | enum | No | `vm-extension` | `vm-extension` | One-time PSK delivery mechanism over ARM control plane. |
 | `bootstrapDeadlineMs` | u64 | No | `600000` | 60000..3600000 | Bootstrap enrollment deadline. |
 | `childZoneHosting` | bool | No | `false` | - | When true, VM hosts a child Zone; creates ZoneLink after enrollment. |
 | `azureTags` | map | No | `{}` | Max 50; key ≤512; val ≤256 | Azure resource tags. `d2b:*` keys rejected at eval time. |
@@ -862,9 +862,9 @@ PSK delivery mechanisms:
 
 **`vm-extension`**: ARM Custom Script Extension PUT with PSK bytes base64-encoded.
 Extension metadata is deleted by the controller after enrollment or expiry.
-
-**`user-data`**: base64-encoded PSK in VM `userData` at provisioning. Cloud-init
-reads it from IMDS; VM agent clears it on use.
+User-data delivery is deliberately excluded because the canonical effect port
+has no user-data operation and the bootstrap PSK must remain a one-way,
+bounded ARM extension payload.
 
 ### Adoption
 
@@ -1187,6 +1187,12 @@ subscription/tenant IDs, or ARM resource URIs.
 | `bootstrap-enrollment-failed` | IKpsk2 handshake failed |
 | `bootstrap-failed` | Bootstrap deadline expired |
 | `credential-unavailable` | `armCredentialRef` Credential not Ready |
+| `azure-operation-handle-invalid` | Reconcile received an operation handle that is not current |
+| `azure-vm-config-invalid` | Provider configuration or recovered lifecycle state is invalid |
+| `transient` | A bounded provider operation can be retried safely |
+| `cancelled` | The provider operation was cancelled before completion |
+| `deadline-expired` | The provider operation exceeded its deadline |
+| `azure-operation-ambiguous` | ARM operation or ownership state cannot be determined safely |
 | `deletion-ambiguous` | ARM deletion LRO unreachable; state unknown |
 | `child-zone-drain-timeout` | Child Zone drain deadline exceeded |
 | `image-change-requires-confirm` | `imageRef` change without `imageChangeConfirm` guard |

@@ -1,7 +1,11 @@
-# Integration fixtures
+# Cloud Hypervisor Provider integration
 
-This directory reserves the integration fixture surface for
-`Provider/runtime-cloud-hypervisor`. The current crate root has no executable
-integration behavior. The placeholder scenario declaration is required by the
-repository layout policy; replace it with the dossier's real fixture when
-implementation lands.
+Hermetic lifecycle tests use injected process and guest-control effect ports:
+
+```text
+cargo test -p d2b-provider-runtime-cloud-hypervisor
+```
+
+Host/KVM acceptance is a separate manual `make test-host-integration` lane.
+It must prove real broker-spawned process ownership, authenticated
+guest-control readiness, and restart adoption without a duplicate VMM.

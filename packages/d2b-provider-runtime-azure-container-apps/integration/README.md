@@ -1,7 +1,12 @@
-# Integration fixtures
+# ACA Provider integration fixtures
 
-This directory reserves the integration fixture surface for
-`Provider/runtime-azure-container-apps`. The current crate root has no
-executable integration behavior. The placeholder scenario declaration is
-required by the repository layout policy; replace it with the dossier's real
-fixture when implementation lands.
+Hermetic lifecycle coverage uses the Provider's typed effect ports and
+in-process fakes:
+
+```text
+cargo test -p d2b-provider-runtime-azure-container-apps
+```
+
+The fixture path never uses Azure credentials, network access, a broker, or a
+host socket. Live validation is manual-only and must be explicitly enabled by
+the deployment harness.

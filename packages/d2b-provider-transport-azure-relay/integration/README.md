@@ -1,7 +1,15 @@
-# Integration fixtures
+# Azure Relay Provider integration fixtures
 
-This directory reserves the integration fixture surface for
-`Provider/transport-azure-relay`. The current crate root has no executable
-integration behavior. The placeholder scenario declaration is required by the
-repository layout policy; replace it with the dossier's real fixture when
-implementation lands.
+The source integration fixtures exercise the Provider through its typed socket
+and credential ports. They must not contain local Admin mapping, host relay
+credentials, or unbounded stream buffers.
+
+Hermetic tests use an injected credential port and a real in-process socket
+object. No Azure account, credential, network, or daemon is required:
+
+```text
+cargo test -p d2b-provider-transport-azure-relay
+```
+
+Live Relay validation is manual-only and must be explicitly gated by the
+deployment harness.
