@@ -1733,6 +1733,114 @@ let
     "secretAccess": "none",
     "brokerRequired": "yes",
     "auditMode": "yes"
+  },
+  {
+    "operation": "ApplyHostGenerationHandoff",
+    "subject": "host-generation",
+    "scope": "global",
+    "allowedGroups": [
+      "d2bd"
+    ],
+    "destructive": true,
+    "secretAccess": "metadata-only",
+    "brokerRequired": "yes",
+    "auditMode": "yes"
+  },
+  {
+    "operation": "CgroupKill",
+    "subject": "cgroup",
+    "scope": "per-VM/role leaf",
+    "allowedGroups": [
+      "d2bd"
+    ],
+    "destructive": true,
+    "secretAccess": "none",
+    "brokerRequired": "yes",
+    "auditMode": "yes"
+  },
+  {
+    "operation": "ObserveRunner",
+    "subject": "runner",
+    "scope": "per-VM/role",
+    "allowedGroups": [
+      "d2bd"
+    ],
+    "destructive": false,
+    "secretAccess": "metadata-only",
+    "brokerRequired": "yes",
+    "auditMode": "yes"
+  },
+  {
+    "operation": "PipeWireAudio",
+    "subject": "audio",
+    "scope": "per-VM/role/channel",
+    "allowedGroups": [
+      "d2bd"
+    ],
+    "destructive": true,
+    "secretAccess": "none",
+    "brokerRequired": "yes",
+    "auditMode": "yes"
+  },
+  {
+    "operation": "StartSystemdUnit",
+    "subject": "systemd-unit",
+    "scope": "per-VM/role",
+    "allowedGroups": [
+      "d2bd"
+    ],
+    "destructive": true,
+    "secretAccess": "none",
+    "brokerRequired": "yes",
+    "auditMode": "yes"
+  },
+  {
+    "operation": "CheckSystemdUserManager",
+    "subject": "systemd-user-manager",
+    "scope": "per-user",
+    "allowedGroups": [
+      "d2bd"
+    ],
+    "destructive": false,
+    "secretAccess": "metadata-only",
+    "brokerRequired": "yes",
+    "auditMode": "yes"
+  },
+  {
+    "operation": "ObserveSystemdUnit",
+    "subject": "systemd-unit",
+    "scope": "per-VM/role",
+    "allowedGroups": [
+      "d2bd"
+    ],
+    "destructive": false,
+    "secretAccess": "metadata-only",
+    "brokerRequired": "yes",
+    "auditMode": "yes"
+  },
+  {
+    "operation": "OpenSystemdUnitPidfd",
+    "subject": "systemd-unit-pidfd",
+    "scope": "per-VM/role",
+    "allowedGroups": [
+      "d2bd"
+    ],
+    "destructive": false,
+    "secretAccess": "none",
+    "brokerRequired": "yes",
+    "auditMode": "yes"
+  },
+  {
+    "operation": "StopSystemdUnit",
+    "subject": "systemd-unit",
+    "scope": "per-VM/role",
+    "allowedGroups": [
+      "d2bd"
+    ],
+    "destructive": true,
+    "secretAccess": "none",
+    "brokerRequired": "yes",
+    "auditMode": "yes"
   }
 ]
 '');

@@ -261,6 +261,7 @@ dependencies = [
 name = "d2b-contracts"
 version = "0.0.0-bootstrap"
 dependencies = [
+ "async-trait",
  "d2b-core",
  "d2b-realm-core",
  "protobuf",
@@ -291,6 +292,7 @@ dependencies = [
  "async-trait",
  "d2b-contracts",
  "d2b-core",
+ "d2b-host-argv",
  "libc",
  "miniz_oxide",
  "nix",
@@ -299,6 +301,13 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+]
+
+[[package]]
+name = "d2b-host-argv"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "serde",
 ]
 
 [[package]]
