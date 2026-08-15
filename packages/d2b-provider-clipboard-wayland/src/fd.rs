@@ -1,7 +1,7 @@
 //! FD safety models and the checked Unix attachment adapter.
 
 use std::{
-    io::{self, Read, Take},
+    io::{Read, Take},
     os::fd::{AsFd, OwnedFd},
     sync::{
         Arc,
@@ -446,14 +446,13 @@ pub(crate) fn read_owned_fd_bounded_with_timeout(
     max_size_bytes: u64,
     timeout: Duration,
 ) -> Result<Vec<u8>, FdReadError> {
-    let mut file = std::fs::File::from(fd);
-    let flags = fcntl_getfl(&file).map_err(|_| FdReadError::Io)?;
-    fcntl_setfl(&file, flags | OFlags::NONBLOCK).map_err(|_| FdReadError::Io)?;
+    let flags = fcntl_getfl(fd.as_fd()).map_err(|_| FdReadError::Io)?;
+    fcntl_setfl(fd.as_fd(), flags | OFlags::NONBLOCK).map_err(|_| FdReadError::Io)?;
     let mut bytes = Vec::new();
     let mut buffer = [0_u8; 8192];
     let deadline = Instant::now() + timeout;
     loop {
-        match file.read(&mut buffer) {
+        match rustix::io::read(fd.as_fd(), &mut buffer) {
             Ok(0) => return Ok(bytes),
             Ok(read) => {
                 bytes.extend_from_slice(&buffer[..read]);
@@ -463,14 +462,14 @@ pub(crate) fn read_owned_fd_bounded_with_timeout(
                     });
                 }
             }
-            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+            Err(rustix::io::Errno::AGAIN) => {
                 let remaining = deadline.saturating_duration_since(Instant::now());
                 let timeout_ms = remaining.as_millis().min(i32::MAX as u128) as i32;
                 if timeout_ms == 0 {
                     return Err(FdReadError::Timeout);
                 }
                 let mut poll_fds = [PollFd::new(
-                    &file,
+                    &fd,
                     PollFlags::IN | PollFlags::HUP | PollFlags::ERR,
                 )];
                 match poll(&mut poll_fds, timeout_ms) {
