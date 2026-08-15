@@ -65,14 +65,14 @@ documentation.
   delivers, and watches the work.
 - Ponytail keeps implementation minimal, safe, and free of unnecessary
   lifecycle or framework machinery.
-- Caveman makes transient handoffs and coordination token-efficient; it does
-  not govern persisted prose.
+- Caveman is for transient communication only; it does not govern persisted
+  prose.
 - Advanced planning, orchestration, and independent review prefer
   `gpt-5.6-sol` with xhigh reasoning and long context (`long_context`).
 - Implementation prefers `gpt-5.6-luna` with xhigh reasoning.
 - If a preferred profile is unavailable, use the strongest native
-  role-equivalent model and record that substitution only in the transient
-  handoff. Do not put model, tool, or agent attribution in shipped artifacts.
+  role-equivalent model; record that substitution only in the transient handoff.
+  Do not put model, tool, or agent attribution in shipped artifacts.
 
 ### Review and PR contract
 
@@ -87,9 +87,9 @@ ce-babysit-pr posture:target
 
 Every code diff receives independent review in a separate clean context.
 The repository-owned caller applies actionable fixes, validates them, and
-requests fresh review after every fix or other head-changing update. Missing
-review evidence fails closed to fresh review; no actionable finding remains at
-merge.
+requests fresh review after every fix or other head-changing update.
+Missing review evidence fails closed to fresh review; no actionable finding
+remains at merge.
 
 `ce-babysit-pr` watches review feedback, required checks, and head currency.
 Immediately before merge, refresh the current reviewed head, required checks,
@@ -151,8 +151,8 @@ Read the relevant section before changing any of these:
   `manifestVersion`, and changelog together. Do not hide a failing assertion
   by deleting it; fix its predicate or message.
 - Do not reintroduce per-VM systemd units, host-singleton framework services,
-  or a bash CLI fallback. Lifecycle stays in `d2bd` and privileged mutation
-  uses typed broker operations. Retired knobs
+  or the retired bash CLI fallback. Lifecycle stays in `d2bd` and privileged
+  mutation uses typed broker operations. Retired knobs
   `D2B_LEGACY_BASH_OPT_IN`, `D2B_LEGACY_CLI`, and `D2B_NATIVE_ONLY` are no-ops.
 - Do not commit secrets, hostnames, real user identifiers, or real network
   ranges. Use generic names and RFC1918 or RFC5737 examples.
