@@ -663,26 +663,14 @@ mod tests {
         let source = test_source("guest");
         let observer = test_observer("alice");
         let first = sink
-            .deliver(
-                &mut port,
-                &source,
-                &observer,
-                request_with_action(),
-                100,
-            )
+            .deliver(&mut port, &source, &observer, request_with_action(), 100)
             .unwrap();
         let action_key = match first {
             NotificationResult::Accepted { action_nonces, .. } => action_nonces["open"].clone(),
             other => panic!("unexpected result: {other:?}"),
         };
         let second = sink
-            .deliver(
-                &mut port,
-                &source,
-                &observer,
-                request_with_action(),
-                105,
-            )
+            .deliver(&mut port, &source, &observer, request_with_action(), 105)
             .unwrap();
         assert!(matches!(
             second,
