@@ -27,9 +27,7 @@ rc=0
 # persistent trees owned by tests that invoke nested Cargo; omitting it restores
 # the outer workspace but leaves its critical path cold.
 declared_dirs=(
-  "packages -> target"
-  "packages/d2b-priv-broker -> target"
-  "packages/d2b-guest-shell-runner -> target"
+  ". -> target"
   "tests/tools/no-bash-ast-walker/target"
   ".scratch/rust-test-cache"
 )
@@ -39,12 +37,12 @@ if ! grep -qF "fixture_target_dir=\"\$ROOT/.scratch/rust-test-cache/fixture-cont
   rc=1
 fi
 # Broker parallel feature-pass target dirs: the script uses
-# ${broker_target_dir%/}-<suffix> where broker_target_dir resolves to
-# packages/d2b-priv-broker/target.
+# ${broker_target_dir%/}/broker-<suffix> where broker_target_dir resolves to
+# the repository-root target/.
 while IFS= read -r suffix; do
-  declared_dirs+=("packages/d2b-priv-broker/target-${suffix}")
+  declared_dirs+=("target/broker-${suffix}")
 done < <(
-  grep -oP '(?<=broker_target_dir%/\}-)[a-z0-9]+' "$test_script" | sort -u
+  grep -oP '(?<=broker_target_dir%/\}/broker-)[a-z0-9]+' "$test_script" | sort -u
 )
 
 # --- Extract cached dirs from CI workflow (simple grep) ---

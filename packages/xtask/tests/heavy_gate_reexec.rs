@@ -118,7 +118,7 @@ fn run_reexec_guard(
     fs::set_permissions(&cargo, fs::Permissions::from_mode(0o755)).unwrap();
 
     if plant_redactor {
-        let target = base.join("packages/target/debug");
+        let target = base.join("target/debug");
         fs::create_dir_all(&target).unwrap();
         let xtask = target.join("xtask");
         fs::copy(env!("CARGO_BIN_EXE_xtask"), &xtask).unwrap();

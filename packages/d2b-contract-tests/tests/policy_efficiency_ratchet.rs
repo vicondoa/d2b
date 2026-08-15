@@ -5,7 +5,7 @@
 //!
 //! These checks intentionally live in the existing Rust policy-test layer rather
 //! than a new shell gate. They scan only git-tracked files, so ignored build
-//! outputs such as `packages/target/` and local scratch artifacts are never
+//! outputs such as `target/` and local scratch artifacts are never
 //! considered.
 
 use std::collections::BTreeSet;

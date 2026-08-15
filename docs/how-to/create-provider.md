@@ -100,10 +100,10 @@ conformance helpers. It does not own a Provider identity. Its manifest CLI
 canonicalizes and verifies the bytes used by a Provider package:
 
 ```bash
-cargo run --manifest-path packages/Cargo.toml \
+cargo run --manifest-path Cargo.toml \
   -p d2b-provider-toolkit --bin d2b-provider-toolkit -- \
   manifest emit --out build/provider-manifest.json < provider-manifest-input.json
-cargo run --manifest-path packages/Cargo.toml \
+cargo run --manifest-path Cargo.toml \
   -p d2b-provider-toolkit --bin d2b-provider-toolkit -- \
   manifest verify build/provider-manifest.json
 ```
@@ -117,8 +117,8 @@ first divergent byte and the remediation command.
 Run the crate tests without a container, VM, live host, or physical device:
 
 ```bash
-cargo nextest run --manifest-path packages/Cargo.toml -p d2b-provider-<base>-<implementation>
-cargo test --manifest-path packages/Cargo.toml -p d2b-provider-<base>-<implementation>
+cargo nextest run --manifest-path Cargo.toml -p d2b-provider-<base>-<implementation>
+cargo test --manifest-path Cargo.toml -p d2b-provider-<base>-<implementation>
 make test-policy
 ```
 

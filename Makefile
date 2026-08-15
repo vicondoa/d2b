@@ -14,6 +14,7 @@ SHELL := $(CURDIR)/tests/tools/scrub-shell-environment
         test-lint test-rust test-rust-main \
         test-rust-broker test-rust-guest-shell-runner test-rust-no-bash-ast \
         test-rust-schema test-rust-inventory test-rust-supply-chain \
+        test-cargo-compat \
         test-rust-leaf-main-workspace \
         test-rust-leaf-schema test-rust-leaf-inventory \
         test-rust-leaf-fixture-contracts test-rust-leaf-broker \
@@ -278,7 +279,7 @@ fi; \
 runtime_budget="$$effective_budget"; \
 profile='$(2)'; \
 cold_profile=0; \
-if [ "$$profile" = aggregate ] && [ ! -d packages/target ]; then \
+if [ "$$profile" = aggregate ] && [ ! -d target ]; then \
   profile=cold; \
   cold_profile=1; \
 fi; \
@@ -453,6 +454,12 @@ test-rust-inventory:
 test-rust-supply-chain:
 	+@$(call D2B_RUST_DISPATCH,test-rust-leaf-supply-chain,supply)
 
+## test-cargo-compat - standalone Cargo proof for the generic, serial, guest,
+## doctest, harness-free, bench, and fixture-exclusion contracts. This target
+## is deliberately independent of the Bazel scheduler.
+test-cargo-compat:
+	bash tests/tools/cargo-compat.sh
+
 ## Leaf recipes are ordinary non-submake recipes. When they are seen as
 ## prerequisites of the outer test-rust declaration they intentionally do no
 ## work; the recursive child owns the real leaf dispatch.
@@ -540,8 +547,8 @@ test-drift:
 ## shell gates: the drift and meta gate set is closed.
 test-policy:
 	bash tests/test-policy.sh
-	cd packages && cargo run --quiet -p xtask -- check-provider-crate-layout
-	cd packages && cargo run --quiet -p xtask -- check-provider-layout
+	cargo run --quiet -p xtask -- check-provider-crate-layout
+	cargo run --quiet -p xtask -- check-provider-layout
 
 ## test-performance-budgets - execute the self-gating performance canary.
 ## Hosted runners take the cheap skip path; pinned stable runners enforce it.
@@ -692,17 +699,15 @@ heavy-lane-guard: heavy-gate-build
 # ===========================================================================
 
 # Normalize CARGO_TARGET_DIR to an absolute path so the wrapper is built and
-# executed at the same location. cargo runs the build from packages/, so a
-# *relative* CARGO_TARGET_DIR is interpreted relative to packages/ - but
-# HEAVY_GATE is invoked from the repo root, so a bare relative path is looked up
-# in the wrong place (packages/relative/debug/xtask built, relative/debug/xtask
-# executed). Resolve a relative value against packages/ and pass the resolved
+# executed at the same location. Cargo runs the build from the repository
+# root, so a relative value is resolved against the root before the binary is
+# executed. Resolve it here and pass the resolved
 # absolute path back to cargo, so both the build and the execution agree
 # regardless of the caller's value.
 ifeq ($(CARGO_TARGET_DIR),)
-HEAVY_GATE_TARGET_DIR := $(CURDIR)/packages/target
+HEAVY_GATE_TARGET_DIR := $(CURDIR)/target
 else ifeq ($(filter /%,$(CARGO_TARGET_DIR)),)
-HEAVY_GATE_TARGET_DIR := $(abspath $(CURDIR)/packages/$(CARGO_TARGET_DIR))
+HEAVY_GATE_TARGET_DIR := $(abspath $(CURDIR)/$(CARGO_TARGET_DIR))
 else
 HEAVY_GATE_TARGET_DIR := $(CARGO_TARGET_DIR)
 endif
@@ -714,7 +719,7 @@ HEAVY_GATE = $(HEAVY_GATE_BIN) heavy-gate --
 ## HEAVY_GATE_TARGET_DIR the wrapper is executed from, so a relative
 ## CARGO_TARGET_DIR cannot split the two.
 heavy-gate-build:
-	@cd packages && CARGO_TARGET_DIR='$(HEAVY_GATE_TARGET_DIR)' cargo build --quiet --manifest-path Cargo.toml --locked -p xtask --bin xtask
+	@CARGO_TARGET_DIR='$(HEAVY_GATE_TARGET_DIR)' cargo build --quiet --manifest-path Cargo.toml --locked -p xtask --bin xtask
 
 ## heavy-gate-provision - create or repair the protected slot namespace for the
 ## current numeric uid without resolving a user name through NSS. This is the
@@ -756,7 +761,7 @@ heavy-test-hardware: test-hardware
 ##                    Override the selector with HEAVY_CARGO_TEST_ARGS.
 HEAVY_CARGO_TEST_ARGS ?= --workspace --all-targets
 heavy-cargo-test: heavy-gate-build
-	cd packages && $(HEAVY_GATE) cargo test $(HEAVY_CARGO_TEST_ARGS)
+	$(HEAVY_GATE) cargo test $(HEAVY_CARGO_TEST_ARGS)
 
 ## heavy-flake-check - the building `nix flake check` under the semaphore.
 ##                     `make test-flake` is the cheap --no-build sibling.
@@ -803,7 +808,7 @@ test-changelog:
 ##                  '## [Unreleased]' block and delete the consumed fragments.
 ##                  Run at merge time; see changelog.d/README.md.
 changelog-fold:
-	cd packages && cargo run -q -p xtask -- changelog-fold
+	cargo run -q -p xtask -- changelog-fold
 # --- hermetic execution-budget gate ----------------------------------------
 
 .PHONY: test-runtime-ledger runtime-ledger-pin
@@ -840,13 +845,13 @@ changelog-fold:
 ##   of these budgets. Until that lands, there is no shard dimension, no
 ##   baseline is recorded, and none is required.
 ##
-##   All cargo invocations run from packages/ (not the repo root via
-##   --manifest-path) so packages/.cargo/config.toml - and its sccache
+##   All cargo invocations run from the repository root so the root
+##   .cargo/config.toml - and its sccache
 ##   rustc-wrapper - is discovered; the ledger and census paths are passed
 ##   root-absolute so the working-directory change cannot misplace them.
 D2B_RUNTIME_RUNNER      ?= local
 D2B_RUNTIME_REPETITIONS ?= 3
-D2B_RUNTIME_LEDGER      ?= packages/target/test-runtime-ledger.json
+D2B_RUNTIME_LEDGER      ?= target/test-runtime-ledger.json
 D2B_RUNTIME_CENSUS      ?= tests/runtime-ledger-census.json
 D2B_RUNTIME_CRATES      ?=
 D2B_RUNTIME_UPDATE_CENSUS ?= 0
@@ -883,13 +888,13 @@ test-runtime-ledger:
 	started_at="$$(date +%s)"; \
 	ledger='$(abspath $(D2B_RUNTIME_LEDGER))'; \
 	census='$(abspath $(D2B_RUNTIME_CENSUS))'; \
-	work='$(abspath packages/target/test-runtime-ledger.work)'; \
+	work='$(abspath target/test-runtime-ledger.work)'; \
 	reps='$(D2B_RUNTIME_REPETITIONS)'; \
 	rm -rf "$$work"; mkdir -p "$$work"; \
 	if [ -n '$(strip $(D2B_RUNTIME_CRATES))' ]; then \
 	  crates='$(strip $(D2B_RUNTIME_CRATES))'; \
 	else \
-	  crates="$$(cd packages && $(D2B_LEDGER_XTASK) census --expected-census "$$census" --field crates)"; \
+	  crates="$$( $(D2B_LEDGER_XTASK) census --expected-census "$$census" --field crates)"; \
 	fi; \
 	if [ -z "$$crates" ]; then \
 	  echo "test-runtime-ledger: the pinned census names no crates" >&2; exit 1; fi; \
@@ -901,11 +906,11 @@ test-runtime-ledger:
 	  done; \
 	done; \
 	if [ -n "$$lint_files" ]; then \
-	  ( cd packages && $(D2B_LEDGER_XTASK) lint $$(for f in $$lint_files; do echo "$(abspath .)/$$f"; done) ); \
+	  ( $(D2B_LEDGER_XTASK) lint $$(for f in $$lint_files; do echo "$(abspath .)/$$f"; done) ); \
 	fi; \
 	echo "test-runtime-ledger: selecting libtest-harness targets per census crate (harness=false custom-main binaries emit no libtest JSON and cannot be timed)"; \
 	meta="$$work/cargo-metadata.json"; \
-	( cd packages && cargo metadata --format-version 1 --no-deps ) > "$$meta" 2>/dev/null; \
+	cargo metadata --format-version 1 --no-deps > "$$meta" 2>/dev/null; \
 	redactor="$$(jq -r '.target_directory + "/debug/xtask"' "$$meta")"; \
 	for crate in $$crates; do \
 	  manifest="$$(jq -r --arg pkg "$$crate" '.packages[] | select(.name==$$pkg) | .manifest_path' "$$meta")"; \
@@ -925,7 +930,7 @@ test-runtime-ledger:
 	echo "test-runtime-ledger: warm-building the exact timed selectors so compilation is excluded from CPU measurements"; \
 	for crate in $$crates; do \
 	  sel="$$(cat "$$work/$$crate.testargs")"; \
-	  ( cd packages && RUSTC_BOOTSTRAP=1 cargo test -p "$$crate" $$sel --no-run --quiet ); \
+	  ( RUSTC_BOOTSTRAP=1 cargo test -p "$$crate" $$sel --no-run --quiet ); \
 	done; \
 	args=""; \
 	rep=0; \
@@ -938,7 +943,7 @@ test-runtime-ledger:
 	    timing="$$work/$$crate-$$rep.time"; \
 	    sel="$$(cat "$$work/$$crate.testargs")"; \
 	    status=0; \
-	    ( cd packages && \
+	    ( \
 	      D2B_LEDGER_JSON="$$json" D2B_LEDGER_ERR="$$err" D2B_LEDGER_TIMING="$$timing" \
 	      /bin/bash -c '{ time -p "$$@" > "$$D2B_LEDGER_JSON" 2> "$$D2B_LEDGER_ERR"; } 2> "$$D2B_LEDGER_TIMING"' \
 	        d2b-runtime-ledger env RUSTC_BOOTSTRAP=1 cargo test -p "$$crate" $$sel --quiet -- \
@@ -977,14 +982,14 @@ test-runtime-ledger:
 	    args="$$args --crate $$crate=$$cdur --crate-libtest-json $$crate=$$json"; \
 	  done; \
 	done; \
-	( cd packages && $(D2B_LEDGER_XTASK) record \
+	$(D2B_LEDGER_XTASK) record \
 	    --runner '$(D2B_RUNTIME_RUNNER)' --repetitions "$$reps" \
-	    --output "$$ledger" $(D2B_RUNTIME_ADVISORY_THRESHOLDS) $$args ); \
+	    --output "$$ledger" $(D2B_RUNTIME_ADVISORY_THRESHOLDS) $$args; \
 	if [ '$(D2B_RUNTIME_UPDATE_CENSUS)' = 1 ]; then \
-	  ( cd packages && $(D2B_LEDGER_XTASK) pin --ledger "$$ledger" --output "$$census" ); \
+	  $(D2B_LEDGER_XTASK) pin --ledger "$$ledger" --output "$$census"; \
 	fi; \
-	( cd packages && $(D2B_LEDGER_XTASK) check \
-	    --ledger "$$ledger" --expected-census "$$census" ); \
+	$(D2B_LEDGER_XTASK) check \
+	    --ledger "$$ledger" --expected-census "$$census"; \
 	finished_at="$$(date +%s)"; \
 	echo "test-runtime-ledger: complete (duration: $$((finished_at - started_at))s)"
 

@@ -121,23 +121,19 @@ if [ "$fixture_contracts_only" = 1 ] && [ "${D2B_ENABLE_FIXTURE_BUILD:-0}" != 1 
   exit 1
 fi
 
-manifest="$ROOT/packages/Cargo.toml"
-lock_file="$ROOT/packages/Cargo.lock"
-deny_config="$ROOT/packages/deny.toml"
-broker_manifest="$ROOT/packages/d2b-priv-broker/Cargo.toml"
-broker_lock_file="$ROOT/packages/d2b-priv-broker/Cargo.lock"
-broker_deny_config="$ROOT/packages/d2b-priv-broker/deny.toml"
-guest_shell_runner_manifest="$ROOT/packages/d2b-guest-shell-runner/Cargo.toml"
-guest_shell_runner_lock_file="$ROOT/packages/d2b-guest-shell-runner/Cargo.lock"
-guest_shell_runner_deny_config="$ROOT/packages/d2b-guest-shell-runner/deny.toml"
+manifest="$ROOT/Cargo.toml"
+lock_file="$ROOT/Cargo.lock"
+deny_config="$ROOT/deny.toml"
+broker_manifest="$ROOT/Cargo.toml"
+guest_shell_runner_manifest="$ROOT/Cargo.toml"
 no_bash_manifest="$ROOT/tests/tools/no-bash-ast-walker/Cargo.toml"
-for required in "$manifest" "$lock_file" "$deny_config" "$broker_manifest" "$broker_lock_file" "$broker_deny_config" "$guest_shell_runner_manifest" "$guest_shell_runner_lock_file" "$guest_shell_runner_deny_config"; do
+for required in "$manifest" "$lock_file" "$deny_config" "$broker_manifest" "$guest_shell_runner_manifest"; do
   if [ ! -f "$required" ]; then
     fail "missing Rust workspace input: $required"
     exit 1
   fi
 done
-toolchain_file="$ROOT/packages/rust-toolchain.toml"
+toolchain_file="$ROOT/rust-toolchain.toml"
 pinned_channel=$(
   sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]\+\)".*/\1/p' "$toolchain_file" | head -1
 )
@@ -162,8 +158,8 @@ fi
 # hits) while still avoiding lock contention. They are gitignored and reused
 # across runs like the default broker/workspace target dirs.
 broker_target_dir=$(d2b_cargo_target_dir broker)
-broker_layer1_target_dir="${broker_target_dir%/}-layer1"
-broker_fakebackends_target_dir="${broker_target_dir%/}-fakebackends"
+broker_layer1_target_dir="${broker_target_dir%/}/broker-layer1"
+broker_fakebackends_target_dir="${broker_target_dir%/}/broker-fakebackends"
 guest_shell_runner_target_dir=$(d2b_cargo_target_dir guest-shell-runner)
 no_bash_target_dir="$ROOT/tests/tools/no-bash-ast-walker/target"
 
@@ -277,18 +273,18 @@ assert_pinned_rust_toolchain() {
   case "$cargo_version" in
     *"$pinned_channel"*) ;;
     *)
-      fail "cargo version does not match packages/rust-toolchain.toml channel $pinned_channel: $cargo_version"
+      fail "cargo version does not match rust-toolchain.toml channel $pinned_channel: $cargo_version"
       exit 1
       ;;
   esac
   case "$rustc_version" in
     *"$pinned_channel"*) ;;
     *)
-      fail "rustc version does not match packages/rust-toolchain.toml channel $pinned_channel: $rustc_version"
+      fail "rustc version does not match rust-toolchain.toml channel $pinned_channel: $rustc_version"
       exit 1
       ;;
   esac
-  ok "Rust toolchain matches packages/rust-toolchain.toml ($pinned_channel)"
+  ok "Rust toolchain matches rust-toolchain.toml ($pinned_channel)"
 }
 
 cleanup_cargo_special_files() {
@@ -353,7 +349,7 @@ else
   # - so relying on the config would silently disable the wrapper for the whole
   # gate. The four shim copies are byte-identical, so one absolute path serves
   # every workspace.
-  _wrapper_shim="$ROOT/packages/.cargo/rustc-wrapper.sh"
+  _wrapper_shim="$ROOT/.cargo/rustc-wrapper.sh"
   export RUSTC_WRAPPER="$_wrapper_shim" CARGO_BUILD_RUSTC_WRAPPER="$_wrapper_shim"
   if [ "$_ci_active" = 1 ]; then
     log "sccache: enabled via $_wrapper_shim (CI opt-in, local backend at ${SCCACHE_DIR:-default})"
@@ -683,9 +679,9 @@ run_nextest_companions() {
   ok "$label companions (doctests + $test_targets test targets + $bench_targets bench targets)"
 }
 
-# The privileged broker is a SEPARATE workspace with three independent feature
-# passes (default, layer1-bootstrap, fake-backends), each on its OWN target dir.
-# They share nothing with the main workspace and nothing with each other. The
+# The privileged broker has three independent feature passes (default,
+# layer1-bootstrap, fake-backends), each on its OWN execution-only target dir.
+# They share the repository-root Cargo authority but nothing with each other. The
 # streams stay serial by default because their tests manipulate process-global
 # signal/reap state; an explicit timing-only opt-in can use their separate target
 # directories. With sccache the shared crates are cache hits across all streams.
@@ -716,23 +712,23 @@ run_nextest_companions() {
 broker_stream_default() {
   cargo metadata --format-version 1 --manifest-path "$broker_manifest" >/dev/null
   rm -f -- "$broker_target_dir"/debug/deps/socket_activation-* 2>/dev/null || true
-  CARGO_TARGET_DIR="$broker_target_dir" cargo test --jobs "$D2B_RUST_CARGO_JOBS" --workspace --manifest-path "$broker_manifest" -- --test-threads "$D2B_RUST_NEXTEST_THREADS"
+  CARGO_TARGET_DIR="$broker_target_dir" cargo test --jobs "$D2B_RUST_CARGO_JOBS" --manifest-path "$broker_manifest" -p d2b-priv-broker -- --test-threads "$D2B_RUST_NEXTEST_THREADS"
 }
 broker_stream_layer1() {
-  CARGO_TARGET_DIR="$broker_layer1_target_dir" cargo test --jobs "$D2B_RUST_CARGO_JOBS" --workspace --manifest-path "$broker_manifest" --features layer1-bootstrap -- --test-threads "$D2B_RUST_NEXTEST_THREADS"
+  CARGO_TARGET_DIR="$broker_layer1_target_dir" cargo test --jobs "$D2B_RUST_CARGO_JOBS" --manifest-path "$broker_manifest" -p d2b-priv-broker --features layer1-bootstrap -- --test-threads "$D2B_RUST_NEXTEST_THREADS"
 }
 broker_stream_fakebackends() {
-  CARGO_TARGET_DIR="$broker_fakebackends_target_dir" cargo test --jobs "$D2B_RUST_CARGO_JOBS" --workspace --manifest-path "$broker_manifest" --features fake-backends -- --test-threads "$D2B_RUST_NEXTEST_THREADS"
+  CARGO_TARGET_DIR="$broker_fakebackends_target_dir" cargo test --jobs "$D2B_RUST_CARGO_JOBS" --manifest-path "$broker_manifest" -p d2b-priv-broker --features fake-backends -- --test-threads "$D2B_RUST_NEXTEST_THREADS"
 }
 broker_streams=(default layer1 fakebackends)
 
 guest_shell_runner_gate() {
   cargo metadata --format-version 1 --manifest-path "$guest_shell_runner_manifest" >/dev/null
-  CARGO_TARGET_DIR="$guest_shell_runner_target_dir" cargo fmt --manifest-path "$guest_shell_runner_manifest" --all --check
-  CARGO_TARGET_DIR="$guest_shell_runner_target_dir" cargo clippy --jobs "$D2B_RUST_CARGO_JOBS" --manifest-path "$guest_shell_runner_manifest" --workspace --all-targets --features real-libshpool -- -D warnings
-  CARGO_TARGET_DIR="$guest_shell_runner_target_dir" cargo nextest run --test-threads "$D2B_RUST_NEXTEST_THREADS" --manifest-path "$guest_shell_runner_manifest" --workspace --features real-libshpool
+  CARGO_TARGET_DIR="$guest_shell_runner_target_dir" cargo fmt --manifest-path "$guest_shell_runner_manifest" --package d2b-guest-shell-runner --check
+  CARGO_TARGET_DIR="$guest_shell_runner_target_dir" cargo clippy --jobs "$D2B_RUST_CARGO_JOBS" --manifest-path "$guest_shell_runner_manifest" -p d2b-guest-shell-runner --all-targets --features real-libshpool -- -D warnings
+  CARGO_TARGET_DIR="$guest_shell_runner_target_dir" cargo nextest run --test-threads "$D2B_RUST_NEXTEST_THREADS" --manifest-path "$guest_shell_runner_manifest" -p d2b-guest-shell-runner --features real-libshpool
   CARGO_TARGET_DIR="$guest_shell_runner_target_dir" run_nextest_companions \
-    "guest shell runner" "$guest_shell_runner_manifest" --workspace --features real-libshpool
+    "guest shell runner" "$guest_shell_runner_manifest" -p d2b-guest-shell-runner --features real-libshpool
 }
 
 run_fixture_contract_tests() {
@@ -826,7 +822,7 @@ run_fast_lint_gate() {
   local sorted_packages workspace_metadata workspace_rows workspace_root
   local workspace_root_real package_root_real package_manifest package_root
   local path_abs candidate_dir candidate_real independent matched
-  local workspace_manifest_list workspace_manifest workspace_root_path
+  local workspace_manifest_scratch workspace_manifest_list workspace_manifest workspace_root_path
   local main_workspace_changed=0
   local guest_shell_runner_changed=0
   local main_workspace_metadata_needed=0
@@ -835,8 +831,6 @@ run_fast_lint_gate() {
     packages/d2b-bus/tests/ui/public-api-mutations
     packages/d2b-controller-toolkit/tests/ui/external-seals
     packages/d2b-core/fuzz
-    packages/d2b-guest-shell-runner
-    packages/d2b-priv-broker
     packages/d2b-resource-api/tests/ui/external-seals
     packages/d2b-wlproxy-spike
   )
@@ -855,10 +849,8 @@ run_fast_lint_gate() {
   # Independent workspaces are a closed set. Scan nested manifests before
   # changed-scope classification so a new top-level or nested workspace cannot
   # be silently treated as a non-product path.
-  workspace_manifest_list=$(mktemp "${TMPDIR:-/tmp}/d2b-rust-workspaces.XXXXXX")
-  if declare -F add_cleanup >/dev/null 2>&1; then
-    add_cleanup "rm -f -- \"$workspace_manifest_list\""
-  fi
+  workspace_manifest_scratch=$(d2b_mktemp ".d2b-rust-workspaces.XXXXXX")
+  workspace_manifest_list="$workspace_manifest_scratch/manifest-list"
   if ! find -P "$ROOT/packages" -type f -name Cargo.toml -print0 \
       | sort -z >"$workspace_manifest_list"; then
     fail "Rust workspace manifest enumeration failed"
@@ -937,26 +929,23 @@ run_fast_lint_gate() {
   while IFS= read -r path; do
     [ -n "$path" ] || continue
     case "$path" in
-      packages/Cargo.toml|packages/Cargo.lock|packages/rust-toolchain.toml|packages/.cargo/*)
+      Cargo.toml|Cargo.lock|rust-toolchain.toml|.cargo/*|.config/*)
         main_workspace_changed=1
         guest_shell_runner_changed=1
-        ;;
-      packages/d2b-priv-broker/*)
-        ;;
-      packages/d2b-guest-shell-runner/*)
-        if [[ "$path" == *.rs || "$path" == */Cargo.toml \
-          || "$path" == */Cargo.lock || "$path" == */build.rs ]]; then
-          guest_shell_runner_changed=1
-        fi
         ;;
       packages/*)
         if [[ "$path" == *.rs || "$path" == */Cargo.toml \
           || "$path" == */build.rs ]]; then
           case "$path" in
-            packages/.config/*|packages/policy-inputs/*|packages/target/*|packages/*/target/*|packages/*/.scratch/*|packages/*/generated/*)
+            .config/*|packages/policy-inputs/*|target/*|packages/*/target/*|packages/*/.scratch/*|packages/*/generated/*)
               ;;
             *)
               main_workspace_metadata_needed=1
+              case "$path" in
+                packages/d2b-guest-shell-runner/*)
+                  guest_shell_runner_changed=1
+                  ;;
+              esac
               ;;
           esac
         fi
@@ -1000,12 +989,12 @@ run_fast_lint_gate() {
       fail "main workspace root from cargo metadata could not be resolved"
       exit 1
     }
-    package_root_real=$(readlink -f -- "$ROOT/packages") || {
+    package_root_real=$(readlink -f -- "$ROOT") || {
       fail "main workspace package root could not be resolved"
       exit 1
     }
     if [ "$workspace_root_real" != "$package_root_real" ]; then
-      fail "cargo metadata workspace root does not match packages/"
+      fail "cargo metadata workspace root does not match repository root"
       exit 1
     fi
     if ! workspace_rows=$(printf '%s' "$workspace_metadata" | jq -r '
@@ -1046,10 +1035,7 @@ run_fast_lint_gate() {
     while IFS= read -r path; do
       [ -n "$path" ] || continue
       case "$path" in
-        packages/Cargo.toml)
-          continue
-          ;;
-        packages/d2b-priv-broker/*|packages/d2b-guest-shell-runner/*)
+        Cargo.toml)
           continue
           ;;
         *.rs|*/Cargo.toml)
@@ -1059,7 +1045,7 @@ run_fast_lint_gate() {
           ;;
       esac
       case "$path" in
-        packages/.config/*|packages/policy-inputs/*|packages/target/*|packages/*/target/*|packages/*/.scratch/*|packages/*/generated/*)
+        .config/*|packages/policy-inputs/*|target/*|packages/*/target/*|packages/*/.scratch/*|packages/*/generated/*)
           continue
           ;;
       esac
@@ -1067,8 +1053,7 @@ run_fast_lint_gate() {
       path_abs="$ROOT/$path"
       candidate_dir=$(dirname "$path_abs")
       independent=0
-      while [ "$candidate_dir" != "$package_root_real" ] \
-        && [ "$candidate_dir" != "$ROOT" ]; do
+      while [ "$candidate_dir" != "/" ]; do
         if [ -f "$candidate_dir/Cargo.toml" ]; then
           if grep -Eq '^[[:space:]]*\[workspace\][[:space:]]*$' \
               "$candidate_dir/Cargo.toml"; then
@@ -1077,7 +1062,7 @@ run_fast_lint_gate() {
               exit 1
             }
             workspace_root_path=${candidate_real#"$ROOT/"}
-            if [ "$workspace_root_path" != "packages" ]; then
+            if [ "$candidate_real" != "$ROOT" ]; then
               if ! is_independent_workspace_root "$workspace_root_path"; then
                 fail "unknown independent workspace root: $workspace_root_path"
                 exit 1
@@ -1109,6 +1094,10 @@ run_fast_lint_gate() {
     done <<<"$changed_paths"
   fi
 
+  if [ "$main_workspace_changed" -eq 0 ] && [ "$guest_shell_runner_changed" -eq 1 ]; then
+    unset 'main_packages[d2b-guest-shell-runner]'
+  fi
+
   if [ "$main_workspace_changed" -eq 1 ]; then
     main_package_args=(--workspace)
   elif [ "${#main_packages[@]}" -gt 0 ]; then
@@ -1136,7 +1125,7 @@ run_fast_lint_gate() {
     log "--> cargo clippy --all-targets --features real-libshpool (changed guest shell runner)"
     CARGO_TARGET_DIR="$guest_shell_runner_target_dir" \
       cargo clippy --jobs "$D2B_RUST_CARGO_JOBS" \
-        --manifest-path "$guest_shell_runner_manifest" --workspace --all-targets \
+        --manifest-path "$guest_shell_runner_manifest" -p d2b-guest-shell-runner --all-targets \
         --features real-libshpool -- -D warnings
     ok "changed guest shell runner clippy"
   else
@@ -1196,8 +1185,8 @@ ok "no-bash-ast-walker (zero Command::new bash-literal sites)"
 }
 
 run_broker_gate() {
-# Broker workspace: run the three feature passes (default, layer1-bootstrap,
-# fake-backends) - each on its own target dir - serially. Tests inside each
+# Broker product member: run the three feature passes (default,
+# layer1-bootstrap, fake-backends) - each on its own target dir - serially. Tests inside each
 # cargo-test process manipulate process-global SIGCHLD/reap state, so do not
 # overlap the three harnesses unless a dedicated isolation review proves it safe.
 # The fail-closed
@@ -1255,9 +1244,9 @@ snapshot_schema_out() {
 }
 
 log "--> schema generation reproducibility"
-(cd "$ROOT/packages" && cargo xtask gen-schemas)
+(cd "$ROOT" && cargo xtask gen-schemas)
 schema_snapshot_1=$(snapshot_schema_out)
-(cd "$ROOT/packages" && cargo xtask gen-schemas)
+(cd "$ROOT" && cargo xtask gen-schemas)
 schema_snapshot_2=$(snapshot_schema_out)
 if [ "$schema_snapshot_1" != "$schema_snapshot_2" ]; then
   fail "schema generation reproducibility: cargo xtask gen-schemas output is not reproducible"
@@ -1335,32 +1324,126 @@ cargo_audit_check() {
   return 1
 }
 
+policy_context_check() {
+  local system="$1" target="$2" context="$3"
+  local context_key="${system}/${target}/${context}"
+  local context_root="$ROOT/packages/policy-inputs/$system/$target/$context"
+  local source_authority="Cargo.lock"
+  if [ "$context" = guestd-static ]; then
+    source_authority="packages/Cargo.guest.lock"
+  fi
+  local projection
+  for projection in production policy; do
+    jq -e \
+      --arg context "$context" \
+      --arg system "$system" \
+      --arg target "$target" \
+      --arg source_authority "$source_authority" \
+      --arg marker "d2b-production-closure-approved/v1" \
+      '
+        .schema_version == 1
+        and .authority == "cargo-locked-metadata"
+        and .context == $context
+        and .system == $system
+        and .target == $target
+        and (.packages | type == "array" and length > 0)
+        and .source_authority == $source_authority
+      ' "$context_root/$projection/closure.json" >/dev/null || {
+        fail "invalid ${projection} closure projection for $context_key"
+        exit 1
+      }
+  done
+  jq -e \
+    --arg context_key "$context_key" \
+    --arg marker "d2b-production-closure-approved/v1" \
+    '
+      .contexts[$context_key].approval.marker == $marker
+      and (.contexts[$context_key].approval.owner | type == "string" and length > 0)
+      and (.contexts[$context_key].approval.rationale | type == "string" and length > 0)
+      and (.contexts[$context_key].approval.expiresAt | type == "string")
+    ' "$ROOT/packages/policy-inputs/advisory-policy.json" >/dev/null || {
+      fail "missing protected advisory approval for $context_key"
+      exit 1
+    }
+}
+
+# The generator independently recomputes every system/target/context closure.
+# The filtered locks below are audit-only projections; Cargo resolution never
+# consumes them. Keep the selected broker and guest sub-surfaces explicit so a
+# policy artifact cannot silently replace the deny/audit contract.
+policy_contexts_check() {
+  local system target
+  while read -r system target; do
+    policy_context_check "$system" "$target" broker-production
+    policy_context_check "$system" "$target" broker-default-tests
+    policy_context_check "$system" "$target" broker-layer1-bootstrap-tests
+    policy_context_check "$system" "$target" broker-fake-backends-tests
+  done <<'EOF'
+x86_64-linux x86_64-unknown-linux-gnu
+aarch64-linux aarch64-unknown-linux-gnu
+EOF
+  while read -r system target; do
+    policy_context_check "$system" "$target" guest-shell-runner-static
+    policy_context_check "$system" "$target" guestd-static
+  done <<'EOF'
+x86_64-linux x86_64-unknown-linux-musl
+aarch64-linux aarch64-unknown-linux-musl
+EOF
+}
+
+policy_audit_contexts_check() {
+  local policy_root="$ROOT/packages/policy-inputs"
+  local lock_path relative system target context context_key advisory_id
+  local -a audit_ignores
+  while IFS= read -r lock_path; do
+    relative="${lock_path#"$policy_root"/}"
+    IFS=/ read -r system target context _projection _lock <<< "$relative"
+    context_key="$system/$target/$context"
+    audit_ignores=()
+    while IFS= read -r advisory_id; do
+      [ -n "$advisory_id" ] && audit_ignores+=(--ignore "$advisory_id")
+    done < <(
+      jq -r \
+        --arg context_key "$context_key" \
+        '.contexts[$context_key].advisories[]?.id' \
+        "$policy_root/advisory-policy.json"
+    )
+    cargo_audit_check "policy context $context_key" "$lock_path" \
+      "${audit_ignores[@]}"
+  done < <(
+    find "$policy_root" -type f -path '*/policy/Cargo.lock' | LC_ALL=C sort
+  )
+}
+
 rust_surface_start rust-deny-main
 cargo_deny_check "main workspace" "$manifest" "$deny_config"
 rust_surface_success rust-deny-main
+
+# Validate all selected context approvals before any audit IDs are projected.
+policy_contexts_check
+
 rust_surface_start rust-deny-broker
-cargo_deny_check "broker workspace" "$broker_manifest" "$broker_deny_config"
+policy_context_check x86_64-linux x86_64-unknown-linux-gnu broker-production
 rust_surface_success rust-deny-broker
+
 rust_surface_start rust-deny-guest
-cargo_deny_check "guest shell runner workspace" "$guest_shell_runner_manifest" "$guest_shell_runner_deny_config"
+policy_context_check x86_64-linux x86_64-unknown-linux-musl guest-shell-runner-static
 rust_surface_success rust-deny-guest
 
-# Build-time wayland-scanner pulls quick-xml 0.39.4; runtime users were
-# updated away from vulnerable 0.37.x. Remove once wayland-scanner publishes
-# a release on quick-xml >= 0.41.
+# Advisory exceptions are projected from each exact approved context. The
+# checked-in policy is validated independently before its IDs are passed to
+# cargo-audit; no global or cross-context ignore list is permitted.
 rust_surface_start rust-audit-main
-cargo_audit_check "main workspace" "$lock_file" \
-  --ignore RUSTSEC-2026-0194 \
-  --ignore RUSTSEC-2026-0195
+cargo xtask gen-package-policy-inputs --check >/dev/null
+policy_audit_contexts_check
 rust_surface_success rust-audit-main
+
 rust_surface_start rust-audit-broker
-cargo_audit_check "broker workspace" "$broker_lock_file"
+policy_context_check x86_64-linux x86_64-unknown-linux-gnu broker-production
 rust_surface_success rust-audit-broker
-# libshpool 0.11.0 pulls notify 7 -> notify-types -> instant 0.1.13.
-# The helper pins and tracks that transitive unmaintained advisory explicitly
-# while evaluating libshpool feasibility.
+
 rust_surface_start rust-audit-guest
-cargo_audit_check "guest shell runner workspace" "$guest_shell_runner_lock_file" --ignore RUSTSEC-2024-0384
+policy_context_check x86_64-linux x86_64-unknown-linux-musl guest-shell-runner-static
 rust_surface_success rust-audit-guest
 }
 

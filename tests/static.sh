@@ -396,7 +396,7 @@ else
 fi
 d2b_static_gate_end "tests/tools/preflight-disk-space.sh"
 
-if [ -d "$ROOT/packages" ] && [ -f "$ROOT/packages/rust-toolchain.toml" ]; then
+if [ -d "$ROOT/packages" ] && [ -f "$ROOT/rust-toolchain.toml" ]; then
   d2b_time_begin "shared rust toolchain bootstrap"
   _STATIC_RUST_SHELL_PATH=$(nix shell --quiet --inputs-from "$ROOT" \
     nixpkgs#rustup nixpkgs#cargo nixpkgs#rustc nixpkgs#rustfmt nixpkgs#clippy \
@@ -404,7 +404,7 @@ if [ -d "$ROOT/packages" ] && [ -f "$ROOT/packages/rust-toolchain.toml" ]; then
     --command bash -lc "printf %s \"\$PATH\"")
   D2B_RUST_TOOLCHAIN_PATH=$(d2b_static_path_prefix "$_STATIC_RUST_SHELL_PATH" "$PATH")
   export D2B_RUST_TOOLCHAIN_PATH
-  _STATIC_PINNED_RUST_CHANNEL=$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]\+\)".*/\1/p' "$ROOT/packages/rust-toolchain.toml" | head -1)
+  _STATIC_PINNED_RUST_CHANNEL=$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]\+\)".*/\1/p' "$ROOT/rust-toolchain.toml" | head -1)
   if [ -n "$_STATIC_PINNED_RUST_CHANNEL" ]; then
     export RUSTUP_TOOLCHAIN="${RUSTUP_TOOLCHAIN:-$_STATIC_PINNED_RUST_CHANNEL}"
     d2b_activate_rust_toolchain_path || true
@@ -1225,8 +1225,8 @@ if [ -d "$ROOT/packages" ]; then
   d2b_activate_rust_toolchain_path || true
   _W2_WORKSPACE_TARGET=$(d2b_cargo_target_dir workspace)
   _W2_BROKER_TARGET=$(d2b_cargo_target_dir broker)
-  CARGO_TARGET_DIR="$_W2_WORKSPACE_TARGET" cargo build --manifest-path "$ROOT/packages/Cargo.toml" --quiet -p d2b -p d2bd -p xtask --bins
-  CARGO_TARGET_DIR="$_W2_BROKER_TARGET" cargo build --manifest-path "$ROOT/packages/d2b-priv-broker/Cargo.toml" --quiet -p d2b-priv-broker --features layer1-bootstrap
+  CARGO_TARGET_DIR="$_W2_WORKSPACE_TARGET" cargo build --manifest-path "$ROOT/Cargo.toml" --quiet -p d2b -p d2bd -p xtask --bins
+  CARGO_TARGET_DIR="$_W2_BROKER_TARGET" cargo build --manifest-path "$ROOT/Cargo.toml" --quiet -p d2b-priv-broker --features layer1-bootstrap
 fi
 d2b_time_end "W2 cargo prebuild"
 d2b_time_begin "W2 CLI smoke prewarm"

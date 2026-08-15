@@ -43,7 +43,7 @@ let
     version = "0.0.0-bootstrap";
     src = d2bRelaySrc;
     cargoLock = {
-      lockFile = ../../../packages/Cargo.lock;
+      lockFile = ../../../Cargo.lock;
       outputHashes."wl-proxy-0.1.2" = "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";
     };
     cargoBuildFlags = [

@@ -213,7 +213,7 @@ fn cargo_metadata(root: &Path) -> Result<CargoMetadata, String> {
             "1",
             "--manifest-path",
         ])
-        .arg(root.join("packages/Cargo.toml"))
+        .arg(root.join("Cargo.toml"))
         .output()
         .map_err(|_| "provider-crate-layout-metadata-unavailable".to_owned())?;
     if !output.status.success() {

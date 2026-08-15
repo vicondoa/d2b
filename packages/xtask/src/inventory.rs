@@ -308,7 +308,7 @@ fn is_nix_file(path: &str) -> bool {
 }
 
 fn is_crate_manifest(path: &str) -> bool {
-    path != "packages/Cargo.toml" && path.starts_with("packages/") && path.ends_with("/Cargo.toml")
+    path != "Cargo.toml" && path.starts_with("packages/") && path.ends_with("/Cargo.toml")
 }
 
 fn file_metric(repo_root: &Path, path: &str) -> Result<FileMetric, Box<dyn std::error::Error>> {
@@ -334,7 +334,7 @@ fn sort_metrics(metrics: &mut [FileMetric]) {
 }
 
 fn workspace_info(repo_root: &Path) -> Result<WorkspaceInfo, Box<dyn std::error::Error>> {
-    let root_manifest = "packages/Cargo.toml";
+    let root_manifest = "Cargo.toml";
     let root_toml = fs::read_to_string(repo_root.join(root_manifest))?;
     Ok(WorkspaceInfo {
         root_manifest: root_manifest.to_owned(),

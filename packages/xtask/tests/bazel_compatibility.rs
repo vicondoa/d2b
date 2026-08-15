@@ -44,7 +44,7 @@ fn resolve_bazel_binary() -> PathBuf {
 
     panic!(
         "Bazel {EXPECTED_BAZEL_VERSION} is required, but the ambient Bazel is unavailable or \
-         wrong; run `nix develop .#bazel -c cargo test --manifest-path packages/Cargo.toml \
+         wrong; run `nix develop .#bazel -c cargo test --manifest-path Cargo.toml \
          -p xtask --test bazel_compatibility` or set D2B_BAZEL_BIN to an exact provider"
     );
 }
@@ -94,8 +94,7 @@ fn nix_bazel_provider() -> Option<PathBuf> {
     let output_stdout = String::from_utf8_lossy(&output.stdout);
     let store_path = output_stdout
         .lines()
-        .filter(|line| !line.trim().is_empty())
-        .last()?;
+        .rfind(|line| !line.trim().is_empty())?;
     let bazel = PathBuf::from(store_path.trim()).join("bin/bazel");
     bazel.is_file().then_some(bazel)
 }

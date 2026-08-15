@@ -11,3 +11,5 @@ walkdir = "2"
 [[bin]]
 name = "no-bash-ast-walker"
 path = "src/main.rs"
+
+[workspace]

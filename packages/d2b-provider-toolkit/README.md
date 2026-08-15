@@ -62,8 +62,8 @@ record, or metric label.
 ## Build and test
 
 ```bash
-cd packages && cargo test -p d2b-provider-toolkit
-cd packages && cargo clippy -p d2b-provider-toolkit --all-targets
+cargo test -p d2b-provider-toolkit
+cargo clippy -p d2b-provider-toolkit --all-targets
 ```
 
 Heavier container, Host, Guest, and cross-process fixtures live in

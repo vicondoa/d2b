@@ -7,13 +7,13 @@ let
     if cfg.site.usePrebuiltHostTools
     then import ./prebuilt-packages.nix { inherit pkgs lib; }
     else { };
-  packagesSrc = d2bLib.cleanRustPackagesSource ../packages;
+  packagesSrc = d2bLib.cleanRustPackagesSource ../.;
   sourcePackage = pkgs.rustPlatform.buildRustPackage {
     pname = "d2b-unsafe-local-helper";
     version = "0.0.0-bootstrap";
     src = packagesSrc;
     cargoLock = {
-      lockFile = ../packages/Cargo.lock;
+      lockFile = ../Cargo.lock;
       outputHashes."wl-proxy-0.1.2" = "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";
     };
     cargoBuildFlags = [ "--package" "d2b-unsafe-local-helper" ];

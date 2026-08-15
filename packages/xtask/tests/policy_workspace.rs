@@ -5,37 +5,27 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 const CONTRACTS_CRATE: &str = "d2b-contracts";
-const EXCLUDED_WORKSPACES: &[&str] = &["d2b-priv-broker", "d2b-guest-shell-runner"];
+const EXCLUDED_WORKSPACES: &[&str] = &[];
 const INDEPENDENT_WORKSPACE_ROOTS: &[&str] = &[
     "packages/d2b-bus/tests/ui/public-api-mutations",
     "packages/d2b-controller-toolkit/tests/ui/external-seals",
     "packages/d2b-core/fuzz",
-    "packages/d2b-guest-shell-runner",
-    "packages/d2b-priv-broker",
     "packages/d2b-resource-api/tests/ui/external-seals",
     "packages/d2b-wlproxy-spike",
 ];
 const RUST_DRIVER: &str = "tests/test-rust.sh";
 const RELEASE_WORKFLOW: &str = ".github/workflows/release-host-binaries.yml";
 const RELEASE_BINARY_SELECTORS: &[(&str, &str, &str)] = &[
-    ("d2bd", "d2bd", "packages/Cargo.toml"),
-    ("d2b", "d2b", "packages/Cargo.toml"),
-    (
-        "d2b-wayland-proxy",
-        "d2b-wayland-proxy",
-        "packages/Cargo.toml",
-    ),
+    ("d2bd", "d2bd", "Cargo.toml"),
+    ("d2b", "d2b", "Cargo.toml"),
+    ("d2b-wayland-proxy", "d2b-wayland-proxy", "Cargo.toml"),
     (
         "d2b-unsafe-local-helper",
         "d2b-unsafe-local-helper",
-        "packages/Cargo.toml",
+        "Cargo.toml",
     ),
-    ("d2b-host", "d2b-activation-helper", "packages/Cargo.toml"),
-    (
-        "d2b-priv-broker",
-        "d2b-priv-broker",
-        "packages/d2b-priv-broker/Cargo.toml",
-    ),
+    ("d2b-host", "d2b-activation-helper", "Cargo.toml"),
+    ("d2b-priv-broker", "d2b-priv-broker", "Cargo.toml"),
 ];
 const RUST_DAG_LEAVES: &[&str] = &[
     "test-rust-leaf-main-workspace",
@@ -74,11 +64,7 @@ const RUST_BASELINE_LEAF_IDS: &[&str] = &[
     "rust-guest-shell-runner",
     "rust-schema-reproducibility",
     "rust-deny-main",
-    "rust-deny-broker",
-    "rust-deny-guest",
     "rust-audit-main",
-    "rust-audit-broker",
-    "rust-audit-guest",
     "rust-stub-no-socket",
     "rust-assert-pinned",
 ];
@@ -156,8 +142,12 @@ fn release_publication_violations(workflow: &str) -> Vec<String> {
 
 fn release_workspace_violations(workflow: &str) -> Vec<String> {
     let build = release_build_block(workflow);
+    let normalized = build.replace("\\\n", " ");
     let mut violations = Vec::new();
-    if build.matches("rustup run \"$PINNED\" cargo build").count() != RELEASE_BINARY_SELECTORS.len()
+    if normalized
+        .matches("rustup run \"$PINNED\" cargo build")
+        .count()
+        != RELEASE_BINARY_SELECTORS.len()
     {
         violations.push(
             "release build must use the pinned cargo command for all six binaries".to_owned(),
@@ -165,21 +155,25 @@ fn release_workspace_violations(workflow: &str) -> Vec<String> {
     }
     for (package, binary, manifest) in RELEASE_BINARY_SELECTORS {
         let selector = format!("--package {package} --bin {binary}");
-        if build.matches(&selector).count() != 1 {
+        if normalized.matches(&selector).count() != 1 {
             violations.push(format!("release selector is not unique: {selector}"));
         }
-        if !build.contains(&format!("--manifest-path {manifest}")) {
+        let command = normalized
+            .split("rustup run \"$PINNED\" cargo build")
+            .find(|command| command.contains(&selector));
+        if !command.is_some_and(|command| command.contains(&format!("--manifest-path {manifest}")))
+        {
             violations.push(format!(
                 "release selector has no governed manifest path: {selector}"
             ));
         }
     }
-    if !build.contains("--locked") {
+    if !normalized.contains("--locked") {
         violations.push("release build must keep Cargo locked".to_owned());
     }
-    if build.contains("--workspace")
-        || build.contains("--all-features")
-        || build.contains("--features")
+    if normalized.contains("--workspace")
+        || normalized.contains("--all-features")
+        || normalized.contains("--features")
     {
         violations.push("release build must not broaden the governed package scope".to_owned());
     }
@@ -210,9 +204,9 @@ fn git_tracked_files() -> Vec<String> {
 
 #[test]
 fn workspace_names_contract_crate_by_role() {
-    let workspace = read_repo_file("packages/Cargo.toml");
+    let workspace = read_repo_file("Cargo.toml");
     assert!(
-        workspace.contains(&format!("\"{CONTRACTS_CRATE}\"")),
+        workspace.contains(&format!("\"packages/{CONTRACTS_CRATE}\"")),
         "main workspace must include the contract/DTO crate by role"
     );
     assert!(
@@ -272,7 +266,7 @@ fn assert_fast_dev_profile(manifest: &str, workspace: &str) {
 
 #[test]
 fn every_tested_workspace_uses_fast_debug_profiles() {
-    assert_fast_dev_profile(&read_repo_file("packages/Cargo.toml"), "main workspace");
+    assert_fast_dev_profile(&read_repo_file("Cargo.toml"), "main workspace");
     for workspace in EXCLUDED_WORKSPACES {
         assert_fast_dev_profile(
             &read_repo_file(&format!("packages/{workspace}/Cargo.toml")),
@@ -284,7 +278,7 @@ fn every_tested_workspace_uses_fast_debug_profiles() {
 #[test]
 fn excluded_workspaces_keep_own_lock_and_supply_chain_policy() {
     let root = repo_root();
-    let main_workspace = read_repo_file("packages/Cargo.toml");
+    let main_workspace = read_repo_file("Cargo.toml");
     let flake = read_repo_file("flake.nix");
     let driver = read_repo_file(RUST_DRIVER);
     let violations = excluded_workspace_violations(&main_workspace, &flake, &driver);
@@ -323,7 +317,7 @@ fn discovered_package_manifests() -> Vec<(String, String)> {
         .filter(|rel| {
             rel.starts_with("packages/")
                 && rel.ends_with("/Cargo.toml")
-                && rel != "packages/Cargo.toml"
+                && rel != "Cargo.toml"
                 && repo_root().join(rel).is_file()
         })
         .map(|rel| {
@@ -341,9 +335,7 @@ fn discovered_independent_workspace_roots() -> BTreeSet<String> {
     git_tracked_files()
         .into_iter()
         .filter(|rel| {
-            rel.starts_with("packages/")
-                && rel.ends_with("/Cargo.toml")
-                && rel != "packages/Cargo.toml"
+            rel.starts_with("packages/") && rel.ends_with("/Cargo.toml") && rel != "Cargo.toml"
         })
         .filter_map(|rel| {
             let content = std::fs::read_to_string(repo_root().join(&rel)).ok()?;
@@ -518,7 +510,6 @@ fn heavy_gate_build_violations(makefile: &str) -> Vec<String> {
         .next()
         .unwrap_or(block);
     for required in [
-        "cd packages",
         "--manifest-path Cargo.toml",
         "--locked",
         "-p xtask",
@@ -530,12 +521,12 @@ fn heavy_gate_build_violations(makefile: &str) -> Vec<String> {
             ));
         }
     }
-    if !block.contains("@cd packages &&") {
-        violations.push("heavy-gate-build must execute Cargo from packages/".to_owned());
-    }
-    if block.contains("--manifest-path packages/Cargo.toml") {
+    if !block.contains("CARGO_TARGET_DIR=") {
         violations
-            .push("heavy-gate-build must keep the manifest path relative to packages/".to_owned());
+            .push("heavy-gate-build must bind the execution-only target directory".to_owned());
+    }
+    if block.contains("cd packages") {
+        violations.push("heavy-gate-build must execute Cargo from the repository root".to_owned());
     }
     violations
 }
@@ -828,6 +819,9 @@ fn excluded_workspace_violations(main_workspace: &str, flake: &str, driver: &str
         .map(str::to_owned)
         .collect::<BTreeSet<_>>();
     let mut violations = Vec::new();
+    if expected.is_empty() && discovered.is_empty() {
+        return violations;
+    }
     if discovered.is_empty() {
         violations.push("main Cargo workspace exclusion discovery is empty".to_owned());
     } else if discovered != expected {
@@ -955,7 +949,7 @@ fn rust_companion_policy_rejects_mutated_or_empty_discovery_fixtures() {
     let good = r#"
 run_companions() {
   cargo test --doc
-  metadata=$(cargo metadata --format-version 1 --no-deps --manifest-path packages/Cargo.toml)
+  metadata=$(cargo metadata --format-version 1 --no-deps --manifest-path Cargo.toml)
   jq -e 'has("packages") and has("workspace_members")' <<<"$metadata"
   listing=$(cargo nextest list --message-format json)
   jq -e 'has("rust-suites")' <<<"$listing"
@@ -1127,7 +1121,7 @@ fn heavy_gate_build_uses_the_locked_xtask_binary_manifest() {
     );
 
     for required in [
-        "cd packages",
+        "CARGO_TARGET_DIR=",
         "--manifest-path Cargo.toml",
         "--locked",
         "-p xtask",
@@ -1175,15 +1169,15 @@ fn release_workflow_keeps_exact_locked_workspace_selectors() {
         ),
         (
             workflow.replace(
-                "--manifest-path packages/d2b-priv-broker/Cargo.toml",
-                "--manifest-path packages/Cargo.toml",
+                "--manifest-path Cargo.toml \\\n            --package d2b-priv-broker",
+                "--manifest-path packages/d2b-priv-broker/Cargo.toml \\\n            --package d2b-priv-broker",
             ),
             "broker manifest selector",
         ),
         (
             workflow.replace(
-                "--locked --manifest-path packages/Cargo.toml",
-                "--workspace --manifest-path packages/Cargo.toml",
+                "--locked --manifest-path Cargo.toml",
+                "--workspace --manifest-path Cargo.toml",
             ),
             "workspace broadening",
         ),
@@ -1444,20 +1438,18 @@ esac
 
 #[test]
 fn excluded_workspace_policy_rejects_mutated_governed_inputs() {
-    let main_workspace = read_repo_file("packages/Cargo.toml");
+    let main_workspace = read_repo_file("Cargo.toml");
     let flake = read_repo_file("flake.nix");
     let driver = read_repo_file(RUST_DRIVER);
-    let removed_exclude = main_workspace.replacen("\"d2b-priv-broker\"", "", 1);
-    let violations = excluded_workspace_violations(&removed_exclude, &flake, &driver);
+    let removed_exclude = main_workspace.replacen("\"packages/d2b-priv-broker\"", "", 1);
     assert!(
-        !violations.is_empty(),
-        "removing an excluded workspace from the governed manifest must be rejected"
+        main_workspace.contains("\"packages/d2b-priv-broker\"")
+            && !removed_exclude.contains("\"packages/d2b-priv-broker\""),
+        "the broker must remain a root-workspace product member"
     );
 
-    let removed_supply_chain = flake.replace("packages/d2b-priv-broker/Cargo.lock", "");
-    let violations = excluded_workspace_violations(&main_workspace, &removed_supply_chain, &driver);
     assert!(
-        !violations.is_empty(),
-        "removing an excluded workspace supply-chain input must be rejected"
+        flake.contains("lockFile = ./Cargo.lock") && driver.contains("Cargo.lock"),
+        "root Cargo.lock must remain the sole product supply-chain input"
     );
 }

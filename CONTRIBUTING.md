@@ -41,26 +41,23 @@ coverage.
 
 ```bash
 # Examples; select the commands that cover the changed components.
-cargo --manifest-path packages/Cargo.toml test -p <changed-crate>
-cargo --manifest-path packages/Cargo.toml clippy -p <changed-crate> --all-targets -- -D warnings
+cargo --manifest-path Cargo.toml test -p <changed-crate>
+cargo --manifest-path Cargo.toml clippy -p <changed-crate> --all-targets -- -D warnings
 
 # Optional broader Layer-1 aggregate.
 make check
 ```
 
-The pinned toolchain in `packages/rust-toolchain.toml` is honored only
-when cargo is invoked with `--manifest-path packages/Cargo.toml` or from
-inside `packages/`. See
+The pinned toolchain in `rust-toolchain.toml` is honored by the repository-root
+workspace. See
 [ADR 0009](docs/adr/0009-rust-toolchain-msrv-and-supply-chain.md) for
 toolchain, MSRV, and supply-chain policy.
 
-All d2b worktrees on paydro's host share Cargo build artifacts via
-repo-local `.cargo/config.toml` files:
-
-- `packages/.cargo/config.toml` → `/home/paydro/.cache/d2b-cargo-target/workspace`
-- `packages/d2b-priv-broker/.cargo/config.toml` → `/home/paydro/.cache/d2b-cargo-target/broker`
-- `packages/d2b-guest-shell-runner/.cargo/config.toml` → the helper workspace target dir
-- `packages/d2b-core/fuzz/.cargo/config.toml` → `/home/paydro/.cache/d2b-cargo-target/fuzz`
+The repository-root `.cargo/config.toml` governs the product workspace. Cargo
+uses the conventional root `target/` directory by default; the broker's
+serial feature streams may set explicit execution-only sibling target
+directories, while independent fuzz and proof workspaces retain their own
+configuration.
 
 Cargo's internal locking makes concurrent worktree builds safe, but a
 very old checkout may pay one slower rebuild while incremental state is
@@ -70,11 +67,11 @@ The persistent-shell feasibility helper is a standalone excluded workspace. Run
 it explicitly when iterating on that crate:
 
 ```bash
-cargo --manifest-path packages/d2b-guest-shell-runner/Cargo.toml fmt --check
-cargo --manifest-path packages/d2b-guest-shell-runner/Cargo.toml clippy --workspace --all-targets --features real-libshpool -- -D warnings
-cargo --manifest-path packages/d2b-guest-shell-runner/Cargo.toml test --workspace --features real-libshpool
-cargo deny --manifest-path packages/d2b-guest-shell-runner/Cargo.toml check --config packages/d2b-guest-shell-runner/deny.toml
-cargo audit --file packages/d2b-guest-shell-runner/Cargo.lock --ignore RUSTSEC-2024-0384
+cargo --manifest-path Cargo.toml fmt --check
+cargo --manifest-path Cargo.toml clippy -p d2b-guest-shell-runner --all-targets --features real-libshpool -- -D warnings
+cargo --manifest-path Cargo.toml test -p d2b-guest-shell-runner --features real-libshpool
+cargo deny --manifest-path Cargo.toml check --config deny.toml
+cargo xtask gen-package-policy-inputs --check
 ```
 
 `bash tests/static.sh` remains available as a broader Layer-1 gate when the
@@ -113,12 +110,10 @@ before committing whenever you touch the corresponding Rust types,
 A typical regeneration loop is:
 
 ```bash
-cd packages
 cargo xtask gen-cli-schemas
 cargo xtask gen-error-codes
 cargo xtask gen-cli-shell-artifacts
 cargo xtask gen-daemon-api
-cd ..
 bash tests/cli-json-drift.sh
 bash tests/error-codes-drift.sh
 bash tests/manpage-completion-drift.sh

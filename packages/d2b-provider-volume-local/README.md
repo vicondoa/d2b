@@ -133,8 +133,8 @@ a bootstrap storage cycle.
 ## Build and test
 
 ```bash
-cd packages && cargo test -p d2b-provider-volume-local
-cd packages && cargo clippy -p d2b-provider-volume-local --all-targets
+cargo test -p d2b-provider-volume-local
+cargo clippy -p d2b-provider-volume-local --all-targets
 ```
 
 Host filesystem integration scenarios run through `make

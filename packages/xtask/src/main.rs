@@ -98,6 +98,7 @@ mod gen_resource_schemas;
 mod heavy_gate;
 mod inventory;
 mod process_marker_pin;
+mod production_closure;
 mod provider_crate_policy;
 mod provider_packaging;
 mod semantic_service_schemas;
@@ -404,6 +405,23 @@ fn main() -> std::process::ExitCode {
             diagnostic_redaction::run_cli(rest)
         }
         [command, rest @ ..] if command == "heavy-gate" => heavy_gate::run(rest),
+        [command, rest @ ..] if command == "gen-package-policy-inputs" => {
+            let result = repo_root()
+                .map_err(|error| error.to_string())
+                .and_then(|root| production_closure::run_cli(root, rest));
+            match result {
+                Ok(paths) => {
+                    for path in paths {
+                        println!("{}", path.display());
+                    }
+                    std::process::ExitCode::SUCCESS
+                }
+                Err(error) => {
+                    eprintln!("gen-package-policy-inputs failed: {error}");
+                    std::process::ExitCode::FAILURE
+                }
+            }
+        }
         [command] if command == "process-marker-pin" => run_process_marker_pin(),
         [command] if command == "check-provider-crate-layout" => run_provider_crate_layout(),
         [command] if command == "check-provider-layout" => run_provider_layout(),
@@ -412,7 +430,7 @@ fn main() -> std::process::ExitCode {
         }
         _ => {
             eprintln!(
-                "usage: cargo run --manifest-path packages/Cargo.toml -p xtask -- <gen-schemas|gen-zone-storage-schema|gen-cli-schemas|gen-zone-schemas|gen-zone-nix-options|gen-resource-schemas|gen-error-codes|gen-provider-packaging|gen-semantic-service-schemas|gen-cli-shell-artifacts|gen-guest-proto|gen-guest-ttrpc|gen-resource-proto|gen-resource-ttrpc|gen-daemon-api|release-notes <version>|adr0035-inventory [--output <path>]|changelog-fold [--check]|buildbuddy-probe [--evidence-file <path>]|process-marker-pin|check-provider-crate-layout|check-provider-layout|test-runtime-ledger <record|check|lint|help> [options]|redact-diagnostics --repo-root <path> [--home <path>] [--tail-lines <count>]|delivery wave <snapshot|validate-import|seal|merge-target|merge-eligibility|help> [options]|heavy-gate <-- <command> [args...] | verify-slot>>"
+                "usage: cargo run --manifest-path Cargo.toml -p xtask -- <gen-schemas|gen-zone-storage-schema|gen-cli-schemas|gen-zone-schemas|gen-zone-nix-options|gen-resource-schemas|gen-error-codes|gen-provider-packaging|gen-semantic-service-schemas|gen-cli-shell-artifacts|gen-guest-proto|gen-guest-ttrpc|gen-resource-proto|gen-resource-ttrpc|gen-daemon-api|gen-package-policy-inputs [--check|--write]|release-notes <version>|adr0035-inventory [--output <path>]|changelog-fold [--check]|buildbuddy-probe [--evidence-file <path>]|process-marker-pin|check-provider-crate-layout|check-provider-layout|test-runtime-ledger <record|check|lint|help> [options]|redact-diagnostics --repo-root <path> [--home <path>] [--tail-lines <count>]|delivery wave <snapshot|validate-import|seal|merge-target|merge-eligibility|help> [options]|heavy-gate <-- <command> [args...] | verify-slot>>"
             );
             std::process::ExitCode::FAILURE
         }
@@ -462,7 +480,7 @@ fn run_provider_layout() -> std::process::ExitCode {
 /// member. Generic helper crates such as `d2b-provider-toolkit` do not match
 /// the Provider crate naming shape and remain outside this check.
 fn check_provider_layout(repo_root: &Path) -> Result<(), String> {
-    let manifest = fs::read_to_string(repo_root.join("packages/Cargo.toml"))
+    let manifest = fs::read_to_string(repo_root.join("Cargo.toml"))
         .map_err(|_| "provider-layout-input-unreadable".to_owned())?;
     let members_start = manifest
         .find("members = [")
@@ -491,7 +509,11 @@ fn check_provider_layout(repo_root: &Path) -> Result<(), String> {
         if !provider_suffix.contains('-') {
             continue;
         }
-        let crate_dir = repo_root.join("packages").join(member_path);
+        let crate_dir = if member_path.starts_with("packages") {
+            repo_root.join(member_path)
+        } else {
+            repo_root.join("packages").join(member_path)
+        };
         let required = ["src", "tests", "integration", "README.md"];
         let missing = required
             .into_iter()
@@ -1719,7 +1741,7 @@ mod provider_layout_tests {
         fs::create_dir_all(crate_dir.join("tests")).unwrap();
         fs::create_dir_all(crate_dir.join("integration")).unwrap();
         fs::write(
-            root.join("packages/Cargo.toml"),
+            root.join("Cargo.toml"),
             "[workspace]\nmembers = [\n    \"d2b-provider-device-fixture\",\n]\n",
         )
         .unwrap();

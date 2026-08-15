@@ -1403,7 +1403,7 @@ pub(crate) mod tests {
         pub(crate) fn new(label: &str) -> Self {
             let ordinal = NEXT_SCRATCH.fetch_add(1, Ordering::Relaxed);
             let path = repo_root()
-                .join("packages/target/xtask-delivery-tests")
+                .join("target/xtask-delivery-tests")
                 .join(format!("{label}-{}-{ordinal}", std::process::id()));
             let _ = fs::remove_dir_all(&path);
             fs::create_dir_all(&path).expect("create scratch directory");
@@ -1472,7 +1472,7 @@ pub(crate) mod tests {
 
     #[test]
     fn a_state_root_inside_the_repository_is_refused() {
-        let inside = repo_root().join("packages/target/should-never-exist");
+        let inside = repo_root().join("target/should-never-exist");
         let error = StateRoot::prepare(&[repo_root()], Some(&inside))
             .expect_err("an in-repository state root must be refused");
         assert!(
@@ -1484,7 +1484,7 @@ pub(crate) mod tests {
 
     #[test]
     fn a_state_root_inside_a_git_working_tree_is_refused_without_declared_roots() {
-        let inside = repo_root().join("packages/target/should-never-exist-git");
+        let inside = repo_root().join("target/should-never-exist-git");
         let error = StateRoot::prepare(&[], Some(&inside))
             .expect_err("a state root inside a Git working tree must be refused");
         assert!(
@@ -2041,7 +2041,7 @@ pub(crate) mod tests {
     fn a_prepare_failure_diagnostic_carries_no_absolute_path() {
         // Root-resolution / prepare class: an in-repository state root is
         // refused, and the refusal must not echo the requested path.
-        let inside = repo_root().join("packages/target/prepare-leak-check/state");
+        let inside = repo_root().join("target/prepare-leak-check/state");
         let error = StateRoot::prepare(&[repo_root()], Some(&inside))
             .expect_err("an in-repository state root must be refused");
         assert!(error.message().contains("must not live inside"), "{error}");

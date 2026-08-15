@@ -249,7 +249,7 @@ fn cargo_metadata(repo_root: &Path) -> Result<CargoMetadata, String> {
             "1",
             "--manifest-path",
         ])
-        .arg(repo_root.join("packages/Cargo.toml"))
+        .arg(repo_root.join("Cargo.toml"))
         .output()
         .map_err(|_| "provider-crate-layout-metadata-unavailable".to_owned())?;
     if !output.status.success() {
@@ -513,8 +513,8 @@ mod tests {
             )
             .unwrap();
             fs::write(
-                root.join("packages/Cargo.toml"),
-                "[workspace]\nmembers = [\n    \"d2b-core\",\n    \"d2b-provider-fixture-example\",\n]\n",
+                root.join("Cargo.toml"),
+                "[workspace]\nmembers = [\n    \"packages/d2b-core\",\n    \"packages/d2b-provider-fixture-example\",\n]\n",
             )
             .unwrap();
             Self { root }
@@ -532,10 +532,10 @@ mod tests {
         fn set_members(&self, members: &[&str]) {
             let mut manifest = String::from("[workspace]\nmembers = [\n");
             for member in members {
-                manifest.push_str(&format!("    \"{member}\",\n"));
+                manifest.push_str(&format!("    \"packages/{member}\",\n"));
             }
             manifest.push_str("]\n");
-            fs::write(self.root.join("packages/Cargo.toml"), manifest).unwrap();
+            fs::write(self.root.join("Cargo.toml"), manifest).unwrap();
         }
     }
 
@@ -722,7 +722,7 @@ mod tests {
         let fixture = Fixture::new("redaction");
         let marker = format!("caller-secret-{}", std::process::id());
         fs::write(
-            fixture.root.join("packages/Cargo.toml"),
+            fixture.root.join("Cargo.toml"),
             format!("[workspace]\nmembers = [\n    \"../{marker}\",\n]\n"),
         )
         .unwrap();

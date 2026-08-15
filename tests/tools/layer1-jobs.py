@@ -361,7 +361,7 @@ def rust_job(job: dict[str, Any]) -> str:
       # pass them through untouched.
       #
       # sccache remains enabled for local development, where the same shim is
-      # reached through packages/.cargo/config.toml. Only CI opts out.
+      # reached through .cargo/config.toml. Only CI opts out.
       #
       # CARGO_INCREMENTAL=0 is still set: incremental compilation artifacts are
       # non-deterministic and bloat the cache without benefit for CI (each PR
@@ -401,7 +401,7 @@ def rust_job(job: dict[str, Any]) -> str:
         # Without this, the runner's pre-installed 1.96.0 is hashed,
         # and the cache is keyed on the wrong compiler version.
         run: |
-          PINNED=$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\\([^"]*\\)".*/\\1/p' packages/rust-toolchain.toml | head -1)
+          PINNED=$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\\([^"]*\\)".*/\\1/p' rust-toolchain.toml | head -1)
           rustup toolchain install "$PINNED" --profile minimal --component rustfmt --component clippy
           rustup default "$PINNED"
           echo "Rust toolchain: $(rustc --version)"
@@ -416,12 +416,10 @@ def rust_job(job: dict[str, Any]) -> str:
         uses: {RUST_CACHE}
         with:
           workspaces: |
-            packages -> target
-            packages/d2b-priv-broker -> target
-            packages/d2b-guest-shell-runner -> target
+            . -> target
           cache-directories: |
-            packages/d2b-priv-broker/target-layer1
-            packages/d2b-priv-broker/target-fakebackends
+            target/broker-layer1
+            target/broker-fakebackends
             tests/tools/no-bash-ast-walker/target
             .scratch/rust-test-cache
           prefix-key: "v3-rust"

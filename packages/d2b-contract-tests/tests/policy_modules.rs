@@ -431,7 +431,7 @@ fn provider_controller_crates() -> Vec<(String, String, String)> {
         .args([
             "metadata",
             "--manifest-path",
-            "packages/Cargo.toml",
+            "Cargo.toml",
             "--format-version",
             "1",
             "--no-deps",

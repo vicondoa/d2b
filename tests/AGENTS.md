@@ -201,7 +201,7 @@ dependency edges.
 Those dependency edges are warm-local-profile only. CI dispatches main, broker,
 guest, no-bash, schema, inventory and supply-chain Make targets as seven
 separate jobs, each with the full runner budget. When a local aggregate starts
-without `packages/target`, its cold profile restores shared workspace targets.
+without `target`, its cold profile restores shared workspace targets.
 It runs fixture, inventory and schema as a full-budget chain so discovery
 reuses all prior builds before schema generation.
 
@@ -384,7 +384,7 @@ gate.
 
 ### Standalone Rust workspaces
 
-Most Rust crates are members of `packages/Cargo.toml`, but some crates are
+Most Rust crates are members of `Cargo.toml`, but some crates are
 intentionally excluded because they require a distinct safety or dependency
 policy. The privileged broker lives at `packages/d2b-priv-broker/`; the
 persistent-shell feasibility helper lives at

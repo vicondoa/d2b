@@ -50,9 +50,9 @@ let
   # d2b-owned access helpers (see lib.nix).
   d2bLib = import ./lib.nix { inherit lib pkgs; };
   normalNixosVms = d2bLib.normalNixosVms cfg.vms;
-  packagesSrc = d2bLib.cleanRustPackagesSource ../packages;
+  packagesSrc = d2bLib.cleanRustPackagesSource ../.;
   cargoLock = {
-    lockFile = ../packages/Cargo.lock;
+    lockFile = ../Cargo.lock;
     outputHashes."wl-proxy-0.1.2" = "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";
   };
   prebuilt =

@@ -20,7 +20,7 @@ export ROOT D2B_LOG
 
 cd "$ROOT"
 
-toolchain_file="$ROOT/packages/rust-toolchain.toml"
+toolchain_file="$ROOT/rust-toolchain.toml"
 pinned_channel=$(
   sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]\+\)".*/\1/p' "$toolchain_file" | head -1
 )

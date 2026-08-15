@@ -19,4 +19,5 @@ d2b-host = { path = "../d2b-host", version = "0.0.0-bootstrap" }
 regex = "1"
 rnix = "0.14"
 serde_yaml_ng = "0.10"
+sha2.workspace = true
 syn = { version = "2", features = ["full", "visit"] }

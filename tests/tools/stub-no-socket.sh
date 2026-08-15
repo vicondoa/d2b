@@ -11,7 +11,7 @@ ROOT=${ROOT:-$(cd "$HERE/../.." && pwd)}
 
 d2b_activate_rust_toolchain_path || true
 
-manifest="$ROOT/packages/Cargo.toml"
+manifest="$ROOT/Cargo.toml"
 workspace_target_dir=$(d2b_cargo_target_dir workspace)
 if [ ! -f "$manifest" ]; then
   fail "missing Rust workspace manifest: $manifest"
@@ -30,7 +30,7 @@ if [ -z "${D2B_STUB_NO_SOCKET_IN_NIX_SHELL:-}" ] && ! command -v cargo >/dev/nul
 fi
 
 log "--> cargo build --bin d2b --bin d2bd (stub smoke binaries)"
-(cd "$ROOT/packages" && \
+(cd "$ROOT" && \
   CARGO_TARGET_DIR="$workspace_target_dir" \
   cargo build --manifest-path "$manifest" --quiet --bin d2b --bin d2bd)
 
@@ -162,9 +162,7 @@ run_stub() {
   tmp_before=$(snapshot_tree "$TMPDIR")
 
   set +e
-  output=$(
-    cd "$ROOT/packages" && "$workspace_target_dir/debug/$bin" 2>&1
-  )
+  output=$(cd "$ROOT" && "$workspace_target_dir/debug/$bin" 2>&1)
   rc=$?
   set -e
 

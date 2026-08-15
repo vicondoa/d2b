@@ -31,12 +31,12 @@ NIX_UNIT_DRIVER = ROOT / "tests" / "test-nix-unit.sh"
 EXECUTION_MANIFEST_HELPER = ROOT / "tests" / "tools" / "execution-manifest.pl"
 RELEASE_WORKFLOW = ROOT / ".github" / "workflows" / "release-host-binaries.yml"
 RELEASE_BINARY_SELECTORS = (
-    ("d2bd", "d2bd", "packages/Cargo.toml"),
-    ("d2b", "d2b", "packages/Cargo.toml"),
-    ("d2b-wayland-proxy", "d2b-wayland-proxy", "packages/Cargo.toml"),
-    ("d2b-unsafe-local-helper", "d2b-unsafe-local-helper", "packages/Cargo.toml"),
-    ("d2b-host", "d2b-activation-helper", "packages/Cargo.toml"),
-    ("d2b-priv-broker", "d2b-priv-broker", "packages/d2b-priv-broker/Cargo.toml"),
+    ("d2bd", "d2bd", "Cargo.toml"),
+    ("d2b", "d2b", "Cargo.toml"),
+    ("d2b-wayland-proxy", "d2b-wayland-proxy", "Cargo.toml"),
+    ("d2b-unsafe-local-helper", "d2b-unsafe-local-helper", "Cargo.toml"),
+    ("d2b-host", "d2b-activation-helper", "Cargo.toml"),
+    ("d2b-priv-broker", "d2b-priv-broker", "Cargo.toml"),
 )
 RELEASE_ASSET_NAMES = (
     "d2b-{version}-x86_64-linux.tar.gz",
@@ -677,7 +677,7 @@ def release_workflow_contract_violations(workflow: str) -> list[str]:
                 "identity validation, pinned toolchain, active assertion, cache, and build are out of order"
             )
         for required in [
-            "packages/rust-toolchain.toml",
+            "rust-toolchain.toml",
             "rustup toolchain install",
             'rustup default "$PINNED"',
         ]:
@@ -1123,21 +1123,27 @@ set -euo pipefail
 set -euo pipefail
 ROOT=$1
 D2B_CARGO_LOG=$2
-manifest="$ROOT/packages/Cargo.toml"
-broker_manifest="$ROOT/packages/d2b-priv-broker/Cargo.toml"
-guest_shell_runner_manifest="$ROOT/packages/d2b-guest-shell-runner/Cargo.toml"
+manifest="$ROOT/Cargo.toml"
+broker_manifest="$ROOT/Cargo.toml"
+guest_shell_runner_manifest="$ROOT/Cargo.toml"
 no_bash_manifest="$ROOT/tests/tools/no-bash-ast-walker/Cargo.toml"
-workspace_target_dir="$ROOT/packages/target"
-guest_shell_runner_target_dir="$ROOT/packages/d2b-guest-shell-runner/target"
+workspace_target_dir="$ROOT/target"
+guest_shell_runner_target_dir="$ROOT/target"
 D2B_RUST_CARGO_JOBS=1
 suite_started=$SECONDS
 fail() { printf 'FAIL: %s\\n' "$*" >&2; }
 log() { :; }
 ok() { :; }
+d2b_mktemp() {
+  local pattern="${1:?missing pattern}"
+  local scratch
+  scratch=$(mktemp -d -p "$ROOT" "$pattern")
+  printf '%s\\n' "$scratch"
+}
 cargo() {
   if [ "${1:-}" = metadata ]; then
-    printf '{"workspace_root":"%s/packages","workspace_members":["path+file://%s/packages/d2b-core#0.0.0"],"packages":[{"id":"path+file://%s/packages/d2b-core#0.0.0","name":"d2b-core","manifest_path":"%s/packages/d2b-core/Cargo.toml"}]}\n' \
-      "$ROOT" "$ROOT" "$ROOT" "$ROOT"
+    printf '{"workspace_root":"%s","workspace_members":["path+file://%s/packages/d2b-core#0.0.0","path+file://%s/packages/d2b-priv-broker#0.0.0","path+file://%s/packages/d2b-guest-shell-runner#0.0.0"],"packages":[{"id":"path+file://%s/packages/d2b-core#0.0.0","name":"d2b-core","manifest_path":"%s/packages/d2b-core/Cargo.toml"},{"id":"path+file://%s/packages/d2b-priv-broker#0.0.0","name":"d2b-priv-broker","manifest_path":"%s/packages/d2b-priv-broker/Cargo.toml"},{"id":"path+file://%s/packages/d2b-guest-shell-runner#0.0.0","name":"d2b-guest-shell-runner","manifest_path":"%s/packages/d2b-guest-shell-runner/Cargo.toml"}]}\n' \
+      "$ROOT" "$ROOT" "$ROOT" "$ROOT" "$ROOT" "$ROOT" "$ROOT" "$ROOT" "$ROOT" "$ROOT"
     return 0
   fi
   {
@@ -1161,14 +1167,14 @@ cargo() {
         ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
             tree = self.scratch / f"fast-lint-{name}"
             fixture_files = {
-                "packages/Cargo.toml": (
+                "Cargo.toml": (
                     '[workspace]\nmembers = ["d2b-core"]\nresolver = "2"\n'
                 ),
-                "packages/Cargo.lock": "# fixture lock\n",
-                "packages/rust-toolchain.toml": (
+                "Cargo.lock": "# fixture lock\n",
+                "rust-toolchain.toml": (
                     '[toolchain]\nchannel = "1.97.0"\n'
                 ),
-                "packages/.cargo/config.toml": "[build]\n",
+                ".cargo/config.toml": "[build]\n",
                 "packages/d2b-core/Cargo.toml": (
                     '[package]\nname = "d2b-core"\nversion = "0.0.0"\n'
                 ),
@@ -1280,7 +1286,7 @@ cargo() {
             "packages/d2b-priv-broker/src/lib.rs",
         )
         _, main = run_scenario("main", "packages/d2b-core/src/lib.rs")
-        _, workspace = run_scenario("workspace", "packages/Cargo.toml")
+        _, workspace = run_scenario("workspace", "Cargo.toml")
         _, independent = run_scenario(
             "independent",
             "packages/d2b-core/fuzz/src/lib.rs",
@@ -1313,7 +1319,11 @@ cargo() {
         self.assertFalse(
             any(command.startswith("clippy ") for command in unrelated)
         )
-        self.assertFalse(any(command.startswith("clippy ") for command in broker))
+        broker_clippy = [
+            command for command in broker if command.startswith("clippy ")
+        ]
+        self.assertEqual(len(broker_clippy), 1)
+        self.assertIn("-p d2b-priv-broker", broker_clippy[0])
 
         main_clippy = [
             command for command in main if command.startswith("clippy ")
@@ -1325,10 +1335,17 @@ cargo() {
             command
             for command in workspace
             if command.startswith("clippy ")
-            and "packages/Cargo.toml" in command
+            and "--workspace" in command
         ]
         self.assertEqual(len(workspace_clippy), 1)
         self.assertIn("--workspace", workspace_clippy[0])
+        workspace_guest_clippy = [
+            command
+            for command in workspace
+            if command.startswith("clippy ")
+            and "--features real-libshpool" in command
+        ]
+        self.assertEqual(len(workspace_guest_clippy), 1)
         self.assertFalse(
             any(command.startswith("clippy ") for command in independent)
         )
@@ -1351,7 +1368,7 @@ cargo() {
         ]
         self.assertEqual(len(guest_clippy), 1)
         self.assertIn(
-            "packages/d2b-guest-shell-runner/Cargo.toml",
+            "Cargo.toml",
             guest_clippy[0],
         )
         self.assertIn("--features real-libshpool", guest_clippy[0])
@@ -2568,7 +2585,7 @@ wait
             ),
             (
                 workflow.replace(
-                    "--manifest-path packages/Cargo.toml",
+                    "--manifest-path Cargo.toml",
                     "--manifest-path packages/other/Cargo.toml",
                     1,
                 ),
@@ -3207,7 +3224,7 @@ wait
         makefile = MAKEFILE.read_text(encoding="utf-8")
         driver = RUST_DRIVER.read_text(encoding="utf-8")
         self.assertIn(
-            'if [ "$$profile" = aggregate ] && [ ! -d packages/target ]',
+            'if [ "$$profile" = aggregate ] && [ ! -d target ]',
             makefile,
         )
         cold_block = makefile.split("  cold) \\", 1)[1].split("  main) \\", 1)[0]

@@ -461,12 +461,12 @@ fn check_crate(crate_name: &str, dir: &Path) -> Vec<Violation> {
 // Workspace discovery
 // ---------------------------------------------------------------------------
 
-/// The `[workspace] members` list from `packages/Cargo.toml`.
+/// The `[workspace] members` list from `Cargo.toml`.
 fn workspace_members() -> Vec<String> {
-    let manifest = read_repo_file("packages/Cargo.toml");
+    let manifest = read_repo_file("Cargo.toml");
     let start = manifest
         .find("members = [")
-        .expect("packages/Cargo.toml declares [workspace] members");
+        .expect("Cargo.toml declares [workspace] members");
     let rest = &manifest[start..];
     let end = rest.find(']').expect("the members list terminates");
     rest[..end]
@@ -477,7 +477,7 @@ fn workspace_members() -> Vec<String> {
             trimmed
                 .strip_prefix('"')
                 .and_then(|value| value.strip_suffix('"'))
-                .map(str::to_owned)
+                .map(|value| value.rsplit('/').next().unwrap_or(value).to_owned())
         })
         .collect()
 }

@@ -51,9 +51,9 @@ let
   # egg during the very first activation). Each activation
   # snippet references `${activationHelper}` to get the absolute
   # store-path of the binary.
-  packagesSrc = d2bLib.cleanRustPackagesSource ../packages;
+  packagesSrc = d2bLib.cleanRustPackagesSource ../.;
   cargoLock = {
-    lockFile = ../packages/Cargo.lock;
+    lockFile = ../Cargo.lock;
     outputHashes."wl-proxy-0.1.2" = "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";
   };
   activationHelperSourcePackage = pkgs.rustPlatform.buildRustPackage {

@@ -7,9 +7,9 @@ let
 
   # filter out `target/` dev caches from the source
   # so the Nix copy stays small (workspace target alone is ~17 GB).
-  packagesSrc = d2bLib.cleanRustPackagesSource ../packages;
+  packagesSrc = d2bLib.cleanRustPackagesSource ../.;
   cargoLock = {
-    lockFile = ../packages/Cargo.lock;
+    lockFile = ../Cargo.lock;
     outputHashes."wl-proxy-0.1.2" = "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";
   };
 

@@ -64,6 +64,6 @@ decision renders as a decision rather than as a name.
 ## Build and test
 
 ```bash
-cd packages && cargo test -p d2b-provider
-cd packages && cargo clippy -p d2b-provider --all-targets
+cargo test -p d2b-provider
+cargo clippy -p d2b-provider --all-targets
 ```

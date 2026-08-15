@@ -26,13 +26,13 @@
 # Trust model. This helper derives the canonical checkout - and therefore the
 # xtask it builds and runs - from its OWN on-disk location (BASH_SOURCE), never
 # from the caller-supplied ROOT or from CARGO_TARGET_DIR. The build target is
-# likewise pinned to this checkout's packages/target: the caller's
+# likewise pinned to this checkout's target: the caller's
 # CARGO_TARGET_DIR is deliberately ignored, so an absolute or relative value
 # pointing at a planted xtask cannot make verify-slot succeed without a slot.
 # The build also runs with the caller's build-affecting Cargo/Rust environment
 # stripped, so a hostile rustc, rustc-wrapper, cargo config override, or
 # RUSTFLAGS cannot substitute the binary; only the in-checkout, trusted
-# packages/.cargo/config.toml governs the real toolchain wrapper. The wrapper
+# .cargo/config.toml governs the real toolchain wrapper. The wrapper
 # is pinned empty on the command line rather than through the environment: the
 # scrub above deliberately unsets CARGO_BUILD_RUSTC_WRAPPER, which would
 # otherwise restore the config file's sccache wrapper, absent on CI runners.
@@ -61,7 +61,7 @@ d2b_heavy_gate_reexec() {
   # Canonical checkout root: derived from THIS trusted helper's own location
   # (<root>/tests/tools/heavy-gate-reexec.sh), so it cannot be redirected by a
   # caller-controlled variable.
-  local helper_dir root packages
+  local helper_dir root cargo_root
   helper_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P) || {
     echo "heavy-gate self-guard: cannot resolve the helper directory; failing closed" >&2
     return 70
@@ -70,7 +70,7 @@ d2b_heavy_gate_reexec() {
     echo "heavy-gate self-guard: cannot resolve the checkout root; failing closed" >&2
     return 70
   }
-  packages="$root/packages"
+  cargo_root="$root"
 
   # Fail-closed re-exec depth limit. A healthy acquisition needs exactly one
   # re-exec: unheld -> acquire a slot -> re-run the entrypoint -> now held.
@@ -86,10 +86,11 @@ d2b_heavy_gate_reexec() {
   # would let a hostile environment point the target at a planted xtask whose
   # verify-slot returns success. The wrapper is always built into, and executed
   # from, the target directory that belongs to THIS checkout.
-  local target="$packages/target"
+  local target="$root/target"
   local xtask="$target/debug/xtask"
 
-  # Ensure freshness: ALWAYS rebuild from the canonical packages dir. Rebuilding
+  # Ensure freshness: ALWAYS rebuild from the canonical repository root.
+  # Rebuilding
   # only when the binary is absent would run a stale pre-verify-slot xtask as-is;
   # it lacks the subcommand, fails, and the script re-execs through that same
   # stale gate whose child repeats - the unbounded loop this guard must avoid.
@@ -111,7 +112,7 @@ d2b_heavy_gate_reexec() {
   }
   build_err="$build_diag_dir/cargo.stderr"
   (
-    cd -- "$packages" 2>/dev/null \
+    cd -- "$cargo_root" 2>/dev/null \
       && builtin unset CARGO_TARGET_DIR CARGO_BUILD_TARGET_DIR \
                RUSTC RUSTC_WRAPPER RUSTC_WORKSPACE_WRAPPER \
                CARGO_BUILD_RUSTC CARGO_BUILD_RUSTC_WRAPPER \

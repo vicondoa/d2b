@@ -60,7 +60,7 @@ process step produced it.
 The integrator runs the assembler from the repository root:
 
 ```bash
-cd packages && cargo run -q -p xtask -- changelog-fold      # or: make changelog-fold
+cargo run -q -p xtask -- changelog-fold      # or: make changelog-fold
 ```
 
 It merges every fragment into the `## [Unreleased]` block by section - all

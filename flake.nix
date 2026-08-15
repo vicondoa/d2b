@@ -360,7 +360,7 @@
       # re-entry and rustup bootstrap. Enter this shell and those paths are
       # skipped entirely, because the tools they look for are already present.
       #
-      # rustup rather than pkgs.rustc: packages/rust-toolchain.toml pins a
+      # rustup rather than pkgs.rustc: rust-toolchain.toml pins a
       # version nixpkgs does not carry (the pin is 1.97.0; this nixpkgs has
       # 1.95.0), and rustup reads that file itself. Once the nixpkgs input
       # advances far enough to supply the pinned release, rustup can be dropped
@@ -373,7 +373,7 @@
         default = pkgs.mkShell {
           name = "d2b-dev";
           packages = with pkgs; [
-            # Toolchain. rustup resolves packages/rust-toolchain.toml.
+            # Toolchain. rustup resolves rust-toolchain.toml.
             rustup
             stdenv.cc
             # Compiler cache. The cargo configs route rustc through
@@ -392,7 +392,7 @@
           ];
           shellHook = ''
             export SCCACHE_DIR="''${SCCACHE_DIR:-$HOME/.cache/d2b-sccache}"
-            echo "d2b dev shell: rust $(sed -n 's/.*channel = "\(.*\)".*/\1/p' packages/rust-toolchain.toml) via rustup, sccache at $SCCACHE_DIR"
+            echo "d2b dev shell: rust $(sed -n 's/.*channel = "\(.*\)".*/\1/p' rust-toolchain.toml) via rustup, sccache at $SCCACHE_DIR"
           '';
         };
         # Focused shell for the evaluation-only Nix-unit runner. Keeping this
@@ -447,15 +447,18 @@
         gasCityContributor = gasCityContributorFor system;
         rustPackagesSrc = pkgs.runCommand "d2b-rust-src" { } ''
           mkdir -p $out/packages
+          cp ${./Cargo.toml} $out/Cargo.toml
+          cp ${./Cargo.lock} $out/Cargo.lock
+          cp ${./deny.toml} $out/deny.toml
           cp -r ${./packages}/. $out/packages/
         '';
         rustWorkspace = args: pkgs.rustPlatform.buildRustPackage ({
           pname = "d2b-rust-workspace";
           version = "0.0.0-bootstrap";
           src = rustPackagesSrc;
-          sourceRoot = "d2b-rust-src/packages";
+          sourceRoot = "d2b-rust-src";
           cargoLock = {
-            lockFile = ./packages/Cargo.lock;
+            lockFile = ./Cargo.lock;
             outputHashes."wl-proxy-0.1.2" = "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";
           };
           RUSTC_WRAPPER = "";
@@ -505,11 +508,16 @@
           pkgs.pkgsStatic.rustPlatform.buildRustPackage {
             pname = "d2b-guest-shell-runner-static";
             version = "0.0.0-bootstrap";
-            src = ./packages/d2b-guest-shell-runner;
+            src = rustPackagesSrc;
             cargoLock = {
-              lockFile = ./packages/d2b-guest-shell-runner/Cargo.lock;
+              lockFile = ./Cargo.lock;
+              outputHashes."wl-proxy-0.1.2" = "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";
             };
-            cargoBuildFlags = [ "--features" "real-libshpool" ];
+            sourceRoot = "d2b-rust-src";
+            cargoBuildFlags = [
+              "--package" "d2b-guest-shell-runner"
+              "--features" "real-libshpool"
+            ];
             doCheck = false;
             RUSTC_WRAPPER = "";
             SCCACHE_DIR = "";
@@ -1147,6 +1155,9 @@
         # paths still resolve against the checkout.
         rustPackagesSrc = pkgs.runCommand "d2b-rust-src" { } ''
           mkdir -p $out/packages
+          cp ${./Cargo.toml} $out/Cargo.toml
+          cp ${./Cargo.lock} $out/Cargo.lock
+          cp ${./deny.toml} $out/deny.toml
           cp -r ${./packages}/. $out/packages/
           mkdir -p $out/tests
           cp -r ${./tests/golden} $out/tests/golden
@@ -1157,9 +1168,9 @@
           pname = "d2b-rust-workspace";
           version = "0.0.0-bootstrap";
           src = rustPackagesSrc;
-          sourceRoot = "d2b-rust-src/packages";
+          sourceRoot = "d2b-rust-src";
           cargoLock = {
-            lockFile = ./packages/Cargo.lock;
+            lockFile = ./Cargo.lock;
             outputHashes."wl-proxy-0.1.2" = "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";
           };
           # Repo-local .cargo/config.toml files set
@@ -1173,23 +1184,18 @@
           SCCACHE_DIR = "";
         } // args);
         rustToolchainChannel =
-          (builtins.fromTOML (builtins.readFile ./packages/rust-toolchain.toml)).toolchain.channel;
+          (builtins.fromTOML (builtins.readFile ./rust-toolchain.toml)).toolchain.channel;
         brokerManifestToml = builtins.fromTOML (builtins.readFile ./packages/d2b-priv-broker/Cargo.toml);
-        mainManifestToml = builtins.fromTOML (builtins.readFile ./packages/Cargo.toml);
+        mainManifestToml = builtins.fromTOML (builtins.readFile ./Cargo.toml);
         assertRustToolchain = ''
           rustc --version | grep -F "${rustToolchainChannel}"
         '';
         assertRustSupplyChainInputs = ''
-          test -f ${rustPackagesSrc}/packages/Cargo.lock
+          test -f ${rustPackagesSrc}/Cargo.lock
           test -f ${rustPackagesSrc}/packages/Cargo.guest.lock
-          test -f ${rustPackagesSrc}/packages/deny.toml
-          test -f ${rustPackagesSrc}/packages/d2b-priv-broker/Cargo.lock
-          test -f ${rustPackagesSrc}/packages/d2b-priv-broker/deny.toml
-          test -f ${rustPackagesSrc}/packages/d2b-guest-shell-runner/Cargo.lock
-          test -f ${rustPackagesSrc}/packages/d2b-guest-shell-runner/deny.toml
+          test -f ${rustPackagesSrc}/deny.toml
           printf '%s\n' '${builtins.toJSON mainManifestToml.workspace.members}' >/dev/null
           printf '%s\n' '${brokerManifestToml.package.name}' >/dev/null
-          printf '%s\n' '${builtins.toJSON brokerManifestToml.workspace}' >/dev/null
         '';
 
         # Pinned RustSec advisory DB snapshot for offline cargo-deny /
@@ -1533,9 +1539,9 @@
           printf '%s\n' '${evidence}' > "$out/guest-control-vsock.json"
         '';
 
-        # Real cargo-deny gate: bans, licenses, and sources for both
-        # the main workspace and the broker workspace.  Advisory
-        # checks are handled by rust-audit below (cargo-deny requires
+        # Real cargo-deny gate: bans, licenses, and sources for the
+        # repository-root product workspace. Advisory checks are handled by
+        # rust-audit below (cargo-deny requires
         # a fetchable URL for the advisory DB which is incompatible
         # with the Nix sandbox's no-network constraint).
         #
@@ -1544,14 +1550,8 @@
         # the repo-local .cargo/config.toml enables.
         rust-deny = let
           mainVendor = pkgs.rustPlatform.importCargoLock {
-            lockFile = ./packages/Cargo.lock;
+            lockFile = ./Cargo.lock;
             outputHashes."wl-proxy-0.1.2" = "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";
-          };
-          brokerVendor = pkgs.rustPlatform.importCargoLock {
-            lockFile = ./packages/d2b-priv-broker/Cargo.lock;
-          };
-          guestShellRunnerVendor = pkgs.rustPlatform.importCargoLock {
-            lockFile = ./packages/d2b-guest-shell-runner/Cargo.lock;
           };
           cargoConfig = vendorDir: ''
             [source.crates-io]
@@ -1571,7 +1571,7 @@
           run_deny() {
             local label=$1 src=$2 manifest=$3 vendor_cfg=$4 deny_cfg=$5
             local ws="$TMPDIR/$label"
-            cp -r "$src/packages" "$ws"
+            cp -r "$src/." "$ws"
             chmod -R u+w "$ws"
             # Override all .cargo/config.toml files to disable sccache
             # and enable vendored dependencies.
@@ -1589,19 +1589,7 @@
             "${rustPackagesSrc}" \
             "Cargo.toml" \
             '${cargoConfig mainVendor}' \
-            "${rustPackagesSrc}/packages/deny.toml"
-
-          run_deny "broker" \
-            "${rustPackagesSrc}" \
-            "d2b-priv-broker/Cargo.toml" \
-            '${cargoConfig brokerVendor}' \
-            "${rustPackagesSrc}/packages/d2b-priv-broker/deny.toml"
-
-          run_deny "guest-shell-runner" \
-            "${rustPackagesSrc}" \
-            "d2b-guest-shell-runner/Cargo.toml" \
-            '${cargoConfig guestShellRunnerVendor}' \
-            "${rustPackagesSrc}/packages/d2b-guest-shell-runner/deny.toml"
+            "${rustPackagesSrc}/deny.toml"
 
           echo ok > $out
         '';
@@ -1626,37 +1614,48 @@
           mkdir -p "$ws/.cargo"
           printf '%s\n' '${cargoConfig}' > "$ws/.cargo/config.toml"
           cargo-deny --manifest-path "$ws/Cargo.toml" \
-            check --config "${rustPackagesSrc}/packages/deny.toml" bans licenses sources
+            check             --config "${rustPackagesSrc}/deny.toml" bans licenses sources
           echo ok > "$out"
         '';
 
-        # Real cargo-audit gate: vulnerability scan of every committed lockfile
-        # against the pinned advisory DB snapshot.  Runs offline via
-        # --no-fetch with the bundled git-repo copy of the RustSec DB.
+        # Real cargo-audit gate: vulnerability scan of each checked-in
+        # context policy lock against the pinned advisory DB snapshot. The
+        # filtered locks are audit-only projections; Cargo resolution still
+        # uses the repository-root lock. Advisory ignores, when approved,
+        # are read only from the matching protected context.
         rust-audit = pkgs.runCommand "d2b-rust-audit" {
-          nativeBuildInputs = [ pkgs.cargo-audit ];
+          nativeBuildInputs = [ pkgs.cargo-audit pkgs.jq ];
         } ''
           export HOME="$TMPDIR"
+          policy_root=${rustPackagesSrc}/packages/policy-inputs
+          advisory_policy=$policy_root/advisory-policy.json
           run_audit() {
-            local lock=$1
-            shift
-            echo "==> cargo audit ($(basename "$(dirname "$lock")"))"
+            local lock=$1 context_key=$2 advisory_id
+            shift 2
+            local -a ignores=()
+            if [ -n "$context_key" ]; then
+              while IFS= read -r advisory_id; do
+                [ -n "$advisory_id" ] && ignores+=(--ignore "$advisory_id")
+              done < <(
+                jq -r \
+                  --arg context_key "$context_key" \
+                  '.contexts[$context_key].advisories[]?.id' \
+                  "$advisory_policy"
+              )
+            fi
+            echo "==> cargo audit ($context_key)"
             cargo-audit audit --file "$lock" \
-              --db ${advisoryDbGit} --no-fetch "$@"
+              --db ${advisoryDbGit} --no-fetch \
+              "''${ignores[@]}" "$@"
           }
-          # Build-time wayland-scanner pulls quick-xml 0.39.4; runtime users
-          # were updated away from vulnerable 0.37.x. Remove once
-          # wayland-scanner publishes a release on quick-xml >= 0.41.
-          run_audit ${rustPackagesSrc}/packages/Cargo.lock \
-            --ignore RUSTSEC-2026-0194 \
-            --ignore RUSTSEC-2026-0195
-          run_audit ${rustPackagesSrc}/packages/Cargo.guest.lock
-          run_audit ${rustPackagesSrc}/packages/d2b-priv-broker/Cargo.lock
-          # libshpool 0.11.0 pulls notify 7 -> notify-types -> instant 0.1.13.
-          # Track that feasibility-spike warning explicitly while the helper
-          # evaluates the pinned shpool dependency.
-          run_audit ${rustPackagesSrc}/packages/d2b-guest-shell-runner/Cargo.lock \
-            --ignore RUSTSEC-2024-0384
+          while IFS= read -r lock; do
+            relative="''${lock#"$policy_root"/}"
+            IFS=/ read -r system target context _projection _lock <<< "$relative"
+            run_audit "$lock" "$system/$target/$context"
+          done < <(
+            find "$policy_root" -type f -path '*/policy/Cargo.lock' | LC_ALL=C sort
+          )
+          run_audit ${rustPackagesSrc}/packages/Cargo.guest.lock ""
           echo ok > $out
         '';
 
@@ -1672,7 +1671,7 @@
 
         guest-shell-runner-static-dependency-policy =
           pkgs.runCommand "d2b-guest-shell-runner-static-dependency-policy" { } ''
-            lock=${./packages/d2b-guest-shell-runner/Cargo.lock}
+            lock=${./Cargo.lock}
             if grep -E 'name = "(openssl|openssl-sys|native-tls|libsystemd|systemd|pam-sys|dlopen2)"' "$lock"; then
               echo "guest shell runner lock contains a forbidden dynamic/PAM/systemd dependency" >&2
               exit 1

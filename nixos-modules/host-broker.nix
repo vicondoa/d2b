@@ -24,7 +24,7 @@ let
 
   # filter out `target/` dev caches from the source
   # so the Nix copy stays small (broker target alone is ~6 GB).
-  packagesSrc = d2bLib.cleanRustPackagesSource ../packages;
+  packagesSrc = d2bLib.cleanRustPackagesSource ../.;
   inherit (d2bLib) stablePrincipalId;
 
   brokerSourcePackage = pkgs.rustPlatform.buildRustPackage {
@@ -33,11 +33,11 @@ let
       (builtins.fromTOML (builtins.readFile ../packages/d2b-priv-broker/Cargo.toml))
         .package.version;
     src = packagesSrc;
-    sourceRoot = "source/d2b-priv-broker";
+    sourceRoot = "source";
     cargoLock = {
-      lockFile = ../packages/d2b-priv-broker/Cargo.lock;
+      lockFile = ../Cargo.lock;
     };
-    cargoBuildFlags = [ "--no-default-features" ];
+    cargoBuildFlags = [ "--package" "d2b-priv-broker" "--no-default-features" ];
     doCheck = false;
     postPatch = ''
       mkdir -p .cargo

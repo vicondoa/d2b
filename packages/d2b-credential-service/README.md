@@ -58,8 +58,8 @@ and plaintext records are redacted from `Debug` and error surfaces.
 ## Build and test
 
 ```bash
-cd packages && cargo check -p d2b-contracts -p d2b-credential-service
-cd packages && cargo test -p d2b-contracts -p d2b-credential-service
+cargo check -p d2b-contracts -p d2b-credential-service
+cargo test -p d2b-contracts -p d2b-credential-service
 ```
 
 Cross-process bus routing and delivery-session cryptography require the later

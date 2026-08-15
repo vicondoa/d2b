@@ -42,7 +42,7 @@ d2b_cli_native_bin() {
   bin=$(d2b_cargo_bin_path workspace d2b) || return 1
   if [ ! -x "$bin" ]; then
     workspace_target_dir=$(d2b_cargo_target_dir workspace) || return 1
-    d2b_cli_toolchain_shell "cd '$ROOT/packages' && CARGO_TARGET_DIR='$workspace_target_dir' cargo build -q --manifest-path '$ROOT/packages/Cargo.toml' -p d2b"
+    d2b_cli_toolchain_shell "cd '$ROOT' && CARGO_TARGET_DIR='$workspace_target_dir' cargo build -q --manifest-path '$ROOT/Cargo.toml' -p d2b"
   fi
   printf '%s\n' "$bin"
 }
@@ -52,13 +52,13 @@ d2b_daemon_native_bin() {
   bin=$(d2b_cargo_bin_path workspace d2bd) || return 1
   if [ ! -x "$bin" ]; then
     workspace_target_dir=$(d2b_cargo_target_dir workspace) || return 1
-    d2b_cli_toolchain_shell "cd '$ROOT/packages' && CARGO_TARGET_DIR='$workspace_target_dir' cargo build -q --manifest-path '$ROOT/packages/Cargo.toml' -p d2bd"
+    d2b_cli_toolchain_shell "cd '$ROOT' && CARGO_TARGET_DIR='$workspace_target_dir' cargo build -q --manifest-path '$ROOT/Cargo.toml' -p d2bd"
   fi
   printf '%s\n' "$bin"
 }
 
 _d2b_cli_reap_repo_sockets() {
-  local target_dir="$ROOT/packages/d2bd/target"
+  local target_dir="$ROOT/target"
   [ -d "$target_dir" ] || return 0
   find "$target_dir" -maxdepth 1 -type s -name '*.sock' -exec rm -f -- {} +
 }

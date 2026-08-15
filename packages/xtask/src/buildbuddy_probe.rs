@@ -281,10 +281,10 @@ fn validate_evidence_shape(input: &Map<String, Value>, status: &str) -> Result<(
         .copied()
         .chain(["uploadsDisabled"])
     {
-        if let Some(value) = input.get(field) {
-            if !value.is_boolean() {
-                return Err(format!("evidence-field-must-be-boolean:{field}"));
-            }
+        if let Some(value) = input.get(field)
+            && !value.is_boolean()
+        {
+            return Err(format!("evidence-field-must-be-boolean:{field}"));
         }
     }
     if let Some(value) = input.get("transferBytes") {

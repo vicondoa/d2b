@@ -268,7 +268,6 @@ change.
 When the Rust DTOs change, regenerate schema artifacts with:
 
 ```bash
-cd packages
 cargo run -p xtask -- gen-schemas
 ```
 

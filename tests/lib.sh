@@ -65,6 +65,7 @@ readonly -a D2B_FIXTURE_INDEPENDENT_POLICY_BINARIES=(
   policy_changelog_gate
   policy_provider_crates
   policy_resource_mutation_seal
+  policy_production_closure
   policy_docs
   policy_gas_city
 )
@@ -79,7 +80,7 @@ d2b_repo_root() {
 #
 # Why: a bare path makes Nix use the `path:` fetcher, which copies the
 # ENTIRE working tree into the store, including the multi-GiB
-# `packages/target` cargo artifacts (measured: ~36 GB / 5+ min per cold
+# `target` cargo artifacts (measured: ~36 GB / 5+ min per cold
 # eval, re-triggered every time a cargo build churns target/). `git+file://`
 # copies only git-tracked files (target/ is gitignored), turning a
 # 5-minute eval into <1 s.
@@ -97,9 +98,7 @@ d2b_flake_ref() {
 
 d2b_cargo_config_path() {
   case "${1:-workspace}" in
-    workspace) printf '%s\n' "$(d2b_repo_root)/packages/.cargo/config.toml" ;;
-    broker) printf '%s\n' "$(d2b_repo_root)/packages/d2b-priv-broker/.cargo/config.toml" ;;
-    guest-shell-runner) printf '%s\n' "$(d2b_repo_root)/packages/d2b-guest-shell-runner/.cargo/config.toml" ;;
+    workspace|broker|guest-shell-runner) printf '%s\n' "$(d2b_repo_root)/.cargo/config.toml" ;;
     fuzz) printf '%s\n' "$(d2b_repo_root)/packages/d2b-core/fuzz/.cargo/config.toml" ;;
     *)
       fail "unknown cargo target scope: ${1:-<empty>}"
@@ -126,9 +125,7 @@ d2b_cargo_target_dir() {
     return 0
   fi
   case "$scope" in
-    workspace) base="$(d2b_repo_root)/packages/target" ;;
-    broker) base="$(d2b_repo_root)/packages/d2b-priv-broker/target" ;;
-    guest-shell-runner) base="$(d2b_repo_root)/packages/d2b-guest-shell-runner/target" ;;
+    workspace|broker|guest-shell-runner) base="$(d2b_repo_root)/target" ;;
     fuzz) base="$(d2b_repo_root)/packages/d2b-core/fuzz/target" ;;
     *)
       fail "unknown cargo target scope: $scope"

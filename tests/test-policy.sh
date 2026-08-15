@@ -31,7 +31,7 @@ if ! command -v cargo >/dev/null 2>&1 && [ -z "${D2B_POLICY_GATE_IN_NIX_SHELL:-}
     fail "neither cargo nor nix is on PATH; the policy cargo gates cannot run"
     exit 1
   fi
-  toolchain_file="$ROOT/packages/rust-toolchain.toml"
+  toolchain_file="$ROOT/rust-toolchain.toml"
   pinned_channel=$(
     sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]\+\)".*/\1/p' "$toolchain_file" | head -1
   )
@@ -90,7 +90,7 @@ run_policy_cargo_binaries() {
   log "--> fixture-independent policy binaries"
   set +e
   out=$(
-    cd "$ROOT/packages" \
+    cd "$ROOT" \
       && CARGO_TERM_COLOR=never cargo test -p d2b-contract-tests "${cargo_args[@]}" 2>&1
   )
   status=$?
@@ -161,9 +161,21 @@ run_guest_workspace_guard() {
   fi
 }
 
+run_production_closure_guard() {
+  local label="production-closure-recompute"
+  log "--> $label"
+  if CARGO_TERM_COLOR=never cargo xtask gen-package-policy-inputs --check; then
+    ok "$label"
+  else
+    fail "$label"
+    rc=1
+  fi
+}
+
 run_policy_gate "w0-dep-direction"          tests/unit/meta/w0-dep-direction.sh
 run_policy_gate "deliverable-gate-inventory" tests/unit/meta/deliverable-gate-inventory.sh
 run_policy_gate "layer1-self-inventory"     tests/unit/meta/layer1-self-inventory.sh
+run_production_closure_guard
 # ci-coverage must run LAST: it verifies that every other test is wired into a
 # workflow or aggregator, so it has to observe the final reference set.
 run_policy_gate "ci-coverage"               tests/unit/meta/ci-coverage.sh

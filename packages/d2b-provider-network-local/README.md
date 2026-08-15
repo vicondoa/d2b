@@ -84,9 +84,9 @@ or interface identity. This layer owns no durable Provider state.
 ## Build and test
 
 ```bash
-cd packages && cargo check -p d2b-provider-network-local
-cd packages && cargo test -p d2b-provider-network-local
-cd packages && cargo test -p d2b-provider-network-local --test '*'
+cargo check -p d2b-provider-network-local
+cargo test -p d2b-provider-network-local
+cargo test -p d2b-provider-network-local --test '*'
 ```
 
 Run the declared provider-system scenarios only through the repository's

@@ -72,6 +72,6 @@ representable in either, and both render redacted through `Debug`.
 ## Build and test
 
 ```bash
-cd packages && cargo test -p d2b-provider-system-core
-cd packages && cargo clippy -p d2b-provider-system-core --all-targets
+cargo test -p d2b-provider-system-core
+cargo clippy -p d2b-provider-system-core --all-targets
 ```

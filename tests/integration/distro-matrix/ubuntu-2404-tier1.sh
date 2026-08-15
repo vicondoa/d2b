@@ -119,9 +119,9 @@ phase_install() {
         return 0
     fi
     log "phase install: cargo build d2bd + broker"
-    (cd "$ROOT/packages" && cargo build --release --workspace) \
+    (cd "$ROOT" && cargo build --release --workspace) \
         || fail "cargo build workspace"
-    (cd "$ROOT/packages/d2b-priv-broker" && cargo build --release) \
+    (cd "$ROOT" && cargo build --release --package d2b-priv-broker) \
         || fail "cargo build d2b-priv-broker"
     ok "phase install"
 }
@@ -133,7 +133,7 @@ phase_host_prepare() {
     fi
     log "phase host prepare: d2b host prepare --apply"
     D2B_NATIVE_ONLY=1 \
-        "$ROOT/packages/target/release/d2b" host prepare --apply \
+        "$ROOT/target/release/d2b" host prepare --apply \
         || fail "host prepare --apply"
     ok "phase host prepare"
 }
@@ -145,7 +145,7 @@ phase_vm_start() {
     fi
     log "phase vm start: d2b vm start minimal-vm --apply"
     D2B_NATIVE_ONLY=1 \
-        "$ROOT/packages/target/release/d2b" vm start minimal-vm --apply \
+        "$ROOT/target/release/d2b" vm start minimal-vm --apply \
         || fail "vm start --apply"
     ok "phase vm start"
 }
@@ -169,7 +169,7 @@ phase_vm_stop() {
     fi
     log "phase vm stop: d2b vm stop minimal-vm --apply"
     D2B_NATIVE_ONLY=1 \
-        "$ROOT/packages/target/release/d2b" vm stop minimal-vm --apply \
+        "$ROOT/target/release/d2b" vm stop minimal-vm --apply \
         || fail "vm stop --apply"
     ok "phase vm stop"
 }
@@ -181,7 +181,7 @@ phase_host_destroy() {
     fi
     log "phase host destroy: d2b host destroy --apply"
     D2B_NATIVE_ONLY=1 \
-        "$ROOT/packages/target/release/d2b" host destroy --apply \
+        "$ROOT/target/release/d2b" host destroy --apply \
         || fail "host destroy --apply"
     ok "phase host destroy"
 }

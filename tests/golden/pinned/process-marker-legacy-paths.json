@@ -12,7 +12,6 @@
     "nixos-modules/host-activation.nix",
     "nixos-modules/host.nix",
     "nixos-modules/net.nix",
-    "packages/Cargo.toml",
     "packages/d2b-contract-tests/tests/minijail_gpu.rs",
     "packages/d2b-contract-tests/tests/minijail_profiles.rs",
     "packages/d2b-contract-tests/tests/minijail_swtpm_video.rs",
@@ -71,6 +70,7 @@
     "tests/golden/l3-matrix/w3-ubuntu.txt"
   ],
   "retiredPaths": [
+    "Cargo.toml",
     "packages/d2b/src/lib.rs",
     "packages/d2b/tests/status_contract.rs",
     "packages/d2b/tests/usb_contract.rs"

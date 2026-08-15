@@ -29,13 +29,13 @@ let
   # d2b-wayland-proxy: host-side Wayland proxy.
   # Built from the workspace so the binary path is available for the
   # wayland-proxy DAG node's binaryPath field.
-  packagesSrc = d2bLib.cleanRustPackagesSource ../packages;
+  packagesSrc = d2bLib.cleanRustPackagesSource ../.;
   d2bWaylandProxySourcePackage = pkgs.rustPlatform.buildRustPackage {
     pname = "d2b-wayland-proxy";
     version = "0.0.0";
     src = packagesSrc;
     cargoLock = {
-      lockFile = ../packages/Cargo.lock;
+      lockFile = ../Cargo.lock;
       outputHashes."wl-proxy-0.1.2" = "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";
     };
     cargoBuildFlags = [ "--package" "d2b-wayland-proxy" ];

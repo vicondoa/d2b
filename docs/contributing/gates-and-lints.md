@@ -125,6 +125,26 @@ AST, schema, inventory, and supply chain. Each focused target receives the
 full runner budget and drops local-only dependency edges, so a shard does not
 repeat another shard's work. `make test-rust` remains the local aggregate.
 
+`make test-cargo-compat` is the standalone Cargo proof for the root workspace.
+It checks generic nextest exclusions, the serial broker default,
+`layer1-bootstrap`, and `fake-backends` contexts, the guest
+`real-libshpool` context, doctests, harness-free targets, benches, and
+fixture exclusions. It never invokes Bazel and is independent of the
+Layer-1 scheduler.
+
+Production dependency approval is generated and checked with
+`cargo xtask gen-package-policy-inputs --check`. Cargo locked metadata is the
+reachability authority; `production/closure.json` is the approval authority;
+the filtered `Cargo.lock` files below each context are audit-only inputs and
+must never be passed to Cargo for resolution. Advisory entries are
+context-scoped and require an owner, rationale, approval marker, and expiry.
+The checker rejects global or cross-context ignores, stale outputs, and
+expired approvals. `.github/CODEOWNERS` protects the generated inputs and
+generator. The checked-in approval metadata records the required ownership and
+recomputation shape; it is not evidence that GitHub review occurred. Repository
+branch protection must require owner review and a trusted check before merge,
+and local checks fail closed when approval or recomputation metadata is missing.
+
 ### Rust budget and execution manifest
 
 The local Rust aggregate is the GNU Make DAG behind `make test-rust`. It uses
@@ -247,7 +267,7 @@ authoritative and flag the drift for the integrator.
 
 Every Layer-2, host-integration, hardware, live, and perf-heavy command
 runs through **one** semaphore, invoked from the repository root as `cargo
-run --manifest-path packages/Cargo.toml -p xtask -- heavy-gate`. It grants
+run --manifest-path Cargo.toml -p xtask -- heavy-gate`. It grants
 two slots per uid via open file description locks so concurrent heavy lanes
 cannot oversubscribe the shared Nix store, cargo target directory, or KVM
 device. Do not add a second lock file, sleep-and-retry loop, or per-crate
@@ -283,24 +303,19 @@ The structure is public-lane-plus-guarded-internal:
   the same semaphore.
 
 Run a heavy lane through its public target (or, for an arbitrary command,
-`cargo run --manifest-path packages/Cargo.toml -p xtask -- heavy-gate --
+`cargo run --manifest-path Cargo.toml -p xtask -- heavy-gate --
 <command>`) whenever another heavy lane might be running; do not invoke the
 internal targets directly. Live-host and hardware
 tests obey the same rule: use the gated live-VM smoke entrypoints (`make
 pre-tag` for the full gate, `make smoke-lite` for the lite gate) or wrap a
-raw live script as `cargo run --manifest-path packages/Cargo.toml -p xtask
+raw live script as `cargo run --manifest-path Cargo.toml -p xtask
 -- heavy-gate -- env D2B_LIVE=1 bash tests/integration/live/<name>.sh`.
 
-The `cargo run --manifest-path packages/Cargo.toml` form is deliberate:
-there is no root cargo workspace, so the bare `cargo xtask` alias resolves
-only when the working directory is `packages/`, and running it from the
-repository root fails with `no such command: xtask`. Because cargo config
-discovery is cwd-based, invoking `xtask` from the root via `--manifest-path`
-silently drops the `sccache` configuration in `packages/.cargo/config.toml`;
-that is immaterial for the gate itself. When it matters for a specific
-command, `cd packages && cargo xtask <command>` is the equivalent form -
-pick one per command and pass file arguments relative to the directory you
-run from.
+The repository-root `Cargo.toml` is the product workspace and the root
+`.cargo/config.toml` is its Cargo configuration. The bare `cargo xtask`
+alias therefore resolves from the repository root; use the explicit
+`--manifest-path Cargo.toml` spelling when a command's authority should be
+visible in the invocation.
 
 Invoking a live script directly is safe but not the documented path: each
 one verifies the inherited slot and re-executes itself through the semaphore

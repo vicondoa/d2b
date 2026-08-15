@@ -65,6 +65,6 @@ closed enumerations only.
 ## Build and test
 
 ```bash
-cd packages && cargo test -p d2b-provider-system-systemd
-cd packages && cargo clippy -p d2b-provider-system-systemd --all-targets
+cargo test -p d2b-provider-system-systemd
+cargo clippy -p d2b-provider-system-systemd --all-targets
 ```
