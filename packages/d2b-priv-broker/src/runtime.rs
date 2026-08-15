@@ -3062,10 +3062,10 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
             // rather than allowing an admin caller to turn a shape-only
             // authority proof into a physical hidraw open.
             let _ = req;
-            return Err(BrokerError::Unimplemented {
+            Err(BrokerError::Unimplemented {
                 operation: "OpenHidrawSecurityKey",
                 target_wave: "security-key-provider",
-            });
+            })
         }
         RealBrokerRequest::SecurityKeyOpenDevice(_) => Err(BrokerError::Unimplemented {
             operation: "SecurityKeyOpenDevice",

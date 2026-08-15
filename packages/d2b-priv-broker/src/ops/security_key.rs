@@ -98,15 +98,11 @@ pub(crate) fn validate_device_authority(
 pub(crate) fn resolve_selector(selector_id: &str) -> Result<ResolvedSecurityKeySelector, OpError> {
     if selector_id.is_empty()
         || selector_id.len() > 63
-        || !selector_id
-            .bytes()
-            .enumerate()
-            .all(|(index, byte)| {
-                (index == 0 && byte.is_ascii_lowercase())
-                    || (index > 0 && (byte.is_ascii_lowercase()
-                        || byte.is_ascii_digit()
-                        || byte == b'-'))
-            })
+        || !selector_id.bytes().enumerate().all(|(index, byte)| {
+            (index == 0 && byte.is_ascii_lowercase())
+                || (index > 0
+                    && (byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-'))
+        })
         || selector_id.starts_with("hidraw-")
     {
         return Err(OpError::UnknownSubject {
@@ -128,13 +124,11 @@ fn is_fido_device(sysfs_entry: &Path) -> bool {
 fn fido_device_match(sysfs_entry: &Path) -> Option<bool> {
     let rdesc_path = sysfs_entry.join("device/report_descriptor");
     match std::fs::read(&rdesc_path) {
-        Ok(rdesc) => {
-            return rdesc
-                .windows(FIDO_USAGE_PAGE_LE.len())
-                .any(|w| w == FIDO_USAGE_PAGE_LE)
-                .then_some(true);
-        }
-        Err(_) => return None,
+        Ok(rdesc) => rdesc
+            .windows(FIDO_USAGE_PAGE_LE.len())
+            .any(|w| w == FIDO_USAGE_PAGE_LE)
+            .then_some(true),
+        Err(_) => None,
     }
 }
 
