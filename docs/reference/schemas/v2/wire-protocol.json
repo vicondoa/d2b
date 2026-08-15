@@ -6987,16 +6987,32 @@
     },
     "LegacySwtpmMigrationOutcome": {
       "description": "Closed migration outcome returned by the broker.",
-      "type": "string",
-      "enum": [
-        "migrated",
-        "already-migrated",
-        "not-applicable",
-        "pending",
-        "failed",
-        "ambiguous",
-        "adoption-required",
-        "never-provisioned"
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "migrated",
+            "already-migrated",
+            "not-applicable",
+            "pending",
+            "failed",
+            "ambiguous"
+          ]
+        },
+        {
+          "description": "The broker inventory proves that legacy state exists and adoption is required before a new TPM state can be ensured.",
+          "type": "string",
+          "enum": [
+            "adoption-required"
+          ]
+        },
+        {
+          "description": "The broker inventory proves that no prior state exists.",
+          "type": "string",
+          "enum": [
+            "never-provisioned"
+          ]
+        }
       ]
     },
     "LevelPercent": {
@@ -7166,7 +7182,7 @@
       "additionalProperties": false
     },
     "MigrateLegacySwtpmStateRequest": {
-      "description": "Opaque request for one trusted legacy swtpm migration or broker-locked inventory probe.",
+      "description": "Opaque request for one trusted legacy swtpm migration or inventory probe.",
       "type": "object",
       "required": [
         "bundleLegacySwtpmIntentRef",
@@ -7177,6 +7193,7 @@
           "type": "string"
         },
         "probeOnly": {
+          "description": "When true, inspect the broker-owned legacy inventory without mutating state. The closed outcome is used by Core to seal the migration decision before the Provider reconcile starts.",
           "default": false,
           "type": "boolean"
         },
