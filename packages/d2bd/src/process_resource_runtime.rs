@@ -204,8 +204,9 @@ impl ProcessResourceRuntime {
             .cloned()
             .collect::<Vec<_>>();
         for key in removed {
-            if let Some(record) = self.records.remove(&key) {
+            if let Some(record) = self.records.get(&key).cloned() {
                 self.stop_record(&record).await?;
+                self.records.remove(&key);
             }
             self.terminal.remove(&key);
             self.terminal_failed.remove(&key);
@@ -222,8 +223,9 @@ impl ProcessResourceRuntime {
                 .get(&key)
                 .is_some_and(|current| !current.same_desired_state(&record));
             if replace {
-                if let Some(current) = self.records.remove(&key) {
+                if let Some(current) = self.records.get(&key).cloned() {
                     self.stop_record(&current).await?;
+                    self.records.remove(&key);
                 }
                 self.terminal.remove(&key);
                 self.terminal_failed.remove(&key);
@@ -256,6 +258,36 @@ impl ProcessResourceRuntime {
             }
 
             if record.deletion_requested() {
+                if !self.providers.has_active_resource(&key) {
+                    match &record.process {
+                        DesiredProcess::Process(spec) => {
+                            match self
+                                .providers
+                                .adopt_resource(self.context(&record), spec)
+                                .await
+                                .map_err(map_provider_error)?
+                            {
+                                ProviderAdoption::Quarantined(_) => {
+                                    return Err(ProcessResourceRuntimeError::IdentityAmbiguous);
+                                }
+                                ProviderAdoption::Adopted(_) | ProviderAdoption::Absent => {}
+                            }
+                        }
+                        DesiredProcess::Ephemeral(spec) => {
+                            match self
+                                .providers
+                                .adopt_ephemeral_resource(self.context(&record), spec)
+                                .await
+                                .map_err(map_provider_error)?
+                            {
+                                ProviderAdoption::Quarantined(_) => {
+                                    return Err(ProcessResourceRuntimeError::IdentityAmbiguous);
+                                }
+                                ProviderAdoption::Adopted(_) | ProviderAdoption::Absent => {}
+                            }
+                        }
+                    }
+                }
                 if self.providers.has_active_resource(&key) {
                     self.stop_record(&record).await?;
                 }
