@@ -14,12 +14,15 @@
 //! as the character.
 
 use std::{
+    collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
     process::Command,
 };
 
 use d2b_contract_tests::{read_repo_file, repo_root};
+use serde::Deserialize;
+use sha2::{Digest, Sha256};
 
 const GATE: &str = "tests/tools/tier0-first-pass.sh";
 
@@ -115,6 +118,41 @@ const APPROVED_NOTICES: &[&str] = &[
     "third_party/agent-skills/caveman/v2.0.0/LICENSE",
     "third_party/agent-skills/compound-engineering/compound-engineering-v3.21.4/LICENSE",
 ];
+const APPROVED_UPSTREAMS: &[(&str, &str, &str, &str, &str)] = &[
+    (
+        "third_party/agent-skills/ponytail/v4.9.0",
+        "https://github.com/DietrichGebert/ponytail",
+        "v4.9.0",
+        "0a4dd63ad4541f4f655c4108a295916f3c1d8fda",
+        "MIT",
+    ),
+    (
+        "third_party/agent-skills/caveman/v2.0.0",
+        "https://github.com/JuliusBrussee/caveman",
+        "v2.0.0",
+        "2c67abb9833689b48c7abba88afaa77c39a18657",
+        "MIT",
+    ),
+    (
+        "third_party/agent-skills/compound-engineering/compound-engineering-v3.21.4",
+        "https://github.com/EveryInc/compound-engineering-plugin",
+        "compound-engineering-v3.21.4",
+        "0a2957852e2034d04eb01120fd7da6ed5307dc56",
+        "MIT",
+    ),
+];
+
+#[derive(Debug, Deserialize)]
+struct UpstreamMetadata {
+    files: BTreeMap<String, String>,
+    imported_paths: Vec<String>,
+    excluded_surfaces: Vec<String>,
+    license: String,
+    upstream_commit: String,
+    upstream_repository: String,
+    upstream_tag: String,
+    vendor_date: String,
+}
 
 fn gate_path() -> PathBuf {
     repo_root().join(GATE)
@@ -229,6 +267,343 @@ fn create_approved_adapters(root: &Path) {
     }
 }
 
+fn approved_version_roots() -> BTreeSet<&'static str> {
+    APPROVED_SKILLS
+        .iter()
+        .map(|&(skill_root, _)| {
+            skill_root
+                .strip_suffix("/skills")
+                .expect("approved skill root must end in /skills")
+        })
+        .collect()
+}
+
+fn collect_regular_files(root: &Path) -> BTreeSet<String> {
+    fn visit(root: &Path, current: &Path, files: &mut BTreeSet<String>) {
+        let entries = fs::read_dir(current)
+            .unwrap_or_else(|error| panic!("cannot enumerate {}: {error}", current.display()));
+        for entry in entries {
+            let entry = entry.unwrap_or_else(|error| {
+                panic!(
+                    "cannot read directory entry in {}: {error}",
+                    current.display()
+                )
+            });
+            let path = entry.path();
+            let file_type = fs::symlink_metadata(&path)
+                .unwrap_or_else(|error| panic!("cannot stat {}: {error}", path.display()));
+            if file_type.is_dir() {
+                visit(root, &path, files);
+            } else if file_type.is_file() {
+                let relative = path
+                    .strip_prefix(root)
+                    .unwrap_or_else(|error| {
+                        panic!(
+                            "cannot relativize {} against {}: {error}",
+                            path.display(),
+                            root.display()
+                        )
+                    })
+                    .to_str()
+                    .unwrap_or_else(|| panic!("non-UTF-8 path under {}", root.display()));
+                if relative != "UPSTREAM.json" {
+                    files.insert(relative.to_owned());
+                }
+            } else {
+                panic!(
+                    "vendored version roots may contain only directories and regular files: {}",
+                    path.display()
+                );
+            }
+        }
+    }
+
+    let mut files = BTreeSet::new();
+    visit(root, root, &mut files);
+    files
+}
+
+fn sha256_file(path: &Path) -> String {
+    let bytes =
+        fs::read(path).unwrap_or_else(|error| panic!("cannot read {}: {error}", path.display()));
+    format!("{:x}", Sha256::digest(bytes))
+}
+
+fn assert_canonical_skill_files(root: &Path) {
+    for &(skill_root, skill) in APPROVED_SKILLS {
+        let directory = canonical_skill_path(root, skill_root, skill);
+        let directory_type = fs::symlink_metadata(&directory).unwrap_or_else(|error| {
+            panic!(
+                "missing canonical skill directory {}: {error}",
+                directory.display()
+            )
+        });
+        assert!(
+            directory_type.is_dir(),
+            "canonical skill path must be a directory: {}",
+            directory.display()
+        );
+
+        let skill_file = directory.join("SKILL.md");
+        let skill_file_type = fs::symlink_metadata(&skill_file).unwrap_or_else(|error| {
+            panic!(
+                "missing canonical skill file {}: {error}",
+                skill_file.display()
+            )
+        });
+        assert!(
+            skill_file_type.is_file(),
+            "canonical skill file must be a regular file: {}",
+            skill_file.display()
+        );
+    }
+}
+
+fn assert_upstream_metadata(root: &Path, version_root: &str) {
+    let (_, expected_repository, expected_tag, expected_commit, expected_license) =
+        APPROVED_UPSTREAMS
+            .iter()
+            .find(|&&(candidate, _, _, _, _)| candidate == version_root)
+            .unwrap_or_else(|| panic!("no pinned metadata expectation for {version_root}"));
+    let metadata_path = root.join(version_root).join("UPSTREAM.json");
+    let metadata_body = fs::read_to_string(&metadata_path)
+        .unwrap_or_else(|error| panic!("cannot read {}: {error}", metadata_path.display()));
+    let metadata: UpstreamMetadata = serde_json::from_str(&metadata_body).unwrap_or_else(|error| {
+        panic!(
+            "invalid upstream metadata {}: {error}",
+            metadata_path.display()
+        )
+    });
+
+    assert_eq!(
+        metadata.upstream_repository,
+        *expected_repository,
+        "{}: upstream_repository drifted from the pinned value",
+        metadata_path.display()
+    );
+    assert_eq!(
+        metadata.upstream_tag,
+        *expected_tag,
+        "{}: upstream_tag drifted from the pinned value",
+        metadata_path.display()
+    );
+    assert_eq!(
+        metadata.upstream_commit,
+        *expected_commit,
+        "{}: upstream_commit drifted from the pinned value",
+        metadata_path.display()
+    );
+    assert_eq!(
+        metadata.license,
+        *expected_license,
+        "{}: license drifted from the pinned value",
+        metadata_path.display()
+    );
+    assert_eq!(
+        metadata.vendor_date,
+        "2026-08-14",
+        "{}: vendor_date drifted from the pinned value",
+        metadata_path.display()
+    );
+    let expected_imports: BTreeSet<_> = std::iter::once("LICENSE".to_owned())
+        .chain(APPROVED_SKILLS.iter().filter_map(|&(skill_root, skill)| {
+            (skill_root == format!("{version_root}/skills")).then(|| format!("skills/{skill}"))
+        }))
+        .collect();
+    let actual_imports: BTreeSet<_> = metadata.imported_paths.iter().cloned().collect();
+    assert_eq!(
+        actual_imports.len(),
+        metadata.imported_paths.len(),
+        "{}: imported_paths must not contain duplicates",
+        metadata_path.display()
+    );
+    assert_eq!(
+        actual_imports,
+        expected_imports,
+        "{}: imported_paths must exactly match the approved subset",
+        metadata_path.display()
+    );
+    assert!(
+        !metadata.excluded_surfaces.is_empty(),
+        "{}: excluded_surfaces must be present and non-empty",
+        metadata_path.display()
+    );
+    assert!(
+        metadata
+            .excluded_surfaces
+            .iter()
+            .all(|surface| !surface.is_empty()),
+        "{}: excluded_surfaces must not contain empty entries",
+        metadata_path.display()
+    );
+
+    let version_path = root.join(version_root);
+    let actual_files = collect_regular_files(&version_path);
+    let listed_files: BTreeSet<_> = metadata.files.keys().cloned().collect();
+    if let Some(missing) = actual_files.difference(&listed_files).next() {
+        panic!(
+            "{}: files map is missing regular file {}",
+            metadata_path.display(),
+            version_path.join(missing).display()
+        );
+    }
+    if let Some(extra) = listed_files.difference(&actual_files).next() {
+        panic!(
+            "{}: files map contains extra file entry {}",
+            metadata_path.display(),
+            version_path.join(extra).display()
+        );
+    }
+
+    for (relative, expected_hash) in &metadata.files {
+        let path = version_path.join(relative);
+        let actual_hash = sha256_file(&path);
+        assert_eq!(
+            actual_hash,
+            expected_hash.to_ascii_lowercase(),
+            "{}: hash mismatch for {}",
+            metadata_path.display(),
+            path.display()
+        );
+        assert!(
+            expected_hash
+                .chars()
+                .all(|character| character.is_ascii_hexdigit() && !character.is_ascii_uppercase()),
+            "{}: hash for {} must be lowercase hexadecimal",
+            metadata_path.display(),
+            path.display()
+        );
+    }
+}
+
+fn canonical_skill_for_name(root: &Path, skill: &str) -> PathBuf {
+    APPROVED_SKILLS
+        .iter()
+        .find_map(|&(skill_root, candidate)| {
+            (candidate == skill).then(|| canonical_skill_path(root, skill_root, skill))
+        })
+        .unwrap_or_else(|| panic!("no canonical skill path for adapter entry {skill}"))
+}
+
+fn assert_adapter_topology(root: &Path, adapter_root: &str) {
+    let adapter_path = root.join(adapter_root);
+    let adapter_type = fs::symlink_metadata(&adapter_path).unwrap_or_else(|error| {
+        panic!(
+            "missing adapter directory {}: {error}",
+            adapter_path.display()
+        )
+    });
+    assert!(
+        adapter_type.is_dir(),
+        "adapter root must be a directory: {}",
+        adapter_path.display()
+    );
+
+    let expected_names: BTreeSet<_> = APPROVED_SKILLS
+        .iter()
+        .map(|&(_, skill)| skill.to_owned())
+        .collect();
+    let mut actual_names = BTreeSet::new();
+    let entries = fs::read_dir(&adapter_path)
+        .unwrap_or_else(|error| panic!("cannot enumerate {}: {error}", adapter_path.display()));
+    for entry in entries {
+        let entry = entry.unwrap_or_else(|error| {
+            panic!(
+                "cannot read directory entry in {}: {error}",
+                adapter_path.display()
+            )
+        });
+        let entry_path = entry.path();
+        let name = entry
+            .file_name()
+            .into_string()
+            .unwrap_or_else(|_| panic!("non-UTF-8 adapter entry under {}", adapter_path.display()));
+        assert!(
+            expected_names.contains(&name),
+            "unexpected adapter entry: {}",
+            entry_path.display()
+        );
+        assert!(
+            actual_names.insert(name.clone()),
+            "duplicate adapter entry: {}",
+            entry_path.display()
+        );
+
+        let entry_type = fs::symlink_metadata(&entry_path)
+            .unwrap_or_else(|error| panic!("cannot stat {}: {error}", entry_path.display()));
+        assert!(
+            entry_type.file_type().is_symlink(),
+            "adapter entry must be a symlink: {}",
+            entry_path.display()
+        );
+        let target = fs::read_link(&entry_path).unwrap_or_else(|error| {
+            panic!("cannot read symlink {}: {error}", entry_path.display())
+        });
+        assert!(
+            !target.is_absolute(),
+            "adapter symlink must be relative: {} -> {}",
+            entry_path.display(),
+            target.display()
+        );
+        let actual_target = fs::canonicalize(&entry_path)
+            .unwrap_or_else(|error| panic!("cannot resolve {}: {error}", entry_path.display()));
+        let expected_target = fs::canonicalize(canonical_skill_for_name(root, &name))
+            .unwrap_or_else(|error| panic!("cannot resolve canonical skill {name}: {error}"));
+        assert_eq!(
+            actual_target,
+            expected_target,
+            "adapter symlink must resolve to the canonical skill directory: {}",
+            entry_path.display()
+        );
+    }
+    assert_eq!(
+        actual_names,
+        expected_names,
+        "{}: adapter entries must be exactly the approved skill names",
+        adapter_path.display()
+    );
+}
+
+fn assert_claude_alias(root: &Path) {
+    let alias = root.join("CLAUDE.md");
+    let alias_type = fs::symlink_metadata(&alias).unwrap_or_else(|error| {
+        panic!(
+            "missing Claude instruction alias {}: {error}",
+            alias.display()
+        )
+    });
+    assert!(
+        alias_type.file_type().is_symlink(),
+        "CLAUDE.md must be a symlink: {}",
+        alias.display()
+    );
+    let target = fs::read_link(&alias)
+        .unwrap_or_else(|error| panic!("cannot read symlink {}: {error}", alias.display()));
+    assert!(
+        !target.is_absolute(),
+        "CLAUDE.md symlink must be relative: {} -> {}",
+        alias.display(),
+        target.display()
+    );
+    assert_eq!(
+        target,
+        Path::new("AGENTS.md"),
+        "CLAUDE.md must link exactly to AGENTS.md"
+    );
+    let actual_target = fs::canonicalize(&alias)
+        .unwrap_or_else(|error| panic!("cannot resolve {}: {error}", alias.display()));
+    let expected_target = fs::canonicalize(root.join("AGENTS.md")).unwrap_or_else(|error| {
+        panic!(
+            "cannot resolve {}: {error}",
+            root.join("AGENTS.md").display()
+        )
+    });
+    assert_eq!(
+        actual_target, expected_target,
+        "CLAUDE.md must resolve to AGENTS.md"
+    );
+}
+
 fn fake_command_dir(name: &str, command: &str, body: &str) -> PathBuf {
     let directory = Path::new(env!("CARGO_TARGET_TMPDIR"))
         .join("dash-gate")
@@ -239,6 +614,34 @@ fn fake_command_dir(name: &str, command: &str, body: &str) -> PathBuf {
     fs::write(&path, body).expect("write fake command");
     make_executable(&path);
     directory
+}
+
+#[test]
+fn pinned_skill_metadata_and_files_are_exact() {
+    let root = repo_root();
+    assert_canonical_skill_files(&root);
+
+    let expected_roots: BTreeSet<_> = APPROVED_UPSTREAMS
+        .iter()
+        .map(|&(version_root, _, _, _, _)| version_root)
+        .collect();
+    assert_eq!(
+        approved_version_roots(),
+        expected_roots,
+        "pinned metadata roots must cover the APPROVED_SKILLS version roots exactly"
+    );
+    for version_root in approved_version_roots() {
+        assert_upstream_metadata(&root, version_root);
+    }
+}
+
+#[test]
+fn adapter_aliases_have_exact_canonical_topology() {
+    let root = repo_root();
+    assert_canonical_skill_files(&root);
+    assert_adapter_topology(&root, ".agents/skills");
+    assert_adapter_topology(&root, ".claude/skills");
+    assert_claude_alias(&root);
 }
 
 #[test]
