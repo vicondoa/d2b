@@ -1,0 +1,44 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+
+rust_library(
+    name = "d2b_zone_routing",
+    srcs = [
+        "src/engine.rs",
+        "src/lib.rs",
+        "src/resolver.rs",
+        "src/router.rs",
+        "src/service.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = ["//packages/d2b-contracts:d2b_contracts"],
+)
+
+rust_test(
+    name = "route_engine_vectors",
+    srcs = ["tests/route_engine_vectors.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_zone_routing",
+        "//packages/d2b-contracts:d2b_contracts",
+    ],
+)
+
+rust_binary(
+    name = "route_decision",
+    srcs = ["benches/route_decision.rs"],
+    compile_data = ["Cargo.toml"],
+    tags = ["bench"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_zone_routing",
+        "//packages/d2b-contracts:d2b_contracts",
+    ],
+)
+
+rust_test(
+    name = "d2b_zone_routing_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":d2b_zone_routing",
+)

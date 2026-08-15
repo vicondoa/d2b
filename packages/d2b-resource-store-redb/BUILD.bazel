@@ -1,0 +1,52 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+rust_library(
+    name = "d2b_resource_store_redb",
+    srcs = [
+        "src/actor.rs",
+        "src/audit.rs",
+        "src/backup.rs",
+        "src/keys.rs",
+        "src/lib.rs",
+        "src/metrics.rs",
+        "src/migration.rs",
+        "src/ownership.rs",
+        "src/revision_log.rs",
+        "src/schema.rs",
+        "src/tests.rs",
+        "src/tracing.rs",
+        "src/transaction.rs",
+        "src/values.rs",
+    ],
+    compile_data = [
+        "Cargo.toml",
+        "src/actor.rs",
+        "src/lib.rs",
+        "src/transaction.rs",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-audit:d2b_audit",
+        "//packages/d2b-contracts:d2b_contracts",
+        "//packages/d2b-controller-toolkit:d2b_controller_toolkit",
+        "//packages/d2b-resource-store:d2b_resource_store",
+        "//packages/d2b-telemetry:d2b_telemetry",
+        "@crates//:redb",
+        "@crates//:rustix",
+        "@crates//:serde",
+        "@crates//:serde_json",
+        "@crates//:sha2",
+        "@crates//:tempfile",
+        "@crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "d2b_resource_store_redb_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":d2b_resource_store_redb",
+    deps = [
+        "@crates//:serde_json",
+        "@crates//:tempfile",
+    ],
+)

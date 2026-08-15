@@ -1,5 +1,5 @@
 pub fn format_number(value: usize) -> String {
-    itoa::Buffer::new().format(value).to_owned()
+    serde_json::to_string(&value).expect("serialize fixture number")
 }
 
 #[cfg(test)]

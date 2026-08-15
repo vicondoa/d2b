@@ -1,0 +1,31 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+rust_library(
+    name = "d2b_audit",
+    srcs = [
+        "src/export.rs",
+        "src/hash_chain.rs",
+        "src/lib.rs",
+        "src/operation.rs",
+        "src/rate_limit.rs",
+        "src/reconcile.rs",
+        "src/record_types.rs",
+        "src/segment.rs",
+        "src/sink.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-telemetry:d2b_telemetry",
+        "@crates//:libc",
+        "@crates//:rustix",
+        "@crates//:serde",
+        "@crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "d2b_audit_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":d2b_audit",
+)

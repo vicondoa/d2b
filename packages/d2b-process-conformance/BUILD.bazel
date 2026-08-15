@@ -1,0 +1,33 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+rust_library(
+    name = "d2b_process_conformance",
+    srcs = [
+        "src/error.rs",
+        "src/identity.rs",
+        "src/lib.rs",
+        "src/port.rs",
+        "src/process_provider.rs",
+        "src/provider.rs",
+        "src/sandbox.rs",
+        "src/status.rs",
+        "src/suite.rs",
+        "src/terminal.rs",
+        "src/testing.rs",
+        "src/ticket.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-contracts:d2b_contracts",
+        "@crates//:serde",
+        "@crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "d2b_process_conformance_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":d2b_process_conformance",
+    deps = ["@crates//:serde_json"],
+)

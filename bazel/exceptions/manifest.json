@@ -1,0 +1,71 @@
+{
+  "version": 1,
+  "exceptions": [
+    {
+      "label": "//bazel/exceptions:manifest.json",
+      "path": "bazel/exceptions/BUILD.bazel",
+      "reason": "closed exception inventory",
+      "marker": "# keep"
+    },
+    {
+      "label": "//packages/d2b-core:d2b_core",
+      "path": "packages/d2b-core/BUILD.bazel",
+      "reason": "cross-package compile data and fuzz harness targets",
+      "marker": "# keep"
+    },
+    {
+      "label": "//packages/d2b-core/fuzz:core",
+      "path": "packages/d2b-core/fuzz/BUILD.bazel",
+      "reason": "cross-package compile data for the fuzz smoke target",
+      "marker": "# keep"
+    },
+    {
+      "label": "//packages/d2b-contracts:broker_network_prep",
+      "path": "packages/d2b-contracts/BUILD.bazel",
+      "reason": "cross-package fixture compile data",
+      "marker": "# keep"
+    },
+    {
+      "label": "//packages/d2b-contract-tests:policy_resource_mutation_seal",
+      "path": "packages/d2b-contract-tests/BUILD.bazel",
+      "reason": "cross-package source and fixture compile data",
+      "marker": "# keep"
+    },
+    {
+      "label": "//packages/d2b-credential-service:protocol",
+      "path": "packages/d2b-credential-service/BUILD.bazel",
+      "reason": "cross-package protobuf compile data",
+      "marker": "# keep"
+    },
+    {
+      "label": "//packages/d2b-host:d2b_host",
+      "path": "packages/d2b-host/BUILD.bazel",
+      "reason": "cross-package runner-shape fixture compile data",
+      "marker": "# keep"
+    },
+    {
+      "label": "//packages/d2b-priv-broker:d2b_priv_broker",
+      "path": "packages/d2b-priv-broker/BUILD.bazel",
+      "reason": "cross-package fixture compile data",
+      "marker": "# keep"
+    },
+    {
+      "label": "//packages/d2b-provider-supervisor:d2b_provider_supervisor",
+      "path": "packages/d2b-provider-supervisor/BUILD.bazel",
+      "reason": "cross-package broker source compile data",
+      "marker": "# keep"
+    },
+    {
+      "label": "//packages/d2b-resource-store:d106_policy",
+      "path": "packages/d2b-resource-store/BUILD.bazel",
+      "reason": "cross-package resource implementation compile data",
+      "marker": "# keep"
+    },
+    {
+      "label": "//packages/d2bd:d2bd",
+      "path": "packages/d2bd/BUILD.bazel",
+      "reason": "cross-package daemon source compile data",
+      "marker": "# keep"
+    }
+  ]
+}

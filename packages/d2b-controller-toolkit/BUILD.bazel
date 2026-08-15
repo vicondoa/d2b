@@ -1,0 +1,85 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+
+rust_library(
+    name = "d2b_controller_toolkit",
+    srcs = [
+        "src/context.rs",
+        "src/contract.rs",
+        "src/lib.rs",
+        "src/owner_hints.rs",
+        "src/queue.rs",
+        "src/result.rs",
+        "src/runner.rs",
+        "src/state_migration.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-contracts:d2b_contracts",
+        "@crates//:schemars",
+        "@crates//:serde",
+        "@crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "external_seals",
+    srcs = ["tests/external_seals.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+)
+
+rust_test(
+    name = "production_watch",
+    srcs = [
+        "tests/production_watch.rs",
+        "tests/support/mod.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    crate_root = "tests/production_watch.rs",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_controller_toolkit",
+        "//packages/d2b-contracts:d2b_contracts",
+        "//packages/d2b-resource-api:d2b_resource_api",
+        "//packages/d2b-resource-store:d2b_resource_store",
+        "//packages/d2b-resource-store-redb:d2b_resource_store_redb",
+        "@crates//:serde_json",
+        "@crates//:tempfile",
+        "@crates//:tokio",
+    ],
+)
+
+rust_binary(
+    name = "reaction",
+    srcs = ["benches/reaction.rs"],
+    compile_data = ["Cargo.toml"],
+    tags = ["bench"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_controller_toolkit",
+        "//packages/d2b-bus:d2b_bus",
+        "//packages/d2b-contracts:d2b_contracts",
+        "//packages/d2b-process:d2b_process",
+        "//packages/d2b-process-conformance:d2b_process_conformance",
+        "//packages/d2b-provider-supervisor:d2b_provider_supervisor",
+        "//packages/d2b-provider-system-minijail:d2b_provider_system_minijail",
+        "//packages/d2b-resource-store:d2b_resource_store",
+        "//packages/d2b-resource-store-redb:d2b_resource_store_redb",
+        "@crates//:serde_json",
+        "@crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "d2b_controller_toolkit_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":d2b_controller_toolkit",
+    deps = ["@crates//:serde_json"],
+)
+
+rust_test(
+    name = "reaction_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":reaction",
+)

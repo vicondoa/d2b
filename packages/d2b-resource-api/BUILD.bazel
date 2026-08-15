@@ -1,0 +1,59 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+rust_library(
+    name = "d2b_resource_api",
+    srcs = [
+        "src/adapter.rs",
+        "src/admission.rs",
+        "src/authz.rs",
+        "src/client.rs",
+        "src/emergency_gate.rs",
+        "src/error.rs",
+        "src/generated/d2b_resource_v3_ttrpc.rs",
+        "src/generated/mod.rs",
+        "src/identity.rs",
+        "src/lib.rs",
+        "src/metrics.rs",
+        "src/quota_gate.rs",
+        "src/service.rs",
+        "src/store.rs",
+        "src/watch.rs",
+        "src/zone_service.rs",
+    ],
+    compile_data = [
+        "Cargo.toml",
+        "src/watch.rs",
+    ],
+    proc_macro_deps = ["@crates//:async-trait"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-contracts:d2b_contracts",
+        "//packages/d2b-core-controller:d2b_core_controller",
+        "//packages/d2b-resource-store:d2b_resource_store",
+        "//packages/d2b-resource-store-redb:d2b_resource_store_redb",
+        "//packages/d2b-telemetry:d2b_telemetry",
+        "@crates//:protobuf",
+        "@crates//:serde_json",
+        "@crates//:sha2",
+        "@crates//:tokio",
+        "@crates//:ttrpc",
+    ],
+)
+
+rust_test(
+    name = "external_seals",
+    srcs = ["tests/external_seals.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+)
+
+rust_test(
+    name = "d2b_resource_api_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":d2b_resource_api",
+    deps = [
+        "//packages/d2b-resource-store:d2b_resource_store",
+        "@crates//:protobuf",
+        "@crates//:tokio",
+    ],
+)

@@ -1,0 +1,45 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+rust_library(
+    name = "d2b_provider_volume_virtiofs",
+    srcs = [
+        "src/controller.rs",
+        "src/error.rs",
+        "src/export.rs",
+        "src/lib.rs",
+        "src/port.rs",
+        "src/readiness.rs",
+        "src/socket_path.rs",
+        "src/testing.rs",
+        "src/user_ns.rs",
+        "src/virtiofsd_argv.rs",
+        "src/worker.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-contracts:d2b_contracts",
+        "@crates//:serde",
+        "@crates//:serde_json",
+        "@crates//:sha2",
+    ],
+)
+
+rust_test(
+    name = "export_lifecycle",
+    srcs = ["tests/export_lifecycle.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_provider_volume_virtiofs",
+        "//packages/d2b-contracts:d2b_contracts",
+        "@crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "d2b_provider_volume_virtiofs_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":d2b_provider_volume_virtiofs",
+    deps = ["//packages/d2b-contracts:d2b_contracts"],
+)

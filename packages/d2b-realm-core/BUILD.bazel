@@ -1,0 +1,50 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+rust_library(
+    name = "d2b_realm_core",
+    srcs = [
+        "src/access.rs",
+        "src/allocator.rs",
+        "src/allocator_engine.rs",
+        "src/audit.rs",
+        "src/capability.rs",
+        "src/enrollment.rs",
+        "src/error.rs",
+        "src/execution.rs",
+        "src/frame.rs",
+        "src/identity_config.rs",
+        "src/identity_store.rs",
+        "src/ids.rs",
+        "src/lib.rs",
+        "src/migration.rs",
+        "src/mux.rs",
+        "src/node.rs",
+        "src/payload.rs",
+        "src/realm.rs",
+        "src/registry.rs",
+        "src/route_engine.rs",
+        "src/routing.rs",
+        "src/shell.rs",
+        "src/stream.rs",
+        "src/target.rs",
+        "src/token.rs",
+        "src/trace_context.rs",
+        "src/workload.rs",
+    ],
+    compile_data = [
+        "Cargo.toml",
+        "tests/fixtures/workload-execution-posture-v1.json",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "@crates//:schemars",
+        "@crates//:serde",
+    ],
+)
+
+rust_test(
+    name = "d2b_realm_core_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":d2b_realm_core",
+    deps = ["@crates//:serde_json"],
+)

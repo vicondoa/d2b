@@ -1,0 +1,18 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_test")
+
+rust_binary(
+    name = "d2b-wlproxy-spike",
+    srcs = ["src/main.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "@crates//:log",
+        "@crates//:wl-proxy",
+    ],
+)
+
+rust_test(
+    name = "d2b-wlproxy-spike_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":d2b-wlproxy-spike",
+)

@@ -1,0 +1,13 @@
+load("@rules_rust//rust:defs.bzl", "rust_library")
+
+rust_library(
+    name = "d2b_bus_public_api_mutations",
+    srcs = ["src/lib.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-bus:d2b_bus",
+        "//packages/d2b-bus/tests/ui/public-api-mutations/opaque-claims:opaque_claims",
+        "//packages/d2b-session:d2b_session",
+    ],
+)

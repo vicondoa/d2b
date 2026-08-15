@@ -1,0 +1,73 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+
+rust_library(
+    name = "d2b_gateway_runtime",
+    srcs = [
+        "src/aca_workload.rs",
+        "src/audit_jsonl.rs",
+        "src/credential.rs",
+        "src/display_listener.rs",
+        "src/lib.rs",
+        "src/production.rs",
+        "src/waypipe_display.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    proc_macro_deps = ["@crates//:async-trait"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-gateway:d2b_gateway",
+        "//packages/d2b-provider-aca:d2b_provider_aca",
+        "//packages/d2b-provider-relay:d2b_provider_relay",
+        "//packages/d2b-realm-core:d2b_realm_core",
+        "//packages/d2b-realm-provider:d2b_realm_provider",
+        "@crates//:base64",
+        "@crates//:chacha20poly1305",
+        "@crates//:getrandom-0.2.17",
+        "@crates//:libc",
+        "@crates//:serde",
+        "@crates//:serde_json",
+        "@crates//:sha2",
+        "@crates//:tokio",
+        "@crates//:tracing",
+    ],
+)
+
+rust_binary(
+    name = "d2b-gateway-enroll",
+    srcs = ["src/bin/d2b-gateway-enroll.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_gateway_runtime",
+        "@crates//:serde_json",
+        "@crates//:tracing",
+        "@crates//:tracing-subscriber",
+    ],
+)
+
+rust_binary(
+    name = "d2b-gateway-relay",
+    srcs = ["src/bin/d2b-gateway-relay.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_gateway_runtime",
+        "//packages/d2b-gateway:d2b_gateway",
+        "//packages/d2b-provider-relay:d2b_provider_relay",
+        "@crates//:base64",
+        "@crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "d2b_gateway_runtime_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":d2b_gateway_runtime",
+    deps = [
+        "//packages/d2b-realm-core:d2b_realm_core",
+        "//packages/d2b-realm-provider:d2b_realm_provider",
+        "@crates//:azure_core",
+        "@crates//:tempfile",
+        "@crates//:tokio",
+    ],
+)

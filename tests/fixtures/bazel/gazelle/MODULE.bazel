@@ -1,6 +1,6 @@
 module(
-    name = "d2b",
-    version = "3.0.0",
+    name = "d2b_bazel_gazelle_fixture",
+    version = "0.0.0",
 )
 
 bazel_dep(name = "rules_rust", version = "0.67.0")

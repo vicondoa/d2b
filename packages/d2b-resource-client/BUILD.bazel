@@ -1,0 +1,27 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+rust_library(
+    name = "d2b_resource_client",
+    srcs = [
+        "src/call.rs",
+        "src/client.rs",
+        "src/dispatch.rs",
+        "src/error.rs",
+        "src/lib.rs",
+        "src/process_attach.rs",
+        "src/target.rs",
+        "src/zone_client.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-contracts:d2b_contracts",
+        "@crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "d2b_resource_client_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":d2b_resource_client",
+)

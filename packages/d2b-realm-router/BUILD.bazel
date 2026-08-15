@@ -1,0 +1,55 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+rust_library(
+    name = "d2b_realm_router",
+    srcs = [
+        "src/display_transport.rs",
+        "src/execution.rs",
+        "src/lib.rs",
+        "src/mux_session.rs",
+        "src/remote_node.rs",
+        "src/secure_session.rs",
+        "src/session.rs",
+        "src/session_lifecycle.rs",
+        "src/target_resolver.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-realm-core:d2b_realm_core",
+        "//packages/d2b-realm-provider:d2b_realm_provider",
+        "@crates//:chacha20poly1305",
+        "@crates//:hmac",
+        "@crates//:serde",
+        "@crates//:serde_json",
+        "@crates//:sha2",
+        "@crates//:subtle",
+        "@crates//:tokio",
+        "@crates//:tracing",
+    ],
+)
+
+rust_test(
+    name = "transport_topology_harness",
+    srcs = ["tests/transport_topology_harness.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-realm-core:d2b_realm_core",
+        "//packages/d2b-realm-provider:d2b_realm_provider",
+        "//packages/d2b-realm-transport:d2b_realm_transport",
+        "@crates//:serde_json",
+        "@crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "d2b_realm_router_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":d2b_realm_router",
+    deps = [
+        "//packages/d2b-realm-codec-protobuf:d2b_realm_codec_protobuf",
+        "//packages/d2b-realm-transport:d2b_realm_transport",
+        "@crates//:tokio",
+    ],
+)

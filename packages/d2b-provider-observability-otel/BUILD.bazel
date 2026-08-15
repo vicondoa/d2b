@@ -1,0 +1,38 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+rust_library(
+    name = "d2b_provider_observability_otel",
+    srcs = [
+        "src/agent.rs",
+        "src/config.rs",
+        "src/emitter_socket.rs",
+        "src/ingress_policy.rs",
+        "src/lib.rs",
+        "src/metric_policy.rs",
+        "src/metrics.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-contracts:d2b_contracts",
+        "//packages/d2b-provider-toolkit:d2b_provider_toolkit",
+        "@crates//:rustix",
+        "@crates//:serde",
+        "@crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "ingress_metric_policy",
+    srcs = ["tests/ingress_metric_policy.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [":d2b_provider_observability_otel"],
+)
+
+rust_test(
+    name = "d2b_provider_observability_otel_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":d2b_provider_observability_otel",
+    deps = ["@crates//:serde_json"],
+)

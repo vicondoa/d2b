@@ -1,0 +1,238 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+rust_library(
+    name = "d2b_core",
+    srcs = [
+        "src/allocator_config.rs",
+        "src/audio_policy.rs",
+        "src/base64_codec.rs",
+        "src/bundle.rs",
+        "src/bundle_resolver.rs",
+        "src/closures.rs",
+        "src/configured_argv.rs",
+        "src/console_ring.rs",
+        "src/contract_id.rs",
+        "src/error.rs",
+        "src/host.rs",
+        "src/host_check.rs",
+        "src/host_w3.rs",
+        "src/lib.rs",
+        "src/manifest.rs",
+        "src/manifest_v04.rs",
+        "src/minijail_profile.rs",
+        "src/privileges.rs",
+        "src/privileges_w3.rs",
+        "src/process_builder.rs",
+        "src/processes.rs",
+        "src/provider_artifact.rs",
+        "src/provider_capabilities.rs",
+        "src/realm_controller_config.rs",
+        "src/realm_workloads_launcher.rs",
+        "src/runtime.rs",
+        "src/static_invariants.rs",
+        "src/storage.rs",
+        "src/storage_lifecycle.rs",
+        "src/sync.rs",
+        "src/test_support.rs",
+        "src/unsafe_local_workloads.rs",
+        "src/workload_identity.rs",
+    ],
+    compile_data = [
+        "//:tests/fixtures/deny-unknown/host-valid.json",  # keep
+        "//:tests/golden/manifest_v04/baseline-vms.json",  # keep
+        "//:tests/golden/vms.json-signoz-v7",  # keep
+        "Cargo.toml",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-realm-core:d2b_realm_core",
+        "@crates//:rustix",
+        "@crates//:schemars",
+        "@crates//:semver",
+        "@crates//:serde",
+        "@crates//:serde_json",
+        "@crates//:sha2",
+    ],
+)
+
+rust_test(
+    name = "allocator_config",
+    srcs = ["tests/allocator_config.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_core",
+        "@crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "audio-policy",
+    srcs = ["tests/audio_policy.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_core",
+        "@crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "bundle-resolver-tamper",
+    srcs = ["tests/bundle_resolver_tamper.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_core",
+        "@crates//:nix",
+        "@crates//:rustix",
+        "@crates//:serde_json",
+        "@crates//:sha2",
+        "@crates//:tempfile",
+    ],
+)
+
+rust_test(
+    name = "bundle_resolver_runner_intent_parity",
+    srcs = ["tests/bundle_resolver_runner_intent_parity.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_core",
+        "@crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "bundle_resolver_runner_intents",
+    srcs = ["tests/bundle_resolver_runner_intents.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_core",
+        "@crates//:rustix",
+        "@crates//:serde_json",
+        "@crates//:sha2",
+        "@crates//:tempfile",
+    ],
+)
+
+rust_test(
+    name = "d2b-core-fuzz-bundle",
+    srcs = ["//packages/d2b-core/fuzz:src/bin/bundle.rs"],  # keep
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_core",
+        "@crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "d2b-core-fuzz-host",
+    srcs = ["//packages/d2b-core/fuzz:src/bin/host.rs"],  # keep
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_core",
+        "@crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "d2b-core-fuzz-manifest",
+    srcs = ["//packages/d2b-core/fuzz:src/bin/manifest.rs"],  # keep
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [":d2b_core"],
+)
+
+rust_test(
+    name = "d2b-core-fuzz-privileges",
+    srcs = ["//packages/d2b-core/fuzz:src/bin/privileges.rs"],  # keep
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_core",
+        "@crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "d2b-core-smoke",
+    srcs = ["//packages/d2b-core/fuzz:src/bin/core.rs"],  # keep
+    compile_data = [
+        "//:tests/golden/vms.json-signoz-v7",  # keep
+        "Cargo.toml",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_core",
+        "@crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "manifest_bounded_property",
+    srcs = ["tests/manifest_bounded_property.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_core",
+        "@crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "manifest_v04_roundtrip",
+    srcs = ["tests/manifest_v04_roundtrip.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_core",
+        "@crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "process_builder",
+    srcs = ["tests/process_builder.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_core",
+        "@crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "realm_controller_config",
+    srcs = ["tests/realm_controller_config.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_core",
+        "@crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "runtime_dtos",
+    srcs = ["tests/runtime_dtos.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_core",
+        "@crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "d2b_core_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":d2b_core",
+    deps = [
+        "@crates//:regex",
+        "@crates//:serde_json",
+    ],
+)

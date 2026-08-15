@@ -1,0 +1,81 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+rust_library(
+    name = "d2b_provider_network_local",
+    srcs = [
+        "src/artifact.rs",
+        "src/bridge_port.rs",
+        "src/controller.rs",
+        "src/ifname.rs",
+        "src/lib.rs",
+        "src/netlink.rs",
+        "src/nftables.rs",
+        "src/observe.rs",
+        "src/plan.rs",
+        "src/routes.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = ["//packages/d2b-contracts:d2b_contracts"],
+)
+
+rust_test(
+    name = "controller_state_machine",
+    srcs = ["tests/controller_state_machine.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_provider_network_local",
+        "//packages/d2b-contracts:d2b_contracts",
+    ],
+)
+
+rust_test(
+    name = "ifname_derive",
+    srcs = ["tests/ifname_derive.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_provider_network_local",
+        "//packages/d2b-contracts:d2b_contracts",
+    ],
+)
+
+rust_test(
+    name = "net_vm_artifact_is_generic",
+    srcs = ["tests/net_vm_artifact_is_generic.rs"],
+    compile_data = [
+        "Cargo.toml",
+        "nix/net-vm.nix",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_provider_network_local",
+        "//packages/d2b-contracts:d2b_contracts",
+    ],
+)
+
+rust_test(
+    name = "network_primitives",
+    srcs = ["tests/network_primitives.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_provider_network_local",
+        "//packages/d2b-contracts:d2b_contracts",
+    ],
+)
+
+rust_test(
+    name = "telemetry_redaction",
+    srcs = ["tests/telemetry_redaction.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [":d2b_provider_network_local"],
+)
+
+rust_test(
+    name = "d2b_provider_network_local_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":d2b_provider_network_local",
+)

@@ -1,0 +1,73 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+
+rust_library(
+    name = "d2b_unsafe_local_helper",
+    srcs = [
+        "src/environment.rs",
+        "src/lib.rs",
+        "src/output_ring.rs",
+        "src/protocol.rs",
+        "src/runtime.rs",
+        "src/shell_runtime.rs",
+        "src/shell_socket.rs",
+        "src/shell_supervisor.rs",
+        "src/supervisor_protocol.rs",
+        "src/systemd.rs",
+        "src/tty_exec.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-contracts:d2b_contracts",
+        "//packages/d2b-core:d2b_core",
+        "//packages/d2b-realm-core:d2b_realm_core",
+        "//packages/d2b-wayland-proxy:d2b_wayland_proxy",
+        "@crates//:getrandom-0.2.17",
+        "@crates//:nix",
+        "@crates//:rustix",
+        "@crates//:serde",
+        "@crates//:serde_json",
+        "@crates//:sha2",
+        "@crates//:socket2",
+        "@crates//:uzers",
+        "@crates//:zbus",
+    ],
+)
+
+rust_binary(
+    name = "d2b-unsafe-local-helper",
+    srcs = ["src/main.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_unsafe_local_helper",
+        "@crates//:clap",
+    ],
+)
+
+rust_test(
+    name = "shell_supervisor",
+    srcs = ["tests/shell_supervisor.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_unsafe_local_helper",
+        "//packages/d2b-contracts:d2b_contracts",
+        "//packages/d2b-core:d2b_core",
+        "//packages/d2b-realm-core:d2b_realm_core",
+        "@crates//:getrandom-0.2.17",
+        "@crates//:nix",
+        "@crates//:serde_json",
+        "@crates//:uzers",
+    ],
+)
+
+rust_test(
+    name = "d2b_unsafe_local_helper_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":d2b_unsafe_local_helper",
+    deps = [
+        "@crates//:getrandom-0.2.17",
+        "@crates//:rustix",
+    ],
+)

@@ -1,0 +1,82 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+rust_library(
+    name = "d2b_session_unix",
+    srcs = [
+        "src/adapter.rs",
+        "src/credit.rs",
+        "src/descriptor.rs",
+        "src/error.rs",
+        "src/lib.rs",
+        "src/pidfd.rs",
+        "src/socket.rs",
+        "src/subject.rs",
+        "src/systemd.rs",
+        "src/vsock.rs",
+        "src/zone_admission.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    crate_features = [
+        "host-socket",
+        "native-vsock",
+    ],
+    proc_macro_deps = ["@crates//:async-trait"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-contracts:d2b_contracts",
+        "//packages/d2b-session:d2b_session",
+        "@crates//:envmnt",
+        "@crates//:libc",
+        "@crates//:listenfd",
+        "@crates//:nix",
+        "@crates//:rustix",
+        "@crates//:tokio",
+        "@crates//:tokio-vsock",
+    ],
+)
+
+rust_test(
+    name = "subject_mapping",
+    srcs = ["tests/subject_mapping.rs"],
+    compile_data = ["Cargo.toml"],
+    crate_features = [
+        "host-socket",
+        "native-vsock",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_session_unix",
+        "//packages/d2b-session:d2b_session",
+        "@crates//:rustix",
+        "@crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "unix_session",
+    srcs = ["tests/unix_session.rs"],
+    compile_data = ["Cargo.toml"],
+    crate_features = [
+        "host-socket",
+        "native-vsock",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_session_unix",
+        "//packages/d2b-contracts:d2b_contracts",
+        "//packages/d2b-session:d2b_session",
+        "@crates//:rustix",
+        "@crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "d2b_session_unix_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":d2b_session_unix",
+    crate_features = [
+        "host-socket",
+        "native-vsock",
+    ],
+    deps = ["@crates//:tokio"],
+)

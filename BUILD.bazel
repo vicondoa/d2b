@@ -1,1 +1,37 @@
-exports_files(["MODULE.bazel"])
+load("@gazelle//:def.bzl", "gazelle", "gazelle_binary")
+
+package(default_visibility = ["//visibility:public"])
+
+# gazelle:rust_cargo_lockfile Cargo.lock
+# gazelle:rust_crates_prefix @crates//:
+# gazelle:rust_default_edition 2024
+# gazelle:rust_mode generate_from_cargo
+
+gazelle_binary(
+    name = "gazelle_rust",
+    languages = ["@gazelle_rust//rust_language"],
+)
+
+gazelle(
+    name = "gazelle",
+    gazelle = ":gazelle_rust",
+)
+
+exports_files([
+    "Cargo.lock",
+    "Cargo.toml",
+    "MODULE.bazel",
+    "rust-toolchain.toml",
+    "nixos-modules/components/observability/dashboards/01-d2b-overview.json",
+    "tests/fixtures/deny-unknown/host-valid.json",
+    "tests/golden/manifest_v04/baseline-vms.json",
+    "tests/golden/runner-shape/audio-argv-minimal.txt",
+    "tests/golden/runner-shape/gpu-argv-minimal.txt",
+    "tests/golden/runner-shape/otel-host-bridge-argv-minimal.txt",
+    "tests/golden/runner-shape/swtpm-argv-minimal.txt",
+    "tests/golden/runner-shape/usbip-argv-minimal.txt",
+    "tests/golden/runner-shape/video-argv-minimal.txt",
+    "tests/golden/runner-shape/virtiofsd-argv-minimal.txt",
+    "tests/golden/runner-shape/vsock-relay-argv-minimal.txt",
+    "tests/golden/vms.json-signoz-v7",
+])

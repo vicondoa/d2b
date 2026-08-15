@@ -1,0 +1,15 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+rust_library(
+    name = "d2b_provider_display_wayland",
+    srcs = ["src/lib.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+)
+
+rust_test(
+    name = "scaffold",
+    srcs = ["tests/scaffold.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+)

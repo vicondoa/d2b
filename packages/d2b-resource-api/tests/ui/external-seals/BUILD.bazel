@@ -1,0 +1,89 @@
+load("@rules_rust//rust:defs.bzl", "rust_test")
+
+rust_test(
+    name = "clone_seal_acceptor",
+    srcs = ["tests/clone_seal_acceptor.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = ["//packages/d2b-resource-store:d2b_resource_store"],
+)
+
+rust_test(
+    name = "clone_sealed_mutation",
+    srcs = ["tests/clone_sealed_mutation.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = ["//packages/d2b-resource-store:d2b_resource_store"],
+)
+
+rust_test(
+    name = "compare_seal_identities",
+    srcs = ["tests/compare_seal_identities.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = ["//packages/d2b-resource-store:d2b_resource_store"],
+)
+
+rust_test(
+    name = "debug_format_sealed_mutation",
+    srcs = ["tests/debug_format_sealed_mutation.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = ["//packages/d2b-resource-store:d2b_resource_store"],
+)
+
+rust_test(
+    name = "display_format_seal_identity",
+    srcs = ["tests/display_format_seal_identity.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = ["//packages/d2b-resource-store:d2b_resource_store"],
+)
+
+rust_test(
+    name = "forge_issuer",
+    srcs = ["tests/forge_issuer.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = ["//packages/d2b-resource-api:d2b_resource_api"],
+)
+
+rust_test(
+    name = "forge_sealed_mutation",
+    srcs = ["tests/forge_sealed_mutation.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = ["//packages/d2b-resource-store:d2b_resource_store"],
+)
+
+rust_test(
+    name = "implement_mutation_view",
+    srcs = ["tests/implement_mutation_view.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = ["//packages/d2b-resource-store-redb:d2b_resource_store_redb"],
+)
+
+rust_test(
+    name = "name_seal_authority",
+    srcs = ["tests/name_seal_authority.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = ["//packages/d2b-resource-store:d2b_resource_store"],
+)
+
+rust_test(
+    name = "open_sealed_without_acceptor",
+    srcs = ["tests/open_sealed_without_acceptor.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = ["//packages/d2b-resource-store:d2b_resource_store"],
+)
+
+rust_test(
+    name = "reuse_sealed_mutation",
+    srcs = ["tests/reuse_sealed_mutation.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = ["//packages/d2b-resource-store:d2b_resource_store"],
+)

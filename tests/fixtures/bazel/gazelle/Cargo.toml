@@ -1,5 +1,5 @@
 [package]
-name = "bazel-compat-fixture"
+name = "gazelle-layout-fixture"
 version = "0.1.0"
 edition = "2024"
 
@@ -7,7 +7,7 @@ edition = "2024"
 path = "src/lib.rs"
 
 [[bin]]
-name = "compat_fixture"
+name = "gazelle_layout_fixture_bin"
 path = "src/main.rs"
 
 [dependencies]

@@ -1,0 +1,23 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+rust_library(
+    name = "d2b_realm_transport",
+    srcs = [
+        "src/lib.rs",
+        "src/local_tcp.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    proc_macro_deps = ["@crates//:async-trait"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-realm-core:d2b_realm_core",
+        "//packages/d2b-realm-provider:d2b_realm_provider",
+        "@crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "d2b_realm_transport_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":d2b_realm_transport",
+)

@@ -1,0 +1,51 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+
+rust_library(
+    name = "d2b_guest_shell_runner",
+    srcs = [
+        "src/cli.rs",
+        "src/lib.rs",
+        "src/name.rs",
+        "src/output.rs",
+        "src/socket.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "@crates//:anyhow",
+        "@crates//:clap",
+        "@crates//:serde",
+        "@crates//:thiserror",
+    ],
+)
+
+rust_binary(
+    name = "d2b-guest-shell-runner",
+    srcs = ["src/main.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_guest_shell_runner",
+        "@crates//:anyhow",
+        "@crates//:clap",
+        "@crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "cli",
+    srcs = ["tests/cli.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "@crates//:assert_cmd",
+        "@crates//:predicates",
+    ],
+)
+
+rust_test(
+    name = "d2b_guest_shell_runner_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":d2b_guest_shell_runner",
+    deps = ["@crates//:serde_json"],
+)

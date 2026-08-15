@@ -1,0 +1,61 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+
+rust_library(
+    name = "d2b_guestd",
+    srcs = [
+        "src/auth.rs",
+        "src/detached.rs",
+        "src/detached_registry.rs",
+        "src/exec.rs",
+        "src/exec_linux.rs",
+        "src/exec_pty.rs",
+        "src/generated/guest_control_ttrpc.rs",
+        "src/generated/mod.rs",
+        "src/lib.rs",
+        "src/login_session.rs",
+        "src/service.rs",
+        "src/shell.rs",
+        "src/terminal_io.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    proc_macro_deps = ["@crates//:async-trait"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-contracts:d2b_contracts",
+        "//packages/d2b-exec-runner:d2b_exec_runner",
+        "//packages/d2b-realm-core:d2b_realm_core",
+        "@crates//:futures",
+        "@crates//:hmac",
+        "@crates//:protobuf",
+        "@crates//:rustix",
+        "@crates//:sha2",
+        "@crates//:tokio",
+        "@crates//:tokio-vsock",
+        "@crates//:ttrpc",
+    ],
+)
+
+rust_binary(
+    name = "d2b-guestd",
+    srcs = ["src/main.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_guestd",
+        "@crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "fail_closed",
+    srcs = ["tests/fail_closed.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+)
+
+rust_test(
+    name = "d2b_guestd_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":d2b_guestd",
+    deps = ["//packages/d2b-exec-runner:d2b_exec_runner"],
+)

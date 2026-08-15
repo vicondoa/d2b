@@ -1,0 +1,31 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+rust_library(
+    name = "d2b_gateway",
+    srcs = [
+        "src/audit.rs",
+        "src/error.rs",
+        "src/handshake.rs",
+        "src/ledger.rs",
+        "src/lib.rs",
+        "src/orchestrator.rs",
+        "src/types.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    proc_macro_deps = ["@crates//:async-trait"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-realm-core:d2b_realm_core",
+        "@crates//:hmac",
+        "@crates//:serde",
+        "@crates//:serde_json",
+        "@crates//:sha2",
+    ],
+)
+
+rust_test(
+    name = "d2b_gateway_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":d2b_gateway",
+    deps = ["@crates//:tokio"],
+)

@@ -1,0 +1,107 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+
+rust_library(
+    name = "d2b_clipd",
+    srcs = [
+        "src/audit.rs",
+        "src/fallback.rs",
+        "src/fd.rs",
+        "src/framing.rs",
+        "src/host.rs",
+        "src/lib.rs",
+        "src/niri.rs",
+        "src/notifications.rs",
+        "src/picker.rs",
+        "src/policy.rs",
+        "src/protocol.rs",
+        "src/virtual_keyboard.rs",
+        "src/wayland.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-core:d2b_core",
+        "//packages/d2b-realm-core:d2b_realm_core",
+        "@crates//:command-fds",
+        "@crates//:log",
+        "@crates//:notify-rust",
+        "@crates//:rustix",
+        "@crates//:serde",
+        "@crates//:serde_json",
+        "@crates//:sha2",
+        "@crates//:thiserror",
+        "@crates//:wayland-client",
+        "@crates//:wayland-protocols",
+        "@crates//:wayland-protocols-misc",
+        "@crates//:wayland-protocols-wlr",
+    ],
+)
+
+rust_binary(
+    name = "d2b-clip-debug",
+    srcs = ["src/bin/d2b-clip-debug.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "@crates//:env_logger",
+        "@crates//:rustix",
+        "@crates//:wayland-client",
+    ],
+)
+
+rust_binary(
+    name = "d2b-clipd",
+    srcs = ["src/main.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_clipd",
+        "//packages/d2b-core:d2b_core",
+        "//packages/d2b-realm-core:d2b_realm_core",
+        "@crates//:env_logger",
+        "@crates//:html2text",
+        "@crates//:log",
+        "@crates//:nix",
+        "@crates//:rustix",
+        "@crates//:serde",
+        "@crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "daemon_cli",
+    srcs = ["tests/daemon_cli.rs"],
+    compile_data = [
+        "Cargo.toml",
+        "src/main.rs",
+    ],
+    visibility = ["//visibility:public"],
+    deps = ["@crates//:serde_json"],
+)
+
+rust_test(
+    name = "test_pipe",
+    srcs = ["tests/test_pipe.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = ["@crates//:rustix"],
+)
+
+rust_test(
+    name = "d2b_clipd_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":d2b_clipd",
+    deps = ["@crates//:serde_json"],
+)
+
+rust_test(
+    name = "d2b-clip-debug_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":d2b-clip-debug",
+)
+
+rust_test(
+    name = "d2b-clipd_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":d2b-clipd",
+)

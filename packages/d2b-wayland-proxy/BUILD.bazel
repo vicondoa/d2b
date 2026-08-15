@@ -1,0 +1,73 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+
+rust_library(
+    name = "d2b_wayland_proxy",
+    srcs = [
+        "src/attribution.rs",
+        "src/bridge.rs",
+        "src/clipboard.rs",
+        "src/decoration.rs",
+        "src/diag.rs",
+        "src/dmabuf.rs",
+        "src/filter.rs",
+        "src/identity.rs",
+        "src/lib.rs",
+        "src/policy.rs",
+        "src/readiness.rs",
+        "src/terminal.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-core:d2b_core",
+        "//packages/d2b-realm-core:d2b_realm_core",
+        "@crates//:getrandom-0.2.17",
+        "@crates//:log",
+        "@crates//:nix",
+        "@crates//:rustix",
+        "@crates//:serde",
+        "@crates//:serde_json",
+        "@crates//:sha2",
+        "@crates//:thiserror",
+        "@crates//:uapi",
+        "@crates//:wl-proxy",
+    ],
+)
+
+rust_binary(
+    name = "d2b-wayland-proxy",
+    srcs = ["src/main.rs"],
+    compile_data = [
+        "Cargo.toml",
+        "src/filter.rs",
+        "src/main.rs",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_wayland_proxy",
+        "//packages/d2b-core:d2b_core",
+        "//packages/d2b-realm-core:d2b_realm_core",
+        "@crates//:clap",
+        "@crates//:env_logger",
+        "@crates//:libc",
+        "@crates//:log",
+        "@crates//:rustix",
+        "@crates//:smallvec",
+    ],
+)
+
+rust_test(
+    name = "d2b_wayland_proxy_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":d2b_wayland_proxy",
+    deps = [
+        "//packages/d2b-core:d2b_core",
+        "//packages/d2b-realm-core:d2b_realm_core",
+    ],
+)
+
+rust_test(
+    name = "d2b-wayland-proxy_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":d2b-wayland-proxy",
+)

@@ -1,0 +1,61 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+rust_library(
+    name = "d2b_provider_device_gpu",
+    srcs = [
+        "src/controller.rs",
+        "src/effects.rs",
+        "src/lib.rs",
+        "src/process.rs",
+        "src/settings.rs",
+        "src/wire.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-contracts:d2b_contracts",
+        "@crates//:serde",
+    ],
+)
+
+rust_test(
+    name = "combined_reconcile",
+    srcs = ["tests/combined_reconcile.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_provider_device_gpu",
+        "//packages/d2b-contracts:d2b_contracts",
+    ],
+)
+
+rust_test(
+    name = "conformance",
+    srcs = ["tests/conformance.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_provider_device_gpu",
+        "//packages/d2b-contracts:d2b_contracts",
+        "@crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "render_node_enforcement",
+    srcs = ["tests/render_node_enforcement.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_provider_device_gpu",
+        "//packages/d2b-contracts:d2b_contracts",
+    ],
+)
+
+rust_test(
+    name = "wire_constant_snapshot",
+    srcs = ["tests/wire_constant_snapshot.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [":d2b_provider_device_gpu"],
+)

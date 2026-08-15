@@ -3,7 +3,7 @@
 version = 4
 
 [[package]]
-name = "bazel-compat-fixture"
+name = "gazelle-layout-fixture"
 version = "0.1.0"
 dependencies = [
  "serde_json",

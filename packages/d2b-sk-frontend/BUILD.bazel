@@ -1,0 +1,24 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_test")
+
+rust_binary(
+    name = "d2b-sk-frontend",
+    srcs = [
+        "src/framing.rs",
+        "src/main.rs",
+        "src/uhid.rs",
+        "src/vsock.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "@crates//:libc",
+        "@crates//:tokio",
+        "@crates//:tokio-vsock",
+    ],
+)
+
+rust_test(
+    name = "d2b-sk-frontend_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":d2b-sk-frontend",
+)

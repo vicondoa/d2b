@@ -1,0 +1,4 @@
+package(default_visibility = ["//visibility:public"])
+
+# keep
+exports_files(["manifest.json"])

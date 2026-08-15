@@ -1,0 +1,59 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+
+rust_library(
+    name = "d2b_exec_runner",
+    srcs = [
+        "src/atomicio.rs",
+        "src/codec.rs",
+        "src/filering.rs",
+        "src/lib.rs",
+        "src/limits.rs",
+        "src/paths.rs",
+        "src/record.rs",
+        "src/spec.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+)
+
+rust_binary(
+    name = "d2b-exec-runner",
+    srcs = [
+        "src/main.rs",
+        "src/service_mode.rs",
+        "src/tty_helper.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_exec_runner",
+        "@crates//:rustix",
+    ],
+)
+
+rust_test(
+    name = "fail_closed",
+    srcs = ["tests/fail_closed.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+)
+
+rust_test(
+    name = "tty_pty_integration",
+    srcs = ["tests/tty_pty_integration.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = ["@crates//:rustix"],
+)
+
+rust_test(
+    name = "d2b_exec_runner_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":d2b_exec_runner",
+)
+
+rust_test(
+    name = "d2b-exec-runner_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":d2b-exec-runner",
+)

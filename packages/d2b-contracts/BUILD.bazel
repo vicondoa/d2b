@@ -1,0 +1,153 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+rust_library(
+    name = "d2b_contracts",
+    srcs = [
+        "src/broker_wire.rs",
+        "src/cli_output.rs",
+        "src/generated/d2b_resource_v3.rs",
+        "src/generated/guest_control.rs",
+        "src/generated/mod.rs",
+        "src/generation_bundle.rs",
+        "src/guest_auth.rs",
+        "src/guest_wire.rs",
+        "src/lib.rs",
+        "src/public_wire.rs",
+        "src/resource_proto_formatting_tests.rs",
+        "src/security_key.rs",
+        "src/terminal_wire.rs",
+        "src/types.rs",
+        "src/unsafe_local_wire.rs",
+        "src/usbip.rs",
+        "src/v3/component_session.rs",
+        "src/v3/credential.rs",
+        "src/v3/credential/service.rs",
+        "src/v3/credential_controller.rs",
+        "src/v3/device.rs",
+        "src/v3/emergency_policy.rs",
+        "src/v3/endpoint.rs",
+        "src/v3/error.rs",
+        "src/v3/execution_policy.rs",
+        "src/v3/guest.rs",
+        "src/v3/host.rs",
+        "src/v3/identity.rs",
+        "src/v3/ifname.rs",
+        "src/v3/limits.rs",
+        "src/v3/mod.rs",
+        "src/v3/network.rs",
+        "src/v3/process.rs",
+        "src/v3/provider.rs",
+        "src/v3/provider_registry.rs",
+        "src/v3/quota.rs",
+        "src/v3/resource.rs",
+        "src/v3/resource_bundle.rs",
+        "src/v3/resource_export.rs",
+        "src/v3/resource_import.rs",
+        "src/v3/resource_ref.rs",
+        "src/v3/resource_schema.rs",
+        "src/v3/resource_status.rs",
+        "src/v3/role.rs",
+        "src/v3/role_binding.rs",
+        "src/v3/semantic_services/audio.rs",
+        "src/v3/semantic_services/mod.rs",
+        "src/v3/semantic_services/security_key.rs",
+        "src/v3/semantic_services/telemetry.rs",
+        "src/v3/semantic_services/usb.rs",
+        "src/v3/services.rs",
+        "src/v3/storage.rs",
+        "src/v3/telemetry_frame.rs",
+        "src/v3/telemetry_policy.rs",
+        "src/v3/user.rs",
+        "src/v3/volume.rs",
+        "src/v3/volume_state.rs",
+        "src/v3/zone.rs",
+        "src/v3/zone_link.rs",
+        "src/v3/zone_routing.rs",
+        "src/v3/zone_session.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-core:d2b_core",
+        "//packages/d2b-realm-core:d2b_realm_core",
+        "@crates//:protobuf",
+        "@crates//:schemars",
+        "@crates//:serde",
+        "@crates//:serde_json",
+        "@crates//:sha2",
+        "@crates//:unicode-normalization",
+    ],
+)
+
+rust_test(
+    name = "broker_network_prep",
+    srcs = ["tests/broker_network_prep.rs"],
+    compile_data = [
+        "//:tests/fixtures/deny-unknown/host-valid.json",  # keep
+        "//:tests/golden/manifest_v04/baseline-vms.json",  # keep
+        "Cargo.toml",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-core:d2b_core",
+        "@crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "generation_bundle",
+    srcs = ["tests/generation_bundle.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_contracts",
+        "@crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "guest_proto_bindings",
+    srcs = ["tests/guest_proto_bindings.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_contracts",
+        "@crates//:protobuf",
+        "@crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "resource_v3_protocol_vectors",
+    srcs = ["tests/resource_v3_protocol_vectors.rs"],
+    compile_data = [
+        "Cargo.toml",
+        "proto/d2b-resource-v3.proto",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_contracts",
+        "@crates//:protobuf",
+    ],
+)
+
+rust_test(
+    name = "version_skew",
+    srcs = ["tests/version_skew.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_contracts",
+        "@crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "d2b_contracts_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":d2b_contracts",
+    deps = [
+        "@crates//:protobuf",
+        "@crates//:serde_json",
+    ],
+)

@@ -1,0 +1,86 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+rust_library(
+    name = "d2b_provider_device_security_key",
+    srcs = [
+        "src/authority.rs",
+        "src/cid.rs",
+        "src/controller.rs",
+        "src/descriptor.rs",
+        "src/lease.rs",
+        "src/lib.rs",
+        "src/process.rs",
+        "src/session_ring.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-contracts:d2b_contracts",
+        "@crates//:serde",
+    ],
+)
+
+rust_test(
+    name = "conformance",
+    srcs = ["tests/conformance.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_provider_device_security_key",
+        "//packages/d2b-contracts:d2b_contracts",
+        "@crates//:serde",
+        "@crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "guest_frontend_process",
+    srcs = ["tests/guest_frontend_process.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_provider_device_security_key",
+        "//packages/d2b-contracts:d2b_contracts",
+    ],
+)
+
+rust_test(
+    name = "lease_state_machine",
+    srcs = ["tests/lease_state_machine.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_provider_device_security_key",
+        "//packages/d2b-contracts:d2b_contracts",
+    ],
+)
+
+rust_test(
+    name = "mutual_exclusion",
+    srcs = ["tests/mutual_exclusion.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_provider_device_security_key",
+        "//packages/d2b-contracts:d2b_contracts",
+    ],
+)
+
+rust_test(
+    name = "provider_lifecycle",
+    srcs = ["integration/provider_lifecycle.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_provider_device_security_key",
+        "//packages/d2b-contracts:d2b_contracts",
+    ],
+)
+
+rust_test(
+    name = "session_ring",
+    srcs = ["tests/session_ring.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [":d2b_provider_device_security_key"],
+)

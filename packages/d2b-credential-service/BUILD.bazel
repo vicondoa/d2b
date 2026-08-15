@@ -1,0 +1,61 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+rust_library(
+    name = "d2b_credential_service",
+    srcs = [
+        "src/client.rs",
+        "src/lib.rs",
+        "src/server.rs",
+        "src/service.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = ["//packages/d2b-contracts:d2b_contracts"],
+)
+
+rust_test(
+    name = "admission",
+    srcs = ["tests/admission.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_credential_service",
+        "//packages/d2b-contracts:d2b_contracts",
+    ],
+)
+
+rust_test(
+    name = "protocol",
+    srcs = ["tests/protocol.rs"],
+    compile_data = [
+        "//packages/d2b-contracts:proto/v3/credential.proto",  # keep
+        "Cargo.toml",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_credential_service",
+        "//packages/d2b-contracts:d2b_contracts",
+    ],
+)
+
+rust_test(
+    name = "redaction",
+    srcs = ["tests/redaction.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_credential_service",
+        "//packages/d2b-contracts:d2b_contracts",
+    ],
+)
+
+rust_test(
+    name = "server",
+    srcs = ["tests/server.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_credential_service",
+        "//packages/d2b-contracts:d2b_contracts",
+    ],
+)

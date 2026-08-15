@@ -1,0 +1,77 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+rust_library(
+    name = "d2b_provider_device_usbip",
+    srcs = [
+        "src/arbitration.rs",
+        "src/busid.rs",
+        "src/controller.rs",
+        "src/firewall.rs",
+        "src/lib.rs",
+        "src/process.rs",
+        "src/workers.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = ["//packages/d2b-contracts:d2b_contracts"],
+)
+
+rust_test(
+    name = "arbitration_conflict",
+    srcs = ["tests/arbitration_conflict.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_provider_device_usbip",
+        "//packages/d2b-contracts:d2b_contracts",
+    ],
+)
+
+rust_test(
+    name = "conformance",
+    srcs = ["tests/conformance.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_provider_device_usbip",
+        "//packages/d2b-contracts:d2b_contracts",
+    ],
+)
+
+rust_test(
+    name = "controller_state_machine",
+    srcs = ["tests/controller_state_machine.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_provider_device_usbip",
+        "//packages/d2b-contracts:d2b_contracts",
+    ],
+)
+
+rust_test(
+    name = "explicit_attach_split",
+    srcs = ["tests/explicit_attach_split.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [":d2b_provider_device_usbip"],
+)
+
+rust_test(
+    name = "firewall_marker",
+    srcs = ["tests/firewall_marker.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [":d2b_provider_device_usbip"],
+)
+
+rust_test(
+    name = "wrong_zone_and_redaction",
+    srcs = ["tests/wrong_zone_and_redaction.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_provider_device_usbip",
+        "//packages/d2b-contracts:d2b_contracts",
+    ],
+)

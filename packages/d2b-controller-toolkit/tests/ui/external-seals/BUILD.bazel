@@ -1,0 +1,12 @@
+load("@rules_rust//rust:defs.bzl", "rust_test")
+
+rust_test(
+    name = "forge_committed_decision",
+    srcs = ["tests/forge_committed_decision.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-contracts:d2b_contracts",
+        "//packages/d2b-controller-toolkit:d2b_controller_toolkit",
+    ],
+)

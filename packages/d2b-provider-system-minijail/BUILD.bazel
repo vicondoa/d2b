@@ -1,0 +1,44 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+rust_library(
+    name = "d2b_provider_system_minijail",
+    srcs = [
+        "src/adoption.rs",
+        "src/effect_port.rs",
+        "src/effect_result.rs",
+        "src/launch.rs",
+        "src/lib.rs",
+        "src/sandbox_compiler.rs",
+        "src/user_ns.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-contracts:d2b_contracts",
+        "//packages/d2b-process-conformance:d2b_process_conformance",
+    ],
+)
+
+rust_test(
+    name = "conformance",
+    srcs = ["tests/conformance.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_provider_system_minijail",
+        "//packages/d2b-contracts:d2b_contracts",
+        "//packages/d2b-process-conformance:d2b_process_conformance",
+    ],
+)
+
+rust_test(
+    name = "execution_parents",
+    srcs = ["tests/execution_parents.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_provider_system_minijail",
+        "//packages/d2b-contracts:d2b_contracts",
+        "//packages/d2b-process-conformance:d2b_process_conformance",
+    ],
+)

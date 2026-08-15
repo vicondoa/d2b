@@ -459,6 +459,7 @@ fn pins_exact_upstream_bazel_and_unmodified_bzlmod_tools() {
         "crate.from_cargo(",
         "use_repo(crate, \"crates\")",
         "register_toolchains(\"@rust_toolchains//:all\")",
+        "versions = [\"1.97.0\"]",
         "bazel_dep(name = \"gazelle_rust\", version = \"0.1.0\")",
         "bazel_dep(name = \"protobuf\", version = \"33.4\")",
     ] {
@@ -512,6 +513,16 @@ fn exact_bazel_version_analyzes_and_runs_the_upstream_compatibility_fixture() {
         "-index=lazy",
         "tests/fixtures/bazel/compat",
     ]);
+    run_bazel(&[
+        "run",
+        "--noshow_progress",
+        "//:gazelle",
+        "--",
+        "-mode=diff",
+        "-index=lazy",
+        "packages",
+        "tests/fixtures/bazel/gazelle",
+    ]);
 
     let generated_build = read_repo_file("tests/fixtures/bazel/compat/BUILD.bazel");
     assert!(
@@ -539,7 +550,7 @@ fn compatibility_fixture_declares_the_third_party_and_exception_boundaries() {
 
     let generated_build = read_repo_file("tests/fixtures/bazel/compat/BUILD.bazel");
     assert!(
-        generated_build.contains("@crates//:itoa"),
+        generated_build.contains("@crates//:serde_json"),
         "the compatibility graph must contain a crate_universe dependency"
     );
     assert!(

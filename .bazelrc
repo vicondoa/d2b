@@ -1,3 +1,4 @@
+common --lockfile_mode=error
 common --@protobuf//bazel/toolchains:prefer_prebuilt_protoc
 common --per_file_copt=external/.*protobuf.*@--PROTOBUF_WAS_NOT_SUPPOSED_TO_BE_BUILT
 common --host_per_file_copt=external/.*protobuf.*@--PROTOBUF_WAS_NOT_SUPPOSED_TO_BE_BUILT

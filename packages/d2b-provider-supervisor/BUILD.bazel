@@ -1,0 +1,53 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+rust_library(
+    name = "d2b_provider_supervisor",
+    srcs = [
+        "src/adapter.rs",
+        "src/broker.rs",
+        "src/lib.rs",
+        "src/metrics.rs",
+        "src/systemd.rs",
+        "src/tracing.rs",
+    ],
+    compile_data = [
+        "//packages/d2b-priv-broker:src/live_handlers.rs",  # keep
+        "//packages/d2b-priv-broker:src/runtime.rs",  # keep
+        "Cargo.toml",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-contracts:d2b_contracts",
+        "//packages/d2b-process:d2b_process",
+        "//packages/d2b-telemetry:d2b_telemetry",
+        "@crates//:rustix",
+        "@crates//:serde_json",
+        "@crates//:sha2",
+        "@crates//:socket2",
+    ],
+)
+
+rust_test(
+    name = "production_adapter",
+    srcs = ["tests/production_adapter.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_provider_supervisor",
+        "//packages/d2b-contracts:d2b_contracts",
+        "//packages/d2b-process:d2b_process",
+        "//packages/d2b-process-conformance:d2b_process_conformance",
+        "//packages/d2b-provider-system-minijail:d2b_provider_system_minijail",
+        "//packages/d2b-provider-system-systemd:d2b_provider_system_systemd",
+        "@crates//:rustix",
+        "@crates//:tempfile",
+        "@crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "d2b_provider_supervisor_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":d2b_provider_supervisor",
+    deps = ["//packages/d2b-process-conformance:d2b_process_conformance"],
+)

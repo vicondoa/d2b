@@ -1,0 +1,18 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+rust_library(
+    name = "d2b_process",
+    srcs = [
+        "src/backend.rs",
+        "src/lib.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = ["//packages/d2b-process-conformance:d2b_process_conformance"],
+)
+
+rust_test(
+    name = "d2b_process_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":d2b_process",
+)

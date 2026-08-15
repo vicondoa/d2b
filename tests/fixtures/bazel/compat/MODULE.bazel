@@ -10,7 +10,10 @@ bazel_dep(name = "gazelle_rust", version = "0.1.0")
 bazel_dep(name = "protobuf", version = "33.4")
 
 rust = use_extension("@rules_rust//rust:extensions.bzl", "rust")
-rust.toolchain(edition = "2024")
+rust.toolchain(
+    edition = "2024",
+    versions = ["1.97.0"],
+)
 use_repo(rust, "rust_toolchains")
 register_toolchains("@rust_toolchains//:all")
 

@@ -1,0 +1,42 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+rust_library(
+    name = "d2b_provider_device_tpm",
+    srcs = [
+        "src/controller.rs",
+        "src/lib.rs",
+        "src/migration.rs",
+        "src/runner.rs",
+        "src/state.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = ["@crates//:serde"],
+)
+
+rust_test(
+    name = "conformance",
+    srcs = ["tests/conformance.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_provider_device_tpm",
+        "@crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "controller_state_machine",
+    srcs = ["tests/controller_state_machine.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [":d2b_provider_device_tpm"],
+)
+
+rust_test(
+    name = "fault_swtpm_missing",
+    srcs = ["tests/fault_swtpm_missing.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [":d2b_provider_device_tpm"],
+)

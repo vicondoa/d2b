@@ -1,0 +1,273 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+
+rust_library(
+    name = "d2b_lib",
+    srcs = [
+        "src/activation.rs",
+        "src/complete.rs",
+        "src/context.rs",
+        "src/dispatch.rs",
+        "src/doctor.rs",
+        "src/endpoint.rs",
+        "src/exec.rs",
+        "src/exec_client.rs",
+        "src/guest.rs",
+        "src/host.rs",
+        "src/host_validate.rs",
+        "src/legacy.rs",
+        "src/lib.rs",
+        "src/provider.rs",
+        "src/resource.rs",
+        "src/share.rs",
+        "src/shell.rs",
+        "src/status_read_model.rs",
+        "src/target_routing.rs",
+        "src/terminal_client.rs",
+        "src/zone.rs",
+        "src/zone_audit.rs",
+        "src/zone_doctor.rs",
+        "src/zone_support_bundle.rs",
+    ],
+    compile_data = [
+        "Cargo.toml",
+        "src/legacy.rs",
+        "src/lib.rs",
+    ],
+    crate_name = "d2b",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-contracts:d2b_contracts",
+        "//packages/d2b-core:d2b_core",
+        "//packages/d2b-realm-core:d2b_realm_core",
+        "//packages/d2b-realm-router:d2b_realm_router",
+        "//packages/d2b-resource-client:d2b_resource_client",
+        "@crates//:clap",
+        "@crates//:nix",
+        "@crates//:rustix",
+        "@crates//:schemars",
+        "@crates//:serde",
+        "@crates//:serde_json",
+        "@crates//:sha2",
+    ],
+)
+
+rust_binary(
+    name = "d2b",
+    srcs = ["src/main.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [":d2b_lib"],
+)
+
+rust_test(
+    name = "audit_contract",
+    srcs = [
+        "tests/audit_contract.rs",
+        "tests/common/mod.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    crate_root = "tests/audit_contract.rs",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-contracts:d2b_contracts",
+        "@crates//:nix",
+        "@crates//:serde_json",
+        "@crates//:tempfile",
+    ],
+)
+
+rust_test(
+    name = "auth_status_contract",
+    srcs = ["tests/auth_status_contract.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-contracts:d2b_contracts",
+        "@crates//:serde_json",
+        "@crates//:tempfile",
+    ],
+)
+
+rust_test(
+    name = "cli_contract",
+    srcs = ["tests/cli_contract.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "@crates//:serde_json",
+        "@crates//:tempfile",
+    ],
+)
+
+rust_test(
+    name = "cli_contract_coverage",
+    srcs = ["tests/cli_contract_coverage.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_lib",
+        "@crates//:clap",
+        "@crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "cli_json_contract",
+    srcs = ["tests/cli_json_contract.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "@crates//:rustix",
+        "@crates//:serde_json",
+        "@crates//:tempfile",
+    ],
+)
+
+rust_test(
+    name = "cli_json_output_contract",
+    srcs = ["tests/cli_json_output_contract.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "@crates//:nix",
+        "@crates//:serde_json",
+        "@crates//:tempfile",
+    ],
+)
+
+rust_test(
+    name = "host_check_contract",
+    srcs = [
+        "tests/common/mod.rs",
+        "tests/host_check_contract.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    crate_root = "tests/host_check_contract.rs",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-contracts:d2b_contracts",
+        "//packages/d2b-core:d2b_core",
+        "@crates//:nix",
+        "@crates//:serde_json",
+        "@crates//:tempfile",
+    ],
+)
+
+rust_test(
+    name = "host_doctor_contract",
+    srcs = ["tests/host_doctor_contract.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "@crates//:nix",
+        "@crates//:serde_json",
+        "@crates//:tempfile",
+    ],
+)
+
+rust_test(
+    name = "host_validate_verb",
+    srcs = ["tests/host_validate_verb.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "@crates//:serde_json",
+        "@crates//:tempfile",
+    ],
+)
+
+rust_test(
+    name = "launch_contract",
+    srcs = ["tests/launch_contract.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = ["@crates//:tempfile"],
+)
+
+rust_test(
+    name = "status_contract",
+    srcs = ["tests/status_contract.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "@crates//:serde_json",
+        "@crates//:tempfile",
+    ],
+)
+
+rust_test(
+    name = "usb_contract",
+    srcs = ["tests/usb_contract.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "@crates//:serde_json",
+        "@crates//:tempfile",
+    ],
+)
+
+rust_test(
+    name = "usb_sk_contract",
+    srcs = ["tests/usb_sk_contract.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "@crates//:serde_json",
+        "@crates//:tempfile",
+    ],
+)
+
+rust_test(
+    name = "vm_verbs_contract",
+    srcs = ["tests/vm_verbs_contract.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "@crates//:serde_json",
+        "@crates//:tempfile",
+    ],
+)
+
+rust_test(
+    name = "zone_audit_contract",
+    srcs = ["tests/zone_audit_contract.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "@crates//:nix",
+        "@crates//:serde_json",
+        "@crates//:sha2",
+        "@crates//:tempfile",
+    ],
+)
+
+rust_test(
+    name = "zone_doctor_contract",
+    srcs = ["tests/zone_doctor_contract.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "@crates//:nix",
+        "@crates//:serde_json",
+        "@crates//:tempfile",
+    ],
+)
+
+rust_test(
+    name = "zone_support_bundle_contract",
+    srcs = ["tests/zone_support_bundle_contract.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "@crates//:nix",
+        "@crates//:serde_json",
+        "@crates//:tempfile",
+    ],
+)
+
+rust_test(
+    name = "d2b_lib_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":d2b_lib",
+    deps = ["@crates//:nix"],
+)
