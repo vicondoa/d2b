@@ -1,0 +1,138 @@
+//! Typed Process-conformance lifecycle for session supervisors.
+
+use std::collections::BTreeSet;
+
+use d2b_contracts::v3::execution_policy::{BoundedToken, ExecutionDomain};
+use d2b_process_conformance::{
+    AdoptionCondition, AdoptionOutcome, CancellationBinding, IdentityBinding, LaunchTicket,
+    ProcessConformanceError, ProcessIdentityDigest, ProcessLaunchEffectPort, ProcessPhaseClass,
+    ProcessProvider, ProcessProviderProfile, ProcessStatusReport, StopClass, WaitReapOwner,
+};
+
+/// User-domain supervisor lifecycle delegated to `Provider/system-systemd`.
+///
+/// This type validates only the semantic process request and calls a typed
+/// effect port. It neither opens a broker or system-manager connection nor
+/// receives raw process identifiers, credentials, paths, or descriptors.
+#[derive(Debug)]
+pub struct SupervisorProcessLifecycle<P: ProcessLaunchEffectPort> {
+    port: P,
+    profile: ProcessProviderProfile,
+}
+
+impl<P: ProcessLaunchEffectPort> SupervisorProcessLifecycle<P> {
+    /// Construct a workload-user supervisor lifecycle over a fixed effect port.
+    pub fn new(port: P) -> Self {
+        let profile = ProcessProviderProfile::new(
+            BoundedToken::parse("system-systemd")
+                .expect("the fixed system-systemd provider token is valid"),
+            WaitReapOwner::ServiceManager,
+            BTreeSet::from([ExecutionDomain::User]),
+            BTreeSet::from([
+                IdentityBinding::UnitInvocationId,
+                IdentityBinding::Cgroup,
+                IdentityBinding::UnitMainPid,
+                IdentityBinding::ProcessStartTime,
+                IdentityBinding::Template,
+                IdentityBinding::Generation,
+            ]),
+        )
+        .expect("the fixed supervisor process profile is valid");
+        Self { port, profile }
+    }
+
+    fn validate(&self, ticket: &LaunchTicket) -> Result<(), ProcessConformanceError> {
+        if ticket.selected_provider().as_str() != "system-systemd" {
+            return Err(ProcessConformanceError::ProviderMismatch);
+        }
+        if ticket.domain() != ExecutionDomain::User || ticket.user_ref().is_none() {
+            return Err(ProcessConformanceError::UserRefRequired);
+        }
+        if ticket.operation().cancellation() == CancellationBinding::Cancelled {
+            return Err(ProcessConformanceError::Cancelled);
+        }
+        Ok(())
+    }
+
+    fn report(
+        &self,
+        ticket: &LaunchTicket,
+        identity: ProcessIdentityDigest,
+        phase: ProcessPhaseClass,
+        adoption: AdoptionCondition,
+    ) -> ProcessStatusReport {
+        ProcessStatusReport {
+            provider: self.profile.provider().clone(),
+            identity,
+            wait_reap_owner: WaitReapOwner::ServiceManager,
+            execution_ref: ticket.execution_ref().clone(),
+            domain: ExecutionDomain::User,
+            user_ref: ticket.user_ref().cloned(),
+            digests: *ticket.digests(),
+            phase,
+            last_exit: None,
+            adoption,
+        }
+    }
+}
+
+impl<P: ProcessLaunchEffectPort> ProcessProvider for SupervisorProcessLifecycle<P> {
+    fn profile(&self) -> &ProcessProviderProfile {
+        &self.profile
+    }
+
+    async fn launch(
+        &self,
+        ticket: &LaunchTicket,
+    ) -> Result<ProcessStatusReport, ProcessConformanceError> {
+        self.validate(ticket)?;
+        let launched = self.port.launch(ticket).await?;
+        if launched.wait_reap_owner != WaitReapOwner::ServiceManager {
+            return Err(ProcessConformanceError::WaitOwnerMismatch);
+        }
+        launched.validate(self.profile.required_identity_bindings())?;
+        Ok(self.report(
+            ticket,
+            launched.identity,
+            ProcessPhaseClass::Running,
+            AdoptionCondition::NotApplicable,
+        ))
+    }
+
+    async fn adopt(
+        &self,
+        ticket: &LaunchTicket,
+    ) -> Result<AdoptionOutcome, ProcessConformanceError> {
+        self.validate(ticket)?;
+        let Some(candidate) = self.port.observe(ticket).await? else {
+            return Ok(AdoptionOutcome::Absent);
+        };
+        let identity_verified = candidate.wait_reap_owner == WaitReapOwner::ServiceManager
+            && candidate
+                .validate(self.profile.required_identity_bindings())
+                .is_ok();
+        if !identity_verified {
+            return Ok(AdoptionOutcome::Quarantined(self.report(
+                ticket,
+                candidate.identity,
+                ProcessPhaseClass::Unknown,
+                AdoptionCondition::Quarantined,
+            )));
+        }
+        let _pidfd = self.port.open_pidfd(&candidate).await?;
+        Ok(AdoptionOutcome::Adopted(self.report(
+            ticket,
+            candidate.identity,
+            ProcessPhaseClass::Running,
+            AdoptionCondition::Adopted,
+        )))
+    }
+
+    async fn stop(
+        &self,
+        identity: &ProcessIdentityDigest,
+        class: StopClass,
+    ) -> Result<(), ProcessConformanceError> {
+        self.port.stop(identity, class).await
+    }
+}

@@ -1,8 +1,9 @@
 # `d2b-provider-shell-terminal`
 
-This is the canonical crate root for `Provider/shell-terminal`. It is a
-compile-safe scaffold; semantic Provider behavior is intentionally not present
-here.
+This crate implements the policy and lifecycle contracts for
+`Provider/shell-terminal`. It models qualified pool and session resources,
+current-request authorization, workload-user supervisor placement, bounded PTY
+replay, stale-generation refusal, and verified restart adoption.
 
 See [Create a Provider](../../docs/how-to/create-provider.md) and the
 [shell-terminal dossier](../../docs/specs/providers/ADR-046-provider-shell-terminal.md)
@@ -16,39 +17,34 @@ for the implementation contract.
 | Provider reference | `Provider/shell-terminal` |
 | Package | `packages/d2b-provider-shell-terminal/` |
 
-## Config schema
+## Resource model
 
-The Provider-specific configuration is defined by the shell-terminal dossier.
-This scaffold does not publish a configuration schema.
+- `shell-terminal.d2bus.org.ShellPool` binds one Host or Guest target, one
+  workload user, a manifest-fixed login shell artifact, and bounded capacity.
+- `shell-terminal.d2bus.org.ShellSession` freezes those inherited fields and
+  owns one workload-user session supervisor.
+- The controller owns no Provider state volume. PTY bytes and attachment state
+  stay in the supervisor's bounded in-memory ring.
 
-## Exported resource types
+All service verbs authorize the current Zone-scoped request before capacity or
+route lookup. Relay-authenticated callers cannot use Host user-domain pools.
 
-The resource types are defined by the dossier. This scaffold exports no
-resource implementation.
+## Process and stream contracts
 
-## Controllers / services / workers / binaries
+- Session supervisors use the typed `Provider/system-systemd` user-domain
+  process conformance seam. The provider cannot open a broker or
+  system-manager connection, inherit credentials, or receive raw process
+  identifiers.
+- The public controller service is `shell-terminal.v3`; supervisors expose
+  `shell-session-supervisor.v1` and the named `terminal` stream.
+- Reconnect replays only bounded in-memory output. Stale generations and
+  reused capabilities refuse. Detach does not terminate a shell.
 
-None are implemented in this scaffold. Controllers, services, workers, and
-binaries belong to the owning Provider implementation.
+## Observability
 
-## Placement and dependencies
-
-No runtime placement is declared, and the scaffold has no workspace
-dependencies.
-
-## RBAC requirements
-
-The scaffold requests no permissions and performs no resource or effect
-operations.
-
-## Security posture
-
-No host, broker, filesystem, network, process, credential, or device effect is
-reachable from this scaffold.
-
-## State and telemetry
-
-The scaffold owns no state and emits no telemetry.
+Diagnostics and metrics use closed labels and bounded retention. Terminal
+bytes, paths, process identifiers, user names, session names, credentials, and
+opaque handles do not enter debug output or provider observations.
 
 ## Build and test
 
@@ -57,5 +53,6 @@ cargo check -p d2b-provider-shell-terminal
 cargo test -p d2b-provider-shell-terminal
 ```
 
-The current test targets are structural compile checks. Executable scenarios
-belong to the owning implementation.
+The hermetic suite covers resource shape, authorization, process conformance,
+placement, ring buffering, restart adoption, stream contracts, and bounded
+observability.
