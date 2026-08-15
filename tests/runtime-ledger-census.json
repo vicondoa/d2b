@@ -76,6 +76,7 @@
     "d2b-core::error::tests::error_serializes_as_operator_envelope",
     "d2b-core::error::tests::kind_serializes_as_leaf_discriminant",
     "d2b-core::error::tests::semver_range_matches_valid_server_version",
+    "d2b-core::generic_process_template_lookup_does_not_require_resource_name_to_match_role_id",
     "d2b-core::host::tests::bridge_port_flags_resolve_legacy_defaults",
     "d2b-core::host::tests::host_json_accepts_optional_qemu_media",
     "d2b-core::host::tests::host_json_denies_unknown_fields",
