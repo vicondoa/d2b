@@ -13,7 +13,7 @@
 
 use std::{
     collections::BTreeSet,
-    fmt,
+    fmt, fs,
     path::{Component, Path},
     sync::OnceLock,
 };
@@ -375,15 +375,37 @@ fn markdown_has_anchor(content: &str, anchor: &str) -> bool {
 
 fn markdown_repo_path_is_contained(path: &str) -> bool {
     path.is_empty()
-        || (!Path::new(path).is_absolute()
+        || (!path.contains(':')
+            && !Path::new(path).is_absolute()
             && Path::new(path)
                 .components()
                 .all(|component| matches!(component, Component::CurDir | Component::Normal(_))))
 }
 
+fn markdown_link_is_external(target: &str) -> bool {
+    target.starts_with("mailto:")
+        || target.starts_with("//")
+        || target.starts_with("http://")
+        || target.starts_with("https://")
+}
+
+fn resolved_repo_path_is_contained(root: &Path, path: &str) -> bool {
+    let canonical_root = fs::canonicalize(root)
+        .unwrap_or_else(|error| panic!("cannot resolve repo root {}: {error}", root.display()));
+    fs::canonicalize(root.join(path.trim_start_matches("./")))
+        .map(|target| target.starts_with(canonical_root))
+        .unwrap_or(false)
+}
+
 #[test]
 fn markdown_repo_paths_reject_absolute_and_parent_escape() {
-    for invalid in ["/etc/passwd", "../outside.md", "docs/../README.md"] {
+    for invalid in [
+        "/etc/passwd",
+        "../outside.md",
+        "docs/../README.md",
+        "file:///etc/passwd",
+        "C:/Windows/System32",
+    ] {
         assert!(
             !markdown_repo_path_is_contained(invalid),
             "repository Markdown path must reject escape: {invalid}"
@@ -402,6 +424,22 @@ fn markdown_repo_paths_reject_absolute_and_parent_escape() {
     }
 }
 
+#[test]
+fn markdown_repo_paths_reject_symlink_escape() {
+    let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join("policy-doc-links");
+    let outside = Path::new(env!("CARGO_TARGET_TMPDIR")).join("policy-doc-outside.md");
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).expect("create Markdown link fixture root");
+    fs::write(&outside, "outside\n").expect("write outside Markdown fixture");
+    std::os::unix::fs::symlink(&outside, root.join("escape.md"))
+        .expect("create escaping Markdown symlink");
+
+    assert!(
+        !resolved_repo_path_is_contained(&root, "escape.md"),
+        "repository Markdown path must reject a symlink resolving outside its root"
+    );
+}
+
 /// A router whose links rot is worse than the monolith it replaced: the rule
 /// looks documented while the detail is unreachable. Validate local Markdown
 /// paths in all supported forms and validate anchors in the linked document.
@@ -412,7 +450,7 @@ fn agents_md_routes_to_paths_that_exist() {
     let mut missing: Vec<String> = Vec::new();
     for caps in link_re.captures_iter(&agents) {
         let target = &caps[1];
-        if target.starts_with("mailto:") || target.starts_with("//") || target.contains("://") {
+        if markdown_link_is_external(target) {
             continue;
         }
 
@@ -423,7 +461,9 @@ fn agents_md_routes_to_paths_that_exist() {
         }
         let rel = path.trim_start_matches("./");
         let link_path = if rel.is_empty() { "AGENTS.md" } else { rel };
-        if !repo_path_exists(link_path) {
+        if !repo_path_exists(link_path)
+            || !resolved_repo_path_is_contained(&d2b_contract_tests::repo_root(), link_path)
+        {
             missing.push(target.to_string());
             continue;
         }
