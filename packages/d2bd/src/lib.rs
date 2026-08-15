@@ -91,14 +91,17 @@ use d2b_gateway::{
     IdSource, LedgerLimits, ListenerHandle, NoopGatewayAudit, OpenSession, SECRET_LEN,
     SessionBinding, SessionSecret, TargetKey,
 };
+use d2b_gateway_runtime::relay_compat::LocalTarget;
 use d2b_gateway_runtime::{
     AcaGatewayWorkload, AgentBinaries, CredentialFilePolicy, GatewayCredential, RelayCoords,
     RelayDisplayListener, SealingKey, production_deps, relay_sas_token_snippet, system_now_fn,
     system_now_unix,
 };
 use d2b_host::ssh_keygen;
-use d2b_provider_aca::{AcaConfig, AcaDiskImageSource, AcaSandboxDefaults, AcaWorkloadProvider};
-use d2b_provider_relay::{LocalTarget, RelayEndpoint};
+use d2b_provider_runtime_azure_container_apps::gateway_compat::{
+    AcaConfig, AcaDiskImageSource, AcaSandboxDefaults, AcaWorkloadProvider,
+};
+use d2b_provider_transport_azure_relay::gateway_compat::{DEFAULT_SAS_TTL_SECS, RelayEndpoint};
 use d2b_realm_core::{RealmIdentityConfigJson, RealmIdentityConfigSummary, TargetName};
 use d2b_realm_provider::provider::WorkloadProvider;
 use nix::cmsg_space;
@@ -5814,10 +5817,7 @@ fn gateway_credential_from_config(
 fn relay_auth_snippet_from_config(config: &GatewayFileConfig) -> Result<String, GatewayError> {
     let credential = gateway_credential_from_config(config)?;
     let token = credential
-        .mint_send_token(
-            &relay_endpoint_from_config(config)?,
-            d2b_provider_relay::DEFAULT_SAS_TTL_SECS,
-        )
+        .mint_send_token(&relay_endpoint_from_config(config)?, DEFAULT_SAS_TTL_SECS)
         .map_err(|_| GatewayError::ProviderAllocationFailed)?;
     Ok(relay_sas_token_snippet(token.expose()))
 }
@@ -5845,7 +5845,7 @@ fn display_listener_from_config(
             uid: validated.uid,
             mode: validated.mode,
         },
-        d2b_provider_relay::DEFAULT_SAS_TTL_SECS,
+        DEFAULT_SAS_TTL_SECS,
         None,
         system_now_fn(),
     ))

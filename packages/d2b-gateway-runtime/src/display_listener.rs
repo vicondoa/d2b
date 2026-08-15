@@ -3,11 +3,12 @@
 //! per-session handshake (ADR 0032, P0).
 //!
 //! `arm` spawns a task running
-//! [`run_listener_verified`](d2b_provider_relay::run_listener_verified) with
-//! a [`PrologueVerifier`] that (a) verifies the session handshake under the
-//! authorizing binding + secret and (b) signals a [`Notify`] the first time a
-//! handshake verifies, so `await_handshake` resolves exactly when bytes begin
-//! to flow. `close` aborts the task and drops the listener.
+//! [`run_listener_verified_with_ready`](crate::relay_compat::run_listener_verified_with_ready)
+//! with a [`PrologueVerifier`] that verifies the session handshake under the
+//! authorizing binding + secret. Readiness is signalled only after the
+//! authenticated relay has attached to the local display endpoint, so
+//! `await_handshake` resolves exactly when bytes can flow. `close` aborts the
+//! task and drops the listener.
 //!
 //! The verifier-signal composition is a pure helper ([`notifying_verifier`]) so
 //! it is unit-tested with a real handshake frame and no Azure round-trip.
@@ -22,10 +23,14 @@ use d2b_gateway::{
     DisplayListener, DisplaySessionContext, GatewayError, ListenerHandle, SessionBinding,
     SessionSecret,
 };
-use d2b_provider_relay::{LocalTarget, PrologueVerifier, RelayCredential, RelayEndpoint};
+use d2b_provider_transport_azure_relay::gateway_compat::{RelayCredential, RelayEndpoint};
 use tokio::sync::Notify;
+use tokio::time::{Duration, timeout};
 
-use crate::{NowFn, make_prologue_verifier};
+use crate::{
+    NowFn, make_prologue_verifier,
+    relay_compat::{LocalTarget, PrologueVerifier},
+};
 
 /// Wrap a [`PrologueVerifier`] so the first verified handshake flips `armed` and
 /// wakes everyone waiting on `notify`. The wrapped verifier is otherwise
@@ -51,6 +56,7 @@ struct ListenerState {
     _thread: std::thread::JoinHandle<()>,
     handshook: Arc<Notify>,
     armed: Arc<AtomicBool>,
+    handshake_timeout: Duration,
 }
 
 impl Drop for ListenerState {
@@ -112,7 +118,14 @@ impl DisplayListener for RelayDisplayListener {
         );
         let handshook = Arc::new(Notify::new());
         let armed = Arc::new(AtomicBool::new(false));
-        let verify = notifying_verifier(inner, handshook.clone(), armed.clone());
+        let ready = {
+            let handshook = handshook.clone();
+            let armed = armed.clone();
+            Arc::new(move || {
+                armed.store(true, Ordering::SeqCst);
+                handshook.notify_waiters();
+            })
+        };
 
         let endpoint = self.endpoint.clone();
         let credential = self.credential.clone();
@@ -153,13 +166,14 @@ impl DisplayListener for RelayDisplayListener {
                                     break;
                                 }
                             }
-                            result = d2b_provider_relay::run_listener_verified(
+                            result = crate::relay_compat::run_listener_verified_with_ready(
                                 &endpoint,
                                 &credential,
                                 &target,
                                 ttl,
                                 ca.as_deref(),
-                                verify.clone(),
+                                inner.clone(),
+                                ready.clone(),
                             ) => {
                                 if *cancel_rx.borrow() {
                                     break;
@@ -182,6 +196,8 @@ impl DisplayListener for RelayDisplayListener {
             })
             .map_err(|_| GatewayError::Internal)?;
         let mut guard = self.state.lock().map_err(|_| GatewayError::Internal)?;
+        let now = (self.now)();
+        let handshake_timeout = Duration::from_secs(binding.not_after.saturating_sub(now));
         guard.insert(
             id.clone(),
             ListenerState {
@@ -189,6 +205,7 @@ impl DisplayListener for RelayDisplayListener {
                 _thread: thread,
                 handshook,
                 armed,
+                handshake_timeout,
             },
         );
         Ok(ListenerHandle(id))
@@ -196,10 +213,10 @@ impl DisplayListener for RelayDisplayListener {
 
     async fn await_handshake(&self, handle: &ListenerHandle) -> Result<(), GatewayError> {
         // Snapshot the signal primitives without holding the lock across await.
-        let (handshook, armed) = {
+        let (handshook, armed, handshake_timeout) = {
             let guard = self.state.lock().map_err(|_| GatewayError::Internal)?;
             let st = guard.get(&handle.0).ok_or(GatewayError::Internal)?;
-            (st.handshook.clone(), st.armed.clone())
+            (st.handshook.clone(), st.armed.clone(), st.handshake_timeout)
         };
         if armed.load(Ordering::SeqCst) {
             return Ok(());
@@ -210,7 +227,10 @@ impl DisplayListener for RelayDisplayListener {
         if armed.load(Ordering::SeqCst) {
             return Ok(());
         }
-        waiter.await;
+        if timeout(handshake_timeout, waiter).await.is_err() {
+            self.close(handle).await?;
+            return Err(GatewayError::Timeout);
+        }
         Ok(())
     }
 
@@ -302,6 +322,7 @@ mod tests {
                 _thread: thread,
                 handshook,
                 armed,
+                handshake_timeout: Duration::from_secs(100),
             },
         );
         // armed is already true -> resolves immediately.

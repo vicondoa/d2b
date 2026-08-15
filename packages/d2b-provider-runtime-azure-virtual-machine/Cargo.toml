@@ -7,3 +7,15 @@ license.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+async-trait = "0.1"
+base64 = "0.22"
+d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+zeroize = "1"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }

@@ -1,62 +1,59 @@
 # `d2b-provider-runtime-azure-container-apps`
 
-This is the canonical crate root for
-`Provider/runtime-azure-container-apps`. It is a compile-safe scaffold;
-semantic Provider behavior is intentionally not present here.
-
-See [Create a Provider](../../docs/how-to/create-provider.md) and the
-[runtime-azure-container-apps dossier](../../docs/specs/providers/ADR-046-provider-runtime-azure-container-apps.md)
-for the implementation contract.
+Canonical implementation of `Provider/runtime-azure-container-apps`.
 
 ## Provider identity
 
-| Field | Value |
-| --- | --- |
-| Provider name | `runtime-azure-container-apps` |
-| Provider reference | `Provider/runtime-azure-container-apps` |
-| Package | `packages/d2b-provider-runtime-azure-container-apps/` |
+The implementation identifier is `azure-container-apps`. It reconciles remote
+ACA sandbox Guests while keeping the controller and deployment service inside a
+configured gateway Guest.
 
 ## Config schema
 
-The Provider-specific configuration is defined by the
-runtime-azure-container-apps dossier. This scaffold does not publish a
-configuration schema.
+`AcaProviderConfig` validates the gateway Guest, Credential refs, optional
+Network ref, bounded Azure identifiers, and Provider defaults. Guest profiles
+validate CPU, memory, image source, auto-suspend, readiness, and operation
+ledger bounds.
 
 ## Exported resource types
 
-The resource types are defined by the dossier. This scaffold exports no
-resource implementation.
+The Provider reconciles `Guest` and owns semantic sandbox-agent Endpoint
+observations. A managed ACA sandbox is not a Zone or a ZoneLink.
 
 ## Controllers / services / workers / binaries
 
-None are implemented in this scaffold. Controllers, services, workers, and
-binaries belong to the owning Provider implementation.
+`AcaController` performs observe, adopt, ensure, start, stop, destroy, and
+finalize through `AcaControl` and `AcaCredentialLeaseClient`. The deployment
+service dispatches bounded lifecycle requests and never self-spawns a process.
 
 ## Placement and dependencies
 
-No runtime placement is declared, and the scaffold has no workspace
-dependencies.
+All cloud control and credential use is gateway-Guest local. No Host process,
+Host Credential, ambient SDK credential chain, or Provider-owned persistent
+service is used.
 
 ## RBAC requirements
 
-The scaffold requests no permissions and performs no resource or effect
-operations.
+Callers provide an operation-bound opaque ID and a bounded deadline. Effect
+ports are the only mutation boundary; ambiguous adoption fails closed.
 
 ## Security posture
 
-No host, broker, filesystem, network, process, credential, or device effect is
-reachable from this scaffold.
+Credential leases expose only opaque metadata. Status, Debug, audit, and
+metrics never contain sandbox IDs, endpoints, tokens, paths, or ZoneLink
+authority.
 
 ## State and telemetry
 
-The scaffold owns no state and emits no telemetry.
+Bounded observed identity digests and lifecycle phases are status-first.
+Completed operation entries are bounded and expirable. Audit events and metric
+labels use closed semantic values.
 
 ## Build and test
 
-```bash
-cargo check -p d2b-provider-runtime-azure-container-apps
+```text
 cargo test -p d2b-provider-runtime-azure-container-apps
 ```
 
-The current test targets are structural compile checks. Executable scenarios
-belong to the owning implementation.
+Tests use real typed effect objects and in-process fakes. No Azure account or
+network access is required.

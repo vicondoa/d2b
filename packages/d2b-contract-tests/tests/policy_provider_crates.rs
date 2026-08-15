@@ -53,16 +53,20 @@ const DECLARATION_WINDOW: usize = 20;
 ///
 /// This is an allowlist rather than a denylist on purpose: a denylist admits
 /// every crate nobody thought to name, and the direction rule is exactly the
-/// kind of invariant a new workspace member quietly breaks. The admitted set is
-/// the public neutral contract, the shared conformance kit, the toolkits, and
-/// the Provider SDK.
+/// kind of invariant a new workspace member quietly breaks. The admitted set
+/// is the public neutral contract, the shared conformance kit, the pure host
+/// argv helper, the toolkits, the Provider SDK, and the codec-neutral realm
+/// Provider traits used by the gateway compatibility adapters.
 const ALLOWED_WORKSPACE_DEPS: &[&str] = &[
     "d2b-contracts",
     "d2b-controller-toolkit",
     "d2b-core",
+    "d2b-host-argv",
     "d2b-process-conformance",
     "d2b-provider",
     "d2b-provider-toolkit",
+    "d2b-realm-core",
+    "d2b-realm-provider",
 ];
 
 /// Workspace crates whose appearance in a Provider crate names a specific
@@ -79,26 +83,8 @@ const NAMED_INVERSIONS: &[(&str, &str)] = &[
     ("d2b-host", "the host lifecycle primitives"),
 ];
 
-/// Crates exempt from the naming rule and therefore from this whole policy,
-/// each with the reason recorded in the wave's implementation-debt register.
-///
-/// Both are pre-ADR-046 crates carrying a single segment after
-/// `d2b-provider-`, so neither matches `<base>-<implementation>` at all, and
-/// both are dispositioned REPLACE by the migration map. Reshaping a crate
-/// scheduled for deletion would be work thrown away, so the exemption is
-/// recorded rather than the crates renamed.
-const EXEMPT_CRATES: &[(&str, &str)] = &[
-    (
-        "d2b-provider-aca",
-        "pre-ADR-046 crate, single-segment name, dispositioned REPLACE by \
-         Provider/runtime-azure-container-apps; exemption retires with its removal",
-    ),
-    (
-        "d2b-provider-relay",
-        "pre-ADR-046 crate, single-segment name, dispositioned REPLACE by \
-         Provider/transport-azure-relay; exemption retires with its removal",
-    ),
-];
+/// No legacy Provider crates remain outside the canonical naming rule.
+const EXEMPT_CRATES: &[(&str, &str)] = &[];
 
 /// Workspace members under `packages/` that carry the `d2b-provider-` prefix
 /// but are not Provider implementations.
@@ -740,10 +726,9 @@ fn non_provider_crates_are_exempt() {
 }
 
 /// Every `d2b-provider-*` workspace name belongs to exactly one visible
-/// classification: a non-Provider helper, one of the two recorded legacy
-/// exemptions, a conforming Provider identity, or a malformed name that must
-/// be rejected. Keeping the partition explicit prevents a new prefixed crate
-/// from becoming silently unclassified.
+/// classification: a non-Provider helper, a conforming Provider identity, or
+/// a malformed name that must be rejected. Keeping the partition explicit
+/// prevents a new prefixed crate from becoming silently unclassified.
 #[test]
 fn every_provider_prefixed_workspace_name_has_one_classification() {
     for name in workspace_members()
@@ -768,24 +753,10 @@ fn every_provider_prefixed_workspace_name_has_one_classification() {
     }
 }
 
-/// The two recorded exemptions, and only those two.
-///
-/// Each is asserted to still exist and to still fail the naming rule. An
-/// exemption for a crate that no longer exists, or that has since been renamed
-/// into conformance, is stale and must be retired rather than left standing.
+/// No retired legacy exemptions remain after the canonical Provider migration.
 #[test]
-fn the_two_recorded_exemptions_are_exactly_the_naming_mismatches() {
-    let packages = repo_root().join("packages");
-    for (name, reason) in EXEMPT_CRATES {
-        assert!(
-            packages.join(name).is_dir(),
-            "exempt crate {name} no longer exists; retire the exemption ({reason})"
-        );
-        assert!(
-            split_provider_name(name).is_none(),
-            "exempt crate {name} now matches <base>-<implementation>; retire the exemption"
-        );
-    }
+fn no_legacy_provider_exemptions_remain() {
+    assert!(EXEMPT_CRATES.is_empty());
     let unexpected: Vec<String> = workspace_members()
         .into_iter()
         .filter(|name| name.starts_with("d2b-provider"))
@@ -1196,8 +1167,7 @@ fn a_matching_crate_and_dossier_produce_no_violation() {
     );
 }
 
-/// The exempt and non-Provider crates name no identity, so they name no
-/// dossier. The exemption list stays exactly the naming mismatches.
+/// Non-Provider crates name no identity, so they name no dossier.
 #[test]
 fn out_of_scope_crates_are_owed_no_dossier() {
     let empty = DossierFixture::empty("outofscope");
