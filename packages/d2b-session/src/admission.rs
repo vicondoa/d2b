@@ -743,6 +743,15 @@ impl AuthenticatedTtrpcHandle {
         self.driver.receive_ttrpc().await
     }
 
+    /// Send one response frame for an authenticated inbound request.
+    ///
+    /// The Zone bus owns the request authorization and correlation fence
+    /// before calling this transport operation.  Provider code never
+    /// receives this handle.
+    pub async fn send_response(&self, frame: Vec<u8>) -> Result<()> {
+        self.driver.send_ttrpc(frame).await
+    }
+
     /// Remove one terminal correlated request.
     pub async fn complete(&self, request_id: RequestId) -> Result<bool> {
         let result = ComponentSessionDriver::complete_ttrpc(&self.driver, request_id).await;

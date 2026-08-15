@@ -49,7 +49,8 @@ pub use record::{ProtectedRecord, RecordProtector};
 pub use scheduler::{FairScheduler, OutboundFrame, QueueClass};
 pub use server::{
     SessionServerError, current_handler_cancellation, rewrite_ttrpc_stream_id,
-    serve_ttrpc_services, ttrpc_request_id, ttrpc_stream_id,
+    serve_ttrpc_services, ttrpc_is_request, ttrpc_is_response, ttrpc_request_id,
+    ttrpc_stream_id,
 };
 pub use streams::{NamedStreamMux, StreamEvent, StreamId, StreamPhase};
 pub use transport::{

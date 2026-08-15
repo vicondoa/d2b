@@ -375,6 +375,12 @@ pub trait BusEndpoint: Send + Sync + 'static {
     /// Deliver one already-authorized method invocation.
     async fn invoke(&self, request: DeliveredInvocation) -> Result<BusResponse, EndpointError>;
 
+    /// Send one response for a request received on the authenticated
+    /// ComponentSession transport.
+    async fn send_inbound_response(&self, _frame: Vec<u8>) -> Result<(), EndpointError> {
+        Err(EndpointError::Unavailable)
+    }
+
     /// Open one already-authorized named stream.
     async fn open_stream(&self, request: DeliveredStream) -> Result<(), EndpointError>;
 

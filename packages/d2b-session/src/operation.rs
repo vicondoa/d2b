@@ -103,6 +103,27 @@ pub const GENERATED_OPERATION_CATALOG: &[OperationCatalogEntry] = &[
         resource_method: None,
         verb: SessionVerb::SupportBundle,
     },
+    interaction("d2b.display.v3", "DisplayService/Reconcile"),
+    interaction("d2b.display.v3", "DisplayService/Finalize"),
+    interaction("d2b.display.v3", "DisplayService/Observe"),
+    interaction("d2b.clipboard.v3", "ClipboardService/Reconcile"),
+    interaction("d2b.clipboard.v3", "ClipboardService/Drain"),
+    interaction(
+        "d2b.clipboard.bridge.v3",
+        "ClipboardBridgeService/CaptureGuest",
+    ),
+    interaction(
+        "d2b.clipboard.bridge.v3",
+        "ClipboardBridgeService/CaptureHost",
+    ),
+    interaction("d2b.clipboard.bridge.v3", "ClipboardBridgeService/Drain"),
+    interaction(
+        "d2b.clipboard.picker-coord.v3",
+        "ClipboardPickerService/Complete",
+    ),
+    interaction("d2b.notification.v3", "NotificationService/Reconcile"),
+    interaction("d2b.notification.v3", "NotificationService/Deliver"),
+    interaction("d2b.notification.v3", "NotificationService/Drain"),
 ];
 
 const fn resource(
@@ -120,6 +141,16 @@ const fn resource(
         } else {
             SessionVerb::Invoke
         },
+    }
+}
+
+const fn interaction(service: &'static str, member: &'static str) -> OperationCatalogEntry {
+    OperationCatalogEntry {
+        service,
+        member,
+        kind: OperationKind::Method,
+        resource_method: None,
+        verb: SessionVerb::Invoke,
     }
 }
 
