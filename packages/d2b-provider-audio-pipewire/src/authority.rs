@@ -59,13 +59,24 @@ impl MicrophoneArbiter {
         if self.active == Some(lease) {
             return MicDecision::Granted;
         }
+        if self.active.is_none() {
+            if let Some(next) = self.queue.pop_front() {
+                self.active = Some(next);
+                if next == lease {
+                    return MicDecision::Granted;
+                }
+                if !self.queue.contains(&lease) {
+                    self.queue.push_back(lease);
+                }
+                return MicDecision::Queued;
+            }
+            self.active = Some(lease);
+            return MicDecision::Granted;
+        }
         if self.queue.contains(&lease) {
             return MicDecision::Queued;
         }
-        if self.active.is_none() {
-            self.active = Some(lease);
-            MicDecision::Granted
-        } else if self.queue.len() >= self.max_queue {
+        if self.queue.len() >= self.max_queue {
             MicDecision::QueueFull
         } else {
             self.queue.push_back(lease);
@@ -163,6 +174,11 @@ impl SpeakerMixer {
     /// Return whether one lease currently holds a speaker grant.
     pub fn has_grant(&self, lease: AudioLeaseId) -> bool {
         self.grants.contains(&lease)
+    }
+
+    /// Return the last level recorded for one consumer.
+    pub fn level(&self, lease: AudioLeaseId) -> Option<u8> {
+        self.levels.get(&lease).copied()
     }
 
     /// Return whether any speaker grant remains active.

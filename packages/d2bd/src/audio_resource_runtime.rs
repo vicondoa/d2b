@@ -163,13 +163,21 @@ impl AudioResourceRuntime {
             .cloned()
             .collect::<Vec<_>>();
         for key in removed {
-            if let Some(mut record) = self.bindings.remove(&key)
-                && let Some(controller) = record.controller.as_mut()
-            {
-                controller
-                    .finalize_shared(record.lease)
-                    .map_err(AudioResourceRuntimeError::Controller)?;
+            let promoted = if let Some(record) = self.bindings.get_mut(&key) {
+                if let Some(controller) = record.controller.as_mut() {
+                    controller
+                        .finalize_shared(record.lease)
+                        .map_err(AudioResourceRuntimeError::Controller)?
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            if let Some(promoted) = promoted {
+                self.activate_promoted(promoted)?;
             }
+            self.bindings.remove(&key);
         }
 
         let manifest = crate::load_json::<d2b_core::manifest_v04::ManifestV04>(
@@ -187,6 +195,28 @@ impl AudioResourceRuntime {
                 .is_some_and(|record| record.spec == spec)
                 && service.service_role == AudioServiceRole::Projection
             {
+                let promoted = if let Some(record) = self.bindings.get_mut(&key) {
+                    if let Some(controller) = record.controller.as_mut() {
+                        controller
+                            .finalize_shared(record.lease)
+                            .map_err(AudioResourceRuntimeError::Controller)?
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+                if let Some(promoted) = promoted {
+                    self.activate_promoted(promoted)?;
+                }
+                if let Some(record) = self.bindings.get_mut(&key) {
+                    record.controller = None;
+                    record.status = unavailable_status(
+                        AudioBindingPhase::Degraded,
+                        HostAudioReadiness::Unavailable,
+                        GuestAudioReadiness::Unavailable,
+                    );
+                }
                 continue;
             }
             if let Some(record) = self.bindings.get_mut(&key)
@@ -210,13 +240,21 @@ impl AudioResourceRuntime {
                 }
                 continue;
             }
-            if let Some(mut old) = self.bindings.remove(&key)
-                && let Some(controller) = old.controller.as_mut()
-            {
-                controller
-                    .finalize_shared(old.lease)
-                    .map_err(AudioResourceRuntimeError::Controller)?;
+            let promoted = if let Some(old) = self.bindings.get_mut(&key) {
+                if let Some(controller) = old.controller.as_mut() {
+                    controller
+                        .finalize_shared(old.lease)
+                        .map_err(AudioResourceRuntimeError::Controller)?
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            if let Some(promoted) = promoted {
+                self.activate_promoted(promoted)?;
             }
+            self.bindings.remove(&key);
 
             let lease = lease_for(&resource.resource_ref);
             let (controller, status) = if service.service_role == AudioServiceRole::Projection {
@@ -293,6 +331,25 @@ impl AudioResourceRuntime {
         }
         self.services = services;
         Ok(())
+    }
+
+    fn activate_promoted(
+        &mut self,
+        lease: d2b_provider_audio_pipewire::AudioLeaseId,
+    ) -> Result<(), AudioResourceRuntimeError> {
+        let Some(record) = self
+            .bindings
+            .values_mut()
+            .find(|record| record.lease == lease)
+        else {
+            return Ok(());
+        };
+        let Some(controller) = record.controller.as_mut() else {
+            return Ok(());
+        };
+        controller
+            .activate_promoted_microphone(lease)
+            .map_err(AudioResourceRuntimeError::Controller)
     }
 
     pub(crate) fn statuses(&self) -> Vec<AudioBindingRuntimeStatus> {

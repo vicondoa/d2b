@@ -112,6 +112,8 @@ pub struct FakeAudioMediator {
     guest: GuestAudioReadiness,
     grant: AudioGrant,
     level: Option<LevelPercent>,
+    grant_calls: u32,
+    level_calls: u32,
 }
 
 impl FakeAudioMediator {
@@ -123,6 +125,8 @@ impl FakeAudioMediator {
             guest: GuestAudioReadiness::Ready,
             grant: AudioGrant::Off,
             level: None,
+            grant_calls: 0,
+            level_calls: 0,
         }
     }
 
@@ -134,6 +138,8 @@ impl FakeAudioMediator {
             guest: GuestAudioReadiness::Ready,
             grant: AudioGrant::Off,
             level: None,
+            grant_calls: 0,
+            level_calls: 0,
         }
     }
 
@@ -145,6 +151,8 @@ impl FakeAudioMediator {
             guest: GuestAudioReadiness::Ready,
             grant: AudioGrant::Off,
             level: None,
+            grant_calls: 0,
+            level_calls: 0,
         }
     }
 
@@ -157,6 +165,16 @@ impl FakeAudioMediator {
     pub const fn level(&self) -> Option<LevelPercent> {
         self.level
     }
+
+    /// Return the number of accepted grant operations.
+    pub const fn grant_calls(&self) -> u32 {
+        self.grant_calls
+    }
+
+    /// Return the number of accepted level operations.
+    pub const fn level_calls(&self) -> u32 {
+        self.level_calls
+    }
 }
 
 impl AudioMediator for FakeAudioMediator {
@@ -167,6 +185,7 @@ impl AudioMediator for FakeAudioMediator {
         if self.host != HostAudioReadiness::Ready {
             return Err(AudioMediatorError::ProviderSessionUnavailable);
         }
+        self.grant_calls = self.grant_calls.saturating_add(1);
         self.grant = grant;
         Ok(())
     }
@@ -186,6 +205,7 @@ impl AudioMediator for FakeAudioMediator {
         if self.host != HostAudioReadiness::Ready {
             return Err(AudioMediatorError::ProviderSessionUnavailable);
         }
+        self.level_calls = self.level_calls.saturating_add(1);
         self.level = Some(level);
         Ok(())
     }

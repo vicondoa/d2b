@@ -1,8 +1,65 @@
 use d2b_contracts::v3::ResourceRef;
 use d2b_provider_audio_pipewire::{
-    AudioBindingController, AudioBindingPhase, AudioGrant, AudioLeaseId, AudioMediatorError,
-    FakeAudioMediator, shared_microphone_arbiter, validate_audio_binding,
+    AudioBindingController, AudioBindingPhase, AudioChannel, AudioGrant, AudioLeaseId,
+    AudioMediator, AudioMediatorError, AudioReadiness, FakeAudioMediator, GuestAudioReadiness,
+    HostAudioReadiness, LevelPercent, shared_microphone_arbiter, validate_audio_binding,
 };
+
+#[derive(Debug)]
+struct HandoffFailureMediator {
+    grant: AudioGrant,
+    microphone_on_attempts: u8,
+}
+
+impl HandoffFailureMediator {
+    fn new() -> Self {
+        Self {
+            grant: AudioGrant::Off,
+            microphone_on_attempts: 0,
+        }
+    }
+
+    fn set_microphone_grant(&mut self, grant: AudioGrant) -> Result<(), AudioMediatorError> {
+        if grant == AudioGrant::On {
+            self.microphone_on_attempts += 1;
+            if self.microphone_on_attempts == 2 {
+                return Err(AudioMediatorError::ProviderSessionUnavailable);
+            }
+        }
+        self.grant = grant;
+        Ok(())
+    }
+}
+
+impl AudioMediator for HandoffFailureMediator {
+    fn set_grant(&mut self, grant: AudioGrant) -> Result<(), AudioMediatorError> {
+        self.set_microphone_grant(grant)
+    }
+
+    fn set_channel_grant(
+        &mut self,
+        _channel: AudioChannel,
+        grant: AudioGrant,
+    ) -> Result<(), AudioMediatorError> {
+        self.set_microphone_grant(grant)
+    }
+
+    fn set_level(&mut self, _level: LevelPercent) -> Result<(), AudioMediatorError> {
+        Ok(())
+    }
+
+    fn readiness(&self) -> AudioReadiness {
+        AudioReadiness::Ready
+    }
+
+    fn host_readiness(&self) -> HostAudioReadiness {
+        HostAudioReadiness::Ready
+    }
+
+    fn guest_readiness(&self) -> GuestAudioReadiness {
+        GuestAudioReadiness::Ready
+    }
+}
 
 fn binding() -> d2b_provider_audio_pipewire::AudioBindingSpec {
     d2b_provider_audio_pipewire::AudioBindingSpec::new(
@@ -140,6 +197,66 @@ fn shared_finalization_does_not_enable_the_promoted_binding_through_the_old_medi
         .reconcile(&requested, "zone-a", AudioLeaseId::new(2))
         .unwrap();
     assert_eq!(second.mediator().grant(), AudioGrant::On);
+}
+
+#[test]
+fn failed_microphone_promotion_requeues_the_promoted_lease() {
+    let mut controller = AudioBindingController::new(HandoffFailureMediator::new());
+    let mut requested = binding();
+    requested.grants.mic = AudioGrant::On;
+    controller
+        .reconcile(&requested, "zone-a", AudioLeaseId::new(1))
+        .unwrap();
+    controller
+        .reconcile(&requested, "zone-a", AudioLeaseId::new(2))
+        .unwrap();
+
+    assert_eq!(
+        controller.finalize(AudioLeaseId::new(1)).unwrap_err(),
+        d2b_provider_audio_pipewire::AudioControllerError::Mediator(
+            AudioMediatorError::ProviderSessionUnavailable
+        )
+    );
+    assert_eq!(controller.active_microphone_lease(), None);
+
+    let result = controller
+        .reconcile(&requested, "zone-a", AudioLeaseId::new(2))
+        .unwrap();
+    assert_eq!(
+        result.status.microphone,
+        Some(d2b_provider_audio_pipewire::MicDecision::Granted)
+    );
+    assert_eq!(
+        controller.active_microphone_lease(),
+        Some(AudioLeaseId::new(2))
+    );
+}
+
+#[test]
+fn unchanged_audio_reconciliation_does_not_repeat_mediator_effects() {
+    let mut controller = AudioBindingController::new(FakeAudioMediator::ready());
+    let mut requested = binding();
+    requested.grants.mic = AudioGrant::On;
+    requested.grants.speaker = AudioGrant::On;
+    requested.grants.speaker_level = Some(LevelPercent::new(25).expect("bounded test level"));
+
+    controller
+        .reconcile(&requested, "zone-a", AudioLeaseId::new(1))
+        .unwrap();
+    let first_counts = (
+        controller.mediator().grant_calls(),
+        controller.mediator().level_calls(),
+    );
+    controller
+        .reconcile(&requested, "zone-a", AudioLeaseId::new(1))
+        .unwrap();
+    assert_eq!(
+        (
+            controller.mediator().grant_calls(),
+            controller.mediator().level_calls()
+        ),
+        first_counts
+    );
 }
 
 #[test]
