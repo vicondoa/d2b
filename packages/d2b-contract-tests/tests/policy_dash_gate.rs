@@ -7,8 +7,8 @@
 //! pass on a clean one. It also pins the structural properties the scan depends
 //! on: the gate is wired into `make check-tier0`, it runs repository-wide in
 //! its main body, and it matches on codepoints rather than on literal
-//! characters that would make it flag its own source. Vendor paths receive no
-//! special admission.
+//! characters that would make it flag its own source. Only the exact
+//! agent-asset paths receive admission.
 //!
 //! Every banned character in this file is written as a `\u{...}` escape, never
 //! as the character.
@@ -39,6 +39,78 @@ const BANNED: &[(char, &str)] = &[
     ('\u{FF0D}', "U+FF0D"),
 ];
 
+const APPROVED_SKILLS: &[(&str, &str)] = &[
+    (
+        "third_party/agent-skills/ponytail/v4.9.0/skills",
+        "ponytail",
+    ),
+    (
+        "third_party/agent-skills/ponytail/v4.9.0/skills",
+        "ponytail-audit",
+    ),
+    (
+        "third_party/agent-skills/ponytail/v4.9.0/skills",
+        "ponytail-debt",
+    ),
+    (
+        "third_party/agent-skills/ponytail/v4.9.0/skills",
+        "ponytail-gain",
+    ),
+    (
+        "third_party/agent-skills/ponytail/v4.9.0/skills",
+        "ponytail-help",
+    ),
+    (
+        "third_party/agent-skills/ponytail/v4.9.0/skills",
+        "ponytail-review",
+    ),
+    ("third_party/agent-skills/caveman/v2.0.0/skills", "caveman"),
+    (
+        "third_party/agent-skills/compound-engineering/compound-engineering-v3.21.4/skills",
+        "ce-babysit-pr",
+    ),
+    (
+        "third_party/agent-skills/compound-engineering/compound-engineering-v3.21.4/skills",
+        "ce-brainstorm",
+    ),
+    (
+        "third_party/agent-skills/compound-engineering/compound-engineering-v3.21.4/skills",
+        "ce-code-review",
+    ),
+    (
+        "third_party/agent-skills/compound-engineering/compound-engineering-v3.21.4/skills",
+        "ce-commit-push-pr",
+    ),
+    (
+        "third_party/agent-skills/compound-engineering/compound-engineering-v3.21.4/skills",
+        "ce-debug",
+    ),
+    (
+        "third_party/agent-skills/compound-engineering/compound-engineering-v3.21.4/skills",
+        "ce-doc-review",
+    ),
+    (
+        "third_party/agent-skills/compound-engineering/compound-engineering-v3.21.4/skills",
+        "ce-plan",
+    ),
+    (
+        "third_party/agent-skills/compound-engineering/compound-engineering-v3.21.4/skills",
+        "ce-resolve-pr-feedback",
+    ),
+    (
+        "third_party/agent-skills/compound-engineering/compound-engineering-v3.21.4/skills",
+        "ce-simplify-code",
+    ),
+    (
+        "third_party/agent-skills/compound-engineering/compound-engineering-v3.21.4/skills",
+        "ce-work",
+    ),
+    (
+        "third_party/agent-skills/compound-engineering/compound-engineering-v3.21.4/skills",
+        "ce-worktree",
+    ),
+];
+
 fn gate_path() -> PathBuf {
     repo_root().join(GATE)
 }
@@ -49,7 +121,22 @@ fn scrubber_path() -> PathBuf {
 
 /// Run the gate's scan mode over `root` and return `(success, combined output)`.
 fn scan(root: &Path) -> (bool, String) {
-    let output = Command::new(scrubber_path())
+    scan_with_path(root, None)
+}
+
+fn scan_with_path(root: &Path, extra_path: Option<&Path>) -> (bool, String) {
+    let mut command = Command::new(scrubber_path());
+    if let Some(extra_path) = extra_path {
+        let mut paths = vec![extra_path.to_path_buf()];
+        paths.extend(std::env::split_paths(
+            &std::env::var_os("PATH").expect("PATH must be set for policy tests"),
+        ));
+        command.env(
+            "PATH",
+            std::env::join_paths(paths).expect("join policy test PATH"),
+        );
+    }
+    let output = command
         .args(["-c", "exec bash \"$@\"", "policy-dash-gate"])
         .arg(gate_path())
         .arg("--scan-dashes")
@@ -70,6 +157,81 @@ fn fixture_tree(name: &str, body: &str) -> PathBuf {
     fs::write(root.join("clean.md"), "A spaced hyphen - like this.\n").expect("write clean file");
     fs::write(root.join("nested/sample.md"), body).expect("write sample file");
     root
+}
+
+fn make_executable(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut permissions = fs::metadata(path).expect("read executable metadata").permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(path, permissions).expect("make fixture executable");
+}
+
+fn git_fixture_tree(name: &str) -> PathBuf {
+    let root = Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join("dash-gate")
+        .join(name);
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).expect("create git fixture tree");
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(&root)
+        .args(["-c", "init.defaultBranch=main", "init", "--quiet"])
+        .status()
+        .expect("initialize git fixture");
+    assert!(status.success(), "git fixture initialization must succeed");
+    root
+}
+
+fn write_dash_file(path: &Path) {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).expect("create dash fixture parent");
+    }
+    fs::write(path, "contains \u{2014}\n").expect("write dash fixture");
+}
+
+fn canonical_skill_path(root: &Path, skill_root: &str, skill: &str) -> PathBuf {
+    root.join(skill_root).join(skill)
+}
+
+fn create_canonical_skills(root: &Path) {
+    for (skill_root, skill) in APPROVED_SKILLS {
+        let directory = canonical_skill_path(root, skill_root, skill);
+        fs::create_dir_all(&directory).expect("create canonical skill directory");
+        write_dash_file(&directory.join("SKILL.md"));
+    }
+}
+
+fn create_approved_adapters(root: &Path) {
+    fs::create_dir_all(root.join(".agents/skills")).expect("create agents adapter");
+    fs::create_dir_all(root.join(".claude/skills")).expect("create claude adapter");
+
+    for (skill_root, skill) in APPROVED_SKILLS {
+        let canonical = format!("{skill_root}/{skill}");
+        let agents_link = root.join(".agents/skills").join(skill);
+        std::os::unix::fs::symlink(format!("../../{canonical}"), &agents_link)
+            .expect("create agents skill symlink");
+
+        let claude_directory = root.join(".claude/skills").join(skill);
+        fs::create_dir_all(&claude_directory).expect("create claude fallback skill directory");
+        std::os::unix::fs::symlink(
+            format!("../../../{canonical}/SKILL.md"),
+            claude_directory.join("SKILL.md"),
+        )
+        .expect("create claude component symlink");
+    }
+}
+
+fn fake_command_dir(name: &str, command: &str, body: &str) -> PathBuf {
+    let directory = Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join("dash-gate")
+        .join(name);
+    let _ = fs::remove_dir_all(&directory);
+    fs::create_dir_all(&directory).expect("create fake command directory");
+    let path = directory.join(command);
+    fs::write(&path, body).expect("write fake command");
+    make_executable(&path);
+    directory
 }
 
 #[test]
@@ -98,6 +260,105 @@ fn scan_passes_on_a_clean_tree() {
     assert!(
         success,
         "the tier0 dash scan must pass a tree whose only dash is the ASCII hyphen; output:\n{output}"
+    );
+}
+
+#[test]
+fn scan_allows_only_exact_agent_assets_and_skips_grep_when_all_are_exempt() {
+    let root = git_fixture_tree("approved-agent-assets");
+    write_dash_file(&root.join("AGENTS.md"));
+    write_dash_file(&root.join("tests/AGENTS.md"));
+    write_dash_file(&root.join("labs/venus-vulkan-video/AGENTS.md"));
+    write_dash_file(&root.join("CLAUDE.md"));
+    create_canonical_skills(&root);
+    create_approved_adapters(&root);
+
+    let grep = fake_command_dir("all-exempt-grep", "grep", "#!/bin/sh\nexit 99\n");
+    let (success, output) = scan_with_path(&root, Some(&grep));
+
+    assert!(
+        success,
+        "all recognized instruction, canonical skill, and adapter paths must pass; output:\n{output}"
+    );
+    assert!(
+        output.contains("grep skipped"),
+        "an all-exempt tree must skip grep after proving enumeration was non-empty; output:\n{output}"
+    );
+}
+
+#[test]
+fn scan_rejects_lookalikes_unapproved_assets_and_ordinary_files() {
+    let root = git_fixture_tree("unapproved-agent-assets");
+    create_canonical_skills(&root);
+
+    write_dash_file(&root.join("docs/AGENTS.md"));
+    write_dash_file(&root.join("AGENTS.md.bak"));
+    write_dash_file(&root.join("tests/AGENTS.md.bak"));
+    write_dash_file(&root.join("CLAUDE.md.bak"));
+    write_dash_file(&root.join("README.md"));
+    write_dash_file(&root.join("docs/plan.md"));
+    write_dash_file(&root.join("docs/plans/entry.md"));
+    write_dash_file(&root.join("changelog.d/entry.md"));
+    write_dash_file(&root.join("config.nix"));
+    write_dash_file(&root.join(
+        "third_party/agent-skills/other/v4.9.0/skills/ponytail/SKILL.md",
+    ));
+    write_dash_file(&root.join(
+        "third_party/agent-skills/ponytail/v4.9.1/skills/ponytail/SKILL.md",
+    ));
+    write_dash_file(&root.join(
+        "third_party/agent-skills/ponytail/v4.9.0/skills/ponytail-extra/SKILL.md",
+    ));
+    write_dash_file(&root.join(
+        "third_party/agent-skills/caveman/v2.0.0/skills/caveman-compress/SKILL.md",
+    ));
+
+    write_dash_file(&root.join(".agents/skills/not-approved"));
+    write_dash_file(&root.join(".agents/skills/ponytail/SKILL.md"));
+    write_dash_file(&root.join(".claude/skills/not-approved"));
+    write_dash_file(&root.join(".claude/skills/ponytail/regular.md"));
+    write_dash_file(&root.join("outside.md"));
+    fs::create_dir_all(root.join(".claude/skills/ponytail")).expect("create fallback directory");
+    std::os::unix::fs::symlink(
+        "../../../outside.md",
+        root.join(".claude/skills/ponytail/escape.md"),
+    )
+    .expect("create invalid claude component link");
+
+    let (success, output) = scan(&root);
+
+    assert!(
+        !success,
+        "lookalikes, ordinary files, and invalid adapter entries must fail; output:\n{output}"
+    );
+    for path in [
+        "docs/AGENTS.md",
+        "AGENTS.md.bak",
+        "tests/AGENTS.md.bak",
+        "CLAUDE.md.bak",
+        "README.md",
+        "docs/plan.md",
+        "docs/plans/entry.md",
+        "changelog.d/entry.md",
+        "config.nix",
+        "third_party/agent-skills/other/v4.9.0/skills/ponytail/SKILL.md",
+        "third_party/agent-skills/ponytail/v4.9.1/skills/ponytail/SKILL.md",
+        "third_party/agent-skills/ponytail/v4.9.0/skills/ponytail-extra/SKILL.md",
+        "third_party/agent-skills/caveman/v2.0.0/skills/caveman-compress/SKILL.md",
+        ".agents/skills/not-approved",
+        ".agents/skills/ponytail/SKILL.md",
+        ".claude/skills/not-approved",
+        ".claude/skills/ponytail/regular.md",
+        ".claude/skills/ponytail/escape.md",
+    ] {
+        assert!(
+            output.contains(path),
+            "the scan must report the denied path {path}; output:\n{output}"
+        );
+    }
+    assert!(
+        !output.contains("third_party/agent-skills/ponytail/v4.9.0/skills/ponytail/SKILL.md"),
+        "the exact canonical skill path must be exempt; output:\n{output}"
     );
 }
 
@@ -132,6 +393,45 @@ fn scan_ignores_dash_bytes_inside_a_binary_file() {
     assert!(
         text_output.contains("nested/sample.md:1"),
         "the text control must report the offending file:line; output:\n{text_output}"
+    );
+}
+
+#[test]
+fn scan_fails_closed_when_the_file_enumerator_fails() {
+    let root = git_fixture_tree("enumerator-error");
+    write_dash_file(&root.join("ordinary.md"));
+    let fake_git = fake_command_dir(
+        "enumerator-error-git",
+        "git",
+        "#!/bin/sh\nif [ \"$3\" = \"rev-parse\" ]; then printf '%s\\n' \"$2\"; exit 0; fi\nexit 42\n",
+    );
+
+    let (success, output) = scan_with_path(&root, Some(&fake_git));
+
+    assert!(
+        !success,
+        "enumerator failure must fail closed instead of scanning a partial tree; output:\n{output}"
+    );
+    assert!(
+        output.contains("enumerator exited 42"),
+        "enumerator failure must remain visible in the diagnostic; output:\n{output}"
+    );
+}
+
+#[test]
+fn scan_fails_closed_when_grep_returns_an_error() {
+    let root = fixture_tree("grep-error", "ordinary text\n");
+    let fake_grep = fake_command_dir("grep-error-command", "grep", "#!/bin/sh\nexit 2\n");
+
+    let (success, output) = scan_with_path(&root, Some(&fake_grep));
+
+    assert!(
+        !success,
+        "a grep error must fail closed instead of reporting a clean scan; output:\n{output}"
+    );
+    assert!(
+        output.contains("grep exited 2"),
+        "grep error status must remain visible in the diagnostic; output:\n{output}"
     );
 }
 
@@ -183,7 +483,7 @@ fn the_repository_carries_no_non_ascii_dash() {
 }
 
 #[test]
-fn the_gate_matches_codepoints_not_literal_characters() {
+fn the_gate_matches_codepoints_and_declares_a_closed_asset_allowlist() {
     let gate = read_repo_file(GATE);
     for (dash, label) in BANNED {
         assert!(
@@ -201,6 +501,23 @@ fn the_gate_matches_codepoints_not_literal_characters() {
         gate.contains("scan_dashes \"$ROOT\""),
         "{GATE} must run the repository-wide scan in its main body, not only in scan mode"
     );
+    for required in [
+        "DASH_EXEMPT_INSTRUCTION_PATHS",
+        "DASH_APPROVED_SKILL_ROOTS",
+        "DASH_APPROVED_ADAPTER_ROOTS",
+        "dash_canonical_skill_dir",
+        "dash_symlink_matches",
+        "dash_path_is_exempt",
+        "grep skipped",
+        "third_party/agent-skills/ponytail/v4.9.0/skills",
+        "third_party/agent-skills/caveman/v2.0.0/skills",
+        "third_party/agent-skills/compound-engineering/compound-engineering-v3.21.4/skills",
+    ] {
+        assert!(
+            gate.contains(required),
+            "{GATE} must declare the narrow dash allowlist element {required}"
+        );
+    }
     for retired_admission in [
         "CAVEMAN_DASH_ADMISSIONS",
         "validate_caveman_dash_admissions",
