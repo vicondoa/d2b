@@ -79,11 +79,16 @@ documentation.
 The exact d2b Compound Engineering profile is:
 
 ```text
-ce-work mode:return-to-caller
+ce-work
+ce-work mode:return-to-caller <plan-path>
 ce-code-review mode:agent
 ce-commit-push-pr branding:off babysit:off
 ce-babysit-pr posture:target
 ```
+
+Use bare `ce-work` for a clear bounded change. Use caller mode only when an
+outer workflow supplies an implementation-ready plan and owns the shipping
+tail.
 
 Every code diff receives independent review in a separate clean context.
 The repository-owned caller applies actionable fixes, validates them, and

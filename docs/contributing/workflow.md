@@ -35,11 +35,16 @@ keeps transient communication concise.
 The d2b profile is:
 
 ```text
-ce-work mode:return-to-caller
+ce-work
+ce-work mode:return-to-caller <plan-path>
 ce-code-review mode:agent
 ce-commit-push-pr branding:off babysit:off
 ce-babysit-pr posture:target
 ```
+
+Bare `ce-work` owns a bounded standalone change. Caller mode is only for an
+outer workflow that supplies an implementation-ready plan and owns the
+shipping tail.
 
 Ponytail supplies minimal safe implementation discipline. Caveman is for
 transient communication only. Advanced planning, orchestration, and review

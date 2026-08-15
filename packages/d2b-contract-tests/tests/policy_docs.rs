@@ -397,6 +397,13 @@ fn resolved_repo_path_is_contained(root: &Path, path: &str) -> bool {
         .unwrap_or(false)
 }
 
+fn markdown_uses_reference_link_syntax(content: &str) -> bool {
+    let reference_use = Regex::new(r"\]\s*\[[^]]*\]").expect("valid reference-style link regex");
+    let reference_definition =
+        Regex::new(r"(?m)^[ \t]{0,3}\[[^]]+\]:[ \t]*\S+").expect("valid link definition regex");
+    reference_use.is_match(content) || reference_definition.is_match(content)
+}
+
 #[test]
 fn markdown_repo_paths_reject_absolute_and_parent_escape() {
     for invalid in [
@@ -446,16 +453,32 @@ fn markdown_repo_paths_reject_symlink_escape() {
     );
 }
 
+#[test]
+fn markdown_reference_links_are_rejected_in_all_forms() {
+    for invalid in [
+        "[Workflow][guide]\n\n[guide]: docs/contributing/workflow.md\n",
+        "[Workflow][]\n\n[Workflow]: docs/contributing/workflow.md\n",
+        "[Workflow]\n\n[Workflow]: ../outside.md\n",
+    ] {
+        assert!(
+            markdown_uses_reference_link_syntax(invalid),
+            "reference-style Markdown link must be detected: {invalid}"
+        );
+    }
+    assert!(
+        !markdown_uses_reference_link_syntax("[Workflow](docs/contributing/workflow.md)\n"),
+        "inline Markdown link must remain supported"
+    );
+}
+
 /// A router whose links rot is worse than the monolith it replaced: the rule
 /// looks documented while the detail is unreachable. Validate local Markdown
 /// paths in all supported forms and validate anchors in the linked document.
 #[test]
 fn agents_md_routes_to_paths_that_exist() {
     let agents = read_repo_file("AGENTS.md");
-    let reference_link_re =
-        Regex::new(r"\]\s*\[[^]]*\]").expect("valid reference-style link regex");
     assert!(
-        !reference_link_re.is_match(&agents),
+        !markdown_uses_reference_link_syntax(&agents),
         "AGENTS.md must use inline Markdown links so every destination is validated"
     );
     let link_re = Regex::new(r"\]\(([^)\s]+)").expect("valid link regex");
@@ -550,7 +573,7 @@ fn agents_md_defines_model_preferences_and_exact_ce_profile() {
         "gpt-5.6-luna",
         "strongest native",
         "record that substitution only in the transient handoff",
-        "ce-work mode:return-to-caller",
+        "\nce-work\nce-work mode:return-to-caller <plan-path>\n",
         "ce-code-review mode:agent",
         "ce-commit-push-pr branding:off babysit:off",
         "ce-babysit-pr posture:target",
