@@ -44,9 +44,9 @@ use crate::guest_control_health::{
     guest_control_health_ready, probe_guest_control_health, read_guest_config_authenticated,
     request_metadata_with_id, usbip_import_authenticated, usbip_status_authenticated,
 };
-use protobuf::MessageField;
 use crate::guest_control_vsock::{GuestControlTransportProbeResult, connect_guest_control_vsock};
 use crate::typed_error::TypedError;
+use protobuf::MessageField;
 
 /// Well-known `VMADDR_CID_HOST`. The host side of an `AF_VSOCK` pair is
 /// always CID 2; the sign request binds the host proof to this CID so a
@@ -591,20 +591,13 @@ pub fn run_wayland_service_once(
         let mut create = pb::ExecCreateRequest::new();
         create.metadata = MessageField::some(request_metadata_with_id(
             &params.vm_id,
-            &format!(
-                "wayland-service:{}:{}",
-                operation, health.guest_boot_id
-            ),
+            &format!("wayland-service:{}:{}", operation, health.guest_boot_id),
         ));
         create.argv = argv;
         create.detached = true;
         let create_timeout = attempt_timeout.min(GUEST_CONTROL_ATTEMPT_CAP);
         let created = client
-            .unary_with_timeout::<_, pb::ExecCreateResponse>(
-                "ExecCreate",
-                create,
-                create_timeout,
-            )
+            .unary_with_timeout::<_, pb::ExecCreateResponse>("ExecCreate", create, create_timeout)
             .await?;
         let exec_id = created
             .exec_id
