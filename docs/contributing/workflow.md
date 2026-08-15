@@ -1,18 +1,53 @@
 # Development workflow
 
-How work is organized, validated, and landed: parallel worktrees, focused
-validation, and disk hygiene for concurrent trees.
+How work is organized, validated, reviewed, and landed for
+[`../../AGENTS.md`](../../AGENTS.md). That file is the single operational
+authority; this document carries the detail and rationale.
 
-The binding one-line rules are in [`../../AGENTS.md`](../../AGENTS.md) under
-"Development workflow". This file carries the detail and the rationale.
+## Worktrees and task routing
 
-## Worktrees for parallel agents
+Use a new isolated worktree by default for feature work. A worktree is also
+required for each concurrent worker. Start from an owned feature or
+integration branch, never directly from protected `main` or `v3`.
 
-When agents or humans work on disjoint scopes concurrently, use git worktrees
-instead of branching in place. One worktree per agent isolates context and
-simplifies integration into an owned feature/integration branch. A slice
-worktree is based on that owned branch, never directly on protected `main` or
-`v3`.
+Every code change enters through Compound Engineering:
+
+- A clear bounded change uses `ce-work` on the smallest sufficient route.
+- An open-ended bug uses `ce-debug`, then `ce-work` after the failure is
+  understood. Use `ce-plan` if scope or product intent remains unclear.
+- Larger or product-ambiguous work uses `ce-brainstorm`, `ce-plan`, then
+  `ce-work`.
+
+Use these thresholds rather than treating every task as a heavyweight plan:
+
+| Route | Signals |
+| --- | --- |
+| Clear bounded | One or two files, known behavior, no product decision, and a focused validation path. |
+| Open-ended bug | A regression, failing test, error report, or unclear failure path that needs diagnosis before editing. |
+| Larger or ambiguous | Cross-cutting work, roughly ten or more files, architecture/auth/migration impact, or unresolved product intent. |
+
+Useful parallelism is limited to genuinely disjoint units. Different files do
+not prove independence when units share APIs, generated artifacts, schemas,
+lockfiles, stateful tools, or runtime resources. When overlap is uncertain,
+work serially. Persisted prose uses normal repository style even when Caveman
+keeps transient communication concise.
+
+The d2b profile is:
+
+```text
+ce-work mode:return-to-caller
+ce-code-review mode:agent
+ce-commit-push-pr branding:off babysit:off
+ce-babysit-pr posture:target
+```
+
+Ponytail supplies minimal safe implementation discipline. Caveman is for
+transient communication only. Advanced planning, orchestration, and review
+prefer `gpt-5.6-sol` with xhigh reasoning and long context (`long_context`);
+implementation prefers `gpt-5.6-luna` with xhigh reasoning. If unavailable,
+use the strongest
+native role-equivalent model and record the substitution only in a transient
+handoff. Shipped prose never attributes a model or tool.
 
 ```bash
 # From the primary clone, one worktree per concurrent scope:
@@ -102,7 +137,7 @@ host, prefer `d2b down <vm> --apply` followed by
 `d2b up <vm> --apply`; `d2b switch <vm>` is not reliable here).
 
 
-## Edit → commit → validate
+## Edit -> commit -> validate
 
 Commit before running `static.sh` / the smoke evals. Two reasons:
 
@@ -114,7 +149,7 @@ Commit before running `static.sh` / the smoke evals. Two reasons:
    consumer-side concern, but the habit of committing-then-building
    is the right one to carry into framework work too.
 
-## "Existing code is canon"
+## Existing code is canon
 
 When the spec, plan, README, or any reference doc disagrees with the
 **code that is actually committed and passing tests**, the code
@@ -128,18 +163,42 @@ prose.
 This rule applies to AGENTS.md too: if you change a load-bearing
 behaviour described here, update this file in the same commit.
 
-## Landing changes (PR workflow)
+## Reviewed-head PR lifecycle
 
-`main` and `v3` are protected: changes land via pull requests, not direct
-pushes. Develop on an owned feature/integration branch (or its worktree),
-validate locally against the gates above, open a PR to the applicable
-protected target, let CI run, then squash-merge. Commit conventions in [changelog and commit conventions](./changelog-and-commits.md)
-apply to in-development commits on those feature branches; `v3` remains the
-clean-break integration lineage and `main` remains a by-release history.
+Every code diff gets an independent review in a separate clean context.
+`ce-code-review` is report-only; the repository-owned caller applies
+actionable fixes. After any review fix, CI fix, push, base update, or other
+head-changing update, validate the new head and obtain fresh independent
+review. Missing review evidence fails closed to fresh review. No actionable
+finding remains at merge.
 
-PR bodies record the change, validation evidence, and substantive review
-outcomes only. Do **not** tag or list the AI assistant or model used to author
-or review a change.
+Review evidence is bound to the repository, PR, review head OID, observed base
+ref and OID, and verdict. It is not reusable after the head changes. A review
+that cannot prove those bindings is missing evidence, not a pass.
+
+Use `ce-babysit-pr` to watch feedback, required checks, and head currency.
+Immediately before merge, refresh the current reviewed head, required checks,
+feedback, mergeability, and observed base. Reconcile any new feedback or
+check result before proceeding.
+
+After all required checks and feedback settle, merge with a normal squash and
+an expected-head guard. Do not use admin, auto-merge, bypass, or a merge
+queue. If a merge result is ambiguous, inspect current PR state and reconcile
+before retrying. The workflow refreshes the base on a best-effort basis and
+accepts the narrow non-atomic base race under current non-strict branch
+settings; it does not change GitHub settings or claim atomic base binding.
+
+`main` and `v3` remain protected: changes land through a pull request, not a
+direct push. PR bodies record the change, validation evidence, and substantive
+review outcomes only. Never include AI, tool, or model attribution.
+
+## Gas City boundary
+
+Gas City is separate managed contributor infrastructure. Do not modify
+`nix/gas-city-contributor/**` or its managed authority as part of ordinary
+repository work, and do not make claims about repo-skill visibility in managed
+sessions. Its focused operating detail is
+[`gas-city.md`](./gas-city.md).
 
 
 ## Disk hygiene contract

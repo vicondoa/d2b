@@ -332,7 +332,7 @@ fn contributing_doc_enumeration_fault_debug_redacts_the_directory_and_the_detail
 /// rather than in a doc the agent opens when it needs it.
 #[test]
 fn agents_md_stays_within_its_context_budget() {
-    const BUDGET: usize = 40_000;
+    const BUDGET: usize = 20_000;
     let bytes = read_repo_file("AGENTS.md").len();
     assert!(
         bytes <= BUDGET,
@@ -342,25 +342,199 @@ fn agents_md_stays_within_its_context_budget() {
     );
 }
 
+fn markdown_anchor_slug(heading: &str) -> String {
+    let mut slug = String::new();
+    let mut pending_dash = false;
+    for ch in heading.trim().chars() {
+        if ch.is_ascii_alphanumeric() || ch == '_' {
+            if pending_dash && !slug.is_empty() {
+                slug.push('-');
+            }
+            pending_dash = false;
+            slug.push(ch.to_ascii_lowercase());
+        } else if ch == '-' || ch.is_whitespace() {
+            pending_dash = true;
+        }
+    }
+    slug
+}
+
+fn markdown_has_anchor(content: &str, anchor: &str) -> bool {
+    let expected = anchor.trim_start_matches('#').to_ascii_lowercase();
+    content.lines().any(|line| {
+        let heading = line.trim_start_matches('#');
+        line.starts_with('#') && markdown_anchor_slug(heading) == expected
+    }) || content.contains(&format!("id=\"{expected}\""))
+        || content.contains(&format!("id='{expected}'"))
+}
+
 /// A router whose links rot is worse than the monolith it replaced: the rule
-/// looks documented while the detail is unreachable.
+/// looks documented while the detail is unreachable. Validate local Markdown
+/// paths in all supported forms and validate anchors in the linked document.
 #[test]
 fn agents_md_routes_to_paths_that_exist() {
     let agents = read_repo_file("AGENTS.md");
-    let link_re = Regex::new(r"\]\((\./[^)#]+)").expect("valid link regex");
+    let link_re = Regex::new(r"\]\(([^)\s]+)").expect("valid link regex");
     let mut missing: Vec<String> = Vec::new();
     for caps in link_re.captures_iter(&agents) {
-        let rel = caps[1].trim_start_matches("./");
-        if !repo_path_exists(rel) {
-            missing.push(rel.to_string());
+        let target = &caps[1];
+        if target.starts_with("mailto:")
+            || target.starts_with("//")
+            || target.contains("://")
+        {
+            continue;
+        }
+
+        let (path, anchor) = target.split_once('#').unwrap_or((target, ""));
+        let rel = path.trim_start_matches("./");
+        let link_path = if rel.is_empty() { "AGENTS.md" } else { rel };
+        if !repo_path_exists(link_path) {
+            missing.push(target.to_string());
+            continue;
+        }
+        if !anchor.is_empty() {
+            let target_path = d2b_contract_tests::repo_root().join(link_path);
+            let content = if link_path == "AGENTS.md" {
+                agents.clone()
+            } else if target_path.is_file() {
+                read_repo_file(link_path)
+            } else if target_path.is_dir() {
+                let index = target_path.join("README.md");
+                index
+                    .is_file()
+                    .then(|| {
+                        index
+                            .strip_prefix(d2b_contract_tests::repo_root())
+                            .expect("Markdown directory index stays in repo")
+                            .to_string_lossy()
+                            .into_owned()
+                    })
+                    .map(|index| read_repo_file(&index))
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            };
+            if content.is_empty() || !markdown_has_anchor(&content, anchor) {
+                missing.push(target.to_string());
+            }
         }
     }
     assert!(
         missing.is_empty(),
-        "AGENTS.md links to {} path(s) that do not exist: {}",
+        "AGENTS.md links to {} missing path(s) or anchor(s): {}",
         missing.len(),
         missing.join(", ")
     );
+}
+
+#[test]
+fn agents_md_defines_the_single_authority_and_tiered_routes() {
+    let agents = read_repo_file("AGENTS.md");
+    for required in [
+        "single operational authority",
+        "Every code change uses Compound Engineering",
+        "Clear bounded change",
+        "Open-ended bug",
+        "Larger or product-ambiguous work",
+        "ce-work",
+        "ce-debug",
+        "ce-brainstorm",
+        "ce-plan",
+        "Ponytail",
+        "Caveman",
+        "transient communication only",
+    ] {
+        assert!(
+            agents.contains(required),
+            "AGENTS.md is missing contributor workflow anchor: {required}"
+        );
+    }
+}
+
+#[test]
+fn agents_md_defines_model_preferences_and_exact_ce_profile() {
+    let agents = read_repo_file("AGENTS.md");
+    for required in [
+        "gpt-5.6-sol",
+        "xhigh reasoning and long context",
+        "gpt-5.6-luna",
+        "strongest native",
+        "record that substitution only in the transient handoff",
+        "ce-work mode:return-to-caller",
+        "ce-code-review mode:agent",
+        "ce-commit-push-pr branding:off babysit:off",
+        "ce-babysit-pr posture:target",
+    ] {
+        assert!(
+            agents.contains(required),
+            "AGENTS.md is missing model/profile anchor: {required}"
+        );
+    }
+}
+
+#[test]
+fn agents_md_defines_reviewed_head_and_guarded_merge_contract() {
+    let agents = read_repo_file("AGENTS.md");
+    for required in [
+        "independent review",
+        "fresh review",
+        "Missing review evidence fails closed",
+        "ce-babysit-pr",
+        "expected-head guard",
+        "normal squash",
+        "Never use admin, auto-merge, bypass",
+        "observed base",
+        "nix/gas-city-contributor/**",
+        "separate managed authority",
+    ] {
+        assert!(
+            agents.contains(required),
+            "AGENTS.md is missing reviewed-head or boundary anchor: {required}"
+        );
+    }
+}
+
+#[test]
+fn strategy_is_concise_product_direction_without_operational_policy() {
+    const BUDGET: usize = 4_000;
+    let strategy = read_repo_file("STRATEGY.md");
+    assert!(
+        strategy.len() <= BUDGET,
+        "STRATEGY.md is {} bytes, over its {BUDGET}-byte product-direction budget",
+        strategy.len()
+    );
+    for required in [
+        "Product purpose",
+        "Target user and outcome",
+        "daemon-only control plane",
+        "Isolation and security posture",
+        "Declarative contract",
+        "Current direction",
+        "d2bd",
+        "d2b-priv-broker",
+        "microVM",
+    ] {
+        assert!(
+            strategy.contains(required),
+            "STRATEGY.md is missing product anchor: {required}"
+        );
+    }
+    for forbidden in [
+        "Ponytail",
+        "Caveman",
+        "skill",
+        "model",
+        "ce-work",
+        "gpt-5.6",
+        "pull request",
+        "expected-head",
+        "ce-code-review",
+    ] {
+        assert!(
+            !strategy.contains(forbidden),
+            "STRATEGY.md must not carry operational policy: {forbidden}"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
