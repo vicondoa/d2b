@@ -1,7 +1,7 @@
 //! In-memory host notification sink and observer projection.
 
 use crate::{
-    GuestSource,
+    GuestSource, NotificationProviderConfig,
     action_nonce::{ActionNonceError, ActionNonceStore},
     admission::SessionEvidence,
     redact::SanitizedNotification,
@@ -90,11 +90,14 @@ impl core::fmt::Debug for NotificationProjection {
 /// Host sink with bounded projection and action state.
 pub struct NotificationSink {
     max_pending: usize,
+    acknowledge_timeout_secs: u64,
+    observer_enabled: bool,
     projections: BTreeMap<String, NotificationProjection>,
     order: VecDeque<String>,
     projection_nonces: BTreeMap<String, Vec<String>>,
     projection_idempotency: BTreeMap<String, (String, String)>,
     projection_sessions: BTreeMap<String, String>,
+    projection_deadlines: BTreeMap<String, u64>,
     idempotency: BTreeMap<(String, String), (String, NotificationResult)>,
     nonces: ActionNonceStore,
 }
@@ -102,16 +105,47 @@ pub struct NotificationSink {
 impl NotificationSink {
     /// Construct a host sink with bounded queue and nonce state.
     pub fn new(max_pending: usize, nonce_capacity: usize, nonce_ttl_secs: u64) -> Self {
+        Self::new_with_policy(
+            max_pending,
+            nonce_capacity,
+            nonce_ttl_secs,
+            crate::DEFAULT_ACKNOWLEDGE_TIMEOUT_SECS,
+            true,
+        )
+    }
+
+    /// Construct a host sink with the complete Provider policy.
+    pub fn new_with_policy(
+        max_pending: usize,
+        nonce_capacity: usize,
+        nonce_ttl_secs: u64,
+        acknowledge_timeout_secs: u64,
+        observer_enabled: bool,
+    ) -> Self {
         Self {
             max_pending,
+            acknowledge_timeout_secs,
+            observer_enabled,
             projections: BTreeMap::new(),
             order: VecDeque::new(),
             projection_nonces: BTreeMap::new(),
             projection_idempotency: BTreeMap::new(),
             projection_sessions: BTreeMap::new(),
+            projection_deadlines: BTreeMap::new(),
             idempotency: BTreeMap::new(),
             nonces: ActionNonceStore::new(nonce_capacity, nonce_ttl_secs),
         }
+    }
+
+    /// Construct a host sink from the validated Provider configuration.
+    pub fn from_config(config: &NotificationProviderConfig) -> Self {
+        Self::new_with_policy(
+            config.max_pending_notifications(),
+            config.action_nonce_store_size(),
+            config.action_nonce_ttl_secs(),
+            config.acknowledge_timeout_secs(),
+            config.observer_enabled(),
+        )
     }
 
     /// Deliver one authenticated Guest-source request through the effect port
@@ -127,6 +161,9 @@ impl NotificationSink {
         source_session
             .admit_source()
             .map_err(|_| crate::types::NotificationError::InvalidOpaqueKey)?;
+        if !self.observer_enabled {
+            return Err(crate::types::NotificationError::ObserverDisabled);
+        }
         observer_session
             .admit_observer()
             .map_err(|_| crate::types::NotificationError::InvalidOpaqueKey)?;
@@ -135,6 +172,7 @@ impl NotificationSink {
         }
         let observer_session = observer_session.session_key();
         self.nonces.gc(now_secs);
+        self.gc_projections(now_secs);
         self.prune_idempotency_nonces();
         let idempotency_key = request
             .idempotency_key()
@@ -200,6 +238,10 @@ impl NotificationSink {
         self.projection_nonces.insert(request_id, issued_keys);
         self.projection_sessions
             .insert(format!("notification-{notification_id}"), observer_session);
+        self.projection_deadlines.insert(
+            format!("notification-{notification_id}"),
+            now_secs.saturating_add(self.acknowledge_timeout_secs),
+        );
         let result = NotificationResult::Accepted {
             notification_id,
             action_nonces,
@@ -280,6 +322,7 @@ impl NotificationSink {
         self.revoke_projection_nonces(&request_id);
         self.remove_projection_idempotency(&request_id);
         self.projection_sessions.remove(&request_id);
+        self.projection_deadlines.remove(&request_id);
         self.order.retain(|value| value != &request_id);
     }
 
@@ -310,6 +353,7 @@ impl NotificationSink {
         self.projection_nonces.clear();
         self.projection_idempotency.clear();
         self.projection_sessions.clear();
+        self.projection_deadlines.clear();
         self.idempotency.clear();
         self.nonces.clear();
     }
@@ -325,6 +369,7 @@ impl NotificationSink {
             self.revoke_projection_nonces(&request_id);
             self.remove_projection_idempotency(&request_id);
             self.projection_sessions.remove(&request_id);
+            self.projection_deadlines.remove(&request_id);
         }
     }
 
@@ -373,7 +418,26 @@ impl NotificationSink {
             self.revoke_projection_nonces(&request_id);
             self.projection_idempotency.remove(&request_id);
             self.projection_sessions.remove(&request_id);
+            self.projection_deadlines.remove(&request_id);
             self.order.retain(|value| value != &request_id);
+        }
+    }
+
+    fn gc_projections(&mut self, now_secs: u64) {
+        let expired = self
+            .projection_deadlines
+            .iter()
+            .filter_map(|(request_id, deadline)| {
+                (*deadline <= now_secs).then_some(request_id.clone())
+            })
+            .collect::<Vec<_>>();
+        for request_id in expired {
+            if let Some(notification_id) = request_id
+                .strip_prefix("notification-")
+                .and_then(|value| value.parse::<u32>().ok())
+            {
+                self.close(notification_id);
+            }
         }
     }
 }
@@ -577,6 +641,60 @@ mod tests {
         assert_eq!(
             sink.invoke_action_for(&action_key, &observer, "open", 102),
             Ok("open".to_owned())
+        );
+    }
+
+    #[test]
+    fn observer_policy_and_acknowledgement_timeout_are_enforced() {
+        let mut disabled = NotificationSink::new_with_policy(2, 2, 10, 5, false);
+        let mut port = TestPort::default();
+        assert_eq!(
+            disabled.deliver(
+                &mut port,
+                &test_source("guest"),
+                &test_observer("alice"),
+                request_with_action(),
+                100,
+            ),
+            Err(crate::types::NotificationError::ObserverDisabled)
+        );
+
+        let mut sink = NotificationSink::new_with_policy(2, 2, 100, 5, true);
+        let source = test_source("guest");
+        let observer = test_observer("alice");
+        let first = sink
+            .deliver(
+                &mut port,
+                &source,
+                &observer,
+                request_with_action(),
+                100,
+            )
+            .unwrap();
+        let action_key = match first {
+            NotificationResult::Accepted { action_nonces, .. } => action_nonces["open"].clone(),
+            other => panic!("unexpected result: {other:?}"),
+        };
+        let second = sink
+            .deliver(
+                &mut port,
+                &source,
+                &observer,
+                request_with_action(),
+                105,
+            )
+            .unwrap();
+        assert!(matches!(
+            second,
+            NotificationResult::Accepted {
+                notification_id: 2,
+                ..
+            }
+        ));
+        assert_eq!(sink.projection_len(), 1);
+        assert_eq!(
+            sink.invoke_action(&action_key, &observer, 105),
+            Err(ActionNonceError::Unavailable)
         );
     }
 }

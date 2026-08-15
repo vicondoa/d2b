@@ -56,3 +56,5 @@ pub const DEFAULT_MAX_PENDING: usize = 64;
 pub const DEFAULT_NONCE_TTL_SECS: u64 = 120;
 /// Canonical action nonce store capacity.
 pub const DEFAULT_NONCE_STORE_SIZE: usize = 256;
+/// Canonical observer acknowledgement timeout in seconds.
+pub const DEFAULT_ACKNOWLEDGE_TIMEOUT_SECS: u64 = 3600;

@@ -186,6 +186,8 @@ pub enum NotificationError {
     InvalidTimeout,
     /// A correlation or idempotency key exceeded its bound.
     InvalidOpaqueKey,
+    /// The authenticated observer stream is disabled by Provider policy.
+    ObserverDisabled,
 }
 
 impl core::fmt::Display for NotificationError {
@@ -196,6 +198,7 @@ impl core::fmt::Display for NotificationError {
             Self::InvalidActions => "notification-actions-invalid",
             Self::InvalidTimeout => "notification-timeout-invalid",
             Self::InvalidOpaqueKey => "notification-opaque-key-invalid",
+            Self::ObserverDisabled => "notification-observer-disabled",
         })
     }
 }

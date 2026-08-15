@@ -82,6 +82,16 @@ let
         message = "${row.path}.spec.config.actionNonceTtlSecs must be between 30 and 600.";
       }
       {
+        assertion = (c.actionNonceStoreSize or 256) >= 64
+          && (c.actionNonceStoreSize or 256) <= 4096;
+        message = "${row.path}.spec.config.actionNonceStoreSize must be between 64 and 4096.";
+      }
+      {
+        assertion = (c.acknowledgeTimeoutSecs or 3600) >= 1
+          && (c.acknowledgeTimeoutSecs or 3600) <= 86400;
+        message = "${row.path}.spec.config.acknowledgeTimeoutSecs must be between 1 and 86400.";
+      }
+      {
         assertion = lib.length sources <= 16;
         message = "${row.path}.spec.config.guestSources must contain at most 16 entries.";
       }

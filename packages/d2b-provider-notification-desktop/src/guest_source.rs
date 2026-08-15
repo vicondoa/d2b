@@ -9,16 +9,25 @@ pub struct GuestSource {
     source_ref: ResourceRef,
     zone: ZoneId,
     categories: BTreeSet<Category>,
+    generation: u64,
 }
 
 impl GuestSource {
-    /// Construct a configured Guest source from Core-owned configuration.
-    pub fn from_config(config: &GuestSourceConfig) -> Self {
-        Self {
+    /// Construct a configured Guest source from Core-owned configuration and
+    /// the current authenticated reconnect generation.
+    pub fn from_config_at_generation(
+        config: &GuestSourceConfig,
+        generation: u64,
+    ) -> Result<Self, &'static str> {
+        if generation == 0 {
+            return Err("notification-source-generation-invalid");
+        }
+        Ok(Self {
             source_ref: config.source_ref().clone(),
             zone: config.zone().clone(),
             categories: config.categories().clone(),
-        }
+            generation,
+        })
     }
 
     /// Construct an unbound source for unit tests only.
@@ -32,6 +41,7 @@ impl GuestSource {
             source_ref: ResourceRef::parse("Guest/test").unwrap(),
             zone: ZoneId::parse("test").unwrap(),
             categories,
+            generation: 1,
         })
     }
 
@@ -55,6 +65,9 @@ impl GuestSource {
             .map_err(|_| "notification-source-unauthenticated")?;
         if session.subject_ref() != &self.source_ref || session.zone() != &self.zone {
             return Err("notification-source-binding-mismatch");
+        }
+        if session.generation() != self.generation {
+            return Err("notification-source-stale-generation");
         }
         self.validate(request)
     }
@@ -82,7 +95,7 @@ mod tests {
             [Category::SystemInfo],
         )
         .unwrap();
-        let source = GuestSource::from_config(&config);
+        let source = GuestSource::from_config_at_generation(&config, 1).unwrap();
         let request = NotificationRequest::new("summary", "body", Category::SystemInfo).unwrap();
         assert_eq!(
             source.validate_authenticated(&test_observer("alice"), &request),
@@ -96,6 +109,10 @@ mod tests {
         assert_eq!(
             source.validate_authenticated(&crate::admission::test_source("other"), &request),
             Err("notification-source-binding-mismatch")
+        );
+        assert_eq!(
+            source.validate_authenticated(&crate::admission::test_source_at("guest", 2), &request),
+            Err("notification-source-stale-generation")
         );
     }
 }

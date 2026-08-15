@@ -79,6 +79,9 @@ impl SessionEvidence {
 
     /// Check all fixed service, transport, and authentication requirements.
     pub fn admit(&self) -> Result<(), AdmissionError> {
+        if self.generation == 0 {
+            return Err(AdmissionError::SessionNotEstablished);
+        }
         match (self.purpose, self.transport) {
             (AdmissionPurpose::NotificationSource, TransportClass::EnrolledNoiseKk)
             | (AdmissionPurpose::DesktopObserver, TransportClass::UnixSeqpacket) => Ok(()),
@@ -247,6 +250,14 @@ mod tests {
         assert_ne!(first.session_key(), second.session_key());
         assert_eq!(first.zone().as_str(), "work");
         assert_eq!(first.generation(), 1);
+    }
+
+    #[test]
+    fn zero_reconnect_generation_is_not_admitted() {
+        assert_eq!(
+            test_source_at("guest", 0).admit(),
+            Err(AdmissionError::SessionNotEstablished)
+        );
     }
 }
 

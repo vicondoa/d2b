@@ -11,6 +11,14 @@ use crate::Category;
 const DISPLAY_PROVIDER_REF: &str = "Provider/display-wayland";
 const DISPLAY_SERVICE_PACKAGE: &str = "d2b.display.v3";
 const MAX_GUEST_SOURCES: usize = 16;
+const MIN_MAX_PENDING_NOTIFICATIONS: usize = 8;
+const MAX_MAX_PENDING_NOTIFICATIONS: usize = 1024;
+const MIN_ACTION_NONCE_TTL_SECS: u64 = 30;
+const MAX_ACTION_NONCE_TTL_SECS: u64 = 600;
+const MIN_ACTION_NONCE_STORE_SIZE: usize = 64;
+const MAX_ACTION_NONCE_STORE_SIZE: usize = 4096;
+const MIN_ACKNOWLEDGE_TIMEOUT_SECS: u64 = 1;
+const MAX_ACKNOWLEDGE_TIMEOUT_SECS: u64 = 86_400;
 
 /// Readiness state reported by the authenticated display dependency.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -235,7 +243,13 @@ pub struct NotificationProviderConfig {
     guest_sources: Vec<GuestSourceConfig>,
     host_execution_ref: Option<ResourceRef>,
     host_user_ref: Option<ResourceRef>,
+    display_wayland_ref: Option<ResourceRef>,
+    max_pending_notifications: usize,
+    action_nonce_ttl_secs: u64,
+    action_nonce_store_size: usize,
+    acknowledge_timeout_secs: u64,
     dbus_sink_enabled: bool,
+    observer_enabled: bool,
 }
 
 impl NotificationProviderConfig {
@@ -254,7 +268,13 @@ impl NotificationProviderConfig {
             guest_sources,
             host_execution_ref: None,
             host_user_ref: None,
+            display_wayland_ref: None,
+            max_pending_notifications: crate::DEFAULT_MAX_PENDING,
+            action_nonce_ttl_secs: crate::DEFAULT_NONCE_TTL_SECS,
+            action_nonce_store_size: crate::DEFAULT_NONCE_STORE_SIZE,
+            acknowledge_timeout_secs: crate::DEFAULT_ACKNOWLEDGE_TIMEOUT_SECS,
             dbus_sink_enabled: true,
+            observer_enabled: true,
         })
     }
 
@@ -267,6 +287,112 @@ impl NotificationProviderConfig {
     /// Return whether the host D-Bus sink is configured.
     pub const fn dbus_sink_enabled(&self) -> bool {
         self.dbus_sink_enabled
+    }
+
+    /// Enable or disable the authenticated observer stream.
+    pub const fn with_observer_enabled(mut self, enabled: bool) -> Self {
+        self.observer_enabled = enabled;
+        self
+    }
+
+    /// Return whether the authenticated observer stream is configured.
+    pub const fn observer_enabled(&self) -> bool {
+        self.observer_enabled
+    }
+
+    /// Configure the maximum number of pending projections.
+    pub fn with_max_pending_notifications(
+        mut self,
+        max_pending_notifications: usize,
+    ) -> Result<Self, &'static str> {
+        if !(MIN_MAX_PENDING_NOTIFICATIONS..=MAX_MAX_PENDING_NOTIFICATIONS)
+            .contains(&max_pending_notifications)
+        {
+            return Err("notification-pending-capacity");
+        }
+        self.max_pending_notifications = max_pending_notifications;
+        Ok(self)
+    }
+
+    /// Return the maximum number of pending projections.
+    pub const fn max_pending_notifications(&self) -> usize {
+        self.max_pending_notifications
+    }
+
+    /// Configure the action capability TTL.
+    pub fn with_action_nonce_ttl_secs(
+        mut self,
+        action_nonce_ttl_secs: u64,
+    ) -> Result<Self, &'static str> {
+        if !(MIN_ACTION_NONCE_TTL_SECS..=MAX_ACTION_NONCE_TTL_SECS).contains(&action_nonce_ttl_secs)
+        {
+            return Err("notification-action-nonce-ttl");
+        }
+        self.action_nonce_ttl_secs = action_nonce_ttl_secs;
+        Ok(self)
+    }
+
+    /// Return the action capability TTL.
+    pub const fn action_nonce_ttl_secs(&self) -> u64 {
+        self.action_nonce_ttl_secs
+    }
+
+    /// Configure the action capability store capacity.
+    pub fn with_action_nonce_store_size(
+        mut self,
+        action_nonce_store_size: usize,
+    ) -> Result<Self, &'static str> {
+        if !(MIN_ACTION_NONCE_STORE_SIZE..=MAX_ACTION_NONCE_STORE_SIZE)
+            .contains(&action_nonce_store_size)
+        {
+            return Err("notification-action-nonce-capacity");
+        }
+        self.action_nonce_store_size = action_nonce_store_size;
+        Ok(self)
+    }
+
+    /// Return the action capability store capacity.
+    pub const fn action_nonce_store_size(&self) -> usize {
+        self.action_nonce_store_size
+    }
+
+    /// Configure the observer acknowledgement timeout.
+    pub fn with_acknowledge_timeout_secs(
+        mut self,
+        acknowledge_timeout_secs: u64,
+    ) -> Result<Self, &'static str> {
+        if !(MIN_ACKNOWLEDGE_TIMEOUT_SECS..=MAX_ACKNOWLEDGE_TIMEOUT_SECS)
+            .contains(&acknowledge_timeout_secs)
+        {
+            return Err("notification-acknowledge-timeout");
+        }
+        self.acknowledge_timeout_secs = acknowledge_timeout_secs;
+        Ok(self)
+    }
+
+    /// Return the observer acknowledgement timeout.
+    pub const fn acknowledge_timeout_secs(&self) -> u64 {
+        self.acknowledge_timeout_secs
+    }
+
+    /// Bind the display Provider dependency selected by Core.
+    pub fn with_display_wayland_ref(
+        mut self,
+        display_wayland_ref: Option<ResourceRef>,
+    ) -> Result<Self, &'static str> {
+        if display_wayland_ref
+            .as_ref()
+            .is_some_and(|provider| provider.to_canonical_string() != DISPLAY_PROVIDER_REF)
+        {
+            return Err("notification-display-provider-invalid");
+        }
+        self.display_wayland_ref = display_wayland_ref;
+        Ok(self)
+    }
+
+    /// Borrow the configured display Provider dependency.
+    pub fn display_wayland_ref(&self) -> Option<&ResourceRef> {
+        self.display_wayland_ref.as_ref()
     }
 
     /// Bind the configured processes to the Core-resolved Host and User.
@@ -621,6 +747,8 @@ pub struct ProcessPlan {
     pub execution_ref: ResourceRef,
     /// Authenticated User identity for user-domain processes.
     pub user_ref: Option<ResourceRef>,
+    /// Whether the host sink exposes the authenticated observer stream.
+    pub observer_enabled: bool,
 }
 
 /// Notification placement controller.
@@ -663,6 +791,11 @@ impl NotificationController {
         {
             return Err("notification-host-binding-mismatch");
         }
+        if config.dbus_sink_enabled()
+            && config.display_wayland_ref() != Some(display.provider_ref())
+        {
+            return Err("notification-display-provider-mismatch");
+        }
         if config
             .guest_sources()
             .iter()
@@ -677,6 +810,7 @@ impl NotificationController {
             source_ref: None,
             execution_ref: host_execution_ref.clone(),
             user_ref: None,
+            observer_enabled: false,
         }];
         if config.dbus_sink_enabled() && display.is_ready() {
             let host_user_ref = host_user_ref.ok_or("notification-host-binding-missing")?;
@@ -687,6 +821,7 @@ impl NotificationController {
                 source_ref: None,
                 execution_ref: host_execution_ref.clone(),
                 user_ref: Some(host_user_ref.clone()),
+                observer_enabled: config.observer_enabled(),
             });
         }
         if display.is_ready() {
@@ -697,6 +832,7 @@ impl NotificationController {
                 source_ref: Some(source.source_ref().clone()),
                 execution_ref: source.source_ref().clone(),
                 user_ref: None,
+                observer_enabled: false,
             }));
         }
         Ok(plans)
@@ -963,6 +1099,8 @@ mod tests {
                 ResourceRef::parse("User/alice").unwrap(),
             )
             .unwrap()
+            .with_display_wayland_ref(Some(ResourceRef::parse(DISPLAY_PROVIDER_REF).unwrap()))
+            .unwrap()
     }
 
     #[test]
@@ -988,6 +1126,44 @@ mod tests {
         assert_eq!(
             controller.plan(&display(DisplayDependencyState::Ready), &wrong_zone_config),
             Err("notification-source-zone-mismatch")
+        );
+    }
+
+    #[test]
+    fn configured_display_dependency_is_exact_and_bounded() {
+        let base = NotificationProviderConfig::new(Vec::new()).unwrap();
+        assert_eq!(
+            base.clone()
+                .with_display_wayland_ref(Some(ResourceRef::parse("Provider/another").unwrap())),
+            Err("notification-display-provider-invalid")
+        );
+        assert_eq!(
+            base.clone().with_max_pending_notifications(7).unwrap_err(),
+            "notification-pending-capacity"
+        );
+        assert_eq!(
+            base.clone().with_action_nonce_ttl_secs(29).unwrap_err(),
+            "notification-action-nonce-ttl"
+        );
+        assert_eq!(
+            base.with_action_nonce_store_size(63).unwrap_err(),
+            "notification-action-nonce-capacity"
+        );
+    }
+
+    #[test]
+    fn ready_sink_requires_the_configured_display_dependency() {
+        let controller = NotificationController::new(crate::PROVIDER_REF).unwrap();
+        let config = NotificationProviderConfig::new(Vec::new())
+            .unwrap()
+            .with_host_binding(
+                ResourceRef::parse("Host/host-system").unwrap(),
+                ResourceRef::parse("User/alice").unwrap(),
+            )
+            .unwrap();
+        assert_eq!(
+            controller.plan(&display(DisplayDependencyState::Ready), &config),
+            Err("notification-display-provider-mismatch")
         );
     }
 
