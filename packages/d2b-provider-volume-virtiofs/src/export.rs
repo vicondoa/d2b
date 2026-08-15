@@ -12,8 +12,8 @@ use sha2::{Digest, Sha256};
 use d2b_contracts::v3::ResourceRef;
 use d2b_contracts::v3::execution_policy::BoundedToken;
 use d2b_contracts::v3::volume::{
-    AttachmentAccess, AttachmentSettings, AttachmentTransport, MAX_LAYOUT_PATH_BYTES,
-    VolumeAttachment,
+    AttachmentAccess, AttachmentSettings, AttachmentTransport, VolumeAttachment,
+    validate_mount_path,
 };
 
 use crate::error::VirtiofsExportError;
@@ -183,28 +183,11 @@ impl ExportSpec {
         mount_path: impl Into<String>,
     ) -> Result<Self, VirtiofsExportError> {
         let mount_path = mount_path.into();
-        if !Self::valid_mount_path(&mount_path) {
+        if !validate_mount_path(&mount_path) {
             return Err(VirtiofsExportError::InvalidExport);
         }
         self.mount_path = mount_path;
         Ok(self)
-    }
-
-    fn valid_mount_path(value: &str) -> bool {
-        if value.len() > MAX_LAYOUT_PATH_BYTES
-            || !value.starts_with('/')
-            || value.contains('\0')
-            || value.contains('\\')
-        {
-            return false;
-        }
-        if value == "/" {
-            return true;
-        }
-        value
-            .split('/')
-            .skip(1)
-            .all(|component| !component.is_empty() && component != "." && component != "..")
     }
 
     /// Derive the stable per-Volume worker principal name.
@@ -246,6 +229,17 @@ mod tests {
         )
         .unwrap();
         assert!(export.clone().with_mount_path("/guest/data").is_ok());
-        assert!(export.with_mount_path("../escape").is_err());
+        for rejected in [
+            "../escape",
+            "/guest/\u{FF0F}data",
+            "/guest/\u{FF0E}/data",
+            "/guest/\u{0001}data",
+            "/guest/\0data",
+        ] {
+            assert!(
+                export.clone().with_mount_path(rejected).is_err(),
+                "unsafe mount path admitted: {rejected:?}"
+            );
+        }
     }
 }
