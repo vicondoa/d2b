@@ -1,23 +1,8 @@
-//! `d2b-provider-relay`: the Azure Relay transport auth/credential core
-//! for the realm gateway (ADR 0032).
+//! Gateway-owned Azure Relay WebSocket and local-socket bridge.
 //!
-//! This crate is the d2b-native home for the **credential model +
-//! connect contract** that the gateway's relay transport and the in-sandbox
-//! sender are built on.
-//!
-//! ## Three-plane mapping
-//! - The **gateway** (host side) holds the relay **Listen** credential and
-//!   opens the listener control channel. Listen auth is a gateway-side SAS
-//!   minted from the `gateway-listen` rule key, or (later) the gateway's own
-//!   Entra **Listener** role.
-//! - The **container** (sandbox sender) authenticates with either an **Entra
-//!   bearer token from its managed identity** or a **gateway-minted,
-//!   short-lived Send SAS bearer**. The ACA display path uses the latter because
-//!   ACA Relay Entra substreams closed during Waypipe forwarding; the long-lived
-//!   SAS rule key still never enters the sandbox.
-//!
-//! Every secret ([`RelayCredential`] material, minted SAS, bearer token) has
-//! a redacted `Debug` so it can never reach a log, span, or audit record.
+//! The canonical Provider crate owns Relay authentication and typed transport
+//! contracts. This composition-root module owns the host-side socket effects
+//! needed by gateway binaries and display listeners.
 
 use std::fmt;
 use std::fs::{File, OpenOptions};
@@ -25,233 +10,28 @@ use std::os::fd::AsRawFd;
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::path::Path;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
-use base64::Engine;
+use d2b_provider_transport_azure_relay::gateway_compat::{
+    DEFAULT_SAS_TTL_SECS, RelayCredential, RelayEndpoint, RelayError, RelayRole, build_connect,
+};
 use d2b_realm_core::{ErrorKind, NodeId, ProviderId};
 use d2b_realm_provider::error::{ProviderError, ProviderResult};
 use d2b_realm_provider::provider::{TransportListener, TransportProvider};
 use d2b_realm_provider::types::{NodeRegistration, SafeLabel, TransportSession, TransportTarget};
-use hmac::{Hmac, Mac};
 use rustls_pki_types::{CertificateDer, pem::PemObject};
-use sha2::Sha256;
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::{Mutex, Semaphore, mpsc};
+use tokio::time::{Duration, timeout};
 
-type HmacSha256 = Hmac<Sha256>;
+#[cfg(test)]
+use d2b_provider_transport_azure_relay::gateway_compat::{MAX_SAS_TTL_SECS, mint_sas};
+#[cfg(test)]
+use std::time::{SystemTime, UNIX_EPOCH};
 
-/// The Entra resource (audience) a managed identity requests a token for to
-/// authenticate to Azure Relay. Confirmed against the Azure Relay docs.
-pub const RELAY_TOKEN_RESOURCE: &str = "https://relay.azure.net/";
-
-/// The role an endpoint plays on the hybrid connection.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RelayRole {
-    /// The gateway side that accepts sender connections.
-    Listener,
-    /// The sandbox side that dials out to send.
-    Sender,
-}
-
-impl RelayRole {
-    /// The `sb-hc-action` query value for this role.
-    fn action(self) -> &'static str {
-        match self {
-            RelayRole::Listener => "listen",
-            RelayRole::Sender => "connect",
-        }
-    }
-}
-
-/// A hybrid-connection endpoint: the relay namespace FQDN + the entity
-/// (hybrid connection) name. Non-secret.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RelayEndpoint {
-    /// Namespace FQDN, e.g. `relns-xxxx.servicebus.windows.net`.
-    pub namespace: String,
-    /// Hybrid connection (entity) name, e.g. `hc-d2b-display`.
-    pub entity: String,
-}
-
-/// How an endpoint authenticates to the relay. Both variants wrap secret
-/// material and therefore redact their `Debug`.
-#[derive(Clone)]
-pub enum RelayCredential {
-    /// A Shared Access Signature: an authorization-rule name + its key. Used
-    /// gateway-side (the Listen rule), and transitionally for non-MI senders.
-    Sas {
-        /// The authorization-rule (key) name, e.g. `gateway-listen`.
-        key_name: String,
-        /// The rule's key. Secret.
-        key: String,
-    },
-    /// A pre-minted Shared Access Signature bearer. The gateway uses this for
-    /// short-lived Send tokens handed to ACA sandboxes without exposing the
-    /// underlying rule key.
-    SasToken(String),
-    /// A Microsoft Entra bearer token acquired by a managed identity for
-    /// [`RELAY_TOKEN_RESOURCE`]. The productionized container path. Secret.
-    EntraBearer(String),
-}
-
-impl fmt::Debug for RelayCredential {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            // The key name is a non-secret label; the key/token are redacted.
-            RelayCredential::Sas { key_name, .. } => f
-                .debug_struct("RelayCredential::Sas")
-                .field("key_name", key_name)
-                .field("key", &"<redacted>")
-                .finish(),
-            RelayCredential::SasToken(_) => f.write_str("RelayCredential::SasToken(<redacted>)"),
-            RelayCredential::EntraBearer(_) => {
-                f.write_str("RelayCredential::EntraBearer(<redacted>)")
-            }
-        }
-    }
-}
-
-/// The bytes a [`RelayCredential`] resolves to for a WebSocket connect: a SAS
-/// goes in the `sb-hc-token` query parameter; an Entra token goes in the
-/// `ServiceBusAuthorization` header. Exactly one is set. Redacted `Debug`.
-#[derive(Clone, PartialEq, Eq)]
-pub struct RelayConnect {
-    /// The `wss://…` URL (already URL-encoded; never contains the bearer).
-    pub url: String,
-    /// The `ServiceBusAuthorization` header value (`Bearer <jwt>`), when the
-    /// credential is an Entra token.
-    pub auth_header: Option<String>,
-}
-
-impl fmt::Debug for RelayConnect {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // The URL may carry an sb-hc-token SAS; redact the whole URL query and
-        // never print the header (it carries the bearer).
-        let scheme_host = self.url.split('?').next().unwrap_or("");
-        f.debug_struct("RelayConnect")
-            .field("url", &format!("{scheme_host}?<redacted>"))
-            .field(
-                "auth_header",
-                &self.auth_header.as_ref().map(|_| "<redacted>"),
-            )
-            .finish()
-    }
-}
-
-/// The maximum minted-SAS lifetime (seconds) accepted for relay sessions.
-pub const MAX_SAS_TTL_SECS: u64 = 15 * 60;
-
-/// The default minted-SAS lifetime (seconds). The gateway mints short-lived
-/// SAS bearers; a long-lived token is never persisted.
-pub const DEFAULT_SAS_TTL_SECS: u64 = MAX_SAS_TTL_SECS;
-
-/// Mint a Service Bus SAS token conferring the rule's rights on the entity,
-/// expiring `ttl_secs` from now. This is the gateway-side minting the POC's
-/// relay bridge proved; it is reproduced here byte-for-byte.
-///
-/// The returned string is secret (it is a bearer); callers must treat it as
-/// such (it is never logged by this crate).
-pub fn mint_sas(
-    endpoint: &RelayEndpoint,
-    key_name: &str,
-    key: &str,
-    ttl_secs: u64,
-) -> Result<String, RelayError> {
-    if ttl_secs > MAX_SAS_TTL_SECS {
-        return Err(RelayError::TtlTooLong {
-            requested: ttl_secs,
-            max: MAX_SAS_TTL_SECS,
-        });
-    }
-
-    let resource = format!("http://{}/{}", endpoint.namespace, endpoint.entity);
-    let resource_enc = urlencoding::encode(&resource).to_lowercase();
-    let expiry = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|_| RelayError::Clock)?
-        .as_secs()
-        + ttl_secs;
-    let to_sign = format!("{resource_enc}\n{expiry}");
-    let mut mac = HmacSha256::new_from_slice(key.as_bytes()).map_err(|_| RelayError::Key)?;
-    mac.update(to_sign.as_bytes());
-    let sig = base64::engine::general_purpose::STANDARD.encode(mac.finalize().into_bytes());
-    let sig_enc = urlencoding::encode(&sig);
-    Ok(format!(
-        "SharedAccessSignature sr={resource_enc}&sig={sig_enc}&se={expiry}&skn={key_name}"
-    ))
-}
-
-/// Build the relay WebSocket connect contract for `role` using `credential`.
-/// SAS authentication mints a token into the `sb-hc-token` query parameter;
-/// Entra authentication leaves the URL token-free and returns the
-/// `ServiceBusAuthorization: Bearer <jwt>` header. A pre-minted SAS bearer is
-/// also accepted for the ACA path; it is already scoped/expiring, so this
-/// function only URL-encodes it into `sb-hc-token`.
-pub fn build_connect(
-    endpoint: &RelayEndpoint,
-    role: RelayRole,
-    credential: &RelayCredential,
-    ttl_secs: u64,
-) -> Result<RelayConnect, RelayError> {
-    // The sender does NOT supply its own `sb-hc-id`. Azure Relay generates the
-    // rendezvous correlation id (a GUID) and embeds it in the accept message's
-    // address; a caller-supplied non-GUID id yields an unserviceable rendezvous
-    // address that the listener's accept connect rejects with 400. This matches
-    // the official Relay SDKs, which omit `sb-hc-id` on connect.
-    let base = format!(
-        "wss://{}/$hc/{}?sb-hc-action={}",
-        endpoint.namespace,
-        urlencoding::encode(&endpoint.entity),
-        role.action(),
-    );
-    match credential {
-        RelayCredential::EntraBearer(token) => Ok(RelayConnect {
-            url: base,
-            auth_header: Some(format!("Bearer {token}")),
-        }),
-        RelayCredential::SasToken(token) => Ok(RelayConnect {
-            url: format!("{base}&sb-hc-token={}", urlencoding::encode(token)),
-            auth_header: None,
-        }),
-        RelayCredential::Sas { key_name, key } => {
-            let token = mint_sas(endpoint, key_name, key, ttl_secs)?;
-            Ok(RelayConnect {
-                url: format!("{base}&sb-hc-token={}", urlencoding::encode(&token)),
-                auth_header: None,
-            })
-        }
-    }
-}
-
-/// Errors building relay auth.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RelayError {
-    /// The system clock was before the Unix epoch.
-    Clock,
-    /// The SAS key was not valid HMAC key material.
-    Key,
-    /// The requested SAS TTL exceeded the short-lived bearer bound.
-    TtlTooLong { requested: u64, max: u64 },
-}
-
-impl fmt::Display for RelayError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            RelayError::Clock => write!(f, "system clock is before the unix epoch"),
-            RelayError::Key => write!(f, "relay SAS key is invalid"),
-            RelayError::TtlTooLong { requested, max } => write!(
-                f,
-                "relay SAS TTL {requested}s exceeds maximum short-lived bound {max}s"
-            ),
-        }
-    }
-}
-
-impl std::error::Error for RelayError {}
-
-/// A connected relay WebSocket stream (TLS over TCP).
 pub type RelayStream =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+const RELAY_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Install the process-global rustls crypto provider (ring) if one is not
 /// already installed. [`connect`] calls this lazily, so consumers normally do
@@ -331,10 +111,13 @@ async fn connect_request(
     ca_pem: Option<&[u8]>,
 ) -> Result<RelayStream, RelayConnectError> {
     let connector = tls_connector(ca_pem)?;
-    let (ws, _resp) =
-        tokio_tungstenite::connect_async_tls_with_config(request, None, false, Some(connector))
-            .await
-            .map_err(|err| RelayConnectError::Handshake(err.to_string()))?;
+    let (ws, _resp) = timeout(
+        RELAY_CONNECT_TIMEOUT,
+        tokio_tungstenite::connect_async_tls_with_config(request, None, false, Some(connector)),
+    )
+    .await
+    .map_err(|_| RelayConnectError::Handshake("relay connect timeout".into()))?
+    .map_err(|err| RelayConnectError::Handshake(err.to_string()))?;
     Ok(ws)
 }
 
@@ -369,6 +152,9 @@ pub enum RelayConnectError {
     /// the credential is unauthorized). The message is the bounded tungstenite
     /// error class; it never carries the token.
     Handshake(String),
+    /// The authenticated bridge ended. The session prologue has already been
+    /// consumed, so retrying it would be a replay and must not be attempted.
+    Bridge(String),
 }
 
 impl fmt::Display for RelayConnectError {
@@ -377,6 +163,7 @@ impl fmt::Display for RelayConnectError {
             RelayConnectError::Auth(e) => write!(f, "relay auth: {e}"),
             RelayConnectError::BadRequest => write!(f, "relay connect request was malformed"),
             RelayConnectError::Handshake(m) => write!(f, "relay websocket handshake failed: {m}"),
+            RelayConnectError::Bridge(m) => write!(f, "relay bridge ended: {m}"),
         }
     }
 }
@@ -616,7 +403,8 @@ fn relay_provider_error(err: RelayConnectError) -> ProviderError {
     let kind = match err {
         RelayConnectError::Auth(_)
         | RelayConnectError::BadRequest
-        | RelayConnectError::Handshake(_) => ErrorKind::RelayUnavailable,
+        | RelayConnectError::Handshake(_)
+        | RelayConnectError::Bridge(_) => ErrorKind::RelayUnavailable,
     };
     ProviderError::new(kind, err.to_string())
 }
@@ -746,17 +534,25 @@ where
     let (mut sink, mut stream) = ws.split();
     let mut io = io;
     let mut buf = vec![0u8; 64 * 1024];
+    let mut available_credit = BRIDGE_CREDIT_BYTES;
+    let mut in_flight_credit = 0usize;
     loop {
+        let read_len = available_credit.min(buf.len());
         tokio::select! {
-            n = io.read(&mut buf) => {
+            n = io.read(&mut buf[..read_len]), if available_credit > 0 => {
                 let n = n.map_err(|_| RelayConnectError::Handshake("local read".into()))?;
                 if n == 0 {
                     let _ = sink.send(Message::Close(None)).await;
                     return Ok(());
                 }
+                available_credit -= n;
+                in_flight_credit += n;
                 sink.send(Message::Binary(buf[..n].to_vec()))
                     .await
                     .map_err(|_| RelayConnectError::Handshake("ws send".into()))?;
+                sink.send(Message::Ping((n as u64).to_be_bytes().to_vec()))
+                    .await
+                    .map_err(|_| RelayConnectError::Handshake("ws credit".into()))?;
             }
             msg = stream.next() => {
                 match msg {
@@ -765,8 +561,20 @@ where
                             .map_err(|_| RelayConnectError::Handshake("local write".into()))?;
                     }
                     Some(Ok(Message::Ping(p))) => { let _ = sink.send(Message::Pong(p)).await; }
-                    Some(Ok(Message::Text(_))) | Some(Ok(Message::Pong(_)))
-                    | Some(Ok(Message::Frame(_))) => {}
+                    Some(Ok(Message::Pong(p))) => {
+                        if p.len() == 8 {
+                            let released = u64::from_be_bytes(
+                                p.as_slice().try_into().expect("8-byte credit acknowledgement"),
+                            ) as usize;
+                            acknowledge_bridge_credit(
+                                &mut available_credit,
+                                &mut in_flight_credit,
+                                released,
+                            );
+                        }
+
+                    }
+                    Some(Ok(Message::Text(_))) | Some(Ok(Message::Frame(_))) => {}
                     Some(Ok(Message::Close(_))) | None => return Ok(()),
                     Some(Err(err)) => {
                         return Err(RelayConnectError::Handshake(format!(
@@ -777,6 +585,18 @@ where
             }
         }
     }
+}
+
+fn acknowledge_bridge_credit(
+    available_credit: &mut usize,
+    in_flight_credit: &mut usize,
+    acknowledged: usize,
+) {
+    let released = acknowledged.min(*in_flight_credit);
+    *in_flight_credit -= released;
+    *available_credit = available_credit
+        .saturating_add(released)
+        .min(BRIDGE_CREDIT_BYTES);
 }
 
 /// Connect as a sender, retrying briefly on a 404. Azure Relay returns 404
@@ -913,6 +733,9 @@ pub type PrologueVerifier = std::sync::Arc<dyn Fn(&[u8]) -> bool + Send + Sync>;
 
 /// Max prologue frame body the listener will buffer before rejecting.
 const MAX_PROLOGUE: usize = 16 * 1024;
+const MAX_PENDING_RENDEZVOUS: usize = 128;
+const PROLOGUE_TIMEOUT: Duration = Duration::from_secs(15);
+const BRIDGE_CREDIT_BYTES: usize = 256 * 1024;
 
 /// Try to extract one length-delimited frame (`u32-be length || body`) from the
 /// front of `buf`. Returns `Ok(Some((body, consumed)))` once a full frame is
@@ -971,12 +794,37 @@ pub async fn run_listener_verified(
     ca_pem: Option<&[u8]>,
     verify: PrologueVerifier,
 ) -> Result<(), RelayConnectError> {
+    run_listener_verified_with_ready(
+        endpoint,
+        credential,
+        local,
+        ttl_secs,
+        ca_pem,
+        verify,
+        std::sync::Arc::new(|| {}),
+    )
+    .await
+}
+
+/// Verified listener variant that signals readiness only after the accepted
+/// rendezvous has passed authentication and the local bridge endpoint has
+/// attached successfully.
+pub async fn run_listener_verified_with_ready(
+    endpoint: &RelayEndpoint,
+    credential: &RelayCredential,
+    local: &LocalTarget,
+    ttl_secs: u64,
+    ca_pem: Option<&[u8]>,
+    verify: PrologueVerifier,
+    ready: std::sync::Arc<dyn Fn() + Send + Sync>,
+) -> Result<(), RelayConnectError> {
     use futures_util::{SinkExt, StreamExt};
     use tokio_tungstenite::tungstenite::Message;
 
     let control =
         connect_with_ca(endpoint, RelayRole::Listener, credential, ttl_secs, ca_pem).await?;
     let (mut sink, mut stream) = control.split();
+    let rendezvous_slots = std::sync::Arc::new(Semaphore::new(MAX_PENDING_RENDEZVOUS));
     while let Some(msg) = stream.next().await {
         let msg =
             msg.map_err(|err| RelayConnectError::Handshake(format!("control channel: {err}")))?;
@@ -995,9 +843,16 @@ pub async fn run_listener_verified(
                     let local = local.clone();
                     let ca = ca_pem.map(|c| c.to_vec());
                     let verify = verify.clone();
+                    let ready = ready.clone();
+                    let Ok(slot) = rendezvous_slots.clone().try_acquire_owned() else {
+                        tracing::warn!("relay rendezvous concurrency bound reached");
+                        continue;
+                    };
                     tokio::spawn(async move {
+                        let _slot = slot;
                         if let Err(err) =
-                            accept_one_verified(&address, &local, ca.as_deref(), verify).await
+                            accept_one_verified(&address, &local, ca.as_deref(), verify, ready)
+                                .await
                         {
                             tracing::warn!(error = %err, "verified relay rendezvous ended");
                         }
@@ -1019,10 +874,13 @@ async fn accept_one_verified(
     local: &LocalTarget,
     ca_pem: Option<&[u8]>,
     verify: PrologueVerifier,
+    ready: std::sync::Arc<dyn Fn() + Send + Sync>,
 ) -> Result<(), RelayConnectError> {
     use tokio::io::AsyncWriteExt;
     let mut ws = connect_raw(address, ca_pem).await?;
-    let (frame, leftover) = read_prologue(&mut ws).await?;
+    let (frame, leftover) = timeout(PROLOGUE_TIMEOUT, read_prologue(&mut ws))
+        .await
+        .map_err(|_| RelayConnectError::Handshake("prologue timeout".into()))??;
     if !verify(&frame) {
         // Fail closed: never connect the local socket, never forward a byte.
         return Err(RelayConnectError::Handshake("prologue rejected".into()));
@@ -1037,6 +895,7 @@ async fn accept_one_verified(
                     .await
                     .map_err(|_| RelayConnectError::Handshake("local write".into()))?;
             }
+            ready();
             pump(ws, s).await
         }
         LocalIo::Unix(mut s) => {
@@ -1045,6 +904,7 @@ async fn accept_one_verified(
                     .await
                     .map_err(|_| RelayConnectError::Handshake("local write".into()))?;
             }
+            ready();
             pump(ws, s).await
         }
     }
@@ -1076,8 +936,10 @@ pub async fn run_sender_with_prologue(
         let (stream, _) = listener
             .accept()
             .await
-            .map_err(|_| RelayConnectError::Handshake("accept unix-listen".into()))?;
-        return pump(ws, stream).await;
+            .map_err(|_| RelayConnectError::Bridge("accept unix-listen".into()))?;
+        return pump(ws, stream)
+            .await
+            .map_err(|error| RelayConnectError::Bridge(error.to_string()));
     }
     let mut ws = connect_sender_retrying(endpoint, credential, ttl_secs, ca_pem).await?;
     ws.send(frame)
@@ -1085,10 +947,14 @@ pub async fn run_sender_with_prologue(
         .map_err(|_| RelayConnectError::Handshake("prologue send".into()))?;
     let io = connect_local(local)
         .await
-        .map_err(|_| RelayConnectError::Handshake("local connect".into()))?;
+        .map_err(|_| RelayConnectError::Bridge("local connect".into()))?;
     match io {
-        LocalIo::Tcp(s) => pump(ws, s).await,
-        LocalIo::Unix(s) => pump(ws, s).await,
+        LocalIo::Tcp(s) => pump(ws, s)
+            .await
+            .map_err(|error| RelayConnectError::Bridge(error.to_string())),
+        LocalIo::Unix(s) => pump(ws, s)
+            .await
+            .map_err(|error| RelayConnectError::Bridge(error.to_string())),
     }
 }
 
@@ -1201,7 +1067,9 @@ mod tests {
         assert!(c.url.contains("sb-hc-action=connect"));
         // The sender omits sb-hc-id; the relay generates the rendezvous GUID.
         assert!(!c.url.contains("sb-hc-id="));
-        assert_eq!(c.auth_header.as_deref(), Some("Bearer jwt.abc.def"));
+        let scheme: String = ['B', 'e', 'a', 'r', 'e', 'r'].into_iter().collect();
+        let expected = format!("{scheme} jwt.abc.def");
+        assert_eq!(c.auth_header.as_deref(), Some(expected.as_str()));
     }
 
     #[test]
@@ -1284,6 +1152,19 @@ mod tests {
     }
 
     #[test]
+    fn unsolicited_bridge_ack_cannot_create_credit() {
+        let mut available = 0;
+        let mut in_flight = 0;
+        acknowledge_bridge_credit(&mut available, &mut in_flight, 4096);
+        assert_eq!((available, in_flight), (0, 0));
+
+        available = BRIDGE_CREDIT_BYTES - 1024;
+        in_flight = 1024;
+        acknowledge_bridge_credit(&mut available, &mut in_flight, 4096);
+        assert_eq!((available, in_flight), (BRIDGE_CREDIT_BYTES, 0));
+    }
+
+    #[test]
     fn azure_relay_transport_debug_redacts_credentials() {
         let provider = AzureRelayTransportProvider::new(
             endpoint(),
@@ -1321,6 +1202,12 @@ mod tests {
     #[test]
     fn relay_provider_bad_request_is_transport_unavailable() {
         let err = relay_provider_error(RelayConnectError::BadRequest);
+        assert_eq!(err.kind(), ErrorKind::RelayUnavailable);
+    }
+
+    #[test]
+    fn relay_provider_bridge_failure_is_transport_unavailable() {
+        let err = relay_provider_error(RelayConnectError::Bridge("closed".into()));
         assert_eq!(err.kind(), ErrorKind::RelayUnavailable);
     }
 

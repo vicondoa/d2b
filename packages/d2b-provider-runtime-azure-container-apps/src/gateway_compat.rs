@@ -1,4 +1,4 @@
-//! `d2b-provider-aca`: the Azure Container Apps **sandbox**
+//! `d2b-provider-runtime-azure-container-apps`: the Azure Container Apps **sandbox**
 //! `WorkloadProvider` implementation for provider-managed sandboxes.
 //!
 //! This productionizes the Azure Container Apps sandbox path: instead of the
@@ -33,7 +33,9 @@
 //!
 //! ```no_run
 //! # use d2b_realm_core::NodeId;
-//! # use d2b_provider_aca::{AcaConfig, AcaWorkloadProvider};
+//! # use d2b_provider_runtime_azure_container_apps::gateway_compat::{
+//! #     AcaConfig, AcaWorkloadProvider,
+//! # };
 //! # fn build(cfg: AcaConfig) -> Result<AcaWorkloadProvider, Box<dyn std::error::Error>> {
 //! let provider = AcaWorkloadProvider::new(cfg, NodeId::parse("gateway")?)?;
 //! # Ok(provider)
@@ -46,7 +48,9 @@
 //!
 //! ```no_run
 //! # use d2b_realm_core::NodeId;
-//! # use d2b_provider_aca::{AcaConfig, AcaWorkloadProvider, ReqwestTransport};
+//! # use d2b_provider_runtime_azure_container_apps::gateway_compat::{
+//! #     AcaConfig, AcaWorkloadProvider, ReqwestTransport,
+//! # };
 //! # use std::sync::Arc;
 //! # fn build_local(cfg: AcaConfig) -> Result<AcaWorkloadProvider, Box<dyn std::error::Error>> {
 //! let credential = azure_identity::AzureCliCredential::new(None)?;
@@ -399,14 +403,18 @@ pub struct ReqwestTransport {
 }
 
 impl ReqwestTransport {
-    /// Build a transport with a default `reqwest` client.
+    /// Build a transport with bounded connect and response deadlines.
     pub fn new() -> ProviderResult<Self> {
-        let client = reqwest::Client::builder().build().map_err(|err| {
-            ProviderError::new(
-                ErrorKind::ProviderAllocationFailed,
-                format!("failed to build http client: {err}"),
-            )
-        })?;
+        let client = reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(30))
+            .build()
+            .map_err(|err| {
+                ProviderError::new(
+                    ErrorKind::ProviderAllocationFailed,
+                    format!("failed to build http client: {err}"),
+                )
+            })?;
         Ok(Self { client })
     }
 }
@@ -646,6 +654,8 @@ fn classify_credential_error_message(message: &str) -> &'static str {
 
 static ACA_CIRCUITS: OnceLock<Mutex<BTreeMap<String, Weak<ProviderCircuitBreaker>>>> =
     OnceLock::new();
+static ACA_LIFECYCLE_LOCKS: OnceLock<Mutex<BTreeMap<String, Weak<tokio::sync::Mutex<()>>>>> =
+    OnceLock::new();
 
 fn shared_circuit_for(config: &AcaConfig) -> Arc<ProviderCircuitBreaker> {
     let key = format!(
@@ -661,9 +671,29 @@ fn shared_circuit_for(config: &AcaConfig) -> Arc<ProviderCircuitBreaker> {
     if let Some(existing) = circuits.get(&key).and_then(Weak::upgrade) {
         return existing;
     }
+
     let circuit = Arc::new(ProviderCircuitBreaker::default());
     circuits.insert(key, Arc::downgrade(&circuit));
     circuit
+}
+
+fn shared_lifecycle_lock_for(config: &AcaConfig) -> Arc<tokio::sync::Mutex<()>> {
+    let key = format!(
+        "{}\u{1f}{}\u{1f}{}\u{1f}{}",
+        config.endpoint(),
+        config.subscription,
+        config.resource_group,
+        config.sandbox_group
+    );
+    let registry = ACA_LIFECYCLE_LOCKS.get_or_init(|| Mutex::new(BTreeMap::new()));
+    let mut locks = registry.lock().expect("aca lifecycle registry poisoned");
+    locks.retain(|_, weak| weak.strong_count() > 0);
+    if let Some(existing) = locks.get(&key).and_then(Weak::upgrade) {
+        return existing;
+    }
+    let lock = Arc::new(tokio::sync::Mutex::new(()));
+    locks.insert(key, Arc::downgrade(&lock));
+    lock
 }
 
 #[cfg(test)]
@@ -796,6 +826,7 @@ impl AcaWorkloadProvider {
         credential: Arc<dyn TokenCredential>,
         http: Arc<dyn HttpTransport>,
     ) -> Self {
+        let lifecycle_lock = shared_lifecycle_lock_for(&config);
         Self {
             config,
             credential,
@@ -803,7 +834,7 @@ impl AcaWorkloadProvider {
             node,
             provider_id: ProviderId::parse("aca").expect("valid provider id"),
             sandbox_defaults: None,
-            lifecycle_lock: Arc::new(tokio::sync::Mutex::new(())),
+            lifecycle_lock,
             token_cache: Arc::new(tokio::sync::Mutex::new(None)),
             circuit: Arc::new(ProviderCircuitBreaker::default()),
         }
@@ -863,6 +894,30 @@ impl AcaWorkloadProvider {
     }
 
     async fn request(
+        &self,
+        method: HttpMethod,
+        url: &str,
+        bearer: &str,
+        body: Option<String>,
+    ) -> ProviderResult<HttpResponse> {
+        let retry_body = body.clone();
+        let response = self.request_once(method, url, bearer, body).await?;
+        if matches!(response.status, 401 | 403) {
+            self.invalidate_bearer(bearer).await;
+            let fresh = self.bearer().await?;
+            return self.request_once(method, url, &fresh, retry_body).await;
+        }
+        Ok(response)
+    }
+
+    async fn invalidate_bearer(&self, bearer: &str) {
+        let mut cache = self.token_cache.lock().await;
+        if cache.as_ref().is_some_and(|cached| cached.token == bearer) {
+            *cache = None;
+        }
+    }
+
+    async fn request_once(
         &self,
         method: HttpMethod,
         url: &str,
@@ -978,9 +1033,18 @@ impl AcaWorkloadProvider {
         selector.insert("d2b-workload".to_owned(), workload.as_str().to_owned());
         let labels = labels_selector(&selector);
         let sandboxes = self.list_sandboxes(Some(&labels)).await?;
-        Ok(sandboxes
+        let matches = sandboxes
             .into_iter()
-            .find(|sandbox| labels_match(&sandbox.labels, &selector)))
+            .filter(|sandbox| labels_match(&sandbox.labels, &selector))
+            .collect::<Vec<_>>();
+        match matches.as_slice() {
+            [] => Ok(None),
+            [sandbox] => Ok(Some(sandbox.clone())),
+            _ => Err(ProviderError::new(
+                ErrorKind::ProviderAllocationFailed,
+                "Azure Container Apps workload labels matched multiple sandboxes",
+            )),
+        }
     }
 
     /// Ensure the workload alias has a sandbox, creating the disk image and
@@ -1002,20 +1066,40 @@ impl AcaWorkloadProvider {
     }
 
     async fn wait_workload_running(&self, workload: &WorkloadId) -> ProviderResult<AcaSandbox> {
-        for attempt in 0..READY_POLL_ATTEMPTS {
-            if let Some(sandbox) = self.find_workload_sandbox(workload).await?
-                && sandbox_is_running(&sandbox)
-            {
-                return Ok(sandbox);
+        match tokio::time::timeout(Duration::from_secs(READY_POLL_ATTEMPTS as u64 * 2), async {
+            for attempt in 0..READY_POLL_ATTEMPTS {
+                if let Some(sandbox) = self.find_workload_sandbox(workload).await? {
+                    match sandbox_lifecycle(&sandbox) {
+                        SandboxLifecycle::Running => return Ok(sandbox),
+                        SandboxLifecycle::Failed | SandboxLifecycle::Unknown => {
+                            return Err(ProviderError::new(
+                                ErrorKind::ProviderAllocationFailed,
+                                "Azure Container Apps sandbox entered a terminal failure state",
+                            ));
+                        }
+                        SandboxLifecycle::Creating
+                        | SandboxLifecycle::Starting
+                        | SandboxLifecycle::Stopping
+                        | SandboxLifecycle::Idle => {}
+                    }
+                }
+                if attempt + 1 < READY_POLL_ATTEMPTS {
+                    tokio::time::sleep(READY_POLL_INTERVAL).await;
+                }
             }
-            if attempt + 1 < READY_POLL_ATTEMPTS {
-                tokio::time::sleep(READY_POLL_INTERVAL).await;
-            }
+            Err(ProviderError::new(
+                ErrorKind::Timeout,
+                "Azure Container Apps sandbox did not reach Running before the readiness deadline",
+            ))
+        })
+        .await
+        {
+            Ok(result) => result,
+            Err(_) => Err(ProviderError::new(
+                ErrorKind::Timeout,
+                "Azure Container Apps sandbox did not reach Running before the readiness deadline",
+            )),
         }
-        Err(ProviderError::new(
-            ErrorKind::Timeout,
-            "Azure Container Apps sandbox did not reach Running before the readiness deadline",
-        ))
     }
 
     /// List sandboxes, optionally filtered by an Azure Container Apps label selector.
@@ -1235,8 +1319,20 @@ impl WorkloadProvider for AcaWorkloadProvider {
             return Err(ProviderError::capability_denied(Capability::Lifecycle));
         }
         let sandbox = self.ensure_workload_sandbox(&id).await?;
-        if !sandbox_is_running(&sandbox) {
-            self.resume(&sandbox.id, &self.bearer().await?).await?;
+        match sandbox_lifecycle(&sandbox) {
+            SandboxLifecycle::Running => {}
+            SandboxLifecycle::Idle => {
+                self.resume(&sandbox.id, &self.bearer().await?).await?;
+            }
+            SandboxLifecycle::Creating
+            | SandboxLifecycle::Starting
+            | SandboxLifecycle::Stopping => {}
+            SandboxLifecycle::Failed | SandboxLifecycle::Unknown => {
+                return Err(ProviderError::new(
+                    ErrorKind::ProviderAllocationFailed,
+                    "Azure Container Apps sandbox cannot be started from its current state",
+                ));
+            }
         }
         self.wait_workload_running(&id).await?;
         Ok(WorkloadStatus {
@@ -1578,10 +1674,32 @@ fn sandbox_create_body(
 }
 
 fn sandbox_is_running(sandbox: &AcaSandbox) -> bool {
-    sandbox
-        .state
-        .as_deref()
-        .is_some_and(|state| matches!(state.to_ascii_lowercase().as_str(), "running" | "ready"))
+    matches!(sandbox_lifecycle(sandbox), SandboxLifecycle::Running)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SandboxLifecycle {
+    Creating,
+    Starting,
+    Running,
+    Idle,
+    Stopping,
+    Failed,
+    Unknown,
+}
+
+fn sandbox_lifecycle(sandbox: &AcaSandbox) -> SandboxLifecycle {
+    match sandbox.state.as_deref().map(str::to_ascii_lowercase) {
+        Some(state) if state == "running" || state == "ready" => SandboxLifecycle::Running,
+        Some(state) if state == "idle" || state == "suspended" || state == "stopped" => {
+            SandboxLifecycle::Idle
+        }
+        Some(state) if state == "starting" => SandboxLifecycle::Starting,
+        Some(state) if state == "creating" => SandboxLifecycle::Creating,
+        Some(state) if state == "stopping" => SandboxLifecycle::Stopping,
+        Some(state) if state == "failed" || state == "error" => SandboxLifecycle::Failed,
+        _ => SandboxLifecycle::Unknown,
+    }
 }
 
 fn sandbox_state(sandbox: &AcaSandbox) -> d2b_realm_core::WorkloadState {
@@ -1613,6 +1731,42 @@ mod tests {
     use azure_core::credentials::{AccessToken, TokenRequestOptions};
     use std::sync::Mutex;
     use std::time::SystemTime;
+
+    fn sandbox(state: &str) -> AcaSandbox {
+        AcaSandbox {
+            id: "sandbox".into(),
+            state: Some(state.into()),
+            labels: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn sandbox_lifecycle_classifies_terminal_and_resumable_states() {
+        assert_eq!(
+            sandbox_lifecycle(&sandbox("Running")),
+            SandboxLifecycle::Running
+        );
+        assert_eq!(
+            sandbox_lifecycle(&sandbox("Suspended")),
+            SandboxLifecycle::Idle
+        );
+        assert_eq!(
+            sandbox_lifecycle(&sandbox("Creating")),
+            SandboxLifecycle::Creating
+        );
+        assert_eq!(
+            sandbox_lifecycle(&sandbox("Stopping")),
+            SandboxLifecycle::Stopping
+        );
+        assert_eq!(
+            sandbox_lifecycle(&sandbox("Failed")),
+            SandboxLifecycle::Failed
+        );
+        assert_eq!(
+            sandbox_lifecycle(&sandbox("unexpected")),
+            SandboxLifecycle::Unknown
+        );
+    }
 
     fn cfg() -> AcaConfig {
         AcaConfig {
@@ -1944,7 +2098,7 @@ mod tests {
 
     #[tokio::test]
     async fn exec_shell_fails_closed_on_non_200() {
-        let (p, _) = provider(403, "forbidden");
+        let (p, _) = provider_seq(vec![(403, "forbidden"), (403, "forbidden")]);
         let err = p.exec_shell("sbx-1", "echo hi").await.unwrap_err();
         assert_eq!(err.kind(), ErrorKind::Unauthorized);
     }
@@ -2132,7 +2286,7 @@ mod tests {
 
     #[test]
     fn aca_source_imports_no_full_host_or_developer_credential_surfaces() {
-        let imports = include_str!("lib.rs")
+        let imports = include_str!("gateway_compat.rs")
             .lines()
             .filter(|line| line.trim_start().starts_with("use "))
             .collect::<Vec<_>>()
@@ -2161,7 +2315,7 @@ mod tests {
 
     #[test]
     fn production_constructor_uses_workload_then_managed_identity_only() {
-        let source = include_str!("lib.rs");
+        let source = include_str!("gateway_compat.rs");
         let impl_start = source
             .find("impl AcaWorkloadProvider {")
             .expect("AcaWorkloadProvider impl present");
@@ -2454,11 +2608,18 @@ mod tests {
             "x-ms-correlation-request-id".to_owned(),
             "corr-123".to_owned(),
         );
-        let (p, _) = provider_seq_with_headers(vec![(
-            403,
-            r#"{"error":{"code":"AuthorizationFailed","message":"quota denied for sandbox group"}}"#,
-            headers,
-        )]);
+        let (p, _) = provider_seq_with_headers(vec![
+            (
+                403,
+                r#"{"error":{"code":"AuthorizationFailed","message":"quota denied for sandbox group"}}"#,
+                headers.clone(),
+            ),
+            (
+                403,
+                r#"{"error":{"code":"AuthorizationFailed","message":"quota denied for sandbox group"}}"#,
+                headers,
+            ),
+        ]);
         let p = p.with_sandbox_defaults(lifecycle_defaults());
         let err = p.list(ListSelector::All).await.unwrap_err();
         assert_eq!(err.kind(), ErrorKind::Unauthorized);
@@ -2480,7 +2641,7 @@ mod tests {
             (401, ErrorKind::AuthenticationFailed),
             (403, ErrorKind::Unauthorized),
         ] {
-            let (p, _) = provider_seq(vec![(status, "{}")]);
+            let (p, _) = provider_seq(vec![(status, "{}"), (status, "{}")]);
             let err = p.sandbox_reachable("sandbox-1").await.unwrap_err();
             assert_eq!(err.kind(), kind);
             assert!(

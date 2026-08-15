@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://d2bus.org/schemas/v3/providers/transport-azure-relay.transport-settings.json",
+  "title": "AzureRelayTransportSettings",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["relayNamespaceId", "relayEntityId"],
+  "properties": {
+    "relayNamespaceId": {
+      "type": "string",
+      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9-]{1,48}[a-zA-Z0-9]$",
+      "maxLength": 50
+    },
+    "relayEntityId": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{1,49}$",
+      "maxLength": 50
+    }
+  }
+}

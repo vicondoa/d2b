@@ -33,6 +33,7 @@
     ./bundle-artifacts.nix
     ./options-observability.nix
     ./provider-catalog.nix
+    ./provider-runtime-contracts.nix
     ./provider-projection-validate.nix
     ./options-ownership-matrix.nix
     ./index.nix

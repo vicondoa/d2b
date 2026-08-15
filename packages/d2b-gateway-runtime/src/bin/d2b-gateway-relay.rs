@@ -34,8 +34,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use base64::Engine;
 use d2b_gateway::{SECRET_LEN, SessionBinding, SessionSecret};
+use d2b_gateway_runtime::relay_compat::{LocalTarget, RelayConnectError};
 use d2b_gateway_runtime::{agent_prologue, make_prologue_verifier};
-use d2b_provider_relay::{LocalTarget, RelayCredential, RelayEndpoint};
+use d2b_provider_transport_azure_relay::gateway_compat::{RelayCredential, RelayEndpoint};
 
 type Err = Box<dyn std::error::Error>;
 
@@ -104,28 +105,50 @@ fn now_unix() -> u64 {
         .unwrap_or(0)
 }
 
+fn retry_sender_error(error: &RelayConnectError) -> bool {
+    !matches!(error, RelayConnectError::Bridge(_))
+}
+
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
 async fn main() -> Result<(), Err> {
     let mode = std::env::args().nth(1).unwrap_or_default();
     let target = LocalTarget::parse(&env("D2B_RELAY_TARGET")?);
     let endpoint = endpoint()?;
-    let credential = credential()?;
     let ca = ca();
     let (binding, secret) = binding_and_secret()?;
 
     match mode.as_str() {
         "sender" => {
             eprintln!("[d2b-gateway-relay] sender (handshake prologue) -> {target:?}");
-            let prologue = agent_prologue(&secret, binding);
-            d2b_provider_relay::run_sender_with_prologue(
-                &endpoint,
-                &credential,
-                &target,
-                600,
-                ca.as_deref(),
-                &prologue,
-            )
-            .await?;
+            let prologue = agent_prologue(&secret, binding.clone());
+            let mut backoff = 1u64;
+            loop {
+                if now_unix() >= binding.not_after {
+                    return Err("relay sender session expired".into());
+                }
+                let credential = credential()?;
+                match d2b_gateway_runtime::relay_compat::run_sender_with_prologue(
+                    &endpoint,
+                    &credential,
+                    &target,
+                    600,
+                    ca.as_deref(),
+                    &prologue,
+                )
+                .await
+                {
+                    Ok(()) => return Ok(()),
+                    Err(err) if !retry_sender_error(&err) => return Err(err.into()),
+                    Err(err) => {
+                        eprintln!(
+                            "[d2b-gateway-relay] sender disconnected: {err}; \
+                             reacquiring credential and retrying"
+                        );
+                        tokio::time::sleep(std::time::Duration::from_secs(backoff)).await;
+                        backoff = (backoff.saturating_mul(2)).min(30);
+                    }
+                }
+            }
         }
         "listener" => {
             eprintln!("[d2b-gateway-relay] listener (verifying handshake) -> {target:?}");
@@ -133,7 +156,8 @@ async fn main() -> Result<(), Err> {
             let verify = make_prologue_verifier(secret, binding, generation, Arc::new(now_unix));
             loop {
                 eprintln!("[d2b-gateway-relay] arming verified listener...");
-                if let Err(e) = d2b_provider_relay::run_listener_verified(
+                let credential = credential()?;
+                if let Err(e) = d2b_gateway_runtime::relay_compat::run_listener_verified(
                     &endpoint,
                     &credential,
                     &target,
@@ -148,11 +172,27 @@ async fn main() -> Result<(), Err> {
                 tokio::time::sleep(std::time::Duration::from_secs(1)).await;
             }
         }
+
         other => {
             return Err(
                 format!("usage: d2b-gateway-relay <sender|listener>; got {other:?}").into(),
             );
         }
     }
-    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::retry_sender_error;
+    use d2b_gateway_runtime::relay_compat::RelayConnectError;
+
+    #[test]
+    fn authenticated_bridge_failures_are_not_retried() {
+        assert!(!retry_sender_error(&RelayConnectError::Bridge(
+            "websocket closed".into()
+        )));
+        assert!(retry_sender_error(&RelayConnectError::Handshake(
+            "404".into()
+        )));
+    }
 }

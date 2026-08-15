@@ -1,61 +1,56 @@
 # `d2b-provider-transport-azure-relay`
 
-This is the canonical crate root for `Provider/transport-azure-relay`. It is a
-compile-safe scaffold; semantic Provider behavior is intentionally not present
-here.
-
-See [Create a Provider](../../docs/how-to/create-provider.md) and the
-[transport-azure-relay dossier](../../docs/specs/providers/ADR-046-provider-transport-azure-relay.md)
-for the implementation contract.
+Canonical implementation of `Provider/transport-azure-relay`.
 
 ## Provider identity
 
-| Field | Value |
-| --- | --- |
-| Provider name | `transport-azure-relay` |
-| Provider reference | `Provider/transport-azure-relay` |
-| Package | `packages/d2b-provider-transport-azure-relay/` |
+The implementation identifier is `azure-relay`. It carries opaque
+ComponentSession byte streams and owns no ResourceType.
 
 ## Config schema
 
-The Provider-specific configuration is defined by the transport-azure-relay
-dossier. This scaffold does not publish a configuration schema.
+`RelayTransportConfig` requires a gateway Guest and Network. The signed
+transport settings schema accepts only bare namespace and entity identifiers;
+Credential refs are separate from settings.
 
 ## Exported resource types
 
-The resource types are defined by the dossier. This scaffold exports no
-resource implementation.
+No ResourceType is exported. ZoneLink desired state is interpreted by Core and
+the Provider returns only an opaque carriage connection.
 
 ## Controllers / services / workers / binaries
 
-None are implemented in this scaffold. Controllers, services, workers, and
-binaries belong to the owning Provider implementation.
+`AzureRelayTransportProvider` opens bounded sender or listener connections
+through `RelayCredentialPort` and `RelaySocketConnector`. Reconnect and
+backpressure are explicit typed helpers.
 
 ## Placement and dependencies
 
-No runtime placement is declared, and the scaffold has no workspace
-dependencies.
+Relay credentials and endpoint coordinates remain inside the gateway Guest.
+The Host is an opaque intermediary and never terminates the enrolled KK
+ComponentSession.
 
 ## RBAC requirements
 
-The scaffold requests no permissions and performs no resource or effect
-operations.
+Credentials are acquired for one role and one bounded deadline. Relay
+authentication is carriage evidence only and never maps to local Admin.
 
 ## Security posture
 
-No host, broker, filesystem, network, process, credential, or device effect is
-reachable from this scaffold.
+Secrets, frames, endpoint coordinates, and lease diagnostics are redacted.
+Bootstrap IKpsk2 continuation must be rejected until durable enrollment and a
+distinct enrolled KK session are established.
 
 ## State and telemetry
 
-The scaffold owns no state and emits no telemetry.
+Credit windows bound aggregate buffering. Reconnect delays are capped and
+reset after a stable connection. Audit and metric labels are closed semantic
+sets.
 
 ## Build and test
 
-```bash
-cargo check -p d2b-provider-transport-azure-relay
+```text
 cargo test -p d2b-provider-transport-azure-relay
 ```
 
-The current test targets are structural compile checks. Executable scenarios
-belong to the owning implementation.
+Tests use in-process socket objects and do not contact Azure Relay.

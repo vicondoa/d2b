@@ -75,17 +75,17 @@ compatibility surface.
 
 | Type | Kind | Rust definition | Shape |
 | --- | --- | --- | --- |
-| `FeatureFlag` | struct | [`FeatureFlag`](../../packages/d2b-contracts/src/lib.rs#L108) | empty struct |
+| `FeatureFlag` | struct | [`FeatureFlag`](../../packages/d2b-contracts/src/lib.rs#L109) | empty struct |
 | `GuestCapability` | enum | [`GuestCapability`](../../packages/d2b-contracts/src/guest_wire.rs#L351) | `Health`; `Capabilities`; `ExecAttached`; `ExecDetached`; `ExecTty`; `ExecLogs`; `TtyResize`; `Signals`; `ReadGuestFile`; `UsbipImport`; `ShellAttached`; `ShellManagement`; `ShellForceAttach`; `UsbipStatus`; `SystemActivation`; `AudioStatus`; `AudioSet` |
-| `Hello` | struct | [`Hello`](../../packages/d2b-contracts/src/lib.rs#L189) | struct { `client_version`: `SemverRange`; `supported_features`: `Vec<FeatureFlag>` } |
-| `HelloOk` | struct | [`HelloOk`](../../packages/d2b-contracts/src/lib.rs#L197) | struct { `server_version`: `Version`; `selected_version`: `Version`; `capabilities`: `Vec<FeatureFlag>` } |
-| `HelloRejected` | struct | [`HelloRejected`](../../packages/d2b-contracts/src/lib.rs#L205) | struct { `reason`: `HelloRejectedReason` } |
-| `HelloRejectedReason` | enum | [`HelloRejectedReason`](../../packages/d2b-contracts/src/lib.rs#L211) | `VersionMismatch`; `CapabilityNegotiationFailed`; `InternalError` |
+| `Hello` | struct | [`Hello`](../../packages/d2b-contracts/src/lib.rs#L190) | struct { `client_version`: `SemverRange`; `supported_features`: `Vec<FeatureFlag>` } |
+| `HelloOk` | struct | [`HelloOk`](../../packages/d2b-contracts/src/lib.rs#L198) | struct { `server_version`: `Version`; `selected_version`: `Version`; `capabilities`: `Vec<FeatureFlag>` } |
+| `HelloRejected` | struct | [`HelloRejected`](../../packages/d2b-contracts/src/lib.rs#L206) | struct { `reason`: `HelloRejectedReason` } |
+| `HelloRejectedReason` | enum | [`HelloRejectedReason`](../../packages/d2b-contracts/src/lib.rs#L212) | `VersionMismatch`; `CapabilityNegotiationFailed`; `InternalError` |
 | `HelloRequest` | struct | [`HelloRequest`](../../packages/d2b-contracts/src/broker_wire.rs#L957) | struct { `client_version`: `String`; `supported_features`: `Vec<String>` } |
 | `HelloRequest` | struct | [`HelloRequest`](../../packages/d2b-contracts/src/guest_wire.rs#L581) | struct { `metadata`: `GuestRequestMetadata`; `host_nonce`: `GuestNonce`; `transcript_version`: `u32` } |
 | `HelloResponse` | struct | [`HelloResponse`](../../packages/d2b-contracts/src/broker_wire.rs#L1065) | struct { `server_version`: `String`; `selected_version`: `String`; `capabilities`: `Vec<String>` } |
 | `HelloResponse` | struct | [`HelloResponse`](../../packages/d2b-contracts/src/guest_wire.rs#L589) | struct { `guest_nonce`: `GuestNonce`; `guest_boot_id`: `GuestBootId`; `protocol_version`: `u32` } |
-| `KnownFeatureFlag` | enum | [`KnownFeatureFlag`](../../packages/d2b-contracts/src/lib.rs#L161) | `TypedErrors`; `ManifestV04`; `StatusCheckBridges`; `ExportBrokerAudit`; `ConfiguredLaunchV1`; `UnsafeLocalProviderV1` |
+| `KnownFeatureFlag` | enum | [`KnownFeatureFlag`](../../packages/d2b-contracts/src/lib.rs#L162) | `TypedErrors`; `ManifestV04`; `StatusCheckBridges`; `ExportBrokerAudit`; `ConfiguredLaunchV1`; `UnsafeLocalProviderV1` |
 <!-- END AUTO-GENERATED: handshake-types -->
 
 ## Public socket
@@ -533,7 +533,7 @@ running live guest activation.
 | `TerminalStatus` | enum | [`TerminalStatus`](../../packages/d2b-contracts/src/guest_wire.rs#L1454) | `ExitCode` - struct { `exit_code`: `i32` }; `Signal` - struct { `signal`: `u32` }; `StatusCode` - struct { `status_code`: `i32` }; `Error` - struct { `error`: `GuestControlErrorKind` } |
 | `SignalTarget` | enum | [`SignalTarget`](../../packages/d2b-contracts/src/guest_wire.rs#L1473) | `ForegroundProcessGroup`; `ProcessTree` |
 | `ExecCancelReason` | enum | [`ExecCancelReason`](../../packages/d2b-contracts/src/guest_wire.rs#L1480) | `ClientDisconnect`; `UserRequested`; `SlowConsumer`; `ProtocolError` |
-| `KnownFeatureFlag` | enum | [`KnownFeatureFlag`](../../packages/d2b-contracts/src/lib.rs#L161) | `TypedErrors`; `ManifestV04`; `StatusCheckBridges`; `ExportBrokerAudit`; `ConfiguredLaunchV1`; `UnsafeLocalProviderV1` |
+| `KnownFeatureFlag` | enum | [`KnownFeatureFlag`](../../packages/d2b-contracts/src/lib.rs#L162) | `TypedErrors`; `ManifestV04`; `StatusCheckBridges`; `ExportBrokerAudit`; `ConfiguredLaunchV1`; `UnsafeLocalProviderV1` |
 | `WorkloadOp` | enum | [`WorkloadOp`](../../packages/d2b-contracts/src/public_wire.rs#L197) | `List` - (WorkloadListArgs); `Status` - (WorkloadStatusArgs); `LauncherExec` - (LauncherExecArgs) |
 | `WorkloadAvailability` | enum | [`WorkloadAvailability`](../../packages/d2b-contracts/src/public_wire.rs#L237) | `Ready`; `HelperUnavailable`; `HelperStale`; `UserManagerUnavailable`; `GraphicalSessionInactive`; `WaylandUnavailable`; `ProxyUnavailable`; `Degraded` |
 | `GraphicalLaunchPosture` | enum | [`GraphicalLaunchPosture`](../../packages/d2b-contracts/src/public_wire.rs#L251) | `Proxied`; `NotApplicable`; `GraphicalSessionInactive`; `WaylandUnavailable`; `ProxyUnavailable` |
