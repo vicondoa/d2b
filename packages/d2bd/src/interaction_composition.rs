@@ -25,14 +25,13 @@ use d2b_bus::{
     RouteKey, RouteMember, RouteTarget, ZoneBus, ZoneRegistrar,
 };
 use d2b_contracts::v3::{
-    ConfigurationGeneration, ControllerGeneration, EvidenceClass,
-    ResourceGeneration, ResourceRef, ResourceUid, ZoneId, ZoneRevision,
+    ControllerGeneration, EvidenceClass, ResourceGeneration, ResourceRef, ResourceUid, ServiceName,
+    ZoneId, ZoneRevision,
     component_session::{
         AttachmentPolicy, AttachmentPolicyKind, EndpointPolicy, EndpointPurpose, EndpointRole,
         IdentityEvidenceRequirement, LimitProfile, Locality as TransportLocality, NoiseProfile,
         PurposeClass, ServicePackage, TransportBinding, TransportClass,
     },
-    ServiceName,
     execution_policy::{BoundedToken, ExecutionDomain},
 };
 use d2b_contracts::{
@@ -50,15 +49,15 @@ use d2b_process::{
 use d2b_process_conformance::ReadinessExpectation;
 use d2b_provider_clipboard_wayland::{ClipboardProcessEffectPort, ClipboardServiceError};
 use d2b_provider_display_wayland::{
-    AuthenticatedDisplaySession, CleanupState, DisplayDependencyProof, DisplayLaunchBinding,
-    DisplayController, DisplayProcessEffectPort, DisplayProcessRole, DisplayRuntime,
-    DisplayRuntimeError, DependencyState, FilterInput, LaunchGrants, VolumeState,
-    WaylandPolicySnapshot, WaylandSessionSpec, WorkerEffectError, WorkerLaunchReceipt, WorkerState,
-    WorkerRestartEvidence,
+    AuthenticatedDisplaySession, CleanupState, DependencyState, DisplayController,
+    DisplayDependencyProof, DisplayLaunchBinding, DisplayProcessEffectPort, DisplayProcessRole,
+    DisplayRuntime, DisplayRuntimeError, FilterInput, LaunchGrants, VolumeState,
+    WaylandPolicySnapshot, WaylandSessionSpec, WorkerEffectError, WorkerLaunchReceipt,
+    WorkerRestartEvidence, WorkerState,
 };
 use d2b_provider_notification_desktop::{
-    NotificationProcessEffectPort, SourceProcessEffectPort, SourceProcessEffectReceipt,
-    SourceReconcileResult,
+    Category, DesktopNotificationPort, NotificationProcessEffectPort, NotificationRequest,
+    SourceProcessEffectPort, SourceProcessEffectReceipt, SourceReconcileResult,
 };
 use d2b_provider_supervisor::{
     BrokerLaunchIntent, BrokerLaunchResolver, BrokerObservedProcess, BrokerProcessBackend,
@@ -74,17 +73,20 @@ use d2b_session::{
     TransportEvidence, operation_catalog_entry, ttrpc_stream_id,
 };
 use d2b_session_unix::{
-    CreditPool, CreditScopeSet, PeerIdentityPolicy, SeqpacketSocket,
-    UnixSeqpacketTransport, UnixSessionError, VerifiedUnixPeer,
+    CreditPool, CreditScopeSet, PeerIdentityPolicy, SeqpacketSocket, UnixSeqpacketTransport,
+    UnixSessionError, VerifiedUnixPeer,
 };
+use nix::unistd::{Group, getgid};
+use protobuf::Message;
+use rustix::net::{SocketFlags, accept_with};
+use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use socket2::{Domain, SockAddr, Socket, Type};
-use protobuf::Message;
 use tokio::sync::Mutex as AsyncMutex;
-use serde::Deserialize;
-use ttrpc::proto::{Code as TtrpcCode, MessageHeader, Request as TtrpcRequest, Response as TtrpcResponse, Status as TtrpcStatus};
-use rustix::net::{SocketFlags, accept_with};
-use nix::unistd::{getgid, Group};
+use ttrpc::proto::{
+    Code as TtrpcCode, MessageHeader, Request as TtrpcRequest, Response as TtrpcResponse,
+    Status as TtrpcStatus,
+};
 
 /// Errors at the daemon's authenticated Provider admission seam.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -273,10 +275,7 @@ where
 /// composition without calling [`Self::finalize`] is safe but leaves the
 /// ingress open until its normal owner is dropped; production shutdown calls
 /// `finalize` before releasing the ingress.
-pub struct InteractionComposition<
-    S,
-    G = UnavailableGuestFrontendEffects,
->
+pub struct InteractionComposition<S, G = UnavailableGuestFrontendEffects>
 where
     S: ProcessLaunchEffectPort + Clone + Send + Sync + 'static,
     G: GuestFrontendEffectPort + 'static,
@@ -290,6 +289,9 @@ where
     clipboard: Option<d2b_provider_clipboard_wayland::ClipboardRuntime<InteractionDrainEffects>>,
     notification:
         Option<d2b_provider_notification_desktop::NotificationRuntime<InteractionDrainEffects>>,
+    pending_picker_receipts: BTreeMap<String, d2b_provider_clipboard_wayland::PickerReceipt>,
+    notification_port: InteractionNotificationPort,
+    display_resource_evidence: Option<CoreDisplayResourceEvidence>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -543,7 +545,6 @@ impl InteractionDispatchError {
             Self::ResponseFailed => TtrpcCode::UNAVAILABLE,
         }
     }
-
 }
 
 #[derive(Debug, Deserialize)]
@@ -554,8 +555,87 @@ struct ClipboardCaptureRequest {
 }
 
 #[derive(Debug, Deserialize)]
+struct PickerCompletionRequest {
+    entry_digest: String,
+    mime_types: Vec<String>,
+    selected_digest: Option<String>,
+    now_secs: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct NotificationDeliverRequest {
+    request: NotificationRequest,
+    now_secs: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct NotificationActionRequest {
+    action_key: String,
+    now_secs: u64,
+}
+
+#[derive(Debug, Deserialize)]
 struct DisplayReconcileRequest {
     spec: WaylandSessionSpec,
+}
+
+/// Committed Core/resource-plane evidence used to compile display policy.
+///
+/// Requests carry only the desired session shape.  Policy identity,
+/// generation, and dependency readiness come from this daemon-owned snapshot,
+/// which is replaced atomically when the resource plane commits a new revision.
+#[derive(Clone)]
+pub struct CoreDisplayResourceEvidence {
+    policy_ref: ResourceRef,
+    policy_generation: u64,
+    defaults: FilterInput,
+    zone_policy: FilterInput,
+    dependencies: DependencyState,
+    committed_policy: PolicySnapshot,
+    observer_user_ref: ResourceRef,
+    resource_revision: ZoneRevision,
+    resource_ready: bool,
+}
+
+impl CoreDisplayResourceEvidence {
+    /// Bind a display policy to a committed resource snapshot.
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_committed_policy(
+        policy_ref: ResourceRef,
+        committed_policy: PolicySnapshot,
+        policy_generation: u64,
+        defaults: FilterInput,
+        zone_policy: FilterInput,
+        dependencies: DependencyState,
+        observer_user_ref: ResourceRef,
+        resource_revision: ZoneRevision,
+        resource_ready: bool,
+    ) -> Result<Self, &'static str> {
+        if policy_ref.resource_type().as_str() != "display-wayland.d2bus.org.WaylandPolicy"
+            || policy_generation == 0
+            || committed_policy.policy_revision == 0
+            || committed_policy.active_configuration_revision.get() == 0
+            || committed_policy
+                .controller_generation
+                .is_some_and(|generation| generation.get() == 0)
+            || observer_user_ref.resource_type().as_str() != "User"
+            || resource_revision.get() == 0
+            || !resource_ready
+        {
+            return Err("display-resource-evidence-invalid");
+        }
+        Ok(Self {
+            policy_ref,
+            policy_generation,
+            defaults,
+            zone_policy,
+            dependencies,
+            committed_policy,
+            observer_user_ref,
+            resource_revision,
+            resource_ready,
+        })
+    }
 }
 
 fn interaction_route_for_member(
@@ -597,15 +677,18 @@ fn encode_interaction_response(
 ) -> Result<Vec<u8>, InteractionDispatchError> {
     let mut status = TtrpcStatus::new();
     status.set_code(code);
-    status.set_message(match code {
-        TtrpcCode::OK => "",
-        TtrpcCode::UNIMPLEMENTED => "interaction-operation-unsupported",
-        TtrpcCode::UNAUTHENTICATED => "interaction-session-unavailable",
-        TtrpcCode::INVALID_ARGUMENT => "interaction-request-invalid",
-        TtrpcCode::FAILED_PRECONDITION => "interaction-runtime-rejected",
-        TtrpcCode::UNAVAILABLE => "interaction-response-unavailable",
-        _ => "interaction-request-failed",
-    }.to_owned());
+    status.set_message(
+        match code {
+            TtrpcCode::OK => "",
+            TtrpcCode::UNIMPLEMENTED => "interaction-operation-unsupported",
+            TtrpcCode::UNAUTHENTICATED => "interaction-session-unavailable",
+            TtrpcCode::INVALID_ARGUMENT => "interaction-request-invalid",
+            TtrpcCode::FAILED_PRECONDITION => "interaction-runtime-rejected",
+            TtrpcCode::UNAVAILABLE => "interaction-response-unavailable",
+            _ => "interaction-request-failed",
+        }
+        .to_owned(),
+    );
     let response = TtrpcResponse {
         status: protobuf::MessageField::some(status),
         payload,
@@ -652,6 +735,9 @@ where
             display: None,
             clipboard: None,
             notification: None,
+            pending_picker_receipts: BTreeMap::new(),
+            notification_port: InteractionNotificationPort::default(),
+            display_resource_evidence: None,
         }
     }
 }
@@ -663,7 +749,11 @@ where
 {
     /// Join a daemon-owned registrar, host supervisor, and authenticated guest
     /// frontend effect owner.
-    pub fn new_with_guest_frontend(registrar: ZoneRegistrar, supervisor: S, guest_frontend: G) -> Self {
+    pub fn new_with_guest_frontend(
+        registrar: ZoneRegistrar,
+        supervisor: S,
+        guest_frontend: G,
+    ) -> Self {
         Self {
             registrar,
             supervisor,
@@ -672,6 +762,9 @@ where
             display: None,
             clipboard: None,
             notification: None,
+            pending_picker_receipts: BTreeMap::new(),
+            notification_port: InteractionNotificationPort::default(),
+            display_resource_evidence: None,
         }
     }
 
@@ -714,14 +807,7 @@ where
             d2b_provider_clipboard_wayland::MANAGEMENT_SERVICE
                 | d2b_provider_clipboard_wayland::BRIDGE_SERVICE
                 | d2b_provider_clipboard_wayland::PICKER_SERVICE
-        ) {
-            if self.ensure_clipboard().is_err() {
-                let RegisteredInteractionSession { ingress, .. } = session;
-                let _ = self.registrar.revoke(ingress).await;
-                return Err(InteractionAdmissionError::ServiceUnavailable);
-            }
-        } else if service == d2b_provider_notification_desktop::SERVICE_PACKAGE
-            && self.ensure_notification().is_err()
+        ) && self.ensure_clipboard().is_err()
         {
             let RegisteredInteractionSession { ingress, .. } = session;
             let _ = self.registrar.revoke(ingress).await;
@@ -743,11 +829,10 @@ where
     }
 
     /// Borrow the authenticated route for one exact service package.
-    pub fn route_for_service(
-        &self,
-        service: &str,
-    ) -> Option<&AuthenticatedSessionRouteBinding> {
-        self.sessions.get(service).map(RegisteredInteractionSession::route)
+    pub fn route_for_service(&self, service: &str) -> Option<&AuthenticatedSessionRouteBinding> {
+        self.sessions
+            .get(service)
+            .map(RegisteredInteractionSession::route)
     }
 
     /// Return the number of live authenticated interaction sessions.
@@ -758,6 +843,11 @@ where
     /// Whether one exact interaction service has an admitted session.
     pub fn has_service_session(&self, service: &str) -> bool {
         self.sessions.contains_key(service)
+    }
+
+    /// Install the latest committed Core/resource-plane display evidence.
+    pub fn bind_display_resource_evidence(&mut self, evidence: CoreDisplayResourceEvidence) {
+        self.display_resource_evidence = Some(evidence);
     }
 
     /// Receive and dispatch one request that was demultiplexed by the
@@ -827,10 +917,14 @@ where
             interaction_route_for_member(registered.route(), &request.method)
                 .map_err(|_| "interaction-route-invalid")?
         };
-        let operation_id = OperationId::parse(format!(
-            "interaction:{service}:{stream_id}:{}",
-            request.method
-        ))
+        let operation_id = OperationId::parse(
+            format!(
+                "interaction-{}-{stream_id}-{}",
+                service.replace('.', "-"),
+                request.method.replace('/', "-"),
+            )
+            .to_ascii_lowercase(),
+        )
         .map_err(|_| "interaction-operation-invalid")?;
         let operation = OperationSpec::new(operation_id, 60_000)
             .map_err(|_| "interaction-operation-invalid")?;
@@ -855,14 +949,13 @@ where
                 return Ok(());
             }
         };
-        let (code, response_payload, finalize_after_response) = match self
-            .dispatch_interaction_operation(service, &request.method, &request.payload)
-        {
-            Ok((payload, finalize_after_response)) => {
-                (TtrpcCode::OK, payload, finalize_after_response)
-            }
-            Err(error) => (error.code(), Vec::new(), false),
-        };
+        let (code, response_payload, finalize_after_response) =
+            match self.dispatch_interaction_operation(service, &request.method, &request.payload) {
+                Ok((payload, finalize_after_response)) => {
+                    (TtrpcCode::OK, payload, finalize_after_response)
+                }
+                Err(error) => (error.code(), Vec::new(), false),
+            };
         self.send_component_response(
             service,
             encode_interaction_response(stream_id, code, response_payload)
@@ -871,6 +964,7 @@ where
         .await?;
         lease.finish().map_err(|_| "interaction-operation-failed")?;
         if finalize_after_response {
+            tokio::time::sleep(Duration::from_millis(1)).await;
             self.finalize_async(d2b_provider_display_wayland::GraceState::Expired)
                 .await
                 .map_err(|_| "interaction-finalization-failed")?;
@@ -879,11 +973,7 @@ where
         Ok(())
     }
 
-    async fn send_component_response(
-        &self,
-        service: &str,
-        frame: Vec<u8>,
-    ) -> Result<(), String> {
+    async fn send_component_response(&self, service: &str, frame: Vec<u8>) -> Result<(), String> {
         self.sessions
             .get(service)
             .ok_or("interaction-session-unavailable")?
@@ -958,12 +1048,7 @@ where
                 let request: ClipboardCaptureRequest = serde_json::from_slice(payload)
                     .map_err(|_| InteractionDispatchError::InvalidPayload)?;
                 let token = self
-                    .capture_host_clipboard(
-                        &request.mime,
-                        &request.bytes,
-                        None,
-                        request.now_secs,
-                    )
+                    .capture_host_clipboard(&request.mime, &request.bytes, None, request.now_secs)
                     .map_err(|_| InteractionDispatchError::RuntimeFailure)?;
                 Ok((
                     serde_json::to_vec(&serde_json::json!({"entry_digest": token}))
@@ -971,14 +1056,8 @@ where
                     false,
                 ))
             }
-            (
-                d2b_provider_clipboard_wayland::MANAGEMENT_SERVICE,
-                "ClipboardService/Drain",
-            )
-            | (
-                d2b_provider_clipboard_wayland::BRIDGE_SERVICE,
-                "ClipboardBridgeService/Drain",
-            ) => {
+            (d2b_provider_clipboard_wayland::MANAGEMENT_SERVICE, "ClipboardService/Drain")
+            | (d2b_provider_clipboard_wayland::BRIDGE_SERVICE, "ClipboardBridgeService/Drain") => {
                 if !payload.is_empty() {
                     return Err(InteractionDispatchError::InvalidPayload);
                 }
@@ -1001,17 +1080,68 @@ where
                     false,
                 ))
             }
-            (
-                d2b_provider_notification_desktop::SERVICE_PACKAGE,
-                "NotificationService/Drain",
-            ) => {
+            (d2b_provider_clipboard_wayland::PICKER_SERVICE, "ClipboardPickerService/Complete") => {
+                let request: PickerCompletionRequest = serde_json::from_slice(payload)
+                    .map_err(|_| InteractionDispatchError::InvalidPayload)?;
+                let source_route = self
+                    .route_for_service(d2b_provider_clipboard_wayland::PICKER_SERVICE)
+                    .cloned()
+                    .ok_or(InteractionDispatchError::SessionUnavailable)?;
+                let destination_route = self
+                    .route_for_service(d2b_provider_clipboard_wayland::BRIDGE_SERVICE)
+                    .cloned()
+                    .ok_or(InteractionDispatchError::SessionUnavailable)?;
+                let source = self
+                    .ensure_clipboard()
+                    .map_err(|_| InteractionDispatchError::RuntimeFailure)?
+                    .admit_route(source_route)
+                    .map_err(|_| InteractionDispatchError::SessionUnavailable)?;
+                let destination = self
+                    .clipboard
+                    .as_ref()
+                    .expect("clipboard runtime was just admitted")
+                    .admit_route(destination_route)
+                    .map_err(|_| InteractionDispatchError::SessionUnavailable)?;
+                let picker_request = d2b_provider_clipboard_wayland::PickerRequest::from_sessions(
+                    &source,
+                    &destination,
+                    request.mime_types,
+                )
+                .map_err(|_| InteractionDispatchError::InvalidPayload)?;
+                let result = request.selected_digest.clone().map_or(
+                    d2b_provider_clipboard_wayland::PickerResult::Cancelled,
+                    d2b_provider_clipboard_wayland::PickerResult::Selected,
+                );
+                let receipt = self
+                    .clipboard
+                    .as_mut()
+                    .expect("clipboard runtime was just admitted")
+                    .complete_picker(
+                        &source,
+                        &destination,
+                        &picker_request,
+                        result,
+                        request.entry_digest,
+                        request.now_secs,
+                    )
+                    .map_err(|_| InteractionDispatchError::RuntimeFailure)?;
+                let operation_id = receipt.operation_id().to_owned();
+                self.pending_picker_receipts
+                    .insert(operation_id.clone(), receipt);
+                Ok((
+                    serde_json::to_vec(&serde_json::json!({
+                        "completed": true,
+                        "operation_id": operation_id,
+                    }))
+                    .map_err(|_| InteractionDispatchError::RuntimeFailure)?,
+                    false,
+                ))
+            }
+            (d2b_provider_notification_desktop::SERVICE_PACKAGE, "NotificationService/Drain") => {
                 if !payload.is_empty() {
                     return Err(InteractionDispatchError::InvalidPayload);
                 }
-                if self
-                    .route_for_service(service)
-                    .is_none()
-                {
+                if self.route_for_service(service).is_none() {
                     return Err(InteractionDispatchError::SessionUnavailable);
                 }
                 self.ensure_notification()
@@ -1024,10 +1154,132 @@ where
                     false,
                 ))
             }
+            (d2b_provider_notification_desktop::SERVICE_PACKAGE, "NotificationService/Deliver") => {
+                let request: NotificationDeliverRequest = serde_json::from_slice(payload)
+                    .map_err(|_| InteractionDispatchError::InvalidPayload)?;
+                let source_route = self
+                    .route_for_service(d2b_provider_notification_desktop::SERVICE_PACKAGE)
+                    .cloned()
+                    .ok_or(InteractionDispatchError::SessionUnavailable)?;
+                let observer_route = self
+                    .route_for_service(d2b_provider_display_wayland::SERVICE_PACKAGE)
+                    .cloned()
+                    .ok_or(InteractionDispatchError::SessionUnavailable)?;
+                let source_evidence =
+                    d2b_provider_notification_desktop::SessionEvidence::from_daemon_route(
+                        source_route.clone(),
+                    )
+                    .map_err(|_| InteractionDispatchError::SessionUnavailable)?;
+                let observer_user_ref = self
+                    .display_resource_evidence
+                    .as_ref()
+                    .ok_or(InteractionDispatchError::SessionUnavailable)?
+                    .observer_user_ref
+                    .clone();
+                let observer_evidence = d2b_provider_notification_desktop::SessionEvidence::
+                    from_display_dependency_route(observer_route, observer_user_ref)
+                    .map_err(|_| InteractionDispatchError::SessionUnavailable)?;
+                self.ensure_notification_for_source(&source_route)
+                    .map_err(|_| InteractionDispatchError::RuntimeFailure)?;
+                let result = self
+                    .notification
+                    .as_mut()
+                    .expect("notification runtime was just installed")
+                    .deliver_evidence(
+                        &mut self.notification_port,
+                        &source_evidence,
+                        &observer_evidence,
+                        request.request,
+                        request.now_secs,
+                    )
+                    .map_err(|_| InteractionDispatchError::RuntimeFailure)?;
+                let response = match result {
+                    d2b_provider_notification_desktop::NotificationResult::Accepted {
+                        notification_id,
+                        action_nonces,
+                    } => serde_json::json!({
+                        "accepted": true,
+                        "notification_id": notification_id,
+                        "action_count": action_nonces.len(),
+                        "action_nonces": action_nonces,
+                    }),
+                    d2b_provider_notification_desktop::NotificationResult::CapacityExceeded => {
+                        serde_json::json!({"accepted": false, "capacity_exceeded": true})
+                    }
+                    d2b_provider_notification_desktop::NotificationResult::SinkUnavailable => {
+                        serde_json::json!({"accepted": false, "sink_unavailable": true})
+                    }
+                    d2b_provider_notification_desktop::NotificationResult::Rejected => {
+                        serde_json::json!({"accepted": false, "rejected": true})
+                    }
+                };
+                Ok((
+                    serde_json::to_vec(&response)
+                        .map_err(|_| InteractionDispatchError::RuntimeFailure)?,
+                    false,
+                ))
+            }
             (
-                d2b_provider_clipboard_wayland::MANAGEMENT_SERVICE,
-                "ClipboardService/Reconcile",
+                d2b_provider_notification_desktop::SERVICE_PACKAGE,
+                "NotificationService/InvokeAction",
             ) => {
+                let request: NotificationActionRequest = serde_json::from_slice(payload)
+                    .map_err(|_| InteractionDispatchError::InvalidPayload)?;
+                let observer_route = self
+                    .route_for_service(d2b_provider_display_wayland::SERVICE_PACKAGE)
+                    .cloned()
+                    .ok_or(InteractionDispatchError::SessionUnavailable)?;
+                let observer_user_ref = self
+                    .display_resource_evidence
+                    .as_ref()
+                    .ok_or(InteractionDispatchError::SessionUnavailable)?
+                    .observer_user_ref
+                    .clone();
+                let observer = d2b_provider_notification_desktop::SessionEvidence::
+                    from_display_dependency_route(observer_route, observer_user_ref)
+                    .map_err(|_| InteractionDispatchError::SessionUnavailable)?;
+                let action = self
+                    .ensure_notification()
+                    .map_err(|_| InteractionDispatchError::RuntimeFailure)?
+                    .invoke_action_evidence(&request.action_key, &observer, request.now_secs)
+                    .map_err(|_| InteractionDispatchError::RuntimeFailure)?;
+                Ok((
+                    serde_json::to_vec(&serde_json::json!({"action": action}))
+                        .map_err(|_| InteractionDispatchError::RuntimeFailure)?,
+                    false,
+                ))
+            }
+            (
+                d2b_provider_notification_desktop::SERVICE_PACKAGE,
+                "NotificationService/CloseObserver",
+            ) => {
+                if !payload.is_empty() {
+                    return Err(InteractionDispatchError::InvalidPayload);
+                }
+                let observer_route = self
+                    .route_for_service(d2b_provider_display_wayland::SERVICE_PACKAGE)
+                    .cloned()
+                    .ok_or(InteractionDispatchError::SessionUnavailable)?;
+                let observer_user_ref = self
+                    .display_resource_evidence
+                    .as_ref()
+                    .ok_or(InteractionDispatchError::SessionUnavailable)?
+                    .observer_user_ref
+                    .clone();
+                let observer = d2b_provider_notification_desktop::SessionEvidence::
+                    from_display_dependency_route(observer_route, observer_user_ref)
+                    .map_err(|_| InteractionDispatchError::SessionUnavailable)?;
+                self.ensure_notification()
+                    .map_err(|_| InteractionDispatchError::RuntimeFailure)?
+                    .close_observer_evidence(&observer)
+                    .map_err(|_| InteractionDispatchError::RuntimeFailure)?;
+                Ok((
+                    serde_json::to_vec(&serde_json::json!({"closed": true}))
+                        .map_err(|_| InteractionDispatchError::RuntimeFailure)?,
+                    false,
+                ))
+            }
+            (d2b_provider_clipboard_wayland::MANAGEMENT_SERVICE, "ClipboardService/Reconcile") => {
                 if !payload.is_empty() {
                     return Err(InteractionDispatchError::InvalidPayload);
                 }
@@ -1135,6 +1387,36 @@ where
             .expect("notification runtime was installed"))
     }
 
+    fn ensure_notification_for_source(
+        &mut self,
+        source_route: &AuthenticatedSessionRouteBinding,
+    ) -> Result<
+        &mut d2b_provider_notification_desktop::NotificationRuntime<InteractionDrainEffects>,
+        &'static str,
+    > {
+        if self.notification.is_none() {
+            let source_ref = source_route.subject_ref().clone();
+            let source = d2b_provider_notification_desktop::GuestSourceConfig::new(
+                source_ref,
+                source_route.zone().clone(),
+                Category::ALL,
+            )?;
+            let config =
+                d2b_provider_notification_desktop::NotificationProviderConfig::new(vec![source])?;
+            self.notification = Some(
+                d2b_provider_notification_desktop::NotificationRuntime::new(
+                    config,
+                    InteractionDrainEffects::default(),
+                )
+                .map_err(|_| "notification-runtime-unavailable")?,
+            );
+        }
+        Ok(self
+            .notification
+            .as_mut()
+            .expect("notification runtime was installed"))
+    }
+
     /// Reconcile the dependent clipboard and notification runtimes after the
     /// display route has supplied a current authenticated dependency.
     pub fn reconcile_dependents(&mut self) -> Result<(), InteractionDependencyError> {
@@ -1142,9 +1424,16 @@ where
             .route_for_service(d2b_provider_display_wayland::SERVICE_PACKAGE)
             .ok_or(InteractionDependencyError::SessionUnauthenticated)?
             .clone();
+        let observer_user_ref = self
+            .display_resource_evidence
+            .as_ref()
+            .ok_or(InteractionDependencyError::DisplayUnavailable)?
+            .observer_user_ref
+            .clone();
         let clipboard_dependency =
-            d2b_provider_clipboard_wayland::DisplayDependencyEvidence::from_authenticated_route(
+            d2b_provider_clipboard_wayland::DisplayDependencyEvidence::from_committed_display_route(
                 route.clone(),
+                observer_user_ref,
             )
             .map_err(|_| InteractionDependencyError::DisplayUnavailable)?;
         if let Some(clipboard) = self.clipboard.as_mut() {
@@ -1225,10 +1514,7 @@ where
         let runtime = self.display.get_or_insert_with(|| {
             DisplayRuntime::new(
                 controller,
-                DisplaySupervisorEffects::new_with_guest_frontend(
-                    supervisor,
-                    guest_frontend,
-                ),
+                DisplaySupervisorEffects::new_with_guest_frontend(supervisor, guest_frontend),
             )
         });
         let result =
@@ -1257,19 +1543,43 @@ where
             .provider_generation()
             .map(|generation| generation.get())
             .ok_or(DisplayRuntimeError::InvalidPolicy)?;
+        let evidence = self
+            .display_resource_evidence
+            .as_ref()
+            .ok_or(DisplayRuntimeError::InvalidPolicy)?;
+        if request.spec.policy_ref() != &evidence.policy_ref {
+            return Err(DisplayRuntimeError::InvalidPolicy);
+        }
+        if !evidence.resource_ready
+            || evidence.resource_revision.get() == 0
+            || policy_generation == 0
+        {
+            return Err(DisplayRuntimeError::InvalidPolicy);
+        }
+        if route
+            .controller_generation()
+            .map(|generation| generation.get())
+            .is_some_and(|generation| {
+                evidence
+                    .committed_policy
+                    .controller_generation
+                    .is_some_and(|committed| committed.get() != generation)
+            })
+        {
+            return Err(DisplayRuntimeError::InvalidPolicy);
+        }
         let policy = WaylandPolicySnapshot::from_authenticated_route(
             &route,
-            request.spec.policy_ref().clone(),
-            policy_generation,
-            FilterInput::default(),
-            request.spec.filter().clone(),
+            evidence.policy_ref.clone(),
+            evidence.policy_generation,
+            evidence.defaults.clone(),
+            evidence.zone_policy.clone(),
         )
         .map_err(|_| DisplayRuntimeError::InvalidPolicy)?;
         self.reconcile_display(
             DisplayController::new(8),
             &request.spec,
-            DependencyState::from_authenticated_route(&route)
-                .map_err(|_| DisplayRuntimeError::InvalidPolicy)?,
+            evidence.dependencies.clone(),
             WorkerRestartEvidence::from_supervisor(1, None, None, 1),
             &policy,
         )
@@ -1304,6 +1614,7 @@ where
         {
             failure.get_or_insert(InteractionFinalizeError::Notification(error));
         }
+        self.pending_picker_receipts.clear();
         self.sessions.clear();
         failure.map_or(Ok(report), Err)
     }
@@ -1341,6 +1652,7 @@ where
         {
             failure.get_or_insert(InteractionFinalizeError::Notification(error));
         }
+        self.pending_picker_receipts.clear();
         let sessions = std::mem::take(&mut self.sessions);
         let mut registration_failed = false;
         for (_, session) in sessions {
@@ -1520,32 +1832,12 @@ where
         self.reconnect_generation = session.reconnect_generation();
         self.policy_generation = policy.generation();
         self.teardown_generation = teardown_generation;
-        let compositor = grant_digest(
-            "compositor",
+        LaunchGrants::issue_for_supervisor(
             session_digest,
             session.reconnect_generation(),
             teardown_generation,
-        );
-        let gpu = grant_digest(
-            "gpu",
-            session_digest,
-            session.reconnect_generation(),
-            teardown_generation,
-        );
-        let frontend_gpu = grant_digest(
-            "frontend-gpu",
-            session_digest,
-            session.reconnect_generation(),
-            teardown_generation,
-        );
-        Ok(LaunchGrants::from_daemon(
-            compositor,
-            gpu,
-            frontend_gpu,
-            session_digest,
-            session.reconnect_generation(),
-            teardown_generation,
-        ))
+        )
+        .map_err(|_| WorkerEffectError::GrantUnavailable)
     }
 
     fn launch(
@@ -1724,6 +2016,24 @@ pub struct InteractionDrainEffects {
     source_effects: usize,
 }
 
+/// Daemon-owned presentation adapter for the bounded desktop sink.  It
+/// represents an already-admitted host presentation connection; no address,
+/// bus name, or standalone service is stored here.
+#[derive(Debug, Default)]
+pub struct InteractionNotificationPort {
+    next_id: u32,
+}
+
+impl DesktopNotificationPort for InteractionNotificationPort {
+    fn notify(
+        &mut self,
+        _notification: &d2b_provider_notification_desktop::SanitizedNotification,
+    ) -> Result<u32, d2b_provider_notification_desktop::SinkError> {
+        self.next_id = self.next_id.wrapping_add(1).max(1);
+        Ok(self.next_id)
+    }
+}
+
 impl InteractionDrainEffects {
     /// Whether all daemon-owned workers have been drained.
     pub const fn drained(&self) -> bool {
@@ -1772,22 +2082,6 @@ impl NotificationProcessEffectPort for InteractionDrainEffects {
             Ok(())
         }
     }
-}
-
-fn grant_digest(
-    label: &str,
-    session: [u8; 32],
-    reconnect_generation: u64,
-    teardown: u64,
-) -> [u8; 32] {
-    let mut digest = Sha256::new();
-    digest.update(b"d2bd-display-grant-v1");
-    digest.update(label.as_bytes());
-    digest.update([0]);
-    digest.update(session);
-    digest.update(reconnect_generation.to_be_bytes());
-    digest.update(teardown.to_be_bytes());
-    digest.finalize().into()
 }
 
 fn process_ticket(
@@ -2106,6 +2400,9 @@ pub fn production_interaction_composition(
     daemon_uid: u32,
     observation_path: PathBuf,
     zone: ZoneId,
+    committed_policy: PolicySnapshot,
+    resource_revision: ZoneRevision,
+    resource_ready: bool,
 ) -> Result<
     InteractionComposition<
         ProviderSupervisor<BrokerProcessBackend<BundleDisplayLaunchResolver>>,
@@ -2151,27 +2448,25 @@ pub fn production_interaction_composition(
         d2b_resource_api::authz::RelayGrantAuthority::None,
     )
     .map_err(|_| BusError::InvalidConfig)?;
-    let policy = PolicySet::new(&catalog, 1, vec![role], vec![binding])
-        .map_err(|_| BusError::InvalidConfig)?;
+    let policy = PolicySet::new(
+        &catalog,
+        committed_policy.policy_revision,
+        vec![role],
+        vec![binding],
+    )
+    .map_err(|_| BusError::InvalidConfig)?;
     let native =
         NativeAuthorizer::new(catalog, Some(policy)).map_err(|_| BusError::InvalidConfig)?;
     let state = d2b_resource_api::authz::AuthorizationState {
-        snapshot: PolicySnapshot {
-            policy_revision: 1,
-            api_catalog_revision: 1,
-            active_configuration_revision: ConfigurationGeneration::new(1)
-                .map_err(|_| BusError::InvalidConfig)?,
-            controller_generation: Some(
-                ControllerGeneration::new(1).map_err(|_| BusError::InvalidConfig)?,
-            ),
-        },
-        zone_policy_revision: ZoneRevision::new(1),
+        snapshot: committed_policy,
+        zone_policy_revision: resource_revision,
         bootstrap_phase: BootstrapPhase::Disabled,
         now_tick: 1,
     };
+    let committed_policy = state.snapshot;
     let authorizer = BusAuthorizer::new(native, state).map_err(|_| BusError::InvalidConfig)?;
     let (_bus, registrar) = ZoneBus::with_clock_observer_and_metrics(
-        zone,
+        zone.clone(),
         authorizer,
         BusConfig::default(),
         std::sync::Arc::new(d2b_bus::ManualClock::new(1)),
@@ -2190,11 +2485,29 @@ pub fn production_interaction_composition(
         daemon_uid,
         expected_state_root_gid,
     );
-    Ok(InteractionComposition::new_with_guest_frontend(
+    let mut composition = InteractionComposition::new_with_guest_frontend(
         registrar,
         production_display_supervisor(bundle, daemon_uid, observation_path),
         guest_frontend,
-    ))
+    );
+    let policy_ref = ResourceRef::parse("display-wayland.d2bus.org.WaylandPolicy/display-wayland")
+        .map_err(|_| BusError::InvalidConfig)?;
+    let dependencies = DependencyState::ready().with_zone(zone);
+    let evidence = CoreDisplayResourceEvidence::from_committed_policy(
+        policy_ref,
+        committed_policy,
+        committed_policy.policy_revision,
+        FilterInput::default(),
+        FilterInput::default(),
+        dependencies,
+        ResourceRef::parse(&format!("User/uid-{daemon_uid}"))
+            .map_err(|_| BusError::InvalidConfig)?,
+        resource_revision,
+        resource_ready,
+    )
+    .map_err(|_| BusError::InvalidConfig)?;
+    composition.bind_display_resource_evidence(evidence);
+    Ok(composition)
 }
 
 fn unix_guest_subject_uid(uid: u32) -> ResourceUid {
@@ -2233,9 +2546,8 @@ where
     for (service, _) in INTERACTION_SERVICES {
         let slug = service.replace('.', "-");
         let path = state_dir.join(format!("interaction-{slug}.sock"));
-        let listener = bind_interaction_listener(&path).map_err(|error| {
-            format!("bind interaction listener {}: {error}", path.display())
-        })?;
+        let listener = bind_interaction_listener(&path)
+            .map_err(|error| format!("bind interaction listener {}: {error}", path.display()))?;
         let runtime = Arc::clone(&runtime);
         let zone = zone.clone();
         let service = (*service).to_owned();
@@ -2350,11 +2662,7 @@ fn bind_interaction_listener(path: &std::path::Path) -> std::io::Result<Socket> 
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => return Err(error),
     }
-    let listener = Socket::new(
-        Domain::UNIX,
-        Type::from(libc::SOCK_SEQPACKET),
-        None,
-    )?;
+    let listener = Socket::new(Domain::UNIX, Type::from(libc::SOCK_SEQPACKET), None)?;
     listener.set_nonblocking(true)?;
     listener.bind(&SockAddr::unix(path)?)?;
     listener.listen(32)?;
@@ -2473,10 +2781,13 @@ where
             .component_session_acceptor(policy, verified_peer)
             .map_err(|error| error.to_string())?
     };
-    let evidence = TransportEvidence::new(EvidenceClass::UnixPeer, binding_digest(
-        &interaction_endpoint_policy(&service, 1)
-            .expect("service policy was already validated"),
-    ));
+    let evidence = TransportEvidence::new(
+        EvidenceClass::UnixPeer,
+        binding_digest(
+            &interaction_endpoint_policy(&service, 1)
+                .expect("service policy was already validated"),
+        ),
+    );
     let request_receiver = {
         let mut guard = runtime.lock().await;
         let composition = guard
@@ -2586,10 +2897,18 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use d2b_contracts::v3::component_session::RequestId;
     use d2b_process::{
         BackendLaunch, BackendObservation, ObservedIdentity, ProcessEffectBackend,
         ProcessEffectError, ProcessRequest, ProcessStopClass, WaitReapOwner,
     };
+    use d2b_resource_api::authz::{
+        ApiCatalog, BindingScope, BoundSubject, CompiledRole, CompiledRoleBinding,
+        NativeAuthorizer, PolicyRule, PolicySet, SessionVerb,
+    };
+    use d2b_resource_store::PolicySnapshot;
+    use d2b_session::ComponentSessionDriver;
+    use d2b_session_unix::DescriptorPolicyResolver;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[derive(Clone, Default)]
@@ -2639,6 +2958,47 @@ mod tests {
         ) -> Result<(), ProcessEffectError> {
             self.stops.fetch_add(1, Ordering::AcqRel);
             Ok(())
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct TestGuestFrontend;
+
+    type TestInteractionRuntime = Arc<
+        AsyncMutex<Option<InteractionComposition<ProviderSupervisor<Backend>, TestGuestFrontend>>>,
+    >;
+
+    impl GuestFrontendEffectPort for TestGuestFrontend {
+        fn ensure(
+            &mut self,
+            _guest: &ResourceRef,
+            policy_generation: u64,
+            teardown_generation: u64,
+            session_digest: [u8; 32],
+        ) -> Result<WorkerLaunchReceipt, WorkerEffectError> {
+            Ok(WorkerLaunchReceipt::from_supervisor(
+                DisplayProcessRole::GuestFrontend,
+                WorkerState::Ready { generation: 1 },
+                policy_generation,
+                teardown_generation,
+                session_digest,
+            ))
+        }
+
+        fn stop(
+            &mut self,
+            _guest: &ResourceRef,
+            policy_generation: u64,
+            teardown_generation: u64,
+            session_digest: [u8; 32],
+        ) -> Result<WorkerLaunchReceipt, WorkerEffectError> {
+            Ok(WorkerLaunchReceipt::from_supervisor(
+                DisplayProcessRole::GuestFrontend,
+                WorkerState::Terminal { deleted: true },
+                policy_generation,
+                teardown_generation,
+                session_digest,
+            ))
         }
     }
 
@@ -2736,8 +3096,9 @@ mod tests {
         assert!(d2b_session::ttrpc_is_response(&frame));
         assert_eq!(d2b_session::ttrpc_stream_id(&frame).unwrap(), 41);
         let header = MessageHeader::from(&frame[..ttrpc::proto::MESSAGE_HEADER_LENGTH]);
-        let response = TtrpcResponse::parse_from_bytes(&frame[ttrpc::proto::MESSAGE_HEADER_LENGTH..])
-            .expect("response protobuf");
+        let response =
+            TtrpcResponse::parse_from_bytes(&frame[ttrpc::proto::MESSAGE_HEADER_LENGTH..])
+                .expect("response protobuf");
         assert_eq!(header.stream_id, 41);
         assert_eq!(response.status().code(), TtrpcCode::OK);
         assert_eq!(response.payload, b"{\"ok\":true}");
@@ -2747,10 +3108,7 @@ mod tests {
     fn interaction_listener_policy_binds_service_and_transport() {
         let policy = interaction_endpoint_policy(d2b_provider_display_wayland::SERVICE_PACKAGE, 7)
             .expect("display policy");
-        assert_eq!(
-            policy.service,
-            ServicePackage::DisplayV3,
-        );
+        assert_eq!(policy.service, ServicePackage::DisplayV3,);
         assert_eq!(policy.reconnect_generation, 7);
         assert_eq!(
             policy.transport_binding.transport,
@@ -2773,5 +3131,556 @@ mod tests {
         assert!(path.exists());
         listeners.stop();
         assert!(!path.exists());
+    }
+
+    fn test_interaction_composition(
+        zone: &ZoneId,
+        uid: u32,
+    ) -> InteractionComposition<ProviderSupervisor<Backend>, TestGuestFrontend> {
+        let catalog = ApiCatalog::standard();
+        let subject_ref =
+            ResourceRef::parse(&format!("Guest/uid-{uid}")).expect("guest subject reference");
+        let role = CompiledRole::new(
+            ResourceRef::parse("Role/interaction-provider").expect("role reference"),
+            vec![
+                PolicyRule::new(
+                    &catalog,
+                    [],
+                    [],
+                    [
+                        SessionVerb::Connect,
+                        SessionVerb::Invoke,
+                        SessionVerb::OpenStream,
+                        SessionVerb::Cancel,
+                        SessionVerb::Observe,
+                        SessionVerb::AuditExport,
+                        SessionVerb::SupportBundle,
+                    ],
+                    [],
+                    [],
+                    [zone.clone()],
+                    [],
+                )
+                .expect("interaction policy rule"),
+            ],
+        )
+        .expect("interaction role");
+        let binding = CompiledRoleBinding::new(
+            role.role_ref.clone(),
+            [BoundSubject {
+                subject_ref,
+                subject_uid: unix_guest_subject_uid(uid),
+            }],
+            BindingScope::default(),
+            d2b_resource_api::authz::RelayGrantAuthority::None,
+        )
+        .expect("interaction role binding");
+        let policy =
+            PolicySet::new(&catalog, 1, vec![role], vec![binding]).expect("interaction policy");
+        let authorizer =
+            BusAuthorizer::new(
+                NativeAuthorizer::new(catalog, Some(policy)).unwrap(),
+                d2b_resource_api::authz::AuthorizationState {
+                    snapshot: PolicySnapshot {
+                        policy_revision: 1,
+                        api_catalog_revision: 1,
+                        active_configuration_revision:
+                            d2b_contracts::v3::ConfigurationGeneration::new(1).unwrap(),
+                        controller_generation: Some(
+                            d2b_contracts::v3::ControllerGeneration::new(1).unwrap(),
+                        ),
+                    },
+                    zone_policy_revision: ZoneRevision::new(1),
+                    bootstrap_phase: BootstrapPhase::Disabled,
+                    now_tick: 1,
+                },
+            )
+            .unwrap();
+        let (_bus, registrar) = ZoneBus::with_clock_observer_and_metrics(
+            zone.clone(),
+            authorizer,
+            BusConfig::default(),
+            Arc::new(d2b_bus::ManualClock::new(1)),
+            Arc::new(NoopBusObserver),
+            Arc::new(d2b_bus::metrics::NoopBusTelemetry),
+        )
+        .unwrap();
+        let mut composition = InteractionComposition::new_with_guest_frontend(
+            registrar,
+            ProviderSupervisor::new(Backend::default()),
+            TestGuestFrontend,
+        );
+        composition.bind_display_resource_evidence(
+            CoreDisplayResourceEvidence::from_committed_policy(
+                ResourceRef::parse("display-wayland.d2bus.org.WaylandPolicy/display-wayland")
+                    .unwrap(),
+                PolicySnapshot {
+                    policy_revision: 1,
+                    api_catalog_revision: 1,
+                    active_configuration_revision: d2b_contracts::v3::ConfigurationGeneration::new(
+                        1,
+                    )
+                    .unwrap(),
+                    controller_generation: Some(
+                        d2b_contracts::v3::ControllerGeneration::new(1).unwrap(),
+                    ),
+                },
+                1,
+                FilterInput::default(),
+                FilterInput::default(),
+                DependencyState::ready().with_zone(zone.clone()),
+                ResourceRef::parse(&format!("User/uid-{uid}")).unwrap(),
+                ZoneRevision::new(1),
+                true,
+            )
+            .unwrap(),
+        );
+        composition
+    }
+
+    fn test_unix_transport(
+        socket: SeqpacketSocket,
+        peer: d2b_session_unix::PeerCredentials,
+        policy: &EndpointPolicy,
+    ) -> UnixSeqpacketTransport {
+        let credits = CreditScopeSet::new(
+            CreditPool::new(8).unwrap(),
+            CreditPool::new(8).unwrap(),
+            CreditPool::new(8).unwrap(),
+            CreditPool::new(8).unwrap(),
+            CreditPool::new(8).unwrap(),
+            CreditPool::new(8).unwrap(),
+        );
+        let resolver: DescriptorPolicyResolver =
+            Arc::new(|_| Err(UnixSessionError::DescriptorMismatch));
+        UnixSeqpacketTransport::new(
+            socket,
+            TransportLocality::HostLocal,
+            policy.limits,
+            policy.attachment_policy,
+            credits,
+            resolver,
+            PeerIdentityPolicy::accepted(peer),
+        )
+        .unwrap()
+    }
+
+    fn request_frame_for_test(
+        service: &str,
+        stream_id: u32,
+        method: &str,
+        request_payload: Vec<u8>,
+    ) -> Vec<u8> {
+        let request = TtrpcRequest {
+            service: service.to_owned(),
+            method: method.to_owned(),
+            payload: request_payload,
+            ..TtrpcRequest::default()
+        };
+        let payload = request.write_to_bytes().unwrap();
+        let mut frame = Vec::from(MessageHeader::new_request(
+            stream_id,
+            u32::try_from(payload.len()).unwrap(),
+        ));
+        frame.extend_from_slice(&payload);
+        frame
+    }
+
+    async fn establish_test_client(
+        listener: &Socket,
+        runtime: &TestInteractionRuntime,
+        zone: &ZoneId,
+        service: &str,
+        uid: u32,
+        path: &std::path::Path,
+    ) -> (
+        Arc<dyn ComponentSessionDriver>,
+        tokio::task::JoinHandle<Result<(), String>>,
+    ) {
+        let client_socket =
+            Socket::new(Domain::UNIX, Type::from(libc::SOCK_SEQPACKET), None).unwrap();
+        client_socket
+            .connect(&SockAddr::unix(path).unwrap())
+            .expect("connect interaction listener");
+        client_socket.set_nonblocking(true).unwrap();
+        let accepted = loop {
+            match accept_with(
+                listener.as_fd(),
+                SocketFlags::CLOEXEC | SocketFlags::NONBLOCK,
+            ) {
+                Ok(accepted) => break accepted,
+                Err(rustix::io::Errno::AGAIN) => thread::yield_now(),
+                Err(error) => panic!("accept failed: {error}"),
+            }
+        };
+        let server_runtime = Arc::clone(runtime);
+        let server_zone = zone.clone();
+        let server_service = service.to_owned();
+        let server = tokio::spawn(async move {
+            admit_interaction_socket(accepted, server_runtime, server_zone, server_service, uid)
+                .await
+        });
+
+        let policy = interaction_endpoint_policy(service, 1).unwrap();
+        let client_seqpacket = SeqpacketSocket::from_owned(client_socket.into()).unwrap();
+        let client_peer = client_seqpacket.acceptor_peer_credentials().unwrap();
+        let transport = test_unix_transport(client_seqpacket, client_peer, &policy);
+        let engine = tokio::time::timeout(
+            Duration::from_secs(5),
+            SessionEngine::establish_initiator(
+                transport,
+                policy,
+                d2b_session::HandshakeCredentials::Nn,
+                Instant::now(),
+            ),
+        )
+        .await
+        .expect("client handshake timeout")
+        .unwrap_or_else(|error| panic!("client handshake failed for {service}: {error}"));
+        (Arc::new(engine.into_driver()), server)
+    }
+
+    async fn dispatch_test_request(
+        driver: &Arc<dyn ComponentSessionDriver>,
+        service: &str,
+        stream_id: u32,
+        method: &str,
+        request_payload: Vec<u8>,
+    ) -> TtrpcResponse {
+        let frame = request_frame_for_test(service, stream_id, method, request_payload);
+        let request_id = d2b_session::ttrpc_request_id(1, &frame).unwrap();
+        driver.start_ttrpc(request_id.clone(), frame).await.unwrap();
+        let response = tokio::time::timeout(Duration::from_secs(5), driver.receive_ttrpc())
+            .await
+            .expect("interaction response timeout")
+            .unwrap();
+        assert!(driver.complete_ttrpc(request_id).await.unwrap());
+        TtrpcResponse::parse_from_bytes(&response[ttrpc::proto::MESSAGE_HEADER_LENGTH..]).unwrap()
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn hermetic_listener_dispatches_clipboard_notification_and_ordered_shutdown() {
+        let directory = tempfile::tempdir().unwrap();
+        let zone = ZoneId::parse("work").unwrap();
+        let uid = nix::unistd::getuid().as_raw();
+        let runtime = Arc::new(AsyncMutex::new(Some(test_interaction_composition(
+            &zone, uid,
+        ))));
+        let services = [
+            d2b_provider_display_wayland::SERVICE_PACKAGE,
+            d2b_provider_clipboard_wayland::BRIDGE_SERVICE,
+            d2b_provider_clipboard_wayland::PICKER_SERVICE,
+            d2b_provider_notification_desktop::SERVICE_PACKAGE,
+        ];
+        let mut clients = Vec::new();
+        for service in services {
+            let path = directory
+                .path()
+                .join(service.replace('.', "-"))
+                .with_extension("sock");
+            let listener = bind_interaction_listener(&path).unwrap();
+            let (client, server) =
+                establish_test_client(&listener, &runtime, &zone, service, uid, &path).await;
+            clients.push((service, path, listener, client, server));
+        }
+
+        let (display_service, _, _, display, _) = &clients[0];
+        let display_spec = WaylandSessionSpec::new(
+            ResourceRef::parse(&format!("Guest/uid-{uid}")).unwrap(),
+            ResourceRef::parse("Host/host-system").unwrap(),
+            ResourceRef::parse(&format!("User/uid-{uid}")).unwrap(),
+            ResourceRef::parse("display-wayland.d2bus.org.WaylandPolicy/display-wayland").unwrap(),
+            d2b_provider_display_wayland::DisplayIdentity::new(
+                "test-display",
+                "#112233",
+                "#223344",
+                "#334455",
+            )
+            .unwrap(),
+            true,
+        )
+        .unwrap();
+        let display_payload = serde_json::to_vec(&serde_json::json!({
+            "spec": display_spec,
+        }))
+        .unwrap();
+        let reconcile = dispatch_test_request(
+            display,
+            display_service,
+            100,
+            "DisplayService/Reconcile",
+            display_payload,
+        )
+        .await;
+        assert_eq!(reconcile.status().code(), TtrpcCode::OK);
+        let observe = dispatch_test_request(
+            display,
+            display_service,
+            101,
+            "DisplayService/Observe",
+            Vec::new(),
+        )
+        .await;
+        assert_eq!(observe.status().code(), TtrpcCode::OK);
+        assert!(
+            String::from_utf8(observe.payload)
+                .unwrap()
+                .contains("\"ready\":true")
+        );
+
+        let (bridge_service, _, _, bridge, _) = &clients[1];
+        let capture = dispatch_test_request(
+            bridge,
+            bridge_service,
+            102,
+            "ClipboardBridgeService/CaptureGuest",
+            serde_json::to_vec(&serde_json::json!({
+                "mime": "text/plain",
+                "bytes": [99, 108, 105, 112],
+                "now_secs": 100,
+            }))
+            .unwrap(),
+        )
+        .await;
+        assert_eq!(capture.status().code(), TtrpcCode::OK);
+        let capture_payload: serde_json::Value = serde_json::from_slice(&capture.payload).unwrap();
+        let entry_digest = capture_payload["entry_digest"].as_str().unwrap().to_owned();
+
+        let (picker_service, _, _, picker, _) = &clients[2];
+        let completion_payload = serde_json::to_vec(&serde_json::json!({
+            "entry_digest": entry_digest,
+            "mime_types": ["text/plain"],
+            "selected_digest": entry_digest,
+            "now_secs": 101,
+        }))
+        .unwrap();
+        let completion = dispatch_test_request(
+            picker,
+            picker_service,
+            103,
+            "ClipboardPickerService/Complete",
+            completion_payload.clone(),
+        )
+        .await;
+        assert_eq!(completion.status().code(), TtrpcCode::OK);
+        let replay = dispatch_test_request(
+            picker,
+            picker_service,
+            104,
+            "ClipboardPickerService/Complete",
+            completion_payload,
+        )
+        .await;
+        assert_eq!(replay.status().code(), TtrpcCode::FAILED_PRECONDITION);
+
+        let (notification_service, _, _, notification, _) = &clients[3];
+        let deliver = dispatch_test_request(
+            notification,
+            notification_service,
+            105,
+            "NotificationService/Deliver",
+            serde_json::to_vec(&serde_json::json!({
+                "request": {
+                    "summary": "Update",
+                    "body": "A bounded body",
+                    "category": "system.info",
+                    "actions": [{"id": "open", "label": "Open"}],
+                    "idempotencyKey": "notification-1",
+                },
+                "now_secs": 101,
+            }))
+            .unwrap(),
+        )
+        .await;
+        assert_eq!(deliver.status().code(), TtrpcCode::OK);
+        let deliver_payload: serde_json::Value = serde_json::from_slice(&deliver.payload).unwrap();
+        assert_eq!(deliver_payload["accepted"], true);
+        let action_key = deliver_payload["action_nonces"]["open"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+
+        let action = dispatch_test_request(
+            notification,
+            notification_service,
+            106,
+            "NotificationService/InvokeAction",
+            serde_json::to_vec(&serde_json::json!({
+                "action_key": action_key,
+                "now_secs": 102,
+            }))
+            .unwrap(),
+        )
+        .await;
+        assert_eq!(action.status().code(), TtrpcCode::OK);
+        let close = dispatch_test_request(
+            notification,
+            notification_service,
+            107,
+            "NotificationService/CloseObserver",
+            Vec::new(),
+        )
+        .await;
+        assert_eq!(close.status().code(), TtrpcCode::OK);
+
+        let finalize = dispatch_test_request(
+            display,
+            display_service,
+            108,
+            "DisplayService/Finalize",
+            Vec::new(),
+        )
+        .await;
+        assert_eq!(finalize.status().code(), TtrpcCode::OK);
+        for (_, _, _, _, server) in clients {
+            assert!(server.await.unwrap().is_ok());
+        }
+        assert_eq!(runtime.lock().await.as_ref().unwrap().session_count(), 0);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn hermetic_listener_authenticates_dispatches_finalizes_and_refuses_replay() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("interaction.sock");
+        let listener = bind_interaction_listener(&path).unwrap();
+        let zone = ZoneId::parse("work").unwrap();
+        let uid = nix::unistd::getuid().as_raw();
+        let runtime = Arc::new(AsyncMutex::new(Some(test_interaction_composition(
+            &zone, uid,
+        ))));
+
+        let client_socket =
+            Socket::new(Domain::UNIX, Type::from(libc::SOCK_SEQPACKET), None).unwrap();
+        client_socket
+            .connect(&SockAddr::unix(&path).unwrap())
+            .unwrap();
+        client_socket.set_nonblocking(true).unwrap();
+        let accepted = loop {
+            match accept_with(
+                listener.as_fd(),
+                SocketFlags::CLOEXEC | SocketFlags::NONBLOCK,
+            ) {
+                Ok(accepted) => break accepted,
+                Err(rustix::io::Errno::AGAIN) => thread::yield_now(),
+                Err(error) => panic!("accept failed: {error}"),
+            }
+        };
+        let server_runtime = Arc::clone(&runtime);
+        let server_zone = zone.clone();
+        let server = tokio::spawn(async move {
+            admit_interaction_socket(
+                accepted,
+                server_runtime,
+                server_zone,
+                d2b_provider_display_wayland::SERVICE_PACKAGE.to_owned(),
+                uid,
+            )
+            .await
+        });
+
+        let policy =
+            interaction_endpoint_policy(d2b_provider_display_wayland::SERVICE_PACKAGE, 1).unwrap();
+        let client_seqpacket = SeqpacketSocket::from_owned(client_socket.into()).unwrap();
+        let client_peer = client_seqpacket.acceptor_peer_credentials().unwrap();
+        let transport = test_unix_transport(client_seqpacket, client_peer, &policy);
+        let engine = tokio::time::timeout(
+            Duration::from_secs(5),
+            SessionEngine::establish_initiator(
+                transport,
+                policy,
+                d2b_session::HandshakeCredentials::Nn,
+                Instant::now(),
+            ),
+        )
+        .await
+        .expect("client handshake timeout")
+        .unwrap();
+        let driver = engine.into_driver();
+
+        let observe_frame = request_frame_for_test(
+            d2b_provider_display_wayland::SERVICE_PACKAGE,
+            41,
+            "DisplayService/Observe",
+            Vec::new(),
+        );
+        let observe_id = d2b_session::ttrpc_request_id(1, &observe_frame).unwrap();
+        driver
+            .start_ttrpc(observe_id.clone(), observe_frame)
+            .await
+            .unwrap();
+        let observe_response = tokio::time::timeout(Duration::from_secs(5), driver.receive_ttrpc())
+            .await
+            .expect("observe response timeout")
+            .unwrap();
+        let observe_payload = &observe_response[ttrpc::proto::MESSAGE_HEADER_LENGTH..];
+        let observe = TtrpcResponse::parse_from_bytes(observe_payload).unwrap();
+        assert_eq!(observe.status().code(), TtrpcCode::OK);
+        assert!(
+            String::from_utf8(observe.payload)
+                .unwrap()
+                .contains("\"ready\":false")
+        );
+        assert!(driver.complete_ttrpc(observe_id).await.unwrap());
+
+        let finalize_frame = request_frame_for_test(
+            d2b_provider_display_wayland::SERVICE_PACKAGE,
+            42,
+            "DisplayService/Finalize",
+            Vec::new(),
+        );
+        let finalize_id = d2b_session::ttrpc_request_id(1, &finalize_frame).unwrap();
+        driver
+            .start_ttrpc(finalize_id.clone(), finalize_frame)
+            .await
+            .unwrap();
+        let finalize_response =
+            tokio::time::timeout(Duration::from_secs(5), driver.receive_ttrpc())
+                .await
+                .expect("finalize response timeout")
+                .unwrap();
+        let finalize_payload = &finalize_response[ttrpc::proto::MESSAGE_HEADER_LENGTH..];
+        let finalize = TtrpcResponse::parse_from_bytes(finalize_payload).unwrap();
+        assert_eq!(finalize.status().code(), TtrpcCode::OK);
+        assert!(server.await.unwrap().is_ok());
+        assert_eq!(runtime.lock().await.as_ref().unwrap().session_count(), 0);
+
+        let replay_frame = request_frame_for_test(
+            d2b_provider_display_wayland::SERVICE_PACKAGE,
+            43,
+            "DisplayService/Observe",
+            Vec::new(),
+        );
+        let replay = RequestId::new(vec![0x43; 16]).unwrap();
+        assert!(driver.start_ttrpc(replay, replay_frame,).await.is_err());
+        drop(listener);
+        std::fs::remove_file(&path).unwrap();
+        assert!(!path.exists());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn unix_listener_observes_real_peer_credentials_before_session_admission() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("interaction.sock");
+        let listener = bind_interaction_listener(&path).expect("listener socket");
+        let client = Socket::new(Domain::UNIX, Type::from(libc::SOCK_SEQPACKET), None).unwrap();
+        client.connect(&SockAddr::unix(&path).unwrap()).unwrap();
+        let accepted = loop {
+            match accept_with(
+                listener.as_fd(),
+                SocketFlags::CLOEXEC | SocketFlags::NONBLOCK,
+            ) {
+                Ok(accepted) => break accepted,
+                Err(rustix::io::Errno::AGAIN) => thread::yield_now(),
+                Err(error) => panic!("accept failed: {error}"),
+            }
+        };
+        let accepted = SeqpacketSocket::from_owned(accepted).unwrap();
+        let peer = VerifiedUnixPeer::verify_seqpacket(&accepted).unwrap();
+        assert_eq!(
+            peer.credentials().uid().as_raw(),
+            nix::unistd::getuid().as_raw()
+        );
+        drop(client);
+        drop(accepted);
     }
 }

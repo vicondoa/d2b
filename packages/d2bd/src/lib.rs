@@ -695,8 +695,7 @@ struct ServerState {
     /// Listener loops for the daemon-owned interaction ComponentSession
     /// sockets.  Their stop handle is retained so shutdown closes admission
     /// before runtime finalization.
-    interaction_listeners:
-        Arc<Mutex<Option<interaction_composition::InteractionListenerSet>>>,
+    interaction_listeners: Arc<Mutex<Option<interaction_composition::InteractionListenerSet>>>,
     /// Bounded execution-target bindings for qualified ShellSession resources.
     /// The provider may remove a killed session before a retry arrives, so the
     /// daemon keeps recent exact target bindings independently of provider
@@ -1771,50 +1770,6 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
 
     match load_bundle_resolver(&state) {
         Ok(resolver) => {
-            if let Ok(interaction_bundle) = load_bundle_resolver(&state)
-                && let Some(zone) = authoritative_zone_ids(&interaction_bundle)
-                    .ok()
-                    .and_then(|zones| zones.into_iter().next())
-            {
-                match interaction_composition::production_interaction_composition(
-                    interaction_bundle,
-                    state.daemon_uid,
-                    state
-                        .daemon_state_dir
-                        .join("interaction-display-observations.json"),
-                    zone.clone(),
-                ) {
-                    Ok(runtime) => {
-                        *state.interaction_runtime.lock().await = Some(runtime);
-                        match interaction_composition::spawn_interaction_listeners(
-                            Arc::clone(&state.interaction_runtime),
-                            state.daemon_state_dir.join("interaction"),
-                            zone,
-                            state.daemon_uid,
-                        ) {
-                            Ok(listeners) => {
-                                let paths = listeners.paths().to_owned();
-                                *state
-                                    .interaction_listeners
-                                    .lock()
-                                    .expect("interaction listener lock") = Some(listeners);
-                                tracing::info!(
-                                    listener_count = paths.len(),
-                                    "interaction Provider ComponentSession listeners ready",
-                                );
-                            }
-                            Err(error) => tracing::error!(
-                                %error,
-                                "interaction Provider listeners failed closed during startup",
-                            ),
-                        }
-                    }
-                    Err(error) => tracing::error!(
-                        error = ?error,
-                        "interaction Provider composition failed closed during startup",
-                    ),
-                }
-            }
             let provider_ready = match state.provider_runtime.configure_from_host(&resolver.host) {
                 Ok(()) => true,
                 Err(error) => {
@@ -1852,13 +1807,74 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
                                 }
                             })?;
                         }
+                        let interaction_zone = plane.zone_ids().into_iter().next();
+                        let interaction_evidence = interaction_zone.as_ref().and_then(|zone| {
+                            plane.zone(zone).ok().map(|runtime| {
+                                (
+                                    zone.clone(),
+                                    runtime.committed_policy_snapshot(),
+                                    runtime.current_revision(),
+                                    runtime.require_ready().is_ok(),
+                                )
+                            })
+                        });
                         if let Ok(mut slot) = state.resource_plane.lock() {
-                            *slot = Some(plane);
+                            *slot = Some(Arc::clone(&plane));
                         } else {
                             return Err(TypedError::InternalIo {
                                 context: "publish resource plane".to_owned(),
                                 detail: "resource-plane state lock unavailable".to_owned(),
                             });
+                        }
+                        if let Some((zone, committed_policy, resource_revision, resource_ready)) =
+                            interaction_evidence
+                        {
+                            match interaction_composition::production_interaction_composition(
+                                resolver.clone(),
+                                state.daemon_uid,
+                                state
+                                    .daemon_state_dir
+                                    .join("interaction-display-observations.json"),
+                                zone.clone(),
+                                committed_policy,
+                                resource_revision,
+                                resource_ready,
+                            ) {
+                                Ok(runtime) => {
+                                    *state.interaction_runtime.lock().await = Some(runtime);
+                                    match interaction_composition::spawn_interaction_listeners(
+                                        Arc::clone(&state.interaction_runtime),
+                                        state.daemon_state_dir.join("interaction"),
+                                        zone,
+                                        state.daemon_uid,
+                                    ) {
+                                        Ok(listeners) => {
+                                            let paths = listeners.paths().to_owned();
+                                            *state
+                                                .interaction_listeners
+                                                .lock()
+                                                .expect("interaction listener lock") =
+                                                Some(listeners);
+                                            tracing::info!(
+                                                listener_count = paths.len(),
+                                                "interaction Provider ComponentSession listeners ready",
+                                            );
+                                        }
+                                        Err(error) => tracing::error!(
+                                            %error,
+                                            "interaction Provider listeners failed closed during startup",
+                                        ),
+                                    }
+                                }
+                                Err(error) => tracing::error!(
+                                    error = ?error,
+                                    "interaction Provider composition failed closed during startup",
+                                ),
+                            }
+                        } else {
+                            tracing::error!(
+                                "interaction Provider composition refused: no ready resource Zone",
+                            );
                         }
                     }
                     Err(error) => {

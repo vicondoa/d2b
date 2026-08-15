@@ -1273,11 +1273,7 @@ impl UnixSubjectRecord {
                 d2b_session::contract::SessionErrorCode::SubjectMismatch,
             ));
         }
-        let provider_ref = if self
-            .subject_ref
-            .to_canonical_string()
-            == "Provider/system-core"
-        {
+        let provider_ref = if self.subject_ref.to_canonical_string() == "Provider/system-core" {
             match binding.service().as_str() {
                 "d2b.display.v3" => ResourceRef::parse("Provider/display-wayland").ok(),
                 "d2b.clipboard.v3"
@@ -1306,6 +1302,12 @@ impl UnixSubjectRecord {
                 binding.transcript_hash().clone(),
             ),
         );
+        if binding.service().as_str() == "d2b.display.v3" {
+            context = context.with_execution_ref(
+                ResourceRef::parse("Host/host-system")
+                    .expect("daemon-owned local display execution reference"),
+            );
+        }
         if let (Some(provider_ref), Some(provider_generation)) =
             (provider_ref, self.provider_generation)
         {
@@ -1357,12 +1359,11 @@ impl AuthoritativeUnixSubjectResolver {
         #[cfg(not(test))]
         {
             let uid = peer.uid().as_raw();
-            let subject_ref = ResourceRef::parse(&format!("Guest/uid-{uid}"))
-                .map_err(|_| {
-                    d2b_session::SessionError::new(
-                        d2b_session::contract::SessionErrorCode::SubjectConfigurationMismatch,
-                    )
-                })?;
+            let subject_ref = ResourceRef::parse(&format!("Guest/uid-{uid}")).map_err(|_| {
+                d2b_session::SessionError::new(
+                    d2b_session::contract::SessionErrorCode::SubjectConfigurationMismatch,
+                )
+            })?;
             let mut digest = Sha256::new();
             digest.update(b"d2b-unix-guest-subject-v1");
             digest.update(uid.to_be_bytes());
@@ -1388,9 +1389,11 @@ impl AuthoritativeUnixSubjectResolver {
                 | "d2b.clipboard.bridge.v3"
                 | "d2b.clipboard.picker-coord.v3" => "Provider/clipboard-wayland",
                 "d2b.notification.v3" => "Provider/notification-desktop",
-                _ => return Err(d2b_session::SessionError::new(
-                    d2b_session::contract::SessionErrorCode::SubjectConfigurationMismatch,
-                )),
+                _ => {
+                    return Err(d2b_session::SessionError::new(
+                        d2b_session::contract::SessionErrorCode::SubjectConfigurationMismatch,
+                    ));
+                }
             };
             let subject = UnixSubjectRecord::guest(
                 subject_ref,
@@ -1736,10 +1739,10 @@ impl ComponentResponses {
         let (requests, receiver) = mpsc::channel(32);
         (
             Arc::new(Self {
-            generation,
-            ttrpc,
-            requests,
-            state: Mutex::new(ComponentResponseState::default()),
+                generation,
+                ttrpc,
+                requests,
+                state: Mutex::new(ComponentResponseState::default()),
             }),
             Arc::new(AsyncMutex::new(receiver)),
         )
@@ -1797,8 +1800,7 @@ impl ComponentResponses {
                             .state
                             .lock()
                             .unwrap_or_else(|poisoned| poisoned.into_inner());
-                        state.inbound_streams.len() < 32
-                            && state.inbound_streams.insert(stream_id)
+                        state.inbound_streams.len() < 32 && state.inbound_streams.insert(stream_id)
                     };
                     if !accepted {
                         self.terminate(EndpointError::Rejected);
@@ -2486,7 +2488,18 @@ impl ZoneRegistrar {
 fn routes_for_admitted_session(
     binding: &AuthenticatedSessionRouteBinding,
 ) -> Result<Vec<RouteKey>, BusError> {
-    if binding.subject_ref().resource_type().as_str() != "Provider" {
+    let guest_provider_service = binding.subject_ref().resource_type().as_str() == "Guest"
+        && matches!(
+            binding.service().as_str(),
+            "d2b.display.v3"
+                | "d2b.clipboard.v3"
+                | "d2b.clipboard.bridge.v3"
+                | "d2b.clipboard.picker-coord.v3"
+                | "d2b.notification.v3"
+        );
+    if binding.provider_ref().is_none()
+        || (binding.subject_ref().resource_type().as_str() != "Provider" && !guest_provider_service)
+    {
         return Ok(Vec::new());
     }
     let target_ref = binding
@@ -2679,13 +2692,10 @@ impl BusIngress {
             .await?;
         let destination = self.core.lock_registry().resolve(&route)?;
         let now = self.core.clock.now_tick();
-        let cancellation = self.core.lock_operations().begin(
-            &operation,
-            self.session,
-            destination,
-            route,
-            now,
-        )?;
+        let cancellation =
+            self.core
+                .lock_operations()
+                .begin(&operation, self.session, destination, route, now)?;
         Ok(LocalOperationLease {
             inner: Some(OperationLease::new(
                 Arc::clone(&self.core),

@@ -690,6 +690,7 @@ impl Registry {
             Some(*session) != replacing
                 && registered.identity.subject_ref == registration.identity.subject_ref
                 && registered.identity.subject_uid == registration.identity.subject_uid
+                && registered.identity.service == registration.identity.service
         }) {
             return Err(RegistryError::DuplicateSessionIdentity);
         }

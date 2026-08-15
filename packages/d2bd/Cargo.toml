@@ -30,7 +30,7 @@ d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
 d2b-audit = { path = "../d2b-audit", version = "0.0.0-bootstrap" }
 d2b-provider = { path = "../d2b-provider", version = "0.0.0-bootstrap" }
 d2b-provider-device-tpm = { path = "../d2b-provider-device-tpm", version = "0.0.0-bootstrap" }
-d2b-provider-display-wayland = { path = "../d2b-provider-display-wayland", version = "0.0.0-bootstrap", features = ["daemon-support"] }
+d2b-provider-display-wayland = { path = "../d2b-provider-display-wayland", version = "0.0.0-bootstrap" }
 d2b-provider-clipboard-wayland = { path = "../d2b-provider-clipboard-wayland", version = "0.0.0-bootstrap" }
 d2b-provider-notification-desktop = { path = "../d2b-provider-notification-desktop", version = "0.0.0-bootstrap", features = ["daemon-support"] }
 d2b-provider-supervisor = { path = "../d2b-provider-supervisor", version = "0.0.0-bootstrap" }
@@ -68,5 +68,6 @@ uzers = "0.12"
 [dev-dependencies]
 d2b-core = { path = "../d2b-core", version = "0.0.0-bootstrap", features = ["test-support"] }
 d2b-core-controller = { path = "../d2b-core-controller", version = "0.0.0-bootstrap", features = ["test-support"] }
+d2b-provider-display-wayland = { path = "../d2b-provider-display-wayland", version = "0.0.0-bootstrap", features = ["test-support"] }
 regex = "1"
 tempfile = "3"

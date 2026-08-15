@@ -25,7 +25,7 @@ const QUALIFIED_RESOURCE_TYPE_PATTERN: &str =
 const UUID_V4_PATTERN: &str =
     "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$";
 const SESSION_PURPOSE_PATTERN: &str = "^[a-z][a-z0-9-]{0,63}$";
-const SERVICE_NAME_PATTERN: &str = "^[a-z][a-z0-9]*(\\.[a-z0-9]+)+$";
+const SERVICE_NAME_PATTERN: &str = "^[a-z][a-z0-9-]*(\\.[a-z0-9][a-z0-9-]*)+$";
 const SHA256_PATTERN: &str = "^sha256:[0-9a-f]{64}$";
 const TIMESTAMP_PATTERN: &str =
     "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$";
@@ -628,7 +628,11 @@ impl ServiceName {
                 !segment.is_empty()
                     && segment
                         .bytes()
-                        .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+                        .next()
+                        .is_some_and(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+                    && segment.bytes().all(|byte| {
+                        byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-'
+                    })
             });
         if !valid_first || !valid_remaining {
             return Err(IdentityError::InvalidShape {
@@ -1538,6 +1542,7 @@ mod tests {
         assert!(SessionPurpose::parse("resource-api").is_ok());
         assert!(SessionPurpose::parse("A").is_err());
         assert!(ServiceName::parse("d2b.resource.v3").is_ok());
+        assert!(ServiceName::parse("d2b.clipboard.picker-coord.v3").is_ok());
         assert!(ServiceName::parse("resource").is_err());
         assert!(ServiceName::parse("d2b.Resource.v3").is_err());
         assert!(SchemaFingerprint::parse("sha256:ABC").is_err());

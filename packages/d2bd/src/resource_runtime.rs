@@ -24,14 +24,13 @@ use d2b_audit::{AuditSink, DurabilityEvidence};
 use d2b_contracts::v3::{
     DEFAULT_LIST_PAGE_SIZE, MAX_FILTER_VALUES, MAX_LIST_FILTERS, MAX_LIST_PAGE_SIZE,
     MAX_LIST_RESOURCE_TYPES, MAX_PAGE_CURSOR_BYTES, MAX_RESPONSE_CANONICAL_BYTES, ResourceName,
-    ZoneRevision,
 };
 use d2b_contracts::{
     broker_wire::{OpenZoneStoreResponse, ZoneStoreDisposition},
     v3::{
         ConfigurationGeneration, ControllerGeneration, ResourceError, ResourceErrorKind,
         ResourceErrorReason, ResourceRef, ResourceTypeName, ResourceUid, RetryClass, Timestamp,
-        ZoneId,
+        ZoneId, ZoneRevision,
     },
 };
 use d2b_core_controller::authority::{
@@ -534,6 +533,20 @@ impl ZoneResourceRuntime {
     /// Return the startup readiness projection.
     pub const fn readiness(&self) -> ZoneRuntimeReadiness {
         self.readiness
+    }
+
+    /// Return the policy revision committed in the opened resource store.
+    ///
+    /// Interaction Providers bind this snapshot instead of carrying a
+    /// route-derived policy placeholder.
+    pub const fn committed_policy_snapshot(&self) -> PolicySnapshot {
+        self.store_metadata.policy_snapshot
+    }
+
+    /// Return the durable resource revision used to fence interaction
+    /// evidence against a later store commit.
+    pub const fn current_revision(&self) -> ZoneRevision {
+        self.store_metadata.current_revision
     }
 
     /// Return the current core-controller stage.

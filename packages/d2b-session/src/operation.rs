@@ -123,6 +123,8 @@ pub const GENERATED_OPERATION_CATALOG: &[OperationCatalogEntry] = &[
     ),
     interaction("d2b.notification.v3", "NotificationService/Reconcile"),
     interaction("d2b.notification.v3", "NotificationService/Deliver"),
+    interaction("d2b.notification.v3", "NotificationService/InvokeAction"),
+    interaction("d2b.notification.v3", "NotificationService/CloseObserver"),
     interaction("d2b.notification.v3", "NotificationService/Drain"),
 ];
 
