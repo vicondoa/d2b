@@ -12,6 +12,7 @@ mod portal;
 mod principal;
 mod process;
 mod readiness;
+mod runtime;
 mod spec;
 
 pub use audit::{DisplayAuditKind, DisplayAuditOutcome, DisplayAuditRecord};
@@ -36,6 +37,10 @@ pub use process::{
     WorkerSupervisorError,
 };
 pub use readiness::ProxyReadinessEvent;
+pub use runtime::{
+    DisplayProcessEffectPort, DisplayRuntime, DisplayRuntimeError, FinalizationReport,
+    WorkerEffectError, WorkerLaunchReceipt,
+};
 pub use spec::{DisplayIdentity, DisplayLabelPosition, WaylandSessionSpec, WaylandSpecError};
 
 /// Canonical Provider reference.
