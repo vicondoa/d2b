@@ -21,6 +21,16 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
     mpsc,
 };
+
+type InteractionSupervisor = d2b_provider_supervisor::ProviderSupervisor<
+    d2b_provider_supervisor::BrokerProcessBackend<
+        interaction_composition::BundleDisplayLaunchResolver,
+    >,
+>;
+type InteractionRuntime = interaction_composition::InteractionComposition<
+    InteractionSupervisor,
+    interaction_composition::AuthenticatedGuestFrontendEffects,
+>;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -221,6 +231,7 @@ pub mod metrics;
 // singleton (retired in v1.0). See `docs/reference/daemon-metrics.md` for
 // the metric inventory.
 pub mod ch_stats;
+pub mod interaction_composition;
 pub mod provider_shutdown;
 // v3 Provider composition and descriptor-bound lifecycle effects. The
 // modules reuse the shared Provider registry and the typed broker lifecycle
@@ -675,6 +686,14 @@ struct ServerState {
     /// trusted bundle/storage admission is incomplete; public resource
     /// requests fail closed rather than falling back to the legacy path.
     resource_plane: Arc<Mutex<Option<Arc<resource_runtime::ResourcePlane>>>>,
+    /// Daemon-owned interaction Provider composition and its authenticated
+    /// ComponentSession registrations.
+    interaction_runtime: Arc<tokio::sync::Mutex<Option<InteractionRuntime>>>,
+    /// Listener loops for the daemon-owned interaction ComponentSession
+    /// sockets.  Their stop handle is retained so shutdown closes admission
+    /// before runtime finalization.
+    interaction_listeners:
+        Arc<Mutex<Option<interaction_composition::InteractionListenerSet>>>,
     /// Bounded execution-target bindings for qualified ShellSession resources.
     /// The provider may remove a killed session before a retry arrives, so the
     /// daemon keeps recent exact target bindings independently of provider
@@ -1587,6 +1606,16 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
     ensure_locks_dir(&config.locks_dir, &runtime_identity)?;
     let _lock_file = acquire_state_lock(&config.state_lock_path, &runtime_identity)?;
     let listener = bind_public_socket(&config.public_socket_path, &runtime_identity)?;
+    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        .map_err(|error| TypedError::InternalIo {
+            context: "install SIGTERM shutdown handler".to_owned(),
+            detail: error.to_string(),
+        })?;
+    let mut sigint = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
+        .map_err(|error| TypedError::InternalIo {
+            context: "install SIGINT shutdown handler".to_owned(),
+            detail: error.to_string(),
+        })?;
     let unsafe_local_helper_uids =
         resolve_unsafe_local_helper_uids(&config, runtime_identity.daemon_uid)?;
     let unsafe_local_helper_listener =
@@ -1716,6 +1745,8 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
             })?,
         ),
         resource_plane: Arc::new(Mutex::new(None)),
+        interaction_runtime: Arc::new(tokio::sync::Mutex::new(None)),
+        interaction_listeners: Arc::new(Mutex::new(None)),
         typed_shell_session_targets: new_typed_shell_session_targets(),
         zone_coordinator: new_zone_coordinator(),
         security_key_sessions: Arc::new(parking_lot::Mutex::new(
@@ -1737,6 +1768,50 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
 
     match load_bundle_resolver(&state) {
         Ok(resolver) => {
+            if let Ok(interaction_bundle) = load_bundle_resolver(&state)
+                && let Some(zone) = authoritative_zone_ids(&interaction_bundle)
+                    .ok()
+                    .and_then(|zones| zones.into_iter().next())
+            {
+                match interaction_composition::production_interaction_composition(
+                    interaction_bundle,
+                    state.daemon_uid,
+                    state
+                        .daemon_state_dir
+                        .join("interaction-display-observations.json"),
+                    zone.clone(),
+                ) {
+                    Ok(runtime) => {
+                        *state.interaction_runtime.lock().await = Some(runtime);
+                        match interaction_composition::spawn_interaction_listeners(
+                            Arc::clone(&state.interaction_runtime),
+                            state.daemon_state_dir.join("interaction"),
+                            zone,
+                            state.daemon_uid,
+                        ) {
+                            Ok(listeners) => {
+                                let paths = listeners.paths().to_owned();
+                                *state
+                                    .interaction_listeners
+                                    .lock()
+                                    .expect("interaction listener lock") = Some(listeners);
+                                tracing::info!(
+                                    listener_count = paths.len(),
+                                    "interaction Provider ComponentSession listeners ready",
+                                );
+                            }
+                            Err(error) => tracing::error!(
+                                %error,
+                                "interaction Provider listeners failed closed during startup",
+                            ),
+                        }
+                    }
+                    Err(error) => tracing::error!(
+                        error = ?error,
+                        "interaction Provider composition failed closed during startup",
+                    ),
+                }
+            }
             let provider_ready = match state.provider_runtime.configure_from_host(&resolver.host) {
                 Ok(()) => true,
                 Err(error) => {
@@ -1988,17 +2063,53 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
     );
     run_startup_autostart(&state, &combined_pre_degraded).await;
     sd_notify_ready(notify_socket.as_deref());
+    let interaction_runtime_ready = state.interaction_runtime.lock().await.is_some();
     tracing::info!(
         socket_kind = "public",
         socket_ready = true,
+        interaction_runtime_ready,
         "d2bd public socket ready; accepting connections",
     );
 
     loop {
-        let (stream, _) = listener.accept().map_err(|err| TypedError::InternalIo {
-            context: "accept public seqpacket client".to_owned(),
-            detail: err.to_string(),
-        })?;
+        let accepted = tokio::select! {
+            _ = sigterm.recv() => {
+                finalize_daemon_interactions(&state).await?;
+                break;
+            }
+            _ = sigint.recv() => {
+                finalize_daemon_interactions(&state).await?;
+                break;
+            }
+            _ = tokio::time::sleep(Duration::from_millis(10)) => {
+                match listener.accept() {
+                    Ok(accepted) => Some(accepted),
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => None,
+                    Err(error) => {
+                        let accept_error = TypedError::InternalIo {
+                            context: "accept public seqpacket client".to_owned(),
+                            detail: error.to_string(),
+                        };
+                        if let Err(cleanup_error) = finalize_daemon_interactions(&state).await {
+                            tracing::error!(
+                                ?cleanup_error,
+                                "interaction Provider finalization failed after accept error",
+                            );
+                        }
+                        return Err(accept_error);
+                    }
+                }
+            }
+        };
+        let Some((stream, _)) = accepted else {
+            continue;
+        };
+        stream
+            .set_nonblocking(false)
+            .map_err(|error| TypedError::InternalIo {
+                context: "set accepted public socket blocking".to_owned(),
+                detail: error.to_string(),
+            })?;
 
         // The `once` test path stays fully synchronous/inline so unit
         // tests can drive a single connection deterministically.
@@ -2006,12 +2117,7 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
             if let Err(error) = handle_connection(stream, &state, None) {
                 eprintln!("{}", error.message());
             }
-            shutdown_resource_plane(&state)
-                .await
-                .map_err(|error| TypedError::InternalIo {
-                    context: "authoritative resource-plane shutdown audit".to_owned(),
-                    detail: error.to_string(),
-                })?;
+            finalize_daemon_interactions(&state).await?;
             break;
         }
 
@@ -2078,6 +2184,30 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
     }
 
     Ok(())
+}
+
+async fn finalize_daemon_interactions(state: &ServerState) -> Result<(), TypedError> {
+    if let Some(listeners) = state
+        .interaction_listeners
+        .lock()
+        .expect("interaction listener lock")
+        .take()
+    {
+        listeners.stop();
+    }
+    if let Some(mut runtime) = state.interaction_runtime.lock().await.take()
+        && let Err(error) = runtime
+            .finalize_async(d2b_provider_display_wayland::GraceState::Expired)
+            .await
+    {
+        tracing::error!(?error, "interaction Provider finalization failed");
+    }
+    shutdown_resource_plane(state)
+        .await
+        .map_err(|error| TypedError::InternalIo {
+            context: "authoritative resource-plane shutdown audit".to_owned(),
+            detail: error.to_string(),
+        })
 }
 
 pub async fn lock_only(options: LockOnlyOptions) -> Result<(), TypedError> {
@@ -2962,6 +3092,12 @@ fn bind_public_socket(path: &Path, identity: &RuntimeIdentity) -> Result<Socket,
         context: format!("listen on public socket {}", path.display()),
         detail: err.to_string(),
     })?;
+    socket
+        .set_nonblocking(true)
+        .map_err(|err| TypedError::InternalIo {
+            context: format!("set public socket {} nonblocking", path.display()),
+            detail: err.to_string(),
+        })?;
     fs::set_permissions(path, fs::Permissions::from_mode(0o660)).map_err(|err| {
         TypedError::InternalIo {
             context: format!("chmod public socket {}", path.display()),
@@ -4613,6 +4749,8 @@ mod workload_observability_tests {
             public_status_read_model: Arc::new(PublicStatusReadModel::new()),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
             resource_plane: Arc::new(Mutex::new(None)),
+            interaction_runtime: Arc::new(tokio::sync::Mutex::new(None)),
+            interaction_listeners: Arc::new(Mutex::new(None)),
             typed_shell_session_targets: new_typed_shell_session_targets(),
             zone_coordinator: new_zone_coordinator(),
             console_sessions: Arc::new(Mutex::new(console_session::ConsoleSessionTable::default())),
@@ -21918,6 +22056,8 @@ mod public_status_tests {
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
             resource_plane: Arc::new(Mutex::new(None)),
+            interaction_runtime: Arc::new(tokio::sync::Mutex::new(None)),
+            interaction_listeners: Arc::new(Mutex::new(None)),
             typed_shell_session_targets: new_typed_shell_session_targets(),
             zone_coordinator: new_zone_coordinator(),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
@@ -24951,6 +25091,8 @@ mod detached_exec_routing_tests {
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
             resource_plane: Arc::new(Mutex::new(None)),
+            interaction_runtime: Arc::new(tokio::sync::Mutex::new(None)),
+            interaction_listeners: Arc::new(Mutex::new(None)),
             typed_shell_session_targets: new_typed_shell_session_targets(),
             zone_coordinator: new_zone_coordinator(),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
@@ -25684,6 +25826,8 @@ mod accept_loop_concurrency_tests {
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
             resource_plane: Arc::new(Mutex::new(None)),
+            interaction_runtime: Arc::new(tokio::sync::Mutex::new(None)),
+            interaction_listeners: Arc::new(Mutex::new(None)),
             typed_shell_session_targets: new_typed_shell_session_targets(),
             zone_coordinator: new_zone_coordinator(),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
@@ -26422,6 +26566,8 @@ mod broker_dispatch_tests {
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
             resource_plane: Arc::new(Mutex::new(None)),
+            interaction_runtime: Arc::new(tokio::sync::Mutex::new(None)),
+            interaction_listeners: Arc::new(Mutex::new(None)),
             typed_shell_session_targets: new_typed_shell_session_targets(),
             zone_coordinator: new_zone_coordinator(),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
@@ -26464,6 +26610,8 @@ mod broker_dispatch_tests {
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
             resource_plane: Arc::new(Mutex::new(None)),
+            interaction_runtime: Arc::new(tokio::sync::Mutex::new(None)),
+            interaction_listeners: Arc::new(Mutex::new(None)),
             typed_shell_session_targets: new_typed_shell_session_targets(),
             zone_coordinator: new_zone_coordinator(),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
@@ -28604,6 +28752,8 @@ mod broker_dispatch_tests {
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
             resource_plane: Arc::new(Mutex::new(None)),
+            interaction_runtime: Arc::new(tokio::sync::Mutex::new(None)),
+            interaction_listeners: Arc::new(Mutex::new(None)),
             typed_shell_session_targets: new_typed_shell_session_targets(),
             zone_coordinator: new_zone_coordinator(),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
@@ -28833,6 +28983,8 @@ mod broker_dispatch_tests {
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
             resource_plane: Arc::new(Mutex::new(None)),
+            interaction_runtime: Arc::new(tokio::sync::Mutex::new(None)),
+            interaction_listeners: Arc::new(Mutex::new(None)),
             typed_shell_session_targets: new_typed_shell_session_targets(),
             zone_coordinator: new_zone_coordinator(),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
@@ -29095,6 +29247,8 @@ mod broker_dispatch_tests {
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
             resource_plane: Arc::new(Mutex::new(None)),
+            interaction_runtime: Arc::new(tokio::sync::Mutex::new(None)),
+            interaction_listeners: Arc::new(Mutex::new(None)),
             typed_shell_session_targets: new_typed_shell_session_targets(),
             zone_coordinator: new_zone_coordinator(),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
@@ -31001,6 +31155,8 @@ mod broker_dispatch_tests {
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
             resource_plane: Arc::new(Mutex::new(None)),
+            interaction_runtime: Arc::new(tokio::sync::Mutex::new(None)),
+            interaction_listeners: Arc::new(Mutex::new(None)),
             typed_shell_session_targets: new_typed_shell_session_targets(),
             zone_coordinator: new_zone_coordinator(),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
@@ -32253,6 +32409,8 @@ mod broker_dispatch_tests {
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
             resource_plane: Arc::new(Mutex::new(None)),
+            interaction_runtime: Arc::new(tokio::sync::Mutex::new(None)),
+            interaction_listeners: Arc::new(Mutex::new(None)),
             typed_shell_session_targets: new_typed_shell_session_targets(),
             zone_coordinator: new_zone_coordinator(),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
@@ -32382,6 +32540,8 @@ mod broker_dispatch_tests {
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
             resource_plane: Arc::new(Mutex::new(None)),
+            interaction_runtime: Arc::new(tokio::sync::Mutex::new(None)),
+            interaction_listeners: Arc::new(Mutex::new(None)),
             typed_shell_session_targets: new_typed_shell_session_targets(),
             zone_coordinator: new_zone_coordinator(),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(

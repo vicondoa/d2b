@@ -1,6 +1,7 @@
 //! Process and attachment projections for display workers.
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 /// Lifecycle evidence for one independently supervised worker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -285,9 +286,14 @@ pub struct AttachmentGrantHandle([u8; 32]);
 
 impl AttachmentGrantHandle {
     /// Construct a handle at the private Core/Supervisor boundary.
-    #[allow(dead_code)]
     pub(crate) const fn from_supervisor(bytes: [u8; 32]) -> Self {
         Self(bytes)
+    }
+
+    /// Construct an opaque fixture handle for daemon conformance tests.
+    #[cfg(any(feature = "daemon-support", test))]
+    pub const fn from_daemon(bytes: [u8; 32]) -> Self {
+        Self::from_supervisor(bytes)
     }
 }
 
@@ -361,6 +367,31 @@ impl LaunchGrants {
             reconnect_generation,
             teardown_generation,
         }
+    }
+
+    /// Construct one daemon-issued grant bundle.
+    ///
+    /// This constructor is available only to the daemon adapter feature (and
+    /// hermetic tests).  The values are opaque grant commitments; they are
+    /// consumed into a single [`LaunchTicket`] before a process effect is
+    /// attempted.
+    #[cfg(any(feature = "daemon-support", feature = "test-support"))]
+    pub const fn from_daemon(
+        compositor: [u8; 32],
+        gpu: [u8; 32],
+        frontend_gpu: [u8; 32],
+        session_digest: [u8; 32],
+        reconnect_generation: u64,
+        teardown_generation: u64,
+    ) -> Self {
+        Self::from_supervisor_for_session_with_frontend(
+            AttachmentGrantHandle::from_supervisor(compositor),
+            AttachmentGrantHandle::from_supervisor(gpu),
+            AttachmentGrantHandle::from_supervisor(frontend_gpu),
+            session_digest,
+            reconnect_generation,
+            teardown_generation,
+        )
     }
 
     #[allow(dead_code)]
@@ -452,6 +483,85 @@ impl LaunchGrants {
     }
 }
 
+/// Daemon-only, grant-free binding produced by consuming a display launch
+/// ticket.
+///
+/// The attachment grants are reduced to commitments before crossing into the
+/// daemon composition layer.  No file descriptor, path, process handle, or
+/// raw attachment authority is exposed.
+#[cfg(any(feature = "daemon-support", feature = "test-support"))]
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct DisplayLaunchBinding {
+    role: DisplayProcessRole,
+    attachment_digest: [u8; 32],
+    policy_digest: [u8; 32],
+    policy_generation: u64,
+    teardown_generation: u64,
+}
+
+#[cfg(any(feature = "daemon-support", feature = "test-support"))]
+impl DisplayLaunchBinding {
+    /// Consume one ticket into a daemon-owned commitment.
+    pub fn from_ticket(ticket: LaunchTicket) -> Self {
+        let mut digest = Sha256::new();
+        digest.update(b"d2b-display-launch-binding-v1");
+        digest.update((ticket.role as u8).to_be_bytes());
+        digest.update(ticket.gpu_grant.0);
+        if let Some(compositor) = ticket.compositor_grant {
+            digest.update(compositor.0);
+        }
+        let attachment_digest = digest.finalize().into();
+        let policy_digest = digest_policy(ticket.policy_digest.as_bytes());
+        Self {
+            role: ticket.role,
+            attachment_digest,
+            policy_digest,
+            policy_generation: ticket.policy_generation,
+            teardown_generation: ticket.teardown_generation,
+        }
+    }
+
+    /// Return the worker role.
+    pub const fn role(self) -> DisplayProcessRole {
+        self.role
+    }
+
+    /// Return the opaque attachment commitment.
+    pub const fn attachment_digest(self) -> [u8; 32] {
+        self.attachment_digest
+    }
+
+    /// Return the compiled policy digest.
+    pub const fn policy_digest(self) -> [u8; 32] {
+        self.policy_digest
+    }
+
+    /// Return the policy generation.
+    pub const fn policy_generation(self) -> u64 {
+        self.policy_generation
+    }
+
+    /// Return the teardown generation.
+    pub const fn teardown_generation(self) -> u64 {
+        self.teardown_generation
+    }
+}
+
+#[cfg(any(feature = "daemon-support", feature = "test-support"))]
+impl core::fmt::Debug for DisplayLaunchBinding {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("DisplayLaunchBinding(<redacted>)")
+    }
+}
+
+#[cfg(any(feature = "daemon-support", feature = "test-support"))]
+fn digest_policy(policy_digest: &[u8]) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    digest.update(b"d2b-display-policy-binding-v1");
+    digest.update(policy_digest);
+    digest.finalize().into()
+}
+
 impl core::fmt::Debug for LaunchGrants {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str("LaunchGrants(<redacted>)")
@@ -459,7 +569,7 @@ impl core::fmt::Debug for LaunchGrants {
 }
 
 /// Display worker role.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum DisplayProcessRole {
     /// Jailed Host proxy worker.
@@ -621,6 +731,15 @@ impl ProcessObservation {
             && self.proxy.is_ready()
             && self.frontend.is_ready()
     }
+
+    /// Whether both supervised workers hold a non-zero current fence.
+    pub fn is_ready(&self) -> bool {
+        self.policy_generation != 0
+            && self.teardown_generation != 0
+            && self.session_digest != [0; 32]
+            && self.proxy.is_ready()
+            && self.frontend.is_ready()
+    }
 }
 
 /// Canonical process template projection.
@@ -746,6 +865,28 @@ impl LaunchTicket {
             identity_label,
             teardown_generation,
         })
+    }
+
+    /// Construct an opaque role ticket for daemon conformance tests.
+    #[cfg(any(feature = "daemon-support", test))]
+    pub fn new_for_daemon(
+        role: DisplayProcessRole,
+        compositor_grant: Option<AttachmentGrantHandle>,
+        gpu_grant: AttachmentGrantHandle,
+        policy_digest: impl Into<String>,
+        policy_generation: u64,
+        identity_label: impl Into<String>,
+        teardown_generation: u64,
+    ) -> Result<Self, &'static str> {
+        Self::new_for_role(
+            role,
+            compositor_grant,
+            gpu_grant,
+            policy_digest,
+            policy_generation,
+            identity_label,
+            teardown_generation,
+        )
     }
 
     /// Return the independently supervised worker role.

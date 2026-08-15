@@ -31,6 +31,7 @@ use d2b_contracts::broker_wire::{
     GuestControlSignResponse,
 };
 use d2b_contracts::guest_auth::AUTH_NONCE_LEN;
+use d2b_contracts::guest_proto as pb;
 
 use crate::guest_control_health::{
     AttemptBudget, GuestAudioChannelStatus, GuestAudioSetError, GuestAudioSetRequest,
@@ -41,8 +42,9 @@ use crate::guest_control_health::{
     activate_system_start_authenticated, activate_system_status_authenticated,
     audio_set_authenticated, audio_status_authenticated, connected_stream_to_ttrpc_socket,
     guest_control_health_ready, probe_guest_control_health, read_guest_config_authenticated,
-    usbip_import_authenticated, usbip_status_authenticated,
+    request_metadata_with_id, usbip_import_authenticated, usbip_status_authenticated,
 };
+use protobuf::MessageField;
 use crate::guest_control_vsock::{GuestControlTransportProbeResult, connect_guest_control_vsock};
 use crate::typed_error::TypedError;
 
@@ -67,6 +69,23 @@ pub const GUEST_CONTROL_CONFIG_READ_TIMEOUT: Duration = Duration::from_secs(10);
 /// `usbip` command timeout so the host does not drop the ttRPC future and kill
 /// the guest subprocess before guestd can return a typed failure.
 pub const GUEST_CONTROL_USBIP_IMPORT_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Closed guest-side lifecycle operation for the fixed Wayland frontend
+/// service. Callers cannot supply a command, unit name, or user.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GuestWaylandServiceAction {
+    Ensure,
+    Observe,
+    Stop,
+}
+
+/// Authenticated evidence for the fixed guest Wayland service.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GuestWaylandServiceEvidence {
+    pub guest_boot_id: String,
+    pub active: bool,
+    pub state_generation: u64,
+}
 
 /// 32 fresh CSPRNG bytes for the host nonce. No time-seeded fallback:
 /// an entropy failure fails the probe closed.
@@ -249,6 +268,7 @@ pub trait GuestControlProbe: Send + Sync {
 /// Production probe: connects the vsock socket, builds the ttRPC client,
 /// and runs the authenticated probe / config read on a dedicated
 /// current-thread runtime. Owns only the broker socket path.
+#[derive(Clone)]
 pub struct RealGuestControlProbe {
     broker_socket_path: PathBuf,
     caller_role: BrokerCallerRole,
@@ -269,6 +289,24 @@ impl RealGuestControlProbe {
             broker_socket_path,
             caller_role,
         }
+    }
+
+    /// Run one authenticated lifecycle operation against the fixed guest
+    /// `wayland-proxy.service` systemd-user unit. The operation is encoded by
+    /// this closed enum; no free-form guest command crosses the boundary.
+    pub fn wayland_service(
+        &self,
+        params: &ProbeParams,
+        attempt_timeout: Duration,
+        action: GuestWaylandServiceAction,
+    ) -> Result<GuestWaylandServiceEvidence, GuestControlHealthError> {
+        run_wayland_service_once(
+            params,
+            &self.broker_socket_path,
+            self.caller_role.clone(),
+            attempt_timeout,
+            action,
+        )
     }
 }
 
@@ -491,6 +529,127 @@ pub fn run_health_probe_once(
             &signer,
         )
         .await
+    })
+}
+
+/// Return the closed command shape for the fixed Wayland user service.
+fn wayland_service_argv(action: GuestWaylandServiceAction) -> Vec<String> {
+    let operation = match action {
+        GuestWaylandServiceAction::Ensure => "restart",
+        GuestWaylandServiceAction::Observe => "is-active",
+        GuestWaylandServiceAction::Stop => "stop",
+    };
+    vec![
+        "/run/current-system/sw/bin/systemctl".to_owned(),
+        "--user".to_owned(),
+        operation.to_owned(),
+        "wayland-proxy.service".to_owned(),
+    ]
+}
+
+/// Authenticated lifecycle operation for the fixed guest Wayland user service.
+///
+/// This deliberately reuses only the already-authenticated detached-exec
+/// substrate. The command shape is closed here and the guestd policy still
+/// binds execution to its configured workload user.
+pub fn run_wayland_service_once(
+    params: &ProbeParams,
+    broker_socket_path: &Path,
+    caller_role: BrokerCallerRole,
+    attempt_timeout: Duration,
+    action: GuestWaylandServiceAction,
+) -> Result<GuestWaylandServiceEvidence, GuestControlHealthError> {
+    let handshake_budget = AttemptBudget::from_now(attempt_timeout, GUEST_CONTROL_ATTEMPT_CAP);
+    let signer = BrokerSigner::with_caller_role(
+        broker_socket_path.to_path_buf(),
+        handshake_budget,
+        caller_role,
+    );
+    let nonce = host_nonce().map_err(|_| GuestControlHealthError::Signer)?;
+    let runtime = build_probe_runtime()?;
+    runtime.block_on(async {
+        let client = connect_and_build_client(params, handshake_budget)?;
+        let health = probe_guest_control_health(
+            &params.vm_id,
+            Some(VMADDR_CID_HOST),
+            nonce,
+            &client,
+            &signer,
+        )
+        .await?;
+        if !health.health.capabilities.iter().any(|capability| {
+            matches!(
+                capability.enum_value(),
+                Ok(pb::GuestCapability::GUEST_CAPABILITY_EXEC_DETACHED)
+            )
+        }) {
+            return Err(GuestControlHealthError::Protocol);
+        }
+
+        let argv = wayland_service_argv(action);
+        let operation = argv[2].clone();
+        let mut create = pb::ExecCreateRequest::new();
+        create.metadata = MessageField::some(request_metadata_with_id(
+            &params.vm_id,
+            &format!(
+                "wayland-service:{}:{}",
+                operation, health.guest_boot_id
+            ),
+        ));
+        create.argv = argv;
+        create.detached = true;
+        let create_timeout = attempt_timeout.min(GUEST_CONTROL_ATTEMPT_CAP);
+        let created = client
+            .unary_with_timeout::<_, pb::ExecCreateResponse>(
+                "ExecCreate",
+                create,
+                create_timeout,
+            )
+            .await?;
+        let exec_id = created
+            .exec_id
+            .clone()
+            .ok_or(GuestControlHealthError::Protocol)?;
+        let mut metadata = pb::ExecRequestMetadata::new();
+        metadata.common = MessageField::some(request_metadata_with_id(
+            &params.vm_id,
+            &format!("wayland-service:{operation}:wait:{}", health.guest_boot_id),
+        ));
+        metadata.exec_id = exec_id;
+        metadata.guest_boot_id = health.guest_boot_id.clone();
+        let mut wait = pb::ExecWaitRequest::new();
+        wait.metadata = MessageField::some(metadata);
+        wait.timeout_ms = create_timeout.as_millis().min(u64::MAX as u128) as u64;
+        let waited = client
+            .unary_with_timeout::<_, pb::ExecWaitResponse>("ExecWait", wait, create_timeout)
+            .await?;
+        let state = waited
+            .state
+            .enum_value()
+            .map_err(|_| GuestControlHealthError::Protocol)?;
+        let exit_code = waited
+            .visible_terminal_status
+            .as_ref()
+            .and_then(|status| status.has_exit_code().then_some(status.exit_code()));
+        if waited.error.is_some()
+            || !matches!(
+                state,
+                pb::ExecState::EXEC_STATE_EXITED | pb::ExecState::EXEC_STATE_REAPED
+            )
+        {
+            return Err(GuestControlHealthError::Protocol);
+        }
+
+        let active = match action {
+            GuestWaylandServiceAction::Observe => exit_code == Some(0),
+            GuestWaylandServiceAction::Ensure => exit_code == Some(0),
+            GuestWaylandServiceAction::Stop => exit_code == Some(0),
+        };
+        Ok(GuestWaylandServiceEvidence {
+            guest_boot_id: health.guest_boot_id,
+            active,
+            state_generation: waited.state_generation,
+        })
     })
 }
 
@@ -1334,6 +1493,37 @@ mod tests {
                 fail,
             }
         }
+    }
+
+    #[test]
+    fn wayland_service_command_shape_is_closed() {
+        assert_eq!(
+            wayland_service_argv(GuestWaylandServiceAction::Ensure),
+            [
+                "/run/current-system/sw/bin/systemctl",
+                "--user",
+                "restart",
+                "wayland-proxy.service",
+            ]
+        );
+        assert_eq!(
+            wayland_service_argv(GuestWaylandServiceAction::Observe),
+            [
+                "/run/current-system/sw/bin/systemctl",
+                "--user",
+                "is-active",
+                "wayland-proxy.service",
+            ]
+        );
+        assert_eq!(
+            wayland_service_argv(GuestWaylandServiceAction::Stop),
+            [
+                "/run/current-system/sw/bin/systemctl",
+                "--user",
+                "stop",
+                "wayland-proxy.service",
+            ]
+        );
     }
 
     impl GuestControlSigner for RecordingSigner {

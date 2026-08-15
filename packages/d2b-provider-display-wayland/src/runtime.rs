@@ -8,7 +8,7 @@
 
 use std::collections::BTreeSet;
 
-use d2b_provider_toolkit::AuthenticatedComponentSession;
+use d2b_provider_toolkit::{AuthenticatedComponentSession, AuthenticatedSessionRouteBinding};
 use sha2::{Digest, Sha256};
 
 use crate::{
@@ -153,6 +153,8 @@ pub trait DisplayProcessEffectPort {
     fn issue_launch_grants(
         &mut self,
         session: &AuthenticatedDisplaySession,
+        spec: &WaylandSessionSpec,
+        policy: &WaylandPolicySnapshot,
         proof: Option<&DisplayDependencyProof>,
         teardown_generation: u64,
     ) -> Result<LaunchGrants, WorkerEffectError>;
@@ -160,7 +162,7 @@ pub trait DisplayProcessEffectPort {
     /// Launch or adopt one exact worker ticket.
     fn launch(
         &mut self,
-        ticket: &crate::LaunchTicket,
+        ticket: crate::LaunchTicket,
     ) -> Result<WorkerLaunchReceipt, WorkerEffectError>;
 
     /// Stop one exact worker and return terminal deletion evidence.
@@ -226,6 +228,11 @@ where
         self.observation
     }
 
+    /// Whether both supervised workers are ready for the current fence.
+    pub fn is_ready(&self) -> bool {
+        self.observation.is_ready()
+    }
+
     /// Borrow the current controller.
     pub const fn controller(&self) -> &DisplayController {
         &self.controller
@@ -247,6 +254,20 @@ where
     ) -> Result<DisplayDependencyProof, DisplayRuntimeError> {
         self.controller
             .dependency_proof(session, spec, result, policy, self.observation)
+            .map_err(|_| DisplayRuntimeError::ObservationUnavailable)
+    }
+
+    /// Project dependency evidence from a route retained after daemon
+    /// registration.
+    pub fn dependency_proof_from_route(
+        &self,
+        route: &AuthenticatedSessionRouteBinding,
+        spec: &WaylandSessionSpec,
+        result: &crate::ReconcileResult,
+        policy: &WaylandPolicySnapshot,
+    ) -> Result<DisplayDependencyProof, DisplayRuntimeError> {
+        self.controller
+            .dependency_proof_from_route(route, spec, result, policy, self.observation)
             .map_err(|_| DisplayRuntimeError::ObservationUnavailable)
     }
 
@@ -298,6 +319,8 @@ where
                 .effects
                 .issue_launch_grants(
                     &authenticated,
+                    spec,
+                    policy,
                     self.controller
                         .dependency_proof(session, spec, &result, policy, self.observation)
                         .ok()
@@ -321,7 +344,7 @@ where
             {
                 let receipt = self
                     .effects
-                    .launch(&ticket)
+                    .launch(ticket)
                     .map_err(DisplayRuntimeError::Effect)?;
                 if receipt.teardown_generation() != supervision.teardown_generation
                     || receipt.policy_generation() != policy.generation()
@@ -334,6 +357,101 @@ where
                 .controller
                 .reconcile_authenticated_session(
                     session,
+                    spec,
+                    dependencies,
+                    self.observation,
+                    supervision,
+                    None,
+                    policy,
+                )
+                .map_err(|_| DisplayRuntimeError::InvalidPolicy)?;
+        }
+        Ok(result)
+    }
+
+    /// Reconcile a session whose authority was consumed by the daemon's Zone
+    /// registrar.  The retained route is authenticated metadata only; bus
+    /// ingress remains the owner of cancellation and request authority.
+    pub fn reconcile_registered(
+        &mut self,
+        route: &AuthenticatedSessionRouteBinding,
+        spec: &WaylandSessionSpec,
+        dependencies: DependencyState,
+        supervision: WorkerRestartEvidence,
+        policy: &WaylandPolicySnapshot,
+    ) -> Result<crate::ReconcileResult, DisplayRuntimeError> {
+        let authenticated = AuthenticatedDisplaySession::from_authenticated_route(route.clone())
+            .map_err(|_| DisplayRuntimeError::SessionUnauthenticated)?;
+        if authenticated.guest_ref() != spec.guest_ref()
+            || authenticated.host_ref() != spec.host_ref()
+            || authenticated.reconnect_generation() != spec.reconnect_generation()
+            || authenticated.zone() != policy.zone()
+        {
+            return Err(DisplayRuntimeError::SessionMismatch);
+        }
+        self.supervision = supervision;
+        let mut result = self
+            .controller
+            .reconcile_authenticated_route(
+                route,
+                spec,
+                dependencies.clone(),
+                self.observation,
+                supervision,
+                None,
+                policy,
+            )
+            .map_err(|_| DisplayRuntimeError::InvalidPolicy)?;
+        if !result.worker_actions.is_empty() {
+            let fence = grant_fence(&authenticated, supervision);
+            if !self.issued_grants.insert(fence) {
+                return Err(DisplayRuntimeError::Effect(
+                    WorkerEffectError::GrantUnavailable,
+                ));
+            }
+            let proof = self
+                .controller
+                .dependency_proof_from_route(route, spec, &result, policy, self.observation)
+                .ok();
+            let grants = self
+                .effects
+                .issue_launch_grants(
+                    &authenticated,
+                    spec,
+                    policy,
+                    proof.as_ref(),
+                    supervision.teardown_generation,
+                )
+                .map_err(DisplayRuntimeError::Effect)?;
+            for ticket in self
+                .controller
+                .reconcile_authenticated_route(
+                    route,
+                    spec,
+                    dependencies.clone(),
+                    self.observation,
+                    supervision,
+                    Some(grants),
+                    policy,
+                )
+                .map_err(|_| DisplayRuntimeError::InvalidPolicy)?
+                .launch_tickets
+            {
+                let receipt = self
+                    .effects
+                    .launch(ticket)
+                    .map_err(DisplayRuntimeError::Effect)?;
+                if receipt.teardown_generation() != supervision.teardown_generation
+                    || receipt.policy_generation() != policy.generation()
+                {
+                    return Err(DisplayRuntimeError::ObservationUnavailable);
+                }
+                self.observe_receipt(receipt);
+            }
+            result = self
+                .controller
+                .reconcile_authenticated_route(
+                    route,
                     spec,
                     dependencies,
                     self.observation,
@@ -493,6 +611,29 @@ pub struct FinalizationReport {
     pub portal: CleanupState,
 }
 
+impl FinalizationReport {
+    /// Report a completed finalization for a session that never launched
+    /// display workers.
+    pub const fn empty() -> Self {
+        Self {
+            decision: FinalizationDecision {
+                stop_proxy: false,
+                stop_frontend: false,
+                delete_runtime_volume: true,
+                remove_finalizer: true,
+                phase: crate::controller::Phase::Terminating,
+                ambiguous: false,
+            },
+            stop_proxy: false,
+            stop_frontend: false,
+            volume: VolumeState::Deleted,
+            authority: CleanupState::Complete,
+            principal: CleanupState::Complete,
+            portal: CleanupState::Complete,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -511,6 +652,8 @@ mod tests {
         fn issue_launch_grants(
             &mut self,
             session: &AuthenticatedDisplaySession,
+            _spec: &WaylandSessionSpec,
+            _policy: &WaylandPolicySnapshot,
             _proof: Option<&DisplayDependencyProof>,
             teardown_generation: u64,
         ) -> Result<LaunchGrants, WorkerEffectError> {
@@ -527,7 +670,7 @@ mod tests {
 
         fn launch(
             &mut self,
-            ticket: &crate::LaunchTicket,
+            ticket: crate::LaunchTicket,
         ) -> Result<WorkerLaunchReceipt, WorkerEffectError> {
             self.launches.push(ticket.role());
             Ok(WorkerLaunchReceipt::from_supervisor(

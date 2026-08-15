@@ -2,6 +2,7 @@
 
 use d2b_contracts::v3::ResourceRef;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::policy::FilterInput;
 
@@ -378,6 +379,21 @@ impl WaylandSessionSpec {
     /// Whether the experimental virgl video path is requested.
     pub const fn virgl_video(&self) -> bool {
         self.virgl_video
+    }
+
+    /// Derive the stable session binding used by daemon-issued worker grants.
+    pub fn session_digest(&self, controller_generation: u64) -> [u8; 32] {
+        let mut digest = Sha256::new();
+        digest.update(self.guest_ref.to_canonical_string().as_bytes());
+        digest.update([0]);
+        digest.update(self.host_ref.to_canonical_string().as_bytes());
+        digest.update([0]);
+        digest.update(self.user_ref.to_canonical_string().as_bytes());
+        digest.update([0]);
+        digest.update(self.reconnect_generation.to_be_bytes());
+        digest.update([0]);
+        digest.update(controller_generation.to_be_bytes());
+        digest.finalize().into()
     }
 
     /// Borrow session-specific filter overrides.

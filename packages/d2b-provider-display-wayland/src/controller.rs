@@ -11,7 +11,7 @@ use crate::{
     spec::WaylandSessionSpec,
 };
 use d2b_contracts::v3::{ResourceRef, ZoneId};
-use d2b_provider_toolkit::AuthenticatedComponentSession;
+use d2b_provider_toolkit::{AuthenticatedComponentSession, AuthenticatedSessionRouteBinding};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
@@ -93,6 +93,28 @@ impl DependencyState {
             virgl_video: CapabilityReadiness::Supported,
             zone: None,
         }
+    }
+
+    /// Construct the dependency evidence admitted by the daemon's
+    /// authenticated display route.
+    ///
+    /// The route is the retained projection of a sealed ComponentSession.
+    /// This adapter deliberately does not accept caller-supplied readiness
+    /// flags; the daemon may only promote the fixed dependency set after the
+    /// Provider, Guest subject, generation, and Zone have all been admitted.
+    pub fn from_authenticated_route(
+        route: &AuthenticatedSessionRouteBinding,
+    ) -> Result<Self, WaylandSpecError> {
+        if route
+            .provider_ref()
+            .is_none_or(|provider| provider.to_canonical_string() != PROVIDER_REF)
+            || route.service().as_str() != crate::SERVICE_PACKAGE
+            || route.subject_ref().resource_type().as_str() != "Guest"
+            || route.provider_generation().is_none()
+        {
+            return Err(WaylandSpecError::InvalidReference);
+        }
+        Ok(Self::ready().with_zone(route.zone().clone()))
     }
 
     /// Return the GPU endpoint readiness.
@@ -266,7 +288,14 @@ impl AuthenticatedDisplaySession {
     pub fn from_component_session<C>(
         session: &AuthenticatedComponentSession<C>,
     ) -> Result<Self, WaylandSpecError> {
-        let route = session.route_binding();
+        Self::from_authenticated_route(session.route_binding())
+    }
+
+    /// Project display identity from a route that was authenticated and
+    /// registered by the daemon's Zone bus.
+    pub fn from_authenticated_route(
+        route: AuthenticatedSessionRouteBinding,
+    ) -> Result<Self, WaylandSpecError> {
         if route
             .provider_ref()
             .is_none_or(|provider| provider.to_canonical_string() != PROVIDER_REF)
@@ -464,6 +493,23 @@ impl WaylandPolicySnapshot {
         zone_policy: FilterInput,
     ) -> Result<Self, WaylandSpecError> {
         let route = session.route_binding();
+        Self::from_authenticated_route(&route, policy_ref, generation, defaults, zone_policy)
+    }
+
+    /// Resolve a policy snapshot from the daemon-retained authenticated route.
+    ///
+    /// This is the production adapter used after the Zone registrar consumed
+    /// the sealed session authority.  The route is authenticated metadata only:
+    /// it supplies the Zone, service, subject kind, and Provider generation;
+    /// the daemon-supplied policy reference and filters remain explicit Core
+    /// evidence and are validated before a snapshot is constructed.
+    pub fn from_authenticated_route(
+        route: &AuthenticatedSessionRouteBinding,
+        policy_ref: ResourceRef,
+        generation: u64,
+        defaults: FilterInput,
+        zone_policy: FilterInput,
+    ) -> Result<Self, WaylandSpecError> {
         if route
             .provider_ref()
             .is_none_or(|provider| provider.to_canonical_string() != PROVIDER_REF)
@@ -626,6 +672,43 @@ impl DisplayController {
         policy: &WaylandPolicySnapshot,
     ) -> Result<ReconcileResult, WaylandSpecError> {
         let authenticated = AuthenticatedDisplaySession::from_component_session(session)?;
+        if authenticated.guest_ref() != spec.guest_ref()
+            || authenticated.host_ref() != spec.host_ref()
+            || authenticated.reconnect_generation() != spec.reconnect_generation()
+            || authenticated.zone() != policy.zone()
+            || dependencies
+                .zone()
+                .is_some_and(|zone| zone != policy.zone())
+        {
+            return Err(WaylandSpecError::InvalidReference);
+        }
+        self.reconcile_with_policy_and_evidence_for_controller(
+            spec,
+            dependencies,
+            observation,
+            supervision,
+            grants,
+            policy,
+            authenticated.controller_generation(),
+        )
+    }
+
+    /// Reconcile using route metadata retained after daemon registration.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "route, policy, and restart evidence remain explicit at the provider boundary"
+    )]
+    pub fn reconcile_authenticated_route(
+        &mut self,
+        route: &AuthenticatedSessionRouteBinding,
+        spec: &WaylandSessionSpec,
+        dependencies: DependencyState,
+        observation: ProcessObservation,
+        supervision: WorkerRestartEvidence,
+        grants: Option<crate::process::LaunchGrants>,
+        policy: &WaylandPolicySnapshot,
+    ) -> Result<ReconcileResult, WaylandSpecError> {
+        let authenticated = AuthenticatedDisplaySession::from_authenticated_route(route.clone())?;
         if authenticated.guest_ref() != spec.guest_ref()
             || authenticated.host_ref() != spec.host_ref()
             || authenticated.reconnect_generation() != spec.reconnect_generation()
@@ -963,7 +1046,26 @@ impl DisplayController {
         policy: &WaylandPolicySnapshot,
         observation: ProcessObservation,
     ) -> Result<DisplayDependencyProof, WaylandSpecError> {
-        let authenticated = AuthenticatedDisplaySession::from_component_session(session)?;
+        self.dependency_proof_from_route(
+            &session.route_binding(),
+            spec,
+            result,
+            policy,
+            observation,
+        )
+    }
+
+    /// Mint dependency evidence from route metadata retained after daemon
+    /// registration.
+    pub fn dependency_proof_from_route(
+        &self,
+        route: &AuthenticatedSessionRouteBinding,
+        spec: &WaylandSessionSpec,
+        result: &ReconcileResult,
+        policy: &WaylandPolicySnapshot,
+        observation: ProcessObservation,
+    ) -> Result<DisplayDependencyProof, WaylandSpecError> {
+        let authenticated = AuthenticatedDisplaySession::from_authenticated_route(route.clone())?;
         if authenticated.guest_ref() != spec.guest_ref()
             || authenticated.host_ref() != spec.host_ref()
             || authenticated.reconnect_generation() != spec.reconnect_generation()
@@ -1020,8 +1122,7 @@ impl DisplayController {
             guest_ref: spec.guest_ref().clone(),
             host_ref: spec.host_ref().clone(),
             user_ref: spec.user_ref().clone(),
-            provider_generation: session
-                .route_binding()
+            provider_generation: route
                 .provider_generation()
                 .ok_or(WaylandSpecError::InvalidReference)?
                 .get(),

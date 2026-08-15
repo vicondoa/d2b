@@ -7,6 +7,7 @@ license.workspace = true
 
 [features]
 test-support = []
+daemon-support = []
 
 [lints]
 workspace = true
@@ -17,22 +18,6 @@ d2b-provider-toolkit = { path = "../d2b-provider-toolkit", version = "0.0.0-boot
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
-
-[[bin]]
-name = "d2b-display-wayland-controller"
-path = "src/bin/d2b-display-wayland-controller.rs"
-
-[[bin]]
-name = "d2b-display-wayland-user-portal"
-path = "src/bin/d2b-display-wayland-user-portal.rs"
-
-[[bin]]
-name = "wl-cross-domain-proxy"
-path = "src/bin/wl-cross-domain-proxy.rs"
-
-[[bin]]
-name = "d2b-display-wayland-host-proxy"
-path = "src/bin/d2b-display-wayland-host-proxy.rs"
 
 [[test]]
 name = "provider_behavior"
