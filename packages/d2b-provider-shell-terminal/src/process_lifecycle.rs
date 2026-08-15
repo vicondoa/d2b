@@ -2,7 +2,11 @@
 
 use std::collections::BTreeSet;
 
-use d2b_contracts::v3::execution_policy::{BoundedToken, ExecutionDomain};
+use crate::ShellSession;
+use d2b_contracts::v3::{
+    ResourceRef,
+    execution_policy::{BoundedToken, ExecutionDomain},
+};
 use d2b_process_conformance::{
     AdoptionCondition, AdoptionOutcome, CancellationBinding, IdentityBinding, LaunchTicket,
     ProcessConformanceError, ProcessIdentityDigest, ProcessLaunchEffectPort, ProcessPhaseClass,
@@ -18,11 +22,13 @@ use d2b_process_conformance::{
 pub struct SupervisorProcessLifecycle<P: ProcessLaunchEffectPort> {
     port: P,
     profile: ProcessProviderProfile,
+    execution_ref: ResourceRef,
+    user_ref: ResourceRef,
 }
 
 impl<P: ProcessLaunchEffectPort> SupervisorProcessLifecycle<P> {
-    /// Construct a workload-user supervisor lifecycle over a fixed effect port.
-    pub fn new(port: P) -> Self {
+    /// Construct a workload-user supervisor lifecycle bound to one session.
+    pub fn for_session(port: P, session: &ShellSession) -> Self {
         let profile = ProcessProviderProfile::new(
             BoundedToken::parse("system-systemd")
                 .expect("the fixed system-systemd provider token is valid"),
@@ -38,7 +44,24 @@ impl<P: ProcessLaunchEffectPort> SupervisorProcessLifecycle<P> {
             ]),
         )
         .expect("the fixed supervisor process profile is valid");
-        Self { port, profile }
+        let target_type = if session.execution_target().is_host() {
+            "Host"
+        } else {
+            "Guest"
+        };
+        let execution_ref = ResourceRef::parse(&format!(
+            "{target_type}/{}",
+            session.execution_target().name()
+        ))
+        .expect("validated ShellSession target has a valid resource reference");
+        let user_ref = ResourceRef::parse(&format!("User/{}", session.workload_user()))
+            .expect("validated ShellSession workload user has a valid resource reference");
+        Self {
+            port,
+            profile,
+            execution_ref,
+            user_ref,
+        }
     }
 
     fn validate(&self, ticket: &LaunchTicket) -> Result<(), ProcessConformanceError> {
@@ -47,6 +70,11 @@ impl<P: ProcessLaunchEffectPort> SupervisorProcessLifecycle<P> {
         }
         if ticket.domain() != ExecutionDomain::User || ticket.user_ref().is_none() {
             return Err(ProcessConformanceError::UserRefRequired);
+        }
+        if ticket.execution_ref() != &self.execution_ref
+            || ticket.user_ref() != Some(&self.user_ref)
+        {
+            return Err(ProcessConformanceError::InvalidTicket);
         }
         if ticket.operation().cancellation() == CancellationBinding::Cancelled {
             return Err(ProcessConformanceError::Cancelled);
@@ -111,7 +139,10 @@ impl<P: ProcessLaunchEffectPort> ProcessProvider for SupervisorProcessLifecycle<
             && candidate
                 .validate(self.profile.required_identity_bindings())
                 .is_ok();
-        if !identity_verified {
+        let expected_identity_matches = ticket
+            .expected_identity_digest()
+            .is_none_or(|expected| *expected == candidate.identity);
+        if !identity_verified || !expected_identity_matches {
             return Ok(AdoptionOutcome::Quarantined(self.report(
                 ticket,
                 candidate.identity,

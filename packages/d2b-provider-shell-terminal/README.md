@@ -17,7 +17,7 @@ for the implementation contract.
 | Provider reference | `Provider/shell-terminal` |
 | Package | `packages/d2b-provider-shell-terminal/` |
 
-## Resource model
+## Config schema
 
 - `shell-terminal.d2bus.org.ShellPool` binds one Host or Guest target, one
   workload user, a manifest-fixed login shell artifact, and bounded capacity.
@@ -26,10 +26,32 @@ for the implementation contract.
 - The controller owns no Provider state volume. PTY bytes and attachment state
   stay in the supervisor's bounded in-memory ring.
 
+## Exported resource types
+
+- `shell-terminal.d2bus.org.ShellPool`
+- `shell-terminal.d2bus.org.ShellSession`
+
+## Controllers / services / workers / binaries
+
+- `ShellTerminalController` creates pool-derived sessions after authorizing
+  the current request.
+- `SessionSupervisor` owns one session's bounded PTY replay and attachments.
+- This provider crate declares no workers or binaries.
+
+## Placement and dependencies
+
+Session supervisors use the workload user's systemd user domain on the
+Pool-selected Host or Guest target. The crate depends only on typed contracts
+and process-conformance effects; it cannot open broker or system-manager
+connections.
+
+## RBAC requirements
+
 All service verbs authorize the current Zone-scoped request before capacity or
 route lookup. Relay-authenticated callers cannot use Host user-domain pools.
+`ShellAdmin` and `ZoneAdmin` are the only accepted roles.
 
-## Process and stream contracts
+## Security posture
 
 - Session supervisors use the typed `Provider/system-systemd` user-domain
   process conformance seam. The provider cannot open a broker or
@@ -40,7 +62,7 @@ route lookup. Relay-authenticated callers cannot use Host user-domain pools.
 - Reconnect replays only bounded in-memory output. Stale generations and
   reused capabilities refuse. Detach does not terminate a shell.
 
-## Observability
+## State and telemetry
 
 Diagnostics and metrics use closed labels and bounded retention. Terminal
 bytes, paths, process identifiers, user names, session names, credentials, and

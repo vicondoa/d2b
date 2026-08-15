@@ -1,9 +1,12 @@
 //! Per-session terminal supervisor contracts.
 
-use std::collections::BTreeSet;
+use std::{
+    collections::BTreeSet,
+    sync::{Arc, Mutex},
+};
 
 use crate::{
-    Authorizer, ShellPool, ShellSession, ShellTerminalError, Subject,
+    Authorizer, ShellSession, ShellTerminalError, Subject,
     session::{OutputRing, RingReplay, SupervisorIdentity},
 };
 
@@ -28,15 +31,102 @@ impl AttachRequest {
 }
 
 /// A one-shot capability minted only by an already authorized `OpenSession`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SessionCapability {
     id: u64,
     generation: u64,
+    session_name: String,
 }
 
 impl SessionCapability {
-    pub(super) const fn new(id: u64, generation: u64) -> Self {
-        Self { id, generation }
+    pub(super) fn new(id: u64, generation: u64, session_name: String) -> Self {
+        Self {
+            id,
+            generation,
+            session_name,
+        }
+    }
+}
+
+impl std::fmt::Debug for SessionCapability {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("SessionCapability")
+            .field("id", &"<redacted>")
+            .field("generation", &self.generation)
+            .finish()
+    }
+}
+
+/// An opaque handle for one active stream attachment.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Attachment {
+    id: u64,
+    session_name: String,
+    generation: u64,
+}
+
+impl std::fmt::Debug for Attachment {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("Attachment(<redacted>)")
+    }
+}
+
+/// A synchronized attachment quota shared by all supervisors in one pool.
+#[derive(Debug)]
+pub(super) struct PoolAttachmentBudget {
+    capacity: usize,
+    entries: Mutex<BTreeSet<Attachment>>,
+    next_id: Mutex<u64>,
+}
+
+impl PoolAttachmentBudget {
+    pub(super) fn new(capacity: u32) -> Self {
+        Self {
+            capacity: capacity as usize,
+            entries: Mutex::new(BTreeSet::new()),
+            next_id: Mutex::new(0),
+        }
+    }
+
+    fn reserve(
+        &self,
+        session_name: &str,
+        generation: u64,
+    ) -> Result<Attachment, ShellTerminalError> {
+        let mut entries = self
+            .entries
+            .lock()
+            .map_err(|_| ShellTerminalError::CapacityExceeded)?;
+        if entries.len() >= self.capacity {
+            return Err(ShellTerminalError::CapacityExceeded);
+        }
+        let mut next_id = self
+            .next_id
+            .lock()
+            .map_err(|_| ShellTerminalError::CapacityExceeded)?;
+        *next_id = next_id
+            .checked_add(1)
+            .ok_or(ShellTerminalError::CapacityExceeded)?;
+        let attachment = Attachment {
+            id: *next_id,
+            session_name: session_name.to_owned(),
+            generation,
+        };
+        entries.insert(attachment.clone());
+        Ok(attachment)
+    }
+
+    fn release(&self, attachment: &Attachment) -> Result<(), ShellTerminalError> {
+        let mut entries = self
+            .entries
+            .lock()
+            .map_err(|_| ShellTerminalError::AttachmentUnknown)?;
+        if entries.remove(attachment) {
+            Ok(())
+        } else {
+            Err(ShellTerminalError::AttachmentUnknown)
+        }
     }
 }
 
@@ -44,6 +134,7 @@ impl SessionCapability {
 pub struct AttachReceipt {
     generation: u64,
     replay: RingReplay,
+    attachment: Attachment,
 }
 
 impl AttachReceipt {
@@ -55,6 +146,11 @@ impl AttachReceipt {
     /// Borrow the replay prepared for the authenticated stream.
     pub const fn replay(&self) -> &RingReplay {
         &self.replay
+    }
+
+    /// Return the opaque handle that releases this attachment on disconnect.
+    pub fn attachment(&self) -> Attachment {
+        self.attachment.clone()
     }
 }
 
@@ -71,24 +167,28 @@ impl std::fmt::Debug for AttachReceipt {
 /// One supervisor that owns exactly one PTY/ring model for one session.
 pub struct SessionSupervisor {
     session: ShellSession,
-    pool: ShellPool,
     identity: SupervisorIdentity,
     ring: OutputRing,
-    attached: u32,
+    attachment_budget: Arc<PoolAttachmentBudget>,
+    attached: BTreeSet<Attachment>,
     consumed_capabilities: BTreeSet<u64>,
 }
 
 impl SessionSupervisor {
     /// Construct a supervisor from process-adapter identity evidence.
-    pub fn new(session: ShellSession, pool: ShellPool, identity: SupervisorIdentity) -> Self {
+    pub(super) fn new(
+        session: ShellSession,
+        identity: SupervisorIdentity,
+        attachment_budget: Arc<PoolAttachmentBudget>,
+    ) -> Self {
         let ring = OutputRing::new(session.output_ring_capacity() as usize)
             .expect("a validated session has a valid output ring capacity");
         Self {
             session,
-            pool,
             identity,
             ring,
-            attached: 0,
+            attachment_budget,
+            attached: BTreeSet::new(),
             consumed_capabilities: BTreeSet::new(),
         }
     }
@@ -103,10 +203,11 @@ impl SessionSupervisor {
         if request.expected_generation != self.identity.generation() {
             return Err(ShellTerminalError::StaleSessionGeneration);
         }
-        self.reserve_attachment()?;
+        let attachment = self.reserve_attachment()?;
         Ok(AttachReceipt {
             generation: self.identity.generation(),
             replay: self.ring.tail(request.tail_bytes as usize),
+            attachment,
         })
     }
 
@@ -120,14 +221,41 @@ impl SessionSupervisor {
         if capability.generation != self.identity.generation() {
             return Err(ShellTerminalError::StaleSessionGeneration);
         }
+        if capability.session_name != self.session.name() {
+            return Err(ShellTerminalError::CapabilitySessionMismatch);
+        }
         if !self.consumed_capabilities.insert(capability.id) {
             return Err(ShellTerminalError::CapabilityReused);
         }
-        self.reserve_attachment()?;
+        let attachment = self.reserve_attachment()?;
         Ok(AttachReceipt {
             generation: self.identity.generation(),
             replay: self.ring.tail(0),
+            attachment,
         })
+    }
+
+    /// Release an authenticated named-terminal attachment after stream closure.
+    pub fn detach(
+        &mut self,
+        subject: &Subject,
+        attachment: Attachment,
+    ) -> Result<(), ShellTerminalError> {
+        self.authorize(subject)?;
+        if attachment.generation != self.identity.generation() {
+            return Err(ShellTerminalError::StaleSessionGeneration);
+        }
+        if attachment.session_name != self.session.name() || !self.attached.contains(&attachment) {
+            return Err(ShellTerminalError::AttachmentUnknown);
+        }
+        self.attachment_budget.release(&attachment)?;
+        self.attached.remove(&attachment);
+        Ok(())
+    }
+
+    /// Append bytes emitted by this supervisor-owned PTY to its bounded replay ring.
+    pub fn record_pty_output(&mut self, bytes: &[u8]) {
+        self.ring.append(bytes);
     }
 
     fn authorize(&self, subject: &Subject) -> Result<(), ShellTerminalError> {
@@ -138,12 +266,12 @@ impl SessionSupervisor {
         )
     }
 
-    fn reserve_attachment(&mut self) -> Result<(), ShellTerminalError> {
-        if self.attached >= self.pool.spec().max_attached() {
-            return Err(ShellTerminalError::CapacityExceeded);
-        }
-        self.attached = self.attached.saturating_add(1);
-        Ok(())
+    fn reserve_attachment(&mut self) -> Result<Attachment, ShellTerminalError> {
+        let attachment = self
+            .attachment_budget
+            .reserve(self.session.name(), self.identity.generation())?;
+        self.attached.insert(attachment.clone());
+        Ok(attachment)
     }
 }
 
@@ -152,7 +280,7 @@ impl std::fmt::Debug for SessionSupervisor {
         formatter
             .debug_struct("SessionSupervisor")
             .field("generation", &self.identity.generation())
-            .field("attached", &self.attached)
+            .field("attached", &self.attached.len())
             .field("ring", &self.ring)
             .finish()
     }

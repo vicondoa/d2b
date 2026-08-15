@@ -30,8 +30,9 @@ pub use resources::{
     PoolSpec, SessionPhase, ShellPool, ShellSession, ShellTerminalError,
 };
 pub use service::{
-    AttachRequest, CONTROLLER_SERVICE, OpenSessionRequest, OpenSessionResult, SUPERVISOR_SERVICE,
-    SessionSupervisor, ShellTerminalController, TERMINAL_STREAM,
+    AttachReceipt, AttachRequest, Attachment, CONTROLLER_SERVICE, OpenSessionRequest,
+    OpenSessionResult, SUPERVISOR_SERVICE, SessionCapability, SessionSupervisor,
+    ShellTerminalController, TERMINAL_STREAM,
 };
 pub use session::{
     AdoptionDecision, OutputRing, SupervisorCandidate, SupervisorIdentity, adopt_supervisor,

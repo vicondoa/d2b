@@ -32,6 +32,10 @@ pub enum ShellTerminalError {
     StaleSessionGeneration,
     /// A one-shot session capability was presented more than once.
     CapabilityReused,
+    /// A one-shot session capability was presented to a different session.
+    CapabilitySessionMismatch,
+    /// An attachment handle was stale, unknown, or belonged to another session.
+    AttachmentUnknown,
     /// A request exceeded a bounded attachment or output limit.
     CapacityExceeded,
     /// Restart adoption could not identify exactly one owned supervisor.
@@ -51,6 +55,8 @@ impl std::fmt::Display for ShellTerminalError {
             Self::GuestUserDomainUnsupported => "shell-terminal-guest-user-domain-unsupported",
             Self::StaleSessionGeneration => "shell-terminal-stale-session-generation",
             Self::CapabilityReused => "shell-terminal-capability-reused",
+            Self::CapabilitySessionMismatch => "shell-terminal-capability-session-mismatch",
+            Self::AttachmentUnknown => "shell-terminal-attachment-unknown",
             Self::CapacityExceeded => "shell-terminal-capacity-exceeded",
             Self::SupervisorAmbiguous => "shell-terminal-supervisor-ambiguous",
         })

@@ -1,12 +1,12 @@
 //! Pool/session controller lifecycle without persistent Provider state.
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::Arc};
 
 use crate::{
     Authorizer, ShellPool, ShellSession, ShellTerminalError, Subject,
     resources::validate_name,
-    service::supervisor::{SessionCapability, SessionSupervisor},
-    session::SupervisorIdentity,
+    service::supervisor::{PoolAttachmentBudget, SessionCapability, SessionSupervisor},
+    session::{AdoptionDecision, SupervisorCandidate, SupervisorIdentity, adopt_supervisor},
 };
 
 /// A validated request to create one pool-derived shell session.
@@ -40,9 +40,9 @@ impl OpenSessionRequest {
 #[derive(Debug, Clone)]
 pub struct OpenSessionResult {
     session: ShellSession,
-    pool: ShellPool,
     supervisor_generation: u64,
     capability: SessionCapability,
+    attachment_budget: Arc<PoolAttachmentBudget>,
 }
 
 impl OpenSessionResult {
@@ -57,8 +57,8 @@ impl OpenSessionResult {
     }
 
     /// Return the current request's one-shot supervisor capability.
-    pub const fn capability(&self) -> SessionCapability {
-        self.capability
+    pub fn capability(&self) -> SessionCapability {
+        self.capability.clone()
     }
 
     /// Build an in-memory supervisor model once the process adapter proves identity.
@@ -71,8 +71,8 @@ impl OpenSessionResult {
         }
         Ok(SessionSupervisor::new(
             self.session.clone(),
-            self.pool.clone(),
             identity,
+            Arc::clone(&self.attachment_budget),
         ))
     }
 }
@@ -81,6 +81,7 @@ impl OpenSessionResult {
 #[derive(Debug, Default)]
 pub struct ShellTerminalController {
     pools: BTreeMap<String, ShellPool>,
+    attachment_budgets: BTreeMap<String, Arc<PoolAttachmentBudget>>,
     sessions: BTreeMap<String, ShellSession>,
     next_capability: u64,
 }
@@ -91,8 +92,34 @@ impl ShellTerminalController {
         if self.pools.contains_key(pool.name()) {
             return Err(ShellTerminalError::CapacityExceeded);
         }
-        self.pools.insert(pool.name().to_owned(), pool);
+        let pool_name = pool.name().to_owned();
+        self.attachment_budgets.insert(
+            pool_name.clone(),
+            Arc::new(PoolAttachmentBudget::new(pool.spec().max_attached())),
+        );
+        self.pools.insert(pool_name, pool);
         Ok(())
+    }
+
+    /// Restore a reconciled session before the controller admits new sessions.
+    ///
+    /// The session remains counted for capacity even when the supervisor is
+    /// missing or ambiguous, preventing a restart from recreating a resource
+    /// name while its earlier process may still exist.
+    pub fn restore_session(
+        &mut self,
+        session: ShellSession,
+        expected_identity: &SupervisorIdentity,
+        candidates: &[SupervisorCandidate],
+    ) -> Result<AdoptionDecision, ShellTerminalError> {
+        if !self.pools.contains_key(session.pool_name())
+            || self.sessions.contains_key(session.name())
+        {
+            return Err(ShellTerminalError::CapacityExceeded);
+        }
+        let decision = adopt_supervisor(session.name(), expected_identity, candidates);
+        self.sessions.insert(session.name().to_owned(), session);
+        Ok(decision)
     }
 
     /// Create a session after authorizing the current request and enforcing pool capacity.
@@ -105,6 +132,11 @@ impl ShellTerminalController {
             .pools
             .get(&request.pool_name)
             .ok_or(ShellTerminalError::CapacityExceeded)?;
+        let attachment_budget = Arc::clone(
+            self.attachment_budgets
+                .get(&request.pool_name)
+                .ok_or(ShellTerminalError::CapacityExceeded)?,
+        );
         Authorizer::authorize(subject, pool)?;
         if self.session_count(pool.name()) >= pool.active_session_capacity() {
             return Err(ShellTerminalError::CapacityExceeded);
@@ -122,9 +154,9 @@ impl ShellTerminalController {
         self.next_capability = self.next_capability.saturating_add(1);
         let result = OpenSessionResult {
             session: session.clone(),
-            pool: pool.clone(),
             supervisor_generation: 1,
-            capability: SessionCapability::new(self.next_capability, 1),
+            capability: SessionCapability::new(self.next_capability, 1, resource_name.clone()),
+            attachment_budget,
         };
         self.sessions.insert(resource_name, session);
         Ok(result)

@@ -4,7 +4,9 @@ mod controller;
 mod supervisor;
 
 pub use controller::{OpenSessionRequest, OpenSessionResult, ShellTerminalController};
-pub use supervisor::{AttachRequest, SessionSupervisor};
+pub use supervisor::{
+    AttachReceipt, AttachRequest, Attachment, SessionCapability, SessionSupervisor,
+};
 
 /// Public controller ComponentSession service name.
 pub const CONTROLLER_SERVICE: &str = "shell-terminal.v3";
