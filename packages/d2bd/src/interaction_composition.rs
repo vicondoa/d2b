@@ -3035,11 +3035,10 @@ pub fn production_interaction_composition(
     };
     let committed_policy = state.snapshot;
     let authorizer = BusAuthorizer::new(native, state).map_err(|_| BusError::InvalidConfig)?;
-    let (_bus, registrar) = ZoneBus::with_clock_observer_and_metrics(
+    let (_bus, registrar) = ZoneBus::with_observer_and_metrics(
         zone.clone(),
         authorizer,
         BusConfig::default(),
-        std::sync::Arc::new(d2b_bus::ManualClock::new(1)),
         std::sync::Arc::new(NoopBusObserver),
         std::sync::Arc::new(d2b_bus::metrics::NoopBusTelemetry),
     )?;
@@ -3451,6 +3450,7 @@ where
         active_handlers,
     } = context;
     while !stop.load(Ordering::Acquire) {
+        reap_finished_handlers(&handlers);
         let socket = match accept_with(
             listener.as_fd(),
             SocketFlags::CLOEXEC | SocketFlags::NONBLOCK,
@@ -3469,10 +3469,9 @@ where
         let runtime = Arc::clone(&runtime);
         let zone = zone.clone();
         let service = service.clone();
-        if active_handlers.load(Ordering::Acquire) >= 64 {
+        if !reserve_interaction_handler(&active_handlers) {
             continue;
         }
-        active_handlers.fetch_add(1, Ordering::AcqRel);
         let handler_active = Arc::clone(&active_handlers);
         let handler_stop = Arc::clone(&stop);
         let handler = thread::Builder::new()
@@ -3504,6 +3503,40 @@ where
                 .push(handler);
         } else {
             active_handlers.fetch_sub(1, Ordering::AcqRel);
+        }
+    }
+}
+
+const MAX_INTERACTION_HANDLERS: usize = 64;
+
+fn reserve_interaction_handler(active_handlers: &AtomicUsize) -> bool {
+    let mut active = active_handlers.load(Ordering::Acquire);
+    loop {
+        if active >= MAX_INTERACTION_HANDLERS {
+            return false;
+        }
+        match active_handlers.compare_exchange_weak(
+            active,
+            active + 1,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => return true,
+            Err(current) => active = current,
+        }
+    }
+}
+
+fn reap_finished_handlers(handlers: &Mutex<Vec<thread::JoinHandle<()>>>) {
+    let mut handlers = handlers
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut index = 0;
+    while index < handlers.len() {
+        if handlers[index].is_finished() {
+            let _ = handlers.swap_remove(index).join();
+        } else {
+            index += 1;
         }
     }
 }
@@ -4485,6 +4518,48 @@ mod tests {
             Err("notification-authority-release-incomplete")
         );
         assert!(!effects.authority_released());
+    }
+
+    #[test]
+    fn listener_handler_reservations_are_bounded() {
+        let active_handlers = Arc::new(AtomicUsize::new(0));
+        let (sender, receiver) = std::sync::mpsc::channel();
+        thread::scope(|scope| {
+            for _ in 0..MAX_INTERACTION_HANDLERS + 16 {
+                let active_handlers = Arc::clone(&active_handlers);
+                let sender = sender.clone();
+                scope.spawn(move || {
+                    sender
+                        .send(reserve_interaction_handler(&active_handlers))
+                        .unwrap();
+                });
+            }
+        });
+        drop(sender);
+
+        assert_eq!(
+            receiver.into_iter().filter(|reserved| *reserved).count(),
+            MAX_INTERACTION_HANDLERS
+        );
+        assert_eq!(
+            active_handlers.load(Ordering::Acquire),
+            MAX_INTERACTION_HANDLERS
+        );
+    }
+
+    #[test]
+    fn completed_listener_handlers_are_reaped() {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let handler = thread::spawn(move || sender.send(()).unwrap());
+        receiver.recv().unwrap();
+        while !handler.is_finished() {
+            thread::yield_now();
+        }
+        let handlers = Mutex::new(vec![handler]);
+
+        reap_finished_handlers(&handlers);
+
+        assert!(handlers.lock().unwrap().is_empty());
     }
 
     #[tokio::test(flavor = "current_thread")]
