@@ -213,14 +213,18 @@ pub fn live_prepare_state_dir(
             })?
             .to_owned();
         let swtpm_dir = legacy.destination.clone();
-        let per_vm_root = swtpm_dir.parent().ok_or_else(|| super::OpError::Refused {
-            operation: "PrepareStateDir",
-            reason: crate::ops::swtpm_dir::reasons::DERIVATION_FAILED.to_owned(),
-        })?;
+        let per_vm_root =
+            swtpm_dir
+                .parent()
+                .map(Path::to_path_buf)
+                .ok_or_else(|| super::OpError::Refused {
+                    operation: "PrepareStateDir",
+                    reason: crate::ops::swtpm_dir::reasons::DERIVATION_FAILED.to_owned(),
+                })?;
         let paths = crate::ops::swtpm_dir::SwtpmDirPaths {
             vm_id: legacy.vm,
             swtpm_dir,
-            per_vm_root: per_vm_root.to_path_buf(),
+            per_vm_root,
             runtime_dir: PathBuf::from(format!("/run/d2b/vms/{}", req.vm_id.as_str())),
             marker_dir: marker_dir.to_path_buf(),
             marker_name,
