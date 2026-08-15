@@ -7,7 +7,7 @@
 
 use crate::ops::exec_reconcile::SystemLiveExec;
 use crate::ops::hosts::stable_hash_str;
-use crate::sys::path_safe::{ensure_dir, ensure_dir_preserve_existing, DirCreateResult};
+use crate::sys::path_safe::{DirCreateResult, ensure_dir, ensure_dir_preserve_existing};
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -196,15 +196,18 @@ pub fn live_prepare_state_dir(
     // typed effect in the TPM lifecycle, so perform the broker-owned swtpm
     // hardening here rather than relying on the later SpawnRunner hook.
     if let Some(legacy) = resolver.resolve_legacy_swtpm_intent(req.vm_id.as_str()) {
-        let marker_dir = legacy.marker.parent().ok_or_else(|| OpError::Refused {
-            operation: "PrepareStateDir",
-            reason: crate::ops::swtpm_dir::reasons::DERIVATION_FAILED.to_owned(),
-        })?;
+        let marker_dir = legacy
+            .marker
+            .parent()
+            .ok_or_else(|| super::OpError::Refused {
+                operation: "PrepareStateDir",
+                reason: crate::ops::swtpm_dir::reasons::DERIVATION_FAILED.to_owned(),
+            })?;
         let marker_name = legacy
             .marker
             .file_name()
             .and_then(|name| name.to_str())
-            .ok_or_else(|| OpError::Refused {
+            .ok_or_else(|| super::OpError::Refused {
                 operation: "PrepareStateDir",
                 reason: crate::ops::swtpm_dir::reasons::DERIVATION_FAILED.to_owned(),
             })?
@@ -212,7 +215,7 @@ pub fn live_prepare_state_dir(
         let per_vm_root = legacy
             .destination
             .parent()
-            .ok_or_else(|| OpError::Refused {
+            .ok_or_else(|| super::OpError::Refused {
                 operation: "PrepareStateDir",
                 reason: crate::ops::swtpm_dir::reasons::DERIVATION_FAILED.to_owned(),
             })?;
@@ -236,9 +239,11 @@ pub fn live_prepare_state_dir(
             now_ms,
             enforce_root_parents: paths.swtpm_dir.starts_with("/var/lib/d2b"),
         };
-        crate::ops::swtpm_dir::harden(&paths, &config).map_err(|error| OpError::Refused {
-            operation: "PrepareStateDir",
-            reason: error.reason.to_owned(),
+        crate::ops::swtpm_dir::harden(&paths, &config).map_err(|error| {
+            super::OpError::Refused {
+                operation: "PrepareStateDir",
+                reason: error.reason.to_owned(),
+            }
         })?;
     }
 
