@@ -1,6 +1,9 @@
 //! Bounded owner-Service audio authority.
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::{
+    collections::{BTreeMap, BTreeSet, VecDeque},
+    sync::{Arc, Mutex},
+};
 
 /// Opaque operation-scoped audio lease identity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -30,6 +33,14 @@ pub struct MicrophoneArbiter {
     active: Option<AudioLeaseId>,
     queue: VecDeque<(AudioLeaseId, String)>,
     max_queue: usize,
+}
+
+/// Shared microphone authority for all bindings of one AudioService.
+pub type SharedMicrophoneArbiter = Arc<Mutex<MicrophoneArbiter>>;
+
+/// Construct a shared microphone authority with the provider's queue bound.
+pub fn shared_microphone_arbiter(max_queue: usize) -> SharedMicrophoneArbiter {
+    Arc::new(Mutex::new(MicrophoneArbiter::new(max_queue)))
 }
 
 impl MicrophoneArbiter {

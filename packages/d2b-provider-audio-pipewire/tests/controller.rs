@@ -1,7 +1,7 @@
 use d2b_contracts::v3::ResourceRef;
 use d2b_provider_audio_pipewire::{
     AudioBindingController, AudioBindingPhase, AudioGrant, AudioLeaseId, AudioMediatorError,
-    FakeAudioMediator, validate_audio_binding,
+    FakeAudioMediator, shared_microphone_arbiter, validate_audio_binding,
 };
 
 fn binding() -> d2b_provider_audio_pipewire::AudioBindingSpec {
@@ -81,6 +81,65 @@ fn queued_microphone_binding_is_not_ready() {
         Some(d2b_provider_audio_pipewire::MicDecision::Queued)
     );
     assert_eq!(result.status.phase, AudioBindingPhase::Pending);
+}
+
+#[test]
+fn bindings_can_share_one_service_microphone_authority() {
+    let shared = shared_microphone_arbiter(64);
+    let mut first =
+        AudioBindingController::with_shared_microphone(FakeAudioMediator::ready(), shared.clone());
+    let mut second =
+        AudioBindingController::with_shared_microphone(FakeAudioMediator::ready(), shared);
+    let mut requested = binding();
+    requested.grants.mic = AudioGrant::On;
+
+    assert_eq!(
+        first
+            .reconcile(&requested, "zone-a", AudioLeaseId::new(1))
+            .unwrap()
+            .status
+            .microphone,
+        Some(d2b_provider_audio_pipewire::MicDecision::Granted)
+    );
+    assert_eq!(
+        second
+            .reconcile(&requested, "zone-a", AudioLeaseId::new(2))
+            .unwrap()
+            .status
+            .microphone,
+        Some(d2b_provider_audio_pipewire::MicDecision::Queued)
+    );
+    assert_eq!(first.active_microphone_lease(), Some(AudioLeaseId::new(1)));
+    assert_eq!(second.active_microphone_lease(), Some(AudioLeaseId::new(1)));
+}
+
+#[test]
+fn shared_finalization_does_not_enable_the_promoted_binding_through_the_old_mediator() {
+    let shared = shared_microphone_arbiter(64);
+    let mut first =
+        AudioBindingController::with_shared_microphone(FakeAudioMediator::ready(), shared.clone());
+    let mut second =
+        AudioBindingController::with_shared_microphone(FakeAudioMediator::ready(), shared);
+    let mut requested = binding();
+    requested.grants.mic = AudioGrant::On;
+    first
+        .reconcile(&requested, "zone-a", AudioLeaseId::new(1))
+        .unwrap();
+    second
+        .reconcile(&requested, "zone-a", AudioLeaseId::new(2))
+        .unwrap();
+
+    assert_eq!(
+        first.finalize_shared(AudioLeaseId::new(1)).unwrap(),
+        Some(AudioLeaseId::new(2))
+    );
+    assert_eq!(first.mediator().grant(), AudioGrant::Off);
+    assert_eq!(second.mediator().grant(), AudioGrant::Off);
+
+    second
+        .reconcile(&requested, "zone-a", AudioLeaseId::new(2))
+        .unwrap();
+    assert_eq!(second.mediator().grant(), AudioGrant::On);
 }
 
 #[test]

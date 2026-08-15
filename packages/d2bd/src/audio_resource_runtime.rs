@@ -14,9 +14,13 @@ use d2b_contracts::v3::{ResourceEnvelope, ResourceRef, ResourceTypeName, ZoneId}
 use d2b_provider_audio_pipewire::{
     AudioBindingController, AudioBindingPhase, AudioBindingSpec, AudioBindingStatus,
     AudioControllerError, AudioMediator, AudioServiceRole, AudioServiceSpec, GuestAudioReadiness,
-    HostAudioReadiness, MicDecision, validate_audio_binding_in_zone, validate_audio_service,
+    HostAudioReadiness, MicDecision, shared_microphone_arbiter, validate_audio_binding_in_zone,
+    validate_audio_service,
 };
-use d2b_resource_api::watch::ResourceWatch;
+use d2b_resource_api::{
+    RedbBackend, UnregisteredResourceClient, service::UnavailableUpgradeDispatcher,
+    watch::ResourceWatch,
+};
 use d2b_resource_store::{
     StoreListRequest, StoreOperationContext, StoreProjection, StoreWatchRequest, StoredResource,
 };
@@ -29,6 +33,7 @@ use crate::audio_dispatch::{DaemonAudioMediator, audio_capability_for_vm};
 const AUDIO_SERVICE_TYPE: &str = "audio.d2bus.org.AudioService";
 const AUDIO_BINDING_TYPE: &str = "audio.d2bus.org.AudioBinding";
 const GUEST_TYPE: &str = "Guest";
+type DecodedAudioBinding = (String, (StoredResource, AudioBindingSpec));
 
 /// One relisted audio resource snapshot.
 #[derive(Debug, Clone, Default)]
@@ -71,6 +76,30 @@ pub(crate) struct AudioBindingRuntimeStatus {
     pub status: AudioBindingStatus,
 }
 
+pub(crate) fn audio_binding_status_value(status: AudioBindingStatus) -> serde_json::Value {
+    serde_json::json!({
+        "phase": match status.phase {
+            AudioBindingPhase::Pending => "Pending",
+            AudioBindingPhase::Ready => "Ready",
+            AudioBindingPhase::Degraded => "Degraded",
+            AudioBindingPhase::Deleted => "Deleted",
+        },
+        "hostReadiness": match status.host_readiness {
+            HostAudioReadiness::Ready => "Ready",
+            HostAudioReadiness::Unavailable => "Unavailable",
+        },
+        "guestReadiness": match status.guest_readiness {
+            GuestAudioReadiness::Ready => "Ready",
+            GuestAudioReadiness::Unavailable => "Unavailable",
+        },
+        "microphone": status.microphone.map(|decision| match decision {
+            MicDecision::Granted => "Granted",
+            MicDecision::Queued => "Queued",
+            MicDecision::QueueFull => "QueueFull",
+        }),
+    })
+}
+
 struct AudioBindingRecord {
     spec: AudioBindingSpec,
     lease: d2b_provider_audio_pipewire::AudioLeaseId,
@@ -83,6 +112,7 @@ pub(crate) struct AudioResourceRuntime {
     zone: ZoneId,
     state: Arc<ServerState>,
     services: BTreeMap<String, AudioServiceSpec>,
+    service_microphones: BTreeMap<String, d2b_provider_audio_pipewire::SharedMicrophoneArbiter>,
     bindings: BTreeMap<String, AudioBindingRecord>,
 }
 
@@ -92,6 +122,7 @@ impl core::fmt::Debug for AudioResourceRuntime {
             .debug_struct("AudioResourceRuntime")
             .field("zone", &self.zone)
             .field("service_count", &self.services.len())
+            .field("service_authority_count", &self.service_microphones.len())
             .field("binding_count", &self.bindings.len())
             .finish()
     }
@@ -103,6 +134,7 @@ impl AudioResourceRuntime {
             zone,
             state,
             services: BTreeMap::new(),
+            service_microphones: BTreeMap::new(),
             bindings: BTreeMap::new(),
         }
     }
@@ -114,6 +146,8 @@ impl AudioResourceRuntime {
         snapshot: AudioResourceSnapshot,
     ) -> Result<(), AudioResourceRuntimeError> {
         let services = decode_services(&self.zone, &snapshot.services)?;
+        self.service_microphones
+            .retain(|service_ref, _| services.contains_key(service_ref));
         let guests = decode_guest_names(&snapshot.guests)?;
         let bindings = decode_bindings(&self.zone, &snapshot.bindings)?;
         validate_relationships(&services, &bindings, &guests)?;
@@ -133,7 +167,7 @@ impl AudioResourceRuntime {
                 && let Some(controller) = record.controller.as_mut()
             {
                 controller
-                    .finalize(record.lease)
+                    .finalize_shared(record.lease)
                     .map_err(AudioResourceRuntimeError::Controller)?;
             }
         }
@@ -147,15 +181,40 @@ impl AudioResourceRuntime {
             let service = services
                 .get(&spec.service_ref.to_canonical_string())
                 .ok_or(AudioResourceRuntimeError::InvalidRelationship)?;
-            let existing = self.bindings.get(&key);
-            if existing.is_some_and(|record| record.spec == spec) {
+            if self
+                .bindings
+                .get(&key)
+                .is_some_and(|record| record.spec == spec)
+                && service.service_role == AudioServiceRole::Projection
+            {
+                continue;
+            }
+            if let Some(record) = self.bindings.get_mut(&key)
+                && record.spec == spec
+                && let Some(controller) = record.controller.as_mut()
+            {
+                match controller.reconcile(&spec, self.zone.as_str(), record.lease) {
+                    Ok(result) => {
+                        record.status = result.status;
+                    }
+                    Err(AudioControllerError::Admission) => {
+                        return Err(AudioResourceRuntimeError::InvalidRelationship);
+                    }
+                    Err(AudioControllerError::Mediator(_)) => {
+                        record.status = unavailable_status(
+                            AudioBindingPhase::Degraded,
+                            controller.mediator().host_readiness(),
+                            controller.mediator().guest_readiness(),
+                        );
+                    }
+                }
                 continue;
             }
             if let Some(mut old) = self.bindings.remove(&key)
                 && let Some(controller) = old.controller.as_mut()
             {
                 controller
-                    .finalize(old.lease)
+                    .finalize_shared(old.lease)
                     .map_err(AudioResourceRuntimeError::Controller)?;
             }
 
@@ -192,7 +251,13 @@ impl AudioResourceRuntime {
                                 uid: self.state.daemon_uid,
                             },
                         );
-                        let mut controller = AudioBindingController::new(mediator);
+                        let microphone = self
+                            .service_microphones
+                            .entry(spec.service_ref.to_canonical_string())
+                            .or_insert_with(|| shared_microphone_arbiter(64))
+                            .clone();
+                        let mut controller =
+                            AudioBindingController::with_shared_microphone(mediator, microphone);
                         let result = controller.reconcile(&spec, self.zone.as_str(), lease);
                         match result {
                             Ok(result) => (Some(controller), result.status),
@@ -288,7 +353,7 @@ fn decode_services(
 fn decode_bindings(
     zone: &ZoneId,
     resources: &[StoredResource],
-) -> Result<Vec<(String, (StoredResource, AudioBindingSpec))>, AudioResourceRuntimeError> {
+) -> Result<Vec<DecodedAudioBinding>, AudioResourceRuntimeError> {
     let mut bindings = Vec::new();
     for resource in resources {
         let mut spec: AudioBindingSpec = decode_spec(resource)?;
@@ -420,6 +485,7 @@ pub(crate) async fn run_audio_watch(
     store: Arc<d2b_resource_store_redb::RedbResourceStore>,
     zone: ZoneId,
     registry: Arc<std::sync::Mutex<Option<AudioResourceRuntime>>>,
+    status_client: Arc<UnregisteredResourceClient<RedbBackend, UnavailableUpgradeDispatcher>>,
 ) {
     loop {
         let Some(batch) = watch.recv().await else {
@@ -437,17 +503,45 @@ pub(crate) async fn run_audio_watch(
                 continue;
             }
         };
-        let result = registry
-            .lock()
-            .ok()
-            .and_then(|mut slot| slot.as_mut().map(|runtime| runtime.reconcile(snapshot)));
-        if let Some(Err(error)) = result {
-            tracing::warn!(error = %error, "audio resource reconciliation degraded");
-        }
-        if watch.acknowledge(revision).await.is_err() {
-            if watch.resume().await.is_err() {
-                return;
+        let binding_resources = snapshot.bindings.clone();
+        let statuses = match registry.lock() {
+            Ok(mut slot) => match slot.as_mut() {
+                Some(runtime) => match runtime.reconcile(snapshot) {
+                    Ok(()) => Some(runtime.statuses()),
+                    Err(error) => {
+                        tracing::warn!(error = %error, "audio resource reconciliation degraded");
+                        None
+                    }
+                },
+                None => None,
+            },
+            Err(_) => return,
+        };
+        if let Some(statuses) = statuses {
+            for status in statuses {
+                let Some(resource) = binding_resources
+                    .iter()
+                    .find(|resource| resource.resource_ref == status.resource)
+                else {
+                    continue;
+                };
+                if let Err(error) = crate::resource_runtime::persist_resource_status(
+                    status_client.as_ref(),
+                    resource,
+                    &audio_binding_status_value(status.status),
+                )
+                .await
+                {
+                    tracing::warn!(
+                        error = %error,
+                        resource = %status.resource,
+                        "audio status projection persistence failed"
+                    );
+                }
             }
+        }
+        if watch.acknowledge(revision).await.is_err() && watch.resume().await.is_err() {
+            return;
         }
     }
 }
@@ -508,6 +602,19 @@ mod tests {
         assert_eq!(status.phase, AudioBindingPhase::Degraded);
         assert_eq!(status.host_readiness, HostAudioReadiness::Unavailable);
         assert_eq!(status.guest_readiness, GuestAudioReadiness::Unavailable);
+    }
+
+    #[test]
+    fn audio_status_projection_is_stable_and_separates_readiness() {
+        let status = audio_binding_status_value(unavailable_status(
+            AudioBindingPhase::Degraded,
+            HostAudioReadiness::Ready,
+            GuestAudioReadiness::Unavailable,
+        ));
+        assert_eq!(status["phase"], "Degraded");
+        assert_eq!(status["hostReadiness"], "Ready");
+        assert_eq!(status["guestReadiness"], "Unavailable");
+        assert!(status["microphone"].is_null());
     }
 
     #[test]

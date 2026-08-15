@@ -16,8 +16,8 @@ use d2b_contracts::{
         ApplyHostGenerationHandoffResponse, BrokerCallerRole, BrokerRequest, BrokerResponse,
     },
     host_generation::{
-        ApplyHostGenerationHandoff, HandoffCallerRole, HandoffState,
-        HostGenerationHandoffIntent, SourceGenerationCompatibilityFloorV1, target_fingerprint,
+        ApplyHostGenerationHandoff, HandoffCallerRole, HandoffState, HostGenerationHandoffIntent,
+        SourceGenerationCompatibilityFloorV1, target_fingerprint,
     },
     public_wire::{self, MutatingVerbOutcome, MutatingVerbResponse, MutationFlags},
     resource_proto as wire,
@@ -56,8 +56,6 @@ pub(crate) enum ActivationResourceRuntimeError {
     Store,
     /// The activation policy refused the resource.
     Policy,
-    /// A broker or target-local effect failed.
-    Effect,
 }
 
 impl core::fmt::Display for ActivationResourceRuntimeError {
@@ -66,7 +64,6 @@ impl core::fmt::Display for ActivationResourceRuntimeError {
             Self::InvalidResource => "activation-resource-invalid",
             Self::Store => "activation-resource-store-failed",
             Self::Policy => "activation-resource-policy-failed",
-            Self::Effect => "activation-resource-effect-failed",
         })
     }
 }
@@ -95,9 +92,8 @@ impl DesiredRecord {
     }
 
     fn deletion_requested(&self) -> bool {
-        metadata_value(&self.resource, "deletionRequestedAt").is_some_and(|value| {
-            !matches!(value, CanonicalJsonValue::Null)
-        })
+        metadata_value(&self.resource, "deletionRequestedAt")
+            .is_some_and(|value| !matches!(value, CanonicalJsonValue::Null))
     }
 
     fn has_finalizer(&self) -> bool {
@@ -218,10 +214,8 @@ impl ActivationResourceRuntime {
                 .get(record.spec.execution_ref())
                 .cloned()
                 .unwrap_or_default();
-            let caller = ActivationCaller::new(
-                CallerRole::Lifecycle,
-                record.spec.execution_ref().clone(),
-            );
+            let caller =
+                ActivationCaller::new(CallerRole::Lifecycle, record.spec.execution_ref().clone());
             let planned = self
                 .controller
                 .reconcile(&record.spec, &caller, &prior, observed.clone())
@@ -233,11 +227,7 @@ impl ActivationResourceRuntime {
                 {
                     let applied = self
                         .controller
-                        .apply_runner_result(
-                            &record.spec,
-                            ActivationOutcomeCode::Adopted,
-                            observed,
-                        )
+                        .apply_runner_result(&record.spec, ActivationOutcomeCode::Adopted, observed)
                         .map_err(|_| ActivationResourceRuntimeError::Policy)?;
                     record = self
                         .publish_status(
@@ -270,18 +260,12 @@ impl ActivationResourceRuntime {
                 .await?;
 
             let request = planned.runner_requests()[0].clone();
-            let outcome = self
-                .execute_runner(&state, &record, &request, &prior)
-                .await;
+            let outcome = self.execute_runner(&state, &record, &request, &prior).await;
             let applied = self
                 .controller
                 .apply_runner_result(&record.spec, outcome, observed)
                 .map_err(|_| ActivationResourceRuntimeError::Policy)?;
-            let detail = activation_detail(
-                record.spec.activation_mode(),
-                outcome,
-                applied.phase(),
-            );
+            let detail = activation_detail(record.spec.activation_mode(), outcome, applied.phase());
             record = self
                 .publish_status(
                     &record,
@@ -771,18 +755,12 @@ fn status_payload(
         outcome
             .map(|outcome| {
                 let mut result = BTreeMap::new();
-                result.insert(
-                    "code".to_owned(),
-                    outcome_json(outcome),
-                );
+                result.insert("code".to_owned(), outcome_json(outcome));
                 result.insert(
                     "message".to_owned(),
                     CanonicalJsonValue::String(activation_outcome_message(outcome).to_owned()),
                 );
-                result.insert(
-                    "retryable".to_owned(),
-                    CanonicalJsonValue::Bool(false),
-                );
+                result.insert("retryable".to_owned(), CanonicalJsonValue::Bool(false));
                 result.insert(
                     "occurredAt".to_owned(),
                     CanonicalJsonValue::String(now.clone()),
@@ -845,7 +823,9 @@ async fn update_finalizers(
     mutation.target = protobuf::MessageField::some(resource_identity(record));
     mutation.precondition = protobuf::MessageField::some(exact_precondition(record));
     if add {
-        mutation.add_finalizers.push(ACTIVATION_FINALIZER.to_owned());
+        mutation
+            .add_finalizers
+            .push(ACTIVATION_FINALIZER.to_owned());
     } else {
         mutation
             .remove_finalizers
@@ -1062,10 +1042,8 @@ mod tests {
         let resource = StoredResource {
             resource_ref,
             zone: ZoneId::parse("dev").expect("zone"),
-            uid: d2b_contracts::v3::ResourceUid::parse(
-                "123e4567-e89b-42d3-a456-426614174000",
-            )
-            .expect("uid"),
+            uid: d2b_contracts::v3::ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000")
+                .expect("uid"),
             generation: d2b_contracts::v3::ResourceGeneration::new(1).expect("generation"),
             revision: ZoneRevision::new(1),
             canonical_json: Vec::new(),

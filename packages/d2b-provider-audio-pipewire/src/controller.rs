@@ -2,7 +2,7 @@
 
 use crate::{
     AudioBindingSpec, AudioChannel, AudioGrant, AudioLeaseId, AudioMediator, AudioMediatorError,
-    AudioReadiness, GuestAudioReadiness, HostAudioReadiness, MicDecision, MicrophoneArbiter,
+    AudioReadiness, GuestAudioReadiness, HostAudioReadiness, MicDecision, SharedMicrophoneArbiter,
     SpeakerMixer, validate_audio_binding_in_zone, validate_audio_service,
 };
 
@@ -67,7 +67,8 @@ pub struct AudioReconcileResult {
 #[derive(Debug)]
 pub struct AudioBindingController<M: AudioMediator> {
     mediator: M,
-    microphone: MicrophoneArbiter,
+    microphone: SharedMicrophoneArbiter,
+    activate_promoted: bool,
     speaker: SpeakerMixer,
 }
 
@@ -76,7 +77,18 @@ impl<M: AudioMediator> AudioBindingController<M> {
     pub fn new(mediator: M) -> Self {
         Self {
             mediator,
-            microphone: MicrophoneArbiter::new(64),
+            microphone: crate::shared_microphone_arbiter(64),
+            activate_promoted: true,
+            speaker: SpeakerMixer::new(64),
+        }
+    }
+
+    /// Construct a controller sharing one AudioService microphone authority.
+    pub fn with_shared_microphone(mediator: M, microphone: SharedMicrophoneArbiter) -> Self {
+        Self {
+            mediator,
+            microphone,
+            activate_promoted: false,
             speaker: SpeakerMixer::new(64),
         }
     }
@@ -87,8 +99,11 @@ impl<M: AudioMediator> AudioBindingController<M> {
     }
 
     /// Return the active microphone lease for status and recovery.
-    pub const fn active_microphone_lease(&self) -> Option<AudioLeaseId> {
-        self.microphone.active()
+    pub fn active_microphone_lease(&self) -> Option<AudioLeaseId> {
+        match self.microphone.lock() {
+            Ok(arbiter) => arbiter.active(),
+            Err(poisoned) => poisoned.into_inner().active(),
+        }
     }
 
     /// Reconcile one binding without opening a host handle itself.
@@ -107,15 +122,25 @@ impl<M: AudioMediator> AudioBindingController<M> {
         let mut guest_effect_applied = false;
 
         if binding.grants.mic == AudioGrant::On {
-            let already_active = self.microphone.active() == Some(lease);
-            let decision = self.microphone.request(lease, binding.zone.clone());
+            let already_active = self.active_microphone_lease() == Some(lease);
+            let decision = match self.microphone.lock() {
+                Ok(mut arbiter) => arbiter.request(lease, binding.zone.clone()),
+                Err(poisoned) => poisoned.into_inner().request(lease, binding.zone.clone()),
+            };
             microphone = Some(decision);
             if decision == MicDecision::Granted {
                 self.mediator
                     .set_channel_grant(AudioChannel::Microphone, AudioGrant::On)
                     .map_err(|error| {
                         if !already_active {
-                            self.microphone.release(lease);
+                            match self.microphone.lock() {
+                                Ok(mut arbiter) => {
+                                    arbiter.release(lease);
+                                }
+                                Err(poisoned) => {
+                                    poisoned.into_inner().release(lease);
+                                }
+                            }
                         }
                         AudioControllerError::Mediator(error)
                     })?;
@@ -187,6 +212,26 @@ impl<M: AudioMediator> AudioBindingController<M> {
         &mut self,
         lease: AudioLeaseId,
     ) -> Result<Option<AudioLeaseId>, AudioControllerError> {
+        self.finalize_inner(lease)
+    }
+
+    /// Finalize a binding whose microphone authority is shared with other
+    /// controllers.
+    ///
+    /// The next lease is returned but is not enabled through this binding's
+    /// mediator. The daemon reconciles the promoted binding so the effect is
+    /// applied to the correct target.
+    pub fn finalize_shared(
+        &mut self,
+        lease: AudioLeaseId,
+    ) -> Result<Option<AudioLeaseId>, AudioControllerError> {
+        self.finalize_inner(lease)
+    }
+
+    fn finalize_inner(
+        &mut self,
+        lease: AudioLeaseId,
+    ) -> Result<Option<AudioLeaseId>, AudioControllerError> {
         let promoted = self.release_microphone(lease)?;
         if self.speaker.is_last_grant(lease) {
             self.mediator
@@ -201,22 +246,43 @@ impl<M: AudioMediator> AudioBindingController<M> {
         &mut self,
         lease: AudioLeaseId,
     ) -> Result<Option<AudioLeaseId>, AudioControllerError> {
-        if self.microphone.active() != Some(lease) {
-            self.microphone.release(lease);
+        if self.active_microphone_lease() != Some(lease) {
+            match self.microphone.lock() {
+                Ok(mut arbiter) => {
+                    arbiter.release(lease);
+                }
+                Err(poisoned) => {
+                    poisoned.into_inner().release(lease);
+                }
+            }
             return Ok(None);
         }
         self.mediator
             .set_channel_grant(AudioChannel::Microphone, AudioGrant::Off)
             .map_err(AudioControllerError::Mediator)?;
-        self.microphone.release(lease);
-        let Some(next) = self.microphone.next_lease() else {
+        let next = match self.microphone.lock() {
+            Ok(mut arbiter) => {
+                arbiter.release(lease);
+                arbiter.next_lease()
+            }
+            Err(poisoned) => {
+                let mut arbiter = poisoned.into_inner();
+                arbiter.release(lease);
+                arbiter.next_lease()
+            }
+        };
+        let Some(next) = next else {
             return Ok(None);
         };
-        if let Err(error) = self
-            .mediator
-            .set_channel_grant(AudioChannel::Microphone, AudioGrant::On)
+        if self.activate_promoted
+            && let Err(error) = self
+                .mediator
+                .set_channel_grant(AudioChannel::Microphone, AudioGrant::On)
         {
-            self.microphone.requeue_active(next);
+            match self.microphone.lock() {
+                Ok(mut arbiter) => arbiter.requeue_active(next),
+                Err(poisoned) => poisoned.into_inner().requeue_active(next),
+            }
             return Err(AudioControllerError::Mediator(error));
         }
         Ok(Some(next))

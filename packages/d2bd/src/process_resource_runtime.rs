@@ -29,7 +29,7 @@ use d2b_resource_store::{
 use d2b_resource_store_redb::RedbResourceStore;
 
 use crate::process_provider_runtime::{
-    ProductionProcessProviders, ProviderAdoption, ProviderLiveness,
+    ProcessResourceContext, ProductionProcessProviders, ProviderAdoption, ProviderLiveness,
 };
 
 const PROCESS_TYPE: &str = "Process";
@@ -180,6 +180,16 @@ impl ProcessResourceRuntime {
         self.status_client = Some(status_client);
     }
 
+    fn context<'a>(&self, record: &'a DesiredRecord) -> ProcessResourceContext<'a> {
+        ProcessResourceContext::new(
+            &record.resource.resource_ref,
+            &record.resource.uid,
+            record.resource.generation,
+            &record.provider_ref,
+            self.controller_generation,
+        )
+    }
+
     /// Reconcile a complete durable Process/EphemeralProcess snapshot.
     pub(crate) async fn reconcile(
         &mut self,
@@ -250,7 +260,7 @@ impl ProcessResourceRuntime {
                     self.stop_record(&record).await?;
                 }
                 self.providers
-                    .finalize_resource(&key)
+                    .finalize_resource(self.context(&record))
                     .await
                     .map_err(map_provider_error)?;
                 record = self
@@ -278,7 +288,7 @@ impl ProcessResourceRuntime {
             {
                 self.stop_record(&record).await?;
                 self.providers
-                    .finalize_resource(&key)
+                    .finalize_resource(self.context(&record))
                     .await
                     .map_err(map_provider_error)?;
                 self.completed_at.insert(key.clone(), Instant::now());
@@ -301,7 +311,7 @@ impl ProcessResourceRuntime {
                 if self.providers.has_active_resource(&key) {
                     self.stop_record(&record).await?;
                     self.providers
-                        .finalize_resource(&key)
+                        .finalize_resource(self.context(&record))
                         .await
                         .map_err(map_provider_error)?;
                 }
@@ -372,7 +382,7 @@ impl ProcessResourceRuntime {
                     }
                     ProviderLiveness::Exited => {
                         self.providers
-                            .finalize_resource(&key)
+                            .finalize_resource(self.context(&record))
                             .await
                             .map_err(map_provider_error)?;
                         let restart = match &record.process {
@@ -458,26 +468,12 @@ impl ProcessResourceRuntime {
             }
             DesiredProcess::Process(spec) => self
                 .providers
-                .adopt_resource_with_controller_generation(
-                    &record.resource.resource_ref,
-                    &record.resource.uid,
-                    record.resource.generation,
-                    &record.provider_ref,
-                    spec,
-                    self.controller_generation,
-                )
+                .adopt_resource(self.context(record), spec)
                 .await
                 .map_err(map_provider_error)?,
             DesiredProcess::Ephemeral(spec) => self
                 .providers
-                .adopt_ephemeral_resource_with_controller_generation(
-                    &record.resource.resource_ref,
-                    &record.resource.uid,
-                    record.resource.generation,
-                    &record.provider_ref,
-                    spec,
-                    self.controller_generation,
-                )
+                .adopt_ephemeral_resource(self.context(record), spec)
                 .await
                 .map_err(map_provider_error)?,
         };
@@ -488,26 +484,18 @@ impl ProcessResourceRuntime {
                 match &record.process {
                     DesiredProcess::Process(spec) => self
                         .providers
-                        .launch_resource_with_controller_generation(
-                            &record.resource.resource_ref,
-                            &record.resource.uid,
-                            record.resource.generation,
-                            &record.provider_ref,
+                        .launch_resource(
+                            self.context(record),
                             spec,
-                            self.controller_generation,
                             launch_timeout(&record.process),
                         )
                         .await
                         .map_err(map_provider_error)?,
                     DesiredProcess::Ephemeral(spec) => self
                         .providers
-                        .launch_ephemeral_resource_with_controller_generation(
-                            &record.resource.resource_ref,
-                            &record.resource.uid,
-                            record.resource.generation,
-                            &record.provider_ref,
+                        .launch_ephemeral_resource(
+                            self.context(record),
                             spec,
-                            self.controller_generation,
                             launch_timeout(&record.process),
                         )
                         .await
@@ -660,26 +648,12 @@ impl ProcessResourceRuntime {
         let liveness = match &record.process {
             DesiredProcess::Process(spec) => self
                 .providers
-                .probe_resource_with_controller_generation(
-                    &record.resource.resource_ref,
-                    &record.resource.uid,
-                    record.resource.generation,
-                    &record.provider_ref,
-                    spec,
-                    self.controller_generation,
-                )
+                .probe_resource(self.context(record), spec)
                 .await
                 .map_err(map_provider_error)?,
             DesiredProcess::Ephemeral(spec) => self
                 .providers
-                .probe_ephemeral_resource_with_controller_generation(
-                    &record.resource.resource_ref,
-                    &record.resource.uid,
-                    record.resource.generation,
-                    &record.provider_ref,
-                    spec,
-                    self.controller_generation,
-                )
+                .probe_ephemeral_resource(self.context(record), spec)
                 .await
                 .map_err(map_provider_error)?,
         };
@@ -696,13 +670,9 @@ impl ProcessResourceRuntime {
         match &record.process {
             DesiredProcess::Process(spec) => self
                 .providers
-                .stop_resource_with_controller_generation(
-                    &record.resource.resource_ref,
-                    &record.resource.uid,
-                    record.resource.generation,
-                    &record.provider_ref,
+                .stop_resource(
+                    self.context(record),
                     spec,
-                    self.controller_generation,
                     process_drain_timeout(spec),
                     Duration::from_secs(30),
                 )
@@ -710,13 +680,9 @@ impl ProcessResourceRuntime {
                 .map_err(map_provider_error)?,
             DesiredProcess::Ephemeral(spec) => self
                 .providers
-                .stop_ephemeral_resource_with_controller_generation(
-                    &record.resource.resource_ref,
-                    &record.resource.uid,
-                    record.resource.generation,
-                    &record.provider_ref,
+                .stop_ephemeral_resource(
+                    self.context(record),
                     spec,
-                    self.controller_generation,
                     Duration::from_secs(30),
                     Duration::from_secs(30),
                 )
@@ -1417,7 +1383,7 @@ mod tests {
                 }),
             Some(2)
         );
-        assert!(d2b_contracts::v3::Timestamp::parse(&now_timestamp()).is_ok());
+        assert!(d2b_contracts::v3::Timestamp::parse(now_timestamp()).is_ok());
         assert_eq!(record.key(), resource_ref);
     }
 

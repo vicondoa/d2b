@@ -17,7 +17,8 @@ pub use audio_policy::{
     parse_audio_state,
 };
 pub use authority::{
-    AudioAuthorityError, AudioLeaseId, MicDecision, MicrophoneArbiter, SpeakerMixer,
+    AudioAuthorityError, AudioLeaseId, MicDecision, MicrophoneArbiter, SharedMicrophoneArbiter,
+    SpeakerMixer, shared_microphone_arbiter,
 };
 pub use controller::{
     AudioBindingController, AudioBindingPhase, AudioBindingStatus, AudioControllerError,

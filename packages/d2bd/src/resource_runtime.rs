@@ -9,22 +9,25 @@
 //! one Zone-scoped value.
 
 use std::{
-    collections::BTreeMap,
-    fs::File,
+    collections::{BTreeMap, BTreeSet},
+    fs::{self, File},
+    io::{self, Read},
     os::fd::OwnedFd,
+    os::unix::fs::FileTypeExt,
+    path::Path,
     sync::{Arc, Mutex},
 };
 
 #[cfg(test)]
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::audio_resource_runtime::{
-    AudioBindingRuntimeStatus, AudioResourceRuntime, AudioResourceRuntimeError,
-    audio_watch_request, list_audio_snapshot, run_audio_watch,
-};
 use crate::activation_resource_runtime::{
     ActivationResourceRuntime, ActivationResourceRuntimeError, activation_watch_request,
     list_activation_snapshot, run_activation_watch,
+};
+use crate::audio_resource_runtime::{
+    AudioBindingRuntimeStatus, AudioResourceRuntime, AudioResourceRuntimeError,
+    audio_binding_status_value, audio_watch_request, list_audio_snapshot, run_audio_watch,
 };
 use crate::authority_persistence::RedbAuthorityPersistence;
 use crate::process_resource_runtime::{
@@ -45,10 +48,12 @@ use d2b_contracts::v3::{
 };
 use d2b_contracts::{
     broker_wire::{OpenZoneStoreResponse, ZoneStoreDisposition},
+    resource_proto as wire,
     v3::{
-        BindingDigest, ConfigurationGeneration, ControllerGeneration, ResourceError,
-        ResourceErrorKind, ResourceErrorReason, ResourcePhase, ResourceRef, ResourceTypeName,
-        ResourceUid, RetryClass, Timestamp, ZoneId, ZoneRevision, ZoneStatusResource,
+        BindingDigest, CanonicalJsonValue, ConfigurationGeneration, ControllerGeneration,
+        ResourceEnvelope, ResourceError, ResourceErrorKind, ResourceErrorReason, ResourcePhase,
+        ResourceRef, ResourceTypeName, ResourceUid, RetryClass, Timestamp, ZoneId, ZoneRevision,
+        ZoneStatusResource,
         component_session::{
             AttachmentPolicy, EndpointPolicy, EndpointPurpose, EndpointRole,
             IdentityEvidenceRequirement, LimitProfile, Locality, NoiseProfile, PurposeClass,
@@ -70,8 +75,9 @@ use d2b_core_controller::main::{
 };
 use d2b_core_controller::zone_status::{SystemCoreStatusEmitter, ZoneStatusInput};
 use d2b_provider_system_core::{
-    HostReconciler, UserBinding, UserDiscoveryEffectPort, UserIdentityDigest, UserObservation,
-    UserReconciler,
+    HostCapabilityClass, HostObservationReport, HostProbeEffectPort, HostProbeMetadata,
+    HostReconciler, MinijailPlatformGate, UserBinding, UserDiscoveryEffectPort, UserIdentityDigest,
+    UserObservation, UserReconciler,
 };
 use d2b_resource_api::{
     RedbBackend, ResourceService, UnregisteredBusAdapter, UnregisteredResourceClient,
@@ -84,6 +90,7 @@ use d2b_resource_api::{
 };
 use d2b_resource_store::{
     PolicySnapshot, StoreListRequest, StoreOperationContext, StoreProjection, StoreSlot,
+    StoredResource,
 };
 #[cfg(test)]
 use d2b_resource_store::{StoreFilter, StoreListResult};
@@ -99,7 +106,7 @@ use d2b_session_unix::{
     CreditPool, CreditScopeSet, DescriptorPolicyResolver, PeerIdentityPolicy, SeqpacketSocket,
     UnixSeqpacketTransport, UnixSessionError, VerifiedUnixPeer, prearmed_seqpacket_pair,
 };
-use nix::unistd::{Group, User};
+use nix::unistd::{Group, Uid, User};
 #[cfg(test)]
 use serde_json::json;
 use serde_json::{Map, Value};
@@ -582,8 +589,9 @@ impl ZoneResourceRuntime {
                 state.clone(),
             )
             .await?;
-            process_status_client = Some(status_client);
-            let system_core = reconcile_system_core_resources(&zone, &store).await?;
+            process_status_client = Some(Arc::clone(&status_client));
+            let system_core =
+                reconcile_system_core_resources(&zone, &store, Arc::clone(&status_client)).await?;
             let aggregate_handler_phase = if system_core.host_phase == HandlerPhase::Ready
                 && system_core.user_phase == HandlerPhase::Ready
             {
@@ -749,21 +757,42 @@ impl ZoneResourceRuntime {
         let snapshot = list_audio_snapshot(&self.store, &self.zone)
             .await
             .map_err(|_| ResourceRuntimeError::StoreReadFailed)?;
-        let mut runtime = self
-            .audio_runtime
-            .lock()
-            .map_err(|_| ResourceRuntimeError::CapabilityUnavailable)?;
-        let registry =
-            runtime.get_or_insert_with(|| AudioResourceRuntime::new(self.zone.clone(), state));
-        registry
-            .reconcile(snapshot)
-            .map_err(map_audio_runtime_error)?;
-        drop(runtime);
-        let mut watch_task = self
+        let binding_resources = snapshot.bindings.clone();
+        let statuses;
+        {
+            let mut runtime = self
+                .audio_runtime
+                .lock()
+                .map_err(|_| ResourceRuntimeError::CapabilityUnavailable)?;
+            let registry =
+                runtime.get_or_insert_with(|| AudioResourceRuntime::new(self.zone.clone(), state));
+            registry
+                .reconcile(snapshot)
+                .map_err(map_audio_runtime_error)?;
+            statuses = registry.statuses();
+        }
+        for status in statuses {
+            let Some(resource) = binding_resources
+                .iter()
+                .find(|resource| resource.resource_ref == status.resource)
+            else {
+                return Err(ResourceRuntimeError::StoreReadFailed);
+            };
+            persist_resource_status(
+                self.process_status_client
+                    .as_ref()
+                    .ok_or(ResourceRuntimeError::AuthenticationUnavailable)?,
+                resource,
+                &audio_binding_status_value(status.status),
+            )
+            .await?;
+        }
+        let start_watch = self
             .audio_watch_task
             .lock()
-            .map_err(|_| ResourceRuntimeError::WatchUnavailable)?;
-        if watch_task.is_none() {
+            .map_err(|_| ResourceRuntimeError::WatchUnavailable)?
+            .is_none();
+        if start_watch {
             let watch = d2b_resource_api::watch::WatchService::new(Arc::clone(&self.store))
                 .open(audio_watch_request(&self.zone))
                 .await
@@ -771,7 +800,21 @@ impl ZoneResourceRuntime {
             let store = Arc::clone(&self.store);
             let zone = self.zone.clone();
             let registry = Arc::clone(&self.audio_runtime);
-            *watch_task = Some(tokio::spawn(run_audio_watch(watch, store, zone, registry)));
+            let status_client = self
+                .process_status_client
+                .as_ref()
+                .ok_or(ResourceRuntimeError::AuthenticationUnavailable)?
+                .clone();
+            let task = tokio::spawn(run_audio_watch(watch, store, zone, registry, status_client));
+            let mut watch_task = self
+                .audio_watch_task
+                .lock()
+                .map_err(|_| ResourceRuntimeError::WatchUnavailable)?;
+            if watch_task.is_none() {
+                *watch_task = Some(task);
+            } else {
+                task.abort();
+            }
         }
         Ok(())
     }
@@ -854,19 +897,21 @@ impl ZoneResourceRuntime {
         let snapshot = list_activation_snapshot(&self.store, &self.zone)
             .await
             .map_err(map_activation_runtime_error)?;
-        let mut runtime = self
-            .activation_runtime
-            .lock()
-            .map_err(|_| ResourceRuntimeError::CapabilityUnavailable)?;
-        let registry = runtime.get_or_insert_with(|| ActivationResourceRuntime::new(self.zone.clone()));
+        let runtime = match self.activation_runtime.lock() {
+            Ok(mut guard) => guard.take(),
+            Err(_) => return Err(ResourceRuntimeError::CapabilityUnavailable),
+        };
+        let mut runtime =
+            runtime.unwrap_or_else(|| ActivationResourceRuntime::new(self.zone.clone()));
         if let Some(status_client) = &self.process_status_client {
-            registry.set_status_client(Arc::clone(status_client));
+            runtime.set_status_client(Arc::clone(status_client));
         }
-        registry
-            .reconcile(Arc::clone(&state), snapshot)
-            .await
-            .map_err(map_activation_runtime_error)?;
-        drop(runtime);
+        let result = runtime.reconcile(Arc::clone(&state), snapshot).await;
+        match self.activation_runtime.lock() {
+            Ok(mut guard) => *guard = Some(runtime),
+            Err(_) => return Err(ResourceRuntimeError::CapabilityUnavailable),
+        }
+        result.map_err(map_activation_runtime_error)?;
         let start_watch = self
             .activation_watch_task
             .lock()
@@ -1882,18 +1927,150 @@ fn handler_phase_to_zone_phase(phase: HandlerPhase) -> d2b_contracts::v3::ZoneHa
 #[derive(Debug, Clone, Copy, Default)]
 struct SystemCoreUserDiscovery;
 
+#[derive(Debug, Clone, Copy)]
+struct SystemCoreHostProbe {
+    user_uid: u32,
+}
+
+impl SystemCoreHostProbe {
+    fn current() -> Self {
+        Self {
+            user_uid: Uid::current().as_raw(),
+        }
+    }
+
+    fn kernel_release() -> Result<String, d2b_provider_system_core::SystemCoreError> {
+        read_bounded("/proc/sys/kernel/osrelease", 64)
+            .map(|release| release.trim().to_owned())
+            .map_err(|_| d2b_provider_system_core::SystemCoreError::HostProbeFailed)
+    }
+
+    fn os_name() -> Result<String, d2b_provider_system_core::SystemCoreError> {
+        let release = read_bounded("/etc/os-release", 16 * 1024)
+            .map_err(|_| d2b_provider_system_core::SystemCoreError::HostProbeFailed)?;
+        Ok(release
+            .lines()
+            .find_map(|line| line.strip_prefix("NAME="))
+            .map(|name| name.trim_matches('"').to_owned())
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| "unknown".to_owned()))
+    }
+
+    fn runtime_path(&self, name: &str) -> std::path::PathBuf {
+        Path::new("/run/user")
+            .join(self.user_uid.to_string())
+            .join(name)
+    }
+
+    fn has_render_node() -> bool {
+        fs::read_dir("/dev/dri")
+            .map(|entries| {
+                entries.flatten().any(|entry| {
+                    entry
+                        .file_name()
+                        .to_str()
+                        .is_some_and(|name| name.starts_with("renderD"))
+                })
+            })
+            .unwrap_or(false)
+    }
+
+    fn has_primary_drm_node() -> bool {
+        fs::read_dir("/dev/dri")
+            .map(|entries| {
+                entries.flatten().any(|entry| {
+                    entry
+                        .file_name()
+                        .to_str()
+                        .is_some_and(|name| name.starts_with("card"))
+                })
+            })
+            .unwrap_or(false)
+    }
+
+    fn active_process_count() -> Result<u32, d2b_provider_system_core::SystemCoreError> {
+        let mut count = 0_u32;
+        for entry in fs::read_dir("/proc")
+            .map_err(|_| d2b_provider_system_core::SystemCoreError::HostProbeFailed)?
+        {
+            let entry =
+                entry.map_err(|_| d2b_provider_system_core::SystemCoreError::HostProbeFailed)?;
+            if entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| name.bytes().all(|byte| byte.is_ascii_digit()))
+            {
+                count = count.saturating_add(1);
+            }
+        }
+        Ok(count)
+    }
+}
+
+impl HostProbeEffectPort for SystemCoreHostProbe {
+    async fn probe(
+        &self,
+        capability: HostCapabilityClass,
+    ) -> Result<bool, d2b_provider_system_core::SystemCoreError> {
+        let available = match capability {
+            HostCapabilityClass::Kvm => Path::new("/dev/kvm").is_file(),
+            HostCapabilityClass::Pidfd => {
+                let gate = d2b_provider_system_minijail::launch::PlatformGate::detect();
+                gate.kernel_major > 5 || (gate.kernel_major == 5 && gate.kernel_minor >= 3)
+            }
+            HostCapabilityClass::CgroupV2 => {
+                Path::new("/sys/fs/cgroup/cgroup.controllers").is_file()
+            }
+            HostCapabilityClass::UserNamespace => Path::new("/proc/self/ns/user").exists(),
+            HostCapabilityClass::Virtiofs => Path::new("/dev/fuse").is_file(),
+            HostCapabilityClass::AudioPipewire => is_socket(&self.runtime_path("pipewire-0")),
+            HostCapabilityClass::Wayland => is_socket(&self.runtime_path("wayland-0")),
+            HostCapabilityClass::GpuRender => Self::has_render_node(),
+            HostCapabilityClass::GpuDrm => Self::has_primary_drm_node(),
+            HostCapabilityClass::Tpm2 => {
+                Path::new("/dev/tpmrm0").is_file() || Path::new("/dev/tpm0").is_file()
+            }
+            HostCapabilityClass::Usbip => {
+                Path::new("/sys/module/usbip_core").exists()
+                    || Path::new("/sys/module/usbip_host").exists()
+            }
+        };
+        Ok(available)
+    }
+
+    async fn platform(
+        &self,
+    ) -> Result<MinijailPlatformGate, d2b_provider_system_core::SystemCoreError> {
+        let gate = d2b_provider_system_minijail::launch::PlatformGate::detect();
+        Ok(MinijailPlatformGate::new(
+            gate.kernel_major,
+            gate.kernel_minor,
+            gate.cgroup_kill_writable,
+        ))
+    }
+
+    async fn metadata(
+        &self,
+    ) -> Result<HostProbeMetadata, d2b_provider_system_core::SystemCoreError> {
+        Ok(HostProbeMetadata {
+            kernel_release: Self::kernel_release()?,
+            os_name: Self::os_name()?,
+            user_manager_available: self.runtime_path("systemd").is_dir(),
+            active_process_count: Self::active_process_count()?,
+        })
+    }
+}
+
 impl UserDiscoveryEffectPort for SystemCoreUserDiscovery {
-    fn discover(
+    async fn discover(
         &self,
         user_ref: &ResourceRef,
         spec: &UserSpec,
-    ) -> impl std::future::Future<
-        Output = Result<
-            Option<d2b_provider_system_core::DiscoveredUser>,
-            d2b_provider_system_core::SystemCoreError,
-        >,
+    ) -> Result<
+        Option<d2b_provider_system_core::DiscoveredUser>,
+        d2b_provider_system_core::SystemCoreError,
     > {
-        async move { discover_local_user(user_ref, spec).await }
+        discover_local_user(user_ref, spec).await
     }
 }
 
@@ -1955,6 +2132,7 @@ async fn discover_local_user(
 async fn reconcile_system_core_resources(
     zone: &ZoneId,
     store: &RedbResourceStore,
+    status_client: Arc<UnregisteredResourceClient<RedbBackend, UnavailableUpgradeDispatcher>>,
 ) -> Result<SystemCoreReconcileResult, ResourceRuntimeError> {
     let host_type =
         ResourceTypeName::parse("Host").map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
@@ -2002,9 +2180,19 @@ async fn reconcile_system_core_resources(
         if provider_ref.to_canonical_string() != HOST_PROVIDER_REF {
             return Err(ResourceRuntimeError::HandlerNotReady);
         }
-        HostReconciler::new()
-            .reconcile(&host_ref, provider_ref, &spec)
+        let report = HostReconciler::new()
+            .reconcile_with_probe(
+                &host_ref,
+                provider_ref,
+                &spec,
+                &SystemCoreHostProbe::current(),
+                &BTreeSet::new(),
+                false,
+            )
+            .await
             .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
+        let status = host_status_value(&report)?;
+        persist_resource_status(&status_client, &resource, &status).await?;
     }
 
     let user_reconciler = UserReconciler::new(SystemCoreUserDiscovery);
@@ -2022,6 +2210,12 @@ async fn reconcile_system_core_resources(
             .reconcile(&user_ref, &spec)
             .await
             .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
+        persist_resource_status(
+            &status_client,
+            &resource,
+            &serde_json::to_value(&status).map_err(|_| ResourceRuntimeError::HandlerNotReady)?,
+        )
+        .await?;
         if status.phase != ResourcePhase::Ready {
             // A User that is absent or drifted is a live, durable condition,
             // not a store failure. Keep the handler current but degraded.
@@ -2039,6 +2233,136 @@ async fn reconcile_system_core_resources(
         host_phase,
         user_phase,
     })
+}
+
+fn host_status_value(
+    report: &HostObservationReport,
+) -> Result<serde_json::Value, ResourceRuntimeError> {
+    let mut status =
+        serde_json::to_value(&report.status).map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
+    let object = status
+        .as_object_mut()
+        .ok_or(ResourceRuntimeError::HandlerNotReady)?;
+    object.insert(
+        "capabilities".to_owned(),
+        serde_json::to_value(&report.capabilities)
+            .map_err(|_| ResourceRuntimeError::HandlerNotReady)?,
+    );
+    object.insert(
+        "kernelRelease".to_owned(),
+        serde_json::Value::String(report.kernel_release.clone()),
+    );
+    object.insert(
+        "osName".to_owned(),
+        serde_json::Value::String(report.os_name.clone()),
+    );
+    object.insert(
+        "userManagerAvailable".to_owned(),
+        serde_json::Value::Bool(report.user_manager_available),
+    );
+    object.insert(
+        "activeProcessCount".to_owned(),
+        serde_json::Value::Number(report.active_process_count.into()),
+    );
+    object.insert(
+        "minijailReady".to_owned(),
+        serde_json::Value::Bool(report.minijail_ready),
+    );
+    Ok(status)
+}
+
+pub(crate) async fn persist_resource_status(
+    client: &UnregisteredResourceClient<RedbBackend, UnavailableUpgradeDispatcher>,
+    resource: &StoredResource,
+    status: &serde_json::Value,
+) -> Result<(), ResourceRuntimeError> {
+    let mut value = CanonicalJsonValue::parse(&resource.canonical_json)
+        .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
+    let root = match &mut value {
+        CanonicalJsonValue::Object(root) => root,
+        _ => return Err(ResourceRuntimeError::HandlerNotReady),
+    };
+    let status_bytes =
+        serde_json::to_vec(status).map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
+    let desired_status = CanonicalJsonValue::parse(&status_bytes)
+        .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
+    if root.get("status") == Some(&desired_status) {
+        return Ok(());
+    }
+    root.insert("status".to_owned(), desired_status);
+    let canonical = value.to_canonical_bytes();
+    let envelope = ResourceEnvelope::from_json(&canonical)
+        .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
+    let digest = envelope
+        .digest()
+        .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
+    let mut identity = wire::ResourceIdentity::new();
+    identity.zone = resource.zone.to_canonical_string();
+    identity.resource_type = resource.resource_ref.resource_type().to_canonical_string();
+    identity.name = resource.resource_ref.name().to_canonical_string();
+    identity.uid = Some(resource.uid.as_str().to_owned());
+    identity.generation = Some(resource.generation.get());
+    identity.revision = Some(resource.revision.get());
+
+    let mut resource_bytes = wire::ResourceEnvelopeBytes::new();
+    resource_bytes.identity = protobuf::MessageField::some(identity.clone());
+    resource_bytes.canonical_json = canonical;
+    resource_bytes.payload_digest = digest;
+
+    let mut precondition = wire::Precondition::new();
+    precondition.kind =
+        protobuf::EnumOrUnknown::new(wire::PreconditionKind::PRECONDITION_KIND_EXACT_REVISION);
+    precondition.expected_revision = Some(resource.revision.get());
+    precondition.expected_uid = Some(resource.uid.as_str().to_owned());
+
+    let operation = format!(
+        "system-core-status-{}-{}",
+        resource.resource_ref.to_canonical_string(),
+        resource.revision.get()
+    );
+    let mut mutation = wire::Mutation::new();
+    mutation.kind = protobuf::EnumOrUnknown::new(wire::MutationKind::MUTATION_KIND_UPDATE_STATUS);
+    mutation.target = protobuf::MessageField::some(identity);
+    mutation.precondition = protobuf::MessageField::some(precondition);
+    mutation.resource = protobuf::MessageField::some(resource_bytes);
+
+    let mut meta = wire::RequestMeta::new();
+    meta.operation_id = operation.clone();
+    meta.idempotency_key = operation.clone();
+    meta.correlation_id = operation.clone();
+    meta.trace_id = operation;
+    meta.deadline_ms = 10_000;
+
+    let mut request = wire::UpdateStatusRequest::new();
+    request.meta = protobuf::MessageField::some(meta);
+    request.mutation = protobuf::MessageField::some(mutation);
+    let response = client.update_status(request).await;
+    if response.error.is_some() || response.resource.is_none() {
+        return Err(ResourceRuntimeError::StoreReadFailed);
+    }
+    Ok(())
+}
+
+fn read_bounded(path: impl AsRef<Path>, limit: usize) -> io::Result<String> {
+    let mut file = File::open(path)?;
+    let mut bytes = Vec::with_capacity(limit.min(4096));
+    file.by_ref()
+        .take(u64::try_from(limit).unwrap_or(u64::MAX).saturating_add(1))
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > limit {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "bounded host probe exceeded limit",
+        ));
+    }
+    String::from_utf8(bytes)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "host probe was not utf-8"))
+}
+
+fn is_socket(path: &Path) -> bool {
+    fs::metadata(path)
+        .map(|metadata| metadata.file_type().is_socket())
+        .unwrap_or(false)
 }
 
 fn host_phase_for_resource_count(count: usize) -> HandlerPhase {
@@ -2079,8 +2403,7 @@ fn map_activation_runtime_error(error: ActivationResourceRuntimeError) -> Resour
     match error {
         ActivationResourceRuntimeError::Store => ResourceRuntimeError::StoreReadFailed,
         ActivationResourceRuntimeError::InvalidResource
-        | ActivationResourceRuntimeError::Policy
-        | ActivationResourceRuntimeError::Effect => ResourceRuntimeError::CapabilityUnavailable,
+        | ActivationResourceRuntimeError::Policy => ResourceRuntimeError::CapabilityUnavailable,
     }
 }
 
@@ -2516,6 +2839,31 @@ mod tests {
         );
         assert_eq!(host_phase_for_resource_count(1), HandlerPhase::Ready);
         assert_eq!(host_phase_for_resource_count(2), HandlerPhase::Ready);
+    }
+
+    #[tokio::test]
+    async fn production_system_core_probe_returns_bounded_host_observations() {
+        let probe = SystemCoreHostProbe::current();
+        let metadata = probe
+            .metadata()
+            .await
+            .expect("the local host metadata probe succeeds");
+        assert!(!metadata.kernel_release.is_empty());
+        assert!(metadata.kernel_release.len() <= 64);
+        assert!(metadata.os_name.len() <= 128);
+        let platform = probe
+            .platform()
+            .await
+            .expect("the local platform probe succeeds");
+        assert!(platform.kernel_major > 0);
+        let pidfd = probe
+            .probe(HostCapabilityClass::Pidfd)
+            .await
+            .expect("the pidfd capability probe succeeds");
+        assert_eq!(
+            pidfd,
+            platform.kernel_major > 5 || (platform.kernel_major == 5 && platform.kernel_minor >= 3)
+        );
     }
 
     #[test]

@@ -61,6 +61,40 @@ struct ManagedResource {
     generation: ResourceGeneration,
 }
 
+fn resource_identity_matches(
+    managed: &ManagedResource,
+    context: ProcessResourceContext<'_>,
+) -> bool {
+    managed.uid == *context.resource_uid && managed.generation == context.resource_generation
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ProcessResourceContext<'a> {
+    pub(crate) resource_ref: &'a ResourceRef,
+    pub(crate) resource_uid: &'a ResourceUid,
+    pub(crate) resource_generation: ResourceGeneration,
+    pub(crate) provider_ref: &'a ResourceRef,
+    pub(crate) controller_generation: ControllerGeneration,
+}
+
+impl<'a> ProcessResourceContext<'a> {
+    pub(crate) const fn new(
+        resource_ref: &'a ResourceRef,
+        resource_uid: &'a ResourceUid,
+        resource_generation: ResourceGeneration,
+        provider_ref: &'a ResourceRef,
+        controller_generation: ControllerGeneration,
+    ) -> Self {
+        Self {
+            resource_ref,
+            resource_uid,
+            resource_generation,
+            provider_ref,
+            controller_generation,
+        }
+    }
+}
+
 /// Result of a Provider-backed launch, carrying only opaque process identity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProviderLaunch {
@@ -327,55 +361,21 @@ impl ProductionProcessProviders {
         })
     }
 
-    /// Launch one durable or ephemeral v3 Process resource.
-    ///
-    /// The resource spec supplies only the typed execution binding and
-    /// template name. Executable, argv, sandbox, and identity data remain
-    /// resolved from the private trusted bundle by the broker resolver.
-    pub async fn launch_resource(
-        &self,
-        resource_ref: &ResourceRef,
-        resource_uid: &ResourceUid,
-        resource_generation: ResourceGeneration,
-        provider_ref: &ResourceRef,
-        spec: &ProcessSpec,
-        timeout: Duration,
-    ) -> Result<ProviderLaunch, String> {
-        self.launch_resource_with_controller_generation(
-            resource_ref,
-            resource_uid,
-            resource_generation,
-            provider_ref,
-            spec,
-            default_controller_generation(),
-            timeout,
-        )
-        .await
-    }
-
     /// Launch one durable Process resource with the controller generation
     /// rehydrated from the owning Zone store.
-    pub async fn launch_resource_with_controller_generation(
+    pub(crate) async fn launch_resource(
         &self,
-        resource_ref: &ResourceRef,
-        resource_uid: &ResourceUid,
-        resource_generation: ResourceGeneration,
-        provider_ref: &ResourceRef,
+        context: ProcessResourceContext<'_>,
         spec: &ProcessSpec,
-        controller_generation: ControllerGeneration,
         timeout: Duration,
     ) -> Result<ProviderLaunch, String> {
-        let provider = managed_provider_from_ref(provider_ref)?;
+        let provider = managed_provider_from_ref(context.provider_ref)?;
         let ticket = resource_ticket(
             &self.bundle,
-            resource_ref,
-            resource_uid,
-            resource_generation,
-            provider_ref,
+            context,
             spec.execution(),
             &serde_json::to_vec(spec).map_err(|_| "provider-ticket:serialization".to_owned())?,
             provider,
-            controller_generation,
             timeout,
         )?;
         let report = match provider {
@@ -389,62 +389,32 @@ impl ProductionProcessProviders {
             }
         };
         self.remember_resource(
-            resource_ref,
-            resource_uid,
-            resource_generation,
+            context.resource_ref,
+            context.resource_uid,
+            context.resource_generation,
             provider,
             report.identity,
         )?;
         Ok(ProviderLaunch {
             identity: report.identity,
         })
-    }
-
-    /// Launch one ephemeral v3 Process resource.
-    pub async fn launch_ephemeral_resource(
-        &self,
-        resource_ref: &ResourceRef,
-        resource_uid: &ResourceUid,
-        resource_generation: ResourceGeneration,
-        provider_ref: &ResourceRef,
-        spec: &EphemeralProcessSpec,
-        timeout: Duration,
-    ) -> Result<ProviderLaunch, String> {
-        self.launch_ephemeral_resource_with_controller_generation(
-            resource_ref,
-            resource_uid,
-            resource_generation,
-            provider_ref,
-            spec,
-            default_controller_generation(),
-            timeout,
-        )
-        .await
     }
 
     /// Launch one ephemeral Process resource with the controller generation
     /// rehydrated from the owning Zone store.
-    pub async fn launch_ephemeral_resource_with_controller_generation(
+    pub(crate) async fn launch_ephemeral_resource(
         &self,
-        resource_ref: &ResourceRef,
-        resource_uid: &ResourceUid,
-        resource_generation: ResourceGeneration,
-        provider_ref: &ResourceRef,
+        context: ProcessResourceContext<'_>,
         spec: &EphemeralProcessSpec,
-        controller_generation: ControllerGeneration,
         timeout: Duration,
     ) -> Result<ProviderLaunch, String> {
-        let provider = managed_provider_from_ref(provider_ref)?;
+        let provider = managed_provider_from_ref(context.provider_ref)?;
         let ticket = resource_ticket(
             &self.bundle,
-            resource_ref,
-            resource_uid,
-            resource_generation,
-            provider_ref,
+            context,
             spec.execution(),
             &serde_json::to_vec(spec).map_err(|_| "provider-ticket:serialization".to_owned())?,
             provider,
-            controller_generation,
             timeout,
         )?;
         let report = match provider {
@@ -458,9 +428,9 @@ impl ProductionProcessProviders {
             }
         };
         self.remember_resource(
-            resource_ref,
-            resource_uid,
-            resource_generation,
+            context.resource_ref,
+            context.resource_uid,
+            context.resource_generation,
             provider,
             report.identity,
         )?;
@@ -469,247 +439,79 @@ impl ProductionProcessProviders {
         })
     }
 
-    /// Adopt one durable Process resource after daemon restart.
-    pub async fn adopt_resource(
-        &self,
-        resource_ref: &ResourceRef,
-        resource_uid: &ResourceUid,
-        resource_generation: ResourceGeneration,
-        provider_ref: &ResourceRef,
-        spec: &ProcessSpec,
-    ) -> Result<ProviderAdoption, String> {
-        self.adopt_resource_with_controller_generation(
-            resource_ref,
-            resource_uid,
-            resource_generation,
-            provider_ref,
-            spec,
-            default_controller_generation(),
-        )
-        .await
-    }
-
     /// Adopt one durable Process resource with the controller generation
     /// rehydrated from the owning Zone store.
-    pub async fn adopt_resource_with_controller_generation(
+    pub(crate) async fn adopt_resource(
         &self,
-        resource_ref: &ResourceRef,
-        resource_uid: &ResourceUid,
-        resource_generation: ResourceGeneration,
-        provider_ref: &ResourceRef,
+        context: ProcessResourceContext<'_>,
         spec: &ProcessSpec,
-        controller_generation: ControllerGeneration,
     ) -> Result<ProviderAdoption, String> {
         self.adopt_resource_with_execution(
-            resource_ref,
-            resource_uid,
-            resource_generation,
-            provider_ref,
+            context,
             spec.execution(),
             &serde_json::to_vec(spec).map_err(|_| "provider-ticket:serialization".to_owned())?,
-            controller_generation,
-        )
-        .await
-    }
-
-    /// Adopt one ephemeral Process resource during continuation recovery.
-    pub async fn adopt_ephemeral_resource(
-        &self,
-        resource_ref: &ResourceRef,
-        resource_uid: &ResourceUid,
-        resource_generation: ResourceGeneration,
-        provider_ref: &ResourceRef,
-        spec: &EphemeralProcessSpec,
-    ) -> Result<ProviderAdoption, String> {
-        self.adopt_ephemeral_resource_with_controller_generation(
-            resource_ref,
-            resource_uid,
-            resource_generation,
-            provider_ref,
-            spec,
-            default_controller_generation(),
         )
         .await
     }
 
     /// Adopt one ephemeral Process resource with the controller generation
     /// rehydrated from the owning Zone store.
-    pub async fn adopt_ephemeral_resource_with_controller_generation(
+    pub(crate) async fn adopt_ephemeral_resource(
         &self,
-        resource_ref: &ResourceRef,
-        resource_uid: &ResourceUid,
-        resource_generation: ResourceGeneration,
-        provider_ref: &ResourceRef,
+        context: ProcessResourceContext<'_>,
         spec: &EphemeralProcessSpec,
-        controller_generation: ControllerGeneration,
     ) -> Result<ProviderAdoption, String> {
         self.adopt_resource_with_execution(
-            resource_ref,
-            resource_uid,
-            resource_generation,
-            provider_ref,
+            context,
             spec.execution(),
             &serde_json::to_vec(spec).map_err(|_| "provider-ticket:serialization".to_owned())?,
-            controller_generation,
-        )
-        .await
-    }
-
-    /// Probe one durable Process resource without retaining a new handle.
-    pub async fn probe_resource(
-        &self,
-        resource_ref: &ResourceRef,
-        resource_uid: &ResourceUid,
-        resource_generation: ResourceGeneration,
-        provider_ref: &ResourceRef,
-        spec: &ProcessSpec,
-    ) -> Result<ProviderLiveness, String> {
-        self.probe_resource_with_controller_generation(
-            resource_ref,
-            resource_uid,
-            resource_generation,
-            provider_ref,
-            spec,
-            default_controller_generation(),
         )
         .await
     }
 
     /// Probe one durable Process resource with the controller generation
     /// rehydrated from the owning Zone store.
-    pub async fn probe_resource_with_controller_generation(
+    pub(crate) async fn probe_resource(
         &self,
-        resource_ref: &ResourceRef,
-        resource_uid: &ResourceUid,
-        resource_generation: ResourceGeneration,
-        provider_ref: &ResourceRef,
+        context: ProcessResourceContext<'_>,
         spec: &ProcessSpec,
-        controller_generation: ControllerGeneration,
     ) -> Result<ProviderLiveness, String> {
         self.probe_resource_with_execution(
-            resource_ref,
-            resource_uid,
-            resource_generation,
-            provider_ref,
+            context,
             spec.execution(),
             &serde_json::to_vec(spec).map_err(|_| "provider-ticket:serialization".to_owned())?,
-            controller_generation,
-        )
-        .await
-    }
-
-    /// Probe one ephemeral Process resource without retaining a new handle.
-    pub async fn probe_ephemeral_resource(
-        &self,
-        resource_ref: &ResourceRef,
-        resource_uid: &ResourceUid,
-        resource_generation: ResourceGeneration,
-        provider_ref: &ResourceRef,
-        spec: &EphemeralProcessSpec,
-    ) -> Result<ProviderLiveness, String> {
-        self.probe_ephemeral_resource_with_controller_generation(
-            resource_ref,
-            resource_uid,
-            resource_generation,
-            provider_ref,
-            spec,
-            default_controller_generation(),
         )
         .await
     }
 
     /// Probe one ephemeral Process resource with the controller generation
     /// rehydrated from the owning Zone store.
-    pub async fn probe_ephemeral_resource_with_controller_generation(
+    pub(crate) async fn probe_ephemeral_resource(
         &self,
-        resource_ref: &ResourceRef,
-        resource_uid: &ResourceUid,
-        resource_generation: ResourceGeneration,
-        provider_ref: &ResourceRef,
+        context: ProcessResourceContext<'_>,
         spec: &EphemeralProcessSpec,
-        controller_generation: ControllerGeneration,
     ) -> Result<ProviderLiveness, String> {
         self.probe_resource_with_execution(
-            resource_ref,
-            resource_uid,
-            resource_generation,
-            provider_ref,
+            context,
             spec.execution(),
             &serde_json::to_vec(spec).map_err(|_| "provider-ticket:serialization".to_owned())?,
-            controller_generation,
-        )
-        .await
-    }
-
-    /// Stop one exact generic Process identity and finalize it.
-    pub async fn stop_resource(
-        &self,
-        resource_ref: &ResourceRef,
-        resource_uid: &ResourceUid,
-        resource_generation: ResourceGeneration,
-        provider_ref: &ResourceRef,
-        spec: &ProcessSpec,
-        term_timeout: Duration,
-        kill_timeout: Duration,
-    ) -> Result<bool, String> {
-        self.stop_resource_with_controller_generation(
-            resource_ref,
-            resource_uid,
-            resource_generation,
-            provider_ref,
-            spec,
-            default_controller_generation(),
-            term_timeout,
-            kill_timeout,
         )
         .await
     }
 
     /// Stop one exact generic Process identity with the controller
     /// generation rehydrated from the owning Zone store.
-    pub async fn stop_resource_with_controller_generation(
+    pub(crate) async fn stop_resource(
         &self,
-        resource_ref: &ResourceRef,
-        resource_uid: &ResourceUid,
-        resource_generation: ResourceGeneration,
-        provider_ref: &ResourceRef,
+        context: ProcessResourceContext<'_>,
         spec: &ProcessSpec,
-        controller_generation: ControllerGeneration,
         term_timeout: Duration,
         kill_timeout: Duration,
     ) -> Result<bool, String> {
         self.stop_resource_with_execution(
-            resource_ref,
-            resource_uid,
-            resource_generation,
-            provider_ref,
+            context,
             spec.execution(),
             &serde_json::to_vec(spec).map_err(|_| "provider-ticket:serialization".to_owned())?,
-            controller_generation,
-            term_timeout,
-            kill_timeout,
-        )
-        .await
-    }
-
-    /// Stop one exact generic EphemeralProcess identity and finalize it.
-    pub async fn stop_ephemeral_resource(
-        &self,
-        resource_ref: &ResourceRef,
-        resource_uid: &ResourceUid,
-        resource_generation: ResourceGeneration,
-        provider_ref: &ResourceRef,
-        spec: &EphemeralProcessSpec,
-        term_timeout: Duration,
-        kill_timeout: Duration,
-    ) -> Result<bool, String> {
-        self.stop_ephemeral_resource_with_controller_generation(
-            resource_ref,
-            resource_uid,
-            resource_generation,
-            provider_ref,
-            spec,
-            default_controller_generation(),
             term_timeout,
             kill_timeout,
         )
@@ -718,25 +520,17 @@ impl ProductionProcessProviders {
 
     /// Stop one exact generic EphemeralProcess identity with the controller
     /// generation rehydrated from the owning Zone store.
-    pub async fn stop_ephemeral_resource_with_controller_generation(
+    pub(crate) async fn stop_ephemeral_resource(
         &self,
-        resource_ref: &ResourceRef,
-        resource_uid: &ResourceUid,
-        resource_generation: ResourceGeneration,
-        provider_ref: &ResourceRef,
+        context: ProcessResourceContext<'_>,
         spec: &EphemeralProcessSpec,
-        controller_generation: ControllerGeneration,
         term_timeout: Duration,
         kill_timeout: Duration,
     ) -> Result<bool, String> {
         self.stop_resource_with_execution(
-            resource_ref,
-            resource_uid,
-            resource_generation,
-            provider_ref,
+            context,
             spec.execution(),
             &serde_json::to_vec(spec).map_err(|_| "provider-ticket:serialization".to_owned())?,
-            controller_generation,
             term_timeout,
             kill_timeout,
         )
@@ -744,16 +538,22 @@ impl ProductionProcessProviders {
     }
 
     /// Finalize one terminal generic Process identity.
-    pub async fn finalize_resource(&self, resource_ref: &ResourceRef) -> Result<(), String> {
+    pub(crate) async fn finalize_resource(
+        &self,
+        context: ProcessResourceContext<'_>,
+    ) -> Result<(), String> {
         let Some(managed) = self
             .managed_resources
             .lock()
             .map_err(|_| "provider-managed-state-poisoned".to_owned())?
-            .get(resource_ref)
+            .get(context.resource_ref)
             .cloned()
         else {
             return Ok(());
         };
+        if !resource_identity_matches(&managed, context) {
+            return Err("provider-process-identity-changed".to_owned());
+        }
         let result = match managed.provider {
             ManagedProvider::Minijail => self
                 .minijail
@@ -770,11 +570,11 @@ impl ProductionProcessProviders {
         };
         match result {
             Ok(()) => {
-                self.forget_resource(resource_ref);
+                self.forget_resource(context.resource_ref);
                 Ok(())
             }
             Err(error) if error == "pidfd-unavailable" || error == "process-vanished" => {
-                self.forget_resource(resource_ref);
+                self.forget_resource(context.resource_ref);
                 Ok(())
             }
             Err(error) => Err(error),
@@ -791,25 +591,17 @@ impl ProductionProcessProviders {
 
     async fn adopt_resource_with_execution(
         &self,
-        resource_ref: &ResourceRef,
-        resource_uid: &ResourceUid,
-        resource_generation: ResourceGeneration,
-        provider_ref: &ResourceRef,
+        context: ProcessResourceContext<'_>,
         execution: &d2b_contracts::v3::process::ExecutionSpec,
         spec_bytes: &[u8],
-        controller_generation: ControllerGeneration,
     ) -> Result<ProviderAdoption, String> {
-        let provider = managed_provider_from_ref(provider_ref)?;
+        let provider = managed_provider_from_ref(context.provider_ref)?;
         let ticket = resource_ticket(
             &self.bundle,
-            resource_ref,
-            resource_uid,
-            resource_generation,
-            provider_ref,
+            context,
             execution,
             spec_bytes,
             provider,
-            controller_generation,
             Duration::from_secs(30),
         )?;
         let outcome = match provider {
@@ -824,16 +616,16 @@ impl ProductionProcessProviders {
             AdoptionOutcome::Absent => Ok(ProviderAdoption::Absent),
             AdoptionOutcome::Adopted(report) => {
                 self.remember_resource(
-                    resource_ref,
-                    resource_uid,
-                    resource_generation,
+                    context.resource_ref,
+                    context.resource_uid,
+                    context.resource_generation,
                     provider,
                     report.identity,
                 )?;
                 Ok(ProviderAdoption::Adopted(report))
             }
             AdoptionOutcome::Quarantined(report) => {
-                self.forget_resource(resource_ref);
+                self.forget_resource(context.resource_ref);
                 Ok(ProviderAdoption::Quarantined(report))
             }
         }
@@ -841,25 +633,17 @@ impl ProductionProcessProviders {
 
     async fn probe_resource_with_execution(
         &self,
-        resource_ref: &ResourceRef,
-        resource_uid: &ResourceUid,
-        resource_generation: ResourceGeneration,
-        provider_ref: &ResourceRef,
+        context: ProcessResourceContext<'_>,
         execution: &d2b_contracts::v3::process::ExecutionSpec,
         spec_bytes: &[u8],
-        controller_generation: ControllerGeneration,
     ) -> Result<ProviderLiveness, String> {
-        let provider = managed_provider_from_ref(provider_ref)?;
+        let provider = managed_provider_from_ref(context.provider_ref)?;
         let ticket = resource_ticket(
             &self.bundle,
-            resource_ref,
-            resource_uid,
-            resource_generation,
-            provider_ref,
+            context,
             execution,
             spec_bytes,
             provider,
-            controller_generation,
             Duration::from_secs(30),
         )?;
         let candidate = match provider {
@@ -898,13 +682,9 @@ impl ProductionProcessProviders {
 
     async fn stop_resource_with_execution(
         &self,
-        resource_ref: &ResourceRef,
-        resource_uid: &ResourceUid,
-        resource_generation: ResourceGeneration,
-        provider_ref: &ResourceRef,
+        context: ProcessResourceContext<'_>,
         execution: &d2b_contracts::v3::process::ExecutionSpec,
         spec_bytes: &[u8],
-        controller_generation: ControllerGeneration,
         term_timeout: Duration,
         kill_timeout: Duration,
     ) -> Result<bool, String> {
@@ -912,10 +692,11 @@ impl ProductionProcessProviders {
             .managed_resources
             .lock()
             .map_err(|_| "provider-managed-state-poisoned".to_owned())?
-            .get(resource_ref)
+            .get(context.resource_ref)
             .cloned()
             .ok_or_else(|| "provider-process-not-found".to_owned())?;
-        if managed.uid != *resource_uid || managed.generation != resource_generation {
+        if managed.uid != *context.resource_uid || managed.generation != context.resource_generation
+        {
             return Err("provider-process-identity-changed".to_owned());
         }
         match self
@@ -929,19 +710,11 @@ impl ProductionProcessProviders {
         let deadline = Instant::now() + term_timeout;
         loop {
             match self
-                .probe_resource_with_execution(
-                    resource_ref,
-                    resource_uid,
-                    resource_generation,
-                    provider_ref,
-                    execution,
-                    spec_bytes,
-                    controller_generation,
-                )
+                .probe_resource_with_execution(context, execution, spec_bytes)
                 .await?
             {
                 ProviderLiveness::Exited => {
-                    self.finalize_resource(resource_ref).await?;
+                    self.finalize_resource(context).await?;
                     return Ok(false);
                 }
                 ProviderLiveness::Alive => {}
@@ -964,19 +737,11 @@ impl ProductionProcessProviders {
         let kill_deadline = Instant::now() + kill_timeout;
         loop {
             match self
-                .probe_resource_with_execution(
-                    resource_ref,
-                    resource_uid,
-                    resource_generation,
-                    provider_ref,
-                    execution,
-                    spec_bytes,
-                    controller_generation,
-                )
+                .probe_resource_with_execution(context, execution, spec_bytes)
                 .await?
             {
                 ProviderLiveness::Exited => {
-                    self.finalize_resource(resource_ref).await?;
+                    self.finalize_resource(context).await?;
                     return Ok(true);
                 }
                 ProviderLiveness::Alive | ProviderLiveness::Unknown => {}
@@ -1333,20 +1098,12 @@ fn managed_provider_from_ref(provider_ref: &ResourceRef) -> Result<ManagedProvid
     }
 }
 
-fn default_controller_generation() -> ControllerGeneration {
-    ControllerGeneration::new(1).expect("controller generation one is valid")
-}
-
 fn resource_ticket(
     bundle: &BundleResolver,
-    resource_ref: &ResourceRef,
-    resource_uid: &ResourceUid,
-    resource_generation: ResourceGeneration,
-    provider_ref: &ResourceRef,
+    context: ProcessResourceContext<'_>,
     execution: &d2b_contracts::v3::process::ExecutionSpec,
     spec_bytes: &[u8],
     provider: ManagedProvider,
-    controller_generation: ControllerGeneration,
     timeout: Duration,
 ) -> Result<LaunchTicket, String> {
     let execution_domain = match execution.domain().unwrap_or(ExecutionDomain::System) {
@@ -1365,24 +1122,24 @@ fn resource_ticket(
     {
         return Err("provider-ticket:template-not-found".to_owned());
     }
-    let provider_name = provider_ref.name().as_str();
+    let provider_name = context.provider_ref.name().as_str();
     let owner_provider =
         BoundedToken::parse(provider_name).map_err(|_| "provider-ticket:invalid-provider")?;
     let component = BoundedToken::parse("process-controller")
         .map_err(|_| "provider-ticket:invalid-component")?;
-    let generation = resource_generation.get();
+    let generation = context.resource_generation.get();
     let operation_uid = stable_uid(
         "operation",
-        &resource_ref.to_canonical_string(),
-        resource_uid.as_str(),
+        &context.resource_ref.to_canonical_string(),
+        context.resource_uid.as_str(),
         generation,
     );
     let deadline_ms = timeout.as_millis().clamp(1, 900_000) as u32;
     let ticket = LaunchTicket::new(
-        resource_ref.clone(),
-        resource_uid.clone(),
-        resource_generation,
-        controller_generation,
+        context.resource_ref.clone(),
+        context.resource_uid.clone(),
+        context.resource_generation,
+        context.controller_generation,
         owner_provider.clone(),
         component,
         execution.template().clone(),
@@ -1390,7 +1147,7 @@ fn resource_ticket(
         execution.domain().unwrap_or(ExecutionDomain::System),
         execution.user_ref().cloned(),
         owner_provider,
-        compiled_resource_digests(bundle, resource_ref, provider, spec_bytes),
+        compiled_resource_digests(bundle, context.resource_ref, provider, spec_bytes),
         OperationBinding::new(operation_uid, deadline_ms)
             .map_err(|_| "provider-ticket:invalid-operation")?,
         required_identity(provider),
@@ -1633,5 +1390,34 @@ mod tests {
             ProductionProcessProviders::provider_names(),
             &["system-minijail", "system-systemd"]
         );
+    }
+
+    #[test]
+    fn managed_resource_finalization_requires_the_current_resource_identity() {
+        let resource_ref = ResourceRef::parse("Process/worker").expect("resource ref");
+        let uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").expect("uid");
+        let provider_ref = ResourceRef::parse("Provider/system-minijail").expect("provider ref");
+        let managed = ManagedResource {
+            provider: ManagedProvider::Minijail,
+            identity: ProcessIdentityDigest::from_bytes([7; 32]),
+            uid: uid.clone(),
+            generation: ResourceGeneration::new(4).expect("generation"),
+        };
+        let context = ProcessResourceContext::new(
+            &resource_ref,
+            &uid,
+            ResourceGeneration::new(4).expect("generation"),
+            &provider_ref,
+            ControllerGeneration::new(1).expect("controller generation"),
+        );
+        assert!(resource_identity_matches(&managed, context));
+        let stale_context = ProcessResourceContext::new(
+            &resource_ref,
+            &uid,
+            ResourceGeneration::new(3).expect("generation"),
+            &provider_ref,
+            ControllerGeneration::new(1).expect("controller generation"),
+        );
+        assert!(!resource_identity_matches(&managed, stale_context));
     }
 }
