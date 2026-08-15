@@ -1,7 +1,6 @@
 # Integration fixtures
 
-This directory reserves the integration fixture surface for
-`Provider/transport-unix`. The current crate root has no executable
-integration behavior. The placeholder scenario declaration is required by the
-repository layout policy; replace it with the dossier's real fixture when
-implementation lands.
+The focused Rust integration surface lives in `../tests/scaffold.rs`. It uses
+real AF_UNIX socketpairs to prove portal admission, `SO_PASSCRED`, close-on-exec,
+route attachment refusal, and owned-monitor finalization without touching host
+state.

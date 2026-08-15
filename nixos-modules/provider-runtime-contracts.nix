@@ -334,6 +334,7 @@ let
         "relayEntityId"
         "relayNamespaceId"
       ];
+      unixSettings = [ "socketKind" ];
     in [
       {
         assertion = lib.all (key: !secretKey key) (lib.attrNames settings);
@@ -375,6 +376,18 @@ let
         {
           assertion = lib.all credentialBoundaryMatches credentialRows;
           message = "${row.path}.spec.transportCredentials must use supported credential Providers, acquire-token, and the Relay consumerRef.";
+        }
+      ]
+      ++ lib.optionals (providerRef == "Provider/transport-unix") [
+        {
+          assertion = lib.all (key: builtins.elem key unixSettings) (lib.attrNames settings)
+            && (!builtins.hasAttr "socketKind" settings
+              || builtins.elem settings.socketKind [ "seqpacket" "stream" ]);
+          message = "${row.path}.spec.transportSettings for Provider/transport-unix accepts only socketKind=seqpacket or socketKind=stream.";
+        }
+        {
+          assertion = credentialRefs == [ ];
+          message = "${row.path}.spec.transportCredentials must be empty for Provider/transport-unix.";
         }
       ];
 

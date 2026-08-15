@@ -15,6 +15,8 @@ pub enum FdPassingError {
     DuplicateFdInSingleSend,
     UnexpectedFdCount { expected: usize, actual: usize },
     MissingCloexec,
+    MessageTruncated,
+    ControlTruncated,
     IOError,
 }
 
@@ -87,7 +89,39 @@ pub fn send_fds(sock: RawFd, payload: &[u8], fds: &[RawFd]) -> io::Result<()> {
 }
 
 pub fn recv_fds(sock: RawFd) -> Result<(Vec<u8>, Vec<RawFd>), FdPassingError> {
-    let mut payload = [0_u8; 256];
+    recv_fds_with_capacity(sock, 256)
+}
+
+/// Receive an ancillary descriptor frame with an explicit payload bound.
+///
+/// This is used for request-side SCM_RIGHTS receipt where the JSON envelope
+/// can be larger than the compact response frames handled by [`recv_fds`].
+/// Truncation is refused before any received descriptor is released.
+pub fn recv_fds_with_capacity(
+    sock: RawFd,
+    payload_capacity: usize,
+) -> Result<(Vec<u8>, Vec<RawFd>), FdPassingError> {
+    recv_fds_with_capacity_inner(sock, payload_capacity, true)
+}
+
+/// Receive a frame whose descriptor attachments are optional.
+///
+/// Broker request frames are normally descriptor-free.  The dispatch layer
+/// decides which operations require an attachment, so this function preserves
+/// a zero-fd frame instead of treating every ordinary request as malformed.
+pub fn recv_fds_with_capacity_allow_empty(
+    sock: RawFd,
+    payload_capacity: usize,
+) -> Result<(Vec<u8>, Vec<RawFd>), FdPassingError> {
+    recv_fds_with_capacity_inner(sock, payload_capacity, false)
+}
+
+fn recv_fds_with_capacity_inner(
+    sock: RawFd,
+    payload_capacity: usize,
+    require_fd: bool,
+) -> Result<(Vec<u8>, Vec<RawFd>), FdPassingError> {
+    let mut payload = vec![0_u8; payload_capacity];
     let mut iov = [IoSliceMut::new(&mut payload)];
     let mut cmsg = cmsg_space!([RawFd; 8]);
     let (bytes, fds) = {
@@ -96,6 +130,25 @@ pub fn recv_fds(sock: RawFd) -> Result<(Vec<u8>, Vec<RawFd>), FdPassingError> {
         // fork+exec in the receiving process.
         let message = recvmsg::<()>(sock, &mut iov, Some(&mut cmsg), MsgFlags::MSG_CMSG_CLOEXEC)
             .map_err(|_| FdPassingError::IOError)?;
+        if message
+            .flags
+            .intersects(MsgFlags::MSG_TRUNC | MsgFlags::MSG_CTRUNC)
+        {
+            let mut received = Vec::new();
+            if let Ok(iter) = message.cmsgs() {
+                for cmsg in iter {
+                    if let ControlMessageOwned::ScmRights(rights) = cmsg {
+                        received.extend(rights);
+                    }
+                }
+            }
+            close_received_fds(&received);
+            return Err(if message.flags.contains(MsgFlags::MSG_CTRUNC) {
+                FdPassingError::ControlTruncated
+            } else {
+                FdPassingError::MessageTruncated
+            });
+        }
         let bytes = message.bytes;
         let mut fds = Vec::new();
         if let Ok(iter) = message.cmsgs() {
@@ -108,7 +161,7 @@ pub fn recv_fds(sock: RawFd) -> Result<(Vec<u8>, Vec<RawFd>), FdPassingError> {
         (bytes, fds)
     };
 
-    if fds.is_empty() {
+    if require_fd && fds.is_empty() {
         return Err(FdPassingError::MissingPassedFd);
     }
 
@@ -157,7 +210,8 @@ fn cloexec_is_set(fd: RawFd) -> bool {
         .unwrap_or(false)
 }
 
-fn close_received_fds(fds: &[RawFd]) {
+/// Close received descriptors on a terminal request or decode failure.
+pub fn close_received_fds(fds: &[RawFd]) {
     for fd in fds {
         let _ = close(*fd);
     }

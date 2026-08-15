@@ -84,6 +84,7 @@ pub fn recv_json_frame<T: DeserializeOwned>(fd: RawFd) -> io::Result<Option<T>> 
     if read == 0 {
         return Ok(None);
     }
+
     if read < 4 {
         return Err(io::Error::new(
             io::ErrorKind::UnexpectedEof,
@@ -108,6 +109,86 @@ pub fn recv_json_frame<T: DeserializeOwned>(fd: RawFd) -> io::Result<Option<T>> 
         .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
 }
 
+/// Receive one JSON frame and its close-on-exec SCM_RIGHTS attachments.
+///
+/// Request-side fd ownership is explicit: successful receipt transfers every
+/// descriptor into an [`std::os::fd::OwnedFd`], while malformed frames and
+/// decode failures close all descriptors before returning.
+pub fn recv_json_frame_with_fds<T: DeserializeOwned>(
+    fd: RawFd,
+) -> io::Result<Option<(T, Vec<std::os::fd::OwnedFd>)>> {
+    let (buffer, raw_fds) =
+        crate::fd_passing::recv_fds_with_capacity_allow_empty(fd, MAX_FRAME_SIZE + 4)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, format!("{error:?}")))?;
+    if buffer.is_empty() {
+        return Ok(None);
+    }
+    if buffer.len() < 4 {
+        crate::fd_passing::close_received_fds(&raw_fds);
+        return Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "frame shorter than 4-byte length prefix",
+        ));
+    }
+    let declared = u32::from_le_bytes(buffer[..4].try_into().expect("prefix length")) as usize;
+    if declared > MAX_FRAME_SIZE || declared != buffer.len() - 4 {
+        crate::fd_passing::close_received_fds(&raw_fds);
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "invalid SCM_RIGHTS frame length",
+        ));
+    }
+    let decoded = match serde_json::from_slice(&buffer[4..]) {
+        Ok(decoded) => decoded,
+        Err(error) => {
+            crate::fd_passing::close_received_fds(&raw_fds);
+            return Err(io::Error::new(io::ErrorKind::InvalidData, error));
+        }
+    };
+    let fds = raw_fds
+        .into_iter()
+        .map(crate::sys::owned_fd_from_raw)
+        .collect();
+    Ok(Some((decoded, fds)))
+}
+
 fn io_error(err: nix::errno::Errno) -> io::Error {
     io::Error::from_raw_os_error(err as i32)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nix::sys::socket::{AddressFamily, SockFlag, SockType, socketpair};
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
+    struct Frame {
+        request: String,
+    }
+
+    #[test]
+    fn request_receiver_preserves_ordinary_fd_free_frames() {
+        let (sender, receiver) = socketpair(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            None,
+            SockFlag::SOCK_CLOEXEC,
+        )
+        .expect("socket pair");
+        let expected = Frame {
+            request: "Hello".to_owned(),
+        };
+
+        send_json_frame(sender.as_raw_fd(), &expected).expect("send JSON request");
+        let (actual, fds) = recv_json_frame_with_fds::<Frame>(receiver.as_raw_fd())
+            .expect("receive JSON request")
+            .expect("request frame");
+
+        assert_eq!(actual, expected);
+        assert!(
+            fds.is_empty(),
+            "ordinary broker requests carry no SCM_RIGHTS"
+        );
+    }
 }
