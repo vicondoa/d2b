@@ -1,0 +1,22 @@
+{
+  "excluded_surfaces": [
+    "all other files",
+    "BSL/runtime/engine paths",
+    "LICENSE.BSL",
+    "skills/caveman-compress/"
+  ],
+  "files": {
+    "LICENSE": "1cd9aa70ec104afb3b0d2dc2e5343230f74737dc01fdc8dad585c9da6449d5a5",
+    "skills/caveman/README.md": "9369b69197e5d07e0c56679f9fc346f3539f58537c17f4e804a44612f086dc73",
+    "skills/caveman/SKILL.md": "daf9cec496ebd039809d8236f99f17fa1b4beaadf8ce4e2d532d0da51d70afce"
+  },
+  "imported_paths": [
+    "LICENSE",
+    "skills/caveman"
+  ],
+  "license": "MIT",
+  "upstream_commit": "2c67abb9833689b48c7abba88afaa77c39a18657",
+  "upstream_repository": "https://github.com/JuliusBrussee/caveman",
+  "upstream_tag": "v2.0.0",
+  "vendor_date": "2026-08-14"
+}
