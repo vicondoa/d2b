@@ -80,6 +80,30 @@ pub enum Category {
 }
 
 impl Category {
+    /// Every category admitted by the closed notification contract.
+    pub const ALL: [Self; 20] = [
+        Self::DeviceAdded,
+        Self::DeviceRemoved,
+        Self::DeviceError,
+        Self::NetworkConnected,
+        Self::NetworkDisconnected,
+        Self::NetworkError,
+        Self::PresenceOnline,
+        Self::PresenceOffline,
+        Self::SecurityEvent,
+        Self::SecurityError,
+        Self::TransferComplete,
+        Self::TransferError,
+        Self::TransferCancelled,
+        Self::UpdateAvailable,
+        Self::UpdateDownloading,
+        Self::UpdateReady,
+        Self::UpdateError,
+        Self::SystemInfo,
+        Self::SystemWarning,
+        Self::SystemError,
+    ];
+
     /// Return the stable metric label.
     pub const fn as_str(self) -> &'static str {
         match self {

@@ -121,6 +121,35 @@ impl<E: NotificationProcessEffectPort> NotificationRuntime<E> {
         )
     }
 
+    /// Deliver using route projections already authenticated and retained by
+    /// the daemon.  This is the production dispatcher entry point.
+    pub fn deliver_evidence<P: DesktopNotificationPort>(
+        &mut self,
+        port: &mut P,
+        source_session: &SessionEvidence,
+        observer_session: &SessionEvidence,
+        request: NotificationRequest,
+        now_secs: u64,
+    ) -> Result<NotificationResult, NotificationError> {
+        let config = self
+            .config
+            .guest_sources()
+            .iter()
+            .find(|configured| configured.source_ref() == source_session.subject_ref())
+            .ok_or(NotificationError::InvalidOpaqueKey)?;
+        let guest_source =
+            GuestSource::from_config_at_generation(config, source_session.generation())
+                .map_err(|_| NotificationError::InvalidOpaqueKey)?;
+        self.sink.deliver_from_guest_source(
+            port,
+            &guest_source,
+            source_session,
+            observer_session,
+            request,
+            now_secs,
+        )
+    }
+
     /// Consume one action capability using an authenticated observer session.
     pub fn invoke_action<C>(
         &mut self,
@@ -134,6 +163,16 @@ impl<E: NotificationProcessEffectPort> NotificationRuntime<E> {
         self.sink.invoke_action(action_key, &observer, now_secs)
     }
 
+    /// Consume one action capability using daemon-retained observer evidence.
+    pub fn invoke_action_evidence(
+        &mut self,
+        action_key: &str,
+        observer: &SessionEvidence,
+        now_secs: u64,
+    ) -> Result<String, ActionNonceError> {
+        self.sink.invoke_action(action_key, observer, now_secs)
+    }
+
     /// Close all projections owned by one authenticated observer session.
     pub fn close_observer<C>(
         &mut self,
@@ -144,6 +183,18 @@ impl<E: NotificationProcessEffectPort> NotificationRuntime<E> {
             .admit_observer()
             .map_err(|_| NotificationRuntimeError::SessionAdmissionFailed)?;
         self.sink.close_session(&observer);
+        Ok(())
+    }
+
+    /// Close all projections owned by daemon-retained observer evidence.
+    pub fn close_observer_evidence(
+        &mut self,
+        observer: &SessionEvidence,
+    ) -> Result<(), NotificationRuntimeError> {
+        observer
+            .admit_observer()
+            .map_err(|_| NotificationRuntimeError::SessionAdmissionFailed)?;
+        self.sink.close_session(observer);
         Ok(())
     }
 
@@ -301,6 +352,12 @@ impl<E: NotificationProcessEffectPort> NotificationRuntime<E> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{
+        Category, DesktopNotificationPort, GuestSourceConfig, NotificationRequest,
+        NotificationResult, SinkError,
+        admission::{test_observer, test_source},
+    };
+    use d2b_contracts::v3::{ResourceRef, ZoneId};
 
     #[derive(Default)]
     struct Effects {
@@ -325,6 +382,22 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
+    struct Port {
+        calls: usize,
+    }
+
+    impl DesktopNotificationPort for Port {
+        fn notify(
+            &mut self,
+            notification: &crate::SanitizedNotification,
+        ) -> Result<u32, SinkError> {
+            self.calls += 1;
+            assert!(!notification.body().is_empty());
+            Ok(self.calls as u32)
+        }
+    }
+
     #[test]
     fn finalization_drains_the_effect_plan_before_releasing_authority() {
         let config = NotificationProviderConfig::new(Vec::new()).unwrap();
@@ -341,5 +414,37 @@ mod tests {
         assert_eq!(runtime.effects.plans, 1);
         assert_eq!(runtime.effects.authority_releases, 1);
         assert_eq!(runtime.finalize().unwrap(), report);
+    }
+
+    #[test]
+    fn authenticated_evidence_delivery_redacts_and_issues_bounded_action_keys() {
+        let source_ref = ResourceRef::parse("Guest/guest").unwrap();
+        let source = GuestSourceConfig::new(
+            source_ref,
+            ZoneId::parse("work").unwrap(),
+            [Category::SystemInfo],
+        )
+        .unwrap();
+        let config = NotificationProviderConfig::new(vec![source]).unwrap();
+        let mut runtime = NotificationRuntime::new(config, Effects::default()).unwrap();
+        let mut port = Port::default();
+        let request = NotificationRequest::new("summary", "body", Category::SystemInfo).unwrap();
+        let result = runtime
+            .deliver_evidence(
+                &mut port,
+                &test_source("guest"),
+                &test_observer("alice"),
+                request,
+                1,
+            )
+            .unwrap();
+        assert!(matches!(
+            result,
+            NotificationResult::Accepted {
+                notification_id: 1,
+                ..
+            }
+        ));
+        assert_eq!(port.calls, 1);
     }
 }

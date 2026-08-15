@@ -83,6 +83,64 @@ impl SessionEvidence {
         })
     }
 
+    /// Admit a local desktop observer from the daemon's authenticated display
+    /// route.  The observer identity is still taken from verified route
+    /// metadata; only the service package differs because the display route
+    /// is the daemon's local desktop authority.
+    pub fn from_display_observer_route(
+        route: AuthenticatedSessionRouteBinding,
+    ) -> Result<Self, AdmissionError> {
+        if route
+            .provider_ref()
+            .is_none_or(|provider| provider.to_canonical_string() != "Provider/display-wayland")
+            || route.service().as_str() != "d2b.display.v3"
+            || route.evidence_class() != EvidenceClass::UnixPeer
+            || route.locality() != d2b_contracts::v3::Locality::Local
+            || route.subject_ref().resource_type().as_str() != "User"
+            || route.provider_generation().is_none()
+            || route.reconnect_generation().get() == 0
+        {
+            return Err(AdmissionError::SessionUnauthenticated);
+        }
+        Ok(Self {
+            subject_ref: route.subject_ref().clone(),
+            zone: route.zone().clone(),
+            generation: route.reconnect_generation().get(),
+            purpose: AdmissionPurpose::DesktopObserver,
+            transport: TransportClass::UnixSeqpacket,
+        })
+    }
+
+    /// Admit the host observer identity from a display dependency route and
+    /// its committed User resource.  The route authenticates the display
+    /// session and Zone; the resource-plane User reference is accepted only
+    /// after the daemon has committed the matching dependency.
+    pub fn from_display_dependency_route(
+        route: AuthenticatedSessionRouteBinding,
+        user_ref: ResourceRef,
+    ) -> Result<Self, AdmissionError> {
+        if route
+            .provider_ref()
+            .is_none_or(|provider| provider.to_canonical_string() != "Provider/display-wayland")
+            || route.service().as_str() != "d2b.display.v3"
+            || route.evidence_class() != EvidenceClass::UnixPeer
+            || route.locality() != d2b_contracts::v3::Locality::Local
+            || route.subject_ref().resource_type().as_str() != "Guest"
+            || user_ref.resource_type().as_str() != "User"
+            || route.provider_generation().is_none()
+            || route.reconnect_generation().get() == 0
+        {
+            return Err(AdmissionError::SessionUnauthenticated);
+        }
+        Ok(Self {
+            subject_ref: user_ref,
+            zone: route.zone().clone(),
+            generation: route.reconnect_generation().get(),
+            purpose: AdmissionPurpose::DesktopObserver,
+            transport: TransportClass::UnixSeqpacket,
+        })
+    }
+
     /// Admit a Guest source from an authenticated enrolled session.
     #[allow(dead_code)]
     pub(crate) fn from_source_route(
