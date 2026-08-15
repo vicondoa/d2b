@@ -405,10 +405,14 @@ fn assert_upstream_metadata(root: &Path, version_root: &str) {
         "{}: vendor_date drifted from the pinned value",
         metadata_path.display()
     );
+    let expected_skill_root = format!("{version_root}/skills");
     let expected_imports: BTreeSet<_> = std::iter::once("LICENSE".to_owned())
-        .chain(APPROVED_SKILLS.iter().filter_map(|&(skill_root, skill)| {
-            (skill_root == format!("{version_root}/skills")).then(|| format!("skills/{skill}"))
-        }))
+        .chain(
+            APPROVED_SKILLS
+                .iter()
+                .filter(|&&(skill_root, _)| skill_root == expected_skill_root)
+                .map(|&(_, skill)| format!("skills/{skill}")),
+        )
         .collect();
     let actual_imports: BTreeSet<_> = metadata.imported_paths.iter().cloned().collect();
     assert_eq!(
