@@ -1,24 +1,19 @@
-# Amendment request: Provider derivation artifact layout
+# Provider derivation artifact layout
 
 | Field | Value |
 | --- | --- |
 | Scope | The required derivation outputs of a Provider artifact: output name, file paths, executable set, digest preimages, signature anchoring, and the conformance scenarios that check them |
-| Raised under | The W5 audit, recorded in `implementation-debt.md` sections 12.1, 12.2, 12.3, 14.8, and 19.7 |
+| Origin | Recorded implementation debt and architecture rationale |
 | Deciding record | [ADR 0050](../../docs/adr/0050-provider-derivation-artifact-layout.md), **Accepted** |
 | Affected member specs | `ADR-046-resources-zone-control` (sections 4.3.1, 4.9 new, 13.4, 14.10, 15.8, 17); `ADR-046-provider-model-and-packaging` (Package catalog, Crate/package boundary); `ADR-046-nix-configuration` (Validation); `ADR-046-security-and-threat-model`; `ADR-046-decision-register` (D101 domain tags); provider dossiers `system-core` (naming **and** a `binaryRef` self-contradiction) and `transport-azure-relay` |
-| Affected manifests | `ADR-046-work-items.json`, `ADR-046-implementation-graph.json`, `ADR-046-implementation-graph.md`, `ADR-046-spec-set.json` - all four are **generated**, see section 9 |
-| Unblocks | `ADR046-zone-control-015` (T174), and transitively `ADR046-zone-control-016` (T212) and `ADR046-zone-control-021` (T213) |
-| Status | Accepted and applied with ADR 0050. The member-spec edits and generated artifacts below are authoritative |
+| Affected artifacts | Provider contracts, Nix catalog validation, Provider packaging, and focused conformance tests |
+| Status | Applied technical correction; existing ADR 0050 remains architectural rationale |
 
-## 0. Applying the accepted amendment
+## 0. Scope
 
-`docs/specs/` is normative and its work-item manifests are drift-gated. ADR 0050
-is now Accepted, so the replacement text below has been applied to the
-authoritative member specs and the generated registry/graph artifacts in the
-same W5 preparation change.
-
-Every edit below is a replacement or an insertion with its anchor quoted, so the
-implementer applying it does not have to infer placement.
+This artifact records the Provider derivation shape and the implementation
+corrections needed to validate it. The technical sections below support product
+implementation and focused conformance testing.
 
 ## 1. `ADR-046-resources-zone-control` section 4.3.1: correct the mislocated map
 
@@ -179,7 +174,7 @@ identity, version, or artifact ID, because the compiler must locate the manifest
 before it is entitled to believe anything the manifest declares about identity.
 
 Both directories are closed. `bin/` holds exactly the executable set and no
-subdirectory; `share/d2b/provider/` holds exactly those three files, and closure is enforced rather than merely stated: the compiler enumerates the directory and refuses any fourth entry with `provider-layout-entry-unexpected`, naming up to four offending entries in sorted order, each truncated to 64 bytes, plus the total count, so the message stays inside the §13.4 bound. Enforcing rather than relaxing is deliberate: a fourth file sitting beside the signed manifest is unpinned by every digest here, and its proximity to verified artifacts invites the assumption that it was verified. A Provider concern that genuinely needs one gets it by amending this section. The
+subdirectory; `share/d2b/provider/` holds exactly those three files, and closure is enforced rather than merely stated: the compiler enumerates the directory and refuses any fourth entry with `provider-layout-entry-unexpected`, naming up to four offending entries in sorted order, each truncated to 64 bytes, plus the total count, so the message stays inside the §13.4 bound. Enforcing rather than relaxing is deliberate: a fourth file sitting beside the signed manifest is unpinned by every digest here, and its proximity to verified artifacts invites the assumption that it was verified. A Provider concern that genuinely needs one gets it by extending this contract. The
 remainder of the output is unconstrained and unpinned, and the resource compiler
 MUST NOT read any path outside these two directories.
 
@@ -478,14 +473,10 @@ there is nothing to canonicalize. The executable set digest is domain-separated
 under D101 using the existing `canonical_digest` helper,
 `SHA-256(domain_tag || 0x00 || canonical_bytes)`.
 
-**Import the right helper.** Two functions in the workspace are named
-`canonical_digest`. `packages/d2b-contracts/src/v3/resource_schema.rs:518` is the
-D101 contract digest and hashes `domain_tag || 0x00 || canonical_bytes`;
-`packages/xtask/src/delivery/model.rs:591` belongs to the delivery tooling,
-hashes `domain || payload_len_u64_be || bytes`, and takes plain
-`serde_json::to_vec` output rather than `d2b-cjson/v1` canonical bytes. This
-amendment means the first. The second is not a D101 digest and must not be used
-for any artifact in this layout.
+**Import the right helper.** Use the D101 contract digest from
+`packages/d2b-contracts/src/v3/resource_schema.rs:518`, which hashes
+`domain_tag || 0x00 || canonical_bytes`. Artifact digests in this layout use
+that contract serialization and domain separation.
 
 The set digest binds the **map**, not a summary of it. The preimage is the
 serialization of the object
@@ -1142,7 +1133,7 @@ because this amendment created the obligation they discharge:
 Section 4.9.4 requires both JSON artifacts to *be* their own `d2b-cjson/v1`
 canonical bytes, and the resource compiler refuses any byte that differs. That
 rule is only reasonable if producing those bytes is a library call rather than an
-authoring discipline, so `ADR046-provider-001` acquires the obligation:
+authoring discipline, so the owning toolkit contract carries the obligation:
 
 **The toolkit MUST expose canonical emission as the only supported writer.**
 
@@ -1223,39 +1214,15 @@ by Phase 2 with `provider-manifest-not-canonical`. Such an author must:
 This applies to out-of-tree authoring only. Nothing in this repository has such
 a file to convert.
 
-## 9. Applying this amendment: the manifests are generated
+ ## 9. Historical implementation records
 
-`docs/specs/ADR-046-work-items.json`, `ADR-046-implementation-graph.json`,
-`ADR-046-implementation-graph.md`, and `ADR-046-spec-set.json` are **generated**
-from the markdown by `xtask spec-registry` and `xtask implementation-graph`, and
-are drift-gated by `tests/unit/gates/drift-check.sh`. They MUST NOT be
-hand-edited. The applying change edits the markdown, then runs:
-
-```bash
-cargo run --manifest-path packages/Cargo.toml -p xtask -- spec-registry
-cargo run --manifest-path packages/Cargo.toml -p xtask -- implementation-graph
-```
-
-and commits the regenerated JSON in the same commit. `make test-drift` is the
-gate that proves it. `gen_spec_set.rs` also asserts a fixed corpus size
-(`EXPECTED_MEMBERS = 55`, `EXPECTED_WORK_ITEMS = 545`); this amendment adds no
-member and no work item, so both counts are unchanged and a change in either is
-a signal that the edit did something unintended.
-
-## 10. Register rows this amendment closes
-
-| `implementation-debt.md` row | Disposition |
-| --- | --- |
-| Required derivation outputs have no path, filename, output name, or layout (12.2) | Closed by ADR 0050 items 1, 2, 4 and section 2 above |
-| Required-outputs row has no conformance scenario in the section 15.8 Phase 2 table (12.3) | Closed by section 4 above |
-| Output cardinality not checkable: no Provider crate has a package output (12.2) | Closed by ADR 0050 item 1: the cardinality is now an eval assertion on the artifact entry, which exists whether or not any Provider crate ships a package yet |
-| `d2b.artifacts.<id>.package` typed `types.package` already enforces the cardinality at the one entry point (12.2, "inference, needs confirm or reject") | **Reject.** `types.package` pins one derivation per artifact ID; it does not pin one output per derivation, and `"${package}"` selecting the first output is exactly the case it misses. It is also weaker than it looks: `lib.types.package.check` accepts a bare store path, which the module system coerces through `lib.toDerivation`. The inference is superseded by the explicit §4.9.1 predicate |
-| `ADR046-zone-control-015` stays blocked pending an amendment (19.7) | Closed on acceptance, with one carve-out: four scenarios stay blocked on the two obligations recorded in section 12, three on `ComponentExecution`/`BinaryRef` and one on the shim helper. `016` and `021` unblock, and `016` gains one new Phase 3 launcher scenario |
-| Catalog names component and descriptor digests; contract names exported schema and service digests (12.4) | **Partly narrowed, not closed.** The executable digest was never part of the dispute: the catalog's singular value and the manifest's map are different objects, and section 2 states the derivation rule. The component/descriptor versus schema/service pair remains open and remains `ADR046-provider-002`'s |
+ Source contracts and their owning generators remain authoritative for generated
+ product artifacts. The historical implementation records provide context for
+ this technical correction.
 
 ## 11. Drift observed while drafting, recorded not fixed
 
-Not in scope for this amendment; recorded so it is not lost.
+Not in scope for this technical correction; recorded so it is not lost.
 
 | Fact | Where |
 | --- | --- |
@@ -1264,7 +1231,7 @@ Not in scope for this amendment; recorded so it is not lost.
 | The root config schema is spelled three ways across the set: `config` (D075 and shipped `ProviderSpec::config`), `settingsSchemaDigest` in the `provider-catalog.json` example, and `configDigest` in the generated catalog shape. D075 and shipped code agree on `config` | D075, `ADR-046-nix-configuration`, `provider-catalog-shape.nix` |
 | `SPIKE-05`, which would have exercised exactly this layout before it was specified, is recorded "Specified - not yet executed" and `proofs/provider-packaging-spike/` does not exist | `ADR-046-feasibility-and-spikes` |
 
-## 12. Implementation obligations this amendment creates
+## 12. Implementation obligations recorded here
 
 Unlike section 11, these are **in scope**, so they are recorded
 separately rather than as observed drift. Two of the three block named
@@ -1272,8 +1239,8 @@ scenarios; the third blocks none and is recorded because the rule it
 discharges is otherwise satisfiable only by hand.
 
 The first obligation below is completed by the applied W5 contract change;
-its description retains the pre-amendment field inventory to make the drift
-that prompted the amendment explicit.
+its description retains the pre-correction field inventory to make the drift
+that prompted the correction explicit.
 
 | Obligation | Owner | Blocks |
 | --- | --- | --- |

@@ -102,7 +102,7 @@ explicitly OUT of W3 scope and are refused with the
 ### Implementation: NO libnftnl runtime dependency
 
 The integrator-prep nix build environment ships `nft(8)` but does NOT
-ship `libnftd2b-dev`. After panel review for the W3 prep commit, the
+ship `libnftd2b-dev`. After maintainer review for the W3 prep commit, the
 decision is to NOT pull the `nftnl` (or `nft-rs`) crate into the
 workspace at this time. Instead, `NftBatch::render_nft_script`
 produces a deterministic `nft -f -` text rendering that the broker

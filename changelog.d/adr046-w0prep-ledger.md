@@ -13,11 +13,10 @@
   executed, so the ledger no longer records, checks, audits, or reports a shard
   scope, and `tests/runtime-ledger-census.json` no longer pins a shard set.
   Real shards land only with the named deferred follow-up.
-- Reconciled the remaining ledger prose across `AGENTS.md`, `tests/README.md`,
-  the ADR-046 validation-and-delivery, streamline, and feasibility-and-spikes
-  specs, and the preparatory changelog fragments, so no surface advertises the
-  removed per-test enforcement, baseline, historical-regression, or shard
-  capabilities (there is no committed baseline file).
+- Reconciled the remaining ledger prose across `AGENTS.md` and
+  `tests/README.md`, so no surface advertises the removed per-test enforcement,
+  baseline, historical-regression, or shard capabilities (there is no
+  committed baseline file).
   Regenerating the census pin after a legitimate test change is a separate,
   supported step: `make runtime-ledger-pin`.
 - Documented the envelope policy lint's D116 negative-example marker in
@@ -27,13 +26,3 @@
   the exact `d2b-lint: expect-d116-eval-error` marker. The guidance frames it as
   a narrowly scoped intentional-rejection signal rather than a general
   suppression switch.
-
-### Fixed
-
-- Documented every `xtask` command in the ADR-046 delivery workflow with a
-  repository-root-runnable invocation. The previous `cargo xtask ...` form fails
-  from the repository root because that alias is defined only in
-  `packages/.cargo/config.toml`; the delivery spec now uses
-  `cargo run --manifest-path packages/Cargo.toml -p xtask -- ...` throughout and
-  notes the `sccache`-wrapper tradeoff plus the `cd packages && cargo xtask ...`
-  alternative.

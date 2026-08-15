@@ -1564,7 +1564,7 @@ are gated with `#[ignore]` and documented in `src/tests/integration/README`.
 
 ### Fast hermetic execution and test placement (D094)
 
-Per D094 and `ADR-046-validation-and-delivery` §10.16, this Provider's `src/`
+Per D094 and the repository's test-budget guidance, this Provider's `src/`
 unit tests and `tests/*.rs` hermetic suite are fast, in-process, deterministic,
 and parallel-safe: an individual normal test has an advisory wall-clock p95
 diagnostic threshold of <=50 ms; gate enforcement is aggregate per-crate
@@ -1596,7 +1596,7 @@ are met:
 | `D2B_RELAY_NAMESPACE` / `D2B_RELAY_ENTITY` environment variables in `d2b-relay.rs` CLI | Relay CLI replaced by `d2b transport status` and Provider-managed lifecycle; live integration tests updated to use Credential resources in config |
 
 Removal proof is not self-issued; it requires the matching Provider dossier's
-integration wave to record the removal in its panel and changelog.
+integration wave to record the removal in its changelog.
 
 Per D094, each replaced current-code test is retired with an explicit
 keep/adapt/move/delete disposition and a removal gate: the minimum reusable

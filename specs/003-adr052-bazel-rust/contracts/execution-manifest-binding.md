@@ -6,7 +6,7 @@ fields or IDs.
 
 Requirements:
 
-- Build Event Protocol results map to the exact eighteen IDs.
+- Build Event Protocol results map to the exact seventeen IDs.
 - A surface completes only after every mapped carrier and companion succeeds.
 - A surface with several carriers emits one surface verdict owned by its
   coverage-map verdict carrier only after every carrier succeeds. Tests plant

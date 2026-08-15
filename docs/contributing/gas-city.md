@@ -1,12 +1,8 @@
 # Gas City contributor environment
 
 > **Optional contributor infrastructure only.** Gas City is not a d2b
-> consumer feature and is not the ordinary contributor workflow. Gas City
-> runs do **not** use the d2b panel, selected-roster signoff, wave delivery,
-> wave sealing, attestation, receipt, merge-eligibility, or bespoke
-> evidence-pinning path. Standalone d2b contributors remain governed by
-> [`panel-review.md`](./panel-review.md), the wave process, and the other
-> d2b contributor contracts.
+> consumer feature and is not the ordinary contributor workflow. It owns its
+> own host services, worktrees, checks, and publication lifecycle.
 
 This guide describes the implemented host-native slice exported by this
 repository. It assumes a supported NixOS host and a dedicated repository
@@ -140,8 +136,7 @@ Gas City imports the Gas City, Compound Engineering, Discord, and local
 contributor packs as siblings. The local `d2b-contributor-build` formula
 keeps native Compound planning, review, synthesis, and bounded fixes. Its
 comment-resolution seam separates judgment, native `ce-work` editing,
-verification, and synthesis; this is native Compound behavior, not the d2b
-panel.
+verification, and synthesis; this is native Compound behavior.
 
 Model-backed roles use ACP profiles:
 
@@ -264,8 +259,8 @@ decisions to the supervisor. There is no public HTTPS interaction endpoint.
 Only configured users in the configured guild and channel can answer. The
 first valid answer wins the durable gate transition. Duplicate, late,
 unauthorized, malformed, or unknown answers are no-ops. Reconciliation after
-retry or restart is safe to repeat. This is a product-decision channel, not a
-d2b panel signoff or an approval receipt.
+retry or restart is safe to repeat. This is a product-decision channel with a
+durable operator decision.
 
 ## Pull-request publication
 
@@ -381,7 +376,7 @@ their branches are not disposable cache.
 
 ## Verification and acceptance
 
-### Pull-request and pre-PR gates
+### Pull-request and conditional validation
 
 Repository gates use fake services and no real external credentials. They
 cover module evaluation, package metadata, policy boundaries, native
@@ -389,16 +384,16 @@ Compound composition, ACP profile routing, identity and sidecar ownership,
 sandbox and egress behavior, local Nix store placement, BuildBuddy proxy
 protocol, and the absence of excluded d2b delivery surfaces.
 
-Host integration is also fake-credential and fixture based, but it runs
-locally before the pull request because the PR pipeline does not provide the
-required NixOS/KVM host. It is evidence of the boundary, not evidence that a
-live provider accepted a real mutation.
+Run host integration locally when a change touches the Gas City host module,
+NixOS/KVM behavior, or another surface that cannot be covered by focused
+tests. The PR pipeline does not provide that host. It is evidence of the
+boundary, not evidence that a live provider accepted a real mutation.
 
 ### Pre-merge live smoke
 
-After the implementation pull request opens, deploy its revision to a
-disposable acceptance repository with temporary scoped credentials. Before
-human merge, run:
+For changes to the Gas City deployment, provider, or live publication
+surfaces, deploy the revision to a disposable acceptance repository with
+temporary scoped credentials before human merge, and run:
 
 1. one bounded real Copilot ACP request;
 2. one Discord decision;

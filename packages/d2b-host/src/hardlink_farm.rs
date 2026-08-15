@@ -490,7 +490,7 @@ pub fn write_generation_marker(
         path: marker_path.display().to_string(),
         detail: e.to_string(),
     })?;
-    // W*-fu GPT-5.5 panel notable: fsync the parent dir after
+    // Review note: fsync the parent dir after
     // rename so the directory entry is durable. tmpfs is a no-op
     // here (it has no on-disk backing) but ext4 / xfs / btrfs need
     // this for full crash safety. Best-effort: errors are
@@ -1414,7 +1414,7 @@ pub fn swap_current_symlink(
         detail: e.to_string(),
     })?;
 
-    // W*-fu GPT-5.5 panel notable: fsync the store root AFTER
+    // Review note: fsync the store root AFTER
     // the rename so the directory entry update is durable under
     // power loss (ext4 with `data=writeback`, XFS, etc.). Best
     // effort: errors are non-fatal because the rename itself is

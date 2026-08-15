@@ -1661,7 +1661,7 @@ portability work splits that into three layers:
 macOS/vfkit, WSL, containers as hosts, Alpine/musl, non-systemd
 autostart, rootless Nix, Firecracker feature parity, crosvm-as-full-VMM
 parity, and aarch64 runtime graphics/audio. Adding any of these
-requires a new ADR + panel sign-off.
+requires a new ADR and explicit design review.
 
 ## 6.6 Headless daemon alpha threat-model delta
 

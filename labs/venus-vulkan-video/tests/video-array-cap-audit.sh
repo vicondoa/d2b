@@ -14,7 +14,7 @@
 # vn_cs_decoder_alloc_temp_array() reachable from a video command or video
 # struct must have a cap in the lines immediately above it. A new video array
 # with no entry in ARRAY_COUNT_LIMITS fails this gate on the commit that adds
-# it, rather than at the next panel.
+# it, rather than at the next review.
 
 set -euo pipefail
 

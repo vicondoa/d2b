@@ -135,7 +135,7 @@ walks off the end of the array.
 subtracted it from the generated mask. The generator already derives its masks
 from the supported set, so there was nothing to subtract - and it was a
 **second hand-written set deciding a question the generator answers**, which is
-the duplication the panel flagged, reproduced in the scrub.
+the duplication the review flagged, reproduced in the scrub.
 
 Found by a mutation that should have fired and did not: forcing the supported
 set to zero changed nothing, because the subtraction had no effect either way.

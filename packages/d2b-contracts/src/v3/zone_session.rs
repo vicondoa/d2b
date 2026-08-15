@@ -57,7 +57,7 @@
 //! `d2b.resource.v3` and `d2b.zone.v3`. The remaining new wire strings and
 //! every new numeric tag are the minimal defensible extension of the frozen
 //! scheme, not a spec quotation. They are listed in the module's report as
-//! inferences pending panel confirmation:
+//! inferences pending explicit contract confirmation:
 //! `EndpointPurpose::ZoneLocal` = 14, `EndpointPurpose::ZoneControl` = 15,
 //! `EndpointRole::ZoneRelay` = 9, `EndpointRole::ZoneBootstrap` = 10,
 //! `ServicePackage::ZoneV3` = 7, `ServicePackage::ZoneLinkV3` = 8, and the

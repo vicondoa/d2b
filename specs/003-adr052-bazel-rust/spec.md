@@ -8,7 +8,7 @@
 
 **Amended**: 2026-08-05
 
-**Status**: Draft amendment awaiting a new plan panel
+**Status**: Draft amendment awaiting review
 
 **Authority**: [ADR 0052](../../docs/adr/0052-bazel-rust-build-and-test.md),
 as amended by
@@ -16,7 +16,7 @@ as amended by
 
 ## Context
 
-Spec 003 migrates the eighteen Rust execution-manifest surfaces behind
+Spec 003 migrates the seventeen Rust execution-manifest surfaces behind
 `test-rust` from Cargo scheduling to Bazel scheduling through a reversible
 shadow period. The product goal is unchanged: remove duplicated compilation
 and scheduling while preserving exact coverage, test topology, supply-chain
@@ -47,8 +47,7 @@ their own locks, and no Bazel workspace file exists. Parked historical
 branches `spec003-w0-*` and `spec003-w0`, plus the unified Bazel spike, are
 evidence about a validated shape,
 not ancestors to merge or assumptions about the base. Implementation restarts
-from the merged `v3` lineage after this amended artifact set passes a new plan
-panel.
+from the merged `v3` lineage after this amended artifact set passes review.
 
 This remains a Track A feature because it changes the required Rust gate,
 dependency and policy authority, workflow structure, cache behavior, and
@@ -60,7 +59,7 @@ invariant.
 
 In scope:
 
-- the eighteen Rust execution-manifest surfaces behind `test-rust`;
+- the seventeen Rust execution-manifest surfaces behind `test-rust`;
 - one product Cargo workspace and lock plus the separate walker workspace and
   lock;
 - package-selected broker and guest Cargo lanes;
@@ -189,7 +188,7 @@ Out of scope:
   capability, wrong output, removed patch, changed policy, failed filter load,
   or unpatched Bazel refuses before any governed action.
 - Generated configured-target, `aquery`, and strategy inventories cover every
-  stable/nightly Rust action kind and require the patched Linux sandbox.
+  governed Rust action kind and require the patched Linux sandbox.
   Governed actions accept only `sandboxed`; `process`, `local`, `standalone`,
   `worker`, and `remote` execution and every fallback are forbidden.
 - In the sandbox child, before filter load, the patch rejects inherited socket
@@ -275,12 +274,12 @@ Out of scope:
 ### User Story 1 - Run a complete Bazel Rust gate beside Cargo - P1
 
 As a contributor, I can run a Bazel-backed aggregate and four attributed
-slices covering the same eighteen Rust surfaces while the Cargo path remains
+slices covering the same seventeen Rust surfaces while the Cargo path remains
 authoritative during shadow.
 
 Acceptance:
 
-1. A passing aggregate publishes all eighteen existing v1 surface IDs.
+1. A passing aggregate publishes all seventeen existing v1 surface IDs.
 2. A carrier failure names its surface and leaves schema-valid partial
    evidence.
 3. Fixture-backed contract surfaces remain on the Cargo and Nix fixture lane.
@@ -430,11 +429,11 @@ Acceptance:
 - **FR-004**: Bazel, Bzlmod, `rules_rust`, `cargo-bazel`, Rust toolchains,
   module locks, and Bazel-side hub locks MUST remain pinned and MUST have only
   repository-owned regeneration paths.
-- **FR-005**: Shadow MUST add the Bazel aggregate, four slices, and shutdown
+- **FR-005**: Shadow MUST add the Bazel aggregate, three slices, and shutdown
   entry point while keeping Cargo authoritative.
 - **FR-006**: Workflows MUST call approved Make targets and MUST NOT invoke
   Bazel or contributor mutation commands directly.
-- **FR-007**: The aggregate MUST represent exactly the eighteen baseline Rust
+- **FR-007**: The aggregate MUST represent exactly the seventeen baseline Rust
   surface IDs and no fixture-backed conditional ID.
 - **FR-008**: The coverage map MUST associate every surface with a nonempty
   carrier set, one slice, an exact derived census, and a topology where
@@ -469,16 +468,14 @@ Acceptance:
   `ENOSYS` fallback. The forced walk MUST use `O_NOFOLLOW` on intermediate
   components but not on the provider leaf. Strict result, cleanup, and
   evidence paths MUST retain
-  `RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS|RESOLVE_NO_MAGICLINKS`. Every auxiliary
+  `RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS|RESOLVE_NO_MAGICLINKS`.   Every auxiliary
   descriptor MUST be close-on-exec and behaviorally tested.
-  `VerifiedExecutable` MUST have private fields, an empty public inherent API
-  allowlist, and an empty locally-authored explicit trait-impl allowlist. The
-  compiler-derived API census MUST pin public/hidden items and exact
-  auto/blanket implementations and reject descriptor extraction/access,
+  `VerifiedExecutable` MUST have private fields and a private minting trait.
+  Defining-crate compiler ambiguity assertions, focused rustdoc `compile_fail`
+  examples, and external-seal tests MUST reject descriptor extraction/access,
   `Deref`, descriptor `Borrow`, fd traits, `Debug`/`Display`, serialization,
-  construction, conversion, defaulting, or duplication. Focused rustdoc
-  `compile_fail` examples MUST prove downstream capability absence; no
-  Cargo-shelling fixture may be added.
+  construction, conversion, defaulting, duplication, and unauthorized minting;
+  no Cargo-shelling fixture may be added.
   `VerifiedExecutable` and the only public API that consumes it MUST be
   co-located in one dependency-leaf crate. The safe Rust API MUST consume the
   handle by value and invoke `d2b-bazel-exec-supervisor` only from the exact
@@ -798,12 +795,12 @@ Acceptance:
 - **FR-047**: A missed ceiling MUST authorize only a larger runner or a further
   disjoint slice split, never weaker coverage or a relaxed ceiling.
 - **FR-048**: Promotion MUST require exact coverage, the isolated
-  eighteen-surface failure matrix, topology, selected package policy, native
+  seventeen-surface failure matrix, topology, selected package policy, native
   dual-architecture realization, performance, cache, and ten-record
   equivalence evidence, including the three explicit camelCase cache counts,
   broker twenty-run exclusivity, exact Nix-patched Bazel source/patch/policy/
   output hashes and startup capability, configured-target plus `aquery`
-  stable/nightly action-kind and strategy inventories, no patch-removal,
+  Rust action-kind and strategy inventories, no patch-removal,
   inherited-capability, setup-before-payload, stage, or unsandboxed gap, all
   eight pre-action socket/io_uring plants plus
   external-egress/live-index, exact
@@ -859,7 +856,7 @@ Acceptance:
   permitted. A startup capability probe, patch-removal plant, wrong-output
   plant, and filter-load failure MUST refuse before governed execution.
   Generated configured-target, `aquery`, and strategy inventories MUST bind
-  stable/nightly Rustc, metadata, Clippy, rustdoc, doctest compile/run,
+  Rustc, metadata, Clippy, rustdoc, doctest compile/run,
   rustfmt, unpretty, build-script, repository, setup, and test action kinds.
   Governed actions MUST use only the patched Linux `sandboxed` strategy, with
   no `process`, `local`, `standalone`, `worker`, `remote`, or other fallback.
@@ -918,8 +915,8 @@ Acceptance:
 - **FR-060**: Release containment and green-run qualification remain
   independent inputs. `spec003w7` qualification and code preparation MAY run
   before `spec003w6`, but its shared documentation/evidence task and merge MUST
-  depend on merged `spec003w6`, then rebase, revalidate, and receive a new
-  panel result. This keeps concurrently ready file ownership disjoint.
+  depend on merged `spec003w6`, then rebase and revalidate. This keeps
+  concurrently ready file ownership disjoint.
 - **FR-061**: Every qualification record MUST carry the explicit camelCase
   fields `bazelRestoreCount`, `bazelSaveCount`, and
   `bazelPublicationCount`. Every cold record MUST additionally carry
@@ -948,8 +945,8 @@ Acceptance:
   `tests/AGENTS.md`, and `docs/contributing/gates-and-lints.md` for the unified
   product workspace. The spec003w5 promotion change MUST update the same files
   plus `tests/README.md` and
-  `docs/reference/test-execution-manifest.md` from eight Rust leaves to four
-  Bazel slices, because those two reference documents also describe the eight
+  `docs/reference/test-execution-manifest.md` from seven Rust leaves to three
+  Bazel slices, because those two reference documents also describe the seven
   CI jobs. Promotion and retirement docs and semantic changelog fragments MUST
   list every hybrid surface and retained socket-using Cargo case, state that
   they are permanently hybrid under this specification, and name separate
@@ -1068,9 +1065,9 @@ Acceptance:
   review/commit, and rerun sequence. Exact retired-hub diagnostics remain
   unchanged.
 - **FR-081**: Promotion MUST introduce authoritative
-  `test-rust-slice-main`, `test-rust-slice-api`,
-  `test-rust-slice-broker`, and `test-rust-slice-aux` targets. Generated CI
-  calls only those targets. The eight existing public leaves retain their
+  `test-rust-slice-main`, `test-rust-slice-broker`, and
+  `test-rust-slice-aux` targets. Generated CI calls only those targets. The
+  seven existing public leaves retain their
   exact semantics and map to exact Bazel subsets, including
   `test-rust-main` conditional fixture behavior.
 - **FR-082**: Compatibility aliases MUST map `test-bazel-rust` to
@@ -1113,8 +1110,8 @@ Acceptance:
   Every code-changing wave MUST own one semantic changelog fragment.
 
 - **FR-085**: The same change that introduces each shadow Make target MUST add
-  that target to `APPROVED_MAKE_TARGETS`. All six shadow targets (the
-  aggregate, the four slices, and shutdown) MUST be approved in spec003w1,
+  that target to `APPROVED_MAKE_TARGETS`. All five shadow targets (the
+  aggregate, the three slices, and shutdown) MUST be approved in spec003w1,
   with a positive test proving each approved name resolves to a real Makefile
   rule and that a workflow step calling it is accepted, and a negative test
   proving both an unapproved `test-bazel-rust-<name>` call and an approved
@@ -1220,7 +1217,7 @@ Acceptance:
   closed bounds. Unreadable-source and unsupported-argument cases MUST execute
   the actual script as a subprocess and assert status 1 and 2 respectively,
   empty stdout, and byte-exact stderr. It MUST run
-  without production-code changes, be required before every plan panel, and
+  without production-code changes, be required before every review, and
   remain a planning tool rather than a repository gate.
 
 ## Key Entities
@@ -1269,7 +1266,7 @@ Acceptance:
   whose governed and declared source sets agree, whose scan results cover
   every governed source including zero-site sources, and whose discovered
   spawn sites are an exact governed subset.
-- **Rust Surface**: One of the existing eighteen execution-manifest IDs.
+- **Rust Surface**: One of the existing seventeen execution-manifest IDs.
 - **Carrier Target**: One independently reported Bazel target assigned to one
   Rust surface.
 - **Qualification Record**: A protected `v3` push record pairing Cargo,
@@ -1298,13 +1295,13 @@ Acceptance:
 
 ## Success Criteria
 
-- **SC-001**: Exactly eighteen surface IDs have nonempty, total, unambiguous
+- **SC-001**: Exactly seventeen surface IDs have nonempty, total, unambiguous
   carrier coverage.
 - **SC-002**: Ten consecutive protected-`v3` qualification records carry
   matching Cargo and Bazel verdicts and a passing same-commit fixture verdict.
-- **SC-003**: Eighteen isolated plants fail exactly their owning surfaces.
+- **SC-003**: Seventeen isolated plants fail exactly their owning surfaces.
 - **SC-004**: Cargo and Bazel report equal test, ignored, doctest,
-  harness-free, API, schema, scan, and pinned-inventory censuses.
+  harness-free, schema, scan, and pinned-inventory censuses.
 - **SC-005**: Each broker context passes twenty consecutive executions under
   the required serialized topology.
 - **SC-006**: Three warm local samples have median at most 10 minutes and
@@ -1337,7 +1334,7 @@ Acceptance:
   8.6.0 output and its source, patch, policy, output NAR, executable, and
   capability hashes match the committed identity. Startup probe,
   patch-removal, wrong-output, filter-load, configured-target, `aquery`, and
-  strategy inventories prove every governed stable/nightly compile, build,
+  strategy inventories prove every governed Rust compile, build,
   setup, and test action enters the patched Linux sandbox with no process,
   local, standalone, worker, remote, or other fallback. Inherited socket,
   ordinary-ring, SQPOLL-ring, and fixed-socket-ring plants refuse before load;
@@ -1364,8 +1361,8 @@ Acceptance:
 - **SC-019**: Module refresh changes only `MODULE.bazel.lock` when stale,
   changes nothing on its second run, carries matching absolute startup
   options, and has zero Make/workflow reachability.
-- **SC-020**: Provider route, descriptor inheritance, `ENOSYS`, API-census,
-  rustdoc capability, same-open-file-description, declared stdin/stdout/stderr,
+- **SC-020**: Provider route, descriptor inheritance, `ENOSYS`, defining-crate
+  compiler seals, rustdoc capability, same-open-file-description, declared stdin/stdout/stderr,
   private-fd identity, CLOEXEC and rebind-absence positives pass. The exact
   immutable static C supervisor Nix output, source/output/dependency hashes,
   fixed protocol, and reviewed safe command-fd mapping are bound. One Rust
@@ -1435,7 +1432,7 @@ Acceptance:
 - **SC-032**: Post-promotion run units are complete and derived; the last ten
   distinct ordered run units are successes with no intervening reset before
   retirement.
-- **SC-033**: All six shadow Make targets are approved in spec003w1 and each
+- **SC-033**: All five shadow Make targets are approved in spec003w1 and each
   resolves to a real Makefile rule; an unapproved shadow target call and an
   approved name without a Makefile rule both fail.
 - **SC-034**: The typed qualification validator derives every threshold from
@@ -1524,7 +1521,7 @@ Acceptance:
   `spec003w5` protected-`v3` merge; old-SHA, candidate-SHA, wrong-seal, and
   unsealed-merge plants fail before either post-promotion eligibility check.
 - **SC-042**: Qualification rejects advisory classification for
-  `test-flake-aarch64`, each of the four Rust slices, and `test-rust`; each
+  `test-flake-aarch64`, each of the three Rust slices, and `test-rust`; each
   advisory mutation fails.
 - **SC-043**: Post-promotion eligibility is identical when derived from the
   complete transient stream and from its in-memory oracle, while persisted
@@ -1553,7 +1550,7 @@ Acceptance:
   complete corrections are recorded in `plan.md`.
 - The root flake system set remains exactly `x86_64-linux` and
   `aarch64-linux`.
-- The existing eighteen surface IDs and two fixture-backed companion surfaces
+- The existing seventeen surface IDs and two fixture-backed companion surfaces
   remain unchanged.
-- Implementation may begin only after this amended artifact set receives
-  unanimous Track A plan-panel signoff.
+- Implementation may begin only after this amended artifact set passes the
+  Track A review.

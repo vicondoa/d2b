@@ -22,7 +22,7 @@
 //! Spec correction (per AGENTS.md "Existing code is canon"): the W3
 //! plan example shows kebab-case wire discriminants (e.g.
 //! `delegate-cgroup-v2`); the existing W2 broker enum uses PascalCase
-//! variants (e.g. `DelegateCgroupV2`). W2 panel signoff froze the
+//! variants (e.g. `DelegateCgroupV2`). W2 review froze the
 //! PascalCase convention. This module preserves the existing wire
 //! convention.
 

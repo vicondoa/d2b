@@ -18,38 +18,34 @@ For repo-specific operational policy, see [AGENTS.md](./AGENTS.md).
    ```
 2. Install Nix with flakes enabled (`experimental-features = nix-command flakes`).
 3. No separate `nix develop` shell is needed.
-4. Validate the framework with:
-   ```bash
-   nix flake check --no-build --all-systems
-   ```
+4. Run focused checks for the components you change. Broader flake checks
+   remain available when the changed surface requires them.
 
 ## Running quality gates
 
-- `bash tests/static.sh` is the top-level Layer-1 gate.
-- It runs parse checks, smoke evals, assertion tests, manifest schema validation, and per-example flake checks.
-- See [tests/README.md](./tests/README.md) for the full test layering and optional Layer-2 integration tests.
+Run focused tests for each changed component. Use `bash tests/static.sh`,
+`make check`, or another broader Layer-1 target when the changed surface needs
+that coverage; none is a prerequisite for opening a PR or starting review.
+Container, host, live, hardware, and performance lanes are conditional on the
+changed surface. See [tests/README.md](./tests/README.md) for the test layering
+and public conditional integration targets.
 
 <a id="rust-workspace-checks"></a>
 
 ### Rust workspace checks
 
-The `packages/` Cargo workspace is gated by `tests/static.sh` and by
-`nix flake check --no-build --all-systems`. To run the gate locally:
+The `packages/` Cargo workspace is covered by CI's Layer-1 jobs. For a local
+change, run the focused test and lint commands for the components you changed;
+the aggregate gates remain available when the changed surface needs broader
+coverage.
 
 ```bash
-cargo --manifest-path packages/Cargo.toml fmt --check
-cargo --manifest-path packages/Cargo.toml clippy --workspace --all-targets -- -D warnings
-cargo --manifest-path packages/Cargo.toml test --workspace
-cargo --manifest-path packages/Cargo.toml deny check
-cargo --manifest-path packages/Cargo.toml audit
-nix build .#checks.x86_64-linux.rust-build \
-          .#checks.x86_64-linux.rust-tests \
-          .#checks.x86_64-linux.rust-clippy \
-          .#checks.x86_64-linux.rust-deny \
-          .#checks.x86_64-linux.rust-audit
-for c in rust-build rust-tests rust-clippy rust-deny rust-audit; do
-  nix eval --raw ".#checks.aarch64-linux.${c}.drvPath" >/dev/null || exit 1
-done
+# Examples; select the commands that cover the changed components.
+cargo --manifest-path packages/Cargo.toml test -p <changed-crate>
+cargo --manifest-path packages/Cargo.toml clippy -p <changed-crate> --all-targets -- -D warnings
+
+# Optional broader Layer-1 aggregate.
+make check
 ```
 
 The pinned toolchain in `packages/rust-toolchain.toml` is honored only
@@ -81,7 +77,8 @@ cargo deny --manifest-path packages/d2b-guest-shell-runner/Cargo.toml check --co
 cargo audit --file packages/d2b-guest-shell-runner/Cargo.lock --ignore RUSTSEC-2024-0384
 ```
 
-`bash tests/static.sh` also has a fast path for Rust-heavy gates:
+`bash tests/static.sh` remains available as a broader Layer-1 gate when the
+changed surface needs it. It also has a fast path for Rust-heavy gates:
 
 - it resolves one shared Rust toolchain shell at the top of the run and
   reuses that PATH in child scripts instead of spawning a fresh `nix shell`
@@ -146,9 +143,9 @@ Contributors touching anything in `packages/d2b-host/`,
 `packages/d2b-priv-broker/src/ops/`, or the host-prepare
 docs (`docs/how-to/host-prepare.md`,
 `docs/how-to/host-prepare.d/*.md`,
-`docs/reference/{cgroup-delegation,inet-d2b-chains,privileges,support-matrix}.md`,
-ADRs 0011-0014) MUST run the host-prepare Layer-1 gate set before
-submitting:
+`docs/reference/{cgroup-delegation,inet-d2b-chains,privileges,support-matrix}.md`)
+MUST run the host-prepare Layer-1 gate set when the change
+touches those host-prepare surfaces:
 
 ```bash
 # From the repo root:
@@ -186,7 +183,7 @@ PR gate. Run them locally when:
   `ApplyNftables` apply, `ApplyNmUnmanaged` apply, `ModprobeIfAllowed`).
 - You bump the L3 distro pin in
   `tests/golden/l3-matrix/w3-{ubuntu,fedora,arch}.txt`. The
-  panel-gated pin requires a fresh L2 run against the new image.
+  pinned image requires a fresh L2 run against the new image.
 - You touch the runner-shape preflight or the minijail version
   check.
 

@@ -550,7 +550,7 @@ let
       );
     };
 
-    # v1.1.2fu19 panel-test R2 must-fix: stablePrincipalId UID
+    # v1.1.2fu19 stablePrincipalId UID regression
     # collision assertion (per the new check in
     # nixos-modules/minijail-profiles.nix:538-575). vm2672 and
     # vm8350 are a known-colliding pair whose

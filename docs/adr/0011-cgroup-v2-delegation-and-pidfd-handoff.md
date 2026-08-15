@@ -130,7 +130,7 @@ W3 must pick:
    written by W3 code. `assert_partition_member_only` panics in
    debug builds and returns `cgroup-partition-root-forbidden` in
    release builds. Partition-root creation would require a separate
-   panel-approved ADR override.
+   reviewed ADR override.
 
 4. **Threaded cgroups forbidden.** `cgroup.type=threaded` is refused
    with `cgroup-threaded-forbidden`. W3 has no use case that requires
@@ -253,7 +253,7 @@ Rejected because:
 - it cannot enforce that the broker re-derives paths from the
   trusted bundle - it accepts caller-supplied paths;
 - its kill scope is process-list-based, not cgroup-leaf-bounded;
-- the C ABI surface adds a panel-relevant supply-chain dependency
+- the C ABI surface adds a supply-chain dependency
   outside our existing Rust-only crate inventory;
 - it does not enforce non-root delegation at the API surface.
 
@@ -334,7 +334,7 @@ the broker captured at spawn.
   [docs/how-to/host-prepare.d/cgroup.md](../how-to/host-prepare.d/cgroup.md)
   document the remediation.
 - Negative: partition-root and threaded-cgroup support is deferred to
-  future panel-approved ADRs.
+  future reviewed ADRs.
 
 ## Test coverage
 

@@ -31,7 +31,7 @@ entirely in the Venus stack.
 > **specific device block**, because this host also exposes `llvmpipe`. An
 > earlier whole-file `grep` version of this check reported PASS for reasons that
 > would also have held if the NVIDIA ICD had vanished entirely - precisely the
-> false-pass mode the panel warned about.
+> false-pass mode the review warned about.
 
 ## 2. Capability inside the crosvm sandbox - ✅ PASS (after two fixes)
 
@@ -54,7 +54,7 @@ running it:
 `/sys`, `/dev/nvidia-modeset` and `/dev/nvidia-uvm-tools` were **absent from the
 originally planned bind set**. Without them the sidecar would have reported no
 NVIDIA Vulkan Video at all, while a host-shell probe kept passing - the exact
-silent divergence the panel required this check to catch.
+silent divergence the review required this check to catch.
 
 ## 3. Protocol baseline (venus-protocol `base/70991d4`)
 
@@ -68,7 +68,7 @@ silent divergence the panel required this check to catch.
 | First free value | **346** |
 | `xmls/` | `vk.xml`, `VK_EXT_command_serialization.xml`, `VK_MESA_venus_protocol.xml` |
 
-**Correction to the plan's risk model.** The panel raised a HIGH finding that
+**Correction to the plan's risk model.** The review raised a HIGH finding that
 adding entries to `VK_XML_EXTENSION_LIST` might renumber existing
 `VK_COMMAND_TYPE_*` values and silently break old guests. Inspection shows IDs
 are **explicitly assigned in the XML**:
@@ -172,7 +172,7 @@ nix run "$LAB_FLAKE#prove-guest-icd"
 > common extension-name table regardless of driver support. The real signal is
 > Venus's static passthrough allowlist in
 > `src/virtio/vulkan/vn_physical_device.c`, so the check now inspects the
-> source that is actually built. Same class of error the panel flagged for
+> source that is actually built. Same class of error the review flagged for
 > Firefox evidence - worth repeating that a check which cannot fail proves
 > nothing.
 

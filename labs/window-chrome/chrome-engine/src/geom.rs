@@ -8,7 +8,7 @@
 //! 2. That region must be at least 32x32 logical px and must sit entirely
 //!    inside proxy-owned chrome, never overlapping guest content.
 
-/// Minimum pointer target, per WCAG 2.2 SC 2.5.8 plus the panel's Fitts's-law
+/// Minimum pointer target, per WCAG 2.2 SC 2.5.8 plus the review's Fitts's-law
 /// uplift from 24 to 32.
 pub const MIN_TARGET: u32 = 32;
 /// Minimum visible (drawn) height of the identity button.
@@ -117,7 +117,7 @@ pub struct ChromeLayout {
     pub reflow: Reflow,
 }
 
-/// The steps a layout took to fit, in the order the panel fixed:
+/// The steps a layout took to fit, in the order the review fixed:
 /// short name, then wrap, then grow the band. Identity always wins, and
 /// security-capability state is never dropped - it moves to a second row and
 /// grows the band rather than disappearing into the menu.
@@ -778,7 +778,7 @@ mod tests {
         assert!(!r.contains(9, 10));
     }
 
-    /// The panel required this cost to be stated rather than hidden.
+    /// The review required this cost to be stated rather than hidden.
     #[test]
     fn stacked_column_cost_is_n_times_band_height() {
         let single = resolve(LayoutInput::default()).layout().unwrap();

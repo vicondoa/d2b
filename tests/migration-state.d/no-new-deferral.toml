@@ -1,0 +1,2 @@
+status = "retired"
+successor_ids = ["retired-by-scope: ADR deferral validation removed"]

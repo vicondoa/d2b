@@ -2,7 +2,7 @@
 
 - ADR 0046 ZoneLink: specified the crash-safe
   `Unenrolled -> IKpsk2 -> EnrollmentCommitted -> KK -> Ready` session state
-  machine on the owning ZoneLink-handler work item and every mirror, replacing
+  machine on the owning ZoneLink handler and every mirror, replacing
   the prior generic `Pending/Established/Disconnected/Reconnecting/Revoked`
   model that had no enrollment or PSK-consumption semantics. Resource traffic is
   now prohibited before the enrolled KK session reaches Ready; each PSK consume,
@@ -32,14 +32,9 @@
   omission only in explicitly labelled rejection fixtures, so the superset
   invariant holds across the primitive-resource-composition, system-core, and
   credential-entra specs and the remaining mixed-domain examples.
-- ADR 0046 current-state prose: corrected the remaining current-source rows that
-  still asserted the spec registry, implementation graph, and execution-time
-  ledger do not exist, distinguishing the tooling that has landed and is wired
-  through `xtask`, the drift gate, and Layer 1 from the binding, wiring, and
-  hardening work that remains.
-- ADR 0046 delivery docs: corrected the `MergeTarget` artifact example, which
-  used pull-request number `0` (rejected by the implementation), to a positive
-  number and stated the nonzero constraint explicitly.
+- ADR 0046 current-state prose: corrected the remaining source rows so they
+  distinguish completed contracts from the binding, wiring, and hardening work
+  that remains.
 - Contributor docs: corrected the spec-literal lint allowlist guidance in
   `AGENTS.md`. There is no inline `d2b-lint-allow` marker; the lint rejects that
   escape hatch, and the sole exemption is the decision-register row that defines

@@ -83,19 +83,15 @@ pub enum WaveCommand {
     Help,
     Snapshot,
     ValidateImport,
-    PanelRequest,
-    PanelAttest,
     Seal,
     MergeTarget,
     MergeEligibility,
 }
 
 /// Every wave subcommand, in workflow order.
-pub const WAVE_COMMANDS: [WaveCommand; 8] = [
+pub const WAVE_COMMANDS: [WaveCommand; 6] = [
     WaveCommand::Snapshot,
     WaveCommand::ValidateImport,
-    WaveCommand::PanelRequest,
-    WaveCommand::PanelAttest,
     WaveCommand::Seal,
     WaveCommand::MergeTarget,
     WaveCommand::MergeEligibility,
@@ -108,8 +104,6 @@ impl WaveCommand {
             Self::Help => "help",
             Self::Snapshot => "snapshot",
             Self::ValidateImport => "validate-import",
-            Self::PanelRequest => "panel-request",
-            Self::PanelAttest => "panel-attest",
             Self::Seal => "seal",
             Self::MergeTarget => "merge-target",
             Self::MergeEligibility => "merge-eligibility",
@@ -128,7 +122,6 @@ impl WaveCommand {
             Self::Help => "ADR046-delivery-002",
             Self::Snapshot => "ADR046-delivery-002",
             Self::ValidateImport => "ADR046-delivery-003",
-            Self::PanelRequest | Self::PanelAttest => "ADR046-delivery-005",
             Self::Seal | Self::MergeTarget | Self::MergeEligibility => "ADR046-delivery-006",
         }
     }
@@ -144,15 +137,7 @@ impl WaveCommand {
                 "Import CI, local, and host validator command results as evidence addressed by \
                  candidate ID."
             }
-            Self::PanelRequest => {
-                "Write the candidate-bound selected-roster panel request into external delivery state."
-            }
-            Self::PanelAttest => {
-                "Validate one panel record per role against the candidate's digests."
-            }
-            Self::Seal => {
-                "Bind unanimous panel records and passing validator lanes to one candidate."
-            }
+            Self::Seal => "Bind passing validator lanes to one candidate.",
             Self::MergeTarget => {
                 "Capture the wave's current pull-request stack into the candidate as the \
                  merge-eligibility input."
@@ -186,14 +171,6 @@ impl WaveCommand {
                  [--lane github-ci|local-host] [--command TEXT] [--log PATH] [--locator TEXT] \
                  [--candidate CANDIDATE_ID] [--state-dir DIR]"
             }
-            Self::PanelRequest => {
-                "cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave panel-request --snapshot PATH \
-                 --selection PATH --repo LOGICAL_ID=CHECKOUT_ROOT [--state-dir DIR]"
-            }
-            Self::PanelAttest => {
-                "cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave panel-attest --snapshot PATH --records DIR \
-                 --repo LOGICAL_ID=CHECKOUT_ROOT [--state-dir DIR]"
-            }
             Self::Seal => {
                 "cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave seal --snapshot PATH --repo LOGICAL_ID=CHECKOUT_ROOT \
                  [--state-dir DIR]"
@@ -214,8 +191,6 @@ impl WaveCommand {
             Self::Help => &[],
             Self::Snapshot => &["--program", "--wave", "--repo", "--base", "--pull-request"],
             Self::ValidateImport => &["--snapshot", "--validation", "--result", "--repo"],
-            Self::PanelRequest => &["--snapshot", "--selection", "--repo"],
-            Self::PanelAttest => &["--snapshot", "--records", "--repo"],
             Self::Seal => &["--snapshot", "--repo"],
             Self::MergeTarget => &["--seal", "--target", "--repo"],
             Self::MergeEligibility => &["--seal", "--repo"],
@@ -266,8 +241,6 @@ impl WaveCommand {
             Self::Help
                 | Self::Snapshot
                 | Self::ValidateImport
-                | Self::PanelRequest
-                | Self::PanelAttest
                 | Self::Seal
                 | Self::MergeTarget
                 | Self::MergeEligibility
@@ -515,8 +488,6 @@ fn dispatch_wave(args: &[String]) -> Result<WorkflowOutput> {
         }
         WaveCommand::Snapshot => super::snapshot::run(rest),
         WaveCommand::ValidateImport => super::evidence::run(rest),
-        WaveCommand::PanelRequest => super::panel::run_request(rest),
-        WaveCommand::PanelAttest => super::panel::run_attest(rest),
         WaveCommand::Seal => super::seal::run(rest),
         WaveCommand::MergeTarget => super::eligibility::run_capture(rest),
         WaveCommand::MergeEligibility => super::eligibility::run(rest),
@@ -660,8 +631,6 @@ mod tests {
             vec![
                 "snapshot",
                 "validate-import",
-                "panel-request",
-                "panel-attest",
                 "seal",
                 "merge-target",
                 "merge-eligibility",
@@ -811,21 +780,6 @@ mod tests {
     }
 
     #[test]
-    fn panel_request_requires_a_selection_path() {
-        let error = dispatch(&args(&[
-            "wave",
-            "panel-request",
-            "--snapshot",
-            "W0/candidate/snapshot.json",
-            "--repo",
-            "github.com/example/d2b=/checkout",
-        ]))
-        .expect_err("panel-request without --selection");
-        assert_eq!(error.kind(), DeliveryErrorKind::Usage);
-        assert!(error.message().contains("--selection"), "{error}");
-    }
-
-    #[test]
     fn every_unimplemented_stage_fails_closed() {
         for command in WAVE_COMMANDS.into_iter().filter(|c| !c.implemented()) {
             let error = dispatch(&args(&["wave", command.as_str()]))
@@ -944,7 +898,7 @@ mod tests {
         /// to the production constant by [`schema_version_moves_with_the_golden`]
         /// so a version bump without a golden update, or a golden update without
         /// a version bump, fails the build.
-        const GOLDEN_SCHEMA_VERSION: u32 = 2;
+        const GOLDEN_SCHEMA_VERSION: u32 = 3;
 
         fn sorted_keys(value: &Value) -> Vec<String> {
             value
@@ -1033,8 +987,6 @@ mod tests {
                 json!([
                     "snapshot",
                     "validate-import",
-                    "panel-request",
-                    "panel-attest",
                     "seal",
                     "merge-target",
                     "merge-eligibility",
@@ -1098,8 +1050,6 @@ mod tests {
                     WaveCommand::ValidateImport => {
                         WAVE_COMMANDS.contains(&WaveCommand::ValidateImport)
                     }
-                    WaveCommand::PanelRequest => WAVE_COMMANDS.contains(&WaveCommand::PanelRequest),
-                    WaveCommand::PanelAttest => WAVE_COMMANDS.contains(&WaveCommand::PanelAttest),
                     WaveCommand::Seal => WAVE_COMMANDS.contains(&WaveCommand::Seal),
                     WaveCommand::MergeTarget => WAVE_COMMANDS.contains(&WaveCommand::MergeTarget),
                     WaveCommand::MergeEligibility => {
@@ -1322,8 +1272,8 @@ mod tests {
         /// `live_fingerprint()` and pin it against the new version.
         fn golden_fingerprint(version: u32) -> Value {
             match version {
-                2 => serde_json::from_str::<Value>(GOLDEN_FINGERPRINT_V2)
-                    .expect("the pinned v2 fingerprint is valid JSON"),
+                3 => serde_json::from_str::<Value>(GOLDEN_FINGERPRINT_V3)
+                    .expect("the pinned v3 fingerprint is valid JSON"),
                 other => panic!(
                     "no pinned delivery wire fingerprint golden for schema version {other}; \
                      capture live_fingerprint() and add a matching arm to golden_fingerprint in \
@@ -1332,14 +1282,12 @@ mod tests {
             }
         }
 
-        const GOLDEN_FINGERPRINT_V2: &str = r#"{
-  "schema_version": 2,
+        const GOLDEN_FINGERPRINT_V3: &str = r#"{
+  "schema_version": 3,
   "status_domain": ["ok"],
   "operation_domain": [
     "snapshot",
     "validate-import",
-    "panel-request",
-    "panel-attest",
     "seal",
     "merge-target",
     "merge-eligibility",
@@ -1396,60 +1344,6 @@ mod tests {
       "status": "string"
     },
     "validate-import": {
-      "artifact": "string",
-      "candidate_id": "string",
-      "commands": [
-        {
-          "implemented": "bool",
-          "name": "string",
-          "optional_options": ["string"],
-          "purpose": "string",
-          "required_options": ["string"],
-          "schema": "string",
-          "synopsis": "string",
-          "work_item": "string"
-        }
-      ],
-      "content_id": "string",
-      "operation": "string",
-      "schema_version": "number",
-      "snapshot_sha256": "string",
-      "state": {
-        "chaining": "string",
-        "default_root": "string",
-        "layout": "string",
-        "override_flag": "string"
-      },
-      "status": "string"
-    },
-    "panel-request": {
-      "artifact": "string",
-      "candidate_id": "string",
-      "commands": [
-        {
-          "implemented": "bool",
-          "name": "string",
-          "optional_options": ["string"],
-          "purpose": "string",
-          "required_options": ["string"],
-          "schema": "string",
-          "synopsis": "string",
-          "work_item": "string"
-        }
-      ],
-      "content_id": "string",
-      "operation": "string",
-      "schema_version": "number",
-      "snapshot_sha256": "string",
-      "state": {
-        "chaining": "string",
-        "default_root": "string",
-        "layout": "string",
-        "override_flag": "string"
-      },
-      "status": "string"
-    },
-    "panel-attest": {
       "artifact": "string",
       "candidate_id": "string",
       "commands": [

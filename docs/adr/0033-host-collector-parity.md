@@ -223,7 +223,7 @@ The existing `hostmetrics`, self-`prometheus`, and StoreSync-audit
   guard). The framework `AGENTS.md` has no observability-behavior section,
   so the load-bearing behavior lives in the Diataxis reference + this ADR
   rather than a forced `AGENTS.md` entry.
-- **Status convention:** this ADR is `Proposed` during panel review and
+- **Status convention:** this ADR is `Proposed` during maintainer review and
   flipped to `Accepted` in the commit that lands the implementation.
 
 ## Consequences

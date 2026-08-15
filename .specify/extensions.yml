@@ -1,5 +1,0 @@
-installed: []
-settings:
-  auto_execute_hooks: false
-hooks:
-  after_implement: []

@@ -42,7 +42,7 @@ that pass this presence check.
 > `d2b host validate` therefore reports those waves as `missing`; it does not
 > substitute their Rust or nix-unit successors, and its result is not current
 > validation evidence. The validator catalog requires a code change outside
-> this document before the composite attestation workflow is usable again.
+> this document before the composite validation workflow is usable again.
 
 ## Usage
 
@@ -109,8 +109,8 @@ or whose `timestamp` / `operatorSignature` are absent or empty.
 
 The two `(no validator)` waves report status `no-validators`. They
 intentionally do not write an evidence file - the default-switch
-readiness gate for `p6`/`p7` is driven entirely by Layer-1 panel output
-recorded for the original release, not by current per-host attestation.
+readiness gate for `p6`/`p7` is driven entirely by Layer-1 validation output
+recorded for the original release, not by a current per-host validation run.
 
 ## Exit codes
 
@@ -132,7 +132,7 @@ sudo nixos-rebuild switch --flake .#myhost
 d2b host validate --dry-run --json | jq '.waves[] | {wave, status}'
 
 # 3. Stop if any requested wave is `missing`; the catalog currently names
-#    retired scripts and has no runnable replacement for composite attestation.
+#    retired scripts and has no runnable replacement for composite validation.
 
 # 4. Write umbrella evidence only after the catalog is reconciled and every
 #    requested validator is present.

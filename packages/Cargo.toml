@@ -22,7 +22,6 @@ members = [
     "d2b-telemetry",
     "d2b-contracts",
     "d2b-bus",
-    "d2b-api-surface",
     "d2b-zone-routing",
     "d2b-resource-client",
     "d2b-resource-compiler",
@@ -111,7 +110,7 @@ unsafe_code = "forbid"
 # policy. Set via `RUSTFLAGS="--cfg test_root" cargo test
 # --features=...` when executing as root. Declaring the
 # check-cfg entry here silences the `unexpected_cfgs` warning
-# the v1.1.1 panel reviewer flagged without weakening the
+# the v1.1.1 reviewer flagged without weakening the
 # safety guard for production callers.
 unexpected_cfgs = { level = "warn", check-cfg = [
     "cfg(test_root)",
@@ -129,8 +128,8 @@ schemars = { version = "0.8", features = ["derive"] }
 # chain gate (cargo-deny + cargo-audit through flake.nix's pinned
 # advisory DB) covers it before scope agents consume it.
 #
-# `rtnetlink` and `nftnl` are intentionally NOT declared here: panel
-# review for the W3 prep commit ruled they ship with the scope commit
+# `rtnetlink` and `nftnl` are intentionally NOT declared here: review
+# for the W3 prep commit ruled they ship with the scope commit
 # that first consumes them (s2 for rtnetlink, s3 for nftables) so the
 # license / advisory whitelist update lands in the same commit that
 # adds the consumer. See plan.md §"W3 broker variant additions" - the
@@ -148,8 +147,8 @@ rtnetlink = "0.14"
 # W3 s3: sha2 lands here so d2b-host's nft drift-detection digest
 # is byte-stable across builds and consumers. The nftnl native binding
 # is intentionally NOT pulled in - see
-# `docs/adr/0013-w3-firewall-coexistence-policy.md` for the panel-
-# rationalized fallback (typed NftBatch + `nft -f -` text rendering,
+# `docs/adr/0013-w3-firewall-coexistence-policy.md` for the reviewed
+# fallback (typed NftBatch + `nft -f -` text rendering,
 # verified by the broker's hash readback).
 sha2 = "0.10"
 unicode-normalization = "0.1"

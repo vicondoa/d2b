@@ -1,49 +1,38 @@
-# Amendment request: W5 destination and crate-rename drift
+# Historical destination and crate-rename drift
 
 | Field | Value |
 | --- | --- |
-| Scope | Work-item **destination paths** for eleven W5 items plus two already-`Merged` items, across five crate renames and one policy-file family; widened in section 7 to a **normative value** conflict on the configuration-cleanup stall threshold |
-| Raised under | FR-046, and the "existing code is canon" rule where FR-046 does not reach |
+| Scope | Implementation destination paths across five crate renames and one policy-file family; section 7 also records a **normative value** conflict on the configuration-cleanup stall threshold |
+| Origin | Existing-code-versus-documentation drift; existing passing code is canon |
 | Affected member specs | `ADR-046-resources-host-guest-process-user`, `ADR-046-resources-zone-control`, `ADR-046-resources-volume`, `ADR-046-provider-state`, `ADR-046-security-and-threat-model` (section 7 only) |
-| Affected manifests | `ADR-046-work-items.json`, `ADR-046-implementation-graph.json` |
-| Status | Recorded and raised to the integrator; awaiting a separate specification amendment |
-| Snapshot verified against | `a7f4a6a4` on `adr046-w5-audit-docs` |
-| Runtime behaviour changed by this document | **None.** No code is edited; section 7.6 is a standing instruction not to edit it |
+| Affected artifacts | Provider and runtime source contracts, tests, and Nix policy files |
+| Status | Historical technical record; current source contracts and focused tests remain authoritative |
+| Runtime behaviour changed by this document | **None.** No code is edited by this record |
 
 ## 1. Why this is a separate file
 
-[`amendment-w2-destination-drift.md`](./amendment-w2-destination-drift.md)
-section 6 says any further **section 3.2 wave-table** drift should be appended
-there rather than opening a second amendment, and draws the boundary
-explicitly: the batching covers drifts in that one table of
-`ADR-046-validation-and-delivery`, and does not extend to other member
-specifications, which carry their own evidence.
+This record covers **destination paths**: the exact files and crates an
+implementation may write. It preserves the distinction between a stale proposed
+name and the committed crate that actually owns the same obligation.
 
-This drift is on the other side of that boundary in both respects. It is not in
-the section 3.2 wave table, it is not about wave assignment, and it touches four
-different member specifications. It is about **destination paths**: the exact
-files and crates a work item may write. Appending it to the W2 file would
-silently widen a batch whose author scoped it to one table and one re-opening.
+## 2. The deciding rule
 
-## 2. The deciding rule, because FR-046 does not settle this class
-
-FR-046 resolves disagreements between the specification set's **prose** and the
-**generated manifests** by making the manifests authoritative. That rule does
-not apply here, and it is worth being precise about why: in every case below,
-both sides of the disagreement are the generated manifest.
+The source documentation contains competing destination names. In each case
+below, the committed, passing crate is used as the implementation boundary and
+the stale name is recorded as drift.
 
 The clearest example. `ADR046-exec-016` and `ADR046-exec-017` name
 `packages/d2b-bus-session/` and `packages/d2b-bus-session-unix/` as
 destinations. `ADR046-session-001` and `ADR046-session-002`, both `Merged` in
 W1, name `packages/d2b-session/` and `packages/d2b-session-unix/`. Both pairs
-are rows in `ADR-046-work-items.json`. Two member specifications were authored
-against different naming proposals and the generator faithfully carried both
-forward. Consulting "the manifest" returns two answers.
+are retained in the historical task records. Two member specifications were
+authored against different naming proposals and the task export carried both
+forward. Consulting the historical task records returns two answers.
 
 **The rule that decides it is "existing code is canon."** Where a destination
 names a path that does not exist and a committed, passing crate covers the same
 obligation under a different name, the committed crate is the destination and
-the manifest cell is drift. Two corollaries, and the second is the one that
+the destination cell is drift. Two corollaries, and the second is the one that
 prevents this document from becoming a completion claim:
 
 - Where the member specification's own detailed-design text explicitly permits
@@ -52,13 +41,13 @@ prevents this document from becoming a completion claim:
   and it is decided by reading the spec rather than by overruling it.
 - **A mapped destination is not a discharged obligation.** Mapping says where
   the work belongs, not that it is done. Every item below stays `Planned` unless
-  the manifest already records otherwise, and section 5 states what would be
+  the historical task record already records otherwise, and section 5 states
+  what would be
   needed to change that.
 
-Per FR-046 none of these cells is corrected in place. Editing a member spec
-re-opens its validation and panel evidence and re-triggers Gate 0 across the
-whole manifest under FR-056. Four member specs are affected here, so the cost of
-correcting in place is four re-openings for a set of path spellings.
+This record does not rewrite architectural documents or generated artifacts.
+Product changes use the existing source owner and focused validation for the
+changed boundary.
 
 ## 3. The renames
 
@@ -87,9 +76,9 @@ removed**."
 destination cell records one, and the tree carries the other. `d2b-session` and
 `d2b-session-unix` are the destinations for these two items and no rename is
 owed. This is decided by reading the spec, not by overruling it, and it is the
-one row in this document where the manifest needs no amendment at all - only the
-destination cell's misleading singularity is worth a footnote if the integrator
-amends the others.
+one row in this document where the historical task export needs no correction
+at all - only the destination cell's misleading singularity is worth a
+historical footnote alongside the other mappings.
 
 `ADR046-exec-017`'s own `currentSource` already names
 `packages/d2b-session-unix/src/` at baseline `b5ddbed6` as the partial
@@ -251,7 +240,7 @@ adding two more names to the exemption list that
 two - would have widened a deliberately closed allowlist to accommodate a stale
 path spelling.
 
-### 3.7 Provider layout policy - three locations, and the W3 record is now stale
+### 3.7 Provider layout policy - three locations, and the earlier record is now stale
 
 `implementation-debt.md` section 10.3 records that `ADR046-pkg-001` named
 `packages/d2b-contract-tests/tests/policy_provider_crate_layout.rs` while the W3
@@ -264,10 +253,9 @@ Measured at `a7f4a6a4`:
 
 | Location | Present | Lane | Owner |
 | --- | --- | --- | --- |
-| `packages/d2b-contract-tests/tests/policy_provider_crate_layout.rs` | yes, 533 lines, landed at `2232c8c1` | `test-fixture-contracts`, which runs `cargo nextest run -p d2b-contract-tests` over the whole crate | `ADR046-pkg-001`, W5, `Planned` |
-| `packages/d2b-contract-tests/tests/policy_provider_crates.rs` | yes | `test-policy` as a standalone binary, and the fixture lane | W3 slice, per section 10.3 |
-| `packages/xtask/src/provider_crate_policy.rs` | yes | `test-policy`, as `cargo xtask check-provider-crate-layout` and `check-provider-layout` | `ADR046-pstate-011`, W4, `Merged` |
-| `tests/unit/gates/provider-crate-layout-check.sh` | **no** | n/a | named by `ADR046-pstate-011`; ruled out by debt section 14.4 |
+| `packages/d2b-contract-tests/tests/policy_provider_crate_layout.rs` | yes, 533 lines, landed at `2232c8c1` | `test-fixture-contracts`, which runs `cargo nextest run -p d2b-contract-tests` over the whole crate | `ADR046-pkg-001`, planned |
+| `packages/d2b-contract-tests/tests/policy_provider_crates.rs` | yes | `test-policy` as a standalone binary, and the fixture lane | shared policy suite |
+| `packages/xtask/src/provider_crate_policy.rs` | yes | `test-policy`, as `cargo xtask check-provider-crate-layout` and `check-provider-layout` | `ADR046-pstate-011`, merged |
 
 Two corrections to the section 10.3 record:
 
@@ -287,10 +275,8 @@ Two corrections to the section 10.3 record:
 field always described; `policy_provider_crates.rs` is the dependency-allowlist
 and naming-exemption policy; `policy_provider_crate_layout.rs` is the
 Cargo-metadata-driven layout policy that also scans `packages/` on disk so a
-crate omitted from the workspace cannot escape coverage. The shell gate at
-`tests/unit/gates/provider-crate-layout-check.sh` is **not** owed and must not
-be created - the drift and meta gate set is closed, and debt section 14.4
-already ruled on it.
+crate omitted from the workspace cannot escape coverage. These locations form
+the focused provider-layout coverage.
 
 ## 4. The unmapped destinations
 
@@ -311,7 +297,7 @@ obligation is genuinely outstanding.
 | T147 | `ADR046-exec-022` | `packages/d2b-bus-client/` | **mapped**, except `ProcessAttachClient`, which is **absent**; see 3.4 |
 | T153 | `ADR046-volume-004` | `nixos-modules/options-volumes.nix` | **absent** - no file declares user-facing volume or attachment options. `resources-volume.nix` exists and holds the eval-time Volume contract over the Zone resource attrset in `options-zones.nix`; the separate option module does not exist and is not covered by another file |
 | T159 | `ADR046-wire-001` | `packages/d2b-contracts/src/v3/state.rs` | **mapped** - split across `v3/{volume_state,storage,limits}.rs` and re-exported from `v3/mod.rs`; see 3.5 |
-| T166 | `ADR046-zone-control-007` | `nixos-modules/resources-zone-control.nix` | **absent as a file**, obligation partly covered - Zone-control resource handling is spread across `options-zones.nix`, `options-zones-resources.nix`, `resources-zones-processes.nix`, `resources-zones-volumes.nix` and `generated/`, and `index.nix` already computes `declaredZones` and `zoneRows`. No single module answers to the destination name, so the integrator must either bind the destination to that set or accept a new file |
+| T166 | `ADR046-zone-control-007` | `nixos-modules/resources-zone-control.nix` | **absent as a file**, obligation partly covered - Zone-control resource handling is spread across `options-zones.nix`, `options-zones-resources.nix`, `resources-zones-processes.nix`, `resources-zones-volumes.nix` and `generated/`, and `index.nix` already computes `declaredZones` and `zoneRows`. No single module answers to the destination name, so the owning implementation must either bind the destination to that set or add a new file |
 
 `ADR046-volume-004` at T153 deserves the emphasis. It is the only row here where
 the check might have looked satisfied and is not: `resources-volume.nix`, its
@@ -335,54 +321,49 @@ none of them is asserted here.
 7 records a conflict over a committed numeric default and explicitly instructs
 W5 to leave that default, and the test that pins it, alone.
 
-**It edits no manifest and no member specification.** The mappings are
-instructions to implementers and to reviewers, standing until a dedicated
-amendment carries the prose change with its own validation and panel evidence.
+**It edits no generated artifact or member specification.** The mappings are
+historical implementation-boundary notes; source code and focused tests remain
+authoritative.
 
-**It does not touch the amendments under panel.**
-`amendment-spike-01-rerun.md` and `gate0-reevaluation-spike-01-rss-rerun.md` are
-untouched; nothing here needed a reference into them.
+It does not alter the separate RSS measurement history or its focused product
+evidence.
 
 ## 6. Disposition
 
-- Sections 3.2 through 3.7 and section 4 are **recorded and raised to the
-  integrator**, to be carried by a separate specification amendment against the
-  four affected member specs, scheduled outside any implementation wave.
-- Section 3.1 needs no amendment: the specification already permits the retained
-  crate names, so there is nothing to correct beyond the destination cell's
-  choice of one of two sanctioned spellings.
-- Until that amendment lands, this document is the standing instruction:
-  implementers write to the mapped path, reviewers reject a candidate that
-  creates a crate named in a stale destination cell, and the two absent rows
-  (`ProcessAttachClient`, `nixos-modules/options-volumes.nix`) plus the partly
-  covered `resources-zone-control.nix` remain outstanding obligations against
-  their `Planned` items.
-- Section 7's numeric conflict is raised on the same amendment, which acquires
-  `ADR-046-security-and-threat-model` as a fifth affected member spec. Until it
-  lands, `CONFIGURATION_CLEANUP_STALL_THRESHOLD_MS_DEFAULT` stays at 600,000 ms
-  and `configuration_stall_clock_is_bounded_and_clock_injected` keeps its pinned
-  ten-minute boundary; a W5 candidate that moves either is out of scope and
-  should be rejected at review.
+- Sections 3.2 through 3.7 and section 4 remain recorded as
+  implementation-boundary findings; a future source change must update the
+  owning contract and focused tests.
+- Section 3.1 is conformant: the specification permits the retained crate
+  names, so the historical destination cell records one of two sanctioned
+  spellings. The mapped paths, absent rows
+  (`ProcessAttachClient`, `nixos-modules/options-volumes.nix`), and partly
+  covered `resources-zone-control.nix` remain historical implementation
+  findings, resolved against committed code, owning contracts, and focused
+  tests rather than this record.
+- Section 7's numeric conflict remains explicit: until the owning product
+  contract selects a published default,
+  `CONFIGURATION_CLEANUP_STALL_THRESHOLD_MS_DEFAULT` stays at 600,000 ms and
+  `configuration_stall_clock_is_bounded_and_clock_injected` keeps its pinned
+  ten-minute boundary. A change to either requires the corresponding focused
+  contract and regression-test update.
 
 ## 7. Scope widened: a normative numeric conflict in the same member specs
 
 This document was opened for destination paths. A second drift of a different
-kind was found in the same wave, in two of the same member specifications, and
-is absorbed here on the precedent
+kind was found in two of the same member specifications and is recorded here
+alongside the destination findings, following the precedent
 [`amendment-w2-destination-drift.md`](./amendment-w2-destination-drift.md)
-section 6 set: batch when the batching is genuinely free, and say where the
-boundary now sits.
+section 6.
 
-The batching is close to free here. This amendment already re-opens
-`ADR-046-resources-host-guest-process-user` and `ADR-046-resources-zone-control`;
-absorbing this conflict adds exactly one further member spec,
-`ADR-046-security-and-threat-model`. Filing it separately would pay three
-re-openings where batching pays one.
+The affected sources are `ADR-046-resources-host-guest-process-user`,
+`ADR-046-resources-zone-control`, and
+`ADR-046-security-and-threat-model`. The record keeps their disagreement
+visible without making this file an authority for changing those sources.
 
 **The boundary.** Section 7 covers a **normative value** conflict - the same
 named default given two different numbers by different members of the set - as
-distinct from sections 3 and 4, which cover destination paths. A third class,
-such as a frozen-contract amendment, still files separately.
+distinct from sections 3 and 4, which cover destination paths. The
+classification keeps numeric contract drift separate from path drift.
 
 ### 7.1 The conflict, with all five sources quoted
 
@@ -419,31 +400,20 @@ pub const CONFIGURATION_CLEANUP_STALL_THRESHOLD_MS_DEFAULT: u64 = 600_000;
 > `cleanupStuckThreshold` (**default 5 minutes**), a `GenerationCleanupFailed`
 > condition is set - the runtime never force-removes finalizers to clear it".
 
-Both `ADR046-exec-015` and `ADR046-zone-control-016` are **W5** and **Planned**,
+Both `ADR046-exec-015` and `ADR046-zone-control-016` are **Planned**,
 and both name the `d2b-core-controller` configuration and cleanup surfaces as
-destinations. The wave that must reconcile this is the wave now in flight.
+destinations. The owning implementation must reconcile this before exposing the
+configuration option.
 
-### 7.2 FR-046 does not decide this either, for the same reason as section 2
+### 7.2 The two documented defaults conflict
 
-The two published values are not prose against a manifest. `ADR046-exec-015`
-carries "10 min default" and `ADR046-zone-control-016` carries "default 5 min",
-both inside `detailedDesign` in `ADR-046-work-items.json`:
+The two published values conflict. `ADR046-exec-015` carries "10 min default"
+and `ADR046-zone-control-016` carries "default 5 min" in historical task
+detail. The source records faithfully preserved two specifications authored
+against different numbers; committed code and its focused regression test remain
+the current implementation boundary.
 
-```
-$ jq -r '.items[] | select(.workItemId=="ADR046-exec-015") | .detailedDesign' \
-    docs/specs/ADR-046-work-items.json | grep -o 'Cleanup-stuck threshold: [^;]*;'
-Cleanup-stuck threshold: 10 min default;
-
-$ jq -r '.items[] | select(.workItemId=="ADR046-zone-control-016") | .detailedDesign' \
-    docs/specs/ADR-046-work-items.json | grep -o 'cleanupStuckThreshold` (default [^)]*)'
-cleanupStuckThreshold` (default 5 min)
-```
-
-Consulting "the manifest" returns both answers, exactly as in section 2. The
-generator is not at fault; it faithfully carried two member specs that were
-authored against different numbers.
-
-### 7.3 Ruling: code is canon for this wave; 600,000 ms stands
+### 7.3 Ruling: code is canon; 600,000 ms stands
 
 **`CONFIGURATION_CLEANUP_STALL_THRESHOLD_MS_DEFAULT` is not changed, and this
 record changes no runtime behaviour.** The committed constant is 600,000 ms, it
@@ -453,8 +423,9 @@ That the code happens to match one of the two normative values is a coincidence
 worth naming rather than leaning on. Code wins here because it is committed and
 passing, not because `ADR-046-resources-host-guest-process-user` outranks
 `ADR-046-resources-zone-control`. Nothing in the specification set gives one
-member standing over another on a shared default, which is precisely why this
-needs an amendment rather than a reading.
+member standing over another on a shared default, which is precisely why the
+current implementation boundary is committed code and focused regression
+evidence rather than document ordering.
 
 ### 7.4 What the constant actually reaches today, measured
 
@@ -489,11 +460,12 @@ Three consequences follow, and they should be read together:
 2. **The constant is a default, not a policy.** Because the threshold is a
    parameter, the eventual disagreement is about what default the Zone
    configuration surface publishes, not about what the predicate computes. An
-   amendment that only edits a number has answered the smaller question.
+   change that only edits a number has answered the smaller question.
 3. **The window closes when the surface is wired.** Once `cleanupStuckThreshold`
    becomes an operator-visible option with a published default, changing it is a
    consumer-facing default change under the deprecation policy rather than a
-   specification correction. It is cheap in W5 and expensive after.
+   specification correction. It is cheap before the option becomes public and
+   expensive after.
 
 ### 7.5 The specific failure this record exists to prevent
 
@@ -505,7 +477,7 @@ Three consequences follow, and they should be read together:
 > stuck detection, rollback verb handler)
 
 It names the exact file holding the 600,000 ms constant, and its detailed design
-says the default is 5 min. A W5 implementer working that item literally will
+says the default is 5 min. An implementer working that item literally will
 edit `600_000` to `300_000`, and
 `configuration_stall_clock_is_bounded_and_clock_injected` will fail, because it
 asserts the transition at `00:10:00.000` rather than tolerating a range.
@@ -521,31 +493,31 @@ the abstract.
 The test is not incidental coverage. It is the only artifact in the tree that
 asserts what the default is.
 
-### 7.6 Standing instruction for W5
+### 7.6 Current implementation boundary
 
 Fail closed on the constant:
 
 - **Do not change `CONFIGURATION_CLEANUP_STALL_THRESHOLD_MS_DEFAULT` in this
-  wave.** A W5 candidate snapshot that alters it is out of scope and should be
-  rejected at review, in the same way section 2's corollary rejects a candidate
-  that creates a crate named in a stale destination cell.
+  implementation.** A candidate that alters it must update the owning product
+  contract and focused regression test, in the same way section 2's corollary
+  rejects a candidate that creates a crate named in a stale destination cell.
 - **Do not retune
   `configuration_stall_clock_is_bounded_and_clock_injected`.** If a slice finds
   itself editing that test's timestamps, the slice has changed a default, and
-  that is an amendment, not an implementation choice, per FR-047.
+  that is a product-contract choice, not an incidental implementation change.
 - **A slice implementing `ADR046-zone-control-016` writes the rest of its
   destination** - pending tracking, status, stuck detection, the rollback verb
   handler - and passes the threshold as the parameter it already is, leaving the
   default where it stands.
 - **Neither wiring the option nor publishing a default is authorised here**,
   because doing so would pick a winner between two member specs by
-  implementation.
+  implementation rather than by an explicit product-contract decision.
 
-### 7.7 Recommendation to the amendment, explicitly not applied
+### 7.7 Recommendation for the owning contract
 
-The amendment must choose one value; it cannot ship both. A recommendation is
-recorded so the decision starts from a position rather than from a fresh
-argument, and it is a recommendation only.
+The owning contract must choose one value; it cannot ship both. A
+recommendation is recorded so the decision starts from a position rather than
+from a fresh argument.
 
 **Recommend 5 minutes, and change the code to match as a deliberate, separate
 change.** Two reasons, neither of them a document headcount:
@@ -564,18 +536,18 @@ change.** Two reasons, neither of them a document headcount:
   force-clears finalizers. That is the document whose numbers should not be
   quietly relaxed by a controller default drifting the other way.
 
-Against that: 10 min is what is committed and tested, and the amendment may
-reasonably prefer the value the code already carries. Either choice is
+Against that: 10 min is what is committed and tested, and the owning contract
+may reasonably prefer the value the code already carries. Either choice is
 defensible; what is not defensible is leaving both published.
 
-**If the amendment selects 5 minutes, one change must land all of:** the
+**If the contract selects 5 minutes, one change must update all of:** the
 constant at `cleanup.rs:257`, the pinned boundary in
 `configuration_stall_clock_is_bounded_and_clock_injected`, and a changelog entry
 naming the halved default - because the moment the option is wired, this is a
 consumer-visible default change, and FR-042's rule that nothing changes silently
 applies to a default just as it does to a capability.
 
-**If the amendment selects 10 minutes**, three normative statements in
+**If the contract selects 10 minutes**, three normative statements in
 `ADR-046-resources-zone-control` plus one in
 `ADR-046-security-and-threat-model` change, and `ADR046-zone-control-016`'s
 `detailedDesign` changes with them. No code changes.
@@ -592,7 +564,7 @@ already recorded in
 disagree on the module shape as well as on the number. Same resolution as
 section 3: existing code is canon, the destination is the directory module, and
 the cell is drift. Recorded here rather than in section 4 because it was found
-through this conflict and shares its amendment.
+through this conflict and shares the same historical record.
 
 ## 8. Four rows from the final audit
 
@@ -603,7 +575,7 @@ gaps rather than adjudicated as mapped**, because in both cases something with
 a matching name exists and would pass a presence-only scan.
 
 No implementation state is changed by this section. Every one of the four items
-is `Planned` in `ADR-046-work-items.json` and stays `Planned`.
+is `Planned` in the historical task record and stays `Planned`.
 
 | Task item | Destination not found | Verdict |
 | --- | --- | --- |

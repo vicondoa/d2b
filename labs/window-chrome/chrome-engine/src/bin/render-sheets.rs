@@ -421,7 +421,7 @@ fn accent_fill_stress(f: &TextRenderer) -> Vec<Cell> {
     cells
 }
 
-/// The combination the panel called failure-prone: a narrow window, a long
+/// The combination the review called failure-prone: a narrow window, a long
 /// label, enlarged text, and a status token all at once. Captions are derived
 /// from what actually happened, not from what was intended.
 fn compound_reflow(f: &TextRenderer) -> Vec<Cell> {

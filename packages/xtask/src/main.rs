@@ -94,9 +94,7 @@ use schemars::schema::RootSchema;
 mod changelog;
 mod delivery;
 mod gen_resource_schemas;
-mod gen_spec_set;
 mod heavy_gate;
-mod implementation_graph;
 mod inventory;
 mod process_marker_pin;
 mod provider_crate_policy;
@@ -404,12 +402,6 @@ fn main() -> std::process::ExitCode {
             diagnostic_redaction::run_cli(rest)
         }
         [command, rest @ ..] if command == "heavy-gate" => heavy_gate::run(rest),
-        [command] if command == "spec-registry" => {
-            run_task("spec-registry", || gen_spec_set::generate(repo_root()?))
-        }
-        [command] if command == "implementation-graph" => run_task("implementation-graph", || {
-            implementation_graph::generate(repo_root()?)
-        }),
         [command] if command == "process-marker-pin" => run_process_marker_pin(),
         [command] if command == "check-provider-crate-layout" => run_provider_crate_layout(),
         [command] if command == "check-provider-layout" => run_provider_layout(),
@@ -418,7 +410,7 @@ fn main() -> std::process::ExitCode {
         }
         _ => {
             eprintln!(
-                "usage: cargo run --manifest-path packages/Cargo.toml -p xtask -- <gen-schemas|gen-zone-storage-schema|gen-cli-schemas|gen-zone-schemas|gen-zone-nix-options|gen-resource-schemas|gen-error-codes|gen-provider-packaging|gen-semantic-service-schemas|gen-cli-shell-artifacts|gen-guest-proto|gen-guest-ttrpc|gen-resource-proto|gen-resource-ttrpc|gen-daemon-api|release-notes <version>|adr0035-inventory [--output <path>]|changelog-fold [--check]|spec-registry|implementation-graph|process-marker-pin|check-provider-crate-layout|check-provider-layout|test-runtime-ledger <record|check|lint|help> [options]|redact-diagnostics --repo-root <path> [--home <path>] [--tail-lines <count>]|delivery wave <snapshot|validate-import|panel-request|panel-attest|seal|merge-target|merge-eligibility|help> [options]|heavy-gate <-- <command> [args...] | verify-slot>>"
+                "usage: cargo run --manifest-path packages/Cargo.toml -p xtask -- <gen-schemas|gen-zone-storage-schema|gen-cli-schemas|gen-zone-schemas|gen-zone-nix-options|gen-resource-schemas|gen-error-codes|gen-provider-packaging|gen-semantic-service-schemas|gen-cli-shell-artifacts|gen-guest-proto|gen-guest-ttrpc|gen-resource-proto|gen-resource-ttrpc|gen-daemon-api|release-notes <version>|adr0035-inventory [--output <path>]|changelog-fold [--check]|process-marker-pin|check-provider-crate-layout|check-provider-layout|test-runtime-ledger <record|check|lint|help> [options]|redact-diagnostics --repo-root <path> [--home <path>] [--tail-lines <count>]|delivery wave <snapshot|validate-import|seal|merge-target|merge-eligibility|help> [options]|heavy-gate <-- <command> [args...] | verify-slot>>"
             );
             std::process::ExitCode::FAILURE
         }

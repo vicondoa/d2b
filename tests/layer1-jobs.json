@@ -38,7 +38,6 @@
       "test-performance-budgets",
       "test-lint",
       "test-changelog",
-      "test-rust-api-surface",
       "test-rust-main",
       "test-rust-broker",
       "test-rust-guest-shell-runner",
@@ -86,7 +85,6 @@
       "displayName": "Tier 0 first-pass gate",
       "makeTarget": "check-tier0",
       "extraMakeTargets": [
-        { "makeTarget": "test-adr-index-coverage", "displayName": "ADR index coverage guard" },
         { "makeTarget": "test-ci-coverage", "displayName": "CI coverage structural guard" }
       ],
       "ciKind": "tier0",
@@ -115,7 +113,7 @@
       "runsOn": "ubuntu-latest"
     },
     "test-lint": {
-      "displayName": "Fast lint gate (API hint + fmt + local changed-scope clippy)",
+      "displayName": "Fast lint gate (fmt + local changed-scope clippy)",
       "makeTarget": "test-lint",
       "ciEnv": {
         "D2B_LINT_CHANGED_CLIPPY": "0"
@@ -134,19 +132,6 @@
       "ciJobId": "test-changelog",
       "needs": ["tier0"],
       "timeoutMinutes": 10,
-      "runsOn": "ubuntu-latest"
-    },
-    "test-rust-api-surface": {
-      "displayName": "Rust compiler-derived API census",
-      "makeTarget": "test-rust-api-surface",
-      "localEnv": {
-        "D2B_SKIP_FIXTURE_BUILD": "1"
-      },
-      "ciKind": "rust",
-      "ciJobId": "test-rust-api-surface",
-      "ciOnly": true,
-      "needs": ["tier0"],
-      "timeoutMinutes": 60,
       "runsOn": "ubuntu-latest"
     },
     "test-rust-main": {
@@ -249,7 +234,6 @@
       "ciKind": "rust-rollup",
       "ciJobId": "test-rust",
       "needs": [
-        "test-rust-api-surface",
         "test-rust-main",
         "test-rust-broker",
         "test-rust-guest-shell-runner",

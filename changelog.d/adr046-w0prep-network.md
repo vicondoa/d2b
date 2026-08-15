@@ -3,8 +3,8 @@
 - Closed the ZoneLink enrollment-bootstrap bypass across every
   implementation-driving surface in `docs/specs/**`, not just the canonical
   state machine. The controller algorithm in
-  `ADR-046-resources-zone-control.md`, the ZoneLink resource work item
-  (`ADR046-zone-control-002`) and its validation cells, and the
+  `ADR-046-resources-zone-control.md`, the ZoneLink resource and its validation
+  cells, and the
   `transport-unix`, `transport-vsock`, and `transport-azure-relay` provider
   dossiers now all state the exact sequence
   `Unenrolled -> IKpsk2 -> EnrollmentCommitted -> KK -> Ready`: the one-time

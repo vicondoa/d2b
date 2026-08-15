@@ -15,7 +15,6 @@ use d2b_contract_tests::{read_repo_file, repo_root};
 use regex::Regex;
 
 const PR_TEMPLATE: &str = ".github/PULL_REQUEST_TEMPLATE.md";
-const PURE_POLICY_NA: &str = "N/A: pure policy/docs/checklist change with no daemon, broker, NixOS";
 
 fn git_tracked_files(roots: &[&str]) -> Vec<String> {
     let output = Command::new("git")
@@ -56,23 +55,26 @@ fn pr_template_violations(template: &str) -> Vec<String> {
     if !template.contains("Do not include AI agent, assistant, or model metadata") {
         violations.push("PR template must ban AI/agent/model metadata".to_owned());
     }
-    if !template.contains("`make test-integration` passes on the host before PR creation") {
-        violations.push("PR template must keep the test-integration checklist item".to_owned());
+    if !template.contains("**Focused tests for the changed components**") {
+        violations.push("PR template must request focused validation evidence".to_owned());
     }
-    if !template.contains("`make test-host-integration` passes on the host before PR creation") {
-        violations
-            .push("PR template must keep the test-host-integration checklist item".to_owned());
+    if !template.contains("**Wider lanes are conditional.**") {
+        violations.push("PR template must make wider lanes conditional".to_owned());
     }
-    if template.matches(PURE_POLICY_NA).count() < 2 {
-        violations.push(
-            "PR template must provide N/A escape hatches for both host/manual gates".to_owned(),
-        );
+    for required in [
+        "**Changed tests are inventoried:**",
+        "**Changelog updated**",
+        "**Docs + CI updated in lockstep**",
+    ] {
+        if !template.contains(required) {
+            violations.push(format!("PR template must retain `{required}`"));
+        }
     }
     violations
 }
 
 #[test]
-fn pr_template_carries_metadata_ban_and_host_gate_escape_hatches() {
+fn pr_template_carries_focused_evidence_and_conditional_lane_guidance() {
     let template = read_repo_file(PR_TEMPLATE);
     let violations = pr_template_violations(&template);
     assert!(
@@ -84,25 +86,22 @@ fn pr_template_carries_metadata_ban_and_host_gate_escape_hatches() {
 
 #[test]
 fn pr_template_ratchet_negative_fixtures_fail_closed() {
-    let missing_metadata_ban = format!(
-        "- [ ] **`make test-integration` passes on the host before PR creation**\n  {PURE_POLICY_NA}\n\
-         - [ ] **`make test-host-integration` passes on the host before PR creation**\n  {PURE_POLICY_NA}\n"
-    );
+    let missing_metadata_ban = "- [ ] **Focused tests for the changed components**\n\
+        - [ ] **Wider lanes are conditional.**";
     assert!(
-        pr_template_violations(&missing_metadata_ban)
+        pr_template_violations(missing_metadata_ban)
             .iter()
             .any(|violation| violation.contains("metadata")),
         "negative fixture without AI/model metadata ban must fail closed"
     );
 
-    let missing_na = "Do not include AI agent, assistant, or model metadata\n\
-         - [ ] **`make test-integration` passes on the host before PR creation**\n\
-         - [ ] **`make test-host-integration` passes on the host before PR creation**\n";
+    let missing_guidance = "Do not include AI agent, assistant, or model metadata\n\
+        - [ ] **Focused tests for the changed components**";
     assert!(
-        pr_template_violations(missing_na)
+        pr_template_violations(missing_guidance)
             .iter()
-            .any(|violation| violation.contains("N/A escape hatches")),
-        "negative fixture without host-gate N/A hatches must fail closed"
+            .any(|violation| violation.contains("wider lanes")),
+        "negative fixture without conditional-lane guidance must fail closed"
     );
 }
 

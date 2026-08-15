@@ -69,26 +69,17 @@ make check
 # Legacy/full-static monolithic gate retained for explicit use.
 make check-static
 
-# Local Layer 1 + container integration. Still run the explicit
-# host/manual pre-PR targets below before opening an agent-owned PR.
+# Local Layer 1 + container integration. Run wider lanes only when the changed
+# surface requires them.
 make test
 ```
 
 Local `make check` runs `test-lint` as a serial fail-fast phase before
 inventory and the long parallel jobs. That lane checks every gated Rust
-workspace with `cargo fmt --check`, runs clippy only for changed main-workspace
-and guest-shell-runner packages, and compares the exact main-workspace API
-census inputs with the fingerprint written by `make api-surface-pin`. The later
-full Rust and API-census leaves remain authoritative. CI omits the changed-scope
+workspace with `cargo fmt --check` and runs clippy only for changed
+main-workspace and guest-shell-runner packages. CI omits the changed-scope
 clippy duplicate because its lint job has no shared Cargo cache; the required
 full Rust shard still runs workspace-wide clippy.
-
-The tier-0 dash scan includes every Caveman provenance blob under
-`third_party/caveman/v1.10.0/`; the vendored prose is normalized to ASCII
-hyphens and has no scan exception. `UPSTREAM.json` pins the normalized blobs.
-`node scripts/copilot/check-bindings.mjs` checks their hashes, the closed vendor
-allowlist, and the communication, feature-editor, panel, and prompt-corpus
-contracts.
 
 `tests/layer1-jobs.json` is authoritative for both the job list and its
 classification. A job is enforcing unless it carries `"enforcement":
@@ -126,36 +117,21 @@ and are excluded from the fixture lane through the shared list in
 `tests/lib.sh`. The focused `test-rust-main` target retains the same conditional
 fixture behavior.
 
-### The API census shard
+### Rust leaves
 
-CI runs eight independent Rust leaf jobs behind the stable required
-`test-rust` rollup context: API, main workspace, broker, guest shell runner,
-no-bash AST, schema, inventory and supply chain. Each focused target receives
-the full runner budget and drops local-only dependency edges, so a shard does
-not repeat another shard's work. `make test-rust` remains the local aggregate.
-
-The API census is a separate shard because it shares nothing with the
-workspace build: it renders through the separately pinned nightly toolchain in
-`packages/d2b-api-surface/rust-toolchain.toml` into its own target directory
-under `.scratch/rust-test-cache/`, so it neither consumes nor produces
-artifacts that fmt, clippy or nextest use. Its cost is rustdoc rendering rather
-than dependency compilation, so it does not need a cache entry of its own; do
-not give it one. `test-rust-main` remains the single rust-cache writer.
+CI runs seven independent Rust leaf jobs behind the stable required
+`test-rust` rollup context: main workspace, broker, guest shell runner, no-bash
+AST, schema, inventory, and supply chain. Each focused target receives the
+full runner budget and drops local-only dependency edges, so a shard does not
+repeat another shard's work. `make test-rust` remains the local aggregate.
 
 ### Rust budget and execution manifest
 
 The local Rust aggregate is the GNU Make DAG behind `make test-rust`. It uses
 `--keep-going` and `--output-sync=target` and keeps broker feature passes
-serial. Fixture/CLI work and the API snapshot checker use isolated stable
-targets below `.scratch/rust-test-cache`, so they overlap the main workspace
-without sharing mutable Cargo state. The public and private rustdoc censuses
-also use separate stable targets and overlap only when the API leaf has at
-least two admitted Cargo jobs; their split job shares never exceed that leaf's
-quota. The snapshot checker runs from Cargo's release profile because its
-measured long pole is CPU-bound JSON processing, not compilation. Budgets
-through nine use one job per active lane; surplus jobs above
-nine are assigned to the measured API long pole while the full nine-lane
-frontier stays within the effective budget. Direct calls to
+serial. Fixture/CLI work uses isolated stable targets below
+`.scratch/rust-test-cache`, so it overlaps the main workspace without sharing
+mutable Cargo state. Direct calls to
 `tests/test-rust.sh` require one explicit leaf mode and are not aggregate
 schedulers. A passing Rust manifest retains
 the exact baseline sub-surface IDs documented in the execution-manifest
@@ -164,12 +140,9 @@ fixture and CLI IDs.
 
 The local warm aggregate keeps that parallel profile. When its normal Cargo
 target is absent, it selects a cold profile that reuses the workspace target
-for fixture/CLI work while retaining the warm-local split API census targets
-across `make clean`. A four-lane bounded prebuild frontier overlaps API, main,
-broker and light independent work. Fixture, inventory and schema then run as a
-full-budget dependency chain, so inventory reuses every prior build before
-schema generation. CI alone
-uses the shared API census target and dispatches each Rust leaf as its own job.
+for fixture/CLI work. Fixture, inventory and schema then run as a full-budget
+dependency chain, so inventory reuses every prior build before schema
+generation. CI dispatches each Rust leaf as its own job.
 
 `D2B_RUST_BUDGET` is the supported local Rust control. It must be a positive
 integer when set and is only a requested upper bound. The automatic budget is
@@ -232,9 +205,9 @@ Do not resolve this by deleting the check. The `--backend` and
 check pins what the binary *accepts*, which is what catches an upstream bump
 dropping a flag.
 
-Before opening an agent-owned PR, run the host/manual integration
-targets on the development host; do not rely on the PR pipeline for
-them:
+When a change needs container or NixOS host coverage, run the corresponding
+host/manual integration target on the development host; do not rely on the PR
+pipeline for those conditional lanes:
 
 ```bash
 make test-integration       # Layer 2 container tests; needs podman
@@ -311,8 +284,8 @@ The structure is public-lane-plus-guarded-internal:
 
 Run a heavy lane through its public target (or, for an arbitrary command,
 `cargo run --manifest-path packages/Cargo.toml -p xtask -- heavy-gate --
-<command>`) whenever another heavy lane might be running; the bare internal
-targets stay available only for a serial console. Live-host and hardware
+<command>`) whenever another heavy lane might be running; do not invoke the
+internal targets directly. Live-host and hardware
 tests obey the same rule: use the gated live-VM smoke entrypoints (`make
 pre-tag` for the full gate, `make smoke-lite` for the lite gate) or wrap a
 raw live script as `cargo run --manifest-path packages/Cargo.toml -p xtask
@@ -336,76 +309,6 @@ not trusted, so it cannot bypass the sole-use invariant.
 **A new live, hardware, or performance entrypoint must carry that same
 self-guard block**, or the fail-closed inventory guard
 (`every_live_and_heavy_entrypoint_routes_through_the_gate`) rejects it.
-
-## Spec-literal lint allowlist
-
-The ADR 0046 spec-literal lints (`policy_adr046_spec_literals.rs`) enforce
-three frozen decisions across `docs/specs/**`: D103 (the single 24-byte
-`YYYY-MM-DDTHH:MM:SS.sssZ` datetime spelling), D104 (the single
-`.d2bus.org.` ResourceType qualifier infix), and D108 (the integer
-`retryAfterMs` retry-delay scalar superseding the old `retryAfter`
-duration string). The allowlist is a pinned exact exemption, not an
-author-suppressible marker: an inline `d2b-lint-allow` comment is
-explicitly **not** honored and will not exempt a line - the lint rejects
-that escape hatch by design, because a per-line marker would let any
-future author silently suppress a real violation. The **only** exemption
-is the decision-register table row that *defines* the rule (the `| <code> |`
-row in `docs/specs/ADR-046-decision-register.md`), and that exemption is
-pinned to that one file. Everywhere else, including a rejection
-illustration, must be phrased so it does not embed the exact rejected
-literal; correct the example rather than trying to silence the lint.
-
-The same policy test checks the seven canonical feasibility measurements
-against every Markdown and JSON document under `docs/**` plus `CHANGELOG.md`.
-It inventories class-specific measurement signatures globally, including
-run and group-commit denominators, the ChangeBatch comparison count, the
-crash-boundary count phrase, RSS values with units, and each p95/p99 value
-with its unit. Registered sites additionally pin their exact measurement or
-qualitative outcome summary. The global scan deliberately does not match bare
-numbers such as `13`, `20`, or `48`, because those are common in unrelated
-prose. Consequently, a new copy that preserves a canonical number-and-unit,
-denominator, or class phrase is rejected even in an unregistered document; a
-free paraphrase that omits every inventoried signature remains a review
-concern rather than something this lint claims to detect.
-
-## Envelope policy lint (D116) negative-example marker
-
-Unlike the spec-literal lints above - which honor no author-suppression
-marker at all - the envelope policy lint (`policy_adr046_envelopes`)
-recognizes exactly one deliberately narrow exemption. That lint enforces
-D116 across `docs/specs/**`: a `Host` or `Guest` whose `allowedDomains`
-admits the `user` domain must name a non-null, non-empty `defaultUserRef`
-(D116 is frozen in `docs/specs/ADR-046-decision-register.md`). A block that
-simply omits it is a real violation and must be corrected.
-
-The one exception is an **intentional negative example**: a fenced example
-(typically a Nix block) authored to *teach* the rule by demonstrating the
-eval-time failure that omitting `defaultUserRef` produces. Deleting that
-counter-example would lose correct teaching content, so the lint preserves
-it - but only under three exact conditions it enforces together, not the
-looser "names both `d2b-lint` and `d116`" shape earlier drafts of this
-section described:
-
-- **One exact, case-sensitive marker.** A comment line **inside the fence**
-  whose text, after its `#` or `//` prefix is stripped, equals the marker
-  string exactly. The current spelling is `# d2b-lint: expect-d116-eval-error`;
-  the match is a whole-string, case-sensitive comparison, so a paraphrase or a
-  comment that merely mentions the `d2b-lint` and `d116` tokens does not
-  qualify.
-- **One pinned file.** The marker is honoured only in the single documenting
-  file the lint pins (currently `docs/specs/ADR-046-nix-configuration.md`).
-  The same comment anywhere else exempts nothing and fails closed.
-- **Exactly once.** The marker must appear a single time in that file. A
-  second copy makes the exemption fail closed for the whole file, so every
-  D116 block there is flagged again.
-
-This is an unambiguous authoring signal for one intentional-rejection
-example, never a general suppression switch. Never reach for it to silence a
-D116 failure on a shape that is meant to be valid - correct the shape
-instead. `policy_adr046_envelopes` is the authority for the exact spelling,
-the pinned file, and the single-occurrence scope; a concurrent hardening may
-tighten them further, so if you are adding a legitimate negative example take
-the current requirement from that lint, not from this paragraph.
 
 For where tests live, when to add or retire each kind of test, and
 which pins/ledgers to update, read [`tests/AGENTS.md`](../../tests/AGENTS.md).
