@@ -163,9 +163,20 @@ broker_fakebackends_target_dir="${broker_target_dir%/}/broker-fakebackends"
 guest_shell_runner_target_dir=$(d2b_cargo_target_dir guest-shell-runner)
 no_bash_target_dir="$ROOT/tests/tools/no-bash-ast-walker/target"
 
-# Keep fixture-dependent contract crates out of generic workspace tests.
-# Full D2B_FIXTURES delivery to the sandbox/CI is tracked separately.
-workspace_test_excludes=(--exclude d2b-contract-tests)
+# Keep dedicated feature/process-topology crates and fixture-dependent contract
+# crates out of generic workspace tests. Their owning lanes run them with the
+# exact feature, serialization, and fixture contracts below.
+workspace_test_excludes=(
+  --exclude d2b-contract-tests
+  --exclude d2b-priv-broker
+  --exclude d2b-guest-shell-runner
+)
+# Generic clippy still compiles d2b-contract-tests, but broker and guest runner
+# require their dedicated feature contexts.
+workspace_clippy_excludes=(
+  --exclude d2b-priv-broker
+  --exclude d2b-guest-shell-runner
+)
 
 d2b_activate_rust_toolchain_path || true
 export RUSTUP_TOOLCHAIN="${RUSTUP_TOOLCHAIN:-$pinned_channel}"
@@ -1148,7 +1159,7 @@ run_main_workspace_gate() {
 # that cargo quietly rewrites here cannot be reproduced by a Nix build.
 rust_surface_start rust-main-clippy
 log "--> cargo clippy --locked --workspace --all-targets -- -D warnings"
-CARGO_TARGET_DIR="$workspace_target_dir" cargo clippy --jobs "$D2B_RUST_CARGO_JOBS" --locked --manifest-path "$manifest" --workspace --all-targets -- -D warnings
+CARGO_TARGET_DIR="$workspace_target_dir" cargo clippy --jobs "$D2B_RUST_CARGO_JOBS" --locked --manifest-path "$manifest" --workspace "${workspace_clippy_excludes[@]}" --all-targets -- -D warnings
 rust_surface_success rust-main-clippy
 ok "cargo clippy"
 
