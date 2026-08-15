@@ -8,6 +8,9 @@ license.workspace = true
 [lints]
 workspace = true
 
+[features]
+daemon-support = []
+
 [dependencies]
 d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
 d2b-provider-toolkit = { path = "../d2b-provider-toolkit", version = "0.0.0-bootstrap" }
@@ -15,15 +18,3 @@ getrandom = "0.2"
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
-
-[[bin]]
-name = "d2b-notification-desktop-controller"
-path = "src/bin/d2b-notification-desktop-controller.rs"
-
-[[bin]]
-name = "d2b-notification-desktop-host-sink"
-path = "src/bin/d2b-notification-desktop-host-sink.rs"
-
-[[bin]]
-name = "d2b-notification-desktop-guest-source"
-path = "src/bin/d2b-notification-desktop-guest-source.rs"

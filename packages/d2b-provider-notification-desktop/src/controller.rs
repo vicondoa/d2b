@@ -519,6 +519,12 @@ pub struct SourceProcessEffectReceipt {
 }
 
 impl SourceProcessEffectReceipt {
+    /// Complete a receipt from the daemon-owned effect adapter.
+    #[cfg(any(feature = "daemon-support", test))]
+    pub fn from_daemon(plan: &SourceReconcileResult) -> Result<Self, &'static str> {
+        Ok(Self::complete(plan))
+    }
+
     /// Start collecting typed acknowledgements for one reconciliation plan.
     pub fn builder(plan: &SourceReconcileResult) -> SourceProcessEffectReceiptBuilder {
         SourceProcessEffectReceiptBuilder {
@@ -530,9 +536,9 @@ impl SourceProcessEffectReceipt {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(feature = "daemon-support", test))]
     /// Mint a receipt after every requested process effect was observed.
-    pub(crate) fn complete(plan: &SourceReconcileResult) -> Self {
+    pub fn complete(plan: &SourceReconcileResult) -> Self {
         let mut builder = Self::builder(plan);
         for endpoint in &plan.start_endpoints {
             builder.acknowledge_source_start(endpoint);

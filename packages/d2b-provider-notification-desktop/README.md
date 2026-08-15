@@ -25,11 +25,16 @@ closed `guestSources` category allowlist.
 
 Notification delivery is stream-only and exports no semantic ResourceType.
 
-## Controllers / services / workers / binaries
+## Controllers / services / workers
 
 The crate exposes a placement controller, source/sink stream DTOs, admission
 checks, a host-sink effect port, an observer projection, and single-use action
 nonces. D-Bus integration is supplied through the pre-opened effect port.
+
+Runtime process admission and supervision are daemon-owned. This crate does
+not install standalone Provider binaries; `d2bd` owns the authenticated
+ComponentSession service loops and launches signed workers through its
+ProviderSupervisor effect ports.
 
 ## Placement and dependencies
 

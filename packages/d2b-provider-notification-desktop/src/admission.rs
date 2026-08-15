@@ -42,9 +42,45 @@ impl SessionEvidence {
     pub fn from_component_session<C>(
         session: &AuthenticatedComponentSession<C>,
     ) -> Result<Self, AdmissionError> {
-        let evidence = Self::from_route_binding(session.route_binding())?;
+        let evidence = Self::from_authenticated_route(session.route_binding())?;
         evidence.admit()?;
         Ok(evidence)
+    }
+
+    /// Admit notification evidence from a route authenticated and registered
+    /// by the daemon's Zone bus.
+    pub fn from_authenticated_route(
+        route: AuthenticatedSessionRouteBinding,
+    ) -> Result<Self, AdmissionError> {
+        let evidence = Self::from_route_binding(route)?;
+        evidence.admit()?;
+        Ok(evidence)
+    }
+
+    /// Admit a daemon-local Guest source route after ComponentSession
+    /// authentication and Zone registration.
+    pub fn from_daemon_route(
+        route: AuthenticatedSessionRouteBinding,
+    ) -> Result<Self, AdmissionError> {
+        if route.service().as_str() != crate::SERVICE_PACKAGE
+            || route
+                .provider_ref()
+                .is_none_or(|provider| provider.to_canonical_string() != crate::PROVIDER_REF)
+            || route.provider_generation().is_none()
+            || route.evidence_class() != EvidenceClass::UnixPeer
+            || route.locality() != d2b_contracts::v3::Locality::Local
+            || route.subject_ref().resource_type().as_str() != "Guest"
+            || route.reconnect_generation().get() == 0
+        {
+            return Err(AdmissionError::SessionUnauthenticated);
+        }
+        Ok(Self {
+            subject_ref: route.subject_ref().clone(),
+            zone: route.zone().clone(),
+            generation: route.reconnect_generation().get(),
+            purpose: AdmissionPurpose::NotificationSource,
+            transport: TransportClass::UnixSeqpacket,
+        })
     }
 
     /// Admit a Guest source from an authenticated enrolled session.
@@ -84,6 +120,7 @@ impl SessionEvidence {
         }
         match (self.purpose, self.transport) {
             (AdmissionPurpose::NotificationSource, TransportClass::EnrolledNoiseKk)
+            | (AdmissionPurpose::NotificationSource, TransportClass::UnixSeqpacket)
             | (AdmissionPurpose::DesktopObserver, TransportClass::UnixSeqpacket) => Ok(()),
             _ => Err(AdmissionError::TransportMismatch),
         }

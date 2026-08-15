@@ -167,6 +167,25 @@ impl<E: NotificationProcessEffectPort> NotificationRuntime<E> {
             .map_err(|_| NotificationRuntimeError::SessionAdmissionFailed)
     }
 
+    /// Project one route retained by the daemon after authenticated bus
+    /// registration into notification source evidence.
+    pub fn source_route_evidence(
+        &self,
+        route: AuthenticatedSessionRouteBinding,
+    ) -> Result<SessionEvidence, NotificationRuntimeError> {
+        SessionEvidence::from_authenticated_route(route)
+            .map_err(|_| NotificationRuntimeError::SessionAdmissionFailed)
+    }
+
+    /// Project daemon-local Guest source routes into typed source evidence.
+    pub fn daemon_source_route_evidence(
+        &self,
+        route: AuthenticatedSessionRouteBinding,
+    ) -> Result<SessionEvidence, NotificationRuntimeError> {
+        SessionEvidence::from_daemon_route(route)
+            .map_err(|_| NotificationRuntimeError::SessionAdmissionFailed)
+    }
+
     /// Reconcile all configured source sessions against the authenticated
     /// display route. Missing or stale evidence drains existing ownership.
     pub fn reconcile<C>(
@@ -187,6 +206,65 @@ impl<E: NotificationProcessEffectPort> NotificationRuntime<E> {
                 &mut self.effects,
             )
             .map_err(|_| NotificationRuntimeError::ReconciliationFailed)
+    }
+
+    /// Reconcile source routes retained by the daemon after registration.
+    pub fn reconcile_routes(
+        &mut self,
+        display: Option<AuthenticatedSessionRouteBinding>,
+        source_routes: &[AuthenticatedSessionRouteBinding],
+    ) -> Result<SourceReconcileResult, NotificationRuntimeError> {
+        let source_evidence = source_routes
+            .iter()
+            .cloned()
+            .map(|route| self.source_route_evidence(route))
+            .collect::<Result<Vec<_>, _>>()?;
+        self.controller
+            .reconcile_authenticated_display_with_effects(
+                display,
+                &self.config,
+                &source_evidence,
+                &mut self.effects,
+            )
+            .map_err(|_| NotificationRuntimeError::ReconciliationFailed)
+    }
+
+    /// Reconcile daemon-local Guest source routes admitted through the
+    /// authenticated ComponentSession listener.
+    pub fn reconcile_daemon_routes(
+        &mut self,
+        display: Option<AuthenticatedSessionRouteBinding>,
+        source_routes: &[AuthenticatedSessionRouteBinding],
+    ) -> Result<SourceReconcileResult, NotificationRuntimeError> {
+        let source_evidence = source_routes
+            .iter()
+            .cloned()
+            .map(|route| self.daemon_source_route_evidence(route))
+            .collect::<Result<Vec<_>, _>>()?;
+        self.controller
+            .reconcile_authenticated_display_with_effects(
+                display,
+                &self.config,
+                &source_evidence,
+                &mut self.effects,
+            )
+            .map_err(|_| NotificationRuntimeError::ReconciliationFailed)
+    }
+
+    /// Drain source processes and the bounded host projection without
+    /// releasing the authenticated ComponentSession authority.
+    pub fn drain(&mut self) -> Result<SourceReconcileResult, NotificationRuntimeError> {
+        let plan = self
+            .controller
+            .reconcile_authenticated_display_with_effects(
+                None,
+                &self.config,
+                &[],
+                &mut self.effects,
+            )
+            .map_err(|_| NotificationRuntimeError::ReconciliationFailed)?;
+        self.sink.drain();
+        Ok(plan)
     }
 
     /// Drain every source and sink before releasing the authenticated
