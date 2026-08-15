@@ -372,8 +372,8 @@
       "crate_name": "d2b_provider_clipboard_wayland",
       "private_census": {
         "external_crates": 134,
-        "index_items": 2965,
-        "path_items": 13910
+        "index_items": 2966,
+        "path_items": 13911
       },
       "private_hidden_items": 58,
       "private_json_file": "d2b_provider_clipboard_wayland.json",
@@ -507,7 +507,7 @@
       "private_json_file": "d2b_provider_display_wayland.json",
       "public_census": {
         "external_crates": 134,
-        "index_items": 2009,
+        "index_items": 2011,
         "path_items": 13814
       },
       "public_json_file": "d2b_provider_display_wayland.json"
@@ -532,15 +532,15 @@
       "crate_name": "d2b_provider_notification_desktop",
       "private_census": {
         "external_crates": 134,
-        "index_items": 2541,
-        "path_items": 13879
+        "index_items": 2577,
+        "path_items": 13889
       },
       "private_hidden_items": 46,
       "private_json_file": "d2b_provider_notification_desktop.json",
       "public_census": {
         "external_crates": 134,
-        "index_items": 1292,
-        "path_items": 13785
+        "index_items": 1309,
+        "path_items": 13787
       },
       "public_json_file": "d2b_provider_notification_desktop.json"
     },
