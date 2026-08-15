@@ -589,7 +589,7 @@ in
             done
           done
           if [ -d /var/lib/d2b/vms/${name} ]; then
-            # Security fix: narrow
+            # Security fix:
             # narrow /dev/kvm ACL to only KVM-consuming role UIDs, and
             # keep /dev/vhost-net narrower still. qemu-media is fd-backed:
             # it may receive broker-opened KVM/media fds, but never a

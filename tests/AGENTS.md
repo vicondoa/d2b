@@ -105,7 +105,7 @@ fails while walking on-disk scripts and the Makefile.
    `D2B_FIXTURES`).
 5. **Asserting a generated artifact is up to date (docs/schemas/CLI)?** → it is
    already covered by a **drift gate**; regenerate with the matching
-   `cargo run -p xtask -- gen-*` and commit - do **not** add a new gate. The
+   `cargo run -p xtask -- gen-*` and commit - do **not** add a new gate.
 6. **Genuinely needs a foreign userland / real systemd boot / live host /
    device?** → the matching Layer-2 tier (9-12). Justify why Layer 1 cannot
    cover it; reach for the *lowest* tier that works (a native fd-passing test
