@@ -429,14 +429,20 @@ fn markdown_repo_paths_reject_symlink_escape() {
     let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join("policy-doc-links");
     let outside = Path::new(env!("CARGO_TARGET_TMPDIR")).join("policy-doc-outside.md");
     let _ = fs::remove_dir_all(&root);
-    fs::create_dir_all(&root).expect("create Markdown link fixture root");
+    fs::create_dir_all(root.join("docs")).expect("create Markdown link fixture root");
     fs::write(&outside, "outside\n").expect("write outside Markdown fixture");
     std::os::unix::fs::symlink(&outside, root.join("escape.md"))
         .expect("create escaping Markdown symlink");
+    std::os::unix::fs::symlink(&outside, root.join("docs/README.md"))
+        .expect("create escaping Markdown directory index");
 
     assert!(
         !resolved_repo_path_is_contained(&root, "escape.md"),
         "repository Markdown path must reject a symlink resolving outside its root"
+    );
+    assert!(
+        !resolved_repo_path_is_contained(&root, "docs/README.md"),
+        "repository Markdown directory index must remain inside its root"
     );
 }
 
@@ -446,6 +452,12 @@ fn markdown_repo_paths_reject_symlink_escape() {
 #[test]
 fn agents_md_routes_to_paths_that_exist() {
     let agents = read_repo_file("AGENTS.md");
+    let reference_link_re =
+        Regex::new(r"\]\s*\[[^]]*\]").expect("valid reference-style link regex");
+    assert!(
+        !reference_link_re.is_match(&agents),
+        "AGENTS.md must use inline Markdown links so every destination is validated"
+    );
     let link_re = Regex::new(r"\]\(([^)\s]+)").expect("valid link regex");
     let mut missing: Vec<String> = Vec::new();
     for caps in link_re.captures_iter(&agents) {
@@ -483,6 +495,9 @@ fn agents_md_routes_to_paths_that_exist() {
                             .expect("Markdown directory index stays in repo")
                             .to_string_lossy()
                             .into_owned()
+                    })
+                    .filter(|index| {
+                        resolved_repo_path_is_contained(&d2b_contract_tests::repo_root(), index)
                     })
                     .map(|index| read_repo_file(&index))
                     .unwrap_or_default()
