@@ -14,6 +14,7 @@ mod host_sink;
 mod metrics;
 mod rbac;
 mod redact;
+mod runtime;
 mod stream_admission;
 mod types;
 
@@ -34,10 +35,14 @@ pub use host_sink::{
 pub use metrics::{NotificationOutcome, NotificationTelemetryField, NotificationTelemetryFrame};
 pub use rbac::{NotificationRbac, NotificationRole};
 pub use redact::{SanitizedNotification, sanitize};
+pub use runtime::{
+    NotificationFinalizationReport, NotificationProcessEffectPort, NotificationRuntime,
+    NotificationRuntimeError,
+};
 pub use stream_admission::{AdmissionError, AdmissionPurpose, SessionEvidence, TransportClass};
 pub use types::{
-    ActionSpec, Category, MAX_ACTIONS, MAX_BODY_CHARS, MAX_SUMMARY_CHARS, NotificationRequest,
-    NotificationUrgency,
+    ActionSpec, Category, MAX_ACTIONS, MAX_BODY_CHARS, MAX_SUMMARY_CHARS, NotificationError,
+    NotificationRequest, NotificationUrgency,
 };
 
 /// Canonical Provider reference.

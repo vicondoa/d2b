@@ -869,7 +869,6 @@ impl NotificationController {
     }
 
     /// Reconcile configured Guest source endpoints and the host sink.
-    #[cfg(test)]
     pub fn reconcile_sources(
         &mut self,
         display: &DisplayDependencyEvidence,
@@ -1069,7 +1068,6 @@ impl NotificationController {
     /// source/sink endpoint. A route is accepted only when the sealed
     /// ComponentSession authority has bound the display Provider, local Unix
     /// evidence, a User subject, and a non-zero Provider generation.
-    #[cfg(test)]
     pub fn reconcile_authenticated_display(
         &mut self,
         display: Option<AuthenticatedSessionRouteBinding>,
@@ -1120,7 +1118,6 @@ impl NotificationController {
     }
 
     /// Drain and forget all source endpoints during shutdown or finalization.
-    #[cfg(test)]
     pub fn drain_sources(&mut self) -> Vec<ResourceRef> {
         let drained = self.active_sources.keys().cloned().collect();
         self.clear_reconciliation();
