@@ -170,7 +170,8 @@ fn capability_trait_source_mutations_fail_closed() {
 #[test]
 fn workspace_capability_source_globs_are_classified() {
     let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let manifest = crate_root.parent().unwrap().join("Cargo.toml");
+    let repository_root = crate_root.parent().unwrap().parent().unwrap();
+    let manifest = repository_root.join("Cargo.toml");
     for package in workspace_render_packages(&manifest).into_values() {
         source_capability_inventory_with_externals(
             &package.crate_name,
@@ -1724,7 +1725,7 @@ fn workspace_render_packages(manifest: &Path) -> BTreeMap<String, RenderPackage>
         if let Some(library) = library {
             let crate_name = library["name"].as_str().expect("library target name");
             let mut dependency_features = BTreeSet::new();
-            let mut external_crates = BTreeSet::new();
+            let mut external_crates = BTreeSet::from(["std".to_owned()]);
             let mut workspace_dependencies = BTreeSet::new();
             for dependency in package["dependencies"]
                 .as_array()
