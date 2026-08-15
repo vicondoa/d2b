@@ -40,7 +40,8 @@ use d2b_resource_store::{
 use d2b_resource_store_redb::RedbResourceStore;
 
 use crate::{
-    BrokerActivationMode, ServerState, dispatch_broker_request_as, dispatch_live_guest_activation,
+    BrokerActivationMode, ServerState, dispatch_broker_activation_metadata_only,
+    dispatch_broker_request_as, dispatch_live_guest_activation,
 };
 
 const ACTIVATION_TYPE: &str = "activation-nixos.d2bus.org.NixosGeneration";
@@ -288,11 +289,14 @@ impl ActivationResourceRuntime {
         request: &d2b_provider_activation_nixos::RunnerRequest,
         prior: &[GenerationObservation],
     ) -> ActivationOutcomeCode {
+        if request.system_artifact_id != *record.spec.system_artifact_id() {
+            return ActivationOutcomeCode::TargetMismatch;
+        }
         match request.execution_ref.resource_type().as_str() {
             "Host" => self
                 .execute_host_handoff(state, record, prior)
                 .unwrap_or(ActivationOutcomeCode::HelperFailed),
-            "Guest" => self.execute_guest_activation(state, record),
+            "Guest" => self.execute_guest_activation(state, record, request),
             _ => ActivationOutcomeCode::TargetMismatch,
         }
     }
@@ -356,6 +360,7 @@ impl ActivationResourceRuntime {
         &self,
         state: &ServerState,
         record: &DesiredRecord,
+        request: &d2b_provider_activation_nixos::RunnerRequest,
     ) -> ActivationOutcomeCode {
         let mode = match record.spec.activation_mode() {
             ActivationMode::Switch => BrokerActivationMode::Switch,
@@ -369,21 +374,36 @@ impl ActivationResourceRuntime {
             BrokerActivationMode::Test => "test",
             BrokerActivationMode::Rollback => "rollback",
         };
-        let response = dispatch_live_guest_activation(
-            state,
-            public_wire::ActivationRequest {
-                vm: record.spec.execution_ref().name().as_str().to_owned(),
-                flags: MutationFlags {
-                    apply: true,
-                    ..MutationFlags::default()
+        let activation_request = public_wire::ActivationRequest {
+            vm: record.spec.execution_ref().name().as_str().to_owned(),
+            flags: MutationFlags {
+                apply: true,
+                ..MutationFlags::default()
+            },
+        };
+        let response = if mode == BrokerActivationMode::Boot {
+            dispatch_broker_activation_metadata_only(
+                state,
+                activation_request,
+                verb,
+                mode,
+                BrokerCallerRole::AdminUid {
+                    uid: state.daemon_uid,
                 },
-            },
-            verb,
-            mode,
-            BrokerCallerRole::AdminUid {
-                uid: state.daemon_uid,
-            },
-        );
+                Some(request.system_artifact_id.clone()),
+            )
+        } else {
+            dispatch_live_guest_activation(
+                state,
+                activation_request,
+                verb,
+                mode,
+                BrokerCallerRole::AdminUid {
+                    uid: state.daemon_uid,
+                },
+                Some(request.system_artifact_id.clone()),
+            )
+        };
         match response {
             Ok(value) => match serde_json::from_value::<MutatingVerbResponse>(value) {
                 Ok(response) if response.outcome == MutatingVerbOutcome::Applied => {
@@ -1050,5 +1070,25 @@ mod tests {
             payload_digest: "sha256:".to_owned(),
         };
         assert_eq!(ordinal_from_resource(&resource), 7);
+    }
+
+    #[test]
+    fn boot_success_projects_the_durable_default_without_live_activation_detail() {
+        assert_eq!(
+            activation_detail(
+                ActivationMode::Boot,
+                ActivationOutcomeCode::Succeeded,
+                ResourcePhase::Succeeded,
+            ),
+            ActivationDetail::BootDefault
+        );
+        assert_eq!(
+            activation_detail(
+                ActivationMode::Switch,
+                ActivationOutcomeCode::Succeeded,
+                ResourcePhase::Succeeded,
+            ),
+            ActivationDetail::Applied
+        );
     }
 }

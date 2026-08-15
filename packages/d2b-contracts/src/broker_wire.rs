@@ -15,7 +15,7 @@ use crate::types::{
 };
 use crate::v3::process::{CapabilityClass, EnvironmentClass, NamespaceClass, UserNamespaceSpec};
 use crate::v3::{
-    ResourceBundleGenerationId, ResourceGeneration, ResourceRef, ResourceUid,
+    ArtifactId, ResourceBundleGenerationId, ResourceGeneration, ResourceRef, ResourceUid,
     execution_policy::ExecutionDomain, storage::ZoneStoreId,
 };
 use d2b_core::host::IfName;
@@ -961,6 +961,9 @@ pub enum ActivationPhase {
 pub struct RunActivationRequest {
     pub bundle_activation_intent_ref: BundleOpId,
     pub mode: ActivationMode,
+    /// Durable generation artifact selected by the caller.
+    #[serde(default)]
+    pub system_artifact_id: Option<ArtifactId>,
     #[serde(default)]
     pub phase: ActivationPhase,
     pub vm: String,
@@ -1984,6 +1987,8 @@ pub struct SystemdUnitIdentity {
     pub template_identity: [u8; 32],
     /// Process resource generation bound to the unit identity.
     pub generation: u64,
+    /// Content identity of the broker-resolved trusted bundle.
+    pub bundle_content_identity: String,
 }
 
 /// Shared trusted request fields for systemd unit operations.
@@ -2004,6 +2009,8 @@ pub struct SystemdUnitRequest {
     pub role: RunnerRole,
     /// Opaque bundle reference resolved only by the broker.
     pub bundle_runner_intent_ref: BundleOpId,
+    /// Content identity the broker must resolve for this unit.
+    pub bundle_content_identity: String,
     /// Process Provider identity digest.
     pub provider_identity: [u8; 32],
     /// Component template identity digest.
@@ -3339,6 +3346,7 @@ mod tests {
         let req = RunActivationRequest {
             bundle_activation_intent_ref: BundleOpId::new("activation:vm:corp-vm"),
             mode: ActivationMode::Switch,
+            system_artifact_id: None,
             phase: ActivationPhase::Prepare,
             vm: "corp-vm".to_owned(),
             tracing_span_id: None,
@@ -4120,6 +4128,7 @@ mod tests {
                 "roleId": "audio",
                 "role": "audio",
                 "bundleRunnerIntentRef": "intent",
+                "bundleContentIdentity": "bundle",
                 "providerIdentity": vec![1_u8; 32],
                 "templateIdentity": vec![2_u8; 32],
                 "generation": 3,

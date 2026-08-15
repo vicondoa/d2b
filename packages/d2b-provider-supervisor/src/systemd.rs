@@ -39,6 +39,31 @@ pub struct SystemdInvocationIdentity {
     provider_identity: [u8; 32],
     template_identity: [u8; 32],
     generation: u64,
+    bundle_content_identity: String,
+}
+
+/// Immutable bundle binding carried by a systemd runtime identity.
+#[derive(Clone, PartialEq, Eq)]
+pub struct SystemdIdentityContext {
+    generation: u64,
+    bundle_content_identity: String,
+}
+
+impl SystemdIdentityContext {
+    /// Construct the bundle-bound portion of a systemd identity.
+    pub fn new(
+        generation: u64,
+        bundle_content_identity: impl Into<String>,
+    ) -> Result<Self, ProcessEffectError> {
+        let bundle_content_identity = bundle_content_identity.into();
+        if generation == 0 || bundle_content_identity.is_empty() {
+            return Err(ProcessEffectError::IdentityChanged);
+        }
+        Ok(Self {
+            generation,
+            bundle_content_identity,
+        })
+    }
 }
 
 impl SystemdInvocationIdentity {
@@ -50,14 +75,13 @@ impl SystemdInvocationIdentity {
         start_time_ticks: u64,
         provider_identity: [u8; 32],
         template_identity: [u8; 32],
-        generation: u64,
+        context: SystemdIdentityContext,
     ) -> Result<Self, ProcessEffectError> {
         if invocation_id == [0; 16]
             || cgroup_identity == [0; 32]
             || start_time_ticks == 0
             || provider_identity == [0; 32]
             || template_identity == [0; 32]
-            || generation == 0
         {
             return Err(ProcessEffectError::IdentityChanged);
         }
@@ -68,7 +92,8 @@ impl SystemdInvocationIdentity {
             start_time_ticks,
             provider_identity,
             template_identity,
-            generation,
+            generation: context.generation,
+            bundle_content_identity: context.bundle_content_identity,
         })
     }
 
@@ -82,6 +107,7 @@ impl SystemdInvocationIdentity {
         digest.update(self.provider_identity);
         digest.update(self.template_identity);
         digest.update(self.generation.to_le_bytes());
+        digest.update(self.bundle_content_identity.as_bytes());
         ProcessIdentityDigest::from_bytes(digest.finalize().into())
     }
 
@@ -109,6 +135,7 @@ impl SystemdInvocationIdentity {
             provider_identity: self.provider_identity,
             template_identity: self.template_identity,
             generation: self.generation,
+            bundle_content_identity: self.bundle_content_identity.clone(),
         }
     }
 
@@ -120,7 +147,10 @@ impl SystemdInvocationIdentity {
             identity.start_time_ticks,
             identity.provider_identity,
             identity.template_identity,
-            identity.generation,
+            SystemdIdentityContext::new(
+                identity.generation,
+                identity.bundle_content_identity.clone(),
+            )?,
         )
     }
 }
@@ -306,7 +336,7 @@ mod tests {
             u64::from(seed) + 1,
             [2; 32],
             [3; 32],
-            1,
+            SystemdIdentityContext::new(1, "bundle").unwrap(),
         )
         .unwrap()
     }
@@ -335,6 +365,15 @@ mod tests {
             format!("{:?}", identity(41)),
             "SystemdInvocationIdentity(<redacted>)"
         );
+    }
+
+    #[test]
+    fn systemd_adoption_identity_binds_bundle_content_identity() {
+        let mut first = identity(41);
+        let mut second = identity(41);
+        first.bundle_content_identity = "bundle-a".to_owned();
+        second.bundle_content_identity = "bundle-b".to_owned();
+        assert_ne!(first.digest(), second.digest());
     }
 }
 
@@ -484,6 +523,7 @@ impl BrokerSystemdEffectOwner {
             resource_uid: Some(intent.resource_uid.clone()),
             role: intent.role,
             bundle_runner_intent_ref: intent.bundle_runner_intent_ref.clone(),
+            bundle_content_identity: intent.bundle_content_identity.clone(),
             provider_identity: intent.provider_identity,
             template_identity: intent.template_identity,
             generation: intent.generation,
@@ -537,6 +577,7 @@ impl BrokerSystemdEffectOwner {
         if wire.provider_identity != intent.provider_identity
             || wire.template_identity != intent.template_identity
             || wire.generation != intent.generation
+            || wire.bundle_content_identity != intent.bundle_content_identity
             || wire.main_pid == 0
         {
             return Err(ProcessEffectError::IdentityChanged);

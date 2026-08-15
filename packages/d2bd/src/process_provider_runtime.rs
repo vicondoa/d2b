@@ -83,6 +83,18 @@ pub(crate) fn detect_minijail_platform_gate() -> PlatformGate {
     PlatformGate::from_observed(kernel_major, kernel_minor, cgroup_kill_writable)
 }
 
+fn retryable_stop_error(error: &str) -> bool {
+    matches!(
+        error,
+        "stop-failed"
+            | "observe-failed"
+            | "launch-failed"
+            | "effect-adapter-busy"
+            | "deadline-exceeded"
+            | "process-fate-unknown"
+    )
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ManagedProvider {
     Minijail,
@@ -496,6 +508,26 @@ impl ProductionProcessProviders {
         .await
     }
 
+    async fn stop_resource_identity_with_retry(
+        &self,
+        managed: &ManagedResource,
+        class: StopClass,
+        deadline: Instant,
+    ) -> Result<(), String> {
+        loop {
+            match self.stop_resource_identity(managed, class).await {
+                Ok(()) => return Ok(()),
+                Err(error) if error == "pidfd-unavailable" || error == "process-vanished" => {
+                    return Err(error);
+                }
+                Err(error) if retryable_stop_error(&error) && Instant::now() < deadline => {
+                    tokio::time::sleep(Duration::from_millis(25)).await;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
     /// Adopt one ephemeral Process resource with the controller generation
     /// rehydrated from the owning Zone store.
     pub(crate) async fn adopt_ephemeral_resource(
@@ -742,7 +774,11 @@ impl ProductionProcessProviders {
             return Err("provider-process-identity-changed".to_owned());
         }
         match self
-            .stop_resource_identity(&managed, StopClass::Drain)
+            .stop_resource_identity_with_retry(
+                &managed,
+                StopClass::Drain,
+                Instant::now() + term_timeout,
+            )
             .await
         {
             Ok(()) => {}
@@ -769,7 +805,11 @@ impl ProductionProcessProviders {
             tokio::time::sleep(Duration::from_millis(25)).await;
         }
         match self
-            .stop_resource_identity(&managed, StopClass::Terminate)
+            .stop_resource_identity_with_retry(
+                &managed,
+                StopClass::Terminate,
+                Instant::now() + kill_timeout,
+            )
             .await
         {
             Ok(()) => {}
@@ -1195,13 +1235,31 @@ fn resource_ticket(
         required_identity(provider),
     )
     .map_err(|error| format!("provider-ticket:{}", error.code()))?;
-    let sandbox = SandboxCompiler
-        .compile_plan(
-            execution.sandbox(),
-            execution.domain().unwrap_or(ExecutionDomain::System),
-            false,
-        )
-        .map_err(|error| format!("provider-ticket:{}", error.code()))?;
+    let domain = execution.domain().unwrap_or(ExecutionDomain::System);
+    let sandbox = if provider == ManagedProvider::Systemd {
+        let spec = execution.sandbox();
+        if !spec.namespace_classes().is_empty()
+            || !spec.capability_classes().is_empty()
+            || spec.seccomp_class().as_str() != "strict"
+            || !spec.no_new_privileges()
+            || spec.start_root()
+            || !matches!(
+                spec.environment_class(),
+                d2b_contracts::v3::process::EnvironmentClass::Minimal
+            )
+            || !spec.read_only_root()
+            || spec.user_namespace().is_some()
+        {
+            return Err("provider-ticket:systemd-sandbox-unsupported".to_owned());
+        }
+        SandboxCompiler
+            .compile_plan(spec, domain, false)
+            .map_err(|error| format!("provider-ticket:{}", error.code()))?
+    } else {
+        SandboxCompiler
+            .compile_plan(execution.sandbox(), domain, false)
+            .map_err(|error| format!("provider-ticket:{}", error.code()))?
+    };
     Ok(ticket
         .with_sandbox_plan(sandbox)
         .with_readiness(ReadinessExpectation::None))
@@ -1470,5 +1528,13 @@ mod tests {
             ControllerGeneration::new(1).expect("controller generation"),
         );
         assert!(!resource_identity_matches(&managed, stale_context));
+    }
+
+    #[test]
+    fn drain_retry_policy_distinguishes_transient_and_permanent_failures() {
+        assert!(retryable_stop_error("stop-failed"));
+        assert!(retryable_stop_error("process-fate-unknown"));
+        assert!(!retryable_stop_error("identity-mismatch"));
+        assert!(!retryable_stop_error("permission-denied"));
     }
 }

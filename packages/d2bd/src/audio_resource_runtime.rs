@@ -9,8 +9,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use d2b_contracts::v3::ZoneRevision;
 use d2b_contracts::v3::{ResourceEnvelope, ResourceRef, ResourceTypeName, ZoneId};
+use d2b_contracts::{resource_proto as wire, v3::ZoneRevision};
 use d2b_provider_audio_pipewire::{
     AudioBindingController, AudioBindingPhase, AudioBindingSpec, AudioBindingStatus,
     AudioControllerError, AudioMediator, AudioServiceRole, AudioServiceSpec, GuestAudioReadiness,
@@ -114,6 +114,7 @@ pub(crate) struct AudioResourceRuntime {
     services: BTreeMap<String, AudioServiceSpec>,
     service_microphones: BTreeMap<String, d2b_provider_audio_pipewire::SharedMicrophoneArbiter>,
     bindings: BTreeMap<String, AudioBindingRecord>,
+    pending_finalizers: BTreeMap<String, StoredResource>,
 }
 
 impl core::fmt::Debug for AudioResourceRuntime {
@@ -136,6 +137,7 @@ impl AudioResourceRuntime {
             services: BTreeMap::new(),
             service_microphones: BTreeMap::new(),
             bindings: BTreeMap::new(),
+            pending_finalizers: BTreeMap::new(),
         }
     }
 
@@ -186,42 +188,30 @@ impl AudioResourceRuntime {
         .ok();
 
         for (key, (resource, spec)) in bindings {
-            let service = services
-                .get(&spec.service_ref.to_canonical_string())
-                .ok_or(AudioResourceRuntimeError::InvalidRelationship)?;
-            if service.service_role == AudioServiceRole::Projection {
-                let mut projection_binding = false;
+            if deletion_requested(&resource) {
                 let promoted = if let Some(record) = self.bindings.get_mut(&key) {
-                    if record.spec == spec {
-                        projection_binding = true;
-                        if let Some(controller) = record.controller.as_mut() {
-                            controller
-                                .finalize_shared(record.lease)
-                                .map_err(AudioResourceRuntimeError::Controller)?
-                        } else {
-                            None
-                        }
+                    if let Some(controller) = record.controller.as_mut() {
+                        controller
+                            .finalize_shared(record.lease)
+                            .map_err(AudioResourceRuntimeError::Controller)?
                     } else {
                         None
                     }
                 } else {
                     None
                 };
-                if projection_binding {
-                    if let Some(promoted) = promoted {
-                        self.activate_promoted(promoted)?;
-                    }
-                    if let Some(record) = self.bindings.get_mut(&key) {
-                        record.controller = None;
-                        record.status = unavailable_status(
-                            AudioBindingPhase::Degraded,
-                            HostAudioReadiness::Unavailable,
-                            GuestAudioReadiness::Unavailable,
-                        );
-                    }
-                    continue;
+                if let Some(promoted) = promoted {
+                    self.activate_promoted(promoted)?;
                 }
+                self.bindings.remove(&key);
+                if has_audio_finalizer(&resource) {
+                    self.pending_finalizers.insert(key.clone(), resource);
+                }
+                continue;
             }
+            let service = services
+                .get(&spec.service_ref.to_canonical_string())
+                .ok_or(AudioResourceRuntimeError::InvalidRelationship)?;
             if let Some(record) = self.bindings.get_mut(&key)
                 && record.spec == spec
                 && let Some(controller) = record.controller.as_mut()
@@ -260,16 +250,7 @@ impl AudioResourceRuntime {
             self.bindings.remove(&key);
 
             let lease = lease_for(&resource.resource_ref);
-            let (controller, status) = if service.service_role == AudioServiceRole::Projection {
-                (
-                    None,
-                    unavailable_status(
-                        AudioBindingPhase::Degraded,
-                        HostAudioReadiness::Unavailable,
-                        GuestAudioReadiness::Unavailable,
-                    ),
-                )
-            } else {
+            let (controller, status) = {
                 let capability = manifest
                     .as_ref()
                     .and_then(|manifest| manifest.vms.get(spec.target_ref.name().as_str()))
@@ -284,6 +265,15 @@ impl AudioResourceRuntime {
                         ),
                     ),
                     Some(capability) => {
+                        let capability = if service.service_role == AudioServiceRole::Projection {
+                            d2b_core::provider_capabilities::AudioProviderCapability {
+                                host_enforcement:
+                                    d2b_core::provider_capabilities::AudioHostEnforcementKind::None,
+                                ..capability
+                            }
+                        } else {
+                            capability
+                        };
                         let mediator = DaemonAudioMediator::new(
                             self.state.as_ref(),
                             spec.target_ref.name().as_str(),
@@ -368,6 +358,12 @@ impl AudioResourceRuntime {
             })
             .collect()
     }
+
+    pub(crate) fn take_pending_finalizers(&mut self) -> Vec<StoredResource> {
+        std::mem::take(&mut self.pending_finalizers)
+            .into_values()
+            .collect()
+    }
 }
 
 fn unavailable_status(
@@ -387,6 +383,75 @@ fn lease_for(resource: &ResourceRef) -> d2b_provider_audio_pipewire::AudioLeaseI
     let digest = Sha256::digest(resource.to_canonical_string().as_bytes());
     let value = u64::from_be_bytes(digest[..8].try_into().expect("fixed digest width"));
     d2b_provider_audio_pipewire::AudioLeaseId::new(value.max(1))
+}
+
+fn deletion_requested(resource: &StoredResource) -> bool {
+    serde_json::from_slice::<serde_json::Value>(&resource.canonical_json)
+        .ok()
+        .and_then(|value| value.get("metadata").cloned())
+        .and_then(|metadata| metadata.get("deletionRequestedAt").cloned())
+        .is_some_and(|value| !value.is_null())
+}
+
+fn has_audio_finalizer(resource: &StoredResource) -> bool {
+    serde_json::from_slice::<serde_json::Value>(&resource.canonical_json)
+        .ok()
+        .and_then(|value| value.get("metadata").cloned())
+        .and_then(|metadata| metadata.get("finalizers").cloned())
+        .and_then(|value| value.as_array().cloned())
+        .is_some_and(|values| {
+            values
+                .iter()
+                .any(|value| value.as_str() == Some("audio.d2bus.org/cleanup"))
+        })
+}
+
+pub(crate) async fn remove_audio_finalizer(
+    client: &UnregisteredResourceClient<RedbBackend, UnavailableUpgradeDispatcher>,
+    resource: &StoredResource,
+) -> Result<(), AudioResourceRuntimeError> {
+    let mut target = wire::ResourceIdentity::new();
+    target.zone = resource.zone.to_canonical_string();
+    target.resource_type = resource.resource_ref.resource_type().as_str().to_owned();
+    target.name = resource.resource_ref.name().as_str().to_owned();
+    target.uid = Some(resource.uid.as_str().to_owned());
+    target.generation = Some(resource.generation.get());
+    target.revision = Some(resource.revision.get());
+
+    let mut precondition = wire::Precondition::new();
+    precondition.kind =
+        protobuf::EnumOrUnknown::new(wire::PreconditionKind::PRECONDITION_KIND_EXACT_REVISION);
+    precondition.expected_revision = Some(resource.revision.get());
+    precondition.expected_uid = Some(resource.uid.as_str().to_owned());
+
+    let operation = format!(
+        "audio-runtime-finalizer-remove-{}-{}",
+        resource.resource_ref.to_canonical_string(),
+        resource.revision.get()
+    );
+    let mut mutation = wire::Mutation::new();
+    mutation.kind =
+        protobuf::EnumOrUnknown::new(wire::MutationKind::MUTATION_KIND_UPDATE_FINALIZERS);
+    mutation.target = protobuf::MessageField::some(target);
+    mutation.precondition = protobuf::MessageField::some(precondition);
+    mutation
+        .remove_finalizers
+        .push("audio.d2bus.org/cleanup".to_owned());
+    let mut request = wire::UpdateFinalizersRequest::new();
+    let mut meta = wire::RequestMeta::new();
+    meta.operation_id = operation.clone();
+    meta.idempotency_key = operation.clone();
+    meta.correlation_id = operation.clone();
+    meta.trace_id = operation;
+    request.meta = protobuf::MessageField::some(meta);
+    request.mutation = protobuf::MessageField::some(mutation);
+    let response = client.update_finalizers(request).await;
+    if response.error.is_some() {
+        return Err(AudioResourceRuntimeError::Controller(
+            AudioControllerError::Admission,
+        ));
+    }
+    Ok(())
 }
 
 fn decode_services(
@@ -449,8 +514,9 @@ fn validate_relationships(
     guests: &BTreeSet<String>,
 ) -> Result<(), AudioResourceRuntimeError> {
     for (_, (resource, spec)) in bindings {
-        if !services.contains_key(&spec.service_ref.to_canonical_string())
-            || !guests.contains(&spec.target_ref.to_canonical_string())
+        if (!deletion_requested(resource)
+            && (!services.contains_key(&spec.service_ref.to_canonical_string())
+                || !guests.contains(&spec.target_ref.to_canonical_string())))
             || resource.resource_ref.resource_type().as_str() != AUDIO_BINDING_TYPE
         {
             return Err(AudioResourceRuntimeError::InvalidRelationship);
@@ -564,19 +630,28 @@ pub(crate) async fn run_audio_watch(
             }
         };
         let binding_resources = snapshot.bindings.clone();
-        let statuses = match registry.lock() {
+        let (statuses, pending_finalizers) = match registry.lock() {
             Ok(mut slot) => match slot.as_mut() {
                 Some(runtime) => match runtime.reconcile(snapshot) {
-                    Ok(()) => Some(runtime.statuses()),
+                    Ok(()) => (Some(runtime.statuses()), runtime.take_pending_finalizers()),
                     Err(error) => {
                         tracing::warn!(error = %error, "audio resource reconciliation degraded");
-                        None
+                        (None, Vec::new())
                     }
                 },
-                None => None,
+                None => (None, Vec::new()),
             },
             Err(_) => return,
         };
+        for resource in pending_finalizers {
+            if let Err(error) = remove_audio_finalizer(status_client.as_ref(), &resource).await {
+                tracing::warn!(
+                    error = %error,
+                    finalizer = "audio",
+                    "audio finalizer removal failed"
+                );
+            }
+        }
         if let Some(statuses) = statuses {
             for status in statuses {
                 let Some(resource) = binding_resources
@@ -704,13 +779,13 @@ mod tests {
         let binding =
             AudioBindingSpec::new(service_ref.clone(), guest_ref.clone(), zone.as_str()).unwrap();
         let resource = StoredResource {
-            resource_ref: binding_ref,
+            resource_ref: binding_ref.clone(),
             zone: zone.clone(),
             uid: d2b_contracts::v3::ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000")
                 .unwrap(),
             generation: d2b_contracts::v3::ResourceGeneration::new(1).unwrap(),
             revision: ZoneRevision::new(1),
-            canonical_json: Vec::new(),
+            canonical_json: br#"{"metadata":{}}"#.to_vec(),
             payload_digest: String::new(),
         };
         let bindings = vec![(
@@ -729,6 +804,17 @@ mod tests {
                 &bindings,
                 &BTreeSet::from([guest_ref.to_canonical_string()])
             ),
+            Ok(())
+        );
+        let mut deleting_resource = bindings[0].1.0.clone();
+        deleting_resource.canonical_json =
+            br#"{"metadata":{"deletionRequestedAt":"2026-08-15T00:00:00Z"}}"#.to_vec();
+        let deleting_bindings = vec![(
+            binding_ref.to_canonical_string(),
+            (deleting_resource, bindings[0].1.1.clone()),
+        )];
+        assert_eq!(
+            validate_relationships(&BTreeMap::new(), &deleting_bindings, &BTreeSet::new()),
             Ok(())
         );
     }

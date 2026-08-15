@@ -26,7 +26,8 @@ use crate::activation_resource_runtime::{
 };
 use crate::audio_resource_runtime::{
     AudioBindingRuntimeStatus, AudioResourceRuntime, AudioResourceRuntimeError,
-    audio_binding_status_value, audio_watch_request, list_audio_snapshot, run_audio_watch,
+    audio_binding_status_value, audio_watch_request, list_audio_snapshot, remove_audio_finalizer,
+    run_audio_watch,
 };
 use crate::authority_persistence::RedbAuthorityPersistence;
 use crate::process_resource_runtime::{
@@ -39,7 +40,8 @@ use d2b_contracts::v3::identity::STANDARD_RESOURCE_TYPES;
 #[cfg(test)]
 use d2b_contracts::v3::{
     DEFAULT_LIST_PAGE_SIZE, MAX_FILTER_VALUES, MAX_LIST_FILTERS, MAX_LIST_PAGE_SIZE,
-    MAX_LIST_RESOURCE_TYPES, MAX_PAGE_CURSOR_BYTES, MAX_RESPONSE_CANONICAL_BYTES, ResourceName,
+    MAX_LIST_RESOURCE_TYPES, MAX_PAGE_CURSOR_BYTES, MAX_RESPONSE_CANONICAL_BYTES,
+    ResourceGeneration, ResourceName,
 };
 use d2b_contracts::v3::{
     host::{HOST_PROVIDER_REF, HostSpec},
@@ -571,6 +573,8 @@ impl ZoneResourceRuntime {
                             .with_runtime_metadata(zone_runtime_metadata(
                                 &store_metadata,
                                 0,
+                                false,
+                                0,
                                 Some(current_status_timestamp()),
                             )),
                     )
@@ -660,6 +664,8 @@ impl ZoneResourceRuntime {
                             .with_runtime_metadata(zone_runtime_metadata(
                                 &store_metadata,
                                 system_core.total_resource_count,
+                                system_core.generation_cleanup_pending,
+                                system_core.cleanup_pending_count,
                                 Some(current_status_timestamp()),
                             )),
                     )
@@ -772,6 +778,8 @@ impl ZoneResourceRuntime {
         let mut runtime = zone_runtime_metadata(
             &self.store_metadata,
             current.total_resource_count(),
+            current.generation_cleanup_pending(),
+            current.cleanup_pending_count(),
             Some(current_status_timestamp()),
         );
         runtime.installed_provider_count = installed_provider_count;
@@ -803,6 +811,7 @@ impl ZoneResourceRuntime {
             .map_err(|_| ResourceRuntimeError::StoreReadFailed)?;
         let binding_resources = snapshot.bindings.clone();
         let statuses;
+        let pending_finalizers;
         {
             let mut runtime = self
                 .audio_runtime
@@ -814,6 +823,17 @@ impl ZoneResourceRuntime {
                 .reconcile(snapshot)
                 .map_err(map_audio_runtime_error)?;
             statuses = registry.statuses();
+            pending_finalizers = registry.take_pending_finalizers();
+        }
+        for resource in pending_finalizers {
+            remove_audio_finalizer(
+                self.process_status_client
+                    .as_ref()
+                    .ok_or(ResourceRuntimeError::AuthenticationUnavailable)?,
+                &resource,
+            )
+            .await
+            .map_err(map_audio_runtime_error)?;
         }
         for status in statuses {
             let Some(resource) = binding_resources
@@ -831,11 +851,13 @@ impl ZoneResourceRuntime {
             )
             .await?;
         }
-        let start_watch = self
-            .audio_watch_task
-            .lock()
-            .map_err(|_| ResourceRuntimeError::WatchUnavailable)?
-            .is_none();
+        let start_watch = {
+            let mut watch_task = self
+                .audio_watch_task
+                .lock()
+                .map_err(|_| ResourceRuntimeError::WatchUnavailable)?;
+            watch_needs_restart(&mut watch_task)
+        };
         if start_watch {
             let watch = d2b_resource_api::watch::WatchService::new(Arc::clone(&self.store))
                 .open(audio_watch_request(&self.zone))
@@ -901,11 +923,13 @@ impl ZoneResourceRuntime {
         }
         result.map_err(map_process_runtime_error)?;
 
-        let start_watch = self
-            .process_watch_task
-            .lock()
-            .map_err(|_| ResourceRuntimeError::WatchUnavailable)?
-            .is_none();
+        let start_watch = {
+            let mut watch_task = self
+                .process_watch_task
+                .lock()
+                .map_err(|_| ResourceRuntimeError::WatchUnavailable)?;
+            watch_needs_restart(&mut watch_task)
+        };
         if start_watch {
             let watch = d2b_resource_api::watch::WatchService::new(Arc::clone(&self.store))
                 .open(process_watch_request(&self.zone))
@@ -956,11 +980,13 @@ impl ZoneResourceRuntime {
             Err(_) => return Err(ResourceRuntimeError::CapabilityUnavailable),
         }
         result.map_err(map_activation_runtime_error)?;
-        let start_watch = self
-            .activation_watch_task
-            .lock()
-            .map_err(|_| ResourceRuntimeError::WatchUnavailable)?
-            .is_none();
+        let start_watch = {
+            let mut watch_task = self
+                .activation_watch_task
+                .lock()
+                .map_err(|_| ResourceRuntimeError::WatchUnavailable)?;
+            watch_needs_restart(&mut watch_task)
+        };
         if start_watch {
             let watch = d2b_resource_api::watch::WatchService::new(Arc::clone(&self.store))
                 .open(activation_watch_request(&self.zone))
@@ -1955,11 +1981,22 @@ struct SystemCoreReconcileResult {
     host_phase: HandlerPhase,
     user_phase: HandlerPhase,
     total_resource_count: u32,
+    generation_cleanup_pending: bool,
+    cleanup_pending_count: u32,
+}
+
+fn watch_needs_restart(slot: &mut Option<tokio::task::JoinHandle<()>>) -> bool {
+    if slot.as_ref().is_some_and(|task| task.is_finished()) {
+        *slot = None;
+    }
+    slot.is_none()
 }
 
 fn zone_runtime_metadata(
     store_metadata: &StoreRuntimeMetadata,
     total_resource_count: u32,
+    generation_cleanup_pending: bool,
+    cleanup_pending_count: u32,
     last_reconciled_at: Option<Timestamp>,
 ) -> ZoneRuntimeMetadata {
     ZoneRuntimeMetadata {
@@ -1976,8 +2013,8 @@ fn zone_runtime_metadata(
             .policy_snapshot
             .active_configuration_revision
             .get(),
-        generation_cleanup_pending: false,
-        cleanup_pending_count: 0,
+        generation_cleanup_pending,
+        cleanup_pending_count,
         last_reconciled_at,
     }
 }
@@ -2248,27 +2285,54 @@ async fn reconcile_system_core_resources(
         trace_id: None,
         deadline_ms: 10_000,
     };
-    let list = |resource_type: ResourceTypeName, suffix: &'static str| async move {
-        store
+    let mut resources = Vec::new();
+    let mut cursor = None;
+    loop {
+        let page = store
             .list(StoreListRequest {
-                operation: operation(suffix),
+                operation: operation("all"),
                 zone: zone.clone(),
-                resource_types: vec![resource_type],
+                resource_types: Vec::new(),
                 resource_names: Vec::new(),
                 filters: Vec::new(),
                 page_size: 128,
-                cursor: None,
+                cursor,
                 projection: StoreProjection::Full,
             })
             .await
-            .map_err(|_| ResourceRuntimeError::StoreReadFailed)
-    };
-    let hosts = list(host_type, "host").await?;
-    let users = list(user_type, "user").await?;
-    let total_resource_count = hosts.resources.len().saturating_add(users.resources.len()) as u32;
+            .map_err(|_| ResourceRuntimeError::StoreReadFailed)?;
+        resources.extend(page.resources);
+        cursor = page.next_cursor;
+        if cursor.is_none() {
+            break;
+        }
+    }
+    let hosts = resources
+        .iter()
+        .filter(|resource| resource.resource_ref.resource_type() == &host_type)
+        .cloned()
+        .collect::<Vec<_>>();
+    let users = resources
+        .iter()
+        .filter(|resource| resource.resource_ref.resource_type() == &user_type)
+        .cloned()
+        .collect::<Vec<_>>();
+    let total_resource_count = resources.len().min(u32::MAX as usize) as u32;
+    let active_configuration_generation = store
+        .runtime_metadata()
+        .await
+        .map_err(|_| ResourceRuntimeError::StoreReadFailed)?
+        .policy_snapshot
+        .active_configuration_revision
+        .get();
+    let cleanup_pending_count = resources
+        .iter()
+        .filter(|resource| configuration_cleanup_pending(resource, active_configuration_generation))
+        .count()
+        .min(u32::MAX as usize) as u32;
 
-    let mut host_phase = host_phase_for_resource_count(hosts.resources.len());
-    for resource in hosts.resources {
+    let mut host_phase = host_phase_for_resource_count(hosts.len());
+    for resource in hosts {
         let envelope = d2b_contracts::v3::ResourceEnvelope::from_json(&resource.canonical_json)
             .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
         let spec: HostSpec = serde_json::from_slice(&envelope.spec().base().to_canonical_bytes())
@@ -2284,7 +2348,7 @@ async fn reconcile_system_core_resources(
         if provider_ref.to_canonical_string() != HOST_PROVIDER_REF {
             return Err(ResourceRuntimeError::HandlerNotReady);
         }
-        let report = HostReconciler::new()
+        let report = match HostReconciler::new()
             .reconcile_with_probe(
                 &host_ref,
                 provider_ref,
@@ -2294,7 +2358,24 @@ async fn reconcile_system_core_resources(
                 false,
             )
             .await
-            .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
+        {
+            Ok(report) => report,
+            Err(_) => {
+                let mut status = HostReconciler::new()
+                    .reconcile(&host_ref, provider_ref, &spec)
+                    .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
+                status.phase = ResourcePhase::Degraded;
+                HostObservationReport {
+                    status,
+                    capabilities: Vec::new(),
+                    kernel_release: "unknown".to_owned(),
+                    os_name: "unknown".to_owned(),
+                    user_manager_available: false,
+                    active_process_count: 0,
+                    minijail_ready: false,
+                }
+            }
+        };
         if report.status.phase != ResourcePhase::Ready {
             host_phase = HandlerPhase::Degraded;
         }
@@ -2304,7 +2385,7 @@ async fn reconcile_system_core_resources(
 
     let user_reconciler = UserReconciler::new(SystemCoreUserDiscovery);
     let mut user_phase = HandlerPhase::Ready;
-    for resource in users.resources {
+    for resource in users {
         let envelope = d2b_contracts::v3::ResourceEnvelope::from_json(&resource.canonical_json)
             .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
         let spec: UserSpec = serde_json::from_slice(&envelope.spec().base().to_canonical_bytes())
@@ -2340,7 +2421,32 @@ async fn reconcile_system_core_resources(
         host_phase,
         user_phase,
         total_resource_count,
+        generation_cleanup_pending: cleanup_pending_count != 0,
+        cleanup_pending_count,
     })
+}
+
+fn configuration_cleanup_pending(
+    resource: &StoredResource,
+    active_configuration_generation: u64,
+) -> bool {
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(&resource.canonical_json) else {
+        return false;
+    };
+    let Some(metadata) = value.get("metadata").and_then(serde_json::Value::as_object) else {
+        return false;
+    };
+    metadata
+        .get("managedBy")
+        .and_then(serde_json::Value::as_str)
+        == Some("configuration")
+        && metadata
+            .get("configurationGeneration")
+            .and_then(serde_json::Value::as_u64)
+            .is_some_and(|generation| generation < active_configuration_generation)
+        && metadata
+            .get("deletionRequestedAt")
+            .is_some_and(|value| !value.is_null())
 }
 
 fn host_status_value(
@@ -2947,6 +3053,44 @@ mod tests {
         );
         assert_eq!(host_phase_for_resource_count(1), HandlerPhase::Ready);
         assert_eq!(host_phase_for_resource_count(2), HandlerPhase::Ready);
+    }
+
+    #[test]
+    fn cleanup_pending_counts_only_deleted_prior_configuration_generations() {
+        let mut resource = StoredResource {
+            resource_ref: ResourceRef::parse("Host/host-system").unwrap(),
+            zone: ZoneId::parse("dev").unwrap(),
+            uid: ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap(),
+            generation: ResourceGeneration::new(1).unwrap(),
+            revision: ZoneRevision::new(1),
+            canonical_json: br#"{"metadata":{"managedBy":"configuration","configurationGeneration":3,"deletionRequestedAt":"2026-08-15T00:00:00Z"}}"#.to_vec(),
+            payload_digest: String::new(),
+        };
+        assert!(configuration_cleanup_pending(&resource, 4));
+        resource.canonical_json =
+            br#"{"metadata":{"managedBy":"configuration","configurationGeneration":4,"deletionRequestedAt":"2026-08-15T00:00:00Z"}}"#.to_vec();
+        assert!(!configuration_cleanup_pending(&resource, 4));
+        resource.canonical_json =
+            br#"{"metadata":{"managedBy":"operator","configurationGeneration":3,"deletionRequestedAt":"2026-08-15T00:00:00Z"}}"#.to_vec();
+        assert!(!configuration_cleanup_pending(&resource, 4));
+    }
+
+    #[tokio::test]
+    async fn completed_watch_handles_are_cleared_for_bounded_restart() {
+        let completed = tokio::spawn(async {});
+        while !completed.is_finished() {
+            tokio::task::yield_now().await;
+        }
+        let mut slot = Some(completed);
+        assert!(watch_needs_restart(&mut slot));
+        assert!(slot.is_none());
+
+        let running = tokio::spawn(async {
+            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+        });
+        let mut slot = Some(running);
+        assert!(!watch_needs_restart(&mut slot));
+        slot.take().expect("running watch").abort();
     }
 
     #[tokio::test]

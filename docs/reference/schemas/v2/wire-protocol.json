@@ -8363,6 +8363,7 @@
       "description": "Request to re-open a pidfd after identity re-verification.",
       "type": "object",
       "required": [
+        "bundleContentIdentity",
         "bundleRunnerIntentRef",
         "domain",
         "expected",
@@ -8374,6 +8375,10 @@
         "vmId"
       ],
       "properties": {
+        "bundleContentIdentity": {
+          "description": "Content identity the broker must resolve for this unit.",
+          "type": "string"
+        },
         "bundleRunnerIntentRef": {
           "description": "Opaque bundle reference resolved only by the broker.",
           "type": "string"
@@ -10580,6 +10585,18 @@
             }
           ]
         },
+        "systemArtifactId": {
+          "description": "Durable generation artifact selected by the caller.",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ArtifactId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "tracingSpanId": {
           "default": null,
           "type": [
@@ -12417,6 +12434,7 @@
       "description": "Request to stop one exact transient systemd unit.",
       "type": "object",
       "required": [
+        "bundleContentIdentity",
         "bundleRunnerIntentRef",
         "class",
         "domain",
@@ -12429,6 +12447,10 @@
         "vmId"
       ],
       "properties": {
+        "bundleContentIdentity": {
+          "description": "Content identity the broker must resolve for this unit.",
+          "type": "string"
+        },
         "bundleRunnerIntentRef": {
           "description": "Opaque bundle reference resolved only by the broker.",
           "type": "string"
@@ -12843,6 +12865,7 @@
       "description": "Stable systemd identity returned only after the broker has queried the manager and re-read the process start time under the pidfd boundary.",
       "type": "object",
       "required": [
+        "bundleContentIdentity",
         "cgroupIdentity",
         "generation",
         "invocationId",
@@ -12852,6 +12875,10 @@
         "templateIdentity"
       ],
       "properties": {
+        "bundleContentIdentity": {
+          "description": "Content identity of the broker-resolved trusted bundle.",
+          "type": "string"
+        },
         "cgroupIdentity": {
           "description": "Digest of the exact ControlGroup path; the path never crosses IPC.",
           "type": "array",
@@ -12921,6 +12948,7 @@
       "description": "Shared trusted request fields for systemd unit operations.",
       "type": "object",
       "required": [
+        "bundleContentIdentity",
         "bundleRunnerIntentRef",
         "domain",
         "generation",
@@ -12931,6 +12959,10 @@
         "vmId"
       ],
       "properties": {
+        "bundleContentIdentity": {
+          "description": "Content identity the broker must resolve for this unit.",
+          "type": "string"
+        },
         "bundleRunnerIntentRef": {
           "description": "Opaque bundle reference resolved only by the broker.",
           "type": "string"

@@ -20,5 +20,5 @@ pub use broker::{
 };
 pub use systemd::{
     BrokerSystemdEffectOwner, BrokerSystemdPidfdHandle, SystemdEffectLaunch, SystemdEffectOwner,
-    SystemdInvocationIdentity, SystemdProcessBackend,
+    SystemdIdentityContext, SystemdInvocationIdentity, SystemdProcessBackend,
 };

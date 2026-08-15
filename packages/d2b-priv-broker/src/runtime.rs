@@ -12934,6 +12934,7 @@ mod tests {
         let request = RunActivationRequest {
             bundle_activation_intent_ref: BundleOpId::new("activation:vm:alpha"),
             mode: ActivationMode::Switch,
+            system_artifact_id: None,
             phase: ActivationPhase::Prepare,
             vm: "alpha".to_owned(),
             tracing_span_id: None,
@@ -13469,6 +13470,7 @@ mod tests {
             BrokerRequest::RunActivation(d2b_contracts::broker_wire::RunActivationRequest {
                 bundle_activation_intent_ref: BundleOpId::new(intent_id_activation("corp-vm")),
                 mode: ActivationMode::Switch,
+                system_artifact_id: None,
                 phase: ActivationPhase::MetadataOnly,
                 vm: "corp-vm".to_owned(),
                 tracing_span_id: Some(TracingSpanId::new("span-activation")),

@@ -14,8 +14,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use d2b_contracts::broker_wire::{
-    OpenSystemdUnitPidfdRequest, StartTransientUnitRequest, StopSystemdUnitRequest,
-    SystemdStopClass, SystemdUnitDomain, SystemdUnitIdentity,
+    OpenSystemdUnitPidfdRequest, SandboxLaunchPlan, StartTransientUnitRequest,
+    StopSystemdUnitRequest, SystemdStopClass, SystemdUnitDomain, SystemdUnitIdentity,
 };
 use d2b_core::bundle_resolver::{BundleResolver, ResolvedRunnerIntent};
 use sha2::{Digest, Sha256};
@@ -79,12 +79,30 @@ fn validate_request(
     if request.generation == 0
         || request.provider_identity == [0; 32]
         || request.template_identity == [0; 32]
+        || request.bundle_content_identity.is_empty()
     {
         return Err(SystemdError::InvalidRequest("identity"));
+    }
+
+    fn systemd_sandbox_supported(plan: &SandboxLaunchPlan) -> bool {
+        plan.namespace_classes.is_empty()
+            && plan.capability_classes.is_empty()
+            && plan.seccomp_class.as_str() == "strict"
+            && plan.no_new_privileges
+            && !plan.start_root
+            && matches!(
+                plan.environment_class,
+                d2b_contracts::v3::process::EnvironmentClass::Minimal
+            )
+            && plan.read_only_root
+            && plan.user_namespace.is_none()
     }
     let intent = resolver
         .find_runner_intent(request.bundle_runner_intent_ref.as_str())
         .ok_or(SystemdError::BundleIntent)?;
+    if resolver.bundle.bundle_hash.as_deref() != Some(request.bundle_content_identity.as_str()) {
+        return Err(SystemdError::IdentityMismatch);
+    }
     if intent.vm_name != request.vm_id.as_str()
         || intent.role_id != request.role_id.as_str()
         || !role_matches(request.role, &intent.role)
@@ -110,7 +128,9 @@ fn validate_request(
     if request.domain != expected_domain {
         return Err(SystemdError::IdentityMismatch);
     }
-    if request.sandbox_plan.is_some() {
+    if let Some(plan) = &request.sandbox_plan
+        && !systemd_sandbox_supported(plan)
+    {
         return Err(SystemdError::InvalidRequest(
             "sandbox-plan-systemd-unsupported",
         ));
@@ -370,6 +390,7 @@ fn read_identity(
         provider_identity: request.provider_identity,
         template_identity: request.template_identity,
         generation: request.generation,
+        bundle_content_identity: request.bundle_content_identity.clone(),
     }))
 }
 
@@ -430,7 +451,14 @@ pub fn start(
         ("KillMode", Value::from("control-group")),
         ("CollectMode", Value::from("inactive-or-failed")),
         ("NoNewPrivileges", Value::from(true)),
+        ("ProtectSystem", Value::from("strict")),
     ];
+    if let Some(plan) = &request.sandbox_plan {
+        if let Some(umask) = plan.umask.as_deref() {
+            properties.push(("UMask", Value::from(umask)));
+        }
+        properties.push(("OOMScoreAdjust", Value::from(plan.oom_score_adj)));
+    }
     if request.domain == SystemdUnitDomain::System {
         properties.push(("User", Value::from(intent.uid.to_string())));
         properties.push(("Group", Value::from(intent.gid.to_string())));
@@ -489,15 +517,17 @@ pub fn stop(
     let intent = validate_request(resolver, &request.unit)?;
     let name = unit_name(&request.unit);
     let connection = manager_connection(&intent, request.unit.domain)?;
-    let actual = read_identity(&request.unit, &intent, &connection, &name)?
-        .ok_or(SystemdError::IdentityMismatch)?;
-    expected_matches(&actual, &request.expected)?;
     let manager = manager_proxy(&connection)?;
+    let Some(actual) = read_identity(&request.unit, &intent, &connection, &name)? else {
+        return Ok(());
+    };
+    expected_matches(&actual, &request.expected)?;
     if request.class == SystemdStopClass::Terminate {
         manager
             .call_method("KillUnit", &(name.as_str(), "all", 9i32))
             .map_err(|_| SystemdError::Stop)?;
     }
+
     manager
         .call_method("StopUnit", &(name.as_str(), "replace"))
         .map_err(|_| SystemdError::Stop)?;
@@ -530,6 +560,7 @@ mod tests {
             resource_uid: None,
             role: RunnerRole::Audio,
             bundle_runner_intent_ref: BundleOpId::new("intent"),
+            bundle_content_identity: "bundle".to_owned(),
             provider_identity: [1; 32],
             template_identity: [2; 32],
             generation: 3,

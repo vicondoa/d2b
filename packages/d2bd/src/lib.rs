@@ -20149,10 +20149,17 @@ fn dispatch_broker_activation(
                 verb,
             )?;
         }
-        return dispatch_broker_activation_metadata_only(state, request, verb, mode, caller_role);
+        return dispatch_broker_activation_metadata_only(
+            state,
+            request,
+            verb,
+            mode,
+            caller_role,
+            None,
+        );
     }
 
-    dispatch_live_guest_activation(state, request, verb, mode, caller_role)
+    dispatch_live_guest_activation(state, request, verb, mode, caller_role, None)
 }
 
 fn dispatch_run_activation_phase(
@@ -20162,6 +20169,7 @@ fn dispatch_run_activation_phase(
     mode: BrokerActivationMode,
     phase: BrokerActivationPhase,
     caller_role: BrokerCallerRole,
+    system_artifact_id: Option<d2b_contracts::v3::ArtifactId>,
 ) -> Result<d2b_contracts::broker_wire::RunActivationResponse, Value> {
     const OP_NAME: &str = "RunActivation";
     let started = Instant::now();
@@ -20172,6 +20180,7 @@ fn dispatch_run_activation_phase(
             mode,
             phase,
             vm: request.vm.clone(),
+            system_artifact_id,
             tracing_span_id: None,
         }),
         caller_role,
@@ -20252,6 +20261,7 @@ fn dispatch_broker_activation_metadata_only(
     verb: &'static str,
     mode: BrokerActivationMode,
     caller_role: BrokerCallerRole,
+    system_artifact_id: Option<d2b_contracts::v3::ArtifactId>,
 ) -> Result<Value, TypedError> {
     let response = match dispatch_run_activation_phase(
         state,
@@ -20260,6 +20270,7 @@ fn dispatch_broker_activation_metadata_only(
         mode,
         BrokerActivationPhase::MetadataOnly,
         caller_role,
+        system_artifact_id,
     ) {
         Ok(response) => response,
         Err(frame) => return Ok(frame),
@@ -20287,6 +20298,7 @@ fn dispatch_live_guest_activation(
     verb: &'static str,
     mode: BrokerActivationMode,
     caller_role: BrokerCallerRole,
+    system_artifact_id: Option<d2b_contracts::v3::ArtifactId>,
 ) -> Result<Value, TypedError> {
     let _guard = match try_acquire_activation_lock(state, &request.vm) {
         Ok(guard) => guard,
@@ -20354,6 +20366,7 @@ fn dispatch_live_guest_activation(
         mode,
         BrokerActivationPhase::Prepare,
         caller_role.clone(),
+        system_artifact_id.clone(),
     ) {
         Ok(response) => response,
         Err(frame) => return Ok(frame),
@@ -20506,6 +20519,7 @@ fn dispatch_live_guest_activation(
         mode,
         BrokerActivationPhase::Commit,
         caller_role,
+        system_artifact_id,
     ) {
         Ok(response) => response,
         Err(frame) => {
