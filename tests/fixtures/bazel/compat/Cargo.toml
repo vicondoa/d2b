@@ -1,0 +1,14 @@
+[package]
+name = "bazel-compat-fixture"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "compat_fixture"
+path = "src/main.rs"
+
+[dependencies]
+itoa = "1.0"

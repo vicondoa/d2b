@@ -1,0 +1,39 @@
+#!/bin/bash
+set -euo pipefail
+
+quiet=0
+pattern=''
+file=''
+while (($#)); do
+  case "$1" in
+    -q) quiet=1; shift ;;
+    -e) pattern="$2"; shift 2 ;;
+    --) shift; break ;;
+    -*) shift ;;
+    *)
+      if [[ -z "$pattern" ]]; then
+        pattern="$1"
+        shift
+      else
+        file="$1"
+        shift
+        break
+      fi
+      ;;
+  esac
+done
+
+if [[ -z "$pattern" || -z "$file" ]]; then
+  exit 2
+fi
+
+matched=1
+while IFS= read -r line; do
+  if [[ "$line" =~ $pattern ]]; then
+    matched=0
+    if ((quiet == 0)); then
+      printf '%s\n' "$line"
+    fi
+  fi
+done < "$file"
+exit "$matched"

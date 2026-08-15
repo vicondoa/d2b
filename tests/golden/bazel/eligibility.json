@@ -1,0 +1,213 @@
+{
+  "schemaVersion": 1,
+  "source": "tests/golden/bazel/check-coverage.json",
+  "entries": [
+    {
+      "id": "layer1:tier0",
+      "bazelLabel": "//tests:check_tier0",
+      "eligible": false,
+      "localOnlyReason": "preflight-gate"
+    },
+    {
+      "id": "layer1:test-lint",
+      "bazelLabel": "//tests:lint",
+      "eligible": false,
+      "localOnlyReason": "preflight-gate"
+    },
+    {
+      "id": "layer1:check-inventory",
+      "bazelLabel": "//tests:check_inventory",
+      "eligible": false,
+      "localOnlyReason": "preflight-gate"
+    },
+    {
+      "id": "layer1:test-changelog",
+      "bazelLabel": "//tests:changelog",
+      "eligible": true,
+      "localOnlyReason": null
+    },
+    {
+      "id": "layer1:test-rust",
+      "bazelLabel": "//tests:rust",
+      "eligible": true,
+      "localOnlyReason": null
+    },
+    {
+      "id": "layer1:test-proofs",
+      "bazelLabel": "//tests:proofs",
+      "eligible": true,
+      "localOnlyReason": null
+    },
+    {
+      "id": "layer1:test-flake",
+      "bazelLabel": "//tests:nix_flake",
+      "eligible": false,
+      "localOnlyReason": "nix-realization"
+    },
+    {
+      "id": "layer1:test-nix-unit",
+      "bazelLabel": "//tests:nix_unit",
+      "eligible": false,
+      "localOnlyReason": "nix-evaluation"
+    },
+    {
+      "id": "layer1:test-policy",
+      "bazelLabel": "//tests:policy",
+      "eligible": false,
+      "localOnlyReason": "preflight-gate"
+    },
+    {
+      "id": "layer1:test-drift",
+      "bazelLabel": "//tests:drift",
+      "eligible": false,
+      "localOnlyReason": "generated-artifact-drift"
+    },
+    {
+      "id": "layer1:test-runtime-ledger",
+      "bazelLabel": "//tests:runtime_ledger",
+      "eligible": true,
+      "localOnlyReason": null
+    },
+    {
+      "id": "layer1:test-performance-budgets",
+      "bazelLabel": "//tests:performance_budgets",
+      "eligible": false,
+      "localOnlyReason": "stable-self-hosted-runner"
+    },
+    {
+      "id": "layer1:test-fixture-contracts",
+      "bazelLabel": "//tests:fixture_contracts",
+      "eligible": false,
+      "localOnlyReason": "fixture-realization"
+    },
+    {
+      "id": "rust:main-workspace",
+      "bazelLabel": "//packages:rust_main_workspace",
+      "eligible": true,
+      "localOnlyReason": null
+    },
+    {
+      "id": "rust:broker-default",
+      "bazelLabel": "//packages/d2b-priv-broker:rust_default",
+      "eligible": true,
+      "localOnlyReason": null
+    },
+    {
+      "id": "rust:broker-layer1",
+      "bazelLabel": "//packages/d2b-priv-broker:rust_layer1_bootstrap",
+      "eligible": true,
+      "localOnlyReason": null
+    },
+    {
+      "id": "rust:broker-fakebackends",
+      "bazelLabel": "//packages/d2b-priv-broker:rust_fake_backends",
+      "eligible": true,
+      "localOnlyReason": null
+    },
+    {
+      "id": "rust:guest-shell-runner-real-libshpool",
+      "bazelLabel": "//packages/d2b-guest-shell-runner:rust_real_libshpool",
+      "eligible": true,
+      "localOnlyReason": null
+    },
+    {
+      "id": "rust:no-bash-ast",
+      "bazelLabel": "//tests:rust_no_bash_ast",
+      "eligible": true,
+      "localOnlyReason": null
+    },
+    {
+      "id": "rust:schema-reproducibility",
+      "bazelLabel": "//tests:rust_schema_reproducibility",
+      "eligible": true,
+      "localOnlyReason": null
+    },
+    {
+      "id": "rust:inventory-stub",
+      "bazelLabel": "//tests:rust_inventory_stub",
+      "eligible": true,
+      "localOnlyReason": null
+    },
+    {
+      "id": "rust:supply-chain",
+      "bazelLabel": "//tests:rust_supply_chain",
+      "eligible": true,
+      "localOnlyReason": null
+    },
+    {
+      "id": "rust:fixture-contracts",
+      "bazelLabel": "//packages/d2b-contract-tests:fixture_contracts",
+      "eligible": false,
+      "localOnlyReason": "fixture-realization"
+    },
+    {
+      "id": "rust:cli-contracts",
+      "bazelLabel": "//packages/d2b:cli_contracts",
+      "eligible": false,
+      "localOnlyReason": "fixture-realization"
+    },
+    {
+      "id": "rust:doctests",
+      "bazelLabel": "//packages:rust_doctests",
+      "eligible": true,
+      "localOnlyReason": null
+    },
+    {
+      "id": "rust:harness-free-targets",
+      "bazelLabel": "//packages:rust_harness_free_targets",
+      "eligible": true,
+      "localOnlyReason": null
+    },
+    {
+      "id": "rust:proof-workspaces",
+      "bazelLabel": "//proofs:all",
+      "eligible": true,
+      "localOnlyReason": null
+    },
+    {
+      "id": "rust:benches",
+      "bazelLabel": "//packages:rust_benches",
+      "eligible": true,
+      "localOnlyReason": null
+    }
+  ],
+  "buildBuddy": {
+    "provider": "buildbuddy",
+    "status": "unavailable",
+    "reason": "provider-evidence-unavailable",
+    "probe": {
+      "kind": "credential-isolated-command",
+      "command": "xtask buildbuddy-probe",
+      "input": "D2B_BUILDBUDDY_EVIDENCE_FILE",
+      "readOnly": true,
+      "fixtureSafe": true,
+      "credentialMode": "none"
+    },
+    "authenticated": false,
+    "executionEntitled": false,
+    "cacheReadEvidence": false,
+    "cacheWriteEvidence": false,
+    "readOnlyProbe": false,
+    "transferBytes": {
+      "uploaded": null,
+      "downloaded": null
+    },
+    "qualificationMetrics": {
+      "wallTimeMillis": null,
+      "actionCacheHits": null,
+      "actionCacheMisses": null,
+      "casHits": null,
+      "casMisses": null,
+      "remoteExecutions": null,
+      "repositoryTrafficBytes": null,
+      "besTrafficBytes": null,
+      "retryTrafficBytes": null,
+      "localNixMillis": null
+    },
+    "workerArchitectures": [],
+    "secretRedaction": false,
+    "trustedSeed": false,
+    "invocationId": null,
+    "dispatchEvidence": false
+  }
+}

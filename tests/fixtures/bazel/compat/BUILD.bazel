@@ -1,0 +1,53 @@
+load("@gazelle//:def.bzl", "gazelle", "gazelle_binary")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+
+# gazelle:rust_cargo_lockfile Cargo.lock
+# gazelle:rust_crates_prefix @crates//:
+# gazelle:rust_mode generate_from_cargo
+
+gazelle_binary(
+    name = "gazelle_rust",
+    languages = ["@gazelle_rust//rust_language"],
+)
+
+gazelle(
+    name = "gazelle",
+    gazelle = ":gazelle_rust",
+)
+
+test_suite(
+    name = "fixture_test",
+    tests = ["//tests/fixtures/bazel/compat:bazel_compat_fixture_test"],
+)
+
+rust_library(
+    name = "bazel_compat_fixture",
+    srcs = ["src/lib.rs"],
+    compile_data = ["Cargo.toml"],
+    edition = "2024",
+    visibility = ["//visibility:public"],
+    deps = ["@crates//:itoa"],
+)
+
+rust_binary(
+    name = "compat_fixture",
+    srcs = ["src/main.rs"],
+    compile_data = ["Cargo.toml"],
+    edition = "2024",
+    visibility = ["//visibility:public"],
+    deps = [":bazel_compat_fixture"],
+)
+
+rust_test(
+    name = "bazel_compat_fixture_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":bazel_compat_fixture",
+    edition = "2024",
+)
+
+# keep
+rust_library(
+    name = "explicit_exception",
+    srcs = ["src/exception.rs"],
+    crate_name = "explicit_exception",
+)
