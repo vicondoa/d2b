@@ -11,6 +11,7 @@ mod history;
 mod picker;
 mod policy;
 mod rbac;
+mod runtime;
 mod service;
 
 pub use audit::{
@@ -31,9 +32,13 @@ pub use history::{ClipboardEntry, ClipboardHistory, HistoryError};
 pub use picker::{PickerAuthority, PickerError, PickerReceipt, PickerRequest, PickerResult};
 pub use policy::{ALLOWED_MIME_TYPES, ClipboardPolicyError, Policy, SECRET_HINT_MIME_TYPES};
 pub use rbac::{ClipboardRbac, ClipboardRole, ClipboardRoleBinding};
+pub use runtime::{
+    ClipboardFinalizationReport, ClipboardProcessEffectPort, ClipboardRuntime,
+    ClipboardRuntimeError,
+};
 pub use service::{
     AuthenticatedClipboardSession, AuthenticatedPasteRoute, ClipboardBridgePort, ClipboardConfig,
-    ClipboardServiceError, ClipboardServiceRole, ClipdHost, DisplayDependency,
+    ClipboardServiceError, ClipboardServiceRole, ClipdHost, DisplayDependency, GuestSelectionEvent,
     VerifiedClipboardAttachments,
 };
 
