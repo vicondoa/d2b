@@ -7,7 +7,7 @@ use crate::{
     },
     fd::{AttachmentClass, FdPermit, FdPermitPool, FdReadError, FdSafetyError, ReceivedFdBatch},
     history::{ClipboardEntry, ClipboardHistory},
-    picker::PickerReceipt,
+    picker::{PickerAuthority, PickerError, PickerReceipt, PickerRequest, PickerResult},
     policy::Policy,
 };
 use d2b_contracts::v3::{ResourceRef, ZoneId};
@@ -872,7 +872,31 @@ impl ClipdHost {
         {
             return Err(ClipboardServiceError::PickerReceiptInvalid);
         }
+
         self.authorize_paste_inner(route, true)
+    }
+
+    /// Complete one authenticated picker operation and mint its one-use
+    /// receipt.  The history claim is made before returning, so retrying the
+    /// same completion cannot mint another receipt.
+    pub fn complete_picker(
+        &mut self,
+        source: &AuthenticatedClipboardSession,
+        destination: &AuthenticatedClipboardSession,
+        request: &PickerRequest,
+        result: PickerResult,
+        entry_digest: impl Into<String>,
+        now_secs: u64,
+    ) -> Result<PickerReceipt, PickerError> {
+        PickerAuthority::complete(
+            source,
+            destination,
+            request,
+            result,
+            entry_digest,
+            &mut self.history,
+            now_secs,
+        )
     }
 
     fn authorize_paste_inner(
@@ -1099,28 +1123,27 @@ mod tests {
         let digest = host
             .capture_host(&source, "text/plain", b"hello", None, 100)
             .unwrap();
-        let receipt = PickerAuthority::complete(
-            &source,
-            &destination,
-            &request,
-            crate::picker::PickerResult::Selected(digest.clone()),
-            digest.clone(),
-            &mut host.history,
-            100,
-        )
-        .expect("picker receipt");
-        assert!(
-            host.authorize_paste_after_picker(&route, receipt, &digest, 3_700)
-                == Err(ClipboardServiceError::PickerReceiptInvalid)
-        );
-        assert_eq!(
-            PickerAuthority::complete(
+        let receipt = host
+            .complete_picker(
                 &source,
                 &destination,
                 &request,
                 crate::picker::PickerResult::Selected(digest.clone()),
                 digest.clone(),
-                &mut host.history,
+                100,
+            )
+            .expect("picker receipt");
+        assert!(
+            host.authorize_paste_after_picker(&route, receipt, &digest, 3_700)
+                == Err(ClipboardServiceError::PickerReceiptInvalid)
+        );
+        assert_eq!(
+            host.complete_picker(
+                &source,
+                &destination,
+                &request,
+                crate::picker::PickerResult::Selected(digest.clone()),
+                digest.clone(),
                 100,
             )
             .err(),

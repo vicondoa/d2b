@@ -39,6 +39,27 @@ pub struct PickerRequest {
 }
 
 impl PickerRequest {
+    /// Bind picker metadata to two authenticated service sessions.
+    pub fn from_sessions(
+        source: &AuthenticatedClipboardSession,
+        destination: &AuthenticatedClipboardSession,
+        mime_types: Vec<String>,
+    ) -> Result<Self, PickerError> {
+        if source.role() != crate::service::ClipboardServiceRole::Picker
+            || destination.role() != crate::service::ClipboardServiceRole::Bridge
+            || !destination.is_guest()
+            || (!source.is_guest() && source.subject_ref().resource_type().as_str() != "User")
+        {
+            return Err(PickerError::ResultMismatch);
+        }
+        Self::new(
+            operation_id_for_sessions(source, destination),
+            source.zone(),
+            destination.guest_ref(),
+            mime_types,
+        )
+    }
+
     /// Validate and construct a metadata-only request.
     pub fn new(
         operation_id: impl Into<String>,

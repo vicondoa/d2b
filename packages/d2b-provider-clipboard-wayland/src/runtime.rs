@@ -4,7 +4,7 @@ use d2b_provider_toolkit::{AuthenticatedComponentSession, AuthenticatedSessionRo
 
 use crate::{
     AuthenticatedPasteRoute, ClipboardAuditSink, ClipboardServiceError, DisplayDependencyEvidence,
-    GuestSelectionEvent, Policy,
+    GuestSelectionEvent, PickerReceipt, PickerRequest, PickerResult, Policy,
     service::{AuthenticatedClipboardSession, ClipboardServiceRole, ClipdHost},
 };
 
@@ -237,6 +237,30 @@ impl<E: ClipboardProcessEffectPort> ClipboardRuntime<E> {
             .map_err(ClipboardRuntimeError::Service)
     }
 
+    /// Complete one picker operation using two authenticated clipboard
+    /// projections.  The returned receipt is one-use and is minted only after
+    /// the history claim succeeds.
+    pub fn complete_picker(
+        &mut self,
+        source: &AuthenticatedClipboardSession,
+        destination: &AuthenticatedClipboardSession,
+        request: &PickerRequest,
+        result: PickerResult,
+        entry_digest: impl Into<String>,
+        now_secs: u64,
+    ) -> Result<PickerReceipt, ClipboardRuntimeError> {
+        if source.role() != ClipboardServiceRole::Picker
+            || destination.role() != ClipboardServiceRole::Bridge
+        {
+            return Err(ClipboardRuntimeError::SessionRoleInvalid);
+        }
+        self.host
+            .complete_picker(source, destination, request, result, entry_digest, now_secs)
+            .map_err(|_| {
+                ClipboardRuntimeError::Service(ClipboardServiceError::PickerReceiptInvalid)
+            })
+    }
+
     /// Flush bounded audit records through the daemon-owned sink.
     pub fn flush_audit<S: ClipboardAuditSink>(
         &mut self,
@@ -251,9 +275,7 @@ impl<E: ClipboardProcessEffectPort> ClipboardRuntime<E> {
     /// Drain daemon-owned workers without releasing the authenticated
     /// ComponentSession authority.
     pub fn drain(&mut self) -> Result<(), ClipboardRuntimeError> {
-        self.effects
-            .drain()
-            .map_err(ClipboardRuntimeError::Service)
+        self.effects.drain().map_err(ClipboardRuntimeError::Service)
     }
 
     /// Finalize in order: stop workers, purge retained history, then release

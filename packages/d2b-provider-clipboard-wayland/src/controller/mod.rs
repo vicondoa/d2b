@@ -94,6 +94,67 @@ impl DisplayDependencyEvidence {
         })
     }
 
+    /// Consume a daemon-authenticated display route plus the committed User
+    /// resource that owns the host observer projection.
+    pub fn from_committed_display_route(
+        route: AuthenticatedSessionRouteBinding,
+        user_ref: ResourceRef,
+    ) -> Result<Self, &'static str> {
+        let Some(provider_ref) = route.provider_ref() else {
+            return Err("clipboard-display-unauthenticated");
+        };
+        let Some(provider_generation) = route.provider_generation() else {
+            return Err("clipboard-display-unauthenticated");
+        };
+        if provider_ref.to_canonical_string() != DISPLAY_PROVIDER_REF
+            || route.service().as_str() != "d2b.display.v3"
+            || route.evidence_class() != EvidenceClass::UnixPeer
+            || route.locality() != Locality::Local
+            || route.subject_ref().resource_type().as_str() != "Guest"
+            || user_ref.resource_type().as_str() != "User"
+            || route.reconnect_generation().get() == 0
+            || provider_generation.get() == 0
+        {
+            return Err("clipboard-display-unauthenticated");
+        }
+        let Some(host_execution_ref) = route.context().execution_ref() else {
+            return Err("clipboard-display-unauthenticated");
+        };
+        let Some(controller_generation) = route.controller_generation() else {
+            return Err("clipboard-display-unauthenticated");
+        };
+        if host_execution_ref.resource_type().as_str() != "Host" || controller_generation.get() == 0
+        {
+            return Err("clipboard-display-unauthenticated");
+        }
+        let mut digest = Sha256::new();
+        digest.update(provider_ref.to_canonical_string().as_bytes());
+        digest.update([0]);
+        digest.update(route.zone().as_str().as_bytes());
+        digest.update([0]);
+        digest.update(host_execution_ref.to_canonical_string().as_bytes());
+        digest.update([0]);
+        digest.update(user_ref.to_canonical_string().as_bytes());
+        digest.update([0]);
+        digest.update(provider_generation.get().to_be_bytes());
+        digest.update([0]);
+        digest.update(route.reconnect_generation().get().to_be_bytes());
+        digest.update([0]);
+        digest.update(controller_generation.get().to_be_bytes());
+        let mut session_digest = [0; 32];
+        session_digest.copy_from_slice(&digest.finalize());
+        Ok(Self {
+            provider_ref: provider_ref.clone(),
+            zone: route.zone().clone(),
+            host_execution_ref: host_execution_ref.clone(),
+            user_ref,
+            provider_generation: provider_generation.get(),
+            reconnect_generation: route.reconnect_generation().get(),
+            controller_generation: controller_generation.get(),
+            session_digest,
+        })
+    }
+
     /// Borrow the authenticated display Provider reference.
     pub const fn provider_ref(&self) -> &ResourceRef {
         &self.provider_ref
