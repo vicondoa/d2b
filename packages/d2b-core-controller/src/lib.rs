@@ -67,4 +67,4 @@ pub use runtime::{
     CoreAdmissionCounts, CoreControllerSource, CoreDispatchOutcome, CoreReconcileError,
     CoreResourceReconciler, CoreSourceError, RegisteredControllerApi,
 };
-pub use zone_status::{SystemCoreStatusEmitter, ZoneStatusInput};
+pub use zone_status::{SystemCoreStatusEmitter, ZoneRuntimeMetadata, ZoneStatusInput};

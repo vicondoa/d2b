@@ -18,7 +18,6 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-#[cfg(test)]
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::activation_resource_runtime::{
@@ -73,7 +72,9 @@ use d2b_core_controller::main::{
     CoreProcess, RecoverySnapshot, RuntimeReadiness as CoreRuntimeReadiness, StartupError,
     StartupStage,
 };
-use d2b_core_controller::zone_status::{SystemCoreStatusEmitter, ZoneStatusInput};
+use d2b_core_controller::zone_status::{
+    SystemCoreStatusEmitter, ZoneRuntimeMetadata, ZoneStatusInput,
+};
 use d2b_provider_system_core::{
     HostCapabilityClass, HostObservationReport, HostProbeEffectPort, HostProbeMetadata,
     HostReconciler, MinijailPlatformGate, UserBinding, UserDiscoveryEffectPort, UserIdentityDigest,
@@ -565,7 +566,14 @@ impl ZoneResourceRuntime {
                 false,
                 core.stage(),
                 SystemCoreStatusEmitter::new()
-                    .emit(ZoneStatusInput::new(ResourcePhase::Pending, Vec::new()))
+                    .emit(
+                        ZoneStatusInput::new(ResourcePhase::Pending, Vec::new())
+                            .with_runtime_metadata(zone_runtime_metadata(
+                                &store_metadata,
+                                0,
+                                Some(current_status_timestamp()),
+                            )),
+                    )
                     .map_err(|_| ResourceRuntimeError::HandlerNotReady)?,
             )
         } else {
@@ -648,7 +656,12 @@ impl ZoneResourceRuntime {
                             .with_system_core_phases(
                                 handler_phase_to_zone_phase(system_core.host_phase),
                                 handler_phase_to_zone_phase(system_core.user_phase),
-                            ),
+                            )
+                            .with_runtime_metadata(zone_runtime_metadata(
+                                &store_metadata,
+                                system_core.total_resource_count,
+                                Some(current_status_timestamp()),
+                            )),
                     )
                     .map_err(|_| ResourceRuntimeError::HandlerNotReady)?,
             )
@@ -733,6 +746,37 @@ impl ZoneResourceRuntime {
                 *current = status;
             })
             .map_err(|_| ResourceRuntimeError::HandlerNotReady)
+    }
+
+    /// Refresh provider counts and other live metadata without replacing the
+    /// currently observed handler phases.
+    pub fn publish_runtime_metadata(
+        &self,
+        runtime: ZoneRuntimeMetadata,
+    ) -> Result<(), ResourceRuntimeError> {
+        let current = self.zone_status()?;
+        self.publish_zone_status(
+            ZoneStatusInput::new(current.core_controller_phase(), current.handlers().to_vec())
+                .with_runtime_metadata(runtime),
+        )
+    }
+
+    /// Publish the provider registry's live counts while retaining store and
+    /// handler metadata already projected into status.
+    pub fn publish_provider_counts(
+        &self,
+        installed_provider_count: u32,
+        ready_provider_count: u32,
+    ) -> Result<(), ResourceRuntimeError> {
+        let current = self.zone_status()?;
+        let mut runtime = zone_runtime_metadata(
+            &self.store_metadata,
+            current.total_resource_count(),
+            Some(current_status_timestamp()),
+        );
+        runtime.installed_provider_count = installed_provider_count;
+        runtime.ready_provider_count = ready_provider_count;
+        self.publish_runtime_metadata(runtime)
     }
 
     /// Mark the trusted Provider path after the daemon has configured it.
@@ -1910,6 +1954,65 @@ struct SystemCoreReconcileResult {
     core_phase: ResourcePhase,
     host_phase: HandlerPhase,
     user_phase: HandlerPhase,
+    total_resource_count: u32,
+}
+
+fn zone_runtime_metadata(
+    store_metadata: &StoreRuntimeMetadata,
+    total_resource_count: u32,
+    last_reconciled_at: Option<Timestamp>,
+) -> ZoneRuntimeMetadata {
+    ZoneRuntimeMetadata {
+        api_catalog_revision: store_metadata.policy_snapshot.api_catalog_revision,
+        policy_revision: store_metadata.policy_snapshot.policy_revision,
+        configuration_revision: store_metadata
+            .policy_snapshot
+            .active_configuration_revision
+            .get(),
+        installed_provider_count: 0,
+        ready_provider_count: 0,
+        total_resource_count,
+        active_configuration_generation: store_metadata
+            .policy_snapshot
+            .active_configuration_revision
+            .get(),
+        generation_cleanup_pending: false,
+        cleanup_pending_count: 0,
+        last_reconciled_at,
+    }
+}
+
+fn current_status_timestamp() -> Timestamp {
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let seconds = millis / 1_000;
+    let day = seconds / 86_400;
+    let day_seconds = seconds % 86_400;
+    let (year, month, day_of_month) = civil_from_days(day as i64);
+    let hour = day_seconds / 3_600;
+    let minute = (day_seconds % 3_600) / 60;
+    let second = day_seconds % 60;
+    Timestamp::parse(format!(
+        "{year:04}-{month:02}-{day_of_month:02}T{hour:02}:{minute:02}:{second:02}.{:03}Z",
+        millis % 1_000
+    ))
+    .expect("system timestamp formatter emits canonical UTC")
+}
+
+fn civil_from_days(days_since_epoch: i64) -> (i64, i64, i64) {
+    let z = days_since_epoch + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let year = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let month = (5 * doy + 2) / 153;
+    let day = doy - (153 * month + 2) / 5 + 1;
+    let month = month + if month < 10 { 3 } else { -9 };
+    let year = year + if month <= 2 { 1 } else { 0 };
+    (year, month, day)
 }
 
 fn handler_phase_to_zone_phase(phase: HandlerPhase) -> d2b_contracts::v3::ZoneHandlerPhase {
@@ -2162,8 +2265,9 @@ async fn reconcile_system_core_resources(
     };
     let hosts = list(host_type, "host").await?;
     let users = list(user_type, "user").await?;
+    let total_resource_count = hosts.resources.len().saturating_add(users.resources.len()) as u32;
 
-    let host_phase = host_phase_for_resource_count(hosts.resources.len());
+    let mut host_phase = host_phase_for_resource_count(hosts.resources.len());
     for resource in hosts.resources {
         let envelope = d2b_contracts::v3::ResourceEnvelope::from_json(&resource.canonical_json)
             .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
@@ -2191,6 +2295,9 @@ async fn reconcile_system_core_resources(
             )
             .await
             .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
+        if report.status.phase != ResourcePhase::Ready {
+            host_phase = HandlerPhase::Degraded;
+        }
         let status = host_status_value(&report)?;
         persist_resource_status(&status_client, &resource, &status).await?;
     }
@@ -2232,6 +2339,7 @@ async fn reconcile_system_core_resources(
         core_phase,
         host_phase,
         user_phase,
+        total_resource_count,
     })
 }
 

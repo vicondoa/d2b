@@ -1,5 +1,9 @@
-use d2b_contracts::v3::{ResourcePhase, ZoneHandlerName, ZoneHandlerPhase, ZoneHandlerStatus};
-use d2b_core_controller::zone_status::{SystemCoreStatusEmitter, ZoneStatusInput};
+use d2b_contracts::v3::{
+    ResourcePhase, Timestamp, ZoneHandlerName, ZoneHandlerPhase, ZoneHandlerStatus,
+};
+use d2b_core_controller::zone_status::{
+    SystemCoreStatusEmitter, ZoneRuntimeMetadata, ZoneStatusInput,
+};
 
 #[test]
 fn production_emitter_always_includes_exact_system_core_pair() {
@@ -63,4 +67,39 @@ fn duplicate_system_core_handler_records_are_rejected() {
         ],
     );
     assert!(SystemCoreStatusEmitter::new().emit(input).is_err());
+}
+
+#[test]
+fn runtime_metadata_and_reconcile_timestamp_are_projected() {
+    let timestamp = Timestamp::parse("2026-08-15T04:10:30.123Z").unwrap();
+    let input = ZoneStatusInput::new(ResourcePhase::Ready, Vec::new()).with_runtime_metadata(
+        ZoneRuntimeMetadata {
+            api_catalog_revision: 7,
+            policy_revision: 11,
+            configuration_revision: 13,
+            installed_provider_count: 3,
+            ready_provider_count: 2,
+            total_resource_count: 9,
+            active_configuration_generation: 17,
+            generation_cleanup_pending: true,
+            cleanup_pending_count: 1,
+            last_reconciled_at: Some(timestamp.clone()),
+        },
+    );
+
+    let status = SystemCoreStatusEmitter::new().emit(input).unwrap();
+    assert_eq!(status.api_catalog_revision(), 7);
+    assert_eq!(status.policy_revision(), 11);
+    assert_eq!(status.configuration_revision(), 13);
+    assert_eq!(status.installed_provider_count(), 3);
+    assert_eq!(status.ready_provider_count(), 2);
+    assert_eq!(status.total_resource_count(), 9);
+    assert_eq!(
+        status
+            .handlers()
+            .iter()
+            .find(|handler| handler.name() == ZoneHandlerName::SystemCoreHost)
+            .and_then(ZoneHandlerStatus::last_reconciled_at),
+        Some(&timestamp)
+    );
 }
