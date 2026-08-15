@@ -110,6 +110,11 @@ const APPROVED_SKILLS: &[(&str, &str)] = &[
         "ce-worktree",
     ),
 ];
+const APPROVED_NOTICES: &[&str] = &[
+    "third_party/agent-skills/ponytail/v4.9.0/LICENSE",
+    "third_party/agent-skills/caveman/v2.0.0/LICENSE",
+    "third_party/agent-skills/compound-engineering/compound-engineering-v3.21.4/LICENSE",
+];
 
 fn gate_path() -> PathBuf {
     repo_root().join(GATE)
@@ -270,6 +275,9 @@ fn scan_allows_only_exact_agent_assets_and_skips_grep_when_all_are_exempt() {
     write_dash_file(&root.join("tests/AGENTS.md"));
     write_dash_file(&root.join("labs/venus-vulkan-video/AGENTS.md"));
     write_dash_file(&root.join("CLAUDE.md"));
+    for notice in APPROVED_NOTICES {
+        write_dash_file(&root.join(notice));
+    }
     create_canonical_skills(&root);
     create_approved_adapters(&root);
 
@@ -312,6 +320,12 @@ fn scan_rejects_lookalikes_unapproved_assets_and_ordinary_files() {
     write_dash_file(&root.join(
         "third_party/agent-skills/caveman/v2.0.0/skills/caveman-compress/SKILL.md",
     ));
+    write_dash_file(&root.join(
+        "third_party/agent-skills/caveman/v2.0.1/LICENSE",
+    ));
+    write_dash_file(&root.join(
+        "third_party/agent-skills/caveman/v2.0.0/LICENSING.md",
+    ));
 
     write_dash_file(&root.join(".agents/skills/not-approved"));
     write_dash_file(&root.join(".agents/skills/ponytail/SKILL.md"));
@@ -345,6 +359,8 @@ fn scan_rejects_lookalikes_unapproved_assets_and_ordinary_files() {
         "third_party/agent-skills/ponytail/v4.9.1/skills/ponytail/SKILL.md",
         "third_party/agent-skills/ponytail/v4.9.0/skills/ponytail-extra/SKILL.md",
         "third_party/agent-skills/caveman/v2.0.0/skills/caveman-compress/SKILL.md",
+        "third_party/agent-skills/caveman/v2.0.1/LICENSE",
+        "third_party/agent-skills/caveman/v2.0.0/LICENSING.md",
         ".agents/skills/not-approved",
         ".agents/skills/ponytail/SKILL.md",
         ".claude/skills/not-approved",
@@ -504,6 +520,7 @@ fn the_gate_matches_codepoints_and_declares_a_closed_asset_allowlist() {
     for required in [
         "DASH_EXEMPT_INSTRUCTION_PATHS",
         "DASH_APPROVED_SKILL_ROOTS",
+        "DASH_EXEMPT_NOTICE_PATHS",
         "DASH_APPROVED_ADAPTER_ROOTS",
         "dash_canonical_skill_dir",
         "dash_symlink_matches",

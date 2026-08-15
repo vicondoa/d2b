@@ -47,6 +47,11 @@ DASH_APPROVED_SKILL_ROOTS=(
   third_party/agent-skills/caveman/v2.0.0/skills
   third_party/agent-skills/compound-engineering/compound-engineering-v3.21.4/skills
 )
+DASH_EXEMPT_NOTICE_PATHS=(
+  third_party/agent-skills/ponytail/v4.9.0/LICENSE
+  third_party/agent-skills/caveman/v2.0.0/LICENSE
+  third_party/agent-skills/compound-engineering/compound-engineering-v3.21.4/LICENSE
+)
 DASH_APPROVED_ADAPTER_ROOTS=(
   .agents/skills
   .claude/skills
@@ -192,6 +197,9 @@ dash_path_is_exempt() {
   local adapter path skill_root remainder skill component canonical entry expected
 
   for path in "${DASH_EXEMPT_INSTRUCTION_PATHS[@]}"; do
+    [ "$f" = "$path" ] && return 0
+  done
+  for path in "${DASH_EXEMPT_NOTICE_PATHS[@]}"; do
     [ "$f" = "$path" ] && return 0
   done
 

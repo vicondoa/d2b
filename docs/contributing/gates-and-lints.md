@@ -27,6 +27,10 @@ directories:
 - `third_party/agent-skills/caveman/v2.0.0/skills`
 - `third_party/agent-skills/compound-engineering/compound-engineering-v3.21.4/skills`
 
+The matching root `LICENSE` file under each of those three pinned version
+directories is also exempt so its upstream bytes and legal notice stay exact.
+No other notice file, source, version, or sibling path is admitted.
+
 The admitted child directory names are `ponytail`, `ponytail-audit`,
 `ponytail-debt`, `ponytail-gain`, `ponytail-help`, `ponytail-review`,
 `caveman`, `ce-babysit-pr`, `ce-brainstorm`, `ce-code-review`,
