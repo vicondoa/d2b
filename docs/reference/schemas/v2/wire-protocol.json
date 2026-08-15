@@ -1182,6 +1182,11 @@
       },
       "additionalProperties": false
     },
+    "BoundedToken": {
+      "type": "string",
+      "maxLength": 63,
+      "minLength": 1
+    },
     "BridgeCheck": {
       "type": "object",
       "required": [
@@ -3724,6 +3729,25 @@
       },
       "additionalProperties": false
     },
+    "CapabilityClass": {
+      "description": "Semantic capability grant.",
+      "type": "string",
+      "enum": [
+        "network-bind",
+        "network-raw",
+        "network-admin",
+        "sys-time",
+        "sys-ptrace",
+        "sys-admin",
+        "dac-override",
+        "fowner",
+        "chown",
+        "setuid",
+        "setgid",
+        "audit-write",
+        "kill"
+      ]
+    },
     "CapabilitySet": {
       "type": "array",
       "items": {
@@ -4590,6 +4614,42 @@
         "vmId"
       ],
       "properties": {
+        "expectedStartTimeTicks": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "pid": {
+          "description": "Optional exact process identity. Deregistration must not remove a replacement runner that reused the VM/role tuple.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "resourceRef": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resourceUid": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceUid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "roleId": {
           "type": "string"
         },
@@ -4670,6 +4730,15 @@
             "not-applicable"
           ]
         }
+      ]
+    },
+    "EnvironmentClass": {
+      "description": "Semantic environment inheritance class.",
+      "type": "string",
+      "enum": [
+        "minimal",
+        "safe-inherited",
+        "provider-defined"
       ]
     },
     "EnvironmentPosture": {
@@ -7772,6 +7841,13 @@
       },
       "additionalProperties": false
     },
+    "MappingClass": {
+      "description": "Frozen semantic user-namespace mapping class.\n\nNo numeric host UID or GID appears in the public spec; core resolves the exact identifiers into private launch state only.",
+      "type": "string",
+      "enum": [
+        "process-principal-root"
+      ]
+    },
     "MigrateLegacySwtpmStateRequest": {
       "description": "Opaque request for one trusted legacy swtpm migration.",
       "type": "object",
@@ -7901,6 +7977,20 @@
       },
       "additionalProperties": false
     },
+    "NamespaceClass": {
+      "description": "Semantic namespace isolation request.",
+      "type": "string",
+      "enum": [
+        "user",
+        "pid",
+        "mount",
+        "ipc",
+        "uts",
+        "network",
+        "cgroup",
+        "time"
+      ]
+    },
     "NftablesProjectionAction": {
       "description": "The action an [`ApplyNftablesProjectionRequest`] carries.\n\nClosed on purpose: the framework's own nftables op spells its two directions as a `destroy` boolean, which leaves \"neither\" and \"both\" expressible in a future field pair. A projection names exactly one of two directions and nothing else.",
       "oneOf": [
@@ -7932,6 +8022,27 @@
       "properties": {
         "bundleRunnerIntentRef": {
           "type": "string"
+        },
+        "resourceRef": {
+          "description": "Optional generic Process identity binding.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resourceUid": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceUid"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "role": {
           "$ref": "#/definitions/RunnerRole"
@@ -8173,6 +8284,27 @@
           "type": "integer",
           "format": "int32"
         },
+        "resourceRef": {
+          "description": "Optional generic Process identity binding. Legacy VM runner callers omit these fields and retain the historical VM/role key.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resourceUid": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceUid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "roleId": {
           "description": "Per-VM role identifier (matches the daemon-side `PidfdKey::role_id`).",
           "type": "string"
@@ -8291,6 +8423,27 @@
           "maxItems": 32,
           "minItems": 32
         },
+        "resourceRef": {
+          "description": "Optional generic Process identity binding used in unit names and authorization. Legacy VM runner callers omit these fields.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resourceUid": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceUid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "role": {
           "description": "Closed runner role selecting the trusted bundle launch plan.",
           "allOf": [
@@ -8302,6 +8455,17 @@
         "roleId": {
           "description": "Process role identifier within the execution target.",
           "type": "string"
+        },
+        "sandboxPlan": {
+          "description": "Typed sandbox requirements enforced by the broker's systemd launch adapter. Legacy VM runner callers omit this field.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SandboxLaunchPlan"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "templateIdentity": {
           "description": "Component template identity digest.",
@@ -11124,6 +11288,78 @@
       },
       "additionalProperties": false
     },
+    "SandboxLaunchPlan": {
+      "description": "Typed semantic sandbox plan compiled by the daemon and re-validated by the privileged broker before a runner is spawned.",
+      "type": "object",
+      "required": [
+        "capabilityClasses",
+        "digest",
+        "domain",
+        "environmentClass",
+        "namespaceClasses",
+        "noNewPrivileges",
+        "oomScoreAdj",
+        "readOnlyRoot",
+        "seccompClass",
+        "startRoot"
+      ],
+      "properties": {
+        "capabilityClasses": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/CapabilityClass"
+          }
+        },
+        "digest": {
+          "type": "string"
+        },
+        "domain": {
+          "$ref": "#/definitions/ExecutionDomain"
+        },
+        "environmentClass": {
+          "$ref": "#/definitions/EnvironmentClass"
+        },
+        "namespaceClasses": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/NamespaceClass"
+          }
+        },
+        "noNewPrivileges": {
+          "type": "boolean"
+        },
+        "oomScoreAdj": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "readOnlyRoot": {
+          "type": "boolean"
+        },
+        "seccompClass": {
+          "$ref": "#/definitions/BoundedToken"
+        },
+        "startRoot": {
+          "type": "boolean"
+        },
+        "umask": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "userNamespace": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/UserNamespaceSpec"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
     "SecretByIdRequest": {
       "type": "object",
       "required": [
@@ -11671,6 +11907,27 @@
           ],
           "format": "int32"
         },
+        "resourceRef": {
+          "description": "Optional generic Process identity binding.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resourceUid": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceUid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "roleId": {
           "type": "string"
         },
@@ -11789,6 +12046,13 @@
         "vmId"
       ],
       "properties": {
+        "bundleContentIdentity": {
+          "description": "Content identity of the daemon's trusted bundle snapshot.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "bundleRunnerIntentRef": {
           "description": "Opaque reference into the trusted bundle's runner-intent table. The broker resolves this to the full launch context (binary path, argv inputs, uid/gid, capabilities, seccomp policy ref, cgroup placement, mount namespace, environment) and feeds it to the matching argv generator.",
           "type": "string"
@@ -11817,6 +12081,49 @@
             }
           ]
         },
+        "generation": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "providerIdentity": {
+          "description": "Provider/template identity expected by the daemon.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0.0
+          },
+          "maxItems": 32,
+          "minItems": 32
+        },
+        "resourceRef": {
+          "description": "Optional generic Process identity binding. These fields are part of the registry key and prevent distinct Process resources from colliding on the legacy VM/role tuple.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resourceUid": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceUid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "role": {
           "description": "Role selector - picks the argv generator the broker applies to the bundle row anchored by `bundle_runner_intent_ref`.",
           "allOf": [
@@ -11836,6 +12143,29 @@
           "items": {
             "$ref": "#/definitions/RunnerAllocation"
           }
+        },
+        "sandboxPlan": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SandboxLaunchPlan"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "templateIdentity": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0.0
+          },
+          "maxItems": 32,
+          "minItems": 32
         },
         "tracingSpanId": {
           "default": null,
@@ -11886,6 +12216,12 @@
         "vmId"
       ],
       "properties": {
+        "bundleContentIdentity": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "consoleFdIndex": {
           "description": "Optional index into the SCM_RIGHTS fd vector for a provider-specific console stream. qemu-media uses this for the daemon-owned peer of the socketpair whose other end was passed to QEMU.",
           "type": [
@@ -11893,6 +12229,35 @@
             "null"
           ],
           "format": "uint32",
+          "minimum": 0.0
+        },
+        "executionDomain": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ExecutionDomain"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "executionRef": {
+          "description": "Resolved execution binding and content identities echoed by the broker after validating the request against its trusted bundle.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "generation": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
           "minimum": 0.0
         },
         "pid": {
@@ -11906,6 +12271,19 @@
           "format": "uint32",
           "minimum": 0.0
         },
+        "providerIdentity": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0.0
+          },
+          "maxItems": 32,
+          "minItems": 32
+        },
         "role": {
           "$ref": "#/definitions/RunnerRole"
         },
@@ -11917,6 +12295,29 @@
           "type": "integer",
           "format": "uint64",
           "minimum": 0.0
+        },
+        "templateIdentity": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0.0
+          },
+          "maxItems": 32,
+          "minItems": 32
+        },
+        "userRef": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "vmId": {
           "type": "string"
@@ -12085,6 +12486,27 @@
           "maxItems": 32,
           "minItems": 32
         },
+        "resourceRef": {
+          "description": "Optional generic Process identity binding used in unit names and authorization. Legacy VM runner callers omit these fields.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resourceUid": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceUid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "role": {
           "description": "Closed runner role selecting the trusted bundle launch plan.",
           "allOf": [
@@ -12096,6 +12518,17 @@
         "roleId": {
           "description": "Process role identifier within the execution target.",
           "type": "string"
+        },
+        "sandboxPlan": {
+          "description": "Typed sandbox requirements enforced by the broker's systemd launch adapter. Legacy VM runner callers omit this field.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SandboxLaunchPlan"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "templateIdentity": {
           "description": "Component template identity digest.",
@@ -12539,6 +12972,27 @@
           "maxItems": 32,
           "minItems": 32
         },
+        "resourceRef": {
+          "description": "Optional generic Process identity binding used in unit names and authorization. Legacy VM runner callers omit these fields.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resourceUid": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceUid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "role": {
           "description": "Closed runner role selecting the trusted bundle launch plan.",
           "allOf": [
@@ -12550,6 +13004,17 @@
         "roleId": {
           "description": "Process role identifier within the execution target.",
           "type": "string"
+        },
+        "sandboxPlan": {
+          "description": "Typed sandbox requirements enforced by the broker's systemd launch adapter. Legacy VM runner callers omit this field.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SandboxLaunchPlan"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "templateIdentity": {
           "description": "Component template identity digest.",
@@ -13254,6 +13719,19 @@
           "items": {
             "$ref": "#/definitions/UsbipProbeEntry"
           }
+        }
+      },
+      "additionalProperties": false
+    },
+    "UserNamespaceSpec": {
+      "description": "The single-entry user namespace pre-established before exec.",
+      "type": "object",
+      "required": [
+        "mappingClass"
+      ],
+      "properties": {
+        "mappingClass": {
+          "$ref": "#/definitions/MappingClass"
         }
       },
       "additionalProperties": false
