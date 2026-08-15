@@ -8,6 +8,18 @@
       "marker": "# keep"
     },
     {
+      "label": "//packages/d2b-bus/tests/ui/public-api-mutations:d2b_bus_public_api_mutations",
+      "path": "packages/d2b-bus/tests/ui/public-api-mutations/BUILD.bazel",
+      "reason": "Rust path-attribute UI fixtures are hand-owned because upstream Gazelle cannot discover their sibling modules",
+      "marker": "# keep"
+    },
+    {
+      "label": "//packages/d2b-controller-toolkit:reaction",
+      "path": "packages/d2b-controller-toolkit/BUILD.bazel",
+      "reason": "Rust path-attribute benchmark support is hand-owned because upstream Gazelle cannot discover its sibling module",
+      "marker": "# keep"
+    },
+    {
       "label": "//packages/d2b-core:d2b_core",
       "path": "packages/d2b-core/BUILD.bazel",
       "reason": "cross-package compile data and fuzz harness targets",
@@ -17,6 +29,12 @@
       "label": "//packages/d2b-core/fuzz:core",
       "path": "packages/d2b-core/fuzz/BUILD.bazel",
       "reason": "cross-package compile data for the fuzz smoke target",
+      "marker": "# keep"
+    },
+    {
+      "label": "//packages/d2b-core-controller:d2b_core_controller",
+      "path": "packages/d2b-core-controller/BUILD.bazel",
+      "reason": "Rust path-attribute authority modules are hand-owned because upstream Gazelle cannot discover their sibling modules",
       "marker": "# keep"
     },
     {
@@ -50,9 +68,33 @@
       "marker": "# keep"
     },
     {
+      "label": "//packages/d2b-provider-credential-entra:conformance",
+      "path": "packages/d2b-provider-credential-entra/BUILD.bazel",
+      "reason": "Rust path-attribute provider conformance modules are hand-owned because upstream Gazelle cannot discover their sibling modules",
+      "marker": "# keep"
+    },
+    {
+      "label": "//packages/d2b-provider-credential-managed-identity:conformance",
+      "path": "packages/d2b-provider-credential-managed-identity/BUILD.bazel",
+      "reason": "Rust path-attribute provider conformance modules are hand-owned because upstream Gazelle cannot discover their sibling modules",
+      "marker": "# keep"
+    },
+    {
+      "label": "//packages/d2b-provider-credential-secret-service:conformance",
+      "path": "packages/d2b-provider-credential-secret-service/BUILD.bazel",
+      "reason": "Rust path-attribute provider conformance modules are hand-owned because upstream Gazelle cannot discover their sibling modules",
+      "marker": "# keep"
+    },
+    {
       "label": "//packages/d2b-provider-supervisor:d2b_provider_supervisor",
       "path": "packages/d2b-provider-supervisor/BUILD.bazel",
       "reason": "cross-package broker source compile data",
+      "marker": "# keep"
+    },
+    {
+      "label": "//packages/d2b-provider-system-core:host_posture_contract",
+      "path": "packages/d2b-provider-system-core/BUILD.bazel",
+      "reason": "Rust path-attribute host posture fixtures are hand-owned because upstream Gazelle cannot discover their sibling modules",
       "marker": "# keep"
     },
     {

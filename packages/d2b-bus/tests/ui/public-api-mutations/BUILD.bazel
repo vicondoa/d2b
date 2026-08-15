@@ -1,5 +1,8 @@
 load("@rules_rust//rust:defs.bzl", "rust_library")
 
+# keep
+# gazelle:ignore
+
 rust_library(
     name = "d2b_bus_public_api_mutations",
     srcs = ["src/lib.rs"],

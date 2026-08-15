@@ -312,6 +312,21 @@ fn nix_surface_pins_the_official_bazel_9_2_0_provider_for_supported_systems() {
         "bazel920For = system:",
         "import ./pkgs/bazel-9.2.0",
         "bazel-9_2_0 = bazel920",
+        "bazelFhs = pkgs.buildFHSEnv",
+        "executableName = \"bazel\"",
+        "targetPkgs =",
+        "bazel920",
+        "bash",
+        "coreutils",
+        "findutils",
+        "gnugrep",
+        "gnused",
+        "rustup",
+        "binutils",
+        "runScript = \"${bazel920}/bin/bazel\"",
+        "packages = [ bazelFhs pkgs.rustup ]",
+        "stdenv.cc",
+        "glibc.dev",
         "bazel = pkgs.mkShellNoCC",
         "export D2B_BAZEL_BIN=",
         "export D2B_BAZEL_TEST_PATH=",
@@ -323,8 +338,17 @@ fn nix_surface_pins_the_official_bazel_9_2_0_provider_for_supported_systems() {
         );
     }
     assert!(
-        !flake.contains("/run/current-system/sw/bin") && !flake.contains("--test_env=PATH=$PATH"),
-        "Bazel compatibility wiring must not capture host PATH fragments"
+        !flake.contains("/run/current-system/sw/bin")
+            && !flake.contains("--test_env=PATH=$PATH")
+            && !flake.contains("/nix/store/"),
+        "Bazel compatibility wiring must not capture host PATH or machine paths"
+    );
+    assert!(
+        !flake.contains("applyPatches")
+            && !flake.contains("patches =")
+            && !flake.contains("overrideAttrs")
+            && !flake.contains("local_path_override"),
+        "the Bazel FHS environment must wrap the unmodified upstream provider"
     );
 }
 

@@ -227,6 +227,49 @@ fn production_bazel_layout_has_one_locked_root_authority() {
             == 1,
         "Bazel must fail closed on MODULE.bazel.lock drift"
     );
+    assert!(
+        !bazelrc.lines().any(|line| {
+            matches!(
+                line.trim(),
+                "common --action_env=PATH" | "common --test_env=PATH"
+            )
+        }),
+        "Bazel must not vary action keys with the caller PATH"
+    );
+
+    let gitignore = read_repo_file(".gitignore");
+    assert!(
+        gitignore.lines().any(|line| line.trim() == "/bazel-*"),
+        "repository policy must ignore Bazel workspace output links"
+    );
+
+    let root_build = read_repo_file("BUILD.bazel");
+    for excluded in [
+        "examples/aca-wayland-poc/relay-bridge",
+        "labs/d2b-agentterm",
+        "labs/window-chrome",
+        "labs/wlattach",
+        "nixos-modules/host-activation-helper",
+        "packages/d2b-bus/tests/ui/public-api-mutations",
+        "packages/d2b-core/fuzz",
+        "proofs/chunked-stdio-conformance",
+        "proofs/redb-resource-store-spike",
+        "proofs/w0-ch-connect-proof",
+        "proofs/window-identity-chrome",
+        "tests/fixtures/provider-crate-layout",
+        "tests/tools/no-bash-ast-walker",
+    ] {
+        assert!(
+            root_build.contains(&format!("# gazelle:exclude {excluded}")),
+            "root Gazelle must exclude non-product Rust tree {excluded}"
+        );
+    }
+
+    let guest_shell_runner = read_repo_file("packages/d2b-guest-shell-runner/BUILD.bazel");
+    assert!(
+        guest_shell_runner.contains("# gazelle:rust_ignore_import predicate"),
+        "guest shell runner must ignore the predicates module alias through the upstream directive"
+    );
 
     let cargo = read_repo_file("Cargo.toml");
     for required in [
@@ -309,6 +352,28 @@ fn exception_manifest_and_generated_ownership_are_closed() {
             assert!(
                 listed.contains(&path),
                 "hand-written BUILD exception is not listed: {path}"
+            );
+        }
+    }
+}
+
+#[test]
+fn path_attribute_exceptions_use_upstream_gazelle_ignore() {
+    let manifest = exception_manifest();
+    for entry in manifest
+        .get("exceptions")
+        .and_then(Value::as_array)
+        .expect("Bazel exception manifest must contain an exceptions array")
+    {
+        let reason = entry.get("reason").and_then(Value::as_str).unwrap_or("");
+        if reason.contains("path-attribute") {
+            let path = entry
+                .get("path")
+                .and_then(Value::as_str)
+                .expect("path-attribute exception must declare a path");
+            assert!(
+                read_repo_file(path).contains("# gazelle:ignore"),
+                "path-attribute exception must use upstream Gazelle ignore: {path}"
             );
         }
     }

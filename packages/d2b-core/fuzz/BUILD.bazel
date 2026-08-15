@@ -1,5 +1,8 @@
 load("@rules_rust//rust:defs.bzl", "rust_binary")
 
+# keep
+# gazelle:ignore
+
 rust_binary(
     name = "bundle",
     srcs = ["src/bin/bundle.rs"],

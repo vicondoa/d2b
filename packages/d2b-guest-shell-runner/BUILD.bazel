@@ -1,5 +1,7 @@
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 
+# gazelle:rust_ignore_import predicate
+
 rust_library(
     name = "d2b_guest_shell_runner",
     srcs = [

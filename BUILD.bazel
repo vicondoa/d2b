@@ -6,6 +6,19 @@ package(default_visibility = ["//visibility:public"])
 # gazelle:rust_crates_prefix @crates//:
 # gazelle:rust_default_edition 2024
 # gazelle:rust_mode generate_from_cargo
+# gazelle:exclude examples/aca-wayland-poc/relay-bridge
+# gazelle:exclude labs/d2b-agentterm
+# gazelle:exclude labs/window-chrome
+# gazelle:exclude labs/wlattach
+# gazelle:exclude nixos-modules/host-activation-helper
+# gazelle:exclude packages/d2b-bus/tests/ui/public-api-mutations
+# gazelle:exclude packages/d2b-core/fuzz
+# gazelle:exclude proofs/chunked-stdio-conformance
+# gazelle:exclude proofs/redb-resource-store-spike
+# gazelle:exclude proofs/w0-ch-connect-proof
+# gazelle:exclude proofs/window-identity-chrome
+# gazelle:exclude tests/fixtures/provider-crate-layout
+# gazelle:exclude tests/tools/no-bash-ast-walker
 
 gazelle_binary(
     name = "gazelle_rust",
