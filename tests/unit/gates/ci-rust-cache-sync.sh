@@ -49,7 +49,7 @@ done < <(
 # The workflow's Swatinem/rust-cache step declares paths in `workspaces:`
 # (format: "path -> target") and `cache-directories:` (plain paths).
 cached_in_ci=$(
-  grep -E '^\s+(packages|packages/|tests/tools/no-bash-ast-walker/target|\.scratch/)' "$wf" \
+  grep -E '^[[:space:]]+(\. -> target|target/broker-(layer1|fakebackends)|tests/tools/no-bash-ast-walker/target|\.scratch/)' "$wf" \
     | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//' \
     | sort -u
 )
