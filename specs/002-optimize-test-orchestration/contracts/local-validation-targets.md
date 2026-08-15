@@ -49,7 +49,6 @@ All three commands:
 CI may continue invoking:
 
 ```bash
-make test-rust-api-surface
 make test-rust-main
 make test-rust-broker
 make test-rust-guest-shell-runner

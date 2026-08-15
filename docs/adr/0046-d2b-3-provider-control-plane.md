@@ -429,16 +429,9 @@ Costs:
 
 The authoritative set has **55 members** - 28 foundation, resource,
 cross-cutting, and closing specs plus 27 Provider dossiers - indexed by
-[`docs/specs/README.md`](../specs/README.md) and bound by the generated
-`docs/specs/ADR-046-spec-set.json` and `docs/specs/ADR-046-work-items.json`
-manifests. The generated implementation DAG
-(`docs/specs/ADR-046-implementation-graph.json` and its human view
-`docs/specs/ADR-046-implementation-graph.md`, decision D095) maps every member
-spec and work item to a dependency-ordered `W0`-`W8` launch wave and a
-file-disjoint parallel group; like the manifests it is a generated non-member
-artifact and does not change the 55-member count. This decision and every member
-are `Accepted` and were reviewed as one atomic unit; the PR delivers
-documentation only.
+[`docs/specs/README.md`](../specs/README.md). This decision and every member
+are `Accepted`; the set describes the proposed architecture and does not
+itself deliver runtime implementation.
 
 Foundation and platform (15): resource object model / three-layer status
 ([`ADR-046-resource-object-model`](../specs/ADR-046-resource-object-model.md)),
@@ -491,11 +484,8 @@ Closing (4): destructive reset/cutover
 ([`ADR-046-reset-and-cutover`](../specs/ADR-046-reset-and-cutover.md)),
 pre-acceptance feasibility proofs/spikes
 ([`ADR-046-feasibility-and-spikes`](../specs/ADR-046-feasibility-and-spikes.md)),
-validation and delivery waves with fast hermetic tests and integration-only
-slow coverage (**D094**)
-([`ADR-046-validation-and-delivery`](../specs/ADR-046-validation-and-delivery.md)),
-and the efficiency/streamline contract
-([`ADR-046-streamline`](../specs/ADR-046-streamline.md)).
+test evidence with fast hermetic tests and integration-only slow coverage
+(**D094**) under the repository's test-budget guidance.
 
 Provider dossiers (27): one dossier per installed `Provider/<name>`, indexed
 with owned/exported ResourceTypes and component placement in
@@ -515,13 +505,9 @@ authored in parallel. No dependent spec may invent a missing foundation choice.
 
 ## Review and acceptance
 
-The same ADR/spec PR has two required human review gates:
-
-1. approval before the immutable final panel snapshot;
-2. approval after unanimous panel signoff.
-
-Any content change invalidates validation and panel evidence. The changed
-candidate is revalidated, repaneled, and reviewed again.
+The same ADR/spec PR receives human review before acceptance and after any
+substantive change. Any content change invalidates prior validation evidence;
+the changed candidate is revalidated and reviewed again.
 
 The set cannot become Accepted while it contains:
 

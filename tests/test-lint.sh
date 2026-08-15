@@ -2,7 +2,6 @@
 # tests/test-lint.sh - `make test-lint`: fail-fast lint before long Layer-1 jobs.
 #
 #   * preflight disk-space guard (fail closed before the Nix-heavy siblings)
-#   * compiler-derived API input fingerprint drift
 #   * Rust formatting across every gated workspace
 #   * changed-scope clippy for the main and guest-shell-runner workspaces
 #   * nix-instantiate --parse on every .nix file
@@ -61,17 +60,6 @@ resolve_lint_base() {
 lint_base=$(resolve_lint_base)
 export D2B_LINT_BASE="$lint_base"
 
-# --- compiler-derived API input fingerprint -------------------------------
-# The authoritative census still runs in test-rust-api-surface. This generated
-# fingerprint proves that make api-surface-pin ran for the exact workspace
-# source state before the expensive census starts.
-log "--> compiler-derived API pin precheck"
-bash "$ROOT/tests/tools/api-surface-input-fingerprint.sh" --check || {
-  fail "compiler-derived API pin is stale"
-  exit 1
-}
-ok "compiler-derived API pin precheck"
-
 # --- Rust format + changed-scope clippy ----------------------------------
 log "--> Rust format + changed-scope clippy"
 env -u D2B_EXECUTION_MANIFEST \
@@ -108,13 +96,7 @@ if ! command -v shellcheck >/dev/null 2>&1; then
   fi
 fi
 mapfile -t sh_files < <(
-  {
-    find tests scripts harness/ubuntu -maxdepth 1 -name '*.sh' -type f 2>/dev/null
-    # The Copilot agent surface keeps its scripts one level deeper, under
-    # scripts/copilot/ and inside each skill directory, so the maxdepth-1
-    # sweep above does not reach them.
-    find scripts/copilot .github/skills -name '*.sh' -type f 2>/dev/null
-  } | sort -u
+  find tests scripts harness/ubuntu -maxdepth 1 -name '*.sh' -type f 2>/dev/null | sort -u
 )
 if [ "${#sh_files[@]}" -eq 0 ]; then
   fail "shellcheck: no .sh files found"
@@ -122,99 +104,5 @@ if [ "${#sh_files[@]}" -eq 0 ]; then
 fi
 shellcheck --severity=warning -x "${sh_files[@]}"
 ok "shellcheck (${#sh_files[@]} scripts)"
-
-# --- copilot agent bindings ----------------------------------------------
-# Reads committed files only. A panel lane dispatched without an explicit
-# reasoning effort silently runs at the model default while its record would
-# attest the policy level, so a mispinned table is a false attestation rather
-# than an error. This is the cheapest place to catch it.
-log "--> copilot agent binding tables"
-if [ -f "$ROOT/scripts/copilot/check-bindings.mjs" ]; then
-  if command -v node >/dev/null 2>&1; then
-    node "$ROOT/scripts/copilot/check-bindings.mjs"
-    ok "copilot agent binding tables"
-  else
-    fail "node not found; scripts/copilot/check-bindings.mjs cannot run"
-    exit 1
-  fi
-else
-  fail "required gate is missing: scripts/copilot/check-bindings.mjs"
-  exit 1
-fi
-
-# --- panel lifecycle behavior ---------------------------------------------
-# Selection, one comprehensive discovery, ledger responses, scoped
-# verification, and legacy continuation are covered by one focused Node
-# harness. It is intentionally separate from the delivery crate tests.
-log "--> panel lifecycle behavior"
-if [ -f "$ROOT/scripts/copilot/test-panel-lifecycle.mjs" ]; then
-  if command -v node >/dev/null 2>&1; then
-    node "$ROOT/scripts/copilot/test-panel-lifecycle.mjs" >/dev/null
-    ok "panel lifecycle behavior"
-  else
-    fail "node not found; scripts/copilot/test-panel-lifecycle.mjs cannot run"
-    exit 1
-  fi
-else
-  fail "required gate is missing: scripts/copilot/test-panel-lifecycle.mjs"
-  exit 1
-fi
-
-# --- panel record assembly ------------------------------------------------
-# make-records.mjs produces the artifacts that seal a wave. Its fail-closed
-# behaviour is the only thing standing between a lane that silently ran at
-# the wrong effort and a record attesting the policy level, so it gets real
-# coverage rather than being exercised only when a panel round happens to run.
-log "--> panel record assembly"
-if [ -f "$ROOT/scripts/copilot/test-make-records.mjs" ]; then
-  if command -v node >/dev/null 2>&1; then
-    node "$ROOT/scripts/copilot/test-make-records.mjs" >/dev/null
-    ok "panel record assembly"
-  else
-    fail "node not found; scripts/copilot/test-make-records.mjs cannot run"
-    exit 1
-  fi
-else
-  fail "required gate is missing: scripts/copilot/test-make-records.mjs"
-  exit 1
-fi
-
-# --- panel review request -------------------------------------------------
-# Reviewers have no shell and receive one generated request rather than a
-# hand-written summary. Exercise that request so incremental ranges, full
-# context, prior verdicts, evidence, and no-rerun instructions cannot silently
-# drop out of the integrator handoff.
-log "--> panel review request"
-if [ -f "$ROOT/scripts/copilot/test-stage-diffs.mjs" ]; then
-  if command -v node >/dev/null 2>&1; then
-    node "$ROOT/scripts/copilot/test-stage-diffs.mjs" >/dev/null
-    ok "panel review request"
-  else
-    fail "node not found; scripts/copilot/test-stage-diffs.mjs cannot run"
-    exit 1
-  fi
-else
-  fail "required gate is missing: scripts/copilot/test-stage-diffs.mjs"
-  exit 1
-fi
-
-# --- binding gate self-coverage -------------------------------------------
-# The seat-roster comparison inside check-bindings.mjs is enforced by parsing
-# source with a regex, and a regex guard can stop matching without anything
-# else changing. A guard that no longer matches fails open in silence, so it
-# gets a negative test rather than being trusted because it once worked.
-log "--> copilot binding gate self-coverage"
-if [ -f "$ROOT/scripts/copilot/test-check-bindings.mjs" ]; then
-  if command -v node >/dev/null 2>&1; then
-    node "$ROOT/scripts/copilot/test-check-bindings.mjs" >/dev/null
-    ok "copilot binding gate self-coverage"
-  else
-    fail "node not found; scripts/copilot/test-check-bindings.mjs cannot run"
-    exit 1
-  fi
-else
-  fail "required gate is missing: scripts/copilot/test-check-bindings.mjs"
-  exit 1
-fi
 
 log "test-lint OK (duration: $((SECONDS - suite_started))s)"

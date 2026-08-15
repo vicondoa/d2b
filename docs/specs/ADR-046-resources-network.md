@@ -1609,7 +1609,8 @@ Metrics:
 ## Security invariants
 
 The following invariants are normative. Any change to the network-local
-Provider or net-VM template that would violate them is a panel-blocking finding.
+Provider or net-VM template that would violate them is a release-blocking
+finding.
 
 ### INV-NET-001: lib.mkForce on 10-eth-dhcp
 

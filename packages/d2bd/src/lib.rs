@@ -13943,7 +13943,7 @@ impl VmStartRunner<'_> {
         //
         // Decision logic is extracted into
         // `node_requires_disk_init_dispatch` for hermetic unit
-        // testing - the regression covered by panel-test R1 #2.
+        // testing - the regression covered by review R1 #2.
         if node_requires_disk_init_dispatch(node) {
             match dispatch_broker_request_as(
                 self.state,
@@ -14528,7 +14528,7 @@ fn command_ready(command: &[String]) -> Result<bool, String> {
         .map_err(|_| "command-readiness-exec-failed".to_owned())
 }
 
-/// v1.1.2-final-R1 (panel-software + panel-test HIGH): explicit
+/// Explicit
 /// process-state outcomes from `/proc/<pid>/stat`. The previous
 /// `Ok(None)` return conflated three different scenarios - file
 /// missing (process gone), file unreadable (transient race),
@@ -14631,7 +14631,7 @@ fn read_proc_state(pid: i32) -> Result<ProcState, std::io::Error> {
 
 #[cfg(test)]
 mod proc_state_tests {
-    // v1.1.2-final-R1 (panel-test HIGH): explicit coverage of
+    // Explicit coverage of
     // /proc/<pid>/stat parsing. Each case exercises the parser
     // with a synthetic stat-format string to ensure the
     // `rfind(')')` correctly handles comm names containing `)`
@@ -31112,9 +31112,9 @@ mod broker_dispatch_tests {
         assert_eq!(event.get("mode").and_then(|v| v.as_str()), Some("strict"),);
     }
 
-    // ----- v1.2fu53 panel-test R1 must-fix regression test -----
+    // ----- Regression test -----
 
-    /// fu53 panel-test R1 #2: hermetic regression test for the D9
+    /// Hermetic regression test for the D9
     /// daemon-side DiskInit dispatch decision.  The original D9 hole
     /// (closed by fu46) was missed precisely because no unit test
     /// exercised the `spawn_runner` path's `node.plan_ops` branch.

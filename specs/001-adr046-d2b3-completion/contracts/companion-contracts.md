@@ -1,6 +1,6 @@
 # Contract: Desktop companion surfaces
 
-**Requirement**: FR-039, FR-040, FR-041, FR-042, FR-045, FR-061, FR-062, FR-063, FR-064, FR-065, SC-024 | **Waves**: W5 publish, W8 verify
+**Requirement**: FR-039, FR-040, FR-041, FR-042, FR-045, FR-061, FR-062, FR-063, FR-064, FR-065, SC-024 | **Stages**: publish, live verification
 
 ## Why this file exists
 
@@ -37,19 +37,19 @@ determination that it consumes no FR-064 limb-2 surface.
 
 ## Obligations
 
-| # | Obligation | Wave | Status |
+| # | Obligation | Stage | Status |
 | --- | --- | --- | --- |
-| CO-1 | Publish the companion inventory as a versioned reference document naming each companion, its exact consumed surface, and its verification status | W5 | **Done** - `docs/reference/companion-contracts.md`, revision 2; the original revision 1 landed at `b72b205f` |
-| CO-2 | Publish replacement contracts early enough for companions to adapt, given no preview release may be published (FR-045) | W5 | **Done** - `docs/reference/zone-cli-contract.md`, revision 1, landed at `b72b205f` |
-| CO-3 | Verify each companion by exercising it against the release candidate on a live host - not by version number or source inspection | W8 | Open |
-| CO-4 | Hold the release while any companion lacks a verified compatible version | W8 | Open |
-| CO-5 | Every "surface consumed" cell in the inventory resolves to a committed reference document, schema, or typed definition at a public ref | W5 exit | Open - the W5 exit condition for CO-2 |
+| CO-1 | Publish the companion inventory as a versioned reference document naming each companion, its exact consumed surface, and its verification status | publication | **Done** - `docs/reference/companion-contracts.md`, revision 2; the original revision 1 landed at `b72b205f` |
+| CO-2 | Publish replacement contracts early enough for companions to adapt, given no preview release may be published (FR-045) | publication | **Done** - `docs/reference/zone-cli-contract.md`, revision 1, landed at `b72b205f` |
+| CO-3 | Verify each companion by exercising it against the release candidate on a live host - not by version number or source inspection | live verification | Open |
+| CO-4 | Hold the release while any companion lacks a verified compatible version | live verification | Open |
+| CO-5 | Every "surface consumed" cell in the inventory resolves to a committed reference document, schema, or typed definition at a public ref | publication condition | Open - the publication condition for CO-2 |
 | CO-6 | Carry the companion-adaptation assumption as an unvalidated risk with a mitigation and a detection point, and never restate it as fact | standing | **Done** - FR-062 |
-| CO-7 | Classify every named surface at W8 as Conformant, Blocked, or Retired, defaulting to Blocked when the outcome cannot be classified | W8 | Open - the pass condition CO-3 is measured against |
-| CO-8 | Record any Retired surface on the FR-042 retirement list before the tag, with justification, owner, restoring condition, and a release-note line, and never as a relabelled failure | W8 | Open |
-| CO-9 | Re-derive the inventory at W8 under FR-064's two limbs, carrying repository, pinned commit, maintainer, discovery source, and consumed surfaces per row, with a recorded negative determination for any removal | W8 | Open |
-| CO-10 | Hold every companion verification to all seven FR-065 conditions, and void every verification if the release-candidate snapshot moves | W8 | Open |
-| CO-11 | Compare every desktop-wrapper and companion/device CLI promise with the frozen expected surface and exact W5 emitted help, JSON, capability, refusal, and wire behavior. Candidate absence is a defect unless the same change follows the explicit parity or FR-042 retirement path with a named replacement, migration guidance, owner, restoring condition, release treatment, and contract coverage; absence alone never authorizes deleting the promise | W5 exit | Open - FR-019, FR-074 |
+| CO-7 | Classify every named surface as Conformant, Blocked, or Retired, defaulting to Blocked when the outcome cannot be classified | live verification | Open - the pass condition CO-3 is measured against |
+| CO-8 | Record any Retired surface on the FR-042 retirement list before the tag, with justification, owner, restoring condition, and a release-note line, and never as a relabelled failure | live verification | Open |
+| CO-9 | Re-derive the inventory under FR-064's two limbs, carrying repository, pinned commit, maintainer, discovery source, and consumed surfaces per row, with a recorded negative determination for any removal | live verification | Open |
+| CO-10 | Hold every companion verification to all seven FR-065 conditions, and void every verification if the release-candidate snapshot moves | live verification | Open |
+| CO-11 | Compare every desktop-wrapper and companion/device CLI promise with the frozen expected surface and exact emitted help, JSON, capability, refusal, and wire behavior. Candidate absence is a defect unless the same change follows the explicit parity or FR-042 retirement path with a named replacement, migration guidance, owner, restoring condition, release treatment, and contract coverage; absence alone never authorizes deleting the promise | publication condition | Open - FR-019, FR-074 |
 
 ## The resolution, and what it binds
 
@@ -67,13 +67,13 @@ Both original constraints survive intact. Nothing in FR-039 is loosened and noth
 FR-045 is carved out; what changes is that the two are no longer read as competing, because
 they govern different objects.
 
-### Sequencing, and where each stage refuses
+### Stages and refusal conditions
 
-| Stage | Wave | Refuses when |
+| Stage | Refuses when |
 | --- | --- | --- |
-| Publish inventory and contracts | W5 | A "surface consumed" cell names a surface with no committed contract at a public ref (CO-5) |
-| Companions adapt | W5 to W8, external | Nothing here refuses. This program does not control a sibling repository's schedule, which is precisely why FR-062 exists |
-| Verify on a live host against the candidate | W8 | Any inventory row lacks a verification record naming the candidate, the companion revision, the surfaces exercised, and the result |
+| Publish inventory and contracts | A "surface consumed" cell names a surface with no committed contract at a public ref (CO-5) |
+| Companions adapt | Nothing here refuses. This program does not control a sibling repository's schedule, which is precisely why FR-062 exists |
+| Verify on a live host against the candidate | Any inventory row lacks a verification record naming the candidate, the companion revision, the surfaces exercised, and the result |
 
 The order is load bearing. Publication must precede adaptation because a maintainer cannot
 implement against an unpublished shape, and verification must follow adaptation because
@@ -87,21 +87,21 @@ that means nothing.
 contracts exist and are reachable. It established nothing about whether any companion has
 read them, can implement them, or intends to. Every row in the published inventory reads
 "Pending live-host verification" for that reason, and the shipped page says in its own words
-that publication is not a compatibility sign-off.
+that publication is not compatibility verification.
 
 **The adaptation assumption is unvalidated and is recorded as such.** FR-062 carries it as a
 risk with a mitigation - contracts point at generated schemas and typed definitions rather
 than paraphrasing them, so a maintainer implements against the same bytes the implementation
-validates - and a detection point, the first live-host verification in W8. That detection
+validates - and a detection point, the first live-host verification. That detection
 point is late, and saying so is part of the record.
 
 ### If adaptation stalls
 
-Exactly two outcomes are lawful: **hold the release**, or **amend FR-045** through the
-specification-amendment path with its own evidence. There is no third option. In particular,
+Exactly two outcomes are lawful: **hold the release**, or change the release contract and
+rerun the affected evidence before publication. There is no third option. In particular,
 publishing an unannounced preview is not a pragmatic exception to FR-045, it is a violation
 of it, and treating contract publication as though it discharged verification is not a
-shortcut through CO-3, it is a skipped gate.
+shortcut through CO-3, it is a skipped release condition.
 
 The no-preview constraint is therefore preserved here rather than amended, because nothing
 found while closing this item is evidence that it must be relaxed. What would constitute such
@@ -199,7 +199,7 @@ non-candidate build; an exercise off the live host; a partial exercise of the ro
 
 **A moved candidate voids every verification against the old one.** If the release-candidate
 snapshot changes, all recorded companion verifications are void and re-run. This mirrors the
-rule that any content change invalidates prior panel sign-off, and it is what makes "verified
+rule that any content change invalidates prior verification evidence, and it is what makes "verified
 against the release candidate" measurable: without it, "the candidate" is whichever build was
 convenient when someone looked.
 
@@ -210,7 +210,7 @@ been discovered from host flake inputs, no in-set companion revision has been pi
 in-set companion has been exercised. Revision 2 records only the negative surface-consumption
 determination that excludes `weezterm`; that is not compatibility verification. All four
 published rows remain **Pending live-host verification**, and the four-row inventory itself
-remains an unverified starting set that FR-064 will confirm or change at W8.
+remains an unverified starting set that FR-064 will confirm or change during live verification.
 
 ## Partial adaptation: the classification that decides the release
 

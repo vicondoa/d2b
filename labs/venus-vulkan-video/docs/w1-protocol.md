@@ -41,7 +41,7 @@ Two things worth recording about *why* this passes:
 
 1. Upstream's `utils/print_vk_command_types.py` is **append-only by
    construction** - it reuses ids already present in the XML and only allocates
-   new ones for genuinely new commands. The panel's renumbering concern was
+   new ones for genuinely new commands. The review's renumbering concern was
    real in principle but is structurally prevented by the tool.
 2. The generator **reproduces the committed XML exactly** at `base/70991d4`
    (345 ids, byte-identical), so the golden snapshot is trustworthy rather than
@@ -402,7 +402,7 @@ Two reasons to keep it in mind anyway:
 
 The first cap pass covered the H.264 codec payload and stopped, reasoning that
 W1 advertises no video so nothing else is reachable. That reasoning was wrong,
-and the W1 panel caught it.
+and the W1 review caught it.
 
 `VkVideoProfileListInfoKHR` chains onto `VkImageCreateInfo` and
 `VkBufferCreateInfo`, which **existing** commands already decode. The

@@ -1,8 +1,8 @@
 //! Rendering for the window identity tab and its deliberate controls.
 //!
-//! `Candidate::BandNeutral` is the design the UX panel converged on across five
-//! rounds. The other arms are controls: they exist so the panel's arguments are
-//! *visible* to the operator rather than asserted in prose.
+//! `Candidate::BandNeutral` is the design the UX review converged on across five
+//! rounds. The other arms are controls: they exist so the review's arguments
+//! are *visible* to the operator rather than asserted in prose.
 
 use crate::{
     canvas::Canvas,

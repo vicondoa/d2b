@@ -1,6 +1,6 @@
 # Contract: Operator CLI
 
-**Owning spec**: `ADR-046-cli-and-operations` | **Wave**: W5 (surface), W7 (cutover verbs)
+**Owning spec**: `ADR-046-cli-and-operations`
 
 ## What this surface is
 
@@ -16,29 +16,26 @@ companion reads this surface or the socket beside it.
 
 ## Obligations
 
-| # | Obligation | Requirement | Wave |
-| --- | --- | --- | --- |
-| CLI-1 | Resource inspection and committed-pending-audit Version 2 text below is historical Wave 5 design. Prospective Zone readiness consumes the handler-list contract from authoritative member specs and generated manifests. | FR-016, FR-069, FR-070, SC-005, SC-032, SC-033 | historical W5 / prospective W6 |
-| CLI-2 | Every failure names a specific cause and an actionable next step | FR-017, SC-004 | W5 |
-| CLI-3 | Cutover verbs: a non-mutating preview, and an apply gated on explicit intent plus exact content-bound consent | FR-020, FR-021 | W7 |
-| CLI-4 | The apply path refuses to pass the rollback boundary without a recorded recovery-point attestation | FR-043, SC-025 | W7 |
-| CLI-5 | Retired verbs are removed with a removal proof, in their own commit, after the successor is integrated | FR-023 | W5-W7 |
-| CLI-6 | `d2b userd` is removed only after parity with the fixed user supervisor Process | FR-041 | W5 |
-| CLI-7 | Desktop-wrapper, companion, audio, USB, security-key, and resource reference pages match exact emitted help, JSON, capabilities, typed refusals, and wire fields; absent behavior is not promised | FR-019, FR-074 | W5 |
+| # | Obligation | Requirement |
+| --- | --- | --- |
+| CLI-1 | Resource inspection and committed-pending-audit behavior follows the handler-list and recovery contracts in the owning product specifications. | FR-016, FR-069, FR-070, SC-005, SC-032, SC-033 |
+| CLI-2 | Every failure names a specific cause and an actionable next step. | FR-017, SC-004 |
+| CLI-3 | Cutover verbs provide a non-mutating preview and an apply gated on explicit intent plus exact content-bound consent. | FR-020, FR-021 |
+| CLI-4 | The apply path refuses to pass the rollback boundary without a recorded recovery-point attestation. | FR-043, SC-025 |
+| CLI-5 | Retired verbs are absent, and successor behavior is documented and tested where compatibility requires it. | FR-023 |
+| CLI-6 | `d2b userd` is removed only after parity with the fixed user supervisor Process. | FR-041 |
+| CLI-7 | Desktop-wrapper, companion, audio, USB, security-key, and resource reference pages match exact emitted help, JSON, capabilities, typed refusals, and wire fields; absent behavior is not promised. | FR-019, FR-074 |
 
 ## Historical committed-pending-audit recovery plan
 
 <!-- RETIRED-W5-CLI-BEGIN -->
 
-This retired design assigned T599 a coordinated amendment of the accepted
-`ADR-046-cli-and-operations` specification from Version 1 to Version 2. Version 2 assigns the
-resource-recovery meanings of exits 75 and 76, makes `zoneRef` and `schemaVersion: 2`
-mandatory in every recovery JSON envelope, and pins the ID and remediation contracts below.
-The existing meanings of 75 and 76 for unrelated exec commands remain command-scoped. T599
-owns migration guidance, DTO/schema and contract tests, reference and release treatment plus
-`changelog.d/cli-operation-recovery.md`; T220 reconciles the generated manifests and folds
-that fragment. The implementation
-was not authorized to ship under the accepted Version 1 contract.
+This retained historical design records the resource-recovery shape: exits 75 and 76, mandatory
+`zoneRef` and `schemaVersion: 2` in every recovery JSON envelope, and the ID and remediation
+contracts below. The existing meanings of 75 and 76 for unrelated exec commands remain
+command-scoped. Migration guidance, DTO/schema and contract tests, reference material, and
+release treatment remain implementation concerns for the owning surfaces. Current behavior is
+determined by the owning product contract, committed code, and focused checks.
 
 The replay handle is an exact 16-byte UUIDv7-layout operation ID rendered as lowercase
 32-hex without separators. It remains opaque to operators. Every
@@ -211,30 +208,12 @@ The d2b 3.0 clean cutover imports no persisted Version 1 recovery state.
 
 ## Host-generation handoff recovery
 
-Code canon does not provide this surface. Prospective ownership and ordering resolve only
-from authoritative member specs and generated manifests after T221. SC-002
-protocol authority belongs solely to accepted Version 2
-`docs/specs/ADR-046-validation-and-delivery.md` and its generated
-`docs/specs/ADR-046-validation-and-delivery-traceability.{json,md}` artifacts. The generated
-JSON is machine authority and the generated Markdown is its review view.
-
-The CLI consumes these stable generated rows rather than copying their protocol:
-
-| Generated identifier | CLI use |
-| --- | --- |
-| `VD2-SC002-RECEIPT` | consume the assigned activation and close-stage evidence references |
-| `VD2-SC002-PUBLICATION` | consume publication, locking, retention, capacity, and crash-recovery decisions without restating them |
-| `VD2-SC002-INCIDENT` | consume incident classification, redaction, and escalation decisions |
-| `VD2-SC002-DISPOSITION` | consume accepted authority and recovery disposition only through its generated owner |
-| `VD2-SC002-RECOVERY` | consume inspectable states, emitted actions, exact invocations, exits, and convergence |
-| `VD2-SC002-SOURCE-FLOOR` | consume the installed source-generation compatibility result |
-| `VD2-SC002-REGISTRIES` | consume independently authored fixture and poison assignments |
-| `VD2-SC002-TRACEABILITY` | bind every consumed identifier to its schema, implementation owner, task, fixture, and enforcing gate |
-
-Missing, duplicate, extra, stale, wrong-owner, non-ancestor, or failing generated rows block
-the surface. The refusal names the remediation: accept Version 2, regenerate its traceability,
-and pass Gate 0. This contract defines no host-generation protocol shape, state machinery, or
-test matrix. None may be inferred from the operator commands or action procedures below.
+Host-generation recovery is a public CLI contract. It consumes the typed
+host-generation protocol and must preserve the exact response states, emitted
+actions, invocations, exits, and convergence behavior defined by the product
+contract. Missing, duplicate, stale, wrong-owner, or failing protocol rows are
+runtime contract failures; the CLI must not synthesize a replacement status or
+translate an unknown variant into generic success or repair guidance.
 
 ### Operator commands
 
@@ -257,10 +236,9 @@ variant into a generic success or repair instruction.
 
 ### Public action owners
 
-The following rows define operator resolution for generated public actions. They do not
-define the emitted action enum or map protocol states and failures to actions; accepted
-Version 2 and generated `VD2-SC002-RECOVERY`, `VD2-SC002-INCIDENT`,
-`VD2-SC002-REGISTRIES`, and `VD2-SC002-TRACEABILITY` own those decisions.
+The following rows define operator resolution for public actions. The emitted action enum
+and mapping from protocol states and failures remain owned by the host-generation product
+contract; this table does not invent alternate protocol states.
 
 | Action | Owner and exact procedure |
 | --- | --- |
@@ -295,9 +273,8 @@ Version 2 and generated `VD2-SC002-RECOVERY`, `VD2-SC002-INCIDENT`,
 | `preserve-and-escalate-audit-integrity-incident` | site security authority runs `host-generation-audit-integrity-escalation-v1` |
 
 Each named `host-generation-*-v1` procedure is an identically named anchor in
-`docs/how-to/host-generation-recovery-v1.md`. The retired runbook/action-map ownership is
-read-only history and supplies no current gate. A missing, extra, duplicate,
-unowned, or broken action mapping blocks release. Machine output carries only the generated
+`docs/how-to/host-generation-recovery-v1.md`. The retired runbook/action-map ownership is read-only history. A missing, extra, duplicate,
+unowned, or broken action mapping is a product contract failure. Machine output carries only the generated
 action token, never an argv array, shell fragment, free-form command, Zone, operation ID, or
 artifact path. Escalation procedures preserve the affected evidence and authorize no repair,
 replacement, deletion, retry, or force action unless the accepted disposition explicitly
@@ -316,13 +293,11 @@ FR-042 explicit retirement list rather than the parity list.
 
 ## Acceptance
 
-- Both machine-readable and human output modes behave per the CLI contract, with exit codes
-  matching the documented table.
+- Both machine-readable and human output modes behave per the CLI contract, with exit codes matching the documented table.
 - Every command and field promised by the desktop-wrapper and companion/device references is
-  present in exact emitted behavior. A typed unavailable state is acceptable only when the
-  frozen contract already defines it or the same change follows the explicit parity/FR-042
-  retirement path with replacement, migration, owner, release treatment, and contract
-  coverage. Candidate absence alone is a W5 defect and never authorizes deleting the promise.
+  present in exact emitted behavior. A typed unavailable state is acceptable only when the frozen contract already defines it or
+  the same change follows the explicit parity/FR-042 retirement path with replacement,
+  migration, owner, release treatment, and contract coverage.
 - A committed mutation whose authoritative audit is pending is displayed as degraded
   `committed-pending-audit` with exactly the Version 2 command, flags, exits, mandatory
   `zoneRef`/`schemaVersion`, DTO schema, ID format, closed remediation actions, and human/JSON
@@ -340,12 +315,12 @@ FR-042 explicit retirement list rather than the parity list.
   `zoneRef` and `operationId` recovery coordinates stay confined to direct operator responses
   and occur zero times in telemetry labels, spans, exported audit identities, or unrelated
   error context.
-- The former Version 2 amendment, migration, and fold are read-only historical design and
-  authorize no current implementation.
-- Host-generation handoff commands consume only accepted generated `VD2-SC002-*` rows for
-  protocol states, publication, capacity, rendering, exits, and transitions. Every generated
-  public action resolves to exactly one command or named owner and public runbook procedure
-  above; the feature-local CLI contract does not redefine the SC-002 protocol.
+- The former Version 2 amendment and migration notes are read-only historical design and
+  authorize no alternate current implementation.
+- Host-generation handoff commands consume the product contract for protocol states,
+  publication, capacity, rendering, exits, and transitions. Every public action resolves to
+  exactly one command or named owner and public runbook procedure above; the feature-local CLI
+  contract does not redefine that protocol.
 - `d2b --help`, host-generation subcommand help, packaging, completions, and policy tests
   expose only the `d2b` binary. The retired standalone executable name occurs in no emitted
   command, package output, runbook invocation, or compatibility alias.
@@ -353,8 +328,7 @@ FR-042 explicit retirement list rather than the parity list.
   `Zone.status.handlers[]` record: `system-core-host` or `system-core-user`, with its `phase`
   and `lastReconciledAt`. Exactly one of each is required; duplicate, missing, wrong-name, or
   `provider-lifecycle` substitution is reported as an actionable refusal rather than a vague
-  Provider path or boolean failure. Current ownership resolves only from authoritative member
-  specs and generated manifests.
+  Provider path or boolean failure. Current ownership resolves from the owning product contracts.
 - The cutover preview modifies nothing, and the apply path is unreachable without both consent
   and attestation.
-- No retired verb remains, verified by its removal proof.
+- No retired verb remains, verified by focused CLI inventory and policy tests.

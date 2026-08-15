@@ -18,7 +18,7 @@ Contracts:
   source-census, Nix selection, generated ownership, release wiring, and
   tool-pinning contract, including the Nix-patched Bazel Linux sandbox and
   exact four-row artifact baseline.
-- `coverage-map.md` - eighteen-surface carrier coverage, native first-party
+- `coverage-map.md` - seventeen-surface carrier coverage, native first-party
   targets, selected-context censuses, and guard placement.
 - `make-target-compatibility.md` - shadow, contributor mutation, promotion,
   versioned diagnostic transition, and retirement command surface.

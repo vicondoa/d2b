@@ -11,4 +11,3 @@ network_manager = 1.46
 nftables = 1.0.9
 cloud_hypervisor_min = 40
 minijail = 17-nix-built
-panel_approval_required_for_change = true

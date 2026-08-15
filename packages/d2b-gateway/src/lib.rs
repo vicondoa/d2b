@@ -1,5 +1,5 @@
 //! `d2b-gateway` - the gateway-mode display-session orchestrator
-//! (ADR 0032, P0; panel-approved design `gw-display-design-r2`).
+//! (ADR 0032, P0; reviewed design `gw-display-design-r2`).
 //!
 //! The crate composes the proven providers into a **session-credential-bound**
 //! display session: a Wayland app inside an ACA sandbox is rendered on the

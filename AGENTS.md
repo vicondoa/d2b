@@ -1,7 +1,7 @@
 # AGENTS.md
 
-Operating manual for AI coding agents (Copilot CLI, GitHub Copilot,
-Cursor, …) and human contributors to **`vicondoa/d2b` itself**. If you
+Operating manual for automated coding sessions and human contributors to
+**`vicondoa/d2b` itself**. If you
 *consume* d2b in your NixOS host config, start at [README.md](./README.md).
 
 ## What this is
@@ -32,15 +32,12 @@ row, then read it.
 | Change any code | "Build and validate" below, then commit before validating |
 | Touch **critical subsystem** | index below, then [critical-subsystems.md](./docs/contributing/critical-subsystems.md) |
 | Add, move, or retire test | [`tests/AGENTS.md`](./tests/AGENTS.md) - binding, read it before touching test tree |
-| Run gate, heavy lane, or build that needs debug symbols | [gates-and-lints.md](./docs/contributing/gates-and-lints.md) - what each Layer-1 job covers, heavy-lane semaphore, build profiles, spec-literal lints |
-| Run or respond to panel round | "Panel review" below, then [panel-review.md](./docs/contributing/panel-review.md) |
+| Run gate, heavy lane, or build that needs debug symbols | [gates-and-lints.md](./docs/contributing/gates-and-lints.md) - what each Layer-1 job covers, heavy-lane semaphore, and build profiles |
 | Open worktree, land PR, or reclaim disk | [workflow.md](./docs/contributing/workflow.md) - worktrees, stacked PRs, edit/commit/validate, disk and cache hygiene |
 | Write changelog entry or commit message | [changelog-and-commits.md](./docs/contributing/changelog-and-commits.md) |
 | Add per-VM feature, unit, or broker op | [architecture.md](./docs/contributing/architecture.md) and [ADR 0015](./docs/adr/0015-daemon-only-clean-break.md) |
 | Do anything security-relevant | "Don'ts" below - that section is exhaustive and binding |
-| Run ADR, panel round, or autopilot wave | [copilot-agents.md](./docs/contributing/copilot-agents.md) - agents, skills, model binding, wave ids |
-| Change feature artifact after its first write | `d2b-spec-edit` owns batch; read [copilot-agents.md](./docs/contributing/copilot-agents.md) |
-| Operate optional Gas City contributor infrastructure | [gas-city.md](./docs/contributing/gas-city.md) - host deployment and recovery; it is separate from the d2b panel, wave, and signoff path |
+| Operate optional Gas City contributor infrastructure | [gas-city.md](./docs/contributing/gas-city.md) - host deployment and recovery |
 
 Two rules override everything else:
 
@@ -106,19 +103,22 @@ from `nixos-modules/default.nix`. Don't fatten existing files.
 
 Use top-level `Makefile` targets. Shell scripts under `tests/` are
 implementation details unless a target or `tests/AGENTS.md` says otherwise.
+Run focused commands covering the changed components. The aggregate
+`make check` target remains available, but is not required before opening a PR
+or starting review.
 
 `nix develop` provides the toolchain every gate expects. Gate scripts bootstrap
 a private toolchain when missing, so a dev shell skips that setup.
 
-CI runs eight independent Rust leaf jobs - API, main workspace, broker, guest
-shell runner, no-bash AST, schema, inventory, and supply chain - behind the
+CI runs seven independent Rust leaf jobs - main workspace, broker, guest shell
+runner, no-bash AST, schema, inventory, and supply chain - behind the
 required `test-rust` rollup. Each leaf gets full runner budget and no local-only
 dependency edges. `make test-rust` remains the local aggregate; use
 `make test-rust-<leaf>` to rerun one CI leaf. See
 [gates and lints](./docs/contributing/gates-and-lints.md).
 
 ```bash
-make check        # PR-equivalent Layer-1 gate; runs tests/layer1-jobs.json
+make check        # optional aggregate Layer-1 gate; runs tests/layer1-jobs.json
 make test-unit    # Layer-1 development umbrella (skips the preflight phase)
 make test         # Layer 1 + container integration
 ```
@@ -139,17 +139,16 @@ is advisory.
 Two coverage traps matter before claiming validation:
 
 - **Layer-1 Rust orchestration excludes `d2b-contract-tests` from its Rust
-  shards** by setting `D2B_SKIP_FIXTURE_BUILD=1`, then runs enforcing
-  `test-fixture-contracts` separately. Local `make test-rust` includes fixture
-  and CLI contract surfaces when Nix is available. Cite
-  `test-fixture-contracts`, not the Rust shard, for Layer-1
-  fixture-dependent coverage.
+  shards** by setting `D2B_SKIP_FIXTURE_BUILD=1`; the fixture-dependent
+  contract and policy layer is not validated by `test-rust`. Run the enforcing
+  `make test-fixture-contracts` target separately and cite it for that
+  coverage.
 - **Doctests and `harness = false` binaries are not nextest surfaces** and need
   explicit companion runs. Several `compile_fail` doctests are capability
   seals; do not "simplify" them away.
 
-Before opening an agent-owned PR, run host/manual tiers locally; the PR
-pipeline does not:
+Run host/manual tiers locally when the changed surface requires them; the PR
+pipeline does not replace these conditional lanes:
 
 ```bash
 make test-integration       # Layer 2 container tests; needs podman
@@ -164,20 +163,8 @@ which fail closed outside the gate. Details, provisioning, and the rule that
 every new live/hardware/perf entrypoint carries a self-guard block:
 [gates-and-lints.md](./docs/contributing/gates-and-lints.md).
 
-Runtime ledger, spec-literal lint allowlist, and D116 envelope negative-example
-marker have exemptions that are easy to misread. They are documented in that file.
-Short version: spec-literal
-lints honour **no** author-suppression marker, and D116 honours exactly one,
-in one pinned file, exactly once.
-
-Prompt policy is checked locally. Caveman provenance is under
-`third_party/caveman/v1.10.0/`, pinned to tag `v1.10.0` at commit
-`fcf7663366c217dc8f334a11028de52ed950ceab`; `UPSTREAM.json` carries three
-SHA-256 values. Selected delivery and review lanes may use optional full transient
-communication. Explicit `normal` or `off` wins. Mode never changes persisted
-prose, panel verdict JSON, finding bars, or panel requirements, except the
-compressed prompt corpus checked by
-`scripts/copilot/prompt-corpus.mjs`.
+The runtime ledger has exemptions that are easy to misread; they are
+documented in [gates-and-lints.md](./docs/contributing/gates-and-lints.md).
 
 ## Development workflow
 
@@ -199,52 +186,14 @@ Detail in [workflow.md](./docs/contributing/workflow.md). Binding rules:
   scratch into the worktree. Stage specific paths.
 - **Put throwaway artifacts in gitignored `.scratch/`**, never beside
   production code or tests.
-- **Route existing feature-artifact writes through `d2b-spec-edit`.** A
-  `speckit-*` command may create only designated absent artifacts: `specify`
-  creates feature directory, initial `spec.md`, and first requirements
-  checklist; `plan` creates absent plan, research, data-model, contracts, or
-  quickstart artifacts; `tasks` creates absent `tasks.md`; `checklist` creates
-  absent checklist. `clarify` batches answers, `analyze` stays read-only,
-  `implement` reports checkbox changes, `converge` prepares exact append
-  content, and
-  `autopilot` and memory fold route feature-directory writes through editor.
-  Once file exists, editor owns every later write and refuses root escape.
 - **Test eval expressions must resolve flake via `git+file://$ROOT`**
   (`d2b_flake_ref` helper), never bare path. bare path makes Nix copy
   entire working tree into store, including multi-GiB cargo artifacts:
   measured at ~36 GB and 5+ minutes per cold eval, versus under second.
 - **Never clear `RUSTC_WRAPPER` to make command work.** repo-local
   wrapper already falls back to plain rustc when sccache is absent.
-- **Run `nix-collect-garbage` after each wave merge**, and prune old system
-  generations periodically; each pins 1-2 GiB.
-
-## Panel review
-
-Detail, including each role's focus and harness notes, in
-[panel-review.md](./docs/contributing/panel-review.md). binding rules:
-
-- Multi-phase work passes a plan gate before implementation and a work gate
-  before advance. `signoff` is `true` iff `recommendations` is `[]`; every
-  selected lifecycle seat must sign off, and green tests never waive the gate.
-- Selection uses the versioned thirteen-seat table. It includes every
-  mandatory and triggered seat, meets the applicable floor, and only widens.
-  Rust depth is a `software` profile; legacy records retain `rust`.
-- One comprehensive discovery produces the stable shared ledger. Fixes are
-  ledger-scoped and batched. Verification receives the full ledger, responses,
-  evidence, fix delta, and full candidate; it checks resolutions and
-  regressions without reopening discovery.
-- Reviewers are read-only and do not rerun validation unless explicitly asked.
-  Missing evidence is a finding. Unrelated defects found during a fix are
-  recorded separately rather than expanding that lifecycle.
-
-Escape hatches are narrow: trivial fixes with no semantic change,
-documentation-only changes that do not describe load-bearing behaviour, and
-time-critical hotfixes, which still require post-fix panel.
-
-The once-per-wave binding panel is enforced in code by
-`packages/xtask/src/delivery/panel.rs`: the request stores the selected roster,
-attestation requires one unanimous candidate-bound record per stored role, and
-strict fixed-ten legacy artifacts remain readable. No override or partial pass.
+- **Run `nix-collect-garbage` after integrating a completed change when disk
+  reclamation is needed**, and prune old system generations periodically.
 
 ## Changelog and commits
 
@@ -262,26 +211,17 @@ binding rules:
 - **Commit subjects are short, imperative, and area-prefixed**
   (`net: fix 10-eth-dhcp neutralization`). Explain *why* in body, wrapped
   at ~72 columns; diff shows what.
-- **Commits on feature branches carry trailing wave tag**, `( W3 )`,
-  `( W2fu1 H3 )`, or qualified form `( spec001w1 )`. Every commit from a
-  panel-fix round must carry relevant tag.
 - **No AI, tool, or model attribution** in commit subjects, bodies, PR
   descriptions, changelog entries, or shipped docs. No `Co-authored-by`
   trailer for AI tools unless explicitly requested.
-- **Sign-offs and GPG signing are not used.**
+- **GPG signing is not used.**
 
-**Process markers stay out of shipped artifacts.** Wave, phase, revision,
-follow-up, round, and finding tags (`W3`, `W4-fu`, `P6`, `D5/P2.3`,
-`( W1fu3 H20 )`) organise work; they are not shipped. Keep them out of source
+**Internal planning labels stay out of shipped artifacts.** Revision,
+follow-up, and finding tags are not user-facing. Keep them out of source
 comments, shipped docs prose, user-facing CLI and error text, CI job and step
-names, and **every** CHANGELOG section including `[Unreleased]`. They remain
-welcome in planning artifacts, this file and other process docs, ADRs, and
-feature-branch commit messages. ban is enforced by `scan_process_markers`
-in `tests/tools/tier0-first-pass.sh` via `make check-tier0`, against frozen
-allowlist; that script is authoritative for governed paths and exceptions.
-two deliberate functional exceptions: consumer-facing
-`d2b.defaultSwitchReadiness.<wave>` option surface, and delivery tool's
-closed `W0`-`W8` namespace under `packages/xtask/src/delivery/`.
+names, and **every** CHANGELOG section including `[Unreleased]`. The ban is
+enforced by `scan_process_markers` in `tests/tools/tier0-first-pass.sh` via
+`make check-tier0`, against its frozen allowlist.
 
 ## Test layout
 
@@ -301,8 +241,8 @@ At glance:
 | `packages/<crate>/src/**`, `packages/<crate>/tests/*.rs` | Rust unit and binary integration tests. Prefer these over shell gates when behaviour is hermetic. |
 | `packages/d2b-contract-tests/tests/` | Rendered-artifact contract tests and policy lints. fixture-dependent crate is excluded from `test-rust`; its fixture-backed tests run in enforcing `test-fixture-contracts` lane, while selected hermetic policy files have separate enforcing entrypoints. |
 | `tests/unit/gates/`, `tests/unit/meta/` | Drift and meta gates; closed set. Regenerate affected artifacts with matching `xtask gen-*` command instead of adding another gate. |
-| `tests/integration/containers/` | Container integration tests run by `make test-integration`; host/manual pre-PR tier. |
-| `tests/host-integration/*.nix` | runNixOSTest VM checks run by `make test-host-integration`; local NixOS/KVM pre-PR tier, not PR pipeline. |
+| `tests/integration/containers/` | Container integration tests run by `make test-integration`; conditional host lane. |
+| `tests/host-integration/*.nix` | runNixOSTest VM checks run by `make test-host-integration`; conditional NixOS/KVM lane, not PR pipeline. |
 | `tests/integration/live/`, `tests/host-integration/hardware/` | Live-host and hardware tests. Manual only; require deployed state or real devices. |
 
 ## CI / `flake.checks`
@@ -348,7 +288,7 @@ is warning, not contract.
 | [Zone message bus boundary](docs/contributing/critical-subsystems.md#zone-message-bus-boundary) | `packages/d2b-bus/src/{router,registry,authorization,streams,operations}.rs` | Registration consumes single-owner capability admission; comparing clonable token is insufficient. |
 | [Resource mutation seal](docs/contributing/critical-subsystems.md#resource-mutation-seal) | `packages/d2b-resource-store/src/mutation_seal.rs` + `packages/d2b-resource-store-redb/src/` + `packages/d2b-resource-api/src/` | Verified resource writes consume concrete, store-instance-bound seal by value; no generic view or unbound mutation path may return. |
 | [Authoritative subject resolution](docs/contributing/critical-subsystems.md#authoritative-subject-resolution) | `packages/d2b-bus/src/router.rs` (`ZoneRegistrar`) | `ZoneRegistrar` **exclusively owns and consumes** subject resolution: peer is mapped to subject from registrar-private state using verified peer evidence. Never accept caller-supplied subject. |
-| [Capability mint surface allowlist](docs/contributing/critical-subsystems.md#capability-mint-surface-allowlist) | `packages/d2b-api-surface/`, `tests/golden/api-surface/`, `packages/d2b-bus/tests/public_mint_surface.rs`, `packages/d2b-resource-store/` | **enforcing compiler leg** uses stable trait-solver ambiguity assertions in defining crates. |
+| [Capability mint surface allowlist](docs/contributing/critical-subsystems.md#capability-mint-surface-allowlist) | `packages/{d2b-bus,d2b-session,d2b-session-unix}/` defining crates, `packages/d2b-bus/tests/public_mint_surface.rs`, `packages/d2b-resource-store/` | Stable trait-solver ambiguity assertions, compile-fail seals, public contract tests, and resource mutation tests enforce the boundary. |
 | [Resource controller effects boundary](docs/contributing/critical-subsystems.md#resource-controller-effects-boundary) | `packages/d2b-controller-toolkit/src/` + `packages/d2b-core-controller/src/` | Controller and core-reconciliation engines are test-only and unwired from absent production store/watch dispatcher. |
 | [Unsafe-local provider, launcher, and persistent-shell helper](docs/contributing/critical-subsystems.md#unsafe-local-provider-launcher-and-persistent-shell-helper) | `nixos-modules/options-realms-workloads.nix` | `unsafe-local` is explicit and default-denied. |
 | [Manifest contract](docs/contributing/critical-subsystems.md#manifest-contract) | `docs/reference/manifest-schema.{md,json}` + `nixos-modules/manifest.nix` | Version-pinned via `manifestVersion`. |
@@ -396,20 +336,17 @@ is warning, not contract.
 - **Don't introduce new linter, formatter, or pre-commit
   hook unless explicitly requested.** `nix flake check`,
   `tests/static.sh`, and `shellcheck` (already wired into
-  `static.sh`) are baseline.
+  `static.sh`) are existing checks; use the one applicable to the changed
+  surface.
 - **Don't add new `nixpkgs.overlays` entry or change
   `nixpkgs.url` casually.** overlay surface is part of
   public ABI and overlay churn rebuilds world for
   every consumer.
 - **Don't leak internal process markers into shipped artifacts.**
-  Wave/phase/revision/follow-up/finding tags (`W3`, `W4-fu`, `P6`,
-  `D5/P2.3`, `( W1fu3 H20 )`) belong in planning artifacts, ADRs, this
-  file's process sections, and feature-branch commits - never in shipped
-  source comments, shipped docs prose, CLI help/error text, or any CHANGELOG
-  section, including `[Unreleased]`.
-  See [Changelog and commits](#changelog-and-commits).
-  functional `d2b.defaultSwitchReadiness.<wave>` option
-  surface is one deliberate exception.
+  Revision, follow-up, and finding tags belong in historical planning records
+  and feature-branch commits - never in shipped source comments, shipped docs
+  prose, CLI help/error text, or any CHANGELOG section, including
+  `[Unreleased]`. See [Changelog and commits](#changelog-and-commits).
 - **Don't spell dash with anything but ASCII hyphen `-`.** Not in
   source, comments, string literals, CLI help or error text, documentation
   prose, ADRs, specs, changelog entries, commit messages, or PR bodies.
@@ -426,22 +363,6 @@ is warning, not contract.
   rather than surviving review. When test genuinely needs one of them
   (parser tolerance case, gate's own patterns) spell it as escape
   such as `"\u{2014}"` or `$'\u2014'`, never as character.
-  One hazard is worth knowing before you paste text in: ADR-046
-  work-item tokenizer treats typographic dash as token separator but a
-  plain hyphen as id character, so id range that was spelled with a
-  typographic dash fuses into single grammatically valid but nonexistent
-  id when normalized. `spec-registry` fails closed on dangling
-  dependency rather than corrupting graph. Respell such range as an
-  enumeration instead of defeating check; see `Dependency/owner`
-  cell for `ADR046-network-005` in
-  `docs/specs/ADR-046-resources-network.md` for shape that survives
-  normalization.
-- Vendored Caveman prose is normalized to ASCII hyphens and receives no dash
-  exception. The scanner covers every file under
-  `third_party/caveman/v1.10.0/`. `UPSTREAM.json` pins the normalized blobs,
-  and `check-bindings.mjs` rejects a changed blob or extra vendor file. No
-  upstream runtime, script, external install, network access, or content
-  upload is permitted.
 - **Don't let host process hold realm credentials, or treat relay
   identity as local auth (ADR 0032).** Realm relay/session/provider
   credentials, remote node registries, and realm audit belong inside
@@ -481,7 +402,7 @@ is warning, not contract.
   leaf, and never mutate delegated subtree as uid 0 after privilege
   drop. host cgroup root is never chowned.
 - **Don't commit unredacted screenshot or visual artifact.** Before a
-  screenshot is committed or attached to PR or panel prompt, remove every
+  screenshot is committed or attached to a PR, remove every
   secret, credential, API key, and token; remove PII (real names, emails,
   employee or user ids); and remove sensitive output such as host paths,
   internal node names, and realm principals. Use generic placeholder
@@ -540,9 +461,8 @@ contract:
 
 Process and contributor docs:
 
-- [`docs/contributing/`](./docs/contributing/) - workflow, panel review,
-  changelog and commits, gates and lints, critical subsystems, architecture
-  conventions.
+- [`docs/contributing/`](./docs/contributing/) - workflow, changelog and
+  commits, gates and lints, critical subsystems, architecture conventions.
 - [`tests/AGENTS.md`](./tests/AGENTS.md) - binding operating manual for the
   test tree. [`tests/README.md`](./tests/README.md) is human quick-start.
 

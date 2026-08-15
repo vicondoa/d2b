@@ -19,12 +19,11 @@
 
 - The rustdoc and compiler caches used by the capability-seal tests are keyed
   on the toolchain. Reusing a tree produced by a different rustc version could
-  fail a render and, in the reverse direction, let a cached render shrink the
-  API inventory a guard compares against.
+  fail a render or leave stale capability-surface evidence.
 - The mint-surface guard discards the rendered documentation of packages whose
   library and binary targets share one output directory. Against a warm tree
   Cargo re-runs only the target it considers dirty and overwrites that
-  directory, dropping exactly the private items the guard inventories.
+  directory, dropping exactly the private items the guard checks.
 - Continuous integration caches the nix store, the guest-shell-runner cargo
   target directory, and the no-bash-ast-walker target directory. None of the
   three were cached, so every run rebuilt them from source.

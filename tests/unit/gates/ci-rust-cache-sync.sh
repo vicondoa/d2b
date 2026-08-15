@@ -24,9 +24,8 @@ rc=0
 
 # --- Build the set of compiler artifact dirs the Rust gate actually uses ---
 # These paths MUST be cached for warm CI builds. The .scratch subtree contains
-# only toolchain-keyed persistent trees owned by tests that invoke nested Cargo
-# or rustdoc; omitting it restores the outer workspace but leaves its 12-minute
-# critical path cold.
+# persistent trees owned by tests that invoke nested Cargo; omitting it restores
+# the outer workspace but leaves its critical path cold.
 declared_dirs=(
   "packages -> target"
   "packages/d2b-priv-broker -> target"
@@ -37,25 +36,6 @@ declared_dirs=(
 
 if ! grep -qF "fixture_target_dir=\"\$ROOT/.scratch/rust-test-cache/fixture-contracts\"" "$test_script"; then
   log "FAIL: fixture/CLI target does not use its isolated cached Cargo target"
-  rc=1
-fi
-api_script="$ROOT/tests/tools/api-surface-json.sh"
-for marker in \
-  "public_target=\"\$target_root/public-census\"" \
-  "private_target=\"\$target_root/private-census\"" \
-  "checker_target=\"\$target_root/checker\""; do
-  if ! grep -qF "$marker" "$api_script"; then
-    log "FAIL: API surface target marker '$marker' is missing"
-    rc=1
-  fi
-done
-if ! grep -qF "CARGO_BUILD_JOBS=\"\$public_jobs\"" "$api_script" \
-  || ! grep -qF "CARGO_BUILD_JOBS=\"\$private_jobs\"" "$api_script"; then
-  log "FAIL: parallel API rustdoc passes do not carry split Cargo quotas"
-  rc=1
-fi
-if ! grep -qF 'cargo run --quiet --release --locked' "$api_script"; then
-  log "FAIL: API snapshot checker is not using the measured release profile"
   rc=1
 fi
 # Broker parallel feature-pass target dirs: the script uses

@@ -2,20 +2,21 @@
 
 **Feature**: `001-adr046-d2b3-completion` | **Opened**: 2026-07-30
 
-Durable record of debt accumulated while implementing waves: stubs, unlanded
+Durable record of implementation debt: stubs, unlanded
 dependencies, semantics inferred where a specification was silent, code that
-exists but is unreachable, and gate coverage that is not yet enforcing.
+exists but is unreachable, and focused coverage that is not yet enforcing.
 
 ## What belongs here, and why it is separate
 
 This register is **not** the current lifecycle's shared finding ledger.
 [`deferred-findings.md`](./deferred-findings.md) is retained as historical compatibility
-data and receives no findings under Constitution 3.0. This register records debt created by *building*
-against a specification set that is not uniformly complete, which is a
-different thing with a different owner and a different closing condition.
+data and receives no findings under Constitution 3.0. This register records debt created by
+building against a specification set that is not uniformly complete. Every
+entry names the product owner or focused check that can close it.
 
-Every entry names the wave that must close it. An entry with no owning wave is
-an integrator decision, not a scheduling one, and is marked as such.
+Historical task identifiers, sequencing labels, manifests, and review terminology quoted
+below provide context for the source records. Current ownership and closure come from
+committed code, product contracts, and focused validation.
 
 The rule that produced most of this register is worth stating, because it is
 what made the debt visible rather than silent: an implementer who cannot
@@ -27,11 +28,10 @@ invent a wire contract, and that was the correct outcome each time.
 
 ---
 
-## 0. Wave 2 delivery claim, stated precisely
+## 0. Historical routing implementation state
 
-Wave 2 is **17 of 19 items complete, 2 partial**. Saying "all nineteen
-implemented" overstates it, and the difference matters to a reviewer deciding
-what to hold to a completion standard.
+The routing implementation record is **17 of 19 items complete, 2 partial**.
+The distinction remains important because the missing work is product behavior.
 
 - `ADR046-routing-014` is partial. The Provider registry, admission, lifecycle
   and forwarding are delivered; the eleven ProviderInstance trait objects and
@@ -42,57 +42,49 @@ what to hold to a completion standard.
   process are not.
 
 Both are blocked on the same missing thing: a v3 Provider-method DTO catalogue
-that exists in no crate. That catalogue is now owned: **Wave 3, inside
-`ADR046-provider-001`**, whose destination already names
+that exists in no crate. That catalogue belongs to `ADR046-provider-001`, whose
+destination names
 `packages/d2b-contracts/src/v3/provider.rs`, `packages/d2b-provider/src/lib.rs`
-and `packages/d2b-provider-toolkit/` - exactly where the catalogue belongs. It
-is scoped into that existing item rather than raised as a fifth work item,
-because a fifth item would contradict `ADR-046-implementation-graph.json`,
-whose `.waves[]` entry for W3 pins `workItemCount: 4`.
+and `packages/d2b-provider-toolkit/` - exactly where the catalogue belongs.
 
-**That ruling is confirmed as to ownership and corrected as to expectation.**
-It was made on the expectation that Wave 3 could deliver the catalogue.
-Wave 3 delivered part of it and stopped, correctly, at the point where
-continuing would have meant inventing a wire contract. The ownership is still
-right and the item is still the right home; the remainder is not scheduling
-debt but a **specification hole**, and it cannot be discharged by any wave
-until that hole is filled. What is delivered and what is not is stated exactly
-in section 10.1; discharging the remainder still closes the Destination
-caveats recorded against `ADR046-routing-014` and `ADR046-routing-015` below,
-and nothing else in this register does.
+The implementation delivered the catalogue only where the specification names
+methods. Continuing would have meant inventing a wire contract. The remainder
+is a **specification hole** and cannot be discharged until that hole is filled.
+What is delivered and what is not is stated exactly in section 10.1;
+discharging the remainder closes the destination caveats recorded against
+`ADR046-routing-014` and `ADR046-routing-015`, and nothing else in this
+register does.
 
-The Evidence rows for those two items in `docs/specs/ADR-046-zone-routing.md`
-are deliberately left alone: they record what Wave 2 actually delivered and are
-already panel-attested. This register is the forward-looking record.
+The evidence rows for those two items in
+`docs/specs/ADR-046-zone-routing.md` remain historical implementation evidence.
+This register records the remaining technical debt.
 
 ## 1. Blocked and unlanded dependencies
 
 These prevent a work item from being completed at all, or force it to ship a
-hole. Each must be closed by the wave named.
+hole. Each must be closed by the named product owner.
 
-| Item | Debt | Owning wave |
+| Item | Debt | Product owner |
 | --- | --- | --- |
-| `ADR046-routing-007` | CLOSED. The dependency declarations landed as integrator prep and the contract module landed first, on the reading that the recorded edge is inverted for the contract. | Closed in W2 |
-| `ADR046-routing-009` | Both landed, 009 first. The recorded edge remains wrong in the graph: it says 009 depends on 007, but 007 imports 009's contract. The manifest should be corrected as a separate amendment under the drift rule. | Amendment, not blocking |
-| `ADR046-routing-016` service | Still no handler for `zone-bootstrap` and `zone-enroll`, but the blocker moved: the session contract and enrollment machine now exist in the bus, so wiring the service to them is ordinary work rather than a missing contract. The four enrollment obligations are met in the bus session module, not in the service. **Not W3**: the destination is `packages/d2b-zone-routing/src/service.rs`, which no W3 work item owns. Every work item whose destination names `packages/d2b-zone-routing/` - `routing-002`, `routing-003`, `routing-006`, `routing-016` - is W2, so the artifacts name no later owning wave. **Ruled: W5, alongside `ADR046-store-004`.** See the ruling note below the table. | W5, `ADR046-store-004` |
+| `ADR046-routing-007` | CLOSED. The dependency declarations landed as preparation and the contract module landed first, on the reading that the recorded edge is inverted for the contract. | Closed in W2 |
+| `ADR046-routing-009` | Both landed, 009 first. The recorded edge remains wrong in the graph: it says 009 depends on 007, but 007 imports 009's contract. Resolve the recorded dependency against the owning contract and focused validation before relying on it for sequencing. | Not blocking |
+| `ADR046-routing-016` service | Still no handler for `zone-bootstrap` and `zone-enroll`, but the blocker moved: the session contract and enrollment machine now exist in the bus, so wiring the service to them is ordinary work rather than a missing contract. The four enrollment obligations are met in the bus session module, not in the service. **Not W3**: the destination is `packages/d2b-zone-routing/src/service.rs`, which no W3 work item owns. Every work item whose destination names `packages/d2b-zone-routing/` - `routing-002`, `routing-003`, `routing-006`, `routing-016` - is W2, so the artifacts name no later owning implementation phase. **Ruled: W5, alongside `ADR046-store-004`.** See the ruling note below the table. | W5, `ADR046-store-004` |
 | `ADR046-primitives-002` providers | `ProcessLaunchEffectPort` has no production adapter, so both process Providers are complete but unwired. The adapter is `ADR046-process-001`, destination `packages/d2b-provider-supervisor/`. | W4 |
-| `ADR046-routing-014` | `ProviderInstance`'s eleven trait objects and the whole `RpcProviderProxy` family are not delivered. Wave 3 delivered the method catalogue only for the methods the specification actually names, so the registry stays generic over the runtime's own opaque instance handle. The remainder is blocked on absent specification content, not on scheduling; see section 10.1. | W3 ownership stands, but blocked on a specification hole |
+| `ADR046-routing-014` | `ProviderInstance`'s eleven trait objects and the whole `RpcProviderProxy` family are not delivered. provider implementation delivered the method catalogue only for the methods the specification actually names, so the registry stays generic over the runtime's own opaque instance handle. The remainder is blocked on absent specification content, not on scheduling; see section 10.1. | W3 ownership stands, but blocked on a specification hole |
 | `ADR046-routing-015` | `GeneratedProviderServiceServer` ttrpc dispatch not implemented: no v3 Provider proto, no service-name freeze, no generated bindings exist, and none can be written without a frozen service name and field numbering. `ProviderAgentAdapter`, `register_exact_instances`, and `ProviderAgentProcess` all depend on routing-014 surfaces that are themselves incomplete. | W3 ownership stands, but blocked on a specification hole |
 
-### Ruling: the bootstrap and enroll handler is W5 work
+### Ruling: the bootstrap and enroll handler belongs with durable enrollment
 
-The `ADR046-routing-016` row above had no natural owner, because every work
-item naming `packages/d2b-zone-routing/` sits in the sealed W2. It is assigned
-to **W5, alongside `ADR046-store-004`**, on a dependency rather than on a
-file-ownership argument.
+The `ADR046-routing-016` row above belongs with `ADR046-store-004` on a
+dependency rather than on a file-ownership argument.
 
-Two sibling rows in the wave-close table below - "Sealed enrollment record does
+Two sibling rows in the historical close table below - "Sealed enrollment record does
 not bind the child uid" and "No durable persistence for enrollment" - were
 already resolved to W5 `ADR046-store-004`, whose destination is
 `packages/d2b-resource-store-redb/src/{lib,actor,transaction}.rs`. A
 `zone-enroll` handler cannot be completed without the durable enrollment
 persistence those two rows describe, so scheduling the handler in any earlier
-wave would schedule work that cannot finish.
+implementation phase would schedule work that cannot finish.
 
 That dependency was verified rather than assumed.
 `packages/d2b-bus/src/session/enrollment.rs` states in its own module
@@ -119,7 +111,7 @@ Each of these is a defensible reading that a reviewer should confirm or
 correct. They are recorded because a silent inference is indistinguishable
 from a specified rule six months later.
 
-| Where | Inference | Owning wave |
+| Where | Inference | Product owner |
 | --- | --- | --- |
 | `v3/volume.rs` | `volumeAttachmentDefaults` entry shape is undefined everywhere in the spec set; every occurrence is an empty list. Typed as an opaque object rather than invented as `{volumeRef, view, access}`. This is the one non-strict spot in the primitive surface. | W5 |
 | `v3/volume.rs` | `SensitivityClass` admitted as `public | private | secret`; only `private` is attested by spec text. | W5 |
@@ -128,8 +120,8 @@ from a specified rule six months later.
 | `v3/credential.rs` | `ExpirySpec.hardDeadlineMs` additionally capped at the maximum lease lifetime, since a deadline beyond the longest possible lease is unreachable. Not a stated rule. | W5 |
 | `v3/zone_routing.rs` | The v3 capability catalogue is not enumerated anywhere. Modelled as a bounded token set with subset ordering rather than a frozen enum, because freezing it would have invented a wire contract four slices consume. | W2, before the routing contract is treated as frozen |
 | `v3/zone_routing.rs` | Zone label bound narrowed from the baseline 128 bytes to 63, on the reading that a Zone label is a Zone resource name. Deliberate narrowing. | W2 |
-| `v3/zone_routing.rs` | The private allocated-capability field shape is an interpretation: modelled as non-serialized state attachable only through a narrowing constructor. | W2 panel |
-| `zone_routing.rs` resolver | The local root may not absorb an unmatched target. Keeping the baseline's ancestor-coverage rule verbatim would make the resolver unconditionally permissive, since the local root is a suffix of every in-scope path. Non-root ancestors still cover descendants. | W2 panel |
+| `v3/zone_routing.rs` | The private allocated-capability field shape is an interpretation: modelled as non-serialized state attachable only through a narrowing constructor. | focused contract review |
+| `zone_routing.rs` resolver | The local root may not absorb an unmatched target. Keeping the baseline's ancestor-coverage rule verbatim would make the resolver unconditionally permissive, since the local root is a suffix of every in-scope path. Non-root ancestors still cover descendants. | focused contract review |
 | `zone_links.rs` | Three refusal labels are not spelled in any spec and were named locally: `bootstrap-psk-invalidated`, `zone-link-not-ready`, `reconnect-budget-exhausted`. Need a register decision if they are to be wire-stable. | W2 |
 | `zone-resources-json.nix` | Canonical bytes come from the Nix JSON builtin, which coincides with the canonical form for the ASCII-constrained data here. A full canonicalization implementation is absent. | W5 |
 
@@ -155,28 +147,25 @@ also invisible until wired, so it must not be mistaken for working behaviour.
 | Debt | Detail | Owner |
 | --- | --- | --- |
 | `flake.nix` zone-schema-drift check | The work item asks for `checks.<system>.zone-schema-drift` plus a matrix pin refresh. Not added. | W2 |
-| `public_mint_surface` runtime | Renders rustdoc for every workspace member sequentially into isolated target dirs; roughly 30 minutes and growing with every crate added. Its earlier characterization here - that the render phase is parallelizable and the dependency ordering is only needed for the analysis phase - is corrected below; the ordering is needed by the render itself. | **Ruled: W3.** See section 9 |
 | Unknown-spec-field rejection | Cannot be enforced while the shared `spec` type injects execution-policy defaults into every resource. Needs the generated per-type submodule to replace the freeform type, which requires editing a file the generator slice does not own. `nix-unit: zone-link-closed-spec` cannot pass until then. | W2 |
-| Two engine refusal branches unreachable from outside | The contract constructors already reject the shapes that would trip them, so they guard only the deserialization path. Exercising them needs a deserialization-based vector, a different surface than the vector suite owns. | W2 panel to rule |
+| Two engine refusal branches unreachable from outside | The contract constructors already reject the shapes that would trip them, so they guard only the deserialization path. Exercising them needs a deserialization-based vector, a different surface than the vector suite owns. | focused contract review to rule |
 | Enrollment validation obligations | Four obligations unmet, blocked on the session contract. | W2, with routing-007/009 |
 | `UNIMPLEMENTED_SCAFFOLD` markers | Still present in several crates, deliberately, because the capability gate fails closed on a crate advertising no public item. Each must be deleted by the slice that fills its crate. | Per slice |
 
 
-### Discharged during Wave 2
+### Discharged during routing implementation
 
 Recorded as closed rather than deleted, so a reader can tell the difference
 between debt that was paid and debt that was never real.
 
-- The capability and public-API snapshots were regenerated and reviewed, and
-  the widening was approved with a stated reason.
-- The drift gate now runs both Zone generators and compares
+- The drift check now runs both Zone generators and compares
   `nixos-modules/generated/`, so the header those artifacts carry promising
   byte-for-byte comparison is now true rather than aspirational.
 
 ## 5. Specification drift found while implementing
 
-Recorded per the standing rule that drift is raised as a separate amendment
-and never corrected inside an implementation wave.
+Recorded so source contracts and focused tests can preserve the existing-code
+decision where documentation is stale.
 
 - **`transportProviderRef` pattern conflict.** The normative zone-control
   schema requires a `transport-` prefixed Provider reference; the zone-routing
@@ -193,32 +182,12 @@ and never corrected inside an implementation wave.
   fields. Not emitted.
 - **Frozen Provider method taxonomy** has no v3 re-freeze, so the capability
   set is a bounded token set rather than the specified taxonomy.
-- **W3 destination set disagrees with the section 3.2 wave table.**
-  `docs/specs/ADR-046-validation-and-delivery.md` section 3.2 gives W3's
-  destinations as only `packages/d2b-provider/`, `packages/d2b-provider-toolkit/`
-  and a `packages/d2b-provider-<base>-<implementation>/` skeleton generator. It
-  names neither `packages/d2b-contracts/src/v3/provider.rs` (destination of
-  `ADR046-provider-001`), nor
-  `packages/d2b-contracts/src/v3/semantic_services/` (destination of
-  `ADR046-provider-004`), nor `packages/d2b-provider-system-core/` (destination
-  of `ADR046-provider-003`). The same table lists
-  `packages/d2b-provider-system-{core,systemd,minijail}/` in its **W5** row,
-  while `ADR046-provider-003` is a W3 item in
-  `ADR-046-implementation-graph.json`. `ADR-046-work-items.json` is canon:
-  FR-046 makes the generated manifests authoritative over prose on wave
-  assignment, destination paths, and work-item identity, and `tasks.md` states
-  that each task is a pointer to a manifest entry and that those manifest
-  fields are the task. Implementers follow the manifest; the section 3.2 W3 and
-  W5 rows are treated as stale prose for those entries only. Not corrected in
-  place, per FR-046 - `ADR-046-validation-and-delivery.md` is untouched, and
-  this is the same shape as
-  [`amendment-w2-destination-drift.md`](./amendment-w2-destination-drift.md),
-  which should carry the prose change in its own amendment with its own
-  validation and panel round.
+- **Provider implementation destinations differ in historical prose.**
+  The committed Provider contracts, toolkit, semantic-service, and system-core
+  paths are the implementation boundaries.
 - **Zone and Volume assertion messages rewritten for FR-017 actionability.**
-  A panel finding established that the assertion messages pinned verbatim by
-  the specification were not FR-017 compliant: each named the violated rule
-  but no concrete operator action. The shipped code in
+  The assertion messages named the violated rule but no concrete operator
+  action. The shipped code in
   `nixos-modules/assertions.nix` and `nixos-modules/resources-volume.nix` was
   rewritten so every message names the option path to edit and the edit to
   make. Code wins, so the pinned strings in the specification validation
@@ -240,43 +209,41 @@ and never corrected inside an implementation wave.
   text, such as the Zone self-resource line in
   `docs/specs/ADR-046-resources-zone-control.md`, was left unchanged.
 
-## 6. Corrections to this program's own process
+## 6. Historical record-handling note
 
-- **The `FR-047` false alarm.** Four independent implementers reported that
-  `FR-047` does not exist. It does - in this feature's `spec.md`. They searched
-  `docs/specs/` because the dispatch prompt cited the decision register and the
-  requirement in the same breath. The requirement is real and was met; the
-  prompt was wrong. Future dispatch prompts must cite a requirement by its
-  file, not only by its number.
+`FR-047` is defined in this feature's `spec.md` and remains the architectural
+consistency requirement. Historical dispatch, registry, and review mechanics
+are not implementation authority; current changes follow the owning contract
+and focused evidence.
 
 ---
 
-## Added at Wave 2 close
+## Added after the routing implementation
 
-New debt discovered while completing the wave's last five items.
+New debt discovered while completing the implementation phase's last five items.
 
-| Debt | Detail | Owning wave |
+| Debt | Detail | Product owner |
 | --- | --- | --- |
 | Appended Zone tags cannot reach the wire | The session contract appends six Zone members at new tags, but the canonical handshake offer encoder types its fields with the un-extended enums and lives in a file no W2 slice owned. Widening it in place would have invalidated the committed golden vectors. Enrolled links and bootstrap use preserved tags, so ZoneLink is unaffected; carrying an appended tag needs an owned decision on the offer encoding. **Not W3**: the encoder is `packages/d2b-session/src/handshake.rs`, and no W3 work item names `packages/d2b-session/`. `ADR046-exec-018` (W5) owns the v3 session wire types and re-types `EndpointPolicy` - `encode_offer`'s sole input - onto v3 `ZoneId`/`ProviderId`, and `ADR046-reuse-001` (W5) owns the v3 contract extension to that crate. | W5, `ADR046-exec-018` |
-| Session tag values are an inference | No specification fixes the numeric tags for the six appended members, nor the ZoneLink service wire string. The scheme chosen is append-only, next unused tag, never renumber, with two tags permanently reserved rather than reused. These are wire-visible and need panel confirmation before anything depends on them. | W2 panel |
-| Subject-digest prologue field is a choice | The specs name no field for the subject-context digest. It is folded into the existing channel binding, which is already inside the canonical offer and therefore inside the handshake prologue, so no wire change was needed. Worth confirming. | W2 panel |
+| Session tag values are an inference | No specification fixes the numeric tags for the six appended members, nor the ZoneLink service wire string. The scheme chosen is append-only, next unused tag, never renumber, with two tags permanently reserved rather than reused. These are wire-visible and need focused contract confirmation before anything depends on them. | session contract owner |
+| Subject-digest prologue field is a choice | The specs name no field for the subject-context digest. It is folded into the existing channel binding, which is already inside the canonical offer and therefore inside the handshake prologue, so no wire change was needed. Worth confirming in focused contract tests. | bus contract owner |
 | Sealed enrollment record does not bind the child uid | The spec says the record binds the child static key pin to the child Zone uid. The session module holds the fingerprint and an opaque allocator-binding digest; the uid binding belongs to the durable store transaction owned by the ZoneLink controller. **Not W3**: no W3 work item owns `packages/d2b-session/` or `packages/d2b-core-controller/`. The transaction is `ADR046-store-004`, destination `packages/d2b-resource-store-redb/src/transaction.rs`, which the graph places in W5; the controller-side write lands in `zone_links.rs` behind it. | W5, `ADR046-store-004` |
 | No durable persistence for enrollment | Recovery takes the persisted facts as arguments. The store transaction that seals or invalidates a record is the controller's and is not implemented. **Not W3**: same determination as the row above - the durable store backend and its transaction module are `ADR046-store-004` in W5, and no W3 destination is a store or controller path. | W5, `ADR046-store-004` |
-| `component_session` runtime tests not duplicated | The bus re-exports the session runtime rather than forking it, so its 2,121 lines of tests were deliberately not copied; they run in the owning crate. The ported golden vectors are the port evidence. A scope judgement worth a reviewer's confirmation. | W2 panel |
-| Principal digest has no frozen domain tag | The cross-Zone idempotency key needs a subject digest, but the frozen digest-tag list has no principal or subject tag, so the digest is currently undomained. If a tag is later frozen, the computation changes. **Not W3**: the digest site is `packages/d2b-bus/src/zone_route.rs` (`ADR046-routing-005`, W2) and the frozen tag list is decision D101, landed by `ADR046-object-001` in W0. Both waves are sealed, and no W3 destination is either file. **Ruled: amendment-shaped, batched with the row below.** | Amendment, not wave work: [`amendment-frozen-cross-zone-contracts.md`](./amendment-frozen-cross-zone-contracts.md), before W6 |
-| No closed reason for a multi-Zone batch | The routing reason enum has no variant for a batch spanning Zones, so a structural error is returned rather than misusing an unrelated routing reason. **Not W3**: `ZoneRouteFailClosedReason` lives in `packages/d2b-contracts/src/v3/zone_routing.rs`, whose sole owning item is `ADR046-routing-001` in the sealed W2, and the refusal site `ZoneRouteError` is in `packages/d2b-bus/src/zone_route.rs` (`ADR046-routing-005`, W2). No post-W2 item names either file. **Ruled: amendment-shaped, batched with the row above.** | Amendment, not wave work: [`amendment-frozen-cross-zone-contracts.md`](./amendment-frozen-cross-zone-contracts.md), before W6 |
-| Unix session tests delegated rather than ported | The manifest asked to port the unix session tests verbatim, but the integrator wired the owning crate as a dependency instead, so copying them would fork the audited substrate. Zone-level semantics were ported instead. Needs a ruling: accept delegation, or add the syscall dev-dependency and port literally. | W2 panel |
+| `component_session` runtime tests not duplicated | The bus re-exports the session runtime rather than forking it, so its 2,121 lines of tests were deliberately not copied; they run in the owning crate. The ported golden vectors are the port evidence. A scope judgement worth focused test confirmation. | session contract owner |
+| Principal digest has no frozen domain tag | The cross-Zone idempotency key needs a subject digest, but the frozen digest-tag list has no principal or subject tag, so the digest is currently undomained. If a tag is later frozen, the computation changes. The digest site is `packages/d2b-bus/src/zone_route.rs` and the frozen tag list is decision D101. The contract gap is recorded in [`amendment-frozen-cross-zone-contracts.md`](./amendment-frozen-cross-zone-contracts.md). | Cross-Zone contract owner, before transport enablement |
+| No closed reason for a multi-Zone batch | The routing reason enum has no variant for a batch spanning Zones, so a structural error is returned rather than misusing an unrelated routing reason. `ZoneRouteFailClosedReason` lives in `packages/d2b-contracts/src/v3/zone_routing.rs`, and the refusal site is in `packages/d2b-bus/src/zone_route.rs`. The contract gap is recorded in [`amendment-frozen-cross-zone-contracts.md`](./amendment-frozen-cross-zone-contracts.md). | Cross-Zone contract owner, before transport enablement |
+| Unix session tests delegated rather than ported | The historical plan asked to port the unix session tests verbatim, but the owning crate is consumed as a dependency instead, so copying them would fork the audited substrate. Zone-level semantics were ported instead. If coverage is insufficient, add the syscall dev-dependency and port the missing cases. | session contract owner |
 | Listener portal transport variant | One spec describes a pre-bound socket handed over a portal call while another describes an inherited connected socket. Only the connected form is implemented; the portal wire contract belongs to a transport Provider crate and is unspecified for the bus. | W6 |
 
-## Wave 3 provider-crate layout and naming policy: scope and exemptions
+## Provider-crate layout and naming policy: scope and exemptions
 
-The Wave 3 crate-layout and naming policy - the mandatory `src/`, `tests/`,
+The crate-layout and naming policy - the mandatory `src/`, `tests/`,
 `integration/`, `README.md` shape and the naming rule that `ADR046-provider-002`
 carries - scopes to crates matching `d2b-provider-<base>-<implementation>`.
 
 Two existing crates are **exempt**:
 
-| Crate | Reason for exemption | Owner of retiring the exemption |
+| Crate | Reason for exemption | Product owner for retiring the exemption |
 | --- | --- | --- |
 | `packages/d2b-provider-aca` | Pre-ADR-046 crate. Its name carries a single segment after `d2b-provider-`, so it does not match `<base>-<implementation>` at all. `ADR-046-current-code-migration-map.md` dispositions `AcaWorkloadProvider` and its `GuestControlEndpointProvider` impl as REPLACE, superseded by `Provider/runtime-azure-container-apps`. Forcing it to conform in W3 would reshape a crate scheduled for deletion. | W6, `ADR046-aca-001`, whose removal proof is "`packages/d2b-provider-aca/` removed only after conformance suite green" |
 | `packages/d2b-provider-relay` | Pre-ADR-046 crate, same single-segment naming mismatch. The migration map dispositions `AzureRelayTransportProvider` as REPLACE, superseded by `Provider/transport-azure-relay`. | W6, `ADR046-aca-004`, whose removal proof is "`packages/d2b-provider-relay/` removed after `transport-azure-relay` Provider conformance". `ADR046-transport-relay-001` (also W6) retains the relay plumbing until ACA display migration completes, so the exemption cannot retire before both land |
@@ -289,30 +256,27 @@ Every other `packages/d2b-provider-*` crate in the tree already matches the
 `ADR046-provider-001`, not a Provider crate, and is out of the naming rule's
 scope by construction.
 
-## 7. Known flakes observed during Wave 2
+## 7. Known flakes observed during routing implementation
 
 Recorded so a later run does not rediscover them as regressions.
 
 | Test | Observation | Assessment |
 | --- | --- | --- |
-| `d2b-unsafe-local-helper::shell_supervisor real_supervisor_preserves_pty_across_reconnect_and_kills_exact_scope` | Failed once with "supervisor did not exit" during a full parallel run, passed 3 of 3 in isolation, and passed on the next full run of all 4499 tests. | Environment-sensitive, not a wave regression. The wave never touched that crate, and the test spawns a real supervisor in a transient scope and waits for it to exit, which is timing-sensitive under heavy parallel load. Worth a bounded wait rather than an unbounded one if it recurs. |
+| `d2b-unsafe-local-helper::shell_supervisor real_supervisor_preserves_pty_across_reconnect_and_kills_exact_scope` | Failed once with "supervisor did not exit" during a full parallel run, passed 3 of 3 in isolation, and passed on the next full run of all 4499 tests. | Environment-sensitive, not a code regression. The test spawns a real supervisor in a transient scope and waits for it to exit, which is timing-sensitive under heavy parallel load. Worth a bounded wait rather than an unbounded one if it recurs. |
 | Capability seal fixtures | Two seal fixtures reported a downstream compile failure that read as a trust-boundary regression. The real cause was a stale fixture lock after the bus gained dependencies. | Fixed. Worth knowing that this failure mode is indistinguishable from a genuine seal break in its message, so a stale lock should be ruled out first. |
 | Compile-fail tests under a caching compiler wrapper | A capability seal failed once with a wrapper client exiting nonzero under concurrent cargo invocations. | Mitigated earlier in the program by clearing every wrapper spelling for those spawned compilers. The original failure was never reproduced on demand, so that remains a reasoned mitigation rather than a demonstrated fix. |
 
-## 8. Validation obligations not met by Wave 2
+## 8. Validation obligations not yet met
 
-The panel found these silent rather than recorded, which is the defect: an
-unmet obligation is acceptable when it is written down and a scheduling
-problem when it is not. Each names the work item that owes it.
+These obligations must be explicit rather than inferred: an unmet obligation is
+acceptable when it is written down, but not when a product surface ships
+without the corresponding evidence. Each names the work item that owes it.
 
-This section was first written by transcribing the three items a reviewer
-happened to name, which is not an audit and produced exactly the gap the
-panel then caught. It has since been rebuilt by reading the `validation`
-field of every one of the wave's nineteen work items against the tests that
-actually exist. The three Zone configuration entries below are unchanged;
-what follows them is the remainder of that audit.
+This section was rebuilt by reading the `validation` field of the affected work
+items against the tests that actually exist. The three Zone configuration
+entries below are unchanged; what follows them is the remainder of that audit.
 
-The three Zone configuration items carry obligations at test layers this wave
+The three Zone configuration items carry obligations at test layers this implementation phase
 did not reach. The Rust behaviour they describe is covered by in-crate tests;
 what is missing is the declarative and integration layer that proves the same
 behaviour through the module system and against a booted host.
@@ -337,7 +301,7 @@ are imported and a production store exists, both of which belong to later
 waves. Writing them now would produce checks that cannot execute.
 
 Larger: the flake checks are the layer that would catch a generator emitting a
-non-deterministic bundle, and nothing else in the wave covers that. The
+non-deterministic bundle, and nothing else in the implementation phase covers that. The
 generators are deterministic by construction and the drift gate now compares
 their output, but neither proves determinism across two independent
 evaluations of the same input.
@@ -350,7 +314,7 @@ the honest reason it is not met and the thing that would discharge it.
 | Work item | Obligation | Why it is not met | What would discharge it |
 | --- | --- | --- | --- |
 | `ADR046-primitives-002` | Host/Guest/user integration, alongside the shared conformance suite | Both Provider conformance suites run only against `ScriptedEffectPort`, a hermetic mock. A scripted collaborator proves the Provider's own decision logic and proves nothing about a real Host, Guest, or user domain, and the crates are imported by no production caller. | The `ProcessLaunchEffectPort` production adapter, then the same conformance obligations re-run against it across the three domains. The adapter is `ADR046-process-001` in W4. |
-| `ADR046-primitives-003` | virtiofs host/guest mount tests | `export_lifecycle.rs` drives `VirtiofsExportController` through a `ScriptedPort`, so "the host serves and the guest mounts" is asserted as a controller state transition, not as a mount. Nothing in the wave mounts anything. | A host-integration check that exports a Volume and mounts it in a booted guest. Blocked on the same absent effect adapter. |
+| `ADR046-primitives-003` | virtiofs host/guest mount tests | `export_lifecycle.rs` drives `VirtiofsExportController` through a `ScriptedPort`, so "the host serves and the guest mounts" is asserted as a controller state transition, not as a mount. Nothing in the implementation phase mounts anything. | A host-integration check that exports a Volume and mounts it in a booted guest. Blocked on the same absent effect adapter. |
 | `ADR046-primitives-003` | ACL, no-follow, and marker tests | `packages/d2b-provider-volume-local/integration/README.md` names the five fixtures that need a real filesystem boundary - Host-path access, the `st_dev` store-view boundary, marker durability across restart, quota enforcement, and the TPM marker - and states plainly that none is wired, because without the adapter they would assert against a stub. The hermetic suite proves these at the policy layer only. | Wiring those fixtures behind the landed effect adapter. |
 | `ADR046-primitives-003` | Eval cases for the Volume assertions in `resources-volume.nix` | The module is imported by nothing (section 3), and `tests/unit/nix/cases/` holds no Volume case, so the assertions neither run in a configuration nor in the gate. | An import from `index.nix` or `default.nix`, then eval cases plus `make nix-unit-pin`. Both owned by later slices. |
 | `ADR046-routing-001` | Golden advertisement, path, and failure vectors **shared by Rust and Nix** | The Rust half is met: the vectors are pinned in `v3/zone_routing.rs` and render canonical bytes. The Nix half does not exist, because no Nix code consumes a routing vector and no Zone eval case is committed. A vector that only one side reads cannot detect the two sides diverging, which is the entire point of sharing it. | A Nix-side consumer of the same vector bytes, landing with the `ADR046-routing-011` eval cases. |
@@ -379,7 +343,7 @@ obligation is named here so it is not lost when that row closes.
 Two port obligations - `ADR046-routing-007`'s `component_session.rs` tests
 and `ADR046-routing-008`'s `unix_session.rs` tests - are unmet by delegation
 rather than by omission, and are already recorded with their reasoning in
-the wave-close table above. They are not repeated here.
+the implementation phase-close table above. They are not repeated here.
 
 The remaining ten items were audited and their obligations are discharged:
 `primitives-001` (schema vectors across the nine v3 primitive modules, and
@@ -400,90 +364,54 @@ allocator FD handoff and its no-socket-activation cell; `routing-009`
 `routing-012`'s two drift obligations, which the drift gate now runs;
 and `routing-016` other than bootstrap and enroll.
 
-## 9. What implementation debt Wave 3 takes on, and what it does not
+## 9. Provider implementation debt and scope
 
-Recorded before the wave's slices open, so its scope is settled rather than
-argued at review. Three items are in scope and one named group is explicitly
-not.
+Two items are in scope and one named group is explicitly not.
 
 ### In scope
 
-**1. The v3 Provider-method DTO catalogue.** Already ruled as owned by
+**1. The v3 Provider-method DTO catalogue.** Owned by
 `ADR046-provider-001` and stated in section 0. Discharging it closes the
 Destination caveats recorded against `ADR046-routing-014` and
 `ADR046-routing-015` in section 1, which are the two partial items in the
-Wave 2 delivery claim. Nothing else in the register turns those two rows from
+routing implementation delivery claim. Nothing else in the register turns those two rows from
 partial to complete.
 
-**2. The `public_mint_surface` gate runtime.** Wave 3 pays this rather than
-inheriting it, because Wave 3 is the wave that makes it worse. The gate's cost
-scales with workspace member count, and Wave 3 adds at least
-`packages/d2b-provider-system-core/` (destination of `ADR046-provider-003`,
-absent from `packages/Cargo.toml` today) and possibly several more through
-`ADR046-provider-002`'s skeleton generator, which emits one
-`packages/d2b-provider-<base>-<implementation>/` crate per Provider. A wave
-that adds crates to a per-crate-linear gate is the wave that should pay for the
-gate's shape.
-
-The register's earlier characterization was verified against
-`packages/d2b-bus/tests/public_mint_surface.rs` and is **partly wrong**, which
-matters because the wrong half was the argument that the fix is cheap:
-
-- Confirmed: `render_workspace_docs` loops over `dependency_order(packages)`
-  and runs one `cargo doc --no-deps -p <package>` per workspace member, in
-  sequence, into a per-crate isolated render directory.
-- Corrected: the dependency ordering is **not** needed only by the analysis
-  phase. Before rendering a package, the loop calls
-  `plant_dependency_doc_link` for every already-rendered crate
-  (`external_docs.iter().chain(docs.iter())`), symlinking those render roots
-  into the package's own doc root. A render therefore consumes the output of
-  the renders before it, and a flat parallel render would not have them.
-- Consequence for the fix: a render/analyze split is **not** available in the
-  form the register claimed. What is genuinely available is (a) hoisting the
-  pure source scans - `hidden_public_api` and
-  `source_capability_inventory_with_externals` - out of the render loop, since
-  neither reads rendered output, and (b) parallelising the render *within* each
-  level of the dependency order rather than across the whole workspace. Both
-  are real wins; neither is the flat parallelisation the old wording implied.
-  A Wave 3 slice must scope to the corrected shape.
-
-**3. A build-level determinism flake check for Wave 3's own generated Nix
+**2. A build-level determinism check for the generated Nix
 catalog.** Section 8 records that the flake-check layer - proving a generator
 emits identical output across two independent evaluations - is the one thing
-neither construction-time tests nor the drift gate cover. The drift gate
+neither construction-time tests nor the drift check cover. The drift gate
 compares a generator's output against the committed tree, which catches a
 generator that changed; it does not catch a generator that emits different
-bytes on two runs of the same input. Wave 3 ships a new generator
+bytes on two runs of the same input. The implementation ships a new generator
 (`ADR046-provider-002`'s Provider package and catalog emitter), so it must not
-repeat the gap it can see in the wave before it.
+repeat the gap it can see in the implementation phase before it.
 
 ### Not in scope
 
-**4. The missing nix-unit eval cases and host-integration checks recorded
+**3. The missing nix-unit eval cases and host-integration checks recorded
 against `ADR046-routing-011`, `ADR046-routing-012`, `ADR046-routing-013` and
 `ADR046-primitives-003`.** These stay where section 8 puts them.
 
 Two reasons, and the first is sufficient on its own. Every one of those
-obligations is owed by a work item in the sealed Wave 2 and already carries a
-recorded owner; transcribing them into Wave 3 would give the same obligation
-two wave attributions and make the wave that discharges it ambiguous, for no
-gain in when it actually lands. Second, several cannot execute yet regardless
+obligations already carries a recorded owner; duplicating them here would give
+the same obligation two owners. Second, several cannot execute yet regardless
 of who owns them: section 3 records that `resources-volume.nix` and
 `options-zones.nix` are imported by no module, and section 8 records that the
 host-integration obligations need both those imports and a production store,
-all owned by later waves. Writing them in Wave 3 would produce checks that do
+all owned by later waves. Writing them in provider implementation would produce checks that do
 not run.
 
-What Wave 3 does owe them is the pattern. Item 3 above establishes the
-build-level determinism flake check on Wave 3's own generator; the
-`ADR046-routing-012` determinism obligations follow that shape when their wave
-lands, rather than each wave re-deciding what a determinism check looks like.
+The implementation does owe them the pattern. Item 3 above establishes the
+build-level determinism check on the generator; the
+`ADR046-routing-012` determinism obligations follow that shape when their implementation phase
+lands, rather than each implementation phase re-deciding what a determinism check looks like.
 
 ---
 
-## 10. Added at Wave 3 close
+## 10. Added after Provider implementation
 
-Debt reported by the wave's three slices, each verified against the tree
+Debt reported by the implementation slices, each verified against the tree
 before it was recorded rather than transcribed from the slice's own account.
 Where verification disagreed with a slice, the tree is recorded and the
 disagreement is stated.
@@ -496,31 +424,31 @@ place where shipped code and written specification disagree and code was kept.
 
 ### 10.1 Unmet obligations
 
-| Debt | Detail | Owning wave |
+| Debt | Detail | Product owner |
 | --- | --- | --- |
-| v3 Provider-method DTO catalogue, remainder | Partly delivered, and the rest is blocked on specification content that does not exist. Verified in `packages/d2b-contracts/src/v3/provider.rs`: method names exist for **one** of the eleven Provider families - the Transport triple `openTransport`/`closeTransport`/`observeTransport` and the controller currency triple `assessUpdate`/`planUpgrade`/`executeUpgrade` - and nothing is named for display, clipboard, notification, shell-terminal, credential, device, volume or network. **No request or response payload is written anywhere for any method**, including the six that are named: `openTransport` is described as returning an opaque handle and observations whose shape appears in no document. There is no proto, no frozen service name and no field numbering, which is exactly what `ADR046-routing-015` needs to freeze. Consequence, confirmed in the tree: `packages/d2b-provider/src/identity.rs` and `src/lib.rs` name the `ProviderInstance` sum type and the `RpcProviderProxy` payload only in prose, no such type exists, and the registry stays generic over the runtime's own opaque instance handle. | `ADR046-provider-001` retains ownership. **What would unblock it**: a specification amendment that (a) names the methods of the remaining ten families, (b) writes the request and response payload for every method including the six already named, and (c) freezes a service name and field numbering. Until that lands, no wave can discharge it, and scheduling it into a later wave would only move the same hole |
-| Catalog / Provider-manifest parity test | **DISCHARGED in `e15f88cc`, after this row was written.** The row's finding stands as history: the offline Nix catalog (`nixos-modules/generated/provider-catalog-shape.nix`, 25 fields) and the `ProviderManifest` DTO (`packages/d2b-contracts/src/v3/provider.rs`) described the same Provider facts in two places with nothing comparing them, and the packaging slice's deferral to "whichever lands second" was void because both landed inside Wave 3, in `56196815` and `753e1e63`. What discharges it: `the_catalog_shape_and_the_provider_contract_describe_the_same_fields` in `packages/xtask/src/provider_packaging.rs`, which compares the generated catalog's flattened field set against the fields the contract structs declare. `xtask` is a member of `packages/Cargo.toml`, so the test runs enforcing under `make test-rust`. The divergences it found are not resolved by its existence - they are pinned as exact data in the test and read out in section 12.4, so resolving any of them fails the test until the register entry is struck in the same change | Closed in W3, `ADR046-provider-002` |
-| Two conformance cells duplicated per Provider crate | `packages/d2b-provider-system-{systemd,minijail}/tests/execution_parents.rs` are near-identical files, differing only in the provider type and one test name. Two cells belong in the shared suite: execution-parent neutrality and the disagreeing wait owner. The slice named them `assert_execution_parent_is_neutral` and `assert_a_disagreeing_wait_owner_quarantines`; **those are proposed suite-helper names, not names in the tree** - the cells are currently spelled `a_non_host_execution_parent_yields_the_same_status_shape` and `a_candidate_whose_wait_owner_disagrees_is_quarantined` in both crates. The suite is `packages/d2b-process-conformance/src/suite.rs`, which no Wave 3 slice owned | The wave that next owns `packages/d2b-process-conformance/` |
+| v3 Provider-method DTO catalogue, remainder | Partly delivered, and the rest is blocked on specification content that does not exist. Verified in `packages/d2b-contracts/src/v3/provider.rs`: method names exist for **one** of the eleven Provider families - the Transport triple `openTransport`/`closeTransport`/`observeTransport` and the controller currency triple `assessUpdate`/`planUpgrade`/`executeUpgrade` - and nothing is named for display, clipboard, notification, shell-terminal, credential, device, volume or network. **No request or response payload is written anywhere for any method**, including the six that are named: `openTransport` is described as returning an opaque handle and observations whose shape appears in no document. There is no proto, no frozen service name and no field numbering, which is exactly what `ADR046-routing-015` needs to freeze. Consequence, confirmed in the tree: `packages/d2b-provider/src/identity.rs` and `src/lib.rs` name the `ProviderInstance` sum type and the `RpcProviderProxy` payload only in prose, no such type exists, and the registry stays generic over the runtime's own opaque instance handle. | `ADR046-provider-001` retains ownership. **What would unblock it**: a specification amendment that (a) names the methods of the remaining ten families, (b) writes the request and response payload for every method including the six already named, and (c) freezes a service name and field numbering. Until that lands, no implementation phase can discharge it, and scheduling it into a later implementation phase would only move the same hole |
+| Catalog / Provider-manifest parity test | **DISCHARGED in `e15f88cc`, after this row was written.** The row's finding stands as history: the offline Nix catalog (`nixos-modules/generated/provider-catalog-shape.nix`, 25 fields) and the `ProviderManifest` DTO (`packages/d2b-contracts/src/v3/provider.rs`) described the same Provider facts in two places with nothing comparing them, and the packaging slice's deferral to "whichever lands second" was void because both landed inside provider implementation, in `56196815` and `753e1e63`. What discharges it: `the_catalog_shape_and_the_provider_contract_describe_the_same_fields` in `packages/xtask/src/provider_packaging.rs`, which compares the generated catalog's flattened field set against the fields the contract structs declare. `xtask` is a member of `packages/Cargo.toml`, so the test runs enforcing under `make test-rust`. The divergences it found are not resolved by its existence - they are pinned as exact data in the test and read out in section 12.4, so resolving any of them fails the test until the register entry is struck in the same change | Closed in W3, `ADR046-provider-002` |
+| Two conformance cells duplicated per Provider crate | `packages/d2b-provider-system-{systemd,minijail}/tests/execution_parents.rs` are near-identical files, differing only in the provider type and one test name. Two cells belong in the shared suite: execution-parent neutrality and the disagreeing wait owner. The slice named them `assert_execution_parent_is_neutral` and `assert_a_disagreeing_wait_owner_quarantines`; **those are proposed suite-helper names, not names in the tree** - the cells are currently spelled `a_non_host_execution_parent_yields_the_same_status_shape` and `a_candidate_whose_wait_owner_disagrees_is_quarantined` in both crates. The suite is `packages/d2b-process-conformance/src/suite.rs`, which no provider implementation slice owned | The implementation phase that next owns `packages/d2b-process-conformance/` |
 | No Provider dossier parity check | **DISCHARGED in `e15f88cc`.** See section 11; recorded there with the rest of the audit, and with exactly what discharges it | Closed in W3, `ADR046-provider-002` |
 | `d2b-provider-toolkit` has no `[dev-dependencies]` | Confirmed: its `Cargo.toml` declares one dependency and no dev-dependency table, so its integration tests cannot use `serde_json`. Malformed-wire rejection is therefore proved in the contracts module rather than against the toolkit's own fakes. Not wrong, but the coverage sits one crate away from the surface it describes | W3 or any later slice touching the toolkit; a two-line manifest change |
 | `SchemaVersion` has no component accessor | Confirmed: `packages/d2b-contracts/src/v3/resource_schema.rs` exposes no `major()` or `minor()`, so `schema_version_parts` in `provider.rs` renders the type's own canonical string and parses it back. The comment in that function states the reasoning, and it is sound - the canonical spelling is the contract's own round trip, so the parse is exact rather than lossy. It remains indirect, and a one-line accessor would remove the parse and its two `expect` calls | Cosmetic. Any later slice owning `resource_schema.rs` |
 
 ### 10.2 Semantics inferred where the specification is silent
 
-| Where | Inference | Owning wave |
+| Where | Inference | Product owner |
 | --- | --- | --- |
 | `v3/provider.rs` | The D089 standard capability matrix is modelled as a bounded token map (`StandardCapabilityMatrix(BTreeMap<BoundedToken, CapabilitySupport>)`) rather than a frozen enum, because the specification mandates the matrix and names the classes it covers but never enumerates the optional-capability identifiers. Absence fails closed: a capability the matrix does not list is unsupported rather than assumed. This is the same shape, and the same reason, as the v3 capability catalogue already recorded against `v3/zone_routing.rs` in section 2 | W3, before the Provider capability surface is treated as frozen |
 | `nixos-modules/generated/provider-catalog-shape.nix` | The catalog's **25 field names** are an inference. The specification's bullets name concepts, not identifiers, so the field **set** is the specification's and the **names** are not. The file records the concept-to-field mapping explicitly in its `fieldGroups`, which is the right shape for a later reviewer to check the inference rather than rediscover it | W3, confirmed by the parity test recorded in 10.1 |
 
 ### 10.3 Specification drift found while implementing
 
-Recorded per the standing rule that drift is raised as a separate amendment
-and never corrected inside an implementation wave.
+Recorded as implementation-versus-contract drift. Historical entries are not
+edited to claim a correction; current documentation follows committed code,
+the owning product contract, and focused validation.
 
 - **Provider crate-layout policy file name and lane.**
   `docs/specs/ADR-046-resources-zone-control.md` section 4.8.2, the
-  `ADR046-pkg-001` Destination, and the matching entries in
-  `ADR-046-work-items.json`, `ADR-046-implementation-graph.json` and
+  `ADR046-pkg-001` Destination, and the matching historical task records and
   `docs/specs/providers/ADR-046-provider-activation-nixos.md` all name
   `packages/d2b-contract-tests/tests/policy_provider_crate_layout.rs`, routed
   through the **advisory** `test-fixture-contracts` lane. The slice shipped
@@ -529,8 +457,8 @@ and never corrected inside an implementation wave.
   reasoning is sound and is kept: the check is filesystem-only and compiles
   nothing, so it is hermetic, and a hermetic check belongs in an enforcing lane
   rather than one that is advisory until fixture delivery is wired. Code is
-  canon. Not corrected in place, per FR-046; the prose change belongs in its
-  own amendment with its own validation and panel round, alongside the
+  canon. The historical register is not corrected in place; any prose change
+  belongs in its owning contract with focused validation, alongside the
   destination drift already recorded in section 5.
 - **Two provider-level identity checks are unreachable through valid input.**
   In `packages/d2b-provider-system-{systemd,minijail}/tests/execution_parents.rs`
@@ -562,11 +490,9 @@ Extending section 3 rather than restating it.
   produces the bindings claimed; that a real transient unit's invocation-id,
   cgroup, main-pid and start-time verification behaves as the profile assumes;
   that a real pidfd spawn does; and that the pid-reuse guard fires against an
-  actually reused pid. **Owner: `ADR046-process-001`, which
-  `ADR-046-implementation-graph.json` places in `W4`** - read from that item's
-  node, whose `wave` field is `W4` and whose `exitGate` names the W4 exit
-  criteria. This agrees with the `ADR046-primitives-002` row already in
-  section 1.
+  actually reused pid. **Owner: `ADR046-process-001`, historically assigned to
+  `W4`** - read from that item's retained task record and implementation-phase
+  note. This agrees with the `ADR046-primitives-002` row already in section 1.
 - `UserDiscoveryEffectPort` (`packages/d2b-provider-system-core/src/user.rs`) is
   **new surface introduced by that crate**, not something the Provider
   catalogue defined. If the catalogue later defines an equivalent discovery
@@ -577,7 +503,7 @@ Extending section 3 rather than restating it.
 
 `packages/d2b-provider-aca` and `packages/d2b-provider-relay` remain
 non-conformant to the crate layout and exempt by name. This was already ruled
-and recorded above under "Wave 3 provider-crate layout and naming policy",
+and recorded above under "provider implementation provider-crate layout and naming policy",
 with a retirement owner for each. Verified still accurate against
 `packages/d2b-contract-tests/tests/policy_provider_crates.rs`, whose
 `the_two_recorded_exemptions_are_exactly_the_naming_mismatches` case pins the
@@ -601,10 +527,10 @@ different routes, and its negative control requires a third, different
 evaluation to produce different bytes, so the comparison cannot have
 degenerated into comparing a constant with itself.
 
-## 11. Validation obligations not met by Wave 3
+## 11. Validation obligations not met by provider implementation
 
 Built the way section 8 was rebuilt: by reading the `validation` field of every
-one of the wave's four work items against the tests that actually exist, rather
+one of the implementation phase's four work items against the tests that actually exist, rather
 than by transcribing what a slice happened to report. Two obligations below
 were named by no slice.
 
@@ -624,20 +550,20 @@ were named by no slice.
 
 Two further observations from the audit, neither of which is an obligation.
 
-The wave's four items are unusually asymmetric in how much their `validation`
+The implementation phase's four items are unusually asymmetric in how much their `validation`
 fields commit to. `ADR046-provider-003` names two things in six words;
 `ADR046-provider-004` enumerates around fourteen. A short validation field is
 not a weaker obligation - it is a less legible one, and 10.4 is what a
 six-word field looks like when it is discharged only over scripted ports and
 nothing in the field says it must not be.
 
-The single largest gap this wave leaves is not any one of the entries above.
+The single largest gap this implementation phase leaves is not any one of the entries above.
 It is that **three crates, one Nix catalog and one Provider contract are all
-proven only against each other**. Every Wave 3 deliverable is hermetic by
+proven only against each other**. Every provider implementation deliverable is hermetic by
 construction, every one is unwired, and the first evidence that any of it
 matches a real system arrives with `ADR046-process-001` in W4. That is the
 correct sequencing and it was chosen deliberately, but it means a green
-Wave 3 gate is evidence about internal consistency and not about behaviour.
+provider implementation gate is evidence about internal consistency and not about behaviour.
 
 ## 12. Corrections and new findings on the `ADR046-provider-002` output and parity obligations
 
@@ -684,16 +610,16 @@ the contents of a derivation it has only declared, so that check could never
 have lived there, and the section 11 remediation was unimplementable as written.
 
 **Where the derivation-contents rule actually belongs.** Work item
-**`ADR046-zone-control-015`**, wave **W5**. Determined by reading the manifests
-rather than inferring: the item's `destination` is
+**`ADR046-zone-control-015`**, implementation phase **W5**. Determined by
+reading the retained task records rather than inferring: the item's
+`destination` is
 `packages/d2b-resource-compiler/src/{main,bundle,schema,validator,digest,sort,secret_lint,generation}.rs`
 exposed as `pkgs.d2b-resource-compiler`; its `detailedDesign` opens "Implement
 all Phase 2 build-time checks (§14.10 Phase 2 table)" and states explicitly that
 for each `d2b.artifacts.*` entry the compiler must "extract and hash manifest and
 config schema files"; its `validation` field enumerates the section 15.8 Phase 2
-build tests. The wave is read from that item's node in
-`ADR-046-implementation-graph.json`, whose `wave` field is `W5`. The
-`implementationState` is `Planned` and no `packages/d2b-resource-compiler/`
+build tests. The implementation phase is recorded as `W5`. The implementation
+state is `Planned` and no `packages/d2b-resource-compiler/`
 exists in the tree, so nothing about this obligation is discharged anywhere
 today.
 
@@ -726,7 +652,7 @@ without **inventing the layout contract every Provider package must satisfy**,
 and an invented layout would be indistinguishable from a specified one the moment
 it is committed and the first Provider package is built against it.
 
-**This needs a specification amendment, not a wave.** The amendment must fix,
+**This needs a specification amendment, not a implementation phase.** The amendment must fix,
 for a Provider derivation: the output name or names, the exact relative path of
 the signed manifest, the exact relative path of the root config JSON Schema, and
 how the executable set is located - which must be consistent with the artifact
@@ -847,12 +773,12 @@ no catalog counterpart. Pinned as
 `CONTRACT_FIELDS_WITHOUT_A_CATALOG_FIELD` together with the two contract-side
 digests.
 
-| Finding | Class | Owning wave |
+| Finding | Class | Product owner |
 | --- | --- | --- |
-| Output obligation mislocated to `provider-catalog.nix`; the derivation-contents rule is `ADR046-zone-control-015` | Correction to this register | Recorded, no wave work |
+| Output obligation mislocated to `provider-catalog.nix`; the derivation-contents rule is `ADR046-zone-control-015` | Correction to this register | Recorded, no implementation phase work |
 | Required derivation outputs have no path, filename, output name, or layout | Specification correction | Closed by accepted ADR 0050 and its applied amendment |
 | Output cardinality not checkable: no Provider crate has a package output, so the crate-to-output relation does not exist in the tree | Unmet obligation, blocked | Closed by the section 4.9.1 artifact-entry predicate |
-| `d2b.artifacts.<id>.package` typed `types.package` already enforces the cardinality at the one entry point | Inference, needs confirm or reject | W3 panel |
+| `d2b.artifacts.<id>.package` typed `types.package` already enforces the cardinality at the one entry point | Inference, needs confirm or reject | focused contract review |
 | Required-outputs row has no conformance scenario in the section 15.8 Phase 2 table | Specification correction | Closed by the applied amendment |
 | Catalog names component and descriptor digests; contract names exported schema and service digests; section 4.3.1 names neither | Ruling needed, three-way | Amendment, before the Provider packaging surface is treated as frozen |
 | Five catalog facts absent from the manifest; one contract field absent from the catalog | Unmet obligation, pinned as data | `ADR046-provider-002`, closes when the ruling above lands |
@@ -864,19 +790,19 @@ common semantic Service and Binding catalog was "not assessable here" and
 deferred the assessment to "the semantic-services slice's own audit". No such
 audit was performed and the deferral named no owner, so for the interval
 between `70eb17a4` and this section the register carried a row that recorded
-neither a pass nor a failure for the largest validation field in the wave.
+neither a pass nor a failure for the largest validation field in the implementation phase.
 That is worse than an unmet obligation, because a reader cannot tell from it
 whether anything is owed.
 
 This section performs that audit the same way sections 8 and 11 were built: by
-reading the item's `validation` field in `docs/specs/ADR-046-work-items.json`
+reading the item's `validation` field in `historical task record`
 clause by clause against the tests and code that exist in
 `packages/d2b-contracts/src/v3/semantic_services/` and the generated artifacts
 in `docs/reference/schemas/v3/`, rather than by transcribing a slice's account
 of its own work.
 
 One note on method. The Provider-neutrality proof this item leans on was
-rewritten in `c4e89e26` after a panel reviewer found the original vacuous - two
+rewritten in `c4e89e26` after a focused review reviewer found the original vacuous - two
 of its assertions compared a value with itself, a third compared a clone with
 its original, and its byte comparison built the schema contract once, outside
 the loop, with no Provider installed. Everything below audits the **current**
@@ -976,7 +902,7 @@ assume.
 **Consequence.** `ADR046-zone-control-019` and `-020` are documented in this
 item's `integration` field as using the factory metadata to admit an owner
 Service and core-create one same-type projection Service. For security-key,
-there is no factory to use. Whichever wave owns those items will find three of
+there is no factory to use. Whichever implementation phase owns those items will find three of
 four families work and the fourth returns a typed error.
 
 **Class: specification gap, with an unmet-obligation consequence downstream.**
@@ -1000,11 +926,11 @@ recorded. All four are **inferences** rather than gaps in the sense of 13.2 and
 13.3, because in each case the catalog did choose something and a reviewer needs
 to confirm or correct that choice.
 
-| Where | Inference | Class | Owning wave |
+| Where | Inference | Class | Product owner |
 | --- | --- | --- | --- |
-| All four family modules | **Only the top-level field-name set of each layer is frozen.** The module doc states the rule and each family module names the interiors it declines to model: audio `grants` and `channels`, security-key `authority` / `target` / `policy`, telemetry `signals` / `quota` / `policy`, USB `accessPolicy` / `backingAuthority` / `attachmentPolicy`. The reason differs per case and is worth keeping distinct - some interiors are stated as prose, some appear only inside a dossier example, and audio's `grants` members and domains **are** stated but were still left unfrozen for consistency with the others. So this is not uniformly forced by the documents; part of it is a consistency choice. The effect either way is that two implementations of one family can disagree about an interior and both pass the common base | Inference | W3 panel, before the semantic bases are treated as frozen |
-| `security_key.rs`, `usb.rs` versus `audio.rs`, `telemetry.rs` | **The Service mode discriminant is spelled three ways and each family keeps its own.** Security-key and USB use a field named `mode`; audio and telemetry use `serviceRole`. The values diverge again inside that: telemetry's authority value is `"authority"` while audio's is `"owner"`, so the three live spellings are `mode: "authority"`, `serviceRole: "authority"`, and `serviceRole: "owner"`. Each is what its own dossier says, so per-family fidelity and cross-family uniformity are in direct conflict and the catalog chose fidelity. Recorded because a consumer writing one code path across the four families has to special-case it, and because a later decision to unify moves four frozen field sets and therefore four fingerprints | Inference | W3 panel; unification, if wanted, must precede the fingerprints being consumed |
-| `mod.rs`, `SEMANTIC_BASE_SCHEMA_MAJOR` / `_MINOR` | **No base schema version is stated for the semantic bases themselves, so `1.0` was chosen.** The constant's own doc says so. The value is not inert: it is an input to `layer_fingerprint` and therefore reaches every one of the sixteen base fingerprints and, through the projection schema fingerprint, all four factory fingerprints and the committed schema artifacts | Inference | W3 panel, before any Provider manifest pins a base fingerprint |
+| All four family modules | **Only the top-level field-name set of each layer is frozen.** The module doc states the rule and each family module names the interiors it declines to model: audio `grants` and `channels`, security-key `authority` / `target` / `policy`, telemetry `signals` / `quota` / `policy`, USB `accessPolicy` / `backingAuthority` / `attachmentPolicy`. The reason differs per case and is worth keeping distinct - some interiors are stated as prose, some appear only inside a dossier example, and audio's `grants` members and domains **are** stated but were still left unfrozen for consistency with the others. So this is not uniformly forced by the documents; part of it is a consistency choice. The effect either way is that two implementations of one family can disagree about an interior and both pass the common base | Inference | focused contract review, before the semantic bases are treated as frozen |
+| `security_key.rs`, `usb.rs` versus `audio.rs`, `telemetry.rs` | **The Service mode discriminant is spelled three ways and each family keeps its own.** Security-key and USB use a field named `mode`; audio and telemetry use `serviceRole`. The values diverge again inside that: telemetry's authority value is `"authority"` while audio's is `"owner"`, so the three live spellings are `mode: "authority"`, `serviceRole: "authority"`, and `serviceRole: "owner"`. Each is what its own dossier says, so per-family fidelity and cross-family uniformity are in direct conflict and the catalog chose fidelity. Recorded because a consumer writing one code path across the four families has to special-case it, and because a later decision to unify moves four frozen field sets and therefore four fingerprints | Inference | focused contract review; unification, if wanted, must precede the fingerprints being consumed |
+| `mod.rs`, `SEMANTIC_BASE_SCHEMA_MAJOR` / `_MINOR` | **No base schema version is stated for the semantic bases themselves, so `1.0` was chosen.** The constant's own doc says so. The value is not inert: it is an input to `layer_fingerprint` and therefore reaches every one of the sixteen base fingerprints and, through the projection schema fingerprint, all four factory fingerprints and the committed schema artifacts | Inference | focused contract review, before any Provider manifest pins a base fingerprint |
 | `mod.rs`, `SEMANTIC_PROJECTION_PROTOCOL_VERSION` | **The semantic projection-protocol version has no stated spelling, so `"1.0"` was chosen.** The specification requires the factory fingerprint to bind this value and to exclude Provider and adapter identity; it fixes neither the spelling nor the value. It is an input to `factory_fingerprint`, so all four committed `x-d2b-factory-fingerprint` values depend on a string nobody specified | Inference | Same as above |
 
 ### 13.5 Where code and comment or register disagree
@@ -1029,7 +955,7 @@ Three, all small, all recorded rather than corrected in place.
 - **The catalog has no production caller.** Nothing outside
   `packages/d2b-contracts/src/v3/mod.rs` and
   `packages/xtask/src/semantic_service_schemas.rs` names `semantic_services`.
-  This extends section 10.4's observation about Wave 3 rather than contradicting
+  This extends section 10.4's observation about provider implementation rather than contradicting
   it: like the three system-Provider crates, the semantic catalog is proven only
   against itself and its own generator, and the first evidence it matches a real
   Zone store arrives with the zone-control items that consume the factory
@@ -1037,25 +963,25 @@ Three, all small, all recorded rather than corrected in place.
 
 ### 13.6 Summary of what this section adds to the register
 
-| Finding | Class | Owning wave |
+| Finding | Class | Product owner |
 | --- | --- | --- |
 | Telemetry Binding common status layer is empty, so no common status is writable for that type | Specification gap | Amendment to the telemetry dossier, before a telemetry controller is written |
 | Security-key names no semantic backing resource, so no signed projection factory can be built for that family | Discharged by ADR 0051 Amendment A | Security-key dossier amendment before `ADR046-zone-control-019` / `-020` |
 | `ADR046-zone-control-019` / `-020` will find one of four families without factory metadata | Unmet obligation, blocked | Behind the amendment above |
-| Same-Zone half of the Binding ref/target rule is delegated to a caller that does not exist, and three of four families' target sets are untested | Unmet obligation | `ADR046-provider-004`, or the wave that first resolves refs in a Zone |
+| Same-Zone half of the Binding ref/target rule is delegated to a caller that does not exist, and three of four families' target sets are untested | Unmet obligation | `ADR046-provider-004`, or the implementation phase that first resolves refs in a Zone |
 | Serde round trip proved for the spec layer only, not status or projection | Unmet obligation, minor | Any later slice owning `semantic_services` |
-| Alias rejection proved as non-registration, not as resolver rejection | Unmet obligation, deferred by construction | The wave that admits installed Provider schemas into a resolver |
-| Only top-level field-name sets are frozen; every named interior is unmodelled, partly by necessity and partly by consistency choice | Inference | W3 panel |
-| Service mode discriminant has three live spellings across four families | Inference | W3 panel |
-| Semantic base schema version `1.0` chosen with none stated; it reaches every base fingerprint | Inference | W3 panel |
-| Semantic projection-protocol version `"1.0"` chosen with no stated spelling; it reaches every factory fingerprint | Inference | W3 panel |
+| Alias rejection proved as non-registration, not as resolver rejection | Unmet obligation, deferred by construction | The implementation phase that admits installed Provider schemas into a resolver |
+| Only top-level field-name sets are frozen; every named interior is unmodelled, partly by necessity and partly by consistency choice | Inference | focused contract review |
+| Service mode discriminant has three live spellings across four families | Inference | focused contract review |
+| Semantic base schema version `1.0` chosen with none stated; it reaches every base fingerprint | Inference | focused contract review |
+| Semantic projection-protocol version `"1.0"` chosen with no stated spelling; it reaches every factory fingerprint | Inference | focused contract review |
 
-## 14. Rulings recorded before Wave 4 opens, and what debt the wave takes on
+## 14. Rulings recorded before controller implementation opens, and what debt the implementation phase takes on
 
-Recorded the way section 9 was, before the wave's slices open, so its scope and
-its shared-file decisions are settled rather than argued at review. Wave 4 is
-the program's largest wave - 31 work items across six parallel groups, against
-Wave 3's four - so a shared-file collision that Wave 3 could absorb in a
+Recorded the way section 9 was, before the implementation phase's slices open, so its scope and
+its shared-file decisions are settled rather than argued at review. controller implementation is
+the program's largest implementation phase - 31 work items across six parallel groups, against
+provider implementation's four - so a shared-file collision that provider implementation could absorb in a
 follow-up round would here collide across three groups at once.
 
 Six rulings follow. Each was verified against the tree and the manifests before
@@ -1065,55 +991,20 @@ kept apart: an **unmet obligation** names work someone still owes, an
 **specification correction** names a place where shipped code and written
 specification disagree and code was kept.
 
-### 14.1 Wave 4 stays one sealed wave and runs as two integration phases
+### 14.1 Shared-file ownership and validation
 
-**The ruling.** Wave 4 remains **one** wave for panel and seal purposes. Its
-first two slice rounds run as an explicit opening phase with its own integrator
-merge, so the binding ten-role panel at T071 reviews a tree whose keystone is
-already integrated rather than a tree assembled in one merge from six groups.
+Historical planning records described integration phases, commit tags, and
+review roles. Those mechanics are not current requirements. The technical
+finding is retained: shared broker operations and configuration modules need a
+single source owner, typed request and response contracts, and focused tests
+before consumers rely on them.
 
-**What was verified.** `ADR-046-implementation-graph.json` pins W4 at
-`workItemCount: 32`, read from the `.waves[]` entry. That is what forbids
-splitting the wave: the Wave 3 precedent in section 0 established that adding or
-removing an item contradicts the manifest, and the same argument applies to
-moving one out. What the manifest does **not** state anywhere is how many
-integrator merge rounds a wave's delivery takes, so the number of integration
-phases is not a manifest fact and is free to be decided here.
+### 14.2 The four new broker ops use typed-unimplemented stubs
 
-**Tag spelling, stated exactly, with one correction.** The planning pass held
-that `AGENTS.md` "already defines the opening-phase commit tag form for exactly
-this". The form exists, but its documented meaning is narrower than that phrase
-implies, and using it as-if would misfile the commits. `AGENTS.md`
-"Commit conventions" defines `( W<N>a-<H> )` / `( W<N>a H<H> )` as a **post-wave**
-opening phase, "used when the work is genuinely pre-wave-N+1 prep". A W4 opening
-phase whose content is W4's own work items is therefore **not** what that form
-names. Contributors use:
-
-| Commit | Tag |
-| --- | --- |
-| Integrator contract-prep commit landed before any W4 worktree opens | `( W4 )` |
-| Slice implementer work in either integration phase | `( W4 )` |
-| Integrator merge closing the opening phase, and each later round | `( W4fu<M> )` |
-| Single finding fixed in round `M` | `( W4fu<M> <S><N> )`, e.g. `( W4fu1 H3 )` |
-
-`( W4 )` for the prep commit is not an improvisation: the
-"Integrator-prep-first pattern" section states that the prep commit carries the
-wave's own tag with no scope label inside the parentheses. The `W4a` form stays
-reserved for its documented meaning, prep landing between W4 and W5.
-
-**Class: inference.** The manifest is silent on merge rounds, so this is a
-defensible reading rather than a stated rule, and a reviewer should confirm that
-two integration phases inside one sealed wave does not offend the one-snapshot
-requirement of the binding panel. It does not appear to: that requirement binds
-the panel to one immutable snapshot at wave close, which the second phase's
-merge produces.
-
-### 14.2 The four new broker ops land in the prep commit as typed-unimplemented
-
-**The ruling.** The integrator prep commit declares all four broker op variants
-with their request and response types, and lands dispatch arms returning a typed
-unimplemented error. Both consuming slices then read a landed closed enum instead
-of racing to extend it.
+**The ruling.** The shared broker contract declares all four broker op variants
+with their request and response types, and dispatch arms return a typed
+unimplemented error until their implementations land. Consumers read one closed
+enum rather than creating competing variants.
 
 **What was verified.**
 
@@ -1143,7 +1034,7 @@ broker op catalogue", and the References section names that file
 "authoritative broker op catalogue". An authoritative catalogue that omits a
 declared op is wrong the moment the op lands, so the prep commit adds the four
 rows in the same change as the four variants. Note that
-`docs/reference/privileges.md` is shipped reference prose, so no wave or finding
+`docs/reference/privileges.md` is shipped reference prose, so no implementation phase or finding
 marker may appear in those rows.
 
 **Class: inference.** Landing a variant whose dispatch arm cannot succeed is a
@@ -1173,52 +1064,48 @@ The two detailed destinations overlap substantively rather than merely sharing a
 path: both claim the diff, both claim name-conflict handling, and both claim
 generation transition. A file split alone does not resolve that overlap - it
 resolves the *edit* collision, and the ownership question of who writes the diff
-is a separate matter for the wave plan's file-ownership map.
+is a separate matter for the implementation phase plan's file-ownership map.
 
-**Class: specification correction is not the right class; this is an integrator
-decision on landed code.** `configuration.rs` is committed, passing code, so
+**Class: code-canon implementation decision.** `configuration.rs` is committed, passing code, so
 reshaping it is a refactor governed by the "existing code is canon" rule. That
 rule makes the code authoritative over prose, which means a slice may not
 restructure it on its own judgement to make its own destination fit. Recording
-the split here is what makes it an explicit decision rather than a slice-level
-improvisation, and it is deliberately taken in prep - before any slice opens -
-so no slice's diff carries a move it did not choose.
+the split here keeps the implementation ownership explicit rather than relying
+on a slice-local workaround. No implementation should move the file merely to
+make a destination label fit.
 
-### 14.4 No new shell gate; the provider-crate-layout check is an xtask policy
+### 14.4 Provider-crate-layout policy uses the existing xtask lane
 
 **Class: specification correction. Code and the test contract are canon.**
 
 **What was verified, on both sides.**
 
-- **The destination text.** `ADR046-pstate-011`'s `destination` reads
-  `` `packages/xtask/src/provider_crate_policy.rs`; `tests/unit/gates/provider-crate-layout-check.sh` ``.
-  It names both.
+- **The destination text.** `ADR046-pstate-011` names
+  `packages/xtask/src/provider_crate_policy.rs` for the provider-crate-layout
+  policy.
 - **The closed-set rule.** `tests/AGENTS.md` states it without an escape hatch:
   "There is no 'type 7/8' escape hatch: the drift gates and meta gates are a
   **closed set** - do not add a new `tests/*.sh`", and its directory map labels
   `tests/unit/gates/` "drift/perf gates (closed set)". `AGENTS.md` repeats the
   prohibition from the other direction.
-- **The item's own `integration` field, which settles it.** It reads
-  "`make test-policy` runs `cargo xtask check-provider-crate-layout`; GitHub CI
-  runs `make test-policy` on every PR; `make check` includes `test-policy` as a
-  required Layer-1 shard". So the item already describes its check executing as
-  an xtask subcommand under an enforcing lane, with no role left for a shell
-  script. The **destination is the outlier within the item itself**, not a rule
-  the ruling overrides.
+- **The item's own validation field, which settles it.** It reads
+  "`make test-policy` runs `cargo xtask check-provider-crate-layout`." The
+  check executes as an xtask subcommand under an enforcing policy lane, with
+  no role left for a shell script. The **destination is the outlier within the
+  item itself**, not a rule the ruling overrides.
 
 **The ruling.** Implement `packages/xtask/src/provider_crate_policy.rs`, expose
-it as `cargo xtask check-provider-crate-layout`, wire it into the existing
-`test-policy` target, and do **not** create
-`tests/unit/gates/provider-crate-layout-check.sh`. The item's eight validation
+it as `cargo xtask check-provider-crate-layout`, and wire it into the existing
+`test-policy` target. The item's eight validation
 outcomes - missing `src/`, `tests/`, `integration/` or `README.md`; an
 `integration/` with no `.rs` files; all four present and non-empty passing;
 non-provider `d2b-*` crates unflagged; idempotence across re-runs - are all
 filesystem predicates and need no shell.
 
-Per FR-046 the manifest is not corrected in place; the prose change belongs in
-its own amendment, the same shape as the destination drift already recorded in
-section 5 and the crate-layout policy file-name drift already recorded in 10.3.
-That 10.3 entry is the direct precedent: the same policy family already shipped
+The historical manifest is not corrected in place; any prose change belongs in
+its owning contract with focused validation, in the same way as the destination
+drift already recorded in section 5 and the crate-layout policy file-name drift
+already recorded in 10.3. That 10.3 entry is the direct precedent: the same policy family already shipped
 under a different file name in the enforcing hermetic lane rather than the named
 advisory one, for the same reason, and code was kept.
 
@@ -1229,7 +1116,7 @@ transcription error: the graph gives `-008` `parallelGroup`
 `wi:core-config-hub:w4` and `topologicalRank` 13, against `-009`'s
 `wi:ADR-046-resources-network` and rank 11, and `tasks.md` carries the matching
 `### Group ``wi:core-config-hub:w4`` (1 items)` heading immediately above T069.
-The two are in different groups and `-008` genuinely sorts last in the wave.
+The two are in different groups and `-008` genuinely sorts last in the implementation phase.
 
 ### 14.6 Which crate, module, and type name own the bundle input DTO
 
@@ -1282,7 +1169,7 @@ and nothing points back.
 
 1. **`ADR046-network-008` is the only one of the four that *defines* the DTOs;
    the other three merely *name a module*.** Its `destination` was re-read in
-   full against `docs/specs/ADR-046-work-items.json`. It enumerates all three
+   full against `historical task record`. It enumerates all three
    type names, marks them explicitly as the **input** DTOs, and states a
    normative exclusion with its reason: `BundleResource` MUST NOT carry
    `managedBy` or `configurationGeneration`, because both are persisted resource
@@ -1317,11 +1204,11 @@ and nothing points back.
 `ADR046-cli-011` (`packages/d2b-contracts/src/zone_bundle.rs`) and
 `ADR046-volume-006` (`packages/d2b-contracts/src/v3/zone_bundle.rs`) must be
 reconciled onto `packages/d2b-contracts/src/generation_bundle.rs` when their
-wave runs. Both are named here so this is not rediscovered as a fresh
-three-way disagreement in W5; neither is in Wave 4's scope and neither blocks
+implementation phase runs. Both are named here so this is not rediscovered as a fresh
+three-way disagreement in W5; neither is in controller implementation's scope and neither blocks
 it.
 
-**This ruling unblocks the Wave 4 prep commit.** The prior pass recorded the
+**This ruling unblocks the controller implementation prep commit.** The prior pass recorded the
 path-and-name question as blocking prep, because prep cannot land a shared
 module whose path and type names are undetermined. Both are now fixed, so prep
 may land `packages/d2b-contracts/src/generation_bundle.rs` with `ZoneBundle`,
@@ -1331,79 +1218,52 @@ stable contract.
 **Class: ruled. The W5 reconciliation is a specification correction owed by
 W5.**
 
-### 14.7 What debt Wave 4 takes on
+### 14.7 What debt controller implementation takes on
 
-Three items are in scope, each with the reason it belongs to this wave rather
+Two items are in scope, each with the reason it belongs to this implementation phase rather
 than to a later one.
 
-**1. `ADR046-process-001` discharges Wave 3's largest recorded gap.** Verified
+**1. `ADR046-process-001` discharges provider implementation's largest recorded gap.** Verified
 in both directions: the register names the item repeatedly - section 1's
 `ADR046-primitives-002` row, section 8's `ADR046-primitives-002` and
 `ADR046-primitives-003` rows, and section 10.4's owner line - and the
 implementation graph places `ADR046-process-001` in W4 with
 `parallelGroup` `wi:ADR-046-components-processes-and-sandbox`. The gap it closes
-is the one section 11 called the single largest thing Wave 3 leaves: three
+is the one section 11 called the single largest thing provider implementation leaves: three
 crates proven only over scripted ports, with no production caller and
 `integration/` directories holding nothing but a `README.md`. The
-`ProcessLaunchEffectPort` production adapter is what turns a green Wave 3 gate
+`ProcessLaunchEffectPort` production adapter is what turns a green provider implementation gate
 from evidence about internal consistency into evidence about behaviour.
 
-**2. The `public_mint_surface` gate runtime, in the corrected fix shape.**
-Section 9 assigned this to Wave 3 on the argument that the wave making a
-per-crate-linear gate worse should pay for its shape. Wave 3 did not pay it, and
-Wave 4 adds roughly eight crates - the `d2b-provider-network-local` and
-credential and provider-state destinations across three groups - so the same
-argument now points here, more strongly.
-
-The fix shape is the corrected one section 9 already established, and it must
-not be re-derived as the flat parallelisation the register originally claimed. A
-flat parallel render is **not available**: before rendering a package the loop
-calls `plant_dependency_doc_link` for every already-rendered crate, symlinking
-those render roots into the package's own doc root, so a render consumes the
-output of the renders before it. What is available is (a) hoisting the two pure
-source scans out of the render loop, since neither reads rendered output, and
-(b) parallelising the render *within* each level of the dependency order.
-
-**Verified: no Wave 3 commit paid it, and the one commit that touched the file
-did something else.** `packages/d2b-bus/tests/public_mint_surface.rs` was last
-touched 18 commits before this branch tip, by a commit that moved the Rust gate
-to nextest and cached what it was rebuilding. That is a genuine runtime
-mitigation - renders and compiled artifacts now persist across runs - but it is
-cross-run caching, not the recorded fix: `render_workspace_docs` still loops
-sequentially over `dependency_order(packages)`, and `hidden_public_api` and
-`source_capability_inventory_with_externals` are both still called inside that
-loop. Neither half of the corrected shape has been done, and the cold-run cost
-the register recorded is unchanged.
-
-**3. Importing `nixos-modules/resources-volume.nix`.** Section 3 records the
+**2. Importing `nixos-modules/resources-volume.nix`.** Section 3 records the
 Volume assertions as imported by no module, so they do not run, and section 8
 records the matching eval-case obligation as blocked behind that import. It is
 one line in `nixos-modules/index.nix`.
 
 **One correction to the reasoning offered for this item.** The planning pass
 justified it as "three W4 slices already open `nixos-modules/index.nix`, so this
-is one line in a file the wave is already in". That is wrong on the count.
+is one line in a file the implementation phase is already in". That is wrong on the count.
 Searching every W4 item's `destination`, `detailedDesign` and `integration`
 fields for `index.nix` returns exactly **one** item, `ADR046-network-004`; the
 other three items naming that file are `ADR046-identities-002` (W0, sealed),
 `ADR046-nix-004` (W5) and `ADR046-zone-control-007` (W5). The scope decision
-survives the correction - the wave does open the file, once, so the marginal
+survives the correction - the implementation phase does open the file, once, so the marginal
 cost is still one line and one owner - but the file is a **single-owner** file in
-this wave, not a shared one, so the import must be assigned to
+this implementation phase, not a shared one, so the import must be assigned to
 `ADR046-network-004`'s slice in the file-ownership map rather than dropped in by
 whichever slice notices first.
 
-### 14.8 What Wave 4 does not take on
+### 14.8 What controller implementation does not take on
 
 Four groups stay where the register already puts them. None is deferred for
 convenience; each has a reason that would not change by moving it.
 
-**The sealed Wave 2 nix-unit and host-integration obligations** recorded in
+**The sealed routing implementation nix-unit and host-integration obligations** recorded in
 section 8 against `ADR046-routing-011`, `-012`, `-013` and
-`ADR046-primitives-003`. Section 9 already declined these for Wave 3 and both of
+`ADR046-primitives-003`. Section 9 already declined these for provider implementation and both of
 its reasons still hold: every one is owed by a sealed-W2 item that already
 carries a recorded owner, so transcribing them here would give one obligation two
-wave attributions and make the discharging wave ambiguous; and several still
+implementation phase attributions and make the discharging implementation phase ambiguous; and several still
 cannot execute, because they need a production store that no W4 item delivers.
 
 **The `zone-bootstrap` / `zone-enroll` handler**, ruled to W5 alongside
@@ -1418,32 +1278,31 @@ would schedule work that cannot finish.
 items. Section 10.1 verified that these are blocked on specification content
 that exists nowhere: no request or response payload is written for any Provider
 method, including the six that are named, and there is no proto, frozen service
-name or field numbering. No wave can discharge that, so moving it into W4 would
+name or field numbering. No implementation phase can discharge that, so moving it into W4 would
 move the hole rather than close it. `ADR046-provider-001` retains ownership.
 
-**The Wave 3 specification gaps about required derivation outputs**, recorded in
+**The provider implementation specification gaps about required derivation outputs**, recorded in
 12.2 and 12.3. The Phase 2 rule names three required outputs and specifies no
 path, filename, Nix output name or layout for any of them, and the rule has no
 conformance scenario to cite. Both need a specification amendment before
-`ADR046-zone-control-015` in W5; neither is wave work, and neither is W4's.
+`ADR046-zone-control-015` in W5; neither is implementation phase work, and neither is W4's.
 
 ### 14.9 Summary of what this section adds to the register
 
-| Finding | Class | Owning wave |
+| Finding | Class | Product owner |
 | --- | --- | --- |
-| W4 stays one sealed wave and delivers in two integration phases; the opening phase's commits take `( W4 )` and `( W4fu<M> )`, not the `W4a` form, which means post-W4 prep | Inference | W4, confirmed at the wave panel |
+| W4 stays one sealed implementation phase and delivers in two integration phases; the opening phase's commits take `( W4 )` and `( W4fu<M> )`, not the `W4a` form, which means post-W4 prep | Inference | W4, confirmed at the implementation phase focused review |
 | Four new broker ops land in the prep commit as typed-unimplemented, with their `docs/reference/privileges.md` catalogue rows in the same change | Inference | W4 prep |
-| `d2b-core-controller/src/configuration.rs` splits into a directory module in prep; the three items' substantive overlap on diff and generation transition is a separate ownership question | Integrator decision on landed code | W4 prep, plus the wave file-ownership map |
-| `ADR046-pstate-011`'s destination names a shell gate the closed-set rule forbids; its own `integration` field already describes the xtask form, so the destination is the outlier | Specification correction, code and the test contract canon | W4; prose amendment separately, per FR-046 |
+| `d2b-core-controller/src/configuration.rs` splits into a directory module in prep; the three items' substantive overlap on diff and generation transition is a separate ownership question | Decision recorded against landed code | W4 prep, plus the implementation phase file-ownership map |
+| `ADR046-pstate-011`'s destination and integration field both resolve to the xtask provider-layout policy | Specification correction, code and the test contract canon | W4; documentation correction separately, with focused validation |
 | `ADR046-network-008` at T069 after `ADR046-network-009` at T068 is correct ordering across two groups | Not debt; recorded to forestall a finding | - |
 | The bundle input DTO belongs to `d2b-contracts` on four independent grounds | Ruled | W4 prep |
 | Its module is `packages/d2b-contracts/src/generation_bundle.rs` with `ZoneBundle`, `BundleResource`, `BundleMetadata`; `ADR046-pstate-010`'s `ZoneResourceBundle` is the same type and its `contentHash` is a member of it, not a second DTO. Prep is unblocked | Ruled | W4 prep |
 | `ADR046-cli-011` and `ADR046-volume-006` name two further module spellings for that same DTO and must be reconciled onto it | Specification correction, owed by W5 | W5 |
-| `ADR046-process-001` closes Wave 3's largest gap: three crates with no production caller, proven only over scripted ports | Unmet obligation, in scope | W4 |
-| `public_mint_surface` runtime: hoist the two pure source scans out of the render loop and parallelise within each dependency level. Verified unpaid by Wave 3; the one commit touching the file added cross-run caching, not this | Unmet obligation, in scope | W4 |
+| `ADR046-process-001` closes provider implementation's largest gap: three crates with no production caller, proven only over scripted ports | Unmet obligation, in scope | W4 |
 | `nixos-modules/resources-volume.nix` imported by nothing; one line in `index.nix`, which exactly one W4 item opens | Unmet obligation, in scope | W4, assigned to `ADR046-network-004`'s slice |
 
-## 15. Added after Wave 4 Round A
+## 15. Added after controller implementation Round A
 
 This section is the Round A debt audit. It was built by reading the complete
 `validation` field for each of `ADR046-process-001`, `ADR046-core-001`,
@@ -1504,7 +1363,7 @@ The distinction used by the rest of this register is preserved here:
 | Provider-state payload digest domain | D101 freezes the complete domain-tag set and contains no Provider-state payload domain. Accepting a caller tag would permit two domains for the same payload, so the helper now correctly fails closed. | **Amend D101 to freeze exactly the domain tag `d2b:v3:provider-state-payload` and define the StateEnvelope payload digest as `SHA-256(b"d2b:v3:provider-state-payload" || 0x00 || d2b-cjson/v1(payload))`, rendered in the D101 `sha256:<64 lowercase hex>` form.** Only then may `from_payload` and `validate_digest` succeed |
 | Credential interactive challenge metadata and method ownership | D093 names bounded non-secret challenge/progress metadata but defines no fields, enum, bounds or null rules. It also places `BeginLogin`, `ObserveLogin` and `CancelLogin` in the common Credential surface while `ADR046-credential-002` freezes exactly five service methods that omit them. | Define the challenge metadata schema and decide whether the three login operations extend `d2b.credential.v3` or live on a separate typed Endpoint service; then add the corresponding vectors |
 | Credential opaque-wrapper keying | Lease/source wrappers use domain-separated unkeyed SHA-256. The raw value is absent from output, but a low-entropy input remains guessable offline, and no keying authority or minimum-entropy contract exists. | Define a keyed opacity derivation and key owner/rotation contract, or explicitly classify these inputs as non-authorizing high-entropy values and enforce that at construction |
-| Core cleanup file attribution | `ADR046-core-001` and `ADR046-network-008` both name `cleanup`, but the shared file is now implemented as pure cleanup policy and covered by focused tests. The former scaffold no longer creates an implementation ownership conflict; only the overlapping destination prose remains. | Amend the two Destinations to identify the module as shared policy when the generated manifest is next corrected; no code ownership decision is still blocking |
+| Core cleanup file attribution | `ADR046-core-001` and `ADR046-network-008` both name `cleanup`, but the shared file is now implemented as pure cleanup policy and covered by focused tests. The former scaffold no longer creates an implementation ownership conflict; only the overlapping destination prose remains. | Update the two destination descriptions to identify the module as shared policy when those descriptions are next maintained; no code ownership decision is still blocking |
 
 ### 15.4 Inferences
 
@@ -1582,16 +1441,13 @@ again.
   both Process Providers run their shared conformance suite through it. The
   stronger Host/Guest/user and real-boundary obligations remain open as recorded
   above. A production adapter and a production caller are different claims.
-- **Still open:** the `public_mint_surface` cold-run shape is unchanged.
-  `render_workspace_docs` still calls both pure source scans inside its sequential
-  package loop.
 - **Still open:** `nixos-modules/resources-volume.nix` is still imported by no
   module; `nixos-modules/index.nix` contains no import for it.
 - **Still open:** the prior `ADR046-primitives-002` Host/Guest/user integration
   obligation. The new adapter makes the test implementable; the hermetic
   locality loop does not turn it into a real integration test.
 
-## 16. Added after Wave 4 Round B
+## 16. Added after controller implementation Round B
 
 This is the Round B debt audit, performed against tree snapshot `91fd5b9e`.
 The audited work items are `ADR046-process-002`, `ADR046-network-002`,
@@ -1600,7 +1456,7 @@ The audited work items are `ADR046-process-002`, `ADR046-network-002`,
 `ADR046-credential-005`, `ADR046-credential-007` and
 `ADR046-network-008`. That set was derived from the Round B slice commits and
 then checked against every item's complete `validation` field in
-`docs/specs/ADR-046-work-items.json`; the reported caveats were starting
+`historical task record`; the reported caveats were starting
 points, not the inventory.
 
 ### 16.1 Specification correction: `ADR046-process-002` cannot fit in its destination
@@ -1636,11 +1492,9 @@ All three structural blockers reported by the slice held on verification.
    there would not make either repository lane execute it and would repeat the
    dead-test pattern already rejected in Round A.
 
-**Ruling and class: specification correction.** The generated work-item
-manifest is normally authoritative over prose for destination and validation,
-which is precisely why this is a manifest defect rather than permission for a
-slice-local workaround. `ADR046-process-002`'s destination is insufficient to
-discharge its own integration and validation obligations. Its scope must extend
+**Ruling and class: implementation ownership correction.** The recorded task
+destination is insufficient to discharge its own integration and validation
+obligations. Its scope must extend
 to the production composition point that instantiates both Process Providers
 over `ProviderSupervisor`, and to the container and host-integration wiring
 that exercises system, user, Host and Guest behavior.
@@ -1652,8 +1506,8 @@ Provider instantiation, and be permitted to depend on
 `d2b-provider-system-minijail`. The dependency-direction rule constrains the
 two Provider crates, not such a core composition crate. Until that actor is
 landed or designated, naming `providers.rs` would be a guess and the item
-remains blocked. The manifest amendment must add that composition destination
-and the two Layer 2 destinations; the item cannot be marked partial merely
+remains blocked. The implementation must include that composition destination
+and the two Layer 2 destinations; it cannot be considered complete merely
 because the pre-existing hermetic schema, status and adoption tests still pass.
 
 ### 16.2 Effect-adapter deferrals
@@ -1664,7 +1518,7 @@ than adding privileged or runtime code to files they did not own.
 | Work item | Verified state | Owner / closing condition |
 | --- | --- | --- |
 | `ADR046-network-002` | The five Provider modules and their hermetic bridge-port, nftables, route and IPv6 tests landed. `ApplyNftablesProjection`, `CreateBridge`, `DeleteBridge` and `DeletePersistentTap` now have live production broker handlers, generation fencing and audit fields. The production `NetworkEffectPort` still does not exist in `d2b-contracts` or `d2b-core`, and `integration/host_fabric.rs` remains a declaration-only Rust test routed by no repository lane. | `ADR046-nl-001` owns the remaining neutral trait and core adapter. The live-handler half formerly assigned to `ADR046-nl-002` is complete; its executable `host_fabric` scenario remains owed. `ADR046-network-005` cannot reach the live broker operations until the adapter exists. |
-| `ADR046-pstate-003` | Marker, quota and domain policy landed, but `integration/volume_local.rs` is declaration-only. The exact Volume effect surface is not merely one of the four Network stubs: the neutral `VolumeEffectPort`, its host-runtime adapter and required closed Volume operations are absent. Existing legacy storage and swtpm broker handlers do not constitute that adapter. | `ADR046-vl-012` owns the concrete core/broker `VolumeEffectPort` adapter and its full provision/sealing scenarios in W6. `ADR046-pstate-009` owns the later W4 end-to-end provider-state and audit fixtures, but those cannot prove the real filesystem boundary until the adapter exists. The current `integration/README.md` statement that ProviderSupervisor owns this adapter is stale; the generated manifest assigns it to `ADR046-vl-012`. |
+| `ADR046-pstate-003` | Marker, quota and domain policy landed, but `integration/volume_local.rs` is declaration-only. The exact Volume effect surface is not merely one of the four Network stubs: the neutral `VolumeEffectPort`, its host-runtime adapter and required closed Volume operations are absent. Existing legacy storage and swtpm broker handlers do not constitute that adapter. | `ADR046-vl-012` owns the concrete core/broker `VolumeEffectPort` adapter and its full provision/sealing scenarios in W6. `ADR046-pstate-009` owns the later W4 end-to-end provider-state and audit fixtures, but those cannot prove the real filesystem boundary until the adapter exists. The current `integration/README.md` statement that ProviderSupervisor owns this adapter is stale; the retained task record assigns it to `ADR046-vl-012`. |
 
 The distinction in the second row matters. The Network deferral is no longer
 blocked by typed-unimplemented broker operations; it is narrowed to the absent
@@ -1676,15 +1530,12 @@ writes, but they are not the same broker state.
 The current tree corrects one ownership assumption in that table:
 `NetworkEffectPort` already lives in
 `packages/d2b-provider-network-local/src/controller.rs`, not in `d2b-contracts`.
-Manifest-backed `ADR046-nl-001` keeps
-that trait and owns the production implementation in
-`packages/d2bd/src/network_effect_adapter.rs`, with prospective W6 edits to
+The retained task records place that trait and its production implementation in
+`packages/d2bd/src/network_effect_adapter.rs`, with prospective edits to
 `d2bd/{Cargo.toml,src/lib.rs,src/resource_runtime.rs}`. It maps opaque intents only to typed
-broker operations and performs no direct host mutation. Current generated work items
-`ADR046-nl-001` through `ADR046-nl-020`
-place that work in W6, and final R9 preserves that ownership. The retired Wave 5 blocker has
-no prospective effect. T221 requires the accepted amendment and authoritative member specs
-and generated manifests own subsequent implementation and evidence.
+broker operations and performs no direct host mutation. The retired current implementation
+blocker has no prospective effect; the owning contracts and focused checks govern subsequent
+implementation and evidence.
 
 ### 16.3 Credential Provider work is in progress, not complete
 
@@ -1728,7 +1579,7 @@ its own string-based error and audit path. The current omission therefore
 cannot make one of the four operations callable, deny it, or change its broker
 dispatch. It leaves the generic core error catalogue incomplete and would
 prevent a future core caller from representing those four operations through
-that envelope. **Class: completeness gap. Owner: a Wave 4 integrator follow-up
+that envelope. **Class: completeness gap. Owner: a controller implementation follow-up
 on `packages/d2b-core/src/error.rs`, before any production caller uses
 `Error::broker_unimplemented` for the new operations.**
 
@@ -1736,14 +1587,14 @@ on `packages/d2b-core/src/error.rs`, before any production caller uses
 
 | Work item | Result of reading the complete validation field against the tree |
 | --- | --- |
-| `ADR046-process-002` | **Blocked, with a destination defect.** The two Provider implementations have pre-existing hermetic conformance and adoption coverage, but no Round B production wiring or executable integration scenario exists. Section 16.1 records all three blockers and the amendment required. |
+| `ADR046-process-002` | **Blocked, with a destination defect.** The two Provider implementations have pre-existing hermetic conformance and adoption coverage, but no Round B production wiring or executable integration scenario exists. Section 16.1 records all three blockers and the contract correction required. |
 | `ADR046-network-002` | **Behavior met at the hermetic Provider layer; pin clause not met and production integration deferred.** Equivalent bridge-port, nftables coexistence, route and IPv6 tests exist in `d2b-provider-network-local`. The validation field's literal statement that all named tests are pinned in `host-prepare-network.txt` and `net-canaries.txt` is false: those files still identify the old `d2b-host`/broker and IfName tests, the IPv6 sequence is pinned in `ipv6-off-readback.txt`, the old nftables matrix is pinned in `nft-coexistence.txt`, and no pin names the adapted Provider coexistence test. Section 16.2 records the real adapter gap. |
 | `ADR046-pstate-003` | **Partial.** Marker missing, replaced and mismatched states, cross-domain refusal, quota soft checks and the visible marker crash states are hermetically covered. A memory marker store does not prove crash behavior at each real filesystem provision step, a broker-maintained marker, cross-process isolation or real quota enforcement. The named host-integration file is non-executable. Section 16.2 records the W6 adapter owner. |
 | `ADR046-pstate-008` | **Catalogue and hermetic validation met; production integration not met.** `audit.rs` now catalogues all 18 Provider lifecycle events and all six broker-owned operation event names from the volume-local specification. `otel.rs` defines all 15 metric descriptors. `audit_unit.rs` pins both catalogues, bounded audit fields, forbidden payload-field classes, exact descriptor labels, closed label value enums and `d2b.zone` as a Resource attribute. Nothing outside `audit.rs` calls `emit_volume_event`, and no emitter exports `METRICS` to `observability-otel`; the lifecycle items that perform each transition must call the sink when they land. `ADR046-pstate-009` owns the live audit and OTEL fixtures. |
 | `ADR046-credential-003` | **In progress.** The specified source and Cargo test files existed at the audit snapshot; its three Layer 2 fixtures were absent then and are being added concurrently. The full named command and repository lane executions have not been accepted as passing in this audit. Section 16.3 is the closure rule. |
 | `ADR046-credential-004` | **In progress.** Same status: source and six Cargo test files existed at the snapshot; the three Layer 2 fixtures are being added concurrently, and complete command/lane evidence is still owed. Section 16.3 is the closure rule. |
 | `ADR046-credential-005` | **In progress.** Source and six Cargo test files existed at the snapshot; a concurrent pass is adding the four Layer 2 fixtures and the separately specified controller/agent topology. Complete command/lane evidence is still owed. Section 16.3 is the closure rule. |
-| `ADR046-pstate-010` | **Partial, with a specification count defect.** The linked section says "All eight" but actually enumerates nine obligations: absent Volume, absent Provider, incident hold, bundle integrity failure, rollback, finalizer timeout, credential-ref guard, name conflict and metric identity absence. The core logic covers diff ownership, intent ordering, incident-hold/finalizer disposition, rollback, count retention and name conflicts; the input DTO rejects a bad content hash; the Nix case covers the credential-ref guard. There is no real store/controller cleanup, no Zone status/audit integration, no generation metric descriptor or canary, no container generation-activation scenario, no full Provider-config schema build rejection, and no test that performs two independent Nix builds and compares their bundle bytes. The destination's named `tests/configuration.rs` and `integration/configuration.rs` do not exist. The eight-versus-nine wording needs a manifest amendment; the missing behavior remains owned by this item and the production store/runtime work it depends on. |
+| `ADR046-pstate-010` | **Partial, with a specification count defect.** The linked section says "All eight" but actually enumerates nine obligations: absent Volume, absent Provider, incident hold, bundle integrity failure, rollback, finalizer timeout, credential-ref guard, name conflict and metric identity absence. The core logic covers diff ownership, intent ordering, incident-hold/finalizer disposition, rollback, count retention and name conflicts; the input DTO rejects a bad content hash; the Nix case covers the credential-ref guard. There is no real store/controller cleanup, no Zone status/audit integration, no generation metric descriptor or canary, no container generation-activation scenario, no full Provider-config schema build rejection, and no test that performs two independent Nix builds and compares their bundle bytes. The destination's named `tests/configuration.rs` and `integration/configuration.rs` do not exist. The eight-versus-nine wording needs a contract-description correction; the missing behavior remains owned by this item and the production store/runtime work it depends on. |
 | `ADR046-credential-007` | **Partial.** The generic option surface, Credential assertions, activation Role, one canonical envelope, sort/digest projection and store-path absence checks exist. The eval corpus does not cover a wrong-type artifact, duplicate catalog identity, the complete Provider-specific signed-schema cross-check, or every example promised by the field. None of the eight named host-integration cleanup, nonblocking, pending-status, stalled, child-preservation, dynamic-isolation, retention/rollback and tampered-bundle scenarios exists. The work item remains the owner; production execution also depends on the W5 resource compiler/store/runtime path. |
 | `ADR046-network-008` | **Partial, with the former scaffold gap closed.** `cleanup.rs` now implements `PendingCleanup` projection and prior-generation pruning. `configuration/generation_transition.rs` now proves post-commit binding, Provider-schema verification, configuration metadata assignment, per-item controller/API name conflicts, absent-resource deletion scheduling and closed audit projections. The named generation-bundle contract test, nix-unit case and focused core tests now exist, and all four required Network broker operations are live. The production store/watch adapter and the named host-integration file remain absent; no executable end-to-end scenario proves mDNS-child deletion, one live `DeleteBridge` request and consumption of the terminal Deleted watch event before finalizer clearance. |
 
@@ -1793,7 +1644,7 @@ exercise their neutral dispatch contract directly. The service crate's own
 tests remain responsible for proving denial-before-dispatch and rejection of
 every altered delivery-binding field. No dependency allowlist was widened.
 
-## 18. Wave 4 closing verification gate
+## 18. controller implementation closing verification gate
 
 This section records only the non-CRITICAL findings selected for the closing
 register update. The concurrent completion agent owns the five destination
@@ -1831,7 +1682,7 @@ without that named flake lane.
 
 | Work item | Omitted obligation | Correction |
 | --- | --- | --- |
-| `ADR046-network-004` | Its generated validation field explicitly requires `make test-flake` with the updated examples, but the collected Wave 4 evidence omitted that command. | Run and import `make test-flake`; another Nix or drift result is not a substitute for this named example-evaluation obligation. |
+| `ADR046-network-004` | Its generated validation field explicitly requires `make test-flake` with the updated examples, but the collected controller implementation evidence omitted that command. | Run and import `make test-flake`; another Nix or drift result is not a substitute for this named example-evaluation obligation. |
 | `ADR046-credential-008` | The collected evidence cited `make test-rust` and `make test-policy`, but neither executes `packages/d2b-contract-tests/tests/credential_audit.rs`. `make test-rust` explicitly excludes the fixture-dependent `d2b-contract-tests` crate. `make test-policy` selects only its closed list of policy binaries and does not select `credential_audit`. | Run and import `make test-fixture-contracts`. `tests/AGENTS.md`, `tests/test-rust.sh` and `tests/layer1-jobs.json` identify that enforcing fixture-contract lane as the job that builds `D2B_FIXTURES` and executes the full contract crate. |
 
 ### 18.4 G1 MEDIUM: Live broker operations retain stale generated descriptions
@@ -1854,53 +1705,17 @@ defect. Fix the Rust doc comments first, then run
 regenerate `wire-protocol.json`; hand-editing the generated schema would leave
 the canonical source stale and fail the drift contract.
 
-## 19. Rulings recorded before Wave 5 opens, and what debt the wave takes on
+## 19. Historical Provider and cutover debt
 
-<!-- RETIRED-READONLY-BEGIN -->
+This section retains technical findings from the implementation record. Shared-file
+decisions follow source ownership, contract compatibility, and focused validation.
 
-Recorded the way sections 9 and 14 were, before any slice opens, so the wave's
-scope and its shared-file decisions are settled rather than argued at review.
-Wave 5 is by a wide margin the program's largest wave - **146 work items across
-twelve parallel groups**, against Wave 4's 32 - so a shared-file collision that
-Wave 4 absorbed in a follow-up round would here collide across several groups at
-once.
+### 19.1 Shared dependencies and validation
 
-Nine rulings follow. Each was verified against the tree and the manifests before
-being recorded, and the three categories this register separates are kept apart:
-an **unmet obligation** names work someone still owes, an **inference** names a
-reading a reviewer must confirm or correct, and a **specification correction**
-names a place where shipped code and written specification disagree and code was
-kept.
-
-### 19.1 Wave 5 stays one sealed wave and runs as per-round integrator prep
-
-**The ruling.** Wave 5 remains **one** wave for panel and seal purposes, on the
-Wave 4 precedent in section 14.1: `ADR-046-implementation-graph.json` pins W5 at
-`workItemCount: 146`, and the section 0 Wave 3 precedent established that adding
-or removing an item contradicts the manifest. The manifest is silent on merge
-rounds, so the number of integration rounds remains free.
-
-**What differs from Wave 4.** Wave 4 landed a single integrator contract-prep
-commit before any worktree opened. At 146 items that is not reproducible: the
-prep commit would have to scaffold shared surfaces for twelve groups blind,
-before any slice has demonstrated what it actually reads. Wave 5 therefore lands
-**one prep commit per round**, each scaffolding only the surfaces that round's
-slices contend on. The Integrator-prep-first pattern's guarantee - that a scope
-worktree opens against a stable contract - is preserved per round, which is the
-level at which slices actually run concurrently.
-
-**Historical tag spelling.** The original section 14.1 ruling used the legacy
-forms `( W5 )` for every prep and slice commit, `( W5fu<M> )` for the integrator
-merge closing round `M`, and `( W5fu<M> <S><N> )` for a single finding; `W5a`
-was reserved for its documented post-wave meaning. Those strings describe the
-old record and are not rewritten. Current execution follows the qualified
-addressing contract: `( adr046w5 )`, `( adr046w5fu<m> )`, and
-`( adr046w5fu<m> <S><n> )`.
-
-**Class: inference.** A reviewer should confirm that per-round prep does not
-offend the binding panel's one-snapshot requirement. It does not appear to: that
-requirement binds the panel to one immutable snapshot at wave close, which the
-final round's merge produces.
+The implementation record identified shared broker, Provider, store, and
+cutover surfaces that require one source owner and typed contracts. The
+technical obligations below remain actionable and are closed by their owning
+contracts and focused checks.
 
 ### 19.2 The canonical crate names are the ones that exist
 
@@ -1921,7 +1736,7 @@ wins and the drift is recorded rather than resolved by creating a second crate.
 **Why this is worth a ruling rather than a slice-local judgement.** The failure
 mode is not ambiguity, it is duplication. A slice that honours the absent
 spelling creates a parallel session, client, or router implementation, and the
-program then has two homes for one concept - exactly the outcome the Wave 4
+program then has two homes for one concept - exactly the outcome the controller implementation
 bundle-DTO ruling in section 14.6 was recorded to prevent.
 
 **Class: specification correction.** Code kept; the manifest destinations are
@@ -1935,7 +1750,7 @@ What remained open is the module path, which the manifest spells two ways:
 `ADR046-volume-006` names `packages/d2b-contracts/src/v3/zone_bundle.rs`.
 Neither file exists. **The crate root wins.**
 
-**What was verified.** Wave 4 landed the sibling bundle DTO at
+**What was verified.** controller implementation landed the sibling bundle DTO at
 `packages/d2b-contracts/src/generation_bundle.rs` - the crate root, not `v3/`.
 The `v3/` directory holds the resource object model: `resource.rs`,
 `resource_ref.rs`, `resource_schema.rs`, `resource_status.rs`, and the
@@ -1959,7 +1774,7 @@ nothing in the workspace consumes it today. The version is pinned exactly at
 `4.1.0` in that spike's `Cargo.lock`; "the already-pinned redb API" in the work
 item's detailed design refers to that pin.
 
-**The precedent this follows.** The Wave 3 prep commit's panel ruled exactly this
+**The precedent this follows.** The provider implementation prep commit's focused review ruled exactly this
 for `rtnetlink` and `nftnl`, and the reasoning is recorded inline in
 `packages/Cargo.toml`: a new third-party dependency ships with the scope commit
 that first consumes it, so the license and advisory whitelist update lands in the
@@ -1967,39 +1782,32 @@ same commit as the consumer. `rustix` went into that prep only because prep stub
 had to compile against it. No W5 prep stub needs `redb`, so the exception does
 not apply and only one slice consumes it.
 
-**Class: inference.** Defensible from an explicit prior panel ruling on
+**Class: inference.** Defensible from an explicit prior focused review ruling on
 materially identical facts, but not a stated rule.
 
-### 19.5 The corrected SPIKE-01 rerun is a measurement of record, and amending the
-canonical figure is part of the work item
+### 19.5 The corrected SPIKE-01 rerun is a measurement of record
 
-**The ruling.** `ADR046-store-004` is gated on a rerun that must pass the
-unchanged 24,576 KiB whole-process maximum-RSS threshold with no baseline
-subtraction. That rerun is a **measurement of record**, and landing it requires
-four things together: the corrected fixture, the new figure in
-`proofs/redb-resource-store-spike/RESULTS.md`, the amended canonical figure in
-`docs/specs/ADR-046-validation-and-delivery.md` section 3.2, and a Gate 0
-re-evaluation. Any one alone is incomplete.
+**The ruling.** `ADR046-store-004` remains responsible for a rerun that must
+pass the unchanged 24,576 KiB whole-process maximum-RSS threshold with no
+baseline subtraction. That rerun is a **measurement of record**, and the
+corrected fixture, recorded result, retained canonical figure, and focused
+validation must agree. Any one alone is incomplete.
 
 **What was verified.** `RESULTS.md` records the canonical run as MEASURED-FAIL at
 25,216 KiB (24.625 MiB), 640 KiB or about 2.6% above the gate.
 `RESULTS-corrections.md` records a **prototype** of four corrections measuring
 18,468 KiB, a pass with 6,108 KiB (24.9%) of headroom. That document is explicit
 and correct that it has no authority over the canonical measurement, does not
-supersede `RESULTS.md`, does not reopen the wave-scoping decision, and that
-changing the canonical figure requires a specification amendment plus Gate 0
-re-evaluation. This ruling does not weaken any of those bounds; it schedules the
-amendment they require.
+supersede `RESULTS.md`, and does not reopen implementation scope. Changing the
+canonical figure requires the owning product evidence and focused validation to
+be updated together. This ruling does not weaken any of those bounds.
 
-**The lint consequence, which is easy to miss.** The whole-process RSS value is
-one of the seven canonical feasibility measurements that
-`policy_adr046_spec_literals.rs` inventories globally across `docs/**` and
-`CHANGELOG.md`, matching RSS values together with their units. Changing the
-canonical figure therefore also changes that lint's pinned inventory and every
-registered site. A slice that edits `RESULTS.md` alone will fail the lint, and a
-slice that edits the lint alone will ship a figure contradicted by the register.
+**The documentation consequence, which is easy to miss.** The whole-process RSS
+value is a canonical feasibility measurement. Changing it requires the retained
+result, the owning product evidence, and every affected focused reference to
+agree; changing one record alone would leave the register contradictory.
 
-**The finding the corrections document already surfaced, which the wave inherits.**
+**The finding the corrections document already surfaced, which the implementation phase inherits.**
 Correction 3, shared immutable ChangeBatch fan-out, contributes **zero** to the
 gate number, because `src/bin/rss-fixture.rs` registers its watches only after
 its last write, so `dispatch_watch` is never called with a non-empty watch list.
@@ -2009,14 +1817,13 @@ obligation** against `ADR046-store-004`: the clone-per-watcher path needs
 coverage that actually executes it, and a fixture that cannot exercise a
 correction cannot be cited as evidence that the correction works.
 
-**Class: unmet obligation**, for the fan-out coverage gap; the amendment
-scheduling itself is an inference.
+**Class: unmet obligation**, for the fan-out coverage gap.
 
 ### 19.6 Hard latency targets without a pinned runner are recorded, not met
 
 **The ruling.** W5 work items naming hard p95 or p99 latency targets are
 delivered with their obligation **recorded as unmeetable** in this register,
-exactly as Wave 4 did, rather than marked met on advisory evidence.
+exactly as controller implementation did, rather than marked met on advisory evidence.
 
 **What was verified.** AGENTS.md states that `test-performance-budgets` prints
 `SKIP` and enforces no latency budget unless `D2B_PERF_STABLE=1`, that promoting
@@ -2031,9 +1838,9 @@ stays open and visible until a runner exists.
 
 **Class: unmet obligation.**
 
-### 19.7 `ADR046-zone-control-015` stays blocked pending an amendment
+### 19.7 `ADR046-zone-control-015` stays blocked pending a contract update
 
-**Disposition: closed by the accepted ADR 0050 amendment.** The item remains
+**Disposition: closed by the contract update recorded in ADR 0050.** The item remains
 implementation work owned by W5, but it is no longer blocked on an absent
 derivation contract; the applied section 4.9 and section 15.8 scenarios are
 the contract it consumes. The dependent 016 and 021 records may likewise cite
@@ -2042,7 +1849,7 @@ the corrected Phase 3 launcher and configuration scenarios.
 **The ruling.** The item is **not** delivered in W5 on invented facts. Section
 12.3 and the required-outputs register row already record the gap: the required
 derivation outputs have no path, filename, output name, or layout anywhere in the
-specification set, and the recorded remedy is an amendment **before**
+specification set, and the recorded remedy is a contract update **before**
 `ADR046-zone-control-015`.
 
 **The consequence for two dependent items, stated explicitly.**
@@ -2052,8 +1859,8 @@ prerequisites, and `ADR046-zone-control-021` depends on `016` in turn. Both are 
 building on a contract that does not exist yet, so the blocking status propagates
 and must be reported rather than absorbed.
 
-**Class: specification gap.** The remedy is an amendment, which is owner work,
-not slice work.
+**Class: specification gap.** The remedy is a contract update owned by the
+product surface, not implementation-slice work.
 
 ### 19.8 The security-key semantic projection is not invented
 
@@ -2069,19 +1876,18 @@ without assigning the physical `Device` to the semantic Service.
 now admitted with an empty `allowedBackingRefTypes` set, and any attempted
 backing reference remains denied.
 
-### 19.9 What Wave 5 takes on from the standing register
+### 19.9 What current implementation takes on from the standing register
 
-Wave 5 is where a large share of the program's accumulated debt comes due,
-because the items that were deferred "pending the durable store" all name
-destinations this wave owns. Carried in explicitly, so no reviewer has to
-reconstruct it:
+The current implementation inherits a large share of the accumulated debt because the items
+deferred "pending the durable store" name destinations in the production store chain. They
+remain listed explicitly so their owners and focused closure conditions are visible:
 
 | Debt | Recorded at | Owner in W5 |
 | --- | --- | --- |
 | `zone-bootstrap` / `zone-enroll` handler still unimplemented | `ADR046-routing-016` row, ruled W5 | alongside `ADR046-store-004` |
-| Sealed enrollment record does not bind the child uid | Wave 3 carry-forward table | `ADR046-store-004`, `transaction.rs` |
-| No durable persistence for enrollment | Wave 3 carry-forward table | `ADR046-store-004` |
-| Appended Zone tags cannot reach the handshake offer encoder | Wave 3 carry-forward table | `ADR046-exec-018` |
+| Sealed enrollment record does not bind the child uid | provider implementation carry-forward table | `ADR046-store-004`, `transaction.rs` |
+| No durable persistence for enrollment | provider implementation carry-forward table | `ADR046-store-004` |
+| Appended Zone tags cannot reach the handshake offer encoder | provider implementation carry-forward table | `ADR046-exec-018` |
 | `volumeAttachmentDefaults` entry shape undefined | primitive-surface inference table | `v3/volume.rs` |
 | `SensitivityClass` admits values only `private` attests | primitive-surface inference table | `v3/volume.rs` |
 | `RepairPolicy` / `CleanupPolicy` / `AdoptionPolicy` / `EntryRestartPolicy` / `LeaseClass` / `Invariant` value sets exemplified, never enumerated | primitive-surface inference table | `v3/volume.rs`, `v3/process.rs` |
@@ -2089,10 +1895,10 @@ reconstruct it:
 | `ExpirySpec.hardDeadlineMs` lease cap not a stated rule | primitive-surface inference table | `v3/credential.rs` |
 | Canonical JSON relies on the Nix builtin rather than a canonicalization implementation | primitive-surface inference table | `zone-resources-json.nix` |
 
-The four items whose destinations are the production store chain -
+The four items in the production store chain -
 `ADR046-store-004`, `ADR046-store-002`, `ADR046-store-005`, `ADR046-reconcile-003` -
-are the wave's critical path. Until they land, much of what Waves 3 and 4
-delivered is proven only against test doubles, which is the honest reading of
+are the current technical dependency chain. Until they land, much of the earlier
+implementation is proven only against test doubles, which is the honest reading of
 their validation evidence rather than a criticism of it.
 
 ### 19.10 Summary of what this section adds to the register
@@ -2106,17 +1912,17 @@ their validation evidence rather than a criticism of it.
 - The derivation output layout gap (19.7) is closed by accepted ADR 0050 and
   its applied amendment.
 - The security-key backing-set gap (19.8) is discharged by ADR 0051 Amendment A.
-- Three **inferences** a reviewer should confirm: per-round prep against the
+- Three **inferences** to confirm: per-snapshot preparation against the
   one-snapshot requirement (19.1) and the `redb` dependency placement (19.4).
 
-### 19.11 The corrected RSS measurement of record is integrator work, not slice work
+### 19.11 The corrected RSS measurement of record is release-validation work
 
 **The ruling.** The `ADR046-store-004` slice implements the four corrections and
-may take a **provisional** RSS reading for its own feedback. The **measurement of
-record** is taken by the integrator, deliberately, on a quiet machine, and the
-machine state is recorded beside the number.
+may take a **provisional** RSS reading for local feedback. The **measurement of
+record** is taken during release validation on a quiet machine, and the machine
+state is recorded beside the number.
 
-**What went wrong first, recorded because the wave nearly shipped on it.** The
+**What went wrong first, recorded because the implementation phase nearly shipped on it.** The
 slice was originally instructed to guard the measurement by checking
 `pgrep -a cargo` and to "wait and retry" if the machine was busy. That guard was
 wrong in three independent ways.
@@ -2128,15 +1934,15 @@ wrong in three independent ways.
    None of those are named `cargo`. The check reported three processes and would
    have read as near-idle.
 2. **The wait is unbounded and belongs to nobody.** The load came from unrelated
-   worktrees (`d2b-ci-gate-cost` running a full workspace `nextest`, and
-   `d2b-copilot` running a Nix eval). Those are the operator's, they run for
+   worktrees (one running a full workspace `nextest`, and another running a Nix
+   eval). Those are the operator's, they run for
    hours, and a slice agent has no authority to wait on them or standing to
    decide when they are done.
 3. **The bias runs toward a false pass, which is the unsafe direction.** Under
    memory pressure the kernel reclaims, so a whole-process **maximum** RSS
    high-water mark reads *lower*, not higher. A measurement taken on a loaded
    machine is therefore biased toward passing the 24,576 KiB gate. That gate is
-   what unblocks the wave's entire critical path, so a falsely-passing reading
+   what unblocks the implementation phase's entire critical path, so a falsely-passing reading
    would have been the most expensive possible defect to carry forward.
 
 **The precondition, stated so it is reproducible.** Before the measurement of
@@ -2151,7 +1957,7 @@ precondition. The provisional slice reading is explicitly not evidence.
 
 <!-- RETIRED-READONLY-END -->
 
-## 20. Wave 5 destination and rename drift, and two corrections to earlier entries
+## 20. current implementation destination and rename drift, and two corrections to earlier entries
 
 The full adjudication is
 [`amendment-w5-destination-drift.md`](./amendment-w5-destination-drift.md). Only
@@ -2166,13 +1972,13 @@ covers the same obligation under a different name: `d2b-bus-session` and
 `d2b-bus-contracts` and `d2b-zone-service` against `d2b-resource-api`, and
 `d2b-provider-runtime` and `d2b-provider-agent` against `d2b-provider`.
 
-**FR-046 does not decide this class**, and that is the entry worth carrying
-forward. FR-046 resolves prose against the generated manifests. Here both sides
-are the generated manifest: `ADR046-exec-016` names `packages/d2b-bus-session/`
+The historical record does not decide this class, and that is the entry worth
+carrying forward. Both sides are task records: `ADR046-exec-016` names
+`packages/d2b-bus-session/`
 while `ADR046-session-001`, `Merged` in W1, names `packages/d2b-session/`, and
-both are rows in `ADR-046-work-items.json`. Two member specs were authored
-against different naming proposals and the generator carried both forward
-faithfully. The deciding rule is therefore "existing code is canon", with the
+Both member specs were authored against different naming proposals and the task
+export carried both forward faithfully. The deciding rule is therefore
+"existing code is canon", with the
 committed crate as the destination - except where the member spec's own
 detailed-design text permits the current name, in which case there is no drift.
 `ADR046-exec-016` and `ADR046-exec-017` are that exception: both say "rename
@@ -2192,13 +1998,12 @@ slice shipped `policy_provider_crates.rs`, routed through "the **advisory**
 - `test-fixture-contracts` is no longer advisory. `tests/layer1-jobs.json`
   classifies exactly one job advisory today, `test-performance-budgets`.
 
-Section 10.3's reasoning was sound and is kept; its premise about the lane is
-not, and citing that sentence now understates the coverage. Three locations are
-live and each has a distinct role - the xtask entrypoint at
+Section 10.3's reasoning is retained with the current lane classification. Three
+locations are live and each has a distinct role - the xtask entrypoint at
 `packages/xtask/src/provider_crate_policy.rs`, the dependency-allowlist and
 naming-exemption policy at `policy_provider_crates.rs`, and the layout policy at
-`policy_provider_crate_layout.rs`. The shell gate `ADR046-pstate-011` also names
-is still not owed; section 14.4 already ruled on it and the gate set is closed.
+`policy_provider_crate_layout.rs`. Together they provide the provider layout
+policy and its focused coverage.
 
 ### 20.2 Two obligations that are absent rather than relocated
 
@@ -2220,8 +2025,8 @@ third case, between the two: no file answers to the name, but Zone-control
 resource handling is spread across `options-zones.nix`,
 `options-zones-resources.nix`, `resources-zones-processes.nix`,
 `resources-zones-volumes.nix` and `generated/`, and `index.nix` already computes
-`declaredZones` and `zoneRows`. The integrator must bind the destination to that
-set or accept a new file; it is not decided here.
+`declaredZones` and `zoneRows`. The implementation must bind the destination to
+that set or accept a new file; the source record does not decide ownership.
 
 ### 20.3 A normative numeric conflict: the configuration-cleanup stall threshold
 
@@ -2237,13 +2042,13 @@ The configuration-cleanup stall threshold has two published defaults.
 `ADR-046-resources-zone-control`, one in `ADR-046-security-and-threat-model`,
 and `ADR046-zone-control-016`'s `detailedDesign` all say five minutes.
 
-**Ruling: committed passing code is canon for this wave. The constant stands at
-600,000 ms and no runtime behaviour changes.** FR-046 does not decide it -
+**Ruling: committed passing code is canon for this implementation phase. The constant stands at
+600,000 ms and no runtime behaviour changes.** The historical record does not
+select between the retained design values -
 `ADR046-exec-015` carries "10 min default" and `ADR046-zone-control-016` carries
-"default 5 min", both inside `detailedDesign` in the same generated manifest, so
-both sides are the manifest. Nothing in the specification set gives one member
-standing over another on a shared default, which is why an amendment is required
-rather than a reading.
+"default 5 min" in their retained design records. Nothing in the specification
+set gives one member standing over another on a shared default, so the owning
+product contract must settle the value before the option is wired.
 
 Three things worth carrying forward.
 
@@ -2263,12 +2068,12 @@ Three things worth carrying forward.
   tempting repair and is exactly how a halved operator-visible default ships
   green and unrecorded. That test is the only artifact in the tree asserting what
   the default is.
-- **Standing instruction for W5**: do not move the constant, do not retune the
-  test, do not wire the option. A candidate snapshot that does any of the three
-  is out of scope and should be rejected at review.
+- **Implementation constraint while this debt remains**: do not move the
+  constant, retune the test, or wire the option. A candidate that does any of
+  the three is incomplete until the product contract and focused evidence agree.
 
-The amendment must pick one value. The recommendation recorded, and it is a
-recommendation only, is five minutes with the code changed to match in a
+The product contract must pick one value. The recommendation recorded, and it is
+a recommendation only, is five minutes with the code changed to match in a
 deliberate separate change carrying a changelog entry: crossing this threshold
 sets a Degraded condition and never refuses or force-clears a finalizer, so a
 false positive costs one investigation while a false negative hides a stuck
@@ -2279,10 +2084,10 @@ for a threshold that surfaces rather than denies.
 
 **Status: planned/assigned, not delivered.** The earlier read-only analysis correctly found
 that the committed unreleased v3 `ZoneHandlerName` enum cannot encode the two system-core
-handler observations. The retired Wave 5 repair did not land.
+handler observations. The retired current implementation repair did not land.
 
-Code canon still lacks the contract correction. Prospective ownership resolves only from
-authoritative member specs and generated manifests. The required values are
+Code canon still lacks the contract correction. Ownership resolves only from
+authoritative member specifications and focused implementation evidence. The required values are
 `ZoneHandlerName::SystemCoreHost` and
 `ZoneHandlerName::SystemCoreUser`, serialized by the existing kebab-case rule as
 `system-core-host` and `system-core-user`. The actual projection is the
@@ -2291,21 +2096,20 @@ authoritative member specs and generated manifests. The required values are
 substitution are rejected. `ProviderLifecycle` remains a distinct allowed value and cannot
 substitute for either required record.
 
-The authoritative prospective object also covers focused Rust round-trip/list coverage, the ownership-compatible
-`packages/d2b-contract-tests/tests/policy_contracts.rs` guard, compiler-regenerated public
-and private snapshots under `tests/golden/api-surface/` via `make api-surface-pin` only, and
+The implementation plan also covers focused Rust round-trip/list coverage, the ownership-compatible
+`packages/d2b-contract-tests/tests/policy_contracts.rs` guard and
 the existing paired `docs/reference/resource-plane-runtime.md`. It treats
 `packages/xtask/src/zone_schema.rs` and
 `docs/reference/schemas/v3/core.d2bus.org_Zone.schema.json` as read-only proof inputs and must
 show that generator output remains byte-identical because the desired Zone spec is unchanged.
-The retired Wave 5 ownership map remains read-only history and authorizes no current run,
-evidence import, or close action.
+The current implementation ownership map remains historical context; implementation
+and evidence import follow authoritative member specifications and focused checks.
 
 No `apiVersion`, `schemaVersion`, `manifestVersion`, `bundleVersion`, or wire-field version
 bump is required: no field or operation changes, the desired-state Zone schema is unchanged,
-and v3 is unreleased. Prospective ownership of paired Rust contract changes, tests, API
-snapshots, reference status docs, consumers/emitters, and generator no-drift proof resolves
-only from authoritative member specs and generated manifests.
+and v3 is unreleased. Ownership of paired Rust contract changes, tests,
+reference status docs, consumers/emitters, and generator no-drift proof resolves only from
+authoritative member specifications and focused checks.
 
-CHK054 is checked only as a specification-quality resolution. Retired editor/lifecycle text
-is read-only history. Prospective implementation resolves only from authoritative objects.
+CHK054 is checked as a specification-quality resolution. Prospective implementation
+resolves from authoritative objects.

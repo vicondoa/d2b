@@ -32,10 +32,9 @@ build", carries this row:
 > schema, executable) - Provider only | Resource compiler | build failure
 
 The row names three required outputs and specifies no path, no filename, no Nix
-output name, and no directory layout for any of them. The W5 audit recorded that
-in `specs/001-adr046-d2b3-completion/implementation-debt.md` sections 12.1
-through 12.3, and section 19.7 ruled `ADR046-zone-control-015` blocked rather
-than delivered on invented facts. That blocking status propagates:
+output name, and no directory layout for any of them. An earlier implementation
+audit recorded this gap and ruled `ADR046-zone-control-015` blocked rather than
+delivered on invented facts. That blocking status propagates:
 `ADR046-zone-control-016` names `015` as a prerequisite and
 `ADR046-zone-control-021` depends on `016`.
 
@@ -68,7 +67,7 @@ A Provider that split `outputs = [ "bin" "out" ]` would therefore have the
 catalog pin `$bin` while its manifest sat in `$out`, unreachable from the pinned
 path and outside the digest the catalog records for it.
 
-**The panel's counter-measurement, which falsified the first draft's rule.** The
+**The counter-measurement that falsified the first draft's rule.** The
 first draft asserted `builtins.length package.all == 1`. Re-measuring the full
 set of shapes `types.package` admits shows that predicate is both wrong and
 partial:
@@ -577,9 +576,8 @@ getting it wrong silently produces a digest nothing else can reproduce:
 
 This ADR means the **first** one, which is the D101 contract digest that
 `ADR-046-decision-register` D101 and `ADR-046-nix-configuration` both spell as
-`SHA-256(domain_tag || 0x00 || canonical_bytes)`. The second belongs to the
-delivery tooling's wave and panel records, hashes non-canonical JSON, and is not
-a D101 digest at all. An implementer of `ADR046-zone-control-015` must import
+`SHA-256(domain_tag || 0x00 || canonical_bytes)`. The second belongs to an earlier delivery record, hashes non-canonical JSON,
+and is not a D101 digest at all. An implementer of `ADR046-zone-control-015` must import
 `d2b_contracts::v3::canonical_digest` and no other.
 
 **The set digest binds the map, not a summary of it.** Stated explicitly because
@@ -985,7 +983,7 @@ build, and a verification failure by re-signing. Collapsing them makes the
 operator guess which of four unrelated remediations applies.
 
 **The bounded safe representation, and why each value is safe to name.** The
-panel asked for actionable values; section 13.4 forbids leaking. These do not
+review required actionable values; section 13.4 forbids leaking. These do not
 conflict once each value is examined rather than the class assumed:
 
 - `publisher` and `signatureId` are catalog fields already required to be
@@ -1296,7 +1294,7 @@ with four exceptions, which item 14 records as blocked on a contract field and a
 framework helper that do not exist yet.
 
 **Multi-output Provider packaging is permitted but must be said out loud.** This
-is where panel round 1 moved the decision, and round 2 widened it further. A
+is where review clarified the decision. A
 Provider may ship a multi-output derivation; the operator names the output that
 carries the Provider (`package = pkgs.foo.out;`), and a non-first output selected
 on a raw-primop derivation is accepted through `outputName` without needing
@@ -1397,7 +1395,7 @@ architecture-dependent. Rejected, but narrowly: the layout must live in **one**
 output because `provider-catalog.nix` records `storePath = "${artifact.package}"`
 and that is the only path the catalog pins, digests, and stages. Splitting the
 manifest into a second output would put it outside the digested path. What the
-decision permits, after panel round 1, is a multi-output derivation whose
+decision permits, after review, is a multi-output derivation whose
 Provider-carrying output the operator names explicitly; what it refuses is
 spreading the required layout across several of them.
 

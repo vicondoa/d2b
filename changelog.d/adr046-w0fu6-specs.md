@@ -27,7 +27,7 @@
 - Assigned a single durable writer for configuration activation (D122):
   `generation.json` (active pointer, prior pointer, retention metadata) is
   committed in one atomic durable write before any diff application or
-  reconcile notification, and every other activation work item defers that
+  reconcile notification, and every other activation path defers that
   commit to the sole writer. Restart recovery follows ADR 0034: recover, adopt,
   or quarantine before any cleanup.
 - Redefined the host-firewall projection generation fence (D125) as the

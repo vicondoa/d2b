@@ -115,7 +115,7 @@ vk.xml against it. A value contributed only by an extension not named there is
 rejected automatically, including values added by a future vk.xml revision.
 
 **The direction is the whole point.** W2's defect - one root cause found twelve
-times across 23 panel rounds - was always a hand-written set deciding whether a
+times across 23 review rounds - was always a hand-written set deciding whether a
 guard applies. Hand-listing what to *reject* reproduces it exactly, because such
 a list is complete only until the registry changes. Naming what is *supported*
 makes the default deny. This is W3 §4.6's requirement, landed early because the

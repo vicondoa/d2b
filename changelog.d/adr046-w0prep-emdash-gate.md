@@ -14,16 +14,3 @@
   hyphen ` - `, and a dash that joined a range or a compound closed up to `-`.
   Documentation, specs, ADRs, comments, CLI text, and generated artifacts are
   all affected.
-- The ADR-046 spec-registry census now labels its dashed-title bucket
-  `dash title` instead of `em-dash title`. The bucket counts titles that split
-  an identifier from its prose with a dash of any kind; only the spelling of
-  the label changed, not the classification or the count.
-
-### Fixed
-
-- The `Dependency/owner` cell for `ADR046-network-005` spelled an id range with
-  a typographic dash. That dash is a token separator to the work-item
-  tokenizer while a plain hyphen is an id character, so normalizing it would
-  have fused the range into a single nonexistent id. The cell is respelled as
-  an enumeration that survives normalization without changing any dependency
-  edge.

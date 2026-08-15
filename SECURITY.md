@@ -123,7 +123,7 @@ macOS/vfkit, WSL, containers as hosts, Alpine/musl, non-systemd
 autostart, rootless Nix, Firecracker feature parity,
 crosvm-as-full-VMM parity, and aarch64 runtime graphics/audio are
 **explicitly rejected** at the first milestone; adding any of these
-requires a new ADR + panel sign-off.
+requires security review.
 
 Telemetry posture is preserved: `d2bd` makes no outbound network
 connections by default; any future opt-in lands behind an explicit

@@ -168,7 +168,7 @@ over unary ttRPC calls**:
 The credit-window ttRPC stream overlay remains documented as a fallback
 candidate if chunked stdio fails later implementation evidence. A custom
 binary stream or custom JSON control remains a last resort and requires a
-new panel-approved decision.
+new reviewed decision.
 
 ### Detached exec
 
@@ -470,7 +470,7 @@ for failing a must-pass row.
 - The port registry owns all guest-control ports. Reserve at least a
   guestd control port and, only if needed, a separate exec stream port:
   `14318` is the host-to-guest `d2b-guestd` ttRPC control port and
-  `14319` is reserved for any future panel-approved guest-control
+  `14319` is reserved for any future reviewed guest-control
   stream side channel. The selected chunked-stdio design does not use
   `14319`. Existing guest-to-host observability port `14317` remains
   separate: it is owned by OTLP/Alloy relay traffic, uses the
@@ -722,7 +722,7 @@ Positive:
 
 - D2b follows existing microVM-agent practice before inventing a
   custom control protocol.
-- The protocol choice is evidence-driven and panel-gated.
+- The protocol choice is evidence-driven and acceptance-gated.
 - Existing SSH workflows keep working for old running VMs during the
   compatibility window.
 - The no-new-unsafe and static guest-binary invariants stay explicit.

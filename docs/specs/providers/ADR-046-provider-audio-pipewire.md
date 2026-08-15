@@ -1731,7 +1731,7 @@ broker-mediated process lifecycle effects. No `SetSocketAcl`, `ChownSocket`,
 ## Security invariants
 
 The following invariants are load-bearing. Any change requires corresponding
-test coverage and is subject to panel review.
+test coverage and is subject to ordinary code review.
 
 1. **Zero host capabilities.** The vhost-user-sound worker Process
    `spec.sandbox.capabilityClasses` is always `[]` and `startRoot` is always
@@ -3126,7 +3126,7 @@ policy rejects a provider crate missing any of these paths.
 
 ### Fast hermetic execution and test placement (D094)
 
-Per D094 and `ADR-046-validation-and-delivery` §10.16, this Provider's `src/`
+Per D094 and the repository's test-budget guidance, this Provider's `src/`
 unit tests and `tests/*.rs` hermetic suite are fast, in-process, deterministic,
 and parallel-safe: an individual normal test has an advisory wall-clock p95
 diagnostic threshold of <=50 ms; gate enforcement is aggregate per-crate

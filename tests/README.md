@@ -8,7 +8,8 @@ that is the binding contract; this file is the human quick-start.
 ## Two layers
 
 - **Layer 1 - static gate.** Hermetic, fast, deterministic; no live host, VM, or
-  container. Runs on every PR and locally via `make check`. This is where the
+  container. Available in CI and locally via `make check`; focused
+  component tests are sufficient when a full aggregate is not needed. This is where the
   overwhelming majority of tests live (Nix eval cases, Rust unit/integration/
   contract/policy-lint tests, flake checks, and a small closed set of drift +
   meta gates). The manifest records which jobs are enforcing and which are
@@ -35,11 +36,11 @@ tests/
 │   ├── meta/                                                    meta gates (guard the test infra; closed set)
 │   └── gates/                                                   drift + perf gates (closed set)
 ├── integration/                   ── Layer 2 ──
-│   ├── containers/                                              type 9: podman (make test-integration; host/manual pre-PR)
+│   ├── containers/                                              type 9: podman (make test-integration; conditional)
 │   ├── distro-matrix/                                           distro pins + fixtures
 │   └── live/                                                    type 11: D2B_LIVE live-host (manual)
 └── host-integration/
-    ├── *.nix                                                    type 10: runNixOSTest (make test-host-integration; host/manual pre-PR)
+    ├── *.nix                                                    type 10: runNixOSTest (make test-host-integration; conditional)
     └── hardware/                                                type 12: real-device tests (manual)
 ```
 
@@ -51,13 +52,13 @@ Rust tests (types 2-5: unit, integration, contract, policy-lint) live under
 | Command | Runs | Where |
 |---------|------|-------|
 | `make test-unit` | **post-preflight L1 umbrella** from `tests/layer1-jobs.json`; `make check` also runs the manifest's preflight jobs | local + CI (parallel jobs) |
-| `make test` | `test-unit` + `test-integration` | local host; still run `make test-host-integration` before opening an agent-owned PR |
+| `make test` | `test-unit` + `test-integration` | local convenience aggregate; use wider lanes when the changed surface needs them |
 | `make check-tier0` | sub-60s syntax + shellcheck gate | local + CI |
 | `make check-inventory` | fail-closed migration-ledger drift check | local + CI |
-| `make test-lint` | serial fail-fast API-pin hint + Rust fmt + local changed-scope clippy + nix-parse + shellcheck; CI leaves clippy to the full Rust shard | local + CI |
+| `make test-lint` | serial fail-fast Rust fmt + local changed-scope clippy + nix-parse + shellcheck; CI leaves clippy to the full Rust shard | local + CI |
 | `make test-changelog` | require release notes for code changes and validate every changelog fragment | local + CI |
-| `make test-rust` | bounded Make DAG for the Rust leaves (API, fmt, clippy, workspace tests, conditional fixture/CLI, broker x3, deny/audit, schema, inventory, and no-bash); fixture/CLI are included once when Nix is available | local + CI |
-| `make test-rust-<leaf>` | eight CI leaf targets (API, main, broker, guest shell runner, no-bash AST, schema, inventory, supply chain) behind the stable `test-rust` rollup; each receives the full runner budget | CI (local for a focused rerun) |
+| `make test-rust` | bounded Make DAG for the Rust leaves (fmt, clippy, workspace tests, conditional fixture/CLI, broker x3, deny/audit, schema, inventory, and no-bash); fixture/CLI are included once when Nix is available | local + CI |
+| `make test-rust-<leaf>` | seven CI leaf targets (main, broker, guest shell runner, no-bash AST, schema, inventory, supply chain) behind the stable `test-rust` rollup; each receives the full runner budget | CI (local for a focused rerun) |
 | `make test-fixture-contracts` | enforcing eval-rendered lane: materializes `D2B_FIXTURES` from evaluated Nix artifact data, then runs `d2b-contract-tests` and the CLI-contract cases; both lanes set `D2B_ENABLE_FIXTURE_BUILD=1`, and invoking it without that variable fails rather than skipping | local + CI |
 | `make test-proofs` | standalone proofs/ crates | local + CI |
 | `make test-flake` | `nix flake check --no-build` (native system); `D2B_FLAKE_CHECK=<name>` instantiates one check, `D2B_FLAKE_OUTPUTS=1` sweeps non-`checks` outputs, `D2B_FLAKE_LOCAL_SHARDS=1` runs the local bounded shard fan-out | local + CI (x86 sharded per-check matrix; aarch64 PR job runs a lightweight smoke eval) |
@@ -65,11 +66,11 @@ Rust tests (types 2-5: unit, integration, contract, policy-lint) live under
 | `make test-flake-partition` | emit those names split into the eval, realized, and nix-unit dispatch classes (CI matrix plumbing) | CI (dynamic matrix) |
 | `make test-nix-unit` | sharded nix-unit corpus checks, retained as explicit evidence in the manifest-driven local and CI graph | local + CI |
 | `make test-drift` | drift-check + vms-json-parity + flake-check-matrix-sync | local + CI |
-| `make test-policy` | meta gates (ci-coverage, adr-index, deliverable inventory, etc.) | local + CI |
+| `make test-policy` | meta gates (CI coverage, deliverable inventory, etc.) | local + CI |
 | `make test-runtime-ledger` | hermetic execution-budget gate: after a warm build, enforces aggregate per-crate process-CPU p95 budgets, fails any individual census test sample over 60 seconds, and reports shorter per-test wall-clock p95s as advisory diagnostics (holds no baseline; makes no historical-regression claim) | local + CI |
 | `make test-performance-budgets` | advisory performance canary; without `D2B_PERF_STABLE=1` it reports `SKIP` and enforces nothing | local + CI |
-| `make test-integration` | type-9 podman container tests | **local host/manual pre-PR** (podman; not the PR pipeline) |
-| `make test-host-integration` | type-10 runNixOSTest VM checks | **local NixOS host w/ KVM**, manual pre-PR (not the PR pipeline; TCG fallback) |
+| `make test-integration` | type-9 podman container tests | conditional local host lane (podman; not the PR pipeline) |
+| `make test-host-integration` | type-10 runNixOSTest VM checks | conditional local NixOS host lane (KVM; TCG fallback; not the PR pipeline) |
 | `make check-fast` | alias for `test-unit` (backward compat) | local + CI |
 | `make check` | PR-equivalent manifest target set with bounded local parallelism; enforcement classifications come from `tests/layer1-jobs.json` | local |
 | `make check-static` | legacy/full-static monolithic gate (`tests/static.sh`) | local |
@@ -167,47 +168,39 @@ runner, setting `D2B_PERF_STABLE=1` there, and removing the `enforcement` and
 
 The fixture lane is enforcing. It fails when `D2B_ENABLE_FIXTURE_BUILD=1` is
 absent, evaluates both Nix configurations, materializes their artifact data, and
-runs the fixture-dependent contract and CLI tests. The default `test-rust` and
-focused `test-rust-main` include those surfaces once when Nix is available;
-`D2B_SKIP_FIXTURE_BUILD=1` omits them for the Layer-1 graph so this separate
-lane does not duplicate work. Selected hermetic policy files may have separate
+runs the fixture-dependent contract and CLI tests. The Layer-1 `test-rust` job
+excludes those surfaces; run `make test-fixture-contracts` to validate
+`d2b-contract-tests` and its fixture-dependent policy layer. Selected hermetic
+policy files may have separate
 enforcing entrypoints under `test-policy`; the shared list in `tests/lib.sh` is
 excluded from the fixture lane so those repository scans execute once. Inspect
 that target before citing one.
 
 ### Rust DAG budget and execution evidence
 
-`make test-rust` is the only aggregate Rust entrypoint. GNU Make schedules its
+`make test-rust` is the aggregate Rust entrypoint for the non-fixture leaves.
+GNU Make schedules its
 explicit leaves with `--keep-going` and `--output-sync=target`, so independent
 leaves continue after a failure and each target's output remains grouped. The
-broker feature passes stay serial. Fixture/CLI work and the API snapshot
-checker use isolated stable targets below `.scratch/rust-test-cache`, so they
-can overlap the main workspace without sharing mutable Cargo state. The public
-and private rustdoc censuses overlap only when the API leaf receives at least
-two jobs, and their split Cargo quotas stay within that leaf's budget. The
-snapshot checker uses its release profile for the measured CPU-bound JSON
-pass. Budgets through nine use one job per active lane; surplus jobs above nine are assigned
-to the measured API long pole while the complete frontier stays bounded.
-Direct calls to `tests/test-rust.sh` require one explicit leaf mode; callers
-that need the complete gate must use `make test-rust`. The focused
-`make test-rust-main` also retains conditional fixture/CLI coverage.
+broker feature passes stay serial. Fixture/CLI work uses an isolated stable
+target below `.scratch/rust-test-cache`, so it can overlap the main workspace
+without sharing mutable Cargo state. The complete frontier remains bounded by
+the requested Rust budget.
+Direct calls to `tests/test-rust.sh` require one explicit leaf mode. Run
+`make test-fixture-contracts` separately for the complete fixture-dependent
+contract and policy coverage.
 
 Before that aggregate starts, local `make check` runs `make test-lint`
-serially. Its Rust precheck shares the normal target directories, so
-changed-package clippy both reports common failures before the long parallel
-phase and warms the later full workspace gate. The API check compares a
-generated fingerprint over the main workspace's census inputs; the later
-compiler-derived census remains the authoritative snapshot check.
+serially. Its changed-package clippy reports common failures before the long
+parallel phase and warms the later full workspace gate.
 
 CI invokes one Make target per Rust leaf, so local-only dependency edges do
 not repeat schema or inventory work in the main and broker jobs. A cold local
 aggregate (detected when `packages/target` is absent) restores the shared
-workspace target layout and retains the warm-local split API census cache
-across `make clean`. A bounded API/main/broker prebuild frontier runs first;
-fixture, inventory and schema then run as a full-budget chain so discovery
+workspace target layout. Fixture, inventory and schema then run as a full-budget
+chain so discovery
 reuses all prior builds before schema generation. Warm local runs retain the
-parallel isolated-target profile, while CI alone uses the shared API census
-target.
+parallel isolated-target profile.
 
 Use `D2B_RUST_BUDGET=<positive-integer>` to request a Rust budget. It is an
 upper bound, not a host-capacity bypass. The default is the smaller of logical
@@ -350,10 +343,10 @@ sets `D2B_FLAKE_LOCAL_SHARDS=1` for `make test-flake` and
 `D2B_SKIP_FIXTURE_BUILD=1` for `make test-rust`, matching the PR Rust job. The
 flake shards do not execute `d2b-contract-tests`; the separate enforcing
 fixture-contract lane runs them with evaluated fixtures and fails rather than skipping. Tune
-`D2B_CHECK_JOBS` and `D2B_FLAKE_JOBS` for host capacity. Agent-owned PRs also run
-`make test-integration` and `make test-host-integration` on the host before the
-PR is opened; those manual integration tiers are not replaced by PR pipeline
-jobs.
+`D2B_CHECK_JOBS` and `D2B_FLAKE_JOBS` for host capacity. Run
+`make test-integration` and `make test-host-integration` when the changed
+surface requires container or host coverage; those conditional integration
+tiers are not replaced by PR pipeline jobs.
 
 Useful knobs:
 - `D2B_NO_SCCACHE=1` - disable sccache in the rust gate.

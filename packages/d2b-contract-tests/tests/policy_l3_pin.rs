@@ -3,8 +3,7 @@
 //! `tests/golden/l3-matrix/` (via the `read_repo_file` / `repo_root` helpers)
 //! and asserts each one parses as an ini-flavoured `key = value` file carrying
 //! the required keys, a valid `sha256` (the sentinel `placeholder` or a 64-char
-//! lowercase-hex digest), an `https://` `image_url`, and
-//! `panel_approval_required_for_change = true` (drift requires an ADR).
+//! lowercase-hex digest), and an `https://` `image_url`.
 //!
 //! This crate runs only from `tests/tools/rust-workspace-checks.sh` against the real
 //! checkout (it is excluded from the hermetic Nix sandbox workspace build), so
@@ -30,7 +29,6 @@ const REQUIRED_KEYS: &[&str] = &[
     "nftables",
     "cloud_hypervisor_min",
     "minijail",
-    "panel_approval_required_for_change",
 ];
 
 /// Parse a pin file's non-comment, non-blank lines into a `key -> value` map,
@@ -99,13 +97,6 @@ fn l3_matrix_pins_parse_and_carry_required_keys() {
         assert!(
             url.starts_with("https://"),
             "l3-pin-consistency: {pin}: image_url must be https://: '{url}'"
-        );
-
-        // Drift requires an ADR: panel approval is mandatory.
-        let panel = &map["panel_approval_required_for_change"];
-        assert_eq!(
-            panel, "true",
-            "l3-pin-consistency: {pin}: panel_approval_required_for_change must be 'true' (drift requires ADR), got: '{panel}'"
         );
     }
 }

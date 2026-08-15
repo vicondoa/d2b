@@ -1,3 +1,4 @@
 ### Changed
 
-- Report Rust formatting, changed-package clippy, and stale compiler-derived API snapshot inputs before long local validation jobs begin.
+- Report Rust formatting and changed-package clippy before long local validation
+  jobs begin.

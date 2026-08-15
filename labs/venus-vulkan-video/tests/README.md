@@ -143,7 +143,7 @@ of *two* call sites and the helper stayed reachable through the other. **A
 mutation that fails to move the number is a claim about the mutation before it
 is a claim about the gate.**
 
-## Three more lessons, from the round-1 panel
+## Three more lessons, from the round-1 review
 
 All seven reviewers rejected the wave and six independently found the same
 thing, which is itself the lesson: **a gate you wrote cannot referee your own
@@ -206,7 +206,7 @@ would have told the difference.
 
 ## The one root cause, found six times
 
-Six panel rounds produced six findings that all look different and are the same
+Six review rounds produced six findings that all look different and are the same
 thing: **a set I wrote by hand decided whether a guard applied.**
 
 | round | the hand-written set | what it missed |
@@ -243,7 +243,7 @@ check runs at all.
 
 ## Rounds 3-4: the value is always one level further out
 
-Each panel round found the same class of defect one level further from where
+Each review round found the same class of defect one level further from where
 the previous fix had looked.
 
 | round | where the value was |
@@ -369,7 +369,7 @@ walks. Hand-listing this surface was wrong every time it was tried.
   gate false-passed a mutation that left two of three video extensions
   advertised to the guest, and it had never been observed failing. Prefer
   auditing gates in order of how load-bearing their claim is, not in the order
-  the panel happens to raise them.
+  the review happens to raise them.
 - **Enumerate what is permitted, not what is forbidden.** Every one of this
   wave's repeated defects was a forbidden-list or an accepted-spelling list that
   the author's imagination bounded. `= true` was matched as "enabled" so `= 1`

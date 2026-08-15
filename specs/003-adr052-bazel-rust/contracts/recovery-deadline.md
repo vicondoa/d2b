@@ -79,12 +79,12 @@ selected from the command-version table. There is no generic `owning slice`
 text, free-form command, dynamic path, numeric PID/PGID, errno text, or raw
 transport byte.
 
-| Command version | Phase where valid | `main` | `api` | `broker` | `aux` |
-| --- | --- | --- | --- | --- | --- |
-| `bazel-diagnostic-v1` | Shadow targets exist and aliases have not been removed | `make test-bazel-rust-main` | `make test-bazel-rust-api` | `make test-bazel-rust-broker` | `make test-bazel-rust-aux` |
-| `bazel-diagnostic-v2` | Alias removal has landed | `make test-rust-slice-main` | `make test-rust-slice-api` | `make test-rust-slice-broker` | `make test-rust-slice-aux` |
+| Command version | Phase where valid | `main` | `broker` | `aux` |
+| --- | --- | --- | --- | --- |
+| `bazel-diagnostic-v1` | Shadow targets exist and aliases have not been removed | `make test-bazel-rust-main` | `make test-bazel-rust-broker` | `make test-bazel-rust-aux` |
+| `bazel-diagnostic-v2` | Alias removal has landed | `make test-rust-slice-main` | `make test-rust-slice-broker` | `make test-rust-slice-aux` |
 
-The renderer accepts the eight cells above as a closed enum. It refuses
+The renderer accepts the six cells above as a closed enum. It refuses
 `bazel-diagnostic-v1` after alias removal, `bazel-diagnostic-v2` before alias
 removal, an unknown slice, or a command that is not present in that repository
 state. The
@@ -110,7 +110,7 @@ the kernel, Yama, and real capability-probe rows and completes them before
 spawning the helper. The patched sandbox owns policy-identity and
 request-argument drift. Sequential T120 owns their renderers, byte-exact
 tests, fixed-locator resolution, and missing or borrowed remedy mutations
-across all four slices and both command versions. Each test asserts no helper
+across all three slices and both command versions. Each test asserts no helper
 was spawned. Qualification requires every positive, refusal, wrong-remedy,
 call-position/type mutation, and wrong-pid/nonchild host-refusal result.
 
@@ -209,7 +209,7 @@ original live monitor may publish the fixed
 `quarantine=entered-and-released-after-consuming-reap`.
 
 T067 owns table-driven byte-exact tests for every parent, helper, and child
-public code crossed with all four slices and both closed command versions.
+public code crossed with all three slices and both closed command versions.
 T068 implements only that runner-owned closed mapping and makes T067 pass.
 Each case asserts nonzero status, empty stdout, fixed safe input, exact
 correction, exact phase-valid rerun command, and absence of forbidden values.

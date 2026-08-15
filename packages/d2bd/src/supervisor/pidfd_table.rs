@@ -656,7 +656,7 @@ fn write_snapshot(path: &Path, snapshot: &PersistedPidfdTable) -> Result<(), Pid
         });
     }
     if let Err(err) = file.write_all(&bytes) {
-        // panel-rust v1.1.2-final-R1 should-fix: log cleanup
+        // Review fix: log cleanup
         // failures so disk-full / permission regressions surface.
         if let Err(rm_err) = fs::remove_file(&tmp) {
             tracing::debug!(?tmp, %rm_err, "pidfd-table: tmpfile cleanup failed (write path)");
@@ -1278,7 +1278,7 @@ mod tests {
         assert!(log.take(1001).is_none());
     }
 
-    /// v1.1.2-final-R1 (panel-test CRITICAL): concurrent snapshot
+    /// Concurrent snapshot
     /// stress test that would have caught the fu32 tmpfile race.
     /// 8 threads each register a pidfd then call snapshot(). The
     /// snapshot_tmp_path uses pid + atomic counter so concurrent
@@ -1348,7 +1348,7 @@ mod tests {
         }
     }
 
-    /// v1.1.2-final-R1 (panel-kernel + panel-test): verify
+    /// Verify
     /// snapshot_tmp_path generates distinct names for concurrent
     /// callers. Direct unit test of the file-naming function.
     #[test]

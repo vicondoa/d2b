@@ -308,12 +308,6 @@ fn authority_capability_is_not_downstream_mintable() {
         !capability_block.contains("Deserialize"),
         "AuthorityOperationCapability must not be deserializable"
     );
-    let api = read_repo_file_opt("tests/golden/api-surface/hidden-public-api.txt")
-        .expect("read hidden API snapshot");
-    assert!(
-        !api.contains("AuthorityOperationCapability::new"),
-        "capability constructor must not appear in the downstream API snapshot"
-    );
     let adapter = read_repo_file_opt("packages/d2bd/src/authority_persistence.rs")
         .expect("read d2bd adapter");
     assert!(

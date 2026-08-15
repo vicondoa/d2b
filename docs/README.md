@@ -251,9 +251,9 @@ link to the relevant how-to for day-2 procedures.
 
 Process documentation for changing d2b itself, rather than consuming it,
 lives outside the Diataxis quadrants in
-[`contributing/`](./contributing/README.md): workflow, panel review,
-changelog and commit conventions, gates and lints, critical subsystems, and
-architecture conventions. Start from [`../AGENTS.md`](../AGENTS.md), which
-indexes them and carries the binding rules.
+[`contributing/`](./contributing/README.md): workflow, changelog and commit
+conventions, gates and lints, critical subsystems, and architecture
+conventions. Start from [`../AGENTS.md`](../AGENTS.md), which indexes them and
+carries the binding rules.
 
 [Diataxis]: https://diataxis.fr/

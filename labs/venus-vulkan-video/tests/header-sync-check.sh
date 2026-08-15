@@ -7,9 +7,9 @@
 # generator at build time, so a change to the wire schema only reaches them
 # when someone remembers to re-copy. Nothing failed when that was forgotten --
 # the renderer simply kept decoding with the old rules while the driver encoded
-# with the new ones, and every other check stayed green. A W1 panel reviewer
-# found exactly that: a decode-side hardening landed in venus-protocol and the
-# pinned renderer still had the unhardened decoder.
+# with the new ones, and every other check stayed green. A W1 reviewer found
+# exactly that: a decode-side hardening landed in venus-protocol and the pinned
+# renderer still had the unhardened decoder.
 #
 # Usage:
 #   header-sync-check.sh [--fix]

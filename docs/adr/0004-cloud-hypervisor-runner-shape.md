@@ -81,7 +81,7 @@ The considered options are:
 | Audio Cloud Hypervisor VM | Supported shape, sidecar split required | Audio/video sidecars must run as separate roles rather than inheriting one broad CH runner profile. |
 | TPM Cloud Hypervisor VM | Supported shape, sidecar split required | `swtpm` remains a separate role with its own uid/gid, socket ownership, and sandbox. |
 | Vsock Cloud Hypervisor VM | Supported shape | Vsock CID allocation and API socket ownership are allowed documented daemon divergences from declaredRunner snapshots. |
-| Firecracker | Deferred non-goal | Firecracker feature parity is outside the first milestone and requires a later ADR plus panel review. |
+| Firecracker | Deferred non-goal | Firecracker feature parity is outside the first milestone and requires a later ADR plus maintainer review. |
 | crosvm-as-full-VMM | Deferred non-goal | Crosvm may appear as a graphics helper, but using crosvm as the primary full VMM is outside the first milestone. |
 
 ## Field-by-field input contract

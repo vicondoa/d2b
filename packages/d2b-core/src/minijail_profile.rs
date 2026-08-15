@@ -64,7 +64,7 @@ pub struct UserNamespaceProfile {
     pub host_gid_for_zero: u32,
 }
 
-// v1.1.2fu19 panel-software R2 should-fix: provide `From` impls
+// Review fix: provide `From` impls
 // across the duplicate `UserNamespaceSpec` types so layer
 // boundaries don't drift if one struct adds a field and the
 // others don't. The conversions are infallible - both source

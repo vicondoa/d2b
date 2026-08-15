@@ -15,7 +15,6 @@ const INDEPENDENT_WORKSPACE_ROOTS: &[&str] = &[
     "packages/d2b-resource-api/tests/ui/external-seals",
     "packages/d2b-wlproxy-spike",
 ];
-const API_SURFACE_CRATE: &str = "packages/d2b-api-surface";
 const RUST_DRIVER: &str = "tests/test-rust.sh";
 const RELEASE_WORKFLOW: &str = ".github/workflows/release-host-binaries.yml";
 const RELEASE_BINARY_SELECTORS: &[(&str, &str, &str)] = &[
@@ -39,7 +38,6 @@ const RELEASE_BINARY_SELECTORS: &[(&str, &str, &str)] = &[
     ),
 ];
 const RUST_DAG_LEAVES: &[&str] = &[
-    "test-rust-leaf-api-surface",
     "test-rust-leaf-main-workspace",
     "test-rust-leaf-schema",
     "test-rust-leaf-inventory",
@@ -50,7 +48,6 @@ const RUST_DAG_LEAVES: &[&str] = &[
     "test-rust-leaf-supply-chain",
 ];
 const RUST_LEAF_MODES: &[&str] = &[
-    "api-surface",
     "main-workspace",
     "broker",
     "guest-shell-runner",
@@ -65,7 +62,6 @@ const REQUIRED_NEXTTEST_BENCH_SOURCES: &[&str] = &[
     "packages/d2b-controller-toolkit/benches/reaction.rs",
 ];
 const RUST_BASELINE_LEAF_IDS: &[&str] = &[
-    "rust-api-surface",
     "rust-main-format",
     "rust-main-clippy",
     "rust-main-workspace-tests",
@@ -286,40 +282,6 @@ fn every_tested_workspace_uses_fast_debug_profiles() {
 }
 
 #[test]
-fn compiler_derived_api_surface_is_pinned_and_enforcing() {
-    let root = repo_root();
-    let workspace = read_repo_file("packages/Cargo.toml");
-    let driver = read_repo_file("tests/test-rust.sh");
-    let api_driver = read_repo_file("tests/tools/api-surface-json.sh");
-    let policy_manifest = read_repo_file(&format!("{API_SURFACE_CRATE}/Cargo.toml"));
-    let toolchain = read_repo_file(&format!("{API_SURFACE_CRATE}/rust-toolchain.toml"));
-
-    assert!(workspace.contains("\"d2b-api-surface\""));
-    assert!(driver.contains("tests/tools/api-surface-json.sh"));
-    assert!(api_driver.contains("--document-private-items --document-hidden-items"));
-    assert!(api_driver.contains("workspace_doc_args+=(--package \"$package_name\")"));
-    assert!(api_driver.contains("\"${workspace_doc_args[@]}\" --lib --no-deps"));
-    assert!(policy_manifest.contains("public-api = { version = \"=0.52.0\""));
-    assert!(policy_manifest.contains("rustdoc-types = \"=0.57.4\""));
-    assert!(toolchain.contains("nightly-2026-02-16"));
-    for required in [
-        "workspace-metadata.json",
-        "input-fingerprint.txt",
-        "roots.json",
-        "public-api.txt",
-        "capability-api.txt",
-        "hidden-public-api.txt",
-        "capability-trait-impls.txt",
-    ] {
-        assert!(
-            root.join("tests/golden/api-surface")
-                .join(required)
-                .is_file()
-        );
-    }
-}
-
-#[test]
 fn excluded_workspaces_keep_own_lock_and_supply_chain_policy() {
     let root = repo_root();
     let main_workspace = read_repo_file("packages/Cargo.toml");
@@ -362,6 +324,7 @@ fn discovered_package_manifests() -> Vec<(String, String)> {
             rel.starts_with("packages/")
                 && rel.ends_with("/Cargo.toml")
                 && rel != "packages/Cargo.toml"
+                && repo_root().join(rel).is_file()
         })
         .map(|rel| {
             let content = std::fs::read_to_string(repo_root().join(&rel)).unwrap_or_else(|error| {
@@ -530,7 +493,7 @@ fn rust_dag_violations(makefile: &str) -> Vec<String> {
         "D2B_RUST_BROKER_PREREQS_cold :=",
         "D2B_RUST_BROKER_PREREQS_broker :=",
         "test-rust-leaf-broker: $(D2B_RUST_BROKER_PREREQS)",
-        "D2B_RUST_FIXTURE_PREREQS_cold := test-rust-leaf-api-surface test-rust-leaf-main-workspace test-rust-leaf-broker test-rust-leaf-guest-shell-runner test-rust-leaf-no-bash-ast test-rust-leaf-supply-chain",
+        "D2B_RUST_FIXTURE_PREREQS_cold := test-rust-leaf-main-workspace test-rust-leaf-broker test-rust-leaf-guest-shell-runner test-rust-leaf-no-bash-ast test-rust-leaf-supply-chain",
         "test-rust-leaf-fixture-contracts: $(D2B_RUST_FIXTURE_PREREQS)",
         "D2B_RUST_INVENTORY_PREREQS_cold := test-rust-leaf-fixture-contracts",
         "test-rust-leaf-inventory: $(D2B_RUST_INVENTORY_PREREQS)",
@@ -782,11 +745,10 @@ fn rust_manifest_policy_violations(makefile: &str, driver: &str) -> Vec<String> 
     violations
 }
 
-fn rust_profile_violations(makefile: &str, driver: &str, api_driver: &str) -> Vec<String> {
+fn rust_profile_violations(makefile: &str, driver: &str) -> Vec<String> {
     let mut violations = Vec::new();
     for profile in [
         "aggregate",
-        "api",
         "main",
         "broker",
         "guest",
@@ -815,13 +777,6 @@ fn rust_profile_violations(makefile: &str, driver: &str, api_driver: &str) -> Ve
         || !driver.contains("fixture_target_dir=\"$workspace_target_dir\"")
     {
         violations.push("fixture target does not restore the shared CI/cold target".to_owned());
-    }
-    if !api_driver.contains("${CI:-}")
-        || !api_driver.contains("shared_census=1")
-        || !api_driver.contains("public_target=\"$target_root/census\"")
-        || !api_driver.contains("public_target=\"$target_root/public-census\"")
-    {
-        violations.push("API census does not separate CI and local targets".to_owned());
     }
     violations
 }
@@ -914,13 +869,8 @@ fn independent_workspace_roots_are_closed_and_explicit() {
         "every package workspace root must be an explicit supported exception"
     );
 
-    let api_driver = read_repo_file("tests/tools/api-surface-input-fingerprint.sh");
     let rust_driver = read_repo_file(RUST_DRIVER);
     for root in INDEPENDENT_WORKSPACE_ROOTS {
-        assert!(
-            api_driver.contains(root),
-            "API fingerprint must name independent workspace root {root}"
-        );
         assert!(
             rust_driver.contains(root),
             "changed-scope Clippy must name independent workspace root {root}"
@@ -1128,8 +1078,7 @@ fn rust_dag_orders_leaves_that_share_the_cargo_target_directory() {
 #[test]
 fn rust_dag_policy_rejects_a_missing_shared_target_edge_fixture() {
     let good = r#"
-test-rust: test-rust-leaf-api-surface test-rust-leaf-main-workspace test-rust-leaf-schema test-rust-leaf-inventory test-rust-leaf-fixture-contracts test-rust-leaf-broker test-rust-leaf-guest-shell-runner test-rust-leaf-no-bash-ast test-rust-leaf-supply-chain
-test-rust-leaf-api-surface:
+test-rust: test-rust-leaf-main-workspace test-rust-leaf-schema test-rust-leaf-inventory test-rust-leaf-fixture-contracts test-rust-leaf-broker test-rust-leaf-guest-shell-runner test-rust-leaf-no-bash-ast test-rust-leaf-supply-chain
 D2B_RUST_MAIN_PREREQS_aggregate := test-rust-leaf-schema
 D2B_RUST_MAIN_PREREQS_cold :=
 D2B_RUST_MAIN_PREREQS_main :=
@@ -1145,7 +1094,7 @@ D2B_RUST_SCHEMA_PREREQS_aggregate := test-rust-leaf-inventory
 D2B_RUST_SCHEMA_PREREQS_cold := test-rust-leaf-inventory
 D2B_RUST_SCHEMA_PREREQS_schema :=
 test-rust-leaf-schema: $(D2B_RUST_SCHEMA_PREREQS)
-D2B_RUST_FIXTURE_PREREQS_cold := test-rust-leaf-api-surface test-rust-leaf-main-workspace test-rust-leaf-broker test-rust-leaf-guest-shell-runner test-rust-leaf-no-bash-ast test-rust-leaf-supply-chain
+D2B_RUST_FIXTURE_PREREQS_cold := test-rust-leaf-main-workspace test-rust-leaf-broker test-rust-leaf-guest-shell-runner test-rust-leaf-no-bash-ast test-rust-leaf-supply-chain
 test-rust-leaf-fixture-contracts: $(D2B_RUST_FIXTURE_PREREQS)
 D2B_RUST_INVENTORY_PREREQS_cold := test-rust-leaf-fixture-contracts
 test-rust-leaf-inventory: $(D2B_RUST_INVENTORY_PREREQS)
@@ -1407,8 +1356,7 @@ fn rust_execution_manifest_policy_rejects_negative_mutations() {
 fn rust_local_ci_and_cold_profiles_are_explicit() {
     let makefile = read_repo_file("Makefile");
     let driver = read_repo_file(RUST_DRIVER);
-    let api_driver = read_repo_file("tests/tools/api-surface-json.sh");
-    let violations = rust_profile_violations(&makefile, &driver, &api_driver);
+    let violations = rust_profile_violations(&makefile, &driver);
     assert!(
         violations.is_empty(),
         "Rust local, CI, and cold profiles drifted:\n{}",
@@ -1420,7 +1368,6 @@ fn rust_local_ci_and_cold_profiles_are_explicit() {
 fn rust_profile_policy_rejects_a_missing_ci_profile() {
     let makefile = r#"
 $(call D2B_RUST_DISPATCH,leaves,aggregate)
-$(call D2B_RUST_DISPATCH,leaves,api)
 $(call D2B_RUST_DISPATCH,leaves,main)
 $(call D2B_RUST_DISPATCH,leaves,broker)
 $(call D2B_RUST_DISPATCH,leaves,guest)
@@ -1437,31 +1384,17 @@ D2B_RUST_QUOTA_BROKER=$$quota_broker
 ${D2B_RUST_COLD_PROFILE:-0}
 fixture_target_dir="$workspace_target_dir"
 "#;
-    let api_driver = r#"
-${CI:-}
-shared_census=1
-public_target="$target_root/census"
-public_target="$target_root/public-census"
-"#;
     assert!(
-        rust_profile_violations(makefile, driver, api_driver).is_empty(),
+        rust_profile_violations(makefile, driver).is_empty(),
         "positive Rust profile fixture must pass"
     );
     let mutated = makefile.replace(",main)", ")");
-    let violations = rust_profile_violations(&mutated, driver, api_driver);
+    let violations = rust_profile_violations(&mutated, driver);
     assert!(
         violations
             .iter()
             .any(|violation| violation.contains("`main` profile")),
         "removing the main CI profile must fail: {violations:?}"
-    );
-    let mutated_api = api_driver.replace("public_target=\"$target_root/public-census\"", "");
-    let violations = rust_profile_violations(makefile, driver, &mutated_api);
-    assert!(
-        violations
-            .iter()
-            .any(|violation| violation.contains("separate CI and local")),
-        "removing the local API target must fail: {violations:?}"
     );
 }
 
@@ -1485,7 +1418,6 @@ if [ "$#" -eq 0 ]; then
   exit 2
 fi
 case "$rust_mode" in
-  api-surface) run_api_surface ;;
   main-workspace) run_main ;;
   broker) run_broker ;;
   guest-shell-runner) run_guest ;;

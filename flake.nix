@@ -1224,12 +1224,12 @@
         #
         # common.txt is REQUIRED and must be non-empty: deleting the pin file
         # itself (along with case files) must fail closed, not silently make
-        # the pin set empty (panel W2 finding). The PER-SYSTEM file is also
+        # the pin set empty (review W2 finding). The PER-SYSTEM file is also
         # REQUIRED TO EXIST for the current system, but may be empty - a
         # system with no extra (e.g. graphics) cases still commits a
         # header-only file, so deleting a non-empty per-system pin file
         # (e.g. x86_64-linux.txt with its 42 graphics pins) also fails closed
-        # (panel W2 re-review finding). The set of supported systems is the
+        # (review W2 re-review finding). The set of supported systems is the
         # flake's own `systems`, not the currently-evaluated case set (which
         # could be deleted in the same diff).
         nixUnitCorpusCaseNames = nixUnitCorpus.caseNames;
@@ -1301,7 +1301,7 @@
         # tests/static.sh + static-fast.sh run `nix flake check --no-build
         # --all-systems`, which evaluates every check's derivation but does
         # NOT build it. A failing runCommand would evaluate to a valid
-        # (unbuilt) derivation and slip through fail-OPEN (panel W2 finding).
+        # (unbuilt) derivation and slip through fail-OPEN (review W2 finding).
         # Throwing here forces the gate to fail during `--no-build`
         # evaluation, on BOTH systems (aarch64 included on an x86 runner).
         nix-unit =
