@@ -117,12 +117,43 @@ fn bazel_shell_executable() -> PathBuf {
 }
 
 fn bazel_test_tool_path() -> String {
-    std::env::var("D2B_BAZEL_TEST_PATH").unwrap_or_else(|_| {
-        panic!(
-            "D2B_BAZEL_TEST_PATH is required for upstream Bazel shell/test scripts; \
-             run the compatibility command inside `nix develop .#bazel`"
-        )
-    })
+    static TOOL_PATH: OnceLock<String> = OnceLock::new();
+    TOOL_PATH.get_or_init(resolve_bazel_test_tool_path).clone()
+}
+
+fn resolve_bazel_test_tool_path() -> String {
+    if let Ok(path) = std::env::var("D2B_BAZEL_TEST_PATH") {
+        return path;
+    }
+
+    let output = Command::new("nix")
+        .args([
+            "develop",
+            "--no-write-lock-file",
+            ".#bazel",
+            "-c",
+            "bash",
+            "-c",
+            r#"printf '%s\n' "$D2B_BAZEL_TEST_PATH""#,
+        ])
+        .current_dir(repo_root())
+        .output()
+        .unwrap_or_else(|error| panic!("resolve the Bazel compatibility tool path: {error}"));
+    assert!(
+        output.status.success(),
+        "resolve the Bazel compatibility tool path from `nix develop .#bazel`: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .rfind(|line| line.starts_with("/nix/store/"))
+        .unwrap_or_else(|| {
+            panic!(
+                "`nix develop .#bazel` did not emit D2B_BAZEL_TEST_PATH:\n{}",
+                String::from_utf8_lossy(&output.stdout)
+            )
+        })
+        .to_owned()
 }
 
 fn run_bazel_output(arguments: &[&str]) -> std::process::Output {
