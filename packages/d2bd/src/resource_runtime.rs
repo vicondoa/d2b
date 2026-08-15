@@ -51,7 +51,7 @@ use d2b_resource_store::{
     PolicySnapshot, StoreGetRequest, StoreOperationContext, StoreProjection, StoreSlot,
 };
 #[cfg(test)]
-use d2b_resource_store::{StoreFilter, StoreListResult, StoreProjection};
+use d2b_resource_store::{StoreFilter, StoreListResult};
 use d2b_resource_store_redb::{
     BrokerEvidenceIndex, RedbResourceStore, StoreIdentity, StoreRuntimeMetadata,
     write_provisioning_marker,
@@ -797,14 +797,14 @@ impl ZoneResourceRuntime {
                 && resource.resource_ref.resource_type().as_str() == "Device"
                 && serde_json::from_slice::<Value>(&resource.canonical_json)
                     .ok()
-                    .and_then(|value| {
+                    .is_some_and(|value| {
                         value
                             .get("spec")
                             .and_then(Value::as_object)
                             .and_then(|spec| spec.get("providerRef"))
                             .and_then(Value::as_str)
+                            == Some("Provider/device-tpm")
                     })
-                    == Some("Provider/device-tpm")
         }))
     }
 
