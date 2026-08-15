@@ -37,6 +37,10 @@ let
   missingCorpusFile = "missing-case-file.nix";
 
   flakeSource = builtins.readFile (flakeRoot + "/flake.nix");
+  hostDaemonSource =
+    builtins.readFile (flakeRoot + "/nixos-modules/host-daemon.nix");
+  providerSchemaPath =
+    "docs/reference/schemas/v3/providers/transport-azure-relay.transport-settings.json";
   shardEntryLines = builtins.filter
     (line: lib.hasInfix ''"test-infrastructure.nix"'' line)
     (lib.splitString "\n" flakeSource);
@@ -93,6 +97,17 @@ in
     expected = {
       pinFilesExist = true;
       unpinned = [ ];
+    };
+  };
+
+  "test-infrastructure/provider-runtime-schema-is-staged-with-rust-sources" = {
+    expr = {
+      flakeSource = lib.hasInfix providerSchemaPath flakeSource;
+      hostDaemonSource = lib.hasInfix providerSchemaPath hostDaemonSource;
+    };
+    expected = {
+      flakeSource = true;
+      hostDaemonSource = true;
     };
   };
 }

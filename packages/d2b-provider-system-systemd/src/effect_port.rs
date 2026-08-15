@@ -8,7 +8,7 @@ use std::future::Future;
 
 use d2b_process_conformance::{
     AdoptionCandidate, LaunchTicket, LaunchedProcess, ProcessConformanceError,
-    ProcessIdentityDigest, ProcessLaunchEffectPort,
+    ProcessIdentityDigest, ProcessLaunchEffectPort, StopClass,
 };
 
 /// The systemd-specific effect seam.
@@ -37,6 +37,7 @@ pub trait SystemdProcessEffectPort: Send + Sync {
     fn stop(
         &self,
         identity: &ProcessIdentityDigest,
+        class: StopClass,
     ) -> impl Future<Output = Result<(), ProcessConformanceError>> + Send;
 }
 
@@ -71,8 +72,8 @@ where
     async fn stop(
         &self,
         identity: &ProcessIdentityDigest,
-        _class: d2b_process_conformance::StopClass,
+        class: StopClass,
     ) -> Result<(), ProcessConformanceError> {
-        self.0.stop(identity).await
+        self.0.stop(identity, class).await
     }
 }

@@ -12,8 +12,10 @@ Provider, not a bootstrap one.
 
 ## Config schema
 
-None yet. Provider selection constraints reach the controller on the launch
-ticket, which is already validated when it arrives.
+The Provider config is bounded: `launchTimeoutSec`,
+`terminationGraceSec`, `userManagerCheckTimeout`, and
+`maxConcurrentLaunches`. Unit names and systemd properties are effect-port
+implementation details.
 
 ## Exported resource types
 
@@ -23,8 +25,10 @@ parent.
 
 ## Controllers / services / workers / binaries
 
-One controller, shipped as a library type: `SystemdProcessProvider`, generic
-over the injected `ProcessLaunchEffectPort`. It ships no binary.
+One controller, shipped as a library type: `SystemdProcessProvider` and its
+`SystemdProcessController`, generic over the injected
+`SystemdProcessEffectPort`. Lifecycle, drain, audit, and metric helpers remain
+typed and path-free.
 
 ## Placement and dependencies
 
@@ -49,16 +53,15 @@ a locally verified pidfd.
 
 Neither this controller nor the process it launches calls systemd's D-Bus or
 socket API, and neither calls `pidfd_open`. The controller validates the
-ticket and calls the injected `ProcessLaunchEffectPort`, which the fixed
-core effect adapter implements and which is the sole caller of the systemd
-effect owner.
+ticket and calls the injected effect port, which the fixed core effect adapter
+implements and which is the sole caller of the systemd effect owner.
 
 Adoption revalidates every required identity binding before a pidfd is
 opened. Ambiguity quarantines; it never signals, kills, or reuses.
 
 ## State and telemetry
 
-No state of its own. Public status is the shared `ProcessStatusReport`,
+No state of its own and no persistent framework unit. Public status is the shared `ProcessStatusReport`,
 which carries an opaque identity digest, typed resource references, and
 closed enumerations only.
 

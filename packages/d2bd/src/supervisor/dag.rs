@@ -490,6 +490,9 @@ mod tests {
 
     fn dummy_node(id: &str, role: ProcessRole) -> ProcessNode {
         ProcessNode {
+            execution_ref: None,
+            execution_domain: None,
+            user_ref: None,
             id: NodeId(id.to_owned()),
             role,
             unit: None,

@@ -244,3 +244,81 @@ fn user_capable_host_without_user_manager_is_degraded() {
     .expect("the host policy itself is valid");
     assert_eq!(result.status.phase, ResourcePhase::Degraded);
 }
+
+#[test]
+fn missing_required_probe_capability_is_rejected() {
+    let probe = Probe {
+        capabilities: BTreeSet::new(),
+        metadata: HostProbeMetadata {
+            kernel_release: "6.1".to_owned(),
+            os_name: "test-os".to_owned(),
+            user_manager_available: true,
+            active_process_count: 0,
+        },
+        gate: MinijailPlatformGate::new(6, 1, true),
+    };
+    assert_eq!(
+        block_on(HostReconciler::new().reconcile_with_probe(
+            &fixtures::host_ref(),
+            &fixtures::system_core_provider_ref(),
+            &fixtures::system_host_spec(),
+            &probe,
+            &BTreeSet::from([HostCapabilityClass::Pidfd]),
+            false,
+        ))
+        .unwrap_err(),
+        SystemCoreError::CapabilityMissing
+    );
+}
+
+#[test]
+fn malformed_probe_metadata_is_rejected() {
+    let probe = Probe {
+        capabilities: HostCapabilityClass::ALL.into_iter().collect(),
+        metadata: HostProbeMetadata {
+            kernel_release: "6.1\nmalicious".to_owned(),
+            os_name: "test-os".to_owned(),
+            user_manager_available: true,
+            active_process_count: 0,
+        },
+        gate: MinijailPlatformGate::new(6, 1, true),
+    };
+    assert_eq!(
+        block_on(HostReconciler::new().reconcile_with_probe(
+            &fixtures::host_ref(),
+            &fixtures::system_core_provider_ref(),
+            &fixtures::system_host_spec(),
+            &probe,
+            &BTreeSet::new(),
+            false,
+        ))
+        .unwrap_err(),
+        SystemCoreError::HostProbeFailed
+    );
+}
+
+#[test]
+fn unsupported_minijail_probe_posture_is_rejected() {
+    let probe = Probe {
+        capabilities: HostCapabilityClass::ALL.into_iter().collect(),
+        metadata: HostProbeMetadata {
+            kernel_release: "6.1".to_owned(),
+            os_name: "test-os".to_owned(),
+            user_manager_available: true,
+            active_process_count: 0,
+        },
+        gate: MinijailPlatformGate::new(6, 1, false),
+    };
+    assert_eq!(
+        block_on(HostReconciler::new().reconcile_with_probe(
+            &fixtures::host_ref(),
+            &fixtures::system_core_provider_ref(),
+            &fixtures::system_host_spec(),
+            &probe,
+            &BTreeSet::new(),
+            true,
+        ))
+        .unwrap_err(),
+        SystemCoreError::CgroupKillUnavailable
+    );
+}

@@ -15,9 +15,10 @@ use std::{
 };
 
 use d2b_contracts::v3::{
-    ArtifactDigest, ArtifactId, CanonicalJsonValue, ProviderManifest, canonical_json_bytes,
-    framed_canonical_digest, identity::STANDARD_RESOURCE_TYPES, is_canonical_digest,
-    resource::RESOURCE_API_VERSION, semantic_services::catalog,
+    ArtifactDigest, ArtifactId, CanonicalJsonValue, NIXOS_GENERATION_RESOURCE_TYPE,
+    ProviderManifest, canonical_json_bytes, framed_canonical_digest,
+    identity::STANDARD_RESOURCE_TYPES, is_canonical_digest, resource::RESOURCE_API_VERSION,
+    semantic_services::catalog,
 };
 use d2b_resource_compiler::{
     ArtifactCatalogEntry, CatalogDigests, Diagnostic, StaticPublisherKeys, compile_linux_artifact,
@@ -31,6 +32,7 @@ const MAX_DIAGNOSTIC_BYTES: usize = d2b_resource_compiler::MAX_DIAGNOSTIC_BYTES;
 const MAX_RESOURCES: usize = 4096;
 const MAX_RESOURCE_BYTES: usize = 512 * 1024;
 const MAX_SCHEMA_BYTES: usize = 8 * 1024 * 1024;
+const ADDITIONAL_RESOURCE_TYPES: &[&str] = &[NIXOS_GENERATION_RESOURCE_TYPE];
 
 fn resource_schema_filename(resource_type: &str) -> String {
     if STANDARD_RESOURCE_TYPES.contains(&resource_type) {
@@ -73,6 +75,7 @@ fn qualified_resource_type_parts(resource_type: &str) -> Option<(&str, &str)> {
 
 fn valid_resource_type(resource_type: &str) -> bool {
     STANDARD_RESOURCE_TYPES.contains(&resource_type)
+        || ADDITIONAL_RESOURCE_TYPES.contains(&resource_type)
         || (qualified_resource_type_parts(resource_type).is_some()
             && catalog().iter().any(|pair| {
                 pair.service().resource_type().as_str() == resource_type

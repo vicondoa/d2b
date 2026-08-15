@@ -8,6 +8,7 @@ use d2b_contracts::v3::{ControllerGeneration, ResourceGeneration, ResourceRef, R
 
 use crate::error::ProcessConformanceError;
 use crate::identity::{ConfigurationDigest, IdentityBinding, ProcessIdentityDigest};
+use crate::sandbox::SandboxPlan;
 
 /// Maximum launch deadline, matching the frozen resource-API request
 /// lifetime ceiling of 900000 ms.
@@ -202,6 +203,7 @@ pub struct LaunchTicket {
     expected_identity_digest: Option<ProcessIdentityDigest>,
     readiness: ReadinessExpectation,
     inherited_fd_table: InheritedFdTable,
+    sandbox: Option<SandboxPlan>,
 }
 
 impl LaunchTicket {
@@ -275,6 +277,7 @@ impl LaunchTicket {
             expected_identity_digest: None,
             readiness: ReadinessExpectation::None,
             inherited_fd_table,
+            sandbox: None,
         })
     }
 
@@ -283,6 +286,18 @@ impl LaunchTicket {
     pub fn with_readiness(mut self, readiness: ReadinessExpectation) -> Self {
         self.readiness = readiness;
         self
+    }
+
+    /// Bind the complete typed sandbox plan to the launch.
+    #[must_use]
+    pub fn with_sandbox_plan(mut self, sandbox: SandboxPlan) -> Self {
+        self.sandbox = Some(sandbox);
+        self
+    }
+
+    /// Borrow the typed sandbox plan, when this launch is a generic Process.
+    pub const fn sandbox_plan(&self) -> Option<&SandboxPlan> {
+        self.sandbox.as_ref()
     }
 
     /// Bind the ticket to an already recorded process identity digest.

@@ -1,8 +1,8 @@
 # `d2b-provider-activation-nixos`
 
-This is the canonical crate root for `Provider/activation-nixos`. It is a
-compile-safe scaffold; semantic Provider behavior is intentionally not present
-here.
+This is the canonical implementation crate for `Provider/activation-nixos`.
+It owns the typed generation resource contract, finalizer-driven retention,
+structured activation-runner boundary, and caller/target authorization policy.
 
 See [Create a Provider](../../docs/how-to/create-provider.md) and the
 [activation-nixos dossier](../../docs/specs/providers/ADR-046-provider-activation-nixos.md)
@@ -18,37 +18,45 @@ for the implementation contract.
 
 ## Config schema
 
-The Provider-specific configuration is defined by the activation-nixos
-dossier. This scaffold does not publish a configuration schema.
+The Provider-specific configuration selects an artifact and a bounded
+`retainedGenerations` window. Store paths, helper paths, and target-local
+commands never cross the resource or Provider boundary.
 
 ## Exported resource types
 
-The resource types are defined by the dossier. This scaffold exports no
-resource implementation.
+The Provider exports
+`activation-nixos.d2bus.org.NixosGeneration`. Its spec contains only the
+Provider reference, Host or Guest execution reference, artifact ID, activation
+mode, and optional prior-generation reference.
 
 ## Controllers / services / workers / binaries
 
-None are implemented in this scaffold. Controllers, services, workers, and
-binaries belong to the owning Provider implementation.
+`ActivationController` is the pure reconcile policy and `ActivationRunner` is
+the typed target-local helper boundary. The existing activation helper accepts
+bounded JSON and refuses raw command or path fallbacks.
 
 ## Placement and dependencies
 
-No runtime placement is declared, and the scaffold has no workspace
-dependencies.
+The controller runs through the daemon's Process Provider. Runner requests are
+typed and always use `startRoot = true`; no Provider-owned persistent unit is
+created.
 
 ## RBAC requirements
 
-The scaffold requests no permissions and performs no resource or effect
-operations.
+Lifecycle and administrator callers must be authenticated for the exact
+execution target. Ordinary users and foreign targets are refused before a
+runner request is emitted.
 
 ## Security posture
 
-No host, broker, filesystem, network, process, credential, or device effect is
-reachable from this scaffold.
+The Provider never sees a store path or broker DTO. Refusal and helper failure
+preserve the prior generation, and audit outcomes are closed codes.
 
 ## State and telemetry
 
-The scaffold owns no state and emits no telemetry.
+Retention is finalizer-driven and has no TTL. Operational state is represented
+by resource status and the core operation ledger; the Provider owns no state
+Volume.
 
 ## Build and test
 

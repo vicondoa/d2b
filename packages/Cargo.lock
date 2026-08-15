@@ -1050,6 +1050,7 @@ dependencies = [
  "d2b-audit",
  "d2b-contracts",
  "d2b-controller-toolkit",
+ "d2b-provider-system-core",
  "d2b-telemetry",
  "serde",
  "serde_json",
@@ -1205,10 +1206,21 @@ dependencies = [
 [[package]]
 name = "d2b-provider-activation-nixos"
 version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-contracts",
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "d2b-provider-audio-pipewire"
 version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-contracts",
+ "schemars",
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "d2b-provider-clipboard-wayland"
@@ -1357,6 +1369,7 @@ name = "d2b-provider-supervisor"
 version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts",
+ "d2b-core",
  "d2b-process",
  "d2b-process-conformance",
  "d2b-provider-system-minijail",
@@ -1377,6 +1390,7 @@ dependencies = [
  "d2b-contracts",
  "serde",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]
@@ -1385,6 +1399,7 @@ version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts",
  "d2b-process-conformance",
+ "serde",
 ]
 
 [[package]]
@@ -1394,6 +1409,8 @@ dependencies = [
  "d2b-contracts",
  "d2b-process-conformance",
  "d2b-provider-toolkit",
+ "serde",
+ "tokio",
 ]
 
 [[package]]
@@ -1703,9 +1720,17 @@ dependencies = [
  "d2b-gateway",
  "d2b-gateway-runtime",
  "d2b-host",
+ "d2b-process",
+ "d2b-process-conformance",
  "d2b-provider",
+ "d2b-provider-activation-nixos",
+ "d2b-provider-audio-pipewire",
  "d2b-provider-device-tpm",
  "d2b-provider-runtime-azure-container-apps",
+ "d2b-provider-supervisor",
+ "d2b-provider-system-core",
+ "d2b-provider-system-minijail",
+ "d2b-provider-system-systemd",
  "d2b-provider-transport-azure-relay",
  "d2b-realm-core",
  "d2b-realm-provider",
@@ -1713,6 +1738,8 @@ dependencies = [
  "d2b-resource-api",
  "d2b-resource-store",
  "d2b-resource-store-redb",
+ "d2b-session",
+ "d2b-session-unix",
  "getrandom 0.2.17",
  "libc",
  "nix 0.29.0",

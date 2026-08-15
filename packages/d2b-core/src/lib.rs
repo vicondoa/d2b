@@ -12,6 +12,7 @@ pub mod contract_id;
 pub mod error;
 pub mod host;
 pub mod host_check;
+pub mod host_generation;
 pub mod host_w3;
 pub mod manifest;
 pub mod manifest_v04;

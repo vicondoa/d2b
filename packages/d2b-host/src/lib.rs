@@ -76,6 +76,7 @@ pub mod wayland_proxy_argv;
 // check + per-generation marker + atomic current-symlink swap with crash
 // reconciliation.
 pub mod hardlink_farm;
+pub mod host_generation;
 // Live ssh-keygen fingerprint + public-key probe wrapping ssh-keygen -lf
 // and ssh-keygen -y -f for the broker-side rotate / trust / show ops.
 pub mod ssh_keygen;
