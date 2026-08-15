@@ -534,11 +534,11 @@ fn cmd_ensure_regular_file(args: &Args) -> ExitCode {
                 return ExitCode::from(2);
             }
             let target_size = size_mib.saturating_mul(1024 * 1024);
-            if target_size != 0 {
-                if let Err(e2) = ftruncate(&existing, target_size as i64) {
-                    eprintln!("re-assert ftruncate({}) failed: {e2}", path.display());
-                    return ExitCode::from(1);
-                }
+            if target_size != 0
+                && let Err(e2) = ftruncate(&existing, target_size as i64)
+            {
+                eprintln!("re-assert ftruncate({}) failed: {e2}", path.display());
+                return ExitCode::from(1);
             }
             if let Err(e2) = fchown(
                 existing.as_raw_fd(),
