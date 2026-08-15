@@ -28,7 +28,7 @@ qualified WaylandPolicy references plus `crossDomainTrusted = true`.
 The Provider projects `WaylandSession` and `WaylandPolicy`. Policy compilation
 rejects unknown interfaces and virtualizes clipboard-manager globals.
 
-## Controllers / services / workers
+## Controllers / services / workers / binaries
 
 The crate exposes the Zone display controller, same-user user portal, opaque
 LaunchTicket, path-free readiness event, and Host proxy / Guest frontend

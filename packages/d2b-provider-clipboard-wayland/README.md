@@ -29,7 +29,7 @@ The Provider is service-only and exports no semantic ResourceType. Core owns
 the two component Process resources; the controller creates only operation
 scoped picker EphemeralProcesses.
 
-## Controllers / services / workers
+## Controllers / services / workers / binaries
 
 The crate exposes clipd-host policy/history/FD safety, clipboard-controller
 placement, metadata-only picker records, and fail-closed audit queue types.

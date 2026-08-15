@@ -25,7 +25,7 @@ closed `guestSources` category allowlist.
 
 Notification delivery is stream-only and exports no semantic ResourceType.
 
-## Controllers / services / workers
+## Controllers / services / workers / binaries
 
 The crate exposes a placement controller, source/sink stream DTOs, admission
 checks, a host-sink effect port, an observer projection, and single-use action
