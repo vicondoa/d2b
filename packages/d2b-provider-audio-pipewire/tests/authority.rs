@@ -3,20 +3,11 @@ use d2b_provider_audio_pipewire::{AudioLeaseId, MicDecision, MicrophoneArbiter, 
 #[test]
 fn microphone_is_exclusive_and_fair_with_bounded_queue() {
     let mut arbiter = MicrophoneArbiter::new(2);
+    assert_eq!(arbiter.request(AudioLeaseId::new(1)), MicDecision::Granted);
+    assert_eq!(arbiter.request(AudioLeaseId::new(2)), MicDecision::Queued);
+    assert_eq!(arbiter.request(AudioLeaseId::new(3)), MicDecision::Queued);
     assert_eq!(
-        arbiter.request(AudioLeaseId::new(1), "zone-a"),
-        MicDecision::Granted
-    );
-    assert_eq!(
-        arbiter.request(AudioLeaseId::new(2), "zone-b"),
-        MicDecision::Queued
-    );
-    assert_eq!(
-        arbiter.request(AudioLeaseId::new(3), "zone-c"),
-        MicDecision::Queued
-    );
-    assert_eq!(
-        arbiter.request(AudioLeaseId::new(4), "zone-d"),
+        arbiter.request(AudioLeaseId::new(4)),
         MicDecision::QueueFull
     );
     assert!(arbiter.release(AudioLeaseId::new(1)));
@@ -26,18 +17,9 @@ fn microphone_is_exclusive_and_fair_with_bounded_queue() {
 #[test]
 fn queued_microphone_requests_remain_queued_until_handoff() {
     let mut arbiter = MicrophoneArbiter::new(1);
-    assert_eq!(
-        arbiter.request(AudioLeaseId::new(1), "zone-a"),
-        MicDecision::Granted
-    );
-    assert_eq!(
-        arbiter.request(AudioLeaseId::new(2), "zone-b"),
-        MicDecision::Queued
-    );
-    assert_eq!(
-        arbiter.request(AudioLeaseId::new(2), "zone-b"),
-        MicDecision::Queued
-    );
+    assert_eq!(arbiter.request(AudioLeaseId::new(1)), MicDecision::Granted);
+    assert_eq!(arbiter.request(AudioLeaseId::new(2)), MicDecision::Queued);
+    assert_eq!(arbiter.request(AudioLeaseId::new(2)), MicDecision::Queued);
     assert_eq!(arbiter.pending_count(), 1);
 }
 

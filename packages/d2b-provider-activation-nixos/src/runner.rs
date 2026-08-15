@@ -116,7 +116,7 @@ impl ActivationRunner {
         struct Wire {
             outcome: RunnerOutcomeCode,
         }
-        if bytes.len() > 512 || String::from_utf8_lossy(bytes).contains('/') {
+        if bytes.len() > 512 || bytes.contains(&b'/') {
             return Err(ActivationRunnerError::InvalidHelperOutput);
         }
         let wire: Wire = serde_json::from_slice(bytes)

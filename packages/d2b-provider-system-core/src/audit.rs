@@ -1,7 +1,5 @@
 //! Redacted Host/User reconciliation audit records.
 
-use std::fmt::Write as _;
-
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
@@ -98,11 +96,7 @@ impl ResourceReconciledAudit {
         hasher.update(b"/");
         hasher.update(resource_name.as_bytes());
         let digest = hasher.finalize();
-        let mut digest_hex = String::with_capacity(digest.len() * 2);
-        for byte in digest.iter() {
-            let _ = write!(digest_hex, "{byte:02x}");
-        }
-        let resource_name_digest = format!("sha256:{digest_hex}");
+        let resource_name_digest = format!("sha256:{digest:x}");
         Self {
             record_class: "resource-reconciled",
             resource_type,

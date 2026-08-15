@@ -3,7 +3,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 
-use super::{ArtifactId, ResourceRef, ResourceTypeName};
+use super::{ArtifactId, ResourceRef, ResourceTypeName, execution_policy::require_execution_ref};
 
 /// The canonical activation generation ResourceType.
 pub const NIXOS_GENERATION_RESOURCE_TYPE: &str = "activation-nixos.d2bus.org.NixosGeneration";
@@ -131,9 +131,8 @@ impl NixosGenerationSpec {
         if provider_ref.to_canonical_string() != ACTIVATION_PROVIDER_REF {
             return Err(NixosGenerationSpecError::ProviderRefMismatch);
         }
-        if !matches!(execution_ref.resource_type().as_str(), "Host" | "Guest") {
-            return Err(NixosGenerationSpecError::ExecutionRefInvalid);
-        }
+        require_execution_ref(&execution_ref)
+            .map_err(|_| NixosGenerationSpecError::ExecutionRefInvalid)?;
         if let Some(reference) = &prior_generation_ref
             && reference.resource_type().as_str() != NIXOS_GENERATION_RESOURCE_TYPE
         {

@@ -59,7 +59,7 @@ impl AudioComponentTemplate {
             return Err(AudioTemplateError::GuestNameInvalid);
         }
         let expected = format!("/run/d2b/vms/{guest_name}/d2b-{guest_name}");
-        if binary_path != expected || binary_path.contains("/nix/store/") {
+        if binary_path != expected {
             return Err(AudioTemplateError::NotPerGuestCopy);
         }
         Ok(Self {

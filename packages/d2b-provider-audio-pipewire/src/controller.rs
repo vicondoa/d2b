@@ -124,8 +124,8 @@ impl<M: AudioMediator> AudioBindingController<M> {
         if binding.grants.mic == AudioGrant::On {
             let already_active = self.active_microphone_lease() == Some(lease);
             let decision = match self.microphone.lock() {
-                Ok(mut arbiter) => arbiter.request(lease, binding.zone.clone()),
-                Err(poisoned) => poisoned.into_inner().request(lease, binding.zone.clone()),
+                Ok(mut arbiter) => arbiter.request(lease),
+                Err(poisoned) => poisoned.into_inner().request(lease),
             };
             microphone = Some(decision);
             if decision == MicDecision::Granted {

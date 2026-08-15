@@ -31,7 +31,7 @@ pub enum MicDecision {
 #[derive(Debug, Clone)]
 pub struct MicrophoneArbiter {
     active: Option<AudioLeaseId>,
-    queue: VecDeque<(AudioLeaseId, String)>,
+    queue: VecDeque<AudioLeaseId>,
     max_queue: usize,
 }
 
@@ -55,11 +55,11 @@ impl MicrophoneArbiter {
     }
 
     /// Request the exclusive capture lease.
-    pub fn request(&mut self, lease: AudioLeaseId, zone: impl Into<String>) -> MicDecision {
+    pub fn request(&mut self, lease: AudioLeaseId) -> MicDecision {
         if self.active == Some(lease) {
             return MicDecision::Granted;
         }
-        if self.queue.iter().any(|(id, _)| *id == lease) {
+        if self.queue.contains(&lease) {
             return MicDecision::Queued;
         }
         if self.active.is_none() {
@@ -68,7 +68,7 @@ impl MicrophoneArbiter {
         } else if self.queue.len() >= self.max_queue {
             MicDecision::QueueFull
         } else {
-            self.queue.push_back((lease, zone.into()));
+            self.queue.push_back(lease);
             MicDecision::Queued
         }
     }
@@ -80,7 +80,7 @@ impl MicrophoneArbiter {
             return true;
         }
         let before = self.queue.len();
-        self.queue.retain(|(id, _)| *id != lease);
+        self.queue.retain(|id| *id != lease);
         before != self.queue.len()
     }
 
@@ -89,7 +89,7 @@ impl MicrophoneArbiter {
         if self.active.is_some() {
             return self.active;
         }
-        self.active = self.queue.pop_front().map(|(lease, _)| lease);
+        self.active = self.queue.pop_front();
         self.active
     }
 
@@ -100,7 +100,7 @@ impl MicrophoneArbiter {
     pub(crate) fn requeue_active(&mut self, lease: AudioLeaseId) {
         if self.active == Some(lease) {
             self.active = None;
-            self.queue.push_front((lease, String::new()));
+            self.queue.push_front(lease);
         }
     }
 
