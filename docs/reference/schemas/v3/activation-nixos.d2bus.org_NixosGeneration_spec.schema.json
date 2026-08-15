@@ -32,6 +32,5 @@
   ],
   "title": "activation-nixos.d2bus.org/NixosGeneration/spec",
   "type": "object",
-  "x-d2b-resource-type": "activation-nixos.d2bus.org.NixosGeneration",
-  "x-d2b-schema-layer": "spec"
+  "x-d2b-resource-type": "activation-nixos.d2bus.org.NixosGeneration"
 }

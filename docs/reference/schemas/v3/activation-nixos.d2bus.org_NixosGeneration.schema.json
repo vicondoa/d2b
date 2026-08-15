@@ -2,6 +2,93 @@
   "$id": "https://d2bus.org/schemas/v3/activation-nixos.d2bus.org/NixosGeneration",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
+  "definitions": {
+    "spec": {
+      "additionalProperties": false,
+      "properties": {
+        "activationMode": {
+          "enum": ["switch", "boot", "test", "adopt"],
+          "type": "string"
+        },
+        "executionRef": {
+          "pattern": "^(?:Host|Guest)/[a-z][a-z0-9-]{0,62}$",
+          "type": "string"
+        },
+        "priorGenerationRef": {
+          "pattern": "^activation-nixos\\.d2bus\\.org\\.NixosGeneration/[a-z][a-z0-9-]{0,62}$",
+          "type": "string"
+        },
+        "providerRef": {
+          "const": "Provider/activation-nixos",
+          "type": "string"
+        },
+        "systemArtifactId": {
+          "pattern": "^[a-z][a-z0-9-]{0,127}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "activationMode",
+        "executionRef",
+        "providerRef",
+        "systemArtifactId"
+      ],
+      "type": "object"
+    },
+    "status": {
+      "additionalProperties": false,
+      "properties": {
+        "activationDetail": {
+          "enum": [
+            "planning",
+            "staged",
+            "applying",
+            "applied",
+            "boot-default",
+            "adopted",
+            "rolled-back",
+            "superseded"
+          ],
+          "type": "string"
+        },
+        "observedGeneration": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "outcome": {
+          "enum": [
+            "succeeded",
+            "adopted",
+            "unauthorized",
+            "stale-generation",
+            "target-mismatch",
+            "helper-refused",
+            "helper-failed",
+            "rolled-back"
+          ],
+          "type": "string"
+        },
+        "phase": {
+          "enum": [
+            "Pending",
+            "Ready",
+            "Succeeded",
+            "Degraded",
+            "Failed",
+            "Deleted",
+            "Unknown"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "activationDetail",
+        "observedGeneration",
+        "phase"
+      ],
+      "type": "object"
+    }
+  },
   "properties": {
     "apiVersion": {
       "const": "resources.d2bus.org/v3",
@@ -11,10 +98,10 @@
       "type": "object"
     },
     "spec": {
-      "$ref": "activation-nixos.d2bus.org_NixosGeneration_spec.schema.json"
+      "$ref": "#/definitions/spec"
     },
     "status": {
-      "$ref": "activation-nixos.d2bus.org_NixosGeneration_status.schema.json"
+      "$ref": "#/definitions/status"
     },
     "type": {
       "const": "activation-nixos.d2bus.org.NixosGeneration",
