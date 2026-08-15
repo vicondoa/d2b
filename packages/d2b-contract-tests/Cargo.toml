@@ -20,3 +20,4 @@ regex = "1"
 rnix = "0.14"
 serde_yaml_ng = "0.10"
 syn = { version = "2", features = ["full", "visit"] }
+sha2.workspace = true
