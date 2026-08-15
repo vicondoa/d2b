@@ -372,15 +372,15 @@
       "crate_name": "d2b_provider_clipboard_wayland",
       "private_census": {
         "external_crates": 134,
-        "index_items": 2966,
-        "path_items": 13911
+        "index_items": 2972,
+        "path_items": 13913
       },
       "private_hidden_items": 58,
       "private_json_file": "d2b_provider_clipboard_wayland.json",
       "public_census": {
         "external_crates": 134,
-        "index_items": 1567,
-        "path_items": 13827
+        "index_items": 1569,
+        "path_items": 13828
       },
       "public_json_file": "d2b_provider_clipboard_wayland.json"
     },
@@ -724,7 +724,7 @@
       "crate_name": "d2b_provider_toolkit",
       "private_census": {
         "external_crates": 133,
-        "index_items": 3079,
+        "index_items": 3080,
         "path_items": 13842
       },
       "private_hidden_items": 41,
