@@ -113,6 +113,10 @@ impl AuthenticatedClipboardSession {
     pub fn is_guest(&self) -> bool {
         self.subject_ref.resource_type().as_str() == "Guest"
     }
+
+    fn is_user(&self) -> bool {
+        self.subject_ref.resource_type().as_str() == "User"
+    }
 }
 
 impl core::fmt::Debug for AuthenticatedClipboardSession {
@@ -221,6 +225,7 @@ pub struct VerifiedClipboardAttachments {
     credits: CreditBundle,
     permit: FdPermit,
     max_size_bytes: u64,
+    max_total_bytes: u64,
 }
 
 struct VerifiedReceivedFds<F> {
@@ -246,12 +251,42 @@ impl VerifiedClipboardAttachments {
             credits: _credits,
             permit: _permit,
             max_size_bytes,
+            max_total_bytes,
         } = self;
-        descriptors
-            .into_iter()
-            .map(|descriptor| read_owned_fd_bounded(descriptor, max_size_bytes))
-            .collect()
+        let mut total_bytes = 0_u64;
+        let mut payloads = Vec::with_capacity(descriptors.len());
+        for descriptor in descriptors {
+            let remaining_bytes = max_total_bytes.saturating_sub(total_bytes);
+            let read_limit = max_size_bytes.min(remaining_bytes);
+            let payload = match read_owned_fd_bounded(descriptor, read_limit) {
+                Err(FdReadError::SizeExceeded { .. }) if read_limit < max_size_bytes => {
+                    return Err(FdReadError::AggregateSizeExceeded {
+                        limit: max_total_bytes,
+                    });
+                }
+                result => result?,
+            };
+            append_bounded_payload(&mut payloads, &mut total_bytes, payload, max_total_bytes)?;
+        }
+        Ok(payloads)
     }
+}
+
+fn append_bounded_payload(
+    payloads: &mut Vec<Vec<u8>>,
+    total_bytes: &mut u64,
+    payload: Vec<u8>,
+    max_total_bytes: u64,
+) -> Result<(), FdReadError> {
+    let observed = total_bytes.saturating_add(payload.len() as u64);
+    if observed > max_total_bytes {
+        return Err(FdReadError::AggregateSizeExceeded {
+            limit: max_total_bytes,
+        });
+    }
+    *total_bytes = observed;
+    payloads.push(payload);
+    Ok(())
 }
 
 impl core::fmt::Debug for VerifiedClipboardAttachments {
@@ -534,7 +569,7 @@ impl ClipdHost {
                 Err(ClipboardServiceError::SessionUnauthenticated)
             }
             AttachmentClass::HostSelectionRead | AttachmentClass::HostSelectionWrite
-                if session.is_guest() =>
+                if !session.is_user() =>
             {
                 Err(ClipboardServiceError::HostSessionInvalid)
             }
@@ -577,6 +612,7 @@ impl ClipdHost {
             credits,
             permit,
             max_size_bytes: self.policy.max_item_bytes() as u64,
+            max_total_bytes: self.policy.max_total_bytes() as u64,
         })
     }
 
@@ -589,6 +625,7 @@ impl ClipdHost {
         now_secs: u64,
     ) -> Result<String, ClipboardServiceError> {
         self.history.gc(now_secs);
+        self.prune_echo_window(now_secs);
         if self.dependency.status != DependencyStatus::Ready {
             return Err(ClipboardServiceError::DependencyUnavailable);
         }
@@ -650,6 +687,7 @@ impl ClipdHost {
         now_secs: u64,
     ) -> Result<GuestSelectionEvent, ClipboardServiceError> {
         self.history.gc(now_secs);
+        self.prune_echo_window(now_secs);
         if !session.is_guest()
             || session.role() != ClipboardServiceRole::Bridge
             || !self.dependency_zone_matches(session.zone())
@@ -693,14 +731,12 @@ impl ClipdHost {
         {
             return Err(ClipboardServiceError::DependencyUnavailable);
         }
-        if session.is_guest() || session.role() != ClipboardServiceRole::Bridge {
+        if !session.is_user() || session.role() != ClipboardServiceRole::Bridge {
             return Err(ClipboardServiceError::HostSessionInvalid);
         }
         if !self.policy.allow_host_capture() {
             return Err(ClipboardServiceError::HistoryRejected);
         }
-        self.echo_window
-            .retain(|_, suppression| suppression.expires_at > now_secs);
         if self.policy.suppress_echo()
             && source_event.as_ref().is_some_and(|event| {
                 event.expires_at > now_secs
@@ -774,6 +810,11 @@ impl ClipdHost {
         self.history.purge_guest(guest);
         self.echo_window
             .retain(|_, suppression| suppression.guest != guest);
+    }
+
+    fn prune_echo_window(&mut self, now_secs: u64) {
+        self.echo_window
+            .retain(|_, suppression| suppression.expires_at > now_secs);
     }
 
     /// Check whether a cross-Zone route is allowed.
@@ -1133,6 +1174,49 @@ mod tests {
             ClipdHost::validate_attachment_subject(&guest, AttachmentClass::HostSelectionWrite),
             Err(ClipboardServiceError::HostSessionInvalid)
         );
+    }
+
+    #[test]
+    fn provider_subject_cannot_capture_or_write_host_selection() {
+        let provider = AuthenticatedClipboardSession {
+            subject_ref: ResourceRef::parse("Provider/display-wayland").unwrap(),
+            zone: ZoneId::parse("zone-a").unwrap(),
+            reconnect_generation: 1,
+            role: ClipboardServiceRole::Bridge,
+        };
+        let mut host = ClipdHost::new(Policy::default(), 4, Some(display())).unwrap();
+        assert_eq!(
+            host.capture_host(&provider, "text/plain", b"hello", None, 100),
+            Err(ClipboardServiceError::HostSessionInvalid)
+        );
+        assert_eq!(
+            ClipdHost::validate_attachment_subject(&provider, AttachmentClass::HostSelectionWrite),
+            Err(ClipboardServiceError::HostSessionInvalid)
+        );
+    }
+
+    #[test]
+    fn guest_capture_prunes_expired_echo_metadata_without_host_activity() {
+        let mut host = ClipdHost::new(Policy::default(), 4, Some(display())).unwrap();
+        let guest = guest("work", "zone-a", 1);
+        host.capture_guest(&guest, "text/plain", b"old", 100)
+            .unwrap();
+        host.capture_guest(&guest, "text/plain", b"new", 200)
+            .unwrap();
+        assert_eq!(host.echo_window.len(), 1);
+    }
+
+    #[test]
+    fn attachment_batch_enforces_the_aggregate_byte_limit() {
+        let mut payloads = Vec::new();
+        let mut total_bytes = 0;
+        append_bounded_payload(&mut payloads, &mut total_bytes, vec![1; 5], 8).unwrap();
+        assert_eq!(
+            append_bounded_payload(&mut payloads, &mut total_bytes, vec![2; 4], 8),
+            Err(FdReadError::AggregateSizeExceeded { limit: 8 })
+        );
+        assert_eq!(payloads, vec![vec![1; 5]]);
+        assert_eq!(total_bytes, 5);
     }
 
     #[test]

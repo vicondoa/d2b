@@ -339,6 +339,12 @@ pub enum FdReadError {
         /// Configured byte limit.
         limit: u64,
     },
+    /// The attachment batch produced more bytes than the authenticated
+    /// aggregate bound.
+    AggregateSizeExceeded {
+        /// Configured aggregate byte limit.
+        limit: u64,
+    },
 }
 
 impl core::fmt::Display for FdReadError {
@@ -346,6 +352,7 @@ impl core::fmt::Display for FdReadError {
         formatter.write_str(match self {
             Self::Io => "fd-read-failed",
             Self::SizeExceeded { .. } => "fd-read-size-exceeded",
+            Self::AggregateSizeExceeded { .. } => "fd-read-total-size-exceeded",
         })
     }
 }
@@ -522,6 +529,18 @@ mod tests {
         assert_eq!(
             read_bounded(&mut reader, 4),
             Err(FdReadError::SizeExceeded { limit: 4 })
+        );
+    }
+
+    #[test]
+    fn bounded_reader_error_codes_distinguish_item_and_batch_limits() {
+        assert_eq!(
+            FdReadError::SizeExceeded { limit: 4 }.to_string(),
+            "fd-read-size-exceeded"
+        );
+        assert_eq!(
+            FdReadError::AggregateSizeExceeded { limit: 8 }.to_string(),
+            "fd-read-total-size-exceeded"
         );
     }
 
