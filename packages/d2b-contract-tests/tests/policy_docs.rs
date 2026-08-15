@@ -400,7 +400,7 @@ fn resolved_repo_path_is_contained(root: &Path, path: &str) -> bool {
 fn markdown_uses_reference_link_syntax(content: &str) -> bool {
     let reference_use = Regex::new(r"\]\s*\[[^]]*\]").expect("valid reference-style link regex");
     let reference_definition =
-        Regex::new(r"(?m)^[ \t]{0,3}\[[^]]+\]:[ \t]*\S+").expect("valid link definition regex");
+        Regex::new(r"(?m)^[ \t]{0,3}\[[^]]+\]:").expect("valid link definition regex");
     reference_use.is_match(content) || reference_definition.is_match(content)
 }
 
@@ -459,6 +459,7 @@ fn markdown_reference_links_are_rejected_in_all_forms() {
         "[Workflow][guide]\n\n[guide]: docs/contributing/workflow.md\n",
         "[Workflow][]\n\n[Workflow]: docs/contributing/workflow.md\n",
         "[Workflow]\n\n[Workflow]: ../outside.md\n",
+        "[Workflow]:\n../outside.md\n\nSee [Workflow].\n",
     ] {
         assert!(
             markdown_uses_reference_link_syntax(invalid),
