@@ -262,7 +262,7 @@ pub fn check_sshd_host_keys(vm: &str, keys_dir: &Path) -> Result<(), SshdHostKey
             });
         }
         let mode = meta.permissions().mode() & 0o7777;
-        // v1.1.2fu25 panel-virt: when the file has POSIX ACL named
+        // Review note: when the file has POSIX ACL named
         // entries (e.g. from the activation script's per-keyfile
         // `u:virtiofsd_uid:r` grant required by ADR 0021 broker-
         // pre-NS virtiofsd reading the 0400 root:root host key),

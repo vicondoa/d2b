@@ -2,7 +2,7 @@
 
 This dossier records the W0 evidence required by
 [ADR 0028](../adr/0028-guest-control-plane-over-vsock.md). It is the
-panel-review input for locking the guest-control IPC direction.
+review input for locking the guest-control IPC direction.
 
 > **Update (W16) - exploratory/historical.** This is W0 feasibility
 > evidence, not a description of the shipped surface. The guest-control
@@ -51,7 +51,7 @@ W0 protocol.
 | Proof | Branch | Commit | Result |
 | --- | --- | --- | --- |
 | ADR introduced | `guest-control-ttRPC` | `c3bd66888722bc03c19f678b3e7da9b23954977e` | ADR 0028 added with the feasibility gate. |
-| ADR accepted | integrated W0 decision branch | `18156adc721025b6d7706e315fe3b94b1026ab37` | ADR 0028 accepted after feasibility evidence and panel review findings were addressed. |
+| ADR accepted | integrated W0 decision branch | `18156adc721025b6d7706e315fe3b94b1026ab37` | ADR 0028 accepted after feasibility evidence and review findings were addressed. |
 | CH CONNECT transport | integrated W0 decision branch | `6797def8a1916966b4262d70f2381ce5845a6e8f` | PASS: CH post-OK stream can be wrapped in `ttrpc-rust` async `Socket` and `Client` without a host proxy; `OK <local-port>` is validated as an opaque u32 ACK, not used as a buffer limit, malformed/refused ACK failures surface only bounded error categories, handshake timeout is bounded, and post-OK half-close preserves guest output drain. |
 | Static guest build | `guest-control-w0-static` | `a085e68be5bfa9ed19fcb3441b4f914c7120ac69` | PASS with implementation constraints: representative ttRPC guest dependency probe builds as static musl for x86_64 and aarch64; real `d2b-guestd`/`d2b-userd` artifacts remain a follow-up implementation gate. |
 | ttRPC stream semantics | `guest-control-w0-stream` | `eeaaf881a0aa4b7344b2005290248533a1576605` | CONDITIONAL: duplex streams are semantically expressive, but raw stream queues still need bounded flow control. |
@@ -407,7 +407,7 @@ payloads when an application receiver stalls. Raw ttRPC stream queues
 therefore do not satisfy ADR 0028's backpressure and byte-exact
 requirements by themselves.
 
-Panel follow-up corrected the message-size invariant for protobuf
+Review follow-up corrected the message-size invariant for protobuf
 `bytes`: generated decoders may allocate the field before a
 `WriteStdin` handler can compare it with `max_chunk_bytes`. The selected
 chunked-stdio design therefore treats `ttrpc-rust` 0.9.x's fixed 4 MiB
@@ -428,7 +428,7 @@ limiter or patched/configurable ttRPC transport and a new proof.
 | ---: | --- | --- | --- |
 | `14317` | guest-to-host | Observability OTLP/Alloy relay | Existing; not available for guest control. |
 | `14318` | host-to-guest | `d2b-guestd` ttRPC control | Reserved for Hello, Health, capabilities, lifecycle, exec chunked stdio, and framework guest operations. |
-| `14319` | host-to-guest | Future guest-control stream side channel | Reserved but unused by W0; requires a new panel-approved decision before use. |
+| `14319` | host-to-guest | Future guest-control stream side channel | Reserved but unused by W0; requires a new reviewed decision before use. |
 
 The control reservation starts at `14318` specifically to avoid
 colliding with the existing observability port `14317`. The two surfaces
@@ -528,7 +528,7 @@ Lock the implementation design to:
    post-decode byte-budget semaphores for protobuf `bytes` fields;
 3. no raw ttRPC stream forwarding for exec I/O;
 4. no custom binary stream unless the selected chunked-stdio path fails a
-   later implementation gate and a new panel review approves a fallback.
+   later implementation gate and a new review approves a fallback.
 
 Do not implement raw ttRPC stream forwarding for exec I/O.
 

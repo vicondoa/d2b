@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Derive the complete video exposure surface from vk.xml.
 #
-# W2 planning found seven separate "doors" over four panel rounds, each by a
+# W2 planning found seven separate "doors" over four review rounds, each by a
 # different reviewer, each an individual instance:
 #
 #   1 guest enables an unadvertised extension via vkCreateDevice

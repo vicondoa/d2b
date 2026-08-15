@@ -205,7 +205,7 @@ fn no_bash_exec_check() {
         violations.is_empty(),
         "no-bash-exec-eval[check]: found bash exec sites not in allow-list \
          (ADR 0017 - the Rust CLI must never invoke bash; allow-list additions \
-         require panel review):\n{}",
+         require dev-tool dependency governance):\n{}",
         violations.join("\n")
     );
 }

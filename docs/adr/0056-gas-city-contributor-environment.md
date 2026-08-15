@@ -6,20 +6,16 @@
   for the implemented Gas City environment. ADR 0053's classification of Gas
   City as optional contributor infrastructure and its measured upstream facts
   remain authoritative. This record supersedes the former unimplemented
-  implementation shape, the requirement for Gas City to achieve d2b panel
-  parity, and the bespoke d2b delivery-hardening decisions. It does not
-  change the standalone d2b contributor contract or any consumer surface.
-- Related: [ADR 0055](0055-discover-fix-verify-panel-review.md) remains the
-  authority for the standalone d2b panel process.
+  implementation shape and records the deployed package choices. It does not
+  change any consumer surface.
 
 ## Context
 
 Gas City is useful optional infrastructure for contributors who want a
 host-native workflow that can turn a bounded change into a reviewable pull
-request. It is not a d2b product capability, a consumer workflow, or a
-replacement for the ordinary d2b contributor process. The implementation must
-therefore be useful without importing the d2b panel and delivery machinery
-into Gas City's state or execution graph.
+request. It is not a d2b product capability or a consumer workflow. The
+implementation must therefore be useful without importing d2b runtime or
+release machinery into Gas City's state or execution graph.
 
 The environment also needs a narrow host integration boundary. Gas City needs
 host worktrees, Nix, a local control plane, and persistent workflow state, but
@@ -87,7 +83,7 @@ The final comment-resolution seam is intentionally split:
 4. the native Compound synthesis stage records the result.
 
 This split prevents a mixed review-and-edit role from being treated as
-independent review. It is not a d2b panel implementation.
+independent review.
 
 ### ACP profiles and fallback
 
@@ -283,15 +279,9 @@ verification evidence.
 
 ## Explicitly excluded
 
-Gas City does not import, invoke, produce, or wait for the standalone d2b
-panel, selected-roster signoff, wave delivery, wave sealing, attestation,
-receipt, merge-eligibility, or bespoke evidence-pinning hardening. Ordinary
-Nix and dependency locks remain normal reproducibility inputs. Automatic
-pull-request merging is also excluded.
-
-The d2b panel, signoff, wave, and delivery documents continue to govern
-standalone d2b contributor runs. This ADR does not weaken those contracts; it
-records that they are a different workflow.
+Gas City does not import, invoke, or wait for repository-only d2b contributor
+state. Ordinary Nix and dependency locks remain normal reproducibility inputs.
+Automatic pull-request merging is also excluded.
 
 ## Consequences
 

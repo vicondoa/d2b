@@ -1,8 +1,8 @@
 //! External, candidate-ID-addressed delivery state.
 //!
 //! Spec sections 12.2 and 12.5 are absolute about where wave evidence lives:
-//! validation command output, panel transcripts, and attestation payloads
-//! never enter Git, generated source, a PR body, or a release archive. This
+//! validation command output never enters Git, generated source, a PR body, or
+//! a release archive. This
 //! module is the only place delivery artifacts are written, and its API is
 //! shaped so that constraint cannot be violated by a caller:
 //!
@@ -19,8 +19,6 @@
 //! ```text
 //! <state root>/<wave>/<candidate_id>/snapshot.json
 //! <state root>/<wave>/<candidate_id>/evidence/...
-//! <state root>/<wave>/<candidate_id>/panel/...
-//! <state root>/<wave>/<candidate_id>/panel-request.json
 //! <state root>/<wave>/<candidate_id>/seal.json
 //! <state root>/<wave>/<candidate_id>/history-proof.json
 //! ```
@@ -100,11 +98,9 @@ pub const MAX_JSON_BYTES: usize = 2 * 1024 * 1024;
 pub const MAX_ARTIFACT_BYTES: usize = 16 * 1024 * 1024;
 
 pub const SNAPSHOT_FILE: &str = "snapshot.json";
-pub const PANEL_REQUEST_FILE: &str = "panel-request.json";
 pub const SEAL_FILE: &str = "seal.json";
 pub const HISTORY_PROOF_FILE: &str = "history-proof.json";
 pub const EVIDENCE_DIR: &str = "evidence";
-pub const PANEL_DIR: &str = "panel";
 
 /// A delivery state root proven to sit outside every reviewed checkout.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -398,10 +394,6 @@ impl CandidateDir {
         self.path.join(SNAPSHOT_FILE)
     }
 
-    pub fn panel_request_path(&self) -> PathBuf {
-        self.path.join(PANEL_REQUEST_FILE)
-    }
-
     pub fn seal_path(&self) -> PathBuf {
         self.path.join(SEAL_FILE)
     }
@@ -412,10 +404,6 @@ impl CandidateDir {
 
     pub fn evidence_dir(&self) -> PathBuf {
         self.path.join(EVIDENCE_DIR)
-    }
-
-    pub fn panel_dir(&self) -> PathBuf {
-        self.path.join(PANEL_DIR)
     }
 
     /// Resolves a relative artifact path under the candidate directory.
@@ -1441,7 +1429,7 @@ pub(crate) mod tests {
     /// scheme: a legacy bare wave still addresses its existing directory, byte
     /// for byte. A program is running against this state right now, and
     /// re-addressing a wave would invalidate the candidate digests that bind
-    /// its existing snapshots, seals, and panel records.
+    /// its existing snapshots and seals.
     #[test]
     fn a_legacy_wave_addresses_its_existing_state_directory_unchanged() {
         let scratch = Scratch::new("legacy-wave-path");

@@ -96,10 +96,10 @@ negative-test harness switches off is not a seal.
 Two further properties make the shape wrong independent of the two bypasses.
 The check runs at `start()`, so it binds a type parameter once at open and
 never binds the evidence to the mutation, the store, or the commit. And a
-runtime string comparison cannot be asserted by the compile-fail and
-API-surface census legs that this repository uses for every other capability
-boundary, so the guard is invisible to the machinery that would otherwise
-notice it regressing.
+runtime string comparison cannot be asserted by the defining-crate compiler
+assertions and compile-fail tests that this repository uses for every other
+capability boundary, so the guard is invisible to the machinery that would
+otherwise notice it regressing.
 
 The W5 branch is parked at `dc145025` with the attempted follow-up deliberately
 uncommitted. Every claim about current behaviour in this record is taken from
@@ -291,10 +291,9 @@ No type declared in `mutation_seal.rs` implements `Debug`, `Display`,
 `SealedMutation`, `OpenedMutation`, `MutationSealIssuer`,
 `MutationSealAcceptor`, `MutationSealBody`, `StoreSealIdentity`, and
 `SealAuthority`. The first five are this section's rule; the two comparison
-traits are section 2c's, and both are enforced by the same scan. The approved
-capability trait-impl allowlist at
-`packages/d2b-bus/tests/approved-capability-trait-impls.txt` therefore gains
-zero rows, not four.
+traits are section 2c's, and both are enforced by the same scan. The resource
+mutation policy scan therefore enforces zero trait-implementation rows for
+these types, not four.
 
 An earlier revision of this record planned a redacted `Debug` on the four
 capability types, on the precedent of `SessionAcceptor`, whose `Debug` writes
@@ -393,8 +392,8 @@ remediation for each code.
 `packages/d2b-contracts/src/v3/identity.rs`, `d2b-resource-store` already
 depends on `d2b-contracts` and nothing else, and `d2b-resource-store` already
 names `ResourceUid` in `AdmittedAuthorization::subject_uid`. So this costs no
-new type, no new dependency, and no new census identity: `ResourceUid` is
-already a `claim_roots` entry in `tests/golden/api-surface/roots.json`.
+new type or dependency. `ResourceUid` is already committed, schema-generated,
+and governed.
 
 A new `StoreUuid` newtype was rejected for the same reason a new dependency
 was: it would duplicate validation that is already committed, already schema-
@@ -823,8 +822,8 @@ fails the return type, so the test asserts a misleading `error[E0308]` instead
 of the absent-method error it means to prove. Measured both ways.
 
 The three non-forgery fixtures are the compile-fail half of sections 2a and 2c.
-They are worth their build cost because the census cannot see them: absence of
-a trait impl is not a snapshot row, so nothing else in the harness would notice
+They are worth their build cost because a source policy scan cannot prove the
+absence of a trait implementation, so nothing else in the harness would notice
 a `#[derive(Debug)]` appearing on `SealedMutation`, or a `#[derive(PartialEq)]`
 appearing on `StoreSealIdentity` and quietly folding the correlator into the
 identity comparison, in a later wave. All three were measured directly rather
@@ -833,31 +832,6 @@ rather than `Display`, and `compare_seal_identities` names the owned type
 `StoreSealIdentity` rather than `&StoreSealIdentity`, so an assertion on either
 short form would not match.
 
-API-surface census: `SealedMutation`, `MutationSealIssuer`,
-`MutationSealAcceptor`, and `OpenedMutation` are added to `capability_roots` in
-`tests/golden/api-surface/roots.json`, and the four snapshots under
-`tests/golden/api-surface/` are regenerated with `make api-surface-pin`.
-
-What that does to
-`packages/d2b-bus/tests/approved-capability-trait-impls.txt` is worth stating
-exactly, because it is the one part of this wave an implementer cannot guess
-from the diff. `capability_fixed_point` in
-`packages/d2b-api-surface/src/lib.rs` grows the closure by **referrer, not
-referent**: an identity joins when its own definition references something
-already in the set. So the four new roots contribute no rows of their own, per
-section 2a they implement nothing, and `SealIdentityMismatch`,
-`StoreSealIdentity`, `MutationSealBody`, and `StoreSlot` stay outside the
-closure entirely, because their definitions reference nothing at all in the
-mismatch enum's case and `u8`, `StoreSlot`, `ZoneId`, `ResourceUid`, and the
-payload types in the others, and none of those is a capability. What joins are
-the holders:
-`NativeAuthorizer`, `RedbResourceStore`, `ResourceStoreBackend`, `RedbBackend`,
-and `ResourceService`. Of those five, exactly one implements anything today -
-`NativeAuthorizer` has a hand-written `Debug` writing
-`NativeAuthorizer(<redacted>)` - so that is the one row B2 expects to approve,
-and it is already redacted. The seal types themselves must never appear in that
-file; if they do, section 2a has been broken.
-
 Trait-solver ambiguity assertions go in
 `d2b-resource-store` itself, extending the
 `CapabilityMustNotImplementCloneCopyDefaultOrFrom` construction that
@@ -865,17 +839,15 @@ Trait-solver ambiguity assertions go in
 with one further arm, `impl<T: core::fmt::Debug, B> ... for T {}`, and renaming
 it `CapabilityMustNotImplementCloneCopyDefaultDebugOrFrom`. `Clone`, `Copy`,
 `Default`, `Debug`, and `From` for the four types are then rejected in every
-compiled configuration. Measured on rustc 1.97.0: the extended construction
-compiles unchanged while the types implement none of the five, and adding
+compiled configuration. Measured on rustc 1.97.0: the extended construction compiles
+unchanged while the types implement none of the five, and adding
 `#[derive(Debug)]` to `SealedMutation` turns the assertion into
 `error[E0283]: type annotations needed`, naming the blanket impl and the
-`Debug` arm as the two candidates. `packages/d2b-bus/tests/public_mint_surface.rs`
-is the census that reads those results, not the place the assertions live. Any
-later public constructor, public field, or extra trait implementation reachable
-from the capability closure then appears as a snapshot diff and fails
-`make test-rust-api-surface`.
+`Debug` arm as the two candidates. The defining-crate assertions are
+complemented by the external-seal UI tests and the public wire/API contract
+tests.
 
-Four source-level properties a census cannot see are enforced by a new
+Four source-level properties compiler assertions cannot see are enforced by a new
 tree-wide policy lint at
 `packages/d2b-contract-tests/tests/policy_resource_mutation_seal.rs`, wired
 explicitly into `tests/test-policy.sh`. The existing
@@ -983,9 +955,10 @@ cross-crate, so `d2b-resource-store` must expose
 `PreparedStoreMutation::new(mutation, resource_uid, payload_digest)`. This is
 acceptable and it is not a mint: a prepared mutation is inert data, meaningful
 only inside a `SealedMutation` that the holder cannot construct. It does move
-four census identities from `d2b_resource_api::PreparedStoreMutation` to
-`d2b_resource_store::PreparedStoreMutation` and adds a `::method:new` row, so
-the snapshot re-pin is part of the same wave, not a later one.
+the public type from `d2b_resource_api::PreparedStoreMutation` to
+`d2b_resource_store::PreparedStoreMutation` and adds a `::method:new` entry, so
+the defining-crate and contract checks are part of the same wave, not a later
+one.
 
 **`d2b-resource-store-redb`** loses `VerifiedMutationView`,
 `VerifiedPreparedMutationView`, the `V` parameter on `RedbResourceStore`, the
@@ -1110,9 +1083,9 @@ policy test. Trading a policy invariant for a type-system one when a third
 option satisfies both is a bad trade.
 
 **A doc-hidden or `#[cfg(test)]`-gated constructor.** `#[doc(hidden)]` is
-public API with a discouraging label; the rustdoc census in
-`tests/golden/api-surface/hidden-public-api.txt` exists precisely because
-hidden items are still reachable. A `cfg`-gated seal is measured bypass 2.
+still public API, and the defining-crate compiler assertions plus the external
+seal UI tests must continue to reject a reachable constructor. A `cfg`-gated
+seal is measured bypass 2.
 
 **A backend-owned issuer.** Letting `RedbResourceStore` create the pair and
 hand the issuer up puts the mint capability in the trusted-but-not-authorizing
@@ -1123,7 +1096,7 @@ the side that evaluates policy.
 **A token identifier checked at runtime.** A `u64` or UUID compared inside
 `commit_verified` is what the parked branch has, one abstraction up. It is
 forgeable by anyone who can construct the carrier, invisible to the
-compile-fail and census legs, and it degrades rather than denies when the
+compile-fail and source-policy checks, and it degrades rather than denies when the
 comparison is skipped. Rejected on the fail-closed rule.
 
 **Cryptographically re-binding the envelope.** Sealing a digest of the
@@ -1179,9 +1152,9 @@ extended.
 2. Both mint symbols have exactly one non-test call site each, in
    `d2b-resource-api`: `mutation_seal_pair` and `MutationSealIssuer::seal`. A
    second `mutation_seal_pair` call site means a store exists whose writes the
-   evaluator does not gate. A second `seal` call site means a commit exists
-   that no evaluation produced, which the census cannot see because `seal` is
-   already public.
+   evaluator does not gate. A    second `seal` call site means a commit exists that no evaluation produced;
+   the resource mutation policy lint catches it because `seal` is already
+   public.
 3. `d2b-resource-store` and `d2b-resource-store-redb` never depend on
    `d2b-resource-api`. Unchanged from D106, now also required for the seal to
    remain coherent.
@@ -1260,8 +1233,8 @@ a second `MutationSealIssuer::seal` call site anywhere in `d2b-resource-api`
 mints committable evidence over a hand-built `MutationSealBody` with no
 evaluation at all, because `seal` is public, the body's fields are public, and
 the authorizer retains the issuer for its whole life. Neither is visible to the
-API-surface census, because neither changes a public surface. Invariant 2 and
-the two counts in
+public wire/API contract tests, because neither changes the wire surface.
+Invariant 2 and the two counts in
 `packages/d2b-contract-tests/tests/policy_resource_mutation_seal.rs` exist for
 exactly these two cases and nothing else.
 
@@ -1289,21 +1262,13 @@ One scope, owning `packages/d2b-resource-store/src/**`,
 `packages/d2b-resource-store-redb/src/**`, `packages/d2b-resource-api/src/**`,
 `packages/d2b-resource-api/tests/external_seals.rs`,
 `packages/d2b-resource-api/tests/ui/external-seals/tests/forge_issuer.rs`,
-the three `Cargo.toml` files, the four census snapshots under
-`tests/golden/api-surface/`, the four `packages/d2b-bus/tests/approved-*.txt`
-snapshots, and the two documents named below.
+the three `Cargo.toml` files, the resource mutation policy lint, and the two
+documents named below.
 
-The census snapshots are Wave A's, not Wave B's, and the reason is mechanical
-rather than tidy. `tests/golden/api-surface/capability-api.txt` carries
-fourteen lines naming `d2b_resource_api::VerifiedMutation` and
-`d2b_resource_api::PreparedStoreMutation`, and
-`packages/d2b-bus/tests/approved-capability-api.txt` carries four more.
-Wave A deletes the first type and re-homes the second, so both files change the
-moment Wave A compiles, and `run_api_surface_gate` plus
-`public_mint_surface.rs` both run inside `make test-rust`. If Wave B owned
-those files, Wave A's own stopping condition could not be met. Wave A therefore
-re-pins the snapshots for the surface it deletes and re-homes, and nothing
-else; Wave B adds the new capability roots and re-pins again.
+The defining-crate compiler assertions, external-seal UI tests, and public
+wire/API contract tests are the stopping condition for the closed mutation
+surface. The resource mutation policy lint covers the source-level mint and
+serialization rules that those compiler and contract tests cannot observe.
 
 Deliverable: sections 1 through 5 above, including 2a, 2b, and 2c, and section
 7, plus the eleven runtime negatives in section 6.
@@ -1327,7 +1292,7 @@ The same excluded crate holds `policy_dash_gate.rs` and `policy_lints.rs`,
 which read `AGENTS.md` and `docs/adr/README.md`, and `policy_units.rs` and
 `policy_docs.rs`, which the daemon-only rule already requires for any doc row
 describing a control-plane surface. Wave A changes both documents and eleven
-lines of `tests/golden/api-surface/`, so it must run the lane that covers them.
+the resource mutation policy lint, so it must run the lane that covers it.
 
 `make test-fixture-contracts` refuses to run unless `D2B_ENABLE_FIXTURE_BUILD`
 is `1`: `tests/test-rust.sh` fails with "fixture-contracts mode requires
@@ -1347,13 +1312,12 @@ rg -n 'd2b-resource-api' packages/d2b-resource-store/Cargo.toml \
 rg -n 'cfg\(test\)|cfg\(not\(test\)\)' packages/d2b-resource-store/src/mutation_seal.rs  # exit 1
 rg -n 'Debug|Display|Serialize|Deserialize|JsonSchema|PartialEq|Eq|as_str|to_canonical_string' \
    packages/d2b-resource-store/src/mutation_seal.rs                               # exit 1
-rg -n 'VerifiedMutation' tests/golden/api-surface packages/d2b-bus/tests           # exit 1
 rg -n 'StoreSlot' packages/d2b-contracts \
    packages/d2b-resource-store-redb/src/keys.rs \
    packages/d2b-resource-store-redb/src/values.rs \
    packages/d2b-resource-store-redb/src/schema.rs                               # exit 1
-make api-surface-pin && git diff --exit-code tests/golden/api-surface/             # exit 0
-make test-rust                                                                     # exit 0
+cargo test -p d2b-resource-api --test external_seals                               # exit 0
+cargo test -p d2b-contract-tests --test policy_resource_mutation_seal              # exit 0
 D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts                             # exit 0
 ```
 
@@ -1375,46 +1339,37 @@ Two file-disjoint scopes, both opening against merged Wave A.
   fixtures in section 6 with their exact asserted diagnostics.
   Done when `cargo test -p d2b-resource-api --test external_seals` exits 0 and
   the test asserts all ten.
-- **B2 census roots and mint policy.** Owns
+- **B2 defining-crate assertions and mint policy.** Owns
   `packages/d2b-resource-store/src/mutation_seal.rs` for the in-crate
   trait-solver assertions,
-  `tests/golden/api-surface/roots.json`, the four snapshots under
-  `tests/golden/api-surface/`,
-  `packages/d2b-bus/tests/approved-capability-trait-impls.txt`,
   `packages/d2b-contract-tests/tests/policy_resource_mutation_seal.rs`,
   `tests/test-policy.sh`, and the "Capability mint surface allowlist" rows in
   `AGENTS.md` and
   `docs/contributing/critical-subsystems.md`, whose crate lists gain
   `packages/d2b-resource-store/`.
-  Adds the four capability roots, regenerates the snapshots, adds the
-  in-crate trait-solver ambiguity assertions including the `Debug` arm, and
-  adds the three counts and the three `mutation_seal.rs` scans to
+  Adds the in-crate trait-solver ambiguity assertions including the `Debug`
+  arm, and adds the three counts and the three `mutation_seal.rs` scans to
   `policy_resource_mutation_seal.rs`. It also moves Wave A's `StoreSlot` wire
   and durable serialization grep into that policy lint as a fail-closed
   workspace scan, and wires the lint into `test-policy`, so invariant 10
   remains enforced after the implementation branch closes. The approved
   trait-impl file gains only holder rows, per the closure analysis in section
   6.
-  Done when `make api-surface-pin` followed by
-  `git diff --exit-code tests/golden/api-surface/` exits 0,
-  `make test-rust-api-surface` exits 0,
-  `make test-rust` exits 0 so the `d2b-resource-store` trait-solver seals
-  compile in their owning crate,
+  Done when the resource-store trait-solver seals compile in their owning
+  crate, the external-seal UI tests pass, and
+  `cargo test -p d2b-contract-tests --test policy_resource_mutation_seal` exits
+  0,
   `make test-policy` exits 0,
 
   ```bash
-  rg -n 'SealedMutation|MutationSealIssuer|MutationSealAcceptor|OpenedMutation' \
-     packages/d2b-bus/tests/approved-capability-trait-impls.txt   # exit 1
   D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts          # exit 0
   ```
 
-  The first condition is section 2a as a grep: no seal type may have acquired a
-  trait impl. `make test-rust` covers the compiled assertions in
-  `d2b-resource-store`; `make test-policy` covers the tree-wide lint in
-  `d2b-contract-tests`. The last condition is not decoration: B2 edits two
-  `AGENTS.md` rows and re-pins the golden census, and the crate that gates both
-  is excluded from `test-rust` for the same reason Wave A carries the same
-  condition.
+  `make test-rust` covers the compiled assertions in `d2b-resource-store`;
+  `make test-policy` covers the tree-wide lint in `d2b-contract-tests`. The
+  last condition is not decoration: B2 edits two `AGENTS.md` rows and the
+  policy lint, and the crate that gates both is excluded from `test-rust` for
+  the same reason Wave A carries the same condition.
 
 B1 and B2 are disjoint by path. They both open against Wave A, which has
 already landed every shared contract they read, so no separate integrator prep

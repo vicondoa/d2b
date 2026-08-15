@@ -69,7 +69,7 @@ assertion is relaxed (or moved to `nix-unit`'s `expectedError.msg`).
 The same minimal-evalModules technique also applies to
 `tests/unit/nix/eval-cases/observability.nix` and `processes-dag-order.nix`,
 which still call full `nixosSystem`. This touches a critical contract
-gate, so route it through panel review. Target: whole gate under
+gate, so route it through ordinary review. Target: whole gate under
 ~2 min.
 
 ## `docs/reference/cli-output/status.schema.json` is stale (missing `api_ready` defs)

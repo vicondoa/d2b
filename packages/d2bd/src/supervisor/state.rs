@@ -335,7 +335,7 @@ pub fn reconcile_and_adopt(
                     .get(&(entry.vm.clone(), entry.role_id.clone()))
                     .copied()
                     .expect("reconcile preserves snapshot keys");
-                // GPT-5.5 panel critical fix: pass the expected
+                // Security fix: pass the expected
                 // start-time so the opener can re-verify AFTER
                 // pidfd_open, closing the pid-reuse race window.
                 let expected_start_time = snapshots
@@ -1026,7 +1026,7 @@ mod tests {
         }
     }
 
-    /// W*-fu GPT-5.5 panel CRITICAL fix regression test:
+    /// Regression test:
     /// reconcile_and_adopt MUST pass the snapshot's
     /// start_time_ticks through to the opener so the opener can
     /// perform the post-open re-verification that closes the

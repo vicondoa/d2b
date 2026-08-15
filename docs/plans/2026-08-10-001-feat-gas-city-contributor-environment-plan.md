@@ -30,20 +30,20 @@ The environment will run within a constrained NixOS slice with one Gas City life
 ### Problem Frame
 
 The current Copilot workflow consumes substantial host resources through its interactive TUI even when the underlying model work is less demanding.
-The existing Spec Kit and panel-review process is inflexible, relies heavily on repository files for orchestration state, takes a long time to reach full signoff, and often requires manual intervention when work drifts.
+The prior repository-local process is inflexible, relies heavily on repository files for orchestration state, takes a long time to complete, and often requires manual intervention when work drifts.
 
 The operator needs durable orchestration that can continue across sessions, control resource use, and complete a software project without routine babysitting.
 The first representative workload will ask Gas City to migrate as much of `make check` as practical to Bazel and BuildBuddy while preserving local and integration-only lanes and using the BuildBuddy free tier efficiently.
 
 ### Key Decisions
 
-- **Use Gas City as the canonical orchestrator.** The environment will not inherit the existing Spec Kit or panel-review workflow contract. Factual upstream constraints recorded in `docs/adr/0053-gascity-contributor-infrastructure.md` remain research inputs. Governs R10 and R14.
+- **Use Gas City as the canonical orchestrator.** The environment will not inherit the prior repository-local workflow contract. Factual upstream constraints recorded in `docs/adr/0053-gascity-contributor-infrastructure.md` remain research inputs. Governs R10 and R14.
 - **Use one host-native constrained slice.** One Gas City lifecycle service and narrow credential sidecars preserve host worktrees, Nix, and caching while ACP removes the TUI and tmux execution path. Governs R5-R9.
 - **Keep reusable host policy in the repo flake.** The flake will export the NixOS module that defines identity, service, sandbox, and resource policy; `/etc/nixos` will only import it and supply host-specific values. Governs R1-R3.
 - **Deliver the complete path in the first accepted version.** Sandboxing, scoped credentials, Discord decisions, resource controls, durable state, model routing, and unattended pull-request delivery all gate acceptance. Governs R5-R20.
 - **Keep merge and critical product judgment human-owned.** Gas City may ask targeted questions and open a pull request, but it must not merge. Governs R12 and R13.
 - **Bind models by workflow role with one approved fallback.** Planning and review prefer the high-context profile, while Luna at `max` is the only permitted degradation target. Governs R18-R20.
-- **Exclude d2b delivery hardening.** Gas City will not use selected-roster signoff, panel lifecycle, wave sealing, attestation, or bespoke evidence-pinning machinery. Governs R21.
+- **Exclude repository-specific delivery hardening.** Gas City will use its native workflow state and ordinary dependency locks. Governs R21.
 
 <!-- ce-section: work-relationships -->
 ### How This Work Fits Together
@@ -86,7 +86,7 @@ The surrounding breakdown is current context, not a committed roadmap.
 - R11. A run must accept a software project request, execute implementation and verification with Copilot CLI agents, push a branch, and open a reviewable pull request.
 - R12. Discord must provide outbound notifications and targeted product-decision prompts that resume the same durable run after the operator responds.
 - R13. Gas City must never merge a pull request; merge remains an explicit operator action.
-- R14. Durable workflow state must survive terminal closure, agent-session loss, and service restart without depending on Spec Kit or panel-review files as the orchestration state machine.
+- R14. Durable workflow state must survive terminal closure, agent-session loss, and service restart without depending on repository-local planning files as the orchestration state machine.
 - R15. Routine recovery and bounded fix work must proceed without operator intervention, while decisions that would change product behavior or scope must pause and request input.
 
 **Acceptance workload**
@@ -102,7 +102,7 @@ The surrounding breakdown is current context, not a committed roadmap.
 
 **Workflow simplicity**
 
-- R21. Gas City runs must not require d2b panel signoff, selected-roster review, wave or seal gates, attestation artifacts, or bespoke evidence-pinning beyond ordinary dependency locks needed to reproduce the environment.
+- R21. Gas City runs must rely on native workflow state and ordinary dependency locks rather than repository-specific delivery machinery.
 
 ```mermaid
 flowchart TB
@@ -184,7 +184,7 @@ flowchart TB
   - **Covers R14 and R15.**
   - **Given:** The terminal, an agent session, or the Gas City service stops during an active run.
   - **When:** The service and run restart.
-  - **Then:** Durable state identifies the last completed work and the run resumes or reports a precise blocked condition without reconstructing progress from Spec Kit or panel files.
+  - **Then:** Durable state identifies the last completed work and the run resumes or reports a precise blocked condition without reconstructing progress from repository-local planning files.
 
 - AE7. **Role-specific model routing**
   - **Covers R18-R20.**
@@ -196,7 +196,7 @@ flowchart TB
   - **Covers R21.**
   - **Given:** Gas City starts or completes a software delivery run.
   - **When:** The run advances from planning through pull-request creation.
-  - **Then:** It does not wait for d2b panel signoff, produce wave or seal artifacts, require attestation records, or create evidence-pinning work beyond normal dependency locking. The resolved city graph contains no references to those excluded surfaces.
+  - **Then:** It uses native workflow state without repository-specific delivery artifacts or evidence-pinning beyond normal dependency locking.
 
 ### Success Criteria
 
@@ -211,8 +211,8 @@ flowchart TB
 ### Scope Boundaries
 
 - The Bazel and BuildBuddy conversion itself is not implemented by this plan.
-- Existing Spec Kit, panel-review, and wave-delivery workflows do not govern Gas City runs created by this environment.
-- Selected-roster signoff, sealing, attestation, and bespoke evidence-pinning are excluded; ordinary flake and dependency locks remain in scope for reproducibility.
+- Prior repository-local workflow machinery does not govern Gas City runs created by this environment.
+- Ordinary flake and dependency locks remain in scope for reproducibility.
 - Automatic pull-request merging is excluded.
 - Public Discord interaction endpoints are excluded; the first version uses the outbound gateway path.
 - Rootless containers and per-worker sandbox identities are excluded from the first version.
@@ -230,7 +230,6 @@ flowchart TB
 ### Sources and Research
 
 - `docs/adr/0053-gascity-contributor-infrastructure.md` documents prior upstream measurements, pack composition, tmux and worktree behavior, loopback control-plane needs, supervisor behavior, and pack runtime dependencies.
-- `docs/contributing/copilot-agents.md` documents the current Copilot-only contributor harness and its Spec Kit and panel workflow.
 - `flake.nix` currently exposes the d2b NixOS module and development shells but no complete Gas City environment or Gas City service module.
 - [Gas City](https://github.com/gastownhall/gascity)
 - [Gas City Compound Engineering pack](https://github.com/gastownhall/gascity-packs/tree/main/compound-engineering)
@@ -244,7 +243,7 @@ flowchart TB
 
 The Product Contract remains authoritative.
 Planning preserves every R, A, F, and AE identifier.
-The user added R21 and AE8 and narrowed R12 and AE7 to exclude d2b delivery hardening and approval or attestation semantics.
+The user added R21 and AE8 and narrowed R12 and AE7 to exclude repository-specific delivery hardening.
 No other product scope changed.
 
 ### Key Technical Decisions
@@ -263,8 +262,8 @@ No other product scope changed.
 - KTD12. **Use a credential-isolated publisher and stop at the PR.** (session-settled: user-approved - chosen over local-only completion or automatic merge: Gas City must open a reviewable pull request and leave merge to the operator) A separate `gascity-publisher` identity owns the GitHub App key and establishes one close-on-exec channel before ACP workers start. The main service sends an unlinked Git bundle FD and bounded metadata. The publisher imports into its own bare clone with isolated Git configuration and hooks disabled, pushes to the fixed HTTPS repository without force, finds a PR by exact head and base, creates only when absent, notifies, and stops.
 - KTD13. **Project only scoped credentials.** (session-settled: user-approved - chosen over exposing the operator home or ambient credentials: only dedicated service credentials and the required Copilot token enter the sandbox) Only `gascity-agent` receives the dedicated Copilot token. Discord and GitHub credentials remain in their sidecars. A `gascity-buildbuddy-proxy` identity generates an in-memory Envoy configuration that injects `x-buildbuddy-api-key` and establishes HTTP/2 TLS to `remote.buildbuddy.io:443` with the system CA, fixed SNI, and SAN verification. The proxy and uncredentialed `gascity-check` runner share a private network namespace whose loopback listener is inaccessible to other units.
 - KTD14. **Separate PR creation, merge, and rollout gates.** Repo checks and NixOS host integration gate implementation PR readiness. One real-credential Copilot, Discord, GitHub, and BuildBuddy smoke gates human merge. Three representative projects and full BuildBuddy efficiency measurements are post-merge rollout acceptance.
-- KTD15. **Supersede obsolete Gas City delivery decisions.** Add ADR 0056. Mark ADR 0053's panel-parity and delivery-hardening decisions superseded while retaining its contributor-infrastructure classification and measured upstream facts.
-- KTD16. **Keep native Compound and exclude d2b delivery hardening.** (session-settled: user-directed - chosen over d2b panel, signoff, wave, seal, attestation, and pinning hardening: the extra lifecycle is a waste of time for Gas City) Gas City-owned configuration and state must not import, invoke, produce, or wait for the excluded d2b delivery surfaces.
+- KTD15. **Supersede obsolete Gas City delivery decisions.** Add ADR 0056. Mark ADR 0053's repository-specific delivery-hardening decisions superseded while retaining its contributor-infrastructure classification and measured upstream facts.
+- KTD16. **Keep native Compound.** Gas City-owned configuration and state use native workflow state and do not depend on retired repository-specific delivery machinery.
 - KTD17. **Reuse existing Gas City control through fixed wrappers.** A root-owned `gascity-operators` group may execute only package-provided `submit`, `status`, and `cancel` wrappers as `gascity` through narrow sudo rules. Wrappers validate size, identifiers, cancellation state, and redacted output. No second control protocol is introduced.
 - KTD18. **Keep all project checks inside the contributor boundary.** The uncredentialed check runner uses `local?root=/var/lib/gascity-check/nix-root` with no daemon, no ambient substituters, configured trusted keys, bounded jobs and cores, and a store root inside its quota. The check namespace has no external interface. HTTP and HTTPS, Nix substituter traffic, and fixed-output fetches use an inherited relay to the allowlisting egress proxy. BuildBuddy gRPC uses the private Envoy listener. Direct network bypass is impossible.
 - KTD19. **Bound external retries and durable growth.** Discord and GitHub use at most three attempts, honor provider retry hints, and reconcile ambiguous mutations before retry. Systemd project quotas cap each persistent service directory, and assertions keep their sum within one total city quota. Activation fails when the backing filesystem lacks project-quota support. Submission and active heavy stages stop before the host reserve is consumed.
@@ -493,7 +492,7 @@ Each ACP profile probe:
 7. Classifies failures through a closed error map.
 
 The service writes only generation identity, readiness, selected review profile, coding profile, and an actionable error code to runtime status.
-It records no prompt, response, receipt, attestation, or evidence object.
+It records no prompt, response, receipt, or raw evidence object.
 `submit` rejects work unless the current generation is ready.
 
 ### Agent Role Routing
@@ -831,7 +830,7 @@ flowchart LR
 - The resolved catalog matches the generated role bindings.
 - The instruction fragment appears once.
 - Malicious repository instructions cannot enable denied tools or integration commands.
-- The managed graph contains no forbidden d2b delivery reference.
+- The managed graph contains no retired repository workflow reference.
 - A planted forbidden import fails the policy test.
 
 **Verification:** The resolved formula catalog and role matrix are complete, native Compound review remains, and R21 is enforced without scanning the unrelated worktree contents.
@@ -1089,7 +1088,7 @@ flowchart LR
 3. Register one fixture-independent policy binary in the existing policy lane.
 4. Add positive and planted-negative policy fixtures.
 5. Regenerate existing Nix-unit and flake-check inventories.
-6. Add no top-level shell gate, meta gate, drift gate, container test, panel fixture, receipt resolver, or attestation test.
+6. Add no top-level shell gate, meta gate, drift gate, container test, or receipt resolver.
 
 **Patterns to follow:** `tests/AGENTS.md`, existing Nix-unit cases, flake smoke checks, and fixture-independent policy wiring.
 
@@ -1107,7 +1106,7 @@ flowchart LR
 - Sidecar credential isolation and close-on-exec channels.
 - Retry ceilings, atomic decision transitions, and idempotent publication.
 - Storage reserve, manual-cleanup eligibility, and local Nix store rendering.
-- Forbidden d2b delivery surfaces.
+- Retired repository workflow surfaces.
 - Ordinary locks only.
 - Every matcher fails against a planted invalid fixture.
 
@@ -1149,7 +1148,7 @@ flowchart LR
 - Restart across a compatible generation continues, while an incompatible schema blocks safely.
 - ACP loss creates a fresh process and retains worktree progress.
 - Copilot homes contain settings and runtime state but no copied operator config or token.
-- Gas City runtime state contains no excluded d2b delivery surface.
+- Gas City runtime state contains no retired repository workflow surface.
 - Free-space refusal works and the manual cleanup procedure preserves active runs and open pull requests.
 - Cancellation preserves the branch and worktree.
 
@@ -1170,8 +1169,6 @@ flowchart LR
 - `docs/adr/README.md`
 - `docs/contributing/gas-city.md`
 - `docs/contributing/README.md`
-- `docs/contributing/copilot-agents.md`
-- `docs/contributing/panel-review.md`
 - `AGENTS.md`
 - `.gitignore`
 - `changelog.d/gas-city-contributor-environment.md`
@@ -1180,9 +1177,9 @@ flowchart LR
 **Approach:**
 
 1. Add ADR 0056 with the KTDs in this plan.
-2. Mark ADR 0053's Gas City panel-parity and delivery-hardening decisions superseded.
+2. Mark ADR 0053's repository-specific delivery-hardening decisions superseded.
 3. Retain ADR 0053's contributor classification and measured upstream facts.
-4. Remove future Gas City panel-parity promises from contributor docs.
+4. Remove obsolete workflow-parity promises from contributor docs.
 5. Document module import, credential sidecars, local operator authorization, lifecycle, readiness, commands, decisions, diagnostics, restart recovery, publication, the local Nix store, manual cleanup, and post-merge acceptance.
 6. Document the city-wide same-UID threat boundary and the absence of adversarial isolation between agents.
 7. Add the guide to contributor indexes.
@@ -1192,9 +1189,8 @@ flowchart LR
 
 **Test scenarios:**
 
-- ADR index coverage accepts ADR 0056.
-- Contributor docs contain no future Gas City panel-parity requirement.
-- Policy tests accept native Compound review and reject d2b delivery integration.
+- Contributor docs contain no obsolete workflow-parity requirement.
+- Policy tests accept native Compound review and reject retired workflow integration.
 - Changelog checks accept the fragment.
 
 **Verification:** Architecture and operator guidance match the implemented environment and excluded scope.
@@ -1336,7 +1332,7 @@ No live secret, prompt, response, log, review output, or proof is committed.
 - Active-run GC roots survive Nix garbage collection and are removed at terminal cleanup.
 - Discord decisions and GitHub publication converge after retry and restart.
 - BuildBuddy authentication is injected only by the Envoy proxy over HTTP/2 with upstream TLS.
-- No merge operation or excluded d2b delivery surface is implemented or invoked.
+- No merge operation or retired repository workflow surface is implemented or invoked.
 - Agent Nix work uses the approved wrapper and unprivileged local store.
 - Submission and heavy stages preserve the configured free-space reserve.
 - Experimental and abandoned implementation paths are removed from the diff.
@@ -1356,8 +1352,8 @@ No live secret, prompt, response, log, review output, or proof is committed.
 **Documentation**
 
 - ADR 0056 is added and indexed.
-- ADR 0053 explicitly records the superseded Gas City panel-parity and delivery-hardening decisions.
-- Future Gas City panel-parity language is removed.
+- ADR 0053 explicitly records the superseded repository-specific delivery-hardening decisions.
+- Obsolete workflow-parity language is removed.
 - The contributor guide documents deployment and operation.
 - The guide contains the post-merge live checklist.
 - Root contributor guidance links to the guide.
@@ -1383,8 +1379,6 @@ Three representative projects and the BuildBuddy workload remain post-merge roll
 ## Sources and Research
 
 - `docs/adr/0053-gascity-contributor-infrastructure.md`
-- `docs/contributing/copilot-agents.md`
-- `docs/contributing/panel-review.md`
 - `tests/AGENTS.md`
 - `flake.nix`
 - `nixos-modules/default.nix`

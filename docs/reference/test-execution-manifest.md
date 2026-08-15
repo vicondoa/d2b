@@ -158,7 +158,6 @@ failed or interrupted record is useful diagnostic evidence but cannot satisfy
 coverage acceptance. A passing Rust aggregate preserves this baseline leaf set
 exactly when its conditional fixture/CLI surfaces are enabled:
 
-- `rust-api-surface`
 - `rust-main-format`
 - `rust-main-clippy`
 - `rust-main-workspace-tests`
@@ -189,11 +188,10 @@ duplicating them. Fixture and CLI work uses an isolated stable target below
 sharing mutable Cargo state.
 
 That isolated layout is warm-local only. Cold local runs restore shared
-workspace targets and retain the split API census cache across `make clean`.
-They overlap a bounded prebuild frontier, then run fixture, inventory and
-schema as a full-budget chain. CI alone uses the shared API census target
-and runs API, main, broker, guest, no-bash, schema, inventory and supply chain
-as separate full-budget Make jobs before the stable `test-rust` join.
+workspace targets across `make clean`. They overlap a bounded prebuild
+frontier, then run fixture, inventory and schema as a full-budget chain. CI
+runs main, broker, guest, no-bash, schema, inventory and supply chain as
+separate full-budget Make jobs before the stable `test-rust` join.
 
 For Nix-unit, compare the seven completed leaves listed above with the
 baseline execution manifest, then compare the source case and file-job

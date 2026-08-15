@@ -3,7 +3,7 @@
 //! as a provider session is allocated, wired, run, and torn down, and uses
 //! it to reconcile orphans after a restart.
 //!
-//! The P0 design panel (software, service-architect) required a concrete
+//! The P0 design review (software, service-architect) required a concrete
 //! lifecycle with explicit states, rollback on partial failure, and an
 //! idempotent stop - so a half-allocated ACA session can never be leaked or
 //! double-stopped. The phases are strictly ordered:

@@ -115,7 +115,7 @@ Hard invariants:
    observability only); writing to it is refused unconditionally.
 5. **Threaded cgroups forbidden.** `cgroup.type=threaded` is refused
    with `cgroup-threaded-forbidden`. Removing this restriction
-   requires a panel-approved ADR override.
+requires an explicitly reviewed ADR override.
 6. **No internal processes.** `d2b.slice` and intermediate VM
    cgroup directories MUST be process-free. Leaf role cgroups are the
    only directories that carry processes.
@@ -318,4 +318,4 @@ D2b explicitly forbids the following:
   the ADR - it cannot enforce bundle-derived paths or audit the
   decision).
 
-Removing any of these requires a panel-approved ADR override.
+Removing any of these requires an explicitly reviewed ADR override.

@@ -51,7 +51,7 @@
   block uses a foreign system or remote builder; common cross-system
   configuration pins and drift remain one step. The Layer-1, realized-class,
   and dual-system matrix pins are regenerated. If accepted, Spec 003 must be
-  amended and re-panelled before implementation resumes.
+  amended and reviewed again before implementation resumes.
 - Related: [ADR 0009](0009-rust-toolchain-msrv-and-supply-chain.md) (Rust
   toolchain, MSRV, and supply-chain policy), which keeps its authority
   unchanged and is not superseded;
@@ -61,8 +61,8 @@
   whose AST scan is one of the surfaces migrated here;
   [ADR 0008](0008-supported-platforms-and-rejected-targets.md) (supported
   platforms), which bounds the host platform this graph builds for
-- Scope: the eight Rust leaves behind the required `test-rust` context, the
-  eighteen execution-manifest surfaces they publish, the new local Make entry
+- Scope: the seven retained Rust leaves behind the required `test-rust` context,
+  the execution-manifest surfaces they publish, the new local Make entry
   points in section 8, and one new side-by-side GitHub Actions workflow. Rust
   only.
 - Non-scope: Bazel-to-Nix packaging, `nix` package overrides, flake and
@@ -74,8 +74,8 @@
 
 The Rust gate is the most expensive part of pull-request validation and the
 part with the most duplicated work. `make test-rust` is a GNU Make DAG over
-nine leaves; `tests/test-rust.sh` owns one leaf mode each; and
-`tests/layer1-jobs.json` dispatches eight of them as independent GitHub jobs
+seven leaves; `tests/test-rust.sh` owns one leaf mode each; and
+`tests/layer1-jobs.json` dispatches seven of them as independent GitHub jobs
 behind the stable required `test-rust` rollup context. Each leaf receives the
 full runner budget, and several of them compile overlapping dependency graphs
 into separate Cargo target directories on purpose, because Cargo has no way to
@@ -83,10 +83,10 @@ share one build across concurrent invocations with different feature sets and
 target directories.
 
 That duplication is visible in the numbers. On run `30778148252` (a warm push
-to `v3`), the eight Rust leaves took 4m24s (API census), 6m50s (main
-workspace), 2m39s (schema), 7m46s (inventory), 1m21s (no-bash AST), 1m50s
-(guest shell runner), 4m22s (broker) and 1m28s (supply chain): about 30m40s of
-runner time to produce a 7m46s critical path across eight runners. The
+to `v3`), the seven retained Rust leaves took 6m50s (main workspace), 2m39s
+(schema), 7m46s (inventory), 1m21s (no-bash AST), 1m50s (guest shell runner),
+4m22s (broker) and 1m28s (supply chain): about 26m16s of runner time to
+produce a 7m46s critical path across seven runners. The
 workflow's own comment records the cold cost of a Rust-profile job as about 43
 minutes. The gate is fast because it is wide, not because it is efficient.
 
@@ -223,12 +223,7 @@ contradict the guidance that would otherwise have been followed.
     transition; the only in-tree instance is the rule transition
     `nightly_unpretty_transition` in `rust/private/unpretty.bzl`, which sets
     `//rust/toolchain/channel` to `"nightly"` over its own subgraph.
-14. **There is no rustdoc-JSON rule.** `rust/defs.bzl` at 0.73.0 exports
-    `rust_doc` (HTML) and `rust_doc_test` and nothing else in that family.
-    `tests/tools/api-surface-json.sh` additionally runs `rustup set profile
-    minimal` and `rustup toolchain install "$pin"` at run time, which no Bazel
-    action can do.
-15. **The Bazel repository cache has no enumeration interface.** It is an
+14. **The Bazel repository cache has no enumeration interface.** It is an
     internal content-addressed store with no label and no listing API, and
     `crate_universe`'s generated spoke repositories expose per-crate rules
     rather than `.crate` archives or a whole-tree filegroup. A download
@@ -237,7 +232,7 @@ contradict the guidance that would otherwise have been followed.
 
 Constraint 1 alone rules out the handoff's 4 GiB rolling cache as a starting
 point. Constraints 4 and 5 rule out its implied scheduling primitive.
-Constraint 8 rules out its workflow skeleton. Constraints 10 through 15 are why
+Constraint 8 rules out its workflow skeleton. Constraints 10 through 14 are why
 sections 5, 6, 7, 9, 11 and 12 name the mechanisms they name rather than the
 ones an earlier draft of this record named. Those are recorded here so a
 future reader knows the divergences below are measurements, not preferences.
@@ -319,11 +314,10 @@ Concretely:
   repin drift check (section 5) fails closed when the Bazel-side lock does not
   match what the Cargo lock resolves to, which is the Bazel equivalent of the
   `--locked` flag the gate passes today.
-- The Rust toolchains registered in Bazel are exactly the channels named in
-  `packages/rust-toolchain.toml` (1.97.0) and
-  `packages/d2b-api-surface/rust-toolchain.toml` (nightly-2026-02-16). A guard
-  asserts equality between the registered versions and the two committed pins,
-  so a toolchain bump cannot land in one place only.
+- The Rust toolchain registered in Bazel is exactly the channel named in
+  `packages/rust-toolchain.toml` (1.97.0). A guard asserts equality between the
+  registered version and the committed pin, so a toolchain bump cannot land in
+  one place only.
 - Changing a dependency or a toolchain is still a Cargo-file edit followed by a
   regeneration, never a hand edit of Bazel files.
 
@@ -396,8 +390,8 @@ exactly this class of staleness for the other `xtask gen-*` outputs.
 generator to the trusted build path for a workspace whose interesting cases are
 precisely the ones a generic generator handles worst: three feature variants of
 one privileged workspace, two standalone workspaces with their own locks, six
-`harness = false` targets, `compile_fail` doctests that are capability seals
-and carry their own rustc flags, and a nightly-rendered API census. The
+`harness = false` targets, and `compile_fail` doctests that are capability seals
+and carry their own rustc flags. The
 repository already has a codegen-plus-drift-gate idiom and a place to put it.
 Using it costs one `xtask` subcommand and removes a dependency.
 
@@ -410,12 +404,12 @@ unmodelled case is visible rather than merely absent.
 `docs/reference/test-execution-manifest.md` pins the baseline set of Rust
 sub-surface identifiers that a passing Rust aggregate must publish. Under
 `D2B_SKIP_FIXTURE_BUILD=1`, which is what both the Layer-1 graph and
-continuous integration use, that set is eighteen identifiers. Those eighteen
-are the coverage contract this decision must preserve exactly.
+continuous integration use, that set is the coverage contract this decision
+must preserve exactly.
 
 `tests/golden/bazel-rust-coverage.json` maps each identifier to the Bazel
 target or test suite that carries it, to the continuous-integration slice that
-runs it, to the exact census that surface must observe, and, for a test suite,
+runs it, and, for a test suite,
 to its declared process topology (section 7). Census is exact, not a floor:
 every surface in this table has a derivable manifest, so a pinned minimum
 count survives only as a fallback for a surface added later that provably has
@@ -424,7 +418,6 @@ in the map. The map is the normative statement of coverage:
 
 | Surface identifier | Today | Bazel carrier | Slice |
 | --- | --- | --- | --- |
-| `rust-api-surface` | `tests/tools/api-surface-json.sh`, nightly rustdoc JSON plus snapshot compare | `//ci/rust:api_census` | `api` |
 | `rust-main-format` | `cargo fmt --all --check` | `//ci/rust:fmt` | `main` |
 | `rust-main-clippy` | `cargo clippy --locked --workspace --all-targets -- -D warnings` | `//ci/rust:clippy` | `main` |
 | `rust-main-workspace-tests` | `cargo nextest run --workspace --exclude d2b-contract-tests`, plus `cargo test --doc`, plus one `cargo test --test` per `harness = false` target | `//ci/rust:main_tests`, `//ci/rust:main_doctests`, `//ci/rust:main_harness_free` | `main` |
@@ -448,7 +441,7 @@ surfaces the aggregate publishes only when the fixture build is enabled. They
 depend on evaluated Nix fixtures and therefore belong to the Nix bridge this
 ADR defers. They stay on the current Cargo and Nix path, exactly as the
 enforcing `test-fixture-contracts` lane already runs them. After promotion
-(section 12), `make test-rust` is the Bazel path for the eighteen surfaces plus
+(section 12), `make test-rust` is the Bazel path for the retained surfaces plus
 the unchanged Cargo fixture leaf for those two, so the local target's current
 behaviour of including fixture and CLI surfaces when Nix is available is
 preserved.
@@ -494,7 +487,7 @@ guard enforces both directions of totality.
 
 ### 6. Non-compilation policy checks stay real, named, enforcing targets
 
-Nine of the eighteen surfaces are not `rules_rust` tests in any natural sense.
+Several retained surfaces are not `rules_rust` tests in any natural sense.
 Pretending otherwise is how coverage disappears during a migration, so each one
 gets a named representation and a named hazard.
 
@@ -527,7 +520,7 @@ RustSec snapshot with `--no-fetch`.
 The Bazel targets take that same shape, with the vendor tree produced by a
 repository-owned `repository_rule` rather than read out of the Bazel repository
 cache. Reading it out of the cache is what an earlier draft of this section
-said, and constraint 15 measures why that is not a mechanism: the cache is an
+said, and constraint 14 measures why that is not a mechanism: the cache is an
 internal content-addressed store with no label and no enumeration interface,
 and `crate_universe`'s spoke repositories expose per-crate rules rather than
 `.crate` archives or a whole-tree filegroup.
@@ -772,42 +765,6 @@ same distinction the current gate makes when it derives the harness-free set
 from `nextest list`. The test fails closed when any pinned name is absent and
 when any suite's listing is empty.
 
-**The API census.** `rules_rust` 0.73.0 exports no rustdoc-JSON rule and the
-current script installs a toolchain through `rustup` at run time, which no
-action can do (constraint 14). The census is therefore carried by a
-repository-owned `rustdoc_json` rule that invokes the resolved nightly rustdoc
-from the registered toolchain with the JSON output format, declares one JSON
-output per crate so the render is a build artifact rather than a side effect in
-a scratch directory, and declares **the toolchain version string the action
-actually used** as an additional output. A diff test compares the rendered JSON
-against `tests/golden/api-surface`, and a guard compares that emitted version
-to the pin in `packages/d2b-api-surface/rust-toolchain.toml`. Emitting what ran
-is strictly stronger than what ships today: the current script asserts the pin
-file's contents and refuses to proceed on drift, which proves what was
-requested, not what executed.
-
-**The nightly channel is reached by a per-target transition, not a flag.** The
-channel is a global build setting with `scope = "universal"` and `rules_rust`
-ships no public per-target transition (constraint 13). The census subgraph
-therefore sits behind a repository-owned Starlark rule carrying an outgoing
-`cfg = transition(...)` that sets `@rules_rust//rust/toolchain/channel` to
-`"nightly"` over that subgraph only, copying the shape of the in-tree
-`nightly_unpretty_transition`. It is a hand-written Bazel fragment and is
-listed as one in the coverage map, per section 4.
-
-Setting the flag on the command line is forbidden, and that is the failure this
-mechanism exists to prevent. `--@rules_rust//rust/toolchain/channel=nightly`
-flips the entire invocation: every first-party crate would compile on nightly
-while the gate stayed green, silently violating section 2's pin equality
-against `packages/rust-toolchain.toml`. No `.bazelrc` line and no Make wrapper
-argument sets that flag, and a guard fails closed on one. The cost is recorded
-rather than elided: a transition creates a second configuration, so the census
-subgraph's dependencies analyze and build once per configuration. That cost is
-bounded to a subgraph the gate documentation already records as sharing nothing
-with the workspace build, and it is charged to the `api` slice's profiles in
-section 11. This is what preserves section 8's single Bazel invocation; two
-invocations are rejected in the alternatives below.
-
 ### 7. Failure reporting, test process topology, and the broker
 
 Every logical check is its own Bazel target. No aggregate shell script wraps
@@ -816,7 +773,7 @@ property that makes the current gate diagnosable and it is the property a
 naive migration destroys first.
 
 The Make wrapper maps Bazel's build event protocol test results back onto the
-eighteen surface identifiers, so `D2B_EXECUTION_MANIFEST` keeps publishing the
+baseline surface identifiers, so `D2B_EXECUTION_MANIFEST` keeps publishing the
 same versioned evidence with the same identifiers, the same `completed_leaves`
 and `failed_surfaces` semantics, and the same partial evidence on failure and
 interruption. The execution-manifest contract in
@@ -1048,9 +1005,9 @@ review the committed comment demands.
 ### 8. `make test-bazel-rust` lands beside `make test-rust`
 
 `make test-rust` is unchanged and stays authoritative. `make test-bazel-rust`
-is added as a peer, plus four slice targets `make test-bazel-rust-main`,
-`-api`, `-broker` and `-aux`, plus `make bazel-shutdown`, the dedicated
-server-shutdown target that section 11's stuck-server remedy names. All six
+is added as a peer, plus three slice targets `make test-bazel-rust-main`,
+`-broker` and `-aux`, plus `make bazel-shutdown`, the dedicated server-shutdown
+target that section 11's stuck-server remedy names. All five
 are added to `APPROVED_MAKE_TARGETS` in `packages/xtask/tests/policy_ci.rs` in
 the same change, because that list is a closed set and a workflow calling an
 unlisted target fails the policy test. `make bazel-shutdown` issues
@@ -1060,10 +1017,8 @@ while a cleanup refusal or a stuck server is still unresolved.
 
 Locally, `make test-bazel-rust` is one Bazel invocation over the whole Rust
 suite. There is one machine and one cache; splitting it would only defeat the
-scheduler. That stays one invocation with the nightly API census inside it,
-because section 6 reaches the nightly channel through a per-target transition
-over the census subgraph rather than through a global flag or a second
-invocation.
+scheduler. That stays one invocation so the shared analysis graph and cache
+remain authoritative rather than being split across independent invocations.
 
 Concurrency is derived from the existing `D2B_RUST_BUDGET` computation rather
 than a new control. That computation already takes the smaller of logical CPUs
@@ -1208,19 +1163,17 @@ beside the existing one. It is hand-written rather than generated from
 because its measurement and cache steps have no template support. It is not
 added to `V3_PR_GATE_WORKFLOWS`; it is not a gate.
 
-Topology: four parallel jobs, one per slice, plus a rollup job that requires
-all four. Each job runs its `make test-bazel-rust-<slice>` target, satisfying
+Topology: three parallel jobs, one per slice, plus a rollup job that requires
+all three. Each job runs its `make test-bazel-rust-<slice>` target, satisfying
 the approved-target policy and keeping the local and continuous-integration
 entry points identical.
 
-Four jobs rather than the single job the handoff recommends, for a reason
+Three jobs rather than the single job the handoff recommends, for a reason
 grounded in this repository's committed comments. The handoff's rule is to
-avoid runner fan-out that hides duplicated compilation. These four slices
-duplicate nothing: the API census renders through a separately pinned nightly
-toolchain into its own tree and, as the gate documentation already states,
-"shares nothing with the workspace build"; the broker and guest-shell-runner
-are separate Cargo workspaces with separate locks; and the supply-chain targets
-compile no first-party code. The one slice that does contain a shared
+avoid runner fan-out that hides duplicated compilation. These three slices
+duplicate nothing: the broker and guest-shell-runner are separate Cargo
+workspaces with separate locks, and the supply-chain targets compile no
+first-party code. The one slice that does contain a shared
 dependency graph, `main`, is not split, and that is where Bazel's deduplication
 is actually collected. Splitting along boundaries that already share nothing
 converts runner minutes into wall clock, which is what the budget in section 11
@@ -1749,11 +1702,9 @@ not constrained by it, and are never replaced by it.
 **Honest expectation.** The cold ceilings are ambitious against the measured
 baseline. The workflow's own comment puts a cold Rust-profile job at about 43
 minutes on the reference runner, and while Bazel removes the duplicated
-compilation across leaves, it does not add cores. The `api` slice additionally
-pays a second configuration for the census subgraph, because section 6 reaches
-nightly through a per-target transition; that cost sits inside these ceilings
-rather than being carved out of them. The `main` slice is where this will be
-decided. This ADR sets the ceiling as a promotion gate precisely so the answer
+compilation across leaves, it does not add cores. The `main` slice is where
+this will be decided. This ADR sets the ceiling as a promotion gate precisely
+so the answer
 arrives from the first shadow run rather than at cutover, and so the response
 to a miss is a named remediation rather than an improvised one.
 
@@ -1766,11 +1717,10 @@ hold. Each is mechanically checkable.
 1. **Coverage.** The section 5 guard holds in both halves: analysis of
    `//ci/rust:coverage_map_guard` succeeds with every mapped carrier a real
    dependency edge, the test passes, and the out-of-test completeness and
-   query-drift checks in the Make wrapper and `test-drift` pass. All eighteen
-   baseline identifiers map to carriers that exist, every carrier belongs to
-   exactly one identifier, no Rust test target is unmapped, and no hand-written
-   fragment is unlisted, the channel transition and the `rustdoc_json` rule
-   included.
+   query-drift checks in the Make wrapper and `test-drift` pass. Every baseline
+   identifier maps to a carrier that exists, every carrier belongs to exactly
+   one identifier, no Rust test target is unmapped, and no hand-written
+   fragment is unlisted.
 2. **Equivalence, positive.** Ten consecutive matching qualification records as
    section 9 defines them: ten consecutive push-to-`v3` records in which the
    Bazel rollup and the Cargo
@@ -1783,7 +1733,7 @@ hold. Each is mechanically checkable.
    regression. Pull-request, `main`-push, scheduled and dispatched runs never
    enter the streak, and the reset rules in section 9 apply.
 3. **Equivalence, negative.** A recorded seeded-failure matrix: for each of the
-   eighteen surfaces, a deliberately broken tree makes exactly that Bazel
+   each retained surface, a deliberately broken tree makes exactly that Bazel
    target fail and does not make an unrelated surface fail. This is recorded
    once, in the wave notes, not on every run. Without it, the positive evidence
    only proves the targets are green, not that they are enforcing.
@@ -1816,19 +1766,19 @@ hold. Each is mechanically checkable.
 
 The promotion change then:
 
-- replaces the eight `ciKind: rust` leaves in `tests/layer1-jobs.json` with the
-  four Bazel slices while keeping `ciJobId: test-rust` on the rollup, so the
+- replaces the seven `ciKind: rust` leaves in `tests/layer1-jobs.json` with the
+  three Bazel slices while keeping `ciJobId: test-rust` on the rollup, so the
   required context name is unchanged and branch protection needs no edit;
 - regenerates `pr-l1-static-fast.yml` through `make layer1-workflow` and
   deletes `.github/workflows/pr-bazel-rust.yml`, whose continued existence is
   itself the mechanical signal that promotion is incomplete;
-- points `make test-rust` at Bazel for the eighteen surfaces while leaving the
+- points `make test-rust` at Bazel for the retained surfaces while leaving the
   Cargo fixture leaf for `rust-contract-tests` and `rust-cli-contract-tests`
   untouched;
-- keeps the eight `make test-rust-<leaf>` names as thin aliases onto the Bazel
+- keeps the seven `make test-rust-<leaf>` names as thin aliases onto the Bazel
   targets for their surfaces, so contributor muscle memory and the
   contributor documentation stay correct;
-- keeps `make test-bazel-rust` and its four slice targets as **compatibility
+- keeps `make test-bazel-rust` and its three slice targets as **compatibility
   aliases** rather than deleting them. Each forwards to `make test-rust` or
   the corresponding leaf target, prints a one-line deprecation notice on
   standard error naming the replacement target, and exits with the forwarded
@@ -1848,11 +1798,11 @@ promotion. Removal lands its own fragment. Until removal, a structural
 assertion forbids any workflow from calling the aliases, so they remain a
 human convenience and can never quietly become the gate path.
 
-Retirement of the Cargo implementation, meaning deletion of only the eighteen
+Retirement of the Cargo implementation, meaning deletion of only the retained
 surfaces' Cargo leaf modes from `tests/test-rust.sh` and unreachable
 Cargo-specific plumbing, happens in a further change after promotion has been
 green for ten consecutive push-to-`v3` runs. The public `make test-rust` and
-eight `make test-rust-<leaf>` names remain and continue to forward to the
+seven `make test-rust-<leaf>` names remain and continue to forward to the
 authoritative Bazel carriers; deleting them or leaving `test-rust` with only
 the fixture leaf is forbidden. The `fixture-contracts` mode stays. Until the
 Cargo implementation deletion, the old executor is recoverable by reverting
@@ -1909,15 +1859,6 @@ recorded decision rather than a silent regression.
   `rules_rust`-owned and lives in an output tree. Repository-owned Make,
   runner, cleanup and process-control code still invokes no shell, and ADR
   0017's scan set is unchanged and is not widened to output trees.
-- **The API census renders through a repository-owned rule.** `rules_rust`
-  0.73.0 has no rustdoc-JSON rule and the current script installs a toolchain
-  through `rustup` at run time (constraint 14). The Bazel path renders through
-  a repository-owned `rustdoc_json` rule against the registered nightly
-  toolchain, reached by a per-target channel transition, and emits the
-  toolchain version the action actually used. The compared surface is the same
-  golden API inventory; the evidence about *which compiler produced it* is
-  strictly stronger than the pin-file assertion it replaces.
-
 This list is closed. A divergence from the Cargo path that is not listed here
 is a defect, not a discovery, and adding an entry amends this ADR rather than
 being a plan-level decision.
@@ -2189,22 +2130,15 @@ the promoted workflow actually has.
 9. Negative: contributors must learn a second tool to debug a gate failure
    during the shadow stage. The mitigation is that `make test-bazel-rust` and
    `make test-rust` both exist and either can reproduce a failure.
-10. Negative: the migration carries three hand-written Bazel fragments that
-    upstream does not provide - the per-target channel transition, the
-    `rustdoc_json` rule, and the vendor repository rule. Each tracks
-    `rules_rust` or Bazel internals and each is a review surface at every
-    version bump. The `rustdoc_json` rule exists only because upstream has no
-    equivalent; if one lands, replacing the fragment is an ordinary change.
+10. Negative: the migration carries a hand-written vendor repository rule that
+    upstream does not provide. It tracks Bazel internals and is a review
+    surface at every version bump.
 11. Negative: the locator migration touches the 25 binary-locating files and
     the 20 manifest-resolving test files, 11 of them through a `repo_root()`
     helper, and every one must stay green on the Cargo path for the whole
     shadow stage. It is the largest first-party code change this decision
     requires.
-12. Negative: the per-target channel transition creates a second
-    configuration, so the census subgraph's dependencies analyze and build once
-    per configuration. That is charged to the `api` slice's cold and warm
-    profiles rather than treated as free.
-13. Neutral: the eighteen execution-manifest surface identifiers, the
+12. Neutral: the execution-manifest surface identifiers, the
     fixture-lane split, the advisory classification of
     `test-performance-budgets`, and the heavy-lane semaphore are all
     unchanged. This ADR changes the executor beneath the Rust gate and nothing
@@ -2290,22 +2224,11 @@ of three cases and refuses by name on anything else, including a mirror source
 and a checksum-less non-git entry, and the action asserts that the materialized
 package count equals the lock's before `cargo-deny` runs.
 
-**A channel transition that does not apply, or one applied globally.** A
-transition wired to the wrong attribute, or dropped in a `rules_rust` bump,
-leaves the census on the stable toolchain and the census still renders. Guard:
-the `rustdoc_json` rule emits the toolchain version the action actually used as
-a declared output and a test compares it to the committed pin, so what ran is
-the evidence rather than what was requested. The inverse failure is worse and
-quieter: `--@rules_rust//rust/toolchain/channel=nightly` on the command line or
-in `.bazelrc` compiles every first-party crate on nightly while everything
-stays green, violating section 2's pin equality. Guard: a check that fails
-closed when any `.bazelrc` line or wrapper argument sets that flag.
-
 ## Alternatives considered
 
 - **Stay on Make and Cargo, and keep optimizing.** The current path has been
-  optimized hard and recently: nextest adoption, per-leaf sharding, split API
-  census targets, removal of redundant `cargo check` passes, a bounded local
+  optimized hard and recently: nextest adoption, per-leaf sharding, split leaf
+  targets, removal of redundant `cargo check` passes, a bounded local
   budget with memory awareness. It works. It is rejected because the remaining
   cost is structural: Cargo cannot share one compilation across the concurrent
   invocations that the feature variants and separate workspaces require, so the
@@ -2321,7 +2244,7 @@ closed when any `.bazelrc` line or wrapper argument sets that flag.
   command.
 - **Big-bang replacement of the Rust gate in one change.** Rejected because the
   acceptance evidence this decision requires, ten consecutive equivalence runs
-  and an eighteen-surface seeded-failure matrix, cannot be collected without a
+  and a seeded-failure matrix, cannot be collected without a
   period in which both paths run. A cutover without that evidence would be a
   claim that coverage was preserved, not a demonstration.
 - **Migrate Rust and Nix together, as the handoff describes.** Rejected for
@@ -2402,16 +2325,6 @@ closed when any `.bazelrc` line or wrapper argument sets that flag.
   crate declaring the binary, so a shared function captures the wrong
   environment and compiles cleanly while resolving nothing. The Cargo arm is a
   macro that expands at the call site.
-- **Splitting into two Bazel invocations, one stable and one nightly.**
-  Rejected: it contradicts section 8's single-invocation decision, it pays a
-  second analysis phase and a second server interaction for a subgraph that
-  already shares nothing, and the cost would have to be charged to the
-  performance profiles anyway. The per-target transition buys the same
-  isolation inside one invocation.
-- **Setting the channel flag globally, on the command line or in `.bazelrc`.**
-  Rejected: the flag's scope is universal, so it compiles every first-party
-  crate on nightly while the gate stays green, silently violating section 2's
-  pin equality. A guard fails closed on it.
 - **A repository-owned rustdoc-test rule so no shell runner appears, or running
   doctests on nightly to reach the compiled path.** Both rejected. The
   shell-free upstream path compiles doctests with
@@ -2482,17 +2395,17 @@ closed when any `.bazelrc` line or wrapper argument sets that flag.
 1. Bazel is the Rust build and test scheduler for the surfaces in the coverage
    map, and for nothing else. It does not build Nix outputs, package artifacts,
    images, or release binaries under this decision.
-2. `Cargo.toml`, `Cargo.lock` and the two `rust-toolchain.toml` files remain
+2. `Cargo.toml`, `Cargo.lock` and the `rust-toolchain.toml` file remain
    the authoritative dependency and toolchain inputs. A dependency or toolchain
    change is a Cargo-file change followed by regeneration.
-3. Every one of the eighteen baseline execution-manifest surfaces has a
-   nonempty carrier set and every carrier belongs to exactly one identifier:
+3. Every baseline execution-manifest surface has a nonempty carrier set and
+   every carrier belongs to exactly one identifier:
    the mapping is total and unambiguous, not one-to-one. Mapped-label existence
    is proved at analysis time through real dependency edges, so a label that
    does not exist fails analysis naming the label; graph completeness and
    query drift are proved outside the Bazel test, in the Make wrapper and
    `test-drift`, over a committed drift-checked or declared query result; and
-   census, topology and hand-written-fragment listing are proved inside the
+   execution inventory, topology and hand-written-fragment listing are proved inside the
    test. No Bazel test invokes `bazel query` and no test action runs a nested
    Bazel server. The guard fails closed on an unmapped identifier, a missing
    target, an unmapped test target, or an unlisted hand-written fragment.
@@ -2703,14 +2616,7 @@ closed when any `.bazelrc` line or wrapper argument sets that flag.
     reads is a declared `data` input, and a check that needs the repository
     inventory rather than a file consumes a generated, drift-checked manifest
     as a declared input.
-23. The nightly channel is selected by a repository-owned per-target transition
-    over the API-census subgraph only, inside the single Bazel invocation. No
-    `.bazelrc` line and no Make wrapper argument sets
-    `@rules_rust//rust/toolchain/channel` globally, and a guard fails closed on
-    one. The census emits the toolchain version the action actually used as a
-    declared output, and a test compares it to
-    `packages/d2b-api-surface/rust-toolchain.toml`.
-24. The section 13 list of deliberate differences is closed. An unlisted
+23. The section 13 list of deliberate differences is closed. An unlisted
     divergence from the Cargo path is a defect; adding an entry amends this
     ADR.
 25. The repository dev shell provides pinned `bazel_8` and
@@ -2726,7 +2632,7 @@ closed when any `.bazelrc` line or wrapper argument sets that flag.
 ## References
 
 - `Makefile`, the `test-rust` DAG and its leaf targets
-- `tests/test-rust.sh`, the nine leaf modes and their surface identifiers
+- `tests/test-rust.sh`, the seven leaf modes and their surface identifiers
 - `tests/layer1-jobs.json`, the authoritative job list and enforcement
   classification
 - `.github/workflows/pr-l1-static-fast.yml` and
@@ -2742,8 +2648,6 @@ closed when any `.bazelrc` line or wrapper argument sets that flag.
   `process_group(0)` spawn and `signal_process_group` reuse argument
 - `tests/unit/meta/ci-coverage.sh`, the workflow shell and checkout-credential
   structural gates
-- `tests/tools/api-surface-json.sh`, the current census and its run-time
-  `rustup toolchain install`
 - `packages/d2b-contract-tests/tests/policy_source.rs`, the ADR 0017
   `Command::new` scan and its git-tracked, `packages/`-rooted scan set
 - `flake.nix`, the committed offline vendor shape, the `wl-proxy` source

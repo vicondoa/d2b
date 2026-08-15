@@ -36,24 +36,24 @@ Making this reachable is the core of User Story 1 and the precondition for SC-02
 
 ## Obligations
 
-| # | Obligation | Requirement | Wave |
+| # | Obligation | Requirement | Stage |
 | --- | --- | --- | --- |
-| RA-1 | Register the resource service behind an authenticated ComponentSession router; retire `UnregisteredBusAdapter` and its reachability constant | FR-001, SC-021 | W2-W5 |
-| RA-2 | Supply an authoritative subject resolver owned by the Zone registrar, consuming verified peer evidence only | FR-008, SC-009 | W2 |
-| RA-3 | Wire the production store backend behind the corrected engine; remove the test-only commit-proof issuance path | FR-006, SC-007 | W5 |
-| RA-4 | Deliver replay and live watch with one global bounded admission budget, typed backpressure, and deterministic slow-watcher eviction with cursor resume | FR-002 | W5 |
-| RA-5 | Enforce exact, subject-bound, revision-bound, Zone-checked routing on every operation | FR-009, SC-008 | W2 |
-| RA-6 | Audit every denial | FR-007 | W2-W5 |
-| RA-7 | Publish ResourceService only from a registrar-consumed authenticated ComponentSession, with the accepted socket transferred over `SCM_RIGHTS` to the typed broker `OpenPeerPidfdFromAcceptedSocket` operation and only an `OwnedFd` pidfd returned; keep raw `SO_PEERPIDFD` solely in the approved broker `sys.rs` FFI quarantine with narrow allowances and per-block `SAFETY:` comments; verify credential/generation/cgroup/liveness against that fd; retain one private registrar issuer, no public evidence accessor or bootstrap mint, authoritative subject propagation, and no request subject field; reject the `nix` wrapper, a new project FFI crate, numeric-PID lookup, and any local session fallback | FR-066, SC-030 | W5 |
-| RA-8 | Install and recover policy under `ZoneResourceRuntime`: consume one private-issuer, compiler/API-sealed, non-fabricable one-shot `PolicyBootstrapRead` for the first exact-revision envelope snapshot, then use authenticated Resource API reads/updates only; keep both stores policy-neutral | FR-067, FR-073 | W5 |
-| RA-9 | Register the production controller endpoint and admit its watch through ResourceService, ZoneBus, the production store, and controller fan-in | FR-068, FR-069 | W5 |
-| RA-10 | Persist every committed effect and cleanup intent before dispatch, replay/adopt it after restart, and complete cleanup only for the same UID and exact nonzero revision | FR-068, SC-031 | W5 |
-| RA-11 | Commit an immutable authoritative audit journal row transactionally with each mutation, export through a root-owned fd-anchored segment owner by typed fixed digest plus ordinal with file/directory durability, prune journal rows only after durable export plus bounded retention, represent export-pending `CommittedPendingAudit` on every mutation response including delete, and expose typed durable `InspectOperation` keyed only by required `(Zone, operation_id)`. Permit the same opaque ID in different Zones, create no host-global index, require exact same-Zone replay binding, and reject malformed/future/expired UUIDv7 IDs before observation or mutation so pruning never makes an old ID new | FR-070, SC-032 | W5 |
-| RA-12 | Reopen advanced mutable revisions from durable metadata and isolate per-Zone startup/close failures without dropping later Zones | FR-071, SC-033 | W5 |
-| RA-13 | Keep all RBAC DTO deserialization, compilation, and ownership outside both store crates | FR-073, D106 | W5 |
-| RA-14 | Retain the Wave 5 reconciliation design as unchecked historical planning evidence without reconstructing it. Preserve the exact retained candidate, request, snapshot, evidence inventory, zero attestations, and no seal. | FR-036, FR-072, SC-034 | historical W5 |
-| RA-15 | Make the readiness Provider member exactly the `d2b-core-controller`-owned `Provider/system-core` registration plus exactly one `Zone.status.handlers[]` record named `system-core-host` and one named `system-core-user`, each carrying phase/timestamp from the active, initialized, current `HostReconciler` or `UserReconciler`; reject duplicates, missing/wrong names, and `ProviderLifecycle` substitution; do not wait for other W6 dossiers | FR-069, SC-033 | W5 |
-| RA-16 | Historical Wave 5 coordinated-correction design assigning enum artifacts to T605, emission to T595, consumers to T599, and generated-manifest/full-drift convergence to T220. Those unchecked rows are read-only history. | FR-072, SC-033, SC-034 | historical W5 |
+| RA-1 | Register the resource service behind an authenticated ComponentSession router; retire `UnregisteredBusAdapter` and its reachability constant | FR-001, SC-021 | current implementation |
+| RA-2 | Supply an authoritative subject resolver owned by the Zone registrar, consuming verified peer evidence only | FR-008, SC-009 | current implementation |
+| RA-3 | Wire the production store backend behind the corrected engine; remove the test-only commit-proof issuance path | FR-006, SC-007 | current implementation |
+| RA-4 | Deliver replay and live watch with one global bounded admission budget, typed backpressure, and deterministic slow-watcher eviction with cursor resume | FR-002 | current implementation |
+| RA-5 | Enforce exact, subject-bound, revision-bound, Zone-checked routing on every operation | FR-009, SC-008 | current implementation |
+| RA-6 | Audit every denial | FR-007 | current implementation |
+| RA-7 | Publish ResourceService only from a registrar-consumed authenticated ComponentSession, with the accepted socket transferred over `SCM_RIGHTS` to the typed broker `OpenPeerPidfdFromAcceptedSocket` operation and only an `OwnedFd` pidfd returned; keep raw `SO_PEERPIDFD` solely in the approved broker `sys.rs` FFI quarantine with narrow allowances and per-block `SAFETY:` comments; verify credential/generation/cgroup/liveness against that fd; retain one private registrar issuer, no public evidence accessor or bootstrap mint, authoritative subject propagation, and no request subject field; reject the `nix` wrapper, a new project FFI crate, numeric-PID lookup, and any local session fallback | FR-066, SC-030 | current implementation |
+| RA-8 | Install and recover policy under `ZoneResourceRuntime`: consume one private-issuer, compiler/API-sealed, non-fabricable one-shot `PolicyBootstrapRead` for the first exact-revision envelope snapshot, then use authenticated Resource API reads/updates only; keep both stores policy-neutral | FR-067, FR-073 | current implementation |
+| RA-9 | Register the production controller endpoint and admit its watch through ResourceService, ZoneBus, the production store, and controller fan-in | FR-068, FR-069 | current implementation |
+| RA-10 | Persist every committed effect and cleanup intent before dispatch, replay/adopt it after restart, and complete cleanup only for the same UID and exact nonzero revision | FR-068, SC-031 | current implementation |
+| RA-11 | Commit an immutable authoritative audit journal row transactionally with each mutation, export through a root-owned fd-anchored segment owner by typed fixed digest plus ordinal with file/directory durability, prune journal rows only after durable export plus bounded retention, represent export-pending `CommittedPendingAudit` on every mutation response including delete, and expose typed durable `InspectOperation` keyed only by required `(Zone, operation_id)`. Permit the same opaque ID in different Zones, create no host-global index, require exact same-Zone replay binding, and reject malformed/future/expired UUIDv7 IDs before observation or mutation so pruning never makes an old ID new | FR-070, SC-032 | current implementation |
+| RA-12 | Reopen advanced mutable revisions from durable metadata and isolate per-Zone startup/close failures without dropping later Zones | FR-071, SC-033 | current implementation |
+| RA-13 | Keep all RBAC DTO deserialization, compilation, and ownership outside both store crates | FR-073, D106 | current implementation |
+| RA-14 | Retain the historical reconciliation design as implementation context without reconstructing it. | FR-036, FR-072, SC-034 | historical |
+| RA-15 | Make the readiness Provider member exactly the `d2b-core-controller`-owned `Provider/system-core` registration plus exactly one `Zone.status.handlers[]` record named `system-core-host` and one named `system-core-user`, each carrying phase/timestamp from the active, initialized, current `HostReconciler` or `UserReconciler`; reject duplicates, missing/wrong names, and `ProviderLifecycle` substitution; do not depend on unrelated provider implementation. | FR-069, SC-033 | current |
+| RA-16 | Retain the historical handler-name correction context; the current readiness contract is defined by RA-15. | FR-072, SC-033, SC-034 | historical |
 
 ## Invariants that must not regress
 
@@ -65,7 +65,7 @@ Making this reachable is the core of User Story 1 and the precondition for SC-02
 - **No caller-supplied subject.** There must be no public subject-configuration type and no
   raw-claim registration path. Production currently fails closed here; that is correct until
   an authoritative resolver is wired, and "fixing" it by accepting caller claims is the exact
-  defect the W1 hardening rounds closed repeatedly.
+  defect prior hardening work closed repeatedly.
 - **Unix process identity is socket-derived pidfd-bound.** `SO_PEERCRED` supplies attributes,
   not a durable process identity. Admission obtains the pidfd directly from the accepted
   socket with `SO_PEERPIDFD`; `pidfd_open(SO_PEERCRED.pid)` is forbidden. Credentials,
@@ -100,10 +100,11 @@ Making this reachable is the core of User Story 1 and the precondition for SC-02
 - **The C1 version decision is closed but implementation is pending.**
   `ZoneHandlerName::SystemCoreHost` and `ZoneHandlerName::SystemCoreUser` serialize only as
   `system-core-host` and `system-core-user`; `system_core_host` and `system_core_user` remain
-  internal telemetry labels only. T605 bumps both governing normative specification versions.
+  internal telemetry labels only. T605 keeps the governing contract references and
+  focused implementation tests synchronized with those values.
   No desired Zone field or schema changes, and v3 is unreleased, so no `apiVersion`, JSON
   `schemaVersion`, `manifestVersion`, or `bundleVersion` changes. T605 must still prove
-  current API snapshots and a byte-identical generated desired Zone schema.
+  focused Rust contract behavior and a byte-identical generated desired Zone schema.
 - **Effect and audit recovery precede publication.** A committed effect intent and an
   immutable authoritative audit journal row survive restart; neither may be forgotten,
   bypassed, or treated as ready. Export completion is separate. Audit row constructors accept
@@ -143,11 +144,13 @@ Making this reachable is the core of User Story 1 and the precondition for SC-02
   identity, PID reuse, dead fd, credential/generation/cgroup mismatch, ambiguity, and a stale
   pre-restart pidfd are also refused. Missing or extra ancillary fds, a raw-fd field, unsafe
   outside broker `sys.rs`, a missing per-block `SAFETY:` justification, a new project FFI
-  crate, or a local session syscall blocks T593. API-surface/compile-fail checks expose no
+  crate, or a local session syscall blocks T593. Defining-crate compiler assertions,
+  `packages/d2b-bus/tests/public_mint_surface.rs`, and external compile-fail checks expose no
   public issuer, verifier, clone, or peer evidence accessor.
 - Conformance evidence shows a registered backend mutates only through verified admission and
   exposes no independent write path, plus a recorded security review of each registered
-  backend. The `adr046w5` seal must not close without both.
+  backend. The retained implementation record is historical evidence and does not determine
+  current implementation closure.
 - Policy acceptance covers initial bootstrap installation, authenticated revision advance,
   and restart recovery. It proves the bootstrap capability is consumed, cannot clone or read
   a non-policy resource, cannot be publicly constructed/defaulted/converted/reconstructed,
@@ -174,27 +177,22 @@ Making this reachable is the core of User Story 1 and the precondition for SC-02
   later unrelated Zones still open and close. Removing the `Provider/system-core`
   registration or either required `Zone.status.handlers[]` record in turn degrades only that
   Zone; duplicates, a missing/wrong name, and `provider-lifecycle` substitution are rejected.
-- All acceptance evidence names one exact candidate and uses production owners. Wave 5 verifies
-  only that the accepted migration and ownership contract assigns the double-opt-in Network
-  implementation and all four Network/Host cases to Wave 6 tasks T336-T355 under T221; it does
-  not claim that implementation or its results. The acceptance task starts only after the double-opt-in
-  implementation and all four Network/Host cases have merged. It starts at the emitted
-  operator Nix declaration/bundle,
-  activates on initial startup and public declaration/removal switches without manual daemon
-  restart, observes the exact Provider/config/real-effect/readiness contract for
-  `Volume/acceptance-state`, `Network/acceptance-net`, and `Device/acceptance-tpm`, then proves
-  the pinned state-preserving Device removal without affecting the ready, identity-stable,
-  unrecreated acceptance Volume/Network or unrelated resources. Guest runtime-effect acceptance
-  remains specifically a Wave 6 `Provider/runtime-cloud-hypervisor` T384/T479/T480
-  obligation; Guest emission, status, or refusal cannot
-  satisfy this partial US1 production-plane checkpoint. Refusals are
-  separate negative cases. Direct `WatchService`, `ProductionWatchHarness`, a fake endpoint, a fixed
-  subject, or an older result artifact is ineligible.
-- The T603-T602 Wave 5 reconciliation sequence is historical planning evidence. Constitution
-  3.1.0 does not claim it completed and authorizes no attempt to recreate it. T219 records
-  only the exact no-attestation, no-seal historical disposition. T221 consumes the production
-  historical-predecessor guard before the ordinary Wave 6 plan panel. The local W6 result
-  appears only as `operator-nix-activation-cleanup`, is imported by T479, and remains outside
-  the retained Wave 5 evidence inventory.
+- All acceptance evidence names one exact candidate and uses production owners. The retained
+  Wave 5 record documents only that the accepted migration and ownership contract assigned the
+  double-opt-in Network implementation and all four Network/Host cases to the later
+  implementation tasks; it does not claim that implementation or its results. Current
+  acceptance starts at the emitted operator Nix declaration/bundle, activates on initial
+  startup and public declaration/removal switches without manual daemon restart, observes the
+  exact Provider/config/real-effect/readiness contract for `Volume/acceptance-state`,
+  `Network/acceptance-net`, and `Device/acceptance-tpm`, then proves the pinned
+  state-preserving Device removal without affecting the ready, identity-stable, unrecreated
+  acceptance Volume/Network or unrelated resources. Guest runtime-effect acceptance remains
+  a separate Provider and host-integration obligation. Guest emission, status, or refusal
+  cannot satisfy this partial production-plane checkpoint. Refusals are separate negative
+  cases. Direct `WatchService`, `ProductionWatchHarness`, a fake endpoint, a fixed subject,
+  or an older result artifact is ineligible.
+- The retained reconciliation sequence is historical planning context. T219 records only the
+  exact historical disposition. Current implementation follows the product requirements and
+  focused checks in these contracts.
 
 <!-- RETIRED-READONLY-END -->

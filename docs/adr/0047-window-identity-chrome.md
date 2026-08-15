@@ -266,7 +266,7 @@ label.
 
 ## Requirements for implementation
 
-These come from the UX panel and are binding on the implementation waves. They
+These UX decisions are binding on the implementation waves. They
 are recorded here because the prototype demonstrated the design, not the
 finished product.
 

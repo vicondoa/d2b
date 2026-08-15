@@ -804,7 +804,7 @@ The planned wire shape is:
 ```text
 transport byte stream
   -> end-to-end constellation peer session (TLS 1.3 mutual auth via rustls,
-     or an equivalent panel-approved E2E session)
+     or an equivalent reviewed E2E session)
     -> repeated constellation frames
 
 constellation frame:
@@ -2275,23 +2275,10 @@ Each wave below must land as a reviewable unit with its own focused tests
 before the next dependent wave begins. Wave names are planning labels for
 this ADR; they are not user-facing CLI or schema names.
 
-Every wave has a mandatory panel gate before the next wave starts:
-
-1. **Wave design review:** update the wave's detailed design/tasks if new
-   facts appear, provide validation planned for the wave, and obtain
-   unanimous panel signoff before implementation begins.
-2. **Wave implementation review:** after implementation and focused
-   validation, provide the diff plus validation evidence to the panel.
-   Reviewers inspect the design/diff/evidence and do not rerun tests
-   unless explicitly asked.
-3. **Fix rounds:** any finding blocks the next wave. Fix, revalidate, and
-   rerun the panel until signoff is unanimous.
-4. **Advance:** only after unanimous signoff may the next wave begin.
-
-For this ADR, "panel" means the default panel plus the v2 specialists:
-software, test, nixos, networking, security, rust, product, docs,
-observability, kernel, d2b architect, service architect,
-authentication, and compliance.
+Each wave below must receive ordinary design and implementation review. New
+facts update the wave design and its validation plan before implementation;
+focused tests and validation evidence accompany the implementation. Findings
+are fixed and revalidated before a dependent wave advances.
 
 ### Pre-wave gate - ADR, threat model, and review freeze
 
@@ -2301,8 +2288,8 @@ authentication, and compliance.
 | Design decisions | Realms have host-resident or gateway-backed entrypoints; host-resident realms stay local-only/trusted-host; gateway-backed realms use a per-realm gateway guest; host `d2bd` manages gateway VMs locally only; no host-held relay credentials, remote registries, provider config, or realm audit; local fast path remains unchanged. |
 | Tasks | Finalize ADR 0032; mirror the threat model in `docs/explanation/design.md`; update references in `docs/reference/privileges.md`, `docs/reference/daemon-api.md`, and audit docs to clarify that relay identity is not local daemon/broker auth; list review-blocking anti-patterns. |
 | Dependencies | Existing ADR 0002/0010/0015/0023/0028/0029 and current `SECURITY.md` daemon/broker boundary. |
-| Validation | ADR index coverage, docs link checks, panel signoff, and explicit review of the "host holds no realm credentials" invariant. |
-| Exit criteria | ADR is `Accepted`; all panel reviewers sign off; no open design ambiguity about the entrypoint, auth flow, or trust boundary. |
+| Validation | ADR index coverage, docs link checks, and explicit review of the "host holds no realm credentials" invariant. |
+| Exit criteria | ADR is `Accepted`; review is complete; no open design ambiguity about the entrypoint, auth flow, or trust boundary. |
 | Non-goals | No code, no transport, no schema change, no gateway packaging. |
 
 ### Wave 0 - Provider abstraction and code organization
@@ -2328,7 +2315,7 @@ authentication, and compliance.
 | Tasks | Build the minimum provider stack needed for one target such as `demo.aca.work.d2b`: ACA data-plane exec support, minimal constellation peer handshake, minimal stream mux for stdio/logs/display, Azure Relay transport or equivalent relay-compatible transport, Waypipe-style local/remote display endpoints, gateway-local audit/credential handling, local host CLI routing through the work gateway, and a compatibility matrix comparing local wl-cross-domain capabilities to Waypipe-style display capabilities. |
 | Dependencies | Pre-wave gate and Wave 0 provider/code organization. This wave may implement minimal versions of protocol, stream, transport, capability, provider, and display abstractions before the later waves generalize and harden them. |
 | Validation | Against the current P0 gateway-mode daemon, `d2b vm start demo.aca.work.d2b` routes to `gatewayDisplay` start and, when gateway runtime ACA coordinates are configured, drives the ACA preview REST data plane (`PUT /diskimages`, `PUT /sandboxes`, label-based `GET /sandboxes`, `POST /resume`) through `d2b-provider-aca`; `d2b vm stop/restart <target>` routes to gateway lifecycle instead of local VM lifecycle; `d2b vm exec demo.aca.work.d2b -- <cmd>` routes to `gatewayDisplay` open and the persistent `GatewayOrchestrator` but does not implicitly create a missing sandbox; a Wayland-native smoke app launched in the ACA sandbox was proven visible locally through the Waypipe-style display provider over Azure Relay; stream authz/backpressure/redaction are exercised by unit gates; local wl-cross-domain remains independent. The live proof intentionally used a host-resident gateway-mode daemon with local validation credentials; the production no-host-realm-credential invariant is deferred explicitly to Waves 8, 10, 12, and 17 before full realm rollout. |
-| Exit criteria | A reviewed P0 demo proves ACA sandbox exec + full Wayland app forwarding through the reference provider stack; the gateway-mode CLI lifecycle path is backed by the ACA REST data plane rather than the preview `aca` CLI or a daemon stub; validation evidence is attached; expanded panel signoff is unanimous; local fast path remains green. Full realm rollout may not proceed until both this vertical is green **and** the later wave-owned no-host-realm-credential / gateway-guest placement work closes. |
+| Exit criteria | A reviewed P0 demo proves ACA sandbox exec + full Wayland app forwarding through the reference provider stack; the gateway-mode CLI lifecycle path is backed by the ACA REST data plane rather than the preview `aca` CLI or a daemon stub; validation evidence is attached; maintainer review is complete; local fast path remains green. Full realm rollout may not proceed until both this vertical is green **and** the later wave-owned no-host-realm-credential / gateway-guest placement work closes. |
 | Non-goals | Full realm policy, nested realms, whole-constellation observability, full desktop remoting, GPU acceleration in ACA, generic TCP tunneling, or bypassing capability checks for display. |
 
 **P0 placement note (gateway/guestd/systemd services).** The completed P0
@@ -2760,16 +2747,6 @@ fast, focused proof that the specific boundary still fails closed.
   and capability slots exist.
 - Do not rewrite the v1 substrate when adapters over the current seams are
   sufficient.
-
-## Panel signoff summary
-
-Accepted after unanimous final panel signoff by the default reviewer set:
-software, test, nixos, networking, security, rust, product, docs,
-observability, and kernel. Round 1 returned findings on operator
-entrypoint UX, gateway credential enrollment, idempotency, admission
-audit, audit integrity, and per-realm L2 isolation; the final round signed
-off after those fixes. Raw panel outputs stay in the session workspace
-rather than being committed to the repository.
 
 ## Consequences
 

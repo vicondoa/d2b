@@ -12,8 +12,8 @@ represent directly.
 - Make is already d2b's stable public test interface and adds no dependency.
 - GNU Make provides bounded parallel execution, keep-going behavior, grouped
   output, and a jobserver for scheduling eligible workspace lanes.
-- CI already proves that the API census, main workspace, and remaining suites
-  are independent enough to run on separate runners.
+- CI already proves that the main workspace and remaining suites are
+  independent enough to run on separate runners.
 - A Make DAG can encode the important safety edges: broker feature passes stay
   serial, same-target-directory operations do not overlap, and independent
   workspaces may overlap under one CPU and memory budget.

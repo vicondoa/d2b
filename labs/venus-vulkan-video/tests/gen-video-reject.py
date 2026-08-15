@@ -113,7 +113,7 @@ def struct_stypes(vk_xml):
 # contributed exclusively by an extension NOT named here lands in the reject
 # path automatically, including values added by a future vk.xml revision.
 #
-# That direction matters. W2's defect, found twelve times across 23 panel
+# That direction matters. W2's defect, found twelve times across 23 review
 # rounds, was always a hand-written set deciding whether a guard applies. Going
 # the other way -- hand-listing what to reject -- would reproduce it exactly,
 # because the list would be complete only until the registry changed. Naming

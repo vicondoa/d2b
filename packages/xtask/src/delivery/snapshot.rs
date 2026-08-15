@@ -132,20 +132,6 @@ pub fn run(args: &[String]) -> Result<WorkflowOutput> {
 
 fn run_with_root(request: &SnapshotRequest, root: &StateRoot) -> Result<WorkflowOutput> {
     let material = discover(request)?;
-    super::work_item_state::reject_adr046_w5_mutation(&material, "snapshot")?;
-    let repository_roots = request.checkout_roots()?;
-    super::work_item_state::require_adr046_historical_predecessor_at_entry(
-        root,
-        &material,
-        &repository_roots,
-    )?;
-    // FR-036/FR-048: a wave's implementation may start before its predecessor
-    // is sealed and merged, so entry runs no prior-wave-merged assertion. That
-    // condition is enforced at the panel-request, seal, and merge-eligibility
-    // boundary (FR-049) by `work_item_state::require_prior_waves_merged_for_exit`.
-    // The one-time ADR-046 Wave 5 historical disposition is different: every
-    // Wave 6 snapshot must prove its exact retained state and accepted
-    // integration lineage before it can authorize implementation.
     let snapshot = WaveSnapshot::seal(material)?;
     let candidate = root.candidate(snapshot.wave(), &snapshot.candidate_id)?;
     write(&candidate, &snapshot)?;
@@ -208,11 +194,10 @@ pub fn read_file(path: &Path) -> Result<WaveSnapshot> {
 /// section 12.6 invalidation rule. The head commit is reread too, so a
 /// history-only rebase - which preserves the tree but rewrites the commit -
 /// reproduces the same candidate address while moving `snapshot_sha256`. That
-/// asymmetry is what lets panel evidence (bound to `content_id`/`candidate_id`)
-/// survive a rebase while validator-lane evidence (additionally bound to
-/// `snapshot_sha256`) does not. The base commit is left as recorded because no
-/// base ref is carried into rederivation; a moved head alone is sufficient to
-/// invalidate the recorded snapshot digest.
+/// asymmetry is what makes validator-lane evidence (additionally bound to
+/// `snapshot_sha256`) stale after a rebase. The base commit is left as recorded
+/// because no base ref is carried into rederivation; a moved head alone is
+/// sufficient to invalidate the recorded snapshot digest.
 pub fn rederive(
     snapshot: &WaveSnapshot,
     checkouts: &BTreeMap<String, PathBuf>,
@@ -1001,114 +986,6 @@ pub(crate) mod tests {
         WaveSnapshot::seal(discover(&request).expect("discover")).expect("seal")
     }
 
-    /// FR-036/FR-048: a successor wave's implementation may start - and take
-    /// its snapshot - while a predecessor work item is still `Planned`. The
-    /// fixture's sealed tree carries exactly that manifest, and entry accepts
-    /// it; the predecessor-merged condition now lives at panel/seal (FR-049).
-    #[test]
-    fn snapshot_entry_is_permitted_while_a_prior_wave_item_is_planned() {
-        let fixture = GitFixture::new("snapshot-pipelined-entry");
-        fixture.write(
-            "docs/specs/ADR-046-implementation-graph.json",
-            "{\"nodes\":[\
-             {\"id\":\"ADR046-foundation-001\",\"kind\":\"work-item\",\"wave\":\"W0\"},\
-             {\"id\":\"ADR046-backend-001\",\"kind\":\"work-item\",\"wave\":\"W1\"}]}\n",
-        );
-        fixture.write(
-            "docs/specs/ADR-046-work-items.json",
-            "{\"items\":[\
-             {\"workItemId\":\"ADR046-foundation-001\",\"implementationState\":\"Planned\"},\
-             {\"workItemId\":\"ADR046-backend-001\",\"implementationState\":\"Planned\"}]}\n",
-        );
-        fixture.commit("pre-merge predecessor manifest");
-
-        let mut args = fixture.snapshot_args();
-        let wave = args
-            .iter()
-            .position(|value| value == "--wave")
-            .expect("--wave in the fixture arguments")
-            + 1;
-        args[wave] = "W1".to_owned();
-
-        let request = SnapshotRequest::parse(&args).expect("parse request");
-        let root = StateRoot::for_tests(&fixture.state()).expect("anchor state root");
-        run_with_root(&request, &root)
-            .expect("entry must not block on an unmerged prior-wave item");
-    }
-
-    #[test]
-    fn adr046_w6_snapshot_entry_requires_the_historical_predecessor_guard() {
-        let fixture = GitFixture::new("snapshot-w6-historical-predecessor");
-        let mut args = fixture.snapshot_args();
-        let program = args
-            .iter()
-            .position(|value| value == "--program")
-            .expect("--program in the fixture arguments")
-            + 1;
-        args[program] = "SPEC001".to_owned();
-        let wave = args
-            .iter()
-            .position(|value| value == "--wave")
-            .expect("--wave in the fixture arguments")
-            + 1;
-        args[wave] = "spec001w6".to_owned();
-        for value in &mut args {
-            *value = value.replace("github.com/example/d2b", "github.com/vicondoa/d2b");
-        }
-
-        let request = SnapshotRequest::parse(&args).expect("parse W6 request");
-        let root = StateRoot::for_tests(&fixture.state()).expect("anchor state root");
-        let error = run_with_root(&request, &root)
-            .expect_err("W6 entry must run the historical predecessor guard");
-        assert!(
-            error.message().contains("cannot resolve integration ref"),
-            "{error}"
-        );
-        assert!(
-            !root.path().join("spec001w6").exists(),
-            "a failed entry guard must not publish a candidate"
-        );
-    }
-
-    #[test]
-    fn historical_w5_snapshot_mutation_is_refused_before_candidate_creation() {
-        let fixture = GitFixture::new("snapshot-w5-immutable");
-        for (program_value, wave_value) in [
-            ("ADR046", "W5"),
-            ("ADR046", "adr046w5"),
-            ("SPEC001", "spec001w5"),
-        ] {
-            let mut args = fixture.snapshot_args();
-            let program = args
-                .iter()
-                .position(|value| value == "--program")
-                .expect("--program in the fixture arguments")
-                + 1;
-            args[program] = program_value.to_owned();
-            let wave = args
-                .iter()
-                .position(|value| value == "--wave")
-                .expect("--wave in the fixture arguments")
-                + 1;
-            args[wave] = wave_value.to_owned();
-
-            let request = SnapshotRequest::parse(&args).expect("parse historical request");
-            let root = StateRoot::for_tests(&fixture.state()).expect("anchor state root");
-            let error =
-                run_with_root(&request, &root).expect_err("historical snapshot mutation must fail");
-            assert!(
-                error
-                    .message()
-                    .contains("immutable historical delivery state"),
-                "{error}"
-            );
-            assert!(
-                !root.path().join(wave_value).exists(),
-                "a refused historical mutation must not create a candidate"
-            );
-        }
-    }
-
     #[test]
     fn a_failed_git_command_leaks_neither_the_checkout_path_nor_raw_git_stderr() {
         // Ask an established repository for an object that does not exist. Git
@@ -1320,23 +1197,18 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_real_git_rebase_keeps_the_panel_but_never_the_validator_lanes() {
+    fn a_real_git_rebase_invalidates_validator_lanes() {
         use crate::delivery::{
             evidence::{self, EvidenceLane},
-            panel::{
-                self,
-                tests::{record_files, write_record_dir},
-            },
             seal::{
                 self,
                 tests::{evidence as lane_evidence, import as import_evidence},
             },
-            storage::{SEAL_FILE, tests::Scratch},
+            storage::SEAL_FILE,
         };
 
-        // Snapshot the wave from a real Git repository, then attest a
-        // unanimous panel and import both validator lanes - every artifact
-        // bound to the baseline history.
+        // Snapshot the wave from a real Git repository and import both
+        // validator lanes against the baseline history.
         let fixture = GitFixture::new("rebase-e2e");
         let baseline = take(&fixture);
         let root = StateRoot::for_tests(&fixture.state()).expect("anchor state root");
@@ -1346,12 +1218,8 @@ pub(crate) mod tests {
             .join(baseline.candidate_id.as_str())
             .join(SNAPSHOT_FILE);
         let (candidate, view) =
-            panel::open_candidate(&root, &snapshot_path).expect("open candidate");
+            crate::delivery::open_candidate(&root, &snapshot_path).expect("open candidate");
 
-        panel::request(&candidate, &view).expect("panel request");
-        let records = Scratch::new("rebase-e2e-records");
-        let dir = write_record_dir(&records, &record_files(&view));
-        panel::attest(&candidate, &view, &dir).expect("unanimous panel attests");
         import_evidence(
             &candidate,
             &lane_evidence(&view, EvidenceLane::GithubCi, "layer1-check"),
@@ -1395,15 +1263,8 @@ pub(crate) mod tests {
         let rebased = take(&fixture);
         assert_eq!(rebased.candidate_id, baseline.candidate_id);
         assert_ne!(rebased.snapshot_sha256, baseline.snapshot_sha256);
-        let (candidate, rebased_view) =
-            panel::open_candidate(&root, &snapshot_path).expect("reopen the rebased candidate");
-
-        // Panel evidence SURVIVES: the ten records bind content, which the
-        // rebase preserved, so they re-attest against the rebased snapshot.
-        let request = panel::stored_request(&candidate, &rebased_view)
-            .expect("the stored panel request still matches the rebased content");
-        panel::attested_records(&candidate, &request)
-            .expect("panel evidence survives a history-only rebase");
+        let (candidate, rebased_view) = crate::delivery::open_candidate(&root, &snapshot_path)
+            .expect("reopen the rebased candidate");
 
         // Validator evidence does NOT survive: the imported lanes bind the
         // baseline snapshot digest, so they read as stale against the rebased

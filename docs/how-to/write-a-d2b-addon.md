@@ -189,7 +189,7 @@ surfaces directly. Instead:
 
 If your addon legitimately cannot be expressed inside the closed
 broker enum, open an issue: extending the enum is an explicit
-panel-gated decision (ADR-required), and a privileged sidecar that
+reviewed decision (ADR-required), and a privileged sidecar that
 bypasses the broker would silently weaken the host-prepare trust
 boundary described in [`SECURITY.md`](../../SECURITY.md) §
 host-prepare trust-boundary delta.

@@ -108,12 +108,12 @@ As of v1.2fu15, the function:
 
 The broker child closure is reordered: capset → umask → seccomp → execve
 (previously capset → seccomp → umask), ensuring umask is not intercepted by
-a restrictive BPF before the final stage [panel-kernel R0 #1].
+a restrictive BPF before the final stage [security review R0 #1].
 
 Behavioral regression tests (fork + waitpid) in
 `packages/d2b-priv-broker/src/seccomp_compile_tests.rs` verify that
 a BPF compiled for `[DeviceClass::Kvm]` allows `KVM_GET_API_VERSION` and
-kills with `SIGSYS` on an undeclared ioctl [panel-security R0 #3, #4].
+kills with `SIGSYS` on an undeclared ioctl [security review R0 #3, #4].
 
 ## References
 

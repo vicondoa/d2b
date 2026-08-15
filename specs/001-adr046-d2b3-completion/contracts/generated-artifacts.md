@@ -1,183 +1,66 @@
 # Contract: Generated artifacts
 
-**Owning specs**: `ADR-046-resource-object-model`, `ADR-046-nix-configuration`,
-`ADR-046-validation-and-delivery` | **Waves**: W2-W7
+**Owning specs**: resource object model, Nix configuration, and the product contracts in this
+directory.
 
 ## Why these are contracts
 
-Generated artifacts are consumed by the broker, the daemon, the drift gates, and sibling
-tools. The committed bytes are authoritative - `make test-drift` regenerates every ADR-046
-artifact and requires a clean `git diff`, fail-closed.
+Generated artifacts are consumed by the broker, daemon, controllers, Nix evaluation, contract
+tests, and companions. A generator-owned artifact must be regenerated with its ecosystem tool,
+reviewed for a clean diff, and changed in lockstep with its source contract. Product code and
+its focused drift checks determine ownership.
 
 ## Artifact register
 
-| Artifact | Generator | Consumers | Notes |
+| Artifact | Generator or owner | Consumers | Notes |
 | --- | --- | --- | --- |
-| `docs/reference/schemas/v3/core.d2bus.org_<Type>.schema.json` | `xtask gen-zone-schemas` | Nix eval, contract tests, companions | NEW; `v2/` remains until its paths retire |
-| `nixos-modules/generated/resource-types.nix` | `xtask gen-zone-nix-options` | Nix option surface | NEW in W2 |
-| `nixos-modules/generated/options-zones-<Type>.nix` | `xtask gen-zone-nix-options` | Nix option surface | NEW in W2, one per ResourceType |
-| per-Zone `resource-bundle.json` | sole active chain: `bundle-zones.nix` -> `d2b-resource-compiler` -> `bundle-artifacts.nix`; historical/compatibility-only input: `zone-resources-json.nix` | Zone runtime, core controllers | W5 emits only `schemaVersion: 4` / `bundleVersion: 2`; the required top-level compiler-only `audit` object is outside `resources`, and `contentHash` covers canonical `{audit,resources}`. `zone-resources-json.nix` is not an active generator and cannot emit, version, hash, or publish the active bundle |
-| `docs/reference/schemas/v3/resource-bundle.json` | `xtask gen-zone-schemas` from the active crate-root `ZoneBundle` | compiler, Nix and daemon contract tests, companions | Generated with the 4/2 change; no duplicate full-envelope DTO may generate a competing schema |
-| target-closure `share/d2b/host-generation-rebuild-ref` | authoritative prospective NIX-9 generated row | authoritative prospective acceptance row and broker handoff | Code-canon search found it absent; current ownership resolves only from member specs and generated manifests |
-| `/etc/d2b/host-generation-rebuild-ref` | authoritative prospective NIX-8 broker row consuming NIX-9 input | Handoff digest, post-bootstrap operator recovery | Code-canon search found it absent; current ownership resolves only from member specs and generated manifests |
-| `docs/specs/ADR-046-spec-set.json` | `xtask spec-registry` | Gate 0, drift gate | Integrator-only; last commit of each wave |
-| `docs/specs/ADR-046-work-items.json` | `xtask spec-registry` | Wave entry/seal checks | Same |
-| `docs/specs/ADR-046-implementation-graph.{json,md}` | `xtask implementation-graph` | Wave planning, seal | Same |
-| `/etc/d2b/ui-colors.{json,css}` | `nixos-modules/ui-colors.nix` | wlcontrol, Waybar, niri, wlterm | Public presentation metadata, never authz input |
-| delivery snapshot, panel, seal records | `xtask delivery wave *` | Wave gate | **Never committed**; stored outside any git tree |
-
-## Retirement
-
-| Artifact | Disposition |
-| --- | --- |
-| `/etc/d2b/allocator.json` and its `allocator-json.nix` emitter | DELETE, no successor - explicit retirement list |
-| `/run/d2b/allocator.sock` | DELETE, no successor - same cluster |
+| `docs/reference/schemas/v3/core.d2bus.org_<Type>.schema.json` | `xtask gen-zone-schemas` | Nix eval, contract tests, companions | Versioned resource schemas |
+| `nixos-modules/generated/resource-types.nix` and per-type options | `xtask gen-zone-nix-options` | Nix option surface | Generated from the resource contract |
+| per-Zone `resource-bundle.json` | `bundle-zones.nix` -> `d2b-resource-compiler` -> `bundle-artifacts.nix` | Zone runtime and controllers | Active bundles use schema 4 / bundle 2; top-level `audit` is outside `resources`, and `contentHash` covers canonical `{audit,resources}` |
+| `docs/reference/schemas/v3/resource-bundle.json` | active crate-root `ZoneBundle` schema generator | compiler, Nix, daemon tests, companions | No competing full-envelope DTO may generate a schema |
+| target-closure `share/d2b/host-generation-rebuild-ref` | Nix configuration owner | broker handoff | Must be an explicit target installable output |
+| `/etc/d2b/host-generation-rebuild-ref` | broker handoff owner | recovery and stable-reference checks | Must be validated and pinned before privileged apply |
+| `/etc/d2b/ui-colors.{json,css}` | `nixos-modules/ui-colors.nix` | desktop presentation | Never an authorization input |
 
 ## Invariants
 
-The host-generation bullets below are prospective NIX-8/NIX-9 requirements whose owners
-resolve only from authoritative member specs and generated manifests after T221. Code canon
-does not yet implement them. Other bullets
-describe existing or independently prospective artifact invariants as stated.
-
-- Work-item and spec-set manifests are written by the integrator only, as the last commit of
-  a wave, because every slice would otherwise contend on them.
-- Delivery state must never enter git. The tooling refuses a state root inside a working tree,
-  so this is structural rather than a convention.
-- Downstream tools must fail visibly but remain usable when a public artifact is missing or
-  malformed, without reading root-owned d2b state directly.
-- Resource-bundle emitters, Rust consumers, JSON schema, digest reference, generated pins,
-  tests, and changelog move atomically with the 4/2 version pair. No consumer may accept 3/1
-  or future pairs 5/2, 4/3, or 5/3, and no consumer may synthesize a missing v4 `audit`
-  object from defaults.
+- Resource-bundle emitters, Rust consumers, JSON schema, digest reference, generated pins, tests,
+  and changelog move atomically with the 4/2 version pair. Consumers reject 3/1 and future or
+  mixed pairs and never synthesize a missing v4 `audit` object.
 - `bundle-zones.nix`, `d2b-resource-compiler`, and `bundle-artifacts.nix` are the only active
-  emission/publication chain, in that order. `zone-resources-json.nix` is
-  historical/compatibility-only and cannot be an independent generator, envelope, version,
-  hash, or publication authority.
-- An installed-host migration starts through the target closure's
-  `d2bHostGenerationDeploy` entrypoint with an explicit
-  `<flake-ref>#<configuration-name>`; the first 3/1-to-4/2 migration never reads a file that
-  4/2 has not published. The entrypoint builds and verifies the complete target closure,
-  stages one immutable transition identity, and submits only an opaque request. It cannot
-  publish a profile, control a service, mutate 3/1 bootstrap state, or initiate rollback.
-  That output contains the ordinary `bin/d2b` binary and invokes only its
-  `host-generation` subcommands. It MUST NOT publish a
-  `d2b-host-generation-deploy` binary, wrapper, alias, or completion entry.
-  The target-closure entrypoint is executed only while unprivileged. Before any privileged
-  invocation, the operator must pass the existing
-  public-socket `SO_PEERCRED` plus `d2b`-group Admin classification. The broker consumes that
-  one-shot classification into one durably sealed nonfabricable handoff capability bound to
-  the complete intent and emits no authority token. The source broker also pins one exact
-  immutable broker-managed apply object from trusted
-  installed-generation metadata. Only that object runs under `sudo`; it receives no flake
-  URI, installable, stable-reference path, target executable, or caller-flake executable to
-  reevaluate. The broker binds the accepted apply connection's direct peer pidfd and live
-  executable store/NAR/digest identity to that pin, revalidates it before every mutation, and
-  refuses exit, exec, PID reuse, mismatch, or ambiguity. Tests use only the independently
-  authored fixture membership assigned by generated `VD2-SC002-REGISTRIES` and
-  `VD2-SC002-TRACEABILITY`; missing, duplicate, stale, runtime-derived, skipped, or unvisited
-  coverage fails, and the selected edge and all successors remain unexecuted. Every raw
-  apply-peer input assigned by generated `VD2-SC002-REGISTRIES` remains absent from human, JSON,
-  wire, error, log, span, metric, audit, panic, and `Debug` output. Correlation uses only the
-  typed process-instance and executable-identity digests, and metrics
-  carry no identity label. The connection-scoped pidfd and executable fds are never
-  serialized or persisted.
-  Capability-authorized broker code exclusively owns stock profile publication,
-  broker/daemon service transition, 3/1 bootstrap, d2b pointer/reference publication and
-  repair, stock rollback, and source-service restoration. Before transfer that actor must be
-  a source-generation-installed broker running as the ordinary `serve` process of the
-  existing `d2b-priv-broker.service`, after both installed source peers negotiate numeric
-  protocol 4 plus Hello `operation_catalogue_sha256` exactly equal to the
-  `source-handoff-v1` operation-catalogue fingerprint; after durable
-  transfer it is the target broker. Prospective `SourceGenerationCompatibilityFloorV1`
-  ownership resolves only from authoritative member specs and generated manifests. Canonical membership, receipts,
-  fixtures, poison registries, and transitions come only from generated
-  `VD2-SC002-SOURCE-FLOOR`, `VD2-SC002-REGISTRIES`, and
-  `VD2-SC002-TRACEABILITY` rows. Missing, stale, wrong-owner, non-ancestor, or failing rows
-  refuse before source mutation. Code canon has no handoff operation or catalogue fingerprint.
-  the authoritative prospective NIX-8/NIX-9 rows must land after T221 and before the
-  authoritative acceptance row. Retired Wave 5 ownership has no prospective effect. A
-  target-closure-only mode, synthetic starting image, new unit or override, child, mutating
-  entrypoint, or daemon recovery owner is not a substitute.
-- The stock activation orders the target `d2b-priv-broker.service` before target `d2bd.service`.
-  The broker verifies and audits the staged source/target identity. The target daemon starts
-  and completes Hello for the exact target broker generation and protocol while unready, then
-  presents a broker-issued phase attenuation in the authenticated publication request.
-  Daemon identity, Hello, and bootstrap euid 0 never authorize independently. The broker
-  publishes the pointer and reference with file and directory durability before daemon
-  ingestion/readiness.
-- A failed build leaves 3/1 active. Before first mutation the broker durably owns the
-  coordinator; ownership transfers exactly once to the target broker before target
-  daemon activation. A later failure is reopened by that broker-owned coordinator. Before
-  transfer only the matching installed source compatibility actor may resume; after transfer the existing
-  `d2b-priv-broker.service` reopens after restart and restores the prior pointer and stable
-  reference bytes or verified absence before broker-owned stock rollback.
-  Rollback therefore cannot leave a 4/2 reference on a restored 3/1 host.
-- Nix activation stages immutable input only. Direct activation or daemon creation, repair,
-  replacement, or removal of the stable reference fails policy tests. The broker uses
-  create-exclusive temporary state, regular-file/owner/mode/link-count checks, atomic rename,
-  file and parent-directory sync, fixed-digest audit fields, and the same operation for repair.
-- Runtime version refusal is identifier-free and carries only closed action
-  `rebuild-host-generation`; it contains no command or argv. Reference documentation gives
-  parameterized paths: an unprivileged validated target-closure
-  `d2b host-generation authorize-handoff` invocation followed by
-  `d2b host-generation apply-authorized-handoff` on the separately pinned installed
-  object for a 3/1 host where the stable reference is absent; an installed
-  `d2b host-generation authorize-handoff --from-reference ...` invocation followed
-  by the same pinned installed object's reference-free
-  `d2b host-generation apply-authorized-handoff` only after
-  broker publication; and the equivalent unprivileged prior-target authorization followed by
-  installed-object apply for rollback. Every preflight validates
-  grammar and bounds and stops before public-socket
-  authorization or `sudo`; a failed authorization prevents the privileged invocation. No path contains a
-  fixed illustrative target, invokes raw `nixos-rebuild` directly, or asks an operator to edit
-  generated state. The value and stable path stay out of runtime diagnostics.
-
-- The apply command carries no intent selector or authority token. The source broker's
-  coordinator lock protects a durable zero-or-one nonterminal-intent invariant and atomically
-  claims only the sole `authorized-pending` intent for the accepted connection. Zero,
-  multiple, concurrent, or terminal selection refuses before mutation. A pre-mutation
-  disconnect releases only after a durable zero-mutation proof; after mutation, only replay
-  of that same intent may bind the same pinned apply object after the old peer is proven
-  dead.
+  emission/publication chain, in that order. The compatibility emitter cannot publish or hash
+  an active bundle independently.
+- Installed-host migration starts through the target closure's
+  `d2bHostGenerationDeploy` entrypoint with an explicit flake reference. The entrypoint builds,
+  verifies, stages one immutable transition identity, and submits only an opaque request. It
+  cannot publish a profile, control a service, mutate bootstrap state, or initiate rollback.
+- Before privileged invocation, the operator passes public-socket `SO_PEERCRED` plus current
+  `d2b`-group Admin classification. The broker consumes that evidence into one sealed,
+  nonfabricable capability. The source broker pins one immutable apply object from trusted
+  installed metadata; privileged apply receives no flake URI, installable, stable-reference
+  path, target executable, or caller executable to reevaluate.
+- The accepted apply connection's peer pidfd and executable store/NAR/digest identity are
+  bound to the pinned object and revalidated before every mutation. Exit, exec, PID reuse,
+  mismatch, and ambiguity refuse. Pidfds and executable descriptors are never serialized or
+  persisted, and raw peer identity never reaches human, JSON, wire, error, log, span, metric,
+  audit, panic, or `Debug` output.
+- The existing `d2b-priv-broker.service` remains the lifecycle owner before and after transfer.
+  Ownership moves exactly once before target-daemon activation; the broker-owned coordinator
+  resumes or rolls back after entrypoint, broker, or daemon failure. No new unit or supervisor
+  is introduced.
+- Runtime refusal is identifier-free and carries only the closed action
+  `rebuild-host-generation`. Documentation uses parameterized authorization and apply commands,
+  validates all values before socket authorization or `sudo`, and emits no sensitive reference
+  value in diagnostics.
+- The apply command carries no intent selector or authority token. A coordinator lock protects
+  zero-or-one nonterminal intent and atomically claims only the sole authorized pending intent.
+  Zero, multiple, concurrent, or terminal selection refuses before mutation; post-mutation
+  replay is allowed only for the same intent after the old peer is proven dead.
 
 ## Acceptance
 
-`make test-drift` is clean; no artifact is hand-edited; no delivery record appears in
-`git status`; 4/2 passes while 3/1, mixed, 5/2, 4/3, and 5/3 fail at Rust, Nix, and daemon
-boundaries. Type-1 Nix evaluation pins the rebuild-reference grammar and bounds. Type-10 coverage consumes only the generated source-floor and registry rows assigned to
-the authoritative prospective generated rows; this contract copies no membership, count, fixture id, poison
-case, or transition list. Bare legacy negotiation, a source-peer mismatch, or any missing,
-stale, wrong-owner, non-ancestor, runtime-derived, skipped, or failing generated row is a
-refusal case. The positive case executes the
-parameterized target-closure entrypoint, proves the caller-flake executable runs only
-unprivileged and only validates/builds/stages/authorizes/submits, rejects zero-output and
-multi-output resolution, proves privileged apply uses only the separately pinned installed
-object with no URI, reference, target executable, intent selector, or authority token to
-reevaluate, races two authorizations and two apply connections, injects a two-pending-intent
-census, disconnects before and after the first mutation, and invokes apply after terminal
-completion. It requires atomic sole-pending selection, zero mutation on
-zero/multiple/concurrent/terminal refusals, durable zero-mutation proof before releasing a
-pre-mutation claim, and same-intent coordinator replay only after mutation. It binds the accepted
-connection's direct peer pidfd and executable identity to that pin, and refuses every identity
-transition assigned by the generated independent registry, with no persisted pidfd or later
-mutation. Every raw
-apply-peer input assigned by generated `VD2-SC002-REGISTRIES` remains absent from every output
-surface; only the typed process-instance and executable-identity digests are permitted and metrics carry
-no identity label. The positive case
-proves initial public-socket Admin classification, sealed durable capability,
-broker-before-daemon activation, Hello while unready, phase-attenuated authenticated
-publication request, and durable publication before ingestion/readiness, then injects failure and crash points through
-profile/service/bootstrap/publication/reference repair/readiness/rollback. It kills the
-entrypoint and proves the broker-owned coordinator resumes across target broker and daemon
-startup failures, installed source compatibility-actor crashes, and durable ownership
-transfer. Target-executable, apply-object, installed-symlink, and GC-root substitutions
-refuse before mutation. Prior reference
-bytes or absence, 3/1 artifacts, and source service generations are restored together with
-immutable broker audit. Host recovery also executes the post-publication stable-reference and
-parameterized prior-target rollback commands, rejects direct entrypoint/daemon/Nix mutation
-plus missing or malformed values, and proves no sensitive reference value enters diagnostics.
-The historical generated evidence covered only target-v5 adoption and target outputs; source peer/output
-atomicity is supplied by the accepted external disposition. The nonempty structural/API guard and poison fixture reject a second bundle
-envelope or alias, version authority, hash implementation/entry point, or re-export through
-the existing policy and fixture-contract gates.
+Run the focused generator, schema, Nix, and daemon contract checks for the changed artifact.
+Verify that no generated output is hand-edited, no sensitive value enters diagnostics, the 4/2
+bundle succeeds while 3/1 and mixed versions fail, and handoff crash/identity/rollback cases
+are covered. Run host or live acceptance only when the changed artifact needs it. `make check`
+is an optional broad check, not a mandatory pre-PR gate.

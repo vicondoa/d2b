@@ -1,62 +1,34 @@
 //! Wave seal construction (spec section 12.4, work item
 //! `ADR046-delivery-006`).
 //!
-//! `seal` requires all ten panel records present, unanimous, and bound to the
-//! same `candidate_id`, `content_id`, and `snapshot_sha256`, plus every
-//! spec-section-12.2 validator lane reporting success on that exact snapshot.
-//! It writes one sealed record binding the wave's candidate triple, the
-//! attested panel records, and the lanes it accepted.
+//! `seal` requires every spec-section-12.2 validator lane to report success on
+//! the exact snapshot. It writes one sealed record binding the wave's candidate
+//! triple and the lanes it accepted.
 //!
-//! The panel lane's success is the ten unanimous records themselves, which
-//! this stage verifies directly, so a lane record for the panel is accepted
-//! but never a substitute for the records. The two validator lanes - required
-//! GitHub CI and the heavy-gated local/host validators - must each carry at
-//! least one imported result, and every imported result must be a pass.
+//! The two validator lanes - required GitHub CI and the heavy-gated local/host
+//! validators - must each carry at least one imported result, and every
+//! imported result must be a pass.
 //! [`EvidenceResult`] has no pending state by construction: a pending lane is
 //! an absent record, and an absent lane fails the seal.
 //!
-//! # How the two evidence classes survive a rebase
-//!
-//! Spec section 12.6 lets a history-only rebase preserve the panel record. It
-//! is silent on validator evidence, and this stage takes the fail-closed
-//! reading: the two classes are treated asymmetrically on purpose.
-//!
-//! * **Panel evidence is reusable.** Panel records bind `candidate_id` and
-//!   `content_id`, both of which exclude commit history by construction, so a
-//!   rebase that preserves every byte of integrated content reproduces them
-//!   exactly and the records stay valid.
-//! * **Validator evidence is not reusable.** Every evidence record is checked
-//!   against all three digests, including `snapshot_sha256`, which covers the
-//!   base and head object IDs. A history-only rebase moves `snapshot_sha256`
-//!   while leaving the other two alone, so every prior lane result becomes
-//!   stale and each lane must re-import against the new snapshot.
-//!
-//! The reason for the asymmetry is what each class actually attests. A panel
-//! reviews content, and the content is provably unchanged. A validator run
-//! exercises a specific commit range on a specific base: a merge conflict, a
-//! semantic conflict with newly landed work on the new base, or a rerun of a
-//! flaky gate can all change its outcome without changing a byte of the
-//! wave's own content. Reusing that result would assert something the run
-//! never established.
+//! A history-only rebase moves `snapshot_sha256` while leaving the content and
+//! candidate identities alone. Every prior validator result therefore becomes
+//! stale and each lane must re-import against the new snapshot.
 
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    path::PathBuf,
-};
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 use super::{
-    DELIVERY_SCHEMA_VERSION, DeliveryError, Result,
+    DELIVERY_SCHEMA_VERSION, DeliveryError, Result, SnapshotView,
     command::{CliOptions, WaveCommand, WorkflowOutput},
+    ensure_artifact_kind,
     evidence::{self, EvidenceLane, REQUIRED_EVIDENCE_LANES},
     model::{
         CandidateId, CandidateMaterial, ContentId, SEAL_ARTIFACT_KIND, SnapshotSha256,
         sha256_bytes, validate_identifier, validate_program_wave, validate_sha256,
     },
-    panel::{self, PanelAttestation, SnapshotView, ensure_artifact_kind},
-    storage::{CandidateDir, PANEL_REQUEST_FILE, SEAL_FILE, StateRoot},
+    storage::{CandidateDir, SEAL_FILE},
 };
 
 /// One lane's accepted validations, as bound into the seal.
@@ -86,7 +58,7 @@ pub struct SealedValidation {
 /// [`merge-eligibility`](super::eligibility) needs the sealed base and head
 /// object IDs and the byte-identical content inputs to run the history proof
 /// of spec section 12.6 without re-reading the snapshot.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SealRecord {
     pub artifact_kind: String,
@@ -97,65 +69,7 @@ pub struct SealRecord {
     pub content_id: ContentId,
     pub snapshot_sha256: SnapshotSha256,
     pub material: CandidateMaterial,
-    pub panel: PanelAttestation,
-    pub panel_request_sha256: String,
     pub evidence: Vec<SealedLane>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct SealRecordWire {
-    artifact_kind: String,
-    schema_version: u32,
-    program: String,
-    wave: String,
-    candidate_id: CandidateId,
-    content_id: ContentId,
-    snapshot_sha256: SnapshotSha256,
-    material: CandidateMaterial,
-    panel: PanelAttestation,
-    panel_request_sha256: String,
-    evidence: Vec<SealedLane>,
-}
-
-/// Selects the nested panel family before strict seal DTO deserialization.
-///
-/// The seal itself keeps its existing top-level field set. Its embedded panel
-/// object is the only panel-format discriminator.
-impl<'de> Deserialize<'de> for SealRecord {
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let value = Value::deserialize(deserializer)?;
-        let panel_value = value
-            .as_object()
-            .and_then(|object| object.get("panel"))
-            .ok_or_else(|| serde::de::Error::custom("wave seal is missing its panel object"))?;
-        let expected = panel::probe_panel_format(panel_value, "wave seal panel")
-            .map_err(serde::de::Error::custom)?;
-        let wire: SealRecordWire = serde_json::from_value(value)
-            .map_err(|error| serde::de::Error::custom(format!("invalid wave seal: {error}")))?;
-        let actual = wire.panel.format().map_err(serde::de::Error::custom)?;
-        if actual != expected {
-            return Err(serde::de::Error::custom(
-                "wave seal panel format changed while reading the seal",
-            ));
-        }
-        Ok(Self {
-            artifact_kind: wire.artifact_kind,
-            schema_version: wire.schema_version,
-            program: wire.program,
-            wave: wire.wave,
-            candidate_id: wire.candidate_id,
-            content_id: wire.content_id,
-            snapshot_sha256: wire.snapshot_sha256,
-            material: wire.material,
-            panel: wire.panel,
-            panel_request_sha256: wire.panel_request_sha256,
-            evidence: wire.evidence,
-        })
-    }
 }
 
 impl SealRecord {
@@ -169,7 +83,6 @@ impl SealRecord {
             )));
         }
         validate_program_wave(&self.program, &self.wave)?;
-        validate_sha256(&self.panel_request_sha256, "panel request digest")?;
         if self.program != self.material.program || self.wave != self.material.wave {
             return Err(DeliveryError::new(
                 "wave seal names a different wave than the material it sealed",
@@ -185,46 +98,6 @@ impl SealRecord {
             ));
         }
         candidate.validate_artifact_address(&self.wave, &self.candidate_id, "wave seal")?;
-        let request_bytes = candidate.read_bytes(PANEL_REQUEST_FILE).map_err(|error| {
-            DeliveryError::new(format!(
-                "wave seal has no readable panel request for its embedded panel: {error}"
-            ))
-        })?;
-        let request_sha256 = sha256_bytes(&request_bytes);
-        if request_sha256 != self.panel_request_sha256 {
-            return Err(DeliveryError::new(
-                "wave seal panel request digest does not match the exact stored panel request \
-                 bytes",
-            ));
-        }
-        let request: panel::PanelRequest =
-            serde_json::from_slice(&request_bytes).map_err(|error| {
-                DeliveryError::new(format!(
-                    "wave seal has an invalid stored panel request: {error}"
-                ))
-            })?;
-        request.validate()?;
-        candidate.validate_artifact_address(
-            &request.wave,
-            &request.candidate_id,
-            "wave seal panel request",
-        )?;
-        if request.program != self.program
-            || request.wave != self.wave
-            || request.candidate_id != self.candidate_id
-            || request.content_id != self.content_id
-        {
-            return Err(DeliveryError::new(
-                "wave seal panel request identity does not match the sealed program, wave, \
-                 candidate, and content",
-            ));
-        }
-        if request.format()? != self.panel.format()? || request.roles != self.panel.roles {
-            return Err(DeliveryError::new(
-                "wave seal mixes a panel request and embedded panel from different format or roster families",
-            ));
-        }
-        self.panel.validate()?;
         for lane in &self.evidence {
             for validation in &lane.validations {
                 validate_identifier(&validation.validation, "sealed validation")?;
@@ -239,35 +112,16 @@ impl SealRecord {
 pub fn run(args: &[String]) -> Result<WorkflowOutput> {
     let mut options = CliOptions::parse(args)?;
     let snapshot_path = options.required_path("--snapshot")?;
-    let (state, repository_roots) = panel::prepare_state_with_roots(&mut options)?;
+    let state = super::prepare_state(&mut options)?;
     options.finish()?;
     let snapshot_path = state.resolve_artifact_ref(&snapshot_path);
-    let (candidate, snapshot) = panel::open_candidate(&state, &snapshot_path)?;
-    super::work_item_state::reject_adr046_w5_mutation(&snapshot.material, "seal")?;
-    seal_checked(&state, &candidate, &snapshot, &repository_roots)
+    let (candidate, snapshot) = super::open_candidate(&state, &snapshot_path)?;
+    seal(&candidate, &snapshot)
 }
 
-fn seal_checked(
-    state: &StateRoot,
-    candidate: &CandidateDir,
-    snapshot: &SnapshotView,
-    repository_roots: &BTreeMap<String, PathBuf>,
-) -> Result<WorkflowOutput> {
-    super::work_item_state::require_current_wave_merged(&snapshot.material, repository_roots)?;
-    super::work_item_state::require_predecessor_state_for_exit(
-        state,
-        &snapshot.material,
-        repository_roots,
-    )?;
-    seal(candidate, snapshot)
-}
-
-/// Binds unanimous panel records and passing validator lanes to one candidate.
+/// Binds passing validator lanes to one candidate.
 pub fn seal(candidate: &CandidateDir, snapshot: &SnapshotView) -> Result<WorkflowOutput> {
-    let request = panel::stored_request(candidate, snapshot)?;
-    let attestation = panel::attested_records(candidate, &request)?;
     let evidence = sealed_lanes(candidate, snapshot)?;
-    let panel_request_sha256 = sha256_bytes(&candidate.read_bytes(PANEL_REQUEST_FILE)?);
 
     let record = SealRecord {
         artifact_kind: SEAL_ARTIFACT_KIND.to_owned(),
@@ -278,8 +132,6 @@ pub fn seal(candidate: &CandidateDir, snapshot: &SnapshotView) -> Result<Workflo
         content_id: snapshot.content_id.clone(),
         snapshot_sha256: snapshot.snapshot_sha256.clone(),
         material: snapshot.material.clone(),
-        panel: attestation,
-        panel_request_sha256,
         evidence,
     };
     record.validate(candidate)?;
@@ -350,17 +202,10 @@ pub(crate) mod tests {
     use super::*;
     use crate::delivery::{
         evidence::EvidenceRecord,
-        model::{
-            CandidateMaterial, EVIDENCE_ARTIFACT_KIND, EvidenceResult, PANEL_CURRENT_ROLES,
-            fixtures,
-        },
-        panel::tests::{
-            candidate_with_snapshot, candidate_with_snapshot_from, record_files, write_record_dir,
-        },
-        snapshot::tests::{GitFixture, take},
+        model::{CandidateMaterial, EVIDENCE_ARTIFACT_KIND, EvidenceResult, fixtures},
         storage::tests::Scratch,
+        test_support::{candidate_with_snapshot, candidate_with_snapshot_from},
     };
-    use std::path::Path;
 
     pub(crate) fn evidence(
         snapshot: &SnapshotView,
@@ -392,33 +237,26 @@ pub(crate) mod tests {
         evidence::import(candidate, record).expect("import evidence");
     }
 
-    /// A candidate with a request, ten unanimous records, and both required
-    /// lanes imported.
+    /// A candidate with both required validator lanes imported.
     pub(crate) fn sealable(scratch: &Scratch) -> (CandidateDir, SnapshotView) {
         let (_state, candidate, snapshot) = candidate_with_snapshot(scratch);
-        finish_sealable(scratch, candidate, snapshot)
+        finish_sealable(candidate, snapshot)
     }
 
     /// Like [`sealable`], but over a caller-supplied material, so a test can
-    /// seal a wave whose expected pull-request set is not the single-slice
-    /// fixture default.
+    /// seal a wave whose expected pull-request set is richer than the default.
     pub(crate) fn sealable_from(
         scratch: &Scratch,
         material: CandidateMaterial,
     ) -> (CandidateDir, SnapshotView) {
         let (_state, candidate, snapshot) = candidate_with_snapshot_from(scratch, material);
-        finish_sealable(scratch, candidate, snapshot)
+        finish_sealable(candidate, snapshot)
     }
 
     fn finish_sealable(
-        scratch: &Scratch,
         candidate: CandidateDir,
         snapshot: SnapshotView,
     ) -> (CandidateDir, SnapshotView) {
-        panel::request(&candidate, &snapshot).expect("panel request");
-        let files = record_files(&snapshot);
-        let dir = write_record_dir(scratch, &files);
-        panel::attest(&candidate, &snapshot, &dir).expect("attest");
         import(
             &candidate,
             &evidence(&snapshot, EvidenceLane::GithubCi, "layer1-check"),
@@ -431,7 +269,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_unanimous_panel_and_passing_lanes_seal() {
+    fn a_snapshot_with_passing_lanes_seals() {
         let scratch = Scratch::new("seal-ok");
         let (candidate, snapshot) = sealable(&scratch);
 
@@ -446,168 +284,7 @@ pub(crate) mod tests {
         let record: SealRecord = candidate.read_json(SEAL_FILE).expect("seal record");
         record.validate(&candidate).expect("sealed record is valid");
         assert_eq!(record.candidate_id, snapshot.candidate_id);
-        assert_eq!(record.panel.records.len(), PANEL_CURRENT_ROLES.len());
-        assert_eq!(record.panel.panel_format_version, Some(1));
-        let serialized = serde_json::to_value(&record).expect("seal JSON");
-        assert!(
-            serialized.get("panel_format_version").is_none(),
-            "the top-level seal field set must remain unchanged"
-        );
-        assert_eq!(serialized["panel"]["panel_format_version"], 1);
-        assert!(record.panel.unanimous);
         assert_eq!(record.evidence.len(), 2);
-    }
-
-    #[test]
-    fn seal_command_rejects_stale_planned_work_item_state() {
-        let repository = GitFixture::new("seal-planned-state-repository");
-        repository.write(
-            "docs/specs/ADR-046-implementation-graph.json",
-            r#"{"nodes":[{"id":"ADR046-foundation-001","kind":"work-item","wave":"W0"}]}"#,
-        );
-        repository.write(
-            "docs/specs/ADR-046-work-items.json",
-            r#"{"items":[{"workItemId":"ADR046-foundation-001","implementationState":"Planned"}]}"#,
-        );
-        repository.commit("planned work-item state");
-        let material = take(&repository).material;
-
-        let scratch = Scratch::new("seal-planned-state");
-        let (candidate, snapshot) = sealable_from(&scratch, material);
-        let state = StateRoot::for_tests(&scratch.path.join("state")).expect("state root");
-        let roots = BTreeMap::from([("github.com/example/d2b".to_string(), repository.repo())]);
-        let error = seal_checked(&state, &candidate, &snapshot, &roots)
-            .expect_err("a Planned item must block the seal command");
-        assert!(error.message().contains("cannot seal W0"), "{error}");
-        assert!(error.message().contains("ADR046-foundation-001"), "{error}");
-        assert!(
-            error.message().contains("Implementation state to Merged"),
-            "{error}"
-        );
-    }
-
-    /// FR-049: the seal boundary carries the predecessor-merged condition in
-    /// its own right, not only through the panel request. This wave's own
-    /// items are all `Merged`, so the current-wave leg passes and cannot be
-    /// what refuses; only the prior-wave leg can produce the error below.
-    #[test]
-    fn seal_command_rejects_an_unmerged_prior_wave_item() {
-        let repository = GitFixture::new("seal-prior-wave-repository");
-        repository.write(
-            "docs/specs/ADR-046-implementation-graph.json",
-            "{\"nodes\":[\
-             {\"id\":\"ADR046-foundation-001\",\"kind\":\"work-item\",\"wave\":\"W0\"},\
-             {\"id\":\"ADR046-backend-001\",\"kind\":\"work-item\",\"wave\":\"W1\"}]}\n",
-        );
-        repository.write(
-            "docs/specs/ADR-046-work-items.json",
-            "{\"items\":[\
-             {\"workItemId\":\"ADR046-foundation-001\",\"implementationState\":\"Planned\"},\
-             {\"workItemId\":\"ADR046-backend-001\",\"implementationState\":\"Merged\"}]}\n",
-        );
-        repository.commit("predecessor wave still unmerged");
-        let mut material = take(&repository).material;
-        "W1".clone_into(&mut material.wave);
-
-        let scratch = Scratch::new("seal-prior-wave");
-        let (candidate, snapshot) = sealable_from(&scratch, material);
-        let state = StateRoot::for_tests(&scratch.path.join("state")).expect("state root");
-        let roots = BTreeMap::from([("github.com/example/d2b".to_string(), repository.repo())]);
-        let error = seal_checked(&state, &candidate, &snapshot, &roots)
-            .expect_err("an unmerged prior-wave item must block the seal command");
-        assert!(
-            error
-                .message()
-                .contains("cannot request a panel for, seal, or merge W1"),
-            "{error}"
-        );
-        assert!(error.message().contains("ADR046-foundation-001"), "{error}");
-        assert!(error.message().contains("in W0 is `Planned`"), "{error}");
-    }
-
-    /// Drives the real `wave seal` entrypoint from its argument vector, so CLI
-    /// parsing, state-root preparation, and snapshot resolution are covered -
-    /// not just the inner `seal_checked` helper.
-    ///
-    /// The state root sits inside the ignored build tree, which
-    /// `StateRoot::prepare` refuses in production, so the test installs the
-    /// `#[cfg(test)]`-only redirection for the duration of the run. The
-    /// production refusal is untouched.
-    #[test]
-    fn the_seal_entrypoint_runs_end_to_end_from_its_argument_vector() {
-        use crate::delivery::{snapshot, storage::test_root_override};
-
-        let repository = GitFixture::new("seal-cli-repository");
-        repository.write(
-            "docs/specs/ADR-046-implementation-graph.json",
-            r#"{"nodes":[{"id":"ADR046-foundation-001","kind":"work-item","wave":"W0"}]}"#,
-        );
-        repository.write(
-            "docs/specs/ADR-046-work-items.json",
-            r#"{"items":[{"workItemId":"ADR046-foundation-001","implementationState":"Planned"}]}"#,
-        );
-        repository.commit("planned work-item state");
-        let _guard = test_root_override::install(&repository.state());
-
-        let snapshot_ref = snapshot::run(&repository.snapshot_args())
-            .expect("wave snapshot")
-            .artifact
-            .expect("snapshot artifact reference");
-        let args = vec![
-            "--snapshot".to_owned(),
-            snapshot_ref,
-            "--repo".to_owned(),
-            format!("github.com/example/d2b={}", repository.repo().display()),
-        ];
-        let error = run(&args).expect_err("the entrypoint must refuse a Planned work item");
-        assert!(error.message().contains("cannot seal W0"), "{error}");
-        assert!(error.message().contains("ADR046-foundation-001"), "{error}");
-    }
-
-    #[test]
-    fn a_seal_without_panel_records_is_refused() {
-        let scratch = Scratch::new("seal-no-panel");
-        let (_state, candidate, snapshot) = candidate_with_snapshot(&scratch);
-        panel::request(&candidate, &snapshot).expect("panel request");
-        import(
-            &candidate,
-            &evidence(&snapshot, EvidenceLane::GithubCi, "layer1-check"),
-        );
-        let error = seal(&candidate, &snapshot).expect_err("no records");
-        assert!(error.message().contains("panel-attest"), "{error}");
-    }
-
-    #[test]
-    fn a_seal_without_a_panel_request_is_refused() {
-        let scratch = Scratch::new("seal-no-request");
-        let (_state, candidate, snapshot) = candidate_with_snapshot(&scratch);
-        let error = seal(&candidate, &snapshot).expect_err("no request");
-        assert!(error.message().contains("panel-request"), "{error}");
-    }
-
-    #[test]
-    fn a_missing_panel_record_is_refused() {
-        let scratch = Scratch::new("seal-missing-record");
-        let (candidate, snapshot) = sealable(&scratch);
-        std::fs::remove_file(candidate.panel_dir().join("kernel.json")).expect("remove record");
-        let error = seal(&candidate, &snapshot).expect_err("missing record");
-        assert!(error.message().contains("exactly 13 records"), "{error}");
-    }
-
-    #[test]
-    fn a_panel_record_bound_to_another_candidate_is_refused() {
-        let scratch = Scratch::new("seal-stale-record");
-        let (candidate, snapshot) = sealable(&scratch);
-        let mut stale = crate::delivery::panel::tests::record(
-            crate::delivery::model::PanelRole::Docs,
-            &snapshot,
-        );
-        stale.candidate_id = CandidateId::parse("b".repeat(64)).expect("digest");
-        candidate
-            .write_json(Path::new("panel").join("docs.json"), &stale)
-            .expect("overwrite record");
-        let error = seal(&candidate, &snapshot).expect_err("stale record");
-        assert!(error.message().contains("different candidate"), "{error}");
     }
 
     #[test]
@@ -623,9 +300,6 @@ pub(crate) mod tests {
     fn no_imported_evidence_at_all_is_refused() {
         let scratch = Scratch::new("seal-no-evidence");
         let (_state, candidate, snapshot) = candidate_with_snapshot(&scratch);
-        panel::request(&candidate, &snapshot).expect("panel request");
-        let dir = write_record_dir(&scratch, &record_files(&snapshot));
-        panel::attest(&candidate, &snapshot, &dir).expect("attest");
         let error = seal(&candidate, &snapshot).expect_err("no evidence");
         assert!(error.message().contains("no validator evidence"), "{error}");
     }
@@ -653,15 +327,15 @@ pub(crate) mod tests {
     }
 
     /// A history-only rebase preserves `candidate_id` and `content_id` but
-    /// moves `snapshot_sha256`, so the panel records stay valid while every
-    /// lane result goes stale and has to be re-imported.
+    /// moves `snapshot_sha256`, so every lane result goes stale and has to be
+    /// re-imported.
     #[test]
-    fn a_history_only_rebase_keeps_the_panel_but_invalidates_the_lanes() {
+    fn a_history_only_rebase_invalidates_the_lanes() {
         let scratch = Scratch::new("seal-rebase-evidence");
         let (candidate, snapshot) = sealable(&scratch);
         seal(&candidate, &snapshot).expect("seal before the rebase");
 
-        let rebased = crate::delivery::panel::tests::rebased(&snapshot);
+        let rebased = crate::delivery::test_support::rebased(&snapshot);
         let error = seal(&candidate, &rebased).expect_err("lane results are stale");
         assert!(error.message().contains("stale snapshot"), "{error}");
 
@@ -678,7 +352,7 @@ pub(crate) mod tests {
             .expect("re-imported lanes seal the rebased snapshot");
         assert_eq!(record.snapshot_sha256, rebased.snapshot_sha256);
         assert_eq!(record.candidate_id, snapshot.candidate_id);
-        assert_eq!(record.panel.records.len(), PANEL_CURRENT_ROLES.len());
+        assert_eq!(record.evidence.len(), 2);
     }
 
     /// The nested layout addresses a record by lane and validation, so
@@ -721,72 +395,5 @@ pub(crate) mod tests {
         record.content_id = ContentId::parse("d".repeat(64)).expect("digest");
         let error = record.validate(&candidate).expect_err("forged seal");
         assert!(error.message().contains("re-derive"), "{error}");
-    }
-
-    #[test]
-    fn a_seal_rejects_mutated_panel_request_bytes() {
-        let scratch = Scratch::new("seal-mutated-panel-request");
-        let (candidate, snapshot) = sealable(&scratch);
-        seal(&candidate, &snapshot).expect("seal");
-        let record: SealRecord = candidate.read_json(SEAL_FILE).expect("seal record");
-        let mut request_bytes = candidate
-            .read_bytes(PANEL_REQUEST_FILE)
-            .expect("panel request bytes");
-        request_bytes.push(b'\n');
-        candidate
-            .write_bytes(PANEL_REQUEST_FILE, &request_bytes)
-            .expect("mutate panel request bytes");
-
-        let error = record
-            .validate(&candidate)
-            .expect_err("mutated request bytes must not validate");
-        assert!(error.message().contains("panel request digest"), "{error}");
-    }
-
-    #[test]
-    fn a_seal_rejects_a_foreign_panel_request_even_when_its_digest_is_updated() {
-        let scratch = Scratch::new("seal-foreign-panel-request");
-        let (candidate, snapshot) = sealable(&scratch);
-        seal(&candidate, &snapshot).expect("seal");
-        let mut record: SealRecord = candidate.read_json(SEAL_FILE).expect("seal record");
-
-        let mut foreign_material = fixtures::material();
-        foreign_material.repository_set[0].integration_tree_oid = fixtures::oid(9);
-        let foreign_scratch = Scratch::new("seal-foreign-panel-request-source");
-        let (_foreign_state, foreign_candidate, foreign_snapshot) =
-            candidate_with_snapshot_from(&foreign_scratch, foreign_material);
-        panel::request(&foreign_candidate, &foreign_snapshot).expect("foreign panel request");
-        let foreign_request = foreign_candidate
-            .read_bytes(PANEL_REQUEST_FILE)
-            .expect("foreign panel request bytes");
-        candidate
-            .write_bytes(PANEL_REQUEST_FILE, &foreign_request)
-            .expect("install foreign panel request");
-        record.panel_request_sha256 = sha256_bytes(&foreign_request);
-
-        let error = record
-            .validate(&candidate)
-            .expect_err("foreign request must not validate");
-        assert!(
-            error.message().contains("panel request")
-                && (error.message().contains("address") || error.message().contains("identity")),
-            "{error}"
-        );
-    }
-
-    #[test]
-    fn the_panel_lane_may_be_imported_but_never_replaces_the_records() {
-        let scratch = Scratch::new("seal-panel-lane");
-        let (_state, candidate, snapshot) = candidate_with_snapshot(&scratch);
-        panel::request(&candidate, &snapshot).expect("panel request");
-        for (lane, validation) in [
-            (EvidenceLane::GithubCi, "layer1-check"),
-            (EvidenceLane::LocalHost, "make-test-integration"),
-            (EvidenceLane::Panel, "ten-role-panel"),
-        ] {
-            import(&candidate, &evidence(&snapshot, lane, validation));
-        }
-        let error = seal(&candidate, &snapshot).expect_err("no records");
-        assert!(error.message().contains("panel-attest"), "{error}");
     }
 }

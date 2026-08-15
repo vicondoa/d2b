@@ -552,7 +552,7 @@ inherited the defect. The generalisation that survives: **a member name is not a
 identity.** Every obligation, in every gate, must be keyed by the struct that
 owns the member.
 
-## Eighth appearance, found by applying the rule instead of waiting for the panel
+## Eighth appearance, found by applying the rule instead of waiting for the review
 
 Immediately after closing security M1 I re-audited every gate against the class
 it belonged to -- "a member name is not an identity" -- rather than treating the
@@ -618,7 +618,7 @@ under Nix became `/nix/store/capset-clear-check.py`. It **failed closed** rather
 than passing vacuously, which is the behaviour the lab wants from a missing
 dependency, and it is now passed explicitly via `CAPSET_CLEAR_CHECK`.
 
-Nine appearances. The sweep is finding these faster than the panel is, which is
+Nine appearances. The sweep is finding these faster than the review is, which is
 the argument for auditing by class rather than by finding.
 
 ## Tenth appearance -- accepted spellings
@@ -721,18 +721,17 @@ baseline before trusting any verdict.
 Twenty-three rounds. Every round produced a finding; the last one did not.
 
 The wave's single root cause -- **a hand-written set deciding whether a guard
-applies** -- was found twelve times, in twelve different dresses. The panel found
+applies** -- was found twelve times, in twelve different dresses. The review found
 some; the class sweep found more, and found them faster, because auditing by
 class asks "where else does this shape live?" instead of waiting to be shown the
 next instance.
 
-What the last three rounds cost, and why they were worth it: round 21 signed off
-7/7 on a tree whose capset gate was false-passing, and the sign-off was honest --
-the reviewers had no way to know, because the README told them the gate had been
-mutation-tested when it had not. That single inaccurate line in a test document
-bought a unanimous but worthless sign-off. Round 22 caught a real blocking defect
-in the fix for round 21's. Round 23 found nothing, which is the first time that
-has happened.
+What the last three rounds cost, and why they were worth it: round 21 reviewed
+7/7 on a tree whose capset gate was false-passing, but the reviewers had no way
+to know because the README told them the gate had been mutation-tested when it
+had not. That single inaccurate line in a test document made the review
+unreliable. Round 22 caught a real blocking defect in the fix for round 21's.
+Round 23 found nothing, which is the first time that has happened.
 
 Two things I would do differently from the start:
 

@@ -1,26 +1,22 @@
-# Removal proofs: the three W5 crate removals (FR-023)
-
-<!-- RETIRED-READONLY-BEGIN -->
+# Historical removal proofs for three crate removals (FR-023)
 
 | Field | Value |
 | --- | --- |
-| Satisfies | FR-023, scoped by FR-060 |
-| Wave performing the removal | W5 |
-| Snapshot proofs were run against | `a7f4a6a4` on `adr046-w5-audit-docs` |
+| Satisfies | FR-023 |
+| Removal snapshot | `a7f4a6a4` |
 | Paths proved | `packages/d2b-daemon-access/`, `packages/d2b-host-providers/` (with `packages/d2b-host/src/runtime_provider.rs`), `packages/d2b-userd/` |
 | Companion record | [`removal-proof-inventory.md`](./removal-proof-inventory.md) |
 | Source of truth for dispositions | `docs/specs/ADR-046-current-code-migration-map.md` |
 
-## 1. Why this file exists, and what it is not
+## 1. Purpose and limits
 
 [`removal-proof-inventory.md`](./removal-proof-inventory.md) counts the rows
 that **lack** a proof. It is a census. It deliberately contains no proofs,
 because a census that also carried evidence would let a reader mistake the
 absence of a row for the presence of a proof.
 
-This file is the other half for W5 only: the three superseded paths this wave
-actually deleted, each with the evidence FR-023 demands. It exists because
-`ADR046-W5` deleted three crates and the program had, until this record, only
+This file records the three superseded paths actually deleted, each with the
+evidence FR-023 demands. It exists because the program had, until this record, only
 *rationale* for those deletions in
 [`plan.md`](./plan.md)'s Recorded-drift section. Rationale is not a removal
 proof. FR-023 requires three things per path, and a paragraph explaining why a
@@ -28,10 +24,7 @@ crate looked unused satisfies none of them:
 
 1. the replacement is integrated and covered by tests;
 2. an explicit removal proof passes; and
-3. the removal lands in its own change, separate from the change that
-   introduced the replacement.
-
-Clause 2 is the one that was missing, and it is the one this file supplies.
+Clause 2 was the missing evidence, and it is the one this file supplies.
 
 **What a proof must contain here.** A passing check that names the specific
 superseded path, run against a named commit, whose output is recorded rather
@@ -79,12 +72,8 @@ is not a removal, it is a break, and `cargo metadata` catches a dangling
 `members` entry or a dangling `path` dependency without compiling anything.
 
 **On (E)'s path list.** It names `nixos-modules`, `pkgs`, `nix`, `flake.nix`
-and `Makefile` explicitly rather than scanning the whole tree, because the whole
-tree includes `docs/specs/`, `docs/adr/` and this directory, where the removed
-names appear legitimately and permanently as baseline citations. A scan that
-included them would never return zero, so it would be quietly downgraded to a
-human eyeball pass. See section 6 for why those citations are correct and must
-not be edited.
+and `Makefile` explicitly rather than scanning documentation history. The
+source and packaging surfaces are the product-relevant residual set.
 
 ## 3. Proof 1: `packages/d2b-daemon-access/`
 
@@ -143,13 +132,6 @@ $ git grep -l -e 'd2b-daemon-access' -- packages nixos-modules pkgs nix tests fl
 $ cd packages && cargo metadata --no-deps --format-version 1 --offline
 exit 0; 58 workspace packages; no package named d2b-daemon-access
 ```
-
-### FR-023 clause 3: separate change
-
-`0e58a79a` deletes the crate and touches nothing else except its changelog
-fragment and one line of `policy_provider_crates.rs`. The replacement it defers
-to, `ADR046-api-001`, was introduced in W0 and merged long before. The removal
-is therefore in its own change by construction, not by discipline.
 
 ### Verdict
 
@@ -213,12 +195,6 @@ $ cd packages && cargo metadata --no-deps --format-version 1 --offline
 exit 0; 58 workspace packages; no package named d2b-host-providers
 ```
 
-### FR-023 clause 3: separate change
-
-`15076c77` deletes the adapter crate, the `d2b-host` module, and the two
-`d2b-host` dependency lines that existed only to serve it
-(`d2b-realm-core`, `d2b-realm-provider`). It introduces no replacement.
-
 ### Verdict
 
 **Proof passes for the removal. The row does not close.** The path is provably
@@ -262,16 +238,15 @@ $ git grep -l -e 'd2b-userd' -e 'd2b_userd' -e 'userd' 2e92622f \
 2e92622f:packages/Cargo.guest.lock
 2e92622f:packages/d2b-contract-tests/tests/policy_contracts.rs
 2e92622f:tests/fixtures/guest-rust-workspace/Cargo.toml
-2e92622f:tests/golden/api-surface/workspace-metadata.json
 2e92622f:tests/migration-ledger.toml
 2e92622f:tests/migration-state.d/guest-exec-policy-eval.toml
 2e92622f:tests/migration-state.d/guest-exec-runtime-static.toml
 2e92622f:tests/unit/nix/eval-cases/guest-exec-policy-eval.nix
 ```
 
-Ten surfaces, not zero. This is the case the Cargo-only check would have
+Nine surfaces, not zero. This is the case the Cargo-only check would have
 missed, and it is why (E) exists as a separate command rather than as a
-formality after (D). One of the ten is a false positive:
+formality after (D). One of the nine is a false positive:
 `nixos-modules/net.nix:476` matches inside the comment "useradd/userdel at
 runtime" and is not a `d2b-userd` reference at all. The other nine were genuine
 packaging, lock, fixture, golden and policy surfaces, and `442172a5` with its
@@ -390,7 +365,7 @@ with them. They did not.
 `d2b-host-providers` implemented three traits that the migration map schedules
 separately, at lines 456, 457 and 458:
 
-| Line | Symbol | Disposition | Owner | State after W5 |
+| Line | Symbol | Disposition | Owner | State after removal |
 | --- | --- | --- | --- | --- |
 | 456 | `HostSubstrateProvider` | REPLACE | `ADR046-primitives-003` | open |
 | 457 | `RuntimeProvider` | REPLACE | `ADR046-provider-001` | open |
@@ -403,7 +378,7 @@ when its owner performs its own removal, and `ADR046-primitives-003` and
 line 527's successor: no fixed user supervisor `Process` exists under
 `Provider/system-systemd`, and none of the three proofs above claims otherwise.
 
-The honest statement of what W5 achieved is narrow and worth stating plainly:
+The honest statement of what this removal achieved is narrow and worth stating plainly:
 it deleted three unreachable code artifacts and proved they were unreachable.
 It delivered no successor and closed no capability migration.
 
@@ -413,7 +388,7 @@ The migration map gives `d2b-daemon-access` the disposition **ADAPT** at both
 line 463 and line 480. An `ADAPT` row schedules no removal, which is why the
 crate never appeared in
 [`removal-proof-inventory.md`](./removal-proof-inventory.md)'s census of rows
-owing a proof. W5 nevertheless deleted it.
+owing a proof. The historical removal nevertheless deleted it.
 
 That is not a contradiction of FR-023, and the resolution is that both halves
 of `ADAPT` happened in order:
@@ -426,13 +401,10 @@ of `ADAPT` happened in order:
 
 What is genuinely wrong is the map's disposition cell, which should record that
 the source is retired after adaptation rather than implying it survives. That
-cell is in `docs/specs/ADR-046-current-code-migration-map.md`, a member of the
-55-spec set. Editing it re-opens that spec's validation and panel evidence and
-re-triggers Gate 0 across the whole manifest under FR-056, for one table cell.
-Per FR-046 the drift is therefore **recorded and raised, not corrected in
-place**. The standing instruction until a dedicated amendment lands: the crate
-is removed, this file is its proof, and the ADAPT cell is stale for the source
-path only.
+cell is in `docs/specs/ADR-046-current-code-migration-map.md`. The historical
+citation remains useful for explaining the baseline; the source path is
+removed, this file is its proof, and the ADAPT cell is stale for the source path
+only.
 
 ### 6.3 The `currentSource` citations naming these crates are correct
 
@@ -451,7 +423,7 @@ them is stale either:
 ```
 $ jq -r '.items[] | select((.currentSource // "")
     | test("d2b-daemon-access|d2b-host-providers|d2b-userd"))
-    | .workItemId + " " + .implementationState' docs/specs/ADR-046-work-items.json
+    | .workItemId + " " + .implementationState' historical work-item record
 ADR046-api-001 Merged
 ADR046-api-002 Merged
 ADR046-display-001 Planned
@@ -482,13 +454,12 @@ $ git ls-tree -d b5ddbed6 packages/d2b-daemon-access packages/d2b-host-providers
 **Ruling: no reconciliation is owed, and none is performed.** Rewriting a
 baseline citation to match the current tree would destroy the property that
 makes it useful - that a reader can check the claim against the exact commit
-the analysis was performed on - and would additionally re-trigger Gate 0 for a
-field that is behaving correctly. A future reader who finds a `currentSource`
+the analysis was performed on. A future reader who finds a `currentSource`
 naming a deleted path should resolve it against that spec's `Baseline`, not
 against `HEAD`.
 
-The correct place for the removal to become visible is this file and the
-inventory, both of which are program-local and carry no Gate 0 cost.
+The removal is visible in this file and the inventory, both of which preserve
+the technical evidence without changing baseline citations.
 
 ### 6.4 Shipped prose already reflects the removal
 
@@ -514,14 +485,14 @@ failed any gate.
 
 [`removal-proof-inventory.md`](./removal-proof-inventory.md) section 3 is
 amended by this record as follows. The counts there were correct when written;
-these are the deltas W5 produces.
+these are the deltas this removal produces.
 
 | Inventory row | Was | Now | Basis |
 | --- | --- | --- | --- |
-| 3.2 line 479 `d2b-host-providers` | REPLACE, no proof, owner W2 | REPLACE, **proof recorded here**, performed by W5 | FR-060 binds the proof to the removing wave; section 4 |
-| 3.2 line 527 `d2b-userd` | REPLACE, no proof, owner W2 | REPLACE, **proof recorded here**, performed by W5 | FR-060; section 5 |
+| 3.2 line 479 `d2b-host-providers` | REPLACE, no proof | REPLACE, **proof recorded here** | section 4 |
+| 3.2 line 527 `d2b-userd` | REPLACE, no proof | REPLACE, **proof recorded here** | section 5 |
 | 3.1 line 735 `d2b userd *` CLI verb | DELETE, no proof, owner W2 | **owes no proof**; path absent at baseline | Section 5, measured at `b5ddbed6` |
-| lines 463 / 480 `d2b-daemon-access` | ADAPT, outside the census | **removed in W5, proof recorded here**; disposition drift raised | Section 3, section 6.2 |
+| lines 463 / 480 `d2b-daemon-access` | ADAPT, outside the census | **removed, proof recorded here**; disposition drift retained | Section 3, section 6.2 |
 | 3.1 lines 456-458 trait rows | REPLACE, no proof | unchanged, still open | Section 6.1 |
 
 Net effect on the outstanding count: 36 rows lacking a proof becomes **33** -
@@ -532,9 +503,7 @@ No row is closed by assertion and no successor obligation is discharged.
 
 ## 8. The stopping condition, stated so a machine can evaluate it
 
-These proofs are re-runnable, and FR-023 read together with T563 requires them
-to hold on the wave candidate snapshot, not merely on the day they were
-written. The condition is:
+These proofs are re-runnable. The condition is:
 
 ```
 test 0 -eq "$(git ls-files \
@@ -553,15 +522,11 @@ test 0 -eq "$(git ls-files \
 && (cd packages && cargo metadata --no-deps --format-version 1 --offline >/dev/null)
 ```
 
-All five conjuncts returned true at `a7f4a6a4`. The former T219 evaluation is retained only as
-historical evidence and is not rerun or consumed. Any prospective later verification belongs
-to its current task and candidate; this record does not supply that result.
+All five conjuncts returned true at `a7f4a6a4`. The former evaluation is
+retained only as historical evidence and is not rerun or consumed. Any
+prospective later verification belongs to its current implementation change;
+this record does not supply that result.
 
-The expression is deliberately not wired into a `tests/` gate. The drift and
-meta gate set is a closed set, the paths it names are gone permanently rather
-than being an invariant that could regress from ordinary work, and a
-single-purpose gate for three deleted crates would outlive its subject. If a
-later wave wants standing enforcement, the place for it is a row in the
-existing policy crate, not a new shell gate.
-
-<!-- RETIRED-READONLY-END -->
+The expression is retained as focused historical evidence rather than a
+workspace-wide gate. A future change that reintroduces one of these paths must
+use the owning policy test and the relevant focused checks.

@@ -5,4 +5,4 @@
 
 ### Fixed
 
-- Keep capability seals, timeout-sensitive transport coverage, shard failures, and API snapshot remediation reliable and visible under loaded validation runs.
+- Keep capability seals, timeout-sensitive transport coverage, and shard failures reliable and visible under loaded validation runs.

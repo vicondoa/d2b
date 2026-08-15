@@ -201,20 +201,10 @@ deprecations ship one minor release before removal.
   release mode; this adds about five minutes but ensures the proof gate runs
   its principal oracle, watch, conflict, and owner-fan-in experiments.
 
-- Added the shared `cargo xtask delivery wave` dispatch skeleton for the
-  ADR 0046 delivery contract: the `snapshot`, `validate-import`,
-  `panel-request`, `panel-attest`, `seal`, `merge-eligibility`, and `help`
-  subcommand surface, the `content_id`/`candidate_id`/`snapshot_sha256`
-  digest contract, and the external candidate-ID-addressed evidence
-  directory. Evidence state is refused inside any repository checkout or Git
-  working tree, and every stage whose implementation has not landed fails
-  closed with a nonzero exit instead of reporting an unearned success.
 - Added ADR 0046 and its complete, documentation-only normative
-  specification set for the d2b 3.0 Provider control plane.
-  The atomic set has 55 member specs (28 foundation, resource, cross-cutting,
-  and closing specs plus a 27-Provider dossier catalog) indexed by
-  `docs/specs/README.md` and `docs/specs/providers/README.md` and bound by the
-  generated `ADR-046-spec-set.json` and `ADR-046-work-items.json` manifests.
+  specification set for the d2b 3.0 Provider control plane. The set includes
+  foundation, resource, cross-cutting, and Provider dossier specifications
+  indexed by `docs/specs/README.md` and `docs/specs/providers/README.md`.
   It specifies Zone-local resources over the 19 standard ResourceTypes
   (including `Endpoint`), independently packaged multi-process Providers
   selected by `{ artifactId, config }`, an asynchronous embedded redb resource
@@ -225,43 +215,23 @@ deprecations ship one minor release before removal.
   tests with integration-only slow coverage, and Noise-protected
   ComponentSession/d2b-bus channels on the `d2bus.org` public namespace,
   together with the security/threat-model, reset/cutover, feasibility,
-  validation and delivery, and streamline contracts. No crates, services,
+  reset, cutover, and feasibility contracts. No crates, services,
   controllers, or Providers are created.
 
 
-- Made ADR 0046 work-item delivery state machine-readable and fail-closed:
-  every item now records a closed `Planned` or `Merged` state plus nonempty
-  evidence, and the generated work-item artifact advances to schema version 2.
-- Accepted ADR 0046 and all 55 members of its specification set (28 top-level
-  specs plus 27 Provider dossiers), flipping each metadata `Status` from
-  `Proposed` to `Accepted`. This satisfies the manifest-acceptance portion of
-  the ADR 0046 delivery contract's Gate 0 precondition for implementation
-  work. No crates, services, controllers, or Providers are created.
-- Bound the ADR 0046 delivery contract's binding ten-role wave panel
-  (`ADR-046-validation-and-delivery` §12.3) to `gpt-5.6-sol` at reasoning
-  effort `xhigh`, replacing the earlier model binding, and added
-  `reasoning_effort` to the panel-receipt attestation record.
+- Accepted ADR 0046 and its specification set, flipping each metadata
+  `Status` from `Proposed` to `Accepted`. No crates, services, controllers,
+  or Providers are created.
 - Retargeted every ADR 0046 slice branch at the protected `v3` integration
-  branch instead of `main`, which the v3 line never merges into. The delivery
-  contract now names `v3` once in its Git Town stack section and uses it for
-  slice base/target, the direct-push prohibition, and the auto-release
-  version-header trigger. References to main-branch ADR 0045 provenance are
-  unchanged.
-- Added a terminal friction-closure wave to the ADR 0046 delivery
-  contract for the tooling and process friction (signoff, build, test, merge,
-  codegen, disk) accumulated across the earlier waves. It has no spec members
-  and is therefore excluded from the topological wave-derivation rule, but it
-  runs the identical per-wave entry/exit criteria, including exactly one
-  binding ten-role panel. The release/cutover gate now runs at that wave's
-  exit rather than the previous terminal wave's, so the destructive-cutover
-  removal proofs are re-required on the tree that actually ships.
+  branch instead of `main`, which the v3 line never merges into. References to
+  main-branch ADR 0045 provenance are unchanged.
 - Corrected the disk-hygiene contract in `AGENTS.md`: Rust worktrees each keep
   their own `packages/target/` and deduplicate compiled output through
   `sccache`, rather than sharing a cargo target directory. A shared target dir
   is deliberately avoided because cargo's target-dir lock is workspace-wide.
   The worktree-removal guidance, the disk-space preflight remediation text,
-  and the ADR 0046 worktree-cleanup rules that assumed a shared-cache symlink
-  are corrected with it.
+  and the ADR 0046 cleanup guidance that assumed a shared-cache symlink are
+  corrected with it.
 - Enabled the required Layer-1, eval-shell, and Entra example PR gates for
   changes targeting the `v3` branch as well as `main`.
 
@@ -1570,7 +1540,7 @@ from the v0.x bash CLI + per-VM systemd templates: `d2bd` and
   `manifest-version-mismatch`. Operators must rebuild the manifest.
 - **Cgroup v2 slice** consolidated to a single `d2b.slice`
   delegated to the `d2bd` uid by the broker; see
-  [ADR 0011](docs/adr/0011-cgroup-delegation-and-ownership.md).
+  [ADR 0011](docs/adr/0011-cgroup-v2-delegation-and-pidfd-handoff.md).
 - `d2b_host::DeviceClass` gained `Udmabuf` for GPU sidecar
   ioctls; `modules_disabled` is fail-closed in the broker's
   `ModprobeIfAllowed` path.
@@ -1680,8 +1650,8 @@ The stock host setup still keeps the OTLP receiver on a Unix
 socket, so Tempo export remains an opt-in follow-up rather than a
 default-on path. Manifest schema bumped from version 1 to 2 to add the
 `_observability` reserved sentinel and per-VM `observability`
-block. A new `AGENTS.md` policy makes the panel-review process a
-**hard gate** per phase for multi-phase plans.
+block. A new `AGENTS.md` policy documents the repository's contributor
+validation expectations for multi-phase plans.
 
 ### Added
 
@@ -1806,10 +1776,6 @@ block. A new `AGENTS.md` policy makes the panel-review process a
   manifest still describes their VMs deterministically.
 - **`docs/reference/manifest-schema.{md,json}`** updated to
   describe the v2 schema.
-- **AGENTS.md** adds a "Panel review" hard-gate policy: multi-phase
-  plans must pass plan-review BEFORE implementation and work-review
-  BEFORE phase advancement, with documented escape hatches for
-  trivial, hotfix, and docs-only changes.
 
 ### Security
 

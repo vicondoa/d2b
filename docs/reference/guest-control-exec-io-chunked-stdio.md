@@ -542,7 +542,7 @@ Guest-control audit records are allowlist-only. They may contain:
   durations, retry-after, and truncation booleans;
 - timestamps and monotonic state-generation numbers.
 
-No other audit operation kind is valid until a schema update and panel
+No other audit operation kind is valid until a schema update and security
 review add it to the closed enum.
 
 They must not contain argv, cwd, environment values, stdout/stderr/stdin

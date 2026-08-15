@@ -62,10 +62,7 @@ export SCCACHE_CACHE_SIZE="${SCCACHE_CACHE_SIZE:-10G}"
 # shellcheck disable=SC2034
 readonly -a D2B_FIXTURE_INDEPENDENT_POLICY_BINARIES=(
   policy_dash_gate
-  policy_adr046_work_items
   policy_changelog_gate
-  policy_adr046_spec_literals
-  policy_adr046_envelopes
   policy_provider_crates
   policy_resource_mutation_seal
   policy_docs
@@ -533,7 +530,7 @@ d2b_reap_scratch_orphans() {
 # ---------- disk budget + per-phase GC ----------
 #
 # Full tests/static.sh peak /nix/store growth is ~1.2 TiB cold (per
-# the panel-round transcripts). The bulk of that growth is in
+# historical test transcripts). The bulk of that growth is in
 # transient derivations (kernel/initrd/systemd toplevels) that are
 # only retained via auto-gcroots created by `nix-shell` and
 # `nix flake check` inside individual gates. Running a focused
@@ -604,8 +601,7 @@ d2b_check_disk_budget() {
 # work/corp-vm smoke config). Re-rendering it inside each gate
 # wastes work, multiplies nix-daemon load, and creates intra-run
 # contention that surfaces as transient "could not render smoke
-# vms.json" failures when several test runs happen concurrently
-# (e.g. integrator + review fleet).
+# vms.json" failures when several test runs happen concurrently.
 #
 # When `tests/static.sh` runs the Layer-1 gates it exports
 # `D2B_STATIC_CACHE=<scratch dir>` and pre-renders the shared smoke

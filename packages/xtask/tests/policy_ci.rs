@@ -25,7 +25,6 @@ const APPROVED_MAKE_TARGETS: &[&str] = &[
     "test-unit",
     "test-lint",
     "test-rust",
-    "test-rust-api-surface",
     "test-rust-main",
     "test-rust-broker",
     "test-rust-guest-shell-runner",

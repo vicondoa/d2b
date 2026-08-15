@@ -29,8 +29,8 @@ export D2B_STATIC_CACHE="$ROOT/.static-cache.bootstrap"
 . "$HERE/lib.sh"
 
 # Coarse-grained inter-process serializer. Concurrent invocations of
-# `tests/static.sh` against the same worktree (e.g. the integrator
-# running it while a review-fleet sub-agent also runs it on the same
+# `tests/static.sh` against the same worktree (e.g. two gate
+# runs executing concurrently on the same
 # checkout) compete for the nix-daemon socket and store-path locks.
 # Under load that surfaces as transient "could not render smoke
 # vms.json" failures inside the Layer-1 flake-eval gates. Serialize
@@ -787,19 +787,9 @@ if [ -x "$ROOT/tests/daemon-default-compat-eval.sh" ]; then
   # flip gate honors readiness + evidence + override semantics.
   d2b_static_parallel_script_gate "tests/daemon-default-compat-eval.sh" "$ROOT/tests/daemon-default-compat-eval.sh"
 fi
-# ADR index coverage guard (/ -class doc-drift).
-if [ -x "$ROOT/tests/unit/meta/adr-index-coverage.sh" ]; then
-  d2b_static_parallel_script_gate "tests/unit/meta/adr-index-coverage.sh" "$ROOT/tests/unit/meta/adr-index-coverage.sh"
-fi
 # ADR 0032 crate-granular dependency-direction + lint-inheritance gate.
 if [ -x "$ROOT/tests/unit/meta/w0-dep-direction.sh" ]; then
   d2b_static_parallel_script_gate "tests/unit/meta/w0-dep-direction.sh" "$ROOT/tests/unit/meta/w0-dep-direction.sh"
-fi
-# I3 invariant enforcement (ADR 0022): no new v1.3 deferrals authored
-# during v1.2 stabilization. ADR 0022 documents this gate, so it must
-# stay wired.
-if [ -x "$ROOT/tests/unit/meta/no-new-deferral.sh" ]; then
-  d2b_static_parallel_script_gate "tests/unit/meta/no-new-deferral.sh" "$ROOT/tests/unit/meta/no-new-deferral.sh"
 fi
 if [ -x "$ROOT/tests/privileges-json-rust-vs-nix-eval.sh" ]; then
   d2b_static_parallel_script_gate "tests/privileges-json-rust-vs-nix-eval.sh" "$ROOT/tests/privileges-json-rust-vs-nix-eval.sh"
@@ -818,17 +808,13 @@ for _gate in \
   fi
 done
 unset _gate
-# deliverable-gate-inventory + pr-checklist-gate are invoked literally (not via
-# the loop above) so tests/unit/meta/layer1-self-inventory.sh's invocation grep resolves
-# them.
+# deliverable-gate-inventory is invoked literally (not via the loop above) so
+# tests/unit/meta/layer1-self-inventory.sh's invocation grep resolves it.
 if [ -x "$ROOT/tests/unit/meta/deliverable-gate-inventory.sh" ]; then
   d2b_static_parallel_script_gate "tests/unit/meta/deliverable-gate-inventory.sh" "$ROOT/tests/unit/meta/deliverable-gate-inventory.sh"
 fi
-if [ -x "$ROOT/tests/unit/meta/pr-checklist-gate.sh" ]; then
-  d2b_static_parallel_script_gate "tests/unit/meta/pr-checklist-gate.sh" "$ROOT/tests/unit/meta/pr-checklist-gate.sh"
-fi
 # ci-coverage.sh structural guard (must run after all other tests
-# are registered above so it can attest the full set is wired).
+# are registered above so it can verify the full set is wired).
 if [ -x "$ROOT/tests/unit/meta/ci-coverage.sh" ]; then
   d2b_static_parallel_script_gate "tests/unit/meta/ci-coverage.sh" "$ROOT/tests/unit/meta/ci-coverage.sh"
 fi

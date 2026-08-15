@@ -1390,7 +1390,7 @@ Validation:
 - runtime telemetry exposes executor stalls, blocking-section duration,
   queue saturation, dropped/admission-refused requests, and audit burst
   behavior;
-- panel review treats budget increases as design questions, not automatic
+- maintainer review treats budget increases as design questions, not automatic
   blockers.
 
 Exit criteria:
@@ -1442,8 +1442,8 @@ Exit criteria:
 - USBIP driver mutation cannot indefinitely pin the broker control path;
 - status/read-model clients never trigger sysfs bind/unbind or deep guest USB
   probes by default;
-- the service remains working after the wave, with a full panel implementation
-  signoff and PR merge.
+- the service remains working after the wave, with implementation review and PR
+  merge.
 
 ## Highest-leverage deletion and consolidation targets
 
@@ -1560,7 +1560,7 @@ Each implementation wave must include:
 1. a deletion/consolidation list;
 2. validation evidence for the surfaces it touched;
 3. generated artifact regeneration when source locations or DTO homes move;
-4. a panel review before the next wave begins when the wave changes
+4. maintainer review before the next wave begins when the wave changes
    architecture or behavior;
 5. no new compatibility surface; update callers and delete old paths in the
    same wave instead.
@@ -1568,6 +1568,6 @@ Each implementation wave must include:
    add runtime kinds, helpers, workspaces, public commands, generated
    contracts, or unsafe/task-model boundaries.
 
-Panel reviewers should treat this ADR as a ratchet: a wave that only adds a
-new abstraction without deleting duplication has not satisfied the roadmap,
-even if tests pass.
+Reviewers should treat this ADR as a ratchet: a wave that only adds a new
+abstraction without deleting duplication has not satisfied the roadmap, even
+if tests pass.

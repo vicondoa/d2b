@@ -53,13 +53,13 @@ aarch64-linux/aarch64-unknown-linux-musl/guest-real-libshpool
 ```
 
 **Rust tools**:
-stable 1.97.0 and the existing pinned nightly API toolchain.
+stable 1.97.0.
 
 **Build tools**:
 Bazel 8.6.0, reviewed `rules_rust` pin, pinned `cargo-bazel`.
 
 **Execution surface**:
-the existing eighteen manifest IDs and two fixture companion IDs.
+the existing seventeen manifest IDs and two fixture companion IDs.
 
 **Platforms**:
 root flake systems `x86_64-linux` and `aarch64-linux`. Native x86 and arm
@@ -106,7 +106,7 @@ Layer-1 surfaces. No new top-level shell gate or Layer-1 job.
 | The post-promotion children were both concurrently ready while owning the same binding docs and evidence file. | Eligibility clocks are independent, but concurrently ready scopes must be file-disjoint. | Permit spec003w7 qualification and code preparation in parallel, then make its shared documentation/evidence task and merge depend on merged spec003w6, followed by revalidation and a new panel. |
 | The amended cache record retained only a zero-write summary. | ADR 0052 requires explicit restore, save, publication, duration, key, prefix, and retention semantics. | Restore fields and their fixtures in spec003w3 through spec003w5. |
 | Provider and expiry summaries omitted load-bearing kernel detail. | Same-descriptor `execveat`, close-on-exec behavior, and non-consuming grace observations are binding. | Restore exact flags, fallback semantics, mutations, and host conformance. |
-| Provider behavior tests alone proved the verified-handle seal. | Runtime behavior cannot prove an API is absent, and execution must preserve the same verified open file description without exposing it. | Use the compiler-derived closed API/trait census plus focused rustdoc compile-fail examples; co-locate the handle and sole consuming API in one dependency-leaf crate; pass it through pinned safe command-fd mapping to an exact immutable statically built C execution supervisor. |
+| Provider behavior tests alone proved the verified-handle seal. | Runtime behavior cannot prove an API is absent, and execution must preserve the same verified open file description without exposing it. | Use defining-crate compiler ambiguity assertions, focused rustdoc compile-fail examples, and external-seal tests; co-locate the handle and sole consuming API in one dependency-leaf crate; pass it through pinned safe command-fd mapping to an exact immutable statically built C execution supervisor. |
 | Provider opens reused strict result-path resolution. | Bazel runfiles leaf symlinks may leave the anchor. Provider opens therefore use `O_RDONLY|O_CLOEXEC` with `RESOLVE_NO_MAGICLINKS` only; forced walks use `O_NOFOLLOW` only on intermediates. Strict result and cleanup paths retain all three strict resolve flags. | Remove `RESOLVE_BENEATH` and `RESOLVE_NO_SYMLINKS` from provider opens, retain them on result/cleanup paths, and add a mutation rejecting provider `RESOLVE_BENEATH`. |
 | Guest static ELF evidence accepted `ET_EXEC` and did not bind machine identity. | ADR 0054 keeps static PIE, and the native system decides the expected `e_machine`. | Require `ET_DYN`, expected native `e_machine`, no `PT_INTERP`, and no `DT_NEEDED`; add non-PIE and wrong-machine plants. |
 | spec003w0 foundation tasks proposed failing future-behavior tests behind inert seams. | A merged wave must be green. | Implement spec003w0 behavior tested there; defer spec003w1/spec003w2 tests with their implementations. |
@@ -114,22 +114,22 @@ Layer-1 surfaces. No new top-level shell gate or Layer-1 job.
 | Selected closures could be reconstructed from metadata alone or a synthetic splice. | Exact package context needs a three-way join; measured `cargo metadata` carries no `checksum` field and null workspace `resolve.root`, and plain `cargo tree` output is not machine-readable. | Join target-filtered locked offline root metadata (identities, sources, candidate edges, `cfg`), `packages/Cargo.lock` plus the committed git archive pin (checksums), and package-selected stable `cargo tree` traversals under pinned `--charset ascii --prefix depth --no-dedupe` and a repository-pinned delimited `--format` (root, dependency-kind reach, resolved features); forbid synthetic manifests and require a shared-dependency feature canary. |
 | The initial amendment left the release workflow and two existing drift gates outside spec003w0. | The workspace merge changes their root-manifest, output, and cache assumptions. | spec003w0 updates `release-host-binaries.yml`, `flake-check-matrix-sync.sh`, and `ci-rust-cache-sync.sh`; neither gate is deleted. |
 | The release correction relied on the hosted runner's ambient Rust before initializing rust-cache. | `packages/rust-toolchain.toml` is the release compiler authority, and cache identity is valid only after that channel is active. | T021 tests and T023 implements pinned-channel installation and activation before rust-cache, exact `rustc` and `cargo` version assertions, and locked package/bin/default-feature/feature-selected release builds. |
-| API fingerprinting and changed-scope Clippy inferred crates and package selectors from top-level `packages/` directory names. | Only locked offline root metadata authoritatively relates product workspace member IDs, manifest paths, and Cargo package names. Independent workspaces and generated non-crate directories are not product packages. | T012 plants independent-workspace and `packages/policy-inputs` fixtures; T013 derives both consumers from metadata, uses a closed path classification, and refuses an unclassified package-root entry. |
+| Changed-scope Clippy inferred crates and package selectors from top-level `packages/` directory names. | Only locked offline root metadata authoritatively relates product workspace member IDs, manifest paths, and Cargo package names. Independent workspaces and generated non-crate directories are not product packages. | T012 plants independent-workspace and `packages/policy-inputs` fixtures; T013 derives changed-scope selection from metadata, uses a closed path classification, and refuses an unclassified package-root entry. |
 | The workspace correction covered the primary Rust gate and release workflow but omitted other supported Cargo build call sites, including `Makefile` `heavy-gate-build`. | Every build affected by T006 must be closed-censused, locked, and either use exact generic broker/guest exclusions or exact dedicated package/bin/default-feature/feature selectors. | T012/T013 own shell and Make call sites, T018/T019 own Nix call sites, and T021/T023 own release. Selector-only corrections preserve current target directories, profiles, skip policy, output consumers, and runtime phase. |
 | Only three contributor docs were scheduled for the spec003w0 workspace correction. | `CONTRIBUTING.md`, workflow guidance, critical-subsystem wording, and `policy_modules.rs` also encode the sibling-workspace shape. | Add all four to the future spec003w0 binding-doc scope. Do not edit dated ADR 0038; record that ADR 0054 governs the newer shape. |
 | ADR 0052 and its index/changelog summary still call accepted ADR 0054 proposed and retain the retired four-hub inventory. | ADR 0054 is accepted settled context. | Correct the ADR 0052 amendment-status paragraph, ADR index summary, and ADR 0054 changelog fragment with the spec003w0 documentation correction; leave ADR 0038 historical text unchanged. |
 | Slice ownership included module locks, hub locks, Nix pins, generated BUILD files, and coverage/query goldens. | Those artifacts are generator results shared by all slices. | Integrator alone commits them. Slices write scratch previews. Lock refresh follows the changed authority and always refreshes `MODULE.bazel.lock` last, then clean no-op checks. |
 | One lock-refresh order was described for every change, and two validation blocks refreshed the module lock before the walker hub. | The product and walker hubs are independent authorities and the module lock consumes both. | Split into three authorities: product manifest change (`packages/Cargo.lock`, product hub, module lock last, walker inputs proved byte-identical); walker manifest or lock change (walker Cargo lock, walker hub, module lock last, product inputs proved byte-identical); initial or combined setup (product hub, walker hub, module lock last). Reorder every validation block accordingly. |
 | The spec003w0 Cargo gate could keep auditing the nested broker and guest locks. | Those locks are deleted by the same wave, so the gate has no nested authority left. | Move package deny/audit onto the native-system broker-GNU and guest-musl selected policy inputs with exact source census and pinned `--no-fetch` audit, keep the aggregate root and `Cargo.guest.lock` checks independent, and replace `tests/tools/assert-pinned-tests.sh` nested-lock backup/restore with root-lock package selection. |
-| Six shadow Make targets could be introduced without touching the workflow allowlist. | `APPROVED_MAKE_TARGETS` in `packages/xtask/tests/policy_ci.rs` is the only allowlist, and an unlisted target silently escapes the ci-uses-make guard. | The same wave that introduces the shadow targets adds all six to the allowlist with positive and negative tests owned by one exact spec003w1 slice. |
+| Five shadow Make targets could be introduced without touching the workflow allowlist. | `APPROVED_MAKE_TARGETS` in `packages/xtask/tests/policy_ci.rs` is the only allowlist, and an unlisted target silently escapes the ci-uses-make guard. | The same wave that introduces the shadow targets adds all five to the allowlist with positive and negative tests owned by one exact spec003w1 slice. |
 | Qualification could be read from boolean verdict fields. | A boolean is self-asserted; only immutable references are evidence. | Add a typed validator that derives every threshold from immutable evidence references and refuses omitted, forged, duplicate, inconsistent, and wrong-candidate references. |
 | No-shell was asserted over an implied file set. | An implied set cannot detect an unscanned new spawn site. | Bind no-shell to a generated, drift-checked, nonempty inventory compared bidirectionally against governed sources and declared inputs, with empty, missing, extra, and planted-shell negatives. |
 | spec003w6 entry accepted any containing tag. | Repository tags include two-component names such as `v1.0`, `v1.1`, and `v1.2`, so containment alone is not a release. | Require a containing published tag matching `v<major>.<minor>.<patch>` exactly, resolving on origin with a non-draft release. |
 | The pre-merge rollback rehearsal read `promotion-record.json`. | That record is written only after merge. | Rehearse from the verified current atomic candidate HEAD and the recorded spec003w5 parent; keep promotion-record reads post-merge. |
-| spec003w5 binding docs covered only the three contributor docs. | `tests/README.md` and `docs/reference/test-execution-manifest.md` also describe the eight CI jobs. | Add both to the spec003w5 binding-doc scope. |
+| spec003w5 binding docs covered only the three contributor docs. | `tests/README.md` and `docs/reference/test-execution-manifest.md` also describe the seven CI jobs. | Add both to the spec003w5 binding-doc scope. |
 | Qualification cache fields were written in mixed snake_case and ad hoc names. | One canonical camelCase field set must appear in every artifact. | Fix `bazelRestoreCount`, `bazelSaveCount`, `bazelPublicationCount`, and `sliceDurationsSeconds` as the only spellings. |
 | Post-promotion streak positions were counted per observation, allowing attempts to advance the streak. | An attempt is a rerun of one unit, and rerun start time is mutable. | Count distinct push-created (run ID, head SHA) units, normalize to the highest terminal attempt, and order by immutable `createdAt` then run ID. |
-| Promotion reused old leaf names as CI slice targets. | Promotion needs four authoritative CI slice targets while preserving all eight public leaves. | Introduce `test-rust-slice-{main,api,broker,aux}` for CI and map every old leaf to an exact Bazel subset. Compatibility aliases forward only to the aggregate or matching slice target. |
+| Promotion reused old leaf names as CI slice targets. | Promotion needs three authoritative CI slice targets while preserving all seven public leaves. | Introduce `test-rust-slice-{main,broker,aux}` for CI and map every old leaf to an exact Bazel subset. Compatibility aliases forward only to the aggregate or matching slice target. |
 | Post-promotion eligibility trusted count and ID fields in the evidence file. | Eligibility must be derived from the complete protected-`v3` run stream. | Inventory typed run units with pagination, provenance, terminality, ordering, and promotion-ancestry checks; derive resets and the current streak. |
 | Raw child output remained in `test.log`, and publication failure rewrote a passing test as failed. | Every persistent or emitted sink must be sanitized and bounded; exporter state is not the test verdict. | Sanitize and bound JUnit, `test.log`, execution evidence, qualification evidence, and exporter diagnostics. Preserve `testVerdict`, emit typed degraded evidence, and make surface completion and qualification reject degradation separately. |
 | Cache deletion authority was an undefined authorized-prefix predicate. | Destructive maintenance requires a closed committed authority. | Use a typed prefix enum, preserve unknown entries, and test mixed authorized/unauthorized pagination with zero delete calls on refusal. |
@@ -143,7 +143,7 @@ Layer-1 surfaces. No new top-level shell gate or Layer-1 job.
 | Supervisor signal prose left inherited `SIGPIPE`, non-waitable `SIGCHLD`, external `SIGTERM` without a case deadline, and a normalization window before signal ownership. | A closed status reader must be typed transport failure, child status must remain waitable, and pending termination must not kill the helper during normalization. | Block managed signals first; while blocked install dispositions and synchronous consumption; only then establish the final mask. Ignore `SIGPIPE`, restore waitable `SIGCHLD`, define supervisor ownership before `READY`, and make external `SIGTERM` run the fixed escalation. Add pending-at-entry, normalization-time, closed-reader, inherited-SIGCHLD, blocked/ignored-SIGTERM, and target-ignore-TERM fixtures. |
 | Supervisor transport described bounded I/O but applied single-record overlong probing to the multi-record status stream. | Exec-error is one record, while status can legally coalesce several records in one pipe read. | Keep EOF/one-record-plus-one-byte overlong handling only on exec-error. Give status a fixed header/version/type/length and bounded stateful decoder that retains fragmented or coalesced `READY`, `EXECUTED`, and terminal frames; reject malformed, duplicate, and out-of-order frames without a one-byte status probe. |
 | HELPER/CHILD and parent/sandbox cleanup stages had typed names but no complete operator recovery mapping. | Every refusal needs a stable code, resolvable fixed input, literal correction, and a rerun target that exists in that phase; a renderer must outlive the stage it reports. | T067/T068 own only parent/helper/child mapping and tests. The patched sandbox, owned by sequential T120, owns `SANDBOX_*` mapping/rendering and live exact tests. Both harnesses resolve every governed repository-relative path and Markdown anchor and cover all slices and both command versions. |
-| Ad hoc Cargo-shelling compile fixtures were the VerifiedExecutable API proof. | `tests/AGENTS.md` makes the compiler-derived API census primary and reserves rustdoc compile-fail for downstream type properties. | Make VerifiedExecutable a capability root with empty public-inherent and locally-authored explicit-trait allowlists, pin compiler auto/blanket impls, and use focused rustdoc compile-fail examples only. |
+| Ad hoc Cargo-shelling compile fixtures were the VerifiedExecutable API proof. | The retained contract uses defining-crate compiler assertions and focused downstream type checks. | Make VerifiedExecutable a capability root, add defining-crate compiler ambiguity assertions, and use focused rustdoc compile-fail and external-seal tests only. |
 | The plan validator truncated aggregate ownership prose after `and every`, and its first census saw only unordered unquoted checkboxes. | An ordered, indented, blockquoted, omitted, or zero-task plan can evade canonical parsing; setup exceptions and dynamic values can also leak paths or plan content. | Census every Markdown unchecked task-list form before parsing; reject all noncanonical forms and zero tasks; compare parsed IDs with an independent exact census in `tasks.md`; isolate every branch including actual task omitted from census and malformed/unbalanced markers; byte-match complete stderr; authorize only bounded numeric plus closed `none`/`overflow` locators; and initially guard temp-dir, path, open3, and subprocess setup with the fixed self-test-contract diagnostic. The later seam-classification correction below supersedes only that initial setup-diagnostic choice. |
 | Crash containment was qualification prose without a closed result shape. | Qualification can pass only when every crash stage, monitor identity, cleanup outcome, quarantine transition, and validator mutation is independently bound without persisting process data. | Add exactly seven bounded containment results with closed supervisor recovery/escalation/cleanup/quarantine enums and SHA-256 patch, canonical-monitor, pending-observation, and result digests. Prohibit raw PIDs, descriptors, paths, process output, and opaque identities; require every result and mutation. |
 | Native inventory prose alternated between five checks, two artifact rows, and six checks. | There are exactly six native checks per system and exactly four artifact baseline rows. | Normalize every inventory, task, evidence threshold, quickstart check, and checklist item to those cardinalities. |
@@ -264,8 +264,9 @@ Layer-1 surfaces. No new top-level shell gate or Layer-1 job.
 27. A post-promotion streak position is one distinct push-created
     (run ID, head SHA) unit ordered by immutable creation order; an attempt
     never adds a position.
-28. `VerifiedExecutable` has compiler-derived closed public/trait allowlists
-    and is co-located with its sole consuming API in one dependency-leaf crate.
+28. `VerifiedExecutable` has defining-crate compiler ambiguity assertions,
+    focused compile-fail coverage, and external-seal tests, and is co-located
+    with its sole consuming API in one dependency-leaf crate.
     That safe Rust API preserves stdio, uses pinned safe command-fd mapping,
     and is the one permitted Rust invocation of the exact immutable Nix-built
     static C supervisor. Every first-party Rust crate remains
@@ -351,7 +352,6 @@ tests/
   test-rust.sh
   integration/distro-matrix/ubuntu-2404-tier1.sh
   host-integration/hardware/hardware-smoke-gpu-yubikey.sh
-  tools/api-surface-input-fingerprint.sh
   tools/assert-pinned-tests.sh
   tools/d2b-bazel-exec-supervisor/{supervisor.c,sandbox-crash-plant.c}
   tools/heavy-gate-reexec.sh
@@ -407,17 +407,9 @@ own the same file.
 
 ## Global Delivery Rules
 
-- Before each implementation wave, run a Track A plan panel using the
-  authoritative lifecycle selection. Apply every trigger and the applicable
-  floor from `.github/skills/d2b-panel-round/selection-table.json`, dispatch
-  exactly the ordered roster and per-seat profiles recorded by the selection,
-  and require unanimous signoff with empty recommendations from every selected
-  seat.
-- For fix verification, rerun selection over the full current candidate and
-  every fix delta, union each result into the lifecycle roster, never remove a
-  selected seat, and dispatch exactly the roster and profiles in the resulting
-  selection.
-- Reviewers inspect supplied validation and do not rerun gates.
+- Complete each implementation wave and its validation before starting a
+  dependent wave.
+- Reviewers inspect supplied validation and do not rerun gates unless asked.
 - Land an integrator prep commit before parallel scopes where shared contracts
   are needed.
 - Prep contracts are complete and green before dispatch. No parallel scope
@@ -572,9 +564,9 @@ The prep commit:
 - creates and registers the complete neutral support crate, including the
   filesystem, runfiles, startup interfaces, fakes, and provider behavior that
   runner, locator, xtask, and policy slices read;
-- adds `VerifiedExecutable` as a compiler-derived capability root with an
-  empty inherent API and empty locally-authored explicit-trait allowlist, exact
-  auto/blanket snapshot, and focused rustdoc compile-fail examples; no
+- adds `VerifiedExecutable` as a compile-time capability root with
+  defining-crate compiler ambiguity assertions, focused rustdoc compile-fail
+  examples, and external-seal tests; no
   Cargo-shelling compile fixture is created;
 - creates one dependency-leaf execution crate that owns
   `VerifiedExecutable` and the only public API that consumes it. The API uses
@@ -684,7 +676,7 @@ scope overlaps this ownership.
 
 | Slice | Owned files |
 | --- | --- |
-| `spec003w0-cargo-gates` | `Makefile`, `tests/test-rust.sh`, `tests/tools/assert-pinned-tests.sh`, `tests/tools/api-surface-input-fingerprint.sh`, `tests/static.sh`, `tests/cli-rust-native-common.sh`, `tests/tools/stub-no-socket.sh`, `tests/tools/heavy-gate-reexec.sh`, `tests/unit/gates/drift-check.sh`, `tests/unit/gates/performance-budgets.sh`, `tests/host-integration/hardware/hardware-smoke-gpu-yubikey.sh`, `tests/integration/distro-matrix/ubuntu-2404-tier1.sh`, `tests/unit/meta/ci-runner-regression.py`, `tests/golden/pinned/kernel-canaries.txt`, `tests/golden/pinned/usbip-firewall-skeleton.txt`, `tests/golden/pinned/host-prepare-network.txt`, `tests/golden/pinned/broker-socket-acl.txt`, `tests/golden/pinned/broker-export-audit.txt` |
+| `spec003w0-cargo-gates` | `Makefile`, `tests/test-rust.sh`, `tests/tools/assert-pinned-tests.sh`, `tests/static.sh`, `tests/cli-rust-native-common.sh`, `tests/tools/stub-no-socket.sh`, `tests/tools/heavy-gate-reexec.sh`, `tests/unit/gates/drift-check.sh`, `tests/unit/gates/performance-budgets.sh`, `tests/host-integration/hardware/hardware-smoke-gpu-yubikey.sh`, `tests/integration/distro-matrix/ubuntu-2404-tier1.sh`, `tests/unit/meta/ci-runner-regression.py`, `tests/golden/pinned/kernel-canaries.txt`, `tests/golden/pinned/usbip-firewall-skeleton.txt`, `tests/golden/pinned/host-prepare-network.txt`, `tests/golden/pinned/broker-socket-acl.txt`, `tests/golden/pinned/broker-export-audit.txt` |
 | `spec003w0-bazel-generator` | `.bazelversion`, `.bazelrc`, `MODULE.bazel`, `BUILD.bazel`, `bazel/BUILD.bazel`, `bazel/defs.bzl`, `bazel/toolchains.bzl`, `bazel/rules/sandboxed_action.bzl`, `bazel/cargo/README.md`, `bazel/cargo/BUILD.bazel`, `bazel/cargo/cargo_bazel.bzl`, `packages/xtask/src/bazel.rs`, `packages/xtask/src/package_policy.rs`, `packages/xtask/src/bazel_yanked.rs`, `packages/xtask/src/schema.rs`, `packages/xtask/src/hermeticity.rs`, `packages/xtask/tests/bazel_foundation.rs`, `packages/xtask/tests/bazel_module_refresh.rs`, `packages/xtask/tests/package_policy_refusals.rs`, `packages/xtask/tests/bazel_action_network.rs` |
 | `spec003w0-runner-foundation` | `packages/d2b-bazel-runner/src/exec_handle.rs`, `packages/d2b-bazel-runner/src/bin/d2b-exec-probe.rs`, `packages/d2b-bazel-runner/tests/exec_handle.rs` |
 | `spec003w0-locator-foundation` | `packages/d2b-test-locator/src/mode.rs`, `packages/d2b-test-locator/tests/mode_selection.rs` |
@@ -743,11 +735,6 @@ the sixteen exact package-policy files enumerated in tasks T026
 tests/unit/nix/pinned/common.txt
 tests/unit/nix/pinned/x86_64-linux.txt
 tests/unit/nix/pinned/aarch64-linux.txt
-tests/golden/api-surface/roots.json
-tests/golden/api-surface/capability-api.txt
-tests/golden/api-surface/capability-trait-impls.txt
-tests/golden/api-surface/hidden-public-api.txt
-tests/golden/api-surface/public-api.txt
 tests/golden/bazel-rust-coverage.json
 tests/golden/bazel-rust-artifact-baselines.json
 tests/golden/bazel-rust-query.json
@@ -843,7 +830,7 @@ All must be true:
   lock reports root product, generated guest, and walker locks only; unrelated
   lab, proof, and compile-fixture locks remain outside this assertion;
 - Cargo metadata reports broker and guest as root workspace members;
-- API fingerprinting and changed-scope Clippy derive the exact product
+- Changed-scope Clippy derives the exact product
   manifest paths and package names from locked offline root metadata;
   `packages/d2b-wlproxy-spike` and the closed nested fuzz/UI workspaces remain
   explicitly independent, `packages/policy-inputs` remains an explicit
@@ -859,9 +846,8 @@ All must be true:
   uses matching absolute startup options, emits the exact remediation, and is
   unreachable from Make and workflows;
 - retired hubs pass exact injected argv/cwd refusal tests;
-- the compiler-derived API census proves the closed `VerifiedExecutable`
-  public/hidden/inherent/trait surface, and focused rustdoc compile-fail
-  examples prove downstream construction, descriptor access, coercion,
+- defining-crate compiler ambiguity assertions, focused rustdoc compile-fail
+  examples, and external-seal tests prove downstream construction, descriptor access, coercion,
   formatting/serialization, duplication/conversion, and minting are absent;
   no Cargo-shelling compile fixture exists;
 - one dependency-leaf crate owns both `VerifiedExecutable` and its only
@@ -947,7 +933,7 @@ All must be true:
   Nix/toolchain/sandbox code, fixed causing input, exact repair, phase-valid
   rerun, byte-exact expectation, and wrong-remedy mutation;
   configured-target, `aquery`, and strategy inventories cover every stable/
-  nightly compile, build, setup, and test action and reject process, local,
+  governed Rust compile, build, setup, and test action and reject process, local,
   standalone, worker, remote, or other fallback. Inherited socket,
   ordinary-ring, SQPOLL-ring, and fixed-socket-ring plants refuse before load;
   setup-before-payload and all eight pre-action socket/io_uring plants return
@@ -1047,17 +1033,15 @@ All must be true:
   0038 unchanged;
 - every mutating check above leaves the candidate clean;
 - Cargo remains the required `test-rust` executor;
-- the selected-roster integrated-diff panel has unanimous signoff with empty
-  recommendations from every seat in its lifecycle selection;
 - the PR is sealed as `spec003w0` and merged.
 
 ## spec003w1 - Complete Bazel Coverage Carriers
 
 ### Deliverable
 
-All eighteen Bazel carriers, native first-party configured contexts, exact
+All seventeen Bazel carriers, native first-party configured contexts, exact
 coverage map, runner and locator implementation, offline supply-chain
-carriers, nightly API census, schema, no-bash, inventory, and execution-manifest
+carriers, schema, no-bash, inventory, and execution-manifest
 adapter. Cargo remains authoritative.
 
 ### Integrator prep
@@ -1100,7 +1084,6 @@ slice integration.
 | Slice | Owned files |
 | --- | --- |
 | `spec003w1-main` | `bazel/carriers/main.bzl`, `packages/d2b-bazel-runner/tests/main_topology.rs` |
-| `spec003w1-api` | `bazel/rules/channel_transition.bzl`, `bazel/rules/rustdoc_json.bzl`, `bazel/rules/tests/channel_transition.rs`, `bazel/rules/tests/rustdoc_json.rs` |
 | `spec003w1-broker` | `bazel/carriers/broker.bzl`, `packages/d2b-bazel-runner/tests/broker_topology.rs`, `packages/d2b-bazel-runner/tests/broker_exclusive.rs` |
 | `spec003w1-guest` | `bazel/carriers/guest.bzl`, `packages/d2b-bazel-runner/tests/guest_topology.rs` |
 | `spec003w1-supply-chain` | `bazel/vendor/repositories.bzl`, `bazel/supply_chain/BUILD.bazel`, `bazel/supply_chain/defs.bzl`, `packages/xtask/src/bazel_yanked.rs`, `packages/xtask/tests/bazel_yanked.rs`, `packages/xtask/tests/bazel_action_network.rs` |
@@ -1124,15 +1107,15 @@ both coverage/query goldens.
 Slices emit scratch previews only.
 
 `spec003w1-coverage` owns `packages/xtask/tests/policy_ci.rs` alone. It adds
-all six shadow Make targets (`test-bazel-rust`, `test-bazel-rust-main`,
-`test-bazel-rust-api`, `test-bazel-rust-broker`, `test-bazel-rust-aux`,
+all five shadow Make targets (`test-bazel-rust`, `test-bazel-rust-main`,
+`test-bazel-rust-broker`, `test-bazel-rust-aux`,
 and `bazel-shutdown`) to `APPROVED_MAKE_TARGETS` in the same wave that
 introduces them, with a positive test that every approved shadow name resolves
 to a rule in a supplied Makefile fixture and that a workflow step calling it
 is accepted, and
 negative tests that an unapproved `test-bazel-rust-<name>` call and an
 approved shadow name with no Makefile rule are both rejected. The integrated
-repository consistency form runs after the integrator adds the six entry
+repository consistency form runs after the integrator adds the five entry
 points and must be green on the candidate. The integrator reconciles `Makefile` and
 `ci/rust/BUILD.bazel`, then wires completed modules into the prep-owned runner,
 locator, and xtask roots; prep already owns Cargo manifests and their ordered
@@ -1144,7 +1127,6 @@ lock refresh.
 set -euo pipefail
 make test-bazel-rust
 make test-bazel-rust-main
-make test-bazel-rust-api
 make test-bazel-rust-broker
 make test-bazel-rust-aux
 D2B_EXECUTION_MANIFEST=.scratch/spec003w1-manifest.json make test-bazel-rust
@@ -1160,7 +1142,7 @@ selected broker and guest projections. Any difference fails validation.
 
 ### Mechanical done condition
 
-- coverage map has exactly eighteen IDs and no orphan carrier;
+- coverage map has exactly seventeen IDs and no orphan carrier;
 - every first-party crate is native and every configured context census is
   exact and nonempty;
 - product and walker containment checks pass;
@@ -1168,7 +1150,7 @@ selected broker and guest projections. Any difference fails validation.
 - all broker suites carry `tags = ["exclusive"]`, overlap no test, and the
   tag-removal mutation fails;
 - exact patched-Bazel startup identity plus generated configured-target,
-  `aquery`, and strategy inventories prove every governed stable/nightly
+  `aquery`, and strategy inventories prove every governed Rust
   compile, build, test-setup, and test action enters the patched Linux sandbox;
   no process/local/standalone/worker/remote or stage fallback exists;
   inherited socket/ring/SQPOLL/fixed-socket plants refuse before load,
@@ -1196,7 +1178,7 @@ selected broker and guest projections. Any difference fails validation.
   `no-shell-inventory-unguarded-spawn`,
   `no-shell-inventory-missing-zero-site-record`, and
   `no-shell-inventory-planted-shell`;
-- all six shadow Make targets appear in `APPROVED_MAKE_TARGETS`, each
+- all five shadow Make targets appear in `APPROVED_MAKE_TARGETS`, each
   resolves to a real Makefile rule, an unapproved `test-bazel-rust-<name>`
   call fails, and an approved shadow name with no Makefile rule fails;
 - schema performs two independent nonempty exact-census generations and its
@@ -1345,7 +1327,6 @@ feasibility measurement.
 ```bash
 set -euo pipefail
 make test-bazel-rust-main
-make test-bazel-rust-api
 make test-bazel-rust-broker
 make test-bazel-rust-aux
 make test-rust-main
@@ -1411,7 +1392,7 @@ under `.scratch/`.
 ### Evidence
 
 - ten consecutive matching qualification records;
-- eighteen isolated surface failure records;
+- seventeen isolated surface failure records;
 - exact Cargo and Bazel censuses;
 - five topology proofs and per-case publication;
 - twenty consecutive executions for each broker context with
@@ -1438,7 +1419,7 @@ under `.scratch/`.
 - module-refresh lock-only/idempotence/remediation evidence and both exact Nix
   output-hash results;
 - exact patched-Bazel source/patch/policy/output/executable/capability hashes,
-  startup probe, configured-target plus `aquery` stable/nightly action-kind
+  startup probe, configured-target plus `aquery` Rust action-kind
   coverage, sandbox strategy inventory, patch-removal and filter-load results,
   inherited socket/ring/SQPOLL/fixed-socket plants, setup-before-payload and
   all eight pre-action socket/io_uring plants, every fixed-code stage
@@ -1468,7 +1449,7 @@ identity; and every required containment-validator mutation result;
   fresh-scan/committed spawn-site-key equality, and all six relationship and
   planted-shell results.
 - enforcement records and advisory-classification mutations for
-  `test-flake-aarch64`, all four Rust slices, and `test-rust`.
+`test-flake-aarch64`, all three Rust slices, and `test-rust`.
 
 ### Mechanical done condition
 
@@ -1476,16 +1457,16 @@ identity; and every required containment-validator mutation result;
 record's immutable evidence references and returns success. The record contains
 no pending or incomparable item, binds one candidate commit where required,
 contains all seven containment results and every named validator mutation,
-contains no raw logs or attestations, passes both Rust aggregates and fixture
-companion validation, and is panel-signed, sealed as `spec003w4`, merged, and
+contains no raw logs or evidence payloads, passes both Rust aggregates and fixture
+companion validation, and is sealed as `spec003w4`, merged, and
 immutable.
 
 ## spec003w5 - Promotion and Promotion Record
 
 ### Deliverable
 
-Switch eighteen surfaces to Bazel, preserve fixture behavior and required
-context, replace eight CI leaves with four slices, remove shadow workflow,
+Switch seventeen surfaces to Bazel, preserve fixture behavior and required
+context, replace seven CI leaves with three slices, remove shadow workflow,
 perform ordered cache cutover, and record promotion in a follow-up.
 
 ### Integrator prep and ownership
@@ -1539,14 +1520,13 @@ input.
 ### Mechanical done condition
 
 - required context remains `test-rust`;
-- eighteen surfaces use Bazel and fixtures use existing path;
+- seventeen surfaces use Bazel and fixtures use existing path;
 - current Cargo and decomposed Bazel deny/audit/yanked status and normalized
   finding equality still holds for main, broker, and guest at the promotion
   candidate;
 - generated CI calls exactly `test-rust-slice-main`,
-  `test-rust-slice-api`, `test-rust-slice-broker`, and
-  `test-rust-slice-aux`;
-- all eight old public leaf names retain exact forwarding subsets, including
+  `test-rust-slice-broker`, and `test-rust-slice-aux`;
+- all seven old public leaf names retain exact forwarding subsets, including
   conditional fixture behavior in `test-rust-main`;
 - Bazel compatibility aliases print their exact stderr replacement lines,
   forward to the aggregate or matching authoritative slice, and preserve
@@ -1562,8 +1542,8 @@ input.
   prefixes omit run ID and commit SHA, and maintenance retains the newest
   complete generation;
 - binding docs, including `tests/README.md` and
-  `docs/reference/test-execution-manifest.md`, describe four Bazel slices
-  behind `test-rust` instead of eight Cargo leaves, list the exact permanently
+  `docs/reference/test-execution-manifest.md`, describe three Bazel slices
+  behind `test-rust` instead of seven Cargo leaves, list the exact permanently
   hybrid surface IDs and retained socket-using Cargo cases, state separate
   authorization is required for retirement, and contain no process markers;
 - the enforcing fixture-independent type-5 policy derives the exact nonempty
@@ -1585,7 +1565,7 @@ input.
   current atomic candidate HEAD and the recorded spec003w5 parent, reverts that
   exact atomic commit, and restores Cargo authority; `promotion-record.json`
   is read only after merge;
-- promotion PR is panel-signed, sealed as `spec003w5`, and merged;
+- promotion PR is reviewed, sealed as `spec003w5`, and merged;
 - the post-merge typed promotion-record validator proves the recorded SHA is
   the actual protected-`v3` PR merge and re-derives the exact sealed candidate,
   content, and snapshot identities; old-SHA, candidate-SHA, wrong-seal, and
@@ -1594,7 +1574,7 @@ input.
   page/stream-count, digest checkpoint and final-ten suffix derived from the
   complete transient protected-`v3` stream, persists no raw cursor, and is
   never an append-only full attempt history;
-- follow-up promotion record is panel-signed, sealed as `spec003w5fu1`, and
+- follow-up promotion record is reviewed, sealed as `spec003w5fu1`, and
   merged.
 
 ## spec003w6 - Compatibility Alias Removal
@@ -1672,14 +1652,14 @@ implementation files.
 The interface test is updated and observed failing before alias removal, then
 passes after the atomic T108 change. Only Bazel-specific aliases are removed;
 `make bazel-shutdown`,
-`make test-rust`, and all eight public leaf names remain; no workflow names a
+`make test-rust`, and all seven public leaf names remain; no workflow names a
 removed alias. In the same atomic change, diagnostic command version 1 is
 retired and version 2 makes every provider, sandbox-policy, qualification
 threshold/table, evidence/publication, cleanup, and recovery renderer, both
 module roots, every exact-message fixture, all five governed docs, the
 post-promotion alias fields, and the semantic fragment name only
 `make test-rust` or the enduring
-`make test-rust-slice-{main,api,broker,aux}` target. Version 1 remains only as
+`make test-rust-slice-{main,broker,aux}` target. Version 1 remains only as
 the pre-change fixture whose shadow rules all exist. A closed policy test
 proves no renderer or state label names a removed or nonexistent target. The
 type-5 hybrid disclosure census matches every governed doc and the
@@ -1711,12 +1691,11 @@ and derived validator result in
 spec003w7 qualification and code preparation may proceed before spec003w6.
 Its shared binding-doc and `post-promotion.json` task waits for merged
 spec003w6, rebases onto it, reruns the entire validation, and receives a new
-unanimous panel verdict from every seat in the widened lifecycle selection
-before merge.
+review before merge.
 
 ### Mechanical done condition
 
-Only Cargo implementations for the eighteen surfaces and unreachable
+Only Cargo implementations for the seventeen surfaces and unreachable
 Cargo-only plumbing are removed. Every public Rust Make name, all Bazel
 carriers, fixture mode, fixture IDs, and exact socket-using Cargo compatibility
 cases remain. Retirement docs and the semantic changelog list the permanently
@@ -1768,7 +1747,7 @@ old-rerun-after-failure fixtures prove both rules.
 | A provider is verified by descriptor but executed through a rebound path, or a runfiles leaf symlink is rejected by strict result-path flags. | One `O_RDONLY|O_CLOEXEC` handle with only `RESOLVE_NO_MAGICLINKS`, private-CLOEXEC same-open-file-description `execveat`, leaf-symlink and rebound tests, a mutation rejecting provider `RESOLVE_BENEATH`, and no fallback. |
 | A blocking observation or early reap defeats the independent grace timer. | Recording backend requires repeated `EXITED|NOWAIT|NOHANG`, full grace, unconditional kill, then reap. |
 | Cache restore prefixes become unique and never restore, or maintenance deletes the newest entry. | Run/SHA-free prefix fixtures and newest-generation retention test. |
-| A shadow Make target is introduced without an allowlist entry, so a shadow workflow escapes the ci-uses-make guard. | All six shadow names enter `APPROVED_MAKE_TARGETS` in the same wave, with an unapproved-call negative and an approved-name-without-Makefile-rule negative. |
+| A shadow Make target is introduced without an allowlist entry, so a shadow workflow escapes the ci-uses-make guard. | All five shadow names enter `APPROVED_MAKE_TARGETS` in the same wave, with an unapproved-call negative and an approved-name-without-Makefile-rule negative. |
 | A record qualifies because a boolean verdict field says so while its evidence reference is missing or points at another candidate. | Typed validator derives every threshold from immutable references and refuses omitted, forged, duplicate, inconsistent, and wrong-candidate references; a disagreeing boolean mirror is a refusal. |
 | A new runner source spawns a shell and is never scanned because the governed set was implied. | Generated nonempty no-shell inventory compared bidirectionally against governed sources and declared inputs, with empty, missing, extra, and planted-shell plants. |
 | The module lock is refreshed before the walker hub, so it pins a stale walker input that the next repin invalidates. | Split refresh authorities commit `MODULE.bazel.lock` last in every order and prove the untouched hub's inputs byte-identical. |
@@ -1776,7 +1755,7 @@ old-rerun-after-failure fixtures prove both rules.
 | A two-component or unpushed tag containing the promotion commit is accepted as a release. | Anchored `^v[0-9]+\.[0-9]+\.[0-9]+$` match plus origin resolution and non-draft release checks. |
 | A rerun of an old run inflates the streak or reorders behind newer failures. | Streak positions are distinct push-created (run ID, head SHA) units ordered by `createdAt` then run ID, with repeated-attempt and old-rerun-after-failure fixtures. |
 | The pre-merge rollback rehearsal reads a promotion record that does not exist yet and silently rehearses nothing. | Rehearsal resolves the candidate from verified candidate HEAD and the recorded spec003w5 parent; promotion-record reads are post-merge only. |
-| A verified executable becomes forgeable or descriptor-revealing through a harmless-looking trait, formatter, serializer, constructor, or accessor. | Compiler-derived closed public/hidden/inherent/explicit/auto/blanket API snapshots plus focused rustdoc compile-fail examples. |
+| A verified executable becomes forgeable or descriptor-revealing through a harmless-looking trait, formatter, serializer, constructor, or accessor. | Defining-crate compiler ambiguity assertions plus focused rustdoc compile-fail and external-seal tests. |
 | The immutable helper is rebound, fd 0 stops being stdin, a mapped descriptor is wrong, concurrent launches use separate signal guards, restoration follows unlock, inherited `SIG_IGN` is silently overridden, group creation races `READY`, empty EOF or a wrong stop false-confirms exec, detach fails after the event, or a fast target exit is mistaken for a helper crash with the same status. | The dependency-leaf safe Rust consumer uses the exact static C Nix output, reviewed safe command-fd mapping, and one serialized safe `SigSet` mask handoff at its invocation site. Capture/block/poison/restoration and overlap mutations prove restore-before-unlock. The child completes descriptor setup, enters `PTRACE_TRACEME`, restores final signal state, and raises the initial stop in that order; the supervisor confirms group/direct-parent/wait/tracing state, installs `PTRACE_O_TRACEEXEC`, emits `READY`, releases with zero signal, accepts only exact kernel `PTRACE_EVENT_EXEC`, and detaches with zero signal before `EXECUTED`. Pre-exec signals/death/fault/EOF/wrong-event/detach failure publish no execution. Platform/kernel/Yama, static request/constant-argument seccomp, dynamic child identity, wrong-pid/nonchild refusal, unchanged no-network, framed-status, identity, stdio, CLOEXEC, transport, recovery, cleanup, wait, and reap plants cover every stage without Rust unsafe. |
 | The supervisor crashes after forking and leaves a target or daemonized descendant alive, Rust cleanup signals a reused numeric identity, or recovery destroys the only wait owner before reap. | The patched Bazel sandbox creates one fresh PID namespace whose original live monitor survives the action tree and remains sole wait owner. Its fixed ceiling bounds userspace escalation and the close-or-quarantine decision, while pending kernel cleanup remains quarantined, failed, and non-reusable until that monitor publishes consuming-reap release. The governed runbook drains without terminating it and forbids reboot, early retry, replacement waiter, and manual release. Real crash-stage, descendant, beyond-ceiling, byte-exact diagnostic/link/release, and recovery mutations prove the boundary. |
 | Inherited `SIGPIPE`, non-waitable `SIGCHLD`, a pending managed signal, an ignored managed disposition, or a stalled short-I/O loop defeats supervision. | Safe Rust block-before-spawn and restore-before-unlock, helper first-operation ignored-disposition refusal, typed closed-reader `EPIPE`, default waitable `SIGCHLD`, confirmed group before `READY`, no forwarding or grace before `EXECUTED`, deterministic pre-exec setup termination, no-deadline external-TERM escalation, single-record exec-error, and stateful framed-status tests cover every boundary. |
@@ -1928,7 +1907,7 @@ After the desired waves:
     canonical patch/monitor identity digest, cleanup/quarantine outcome, and
     validator mutation result, and contains no raw PID, descriptor, path,
     process output, or opaque identity.
-23. API fingerprint and changed-scope selection join locked offline
+23. Changed-scope selection joins locked offline
     root-workspace `workspace_members` to manifest paths and Cargo package
     names; broker and guest are product members, every independent workspace
     has the closed classification, `packages/policy-inputs` is generated

@@ -10,7 +10,7 @@ use d2b_contract_tests::load_bundle_resolver_from_env;
 // policy-compliant end-to-end. The NEGATIVE half (synthetic rejection cases)
 // lives in d2b-core unit tests over validate_minijail_profiles.
 //
-// RETIREMENT PREREQUISITES (W3 security panel findings) before retiring
+// RETIREMENT PREREQUISITES (W3 security findings) before retiring
 // static-invariant-uid0 / minijail-validator-*:
 //   - validate_minijail_profiles treats `adr_carve_out: Some(_)` as
 //     sufficient and accepts Some(""); the bash gate required an ADR-like

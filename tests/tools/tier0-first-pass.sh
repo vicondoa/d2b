@@ -33,11 +33,6 @@ DASHES=(
   $'\u2015' $'\u2212' $'\uFE58' $'\uFF0D'
 )
 
-# Historical regression sentinel, not a scan admission: Caveman LICENSE
-# SHA-256 5eb826cd03151bcc7cce3f80d40e87733237fedfc6c36d6908aca5fd650a0bdb.
-# Vendored prose is normalized to ASCII hyphens and every vendor path is
-# scanned with the rest of the repository.
-
 # A process marker is a delimited wave (`W3`, `W4-fu`, `W1fu3`), phase
 # (`P6`, `P2.3`, `ph6`), follow-up (`fu3`), high finding (`H20`),
 # contextual finding/revision (`finding M2`, `revision R5`), or reviewer finding
@@ -49,7 +44,7 @@ DASHES=(
 # Lowercase wave tags are recognized only in path-shaped filenames, such as
 # a lowercase wave prefix followed by a distro name; this avoids treating
 # ordinary prose tokens as process tags.
-PROCESS_MARKER_RE='(^|[^[:alnum:]_-])W[0-9]+((fu|a)[0-9]*|-(fu|followup)([0-9]+)?)?([^[:alnum:]_]|$)|[[:alnum:]_]-W[0-9]+((fu|a)[0-9]*|-(fu|followup)([0-9]+)?)?([^[:alnum:]_]|$)|(^|[^[:alnum:]_-])P[0-9]+([.][0-9]+)?([^[:alnum:]_]|$)|[[:alnum:]_]-P[0-9]+([.][0-9]+)?([^[:alnum:]_]|$)|(^|[^[:alnum:]_])(ph|fu)[0-9]+([^[:alnum:]_]|$)|(^|[^[:alnum:]_])H[0-9]{1,2}([^[:alnum:]_]|$)|(^|[^[:alnum:]_])(finding|recommendation|review|panel|round|revision)[[:space:]#:_-]+[CHMLR][0-9]+([^[:alnum:]_]|$)|[(][[:space:]]*(software|test|nixos|networking|security|rust|product|docs|observability|kernel)-[0-9]+[[:space:]]*[)]'
+PROCESS_MARKER_RE='(^|[^[:alnum:]_-])W[0-9]+((fu|a)[0-9]*|-(fu|followup)([0-9]+)?)?([^[:alnum:]_]|$)|[[:alnum:]_]-W[0-9]+((fu|a)[0-9]*|-(fu|followup)([0-9]+)?)?([^[:alnum:]_]|$)|(^|[^[:alnum:]_-])P[0-9]+([.][0-9]+)?([^[:alnum:]_]|$)|[[:alnum:]_]-P[0-9]+([.][0-9]+)?([^[:alnum:]_]|$)|(^|[^[:alnum:]_])(ph|fu)[0-9]+([^[:alnum:]_]|$)|(^|[^[:alnum:]_])H[0-9]{1,2}([^[:alnum:]_]|$)|(^|[^[:alnum:]_])(finding|recommendation|review|revision)[[:space:]#:_-]+[CHMLR][0-9]+([^[:alnum:]_]|$)|[(][[:space:]]*(software|test|nixos|networking|security|rust|product|docs|observability|kernel)-[0-9]+[[:space:]]*[)]'
 PROCESS_MARKER_FILENAME_RE='(^|[-_.])(W|w|P)[0-9]+((fu|a)[0-9]*|-(fu|followup)([0-9]+)?)?([-_.]|$)'
 
 # Shrink-only legacy debt ratchet. The committed pin partitions one frozen path
@@ -171,13 +166,14 @@ scan_dashes() {
   if [ -n "$toplevel" ] && [ "$(cd "$toplevel" && pwd -P)" = "$root" ]; then
     (cd "$root" && git ls-files -z --cached --others --exclude-standard) \
       | {
-          while IFS= read -r -d '' f; do
-            # `git ls-files --cached` includes tracked paths deleted in a
-            # shared dirty worktree. Do not hand vanished paths to grep; a
-            # file that disappears after this snapshot still fails closed.
-            [ -e "$root/$f" ] && files+=("$f")
-          done
-        }
+        while IFS= read -r -d '' f; do
+          # `git ls-files --cached` includes an unstaged deletion. A removed
+          # path is not part of the shipped tree and must not be handed to
+          # grep as if it were an unreadable file.
+          [ -e "$root/$f" ] || [ -L "$root/$f" ] || continue
+          files+=("$f")
+        done
+      }
   else
     (cd "$root" && find . -name .git -prune -o -name target -prune -o -type f -print0) \
       | { while IFS= read -r -d '' f; do files+=("${f#./}"); done; }
@@ -256,10 +252,11 @@ scan_process_markers() {
     is_repo_root=1
     (cd "$root" && git ls-files -z --cached --others --exclude-standard) \
       | {
-          while IFS= read -r -d '' f; do
-            [ -e "$root/$f" ] && files+=("$f")
-          done
-        }
+        while IFS= read -r -d '' f; do
+          [ -e "$root/$f" ] || [ -L "$root/$f" ] || continue
+          files+=("$f")
+        done
+      }
   else
     (cd "$root" && find . -name .git -prune -o -name target -prune -o -type f -print0) \
       | { while IFS= read -r -d '' f; do files+=("$f"); done; }

@@ -36,7 +36,7 @@ the first milestone.
    same kernel and control-plane requirements.
 4. Tier 2 BEST-EFFORT, after Tier 1, is Arch rolling on x86_64.
 5. The following are UNSUPPORTED at the first milestone and require a
-   separate ADR plus panel review to add: macOS with vfkit, WSL,
+   separate ADR plus maintainer review to add: macOS with vfkit, WSL,
    containers as hosts, Alpine or other musl hosts, non-systemd
    autostart, rootless Nix, Firecracker feature parity, crosvm as a full
    VMM, and aarch64 runtime graphics or audio.
@@ -80,7 +80,7 @@ the first milestone.
    surface.
 4. Negative: Operators on otherwise attractive targets such as Fedora,
    Arch, macOS, WSL, rootless Nix, Firecracker, or crosvm-as-VMM must
-   wait for follow-up ADRs and panel gates.
+   wait for follow-up ADRs and their acceptance gates.
 5. Neutral: Aarch64 remains part of the cross-evaluation story, but not
    a first-milestone runtime graphics or audio target.
 

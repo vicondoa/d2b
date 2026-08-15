@@ -3,14 +3,12 @@
 **Feature**: `001-adr046-d2b3-completion` | **Date**: 2026-07-29
 
 This document summarizes the resource object model the program must make live. It is a
-**navigational summary, not a redefinition**. The normative source for every field, rule, and
-state machine is the ADR-046 specification set; each section cites its owning spec. Where this
-document and a spec disagree, the spec wins.
+**navigational summary, not a redefinition**. The normative source for every field, rule, and state machine is the owning product contract;
+each section cites its owning architectural spec. Where this document and a spec disagree,
+committed code and the current contract win.
 
 **Completeness**: this file deliberately does not enumerate every field of every type - that
-lives in the specs and in the generated `docs/reference/schemas/v3/` bytes. For the coverage
-proof that every one of the 55 specs and 545 work items is accounted for, and for the binding
-rule that `detailedDesign` and `validation` text is carried verbatim rather than paraphrased,
+lives in the specs and in the generated `docs/reference/schemas/v3/` bytes. For the cross-artifact coverage map for the product requirements and their focused evidence,
 see [spec-coverage.md](./spec-coverage.md).
 
 ---
@@ -175,7 +173,7 @@ Owning specs: `ADR-046-resource-api-and-authorization`, `ADR-046-componentsessio
 | **Owned state** | Provider-owned durable state lives in a `Volume` with declared persistence and sensitivity class |
 | **Effect port** | The only way a Provider causes a host effect. A Provider never receives a raw host path or unmediated privilege (FR-012, D077) |
 
-Provider families for W6 parallelism: credentials; interaction; storage/network/device;
+Provider families for parallel implementation: credentials; interaction; storage/network/device;
 system/host/guest; transport/observability/activation.
 
 Owning specs: `ADR-046-provider-model-and-packaging`, `ADR-046-provider-state`,
@@ -183,149 +181,20 @@ Owning specs: `ADR-046-provider-model-and-packaging`, `ADR-046-provider-state`,
 
 ---
 
-## 7. Delivery entities
-
-These are program-tracking entities, not runtime resources, but acceptance criteria reference
-them (FR-025 through FR-045).
-
-| Entity | Key attributes | State |
-| --- | --- | --- |
-| **Wave** | id `W0`-`W8`, member specs, parallel groups, entry and exit criteria | entered, snapshotted, panelled, sealed, merged |
-| **Work item** | `workItemId`, owning `specId`, exact destination paths, validation obligations, `reuseAction` | `Planned` -> `Merged` (68 of 545 at receipt HEAD; 477 remain `Planned`) |
-| **Candidate snapshot** | `candidate_id`, `content_id`, `snapshot_sha256`, base and head OIDs, expected pull requests | immutable; any content change invalidates it |
-| **Panel receipt** | one current `PanelRecord` per selected seat from the current thirteen-seat role domain, 15 fields including required `panel_format_version`, with pinned provider/model/reasoning effort; legacy historical records have 14 fields and no `panel_format_version` | `signoff` true iff `recommendations` is empty; candidate-bound selection may only widen over fix deltas; current writers and validators require 15 fields while legacy readers retain the 14-field compatibility path |
-| **Seal** | binds candidate, content, and snapshot digests after all lanes and the panel pass | requires every wave work item `Merged` |
-
-Delivery state lives outside the repository at `$XDG_STATE_HOME/d2b/delivery` and the tooling
-refuses any root inside a git working tree, which enforces FR-027's "never committed" rule
-structurally rather than by convention.
-
-Owning spec: `ADR-046-validation-and-delivery`.
-
----
-
-## 8. Validation rules traceable to requirements
+## 7. Validation rules traceable to requirements
 
 | Rule | Requirement | Where enforced |
 | --- | --- | --- |
-| Resource name and Zone qualification regex | FR-001 | Nix eval assertions, schema |
+| Resource name and Zone qualification regex | FR-001 | Nix eval assertions and schema |
 | Stale-revision write is refused | FR-004 | store conflict detection |
 | Effect requires consumed commit proof | FR-006 | controller toolkit |
-| Cross-Zone ordinary reference refused | FR-009 | resource API authorization |
-| Caller-supplied subject refused | FR-008 | Zone registrar, compile-time seal |
-| No secret, path, or PII in telemetry or audit | FR-018 | redaction policy lints |
-| Mutation identity is `(Zone, operation_id)` and old IDs fail closed after bounded expiry | FR-070 | store/CLI restart, cross-Zone concurrency, response-loss, and expiry tests |
-| Raw Zone/resource/operation/correlation/trace identity is absent from telemetry and audit | FR-070 | typed-digest, redaction, cardinality, and no-relabel tests |
-| Generated artifact matches source | FR-031 | `make test-drift`, fail-closed |
-| Capability with promised successor reaches parity | FR-041 | per-path removal proof + parity check |
-| Capability without successor is listed and justified | FR-042 | explicit retirement list + release notes |
+| Cross-Zone ordinary reference refused | FR-009 | Resource API authorization |
+| Caller-supplied subject refused | FR-008 | Zone registrar and compile-time API checks |
+| No secret, path, or PII in telemetry or audit | FR-018 | redaction policy tests |
+| Mutation identity is (Zone, operation_id) and old IDs fail closed after bounded expiry | FR-070 | store/CLI restart, concurrency, and expiry tests |
+| Raw identity is absent from telemetry and audit | FR-070 | typed-digest and no-relabel tests |
+| Generated artifact matches source | FR-031 | owning generator and focused artifact-drift test |
+| Capability with promised successor reaches parity | FR-041 | per-path removal proof and parity check |
+| Capability without successor is listed and justified | FR-042 | explicit retirement list and release notes |
 
----
-
-## 9. SC-002 Version 2 authority reference
-
-This feature artifact is not the SC-002 protocol authority. The sole normative source is the
-accepted Version 2 of
-[`ADR-046-validation-and-delivery`](../../docs/specs/ADR-046-validation-and-delivery.md),
-together with its generated schemas, fixtures, and generated traceability artifacts:
-`docs/specs/ADR-046-validation-and-delivery-traceability.{json,md}`. The current external
-specification is Version 1, so every consumer below remains blocked until Version 2 is
-accepted, the generated artifacts are present, Gate 0 passes, and that commit is an ancestor
-of the consumer base.
-
-Version 2 and the generated traceability table MUST publish these stable identifiers:
-
-| Identifier | Sole owned subject |
-| --- | --- |
-| `VD2-SC002-RECEIPT` | activation receipt, evidence-record reference, and close-stage validation |
-| `VD2-SC002-PUBLICATION` | candidate-local publication, locking, retention, and crash recovery |
-| `VD2-SC002-INCIDENT` | incident preimage, state, evidence, and redaction |
-| `VD2-SC002-DISPOSITION` | successor freeze, authority request, signed disposition, apply, and admission |
-| `VD2-SC002-RECOVERY` | inspectable states, emitted actions, exact invocations, exits, and convergence |
-| `VD2-SC002-SOURCE-FLOOR` | installed source-generation compatibility evidence and capability consumption |
-| `VD2-SC002-REGISTRIES` | independently authored fixture and poison registries with generated ownership traceability |
-| `VD2-SC002-TRACEABILITY` | bijection from every identifier to schema, fixture, implementation owner, task, and gate |
-
-The generated JSON is the machine authority and the generated Markdown is its review view.
-Generation MUST fail on a missing, duplicate, extra, or ownerless identifier and drift gates
-MUST compare both artifacts byte-for-byte. Retired consumers remain fenced history.
-Prospective evidence ownership resolves only from authoritative member specs and generated
-manifests. No feature-local field list, count, digest recipe, state table,
-fixture registry, or transition matrix may substitute for generated rows.
-
----
-
-## 10. Installed source-floor evidence
-
-`SourceGenerationCompatibilityFloorV1` is a stable type identifier, not a feature-local
-schema. Its canonical encoding, fields, digests, signatures, capability rules, receipts,
-fixtures, poison registries, and transitions are owned solely by accepted Version 2 through
-`VD2-SC002-SOURCE-FLOOR`, `VD2-SC002-REGISTRIES`, and
-`VD2-SC002-TRACEABILITY`.
-
-Code canon contains no source-floor or host-generation handoff implementation. Prospective
-ownership and ordering resolve only from authoritative member specs and generated manifests.
-No feature-local field list, digest recipe, fixture census, registry count, or transition
-copy substitutes.
-
----
-
-## 11. Immutable Wave 5 historical predecessor
-
-<!-- RETIRED-READONLY-BEGIN -->
-
-The former actionable retained-request disposition model is superseded. Constitution 3.1.0
-supplies only the generic historical-process disposition. This feature and the exact delivery
-validator/tooling contract accept the following state only as closed ADR-046 history through merged Wave 5 commit
-`177235ed37188b3be87525e7f016fb43401574c5`:
-
-| Attribute | Exact accepted value |
-| --- | --- |
-| Delivery address | `adr046w5` |
-| Candidate | `d20267eec23f90b9cd6931e4bd322b66e259533849c8170617fbd002381493a4` |
-| Embedded snapshot identity | `7a04d9b86df6c8b8704b4bd79ddc25603fedae47d1a521f0b6fa420451816c3a` |
-| `snapshot.json` SHA-256 | `dcf4d71a572bdf0766de557dde6b8ede7fd680eb9f85572238575d2ab5c82149` |
-| Head | `19b77dad63060bcadd41f1ef800978d2c53cc030` |
-| `panel-request.json` SHA-256 | `15f49657490410f0fb5530513144c7c2392f567b211eb630551f3110b94633f7` |
-| Candidate root entries | exactly `evidence/`, `panel-request.json`, and `snapshot.json` |
-| Evidence root | exactly `evidence/local-host/` |
-| Evidence tree SHA-256 | `7deb84943d36962493422407ac74342fd598b2fea4970ea1a162942e25cfd33d` over the sorted `(local-host/<name>, file SHA-256)` manifest |
-| Attestations | `0` |
-| Seal | absent |
-
-The exact `evidence/local-host/` inventory is:
-
-| File | SHA-256 |
-| --- | --- |
-| `check-inventory.json` | `785c51649f64bde6f4eff74468527b0702d0fafadf8dc6dc25eaee6a19f429fe` |
-| `redb-full-scale-proof.json` | `2a62cc326b790d4427e061ae0bd078fca5d612d33b6dcd2afc9f85cd9d2f843a` |
-| `redb-rss-spike-observation.json` | `937a9dc9082d96bb0e3662ba3f25c8c81810251587c91537eb80e6c0e403f4db` |
-| `resource-api-external-seals.json` | `9b3ce360d61d0494ec3ff677fc2527cf19d60cd190e40caf0d0f77dda14fef84` |
-| `resource-store-redb-seal-tests.json` | `9b9190f5d6a504b77e575f5e897abb19845512ade5a6287f9ee3c7b0ef913a30` |
-| `test-changelog.json` | `99be704ff0e630220b07d5d218e278646a4396dd04b16e0ad7b4e986ccdf4188` |
-| `test-drift.json` | `56d057624da3c74a2bff79851a4e43a0b989b996963223031793984c2201c9b9` |
-| `test-fixture-contracts.json` | `4a219d8ddb0f376a54072697c3e8cfa98d0918ea7d2eb0962f257407e73c6490` |
-| `test-flake.json` | `1c308adf388ad1c23b1e9135ed2791eadbec124ac3b84e313fac9b428070614f` |
-| `test-lint.json` | `ce4d6477c8e97817d34c4ca02f2ade7dd67f867f44b8d16aef207439e549db3c` |
-| `test-nix-unit.json` | `d2d7c5ae80dd8208ea63a2b44e365065630a7a58ac5ae4ce5da62155482d7d79` |
-| `test-policy.json` | `1a09ca7847d704fb0bcd5a44d11da91ce8ef1b1da2f8efddb9c6d789ac6835f4` |
-| `test-proofs.json` | `7486df6fdca37b631273bf2258dc7881b9bf99148f2ca5cfd6425def77f74c0a` |
-| `test-runtime-ledger.json` | `8af159ac146bc577d5d831b40ead290fcc74a78062c2d45cdde0011cb4d3c3ac` |
-| `test-rust-api-surface.json` | `6a5c25058ae63e6e805a01055d9b69a75929832e8644b68ec7d2b62c00ba718a` |
-| `test-rust.json` | `d5e5b5ca2074f347bd3ee18fa3d516f812769228373c048ba0875c5e93e4ea60` |
-| `tier0.json` | `cfdf94766f0814b53389c9f1a07db8b582e32fb2e26aa194742014586ba76317` |
-
-The Wave 6 production guard accepts no equivalent-looking substitute. It requires the exact
-fetched `origin/v3` base, the merged Wave 5 boundary, and the unique integration commit on
-that base's first-parent lineage after the boundary whose tree contains the exact accepted
-generic Constitution 3.1.0 bytes.
-It matches every root entry and digest above, rejects every extra or missing artifact, and is
-rechecked at Wave 6 snapshot/entry, panel request, seal, and merge eligibility.
-
-No transition leaves this historical state. There is no recovery action, second request,
-retroactive attestation, reconstructed seal, replacement candidate, or import record.
-Historical T219 records the disposition only. T221 consumes the production guard result before
-the ordinary prospective Wave 6 plan panel. The guard provides process-integrity and signoff
-tracking; it is not authentication and does not establish a security boundary.
-
-<!-- RETIRED-READONLY-END -->
+Architectural ADR references in the model explain existing interfaces and trust boundaries.

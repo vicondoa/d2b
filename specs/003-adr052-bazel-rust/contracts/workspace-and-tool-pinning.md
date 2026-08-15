@@ -50,7 +50,7 @@ Paths below `packages/` have this closed classification:
 | --- | --- | --- |
 | Product member | Rows joined from root metadata `workspace_members` | Use the joined manifest path and package name. |
 | Independent workspace | `packages/d2b-wlproxy-spike/`, `packages/d2b-core/fuzz/`, `packages/d2b-bus/tests/ui/public-api-mutations/`, `packages/d2b-controller-toolkit/tests/ui/external-seals/`, `packages/d2b-resource-api/tests/ui/external-seals/` | Never emit a root-workspace `-p` selector. Their owning standalone or compile-fixture gate remains unchanged. The deepest matching independent root wins over a containing product root. |
-| Generated non-crate | `packages/policy-inputs/` | Never require `Cargo.toml`, enter the API fingerprint, or emit a Cargo selector. Drift and package-policy checks own it. |
+| Generated non-crate | `packages/policy-inputs/` | Never require `Cargo.toml` or emit a Cargo selector. Drift and package-policy checks own it. |
 | Workspace administration | `packages/Cargo.toml`, `packages/Cargo.lock`, `packages/Cargo.guest.lock`, `packages/deny.toml`, `packages/rust-toolchain.toml`, `packages/.cargo/`, `packages/.config/` | Select the exact root-wide contexts assigned to that input; these are not crates. |
 | Ignored output | `packages/target/` and the declared gate-owned target directories | Never enter source discovery or changed-scope selection. |
 
@@ -443,7 +443,7 @@ through `socket`, `socketpair`, descriptor import through `pidfd_getfd`, and
 all three io_uring entry points. The exact syscall and eight-plant inventories
 are closed in `coverage-map.md`. Every action receives tools, sources, yanked snapshot, and the pinned RustSec
 database as declared inputs. Configured-target, `aquery`, and strategy
-inventories cover every stable/nightly action kind. Governed execution accepts
+inventories cover every governed Rust action kind. Governed execution accepts
 only the patched Linux `sandboxed` strategy and rejects `process`, `local`,
 `standalone`, `worker`, `remote`, `no-sandbox`, a network-enabling tag, or any
 fallback.

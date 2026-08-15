@@ -1531,7 +1531,7 @@ The four required fixture subdirectories and their coverage obligations:
 
 ### Fast hermetic execution and test placement (D094)
 
-Per D094 and `ADR-046-validation-and-delivery` §10.16, this Provider's `src/`
+Per D094 and the repository's test-budget guidance, this Provider's `src/`
 unit tests and `tests/*.rs` hermetic suite are fast, in-process, deterministic,
 and parallel-safe: an individual normal test has an advisory wall-clock p95
 diagnostic threshold of <=50 ms; gate enforcement is aggregate per-crate
