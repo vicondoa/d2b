@@ -210,7 +210,6 @@ fn apply_locked<E: HandoffEffect>(
         let coordinator = request
             .intent
             .compatibility
-            .clone()
             .begin_handoff(
                 request.intent.source_generation,
                 request.intent.target_generation,

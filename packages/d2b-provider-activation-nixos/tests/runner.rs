@@ -53,6 +53,18 @@ fn runner_preserves_source_on_refusal_and_failure() {
 }
 
 #[test]
+fn runner_success_does_not_preserve_the_source_generation() {
+    let result = ActivationRunner
+        .run(
+            &request("Host/dev"),
+            &FixedHelper(Ok(RunnerOutcomeCode::Succeeded)),
+        )
+        .expect("helper outcome");
+    assert_eq!(result.outcome, RunnerOutcomeCode::Succeeded);
+    assert!(!result.source_generation_preserved);
+}
+
+#[test]
 fn runner_rejects_untrusted_helper_output() {
     assert_eq!(
         ActivationRunner::parse_helper_output(br#"{"outcome":"failed"}"#),

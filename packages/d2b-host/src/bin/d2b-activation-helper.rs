@@ -278,12 +278,22 @@ fn digest_store_path_with_root(
 }
 
 fn active_system_path() -> Result<std::path::PathBuf, CatalogError> {
-    let target =
-        std::fs::read_link("/run/current-system").map_err(|_| CatalogError::ActiveGeneration)?;
+    system_profile_path("/run/current-system")
+}
+
+fn boot_default_system_path() -> Result<std::path::PathBuf, CatalogError> {
+    system_profile_path("/nix/var/nix/profiles/system")
+}
+
+fn system_profile_path(path: &str) -> Result<std::path::PathBuf, CatalogError> {
+    let target = std::fs::read_link(path).map_err(|_| CatalogError::ActiveGeneration)?;
     let absolute = if target.is_absolute() {
         target
     } else {
-        std::path::Path::new("/run").join(target)
+        std::path::Path::new(path)
+            .parent()
+            .ok_or(CatalogError::ActiveGeneration)?
+            .join(target)
     };
     if absolute.parent() != Some(std::path::Path::new("/nix/store"))
         || absolute.file_name().is_none()
@@ -291,6 +301,21 @@ fn active_system_path() -> Result<std::path::PathBuf, CatalogError> {
         return Err(CatalogError::ActiveGeneration);
     }
     Ok(absolute)
+}
+
+fn activation_probe_matches(
+    mode: d2b_contracts::v3::ActivationMode,
+    store_path: &std::path::Path,
+    active_path: Option<&std::path::Path>,
+    boot_path: Option<&std::path::Path>,
+) -> bool {
+    match mode {
+        d2b_contracts::v3::ActivationMode::Boot => boot_path == Some(store_path),
+        d2b_contracts::v3::ActivationMode::Switch | d2b_contracts::v3::ActivationMode::Test => {
+            active_path == Some(store_path)
+        }
+        d2b_contracts::v3::ActivationMode::Adopt => false,
+    }
 }
 
 fn resolve_system_artifact(
@@ -1086,7 +1111,15 @@ fn cmd_apply_generation() -> ExitCode {
                     };
                     match Command::new(&script).arg(mode_arg).status() {
                         Ok(status) if status.success() => {
-                            if active_system_path().ok().as_ref() == Some(&store_path) {
+                            let active = active_system_path().ok();
+                            let boot = boot_default_system_path().ok();
+                            let verified = activation_probe_matches(
+                                request.activation_mode,
+                                &store_path,
+                                active.as_deref(),
+                                boot.as_deref(),
+                            );
+                            if verified {
                                 ActivationHelperOutcome::Succeeded
                             } else {
                                 ActivationHelperOutcome::Failed
@@ -1274,6 +1307,7 @@ fn main() -> ExitCode {
 mod tests {
     use super::*;
     use std::fs;
+    use std::path::Path;
 
     #[test]
     fn package_digest_includes_bytes_read_through_store_symlinks() {
@@ -1301,5 +1335,34 @@ mod tests {
 
         assert_ne!(first, second);
         let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn boot_activation_uses_boot_default_not_active_runtime() {
+        let requested = Path::new("/nix/store/new-system");
+        let active = Path::new("/nix/store/old-system");
+        assert!(activation_probe_matches(
+            d2b_contracts::v3::ActivationMode::Boot,
+            requested,
+            Some(active),
+            Some(requested),
+        ));
+        assert!(!activation_probe_matches(
+            d2b_contracts::v3::ActivationMode::Boot,
+            requested,
+            Some(requested),
+            Some(active),
+        ));
+    }
+
+    #[test]
+    fn failed_activation_probe_does_not_claim_success() {
+        let requested = Path::new("/nix/store/new-system");
+        assert!(!activation_probe_matches(
+            d2b_contracts::v3::ActivationMode::Boot,
+            requested,
+            None,
+            None,
+        ));
     }
 }

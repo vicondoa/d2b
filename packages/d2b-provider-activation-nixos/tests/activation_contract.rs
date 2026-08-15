@@ -15,6 +15,17 @@ fn spec() -> NixosGenerationSpec {
     .unwrap()
 }
 
+fn spec_with_mode(mode: ActivationMode) -> NixosGenerationSpec {
+    NixosGenerationSpec::new(
+        ResourceRef::parse("Provider/activation-nixos").unwrap(),
+        ResourceRef::parse("Guest/dev-vm").unwrap(),
+        "dev-vm-system",
+        mode,
+        None,
+    )
+    .unwrap()
+}
+
 fn caller() -> ActivationCaller {
     ActivationCaller::new(
         CallerRole::Lifecycle,
@@ -79,6 +90,74 @@ fn adopted_outcome_is_rejected_for_switch_mode() {
     assert_eq!(
         result.unwrap_err(),
         d2b_provider_activation_nixos::ActivationError::OutcomeMismatch
+    );
+}
+
+#[test]
+fn adopt_mode_accepts_adoption_without_starting_a_runner() {
+    let controller = ActivationController::new(3);
+    let adopt = spec_with_mode(ActivationMode::Adopt);
+    let pending = controller
+        .reconcile(
+            &adopt,
+            &caller(),
+            &[],
+            GenerationObservation::new("gen-7", GenerationPhase::Pending),
+        )
+        .unwrap();
+    assert!(pending.runner_requests().is_empty());
+
+    let result = controller
+        .apply_runner_result(
+            &adopt,
+            ActivationOutcomeCode::Adopted,
+            GenerationObservation::new("gen-6", GenerationPhase::Ready),
+        )
+        .unwrap();
+    assert_eq!(result.phase(), ResourcePhase::Ready);
+    assert!(!result.source_generation_preserved());
+}
+
+#[test]
+fn test_mode_succeeds_without_preserving_the_source_generation() {
+    let controller = ActivationController::new(3);
+    let result = controller
+        .apply_runner_result(
+            &spec_with_mode(ActivationMode::Test),
+            ActivationOutcomeCode::Succeeded,
+            GenerationObservation::new("gen-6", GenerationPhase::Ready),
+        )
+        .unwrap();
+    assert_eq!(result.phase(), ResourcePhase::Succeeded);
+    assert!(!result.source_generation_preserved());
+}
+
+#[test]
+fn successful_switch_reports_ready_and_replaces_the_source_generation() {
+    let controller = ActivationController::new(3);
+    let result = controller
+        .apply_runner_result(
+            &spec(),
+            ActivationOutcomeCode::Succeeded,
+            GenerationObservation::new("gen-6", GenerationPhase::Ready),
+        )
+        .unwrap();
+    assert_eq!(result.phase(), ResourcePhase::Ready);
+    assert!(!result.source_generation_preserved());
+}
+
+#[test]
+fn deleted_generation_is_not_restarted() {
+    let controller = ActivationController::new(3);
+    let result = controller.reconcile(
+        &spec(),
+        &caller(),
+        &[],
+        GenerationObservation::new("gen-7", GenerationPhase::Deleted),
+    );
+    assert_eq!(
+        result.unwrap_err(),
+        d2b_provider_activation_nixos::ActivationError::AlreadyDeleted
     );
 }
 
