@@ -109,7 +109,7 @@ fn nix_package_source_filters_are_path_segment_based() {
              packages/d2b-realm-core/src/target.rs"
         );
         assert!(
-            content.contains("d2bLib.cleanRustPackagesSource ../packages"),
+            content.contains("d2bLib.cleanRustPackagesSource ../."),
             "{rel}: package source filters must use the centralized segment-based helper"
         );
     }
