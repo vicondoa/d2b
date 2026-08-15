@@ -42,6 +42,7 @@ impl VirtiofsExportSpec {
         mount_path: impl Into<String>,
     ) -> Result<Self, PrimitiveSpecError> {
         if provider_ref.resource_type().as_str() != "Provider"
+            || provider_ref.name().as_str() != "volume-virtiofs"
             || volume_ref.resource_type().as_str() != "Volume"
             || !matches!(execution_ref.resource_type().as_str(), "Host" | "Guest")
         {

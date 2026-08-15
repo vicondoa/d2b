@@ -21,3 +21,18 @@ fn export_spec_is_strict_and_carries_only_typed_refs() {
     )
     .is_err());
 }
+
+#[test]
+fn export_spec_rejects_noncanonical_provider_identity() {
+    assert!(
+        VirtiofsExportSpec::new(
+            ResourceRef::parse("Provider/other").unwrap(),
+            ResourceRef::parse("Volume/store-view").unwrap(),
+            ResourceRef::parse("Guest/work-vm").unwrap(),
+            "ro-store",
+            AttachmentAccess::ReadOnly,
+            "/nix/.ro-store",
+        )
+        .is_err()
+    );
+}

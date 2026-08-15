@@ -126,6 +126,18 @@ impl SecurityKeyController {
         Ok(SecurityKeyReconcileOutcome::Active)
     }
 
+    /// Rebind the controller to fresh Core admission evidence after a
+    /// completed session.
+    pub fn rebind_authorized(
+        &mut self,
+        device_uid: ResourceUid,
+        admission: SecurityKeyAdmission,
+    ) -> Result<(), SecurityKeyControllerError> {
+        self.lease
+            .rebind_authorized(device_uid, admission)
+            .map_err(SecurityKeyControllerError::Lease)
+    }
+
     /// Complete and record the active session.
     pub fn complete<P: SecurityKeyEffectPort>(
         &mut self,

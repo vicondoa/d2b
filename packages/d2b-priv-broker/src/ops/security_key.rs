@@ -1,8 +1,8 @@
 //! Broker op: `OpenHidrawSecurityKey`.
 //!
 //! Resolves a configured FIDO security-key stable selector, opens the
-//! physical `hidraw` node, validates it is a character device owned by
-//! an acceptable group (`plugdev`/`input`/`fido`), and returns an
+//! physical `hidraw` node, validates it is a character device with a
+//! readable FIDO report descriptor, and returns an
 //! `OwnedFd` to be passed to `d2bd` via `SCM_RIGHTS`. Long-lived
 //! CTAPHID session state (CID isolation, lease serialization, relay)
 //! lives in `d2bd::security_key`, not here. This module only opens the
@@ -29,10 +29,6 @@ use super::OpError;
 /// HID report descriptor's usage-page item payload.
 const FIDO_USAGE_PAGE_LE: &[u8] = &[0xD0, 0xF1];
 
-/// Groups that may own a FIDO hidraw node. `plugdev` is the typical
-/// libfido2 udev rule target; `input`/`fido` cover other distros.
-const ALLOWED_GROUPS: &[&str] = &["plugdev", "input", "fido"];
-
 /// Device-class label recorded in the audit trail and response body.
 pub const DEVICE_CLASS_HIDRAW_FIDO: &str = "hidraw-fido";
 
@@ -44,7 +40,7 @@ pub struct ResolvedSecurityKeySelector {
     /// Resolved absolute path to the hidraw node.
     pub hidraw_path: PathBuf,
     /// True when the HID report descriptor was readable and explicitly matched
-    /// the FIDO usage page. False means resolution used the udev-group fallback.
+    /// the FIDO usage page.
     pub descriptor_verified: bool,
 }
 
@@ -94,35 +90,33 @@ pub(crate) fn validate_device_authority(
     Ok(())
 }
 
-/// Scan `/sys/class/hidraw/` for FIDO-class devices.
+/// Resolve a configured stable selector.
 ///
-/// Returns the first device whose report descriptor contains the FIDO
-/// HID usage page, falling back to group ownership when the report
-/// descriptor can't be read (some kernels restrict `rdesc` to root).
+/// Raw `hidraw-N` identifiers are deliberately rejected. The stable
+/// vendor/product/serial selector registry is not available to this legacy
+/// broker entry point, so it fails closed rather than guessing a node.
 pub(crate) fn resolve_selector(selector_id: &str) -> Result<ResolvedSecurityKeySelector, OpError> {
-    let name = selector_id
-        .strip_prefix("hidraw-")
-        .ok_or(OpError::UnknownSubject {
-            operation: "OpenHidrawSecurityKey",
-            subject: selector_id.to_owned(),
-        })?;
-    if name.is_empty() || name.len() > 32 || !name.bytes().all(|byte| byte.is_ascii_digit()) {
+    if selector_id.is_empty()
+        || selector_id.len() > 63
+        || !selector_id
+            .bytes()
+            .enumerate()
+            .all(|(index, byte)| {
+                (index == 0 && byte.is_ascii_lowercase())
+                    || (index > 0 && (byte.is_ascii_lowercase()
+                        || byte.is_ascii_digit()
+                        || byte == b'-'))
+            })
+        || selector_id.starts_with("hidraw-")
+    {
         return Err(OpError::UnknownSubject {
             operation: "OpenHidrawSecurityKey",
             subject: selector_id.to_owned(),
         });
     }
-    let name = format!("hidraw{name}");
-    let sysfs_path = Path::new("/sys/class/hidraw").join(&name);
-    let dev_path = PathBuf::from("/dev").join(&name);
-    let descriptor_verified = fido_device_match(&sysfs_path).ok_or(OpError::UnknownSubject {
+    Err(OpError::UnknownSubject {
         operation: "OpenHidrawSecurityKey",
         subject: selector_id.to_owned(),
-    })?;
-    Ok(ResolvedSecurityKeySelector {
-        selector_label: selector_id.to_owned(),
-        hidraw_path: dev_path,
-        descriptor_verified,
     })
 }
 
@@ -140,22 +134,7 @@ fn fido_device_match(sysfs_entry: &Path) -> Option<bool> {
                 .any(|w| w == FIDO_USAGE_PAGE_LE)
                 .then_some(true);
         }
-        Err(_) => {
-            // Fall through to the distro udev-group fallback only when
-            // the kernel refuses descriptor access.
-        }
-    }
-    // Fallback: accept if the /dev node is owned by an allowed group.
-    let dev_name = sysfs_entry.file_name().unwrap_or_default();
-    let dev_path = PathBuf::from("/dev").join(dev_name);
-    let Ok(meta) = std::fs::metadata(&dev_path) else {
-        return None;
-    };
-    use std::os::unix::fs::MetadataExt;
-    let gid = meta.gid();
-    match nix::unistd::Group::from_gid(nix::unistd::Gid::from_raw(gid)) {
-        Ok(Some(group)) if ALLOWED_GROUPS.contains(&group.name.as_str()) => Some(false),
-        _ => None,
+        Err(_) => return None,
     }
 }
 
@@ -165,7 +144,7 @@ pub(crate) fn open_and_validate_hidraw(
     descriptor_verified: bool,
 ) -> Result<OwnedFd, OpError> {
     use std::fs::OpenOptions;
-    use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt};
+    use std::os::unix::fs::{FileTypeExt, OpenOptionsExt};
 
     // Pre-open check (defence-in-depth; O_NOFOLLOW below prevents a
     // symlink swap between this stat and the actual open).
@@ -182,19 +161,10 @@ pub(crate) fn open_and_validate_hidraw(
             ),
         });
     }
-    let gid = meta.gid();
-    let group_name = nix::unistd::Group::from_gid(nix::unistd::Gid::from_raw(gid))
-        .ok()
-        .flatten()
-        .map(|g| g.name)
-        .unwrap_or_else(|| gid.to_string());
-    if !descriptor_verified && !ALLOWED_GROUPS.contains(&group_name.as_str()) {
+    if !descriptor_verified {
         return Err(OpError::Refused {
             operation: "OpenHidrawSecurityKey",
-            reason: format!(
-                "{}: device group {group_name:?} not in allowed set",
-                path.display()
-            ),
+            reason: "fido-report-descriptor-required".to_owned(),
         });
     }
 
@@ -250,6 +220,14 @@ mod tests {
             }
             Err(other) => panic!("unexpected error: {other}"),
         }
+    }
+
+    #[test]
+    fn raw_hidraw_selector_is_rejected() {
+        assert!(matches!(
+            resolve_selector("hidraw-0"),
+            Err(OpError::UnknownSubject { .. })
+        ));
     }
 
     #[test]

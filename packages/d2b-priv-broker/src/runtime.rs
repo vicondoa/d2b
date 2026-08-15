@@ -3057,33 +3057,15 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
             ))
         }
         RealBrokerRequest::OpenHidrawSecurityKey(req) => {
-            let outcome = crate::ops::security_key::live_open_hidraw_security_key(&req, audit_log)
-                .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
-            write_success_op_record!(
-                audit_log,
-                bundle_metadata,
-                "OpenHidrawSecurityKey",
-                req.vm_id.as_str(),
-                caller_uid,
-                caller_gid,
-                &caller_role,
-                req.vm_id.as_str(),
-                req.selector_id.as_str(),
-                tracing_span_id_str(req.tracing_span_id.as_ref()),
-                OperationFields::OpenHidrawSecurityKey {
-                    vm_id: req.vm_id.as_str().to_owned(),
-                    selector_id: req.selector_id.clone(),
-                    device_class: outcome.device_class.clone(),
-                    resolved: true,
-                },
-            )?;
-            let response = BrokerResponse::OpenHidrawSecurityKey(
-                d2b_contracts::broker_wire::OpenHidrawSecurityKeyResponse {
-                    selector_resolved: outcome.selector_label,
-                    device_class: outcome.device_class,
-                },
-            );
-            Ok(DispatchResult::with_fd(response, outcome.fd))
+            // The legacy wire operation has no bundle-backed stable selector
+            // registry or production Provider session binding. Refuse it
+            // rather than allowing an admin caller to turn a shape-only
+            // authority proof into a physical hidraw open.
+            let _ = req;
+            return Err(BrokerError::Unimplemented {
+                operation: "OpenHidrawSecurityKey",
+                target_wave: "security-key-provider",
+            });
         }
         RealBrokerRequest::SecurityKeyOpenDevice(_) => Err(BrokerError::Unimplemented {
             operation: "SecurityKeyOpenDevice",

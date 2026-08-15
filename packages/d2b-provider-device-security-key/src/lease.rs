@@ -78,7 +78,7 @@ impl std::error::Error for SecurityKeyLeaseError {}
 /// Active lease state held by one Device controller.
 pub struct SecurityKeyLease {
     holder: ResourceUid,
-    backing: PhysicalUsbBackingClaim,
+    backing: Option<PhysicalUsbBackingClaim>,
     authorized_device: Option<ResourceUid>,
     authorized_holder: Option<ResourceRef>,
     state: LeaseState,
@@ -92,7 +92,7 @@ impl SecurityKeyLease {
     pub fn new(holder: ResourceUid, backing: PhysicalUsbBackingClaim) -> Self {
         Self {
             holder,
-            backing,
+            backing: Some(backing),
             authorized_device: None,
             authorized_holder: None,
             state: LeaseState::Idle,
@@ -117,7 +117,7 @@ impl SecurityKeyLease {
         let authorized_holder = admission.holder_ref().clone();
         Ok(Self {
             holder,
-            backing: admission.into_claim(),
+            backing: Some(admission.into_claim()),
             authorized_device: Some(device_uid),
             authorized_holder: Some(authorized_holder),
             state: LeaseState::Idle,
@@ -156,8 +156,12 @@ impl SecurityKeyLease {
         {
             return Err(SecurityKeyLeaseError::SessionConflict);
         }
+        let backing = self
+            .backing
+            .clone()
+            .ok_or(SecurityKeyLeaseError::AuthorizationDenied)?;
         self.state = LeaseState::AwaitingLease;
-        let authority_lease = match port.claim_physical_backing(&self.backing) {
+        let authority_lease = match port.claim_physical_backing(backing) {
             Ok(lease) => lease,
             Err(error) => {
                 self.state = LeaseState::Idle;
@@ -165,7 +169,7 @@ impl SecurityKeyLease {
             }
         };
         self.authority_lease = Some(authority_lease);
-        let intent = SecurityKeyOpenIntent::from_core(device_uid, session, self.backing.clone());
+        let intent = SecurityKeyOpenIntent::from_core(device_uid, session, backing.clone());
         let relay_ticket = match port.open_hidraw(&intent) {
             Ok(ticket) => ticket,
             Err(error) => {
@@ -207,6 +211,32 @@ impl SecurityKeyLease {
             return Err(SecurityKeyLeaseError::AuthorizationDenied);
         }
         self.acquire(session, device_uid, port)
+    }
+
+    /// Replace consumed admission evidence with a fresh Core admission.
+    pub fn rebind_authorized(
+        &mut self,
+        device_uid: ResourceUid,
+        admission: SecurityKeyAdmission,
+    ) -> Result<(), SecurityKeyLeaseError> {
+        if !matches!(
+            self.state,
+            LeaseState::Completed | LeaseState::Cancelled | LeaseState::Expired
+        ) || self.session.is_some()
+            || self.authority_lease.is_some()
+            || admission.device_uid() != &device_uid
+            || admission.zone_ref().resource_type().as_str() != "Zone"
+            || admission.holder_ref().resource_type().as_str() != "Guest"
+        {
+            return Err(SecurityKeyLeaseError::AuthorizationDenied);
+        }
+        let holder = admission.holder_ref().clone();
+        self.holder = device_uid.clone();
+        self.backing = Some(admission.into_claim());
+        self.authorized_device = Some(device_uid);
+        self.authorized_holder = Some(holder);
+        self.state = LeaseState::Idle;
+        Ok(())
     }
 
     /// Complete the active session and release its authority.
@@ -251,6 +281,13 @@ impl SecurityKeyLease {
         self.authority_lease = None;
         self.relay_ticket = None;
         self.session = None;
+        // Core admission evidence is single-use. A later session must carry
+        // a fresh admission rather than replaying the prior physical claim.
+        if self.authorized_device.is_some() {
+            self.backing = None;
+            self.authorized_device = None;
+            self.authorized_holder = None;
+        }
         self.state = terminal;
         Ok(())
     }

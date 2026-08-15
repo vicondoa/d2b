@@ -12,7 +12,8 @@ use sha2::{Digest, Sha256};
 use d2b_contracts::v3::ResourceRef;
 use d2b_contracts::v3::execution_policy::BoundedToken;
 use d2b_contracts::v3::volume::{
-    AttachmentAccess, AttachmentSettings, AttachmentTransport, VolumeAttachment,
+    AttachmentAccess, AttachmentSettings, AttachmentTransport, MAX_LAYOUT_PATH_BYTES,
+    VolumeAttachment,
 };
 
 use crate::error::VirtiofsExportError;
@@ -142,7 +143,7 @@ impl ExportSpec {
             attachment.access(),
             attachment.settings().clone(),
         )
-        .map(|export| export.with_mount_path(attachment.mount_path()))
+        .and_then(|export| export.with_mount_path(attachment.mount_path()))
     }
 
     /// Borrow the Volume this Export serves.
@@ -175,11 +176,35 @@ impl ExportSpec {
         &self.mount_path
     }
 
-    /// Set the typed base mount path while retaining the compatibility
-    /// constructor used by older callers.
-    pub fn with_mount_path(mut self, mount_path: impl Into<String>) -> Self {
-        self.mount_path = mount_path.into();
-        self
+    /// Set the mount path after applying the same closed path contract as
+    /// the public Volume attachment.
+    pub fn with_mount_path(
+        mut self,
+        mount_path: impl Into<String>,
+    ) -> Result<Self, VirtiofsExportError> {
+        let mount_path = mount_path.into();
+        if !valid_mount_path(&mount_path) {
+            return Err(VirtiofsExportError::InvalidExport);
+        }
+        self.mount_path = mount_path;
+        Ok(self)
+    }
+
+    fn valid_mount_path(value: &str) -> bool {
+        if value.len() > MAX_LAYOUT_PATH_BYTES
+            || !value.starts_with('/')
+            || value.contains('\0')
+            || value.contains('\\')
+        {
+            return false;
+        }
+        if value == "/" {
+            return true;
+        }
+        value
+            .split('/')
+            .skip(1)
+            .all(|component| !component.is_empty() && component != "." && component != "..")
     }
 
     /// Derive the stable per-Volume worker principal name.
@@ -203,5 +228,24 @@ impl fmt::Debug for ExportSpec {
 impl Serialize for SocketIdentity {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.serialize_str(&self.to_hex())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compatibility_mount_path_setter_keeps_the_closed_path_contract() {
+        let export = ExportSpec::new(
+            ResourceRef::parse("Volume/data").unwrap(),
+            ResourceRef::parse("Guest/work-vm").unwrap(),
+            BoundedToken::parse("live").unwrap(),
+            AttachmentAccess::ReadOnly,
+            AttachmentSettings::default(),
+        )
+        .unwrap();
+        assert!(export.clone().with_mount_path("/guest/data").is_ok());
+        assert!(export.with_mount_path("../escape").is_err());
     }
 }
