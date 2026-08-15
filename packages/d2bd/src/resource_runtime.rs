@@ -2015,7 +2015,7 @@ impl HostProbeEffectPort for SystemCoreHostProbe {
         let available = match capability {
             HostCapabilityClass::Kvm => Path::new("/dev/kvm").is_file(),
             HostCapabilityClass::Pidfd => {
-                let gate = d2b_provider_system_minijail::launch::PlatformGate::detect();
+                let gate = crate::process_provider_runtime::detect_minijail_platform_gate();
                 gate.kernel_major > 5 || (gate.kernel_major == 5 && gate.kernel_minor >= 3)
             }
             HostCapabilityClass::CgroupV2 => {
@@ -2041,7 +2041,7 @@ impl HostProbeEffectPort for SystemCoreHostProbe {
     async fn platform(
         &self,
     ) -> Result<MinijailPlatformGate, d2b_provider_system_core::SystemCoreError> {
-        let gate = d2b_provider_system_minijail::launch::PlatformGate::detect();
+        let gate = crate::process_provider_runtime::detect_minijail_platform_gate();
         Ok(MinijailPlatformGate::new(
             gate.kernel_major,
             gate.kernel_minor,

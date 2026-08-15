@@ -7,6 +7,7 @@
 
 use std::{
     collections::BTreeMap,
+    fs::OpenOptions,
     path::PathBuf,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
@@ -40,6 +41,47 @@ pub const FIXED_PROCESS_PROVIDER_NAMES: [&str; 2] = ["system-minijail", "system-
 
 type BrokerProcessSupervisor = ProviderSupervisor<BrokerProcessBackend<BundleBackedLaunchResolver>>;
 type BrokerSystemdSupervisor = ProviderSupervisor<SystemdProcessBackend<BrokerSystemdEffectOwner>>;
+
+/// Probe the host posture needed by the daemon-owned minijail Provider.
+///
+/// The Provider receives this bounded snapshot through its constructor; it
+/// never reads host paths or cgroup state itself.
+pub(crate) fn detect_minijail_platform_gate() -> PlatformGate {
+    let (kernel_major, kernel_minor) = std::fs::read_to_string("/proc/sys/kernel/osrelease")
+        .ok()
+        .and_then(|release| {
+            let mut components = release.split('.');
+            let major = components.next()?.parse().ok()?;
+            let minor = components
+                .next()
+                .and_then(|component| {
+                    component
+                        .split(|character: char| !character.is_ascii_digit())
+                        .next()
+                })
+                .filter(|component| !component.is_empty())?
+                .parse()
+                .ok()?;
+            Some((major, minor))
+        })
+        .unwrap_or((0, 0));
+    let cgroup_kill_writable = std::fs::read_to_string("/proc/self/cgroup")
+        .ok()
+        .and_then(|cgroup| {
+            let relative = cgroup
+                .lines()
+                .find_map(|line| line.strip_prefix("0::"))?
+                .trim()
+                .trim_start_matches('/')
+                .to_owned();
+            let path = std::path::Path::new("/sys/fs/cgroup")
+                .join(relative)
+                .join("cgroup.kill");
+            path.is_file().then_some(path)
+        })
+        .is_some_and(|path| OpenOptions::new().write(true).open(path).is_ok());
+    PlatformGate::from_observed(kernel_major, kernel_minor, cgroup_kill_writable)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ManagedProvider {
@@ -210,7 +252,7 @@ impl ProductionProcessProviders {
             Duration::from_secs(10),
             caller_role,
         );
-        let platform_gate = PlatformGate::detect();
+        let platform_gate = detect_minijail_platform_gate();
         Self {
             minijail: MinijailProcessProvider::with_platform_gate(
                 ProviderSupervisor::new(minijail_backend),

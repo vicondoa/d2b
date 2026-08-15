@@ -534,7 +534,6 @@ pub(crate) async fn run_audio_watch(
                 {
                     tracing::warn!(
                         error = %error,
-                        resource = %status.resource,
                         "audio status projection persistence failed"
                     );
                 }

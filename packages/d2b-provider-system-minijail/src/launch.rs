@@ -1,10 +1,6 @@
 //! Minijail launch admission and mandatory platform gate.
 
 use d2b_process_conformance::{LaunchTicket, ProcessConformanceError};
-use std::{
-    fs::OpenOptions,
-    path::{Path, PathBuf},
-};
 
 use crate::PROVIDER_NAME;
 
@@ -20,8 +16,8 @@ pub struct PlatformGate {
 }
 
 impl PlatformGate {
-    /// Construct a platform snapshot for hermetic conformance tests.
-    pub const fn new_for_test(
+    /// Construct a gate from daemon-owned host observations.
+    pub const fn from_observed(
         kernel_major: u16,
         kernel_minor: u16,
         cgroup_kill_writable: bool,
@@ -33,25 +29,13 @@ impl PlatformGate {
         }
     }
 
-    /// Probe the kernel and the daemon's delegated cgroup leaf.
-    ///
-    /// Probe failures become a rejected snapshot rather than an ambient
-    /// fallback. The daemon can therefore compose the Provider during
-    /// startup and every launch still fails closed when the host posture is
-    /// unavailable.
-    pub fn detect() -> Self {
-        let (kernel_major, kernel_minor) = std::fs::read_to_string("/proc/sys/kernel/osrelease")
-            .ok()
-            .and_then(|release| Self::parse_kernel_release(&release))
-            .unwrap_or((0, 0));
-        let cgroup_kill_writable = Self::current_cgroup_kill_path()
-            .map(|path| Self::writable_file(&path))
-            .unwrap_or(false);
-        Self {
-            kernel_major,
-            kernel_minor,
-            cgroup_kill_writable,
-        }
+    /// Construct a platform snapshot for hermetic conformance tests.
+    pub const fn new_for_test(
+        kernel_major: u16,
+        kernel_minor: u16,
+        cgroup_kill_writable: bool,
+    ) -> Self {
+        Self::from_observed(kernel_major, kernel_minor, cgroup_kill_writable)
     }
 
     /// Check Linux 5.14 and cgroup.kill.
@@ -64,39 +48,6 @@ impl PlatformGate {
         } else {
             Ok(())
         }
-    }
-
-    fn parse_kernel_release(release: &str) -> Option<(u16, u16)> {
-        let mut components = release.split('.');
-        let major = components.next()?.parse().ok()?;
-        let minor = components
-            .next()
-            .and_then(|component| {
-                component
-                    .split(|character: char| !character.is_ascii_digit())
-                    .next()
-            })
-            .filter(|component| !component.is_empty())?
-            .parse()
-            .ok()?;
-        Some((major, minor))
-    }
-
-    fn current_cgroup_kill_path() -> Option<PathBuf> {
-        let cgroup = std::fs::read_to_string("/proc/self/cgroup").ok()?;
-        let relative = cgroup
-            .lines()
-            .find_map(|line| line.strip_prefix("0::"))?
-            .trim();
-        let relative = relative.trim_start_matches('/');
-        let path = Path::new("/sys/fs/cgroup")
-            .join(relative)
-            .join("cgroup.kill");
-        path.is_file().then_some(path)
-    }
-
-    fn writable_file(path: &Path) -> bool {
-        OpenOptions::new().write(true).open(path).is_ok()
     }
 }
 
