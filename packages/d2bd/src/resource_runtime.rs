@@ -18,24 +18,37 @@ use std::{
 #[cfg(test)]
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::authority_persistence::RedbAuthorityPersistence;
 use crate::audio_resource_runtime::{
     AudioBindingRuntimeStatus, AudioResourceRuntime, AudioResourceRuntimeError,
     audio_watch_request, list_audio_snapshot, run_audio_watch,
 };
+use crate::activation_resource_runtime::{
+    ActivationResourceRuntime, ActivationResourceRuntimeError, activation_watch_request,
+    list_activation_snapshot, run_activation_watch,
+};
+use crate::authority_persistence::RedbAuthorityPersistence;
+use crate::process_resource_runtime::{
+    ProcessResourceRuntime, ProcessResourceRuntimeError, list_process_snapshot,
+    process_watch_request, run_process_watch,
+};
 use d2b_audit::{AuditSink, DurabilityEvidence};
+use d2b_bus::{BusAuthorizer, BusConfig, BusIngress, ZoneBus, ZoneRegistrar};
+use d2b_contracts::v3::identity::STANDARD_RESOURCE_TYPES;
 #[cfg(test)]
 use d2b_contracts::v3::{
     DEFAULT_LIST_PAGE_SIZE, MAX_FILTER_VALUES, MAX_LIST_FILTERS, MAX_LIST_PAGE_SIZE,
     MAX_LIST_RESOURCE_TYPES, MAX_PAGE_CURSOR_BYTES, MAX_RESPONSE_CANONICAL_BYTES, ResourceName,
+};
+use d2b_contracts::v3::{
+    host::{HOST_PROVIDER_REF, HostSpec},
+    user::UserSpec,
 };
 use d2b_contracts::{
     broker_wire::{OpenZoneStoreResponse, ZoneStoreDisposition},
     v3::{
         BindingDigest, ConfigurationGeneration, ControllerGeneration, ResourceError,
         ResourceErrorKind, ResourceErrorReason, ResourcePhase, ResourceRef, ResourceTypeName,
-        ResourceUid, RetryClass, Timestamp,
-        ZoneId, ZoneRevision, ZoneStatusResource,
+        ResourceUid, RetryClass, Timestamp, ZoneId, ZoneRevision, ZoneStatusResource,
         component_session::{
             AttachmentPolicy, EndpointPolicy, EndpointPurpose, EndpointRole,
             IdentityEvidenceRequirement, LimitProfile, Locality, NoiseProfile, PurposeClass,
@@ -43,30 +56,31 @@ use d2b_contracts::{
         },
     },
 };
-use d2b_contracts::v3::{
-    host::{HOST_PROVIDER_REF, HostSpec},
-    user::UserSpec,
-};
 use d2b_core_controller::authority::{
     AuthorityRequest, AuthorityReservation, ExternalNicClaimRequest, ExternalNicRecoveryInventory,
     ExternalNicReservation, HostGlobalAuthorityIndex, TrustedExternalNicInventory,
 };
 use d2b_core_controller::authority_persistence::AuthorityRecoveryCoordinator;
+use d2b_core_controller::controllers::{
+    CoreHandlerKind, HandlerOutcome, HandlerPhase, HandlerStatus,
+};
 use d2b_core_controller::main::{
     CoreProcess, RecoverySnapshot, RuntimeReadiness as CoreRuntimeReadiness, StartupError,
     StartupStage,
 };
-use d2b_core_controller::controllers::{
-    CoreHandlerKind, HandlerOutcome, HandlerPhase, HandlerStatus,
-};
 use d2b_core_controller::zone_status::{SystemCoreStatusEmitter, ZoneStatusInput};
+use d2b_provider_system_core::{
+    HostReconciler, UserBinding, UserDiscoveryEffectPort, UserIdentityDigest, UserObservation,
+    UserReconciler,
+};
 use d2b_resource_api::{
-    RedbBackend, ResourceService, UnregisteredBusAdapter,
+    RedbBackend, ResourceService, UnregisteredBusAdapter, UnregisteredResourceClient,
     authz::{
         ApiCatalog, AuthorizationState, BindingScope, BootstrapPhase, BoundSubject, CompiledRole,
         CompiledRoleBinding, NativeAuthorizer, PolicyRule, PolicySet, RelayGrantAuthority,
         ResourceVerb, SessionVerb,
     },
+    service::UnavailableUpgradeDispatcher,
 };
 use d2b_resource_store::{
     PolicySnapshot, StoreListRequest, StoreOperationContext, StoreProjection, StoreSlot,
@@ -77,17 +91,6 @@ use d2b_resource_store_redb::{
     BrokerEvidenceIndex, RedbResourceStore, StoreIdentity, StoreRuntimeMetadata,
     write_provisioning_marker,
 };
-#[cfg(test)]
-use serde_json::json;
-use serde_json::{Map, Value};
-use sha2::{Digest, Sha256};
-use d2b_bus::{BusAuthorizer, BusConfig, BusIngress, ZoneBus, ZoneRegistrar};
-use d2b_contracts::v3::identity::STANDARD_RESOURCE_TYPES;
-use d2b_provider_system_core::{
-    HostReconciler, UserBinding, UserDiscoveryEffectPort, UserIdentityDigest, UserObservation,
-    UserReconciler,
-};
-use nix::unistd::{Group, User};
 use d2b_session::{
     HandshakeCredentials, SessionEngine, SessionServerError, TransportEvidence,
     serve_ttrpc_services,
@@ -96,6 +99,11 @@ use d2b_session_unix::{
     CreditPool, CreditScopeSet, DescriptorPolicyResolver, PeerIdentityPolicy, SeqpacketSocket,
     UnixSeqpacketTransport, UnixSessionError, VerifiedUnixPeer, prearmed_seqpacket_pair,
 };
+use nix::unistd::{Group, User};
+#[cfg(test)]
+use serde_json::json;
+use serde_json::{Map, Value};
+use sha2::{Digest, Sha256};
 
 /// Maximum number of Zone runtimes owned by one daemon.
 pub const MAX_ZONE_RUNTIMES: usize = 64;
@@ -252,6 +260,8 @@ pub struct ZoneResourceRuntime {
     registrar: Mutex<Option<ZoneRegistrar>>,
     ingress: Mutex<Option<BusIngress>>,
     service_task: Mutex<Option<tokio::task::JoinHandle<Result<(), SessionServerError>>>>,
+    process_status_client:
+        Option<Arc<UnregisteredResourceClient<RedbBackend, UnavailableUpgradeDispatcher>>>,
     core: Mutex<CoreProcess>,
     readiness: ZoneRuntimeReadiness,
     policy_installed: bool,
@@ -263,6 +273,10 @@ pub struct ZoneResourceRuntime {
     zone_status: Mutex<ZoneStatusResource>,
     audio_runtime: Arc<Mutex<Option<AudioResourceRuntime>>>,
     audio_watch_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    process_runtime: Arc<Mutex<Option<ProcessResourceRuntime>>>,
+    process_watch_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    activation_runtime: Arc<Mutex<Option<ActivationResourceRuntime>>>,
+    activation_watch_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
 impl core::fmt::Debug for ZoneResourceRuntime {
@@ -519,111 +533,118 @@ impl ZoneResourceRuntime {
         let mut registrar = None;
         let mut ingress = None;
         let mut service_task = None;
-        let (resource_api_ready, local_session_ready, policy_installed,
-            controller_endpoint_registered, watch_admitted, stage, zone_status) =
-            if store_metadata.policy_snapshot.policy_revision == 0 {
-                let _ = core.connect_runtime(CoreRuntimeReadiness {
-                    store_ready: true,
-                    resource_api_ready: false,
-                    local_bus_ready: false,
-                    controller_endpoint_registered: false,
-                    authenticated_system_core_session: false,
-                });
-                (
-                    false,
-                    false,
-                    false,
-                    false,
-                    false,
-                    core.stage(),
-                    SystemCoreStatusEmitter::new()
-                        .emit(ZoneStatusInput::new(ResourcePhase::Pending, Vec::new()))
-                        .map_err(|_| ResourceRuntimeError::HandlerNotReady)?,
-                )
+        let mut process_status_client = None;
+        let (
+            resource_api_ready,
+            local_session_ready,
+            policy_installed,
+            controller_endpoint_registered,
+            watch_admitted,
+            stage,
+            zone_status,
+        ) = if store_metadata.policy_snapshot.policy_revision == 0 {
+            let _ = core.connect_runtime(CoreRuntimeReadiness {
+                store_ready: true,
+                resource_api_ready: false,
+                local_bus_ready: false,
+                controller_endpoint_registered: false,
+                authenticated_system_core_session: false,
+            });
+            (
+                false,
+                false,
+                false,
+                false,
+                false,
+                core.stage(),
+                SystemCoreStatusEmitter::new()
+                    .emit(ZoneStatusInput::new(ResourcePhase::Pending, Vec::new()))
+                    .map_err(|_| ResourceRuntimeError::HandlerNotReady)?,
+            )
+        } else {
+            let (policy, state) = runtime_policy(
+                &zone,
+                &store_metadata.policy_snapshot,
+                store_metadata.current_revision,
+            )?;
+            authorizer
+                .replace_policy(policy.clone(), &state)
+                .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?;
+            let bus_authorizer = BusAuthorizer::from_shared(Arc::clone(&authorizer), state.clone())
+                .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?;
+            let (zone_bus, mut zone_registrar) =
+                ZoneBus::new(zone.clone(), bus_authorizer, BusConfig::default())
+                    .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
+            let (zone_ingress, zone_service_task, status_client) = register_system_core_session(
+                &mut zone_registrar,
+                Arc::clone(&api),
+                Arc::clone(&authorizer),
+                state.clone(),
+            )
+            .await?;
+            process_status_client = Some(status_client);
+            let system_core = reconcile_system_core_resources(&zone, &store).await?;
+            let aggregate_handler_phase = if system_core.host_phase == HandlerPhase::Ready
+                && system_core.user_phase == HandlerPhase::Ready
+            {
+                HandlerPhase::Ready
             } else {
-                let (policy, state) = runtime_policy(
-                    &zone,
-                    &store_metadata.policy_snapshot,
-                    store_metadata.current_revision,
-                )?;
-                authorizer
-                    .replace_policy(policy.clone(), &state)
-                    .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?;
-                let bus_authorizer =
-                    BusAuthorizer::from_shared(Arc::clone(&authorizer), state.clone())
-                        .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?;
-                let (zone_bus, mut zone_registrar) =
-                    ZoneBus::new(zone.clone(), bus_authorizer, BusConfig::default())
-                        .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
-                let (zone_ingress, zone_service_task) = register_system_core_session(
-                    &mut zone_registrar,
-                    Arc::clone(&api),
-                    Arc::clone(&authorizer),
-                    state.clone(),
-                )
-                .await?;
-                let system_core = reconcile_system_core_resources(&zone, &store).await?;
-                let aggregate_handler_phase = if system_core.host_phase == HandlerPhase::Ready
-                    && system_core.user_phase == HandlerPhase::Ready
-                {
-                    HandlerPhase::Ready
-                } else {
-                    HandlerPhase::Degraded
-                };
-                let stage = {
-                    let recovered_authority = authority_index.lock().await;
-                    core.start_production(
-                        CoreRuntimeReadiness {
-                            store_ready: true,
-                            resource_api_ready: true,
-                            local_bus_ready: true,
-                            controller_endpoint_registered: true,
-                            authenticated_system_core_session: true,
-                        },
-                        RecoverySnapshot {
-                            startup_epoch: 0,
-                            checkpoint_revision: store_metadata.current_revision.get(),
-                            active_configuration_revision: store_metadata
-                                .policy_snapshot
-                                .active_configuration_revision
-                                .get(),
-                            provider_lease_count: 0,
-                            controller_lease_count: 0,
-                            ambiguous_operation_count: 0,
-                            watch_admitted: true,
-                        },
-                        &recovered_authority,
-                    )
-                    .map_err(map_startup_error)?;
-                    mark_core_handlers(
-                        &mut core,
-                        aggregate_handler_phase,
-                        store_metadata.current_revision.get(),
-                    )?;
-                    core.publish_readiness().map_err(map_startup_error)?
-                };
-                bus = Some(zone_bus);
-                registrar = Some(zone_registrar);
-                ingress = Some(zone_ingress);
-                service_task = Some(zone_service_task);
-                (
-                    true,
-                    true,
-                    true,
-                    true,
-                    true,
-                    stage,
-                    SystemCoreStatusEmitter::new()
-                        .emit(
-                            ZoneStatusInput::new(system_core.core_phase, Vec::new())
-                                .with_system_core_phases(
-                                    handler_phase_to_zone_phase(system_core.host_phase),
-                                    handler_phase_to_zone_phase(system_core.user_phase),
-                                ),
-                        )
-                        .map_err(|_| ResourceRuntimeError::HandlerNotReady)?,
-                )
+                HandlerPhase::Degraded
             };
+            let stage = {
+                let recovered_authority = authority_index.lock().await;
+                core.start_production(
+                    CoreRuntimeReadiness {
+                        store_ready: true,
+                        resource_api_ready: true,
+                        local_bus_ready: true,
+                        controller_endpoint_registered: true,
+                        authenticated_system_core_session: true,
+                    },
+                    RecoverySnapshot {
+                        startup_epoch: 0,
+                        checkpoint_revision: store_metadata.current_revision.get(),
+                        active_configuration_revision: store_metadata
+                            .policy_snapshot
+                            .active_configuration_revision
+                            .get(),
+                        provider_lease_count: 0,
+                        controller_lease_count: 0,
+                        ambiguous_operation_count: 0,
+                        watch_admitted: true,
+                    },
+                    &recovered_authority,
+                )
+                .map_err(map_startup_error)?;
+                mark_core_handlers(
+                    &mut core,
+                    aggregate_handler_phase,
+                    store_metadata.current_revision.get(),
+                )?;
+                core.publish_readiness().map_err(map_startup_error)?
+            };
+            bus = Some(zone_bus);
+            registrar = Some(zone_registrar);
+            ingress = Some(zone_ingress);
+            service_task = Some(zone_service_task);
+            (
+                true,
+                true,
+                true,
+                true,
+                true,
+                stage,
+                SystemCoreStatusEmitter::new()
+                    .emit(
+                        ZoneStatusInput::new(system_core.core_phase, Vec::new())
+                            .with_system_core_phases(
+                                handler_phase_to_zone_phase(system_core.host_phase),
+                                handler_phase_to_zone_phase(system_core.user_phase),
+                            ),
+                    )
+                    .map_err(|_| ResourceRuntimeError::HandlerNotReady)?,
+            )
+        };
         Ok(Self {
             zone,
             store_id: expected_store_id,
@@ -635,6 +656,7 @@ impl ZoneResourceRuntime {
             registrar: Mutex::new(registrar),
             ingress: Mutex::new(ingress),
             service_task: Mutex::new(service_task),
+            process_status_client,
             core: Mutex::new(core),
             readiness: ZoneRuntimeReadiness {
                 store_ready: true,
@@ -653,6 +675,10 @@ impl ZoneResourceRuntime {
             zone_status: Mutex::new(zone_status),
             audio_runtime: Arc::new(Mutex::new(None)),
             audio_watch_task: Mutex::new(None),
+            process_runtime: Arc::new(Mutex::new(None)),
+            process_watch_task: Mutex::new(None),
+            activation_runtime: Arc::new(Mutex::new(None)),
+            activation_watch_task: Mutex::new(None),
         })
     }
 
@@ -727,9 +753,11 @@ impl ZoneResourceRuntime {
             .audio_runtime
             .lock()
             .map_err(|_| ResourceRuntimeError::CapabilityUnavailable)?;
-        let registry = runtime
-            .get_or_insert_with(|| AudioResourceRuntime::new(self.zone.clone(), state));
-        registry.reconcile(snapshot).map_err(map_audio_runtime_error)?;
+        let registry =
+            runtime.get_or_insert_with(|| AudioResourceRuntime::new(self.zone.clone(), state));
+        registry
+            .reconcile(snapshot)
+            .map_err(map_audio_runtime_error)?;
         drop(runtime);
         let mut watch_task = self
             .audio_watch_task
@@ -743,9 +771,126 @@ impl ZoneResourceRuntime {
             let store = Arc::clone(&self.store);
             let zone = self.zone.clone();
             let registry = Arc::clone(&self.audio_runtime);
-            *watch_task = Some(tokio::spawn(run_audio_watch(
-                watch, store, zone, registry,
-            )));
+            *watch_task = Some(tokio::spawn(run_audio_watch(watch, store, zone, registry)));
+        }
+        Ok(())
+    }
+
+    /// Relist and reconcile generic Process and EphemeralProcess resources
+    /// owned by this Zone. Their lifecycle effects remain inside the fixed
+    /// daemon-composed process Provider supervisors.
+    pub(crate) async fn reconcile_process_resources(
+        &self,
+        state: Arc<crate::ServerState>,
+    ) -> Result<(), ResourceRuntimeError> {
+        if !self.readiness.resource_api_ready {
+            return Ok(());
+        }
+        let providers = state
+            .provider_runtime
+            .process_providers()
+            .ok_or(ResourceRuntimeError::ProviderPathUnavailable)?;
+        let snapshot = list_process_snapshot(&self.store, &self.zone)
+            .await
+            .map_err(map_process_runtime_error)?;
+        let runtime = match self.process_runtime.lock() {
+            Ok(mut guard) => guard.take(),
+            Err(_) => return Err(ResourceRuntimeError::CapabilityUnavailable),
+        };
+        let mut runtime =
+            runtime.unwrap_or_else(|| ProcessResourceRuntime::new(self.zone.clone(), providers));
+        if let Some(controller_generation) =
+            self.store_metadata.policy_snapshot.controller_generation
+        {
+            runtime.set_controller_generation(controller_generation);
+        }
+        if let Some(status_client) = &self.process_status_client {
+            runtime.set_status_client(Arc::clone(status_client));
+        }
+        let result = runtime.reconcile(snapshot).await;
+        match self.process_runtime.lock() {
+            Ok(mut guard) => *guard = Some(runtime),
+            Err(_) => return Err(ResourceRuntimeError::CapabilityUnavailable),
+        }
+        result.map_err(map_process_runtime_error)?;
+
+        let start_watch = self
+            .process_watch_task
+            .lock()
+            .map_err(|_| ResourceRuntimeError::WatchUnavailable)?
+            .is_none();
+        if start_watch {
+            let watch = d2b_resource_api::watch::WatchService::new(Arc::clone(&self.store))
+                .open(process_watch_request(&self.zone))
+                .await
+                .map_err(|_| ResourceRuntimeError::WatchUnavailable)?;
+            let store = Arc::clone(&self.store);
+            let zone = self.zone.clone();
+            let registry = Arc::clone(&self.process_runtime);
+            let task = tokio::spawn(run_process_watch(watch, store, zone, registry));
+            let mut watch_task = self
+                .process_watch_task
+                .lock()
+                .map_err(|_| ResourceRuntimeError::WatchUnavailable)?;
+            if watch_task.is_none() {
+                *watch_task = Some(task);
+            } else {
+                task.abort();
+            }
+        }
+        Ok(())
+    }
+
+    /// Relist and reconcile durable NixOS generation resources owned by this
+    /// Zone. Activation effects remain behind the typed broker or the
+    /// authenticated guest-control bridge.
+    pub(crate) async fn reconcile_activation_resources(
+        &self,
+        state: Arc<crate::ServerState>,
+    ) -> Result<(), ResourceRuntimeError> {
+        if !self.readiness.resource_api_ready {
+            return Ok(());
+        }
+        let snapshot = list_activation_snapshot(&self.store, &self.zone)
+            .await
+            .map_err(map_activation_runtime_error)?;
+        let mut runtime = self
+            .activation_runtime
+            .lock()
+            .map_err(|_| ResourceRuntimeError::CapabilityUnavailable)?;
+        let registry = runtime.get_or_insert_with(|| ActivationResourceRuntime::new(self.zone.clone()));
+        if let Some(status_client) = &self.process_status_client {
+            registry.set_status_client(Arc::clone(status_client));
+        }
+        registry
+            .reconcile(state, snapshot)
+            .await
+            .map_err(map_activation_runtime_error)?;
+        drop(runtime);
+        let start_watch = self
+            .activation_watch_task
+            .lock()
+            .map_err(|_| ResourceRuntimeError::WatchUnavailable)?
+            .is_none();
+        if start_watch {
+            let watch = d2b_resource_api::watch::WatchService::new(Arc::clone(&self.store))
+                .open(activation_watch_request(&self.zone))
+                .await
+                .map_err(|_| ResourceRuntimeError::WatchUnavailable)?;
+            let store = Arc::clone(&self.store);
+            let zone = self.zone.clone();
+            let state = state.clone();
+            let registry = Arc::clone(&self.activation_runtime);
+            let task = tokio::spawn(run_activation_watch(watch, store, zone, state, registry));
+            let mut watch_task = self
+                .activation_watch_task
+                .lock()
+                .map_err(|_| ResourceRuntimeError::WatchUnavailable)?;
+            if watch_task.is_none() {
+                *watch_task = Some(task);
+            } else {
+                task.abort();
+            }
         }
         Ok(())
     }
@@ -987,8 +1132,13 @@ impl ZoneResourceRuntime {
             service_task,
             authority_persistence,
             authority_recovery,
+            process_status_client,
             audio_watch_task,
             audio_runtime,
+            process_watch_task,
+            process_runtime,
+            activation_watch_task,
+            activation_runtime,
             ..
         } = self;
         if let Some(task) = service_task
@@ -1006,12 +1156,33 @@ impl ZoneResourceRuntime {
             let _ = task.await;
         }
         drop(audio_runtime);
-        drop(ingress
+        if let Some(task) = process_watch_task
             .into_inner()
-            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?);
-        drop(registrar
+            .map_err(|_| ResourceRuntimeError::WatchUnavailable)?
+        {
+            task.abort();
+            let _ = task.await;
+        }
+        drop(process_runtime);
+        if let Some(task) = activation_watch_task
             .into_inner()
-            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?);
+            .map_err(|_| ResourceRuntimeError::WatchUnavailable)?
+        {
+            task.abort();
+            let _ = task.await;
+        }
+        drop(activation_runtime);
+        drop(process_status_client);
+        drop(
+            ingress
+                .into_inner()
+                .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?,
+        );
+        drop(
+            registrar
+                .into_inner()
+                .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?,
+        );
         drop(bus);
         drop(api);
         drop(backend);
@@ -1541,8 +1712,13 @@ fn runtime_policy(
         RelayGrantAuthority::None,
     )
     .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?;
-    let policy = PolicySet::new(&catalog, snapshot.policy_revision, vec![role], vec![binding])
-        .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?;
+    let policy = PolicySet::new(
+        &catalog,
+        snapshot.policy_revision,
+        vec![role],
+        vec![binding],
+    )
+    .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?;
     let state = AuthorizationState {
         snapshot: *snapshot,
         zone_policy_revision: current_revision,
@@ -1618,6 +1794,7 @@ async fn register_system_core_session(
     (
         BusIngress,
         tokio::task::JoinHandle<Result<(), SessionServerError>>,
+        Arc<UnregisteredResourceClient<RedbBackend, UnavailableUpgradeDispatcher>>,
     ),
     ResourceRuntimeError,
 > {
@@ -1664,16 +1841,14 @@ async fn register_system_core_session(
         .await
         .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
     let subject = authorizer
-        .issue_authenticated_subject(
-            candidate.route_binding().context().clone(),
-            authz_state,
-        )
+        .issue_authenticated_subject(candidate.route_binding().context().clone(), authz_state)
         .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?;
     let service = Arc::new(
         UnregisteredBusAdapter::bind_unregistered_session(api, subject)
             .map_err(|_| ResourceRuntimeError::ResourceApiBindFailed)?,
     );
-    let services = service.unregistered_ttrpc_services();
+    let status_client = Arc::new(service.unregistered_client());
+    let services = Arc::clone(&service).unregistered_ttrpc_services();
     let ingress = registrar
         .register_component_session(candidate)
         .await
@@ -1682,7 +1857,7 @@ async fn register_system_core_session(
         Arc::new(responder.into_driver()),
         services,
     ));
-    Ok((ingress, service_task))
+    Ok((ingress, service_task, status_client))
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1814,9 +1989,8 @@ async fn reconcile_system_core_resources(
     for resource in hosts.resources {
         let envelope = d2b_contracts::v3::ResourceEnvelope::from_json(&resource.canonical_json)
             .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
-        let spec: HostSpec =
-            serde_json::from_slice(&envelope.spec().base().to_canonical_bytes())
-                .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
+        let spec: HostSpec = serde_json::from_slice(&envelope.spec().base().to_canonical_bytes())
+            .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
         let host_ref = ResourceRef::new(
             envelope.resource_type().clone(),
             envelope.metadata().name().clone(),
@@ -1838,9 +2012,8 @@ async fn reconcile_system_core_resources(
     for resource in users.resources {
         let envelope = d2b_contracts::v3::ResourceEnvelope::from_json(&resource.canonical_json)
             .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
-        let spec: UserSpec =
-            serde_json::from_slice(&envelope.spec().base().to_canonical_bytes())
-                .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
+        let spec: UserSpec = serde_json::from_slice(&envelope.spec().base().to_canonical_bytes())
+            .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
         let user_ref = ResourceRef::new(
             envelope.resource_type().clone(),
             envelope.metadata().name().clone(),
@@ -1855,13 +2028,12 @@ async fn reconcile_system_core_resources(
             user_phase = HandlerPhase::Degraded;
         }
     }
-    let core_phase = if matches!(host_phase, HandlerPhase::Ready)
-        && matches!(user_phase, HandlerPhase::Ready)
-    {
-        ResourcePhase::Ready
-    } else {
-        ResourcePhase::Degraded
-    };
+    let core_phase =
+        if matches!(host_phase, HandlerPhase::Ready) && matches!(user_phase, HandlerPhase::Ready) {
+            ResourcePhase::Ready
+        } else {
+            ResourcePhase::Degraded
+        };
     Ok(SystemCoreReconcileResult {
         core_phase,
         host_phase,
@@ -1886,6 +2058,30 @@ fn map_audio_runtime_error(error: AudioResourceRuntimeError) -> ResourceRuntimeE
         AudioResourceRuntimeError::InvalidResource
         | AudioResourceRuntimeError::InvalidRelationship => {
             ResourceRuntimeError::CapabilityUnavailable
+        }
+    }
+}
+
+fn map_process_runtime_error(error: ProcessResourceRuntimeError) -> ResourceRuntimeError {
+    match error {
+        ProcessResourceRuntimeError::Store => ResourceRuntimeError::StoreReadFailed,
+        ProcessResourceRuntimeError::UnsupportedProvider
+        | ProcessResourceRuntimeError::TemplateUnavailable
+        | ProcessResourceRuntimeError::IdentityAmbiguous
+        | ProcessResourceRuntimeError::ProviderEffect
+        | ProcessResourceRuntimeError::InvalidResource => {
+            ResourceRuntimeError::CapabilityUnavailable
+        }
+
+        fn map_activation_runtime_error(error: ActivationResourceRuntimeError) -> ResourceRuntimeError {
+            match error {
+                ActivationResourceRuntimeError::Store => ResourceRuntimeError::StoreReadFailed,
+                ActivationResourceRuntimeError::InvalidResource
+                | ActivationResourceRuntimeError::Policy
+                | ActivationResourceRuntimeError::Effect => {
+                    ResourceRuntimeError::CapabilityUnavailable
+                }
+            }
         }
     }
 }

@@ -120,6 +120,7 @@ use supervisor::pidfd_table::{
 };
 
 mod admission;
+mod activation_resource_runtime;
 pub mod console_session;
 pub mod exec_detached;
 pub mod exec_session;
@@ -210,6 +211,7 @@ pub mod usbipd_perenv_autostart;
 // resolution, host PipeWire enforcement, and guestd RPC dispatch.
 mod audio_dispatch;
 mod audio_resource_runtime;
+mod process_resource_runtime;
 // Host-side audio controller strategy (ADR 0041): typed trait plus
 // PipeWireHostController (wpctl subprocess), QemuAudioController (offline),
 // and FakeHostController (test-only).
@@ -231,9 +233,9 @@ pub mod provider_shutdown;
 // path; they are initialized below after the trusted host bundle loads.
 mod authority_persistence;
 pub mod host_generation;
+pub mod process_provider_runtime;
 pub mod provider_effects;
 pub mod provider_registry;
-pub mod process_provider_runtime;
 pub mod resource_runtime;
 // In-daemon replacement for the
 // `d2b-audit-check.{service,timer}` host singleton + timer that
@@ -1745,15 +1747,14 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
         Ok(resolver) => {
             let provider_ready = match state.provider_runtime.configure_from_host(&resolver.host) {
                 Ok(()) => {
-                    let process_providers = Arc::new(
-                        process_provider_runtime::ProductionProcessProviders::new(
+                    let process_providers =
+                        Arc::new(process_provider_runtime::ProductionProcessProviders::new(
                             resolver.clone(),
                             broker_socket_path(&state),
                             BrokerCallerRole::AdminUid {
                                 uid: state.daemon_uid,
                             },
-                        ),
-                    );
+                        ));
                     state
                         .provider_runtime
                         .attach_process_providers(process_providers)
@@ -2426,8 +2427,7 @@ impl autostart::VmStarter for BrokerVmStarter {
         // `dispatch_broker_vm_start`: if the ch-runner role is
         // already registered, the VM is supervised.
         if let Some(providers) = self.state.provider_runtime.process_providers() {
-            return providers.has_active_role(vm, VM_RUNNER_ROLE_ID)
-                || providers.has_active_vm(vm);
+            return providers.has_active_role(vm, VM_RUNNER_ROLE_ID) || providers.has_active_vm(vm);
         }
         self.state.pidfd_table.contains(vm, VM_RUNNER_ROLE_ID)
     }
@@ -2653,6 +2653,9 @@ impl usbipd_perenv_autostart::PerEnvUsbipdSpawner for BrokerPerEnvUsbipdSpawner 
         // exists for them and threading a synthetic identity would
         // misrepresent their scope in the broker audit trail.
         let request = BrokerRequest::SpawnRunner(BrokerSpawnRunnerRequest {
+            execution_ref: None,
+            execution_domain: None,
+            user_ref: None,
             workload_identity: None,
             vm_id: VmId::new(spec.vm_id.clone()),
             role_id: RoleId::new(spec.role.role_id().to_owned()),
@@ -13409,16 +13412,32 @@ async fn open_resource_plane(
                 }
             };
         runtime.set_provider_path_ready(provider_ready);
-            if let Err(error) = runtime
-                .reconcile_audio_resources(Arc::new(state.clone()))
-                .await
-            {
-                let _ = runtime.shutdown().await;
-                let _ = plane.shutdown().await;
-                return Err(error);
-            }
-            let _ = runtime.audio_binding_statuses();
-            if let Err(error) = runtime.require_ready() {
+        if let Err(error) = runtime
+            .reconcile_process_resources(Arc::new(state.clone()))
+            .await
+        {
+            let _ = runtime.shutdown().await;
+            let _ = plane.shutdown().await;
+            return Err(error);
+        }
+        if let Err(error) = runtime
+            .reconcile_activation_resources(Arc::new(state.clone()))
+            .await
+        {
+            let _ = runtime.shutdown().await;
+            let _ = plane.shutdown().await;
+            return Err(error);
+        }
+        if let Err(error) = runtime
+            .reconcile_audio_resources(Arc::new(state.clone()))
+            .await
+        {
+            let _ = runtime.shutdown().await;
+            let _ = plane.shutdown().await;
+            return Err(error);
+        }
+        let _ = runtime.audio_binding_statuses();
+        if let Err(error) = runtime.require_ready() {
             let _ = runtime.shutdown().await;
             let _ = plane.shutdown().await;
             return Err(error);
@@ -13942,6 +13961,9 @@ impl VmStartRunner<'_> {
         match dispatch_broker_request_with_fds_timeout_as(
             self.state,
             BrokerRequest::SpawnRunner(BrokerSpawnRunnerRequest {
+                execution_ref: None,
+                execution_domain: None,
+                user_ref: None,
                 workload_identity: self.workload_identity.clone(),
                 vm_id: VmId::new(vm),
                 role_id: RoleId::new(role_id.clone()),
@@ -14300,13 +14322,11 @@ impl supervisor::dag::NodeRunner for VmStartRunner<'_> {
             }
             VmStartNodeMode::OneShot(runner_role) => {
                 match self.spawn_runner(vm, node, runner_role, budget.spawn)? {
-                    VmRunnerLaunch::Legacy(response) => {
-                        wait_for_one_shot_exit(
-                            response.pid,
-                            response.start_time_ticks,
-                            budget.readiness,
-                        )
-                    }
+                    VmRunnerLaunch::Legacy(response) => wait_for_one_shot_exit(
+                        response.pid,
+                        response.start_time_ticks,
+                        budget.readiness,
+                    ),
                     VmRunnerLaunch::Provider => {
                         let providers = self
                             .state
@@ -14321,32 +14341,30 @@ impl supervisor::dag::NodeRunner for VmStartRunner<'_> {
                 let launch = self.spawn_runner(vm, node, runner_role, budget.spawn)?;
                 let provider_liveness;
                 let legacy_liveness;
-                let liveness: &dyn supervisor::readiness_liveness::LivenessProbe =
-                    match &launch {
-                        VmRunnerLaunch::Provider => {
-                            let providers = self
-                                .state
-                                .provider_runtime
-                                .process_providers()
-                                .ok_or_else(|| "provider-runtime-unavailable".to_owned())?;
-                            provider_liveness =
-                                process_provider_runtime::ProviderLivenessProbe::new(
-                                    providers.clone(),
-                                    vm,
-                                    node,
-                                );
-                            &provider_liveness
-                        }
-                        VmRunnerLaunch::Legacy(_) => {
-                            legacy_liveness = supervisor::readiness_liveness::PidfdLivenessProbe::new(
-                                &self.state.pidfd_table,
-                                &self.state.broker_reap_log,
-                                vm,
-                                tracked_role_id(node),
-                            );
-                            &legacy_liveness
-                        }
-                    };
+                let liveness: &dyn supervisor::readiness_liveness::LivenessProbe = match &launch {
+                    VmRunnerLaunch::Provider => {
+                        let providers = self
+                            .state
+                            .provider_runtime
+                            .process_providers()
+                            .ok_or_else(|| "provider-runtime-unavailable".to_owned())?;
+                        provider_liveness = process_provider_runtime::ProviderLivenessProbe::new(
+                            providers.clone(),
+                            vm,
+                            node,
+                        );
+                        &provider_liveness
+                    }
+                    VmRunnerLaunch::Legacy(_) => {
+                        legacy_liveness = supervisor::readiness_liveness::PidfdLivenessProbe::new(
+                            &self.state.pidfd_table,
+                            &self.state.broker_reap_log,
+                            vm,
+                            tracked_role_id(node),
+                        );
+                        &legacy_liveness
+                    }
+                };
                 wait_for_readiness(node, readiness, budget.readiness, Some(liveness))?;
                 if node.role == ProcessRole::QemuMediaRunner {
                     self.boot_qemu_media(vm, node, budget.readiness)?;
@@ -14405,11 +14423,8 @@ impl supervisor::dag::NodeRunner for VmStartRunner<'_> {
                         reason: "provider-runtime-unavailable".to_owned(),
                     };
                 };
-                provider_liveness = process_provider_runtime::ProviderLivenessProbe::new(
-                    providers,
-                    vm,
-                    node,
-                );
+                provider_liveness =
+                    process_provider_runtime::ProviderLivenessProbe::new(providers, vm, node);
                 &provider_liveness
             } else {
                 legacy_liveness = supervisor::readiness_liveness::PidfdLivenessProbe::new(
@@ -15763,7 +15778,12 @@ fn ordered_vm_stop_entries(state: &ServerState, vm: &str) -> Vec<PidfdRegistrati
     let provider_roles = state
         .provider_runtime
         .process_providers()
-        .map(|providers| providers.active_role_ids(vm).into_iter().collect::<BTreeSet<_>>())
+        .map(|providers| {
+            providers
+                .active_role_ids(vm)
+                .into_iter()
+                .collect::<BTreeSet<_>>()
+        })
         .unwrap_or_default();
     let mut entries = state
         .pidfd_table
@@ -16837,28 +16857,23 @@ fn stop_vm_pidfd_role(
                 format!("vm stop {vm}: Provider node missing for {role_id}"),
             )
         })?;
-        let required_sigkill = match block_on_future(providers.stop_node(
-            vm,
-            &node,
-            term_timeout,
-            kill_timeout,
-        )) {
-            Ok(required_sigkill) => required_sigkill,
-            Err(error) if error == "provider-process-not-found" => {
-                return Err(invalid_request_response(
-                    verb,
-                    format!("vm '{vm}' has no registered Provider process for {role_id}"),
-                ));
-            }
-            Err(error) => {
-                return Err(daemon_failure_response(
-                    verb,
-                    format!("vm stop {vm}: Provider stop failed for {role_id}: {error}"),
-                ));
-            }
-        };
-        let cgroup_empty =
-            prove_role_cgroup_empty_or_escalate(state, caller_role, vm, role_id);
+        let required_sigkill =
+            match block_on_future(providers.stop_node(vm, &node, term_timeout, kill_timeout)) {
+                Ok(required_sigkill) => required_sigkill,
+                Err(error) if error == "provider-process-not-found" => {
+                    return Err(invalid_request_response(
+                        verb,
+                        format!("vm '{vm}' has no registered Provider process for {role_id}"),
+                    ));
+                }
+                Err(error) => {
+                    return Err(daemon_failure_response(
+                        verb,
+                        format!("vm stop {vm}: Provider stop failed for {role_id}: {error}"),
+                    ));
+                }
+            };
+        let cgroup_empty = prove_role_cgroup_empty_or_escalate(state, caller_role, vm, role_id);
         return Ok(VmStopRoleReport {
             role_id: role_id.to_owned(),
             required_sigkill,
@@ -23157,6 +23172,9 @@ mod public_status_tests {
             workload_identity: None,
             vm: "installer".to_owned(),
             nodes: vec![ProcessNode {
+                execution_ref: None,
+                execution_domain: None,
+                user_ref: None,
                 id: NodeId("qemu-media".to_owned()),
                 role: ProcessRole::QemuMediaRunner,
                 unit: None,
@@ -31277,6 +31295,9 @@ mod broker_dispatch_tests {
         use d2b_core::processes::{NodeId, ProcessNode, ProcessRole};
 
         let node = ProcessNode {
+            execution_ref: None,
+            execution_domain: None,
+            user_ref: None,
             id: NodeId("cloud-hypervisor".to_owned()),
             role: ProcessRole::CloudHypervisorRunner,
             unit: None,
@@ -31305,6 +31326,9 @@ mod broker_dispatch_tests {
         use std::path::PathBuf;
 
         let node = ProcessNode {
+            execution_ref: None,
+            execution_domain: None,
+            user_ref: None,
             id: NodeId("cloud-hypervisor".to_owned()),
             role: ProcessRole::CloudHypervisorRunner,
             unit: None,
@@ -31386,6 +31410,9 @@ mod broker_dispatch_tests {
     fn readiness_test_node() -> d2b_core::processes::ProcessNode {
         use d2b_core::processes::{NodeId, ProcessNode, ProcessRole};
         ProcessNode {
+            execution_ref: None,
+            execution_domain: None,
+            user_ref: None,
             id: NodeId("swtpm".to_owned()),
             role: ProcessRole::Swtpm,
             unit: None,
@@ -31544,6 +31571,9 @@ mod broker_dispatch_tests {
         };
 
         let node = ProcessNode {
+            execution_ref: None,
+            execution_domain: None,
+            user_ref: None,
             id: NodeId("swtpm-node".to_owned()),
             role: ProcessRole::Swtpm,
             unit: None,
@@ -31614,6 +31644,9 @@ mod broker_dispatch_tests {
         use std::time::Duration;
 
         let node = ProcessNode {
+            execution_ref: None,
+            execution_domain: None,
+            user_ref: None,
             id: NodeId("guest-control-health".to_owned()),
             role: ProcessRole::GuestControlHealth,
             unit: None,
