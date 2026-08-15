@@ -119,8 +119,8 @@ use supervisor::pidfd_table::{
     BrokerReapLog, PidfdEntry, PidfdRegistration, PidfdTable, PidfdTableError, WaitTermination,
 };
 
-mod admission;
 mod activation_resource_runtime;
+mod admission;
 pub mod console_session;
 pub mod exec_detached;
 pub mod exec_session;

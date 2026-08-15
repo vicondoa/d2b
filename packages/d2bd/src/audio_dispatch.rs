@@ -991,8 +991,7 @@ fn dispatch_audio_set_volume(
     }
 
     let host_result = if cap.host_enforcement == AudioHostEnforcementKind::PipeWireVhostUserSound {
-        let result =
-            enforce_host_level(state, vm_name, &cap, caller_role.clone(), level, channel);
+        let result = enforce_host_level(state, vm_name, &cap, caller_role.clone(), level, channel);
         if level_increase && matches!(result, HostEnforcementResult::Failed) {
             return Err(TypedError::InternalIo {
                 context: "audio host enforcement".to_owned(),
@@ -1107,8 +1106,7 @@ fn dispatch_audio_mute(
     }
 
     let host_result = if cap.host_enforcement == AudioHostEnforcementKind::PipeWireVhostUserSound {
-        let result =
-            enforce_host_grant(state, vm_name, &cap, caller_role.clone(), grant, channel);
+        let result = enforce_host_grant(state, vm_name, &cap, caller_role.clone(), grant, channel);
         if grant == AudioGrant::On && matches!(result, HostEnforcementResult::Failed) {
             return Err(TypedError::InternalIo {
                 context: "audio host enforcement".to_owned(),
