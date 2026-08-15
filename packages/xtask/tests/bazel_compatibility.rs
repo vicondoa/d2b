@@ -342,6 +342,35 @@ fn exact_bazel_version_resolves_prebuilt_protoc_without_external_cpp() {
 }
 
 #[test]
+fn bazel_9_2_advertises_stable_credential_helper_for_remote_surfaces() {
+    let output = Command::new(bazel_binary())
+        .args(["help", "build"])
+        .output()
+        .expect("run Bazel credential-helper help");
+    assert!(
+        output.status.success(),
+        "Bazel credential-helper help failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let help = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        help.contains("--credential_helper"),
+        "Bazel 9.2 must expose the stable credential-helper option"
+    );
+    for surface in ["--remote_cache", "--remote_executor", "--bes_backend"] {
+        assert!(
+            help.contains(surface),
+            "Bazel 9.2 build options must expose the {surface} remote surface"
+        );
+    }
+}
+
+#[test]
 fn pins_exact_upstream_bazel_and_unmodified_bzlmod_tools() {
     assert_eq!(read_repo_file(".bazelversion").trim(), "9.2.0");
 

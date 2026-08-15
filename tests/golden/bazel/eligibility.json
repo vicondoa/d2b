@@ -188,6 +188,7 @@
     "cacheReadEvidence": false,
     "cacheWriteEvidence": false,
     "readOnlyProbe": false,
+    "uploadsDisabled": null,
     "transferBytes": {
       "uploaded": null,
       "downloaded": null

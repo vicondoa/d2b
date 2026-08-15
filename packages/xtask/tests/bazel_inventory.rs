@@ -422,6 +422,13 @@ fn buildbuddy_evidence_is_machine_readable_and_non_qualifying_without_provider_p
         "none"
     );
     assert!(
+        matches!(
+            string(probe, "credentialMode", "eligibility.buildBuddy.probe"),
+            "none" | "credential-helper"
+        ),
+        "BuildBuddy authentication must use the closed credential-helper contract"
+    );
+    assert!(
         bool_field(probe, "readOnly", "eligibility.buildBuddy.probe"),
         "BuildBuddy entitlement probing must be read-only"
     );
@@ -452,6 +459,21 @@ fn buildbuddy_evidence_is_machine_readable_and_non_qualifying_without_provider_p
         string(evidence, "provider", "BuildBuddy evidence"),
         "buildbuddy"
     );
+    let evidence_probe = object(
+        evidence.get("probe").expect("BuildBuddy evidence.probe"),
+        "BuildBuddy evidence.probe",
+    );
+    assert!(
+        matches!(
+            string(
+                evidence_probe,
+                "credentialMode",
+                "BuildBuddy evidence.probe"
+            ),
+            "none" | "credential-helper"
+        ),
+        "BuildBuddy evidence must use the closed authentication mode contract"
+    );
     assert_no_credential_material(&evidence_value);
 
     let qualified = string(evidence, "status", "BuildBuddy evidence") == "qualified";
@@ -464,6 +486,7 @@ fn buildbuddy_evidence_is_machine_readable_and_non_qualifying_without_provider_p
         "transferBytes",
         "qualificationMetrics",
         "workerArchitectures",
+        "uploadsDisabled",
         "secretRedaction",
         "trustedSeed",
         "invocationId",
@@ -475,6 +498,13 @@ fn buildbuddy_evidence_is_machine_readable_and_non_qualifying_without_provider_p
             "BuildBuddy evidence contract is missing `{field}`"
         );
     }
+    let uploads_disabled = evidence
+        .get("uploadsDisabled")
+        .expect("BuildBuddy evidence.uploadsDisabled");
+    assert!(
+        uploads_disabled.is_null() || uploads_disabled.is_boolean(),
+        "uploadsDisabled must be an explicit boolean or null when provider evidence is unavailable"
+    );
     if qualified {
         for field in [
             "authenticated",
@@ -515,12 +545,29 @@ fn buildbuddy_evidence_is_machine_readable_and_non_qualifying_without_provider_p
         ] {
             assert!(metrics.get(field).and_then(Value::as_u64).is_some());
         }
+        assert!(
+            uploads_disabled.is_boolean(),
+            "qualified BuildBuddy evidence must state whether uploads were disabled"
+        );
         assert!(!array(evidence, "workerArchitectures", "BuildBuddy evidence").is_empty());
         assert!(!string(evidence, "invocationId", "BuildBuddy evidence").is_empty());
-    } else {
+    } else if string(evidence, "status", "BuildBuddy evidence") == "unavailable" {
         assert!(
             !bool_field(evidence, "executionEntitled", "BuildBuddy evidence"),
             "missing or incomplete provider proof must remain non-qualifying"
+        );
+    } else {
+        assert!(
+            evidence
+                .get("secretRedaction")
+                .is_some_and(Value::is_boolean),
+            "provider evidence must state secret-redaction proof"
+        );
+        assert!(
+            evidence
+                .get("uploadsDisabled")
+                .is_some_and(Value::is_boolean),
+            "provider evidence must state whether uploads were disabled"
         );
     }
 }
