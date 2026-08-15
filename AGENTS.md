@@ -98,12 +98,12 @@ repository, PR, observed base ref and OID, head OID, and verdict. A review fix,
 CI fix, push, base update, or missing evidence invalidates readiness and
 requires synchronization, validation, and fresh review.
 
-Merge only with a normal squash and an expected-head guard. Never use admin,
-auto-merge, bypass, or a merge queue. If the result is ambiguous, reconcile
-current PR state before retrying. The accepted workflow refreshes the base on a
-best-effort basis and accepts the narrow non-atomic base race under current
-non-strict branch settings; it does not change GitHub settings or claim atomic
-base binding.
+Merge only with a normal squash and an expected-head guard.
+Never use admin, auto-merge, bypass, or a merge queue. If the result is
+ambiguous, reconcile current PR state before retrying. The accepted workflow
+refreshes the base on a best-effort basis and accepts the narrow non-atomic
+base race under current non-strict branch settings; it does not change GitHub
+settings or claim atomic base binding.
 
 ### Worktree, validation, and landing rules
 
