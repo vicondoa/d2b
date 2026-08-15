@@ -45,6 +45,10 @@ fn map_legacy_migration_outcome(
         d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::Ambiguous => {
             LegacyMigrationOutcome::Ambiguous
         }
+        d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::AdoptionRequired
+        | d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::NeverProvisioned => {
+            LegacyMigrationOutcome::Ambiguous
+        }
     }
 }
 
@@ -74,6 +78,7 @@ pub(crate) struct LiveTpmEffectExecutor<'a> {
     resolver: &'a BundleResolver,
     vm_id: VmId,
     caller_role: BrokerCallerRole,
+    legacy_migration_required: bool,
     prepared_flush_ticket: Option<FlushLaunchTicket>,
     prepared_swtpm_ticket: Option<SwtpmStartLaunchTicket>,
 }
@@ -84,12 +89,14 @@ impl<'a> LiveTpmEffectExecutor<'a> {
         resolver: &'a BundleResolver,
         vm_id: VmId,
         caller_role: BrokerCallerRole,
+        legacy_migration_required: bool,
     ) -> Self {
         Self {
             state,
             resolver,
             vm_id,
             caller_role,
+            legacy_migration_required,
             prepared_flush_ticket: None,
             prepared_swtpm_ticket: None,
         }
@@ -158,6 +165,43 @@ impl<'a> LiveTpmEffectExecutor<'a> {
             }
         })
     }
+
+    fn cleanup_failed_start(
+        &self,
+        response: &d2b_contracts::broker_wire::SpawnRunnerResponse,
+        received_fds: &[std::os::fd::RawFd],
+    ) {
+        let removed = {
+            let _guard = self.state.pidfd_table.mutation_guard();
+            let removed = self.state.pidfd_table.deregister_if_matches(
+                self.vm_id.as_str(),
+                "swtpm",
+                response.pid,
+                response.start_time_ticks,
+            );
+            if removed {
+                let _ = self.state.pidfd_table.snapshot();
+            }
+            removed
+        };
+        if removed {
+            tracing::warn!(
+                vm = %self.vm_id,
+                role = "swtpm",
+                pid = response.pid,
+                "removed failed TPM runner registration"
+            );
+        }
+        crate::stop_unregistered_spawned_runner(
+            self.state,
+            self.vm_id.as_str(),
+            "swtpm",
+            response,
+            received_fds,
+            self.caller_role.clone(),
+        );
+        crate::close_received_fds(received_fds);
+    }
 }
 
 impl CoreTpmEffectExecutor for LiveTpmEffectExecutor<'_> {
@@ -185,9 +229,11 @@ impl CoreTpmEffectExecutor for LiveTpmEffectExecutor<'_> {
         self.prepared_flush_ticket = Some(flush_ticket.clone());
         self.prepared_swtpm_ticket = Some(swtpm_ticket.clone());
         Ok(TpmStatePreparationResult {
-            observation: TpmStateObservation::from_core(
-                TpmStateObservationKind::ExistingWithMarker,
-            ),
+            observation: TpmStateObservation::from_core(if self.legacy_migration_required {
+                TpmStateObservationKind::ExistingWithMarker
+            } else {
+                TpmStateObservationKind::Fresh
+            }),
             flush_ticket,
             swtpm_ticket,
         })
@@ -226,29 +272,74 @@ impl CoreTpmEffectExecutor for LiveTpmEffectExecutor<'_> {
         {
             return Err(TpmEffectError::SpawnRejected);
         }
+        if self
+            .state
+            .pidfd_table
+            .still_alive_same_start_time(self.vm_id.as_str(), "swtpm")
+        {
+            return Ok(());
+        }
+        if self
+            .state
+            .pidfd_table
+            .has_entry(self.vm_id.as_str(), "swtpm")
+        {
+            let _mguard = self.state.pidfd_table.mutation_guard();
+            self.state
+                .pidfd_table
+                .deregister(self.vm_id.as_str(), "swtpm");
+            let _ = self.state.pidfd_table.snapshot();
+        }
         let intent = self.runner_intent("swtpm")?;
         let (response, fds) =
             self.spawn(RunnerRole::Swtpm, "swtpm", intent, Duration::from_secs(30))?;
-        let pidfd = crate::duplicate_received_fd(&fds, response.pidfd_index, "TPM pidfd")
-            .map_err(|_| TpmEffectError::Transient)?;
+        let pidfd = match crate::duplicate_received_fd(&fds, response.pidfd_index, "TPM pidfd") {
+            Ok(pidfd) => pidfd,
+            Err(_) => {
+                self.cleanup_failed_start(&response, &fds);
+                return Err(TpmEffectError::Transient);
+            }
+        };
+        let registration_result = {
+            let _guard = self.state.pidfd_table.mutation_guard();
+            (|| {
+                self.state.pidfd_table.register(
+                    self.vm_id.as_str().to_owned(),
+                    "swtpm".to_owned(),
+                    crate::supervisor::pidfd_table::PidfdEntry {
+                        pidfd,
+                        pid: response.pid,
+                        start_time_ticks: response.start_time_ticks,
+                    },
+                )?;
+                self.state.pidfd_table.snapshot()
+            })()
+        };
+        if let Err(error) = registration_result {
+            let duplicate = matches!(
+                error,
+                crate::supervisor::pidfd_table::PidfdTableError::DuplicateRegistration { .. }
+            );
+            self.cleanup_failed_start(&response, &fds);
+            return Err(if duplicate {
+                TpmEffectError::SpawnRejected
+            } else {
+                TpmEffectError::Transient
+            });
+        }
+        if let Err(error) = crate::write_runner_snapshot(
+            self.state,
+            self.vm_id.as_str(),
+            "swtpm",
+            RunnerRole::Swtpm,
+            response.pid,
+            response.start_time_ticks,
+        ) {
+            self.cleanup_failed_start(&response, &fds);
+            tracing::warn!(error = %error, "TPM runner snapshot persistence failed");
+            return Err(TpmEffectError::Transient);
+        }
         crate::close_received_fds(&fds);
-        let _guard = self.state.pidfd_table.mutation_guard();
-        self.state
-            .pidfd_table
-            .register(
-                self.vm_id.as_str().to_owned(),
-                "swtpm".to_owned(),
-                crate::supervisor::pidfd_table::PidfdEntry {
-                    pidfd,
-                    pid: response.pid,
-                    start_time_ticks: response.start_time_ticks,
-                },
-            )
-            .map_err(|_| TpmEffectError::Transient)?;
-        self.state
-            .pidfd_table
-            .snapshot()
-            .map_err(|_| TpmEffectError::Transient)?;
         Ok(())
     }
 
@@ -364,7 +455,13 @@ pub(crate) fn reconcile_device_tpm(
     binary: SignedBinaryRef,
     caller_role: BrokerCallerRole,
 ) -> Result<TpmReconcileOutcome, d2b_provider_device_tpm::TpmControllerError> {
-    let executor = LiveTpmEffectExecutor::new(state, resolver, vm_id.clone(), caller_role);
+    let executor = LiveTpmEffectExecutor::new(
+        state,
+        resolver,
+        vm_id.clone(),
+        caller_role,
+        migration_decision.requires_migration(),
+    );
     let mut effect = ProductionTpmEffectPort::new(
         state,
         vm_id,

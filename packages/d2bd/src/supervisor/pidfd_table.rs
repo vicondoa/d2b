@@ -265,6 +265,28 @@ impl PidfdTable {
         removed
     }
 
+    /// Remove an entry only when it still identifies the supplied process.
+    /// Rollback paths use this to avoid deleting a newer/live registration
+    /// that won a concurrent spawn race.
+    pub fn deregister_if_matches(
+        &self,
+        vm: &str,
+        role: &str,
+        pid: i32,
+        start_time_ticks: u64,
+    ) -> bool {
+        let mut entries = self.entries.write();
+        let key = (vm.to_owned(), role.to_owned());
+        let matches = entries
+            .get(&key)
+            .is_some_and(|entry| entry.pid == pid && entry.start_time_ticks == start_time_ticks);
+        if matches {
+            entries.remove(&key);
+            self.bump_generation();
+        }
+        matches
+    }
+
     pub fn generation(&self) -> u64 {
         self.generation.load(Ordering::Acquire)
     }
@@ -886,6 +908,27 @@ mod tests {
         let dropped = table.deregister("alpha", "ch").expect("present");
         assert_eq!(dropped.pid, 4242);
         assert_eq!(table.len(), 0);
+    }
+
+    #[test]
+    fn conditional_deregister_preserves_a_newer_registration() {
+        let table = PidfdTable::new(fresh_state_path("conditional-deregister"));
+        table
+            .register(
+                "alpha".into(),
+                "swtpm".into(),
+                PidfdEntry {
+                    pidfd: pipe_owned_fd(),
+                    pid: 4242,
+                    start_time_ticks: 1234,
+                },
+            )
+            .unwrap();
+
+        assert!(!table.deregister_if_matches("alpha", "swtpm", 9001, 1234));
+        assert!(table.contains("alpha", "swtpm"));
+        assert!(table.deregister_if_matches("alpha", "swtpm", 4242, 1234));
+        assert!(!table.contains("alpha", "swtpm"));
     }
 
     #[test]
