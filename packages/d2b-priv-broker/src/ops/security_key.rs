@@ -197,6 +197,7 @@ fn read_hex_attr(path: &Path) -> Option<u16> {
 }
 
 /// Check whether a sysfs hidraw entry is a FIDO-class device.
+#[cfg(test)]
 fn is_fido_device(sysfs_entry: &Path) -> bool {
     fido_device_match(sysfs_entry).is_some()
 }

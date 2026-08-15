@@ -10,6 +10,18 @@ use crate::types::BundleOpId;
 /// Maximum serialized opaque effect-id length.
 pub const MAX_VOLUME_EFFECT_WIRE_ID_BYTES: usize = 128;
 
+/// Invalid opaque effect ID.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VolumeEffectIdError;
+
+impl fmt::Display for VolumeEffectIdError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("volume-effect-id-invalid")
+    }
+}
+
+impl std::error::Error for VolumeEffectIdError {}
+
 macro_rules! opaque_id {
     ($name:ident) => {
         #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
@@ -27,12 +39,7 @@ macro_rules! opaque_id {
             type Error = VolumeEffectIdError;
 
             fn try_from(value: String) -> Result<Self, Self::Error> {
-                if value.is_empty()
-                    || value.len() > MAX_VOLUME_EFFECT_WIRE_ID_BYTES
-                    || !value.bytes().all(|byte| byte.is_ascii_graphic())
-                {
-                    return Err(VolumeEffectIdError);
-                }
+                validate_effect_wire_id(&value)?;
                 Ok(Self(value))
             }
         }
@@ -54,24 +61,22 @@ macro_rules! opaque_id {
     };
 }
 
+fn validate_effect_wire_id(value: &str) -> Result<(), VolumeEffectIdError> {
+    if value.is_empty()
+        || value.len() > MAX_VOLUME_EFFECT_WIRE_ID_BYTES
+        || !value.bytes().all(|byte| byte.is_ascii_graphic())
+    {
+        return Err(VolumeEffectIdError);
+    }
+    Ok(())
+}
+
 opaque_id!(VolumeId);
 opaque_id!(SourcePolicyId);
 opaque_id!(LayoutEntryId);
 opaque_id!(UserId);
 opaque_id!(ViewId);
 opaque_id!(SealingPolicyId);
-
-/// Invalid opaque effect ID.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct VolumeEffectIdError;
-
-impl fmt::Display for VolumeEffectIdError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("volume-effect-id-invalid")
-    }
-}
-
-impl std::error::Error for VolumeEffectIdError {}
 
 /// Access requested for an opaque Volume mount token.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -162,12 +167,7 @@ impl VolumeMountToken {
         token: impl Into<String>,
     ) -> Result<Self, VolumeEffectIdError> {
         let token = token.into();
-        if token.is_empty()
-            || token.len() > MAX_VOLUME_EFFECT_WIRE_ID_BYTES
-            || !token.bytes().all(|byte| byte.is_ascii_graphic())
-        {
-            return Err(VolumeEffectIdError);
-        }
+        validate_effect_wire_id(&token)?;
         Ok(Self {
             volume,
             view,

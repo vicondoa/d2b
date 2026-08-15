@@ -212,7 +212,7 @@ pub fn live_prepare_state_dir(
                 reason: crate::ops::swtpm_dir::reasons::DERIVATION_FAILED.to_owned(),
             })?
             .to_owned();
-        let swtpm_dir = legacy.destination.clone();
+        let swtpm_dir = legacy.destination;
         let per_vm_root =
             swtpm_dir
                 .parent()

@@ -267,7 +267,6 @@ impl CoreTpmEffectExecutor for LiveTpmEffectExecutor<'_> {
     ) -> Result<(), TpmEffectError> {
         if self.prepared_swtpm_ticket.as_ref() != Some(ticket)
             || binary.kind() != BinaryKind::Swtpm
-            || settings.validate().is_err()
             || d2b_provider_device_tpm::SwtpmArgv::for_settings(settings).is_err()
         {
             return Err(TpmEffectError::SpawnRejected);
@@ -279,16 +278,16 @@ impl CoreTpmEffectExecutor for LiveTpmEffectExecutor<'_> {
         {
             return Ok(());
         }
-        if self
-            .state
-            .pidfd_table
-            .has_entry(self.vm_id.as_str(), "swtpm")
         {
             let _mguard = self.state.pidfd_table.mutation_guard();
-            self.state
+            if self
+                .state
                 .pidfd_table
-                .deregister(self.vm_id.as_str(), "swtpm");
-            let _ = self.state.pidfd_table.snapshot();
+                .deregister(self.vm_id.as_str(), "swtpm")
+                .is_some()
+            {
+                let _ = self.state.pidfd_table.snapshot();
+            }
         }
         let intent = self.runner_intent("swtpm")?;
         let (response, fds) =

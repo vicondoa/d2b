@@ -29,10 +29,17 @@ pub fn build_tpm_state_volume_spec(
     device_uid: &ResourceUid,
     execution_ref: &ResourceRef,
 ) -> Result<Value, TpmResourceEffectError> {
+    let short = device_short(device_uid);
+    build_tpm_state_volume_spec_with_short(&short, execution_ref)
+}
+
+fn build_tpm_state_volume_spec_with_short(
+    short: &str,
+    execution_ref: &ResourceRef,
+) -> Result<Value, TpmResourceEffectError> {
     if execution_ref.resource_type().as_str() != "Host" {
         return Err(TpmResourceEffectError::InvalidExecutionRef);
     }
-    let short = device_short(device_uid);
     if short.len() != 12 {
         return Err(TpmResourceEffectError::InvalidDevice);
     }
@@ -97,8 +104,8 @@ pub fn build_tpm_state_volume_resource(
     if device_ref.resource_type().as_str() != "Device" {
         return Err(TpmResourceEffectError::InvalidDevice);
     }
-    let spec = build_tpm_state_volume_spec(device_uid, execution_ref)?;
     let short = device_short(device_uid);
+    let spec = build_tpm_state_volume_spec_with_short(&short, execution_ref)?;
     Ok(serde_json::json!({
         "apiVersion": "resources.d2bus.org/v3",
         "type": "Volume",
