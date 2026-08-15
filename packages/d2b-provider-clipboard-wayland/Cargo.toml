@@ -15,15 +15,3 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 rustix = { workspace = true, features = ["event", "fs"] }
-
-[[bin]]
-name = "clipboard-controller"
-path = "src/bin/clipboard-controller.rs"
-
-[[bin]]
-name = "clipd-host"
-path = "src/bin/clipd-host.rs"
-
-[[bin]]
-name = "picker-session"
-path = "src/bin/picker-session.rs"

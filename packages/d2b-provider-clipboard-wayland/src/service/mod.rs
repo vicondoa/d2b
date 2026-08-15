@@ -46,11 +46,11 @@ impl AuthenticatedClipboardSession {
     pub fn from_component_session<C>(
         session: &AuthenticatedComponentSession<C>,
     ) -> Result<Self, ClipboardServiceError> {
-        Self::from_route_binding(session.route_binding())
+        Self::from_authenticated_route(session.route_binding())
     }
 
     /// Derive clipboard identity from a canonical authenticated route.
-    pub(crate) fn from_route_binding(
+    pub fn from_authenticated_route(
         route: AuthenticatedSessionRouteBinding,
     ) -> Result<Self, ClipboardServiceError> {
         let provider_matches = route
@@ -433,6 +433,8 @@ pub enum ClipboardServiceError {
     HostSessionInvalid,
     /// A received attachment failed mandatory kernel metadata checks.
     AttachmentRejected,
+    /// Daemon-owned workers were not drained before authority release.
+    AuthorityReleaseIncomplete,
 }
 
 impl core::fmt::Display for ClipboardServiceError {
@@ -449,6 +451,7 @@ impl core::fmt::Display for ClipboardServiceError {
             Self::EchoSuppressed => "echo-suppressed",
             Self::HostSessionInvalid => "host-session-invalid",
             Self::AttachmentRejected => "attachment-rejected",
+            Self::AuthorityReleaseIncomplete => "authority-release-incomplete",
         })
     }
 }

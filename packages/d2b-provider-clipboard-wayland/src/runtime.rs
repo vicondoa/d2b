@@ -1,6 +1,6 @@
 //! Authenticated clipboard Provider runtime composition.
 
-use d2b_provider_toolkit::AuthenticatedComponentSession;
+use d2b_provider_toolkit::{AuthenticatedComponentSession, AuthenticatedSessionRouteBinding};
 
 use crate::{
     AuthenticatedPasteRoute, ClipboardAuditSink, ClipboardServiceError, DisplayDependencyEvidence,
@@ -100,6 +100,15 @@ impl<E: ClipboardProcessEffectPort> ClipboardRuntime<E> {
         Ok(authenticated)
     }
 
+    /// Admit a route retained by the daemon after bus registration.
+    pub fn admit_route(
+        &self,
+        route: AuthenticatedSessionRouteBinding,
+    ) -> Result<AuthenticatedClipboardSession, ClipboardRuntimeError> {
+        AuthenticatedClipboardSession::from_authenticated_route(route)
+            .map_err(|_| ClipboardRuntimeError::SessionUnauthenticated)
+    }
+
     /// Admit a bridge session for host/Guest selection mediation.
     pub fn admit_bridge_session<C>(
         &self,
@@ -165,6 +174,23 @@ impl<E: ClipboardProcessEffectPort> ClipboardRuntime<E> {
             .map_err(ClipboardRuntimeError::Service)
     }
 
+    /// Capture a Guest selection through the daemon-retained route.
+    pub fn capture_guest_route(
+        &mut self,
+        route: AuthenticatedSessionRouteBinding,
+        mime: &str,
+        bytes: &[u8],
+        now_secs: u64,
+    ) -> Result<String, ClipboardRuntimeError> {
+        let authenticated = self.admit_route(route)?;
+        if authenticated.role() != ClipboardServiceRole::Bridge {
+            return Err(ClipboardRuntimeError::SessionRoleInvalid);
+        }
+        self.host
+            .capture_guest(&authenticated, mime, bytes, now_secs)
+            .map_err(ClipboardRuntimeError::Service)
+    }
+
     /// Capture one host selection after authenticating the bound User bridge.
     pub fn capture_host<C>(
         &mut self,
@@ -175,6 +201,24 @@ impl<E: ClipboardProcessEffectPort> ClipboardRuntime<E> {
         now_secs: u64,
     ) -> Result<String, ClipboardRuntimeError> {
         let authenticated = self.admit_bridge_session(session)?;
+        self.host
+            .capture_host(&authenticated, mime, bytes, source_event, now_secs)
+            .map_err(ClipboardRuntimeError::Service)
+    }
+
+    /// Capture a host selection through the daemon-retained route.
+    pub fn capture_host_route(
+        &mut self,
+        route: AuthenticatedSessionRouteBinding,
+        mime: &str,
+        bytes: &[u8],
+        source_event: Option<GuestSelectionEvent>,
+        now_secs: u64,
+    ) -> Result<String, ClipboardRuntimeError> {
+        let authenticated = self.admit_route(route)?;
+        if authenticated.role() != ClipboardServiceRole::Bridge {
+            return Err(ClipboardRuntimeError::SessionRoleInvalid);
+        }
         self.host
             .capture_host(&authenticated, mime, bytes, source_event, now_secs)
             .map_err(ClipboardRuntimeError::Service)
@@ -202,6 +246,14 @@ impl<E: ClipboardProcessEffectPort> ClipboardRuntime<E> {
         self.host
             .flush_audit(sink, limit)
             .map_err(|_| ClipboardRuntimeError::Service(ClipboardServiceError::AuditUnavailable))
+    }
+
+    /// Drain daemon-owned workers without releasing the authenticated
+    /// ComponentSession authority.
+    pub fn drain(&mut self) -> Result<(), ClipboardRuntimeError> {
+        self.effects
+            .drain()
+            .map_err(ClipboardRuntimeError::Service)
     }
 
     /// Finalize in order: stop workers, purge retained history, then release

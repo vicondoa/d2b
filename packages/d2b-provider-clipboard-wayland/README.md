@@ -29,12 +29,17 @@ The Provider is service-only and exports no semantic ResourceType. Core owns
 the two component Process resources; the controller creates only operation
 scoped picker EphemeralProcesses.
 
-## Controllers / services / workers / binaries
+## Controllers / services / workers
 
 The crate exposes clipd-host policy/history/FD safety, clipboard-controller
 placement, metadata-only picker records, and fail-closed audit queue types.
 The display bridge is a typed effect port, not a filesystem or compositor
 socket.
+
+Runtime process admission and supervision are daemon-owned. This crate does
+not install standalone Provider binaries; `d2bd` launches the signed
+controller, host service, and picker worker through authenticated
+ComponentSession and ProviderSupervisor effect ports.
 
 ## Placement and dependencies
 
