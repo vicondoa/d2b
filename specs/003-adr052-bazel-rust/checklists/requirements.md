@@ -1,6 +1,6 @@
 # Specification Quality Checklist: ADR 0052 Under ADR 0054
 
-**Purpose**: Validate the amended Track A artifact set before plan panel.
+**Purpose**: Validate the amended Track A artifact set before review.
 
 **Amended**: 2026-08-05
 
@@ -39,7 +39,7 @@
   real-libshpool selection.
 - [x] Generic main Clippy and tests have the exact ADR 0054 exclusion sets.
 - [x] Broker contexts retain serial execution and distinct target dirs.
-- [x] API fingerprint and changed-scope package selection derive manifest paths
+- [x] Changed-scope package selection derives manifest paths
   and Cargo package names from locked offline root-workspace membership, with
   explicit independent-workspace and generated `packages/policy-inputs`
   classifications and an unknown-entry refusal.
@@ -176,13 +176,13 @@
 ## Product Requirements
 
 - [x] All six original user stories remain.
-- [x] The eighteen execution-manifest IDs remain unchanged.
+- [x] The seventeen execution-manifest IDs remain unchanged.
 - [x] Exact coverage, topology, locator, per-case evidence, cache, deadline,
   performance, qualification, promotion, alias, and retirement requirements
   remain.
 - [x] FR identifiers are sequential from FR-001 through FR-090.
 - [x] Success criteria are sequential from SC-001 through SC-043.
-- [x] Fixture-backed surfaces remain outside the eighteen-surface migration.
+- [x] Fixture-backed surfaces remain outside the seventeen-surface migration.
 - [x] Public Make names and required context remain compatibility contracts.
 - [x] Provider `RESOLVE_NO_MAGICLINKS`-only opens, deliberate absence of
   `RESOLVE_BENEATH`/`RESOLVE_NO_SYMLINKS`, permissive fallback leaf,
@@ -213,7 +213,7 @@
 - [x] Every cache key input has an action/repository applicability row and a
   table-driven mutation of every applicable primary key and restore prefix.
 - [x] Four authoritative promoted slice targets and exact mappings for all
-  eight public leaves and five Bazel aliases are explicit.
+  seven public leaves and four Bazel aliases are explicit.
 - [x] Typed post-promotion run units derive eligibility from the complete
   paginated protected-`v3` run stream, where a unit is one distinct
   push-created (run ID, head SHA) pair, attempts `1..max` are that unit's
@@ -247,7 +247,7 @@
   `no-shell-inventory-unguarded-spawn`,
   `no-shell-inventory-missing-zero-site-record`, and
   `no-shell-inventory-planted-shell`.
-- [x] All six shadow Make targets enter `APPROVED_MAKE_TARGETS` in
+- [x] All five shadow Make targets enter `APPROVED_MAKE_TARGETS` in
   `packages/xtask/tests/policy_ci.rs` in the same wave, with positive and
   negative policy tests.
 - [x] spec003w6 entry requires a containing published semantic release tag
@@ -255,11 +255,10 @@
   ancestry, equal peeled local/origin tag commits, and a non-draft release,
   with both draft and prerelease false and a no-argument contributor-only
   validator with exact fixed-code command blocks.
-- [x] VerifiedExecutable has compiler-derived closed public/hidden/inherent/
-  explicit/auto/blanket API snapshots and focused rustdoc compile-fail
-  construction, descriptor-access, trait, formatting/serialization,
-  clone/copy/default, conversion, and minting seals, with no Cargo-shelling
-  fixture.
+- [x] VerifiedExecutable has defining-crate compiler ambiguity assertions,
+  focused rustdoc compile-fail coverage, and external-seal tests for
+  construction, descriptor access, traits, formatting/serialization,
+  clone/copy/default, conversion, and minting, with no Cargo-shelling fixture.
 - [x] Same-descriptor execution consumes `VerifiedExecutable` by value into
   the only public consumer in the same dependency-leaf crate. That consumer
   invokes only the exact immutable Nix-built static C
@@ -384,7 +383,7 @@
 - [x] spec003w6 and spec003w7 eligibility clocks remain independent;
   spec003w7 qualification/code prep may run early, while its shared-file task
   and merge depend on merged spec003w6 and then rebase, revalidate, and
-  re-panel.
+  review again.
 - [x] Task IDs, inline dependencies, and the adjacency graph pass the
   read-only plan-structure validator, which first censuses every unordered,
   ordered, indented, and blockquoted Markdown unchecked task-list form, rejects
@@ -472,12 +471,10 @@
   row and realized artifact, and complete/degraded evidence variants cannot
   contradict their common classification.
 - [x] Required repository validation commands and artifact scans pass.
-- [ ] Selected-roster Track A plan panel applies the versioned selection
-  table's floor and triggers, dispatches exactly the lifecycle selection's
-  roster and per-seat profiles, and returns unanimous signoff with empty
-  recommendations from every selected seat.
+- [ ] Track A release review applies the versioned selection table's floor and
+  triggers and returns with no unresolved recommendations.
 
 ## Readiness
 
-The specification is ready to request the amended plan panel. Implementation
+The specification is ready to request the amended plan review. Implementation
 remains blocked until the final unchecked item passes.

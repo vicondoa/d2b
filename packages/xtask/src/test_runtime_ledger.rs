@@ -21,7 +21,7 @@ use std::{
     collections::BTreeMap,
     collections::BTreeSet,
     fs::{self, OpenOptions},
-    io::Write,
+    io::{self, Write},
     path::{Path, PathBuf},
     process::ExitCode,
     sync::atomic::{AtomicU64, Ordering},
@@ -29,7 +29,7 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-use crate::{diagnostic_redaction::redact_path, gen_spec_set::render_json};
+use crate::diagnostic_redaction::redact_path;
 
 pub const ARTIFACT_KIND: &str = "d2b-test-runtime-ledger";
 pub const SCHEMA_VERSION: u32 = 2;
@@ -59,6 +59,87 @@ pub const CRATE_BUDGET_MS: u64 = 3_000;
 /// per-crate budgets mean anything. A single CPU sample is too thin to support
 /// a stable nearest-rank p95, so the gate refuses fewer repetitions.
 pub const MIN_REPETITIONS: usize = 3;
+
+/// Serializes the runtime ledger in its committed style: two-space indent, a
+/// space on both sides of every object-key colon, and a trailing newline.
+fn render_json<T: Serialize>(value: &T) -> Result<String, Box<dyn std::error::Error>> {
+    let mut buffer = Vec::new();
+    let formatter = SpacedPretty::default();
+    let mut serializer = serde_json::Serializer::with_formatter(&mut buffer, formatter);
+    value.serialize(&mut serializer)?;
+    buffer.push(b'\n');
+    Ok(String::from_utf8(buffer)?)
+}
+
+#[derive(Default)]
+struct SpacedPretty<'a> {
+    inner: serde_json::ser::PrettyFormatter<'a>,
+}
+
+impl serde_json::ser::Formatter for SpacedPretty<'_> {
+    fn begin_array<W>(&mut self, writer: &mut W) -> io::Result<()>
+    where
+        W: ?Sized + io::Write,
+    {
+        self.inner.begin_array(writer)
+    }
+
+    fn end_array<W>(&mut self, writer: &mut W) -> io::Result<()>
+    where
+        W: ?Sized + io::Write,
+    {
+        self.inner.end_array(writer)
+    }
+
+    fn begin_array_value<W>(&mut self, writer: &mut W, first: bool) -> io::Result<()>
+    where
+        W: ?Sized + io::Write,
+    {
+        self.inner.begin_array_value(writer, first)
+    }
+
+    fn end_array_value<W>(&mut self, writer: &mut W) -> io::Result<()>
+    where
+        W: ?Sized + io::Write,
+    {
+        self.inner.end_array_value(writer)
+    }
+
+    fn begin_object<W>(&mut self, writer: &mut W) -> io::Result<()>
+    where
+        W: ?Sized + io::Write,
+    {
+        self.inner.begin_object(writer)
+    }
+
+    fn end_object<W>(&mut self, writer: &mut W) -> io::Result<()>
+    where
+        W: ?Sized + io::Write,
+    {
+        self.inner.end_object(writer)
+    }
+
+    fn begin_object_key<W>(&mut self, writer: &mut W, first: bool) -> io::Result<()>
+    where
+        W: ?Sized + io::Write,
+    {
+        self.inner.begin_object_key(writer, first)
+    }
+
+    fn begin_object_value<W>(&mut self, writer: &mut W) -> io::Result<()>
+    where
+        W: ?Sized + io::Write,
+    {
+        writer.write_all(b" : ")
+    }
+
+    fn end_object_value<W>(&mut self, writer: &mut W) -> io::Result<()>
+    where
+        W: ?Sized + io::Write,
+    {
+        self.inner.end_object_value(writer)
+    }
+}
 
 /// Upper bound on a printable identifier (test id or crate id).
 /// Long enough for any crate-qualified `crate::module::submodule::test` path

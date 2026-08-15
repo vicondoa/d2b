@@ -91,11 +91,11 @@ of the six classes defined in `docs/specs/README.md`:
    this set depends on kcp; nothing in the set requires re-running or
    re-verifying that measurement, and doing so would validate a rejected
    alternative rather than a required capability.
-5. **A spike never substitutes for the panel or for implementation
+5. **A spike never substitutes for review or implementation
    validation.** Per D024 this task's initial output is documentation only,
-   and per the parent ADR's review process the request-bound selected-roster
-   panel runs only against an integrated implementation candidate. Nothing in
-   this document runs, or claims to have run, that panel. Every spike below is additionally
+   and the parent ADR's review process applies to an integrated implementation
+   candidate. Nothing in this document runs, or claims to have completed that
+   review. Every spike below is additionally
    scheduled to be **subsumed and then deleted**: once the named production
    work item exists with its own in-tree conformance/bench test achieving
    equal or stricter coverage, the disposable `proofs/<slug>/` crate is
@@ -661,7 +661,7 @@ performed by the owning production work item, per anti-claim rule 5.
 
 ## Hermetic test-runtime budget reference (D094)
 
-The D094 execution budgets in `ADR-046-validation-and-delivery` §10.16 are
+The D094 execution budgets in the repository's test-budget guidance are
 measurable and are recorded, not asserted by feel:
 
 - **Reference runner.** The pinned CI/reference runner class (fixed vCPU/RAM

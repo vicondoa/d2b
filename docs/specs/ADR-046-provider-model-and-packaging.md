@@ -548,7 +548,7 @@ Every Provider dossier specifies:
   gate (D094);
 - test placement and execution budgets (D094): `src/` units and `tests/` are
   fast, in-process, deterministic, parallel-safe hermetic tests within the
-  `ADR-046-validation-and-delivery` §10.16 budgets (individual normal test p95
+  the repository's test-budget guidance budgets (individual normal test p95
   ≤50 ms, no wall-clock sleep; per-crate `--lib --tests` ≤3 s), and every real
   process/socket/container/Nix/guest/hardware/live scenario lives only in
   `integration/`.

@@ -65,15 +65,8 @@ accessor, `Deref`, `Borrow<OwnedFd>`, `AsFd`, `AsRawFd`, `IntoRawFd`,
 `Default`, `From`, `Into`, `AsRef`, `Clone`, `Copy`, `Debug`, `Display`,
 `Serialize`, or `Deserialize`.
 
-The compiler-derived API census under `packages/d2b-api-surface/` is the
-authority. `VerifiedExecutable` is a capability root. Its public item snapshot
-must contain only the opaque type and the by-value provider/execution
-signatures, its explicit locally-authored trait-implementation allowlist is
-empty, and its compiler-emitted auto/blanket implementation set is pinned
-exactly for the selected toolchain. Any added public field, method, associated
-item, re-export, explicit trait implementation, or changed auto/blanket set is
-an API-surface failure. Focused rustdoc `compile_fail` examples prove the
-downstream type-system properties that the census alone cannot: callers cannot
+Defining-crate compiler ambiguity assertions, focused rustdoc `compile_fail`
+examples, and external-seal tests are authoritative. They prove callers cannot
 construct the type, access or extract its descriptor, coerce it through
 `Deref`/`Borrow`/`AsFd`, clone it, serialize or format it, convert an
 unverified path or descriptor into it, or implement the sealed minting trait.
@@ -615,7 +608,7 @@ Every provider refusal is nonzero, redacted, and actionable:
 
 | Reason | Stable input named | Exact recovery |
 | --- | --- | --- |
-| Runfiles entry missing in Bazel mode | Declared runfiles-relative provider key | `make test-bazel-rust-main`, `make test-bazel-rust-api`, `make test-bazel-rust-broker`, or `make test-bazel-rust-aux`, selected only by the closed coverage-map slice enum after declaring the key as `data`. |
+| Runfiles entry missing in Bazel mode | Declared runfiles-relative provider key | `make test-bazel-rust-main`, `make test-bazel-rust-broker`, or `make test-bazel-rust-aux`, selected only by the closed coverage-map slice enum after declaring the key as `data`. |
 | Provider is not a regular file | Declared runfiles-relative provider key | The same exact closed slice command after correcting the named target's `data` declaration. |
 | Provider is not executable | Declared runfiles-relative provider key and mode | The same exact closed slice command after rebuilding the named target. |
 | Provider is older than its newest declared input | Declared runfiles-relative provider key | The same exact closed slice command after rebuilding the named target. |
@@ -628,7 +621,7 @@ The renderer accepts only the closed versioned slice-command enum; there is no
 free-form command string. Before alias removal, command version 1 renders the
 existing shadow slice target. Alias removal atomically updates every renderer
 and byte-exact test to command version 2's corresponding enduring
-`make test-rust-slice-{main,api,broker,aux}` target. No repository state may
+`make test-rust-slice-{main,broker,aux}` target. No repository state may
 name a target absent from that state. The declared runfiles-relative provider key is
 repository content and is permitted in the refusal. The runfiles root,
 resolved absolute location, descriptor number, argv, environment value, and

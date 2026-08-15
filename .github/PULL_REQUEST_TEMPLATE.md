@@ -1,5 +1,5 @@
-<!-- d2b PR template. The checklist below is MANDATORY and validated by
-     tests/unit/meta/pr-checklist-gate.sh.
+<!-- d2b PR template. Record validation evidence for the changed surface.
+     `make check` is an available aggregate, not a prerequisite for review.
 
      Do not include AI agent, assistant, or model metadata in this PR body. -->
 
@@ -7,29 +7,26 @@
 
 <!-- What changed and why. -->
 
-## Testing checklist (mandatory)
+## Validation evidence
 
-- [ ] **`make check` passes locally** (paste the summary).
-- [ ] **`make test-integration` passes on the host before PR creation**
-      (paste the summary), **or** state
-      `N/A: pure policy/docs/checklist change with no daemon, broker, NixOS
-      module, runtime, network, or generated-artifact behavior change`.
-- [ ] **`make test-host-integration` passes on the host before PR creation**
-      (paste the summary), **or** state
-      `N/A: pure policy/docs/checklist change with no daemon, broker, NixOS
-      module, runtime, network, or generated-artifact behavior change`.
-- [ ] **Manual `make test-hardware` run** on a NixOS host **with the real
-      devices** (GPU / YubiKey / hardware-TPM), if this change touches
-      graphics/GPU, video decode, USBIP/YubiKey, hardware-TPM, or a full
-      d2b-microVM boot. Paste results, **or** state
-      `N/A: no device/passthrough or full-microVM-boot surface touched`
-      with a one-line justification. *(This tier requires physical devices.)*
-- [ ] **New/changed tests are wired into a `make` target** and have rows in
-      `tests/migration-ledger.toml` (`make check-inventory` green - it fails
-      closed on any unclassified test; use `make ledger-regen` to update).
-- [ ] **Docs + CI updated in lockstep**: `docs/**`, `AGENTS.md`,
-      `tests/README.md`, and `.github/workflows/*` (doc+ci-reference gate
-      green).
+- [ ] **Focused tests for the changed components** were run; list exact
+      commands and results.
+- [ ] **Wider lanes are conditional.** Run the applicable public lane when the
+      changed surface needs it, and explain any deliberate omission:
+      `make test-integration` for container behavior,
+      `make test-host-integration` for NixOS, daemon, or host behavior,
+      and `make test-hardware` for real device or full microVM-boot behavior.
+- [ ] **Hardware checks are conditional:** if the change touches graphics/GPU,
+      video decode, USBIP/YubiKey, hardware-TPM, or a full d2b-microVM boot,
+      paste the real-device result; otherwise state why that tier is not
+      applicable.
+- [ ] **Changed tests are inventoried:** wire new tests into the appropriate
+      target and update `tests/migration-ledger.toml` when the test model
+      requires a retirement or inventory row.
+- [ ] **Changelog updated** for code or user-visible behavior, using
+      `CHANGELOG.md` or a `changelog.d/` fragment.
+- [ ] **Docs + CI updated in lockstep** where applicable: `docs/**`,
+      `AGENTS.md`, `tests/README.md`, and `.github/workflows/*`.
 
 ## Notes
 

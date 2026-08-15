@@ -90,10 +90,8 @@ implement export admission and the import-owned projection lifecycle over
 factory metadata. `ADR046-device-004` must publish this family's factory in its
 signed descriptor. All three find three families that work and a fourth that
 returns a typed error, and all three would inherit the mode-blind admission
-shape above. `specs/001-adr046-d2b3-completion/implementation-debt.md` records
-this at `### 13.3 Security-key cannot construct a signed projection factory at
-all` and carries it forward at `### 19.8 The security-key semantic projection is
-not invented` as a specification gap whose remedy is owner work, not slice work.
+shape above. An earlier implementation-debt audit records this as a
+specification gap whose remedy is owner work, not slice work.
 This record is that work.
 
 **The constraint that rules out the obvious answer.** `Device` is the plausible
@@ -1085,28 +1083,6 @@ compare before. Add to the Provider descriptor validation section:
 > rejected against any newer installed version, with the operator remedy of
 > installing a Provider artifact built for the Core protocol in use.
 
-### H. `specs/001-adr046-d2b3-completion/implementation-debt.md`
-
-Both cited sections exist at this branch's base, verified against the committed
-blob rather than the working tree:
-
-```text
-$ git show origin/v3:specs/001-adr046-d2b3-completion/implementation-debt.md \
-    | grep -n '^### 13.3\|^### 19.8'
-942:### 13.3 Security-key cannot construct a signed projection factory at all
-2019:### 19.8 The security-key semantic projection is not invented
-```
-
-The blob hashes `19e969d0a5cfe4091c9a25172c449342cf668e01a91978933ed1339b7f16e6cd`,
-identical to the worktree copy, and this branch does not modify that file:
-`git diff --name-only origin/v3..HEAD` lists only the three `docs/` files this
-record touches. `origin/v3` is `2c665603`, which is the merge commit for PR #368
-from `adr046-w5`, so the W5 work is merged into `v3` and is not an unmerged
-branch. Both citations stand. Each section gains a closing line naming this ADR
-and the amendment that discharges it. Ownership of that edit belongs to whichever
-wave lands amendments A to G, not to this record, because the debt register
-describes the tree and the tree does not change until then.
-
 ## Tests required to consume this decision
 
 Each is mechanically checkable and named so a wave's stopping condition can cite
@@ -1376,29 +1352,27 @@ Nix admission, owned by `ADR046-nix-configuration` and
   without repinning is the standard way this corpus regresses, so it is named
   here rather than left to the wave to rediscover.
 
-API surface, for decision 6's mint-surface widening and the new error variants:
+Public API contract, for decision 6's mint-surface widening and the new error
+variants:
 
 - `admits_backing_ref` is a new public method on `ProjectionFactory`, a type
-  already carried in `packages/d2b-bus/tests/approved-capability-api.txt`;
-  `admits_export_target`'s signature changes; `ProjectionFactory` gains a
-  `projection_protocol_version` accessor; `SemanticProjectionProtocolVersion`
-  and `LEGACY_ABSENT_PROTOCOL_VERSION` are new public items; and
-  `ProviderContractError` gains `ImportOwnedOriginRejected` and
-  `ProjectionProtocolVersionMismatch` while `SemanticContractError` loses
-  `BackingRefTypesUndetermined`. Every one of those is a two-way census entry,
-  and the removal is as census-visible as the additions. The implementing wave
-  runs `make api-surface-pin` to regenerate `tests/golden/api-surface/` and the
-  approved capability list, and `make test-rust-api-surface` to prove the
-  regenerated census matches. The regeneration is a deliberate trust-boundary
-  change whose stated reason is this record; the census must not be pinned
-  without citing it.
+  already covered by the defining-crate compiler assertions and public wire/API
+  contract tests; `admits_export_target`'s signature changes;
+  `ProjectionFactory` gains a `projection_protocol_version` accessor;
+  `SemanticProjectionProtocolVersion` and `LEGACY_ABSENT_PROTOCOL_VERSION` are
+  new public items; and `ProviderContractError` gains
+  `ImportOwnedOriginRejected` and `ProjectionProtocolVersionMismatch` while
+  `SemanticContractError` loses `BackingRefTypesUndetermined`. The
+  implementing wave must update those retained assertions and contract tests
+  for the deliberate trust-boundary change.
 
 Lanes that must be green for the implementing wave: `make test-rust`,
-`make test-rust-api-surface`, `make test-drift`, `make test-fixture-contracts`,
-`make test-nix-unit`, `make check-tier0`, `make test-policy`. Two regeneration
-commands run in the same commits as the changes that require them:
-`make api-surface-pin` for the census delta above, and `make nix-unit-pin` for
-the two new nix-unit cases.
+`make test-drift`, `make test-fixture-contracts`, `make test-nix-unit`,
+`make check-tier0`, and `make test-policy`. The defining-crate compiler
+assertions, compile-fail examples, resource mutation seals, external-seal UI
+tests, and public wire/API contract tests cover the capability boundary; the
+only regeneration command needed here is `make nix-unit-pin` for the two new
+nix-unit cases.
 
 ## Invariants this decision creates
 

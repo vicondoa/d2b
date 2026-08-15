@@ -820,8 +820,8 @@ D094 execution model:
 
 - Each migration/replacement row names the **exact old test selector/file** it
   covers and its keep/adapt/move/delete disposition. `RETAIN`/`ADAPT` targets
-  that are hermetic MUST meet the §10.16 model in
-  `ADR-046-validation-and-delivery` (individual normal test advisory
+  that are hermetic MUST meet the repository's test-budget guidance
+  (individual normal test advisory
   wall-clock p95 threshold <=50 ms and no wall-clock sleep; enforced per-crate
   `--lib --tests` aggregate process-CPU p95 <=3 s; future Layer-1 hermetic shard
   target <=60 s). An adapted test that can only pass by spawning a process, hitting the

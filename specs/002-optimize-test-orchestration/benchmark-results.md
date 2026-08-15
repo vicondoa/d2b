@@ -121,7 +121,7 @@ derived from the completed public-target traces, with
 
 | Target | Manifest | Completed leaves | Trace completion |
 | --- | --- | ---: | --- |
-| Rust | `test-rust-executed.json` | 20 | `traces/test-rust-prime.trace.log:46247` |
+| Rust | `test-rust-executed.json` | 19 | `traces/test-rust-prime.trace.log:46247` |
 | Nix unit | `test-nix-unit-executed.json` | 7 | `traces/test-nix-unit-prime.trace.log:58` |
 | direct flake | `test-flake-executed.json` | 1 aggregate leaf | `traces/test-flake-direct-prime.trace.log:32` |
 | legacy Layer-1 flake | `test-flake-layer1-executed.json` | 33 (32 checks + packages) | `traces/test-flake-layer1-prime.trace.log:38` |
@@ -163,12 +163,14 @@ evidence; a static source inventory alone is not acceptance evidence.
 
 ## Rust leaf ownership and conflicts
 
-The baseline serial order is API surface, main workspace, and remaining suite.
-The manually named leaves and their committed ownership are:
+This is a historical benchmark record. The deleted lane is omitted, and the
+remaining target names describe the retained benchmark surface rather than a
+promise that every historical command remains runnable. The baseline serial
+order is the main workspace followed by the remaining suite. The manually
+named retained leaves and their committed ownership are:
 
 | Leaf owner | Coverage | Target directory / state | Conflict or ordering rule |
 | --- | --- | --- | --- |
-| `rust-api-surface` | Compiler-derived API census | `.scratch/rust-test-cache/api-surface-<pin>/census` | Separate rustdoc target; does not share the main Cargo target |
 | `rust-main-format` / `rust-main-clippy` | Format and clippy | `packages/target` | Ordered before workspace tests |
 | `rust-main-workspace-tests` | nextest plus doctests and `d2b-core-smoke` companion | `packages/target` | Companion follows nextest; same target directory |
 | `rust-contract-tests` / `rust-cli-contract-tests` | Fixture-rendered contract and CLI layers | `packages/target` plus fixture outputs | Reuse the main target; cannot overlap it |
@@ -179,7 +181,7 @@ The manually named leaves and their committed ownership are:
 | `rust-deny-*` / `rust-audit-*` | Three workspace policy scans | Lockfiles and tool caches | Independent of test execution, serial in baseline |
 | `rust-stub-no-socket` / `rust-assert-pinned` | Stub smoke and inventory guard | Workspace/broker targets and pinned files | Runs after the other remaining leaves |
 
-The planned optimized DAG can admit API, main, broker, guest, no-bash, and
+The planned optimized DAG can admit main, broker, guest, no-bash, and
 supply-chain owners concurrently subject to the target-directory edges. The
 broker feature chain must remain serial, and all leaves using
 `packages/target` must remain ordered. The baseline does not yet implement
@@ -329,30 +331,23 @@ The accepted three-run warm benchmark was captured at
 `0e563f433ccd41f8a4a57c955679e10fc256cecc`. Final behavior tip
 `0775159a46427364f943e6b7a49fd3079cd79c7f` changes only cold/cache policy and
 passed the complete warm aggregate with exact evidence in 141 coarse seconds.
-GNU Make owns nine bounded `test-rust-leaf-*` nodes, while
+GNU Make owns eight retained bounded `test-rust-leaf-*` nodes, while
 `tests/test-rust.sh` owns only explicit leaf execution. The
-representative host calculated a 12-job budget and admitted at most nine
-lanes. Budgets through nine use one job per lane; the three surplus jobs on
-this host are assigned to the measured API long pole, so its two rustdoc
-passes receive two Cargo jobs each while the complete runnable frontier stays
-within 12.
+representative host calculated a 12-job budget; this historical report covers
+at most eight retained lanes.
 
-Two measured target-state changes removed the remaining warm critical path:
+One measured target-state change removed the remaining warm critical path:
 
 * warm-local fixture/CLI work uses
   `.scratch/rust-test-cache/fixture-contracts`, independent of
   `packages/target`, so its Nix evaluation and Cargo work overlap the main
-  workspace without mutable target-directory sharing;
-* the public and private rustdoc JSON passes use separate stable census
-  targets, and the CPU-bound snapshot checker runs from Cargo's release
-  profile in its own stable target.
+  workspace without mutable target-directory sharing.
 
-CI does not use those duplicated warm targets. Cold execution retains them
-across `make clean` and
-uses a four-lane bounded API/main/broker prebuild frontier, followed by a
+CI does not use the duplicated warm fixture target. Cold execution retains it
+across `make clean` and uses a bounded retained-target prebuild frontier, followed by a
 full-budget fixture, inventory and schema chain on shared targets. CI runs
-API, main, broker, guest shell runner, no-bash AST, schema, inventory and
-supply chain as eight independent full-budget Make jobs.
+main, broker, guest shell runner, no-bash AST, schema, inventory and
+supply chain as seven independent full-budget Make jobs.
 
 The final hyperfine record is
 `.scratch/test-speedup-optimized/test-rust.json`:
@@ -379,13 +374,12 @@ were retained in both measurements.
 
 ## Rust CI result
 
-The pre-change `v3` jobs completed in 5m24s for API, 7m30s for main and
-10m20s for the combined remaining shard. The final PR run split the remaining
-surface and reported:
+The pre-change `v3` jobs completed in 7m30s for main and 10m20s for the
+combined remaining shard. The final PR run split the retained surface and
+reported this historical table:
 
 | CI Make target | Duration |
 | --- | ---: |
-| `test-rust-api-surface` | 4m09s |
 | `test-rust-main` | 6m50s |
 | `test-rust-broker` | 4m15s |
 | `test-rust-guest-shell-runner` | 2m10s |
@@ -406,7 +400,7 @@ fixture lane remains below 15 minutes.
 The passing v1 manifest is
 `.scratch/test-speedup-optimized/test-rust-executed.json`, SHA-256
 `bbc9c72c498e437682251f3790baaa8935d12051e7c7ed40cdcad71c9dc39c8d`.
-It records `run_status = "passed"` and all 20 baseline leaf identifiers.
+It records `run_status = "passed"` and all 19 retained baseline leaf identifiers.
 Direct sorted comparison with the trace-derived baseline manifest has no
 missing or added leaf.
 

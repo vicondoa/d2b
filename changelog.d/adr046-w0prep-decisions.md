@@ -1,8 +1,8 @@
 ### Added
 
 - Recorded twenty ADR 0046 foundation decisions (D099 to D118) in the decision
-  register, closing the implementation-level contracts the first delivery wave
-  needs before any of its four serialized slices can open.
+  register, closing the implementation-level contracts the first implementation
+  stage needs before any of its four serialized slices can open.
 - Froze the resource-plane byte formats that become permanent the moment any
   data exists: the `d2bkey/v1` store key codec, the `d2bval/v1` value frame, the
   `d2b-cjson/v1` canonical JSON profile with its domain-separated SHA-256
@@ -19,12 +19,6 @@
   the service name and code-generation ownership, the v3 error model, the
   request/list/watch/batch admission bounds, the revision-log compaction
   defaults, and the owner, finalizer, label, annotation, and reference bounds.
-- Froze the remaining delivery contracts: the crate and file ownership for the
-  work items that reach beyond their nominal wave, the destinations for the
-  generated Zone storage row, the scope of the shared execution-policy option
-  block, the store dependency pins and bounded runtime capacities, and the
-  staged aggregate idle-RSS evidence model.
-
 ### Changed
 
 - Replaced the resource API spec's `## Limits` section, which asserted that
@@ -36,7 +30,3 @@
   It previously read as an open list, which left the wire enum unbounded, and
   gave the bounded error `reason` an explicit 512-byte ceiling and redaction
   rule.
-- Regenerated the ADR 0046 spec-set, work-item, and implementation-graph
-  manifests for the decision-register and API spec updates. The certified counts
-  are unchanged: 598 nodes, 1940 edges, 543 work items, 55 member specs, maximum
-  topological rank 22, and a 23-node critical path.

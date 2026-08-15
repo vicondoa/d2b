@@ -486,7 +486,7 @@
             echo
             echo "--- video value surface (E3/E5/E6) ---"
             # Every video-tagged enum value, bucketed and given a direction.
-            # Seven separate "doors" were found by hand over four panel rounds;
+            # Seven separate "doors" were found by hand over four review rounds;
             # four of them were the same thing seen four times. This derives the
             # whole set instead, and fails closed on anything it cannot classify.
             VENUS_PROTOCOL_DIR="$vp" \
@@ -543,7 +543,7 @@
             # Rejecting a value and returning a well-formed, non-disclosing
             # reply are separate obligations. Every other gate here checks the
             # first; this one checks the second, after four defects across
-            # three panel rounds came from the gap -- a zeroed sType tripping
+            # three review rounds came from the gap -- a zeroed sType tripping
             # an encoder assert, a nulled count pointer, unwritten output
             # payloads serialised from stale reply storage, and an unfiltered
             # capacity count.

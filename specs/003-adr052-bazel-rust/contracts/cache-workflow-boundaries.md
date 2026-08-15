@@ -46,7 +46,6 @@ change that cache's fetched-byte identity and need not invalidate it.
 | `MODULE.bazel.lock` | A | R |
 | `.bazelrc` | A | R |
 | stable Rust toolchain pin | A | R |
-| nightly Rust toolchain pin | A | R |
 | `packages/Cargo.lock` | A | R |
 | walker `Cargo.lock` | A | R |
 | `packages/Cargo.guest.lock` | A | R |
@@ -73,7 +72,7 @@ change that cache's fetched-byte identity and need not invalidate it.
 | Linux sandbox seccomp and PID-namespace containment patch digest | A | R |
 | patched Bazel output NAR, executable, and capability-ABI digests | A | R |
 | immutable static execution-supervisor source, derivation dependency closure, protocol, output NAR, and executable digests | A | R |
-| stable/nightly action-kind and sandbox-strategy coverage digest | A | - |
+| Rust action-kind and sandbox-strategy coverage digest | A | - |
 | generated BUILD digest | A | - |
 | configured native-target digest | A | - |
 | native runner architecture and exact system/target mapping | A | R |

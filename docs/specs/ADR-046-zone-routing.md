@@ -366,7 +366,7 @@ Unrelated ADR 0045 assumptions excluded from all reuse:
 - ADR45 child-realm spawn contracts (`child_realm_controller_bootstrap.rs`,
   realm-spawn pidfd protocols, `d2b-contracts/src/generated_v2_services/realm.rs`
   realm-controller child-spawn wire).
-- ADR45 delivery seals (xtask delivery wave / panel / seal process).
+- ADR45 delivery records from the earlier implementation line.
 - The shipped fixed 3-unit PID1 endpoint inventory (`d2bd.service` binding
   the daemon-owned `public.sock` itself with `Type=notify`,
   `d2b-priv-broker.socket`, and `d2b-priv-broker.service` as invariants;
@@ -2682,7 +2682,7 @@ The following transitions are NOT simple textual renames:
 | Validation | Updated `negotiate_offer`/`validate_exact` round-trip tests for v3 purposes; canonical encoding stability test; closed-enum exhaustiveness tests |
 | Removal proof | v2 contracts remain; v3 module is additive |
 | Implementation state | Merged |
-| Evidence | `packages/d2b-contracts/src/v3/zone_session.rs` is present with ten inline tests: frozen tag and wire-string vectors, tag round-trip and uniqueness, per-enumeration wire-string uniqueness, fail-closed unassigned and reserved tags, serde round-trip through the frozen wire string, rejection of unknown wire strings, fail-closed purpose-class admission for bootstrap and zone-local, total lifts with partial lowers, variant-name-only Debug, and `guest_session_credential_surface_is_absent` proving the stripped `GUEST_SESSION_CREDENTIAL_*` surface. Caveat: the numeric tag values for the six appended Zone members and the ZoneLink service wire string are an inference; no specification fixes them, and the append-only scheme chosen is wire-visible and is owed panel confirmation. Separately, the appended tags cannot yet reach the wire, because the canonical handshake offer encoder types its fields with the un-extended enums and lives in a file no Wave 2 slice owned; `every_appended_zone_member_refuses_to_reach_the_wire` in `session/contract.rs` pins that. |
+| Evidence | `packages/d2b-contracts/src/v3/zone_session.rs` is present with ten inline tests: frozen tag and wire-string vectors, tag round-trip and uniqueness, per-enumeration wire-string uniqueness, fail-closed unassigned and reserved tags, serde round-trip through the frozen wire string, rejection of unknown wire strings, fail-closed purpose-class admission for bootstrap and zone-local, total lifts with partial lowers, variant-name-only Debug, and `guest_session_credential_surface_is_absent` proving the stripped `GUEST_SESSION_CREDENTIAL_*` surface. Caveat: the numeric tag values for the six appended Zone members and the ZoneLink service wire string are an inference; no specification fixes them, and the append-only scheme chosen is wire-visible and requires an explicit contract decision. Separately, the appended tags cannot yet reach the wire, because the canonical handshake offer encoder types its fields with the un-extended enums and lives in a file no Wave 2 slice owned; `every_appended_zone_member_refuses_to_reach_the_wire` in `session/contract.rs` pins that. |
 
 ### ADR046-routing-010
 

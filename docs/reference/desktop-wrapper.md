@@ -17,7 +17,7 @@ line points at is the **daemon path** - it drives the VM through
 
 The `.desktop` Exec line is part of the operator-visible UX surface,
 and silent drift between "what the wrapper does" and "what the
-docs / panels claim the wrapper does" is a recurring failure mode
+docs claim the wrapper does" is a recurring failure mode
 (KDE session restore re-launches stale wrappers at login; an Exec
 line that previously could have invoked a now-deleted bash codepath would
 look indistinguishable from one that didn't).

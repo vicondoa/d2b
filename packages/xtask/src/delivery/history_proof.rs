@@ -1,8 +1,8 @@
 //! Byte-identical history proof (spec section 12.6, work item
 //! `ADR046-delivery-006`).
 //!
-//! A history-only rebase or retarget may reuse prior panel records only when
-//! the old and new histories carry byte-identical integrated content,
+//! A history-only rebase or retarget may reuse the sealed content proof only
+//! when the old and new histories carry byte-identical integrated content,
 //! byte-identical generated artifacts, and a byte-identical dependency diff
 //! and repository set. [`prove`] checks each of those clauses separately, so a
 //! failure names the clause that failed rather than reporting one opaque
@@ -13,8 +13,8 @@
 //! `snapshot_sha256` covers base and head object IDs, so it is the value that
 //! actually detects the rebase; the proof records both.
 //!
-//! The proof preserves the panel record only. Required CI still reruns on the
-//! new history, which is why nothing here reports a check result.
+//! The proof preserves the content identity only. Required CI still reruns on
+//! the new history, which is why nothing here reports a check result.
 //!
 //! There is no `wave history-proof` subcommand. The proof is an input to
 //! [`merge-eligibility`](super::eligibility), which runs it on every
@@ -110,7 +110,7 @@ pub fn prove(sealed: &CandidateMaterial, current: &CandidateMaterial) -> Result<
     if sealed_members != current_members {
         return Err(DeliveryError::new(
             "history proof failed: the repository set changed, which is a content change and \
-             invalidates the panel",
+             invalidates the sealed content proof",
         ));
     }
 

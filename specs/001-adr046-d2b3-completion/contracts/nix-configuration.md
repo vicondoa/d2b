@@ -1,6 +1,6 @@
 # Contract: Nix configuration surface
 
-**Owning specs**: `ADR-046-nix-configuration`, `ADR-046-zone-routing` | **Waves**: W2, W5, W6
+**Owning specs**: `ADR-046-nix-configuration`, `ADR-046-zone-routing` | **Stages**: configuration, runtime, compatibility
 
 ## What this surface is
 
@@ -15,8 +15,8 @@ and never authored. Per-Zone compiler policy is the narrow exception: it is type
 option schema for the 19 ResourceTypes and qualified types. `bundle-zones.nix` now emits the
 pinned per-Zone `zones/<zone>/resource-bundle.json` artifact. What remains unproved is the
 complete operator activation from that emitted artifact through the production daemon,
-controller-owned effect, and declared-resource removal cleanup. Active local T604 owns that
-positive proof after authoritative provider work merges. W5 retains the emitted-bundle,
+controller-owned effect, and declared-resource removal cleanup. The focused
+operator-activation proof covers that boundary. The retained implementation record includes the emitted-bundle,
 source-generation compatibility, deployment, and double-opt-in contract prerequisites only.
 `zone-resources-json.nix` is retained only as a historical/compatibility input. It cannot
 emit, version, hash, or publish the active envelope. The sole canonical active chain is
@@ -25,17 +25,17 @@ emit, version, hash, or publish the active envelope. The sole canonical active c
 
 ## Obligations
 
-| # | Obligation | Requirement | Wave |
+| # | Obligation | Requirement | Stage |
 | --- | --- | --- | --- |
-| NIX-1 | Restructure `options-zones.nix` as the generated base; emit `generated/resource-types.nix` and per-type `generated/options-zones-<Type>.nix` via `xtask gen-zone-nix-options` | FR-001 | W2 |
-| NIX-2 | Historical W2 compatibility input only: `zone-resources-json.nix` supplied legacy resource JSON but is not an active bundle emitter, version, hash, or publication authority. The canonical active path is `bundle-zones.nix` -> `d2b-resource-compiler` -> `bundle-artifacts.nix` -> installed per-Zone `resource-bundle.json` | FR-001 | W2 |
-| NIX-3 | Add Zone assertions to `assertions.nix` (sole W2 writer of that file) | FR-001 | W2 |
-| NIX-4 | Removing a declared resource activates the new generation immediately and requests async owner- and finalizer-safe deletion with visible cleanup status | FR-005 | W5 |
-| NIX-5 | Extend the `eval-*` flake checks with Zone and resource examples | FR-032 | W5 |
-| NIX-6 | Active local T604 authors and development-validates the exact Volume/Network/Device path and state-preserving cleanup after T221 and every exact workItemId in `tasks.md` `required_manifest_dependencies.T604`. It owns `tests/golden/delivery/host-generation-pre-start-case-ids.txt` and `tests/golden/delivery/host-generation-unit-census-case-ids.txt`, authors and development-validates the `operator-nix-activation-cleanup` validator, and authors the daemon-restart case. It emits no candidate-bound record; after F6 freezes, T479 invokes the operator validator, emits its one record, and alone executes candidate-bound FR-075. | FR-001, FR-005, FR-072, FR-075, SC-034, SC-035 | active feature-local T604 |
-| NIX-7 | Historical Wave 5 design for the compiler-only audit carrier and bundle-version transition. Exact retired ownership remains only in fenced history. | FR-070, SC-032 | historical W5 |
-| NIX-8 | Code-canon search found no production host-generation handoff. Prospective ownership, file assignment, dependencies, and validation resolve only from the authoritative member spec and generated manifest after T221. | FR-070, SC-032 | prospective authoritative row |
-| NIX-9 | Code-canon search found no rebuild-reference option, emitter, or test. Prospective ownership, grammar/bounds, carrier, dependencies, and validation resolve only from the authoritative member spec and generated manifest after T221. | FR-070, SC-032 | prospective authoritative row |
+| NIX-1 | Restructure `options-zones.nix` as the generated base; emit `generated/resource-types.nix` and per-type `generated/options-zones-<Type>.nix` via `xtask gen-zone-nix-options` | FR-001 | configuration |
+| NIX-2 | Historical compatibility input only: `zone-resources-json.nix` supplied legacy resource JSON but is not an active bundle emitter, version, hash, or publication authority. The canonical active path is `bundle-zones.nix` -> `d2b-resource-compiler` -> `bundle-artifacts.nix` -> installed per-Zone `resource-bundle.json` | FR-001 | historical compatibility |
+| NIX-3 | Add Zone assertions to `assertions.nix` as its sole writer | FR-001 | configuration |
+| NIX-4 | Removing a declared resource activates the new generation immediately and requests async owner- and finalizer-safe deletion with visible cleanup status | FR-005 | runtime |
+| NIX-5 | Extend the `eval-*` flake checks with Zone and resource examples | FR-032 | focused validation |
+| NIX-6 | The operator-activation proof covers the exact Volume/Network/Device path and state-preserving cleanup. Its focused fixture and daemon-restart case exercise declaration, removal, and recovery without a private reload or a manually restarted daemon. Candidate-bound release evidence uses the existing release-validation contract. | FR-001, FR-005, FR-072, FR-075, SC-034, SC-035 | active product requirement |
+| NIX-7 | Historical design for the compiler-only audit carrier and bundle-version transition. Exact retired ownership remains only in fenced history. | FR-070, SC-032 | historical |
+| NIX-8 | Code-canon search found no production host-generation handoff. Implement the broker-owned handoff with focused coverage for ownership transfer, restart, rollback, target identity, and raw-identity redaction. | FR-070, SC-032 | active product requirement |
+| NIX-9 | Code-canon search found no rebuild-reference option, emitter, or test. Implement the bounded option and its carrier with focused evaluation and rendered-output coverage, including missing, malformed, boundary, and selector cases. | FR-070, SC-032 | active product requirement |
 
 ## Invariants
 
@@ -87,7 +87,7 @@ emit, version, hash, or publish the active envelope. The sole canonical active c
 
 - A declared Zone with resources evaluates, emits its pinned generation, and is rejected at
   eval time when malformed.
-- Active local T604 pins declaration and removal generations at the fixture-backed contract layer,
+- The operator-activation proof pins declaration and removal generations at the fixture-backed contract layer,
   consumes those exact generations through the Type-3 production daemon startup/change
   ingestion test, and exercises declaration and removal deployments for exactly
   the closed identity set `Volume/acceptance-state`, `Network/acceptance-net`, and
@@ -97,10 +97,9 @@ emit, version, hash, or publish the active envelope. The sole canonical active c
   `tests/host-integration/resource-operator-activation.nix` through the public
   `make test-host-integration` target. Each exact resource's observed effect and production
   `Ready` projection must both carry that same exact resource identity; a missing, duplicate,
-  unrelated, or mixed-identity member is rejected. Guest support objects remain
-  prerequisites only: Guest runtime-effect acceptance is deferred specifically to Wave 6
-  manifest-backed `ADR046-ch-001` plus local T479/T480 and cannot satisfy the authoritative
-  acceptance row. Direct
+  unrelated, or mixed-identity member is rejected.   Guest support objects remain prerequisites only: Guest runtime-effect acceptance is a
+  separate runtime-provider requirement and cannot satisfy the operator-activation acceptance
+  row. Direct
   ResourceService calls, status-only
   effects, actionable refusals, a skipped lane, or empty check discovery are ineligible for
   that positive proof. Evidence must enumerate and successfully build the exact
@@ -117,15 +116,13 @@ emit, version, hash, or publish the active envelope. The sole canonical active c
   ResourceSpec/ZoneSpec placement, and consumer-side silent defaulting. Production tests pin
   post-export-only journal retention and degraded health on prune or file/directory-sync
   failure.
-- Active local T604 host-activation coverage consumes only the generated `VD2-SC002-SOURCE-FLOOR`,
-  `VD2-SC002-REGISTRIES`, and `VD2-SC002-TRACEABILITY` rows assigned by authoritative member
-  specs and generated manifests. Those rows own source-floor membership, fixture ids, poison cases, counts,
-  and transition ordering; this contract does not copy them. The Type-10 positive runs the
+- Host-activation coverage uses the independently installed source floor and focused contract
+  fixtures. The Type-10 positive runs the
   parameterized target-closure entrypoint from an independently installed source floor,
   proves unprivileged request-only entrypoint behavior, broker-only mutation, one durable
   coordinator transfer, target-before-daemon activation, crash/rollback continuation, exact
   target/apply/GC-root/live-peer pinning, and raw-identity redaction. Missing, stale,
-  wrong-owner, non-ancestor, runtime-derived, skipped, or failing generated coverage refuses
-  before mutation. The same host case fails on unit listing error, excludes only canonical
+  wrong-owner, non-ancestor, or runtime-derived inputs refuse before mutation. The same host
+  case fails on unit listing error, excludes only canonical
   `d2b.slice`, and requires exactly `d2bd.service`, `d2b-priv-broker.socket`, and
   `d2b-priv-broker.service` after the exclusion.

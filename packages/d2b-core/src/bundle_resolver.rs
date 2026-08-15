@@ -4741,7 +4741,7 @@ mod tests {
     // the host net NS is owned by the initial user NS. Tier 2 resolves this by
     // combining clone3(CLONE_NEWUSER) with unshare(CLONE_NEWNET) inside the user NS:
     // the new net NS is owned by the new user NS; CAP_NET_RAW is effective there.
-    // The audio block and panel review cover CAP_NET_RAW + AF_NETLINK.
+    // The audio block and review cover CAP_NET_RAW + AF_NETLINK.
     #[test]
     fn audio_user_namespace_propagates_to_resolved_intent() {
         use crate::minijail_profile::{CgroupPlacement, MountPolicy, NamespaceSet};

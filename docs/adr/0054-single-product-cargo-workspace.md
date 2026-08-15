@@ -515,7 +515,7 @@ drift step and both native blocks must pass.
 ### 5. Amend Spec 003 after merge
 
 After this ADR merges, amend Spec 003's four-hub, three-product-workspace model
-to this model and re-panel before implementation resumes. This ADR PR makes no
+to this model and review again before implementation resumes. This ADR PR makes no
 Spec or code edit; the walker stays separate.
 
 ## Consequences
@@ -566,5 +566,5 @@ Rejected. It has a real tooling boundary and no product path dependency.
    foreign-system/remote-builder refusals, and dual-system pins.
 9. The guest license blocker is resolved by reviewed policy in the merge
    change, not waived or misreported.
-10. Spec 003 is amended and re-panelled after this ADR merges and before
+10. Spec 003 is amended and reviewed again after this ADR merges and before
     implementation resumes.

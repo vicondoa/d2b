@@ -15,9 +15,8 @@ This document has **no authority over the canonical RSS measurement**. Read
 every number below under the following bounds.
 
 - **It does not supersede `RESULTS.md`.** The canonical whole-process RSS
-  outcome for this fixture is the MEASURED-FAIL recorded in `RESULTS.md` and
-  carried into `docs/specs/ADR-046-validation-and-delivery.md` section 3.2.
-  Where this document and that record disagree, the canonical record stands.
+  outcome for this fixture is the MEASURED-FAIL recorded in `RESULTS.md`.
+  Where this document and that record disagree, `RESULTS.md` stands.
 - **It does not reopen the wave-scoping decision derived from that outcome.**
   The failed RSS result is the stated reason the production backend, the watch
   dispatcher, and the real-backend reaction benchmark were deferred. A

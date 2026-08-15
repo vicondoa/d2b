@@ -146,7 +146,7 @@ fn class_ioctls(class: DeviceClass) -> &'static [constants::Number] {
     use constants::*;
     match class {
         DeviceClass::Kvm => &[KVM_GET_API_VERSION, KVM_CREATE_VM, KVM_CREATE_VCPU, KVM_RUN],
-        // v1.1.2-final-R1 (panel-security SHOULD-FIX): tightened to
+        // Security hardening: tightened to
         // TUNSETIFF + TUNSETGROUP only. TUNSETPERSIST and TUNSETOWNER
         // are NOT in this declarative allowlist because the broker is
         // the only legitimate caller and it issues those ioctls via

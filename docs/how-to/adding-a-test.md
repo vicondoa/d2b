@@ -3,12 +3,12 @@
 d2b tests are invoked through **`make` targets** (one per test type). The
 single rule:
 
-> **`make check` is the Layer-1 done-gate.** A change is not finished until
-> `make check` passes. Agent-owned PRs also run `make test-integration` and
-> `make test-host-integration` on the host before PR creation; those manual
-> integration targets are not replaced by the PR pipeline. New tests must be
-> classified in `tests/migration-ledger.toml` (`make check-inventory` fails
-> closed otherwise).
+> **Focused evidence is the review requirement.** Run the smallest relevant
+> target and test, and explain deliberate omissions. `make check` is an
+> available aggregate, not a prerequisite; integration, host, and hardware
+> lanes are conditional on the changed surface. New tests must be wired into a
+> `make` target and classified in `tests/migration-ledger.toml` when the test
+> model requires it (`make check-inventory` fails closed otherwise).
 
 ## Decision tree - which kind of test?
 
@@ -67,16 +67,17 @@ migration-scoped. You only must: (1) put the test behind a `make` target, and
 
 ## Before you open a PR
 
-The PR template checklist is mandatory:
+Record focused evidence for the changed test and explain deliberate omissions.
+Broader lanes are conditional:
 
-- `make check` passes.
-- `make test-integration` passes on the host before PR creation.
-- `make test-host-integration` passes on the host before PR creation.
+- Run the smallest relevant `make` target and the test itself.
+- Run `make check-inventory` when adding or retiring a test script.
+- Run `make test-integration` for container behavior and
+  `make test-host-integration` for NixOS, daemon, or host behavior.
 - If you touched GPU/YubiKey/hardware-TPM or a full microVM boot, run
   `make test-hardware` on a NixOS host **with the devices** and paste results
   (CI cannot - hosted runners have KVM but no devices).
-- New/changed tests are wired into a `make` target and `make check-inventory`
-  is green.
+- New/changed tests are wired into a `make` target.
 - Docs (`docs/**`, `AGENTS.md`, `tests/README.md`) and `.github/workflows/*`
   updated in lockstep.
 

@@ -2342,7 +2342,7 @@ The zone configuration controller retains the N most recently activated, cleanup
 
 ### Provider crate standard layout
 
-Every `packages/d2b-provider-<base>-<implementation>/` crate introduced by any work item in this spec or any downstream spec must satisfy the following directory and file layout. Absence of any required entry fails the workspace package-policy check (`make test-policy` / `cargo xtask delivery wave`).
+Every `packages/d2b-provider-<base>-<implementation>/` crate introduced by any implementation in this spec or any downstream spec must satisfy the following directory and file layout. Absence of any required entry fails the workspace package-policy check (`make test-policy`).
 
 | Path | Required | Contents |
 | --- | --- | --- |

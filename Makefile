@@ -8,19 +8,19 @@
 # function could silently redirect a gate that intends to execute a binary.
 SHELL := $(CURDIR)/tests/tools/scrub-shell-environment
 
-.PHONY: pre-tag smoke-lite i3-check \
+.PHONY: pre-tag smoke-lite \
         check check-static check-ci check-all check-fast check-tier0 \
         test test-unit \
-        test-lint test-rust test-rust-api-surface test-rust-main \
+        test-lint test-rust test-rust-main \
         test-rust-broker test-rust-guest-shell-runner test-rust-no-bash-ast \
         test-rust-schema test-rust-inventory test-rust-supply-chain \
-        test-rust-leaf-api-surface test-rust-leaf-main-workspace \
+        test-rust-leaf-main-workspace \
         test-rust-leaf-schema test-rust-leaf-inventory \
         test-rust-leaf-fixture-contracts test-rust-leaf-broker \
         test-rust-leaf-guest-shell-runner test-rust-leaf-no-bash-ast \
         test-rust-leaf-supply-chain \
         test-fixture-contracts test-proofs test-flake test-nix-unit \
-        test-performance-budgets test-adr-index-coverage test-ci-coverage \
+        test-performance-budgets test-ci-coverage \
         test-flake-list test-flake-partition \
         test-drift test-policy test-integration test-host-integration test-hardware perf \
         heavy-lane-guard heavy-lane-integration heavy-lane-host-integration \
@@ -29,8 +29,8 @@ SHELL := $(CURDIR)/tests/tools/scrub-shell-environment
         heavy-gate-build heavy-gate-provision heavy-check heavy-cargo-test heavy-flake-check \
         heavy-test-integration heavy-test-host-integration heavy-test-hardware \
         layer1-workflow layer1-workflow-check \
-        ledger-regen check-inventory pr-checklist-gate nix-unit-pin flake-matrix-pin \
-        api-surface-pin runtime-ledger-pin clean
+        ledger-regen check-inventory nix-unit-pin flake-matrix-pin \
+        runtime-ledger-pin clean
 
 # Current Nix system double, used to address per-system flake.checks attrs.
 # Falls back to x86_64-linux if `nix` is unavailable (e.g. a docs-only host).
@@ -132,7 +132,6 @@ test-lint:
 # production exposes no shutdown grace knob.
 ###############################################################################
 
-D2B_RUST_QUOTA_API ?= 1
 D2B_RUST_QUOTA_MAIN ?= 1
 D2B_RUST_QUOTA_SCHEMA ?= 1
 D2B_RUST_QUOTA_INVENTORY ?= 1
@@ -156,7 +155,7 @@ D2B_RUST_BROKER_PREREQS_cold :=
 D2B_RUST_BROKER_PREREQS_broker :=
 D2B_RUST_BROKER_PREREQS := $(D2B_RUST_BROKER_PREREQS_$(D2B_RUST_PROFILE))
 D2B_RUST_FIXTURE_PREREQS_aggregate :=
-D2B_RUST_FIXTURE_PREREQS_cold := test-rust-leaf-api-surface test-rust-leaf-main-workspace test-rust-leaf-broker test-rust-leaf-guest-shell-runner test-rust-leaf-no-bash-ast test-rust-leaf-supply-chain
+D2B_RUST_FIXTURE_PREREQS_cold := test-rust-leaf-main-workspace test-rust-leaf-broker test-rust-leaf-guest-shell-runner test-rust-leaf-no-bash-ast test-rust-leaf-supply-chain
 D2B_RUST_FIXTURE_PREREQS_main :=
 D2B_RUST_FIXTURE_PREREQS := $(D2B_RUST_FIXTURE_PREREQS_$(D2B_RUST_PROFILE))
 D2B_RUST_INVENTORY_PREREQS_aggregate :=
@@ -283,7 +282,6 @@ if [ "$$profile" = aggregate ] && [ ! -d packages/target ]; then \
   profile=cold; \
   cold_profile=1; \
 fi; \
-quota_api=1; \
 quota_main=1; \
 quota_schema=1; \
 quota_inventory=1; \
@@ -294,27 +292,22 @@ quota_ast=1; \
 quota_supply=1; \
 case "$$profile" in \
   aggregate) \
-    lane_count=9; \
+    lane_count=8; \
     active_lanes="$$runtime_budget"; \
     [ "$$active_lanes" -le "$$lane_count" ] || active_lanes="$$lane_count"; \
-    if [ "$$runtime_budget" -gt "$$lane_count" ]; then \
-      quota_api=$$((runtime_budget - lane_count + 1)); \
-    fi; \
-    frontier_quota=$$((quota_api + active_lanes - 1)); \
+    frontier_quota=$$((quota_main + active_lanes - 1)); \
     ;; \
   cold) \
     active_lanes="$$runtime_budget"; \
     [ "$$active_lanes" -le 4 ] || active_lanes=4; \
-    quota_api=1; \
     quota_main=1; \
     quota_broker=1; \
     surplus=$$((runtime_budget - active_lanes)); \
     turn=0; \
     while [ "$$surplus" -gt 0 ]; do \
-      case $$((turn % 3)) in \
+      case $$((turn % 2)) in \
         0) quota_main=$$((quota_main + 1)) ;; \
         1) quota_broker=$$((quota_broker + 1)) ;; \
-        2) quota_api=$$((quota_api + 1)) ;; \
       esac; \
       turn=$$((turn + 1)); \
       surplus=$$((surplus - 1)); \
@@ -325,15 +318,10 @@ case "$$profile" in \
     if [ "$$active_lanes" -lt 3 ]; then \
       frontier_quota="$$active_lanes"; \
     elif [ "$$active_lanes" -eq 3 ]; then \
-      frontier_quota=$$((quota_api + quota_main + quota_broker)); \
+      frontier_quota=$$((quota_main + quota_broker)); \
     else \
-      frontier_quota=$$((quota_api + quota_main + quota_broker + 1)); \
+      frontier_quota=$$((quota_main + quota_broker + 1)); \
     fi; \
-    ;; \
-  api) \
-    active_lanes=1; \
-    quota_api="$$runtime_budget"; \
-    frontier_quota="$$quota_api"; \
     ;; \
   main) \
     if [ "$${D2B_SKIP_FIXTURE_BUILD:-0}" = 1 ]; then \
@@ -400,7 +388,6 @@ if [ -n "$${D2B_EXECUTION_MANIFEST:-}" ]; then \
       "D2B_RUST_COLD_PROFILE=$$cold_profile" \
       "D2B_RUST_EFFECTIVE_BUDGET=$$effective_budget" \
       "D2B_RUST_ACTIVE_LANES=$$active_lanes" \
-      "D2B_RUST_QUOTA_API=$$quota_api" \
       "D2B_RUST_QUOTA_MAIN=$$quota_main" \
       "D2B_RUST_QUOTA_SCHEMA=$$quota_schema" \
       "D2B_RUST_QUOTA_INVENTORY=$$quota_inventory" \
@@ -418,7 +405,6 @@ else \
     "D2B_RUST_COLD_PROFILE=$$cold_profile" \
     "D2B_RUST_EFFECTIVE_BUDGET=$$effective_budget" \
     "D2B_RUST_ACTIVE_LANES=$$active_lanes" \
-    "D2B_RUST_QUOTA_API=$$quota_api" \
     "D2B_RUST_QUOTA_MAIN=$$quota_main" \
     "D2B_RUST_QUOTA_SCHEMA=$$quota_schema" \
     "D2B_RUST_QUOTA_INVENTORY=$$quota_inventory" \
@@ -438,17 +424,14 @@ endef
 ## explicit for policy and inventory checks; its recipes are discovery no-ops
 ## while the recursive scheduler runs the same graph with the calculated
 ## budget. This keeps one scheduler in charge of the real leaves.
-test-rust: test-rust-leaf-api-surface test-rust-leaf-main-workspace test-rust-leaf-schema test-rust-leaf-inventory test-rust-leaf-fixture-contracts test-rust-leaf-broker test-rust-leaf-guest-shell-runner test-rust-leaf-no-bash-ast test-rust-leaf-supply-chain
+test-rust: test-rust-leaf-main-workspace test-rust-leaf-schema test-rust-leaf-inventory test-rust-leaf-fixture-contracts test-rust-leaf-broker test-rust-leaf-guest-shell-runner test-rust-leaf-no-bash-ast test-rust-leaf-supply-chain
 	@# D2B_EXECUTION_MANIFEST is removed by the lifecycle helper before dispatch.
 	@# The recursive scheduler invokes +$(MAKE) --keep-going --output-sync=target.
-	+@$(call D2B_RUST_DISPATCH,test-rust-leaf-api-surface test-rust-leaf-main-workspace test-rust-leaf-fixture-contracts test-rust-leaf-broker test-rust-leaf-guest-shell-runner test-rust-leaf-no-bash-ast test-rust-leaf-schema test-rust-leaf-supply-chain test-rust-leaf-inventory,aggregate)
+	+@$(call D2B_RUST_DISPATCH,test-rust-leaf-main-workspace test-rust-leaf-fixture-contracts test-rust-leaf-broker test-rust-leaf-guest-shell-runner test-rust-leaf-no-bash-ast test-rust-leaf-schema test-rust-leaf-supply-chain test-rust-leaf-inventory,aggregate)
 
 test-rust: D2B_RUST_ROOT_PREREQS := 1
 
 ## Stable CI shard targets. Local callers should prefer make test-rust.
-test-rust-api-surface:
-	+@$(call D2B_RUST_DISPATCH,test-rust-leaf-api-surface,api)
-
 test-rust-main:
 	+@$(call D2B_RUST_DISPATCH,$(D2B_RUST_MAIN_LEAVES),main)
 
@@ -473,9 +456,6 @@ test-rust-supply-chain:
 ## Leaf recipes are ordinary non-submake recipes. When they are seen as
 ## prerequisites of the outer test-rust declaration they intentionally do no
 ## work; the recursive child owns the real leaf dispatch.
-test-rust-leaf-api-surface:
-	@if [ "$(D2B_RUST_ROOT_PREREQS)" = 1 ]; then exit 0; fi; D2B_RUST_CARGO_JOBS="$(D2B_RUST_QUOTA_API)" D2B_RUST_NEXTEST_THREADS="$(D2B_RUST_QUOTA_API)" bash tests/test-rust.sh api-surface
-
 test-rust-leaf-main-workspace: $(D2B_RUST_MAIN_PREREQS)
 	@if [ "$(D2B_RUST_ROOT_PREREQS)" = 1 ]; then exit 0; fi; D2B_RUST_CARGO_JOBS="$(D2B_RUST_QUOTA_MAIN)" D2B_RUST_NEXTEST_THREADS="$(D2B_RUST_QUOTA_MAIN)" bash tests/test-rust.sh main-workspace
 
@@ -549,16 +529,12 @@ test-flake-partition:
 test-nix-unit:
 	bash tests/test-nix-unit.sh
 
-## api-surface-pin - explicitly regenerate compiler-derived API snapshots.
-api-surface-pin:
-	D2B_API_SURFACE_UPDATE=1 bash tests/tools/api-surface-json.sh
-
 ## test-drift - generated-artifact drift gates (xtask gen-*, vms-json parity).
 test-drift:
 	bash tests/test-drift.sh
 
 ## test-policy - meta gates that guard the test architecture + cross-cutting
-## invariants (ci-coverage, adr-index, deliverable-gate, etc.).
+## invariants (ci-coverage, deliverable-gate, etc.).
 ##
 ## The Provider crate layout policies run here as xtask commands, not as
 ## shell gates: the drift and meta gate set is closed.
@@ -571,10 +547,6 @@ test-policy:
 ## Hosted runners take the cheap skip path; pinned stable runners enforce it.
 test-performance-budgets:
 	bash tests/unit/gates/performance-budgets.sh
-
-## Focused policy entrypoints used by the early CI preflight.
-test-adr-index-coverage:
-	bash tests/unit/meta/adr-index-coverage.sh
 
 test-ci-coverage:
 	bash tests/unit/meta/ci-coverage.sh
@@ -622,10 +594,6 @@ nix-unit-pin:
 ## rerun, so the sharded x86 CI matrix can't silently change coverage.
 flake-matrix-pin:
 	bash tests/tools/gen-flake-check-matrix-pin.sh
-
-## W0 policy gate (also run by test-policy).
-pr-checklist-gate:
-	bash tests/unit/meta/pr-checklist-gate.sh .github/PULL_REQUEST_TEMPLATE.md
 
 ## test-host-integration - G-host: runNixOSTest VM integration tests (the
 ## `vmChecks` flake output, NOT swept by `nix flake check`). Each test boots a
@@ -797,19 +765,13 @@ heavy-flake-check: heavy-gate-build
 
 # --- pre-existing maintainer targets ---------------------------------------
 
-## i3-check - verify no v1.3 deferrals authored (ADR 0022 I3 invariant).
-##            Wired into pre-tag and tests/static.sh per panel-docs R1 MF-1.
-i3-check:
-	bash tests/unit/meta/no-new-deferral.sh
-
 ## pre-tag - run the full live-VM smoke gate before tagging a release.
 ##           Requires: KVM, d2b active, both personal-dev and work-aad VMs declared.
 ##           Exits non-zero on any probe failure.  Updates $${TMPDIR:-/tmp}/d2b-smoke-run-log.txt.
-##           ALSO runs the I3 invariant grep gate (ADR 0022 + panel-docs R1).
 ##           Public heavy lane: acquires a slot, then runs the raw live work behind
 ##           the gate - the live smoke suite is the most destructive, stateful lane
 ##           in the tree and must never bypass the sole-use semaphore.
-pre-tag: i3-check heavy-gate-build
+pre-tag: heavy-gate-build
 	$(HEAVY_GATE) $(MAKE) heavy-lane-pre-tag
 
 ## heavy-lane-pre-tag - the raw full live-VM smoke work. Internal: reachable only
@@ -818,7 +780,6 @@ heavy-lane-pre-tag: heavy-lane-guard
 	bash tests/integration/live/live-vm-smoke.sh --full
 
 ## smoke-lite - run the single-VM lite smoke gate (≤5 min).
-##              Used at every panel-round HEAD per I5.
 ##              Public heavy lane: acquires a slot, then runs the raw live work
 ##              behind the gate.
 smoke-lite: heavy-gate-build

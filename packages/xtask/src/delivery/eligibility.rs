@@ -89,7 +89,7 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
-    path::{Path, PathBuf},
+    path::Path,
 };
 
 use serde::{Deserialize, Serialize};
@@ -97,14 +97,14 @@ use serde::{Deserialize, Serialize};
 use super::{
     DELIVERY_SCHEMA_VERSION, DeliveryError, Result,
     command::{CliOptions, WaveCommand, WorkflowOutput},
-    evidence,
+    ensure_artifact_kind, evidence,
     history_proof::{self, HistoryVerdict},
     model::{
         CandidateId, CandidateMaterial, ContentId, GitObjectFormat, MAX_PULL_REQUESTS,
         RepositoryRecord, SnapshotSha256, validate_bounded_string, validate_git_ref,
         validate_hash_for_format, validate_repository_id,
     },
-    panel::{ensure_artifact_kind, prepare_state, prepare_state_with_roots, read_json_file},
+    prepare_state, read_json_file,
     seal::SealRecord,
     storage::{CandidateDir, HISTORY_PROOF_FILE, SEAL_FILE, StateRoot},
 };
@@ -199,48 +199,14 @@ pub fn run(args: &[String]) -> Result<WorkflowOutput> {
     let mut options = CliOptions::parse(args)?;
     let seal_path = options.required_path("--seal")?;
     let target_path = options.optional_path("--target")?;
-    let (state, repository_roots) = prepare_state_with_roots(&mut options)?;
+    let state = prepare_state(&mut options)?;
     options.finish()?;
 
     let seal_path = state.resolve_artifact_ref(&seal_path);
     let target_path = target_path.map(|path| state.resolve_artifact_ref(&path));
     let (candidate, seal) = open_sealed_candidate(&state, &seal_path)?;
-    super::work_item_state::reject_adr046_w5_mutation(&seal.material, "merge eligibility")?;
     let target = load_target(&candidate, target_path.as_deref())?;
-    evaluate_checked(&state, &candidate, &seal, &target, &repository_roots)
-}
-
-/// Re-derives both work-item conditions, then decides eligibility.
-///
-/// Both conditions are re-derived here rather than trusted from the seal.
-/// `seal_checked` is the only writer of `seal.json` today, so there is no live
-/// hole, but "only one writer" is an invariant about the current call graph,
-/// not about the artifact: a seal written by a binary predating the prior-wave
-/// gate, or by any future path that writes the seal file directly, would carry
-/// no prior-wave assertion. Re-deriving is cheap - it reads the same two
-/// manifests out of the same sealed `integration_tree_oid` the seal already
-/// bound - and deterministic on that fixed input, so it cannot refuse a seal
-/// that `seal_checked` accepted.
-///
-/// Split out from [`run`] so both gates are reachable from a test: the CLI
-/// entrypoint builds its [`StateRoot`](super::storage::StateRoot) through
-/// `StateRoot::prepare`, which refuses a state root inside a Git working tree,
-/// and every hermetic fixture lives under the ignored build tree inside this
-/// repository.
-pub(crate) fn evaluate_checked(
-    state: &StateRoot,
-    candidate: &CandidateDir,
-    seal: &SealRecord,
-    target: &MergeTarget,
-    repository_roots: &BTreeMap<String, PathBuf>,
-) -> Result<WorkflowOutput> {
-    super::work_item_state::require_current_wave_merged(&seal.material, repository_roots)?;
-    super::work_item_state::require_predecessor_state_for_exit(
-        state,
-        &seal.material,
-        repository_roots,
-    )?;
-    evaluate(candidate, seal, target)
+    evaluate(&candidate, &seal, &target)
 }
 
 /// `cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave merge-target`.
@@ -263,8 +229,7 @@ pub fn run_capture(args: &[String]) -> Result<WorkflowOutput> {
     // `--seal` chains from a prior stage, so it resolves under the state root.
     // `--target` is the integrator's own out-of-band capture, taken verbatim.
     let seal_path = state.resolve_artifact_ref(&seal_path);
-    let (candidate, seal) = open_sealed_candidate(&state, &seal_path)?;
-    super::work_item_state::reject_adr046_w5_mutation(&seal.material, "merge target capture")?;
+    let (candidate, _seal) = open_sealed_candidate(&state, &seal_path)?;
     let target: MergeTarget = read_json_file(&target_path, "merge target")?;
     capture(&candidate, target)
 }
@@ -312,8 +277,7 @@ pub fn evaluate(
     let current_digests = material.digests()?;
 
     // The history proof establishes only that the integrated content is
-    // byte-identical, which keeps the sealed panel attestation valid across a
-    // history-only rebase. It says nothing about the validator lanes: a rebase
+    // byte-identical. It says nothing about the validator lanes: a rebase
     // moves `snapshot_sha256`, which unbinds every prior lane record, so the
     // seal alone must never carry a lane result across it. Re-read the lanes
     // against the current snapshot digest, so a rebased candidate is eligible
@@ -594,14 +558,12 @@ pub fn open_sealed_candidate(
 mod tests {
     use super::*;
     use crate::delivery::{
-        DeliveryErrorKind,
+        DeliveryErrorKind, SnapshotView,
         model::{ExpectedPullRequest, fixtures},
-        panel::SnapshotView,
         seal::{
             seal,
             tests::{sealable, sealable_from},
         },
-        snapshot::tests::{GitFixture, take},
         storage::{SEAL_FILE, tests::Scratch},
     };
 
@@ -649,7 +611,7 @@ mod tests {
                 number: 1,
                 base_ref: "v3".to_owned(),
                 base_oid: base,
-                head_ref: "adr046-w0-panel-seal".to_owned(),
+                head_ref: "adr046-w0-seal".to_owned(),
                 head_oid: head,
                 required_checks: checks(),
             }],
@@ -683,128 +645,29 @@ mod tests {
         );
     }
 
-    /// A work-item manifest and implementation graph naming one item per wave,
-    /// each at the supplied implementation state.
-    fn work_item_repository(name: &str, foundation: &str, backend: &str) -> GitFixture {
-        let repository = GitFixture::new(name);
-        repository.write(
-            "docs/specs/ADR-046-implementation-graph.json",
-            "{\"nodes\":[\
-             {\"id\":\"ADR046-foundation-001\",\"kind\":\"work-item\",\"wave\":\"W0\"},\
-             {\"id\":\"ADR046-backend-001\",\"kind\":\"work-item\",\"wave\":\"W1\"}]}\n",
-        );
-        repository.write(
-            "docs/specs/ADR-046-work-items.json",
-            &format!(
-                "{{\"items\":[\
-                 {{\"workItemId\":\"ADR046-foundation-001\",\"implementationState\":\"{foundation}\"}},\
-                 {{\"workItemId\":\"ADR046-backend-001\",\"implementationState\":\"{backend}\"}}]}}\n"
-            ),
-        );
-        repository.commit("work-item state");
-        repository
-    }
-
-    /// FR-049: merge eligibility re-derives the predecessor-merged condition
-    /// from the sealed tree rather than trusting the seal. This wave's own
-    /// items are `Merged`, so only the prior-wave leg can refuse.
     #[test]
-    fn merge_eligibility_rejects_an_unmerged_prior_wave_item() {
-        let repository =
-            work_item_repository("eligibility-prior-wave-repository", "Planned", "Merged");
-        let mut material = take(&repository).material;
-        "W1".clone_into(&mut material.wave);
-
-        let scratch = Scratch::new("eligibility-prior-wave");
-        let (candidate, record, _snapshot) = sealed_from(&scratch, material);
-        let roots = BTreeMap::from([("github.com/example/d2b".to_string(), repository.repo())]);
-        let merge_target = target(record.material.clone());
-        let state = StateRoot::for_tests(&scratch.path.join("state")).expect("state root");
-        let error = evaluate_checked(&state, &candidate, &record, &merge_target, &roots)
-            .expect_err("an unmerged prior-wave item must block merge eligibility");
-        assert!(
-            error
-                .message()
-                .contains("cannot request a panel for, seal, or merge W1"),
-            "{error}"
-        );
-        assert!(error.message().contains("ADR046-foundation-001"), "{error}");
-        assert!(error.message().contains("in W0 is `Planned`"), "{error}");
-    }
-
-    /// FR-049: merge eligibility also re-derives the current-wave condition,
-    /// so a seal whose own wave still holds a `Planned` item cannot merge.
-    #[test]
-    fn merge_eligibility_rejects_an_unmerged_current_wave_item() {
-        let repository =
-            work_item_repository("eligibility-current-wave-repository", "Planned", "Planned");
-        let material = take(&repository).material;
-
-        let scratch = Scratch::new("eligibility-current-wave");
-        let (candidate, record, _snapshot) = sealed_from(&scratch, material);
-        let roots = BTreeMap::from([("github.com/example/d2b".to_string(), repository.repo())]);
-        let merge_target = target(record.material.clone());
-        let state = StateRoot::for_tests(&scratch.path.join("state")).expect("state root");
-        let error = evaluate_checked(&state, &candidate, &record, &merge_target, &roots)
-            .expect_err("a Planned current-wave item must block merge eligibility");
-        assert!(error.message().contains("cannot seal W0"), "{error}");
-        assert!(error.message().contains("ADR046-foundation-001"), "{error}");
-    }
-
-    /// Drives the real `wave merge-eligibility` entrypoint from its argument
-    /// vector, so CLI parsing, state-root preparation, seal resolution, and the
-    /// re-derived work-item gates are all covered - not just `evaluate_checked`.
-    ///
-    /// The state root sits inside the ignored build tree, which
-    /// `StateRoot::prepare` refuses in production, so the test installs the
-    /// `#[cfg(test)]`-only redirection for the duration of the run. The
-    /// production refusal is untouched.
-    #[test]
-    fn the_merge_eligibility_entrypoint_runs_end_to_end_from_its_argument_vector() {
-        use crate::delivery::storage::test_root_override;
-
-        let repository = work_item_repository("eligibility-cli-repository", "Planned", "Planned");
-        let material = take(&repository).material;
-        let (candidate, record, _snapshot) = sealed_from(repository.scratch_dir(), material);
-        capture(&candidate, target(record.material.clone())).expect("capture merge target");
-
-        let _guard = test_root_override::install(&repository.state());
-        let args = vec![
-            "--seal".to_owned(),
-            format!("W0/{}/{SEAL_FILE}", record.candidate_id.as_str()),
-            "--repo".to_owned(),
-            format!("github.com/example/d2b={}", repository.repo().display()),
-        ];
-        let error =
-            run(&args).expect_err("the entrypoint must re-derive the work-item gates and refuse");
-        assert!(error.message().contains("cannot seal W0"), "{error}");
-        assert!(error.message().contains("ADR046-foundation-001"), "{error}");
-    }
-
-    #[test]
-    fn a_history_only_rebase_needs_current_lanes_but_keeps_the_panel() {
+    fn a_history_only_rebase_needs_current_lanes() {
         use crate::delivery::{
             evidence::EvidenceLane,
-            panel::tests::rebased,
             seal::tests::{evidence as lane_evidence, import as import_evidence},
+            test_support::rebased,
         };
 
         let scratch = Scratch::new("eligibility-rebase");
         let (candidate, seal, snapshot) = sealed(&scratch);
 
-        // A history-only rebase preserves the candidate address and its sealed
-        // panel attestation, but it moves `snapshot_sha256`, so every prior
-        // validator-lane record is bound to the stale snapshot. Until the lanes
-        // rerun and re-import against the new snapshot, the candidate is not
-        // eligible - the seal alone never carries a lane result across a rebase.
+        // A history-only rebase preserves the candidate address, but it moves
+        // `snapshot_sha256`, so every prior validator-lane record is bound to
+        // the stale snapshot. Until the lanes rerun and re-import against the
+        // new snapshot, the candidate is not eligible - the seal alone never
+        // carries a lane result across a rebase.
         let error = evaluate(&candidate, &seal, &target(rebased_material()))
             .expect_err("stale lanes must block eligibility");
         assert!(error.message().contains("current snapshot"), "{error}");
 
         // Re-import both lanes bound to the rebased snapshot, exactly as the
         // integrator would after rerunning them, and the candidate becomes
-        // eligible again - proving the panel survived the rebase while the
-        // validator evidence had to be refreshed.
+        // eligible again.
         let rebased_snapshot = rebased(&snapshot);
         import_evidence(
             &candidate,

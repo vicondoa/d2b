@@ -63,7 +63,7 @@ looking for a key which does not exist in this build and then answering with a
 feature governing a path the prototype deliberately does not use.
 
 It was caught only because the probe dumps the *whole* feature log rather than
-grepping for keys it expects. That is the same lesson W2 paid 23 panel rounds
+grepping for keys it expects. That is the same lesson W2 paid 23 review rounds
 for - a hand-written set deciding what to look at - arriving here as a
 false negative rather than a false positive. Derive the surface; do not
 enumerate it.

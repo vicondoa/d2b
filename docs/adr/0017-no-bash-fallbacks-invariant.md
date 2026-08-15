@@ -214,7 +214,7 @@ enforces the invariant at every commit. The gate is *layered* -
 syntactic grep is the first defence and an allowlist is the
 authoritative one. Negative fixtures are stored as text-only
 `.rs.fixture` files that the Rust compiler never sees, so the
-exclusion-vs-coverage contradiction the R2 panel flagged does
+exclusion-vs-coverage contradiction the R2 review flagged does
 not arise.
 
 **Layer 1 - syntactic grep (fast).** Reject any of:
@@ -413,7 +413,7 @@ outputs = { self, nixpkgs, rust-overlay, ... }:
       overlays = [ rust-overlay.overlays.default ];
     };
     stableRust = pkgs.rust-bin.stable."1.94.1".default;
-    # Concrete nightly date pin - bumped only by panel-approved
+    # Concrete nightly date pin - bumped only by reviewed
     # `v11-PNfuM` commit. The exact date below MUST match
     # tests/no-bash-exec-eval.sh's `expected_nightly` assertion.
     nightlyRust = pkgs.rust-bin.nightly."2026-04-15".default;
@@ -443,10 +443,10 @@ wording was incorrect). `tests/no-bash-exec-eval.sh` asserts:
   (... 2026-04-15)`); fail-fast on mismatch.
 - The `rust-overlay` flake-input rev in `flake.lock` matches
   the expected rev recorded in this ADR (or in a
-  panel-reviewed `flake-input-pins.json` fixture). Mismatches
+  reviewed `flake-input-pins.json` fixture). Mismatches
   fail-fast.
-**Panel updates to the nightly date** require a panel-approved
-(rust + test + security) review of the new toolchain, AND a
+**Updates to the nightly date** require a rust, test, and security
+review of the new toolchain, AND a
 corresponding update to the recorded rev in
 `flake-input-pins.json`.
 
@@ -466,7 +466,7 @@ The CI workflow definition (e.g., GitHub Actions YAML) lists
 this exact invocation as the gate step. PR reviews MUST reject
 any change that introduces `--override-input` or `--impure` to
 the gate invocation; the workflow file itself is covered by
-the CODEOWNERS-equivalent panel-review requirement for
+the repository ownership requirement for
 release-blocking infra changes.
 
 **Proc-macro escape (security R5 major).** The cargo-expand
@@ -486,7 +486,7 @@ adversarial proc-macros. The hardening:
   has the form
   `{name, version-req, source-rev-hash, registry-url, owner,
   audit-notes}`. Adding or upgrading a proc-macro dep requires
-  panel-level (rust + security) review before the entry lands.
+  rust and security review before the entry lands.
   **`registry-url`** is normative: each allowlist entry pins the
   exact source URL the dependency MUST come from (e.g.,
   `https://github.com/rust-lang/crates.io-index` for crates.io,
@@ -509,7 +509,7 @@ adversarial proc-macros. The hardening:
   `replace-with =` directive and fails-closed if any are
   present in the v1.1 baseline (no source replacement is
   legitimate in the v1.1 d2b workspace; legitimate future
-  source replacements would need panel review + an explicit
+  source replacements would need maintainer review + an explicit
   allowlist entry that does not exist in the v1.1 baseline).
   This is enforced in addition to the `Cargo.lock` registry-url
   cross-reference above; the two checks together close the
@@ -552,11 +552,11 @@ adversarial proc-macros. The hardening:
   from the no-bash gate's path scanning (it's a dev tool, not
   the binary crate). To prevent the exemption from creating an
   unaudited backdoor, every change under `tests/tools/no-bash-ast-walker/`
-  requires **panel-level rust + security review** AT COMMIT
+  requires **rust + security review** AT COMMIT
   TIME (not only at allowlist-edit time). v1.1-P1 lands an
   explicit `.github/CODEOWNERS` (or equivalent) entry:
   ```
-  tests/tools/no-bash-ast-walker/    @d2b-panel-rust @d2b-panel-security
+  tests/tools/no-bash-ast-walker/    repository maintainers
   ```
   This makes the walker source as audit-controlled as the
   allowlist itself - any modification triggers the two
@@ -575,9 +575,9 @@ adversarial proc-macros. The hardening:
   was incorrect per R10 security-r10-1 and R11 security-r11-1:
   Cargo source replacement is declared in `.cargo/config.toml`,
   not in package `Cargo.toml` manifests); the walker
-  itself is covered by the CODEOWNERS panel review. The
+  itself is covered by repository ownership review. The
   remaining gap - a malicious allowlisted proc-macro that
-  hides spawn calls from `cargo expand` - is mitigated by panel
+  hides spawn calls from `cargo expand` - is mitigated by maintainer
   review at allowlist edit time, and acknowledged as a residual
   risk in the v1.1 threat model. Operators who want zero
   residual risk can patch their consumer flake to deny ALL
@@ -622,7 +622,7 @@ proc-macro file, NOT in the wrapper file). Schema:
 
 The `review_required_on_change: true` field is normative -
 every entry MUST set it; the CODEOWNERS gate cross-references
-the entries to ensure the per-path panel review is enforced.
+the entries to ensure the per-path review is enforced.
 `tests/no-bash-exec-eval.sh` validates the exempt-path file
 end-to-end (resolves R8 security minor + R8 test minor):
 
@@ -645,7 +645,7 @@ end-to-end (resolves R8 security minor + R8 test minor):
    is scanned by the normal no-bash gate. Directories that
    SHOULD be exempt but are missing from the list fail the
    normal gate (which is the desired signal: add the
-   exemption with a panel-approved rationale).
+   exemption with a reviewed rationale).
 The `macro_rules!`-name grep fallback documented in the R3
 draft is REMOVED - it was vulnerable to false positives on
 non-spawning macros (e.g., `spawn_log!`) and false negatives on
@@ -711,7 +711,7 @@ invoking only `check` and not `syn-ast-walk`, or by
 invoking `tests/no-bash-exec-eval.sh` directly without the
 sandbox guard wrapper) are explicitly disallowed by the
 `.github/workflows/no-bash-gate.yml` CI workflow definition
-that lands in v1.1-P1 (per the plan.md P1 panel scope
+that lands in v1.1-P1 (per the plan.md P1 scope
 addition for `.github/workflows/`).
 
 The `tests/tools/no-bash-ast-walker/` Cargo crate (the small
@@ -734,7 +734,7 @@ stale-entry failure: ADR 0017's exempt-path stale-entry detection
 would fail at P1 because the directory does not yet exist.
 
 Both walker crates' source is governed by **commit-time
-panel-level rust + security review** via `.github/CODEOWNERS`
+rust + security review** via repository ownership rules
 (or equivalent) - this is stricter than the
 allowlist-edit-time review documented in earlier drafts; any
 modification under `tests/tools/no-bash-ast-walker/` (and
@@ -746,22 +746,22 @@ respectively:
 
 ```
 # v1.1-P1
-tests/tools/no-bash-ast-walker/             @d2b-panel-rust @d2b-panel-security
-tests/fixtures/cli-process-allowlist.json   @d2b-panel-rust @d2b-panel-security
-tests/fixtures/cli-proc-macro-allowlist.json    @d2b-panel-rust @d2b-panel-security
-tests/fixtures/cli-spawn-wrappers-allowlist.json @d2b-panel-rust @d2b-panel-security
-tests/fixtures/no-bash-exec-exempt-paths.json @d2b-panel-rust @d2b-panel-security
+tests/tools/no-bash-ast-walker/             repository maintainers
+tests/fixtures/cli-process-allowlist.json   repository maintainers
+tests/fixtures/cli-proc-macro-allowlist.json    repository maintainers
+tests/fixtures/cli-spawn-wrappers-allowlist.json repository maintainers
+tests/fixtures/no-bash-exec-exempt-paths.json repository maintainers
 
 # v1.1-P10 (added when baseline-exception-validator crate lands)
-tests/tools/baseline-exception-validator/   @d2b-panel-rust @d2b-panel-security
-tests/fixtures/broker-spawn-audit-baseline-exceptions.yaml @d2b-panel-rust @d2b-panel-test
+tests/tools/baseline-exception-validator/   repository maintainers
+tests/fixtures/broker-spawn-audit-baseline-exceptions.yaml repository maintainers
 ```
 
 The combined coverage (commit-time CODEOWNERS for walker
-source + allowlist files; rust+security panel for any change)
+source + allowlist files; rust+security review for any change)
 closes the recursion of "the gate verifying itself" - both
 walkers (once the second one lands) cannot weaken the gate
-without panel approval at PR-merge time.
+without review at PR-merge time.
 
 **Dev-tool dependency governance** (resolves R8 security major).
 At v1.1-P1, `tests/tools/no-bash-ast-walker/` has its own
@@ -781,10 +781,10 @@ v1.1-P1) cross-references each dev-tool crate's
 `cargo metadata` output against this allowlist. Any
 unallowlisted proc-macro or build-script dep in a dev tool
 fails the gate. The dev-tool allowlist is itself
-CODEOWNERS-protected (same panel as the production
+repository-ownership protected (same review as the production
 allowlist). When the baseline-exception-validator lands in
 v1.1-P10 its deps are appended to the dev-tool allowlist as
-part of that phase's panel review.
+part of that phase's review.
 
 **Cargo build.rs sandboxing** (resolves R8 security major; tightened
 in R9 per security-r9-1). The `cargo expand` invocation in
@@ -858,7 +858,7 @@ were applied:
 - **Residual risk**: a build.rs that performs purely in-memory
   computation can still influence the expanded output. This is
   acknowledged as a residual risk in the v1.1 threat model;
-  the proc-macro allowlist's panel-review at edit time is the
+  the proc-macro allowlist's review at edit time is the
   primary defence for the dep set. With network unshared and
   the env stripped, exfiltration vectors are closed.
 

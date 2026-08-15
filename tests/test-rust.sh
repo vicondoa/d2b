@@ -2,7 +2,7 @@
 # tests/test-rust.sh - one Rust execution leaf for `make test-rust`.
 #
 # GNU Make owns the Rust DAG. This file owns leaf environment setup and the
-# explicit leaf modes only: fast-lint, api-surface, main-workspace, broker,
+# explicit leaf modes only: fast-lint, main-workspace, broker,
 # guest-shell-runner, no-bash-ast, schema-reproducibility, supply-chain,
 # inventory-stub, and fixture-contracts. The fixture mode emits the contract
 # and CLI surfaces separately.
@@ -17,14 +17,14 @@ if [ "$#" -eq 0 ]; then
   exit 2
 fi
 case "$rust_mode" in
-  fast-lint|api-surface|main-workspace|broker|guest-shell-runner|no-bash-ast|schema-reproducibility|supply-chain|inventory-stub|fixture-contracts)
+  fast-lint|main-workspace|broker|guest-shell-runner|no-bash-ast|schema-reproducibility|supply-chain|inventory-stub|fixture-contracts)
     [ "$#" -eq 1 ] || {
       printf '%s\n' "test-rust.sh accepts one leaf mode; run make test-rust" >&2
       exit 2
     }
     ;;
   *)
-    printf '%s\n' "usage: tests/test-rust.sh {fast-lint|api-surface|main-workspace|broker|guest-shell-runner|no-bash-ast|schema-reproducibility|supply-chain|inventory-stub|fixture-contracts}; run make test-rust" >&2
+    printf '%s\n' "usage: tests/test-rust.sh {fast-lint|main-workspace|broker|guest-shell-runner|no-bash-ast|schema-reproducibility|supply-chain|inventory-stub|fixture-contracts}; run make test-rust" >&2
     exit 2
     ;;
 esac
@@ -1146,26 +1146,6 @@ run_fast_lint_gate() {
   log "test-rust fast-lint OK (duration: $((SECONDS - suite_started))s)"
 }
 
-# The compiler-derived API census. Its own CI shard, because it shares nothing
-# with the workspace build that would make serialising it behind one worthwhile:
-# it renders through a separately pinned nightly toolchain into its own target
-# directory, so it neither consumes nor produces artifacts that clippy and
-# nextest use. Measured on the pull-request gate it ran 209 s inside a 878 s
-# main shard whose peer shard finished 172 s earlier, so that 209 s sat directly
-# on the gate's critical path while a runner stood idle. Splitting it moves the
-# work sideways rather than removing it: total runner minutes barely change, the
-# longest path shortens by roughly the whole 209 s.
-#
-# One compiler-owned workspace build replaces the old test's serial
-# package-by-package HTML rustdoc loop. This is enforcing and cannot skip.
-run_api_surface_gate() {
-  rust_surface_start rust-api-surface
-  log "--> compiler-derived API surface"
-  bash "$ROOT/tests/tools/api-surface-json.sh"
-  rust_surface_success rust-api-surface
-  log "test-rust api-surface OK (duration: $((SECONDS - suite_started))s)"
-}
-
 run_main_workspace_gate() {
   require_nextest "$rust_mode"
   rust_surface_start rust-main-format
@@ -1424,9 +1404,6 @@ ok "assert-pinned-tests"
 case "$rust_mode" in
   fast-lint)
     run_fast_lint_gate
-    ;;
-  api-surface)
-    run_api_surface_gate
     ;;
   main-workspace)
     run_main_workspace_gate
