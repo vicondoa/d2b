@@ -31,6 +31,31 @@ fn controller_uses_opaque_resource_effects_and_preserves_volume_on_finalize() {
 }
 
 #[test]
+fn controller_rejects_non_host_execution_refs() {
+    let device = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
+    let execution = ResourceRef::parse("Zone/zone-a").unwrap();
+
+    assert!(matches!(
+        TpmResourceController::new(device, execution),
+        Err(d2b_provider_device_tpm::TpmResourceControllerError::Effect(
+            TpmResourceEffectError::InvalidExecutionRef
+        ))
+    ));
+}
+
+#[test]
+fn controller_finalize_before_reconcile_is_invalid() {
+    let device = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
+    let execution = ResourceRef::parse("Host/host-system").unwrap();
+    let mut controller = TpmResourceController::new(device, execution).unwrap();
+
+    assert_eq!(
+        block_on(controller.finalize(&NoopEffects)),
+        Err(d2b_provider_device_tpm::TpmResourceControllerError::InvalidState)
+    );
+}
+
+#[test]
 fn controller_finalizes_children_after_endpoint_watch_failure() {
     let device = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
     let execution = ResourceRef::parse("Host/host-system").unwrap();
@@ -53,6 +78,35 @@ fn controller_finalizes_children_after_endpoint_watch_failure() {
     assert_eq!(effects.stop_calls.load(Ordering::SeqCst), 1);
     assert_eq!(effects.delete_calls.load(Ordering::SeqCst), 1);
     assert!(!controller.finalizer_installed());
+}
+
+#[test]
+fn controller_retains_process_when_stop_fails_during_finalize() {
+    let device = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
+    let execution = ResourceRef::parse("Host/host-system").unwrap();
+    let mut controller = TpmResourceController::new(device, execution).unwrap();
+    let effects = ScriptedEffects {
+        stop_fails: AtomicBool::new(true),
+        ..ScriptedEffects::default()
+    };
+
+    assert_eq!(
+        block_on(controller.reconcile(&effects)).unwrap(),
+        TpmResourceOutcome::Ready
+    );
+    assert_eq!(
+        block_on(controller.finalize(&effects)),
+        Err(d2b_provider_device_tpm::TpmResourceControllerError::Effect(
+            TpmResourceEffectError::Transient
+        ))
+    );
+    assert!(controller.finalizer_installed());
+    assert_eq!(
+        controller.phase(),
+        d2b_provider_device_tpm::TpmResourcePhase::Degraded
+    );
+    assert_eq!(effects.stop_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(effects.delete_calls.load(Ordering::SeqCst), 0);
 }
 
 #[test]
