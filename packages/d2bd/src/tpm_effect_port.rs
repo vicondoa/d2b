@@ -188,7 +188,6 @@ impl<'a> LiveTpmEffectExecutor<'a> {
             tracing::warn!(
                 vm = %self.vm_id,
                 role = "swtpm",
-                pid = response.pid,
                 "removed failed TPM runner registration"
             );
         }
