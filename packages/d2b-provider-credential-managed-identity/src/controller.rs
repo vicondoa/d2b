@@ -305,6 +305,7 @@ mod tests {
             ManagedIdentityPlacement::new(
                 PlacementBinding::HostSystem,
                 ResourceRef::parse("Host/azure-vm").unwrap(),
+                ResourceRef::parse("Zone/dev").unwrap(),
             )
             .unwrap(),
         );
@@ -330,6 +331,7 @@ mod tests {
             ManagedIdentityPlacement::new(
                 PlacementBinding::GuestAgent,
                 ResourceRef::parse("Guest/aca-sandbox").unwrap(),
+                ResourceRef::parse("Zone/dev").unwrap(),
             )
             .unwrap(),
         );
