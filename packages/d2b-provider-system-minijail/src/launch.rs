@@ -16,6 +16,28 @@ pub struct PlatformGate {
 }
 
 impl PlatformGate {
+    /// Construct a gate from daemon-owned host observations.
+    pub const fn from_observed(
+        kernel_major: u16,
+        kernel_minor: u16,
+        cgroup_kill_writable: bool,
+    ) -> Self {
+        Self {
+            kernel_major,
+            kernel_minor,
+            cgroup_kill_writable,
+        }
+    }
+
+    /// Construct a platform snapshot for hermetic conformance tests.
+    pub const fn new_for_test(
+        kernel_major: u16,
+        kernel_minor: u16,
+        cgroup_kill_writable: bool,
+    ) -> Self {
+        Self::from_observed(kernel_major, kernel_minor, cgroup_kill_writable)
+    }
+
     /// Check Linux 5.14 and cgroup.kill.
     pub const fn validate(self) -> Result<(), ProcessConformanceError> {
         if self.kernel_major < 5

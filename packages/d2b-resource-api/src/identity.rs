@@ -23,6 +23,16 @@ pub struct AuthenticatedSubjectContext {
 }
 
 impl AuthenticatedSubjectContext {
+    pub(crate) fn issue(
+        claims: Arc<SessionClaims>,
+        authorization_state: AuthorizationState,
+    ) -> Self {
+        Self {
+            claims,
+            authorization_state,
+        }
+    }
+
     pub(crate) fn claims(&self) -> &Arc<SessionClaims> {
         &self.claims
     }
@@ -51,10 +61,7 @@ pub(crate) fn issue_test_subject(
             claims: Arc<SessionClaims>,
             authorization_state: AuthorizationState,
         ) -> AuthenticatedSubjectContext {
-            AuthenticatedSubjectContext {
-                claims,
-                authorization_state,
-            }
+            AuthenticatedSubjectContext::issue(claims, authorization_state)
         }
     }
 

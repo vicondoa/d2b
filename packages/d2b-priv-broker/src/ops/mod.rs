@@ -43,6 +43,8 @@ pub mod usbip_host;
 
 // Kernel-module + device-fd handoff ops.
 pub mod device;
+// GPU-specific role, allowlist, and restart identity preflight.
+pub mod gpu;
 pub mod modprobe;
 // Security-key hidraw open op: resolves stable selector → opens
 // hidraw fd for `d2bd`'s long-lived CTAPHID relay session.
@@ -56,6 +58,8 @@ pub mod exec_reconcile;
 
 // Audit-helper introduced by s2; reusable by s1/s3/s4 going forward.
 pub mod audit_op;
+// Broker-owned source-to-target NixOS generation handoff journal and replay.
+pub mod host_generation_handoff;
 
 // Typed broker op that hardlink-farms per-VM closures into
 // `/var/lib/d2b/vms/<vm>/store/` and atomically swaps the `current`
@@ -96,6 +100,8 @@ pub mod disk_init;
 // qemu-media physical USB enrollment/open by opaque ref. Raw device identity
 // stays in root-only registry/runtime artifacts outside the Nix store.
 pub mod media;
+// Broker-owned transient systemd unit lifecycle.
+pub mod systemd;
 
 use std::fmt;
 use std::path::PathBuf;

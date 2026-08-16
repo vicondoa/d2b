@@ -153,6 +153,10 @@ pub enum OperationFields {
     DelegateCgroupV2 {
         scope_id: String,
     },
+    CgroupKill {
+        vm_id: String,
+        role_id: String,
+    },
     OpenCgroupDir {
         scope_id: String,
         path_class: String,
@@ -294,6 +298,36 @@ pub enum OperationFields {
     OpenPidfd {
         pid: i32,
         expected_start_time_ticks: u64,
+    },
+    /// Accepted-socket peer pidfd handoff has no caller-controlled fields.
+    OpenPeerPidfdFromAcceptedSocket {},
+    ObserveRunner {
+        vm_id: String,
+        role_id: String,
+        present: bool,
+        cgroup_verified: bool,
+        executable_verified: bool,
+    },
+    /// Path-free result of a broker-owned PipeWire host effect.
+    PipeWireAudio {
+        vm_id: String,
+        role_id: String,
+        channel: String,
+        action: String,
+        applied: bool,
+        host_ready: bool,
+        node_present: bool,
+    },
+    /// Transient systemd lifecycle audit fields. Unit names, cgroup paths,
+    /// PIDs, and invocation identifiers remain broker-local.
+    SystemdUnit {
+        vm_id: String,
+        role_id: String,
+        role: String,
+        bundle_runner_intent_ref: String,
+        domain: String,
+        action: String,
+        stopped: Option<bool>,
     },
     /// `OpenZoneStore` audit fields. The broker records only the opaque
     /// storage-row id, the closed disposition, the derived store identity,
@@ -451,6 +485,12 @@ pub enum OperationFields {
         mode: String,
         vm: String,
     },
+    ApplyHostGenerationHandoff {
+        target: String,
+        source_generation: u64,
+        target_generation: u64,
+        state: String,
+    },
     RunGc {
         bundle_gc_intent_ref: String,
         keep_generations: Option<u32>,
@@ -550,6 +590,10 @@ impl OperationFields {
             }),
             "DelegateCgroupV2" => parse_fields!(value => DelegateCgroupV2 {
                 scope_id: String,
+            }),
+            "CgroupKill" => parse_fields!(value => CgroupKill {
+                vm_id: String,
+                role_id: String,
             }),
             "OpenCgroupDir" => parse_fields!(value => OpenCgroupDir {
                 scope_id: String,
@@ -673,6 +717,22 @@ impl OperationFields {
             "OpenPidfd" => parse_fields!(value => OpenPidfd {
                 pid: i32,
                 expected_start_time_ticks: u64,
+            }),
+            "ObserveRunner" => parse_fields!(value => ObserveRunner {
+                vm_id: String,
+                role_id: String,
+                present: bool,
+                cgroup_verified: bool,
+                executable_verified: bool,
+            }),
+            "PipeWireAudio" => parse_fields!(value => PipeWireAudio {
+                vm_id: String,
+                role_id: String,
+                channel: String,
+                action: String,
+                applied: bool,
+                host_ready: bool,
+                node_present: bool,
             }),
             "OpenZoneStore" => parse_fields!(value => OpenZoneStore {
                 zone_store_id: String,
@@ -805,6 +865,12 @@ impl OperationFields {
                 bundle_activation_intent_ref: String,
                 mode: String,
                 vm: String,
+            }),
+            "ApplyHostGenerationHandoff" => parse_fields!(value => ApplyHostGenerationHandoff {
+                target: String,
+                source_generation: u64,
+                target_generation: u64,
+                state: String,
             }),
             "RunGc" => parse_fields!(value => RunGc {
                 bundle_gc_intent_ref: String,
@@ -1461,12 +1527,30 @@ mod tests {
         }
     );
     roundtrip_test!(
+        cgroup_kill_round_trip,
+        "CgroupKill",
+        OperationFields::CgroupKill {
+            vm_id: "corp-vm".to_owned(),
+            role_id: "ch-runner".to_owned(),
+        }
+    );
+    roundtrip_test!(
         run_activation_round_trip,
         "RunActivation",
         OperationFields::RunActivation {
             bundle_activation_intent_ref: "activation:corp-vm".to_owned(),
             mode: "switch".to_owned(),
             vm: "corp-vm".to_owned(),
+        }
+    );
+    roundtrip_test!(
+        apply_host_generation_handoff_round_trip,
+        "ApplyHostGenerationHandoff",
+        OperationFields::ApplyHostGenerationHandoff {
+            target: "Host/host-system".to_owned(),
+            source_generation: 7,
+            target_generation: 8,
+            state: "completed".to_owned(),
         }
     );
     roundtrip_test!(

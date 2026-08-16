@@ -7,6 +7,7 @@ license.workspace = true
 
 [features]
 default = []
+test-support = []
 
 [dependencies]
 async-trait = "0.1"

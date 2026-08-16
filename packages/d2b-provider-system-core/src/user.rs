@@ -251,6 +251,28 @@ impl<P: UserDiscoveryEffectPort> UserReconciler<P> {
         Ok(self.report(user_ref, phase, condition, Some(discovered.identity)))
     }
 
+    /// Reconcile a User and emit its redacted ResourceReconciled record.
+    pub async fn reconcile_with_audit(
+        &self,
+        user_ref: &ResourceRef,
+        spec: &UserSpec,
+    ) -> Result<(UserStatusReport, crate::ResourceReconciledAudit), SystemCoreError> {
+        let status = self.reconcile(user_ref, spec).await?;
+        let outcome = match status.phase {
+            ResourcePhase::Ready => crate::ReconcileOutcome::Converged,
+            ResourcePhase::Degraded => crate::ReconcileOutcome::Degraded,
+            _ => crate::ReconcileOutcome::Failed,
+        };
+        Ok((
+            status,
+            crate::ResourceReconciledAudit::user(
+                user_ref.name().as_str(),
+                outcome,
+                "user-reconciled",
+            ),
+        ))
+    }
+
     fn report(
         &self,
         user_ref: &ResourceRef,

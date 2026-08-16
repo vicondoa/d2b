@@ -7,3 +7,25 @@ license.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+async-trait = "0.1"
+d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
+d2b-provider = { path = "../d2b-provider", version = "0.0.0-bootstrap" }
+d2b-session = { path = "../d2b-session", version = "0.0.0-bootstrap" }
+ring.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["io-util", "rt", "sync", "time"] }
+tracing = "0.1"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "net", "rt", "sync", "time"] }
+
+[[test]]
+name = "host_guest"
+path = "integration/host_guest.rs"
+
+[[test]]
+name = "no_fd_transfer"
+path = "integration/no_fd_transfer.rs"

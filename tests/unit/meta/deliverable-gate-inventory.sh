@@ -36,7 +36,7 @@ MAPPINGS=(
   "known-hosts-refresh:cargo:d2bd::known_hosts_refresh"
   "ssh-host-key-preflight:tests/ssh-host-key-preflight-eval.sh;cargo:d2bd::ssh_host_key_preflight"
   "daemon-autostart:cargo:d2bd::autostart"
-  "stop-dag-owner:tests/stop-dag-reconcile-eval.sh;cargo:d2bd::supervisor::stop_dag"
+  "stop-dag-owner:packages/d2b-contract-tests/tests/policy_daemon.rs;cargo:d2b-contract-tests::stop_dag_reconcile_surface"
   "net-fixture-observability-env:tests/unit/nix/cases/net-vm-network.nix"
   "net-vm-bundle-gate:cargo:d2bd::net_vm_bundle_gate"
   "tap-dag-contract:tests/tap-dag-contract-doc-eval.sh;docs/reference/tap-dag-contract.md"

@@ -1,7 +1,7 @@
 //! Exact Zone router and the single-owner registration surface.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     sync::{
         Arc, Mutex, MutexGuard, Weak,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -22,12 +22,12 @@ use d2b_session::{
     AuthenticatedComponentSession, AuthenticatedSessionRouteBinding, AuthenticatedTtrpcHandle,
     GENERATED_OPERATION_CATALOG, OperationKind, SessionAcceptor, SessionAuthorizationRequest,
     SessionCancellationHandle, SessionOperation, SessionRegistrationCapability,
-    contract::EndpointPolicy, resource_operation, rewrite_ttrpc_stream_id, ttrpc_request_id,
-    ttrpc_stream_id,
+    contract::{EndpointPolicy, ServicePackage},
+    resource_operation, rewrite_ttrpc_stream_id, ttrpc_request_id, ttrpc_stream_id,
 };
 use d2b_session::{SessionAuthenticationBinding, TransportEvidence};
 use d2b_session_unix::{PeerCredentials, VerifiedUnixPeer};
-use tokio::sync::{Mutex as AsyncMutex, oneshot};
+use tokio::sync::{Mutex as AsyncMutex, mpsc, oneshot};
 
 use crate::{
     authorization::{AuthorizationError, BusAuthorizer},
@@ -65,6 +65,21 @@ const CANCEL_DELIVERY_TIMEOUT: Duration = Duration::from_secs(5);
 pub trait BusClock: Send + Sync + 'static {
     /// Return the current monotonic tick.
     fn now_tick(&self) -> u64;
+}
+
+/// A bus operation lease for daemon-local dispatch.
+pub struct LocalOperationLease {
+    inner: Option<OperationLease>,
+}
+
+impl LocalOperationLease {
+    /// Finish the authorized local invocation.
+    pub fn finish(mut self) -> Result<(), BusError> {
+        self.inner
+            .as_mut()
+            .expect("local operation lease is live")
+            .finish()
+    }
 }
 
 struct SystemClock(Instant);
@@ -1105,23 +1120,27 @@ impl core::fmt::Debug for ZoneBus {
     }
 }
 
+#[derive(Clone)]
 enum UnixSubjectKind {
     #[cfg(test)]
     Host,
-    #[cfg(test)]
     Guest,
     Provider,
 }
 
+#[derive(Clone)]
 pub(crate) struct UnixSubjectRecord {
     kind: UnixSubjectKind,
     subject_ref: ResourceRef,
     subject_uid: ResourceUid,
     zone_ref: ResourceRef,
-    expected_peer: PeerCredentials,
+    expected_peer: Option<PeerCredentials>,
+    expected_peer_uid: Option<u32>,
+    service: Option<ServicePackage>,
     provider_ref: Option<ResourceRef>,
     provider_generation: Option<ResourceGeneration>,
     controller_generation: Option<ControllerGeneration>,
+    execution_ref: Option<ResourceRef>,
 }
 
 impl UnixSubjectRecord {
@@ -1157,6 +1176,7 @@ impl UnixSubjectRecord {
         )
     }
 
+    #[cfg(test)]
     pub(crate) fn provider(
         subject_ref: ResourceRef,
         subject_uid: ResourceUid,
@@ -1186,7 +1206,6 @@ impl UnixSubjectRecord {
         let expected_type = match kind {
             #[cfg(test)]
             UnixSubjectKind::Host => "Host",
-            #[cfg(test)]
             UnixSubjectKind::Guest => "Guest",
             UnixSubjectKind::Provider => "Provider",
         };
@@ -1202,14 +1221,72 @@ impl UnixSubjectRecord {
             subject_ref,
             subject_uid,
             zone_ref,
-            expected_peer,
+            expected_peer: Some(expected_peer),
+            expected_peer_uid: None,
+            service: None,
             provider_ref: None,
             provider_generation: None,
             controller_generation: None,
+            execution_ref: None,
         })
     }
 
-    #[cfg(test)]
+    fn guest_for_uid(
+        subject_ref: ResourceRef,
+        subject_uid: ResourceUid,
+        zone_ref: ResourceRef,
+        expected_peer_uid: u32,
+    ) -> d2b_session::Result<Self> {
+        if subject_ref.resource_type().as_str() != "Guest"
+            || zone_ref.resource_type().as_str() != "Zone"
+        {
+            return Err(d2b_session::SessionError::new(
+                d2b_session::contract::SessionErrorCode::SubjectMismatch,
+            ));
+        }
+        Ok(Self {
+            kind: UnixSubjectKind::Guest,
+            subject_ref,
+            subject_uid,
+            zone_ref,
+            expected_peer: None,
+            expected_peer_uid: Some(expected_peer_uid),
+            service: None,
+            provider_ref: None,
+            provider_generation: None,
+            controller_generation: None,
+            execution_ref: None,
+        })
+    }
+
+    fn provider_for_uid(
+        subject_ref: ResourceRef,
+        subject_uid: ResourceUid,
+        zone_ref: ResourceRef,
+        expected_peer_uid: u32,
+    ) -> d2b_session::Result<Self> {
+        if subject_ref.resource_type().as_str() != "Provider"
+            || zone_ref.resource_type().as_str() != "Zone"
+        {
+            return Err(d2b_session::SessionError::new(
+                d2b_session::contract::SessionErrorCode::SubjectMismatch,
+            ));
+        }
+        Ok(Self {
+            kind: UnixSubjectKind::Provider,
+            subject_ref,
+            subject_uid,
+            zone_ref,
+            expected_peer: None,
+            expected_peer_uid: Some(expected_peer_uid),
+            service: None,
+            provider_ref: None,
+            provider_generation: None,
+            controller_generation: None,
+            execution_ref: None,
+        })
+    }
+
     pub(crate) fn with_provider(
         mut self,
         provider_ref: ResourceRef,
@@ -1230,6 +1307,24 @@ impl UnixSubjectRecord {
         self
     }
 
+    fn for_service(mut self, service: ServicePackage) -> Self {
+        self.service = Some(service);
+        self
+    }
+
+    pub(crate) fn with_execution_ref(
+        mut self,
+        execution_ref: ResourceRef,
+    ) -> d2b_session::Result<Self> {
+        if execution_ref.resource_type().as_str() != "Host" {
+            return Err(d2b_session::SessionError::new(
+                d2b_session::contract::SessionErrorCode::SubjectMismatch,
+            ));
+        }
+        self.execution_ref = Some(execution_ref);
+        Ok(self)
+    }
+
     pub(crate) fn bind(
         self,
         peer: VerifiedUnixPeer,
@@ -1240,12 +1335,17 @@ impl UnixSubjectRecord {
         let expected_type = match self.kind {
             #[cfg(test)]
             UnixSubjectKind::Host => "Host",
-            #[cfg(test)]
             UnixSubjectKind::Guest => "Guest",
             UnixSubjectKind::Provider => "Provider",
         };
         peer.validate_transport(binding.transport_class())?;
-        if peer.credentials() != self.expected_peer
+        let peer_matches = self
+            .expected_peer
+            .is_some_and(|expected| peer.credentials() == expected)
+            || self
+                .expected_peer_uid
+                .is_some_and(|expected| peer.credentials().uid().as_raw() == expected);
+        if !peer_matches
             || evidence.class() != EvidenceClass::UnixPeer
             || binding.evidence_class() != EvidenceClass::UnixPeer
             || binding.transport_binding().locality() != Locality::Local
@@ -1257,6 +1357,20 @@ impl UnixSubjectRecord {
                 d2b_session::contract::SessionErrorCode::SubjectMismatch,
             ));
         }
+        let provider_ref = if self.subject_ref.to_canonical_string() == "Provider/system-core" {
+            match binding.service().as_str() {
+                "d2b.display.v3" => ResourceRef::parse("Provider/display-wayland").ok(),
+                "d2b.clipboard.v3"
+                | "d2b.clipboard.bridge.v3"
+                | "d2b.clipboard.picker-coord.v3" => {
+                    ResourceRef::parse("Provider/clipboard-wayland").ok()
+                }
+                "d2b.notification.v3" => ResourceRef::parse("Provider/notification-desktop").ok(),
+                _ => self.provider_ref,
+            }
+        } else {
+            self.provider_ref
+        };
         let subject_ref = self.subject_ref;
         let mut context = AuthenticatedSubjectContext::new(
             subject_ref.clone(),
@@ -1272,8 +1386,17 @@ impl UnixSubjectRecord {
                 binding.transcript_hash().clone(),
             ),
         );
+        if binding.service().as_str() == "d2b.display.v3" {
+            context = context.with_execution_ref(self.execution_ref.ok_or_else(|| {
+                d2b_session::SessionError::new(
+                    d2b_session::contract::SessionErrorCode::SubjectConfigurationMismatch,
+                )
+            })?);
+        } else if let Some(execution_ref) = self.execution_ref {
+            context = context.with_execution_ref(execution_ref);
+        }
         if let (Some(provider_ref), Some(provider_generation)) =
-            (self.provider_ref, self.provider_generation)
+            (provider_ref, self.provider_generation)
         {
             context = context
                 .with_provider_ref(provider_ref)
@@ -1293,65 +1416,74 @@ impl core::fmt::Debug for UnixSubjectRecord {
 }
 
 struct AuthoritativeUnixSubjectResolver {
-    #[cfg(test)]
     subjects: Mutex<Vec<UnixSubjectRecord>>,
-    #[cfg(test)]
     max_subjects: usize,
     #[cfg(not(test))]
     zone: ZoneId,
 }
 
 impl AuthoritativeUnixSubjectResolver {
-    #[cfg(test)]
     fn deny_all(_zone: ZoneId, _max_subjects: usize) -> Self {
         Self {
             subjects: Mutex::new(Vec::new()),
             max_subjects: _max_subjects,
+            #[cfg(not(test))]
+            zone: _zone,
         }
     }
 
-    #[cfg(not(test))]
-    fn deny_all(zone: ZoneId, _max_subjects: usize) -> Self {
-        Self { zone }
-    }
-
-    fn resolve(&self, peer: PeerCredentials) -> d2b_session::Result<UnixSubjectRecord> {
+    fn resolve_for_service(
+        &self,
+        peer: PeerCredentials,
+        service: &ServicePackage,
+    ) -> d2b_session::Result<UnixSubjectRecord> {
         #[cfg(not(test))]
-        {
-            let subject = UnixSubjectRecord::provider(
+        if *service == ServicePackage::ResourceV3 {
+            return UnixSubjectRecord::new(
+                UnixSubjectKind::Provider,
                 ResourceRef::parse("Provider/system-core").expect("fixed Provider ref"),
                 ResourceUid::parse("11111111-1111-4111-8111-111111111111")
                     .expect("fixed Provider uid"),
                 ResourceRef::parse(&format!("Zone/{}", self.zone.as_str()))
                     .expect("fixed Zone ref"),
                 peer,
-                ResourceGeneration::new(1).expect("fixed Provider generation"),
-            )?
-            .with_controller_generation(
-                ControllerGeneration::new(1).expect("fixed controller generation"),
             );
-            Ok(subject)
         }
-
+        let subjects = self
+            .subjects
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let index = subjects
+            .iter()
+            .position(|subject| {
+                let peer_matches = subject
+                    .expected_peer
+                    .is_some_and(|expected| expected == peer)
+                    || subject
+                        .expected_peer_uid
+                        .is_some_and(|expected| peer.uid().as_raw() == expected);
+                peer_matches
+                    && subject
+                        .service
+                        .as_ref()
+                        .is_none_or(|expected| expected == service)
+            })
+            .ok_or_else(|| {
+                d2b_session::SessionError::new(
+                    d2b_session::contract::SessionErrorCode::SubjectConfigurationMismatch,
+                )
+            })?;
         #[cfg(test)]
         {
-            let mut subjects = self
-                .subjects
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            let index = subjects
-                .iter()
-                .position(|subject| subject.expected_peer == peer)
-                .ok_or_else(|| {
-                    d2b_session::SessionError::new(
-                        d2b_session::contract::SessionErrorCode::SubjectConfigurationMismatch,
-                    )
-                })?;
+            let mut subjects = subjects;
             Ok(subjects.swap_remove(index))
+        }
+        #[cfg(not(test))]
+        {
+            Ok(subjects[index].clone())
         }
     }
 
-    #[cfg(test)]
     fn install(&self, subject: UnixSubjectRecord, zone: &ZoneId) -> d2b_session::Result<()> {
         if subject.zone_ref.name().as_str() != zone.as_str() {
             return Err(d2b_session::SessionError::new(
@@ -1376,6 +1508,25 @@ impl core::fmt::Debug for AuthoritativeUnixSubjectResolver {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str("AuthoritativeUnixSubjectResolver(<redacted>)")
     }
+}
+
+/// Trusted committed state used to install daemon-owned interaction subjects.
+pub struct CommittedInteractionSubjectInput {
+    /// The Guest identity committed by the display WaylandSession.
+    pub display_subject_ref: ResourceRef,
+    /// The UID committed for the display WaylandSession Guest.
+    pub display_subject_uid: ResourceUid,
+    pub zone_ref: ResourceRef,
+    pub expected_peer_uid: u32,
+    pub execution_ref: ResourceRef,
+    pub display_generation: ResourceGeneration,
+    pub clipboard_generation: Option<ResourceGeneration>,
+    pub notification_generation: Option<ResourceGeneration>,
+    /// The committed Provider UID used for clipboard service routes.
+    pub clipboard_provider_uid: Option<ResourceUid>,
+    /// The committed Provider UID used for notification service routes.
+    pub notification_provider_uid: Option<ResourceUid>,
+    pub controller_generation: ControllerGeneration,
 }
 
 /// Single, non-cloneable authority that consumes authenticated registrations.
@@ -1560,6 +1711,8 @@ impl ZoneRegistrar {
             core: Arc::clone(&self.core),
             session,
             closed: false,
+            incoming: empty_component_requests(),
+            attachments: None,
         })
     }
 
@@ -1606,6 +1759,8 @@ impl ZoneRegistrar {
             core: Arc::clone(&self.core),
             session,
             closed: false,
+            incoming: empty_component_requests(),
+            attachments: None,
         })
     }
 }
@@ -1629,13 +1784,17 @@ type ComponentResponse = Result<Vec<u8>, EndpointError>;
 struct ComponentResponseState {
     terminal: Option<EndpointError>,
     waiters: BTreeMap<d2b_session::contract::RequestId, oneshot::Sender<ComponentResponse>>,
+    inbound_streams: BTreeSet<u32>,
 }
 
 struct ComponentResponses {
     generation: u64,
     ttrpc: AuthenticatedTtrpcHandle,
+    requests: mpsc::Sender<Vec<u8>>,
     state: Mutex<ComponentResponseState>,
 }
+
+type ComponentRequestChannel = Arc<AsyncMutex<mpsc::Receiver<Vec<u8>>>>;
 
 struct ComponentResponseTask(tokio::task::AbortHandle);
 
@@ -1646,12 +1805,20 @@ impl Drop for ComponentResponseTask {
 }
 
 impl ComponentResponses {
-    fn new(generation: u64, ttrpc: AuthenticatedTtrpcHandle) -> Arc<Self> {
-        Arc::new(Self {
-            generation,
-            ttrpc,
-            state: Mutex::new(ComponentResponseState::default()),
-        })
+    fn new(
+        generation: u64,
+        ttrpc: AuthenticatedTtrpcHandle,
+    ) -> (Arc<Self>, ComponentRequestChannel) {
+        let (requests, receiver) = mpsc::channel(32);
+        (
+            Arc::new(Self {
+                generation,
+                ttrpc,
+                requests,
+                state: Mutex::new(ComponentResponseState::default()),
+            }),
+            Arc::new(AsyncMutex::new(receiver)),
+        )
     }
 
     fn spawn(self: &Arc<Self>) -> ComponentResponseTask {
@@ -1663,13 +1830,75 @@ impl ComponentResponses {
     async fn run(&self) {
         loop {
             match self.ttrpc.receive().await {
-                Ok(response) => match ttrpc_request_id(self.generation, &response) {
-                    Ok(request_id) => self.deliver(request_id, Ok(response)),
-                    Err(_) => {
+                #[cfg(test)]
+                Ok(frame)
+                    if ttrpc_request_id(self.generation, &frame)
+                        .ok()
+                        .is_some_and(|request_id| self.has_waiter(&request_id)) =>
+                {
+                    let request_id = match ttrpc_request_id(self.generation, &frame) {
+                        Ok(request_id) => request_id,
+                        Err(_) => {
+                            self.terminate(EndpointError::Rejected);
+                            return;
+                        }
+                    };
+                    self.deliver(request_id, Ok(frame));
+                }
+                Ok(frame)
+                    if d2b_session::ttrpc_is_request(&frame)
+                        && ttrpc_request_id(self.generation, &frame)
+                            .ok()
+                            .is_some_and(|request_id| self.has_waiter(&request_id)) =>
+                {
+                    let request_id = match ttrpc_request_id(self.generation, &frame) {
+                        Ok(request_id) => request_id,
+                        Err(_) => {
+                            self.terminate(EndpointError::Rejected);
+                            return;
+                        }
+                    };
+                    self.deliver(request_id, Ok(frame));
+                }
+                Ok(frame) if d2b_session::ttrpc_is_request(&frame) => {
+                    let stream_id = match ttrpc_stream_id(&frame) {
+                        Ok(stream_id) => stream_id,
+                        Err(_) => {
+                            self.terminate(EndpointError::Rejected);
+                            return;
+                        }
+                    };
+                    let accepted = {
+                        let mut state = self
+                            .state
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner());
+                        state.inbound_streams.len() < 32 && state.inbound_streams.insert(stream_id)
+                    };
+                    if !accepted {
                         self.terminate(EndpointError::Rejected);
                         return;
                     }
-                },
+                    if self.requests.send(frame).await.is_err() {
+                        self.terminate(EndpointError::Rejected);
+                        return;
+                    }
+                }
+                Ok(response) if d2b_session::ttrpc_is_response(&response) => {
+                    match ttrpc_request_id(self.generation, &response) {
+                        Ok(request_id) => self.deliver(request_id, Ok(response)),
+                        Err(_) => {
+                            self.terminate(EndpointError::Rejected);
+                            return;
+                        }
+                    }
+                }
+                #[cfg(test)]
+                Ok(frame) if ttrpc_request_id(self.generation, &frame).is_ok() => {}
+                Ok(_) => {
+                    self.terminate(EndpointError::Rejected);
+                    return;
+                }
                 Err(error) => {
                     self.terminate(EndpointError::from(error));
                     return;
@@ -1691,6 +1920,14 @@ impl ComponentResponses {
         }
     }
 
+    fn has_waiter(&self, request_id: &d2b_session::contract::RequestId) -> bool {
+        self.state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .waiters
+            .contains_key(request_id)
+    }
+
     fn terminate(&self, error: EndpointError) {
         let waiters = {
             let mut state = self
@@ -1698,11 +1935,32 @@ impl ComponentResponses {
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             state.terminal = Some(error);
+            state.inbound_streams.clear();
             std::mem::take(&mut state.waiters)
         };
         for (_, sender) in waiters {
             let _ = sender.send(Err(error));
         }
+    }
+
+    async fn send_inbound_response(&self, frame: Vec<u8>) -> Result<(), EndpointError> {
+        if !d2b_session::ttrpc_is_response(&frame) {
+            return Err(EndpointError::Rejected);
+        }
+        let stream_id = ttrpc_stream_id(&frame).map_err(|_| EndpointError::Rejected)?;
+        {
+            let mut state = self
+                .state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if state.terminal.is_some() || !state.inbound_streams.remove(&stream_id) {
+                return Err(EndpointError::Rejected);
+            }
+        }
+        self.ttrpc
+            .send_response(frame)
+            .await
+            .map_err(EndpointError::from)
     }
 }
 
@@ -2098,6 +2356,13 @@ impl crate::registry::BusEndpoint for ComponentEndpoint {
         Err(EndpointError::Unavailable)
     }
 
+    async fn send_inbound_response(&self, frame: Vec<u8>) -> Result<(), EndpointError> {
+        if self.is_revoked() {
+            return Err(cancelled_endpoint());
+        }
+        self.responses.send_inbound_response(frame).await
+    }
+
     fn terminalize_cancel(
         &self,
         operation: &OperationId,
@@ -2132,7 +2397,9 @@ impl ZoneRegistrar {
         verified_peer: VerifiedUnixPeer,
     ) -> d2b_session::Result<SessionAcceptor<ComponentSessionAdmission>> {
         verified_peer.validate_transport(policy.transport_binding.transport)?;
-        let subject = self.unix_subjects.resolve(verified_peer.credentials())?;
+        let subject = self
+            .unix_subjects
+            .resolve_for_service(verified_peer.credentials(), &policy.service)?;
         let connect_authorizer = Arc::clone(&self.core.authorizer);
         let request_authorizer = Arc::clone(&self.core.authorizer);
         SessionAcceptor::from_verified_adapter(
@@ -2151,6 +2418,139 @@ impl ZoneRegistrar {
                 identity: Arc::clone(&self.component_admission.identity),
             },
         )
+    }
+
+    /// Install the daemon-owned interaction subject projection from the
+    /// committed resource snapshot. The Unix peer UID authenticates the
+    /// transport only; the Guest/Host refs, resource generations, and
+    /// controller generation are all supplied by trusted committed state.
+    pub fn install_committed_interaction_subject(
+        &self,
+        committed: CommittedInteractionSubjectInput,
+    ) -> d2b_session::Result<()> {
+        let CommittedInteractionSubjectInput {
+            display_subject_ref,
+            display_subject_uid,
+            zone_ref,
+            expected_peer_uid,
+            execution_ref,
+            display_generation,
+            clipboard_generation,
+            notification_generation,
+            clipboard_provider_uid,
+            notification_provider_uid,
+            controller_generation,
+        } = committed;
+        let services = [(
+            ServicePackage::DisplayV3,
+            ResourceRef::parse("Provider/display-wayland").expect("fixed display Provider ref"),
+            display_generation,
+        )];
+        let mut subjects = Vec::with_capacity(5);
+        for (service, provider_ref, generation) in services {
+            subjects.push(
+                UnixSubjectRecord::guest_for_uid(
+                    display_subject_ref.clone(),
+                    display_subject_uid.clone(),
+                    zone_ref.clone(),
+                    expected_peer_uid,
+                )?
+                .with_provider(provider_ref, generation)?
+                .with_controller_generation(controller_generation)
+                .with_execution_ref(execution_ref.clone())?
+                .for_service(service),
+            );
+        }
+        if let Some(generation) = clipboard_generation {
+            let (subject_ref, subject_uid, provider_ref) =
+                if let Some(provider_uid) = clipboard_provider_uid {
+                    (
+                        ResourceRef::parse("Provider/clipboard-wayland")
+                            .expect("fixed clipboard Provider ref"),
+                        provider_uid,
+                        ResourceRef::parse("Provider/clipboard-wayland")
+                            .expect("fixed clipboard Provider ref"),
+                    )
+                } else {
+                    (
+                        display_subject_ref.clone(),
+                        display_subject_uid.clone(),
+                        ResourceRef::parse("Provider/clipboard-wayland")
+                            .expect("fixed clipboard Provider ref"),
+                    )
+                };
+            for service in [
+                ServicePackage::ClipboardV3,
+                ServicePackage::ClipboardBridgeV3,
+                ServicePackage::ClipboardPickerCoordV3,
+            ] {
+                subjects.push(
+                    if provider_uid_is_provider(&subject_ref) {
+                        UnixSubjectRecord::provider_for_uid(
+                            subject_ref.clone(),
+                            subject_uid.clone(),
+                            zone_ref.clone(),
+                            expected_peer_uid,
+                        )?
+                    } else {
+                        UnixSubjectRecord::guest_for_uid(
+                            subject_ref.clone(),
+                            subject_uid.clone(),
+                            zone_ref.clone(),
+                            expected_peer_uid,
+                        )?
+                    }
+                    .with_provider(provider_ref.clone(), generation)?
+                    .with_controller_generation(controller_generation)
+                    .with_execution_ref(execution_ref.clone())?
+                    .for_service(service),
+                );
+            }
+        }
+        if let Some(generation) = notification_generation {
+            let (subject_ref, subject_uid, provider_ref) =
+                if let Some(provider_uid) = notification_provider_uid {
+                    (
+                        ResourceRef::parse("Provider/notification-desktop")
+                            .expect("fixed notification Provider ref"),
+                        provider_uid,
+                        ResourceRef::parse("Provider/notification-desktop")
+                            .expect("fixed notification Provider ref"),
+                    )
+                } else {
+                    (
+                        display_subject_ref,
+                        display_subject_uid,
+                        ResourceRef::parse("Provider/notification-desktop")
+                            .expect("fixed notification Provider ref"),
+                    )
+                };
+            subjects.push(
+                if provider_uid_is_provider(&subject_ref) {
+                    UnixSubjectRecord::provider_for_uid(
+                        subject_ref,
+                        subject_uid,
+                        zone_ref,
+                        expected_peer_uid,
+                    )?
+                } else {
+                    UnixSubjectRecord::guest_for_uid(
+                        subject_ref,
+                        subject_uid,
+                        zone_ref.clone(),
+                        expected_peer_uid,
+                    )?
+                }
+                .with_provider(provider_ref, generation)?
+                .with_controller_generation(controller_generation)
+                .with_execution_ref(execution_ref)?
+                .for_service(ServicePackage::NotificationV3),
+            );
+        }
+        for subject in subjects {
+            self.unix_subjects.install(subject, &self.core.zone)?;
+        }
+        Ok(())
     }
 
     /// Consume an authenticated candidate and install it only after native
@@ -2177,12 +2577,12 @@ impl ZoneRegistrar {
         }
         let routes = routes_for_admitted_session(&binding)?;
         let cancellation = session.cancellation_handle();
-        let responses =
+        let (responses, incoming) =
             ComponentResponses::new(binding.reconnect_generation().get(), ttrpc.clone());
         let response_task = responses.spawn();
         let endpoint: Arc<dyn crate::registry::BusEndpoint> = Arc::new(ComponentEndpoint {
             session: AsyncMutex::new(session),
-            ttrpc,
+            ttrpc: ttrpc.clone(),
             responses,
             _response_task: response_task,
             clock: Arc::clone(&self.core.clock),
@@ -2210,6 +2610,8 @@ impl ZoneRegistrar {
             core: Arc::clone(&self.core),
             session,
             closed: false,
+            incoming,
+            attachments: Some(ttrpc),
         })
     }
 
@@ -2231,12 +2633,12 @@ impl ZoneRegistrar {
             .authorize_connect(binding.context(), &self.core.zone)?;
         let routes = routes_for_admitted_session(&binding)?;
         let cancellation = session.cancellation_handle();
-        let responses =
+        let (responses, incoming) =
             ComponentResponses::new(binding.reconnect_generation().get(), ttrpc.clone());
         let response_task = responses.spawn();
         let endpoint: Arc<dyn crate::registry::BusEndpoint> = Arc::new(ComponentEndpoint {
             session: AsyncMutex::new(session),
-            ttrpc,
+            ttrpc: ttrpc.clone(),
             responses,
             _response_task: response_task,
             clock: Arc::clone(&self.core.clock),
@@ -2278,6 +2680,8 @@ impl ZoneRegistrar {
             core: Arc::clone(&self.core),
             session,
             closed: false,
+            incoming,
+            attachments: Some(ttrpc),
         })
     }
 
@@ -2292,7 +2696,18 @@ impl ZoneRegistrar {
 fn routes_for_admitted_session(
     binding: &AuthenticatedSessionRouteBinding,
 ) -> Result<Vec<RouteKey>, BusError> {
-    if binding.subject_ref().resource_type().as_str() != "Provider" {
+    let guest_provider_service = binding.subject_ref().resource_type().as_str() == "Guest"
+        && matches!(
+            binding.service().as_str(),
+            "d2b.display.v3"
+                | "d2b.clipboard.v3"
+                | "d2b.clipboard.bridge.v3"
+                | "d2b.clipboard.picker-coord.v3"
+                | "d2b.notification.v3"
+        );
+    if binding.provider_ref().is_none()
+        || (binding.subject_ref().resource_type().as_str() != "Provider" && !guest_provider_service)
+    {
         return Ok(Vec::new());
     }
     let target_ref = binding
@@ -2333,6 +2748,13 @@ fn routes_for_admitted_session(
 impl ZoneRegistrar {
     /// Revoke a session, its routes, operations, and streams.
     pub async fn revoke(&mut self, mut ingress: BusIngress) -> Result<(), BusError> {
+        self.revoke_in_place(&mut ingress).await
+    }
+
+    /// Revoke a session while retaining the caller's ingress when the
+    /// authority check fails.  Daemon finalizers use this form so a
+    /// transient cleanup/revocation failure does not discard retry authority.
+    pub async fn revoke_in_place(&mut self, ingress: &mut BusIngress) -> Result<(), BusError> {
         if !Arc::ptr_eq(&self.core, &ingress.core) || ingress.closed {
             return Err(BusError::SessionMismatch);
         }
@@ -2340,6 +2762,10 @@ impl ZoneRegistrar {
         ingress.closed = true;
         Ok(())
     }
+}
+
+fn provider_uid_is_provider(subject_ref: &ResourceRef) -> bool {
+    subject_ref.resource_type().as_str() == "Provider"
 }
 
 impl core::fmt::Debug for ZoneRegistrar {
@@ -2353,6 +2779,41 @@ pub struct BusIngress {
     core: Arc<BusCore>,
     session: SessionId,
     closed: bool,
+    incoming: Arc<AsyncMutex<mpsc::Receiver<Vec<u8>>>>,
+    attachments: Option<AuthenticatedTtrpcHandle>,
+}
+
+/// Receiver for request frames demultiplexed from one admitted ComponentSession.
+#[derive(Clone)]
+pub struct ComponentRequestReceiver {
+    incoming: Arc<AsyncMutex<mpsc::Receiver<Vec<u8>>>>,
+    attachments: Option<AuthenticatedTtrpcHandle>,
+}
+
+impl ComponentRequestReceiver {
+    /// Receive the next request or fail when the authenticated session closes.
+    pub async fn recv(&self) -> Result<Vec<u8>, BusError> {
+        let mut incoming = self.incoming.lock().await;
+        incoming.recv().await.ok_or(BusError::SessionMismatch)
+    }
+
+    /// Receive the next authenticated attachment batch from the same
+    /// ComponentSession. The caller is responsible for checking descriptor
+    /// request/service/method identity before consuming it.
+    pub async fn recv_attachments(&self) -> Result<Vec<d2b_session::OwnedAttachment>, BusError> {
+        self.attachments
+            .as_ref()
+            .ok_or(BusError::SessionMismatch)?
+            .receive_attachments()
+            .await
+            .map_err(|_| BusError::SessionMismatch)
+    }
+}
+
+#[cfg(any(test, feature = "production-rss-fixture"))]
+fn empty_component_requests() -> Arc<AsyncMutex<mpsc::Receiver<Vec<u8>>>> {
+    let (_sender, receiver) = mpsc::channel(1);
+    Arc::new(AsyncMutex::new(receiver))
 }
 
 struct OperationLease {
@@ -2414,6 +2875,71 @@ impl Drop for OperationLease {
 }
 
 impl BusIngress {
+    /// Clone the daemon-owned request receiver for one session loop.
+    pub fn component_request_receiver(&self) -> ComponentRequestReceiver {
+        ComponentRequestReceiver {
+            incoming: Arc::clone(&self.incoming),
+            attachments: self.attachments.clone(),
+        }
+    }
+
+    /// Receive the next inbound ComponentSession request frame.
+    ///
+    /// Component response dispatch and inbound request dispatch share one
+    /// authenticated transport. The registrar-owned response task demuxes
+    /// request frames into this bounded queue so callers never read the
+    /// session transport directly or bypass bus registration.
+    pub async fn receive_component_request(&self) -> Result<Vec<u8>, BusError> {
+        self.ensure_open()?;
+        let mut incoming = self.incoming.lock().await;
+        incoming.recv().await.ok_or(BusError::SessionMismatch)
+    }
+
+    /// Send one response for a request received on this authenticated
+    /// ComponentSession. The response stream must still be fenced as an
+    /// outstanding inbound request by the registrar-owned dispatcher.
+    pub async fn send_component_response(&self, frame: Vec<u8>) -> Result<(), BusError> {
+        self.ensure_open()?;
+        if !d2b_session::ttrpc_is_response(&frame) {
+            return Err(BusError::RouteShape);
+        }
+        let source = self.core.lock_registry().source(self.session)?;
+        source
+            .endpoint
+            .send_inbound_response(frame)
+            .await
+            .map_err(BusError::Endpoint)
+    }
+
+    /// Begin one locally dispatched invocation after the same route and
+    /// session authorization used for ordinary bus delivery.
+    pub async fn begin_local_invoke(
+        &self,
+        route: RouteKey,
+        operation: OperationSpec,
+    ) -> Result<LocalOperationLease, BusError> {
+        self.ensure_open()?;
+        if !route.member().is_method() {
+            return Err(BusError::RouteShape);
+        }
+        self.authorize_route(&route, None, SessionVerb::Invoke, false)
+            .await?;
+        let destination = self.core.lock_registry().resolve(&route)?;
+        let now = self.core.clock.now_tick();
+        let cancellation =
+            self.core
+                .lock_operations()
+                .begin(&operation, self.session, destination, route, now)?;
+        Ok(LocalOperationLease {
+            inner: Some(OperationLease::new(
+                Arc::clone(&self.core),
+                self.session,
+                operation.id().clone(),
+                cancellation,
+            )),
+        })
+    }
+
     async fn authorize_route(
         &self,
         route: &RouteKey,

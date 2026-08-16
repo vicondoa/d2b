@@ -45,7 +45,9 @@ use crate::ops::audit_op::{
 #[cfg(feature = "layer1-bootstrap")]
 use crate::protocol::{bind_seqpacket, connect_seqpacket, recv_json_frame, send_json_frame};
 #[cfg(not(feature = "layer1-bootstrap"))]
-use crate::protocol::{bind_seqpacket, recv_json_frame, send_json_frame, send_json_frame_with_fds};
+use crate::protocol::{
+    bind_seqpacket, recv_json_frame_with_fds, send_json_frame, send_json_frame_with_fds,
+};
 
 #[cfg(feature = "layer1-bootstrap")]
 #[allow(unused_imports)]
@@ -85,11 +87,13 @@ const DEFAULT_BUNDLE_PATH: &str = "/var/lib/d2b/current-bundle/manifest.json";
 const DEFAULT_REALM_CONTROLLERS_PATH: &str = "/etc/d2b/realm-controllers.json";
 const DEFAULT_REALM_IDENTITY_PATH: &str = "/etc/d2b/realm-identity.json";
 const DEFAULT_STATE_DIR: &str = "/var/lib/d2b";
+const DEFAULT_ACTIVATION_HELPER_PATH: &str = "/run/current-system/sw/bin/d2b-activation-helper";
 const CAPABILITIES: &[&str] = &[
     "Hello",
     "ValidateBundle",
     "ExportBrokerAudit",
     "MigrateLegacySwtpmState",
+    "ApplyHostGenerationHandoff",
 ];
 const DEFAULT_IPC_REQUESTS_PER_UID_PER_SECOND: u32 = 512;
 const IPC_RATE_LIMIT_WINDOW: Duration = Duration::from_secs(1);
@@ -115,6 +119,9 @@ pub struct ServerConfig {
     /// fingerprints only; loading it does not enable trust sessions.
     pub realm_identity_path: PathBuf,
     pub state_dir: PathBuf,
+    /// Trusted target-local activation helper. The daemon never supplies
+    /// this path on the wire.
+    pub activation_helper_path: PathBuf,
     pub d2bd_uid: u32,
     pub d2bd_gid: u32,
     /// Directory for the StoreSync-only observability JSONL export
@@ -351,6 +358,7 @@ where
             let mut realm_controllers_path = PathBuf::from(DEFAULT_REALM_CONTROLLERS_PATH);
             let mut realm_identity_path = PathBuf::from(DEFAULT_REALM_IDENTITY_PATH);
             let mut state_dir = PathBuf::from(DEFAULT_STATE_DIR);
+            let mut activation_helper_path = PathBuf::from(DEFAULT_ACTIVATION_HELPER_PATH);
             let mut store_sync_export_dir =
                 PathBuf::from(crate::ops::store_sync_export::DEFAULT_STORE_SYNC_EXPORT_DIR);
             let mut d2bd_uid = None;
@@ -400,6 +408,11 @@ where
                     "--state-dir" => {
                         index += 1;
                         state_dir = PathBuf::from(expect_arg(&rest, index, "--state-dir")?);
+                    }
+                    "--activation-helper-path" => {
+                        index += 1;
+                        activation_helper_path =
+                            PathBuf::from(expect_arg(&rest, index, "--activation-helper-path")?);
                     }
                     "--store-sync-export-dir" => {
                         index += 1;
@@ -468,6 +481,7 @@ where
                 realm_controllers_path,
                 realm_identity_path,
                 state_dir,
+                activation_helper_path,
                 d2bd_uid: d2bd_uid.unwrap_or(fallback_uid),
                 d2bd_gid: d2bd_gid.unwrap_or(fallback_gid),
                 store_sync_export_dir,
@@ -917,6 +931,13 @@ fn handle_connection(
     ipc_rate_limiter: &Arc<Mutex<IpcRateLimiter>>,
 ) -> io::Result<()> {
     let (peer_uid, peer_gid, peer_pid) = peer_credentials(fd.as_raw_fd())?;
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    let (envelope, request_fds) = match recv_json_frame_with_fds::<RequestEnvelope>(fd.as_raw_fd())?
+    {
+        Some(envelope) => envelope,
+        None => return Ok(()),
+    };
+    #[cfg(feature = "layer1-bootstrap")]
     let envelope = match recv_json_frame::<RequestEnvelope>(fd.as_raw_fd())? {
         Some(envelope) => envelope,
         None => return Ok(()),
@@ -1041,7 +1062,7 @@ fn handle_connection(
     let dispatch_outcome = if let Some((path, reason)) = bundle_tamper {
         Err(BrokerError::BundleTampered { path, reason })
     } else {
-        dispatch_request(
+        dispatch_request_with_request_fds(
             request,
             effective_uid,
             peer_gid,
@@ -1050,6 +1071,7 @@ fn handle_connection(
             config,
             audit_log,
             resolver,
+            request_fds,
         )
     };
     #[cfg(feature = "layer1-bootstrap")]
@@ -1144,8 +1166,7 @@ fn write_refusal_audit_bounded(
 }
 
 /// Real-wire dispatch results can carry zero-or-more `OwnedFd`s
-/// alongside the JSON response (for `OpenPidfd` / `SpawnRunner`).
-/// Bootstrap dispatch never carries fds.
+/// alongside the JSON response. Bootstrap dispatch never carries fds.
 #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
 #[derive(Debug)]
 struct DispatchResult {
@@ -1366,6 +1387,36 @@ fn validate_broker_request(request: &BrokerRequest) -> Result<(), BrokerError> {
                 }
             })
         }
+        BrokerRequest::PipeWireAudio(req) => {
+            validate_small_wire_id(req.vm_id.as_str(), 128, "invalid-vm-id").map_err(|reason| {
+                BrokerError::RequestValidation {
+                    operation: "PipeWireAudio",
+                    reason,
+                }
+            })?;
+            validate_small_wire_id(req.role_id.as_str(), 128, "invalid-role-id").map_err(
+                |reason| BrokerError::RequestValidation {
+                    operation: "PipeWireAudio",
+                    reason,
+                },
+            )?;
+            validate_bundle_op_id(req.bundle_runner_intent_ref.as_str()).map_err(|reason| {
+                BrokerError::RequestValidation {
+                    operation: "PipeWireAudio",
+                    reason,
+                }
+            })?;
+            if let d2b_contracts::broker_wire::PipeWireAudioAction::SetLevel { percent } =
+                req.action
+                && percent > 100
+            {
+                return Err(BrokerError::RequestValidation {
+                    operation: "PipeWireAudio",
+                    reason: "audio-level-out-of-range",
+                });
+            }
+            Ok(())
+        }
         _ => Ok(()),
     }
 }
@@ -1470,6 +1521,12 @@ impl DispatchAuditContext {
         audit_join: Option<&AuditJoinContext>,
     ) -> Result<Self, BrokerError> {
         #[cfg(not(feature = "layer1-bootstrap"))]
+        if matches!(request, BrokerRequest::OpenPeerPidfdFromAcceptedSocket(_))
+            && audit_join.is_some()
+        {
+            return Err(BrokerError::Protocol("audit-join-not-permitted".to_owned()));
+        }
+        #[cfg(not(feature = "layer1-bootstrap"))]
         if audit_join.is_none() && Self::request_requires_audit_join(request) {
             return Err(BrokerError::Protocol("audit-join-required".to_owned()));
         }
@@ -1505,15 +1562,7 @@ impl DispatchAuditContext {
 
     #[cfg(not(feature = "layer1-bootstrap"))]
     fn request_requires_audit_join(request: &BrokerRequest) -> bool {
-        !matches!(
-            request,
-            BrokerRequest::Hello(_)
-                | BrokerRequest::ExportBrokerAudit(_)
-                | BrokerRequest::ValidateBundle
-                | BrokerRequest::PollChildReaped
-                | BrokerRequest::PauseBroker
-                | BrokerRequest::ResumeBroker
-        )
+        request.requires_authoritative_audit_join()
     }
 }
 
@@ -1811,6 +1860,11 @@ fn dispatch_request(
     }
 }
 
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn request_accepts_fd(request: &BrokerRequest) -> bool {
+    matches!(request, BrokerRequest::OpenPeerPidfdFromAcceptedSocket(_))
+}
+
 /// Real-wire dispatch. Matches the opaque-ID
 /// `d2b_contracts::broker_wire::BrokerRequest` tuple-newtype shape and
 /// wires the live executors into the dispatch arms that have a ready
@@ -1832,11 +1886,37 @@ fn dispatch_request(
     audit_log: &AuditLog,
     resolver: Option<&Arc<BundleResolver>>,
 ) -> Result<DispatchResult, BrokerError> {
+    dispatch_request_with_request_fds(
+        request,
+        caller_uid,
+        caller_gid,
+        caller_role,
+        audit_context,
+        config,
+        audit_log,
+        resolver,
+        Vec::new(),
+    )
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+#[allow(clippy::too_many_arguments)]
+fn dispatch_request_with_request_fds(
+    request: BrokerRequest,
+    caller_uid: u32,
+    caller_gid: u32,
+    caller_role: CallerRole,
+    audit_context: &DispatchAuditContext,
+    config: &ServerConfig,
+    audit_log: &AuditLog,
+    resolver: Option<&Arc<BundleResolver>>,
+    request_fds: Vec<OwnedFd>,
+) -> Result<DispatchResult, BrokerError> {
     let backend = LiveDispatchBackend {
         daemon_uid: config.d2bd_uid,
         daemon_gid: config.d2bd_gid,
     };
-    dispatch_request_with_backend(
+    dispatch_request_with_backend_and_request_fds(
         request,
         caller_uid,
         caller_gid,
@@ -1846,6 +1926,7 @@ fn dispatch_request(
         audit_log,
         resolver,
         &backend,
+        request_fds,
     )
 }
 
@@ -1862,6 +1943,34 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
     resolver: Option<&Arc<BundleResolver>>,
     backend: &B,
 ) -> Result<DispatchResult, BrokerError> {
+    dispatch_request_with_backend_and_request_fds(
+        request,
+        caller_uid,
+        caller_gid,
+        caller_role,
+        audit_context,
+        config,
+        audit_log,
+        resolver,
+        backend,
+        Vec::new(),
+    )
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+#[allow(clippy::too_many_arguments)]
+fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
+    request: BrokerRequest,
+    caller_uid: u32,
+    caller_gid: u32,
+    caller_role: CallerRole,
+    audit_context: &DispatchAuditContext,
+    config: &ServerConfig,
+    audit_log: &AuditLog,
+    resolver: Option<&Arc<BundleResolver>>,
+    backend: &B,
+    mut request_fds: Vec<OwnedFd>,
+) -> Result<DispatchResult, BrokerError> {
     use d2b_contracts::broker_wire::BrokerRequest as RealBrokerRequest;
     use d2b_core::bundle_resolver::{
         intent_id_hosts_host, intent_id_nft_env, intent_id_nft_host, intent_id_nm_unmanaged_host,
@@ -1877,6 +1986,11 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
         ($($args:tt)*) => {
             write_success_op_record_impl($($args)* audit_context)
         };
+    }
+    if !request_accepts_fd(&request) && !request_fds.is_empty() {
+        return Err(BrokerError::Protocol(
+            "unexpected request SCM_RIGHTS descriptor".to_owned(),
+        ));
     }
     match request {
         RealBrokerRequest::Hello(req) => {
@@ -2008,7 +2122,7 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
         // daemon's opaque BundleOpId via the trusted-bundle resolver,
         // (2) invokes the matching live_handlers::* executor against the
         // system executor, (3) writes the audit row, (4) returns an
-        // Ack/OpenPidfd/SpawnRunner response.
+        // Ack or fd-bearing response.
         RealBrokerRequest::ApplyNftables(req) => {
             let resolver = require_resolver(resolver)?;
             let intent = resolver
@@ -2245,10 +2359,42 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
         }
         RealBrokerRequest::OpenPidfd(req) => {
             // OpenPidfd returns one SCM_RIGHTS-bearing response fd.
-            let runner_id = format!("{}:{}", req.vm_id.as_str(), req.role_id.as_str());
+            let runner_id = runner_registry_key(
+                req.vm_id.as_str(),
+                req.role_id.as_str(),
+                req.resource_ref.as_ref(),
+                req.resource_uid.as_ref(),
+            );
+            let resolver = require_resolver(resolver)?;
+            let intent_id = d2b_core::bundle_resolver::intent_id_runner(
+                req.vm_id.as_str(),
+                req.role_id.as_str(),
+            );
+            let intent = resolver.find_runner_intent(&intent_id).ok_or_else(|| {
+                BrokerError::BundleIntentMissing {
+                    kind: "runner",
+                    intent_id: intent_id.clone(),
+                }
+            })?;
+            if intent.vm_name != req.vm_id.as_str()
+                || (intent.role_id != req.role_id.as_str()
+                    && !(matches!(
+                        intent.role,
+                        d2b_core::processes::ProcessRole::CloudHypervisorRunner
+                    ) && req.role_id.as_str() == "ch-runner"))
+            {
+                return Err(BrokerError::LiveHandler(
+                    "runner adoption intent mismatch".to_owned(),
+                ));
+            }
             let outcome =
                 backend.open_pidfd(runner_id.as_str(), req.pid, req.expected_start_time_ticks)?;
-            write_success_op_record!(
+            if let Err(error) = register_runner_metadata_from_open(runner_id.as_str(), &req, intent)
+            {
+                remove_runner_registration(runner_id.as_str());
+                return Err(error);
+            }
+            if let Err(error) = write_success_op_record!(
                 audit_log,
                 bundle_metadata,
                 "OpenPidfd",
@@ -2263,7 +2409,11 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                     pid: req.pid,
                     expected_start_time_ticks: req.expected_start_time_ticks,
                 },
-            )?;
+            ) {
+                remove_runner_registration(runner_id.as_str());
+                remove_runner_metadata(runner_id.as_str());
+                return Err(error);
+            }
             let response =
                 BrokerResponse::OpenPidfd(d2b_contracts::broker_wire::OpenPidfdResponse {
                     vm_id: req.vm_id.clone(),
@@ -2273,6 +2423,437 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                     pidfd_index: 0,
                 });
             Ok(DispatchResult::with_fd(response, outcome.pidfd))
+        }
+        RealBrokerRequest::OpenPeerPidfdFromAcceptedSocket(_) => {
+            if request_fds.len() != 1 {
+                return Err(BrokerError::Protocol(
+                    "accepted socket request must carry exactly one descriptor".to_owned(),
+                ));
+            }
+            let accepted_socket = request_fds.pop().expect("checked descriptor count");
+            let pidfd = crate::sys::peer_pidfd_from_accepted_socket(accepted_socket.as_raw_fd())
+                .map_err(|_| BrokerError::Protocol("accepted-peer-pidfd-unavailable".to_owned()))?;
+            write_success_op_record!(
+                audit_log,
+                bundle_metadata,
+                "OpenPeerPidfdFromAcceptedSocket",
+                "accepted-socket",
+                caller_uid,
+                caller_gid,
+                &caller_role,
+                "accepted-socket",
+                "broker",
+                None,
+                OperationFields::OpenPeerPidfdFromAcceptedSocket {},
+            )?;
+            Ok(DispatchResult::with_fd(
+                BrokerResponse::OpenPeerPidfdFromAcceptedSocket(
+                    d2b_contracts::broker_wire::OpenPeerPidfdFromAcceptedSocketResponse {
+                        pidfd_index: 0,
+                    },
+                ),
+                pidfd,
+            ))
+        }
+        RealBrokerRequest::ObserveRunner(req) => {
+            let resolver = require_resolver(resolver)?;
+            let intent = resolver
+                .find_runner_intent(req.bundle_runner_intent_ref.as_str())
+                .ok_or_else(|| BrokerError::BundleIntentMissing {
+                    kind: "runner",
+                    intent_id: req.bundle_runner_intent_ref.as_str().to_owned(),
+                })?;
+            let expected_role = runner_role_for_process_role(&intent.role).ok_or_else(|| {
+                BrokerError::SpawnRunnerIntentMismatch {
+                    field: "role",
+                    requested: req.role.as_str().to_owned(),
+                    resolved: format!("{:?}", intent.role),
+                }
+            })?;
+            if req.vm_id.as_str() != intent.vm_name
+                || req.role != expected_role
+                || req.bundle_runner_intent_ref.as_str() != intent.intent_id
+                || req.role_id.as_str()
+                    != match intent.role {
+                        d2b_core::processes::ProcessRole::CloudHypervisorRunner => "ch-runner",
+                        _ => intent.role_id.as_str(),
+                    }
+            {
+                return Err(BrokerError::LiveHandler(
+                    "runner observation intent mismatch".to_owned(),
+                ));
+            }
+            let response = observe_registered_runner(&req, intent)?;
+            write_success_op_record!(
+                audit_log,
+                bundle_metadata,
+                "ObserveRunner",
+                req.bundle_runner_intent_ref.as_str(),
+                caller_uid,
+                caller_gid,
+                &caller_role,
+                req.vm_id.as_str(),
+                req.role_id.as_str(),
+                tracing_span_id_str(req.tracing_span_id.as_ref()),
+                OperationFields::ObserveRunner {
+                    vm_id: req.vm_id.as_str().to_owned(),
+                    role_id: req.role_id.as_str().to_owned(),
+                    present: response.present,
+                    cgroup_verified: response.cgroup_verified,
+                    executable_verified: response.executable_verified,
+                },
+            )?;
+            Ok(DispatchResult::no_fds(BrokerResponse::ObserveRunner(
+                response,
+            )))
+        }
+        RealBrokerRequest::PipeWireAudio(req) => {
+            let resolver = require_resolver(resolver)?;
+            let intent = resolver
+                .find_runner_intent(req.bundle_runner_intent_ref.as_str())
+                .ok_or_else(|| BrokerError::BundleIntentMissing {
+                    kind: "runner",
+                    intent_id: req.bundle_runner_intent_ref.as_str().to_owned(),
+                })?;
+            if req.vm_id.as_str() != intent.vm_name
+                || req.role_id.as_str() != intent.role_id
+                || req.bundle_runner_intent_ref.as_str() != intent.intent_id
+                || intent.role != d2b_core::processes::ProcessRole::Audio
+            {
+                return Err(BrokerError::LiveHandler(
+                    "audio effect intent mismatch".to_owned(),
+                ));
+            }
+
+            let env_value = |key: &str| {
+                intent
+                    .env
+                    .iter()
+                    .find_map(|entry| entry.strip_prefix(&format!("{key}=")))
+            };
+            let response = match (
+                env_value("WPCTL_PATH"),
+                env_value("PW_DUMP_PATH"),
+                env_value("PIPEWIRE_RUNTIME_DIR"),
+            ) {
+                (Some(wpctl_path), Some(pw_dump_path), Some(runtime_dir))
+                    if Path::new(wpctl_path).is_absolute()
+                        && Path::new(pw_dump_path).is_absolute()
+                        && Path::new(runtime_dir).is_absolute() =>
+                {
+                    let dump = std::process::Command::new(pw_dump_path)
+                        .env_clear()
+                        .env("PIPEWIRE_RUNTIME_DIR", runtime_dir)
+                        .env("XDG_RUNTIME_DIR", runtime_dir)
+                        .stdin(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .output();
+                    match dump.ok().filter(|output| output.status.success()) {
+                        None => d2b_contracts::broker_wire::PipeWireAudioResponse {
+                            vm_id: req.vm_id.clone(),
+                            role_id: req.role_id.clone(),
+                            applied: false,
+                            host_ready: false,
+                            node_present: false,
+                        },
+                        Some(dump) => {
+                            let node_id = serde_json::from_slice::<Value>(&dump.stdout)
+                                .ok()
+                                .and_then(|document| {
+                                    let expected_app = format!("d2b-{}", intent.vm_name);
+                                    let expected_class = match req.channel {
+                                        d2b_contracts::broker_wire::PipeWireAudioChannel::Speaker => {
+                                            "Stream/Output/Audio"
+                                        }
+                                        d2b_contracts::broker_wire::PipeWireAudioChannel::Microphone => {
+                                            "Stream/Input/Audio"
+                                        }
+                                    };
+                                    let mut matches =
+                                        document.as_array()?.iter().filter_map(|entry| {
+                                            let props = entry.get("info")?.get("props")?;
+                                            if props.get("application.name")?.as_str()?
+                                                != expected_app
+                                                || props.get("media.class")?.as_str()?
+                                                    != expected_class
+                                            {
+                                                return None;
+                                            }
+                                            entry.get("id").and_then(Value::as_u64)
+                                        });
+                                    let first = matches.next()?;
+                                    if matches.next().is_some() {
+                                        None
+                                    } else {
+                                        Some(first.to_string())
+                                    }
+                                });
+                            match node_id {
+                                None => d2b_contracts::broker_wire::PipeWireAudioResponse {
+                                    vm_id: req.vm_id.clone(),
+                                    role_id: req.role_id.clone(),
+                                    applied: false,
+                                    host_ready: true,
+                                    node_present: false,
+                                },
+                                Some(node_id) => {
+                                    let mut command = std::process::Command::new(wpctl_path);
+                                    command
+                                        .env_clear()
+                                        .env("PIPEWIRE_RUNTIME_DIR", runtime_dir)
+                                        .env("XDG_RUNTIME_DIR", runtime_dir)
+                                        .stdin(std::process::Stdio::null())
+                                        .stdout(std::process::Stdio::null())
+                                        .stderr(std::process::Stdio::null());
+                                    let level_arg;
+                                    match req.action {
+                                        d2b_contracts::broker_wire::PipeWireAudioAction::SetGrant {
+                                            on,
+                                        } => {
+                                            command.args([
+                                                "set-mute",
+                                                &node_id,
+                                                if on { "0" } else { "1" },
+                                            ]);
+                                        }
+                                        d2b_contracts::broker_wire::PipeWireAudioAction::SetLevel {
+                                            percent,
+                                        } => {
+                                            level_arg = format!("{percent}%");
+                                            command.args(["set-volume", &node_id, &level_arg]);
+                                        }
+                                    }
+                                    let applied = command
+                                        .output()
+                                        .map(|output| output.status.success())
+                                        .unwrap_or(false);
+                                    d2b_contracts::broker_wire::PipeWireAudioResponse {
+                                        vm_id: req.vm_id.clone(),
+                                        role_id: req.role_id.clone(),
+                                        applied,
+                                        host_ready: true,
+                                        node_present: true,
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => d2b_contracts::broker_wire::PipeWireAudioResponse {
+                    vm_id: req.vm_id.clone(),
+                    role_id: req.role_id.clone(),
+                    applied: false,
+                    host_ready: false,
+                    node_present: false,
+                },
+            };
+            let action = match req.action {
+                d2b_contracts::broker_wire::PipeWireAudioAction::SetGrant { on } => {
+                    format!("grant:{}", if on { "on" } else { "off" })
+                }
+                d2b_contracts::broker_wire::PipeWireAudioAction::SetLevel { percent } => {
+                    format!("level:{percent}")
+                }
+            };
+            let channel = match req.channel {
+                d2b_contracts::broker_wire::PipeWireAudioChannel::Speaker => "speaker",
+                d2b_contracts::broker_wire::PipeWireAudioChannel::Microphone => "microphone",
+            };
+            write_success_op_record!(
+                audit_log,
+                bundle_metadata,
+                "PipeWireAudio",
+                req.bundle_runner_intent_ref.as_str(),
+                caller_uid,
+                caller_gid,
+                &caller_role,
+                req.vm_id.as_str(),
+                req.role_id.as_str(),
+                tracing_span_id_str(req.tracing_span_id.as_ref()),
+                OperationFields::PipeWireAudio {
+                    vm_id: req.vm_id.as_str().to_owned(),
+                    role_id: req.role_id.as_str().to_owned(),
+                    channel: channel.to_owned(),
+                    action,
+                    applied: response.applied,
+                    host_ready: response.host_ready,
+                    node_present: response.node_present,
+                },
+            )?;
+            Ok(DispatchResult::no_fds(BrokerResponse::PipeWireAudio(
+                response,
+            )))
+        }
+        RealBrokerRequest::StartSystemdUnit(req) => {
+            let resolver = require_resolver_ref(resolver.map(std::sync::Arc::as_ref))?;
+            let (identity, pidfd) = backend.start_systemd_unit(resolver, &req)?;
+            write_success_op_record!(
+                audit_log,
+                bundle_metadata,
+                "StartSystemdUnit",
+                req.role_id.as_str(),
+                caller_uid,
+                caller_gid,
+                &caller_role,
+                req.vm_id.as_str(),
+                req.role_id.as_str(),
+                tracing_span_id_str(req.tracing_span_id.as_ref()),
+                OperationFields::SystemdUnit {
+                    vm_id: req.vm_id.as_str().to_owned(),
+                    role_id: req.role_id.as_str().to_owned(),
+                    role: req.role.as_str().to_owned(),
+                    bundle_runner_intent_ref: req.bundle_runner_intent_ref.as_str().to_owned(),
+                    domain: systemd_domain_name(req.domain).to_owned(),
+                    action: "start".to_owned(),
+                    stopped: None,
+                },
+            )?;
+            Ok(DispatchResult::with_fd(
+                BrokerResponse::StartSystemdUnit(
+                    d2b_contracts::broker_wire::StartTransientUnitResponse {
+                        vm_id: req.vm_id,
+                        role_id: req.role_id,
+                        identity,
+                        pidfd_index: 0,
+                    },
+                ),
+                pidfd,
+            ))
+        }
+        RealBrokerRequest::CheckSystemdUserManager(req) => {
+            let resolver = require_resolver_ref(resolver.map(std::sync::Arc::as_ref))?;
+            let available = backend.check_systemd_user_manager(resolver, &req)?;
+            write_success_op_record!(
+                audit_log,
+                bundle_metadata,
+                "CheckSystemdUserManager",
+                req.role_id.as_str(),
+                caller_uid,
+                caller_gid,
+                &caller_role,
+                req.vm_id.as_str(),
+                req.role_id.as_str(),
+                tracing_span_id_str(req.tracing_span_id.as_ref()),
+                OperationFields::SystemdUnit {
+                    vm_id: req.vm_id.as_str().to_owned(),
+                    role_id: req.role_id.as_str().to_owned(),
+                    role: req.role.as_str().to_owned(),
+                    bundle_runner_intent_ref: req.bundle_runner_intent_ref.as_str().to_owned(),
+                    domain: systemd_domain_name(req.domain).to_owned(),
+                    action: "check-user-manager".to_owned(),
+                    stopped: None,
+                },
+            )?;
+            Ok(DispatchResult::no_fds(
+                BrokerResponse::CheckSystemdUserManager(
+                    d2b_contracts::broker_wire::CheckSystemdUserManagerResponse {
+                        vm_id: req.vm_id,
+                        role_id: req.role_id,
+                        available,
+                    },
+                ),
+            ))
+        }
+        RealBrokerRequest::ObserveSystemdUnit(req) => {
+            let resolver = require_resolver_ref(resolver.map(std::sync::Arc::as_ref))?;
+            let identity = backend.observe_systemd_unit(resolver, &req)?;
+            write_success_op_record!(
+                audit_log,
+                bundle_metadata,
+                "ObserveSystemdUnit",
+                req.role_id.as_str(),
+                caller_uid,
+                caller_gid,
+                &caller_role,
+                req.vm_id.as_str(),
+                req.role_id.as_str(),
+                tracing_span_id_str(req.tracing_span_id.as_ref()),
+                OperationFields::SystemdUnit {
+                    vm_id: req.vm_id.as_str().to_owned(),
+                    role_id: req.role_id.as_str().to_owned(),
+                    role: req.role.as_str().to_owned(),
+                    bundle_runner_intent_ref: req.bundle_runner_intent_ref.as_str().to_owned(),
+                    domain: systemd_domain_name(req.domain).to_owned(),
+                    action: "observe".to_owned(),
+                    stopped: None,
+                },
+            )?;
+            Ok(DispatchResult::no_fds(BrokerResponse::ObserveSystemdUnit(
+                d2b_contracts::broker_wire::ObserveSystemdUnitResponse {
+                    vm_id: req.vm_id,
+                    role_id: req.role_id,
+                    present: identity.is_some(),
+                    identity,
+                },
+            )))
+        }
+        RealBrokerRequest::OpenSystemdUnitPidfd(req) => {
+            let resolver = require_resolver_ref(resolver.map(std::sync::Arc::as_ref))?;
+            let (identity, pidfd) = backend.reopen_systemd_unit(resolver, &req)?;
+            write_success_op_record!(
+                audit_log,
+                bundle_metadata,
+                "OpenSystemdUnitPidfd",
+                req.unit.role_id.as_str(),
+                caller_uid,
+                caller_gid,
+                &caller_role,
+                req.unit.vm_id.as_str(),
+                req.unit.role_id.as_str(),
+                tracing_span_id_str(req.unit.tracing_span_id.as_ref()),
+                OperationFields::SystemdUnit {
+                    vm_id: req.unit.vm_id.as_str().to_owned(),
+                    role_id: req.unit.role_id.as_str().to_owned(),
+                    role: req.unit.role.as_str().to_owned(),
+                    bundle_runner_intent_ref: req.unit.bundle_runner_intent_ref.as_str().to_owned(),
+                    domain: systemd_domain_name(req.unit.domain).to_owned(),
+                    action: "reopen".to_owned(),
+                    stopped: None,
+                },
+            )?;
+            Ok(DispatchResult::with_fd(
+                BrokerResponse::OpenSystemdUnitPidfd(
+                    d2b_contracts::broker_wire::OpenSystemdUnitPidfdResponse {
+                        vm_id: req.unit.vm_id,
+                        role_id: req.unit.role_id,
+                        identity,
+                        pidfd_index: 0,
+                    },
+                ),
+                pidfd,
+            ))
+        }
+        RealBrokerRequest::StopSystemdUnit(req) => {
+            let resolver = require_resolver_ref(resolver.map(std::sync::Arc::as_ref))?;
+            backend.stop_systemd_unit(resolver, &req)?;
+            write_success_op_record!(
+                audit_log,
+                bundle_metadata,
+                "StopSystemdUnit",
+                req.unit.role_id.as_str(),
+                caller_uid,
+                caller_gid,
+                &caller_role,
+                req.unit.vm_id.as_str(),
+                req.unit.role_id.as_str(),
+                tracing_span_id_str(req.unit.tracing_span_id.as_ref()),
+                OperationFields::SystemdUnit {
+                    vm_id: req.unit.vm_id.as_str().to_owned(),
+                    role_id: req.unit.role_id.as_str().to_owned(),
+                    role: req.unit.role.as_str().to_owned(),
+                    bundle_runner_intent_ref: req.unit.bundle_runner_intent_ref.as_str().to_owned(),
+                    domain: systemd_domain_name(req.unit.domain).to_owned(),
+                    action: "stop".to_owned(),
+                    stopped: Some(true),
+                },
+            )?;
+            Ok(DispatchResult::no_fds(BrokerResponse::StopSystemdUnit(
+                d2b_contracts::broker_wire::StopSystemdUnitResponse {
+                    vm_id: req.unit.vm_id,
+                    role_id: req.unit.role_id,
+                    stopped: true,
+                },
+            )))
         }
         RealBrokerRequest::OpenZoneStore(req) => {
             // OpenZoneStore resolves one signed storage-row id and returns
@@ -2304,6 +2885,28 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                 outcome.database_fd,
             ))
         }
+        RealBrokerRequest::CgroupKill(req) => {
+            let resolver = require_resolver(resolver)?;
+            crate::ops::cgroup::live_kill_runner_cgroup(resolver, &req)
+                .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
+            write_success_op_record!(
+                audit_log,
+                bundle_metadata,
+                "CgroupKill",
+                &format!("{}:{}", req.vm_id.as_str(), req.role_id.as_str()),
+                caller_uid,
+                caller_gid,
+                &caller_role,
+                req.vm_id.as_str(),
+                req.role_id.as_str(),
+                tracing_span_id_str(req.tracing_span_id.as_ref()),
+                OperationFields::CgroupKill {
+                    vm_id: req.vm_id.as_str().to_owned(),
+                    role_id: req.role_id.as_str().to_owned(),
+                },
+            )?;
+            Ok(DispatchResult::no_fds(ack_response("CgroupKill")))
+        }
         RealBrokerRequest::SignalRunner(req) => {
             // Boundary note: d2bd owns operator authz classification; the
             // broker admits only the daemon UID and records the forwarded
@@ -2311,7 +2914,29 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
             // constrained by the broker-owned pidfd registry: only registered
             // runner_ids can be signaled, with unknown ids rejected as NoPidfd
             // by the backend.
-            let runner_id = format!("{}:{}", req.vm_id.as_str(), req.role_id.as_str());
+            let runner_id = runner_registry_key(
+                req.vm_id.as_str(),
+                req.role_id.as_str(),
+                req.resource_ref.as_ref(),
+                req.resource_uid.as_ref(),
+            );
+            if let Some(registration) = runner_metadata_registry()
+                .lock()
+                .map_err(|_| {
+                    BrokerError::Protocol("runner metadata registry mutex poisoned".to_owned())
+                })?
+                .get(&runner_id)
+                .cloned()
+                && !registration_matches(
+                    &registration,
+                    req.resource_ref.as_ref(),
+                    req.resource_uid.as_ref(),
+                    req.pid,
+                    req.expected_start_time_ticks,
+                )
+            {
+                return Err(BrokerError::NoPidfd { runner_id });
+            }
             match backend.signal_runner(runner_id.as_str(), req.signal) {
                 Ok(()) => {}
                 Err(BrokerError::NoPidfd { .. }) => {
@@ -2361,14 +2986,42 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
             // intentionally returns `removed: false` for unknown ids,
             // preserving idempotent cleanup without widening the registry
             // surface.
-            let runner_id = format!("{}:{}", req.vm_id.as_str(), req.role_id.as_str());
+            let runner_id = runner_registry_key(
+                req.vm_id.as_str(),
+                req.role_id.as_str(),
+                req.resource_ref.as_ref(),
+                req.resource_uid.as_ref(),
+            );
             let removed = runner_pidfd_registry()
                 .lock()
                 .map_err(|_| {
                     BrokerError::Protocol("runner pidfd registry mutex poisoned".to_owned())
                 })?
-                .remove(&runner_id)
-                .is_some();
+                .get(&runner_id)
+                .is_some_and(|_| {
+                    runner_metadata_registry()
+                        .lock()
+                        .ok()
+                        .and_then(|registry| registry.get(&runner_id).cloned())
+                        .is_some_and(|registration| {
+                            registration_matches(
+                                &registration,
+                                req.resource_ref.as_ref(),
+                                req.resource_uid.as_ref(),
+                                req.pid,
+                                req.expected_start_time_ticks,
+                            )
+                        })
+                });
+            if removed {
+                runner_pidfd_registry()
+                    .lock()
+                    .map_err(|_| {
+                        BrokerError::Protocol("runner pidfd registry mutex poisoned".to_owned())
+                    })?
+                    .remove(&runner_id);
+                remove_runner_metadata(&runner_id);
+            }
             write_success_op_record!(
                 audit_log,
                 bundle_metadata,
@@ -2403,6 +3056,62 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                     kind: "runner",
                     intent_id: req.bundle_runner_intent_ref.as_str().to_owned(),
                 })?;
+            if req.resource_ref.is_some() {
+                let Some(bundle_content_identity) = req.bundle_content_identity.as_deref() else {
+                    return Err(BrokerError::SpawnRunnerIntentMismatch {
+                        field: "bundle_content_identity",
+                        requested: "missing".to_owned(),
+                        resolved: "required".to_owned(),
+                    });
+                };
+                let resolved_bundle_content_identity =
+                    resolver.bundle.bundle_hash.as_deref().ok_or_else(|| {
+                        BrokerError::SpawnRunnerIntentMismatch {
+                            field: "bundle_content_identity",
+                            requested: bundle_content_identity.to_owned(),
+                            resolved: "missing".to_owned(),
+                        }
+                    })?;
+                if bundle_content_identity != resolved_bundle_content_identity {
+                    return Err(BrokerError::SpawnRunnerIntentMismatch {
+                        field: "bundle_content_identity",
+                        requested: bundle_content_identity.to_owned(),
+                        resolved: resolved_bundle_content_identity.to_owned(),
+                    });
+                }
+            }
+            if req.generation.is_some_and(|generation| generation == 0) {
+                return Err(BrokerError::SpawnRunnerIntentMismatch {
+                    field: "generation",
+                    requested: "0".to_owned(),
+                    resolved: "nonzero".to_owned(),
+                });
+            }
+            if req.resource_ref.is_some() && req.sandbox_plan.is_none() {
+                return Err(BrokerError::SpawnRunnerIntentMismatch {
+                    field: "sandbox_plan",
+                    requested: "missing".to_owned(),
+                    resolved: "required-for-generic-process".to_owned(),
+                });
+            }
+            if req.resource_ref.is_some()
+                && (req.execution_ref.is_none()
+                    || req.execution_domain.is_none()
+                    || req.resource_uid.is_none()
+                    || req
+                        .provider_identity
+                        .is_none_or(|identity| identity == [0; 32])
+                    || req
+                        .template_identity
+                        .is_none_or(|identity| identity == [0; 32])
+                    || req.generation.is_none())
+            {
+                return Err(BrokerError::SpawnRunnerIntentMismatch {
+                    field: "process_identity",
+                    requested: "incomplete".to_owned(),
+                    resolved: "resource/provider/template/generation-required".to_owned(),
+                });
+            }
             if let Err(err) = resolver.validate_minijail_profiles() {
                 write_decision_op_record!(
                     audit_log,
@@ -2430,6 +3139,9 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                 });
             }
             validate_spawn_runner_request_matches_intent(&req, intent)?;
+            if let Some(plan) = &req.sandbox_plan {
+                validate_sandbox_launch_plan(&req, intent, plan)?;
+            }
             // When the daemon asks the broker to spawn the OtelHostBridge
             // runner (the replacement for the singleton
             // `d2b-otel-host-bridge.service`), the bundle-resolved
@@ -2477,57 +3189,20 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                 req.vm_id.as_str(),
                 req.role_id.as_str(),
             )?;
-            // v1.1.1 defense-in-depth: the canonical Rust argv
-            // regenerator (`d2b_host::runner_argv_regenerator::regenerate_argv`)
-            // is wired here as a no-op tamper check. The v1.1.1
-            // bundle still carries `intent.argv` as a prebuilt
-            // `Vec<String>` (Nix-side processes-json.nix is the
-            // single source of truth for argv at v1.1.1), so the
-            // typed `RunnerArgvExtra` inputs that the regenerator
-            // requires (ChArgvInput / VirtiofsdArgvInput / etc.)
-            // are intentionally empty here and the regenerator
-            // returns `Err(MissingInput)` for every populated
-            // bundle row. The v1.1.2 wire-cleanup will (a) extend
-            // the bundle schema with typed argv inputs per role,
-            // (b) populate `RunnerArgvExtra` from those typed
-            // inputs at this point, (c) call `regenerate_argv`
-            // and assert byte-equality against `intent.argv` as
-            // a defense-in-depth tamper check. The call is wired
-            // now so the wire is exercised end-to-end (the
-            // regenerator's MissingInput arm IS exercised in the
-            // v1.1.1 broker integration tests) rather than living
-            // as dead code on the v1.1.1 release branch.
             let regenerator_extra = d2b_host::runner_argv_regenerator::RunnerArgvExtra::default();
-            match d2b_host::runner_argv_regenerator::regenerate_argv(intent, &regenerator_extra) {
-                Ok(regenerated) => {
-                    if regenerated != intent.argv {
-                        tracing::warn!(
-                            vm_id = %req.vm_id.as_str(),
-                            role_id = %req.role_id.as_str(),
-                            "regenerate_argv: bundle argv differs from Rust regenerator output; \
-                             v1.1.1 trusts bundle argv (Nix-side processes-json.nix is source of truth); \
-                             diff will become a hard failure in v1.1.2 once typed argv inputs land"
-                        );
-                    }
-                }
-                Err(d2b_host::runner_argv_regenerator::RegenerateArgvError::MissingInput {
-                    ..
-                })
-                | Err(d2b_host::runner_argv_regenerator::RegenerateArgvError::NotYetWired(_)) => {
-                    // Expected at v1.1.1: bundle does not yet
-                    // carry typed argv inputs. Fall through to
-                    // the bundle-argv path. v1.1.2 will populate
-                    // `RunnerArgvExtra` and this arm will be
-                    // removed.
-                }
-                Err(other) => {
-                    tracing::warn!(
-                        vm_id = %req.vm_id.as_str(),
-                        role_id = %req.role_id.as_str(),
-                        error = %other,
-                        "regenerate_argv: unexpected regenerator failure; falling through to bundle argv"
-                    );
-                }
+            let regenerated =
+                d2b_host::runner_argv_regenerator::regenerate_argv(intent, &regenerator_extra)
+                    .map_err(|error| BrokerError::SpawnRunnerIntentMismatch {
+                        field: "argv_comparison_inputs",
+                        requested: "required".to_owned(),
+                        resolved: error.to_string(),
+                    })?;
+            if regenerated != intent.argv {
+                return Err(BrokerError::SpawnRunnerIntentMismatch {
+                    field: "argv",
+                    requested: "bundle-and-regenerator-match".to_owned(),
+                    resolved: "mismatch".to_owned(),
+                });
             }
             let mut mount_policy = intent.mount_policy.clone();
             extend_usbip_backend_device_binds(
@@ -2571,7 +3246,12 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                 }),
                 umask: intent.umask,
             };
-            let runner_id = format!("{}:{}", req.vm_id.as_str(), req.role_id.as_str());
+            let runner_id = runner_registry_key(
+                req.vm_id.as_str(),
+                req.role_id.as_str(),
+                req.resource_ref.as_ref(),
+                req.resource_uid.as_ref(),
+            );
             let outcome = match backend.spawn_runner(
                 runner_id.as_str(),
                 &plan_input,
@@ -2605,12 +3285,22 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                 }
                 Err(other) => return Err(other),
             };
+            if let Err(error) = register_runner_metadata(
+                runner_id.as_str(),
+                &req,
+                intent,
+                outcome.pid,
+                outcome.start_time_ticks,
+            ) {
+                cleanup_spawned_runner_after_failure(runner_id.as_str(), outcome.pidfd.as_fd());
+                return Err(error);
+            }
             // On the success path, emit the terminal PrepareSwtpmDir
             // record (for the w1-swtpm role only) BEFORE the SpawnRunner
             // record so an operator sees the hardening disposition that
             // gated the spawn.
-            if let Some(swtpm_audit) = &outcome.swtpm_dir_audit {
-                write_success_op_record!(
+            if let Some(swtpm_audit) = &outcome.swtpm_dir_audit
+                && let Err(error) = write_success_op_record!(
                     audit_log,
                     bundle_metadata,
                     "PrepareSwtpmDir",
@@ -2622,9 +3312,12 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                     req.role_id.as_str(),
                     tracing_span_id_str(req.tracing_span_id.as_ref()),
                     OperationFields::PrepareSwtpmDir(swtpm_audit.clone()),
-                )?;
+                )
+            {
+                cleanup_spawned_runner_after_failure(runner_id.as_str(), outcome.pidfd.as_fd());
+                return Err(error);
             }
-            write_success_op_record!(
+            if let Err(error) = write_success_op_record!(
                 audit_log,
                 bundle_metadata,
                 "SpawnRunner",
@@ -2642,7 +3335,10 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                     role: req.role.as_str().to_owned(),
                     runtime_allocations: req.runtime_allocations.clone(),
                 },
-            )?;
+            ) {
+                cleanup_spawned_runner_after_failure(runner_id.as_str(), outcome.pidfd.as_fd());
+                return Err(error);
+            }
             let console_fd_index = if outcome.extra_response_fds.is_empty() {
                 None
             } else {
@@ -2653,6 +3349,13 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                     vm_id: req.vm_id.clone(),
                     role_id: req.role_id.clone(),
                     role: req.role,
+                    execution_ref: req.execution_ref.clone(),
+                    execution_domain: req.execution_domain,
+                    user_ref: req.user_ref.clone(),
+                    provider_identity: req.provider_identity,
+                    template_identity: req.template_identity,
+                    generation: req.generation,
+                    bundle_content_identity: req.bundle_content_identity.clone(),
                     pid: outcome.pid,
                     start_time_ticks: outcome.start_time_ticks,
                     pidfd_index: 0,
@@ -2822,6 +3525,14 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                     expected_attachment_generation: req.expected_attachment_generation,
                 },
             )?;
+            crate::ops::network::mark_persistent_tap_realization_deleted(
+                &config.state_dir,
+                &req.attachment_id,
+            )
+            .map_err(|error| BrokerError::RequestValidation {
+                operation: "DeletePersistentTap",
+                reason: error.code(),
+            })?;
             Ok(DispatchResult::no_fds(ack_response("DeletePersistentTap")))
         }
         RealBrokerRequest::BindUnixSocket(_) => Err(BrokerError::Unimplemented {
@@ -2834,10 +3545,55 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
         }),
         RealBrokerRequest::CreatePersistentTap(req) => {
             let resolver = require_resolver(resolver)?;
+            let v3_fields = [
+                req.attachment_id.is_some(),
+                req.network_generation.is_some(),
+                req.attachment_generation.is_some(),
+            ];
+            if v3_fields.iter().any(|present| *present) && !v3_fields.iter().all(|present| *present)
+            {
+                return Err(BrokerError::RequestValidation {
+                    operation: "CreatePersistentTap",
+                    reason: "attachment-realization-conflict",
+                });
+            }
             let exec = live_exec(config);
             let outcome =
-                crate::ops::tap::live_create_persistent_tap(&exec, resolver, &req, audit_log)
-                    .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
+                match crate::ops::tap::live_create_persistent_tap(&exec, resolver, &req, audit_log)
+                {
+                    Ok(outcome) => outcome,
+                    Err(error) => return Err(BrokerError::LiveHandler(error.to_string())),
+                };
+            if let Err(error) = crate::ops::network::persist_persistent_tap_realization(
+                &config.state_dir,
+                &req,
+                &outcome.tap_ifname,
+            ) {
+                if let Err(cleanup) = crate::ops::network::PersistentTapBackend::delete_tap(
+                    &crate::ops::network::SystemPersistentTapBackend,
+                    outcome.tap_ifname.as_str(),
+                ) {
+                    return Err(BrokerError::RequestValidation {
+                        operation: "CreatePersistentTap",
+                        reason: cleanup.code(),
+                    });
+                }
+                if let Some(attachment_id) = req.attachment_id.as_ref()
+                    && let Err(cleanup) = crate::ops::network::remove_persistent_tap_realization(
+                        &config.state_dir,
+                        attachment_id,
+                    )
+                {
+                    return Err(BrokerError::RequestValidation {
+                        operation: "CreatePersistentTap",
+                        reason: cleanup.code(),
+                    });
+                }
+                return Err(BrokerError::RequestValidation {
+                    operation: "CreatePersistentTap",
+                    reason: error.code(),
+                });
+            }
             let public_operation_id = format!("{}:{}", req.vm_id.as_str(), req.role_id.as_str());
             let bridge_ifname = outcome
                 .bridge_ifname
@@ -3057,8 +3813,13 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
             ))
         }
         RealBrokerRequest::OpenHidrawSecurityKey(req) => {
-            let outcome = crate::ops::security_key::live_open_hidraw_security_key(&req, audit_log)
-                .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
+            let resolver = require_resolver(resolver)?;
+            let outcome = crate::ops::security_key::live_open_hidraw_security_key(
+                &req,
+                &resolver.host.security_key_selectors,
+                audit_log,
+            )
+            .map_err(|error| BrokerError::LiveHandler(error.to_string()))?;
             write_success_op_record!(
                 audit_log,
                 bundle_metadata,
@@ -3072,18 +3833,20 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                 tracing_span_id_str(req.tracing_span_id.as_ref()),
                 OperationFields::OpenHidrawSecurityKey {
                     vm_id: req.vm_id.as_str().to_owned(),
-                    selector_id: req.selector_id.clone(),
+                    selector_id: outcome.selector_label.clone(),
                     device_class: outcome.device_class.clone(),
                     resolved: true,
                 },
             )?;
-            let response = BrokerResponse::OpenHidrawSecurityKey(
-                d2b_contracts::broker_wire::OpenHidrawSecurityKeyResponse {
-                    selector_resolved: outcome.selector_label,
-                    device_class: outcome.device_class,
-                },
-            );
-            Ok(DispatchResult::with_fd(response, outcome.fd))
+            Ok(DispatchResult::with_fd(
+                BrokerResponse::OpenHidrawSecurityKey(
+                    d2b_contracts::broker_wire::OpenHidrawSecurityKeyResponse {
+                        selector_resolved: outcome.selector_label,
+                        device_class: outcome.device_class,
+                    },
+                ),
+                outcome.fd,
+            ))
         }
         RealBrokerRequest::SecurityKeyOpenDevice(_) => Err(BrokerError::Unimplemented {
             operation: "SecurityKeyOpenDevice",
@@ -3400,8 +4163,31 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                     ))
                 })?;
             let exec = live_exec(config);
-            crate::ops::state_dir::live_prepare_state_dir(&exec, resolver, &req, audit_log)
-                .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
+            match crate::ops::state_dir::live_prepare_state_dir(&exec, resolver, &req, audit_log) {
+                Ok(()) => {}
+                Err(crate::ops::state_dir::PrepareStateDirError::SwtpmDirHardening(error)) => {
+                    write_decision_op_record!(
+                        audit_log,
+                        bundle_metadata,
+                        "PrepareSwtpmDir",
+                        req.vm_id.as_str(),
+                        caller_uid,
+                        caller_gid,
+                        &caller_role,
+                        req.vm_id.as_str(),
+                        req.vm_id.as_str(),
+                        tracing_span_id_str(req.tracing_span_id.as_ref()),
+                        "denied-refused",
+                        Some(error.reason),
+                        OperationFields::PrepareSwtpmDir(error.audit.clone()),
+                    )?;
+                    return Err(BrokerError::SwtpmDirHardening {
+                        audit: error.audit,
+                        reason: error.reason,
+                    });
+                }
+                Err(error) => return Err(BrokerError::LiveHandler(error.to_string())),
+            }
             write_success_op_record!(
                 audit_log,
                 bundle_metadata,
@@ -3443,28 +4229,56 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                 (intent.owner_uid, intent.owner_gid),
             )
             .map_err(|error| BrokerError::LiveHandler(error.to_string()))?;
-            let outcome = match crate::ops::swtpm_migration::migrate(&paths) {
-                Ok(outcome) => outcome,
-                Err(_) => crate::ops::swtpm_migration::LegacyMigrationOutcome::Failed,
-            };
-            let wire_outcome = match outcome {
-                crate::ops::swtpm_migration::LegacyMigrationOutcome::Migrated => {
-                    d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::Migrated
+            let wire_outcome = if req.probe_only {
+                match crate::ops::swtpm_migration::probe(&paths) {
+                    Ok(crate::ops::swtpm_migration::LegacyInventoryState::NeverProvisioned) => {
+                        d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::NeverProvisioned
+                    }
+                    Ok(crate::ops::swtpm_migration::LegacyInventoryState::ValidLegacy) => {
+                        d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::AdoptionRequired
+                    }
+                    Ok(crate::ops::swtpm_migration::LegacyInventoryState::AlreadyCommitted) => {
+                        d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::AlreadyMigrated
+                    }
+                    Ok(
+                        crate::ops::swtpm_migration::LegacyInventoryState::Missing
+                        | crate::ops::swtpm_migration::LegacyInventoryState::Replaced
+                        | crate::ops::swtpm_migration::LegacyInventoryState::Ambiguous
+                        | crate::ops::swtpm_migration::LegacyInventoryState::Foreign,
+                    )
+                    | Err(crate::ops::swtpm_migration::LegacyMigrationError::InventoryInvalid)
+                    | Err(crate::ops::swtpm_migration::LegacyMigrationError::ForeignOwner) => {
+                        d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::Ambiguous
+                    }
+                    Err(crate::ops::swtpm_migration::LegacyMigrationError::LockUnavailable) => {
+                        d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::Pending
+                    }
+                    Err(_) => d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::Failed,
                 }
-                crate::ops::swtpm_migration::LegacyMigrationOutcome::AlreadyMigrated => {
-                    d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::AlreadyMigrated
-                }
-                crate::ops::swtpm_migration::LegacyMigrationOutcome::NotApplicable => {
-                    d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::NotApplicable
-                }
-                crate::ops::swtpm_migration::LegacyMigrationOutcome::Pending => {
-                    d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::Pending
-                }
-                crate::ops::swtpm_migration::LegacyMigrationOutcome::Failed => {
-                    d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::Failed
-                }
-                crate::ops::swtpm_migration::LegacyMigrationOutcome::Ambiguous => {
-                    d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::Ambiguous
+            } else {
+                let outcome = match crate::ops::swtpm_migration::migrate(&paths) {
+                    Ok(outcome) => outcome,
+                    Err(_) => crate::ops::swtpm_migration::LegacyMigrationOutcome::Failed,
+                };
+                match outcome {
+                    crate::ops::swtpm_migration::LegacyMigrationOutcome::Migrated => {
+                        d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::Migrated
+                    }
+                    crate::ops::swtpm_migration::LegacyMigrationOutcome::AlreadyMigrated => {
+                        d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::AlreadyMigrated
+                    }
+                    crate::ops::swtpm_migration::LegacyMigrationOutcome::NotApplicable => {
+                        d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::NotApplicable
+                    }
+                    crate::ops::swtpm_migration::LegacyMigrationOutcome::Pending => {
+                        d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::Pending
+                    }
+                    crate::ops::swtpm_migration::LegacyMigrationOutcome::Failed => {
+                        d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::Failed
+                    }
+                    crate::ops::swtpm_migration::LegacyMigrationOutcome::Ambiguous => {
+                        d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::Ambiguous
+                    }
                 }
             };
             write_success_op_record!(
@@ -3871,6 +4685,65 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                     notes: outcome.notes,
                 },
             )))
+        }
+        RealBrokerRequest::ApplyHostGenerationHandoff(req) => {
+            let target = req.target.to_canonical_string();
+            let fields = OperationFields::ApplyHostGenerationHandoff {
+                target: target.clone(),
+                source_generation: req.intent.source_generation,
+                target_generation: req.intent.target_generation,
+                state: "requested".to_owned(),
+            };
+            if !caller_role_is_admin(&caller_role)
+                || !matches!(
+                    req.caller_role,
+                    d2b_contracts::host_generation::HandoffCallerRole::Lifecycle
+                        | d2b_contracts::host_generation::HandoffCallerRole::Admin
+                )
+            {
+                write_decision_op_record!(
+                    audit_log,
+                    bundle_metadata,
+                    "ApplyHostGenerationHandoff",
+                    &target,
+                    caller_uid,
+                    caller_gid,
+                    &caller_role,
+                    &target,
+                    "host-generation",
+                    None,
+                    "denied-refused",
+                    Some("handoff-requires-admin"),
+                    fields,
+                )?;
+                return Err(BrokerError::AuditRequiresAdmin);
+            }
+            let response = backend.apply_host_generation_handoff(
+                &config.state_dir,
+                &config.activation_helper_path,
+                &req,
+            )?;
+            write_success_op_record!(
+                audit_log,
+                bundle_metadata,
+                "ApplyHostGenerationHandoff",
+                &response.target.to_canonical_string(),
+                caller_uid,
+                caller_gid,
+                &caller_role,
+                &response.target.to_canonical_string(),
+                "host-generation",
+                None,
+                OperationFields::ApplyHostGenerationHandoff {
+                    target,
+                    source_generation: response.source_generation,
+                    target_generation: response.target_generation,
+                    state: format!("{:?}", response.state).to_lowercase(),
+                },
+            )?;
+            Ok(DispatchResult::no_fds(
+                BrokerResponse::ApplyHostGenerationHandoff(response),
+            ))
         }
         RealBrokerRequest::RunActivation(req) => {
             let resolver = require_resolver(resolver)?;
@@ -5143,6 +6016,14 @@ fn runner_signal_name(signal: d2b_contracts::broker_wire::RunnerSignal) -> &'sta
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
+fn systemd_domain_name(domain: d2b_contracts::broker_wire::SystemdUnitDomain) -> &'static str {
+    match domain {
+        d2b_contracts::broker_wire::SystemdUnitDomain::System => "system",
+        d2b_contracts::broker_wire::SystemdUnitDomain::User => "user",
+    }
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
 fn runner_signal_number(signal: d2b_contracts::broker_wire::RunnerSignal) -> i32 {
     match signal {
         d2b_contracts::broker_wire::RunnerSignal::Term => libc::SIGTERM,
@@ -5155,6 +6036,301 @@ fn runner_signal_number(signal: d2b_contracts::broker_wire::RunnerSignal) -> i32
 fn runner_pidfd_registry() -> &'static Mutex<HashMap<String, OwnedFd>> {
     static REGISTRY: OnceLock<Mutex<HashMap<String, OwnedFd>>> = OnceLock::new();
     REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+#[derive(Debug, Clone)]
+struct RunnerRegistration {
+    vm_id: String,
+    role_id: String,
+    resource_ref: Option<d2b_contracts::v3::ResourceRef>,
+    resource_uid: Option<d2b_contracts::v3::ResourceUid>,
+    role: d2b_contracts::broker_wire::RunnerRole,
+    bundle_runner_intent_ref: String,
+    pid: i32,
+    start_time_ticks: u64,
+    binary_path: PathBuf,
+    cgroup_subtree: String,
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn runner_metadata_registry() -> &'static Mutex<HashMap<String, RunnerRegistration>> {
+    static REGISTRY: OnceLock<Mutex<HashMap<String, RunnerRegistration>>> = OnceLock::new();
+    REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn register_runner_metadata(
+    runner_id: &str,
+    request: &d2b_contracts::broker_wire::SpawnRunnerRequest,
+    intent: &d2b_core::bundle_resolver::ResolvedRunnerIntent,
+    pid: i32,
+    start_time_ticks: u64,
+) -> Result<(), BrokerError> {
+    let mut registry = runner_metadata_registry()
+        .lock()
+        .map_err(|_| BrokerError::Protocol("runner metadata registry mutex poisoned".to_owned()))?;
+    registry.insert(
+        runner_id.to_owned(),
+        RunnerRegistration {
+            vm_id: request.vm_id.as_str().to_owned(),
+            role_id: request.role_id.as_str().to_owned(),
+            resource_ref: request.resource_ref.clone(),
+            resource_uid: request.resource_uid.clone(),
+            role: request.role,
+            bundle_runner_intent_ref: request.bundle_runner_intent_ref.as_str().to_owned(),
+            pid,
+            start_time_ticks,
+            binary_path: intent.binary_path.clone(),
+            cgroup_subtree: intent.cgroup_placement.subtree.clone(),
+        },
+    );
+    Ok(())
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn register_runner_metadata_from_open(
+    runner_id: &str,
+    request: &d2b_contracts::broker_wire::OpenPidfdRequest,
+    intent: &d2b_core::bundle_resolver::ResolvedRunnerIntent,
+) -> Result<(), BrokerError> {
+    let role = runner_role_for_process_role(&intent.role).ok_or_else(|| {
+        BrokerError::SpawnRunnerIntentMismatch {
+            field: "role",
+            requested: request.role_id.as_str().to_owned(),
+            resolved: format!("{:?}", intent.role),
+        }
+    })?;
+    let mut registry = runner_metadata_registry()
+        .lock()
+        .map_err(|_| BrokerError::Protocol("runner metadata registry mutex poisoned".to_owned()))?;
+    registry.insert(
+        runner_id.to_owned(),
+        RunnerRegistration {
+            vm_id: request.vm_id.as_str().to_owned(),
+            role_id: request.role_id.as_str().to_owned(),
+            resource_ref: request.resource_ref.clone(),
+            resource_uid: request.resource_uid.clone(),
+            role,
+            bundle_runner_intent_ref: intent.intent_id.clone(),
+            pid: request.pid,
+            start_time_ticks: request.expected_start_time_ticks,
+            binary_path: intent.binary_path.clone(),
+            cgroup_subtree: intent.cgroup_placement.subtree.clone(),
+        },
+    );
+    Ok(())
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn runner_registry_key(
+    vm_id: &str,
+    role_id: &str,
+    resource_ref: Option<&d2b_contracts::v3::ResourceRef>,
+    resource_uid: Option<&d2b_contracts::v3::ResourceUid>,
+) -> String {
+    match (resource_ref, resource_uid) {
+        (Some(resource_ref), Some(resource_uid)) => format!(
+            "{vm_id}:{role_id}:{}:{}",
+            resource_ref.to_canonical_string(),
+            resource_uid.as_str()
+        ),
+        _ => format!("{vm_id}:{role_id}"),
+    }
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn registration_matches(
+    registration: &RunnerRegistration,
+    resource_ref: Option<&d2b_contracts::v3::ResourceRef>,
+    resource_uid: Option<&d2b_contracts::v3::ResourceUid>,
+    pid: Option<i32>,
+    start_time_ticks: Option<u64>,
+) -> bool {
+    registration.resource_ref.as_ref() == resource_ref
+        && registration.resource_uid.as_ref() == resource_uid
+        && pid.is_none_or(|pid| registration.pid == pid)
+        && start_time_ticks.is_none_or(|ticks| registration.start_time_ticks == ticks)
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn remove_runner_metadata(runner_id: &str) {
+    if let Ok(mut registry) = runner_metadata_registry().lock() {
+        registry.remove(runner_id);
+    }
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn observe_registered_runner(
+    request: &d2b_contracts::broker_wire::ObserveRunnerRequest,
+    intent: &d2b_core::bundle_resolver::ResolvedRunnerIntent,
+) -> Result<d2b_contracts::broker_wire::ObserveRunnerResponse, BrokerError> {
+    let runner_id = runner_registry_key(
+        request.vm_id.as_str(),
+        request.role_id.as_str(),
+        request.resource_ref.as_ref(),
+        request.resource_uid.as_ref(),
+    );
+    let registration = {
+        let registry = runner_metadata_registry().lock().map_err(|_| {
+            BrokerError::Protocol("runner metadata registry mutex poisoned".to_owned())
+        })?;
+        registry.get(&runner_id).cloned()
+    };
+    let Some(registration) = registration else {
+        return discover_runner_candidate(request, intent);
+    };
+
+    let pidfd_registered = runner_pidfd_registry()
+        .lock()
+        .map_err(|_| BrokerError::Protocol("runner pidfd registry mutex poisoned".to_owned()))?
+        .contains_key(&runner_id);
+    if !pidfd_registered
+        || registration.vm_id != request.vm_id.as_str()
+        || registration.role_id != request.role_id.as_str()
+        || registration.role != request.role
+        || !registration_matches(
+            &registration,
+            request.resource_ref.as_ref(),
+            request.resource_uid.as_ref(),
+            None,
+            None,
+        )
+        || registration.bundle_runner_intent_ref != request.bundle_runner_intent_ref.as_str()
+        || registration.pid <= 0
+        || registration.start_time_ticks == 0
+        || registration.binary_path != intent.binary_path
+        || registration.cgroup_subtree != intent.cgroup_placement.subtree
+    {
+        return discover_runner_candidate(request, intent);
+    }
+
+    let Some(start_time_ticks) = read_proc_start_time_ticks(registration.pid)? else {
+        remove_runner_metadata(&runner_id);
+        return Ok(d2b_contracts::broker_wire::ObserveRunnerResponse {
+            vm_id: request.vm_id.clone(),
+            role_id: request.role_id.clone(),
+            present: false,
+            pid: 0,
+            start_time_ticks: 0,
+            cgroup_verified: false,
+            executable_verified: false,
+        });
+    };
+    if start_time_ticks != registration.start_time_ticks {
+        return Err(BrokerError::LiveHandler(
+            "runner process identity changed".to_owned(),
+        ));
+    }
+    let executable_verified = fs::read_link(format!("/proc/{}/exe", registration.pid))
+        .map(|path| path == registration.binary_path)
+        .unwrap_or(false);
+    let cgroup_verified = proc_cgroup_matches(registration.pid, &registration.cgroup_subtree);
+    Ok(d2b_contracts::broker_wire::ObserveRunnerResponse {
+        vm_id: request.vm_id.clone(),
+        role_id: request.role_id.clone(),
+        present: true,
+        pid: registration.pid,
+        start_time_ticks,
+        cgroup_verified,
+        executable_verified,
+    })
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn discover_runner_candidate(
+    request: &d2b_contracts::broker_wire::ObserveRunnerRequest,
+    intent: &d2b_core::bundle_resolver::ResolvedRunnerIntent,
+) -> Result<d2b_contracts::broker_wire::ObserveRunnerResponse, BrokerError> {
+    let mut candidate = None;
+    let entries =
+        fs::read_dir("/proc").map_err(|error| BrokerError::LiveHandler(error.to_string()))?;
+    for entry in entries {
+        let entry = entry.map_err(|error| BrokerError::LiveHandler(error.to_string()))?;
+        let name = entry.file_name();
+        let Some(pid) = name.to_str().and_then(|value| value.parse::<i32>().ok()) else {
+            continue;
+        };
+        if pid <= 0 || !proc_cgroup_matches(pid, &intent.cgroup_placement.subtree) {
+            continue;
+        }
+        let executable = fs::read_link(format!("/proc/{pid}/exe")).ok();
+        if executable.as_deref() != Some(intent.binary_path.as_path()) {
+            continue;
+        }
+        let Some(start_time_ticks) = read_proc_start_time_ticks(pid)? else {
+            continue;
+        };
+        if candidate.replace((pid, start_time_ticks)).is_some() {
+            return Err(BrokerError::LiveHandler(
+                "runner adoption candidate ambiguous".to_owned(),
+            ));
+        }
+    }
+    let Some((pid, start_time_ticks)) = candidate else {
+        return Ok(d2b_contracts::broker_wire::ObserveRunnerResponse {
+            vm_id: request.vm_id.clone(),
+            role_id: request.role_id.clone(),
+            present: false,
+            pid: 0,
+            start_time_ticks: 0,
+            cgroup_verified: false,
+            executable_verified: false,
+        });
+    };
+    Ok(d2b_contracts::broker_wire::ObserveRunnerResponse {
+        vm_id: request.vm_id.clone(),
+        role_id: request.role_id.clone(),
+        present: true,
+        pid,
+        start_time_ticks,
+        cgroup_verified: true,
+        executable_verified: true,
+    })
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn read_proc_start_time_ticks(pid: i32) -> Result<Option<u64>, BrokerError> {
+    let content = match fs::read_to_string(format!("/proc/{pid}/stat")) {
+        Ok(content) => content,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(BrokerError::LiveHandler(error.to_string())),
+    };
+    let close = content
+        .trim_end_matches('\n')
+        .rfind(')')
+        .ok_or_else(|| BrokerError::LiveHandler("malformed proc stat".to_owned()))?;
+    let mut fields = content[close + 1..].split_whitespace();
+    let state = fields
+        .next()
+        .ok_or_else(|| BrokerError::LiveHandler("malformed proc stat".to_owned()))?;
+    if matches!(state, "Z" | "X") {
+        return Ok(None);
+    }
+    fields
+        .nth(18)
+        .ok_or_else(|| BrokerError::LiveHandler("malformed proc stat".to_owned()))?
+        .parse::<u64>()
+        .map(Some)
+        .map_err(|_| BrokerError::LiveHandler("invalid proc start time".to_owned()))
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn proc_cgroup_matches(pid: i32, expected_subtree: &str) -> bool {
+    if expected_subtree.is_empty() {
+        return false;
+    }
+    let Ok(content) = fs::read_to_string(format!("/proc/{pid}/cgroup")) else {
+        return false;
+    };
+    let expected = expected_subtree.trim_start_matches('/');
+    content.lines().any(|line| {
+        let Some((_, path)) = line.split_once("::") else {
+            return false;
+        };
+        let actual = path.trim_start_matches('/');
+        actual == expected || actual.ends_with(&format!("/{expected}"))
+    })
 }
 
 /// In-memory ring buffer for `ChildReaped` notifications.
@@ -5220,6 +6396,13 @@ fn register_runner_pidfd(runner_id: &str, pidfd: &OwnedFd) -> Result<(), BrokerE
         .map_err(|_| BrokerError::Protocol("runner pidfd registry mutex poisoned".to_owned()))?;
     registry.insert(runner_id.to_owned(), duplicated);
     Ok(())
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn remove_runner_registration(runner_id: &str) {
+    if let Ok(mut registry) = runner_pidfd_registry().lock() {
+        registry.remove(runner_id);
+    }
 }
 
 /// Refuse to start a SECOND live runner for an already-registered
@@ -5352,6 +6535,36 @@ trait DispatchBackend {
         expected_start_time_ticks: u64,
     ) -> Result<crate::live_handlers::OpenPidfdResult, BrokerError>;
 
+    fn start_systemd_unit(
+        &self,
+        resolver: &BundleResolver,
+        request: &d2b_contracts::broker_wire::StartTransientUnitRequest,
+    ) -> Result<(d2b_contracts::broker_wire::SystemdUnitIdentity, OwnedFd), BrokerError>;
+
+    fn check_systemd_user_manager(
+        &self,
+        resolver: &BundleResolver,
+        request: &d2b_contracts::broker_wire::CheckSystemdUserManagerRequest,
+    ) -> Result<bool, BrokerError>;
+
+    fn observe_systemd_unit(
+        &self,
+        resolver: &BundleResolver,
+        request: &d2b_contracts::broker_wire::ObserveSystemdUnitRequest,
+    ) -> Result<Option<d2b_contracts::broker_wire::SystemdUnitIdentity>, BrokerError>;
+
+    fn reopen_systemd_unit(
+        &self,
+        resolver: &BundleResolver,
+        request: &d2b_contracts::broker_wire::OpenSystemdUnitPidfdRequest,
+    ) -> Result<(d2b_contracts::broker_wire::SystemdUnitIdentity, OwnedFd), BrokerError>;
+
+    fn stop_systemd_unit(
+        &self,
+        resolver: &BundleResolver,
+        request: &d2b_contracts::broker_wire::StopSystemdUnitRequest,
+    ) -> Result<(), BrokerError>;
+
     fn signal_runner(
         &self,
         runner_id: &str,
@@ -5385,6 +6598,13 @@ trait DispatchBackend {
         phase: d2b_contracts::broker_wire::ActivationPhase,
         mode: d2b_contracts::broker_wire::ActivationMode,
     ) -> Result<crate::live_handlers::ActivationOutcome, BrokerError>;
+
+    fn apply_host_generation_handoff(
+        &self,
+        state_dir: &std::path::Path,
+        helper_path: &std::path::Path,
+        request: &d2b_contracts::host_generation::ApplyHostGenerationHandoff,
+    ) -> Result<d2b_contracts::broker_wire::ApplyHostGenerationHandoffResponse, BrokerError>;
 
     fn run_gc(
         &self,
@@ -5731,6 +6951,51 @@ impl DispatchBackend for LiveDispatchBackend {
         Ok(outcome)
     }
 
+    fn start_systemd_unit(
+        &self,
+        resolver: &BundleResolver,
+        request: &d2b_contracts::broker_wire::StartTransientUnitRequest,
+    ) -> Result<(d2b_contracts::broker_wire::SystemdUnitIdentity, OwnedFd), BrokerError> {
+        crate::ops::systemd::start(resolver, request)
+            .map_err(|error| BrokerError::LiveHandler(error.to_string()))
+    }
+
+    fn check_systemd_user_manager(
+        &self,
+        resolver: &BundleResolver,
+        request: &d2b_contracts::broker_wire::CheckSystemdUserManagerRequest,
+    ) -> Result<bool, BrokerError> {
+        crate::ops::systemd::check_user_manager(resolver, request)
+            .map_err(|error| BrokerError::LiveHandler(error.to_string()))
+    }
+
+    fn observe_systemd_unit(
+        &self,
+        resolver: &BundleResolver,
+        request: &d2b_contracts::broker_wire::ObserveSystemdUnitRequest,
+    ) -> Result<Option<d2b_contracts::broker_wire::SystemdUnitIdentity>, BrokerError> {
+        crate::ops::systemd::observe(resolver, request)
+            .map_err(|error| BrokerError::LiveHandler(error.to_string()))
+    }
+
+    fn reopen_systemd_unit(
+        &self,
+        resolver: &BundleResolver,
+        request: &d2b_contracts::broker_wire::OpenSystemdUnitPidfdRequest,
+    ) -> Result<(d2b_contracts::broker_wire::SystemdUnitIdentity, OwnedFd), BrokerError> {
+        crate::ops::systemd::reopen(resolver, request)
+            .map_err(|error| BrokerError::LiveHandler(error.to_string()))
+    }
+
+    fn stop_systemd_unit(
+        &self,
+        resolver: &BundleResolver,
+        request: &d2b_contracts::broker_wire::StopSystemdUnitRequest,
+    ) -> Result<(), BrokerError> {
+        crate::ops::systemd::stop(resolver, request)
+            .map_err(|error| BrokerError::LiveHandler(error.to_string()))
+    }
+
     fn signal_runner(
         &self,
         runner_id: &str,
@@ -5830,6 +7095,16 @@ impl DispatchBackend for LiveDispatchBackend {
         let exec = crate::ops::exec_reconcile::SystemReconcileExecutor;
         crate::live_handlers::live_run_activation(&exec, intent, store_view_intent, phase, mode)
             .map_err(map_activation_live_error)
+    }
+
+    fn apply_host_generation_handoff(
+        &self,
+        state_dir: &std::path::Path,
+        helper_path: &std::path::Path,
+        request: &d2b_contracts::host_generation::ApplyHostGenerationHandoff,
+    ) -> Result<d2b_contracts::broker_wire::ApplyHostGenerationHandoffResponse, BrokerError> {
+        crate::ops::host_generation_handoff::apply_with_helper(state_dir, helper_path, request)
+            .map_err(|error| BrokerError::LiveHandler(error.to_string()))
     }
 
     fn run_gc(
@@ -7553,7 +8828,6 @@ fn build_usbip_explicit_firewall_decision(
     .map_err(|err| BrokerError::LiveHandler(err.to_string()))
 }
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn runner_role_for_process_role(
     role: &d2b_core::processes::ProcessRole,
 ) -> Option<d2b_contracts::broker_wire::RunnerRole> {
@@ -7582,6 +8856,169 @@ fn runner_role_for_process_role(
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn validate_sandbox_launch_plan(
+    req: &d2b_contracts::broker_wire::SpawnRunnerRequest,
+    intent: &d2b_core::bundle_resolver::ResolvedRunnerIntent,
+    plan: &d2b_contracts::broker_wire::SandboxLaunchPlan,
+) -> Result<(), BrokerError> {
+    if plan.domain
+        != req
+            .execution_domain
+            .unwrap_or(d2b_contracts::v3::execution_policy::ExecutionDomain::System)
+    {
+        return Err(BrokerError::SpawnRunnerIntentMismatch {
+            field: "sandbox_plan.domain",
+            requested: format!("{:?}", plan.domain),
+            resolved: "request-domain".to_owned(),
+        });
+    }
+    if !plan.no_new_privileges {
+        return Err(BrokerError::SpawnRunnerIntentMismatch {
+            field: "sandbox_plan.no_new_privileges",
+            requested: "false".to_owned(),
+            resolved: "true".to_owned(),
+        });
+    }
+    if plan.start_root != intent.root_carve_out {
+        return Err(BrokerError::SpawnRunnerIntentMismatch {
+            field: "sandbox_plan.start_root",
+            requested: plan.start_root.to_string(),
+            resolved: intent.root_carve_out.to_string(),
+        });
+    }
+    if !plan.read_only_root {
+        return Err(BrokerError::SpawnRunnerIntentMismatch {
+            field: "sandbox_plan.read_only_root",
+            requested: "false".to_owned(),
+            resolved: "unsupported".to_owned(),
+        });
+    }
+    if plan.oom_score_adj != 0 {
+        return Err(BrokerError::SpawnRunnerIntentMismatch {
+            field: "sandbox_plan.oom_score_adj",
+            requested: plan.oom_score_adj.to_string(),
+            resolved: "unsupported".to_owned(),
+        });
+    }
+    if plan.environment_class != d2b_contracts::v3::process::EnvironmentClass::Minimal {
+        return Err(BrokerError::SpawnRunnerIntentMismatch {
+            field: "sandbox_plan.environment_class",
+            requested: format!("{:?}", plan.environment_class),
+            resolved: "minimal-only".to_owned(),
+        });
+    }
+    let expected_namespaces = &intent.namespaces;
+    let requested_namespaces = |class| match class {
+        d2b_contracts::v3::process::NamespaceClass::User => expected_namespaces.user,
+        d2b_contracts::v3::process::NamespaceClass::Pid => expected_namespaces.pid,
+        d2b_contracts::v3::process::NamespaceClass::Mount => expected_namespaces.mount,
+        d2b_contracts::v3::process::NamespaceClass::Ipc => expected_namespaces.ipc,
+        d2b_contracts::v3::process::NamespaceClass::Uts => expected_namespaces.uts,
+        d2b_contracts::v3::process::NamespaceClass::Network => expected_namespaces.net,
+        d2b_contracts::v3::process::NamespaceClass::Cgroup
+        | d2b_contracts::v3::process::NamespaceClass::Time => false,
+    };
+    for class in &plan.namespace_classes {
+        if !requested_namespaces(*class) {
+            return Err(BrokerError::SpawnRunnerIntentMismatch {
+                field: "sandbox_plan.namespace_classes",
+                requested: format!("{class:?}"),
+                resolved: "bundle-profile".to_owned(),
+            });
+        }
+    }
+    if plan
+        .namespace_classes
+        .iter()
+        .any(|class| matches!(class, d2b_contracts::v3::process::NamespaceClass::User))
+        != expected_namespaces.user
+    {
+        return Err(BrokerError::SpawnRunnerIntentMismatch {
+            field: "sandbox_plan.namespace_classes",
+            requested: "user".to_owned(),
+            resolved: "bundle-profile".to_owned(),
+        });
+    }
+    if plan.user_namespace.is_some() != intent.user_namespace.is_some()
+        || plan.user_namespace.is_some_and(|spec| {
+            spec.mapping_class != d2b_contracts::v3::process::MappingClass::ProcessPrincipalRoot
+        })
+    {
+        return Err(BrokerError::SpawnRunnerIntentMismatch {
+            field: "sandbox_plan.user_namespace",
+            requested: format!("{:?}", plan.user_namespace),
+            resolved: "bundle-profile".to_owned(),
+        });
+    }
+    if let Some(umask) = &plan.umask {
+        let parsed =
+            u32::from_str_radix(umask, 8).map_err(|_| BrokerError::SpawnRunnerIntentMismatch {
+                field: "sandbox_plan.umask",
+                requested: umask.clone(),
+                resolved: "valid-octal".to_owned(),
+            })?;
+        if intent.umask != Some(parsed) {
+            return Err(BrokerError::SpawnRunnerIntentMismatch {
+                field: "sandbox_plan.umask",
+                requested: umask.clone(),
+                resolved: intent
+                    .umask
+                    .map_or_else(|| "inherit".to_owned(), |value| format!("{value:o}")),
+            });
+        }
+    } else if intent.umask.is_some() {
+        return Err(BrokerError::SpawnRunnerIntentMismatch {
+            field: "sandbox_plan.umask",
+            requested: "inherit".to_owned(),
+            resolved: "bundle-profile".to_owned(),
+        });
+    }
+    if plan.capability_classes.iter().any(|class| {
+        !intent
+            .capabilities
+            .iter()
+            .any(|capability| capability_matches(*class, capability))
+    }) {
+        return Err(BrokerError::SpawnRunnerIntentMismatch {
+            field: "sandbox_plan.capability_classes",
+            requested: "mismatch".to_owned(),
+            resolved: "bundle-profile".to_owned(),
+        });
+    }
+    if plan.seccomp_class.as_str().is_empty() || intent.seccomp_policy_ref.is_none() {
+        return Err(BrokerError::SpawnRunnerIntentMismatch {
+            field: "sandbox_plan.seccomp_class",
+            requested: plan.seccomp_class.as_str().to_owned(),
+            resolved: "broker-profile".to_owned(),
+        });
+    }
+    Ok(())
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn capability_matches(
+    class: d2b_contracts::v3::process::CapabilityClass,
+    capability: &str,
+) -> bool {
+    let expected = match class {
+        d2b_contracts::v3::process::CapabilityClass::NetworkBind => "CAP_NET_BIND_SERVICE",
+        d2b_contracts::v3::process::CapabilityClass::NetworkRaw => "CAP_NET_RAW",
+        d2b_contracts::v3::process::CapabilityClass::NetworkAdmin => "CAP_NET_ADMIN",
+        d2b_contracts::v3::process::CapabilityClass::SysTime => "CAP_SYS_TIME",
+        d2b_contracts::v3::process::CapabilityClass::SysPtrace => "CAP_SYS_PTRACE",
+        d2b_contracts::v3::process::CapabilityClass::SysAdmin => "CAP_SYS_ADMIN",
+        d2b_contracts::v3::process::CapabilityClass::DacOverride => "CAP_DAC_OVERRIDE",
+        d2b_contracts::v3::process::CapabilityClass::Fowner => "CAP_FOWNER",
+        d2b_contracts::v3::process::CapabilityClass::Chown => "CAP_CHOWN",
+        d2b_contracts::v3::process::CapabilityClass::Setuid => "CAP_SETUID",
+        d2b_contracts::v3::process::CapabilityClass::Setgid => "CAP_SETGID",
+        d2b_contracts::v3::process::CapabilityClass::AuditWrite => "CAP_AUDIT_WRITE",
+        d2b_contracts::v3::process::CapabilityClass::Kill => "CAP_KILL",
+    };
+    capability == expected
+}
+
 fn validate_spawn_runner_request_matches_intent(
     req: &d2b_contracts::broker_wire::SpawnRunnerRequest,
     intent: &d2b_core::bundle_resolver::ResolvedRunnerIntent,
@@ -7593,6 +9030,59 @@ fn validate_spawn_runner_request_matches_intent(
             resolved: intent.vm_name.clone(),
         });
     }
+    if let Some(execution_ref) = &req.execution_ref {
+        let expected =
+            d2b_contracts::v3::ResourceRef::parse(&intent.execution_ref).map_err(|_| {
+                BrokerError::SpawnRunnerIntentMismatch {
+                    field: "execution_ref",
+                    requested: execution_ref.to_canonical_string(),
+                    resolved: "invalid-bundle-reference".to_owned(),
+                }
+            })?;
+        if execution_ref != &expected {
+            return Err(BrokerError::SpawnRunnerIntentMismatch {
+                field: "execution_ref",
+                requested: execution_ref.to_canonical_string(),
+                resolved: expected.to_canonical_string(),
+            });
+        }
+    }
+    let expected_domain = match intent.execution_domain {
+        d2b_core::processes::ProcessExecutionDomain::System => {
+            d2b_contracts::v3::execution_policy::ExecutionDomain::System
+        }
+        d2b_core::processes::ProcessExecutionDomain::User => {
+            d2b_contracts::v3::execution_policy::ExecutionDomain::User
+        }
+    };
+    if req
+        .execution_domain
+        .is_some_and(|domain| domain != expected_domain)
+    {
+        return Err(BrokerError::SpawnRunnerIntentMismatch {
+            field: "execution_domain",
+            requested: format!("{:?}", req.execution_domain),
+            resolved: format!("{expected_domain:?}"),
+        });
+    }
+    let expected_user = intent
+        .user_ref
+        .as_deref()
+        .map(d2b_contracts::v3::ResourceRef::parse)
+        .transpose()
+        .map_err(|_| BrokerError::SpawnRunnerIntentMismatch {
+            field: "user_ref",
+            requested: "invalid-bundle-reference".to_owned(),
+            resolved: "invalid-bundle-reference".to_owned(),
+        })?;
+    if req.user_ref != expected_user {
+        return Err(BrokerError::SpawnRunnerIntentMismatch {
+            field: "user_ref",
+            requested: format!("{:?}", req.user_ref),
+            resolved: format!("{expected_user:?}"),
+        });
+    }
+
     let expected_role_id = match intent.role {
         d2b_core::processes::ProcessRole::CloudHypervisorRunner => "ch-runner",
         _ => intent.role_id.as_str(),
@@ -8576,7 +10066,10 @@ fn caller_role_is_admin(caller_role: &CallerRole) -> bool {
     }
     #[cfg(not(feature = "layer1-bootstrap"))]
     {
-        matches!(caller_role, CallerRole::AdminUid { .. })
+        matches!(
+            caller_role,
+            CallerRole::AdminUid { .. } | CallerRole::RootUid { .. }
+        )
     }
 }
 
@@ -9689,6 +11182,7 @@ fn reap_all_pidfds(audit_log: &AuditLog) {
                 if let Ok(mut reg) = runner_pidfd_registry().lock() {
                     reg.remove(&runner_id);
                 }
+                remove_runner_metadata(&runner_id);
             }
             Err(err) => {
                 tracing::warn!(runner_id = %runner_id, error = %err, "reap_all_pidfds: waitid failed");
@@ -9783,6 +11277,7 @@ fn targeted_reap_runner(runner_id: &str, pidfd: std::os::fd::BorrowedFd<'_>) {
             if let Ok(mut reg) = runner_pidfd_registry().lock() {
                 reg.remove(runner_id);
             }
+            remove_runner_metadata(runner_id);
         }
         Err(err) => {
             tracing::warn!(runner_id = %runner_id, error = %err, "targeted_reap_runner: waitid failed");
@@ -9807,6 +11302,7 @@ fn deliver_targeted_reap(
             if let Ok(mut reg) = runner_pidfd_registry().lock() {
                 reg.remove(runner_id);
             }
+            remove_runner_metadata(runner_id);
             push_child_reap_notification(notif);
             tracing::info!(
                 runner_id = %runner_id,
@@ -9825,11 +11321,44 @@ fn remove_and_notify(
     if let Ok(mut reg) = runner_pidfd_registry().lock() {
         reg.remove(runner_id);
     }
+    remove_runner_metadata(runner_id);
     if let Err(err) = audit_log.write_child_reaped(&notif) {
         tracing::warn!(runner_id = %runner_id, error = %err, "reap: audit write_child_reaped failed");
     }
     push_child_reap_notification(notif);
     tracing::info!(runner_id = %runner_id, "broker: child reaped via SIGCHLD handler");
+}
+
+/// Kill and synchronously reap a child when a post-spawn commit step fails.
+/// The broker must not return an error while leaving a live process or stale
+/// runner identity behind: the caller will retry the lifecycle operation and
+/// the next attempt must be able to reserve the same runner id.
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn cleanup_spawned_runner_after_failure(runner_id: &str, pidfd: std::os::fd::BorrowedFd<'_>) {
+    remove_runner_metadata(runner_id);
+    if let Err(err) = crate::sys::pidfd_sys::pidfd_send_signal(pidfd, libc::SIGKILL) {
+        tracing::debug!(
+            runner_id = %runner_id,
+            error = %err,
+            "spawn rollback: pidfd SIGKILL failed; child may already have exited"
+        );
+    }
+
+    use nix::errno::Errno;
+    use nix::sys::wait::{Id, WaitPidFlag, waitid};
+    match waitid(Id::PIDFd(pidfd), WaitPidFlag::WEXITED) {
+        Ok(_) | Err(Errno::ECHILD) => {}
+        Err(err) => {
+            tracing::warn!(
+                runner_id = %runner_id,
+                error = %err,
+                "spawn rollback: blocking pidfd reap failed"
+            );
+        }
+    }
+    if let Ok(mut registry) = runner_pidfd_registry().lock() {
+        registry.remove(runner_id);
+    }
 }
 
 #[cfg(test)]
@@ -9882,6 +11411,44 @@ mod tests {
                 b"attacker error text"
             )
         );
+    }
+
+    #[test]
+    fn swtpm_hardening_failure_uses_the_typed_path_free_operation() {
+        let error = BrokerError::SwtpmDirHardening {
+            audit: crate::ops::audit_op::SwtpmDirAudit {
+                vm_id: "work-vm".to_owned(),
+                base_dir_hash: "fnv1a64:0000000000000000".to_owned(),
+                result: crate::ops::audit_op::SwtpmDirResult::FailedClosed,
+                mode: 0o700,
+                owner_uid: 1000,
+                owner_gid: 1000,
+                marker_result: crate::ops::audit_op::SwtpmMarkerResult::FailedClosed,
+                fail_reason: Some("swtpm-dir-marker-mismatch".to_owned()),
+            },
+            reason: "swtpm-dir-marker-mismatch",
+        };
+
+        #[cfg(feature = "layer1-bootstrap")]
+        assert!(matches!(
+            error.into_response(),
+            BrokerResponse::Error {
+                kind,
+                operation,
+                message,
+                ..
+            } if kind == "Broker.SwtpmDirHardening"
+                && operation == "PrepareSwtpmDir"
+                && !message.contains('/')
+        ));
+        #[cfg(not(feature = "layer1-bootstrap"))]
+        assert!(matches!(
+            error.into_response(),
+            BrokerResponse::Error(response)
+                if response.kind == "Broker.SwtpmDirHardening"
+                    && response.operation == "PrepareSwtpmDir"
+                    && !response.message.contains('/')
+        ));
     }
 
     #[cfg(not(feature = "layer1-bootstrap"))]
@@ -10384,6 +11951,7 @@ mod tests {
 
         let host = HostJson {
             schema_version: "v2".to_owned(),
+            security_key_selectors: Vec::new(),
             site: SitePolicy {
                 allow_unsafe_east_west: false,
             },
@@ -10487,6 +12055,9 @@ mod tests {
                     workload_identity: None,
                     vm: "corp-vm".to_owned(),
                     nodes: vec![ProcessNode {
+                        execution_ref: None,
+                        execution_domain: None,
+                        user_ref: None,
                         id: NodeId("ch-runner".to_owned()),
                         role: ProcessRole::CloudHypervisorRunner,
                         unit: Some("d2b@corp-vm.service".to_owned()),
@@ -10529,6 +12100,9 @@ mod tests {
                     workload_identity: None,
                     vm: "sys-work-usbipd".to_owned(),
                     nodes: vec![ProcessNode {
+                        execution_ref: None,
+                        execution_domain: None,
+                        user_ref: None,
                         id: NodeId("backend".to_owned()),
                         role: ProcessRole::Usbip,
                         unit: None,
@@ -10739,6 +12313,9 @@ mod tests {
             serde_json::from_slice(&fs::read(&bundle.processes_path).expect("read processes.json"))
                 .expect("parse processes.json");
         processes.vms[0].nodes.push(ProcessNode {
+            execution_ref: None,
+            execution_domain: None,
+            user_ref: None,
             id: NodeId("video".to_owned()),
             role: ProcessRole::Video,
             unit: None,
@@ -10856,6 +12433,7 @@ mod tests {
             realm_controllers_path: root.join("realm-controllers.json"),
             realm_identity_path: root.join("realm-identity.json"),
             state_dir: root.join("state"),
+            activation_helper_path: root.join("activation-helper"),
             d2bd_uid: 1000,
             d2bd_gid: Gid::current().as_raw(),
             store_sync_export_dir: root.join("observability").join("store-sync"),
@@ -11203,6 +12781,63 @@ mod tests {
             })
         }
 
+        fn start_systemd_unit(
+            &self,
+            _resolver: &BundleResolver,
+            _request: &d2b_contracts::broker_wire::StartTransientUnitRequest,
+        ) -> Result<(d2b_contracts::broker_wire::SystemdUnitIdentity, OwnedFd), BrokerError>
+        {
+            Err(BrokerError::Unimplemented {
+                operation: "StartSystemdUnit",
+                target_wave: "W6",
+            })
+        }
+
+        fn check_systemd_user_manager(
+            &self,
+            _resolver: &BundleResolver,
+            _request: &d2b_contracts::broker_wire::CheckSystemdUserManagerRequest,
+        ) -> Result<bool, BrokerError> {
+            Err(BrokerError::Unimplemented {
+                operation: "CheckSystemdUserManager",
+                target_wave: "W6",
+            })
+        }
+
+        fn observe_systemd_unit(
+            &self,
+            _resolver: &BundleResolver,
+            _request: &d2b_contracts::broker_wire::ObserveSystemdUnitRequest,
+        ) -> Result<Option<d2b_contracts::broker_wire::SystemdUnitIdentity>, BrokerError> {
+            Err(BrokerError::Unimplemented {
+                operation: "ObserveSystemdUnit",
+                target_wave: "W6",
+            })
+        }
+
+        fn reopen_systemd_unit(
+            &self,
+            _resolver: &BundleResolver,
+            _request: &d2b_contracts::broker_wire::OpenSystemdUnitPidfdRequest,
+        ) -> Result<(d2b_contracts::broker_wire::SystemdUnitIdentity, OwnedFd), BrokerError>
+        {
+            Err(BrokerError::Unimplemented {
+                operation: "OpenSystemdUnitPidfd",
+                target_wave: "W6",
+            })
+        }
+
+        fn stop_systemd_unit(
+            &self,
+            _resolver: &BundleResolver,
+            _request: &d2b_contracts::broker_wire::StopSystemdUnitRequest,
+        ) -> Result<(), BrokerError> {
+            Err(BrokerError::Unimplemented {
+                operation: "StopSystemdUnit",
+                target_wave: "W6",
+            })
+        }
+
         fn signal_runner(
             &self,
             runner_id: &str,
@@ -11298,6 +12933,17 @@ mod tests {
                         .or(Some(store_view_intent.generation))
                 },
             })
+        }
+
+        fn apply_host_generation_handoff(
+            &self,
+            state_dir: &std::path::Path,
+            helper_path: &std::path::Path,
+            request: &d2b_contracts::host_generation::ApplyHostGenerationHandoff,
+        ) -> Result<d2b_contracts::broker_wire::ApplyHostGenerationHandoffResponse, BrokerError>
+        {
+            crate::ops::host_generation_handoff::apply_with_helper(state_dir, helper_path, request)
+                .map_err(|error| BrokerError::LiveHandler(error.to_string()))
         }
 
         fn run_gc(
@@ -11468,6 +13114,7 @@ mod tests {
             BrokerResponse::QemuMediaSystemPowerdown(response) => {
                 assert_eq!(response.command, QemuMediaLifecycleAction::SystemPowerdown);
             }
+
             other => panic!("expected QemuMediaSystemPowerdown, got {other:?}"),
         }
 
@@ -11519,6 +13166,84 @@ mod tests {
 
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
+    fn accepted_peer_pidfd_refuses_missing_or_multiple_request_descriptors() {
+        use d2b_contracts::broker_wire::{BrokerCallerRole, BrokerRequest};
+
+        let root = test_audit_dir("accepted-peer-pidfd-request-fds");
+        let bundle = build_test_bundle(&root);
+        let config = test_server_config(&root, &bundle.manifest_path);
+        let (log, _) = AuditLog::open_capturing(
+            &config.audit_dir,
+            Gid::current().as_raw(),
+            true,
+            config.audit_retention_days,
+        )
+        .expect("open capturing audit log");
+        let backend = FakeDispatchBackend::default();
+        let caller_role = BrokerCallerRole::AdminUid { uid: 1000 };
+        let request = BrokerRequest::OpenPeerPidfdFromAcceptedSocket(
+            d2b_contracts::broker_wire::OpenPeerPidfdFromAcceptedSocketRequest {},
+        );
+        let audit_context = DispatchAuditContext::from_request(&request, 4242, &caller_role)
+            .expect("audit context");
+
+        for request_fds in [Vec::new(), vec![dummy_fd(), dummy_fd()]] {
+            let error = dispatch_request_with_backend_and_request_fds(
+                request.clone(),
+                1000,
+                Gid::current().as_raw(),
+                caller_role.clone(),
+                &audit_context,
+                &config,
+                &log,
+                Some(&bundle.resolver),
+                &backend,
+                request_fds,
+            )
+            .expect_err("request fd count must be exact");
+            assert!(
+                matches!(error, BrokerError::Protocol(message) if message == "accepted socket request must carry exactly one descriptor")
+            );
+        }
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn accepted_peer_pidfd_refuses_caller_supplied_audit_join() {
+        use d2b_contracts::broker_wire::{
+            AuditJoinContext, BrokerCallerRole, CanonicalAuditDigest,
+        };
+
+        let request = BrokerRequest::OpenPeerPidfdFromAcceptedSocket(
+            d2b_contracts::broker_wire::OpenPeerPidfdFromAcceptedSocketRequest {},
+        );
+        let audit_join = AuditJoinContext {
+            zone_id: CanonicalAuditDigest::parse(d2b_contracts::v3::canonical_digest(
+                "d2b:test-zone",
+                b"forged zone",
+            ))
+            .expect("canonical zone digest"),
+            operation_identity: CanonicalAuditDigest::parse(d2b_contracts::v3::canonical_digest(
+                "d2b:test-operation",
+                b"forged operation",
+            ))
+            .expect("canonical operation digest"),
+        };
+
+        let error = DispatchAuditContext::from_request_with_join(
+            &request,
+            4242,
+            &BrokerCallerRole::AdminUid { uid: 1000 },
+            Some(&audit_join),
+        )
+        .expect_err("accepted-socket authority must not accept an audit join");
+        assert!(
+            matches!(error, BrokerError::Protocol(message) if message == "audit-join-not-permitted")
+        );
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
     fn dispatch_run_activation_response_for_intent_uses_native_sequence() {
         let root = test_audit_dir("run-activation-native");
         let source_view = root.join("source-view/alpha-system");
@@ -11546,6 +13271,7 @@ mod tests {
         let request = RunActivationRequest {
             bundle_activation_intent_ref: BundleOpId::new("activation:vm:alpha"),
             mode: ActivationMode::Switch,
+            system_artifact_id: None,
             phase: ActivationPhase::Prepare,
             vm: "alpha".to_owned(),
             tracing_span_id: None,
@@ -11937,6 +13663,8 @@ mod tests {
                 role_id: RoleId::new("ch-runner"),
                 pid: 4242,
                 expected_start_time_ticks: 123456,
+                resource_ref: None,
+                resource_uid: None,
                 tracing_span_id: Some(TracingSpanId::new("span-pidfd")),
             }),
             "OpenPidfd",
@@ -11964,6 +13692,8 @@ mod tests {
                 signal: RunnerSignal::Term,
                 pid: None,
                 expected_start_time_ticks: None,
+                resource_ref: None,
+                resource_uid: None,
                 tracing_span_id: Some(TracingSpanId::new("span-signal")),
             }),
             "SignalRunner",
@@ -11985,6 +13715,16 @@ mod tests {
 
         let spawn_runner = assert_dispatch(
             BrokerRequest::SpawnRunner(d2b_contracts::broker_wire::SpawnRunnerRequest {
+                execution_ref: None,
+                execution_domain: None,
+                user_ref: None,
+                resource_ref: None,
+                resource_uid: None,
+                bundle_content_identity: None,
+                provider_identity: None,
+                template_identity: None,
+                generation: None,
+                sandbox_plan: None,
                 workload_identity: None,
                 vm_id: VmId::new("corp-vm"),
                 role_id: RoleId::new("ch-runner"),
@@ -12067,6 +13807,7 @@ mod tests {
             BrokerRequest::RunActivation(d2b_contracts::broker_wire::RunActivationRequest {
                 bundle_activation_intent_ref: BundleOpId::new(intent_id_activation("corp-vm")),
                 mode: ActivationMode::Switch,
+                system_artifact_id: None,
                 phase: ActivationPhase::MetadataOnly,
                 vm: "corp-vm".to_owned(),
                 tracing_span_id: Some(TracingSpanId::new("span-activation")),
@@ -12418,6 +14159,16 @@ mod tests {
         let caller_role = BrokerCallerRole::AdminUid { uid: 1000 };
         let caller_gid = Gid::current().as_raw();
         let request = BrokerRequest::SpawnRunner(d2b_contracts::broker_wire::SpawnRunnerRequest {
+            execution_ref: None,
+            execution_domain: None,
+            user_ref: None,
+            resource_ref: None,
+            resource_uid: None,
+            bundle_content_identity: None,
+            provider_identity: None,
+            template_identity: None,
+            generation: None,
+            sandbox_plan: None,
             workload_identity: None,
             vm_id: VmId::new("corp-vm"),
             role_id: RoleId::new("ch-runner"),
@@ -13111,6 +14862,16 @@ mod tests {
         let caller_role = BrokerCallerRole::AdminUid { uid: 1000 };
         let caller_gid = Gid::current().as_raw();
         let request = BrokerRequest::SpawnRunner(d2b_contracts::broker_wire::SpawnRunnerRequest {
+            execution_ref: None,
+            execution_domain: None,
+            user_ref: None,
+            resource_ref: None,
+            resource_uid: None,
+            bundle_content_identity: None,
+            provider_identity: None,
+            template_identity: None,
+            generation: None,
+            sandbox_plan: None,
             workload_identity: None,
             vm_id: VmId::new("corp-vm"),
             role_id: RoleId::new("ch-runner"),
@@ -13181,6 +14942,9 @@ mod tests {
             serde_json::from_slice(&fs::read(&bundle.processes_path).expect("read processes.json"))
                 .expect("parse processes.json");
         processes.vms[0].nodes.push(ProcessNode {
+            execution_ref: None,
+            execution_domain: None,
+            user_ref: None,
             id: NodeId("otel-host-bridge".to_owned()),
             role: ProcessRole::OtelHostBridge,
             unit: None,
@@ -13236,6 +15000,16 @@ mod tests {
         let caller_gid = Gid::current().as_raw();
         let intent_ref = intent_id_runner("corp-vm", "otel-host-bridge");
         let request = BrokerRequest::SpawnRunner(d2b_contracts::broker_wire::SpawnRunnerRequest {
+            execution_ref: None,
+            execution_domain: None,
+            user_ref: None,
+            resource_ref: None,
+            resource_uid: None,
+            bundle_content_identity: None,
+            provider_identity: None,
+            template_identity: None,
+            generation: None,
+            sandbox_plan: None,
             workload_identity: None,
             vm_id: VmId::new("corp-vm"),
             role_id: RoleId::new("otel-host-bridge"),
@@ -13313,6 +15087,8 @@ mod tests {
                 signal: RunnerSignal::Term,
                 pid: None,
                 expected_start_time_ticks: None,
+                resource_ref: None,
+                resource_uid: None,
                 tracing_span_id: None,
             });
         let audit_context = DispatchAuditContext::from_request(&request, 5151, &caller_role)

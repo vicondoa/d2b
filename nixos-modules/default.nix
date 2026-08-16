@@ -27,12 +27,17 @@
 {
   imports = [
     ./options.nix
+    ./host-generation-rebuild-ref.nix
     ./options-volumes.nix
     ./resources-zone-control.nix
     ./resource-compiler.nix
     ./bundle-artifacts.nix
     ./options-observability.nix
     ./provider-catalog.nix
+    ./provider-runtime-contracts.nix
+    ./providers/activation-nixos.nix
+    ./providers/system-minijail.nix
+    ./providers/system-systemd.nix
     ./provider-projection-validate.nix
     ./options-ownership-matrix.nix
     ./index.nix
@@ -77,12 +82,16 @@
     ./closures-json.nix
     ./minijail-profiles.nix
     ./ui-colors.nix
+    ./providers/display-wayland.nix
+    ./providers/notification-desktop.nix
+    ./providers/clipboard-wayland.nix
     # Both cli.nix (bash CLI package) and host-ch-exporter.nix (host
     # singleton scraper folded into daemon /metrics) are now retired.
     # See tests/cli-nix-consumers-eval.sh + tests/legacy-unit-denylist-eval.sh
     # for the static gates.
     (import ./host-broker.nix { inherit inputs; })
     ./components/audio/host.nix
+    ./components/audio/v3-resource.nix
     ./components/observability/default.nix
     ./niri-vm-borders.nix
   ];

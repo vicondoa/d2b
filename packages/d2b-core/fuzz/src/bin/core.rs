@@ -428,6 +428,7 @@ fn build_synthetic_resolver() -> BundleResolver {
         fd_ownership: Vec::new(),
         runtime_providers: Vec::new(),
         vm_runtimes: Vec::new(),
+        security_key_selectors: Vec::new(),
         qemu_media: None,
         cloud_hypervisor_capabilities: Vec::new(),
         if_name_mappings: Vec::new(),
@@ -440,6 +441,9 @@ fn build_synthetic_resolver() -> BundleResolver {
             vm: "work-vm".to_owned(),
             workload_identity: None,
             nodes: vec![ProcessNode {
+                execution_ref: None,
+                execution_domain: None,
+                user_ref: None,
                 id: NodeId("ch-runner".to_owned()),
                 role: ProcessRole::CloudHypervisorRunner,
                 unit: None,
@@ -579,7 +583,19 @@ fn bundle_resolver_round_trips_nft_intents() {
         .find_nft_intent(&intent_id_nft_env("work"))
         .expect("env nft");
     assert_eq!(env_intent.scope_label, "env:work");
-    assert!(env_intent.script_body.contains("env nft subset for work"));
+    assert!(env_intent.script_body.contains("chain \"forward-work\""));
+    assert!(
+        env_intent
+            .script_body
+            .contains("ct state established,related accept")
+    );
+    assert!(
+        env_intent
+            .script_body
+            .contains("iifname \"br-work-up\" ct state new accept")
+    );
+    assert!(!env_intent.script_body.contains("hook forward"));
+    assert!(!env_intent.script_body.contains("policy drop"));
 }
 
 fn bundle_resolver_round_trips_route_intents() {

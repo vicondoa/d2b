@@ -1647,6 +1647,30 @@ let
       ])
     cfg.envs;
 
+  networkResourceEastWestAssertions = lib.flatten (lib.mapAttrsToList
+    (zoneName: zone:
+      lib.flatten (lib.mapAttrsToList
+        (resourceName: resource:
+          let
+            spec = resource.spec or { };
+            isolation = spec.isolation or { };
+          in
+          lib.optional (
+            resource.type == "Network"
+            && (isolation.allowEastWest or false)
+            && !cfg.site.allowUnsafeEastWest
+          ) {
+            assertion = false;
+            message = ''
+              d2b.zones.${zoneName}.resources.${resourceName}.spec.isolation.allowEastWest
+              requires d2b.site.allowUnsafeEastWest = true. Both the
+              Network resource opt-in and the site-level acknowledgement are
+              required before direct east-west forwarding is enabled.
+            '';
+          })
+        zone.resources))
+    cfg.zones);
+
   externalNetworkAssertions = lib.flatten (lib.mapAttrsToList
     (envName: env:
       let
@@ -2207,6 +2231,13 @@ let
     "key"
   ];
 
+  unixTransportSettingKeys = [ "socketKind" ];
+  vsockTransportSettingKeys = [
+    "connectTimeoutSeconds"
+    "guestRef"
+    "portClass"
+  ];
+
   zoneAttrOr = attrs: name: fallback:
     if builtins.isAttrs attrs && builtins.hasAttr name attrs
     then attrs.${name}
@@ -2221,6 +2252,16 @@ let
     && builtins.elemAt parts 0 == "Provider"
     && builtins.hasAttr (builtins.elemAt parts 1) resources
     && resources.${builtins.elemAt parts 1}.type == "Provider";
+
+  zoneResolvesAs = resources: expectedType: ref:
+    let
+      parts = if builtins.isString ref then lib.splitString "/" ref else [ ];
+    in
+    builtins.isString ref
+    && lib.length parts == 2
+    && builtins.elemAt parts 0 == expectedType
+    && builtins.hasAttr (builtins.elemAt parts 1) resources
+    && resources.${builtins.elemAt parts 1}.type == expectedType;
 
   # Walk one Zone's ancestry. Returns true when the walk terminates at a
   # parentless Zone within the depth budget and never revisits a name.
@@ -2319,6 +2360,47 @@ let
               + " key(s) from spec.transportSettings: transport endpoints are"
               + " allocator-issued and secrets are referenced as Credential"
               + " resources.";
+          }
+          {
+            assertion =
+              (zoneAttrOr link.spec "transportProviderRef" "")
+                != "Provider/transport-unix"
+              || (
+                builtins.isAttrs settings
+                && lib.all (key: builtins.elem key unixTransportSettingKeys)
+                  (builtins.attrNames settings)
+                && (
+                  !builtins.hasAttr "socketKind" settings
+                  || builtins.elem settings.socketKind [ "seqpacket" "stream" ]
+                )
+                && zoneAttrOr link.spec "transportCredentials" [ ] == [ ]
+              );
+            message =
+              "zones.${zoneName}.resources.${linkName}: Provider/transport-unix"
+              + " accepts only optional socketKind=seqpacket or socketKind=stream"
+              + " and requires an empty transportCredentials list.";
+          }
+          {
+            assertion =
+              (zoneAttrOr link.spec "transportProviderRef" "")
+                != "Provider/transport-vsock"
+              || (
+                builtins.isAttrs settings
+                && lib.all (key: builtins.elem key vsockTransportSettingKeys)
+                  (builtins.attrNames settings)
+                && builtins.hasAttr "guestRef" settings
+                && zoneResolvesAs zone.resources "Guest" settings.guestRef
+                && (settings.portClass or "d2b-link") == "d2b-link"
+                && builtins.isInt (settings.connectTimeoutSeconds or 30)
+                && (settings.connectTimeoutSeconds or 30) >= 1
+                && (settings.connectTimeoutSeconds or 30) <= 60
+                && zoneAttrOr link.spec "transportCredentials" [ ] == [ ]
+              );
+            message =
+              "zones.${zoneName}.resources.${linkName}: Provider/transport-vsock"
+              + " accepts only guestRef, portClass=d2b-link, and a"
+              + " connectTimeoutSeconds from 1 through 60; transportCredentials"
+              + " must be empty.";
           }
         ])
       links);
@@ -2559,6 +2641,11 @@ let
           message = "${row.path}: device-gpu requires a physical DRM Device (gpu-device-shape-invalid).";
         }
         {
+          assertion = provider != "device-gpu"
+            || pkgs.stdenv.hostPlatform.system == "x86_64-linux";
+          message = "${row.path}: device-gpu requires an x86_64-linux host (gpu-platform-unsupported).";
+        }
+        {
           assertion = !(provider == "device-tpm"
             && builtins.isAttrs settings
             && builtins.hasAttr "startupClear" settings);
@@ -2607,6 +2694,123 @@ let
     ++ deviceProviderShapeAssertions
     ++ deviceSharedArbitrationAssertions
     ++ deviceDuplicateLabelAssertions;
+
+  # v3 runtime-qemu-media Provider/Guest assertions. These are deliberately
+  # scoped to the media Provider and do not relax the legacy VM assertions
+  # above. Raw locators remain forbidden in the Provider extension.
+  qemuMediaResourceAssertions = lib.flatten (lib.mapAttrsToList
+    (zoneName: zone:
+      let
+        resources = zone.resources or { };
+        kvmRequired = cfg.qemuMediaRuntime.kvmRequired or true;
+        provider = resources.runtime-qemu-media or null;
+        providerSpec = if provider == null then { } else provider.spec or { };
+        providerConfig = providerSpec.config or { };
+        parseRef = value:
+          let parts = if builtins.isString value then lib.splitString "/" value else [ ];
+          in if lib.length parts == 2 then {
+            type = builtins.elemAt parts 0;
+            name = builtins.elemAt parts 1;
+          } else null;
+        resolves = expectedType: value:
+          let
+            parsed = parseRef value;
+            target =
+              if parsed != null && builtins.hasAttr parsed.name resources
+              then resources.${parsed.name}
+              else null;
+          in parsed != null
+            && parsed.type == expectedType
+            && target != null
+            && target.type == expectedType;
+        guestRows = lib.filterAttrs
+          (_: resource:
+            resource.type == "Guest"
+            && (resource.spec.providerRef or null) == "Provider/runtime-qemu-media")
+          resources;
+        guestAssertions = lib.flatten (lib.mapAttrsToList
+          (guestName: guest:
+            let
+              spec = guest.spec or { };
+              extension = spec.provider or { };
+              settings = extension.settings or { };
+              bootMediaRef = settings.bootMediaRef or null;
+              removable = settings.removableVolumeRefs or [ ];
+              deviceAttachments = spec.deviceAttachments or [ ];
+              declaresKvm = lib.any
+                (attachment: (attachment.deviceRef or null) == "Device/host-kvm")
+                deviceAttachments;
+              displayWindow = settings.displayWindow or false;
+              forbidden = [
+                "hostPath"
+                "socketPath"
+                "argv"
+                "commandLine"
+                "credential"
+                "credentialRef"
+              ];
+            in [
+              {
+                assertion = provider != null;
+                message = "d2b.zones.${zoneName}.resources.${guestName}: runtime-qemu-media Provider is not declared in the same Zone.";
+              }
+              {
+                assertion = (spec.systemArtifactId or null) == null;
+                message = "d2b.zones.${zoneName}.resources.${guestName}.spec.systemArtifactId must be null for runtime-qemu-media.";
+              }
+              {
+                assertion = !kvmRequired
+                  || (declaresKvm && resolves "Device" "Device/host-kvm");
+                message = "d2b.zones.${zoneName}.resources.${guestName}: runtime-qemu-media Guest must declare Device/host-kvm in deviceAttachments.";
+              }
+              {
+                assertion = bootMediaRef == null || resolves "Volume" bootMediaRef;
+                message = "d2b.zones.${zoneName}.resources.${guestName}: bootMediaRef must resolve to a same-Zone Volume.";
+              }
+              {
+                assertion = builtins.isList removable && lib.length removable <= 4;
+                message = "d2b.zones.${zoneName}.resources.${guestName}: removableVolumeRefs must contain at most four entries.";
+              }
+              {
+                assertion = builtins.isList removable
+                  && lib.all
+                    (entry:
+                      builtins.isAttrs entry
+                      && resolves "Volume" (entry.volumeRef or null)
+                      && builtins.isString (entry.view or null)
+                      && builtins.match "^[a-z][a-z0-9-]{0,62}$" (entry.view or "") != null)
+                    removable;
+                message = "d2b.zones.${zoneName}.resources.${guestName}: removableVolumeRefs must use same-Zone Volume refs and bounded views.";
+              }
+              {
+                assertion = !lib.any (key: builtins.hasAttr key settings) forbidden;
+                message = "d2b.zones.${zoneName}.resources.${guestName}.spec.provider.settings must not contain raw locators, argv, or credentials.";
+              }
+              {
+                assertion = !displayWindow
+                  || (providerConfig.displayProviderRef or null) != null;
+                message = "d2b.zones.${zoneName}: displayProviderRef is required when a runtime-qemu-media Guest requests displayWindow.";
+              }
+            ])
+          guestRows);
+      in [
+        {
+          assertion = provider == null
+            || resolves "Host" (providerConfig.controllerExecutionRef or null);
+          message = "d2b.zones.${zoneName}.resources.runtime-qemu-media.spec.config.controllerExecutionRef must resolve to a same-Zone Host.";
+        }
+        {
+          assertion = provider == null
+            || resolves "Provider" (providerConfig.networkProviderRef or null);
+          message = "d2b.zones.${zoneName}.resources.runtime-qemu-media.spec.config.networkProviderRef must resolve to a same-Zone Provider.";
+        }
+        {
+          assertion = provider == null
+            || resolves "Provider" (providerConfig.volumeProviderRef or null);
+          message = "d2b.zones.${zoneName}.resources.runtime-qemu-media.spec.config.volumeProviderRef must resolve to a same-Zone Provider.";
+        }
+      ] ++ guestAssertions)
+    (cfg.zones or { }));
 in
 {
   imports = [
@@ -2619,6 +2823,7 @@ in
     vmAssertions
     ++ qemuMediaAssertions
     ++ envAssertions
+    ++ networkResourceEastWestAssertions
     ++ externalNetworkAssertions
     ++ vsockAssertions
     ++ siteAssertions
@@ -2645,6 +2850,7 @@ in
     ++ securityKeyUsbipMutualExclusionAssertions
     ++ securityKeyDeviceAssertions
     ++ deviceCrossResourceAssertions
+    ++ qemuMediaResourceAssertions
     ++ zoneTopologyAssertions
   );
 

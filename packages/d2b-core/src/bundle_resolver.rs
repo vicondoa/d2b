@@ -78,8 +78,8 @@ use crate::host_w3::{ModuleRequirementW3, TapRoleW3};
 use crate::manifest_v04::{ManifestV04, VmEntry};
 use crate::minijail_profile::{CgroupPlacement, MountPolicy, NamespaceSet};
 use crate::processes::{
-    ProcessMacvtapMode, ProcessNetworkInterfaceType, ProcessNode, ProcessRole, ProcessesJson,
-    RoleProfile, VmProcessDag,
+    ProcessExecutionDomain, ProcessMacvtapMode, ProcessNetworkInterfaceType, ProcessNode,
+    ProcessRole, ProcessesJson, RoleProfile, VmProcessDag,
 };
 use crate::realm_controller_config::RealmControllersJson;
 use crate::realm_workloads_launcher::RealmWorkloadsLauncherV2Json;
@@ -325,6 +325,12 @@ pub struct ResolvedDiskInitOp {
 pub struct ResolvedRunnerIntent {
     pub intent_id: String,
     pub vm_name: String,
+    /// Canonical Host or Guest execution target bound by the private bundle.
+    pub execution_ref: String,
+    /// Canonical execution domain bound by the private bundle.
+    pub execution_domain: ProcessExecutionDomain,
+    /// Canonical User resource for a user-domain launch.
+    pub user_ref: Option<String>,
     pub role_id: String,
     pub role: ProcessRole,
     pub binary_path: PathBuf,
@@ -367,6 +373,31 @@ impl ResolvedRunnerIntent {
     /// legacy spawn specification return `None`.
     pub fn from_process_node(vm_name: &str, node: &ProcessNode) -> Option<Self> {
         let role_name = runner_role_name(&node.role)?;
+        let execution_ref = node
+            .execution_ref
+            .clone()
+            .unwrap_or_else(|| format!("Guest/{vm_name}"));
+        let valid_execution_ref = execution_ref
+            .split_once('/')
+            .is_some_and(|(kind, name)| matches!(kind, "Host" | "Guest") && !name.is_empty());
+        if !valid_execution_ref {
+            return None;
+        }
+        let execution_domain = node
+            .execution_domain
+            .unwrap_or(ProcessExecutionDomain::System);
+        if execution_domain == ProcessExecutionDomain::User
+            && node.user_ref.as_deref().is_none_or(|value| {
+                value
+                    .split_once('/')
+                    .is_none_or(|(kind, name)| kind != "User" || name.is_empty())
+            })
+        {
+            return None;
+        }
+        if execution_domain == ProcessExecutionDomain::System && node.user_ref.is_some() {
+            return None;
+        }
         let (binary_path, argv) = match node.binary_path.as_deref() {
             Some(binary_path)
                 if binary_path.starts_with('/')
@@ -400,6 +431,9 @@ impl ResolvedRunnerIntent {
         Some(Self {
             intent_id: intent_id_runner(vm_name, &node.id.0),
             vm_name: vm_name.to_owned(),
+            execution_ref,
+            execution_domain,
+            user_ref: node.user_ref.clone(),
             role_id: node.id.0.clone(),
             role: node.role.clone(),
             binary_path: PathBuf::from(binary_path),
@@ -1303,6 +1337,33 @@ impl BundleResolver {
 
     pub fn find_runner_intent(&self, id: &str) -> Option<&ResolvedRunnerIntent> {
         self.runner_intents.get(id)
+    }
+
+    /// Find the unique trusted runner intent for a Process template and
+    /// execution binding.
+    ///
+    /// Generic v3 Process resources carry a plain Provider template name
+    /// rather than a legacy process-DAG role id.  The private runner artifact
+    /// remains the only source of executable and sandbox data, so this lookup
+    /// deliberately matches only trusted intent metadata and refuses
+    /// ambiguity.
+    pub fn find_runner_intent_for_process(
+        &self,
+        execution_ref: &str,
+        execution_domain: ProcessExecutionDomain,
+        user_ref: Option<&str>,
+        template: &str,
+    ) -> Option<&ResolvedRunnerIntent> {
+        let mut matches = self.runner_intents.values().filter(|intent| {
+            intent.execution_ref == execution_ref
+                && intent.execution_domain == execution_domain
+                && intent.user_ref.as_deref() == user_ref
+                && (intent.role_id == template
+                    || intent.profile_id == template
+                    || runner_template_name(&intent.role) == Some(template))
+        });
+        let first = matches.next()?;
+        matches.next().is_none().then_some(first)
     }
 
     pub fn find_socket_intent(&self, id: &str) -> Option<&ResolvedSocketIntent> {
@@ -2304,28 +2365,24 @@ fn render_host_nft_script(host: &HostJson) -> String {
 }
 
 fn render_env_nft_subset(host: &HostJson, env: &NetEnv) -> String {
+    let marker = format!(
+        "d2b managed: {}:env:{}",
+        host.nftables.ownership_id, env.env
+    );
+    let chain = format!("forward-{}", env.env);
+    let bridge_ifname = format!("br-{}-up", env.env);
     let mut buf = String::new();
-    let bridge_ifname = resolved_ifname_for(host, &env.env, None, crate::host::TapRole::NetVmLan)
-        .unwrap_or_else(|| env.bridge.as_str().to_owned());
     buf.push_str(&format!(
-        "# d2b env nft subset for {} (bridge {})\n",
-        env.env, bridge_ifname
+        "table inet d2b {{\n  chain \"{chain}\" {{ comment \"{marker}\";\n"
     ));
-    buf.push_str(&format!("# table parent: {}\n", host.nftables.table));
-    for blocked in &env.net_vm_forward_blocklist {
-        buf.push_str(&format!("# blocklist: {blocked}\n"));
-    }
-    for flag in &env.bridge_port_flags {
-        buf.push_str(&format!(
-            "# bridge-port-flags: role={:?} isolated={} neigh_suppress={} learning={} unicast_flood={} rule={}\n",
-            flag.role,
-            flag.isolated,
-            flag.neigh_suppress,
-            flag.resolved_learning(),
-            flag.resolved_unicast_flood(),
-            flag.rule
-        ));
-    }
+    buf.push_str(&format!(
+        "    ct state established,related accept comment \"{marker}\";\n",
+    ));
+    buf.push_str(&format!(
+        "    iifname \"{}\" ct state new accept comment \"{}\";\n",
+        bridge_ifname, marker
+    ));
+    buf.push_str("  }\n}\n");
     buf
 }
 
@@ -2515,11 +2572,14 @@ fn render_hosts_managed_block(host: &HostJson) -> String {
 
 fn build_nm_unmanaged_intents(host: &HostJson) -> BTreeMap<String, ResolvedNmUnmanagedIntent> {
     let mut out = BTreeMap::new();
-    let mut contents = String::from("# managed by d2b broker - do not edit by hand\n");
+    let mut contents = String::from("# d2b-managed begin\n");
+    contents.push_str("# Generated by d2b-priv-broker; do not edit by hand.\n");
     contents.push_str("[keyfile]\n");
     contents.push_str("unmanaged-devices=");
     contents.push_str(&host.network_manager.match_criteria.join(";"));
     contents.push('\n');
+    contents.push_str("# marker-id=nm-unmanaged:host\n");
+    contents.push_str("# d2b-managed end\n");
     let mode = parse_octal_mode(&host.network_manager.ownership.mode).unwrap_or(0o644);
     out.insert(
         intent_id_nm_unmanaged_host(),
@@ -2683,6 +2743,10 @@ fn runner_role_name(role: &ProcessRole) -> Option<&'static str> {
         ProcessRole::Usbip => Some("usbip"),
         ProcessRole::WaylandProxy => Some("wayland-proxy"),
     }
+}
+
+fn runner_template_name(role: &ProcessRole) -> Option<&'static str> {
+    runner_role_name(role)
 }
 
 fn is_placeholder_runner_spec(binary_path: &str, argv: &[String], role_name: &str) -> bool {
@@ -3373,6 +3437,25 @@ mod tests {
         fs::write(path, body).expect("write test json");
     }
 
+    #[test]
+    fn nft_projection_uses_existing_forward_hook_and_preserves_uplink_rules() {
+        let root = test_root("nft-projection");
+        let resolver = build_personal_dev_bundle(&root);
+        let intent = resolver
+            .find_nft_projection_intent(&intent_id_nft_projection_env("personal"))
+            .expect("personal nft projection intent");
+        let script = &intent.script_body;
+
+        assert!(script.contains("chain \"forward-personal\" { comment"));
+        assert!(script.contains("ct state established,related accept"));
+        assert!(script.contains("iifname \"br-personal-up\" ct state new accept"));
+        assert!(!script.contains("hook forward"));
+        assert!(!script.contains("policy drop"));
+        assert_eq!(script.matches("priority -5").count(), 0);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
     fn role_profile(uid: u32, gid: u32, writable_paths: &[&str], subtree: &str) -> RoleProfile {
         crate::test_support::RoleProfileBuilder::new()
             .with_profile_id(format!("profile-{uid}-{gid}"))
@@ -3400,6 +3483,9 @@ mod tests {
     fn qemu_media_runner_wins_exact_writable_path_owner_score() {
         let state_dir = "/var/lib/d2b/vms/media";
         let host = ProcessNode {
+            execution_ref: None,
+            execution_domain: None,
+            user_ref: None,
             id: NodeId("host-reconcile".to_owned()),
             role: ProcessRole::HostReconcile,
             unit: None,
@@ -3412,6 +3498,9 @@ mod tests {
             network_interfaces: Vec::new(),
         };
         let qemu = ProcessNode {
+            execution_ref: None,
+            execution_domain: None,
+            user_ref: None,
             id: NodeId("qemu-media".to_owned()),
             role: ProcessRole::QemuMediaRunner,
             unit: None,
@@ -3498,6 +3587,7 @@ mod tests {
             fd_ownership: Vec::new(),
             runtime_providers: Vec::new(),
             vm_runtimes: Vec::new(),
+            security_key_selectors: Vec::new(),
             cloud_hypervisor_capabilities: Vec::new(),
             if_name_mappings: Vec::<IfNameMapping>::new(),
             qemu_media: None,
@@ -3516,6 +3606,9 @@ mod tests {
                 vm: "personal-dev".to_owned(),
                 nodes: vec![
                     ProcessNode {
+                        execution_ref: None,
+                        execution_domain: None,
+                        user_ref: None,
                         id: NodeId("host-reconcile".to_owned()),
                         role: ProcessRole::HostReconcile,
                         unit: None,
@@ -3533,6 +3626,9 @@ mod tests {
                         network_interfaces: Vec::new(),
                     },
                     ProcessNode {
+                        execution_ref: None,
+                        execution_domain: None,
+                        user_ref: None,
                         id: NodeId("store-virtiofs-preflight".to_owned()),
                         role: ProcessRole::StoreVirtiofsPreflight,
                         unit: None,
@@ -3550,6 +3646,9 @@ mod tests {
                         network_interfaces: Vec::new(),
                     },
                     ProcessNode {
+                        execution_ref: None,
+                        execution_domain: None,
+                        user_ref: None,
                         id: NodeId("virtiofsd-ro-store".to_owned()),
                         role: ProcessRole::Virtiofsd,
                         unit: None,
@@ -4057,6 +4156,9 @@ mod tests {
         let root = test_root("macvtap-intents");
         let mut resolver = build_personal_dev_bundle(&root);
         resolver.processes.vms[0].nodes.push(ProcessNode {
+            execution_ref: None,
+            execution_domain: None,
+            user_ref: None,
             id: NodeId("cloud-hypervisor".to_owned()),
             role: ProcessRole::CloudHypervisorRunner,
             unit: None,
@@ -4488,6 +4590,9 @@ mod tests {
             workload_identity: None,
             vm: "test-vm".to_owned(),
             nodes: vec![ProcessNode {
+                execution_ref: None,
+                execution_domain: None,
+                user_ref: None,
                 id: NodeId("video".to_owned()),
                 role: ProcessRole::Video,
                 unit: None,
@@ -4572,6 +4677,9 @@ mod tests {
             workload_identity: None,
             vm: "test-vm".to_owned(),
             nodes: vec![ProcessNode {
+                execution_ref: None,
+                execution_domain: None,
+                user_ref: None,
                 id: NodeId("swtpm".to_owned()),
                 role: ProcessRole::Swtpm,
                 unit: None,
@@ -4679,6 +4787,9 @@ mod tests {
             workload_identity: None,
             vm: "test-vm".to_owned(),
             nodes: vec![ProcessNode {
+                execution_ref: None,
+                execution_domain: None,
+                user_ref: None,
                 id: NodeId("gpu-render-node".to_owned()),
                 role: ProcessRole::GpuRenderNode,
                 unit: None,
@@ -4799,6 +4910,9 @@ mod tests {
             workload_identity: None,
             vm: "test-vm".to_owned(),
             nodes: vec![ProcessNode {
+                execution_ref: None,
+                execution_domain: None,
+                user_ref: None,
                 id: NodeId("audio".to_owned()),
                 role: ProcessRole::Audio,
                 unit: None,

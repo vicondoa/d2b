@@ -14,6 +14,34 @@ use std::path::{Path, PathBuf};
 use d2b_contracts::types::PathClass;
 use d2b_core::bundle_resolver::BundleResolver;
 
+/// Failure from the generic state-directory operation.
+///
+/// swtpm hardening carries its path-free terminal audit record separately so
+/// the runtime can preserve the typed `PrepareSwtpmDir` disposition rather
+/// than reducing it to a generic live-handler error.
+#[derive(Debug)]
+pub enum PrepareStateDirError {
+    Operation(super::OpError),
+    SwtpmDirHardening(crate::ops::swtpm_dir::SwtpmHardenError),
+}
+
+impl From<super::OpError> for PrepareStateDirError {
+    fn from(error: super::OpError) -> Self {
+        Self::Operation(error)
+    }
+}
+
+impl std::fmt::Display for PrepareStateDirError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Operation(error) => error.fmt(formatter),
+            Self::SwtpmDirHardening(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl std::error::Error for PrepareStateDirError {}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum DirKind {
@@ -165,14 +193,15 @@ pub fn live_prepare_state_dir(
     resolver: &BundleResolver,
     req: &d2b_contracts::broker_wire::PrepareDirRequest,
     _audit_log: &crate::audit::AuditLog,
-) -> Result<(), super::OpError> {
+) -> Result<(), PrepareStateDirError> {
     if req.path_class != PathClass::Vm {
         return Err(super::OpError::InvalidInput {
             detail: format!(
                 "PrepareStateDir requires pathClass=vm, got {:?}",
                 req.path_class
             ),
-        });
+        }
+        .into());
     }
     let intent = resolver
         .resolve_prepare_dir_intent(req.vm_id.as_str(), false)
@@ -190,6 +219,61 @@ pub fn live_prepare_state_dir(
         path: intent.base_dir.clone(),
         detail: e.to_string(),
     })?;
+
+    // Device TPM state must be identity-bound before any pre-start flush is
+    // allowed to run.  The generic state-directory operation is the first
+    // typed effect in the TPM lifecycle, so perform the broker-owned swtpm
+    // hardening here rather than relying on the later SpawnRunner hook.
+    if let Some(legacy) = resolver.resolve_legacy_swtpm_intent(req.vm_id.as_str()) {
+        let marker_dir = legacy
+            .marker
+            .parent()
+            .ok_or_else(|| super::OpError::Refused {
+                operation: "PrepareStateDir",
+                reason: crate::ops::swtpm_dir::reasons::DERIVATION_FAILED.to_owned(),
+            })?;
+        let marker_name = legacy
+            .marker
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| super::OpError::Refused {
+                operation: "PrepareStateDir",
+                reason: crate::ops::swtpm_dir::reasons::DERIVATION_FAILED.to_owned(),
+            })?
+            .to_owned();
+        let swtpm_dir = legacy.destination;
+        let per_vm_root =
+            swtpm_dir
+                .parent()
+                .map(Path::to_path_buf)
+                .ok_or_else(|| super::OpError::Refused {
+                    operation: "PrepareStateDir",
+                    reason: crate::ops::swtpm_dir::reasons::DERIVATION_FAILED.to_owned(),
+                })?;
+        let paths = crate::ops::swtpm_dir::SwtpmDirPaths {
+            vm_id: legacy.vm,
+            swtpm_dir,
+            per_vm_root,
+            runtime_dir: PathBuf::from(format!("/run/d2b/vms/{}", req.vm_id.as_str())),
+            marker_dir: marker_dir.to_path_buf(),
+            marker_name,
+        };
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_millis() as u64)
+            .unwrap_or(0);
+        let config = crate::ops::swtpm_dir::SwtpmHardenConfig {
+            expected_uid: legacy.owner_uid,
+            expected_gid: legacy.owner_gid,
+            marker_owner_uid: 0,
+            marker_owner_gid: 0,
+            now_ms,
+            enforce_root_parents: paths.swtpm_dir.starts_with("/var/lib/d2b"),
+        };
+        crate::ops::swtpm_dir::harden(&paths, &config)
+            .map_err(PrepareStateDirError::SwtpmDirHardening)?;
+    }
+
     Ok(())
 }
 

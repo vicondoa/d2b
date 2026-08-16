@@ -121,6 +121,9 @@ _d2b() {
             d2b,zone)
                 cmd="d2b__subcmd__zone"
                 ;;
+            d2b__subcmd__activation,adopt)
+                cmd="d2b__subcmd__activation__subcmd__adopt"
+                ;;
             d2b__subcmd__activation,apply)
                 cmd="d2b__subcmd__activation__subcmd__apply"
                 ;;
@@ -873,8 +876,30 @@ _d2b() {
             return 0
             ;;
         d2b__subcmd__activation)
-            opts="-h --zone --json --human --deadline --no-deadline --help apply build generations switch boot test rollback gc migrate keys trust rotate-known-host config"
+            opts="-h --zone --json --human --deadline --no-deadline --help apply build generations switch boot test rollback adopt gc migrate keys trust rotate-known-host config"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__activation__subcmd__adopt)
+            opts="-h --zone --json --human --deadline --no-deadline --help <GUEST_REF>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi

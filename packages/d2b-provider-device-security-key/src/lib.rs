@@ -11,13 +11,14 @@ mod authority;
 mod cid;
 mod controller;
 mod descriptor;
+pub mod effect_port;
 mod lease;
 mod process;
 mod session_ring;
 
 pub use authority::{
     PhysicalAuthorityLease, PhysicalUsbBackingClaim, PhysicalUsbBackingToken, RelayLaunchTicket,
-    SecurityKeyEffectError, SecurityKeyEffectPort, SecurityKeyOpenIntent,
+    SecurityKeyAdmission, SecurityKeyEffectError, SecurityKeyEffectPort, SecurityKeyOpenIntent,
 };
 pub use cid::{CidTranslationError, GuestCid, RelayCid, SecurityKeyCidTranslator};
 pub use controller::{
@@ -29,10 +30,14 @@ pub use descriptor::{
     security_key_factory_fingerprint, security_key_projection_factory,
     security_key_projection_schema_fingerprint, security_key_semantic_descriptor,
 };
+pub use effect_port::{
+    DeviceId, InventoryEffectError, InventoryObservation, ObservationPolicyId,
+    SecurityKeyInventoryEffectPort,
+};
 pub use lease::{LeaseState, SecurityKeyLease, SecurityKeyLeaseError, SecurityKeySessionId};
 pub use process::{
-    FrontendProcessDeclaration, ProcessDeclarationError, SecurityKeyProcessRole,
-    security_key_process_name,
+    FrontendProcessDeclaration, ProcessDeclarationError, RelayProcessDeclaration,
+    SecurityKeyProcessRole, security_key_process_name,
 };
 pub use session_ring::{SessionRecord, SessionResult, SessionRing, SessionRingError};
 

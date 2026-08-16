@@ -6,6 +6,10 @@ use d2b_contracts::v3::credential::{
     CredentialRequest, CredentialResponse, CredentialServiceErrorCode, CredentialSourceVersion,
     CredentialStatus, PlacementBinding, encode_outer,
 };
+use d2b_contracts::v3::credential_controller::{
+    CredentialAuditOutcome, CredentialTelemetryOperation, CredentialTelemetryOutcome,
+};
+use d2b_provider_credential_secret_service::SecretServiceController;
 
 use common::{Admission, ProviderHarness, setup};
 
@@ -17,6 +21,7 @@ fn process_unique_secret_service_canaries_are_absent_from_every_rendered_surface
     let credential_uid = format!("credential-uid-{nonce}");
     let credential_digest = format!("credential-digest-{nonce}");
     let (provider, port) = setup(64);
+    let controller = SecretServiceController::new(provider.config().clone());
     let operation_id = format!("{}-{credential_uid}", port.object_path_canary);
     let idempotency_key = format!("{}-{credential_digest}", port.credential_canary);
     let request = CredentialRequest::new(
@@ -113,6 +118,32 @@ fn process_unique_secret_service_canaries_are_absent_from_every_rendered_surface
         serde_json::to_string(&status).unwrap(),
         format!("{error:?}"),
         error.to_string(),
+        format!(
+            "{:?}",
+            controller
+                .authorized_service_audit(
+                    true,
+                    "user-zone",
+                    credential_uid.as_bytes(),
+                    credential_name.as_bytes(),
+                    CredentialMethod::AcquireToken,
+                    CredentialAuditOutcome::Success,
+                    1,
+                    Some(credential_digest.as_bytes()),
+                )
+                .unwrap()
+        ),
+        format!(
+            "{:?}",
+            controller
+                .telemetry(
+                    "user-zone",
+                    CredentialTelemetryOperation::AcquireToken,
+                    CredentialTelemetryOutcome::Success,
+                    1,
+                )
+                .unwrap()
+        ),
     ];
     for surface in surfaces {
         for canary in [

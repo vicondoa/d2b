@@ -201,6 +201,9 @@ impl Default for RoleProfileBuilder {
 pub struct ResolvedRunnerIntentBuilder {
     intent_id: String,
     vm_name: String,
+    execution_ref: String,
+    execution_domain: crate::processes::ProcessExecutionDomain,
+    user_ref: Option<String>,
     role_id: String,
     role: ProcessRole,
     binary_path: PathBuf,
@@ -226,6 +229,9 @@ impl ResolvedRunnerIntentBuilder {
         Self {
             intent_id: "test-intent".to_owned(),
             vm_name: "test-vm".to_owned(),
+            execution_ref: "Guest/test-vm".to_owned(),
+            execution_domain: crate::processes::ProcessExecutionDomain::System,
+            user_ref: None,
             role_id: "test-role".to_owned(),
             role: ProcessRole::CloudHypervisorRunner,
             binary_path: PathBuf::from("/bin/test"),
@@ -271,6 +277,24 @@ impl ResolvedRunnerIntentBuilder {
 
     pub fn with_vm_name(mut self, name: impl Into<String>) -> Self {
         self.vm_name = name.into();
+        self
+    }
+
+    pub fn with_execution_ref(mut self, value: impl Into<String>) -> Self {
+        self.execution_ref = value.into();
+        self
+    }
+
+    pub fn with_execution_domain(
+        mut self,
+        value: crate::processes::ProcessExecutionDomain,
+    ) -> Self {
+        self.execution_domain = value;
+        self
+    }
+
+    pub fn with_user_ref(mut self, value: Option<impl Into<String>>) -> Self {
+        self.user_ref = value.map(Into::into);
         self
     }
 
@@ -365,6 +389,9 @@ impl ResolvedRunnerIntentBuilder {
         ResolvedRunnerIntent {
             intent_id: self.intent_id,
             vm_name: self.vm_name,
+            execution_ref: self.execution_ref,
+            execution_domain: self.execution_domain,
+            user_ref: self.user_ref,
             role_id: self.role_id,
             role: self.role,
             binary_path: self.binary_path,

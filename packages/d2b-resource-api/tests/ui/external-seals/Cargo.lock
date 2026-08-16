@@ -191,6 +191,7 @@ dependencies = [
 name = "d2b-contracts"
 version = "0.0.0-bootstrap"
 dependencies = [
+ "async-trait",
  "d2b-core",
  "d2b-realm-core",
  "protobuf",
@@ -231,11 +232,22 @@ dependencies = [
  "d2b-audit",
  "d2b-contracts",
  "d2b-controller-toolkit",
+ "d2b-provider-system-core",
  "d2b-telemetry",
  "serde",
  "serde_json",
  "sha2",
  "tokio",
+]
+
+[[package]]
+name = "d2b-provider-system-core"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-contracts",
+ "serde",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]
@@ -380,9 +392,9 @@ dependencies = [
 
 [[package]]
 name = "futures-core"
-version = "0.3.33"
+version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2cd50c473c80f6d7c3670a752354b8e569b1a7cbfdc0419ec88e5edad85e0dc7"
+checksum = "92d699e522242e69e3003b94ecc1f960f3a5e015aa7c5d7486e65ad01dd94f5e"
 
 [[package]]
 name = "futures-executor"
@@ -397,9 +409,9 @@ dependencies = [
 
 [[package]]
 name = "futures-io"
-version = "0.3.33"
+version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4577ecaa3c4f96589d473f679a71b596316f6641bc350038b962a5daf0085d7a"
+checksum = "53c0fa8157de1303bfffdaa1cc2a673bfffb60102f76b0ef4441659124373fed"
 
 [[package]]
 name = "futures-macro"
@@ -420,9 +432,9 @@ checksum = "e34418ac499d6305c2fb5ad0ed2f6ac998c5f8ca209b4510f7f94242c647e307"
 
 [[package]]
 name = "futures-task"
-version = "0.3.33"
+version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b231ed28831efb4a61a08580c4bc233ec56bc009f4cd8f52da2c3cb97df0c109"
+checksum = "cd417de3d1d015fc3bfd2b1ea46dfc7bab72ef86f1cc7cc9c78e728b34a6d1fd"
 
 [[package]]
 name = "futures-util"

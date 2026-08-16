@@ -18,27 +18,33 @@ use d2b_contracts::v3::credential_controller::{
     CredentialTelemetryOperation, CredentialTelemetryOutcome, observe_credential,
     reconcile_credential, revoke_credential,
 };
+use d2b_contracts::v3::{AuthenticatedSubjectContext, Locality};
 
-use crate::{EntraClientState, EntraPlacement, LOGIN_ENDPOINT_PURPOSE, PROVIDER_REF};
+use crate::{
+    EntraClientState, EntraPlacement, EntraResourceHealth, LOGIN_ENDPOINT_PURPOSE, PROVIDER_REF,
+};
 
 /// Canonical provider-visible Endpoint policy for the Entrablau service.
 #[derive(Clone, PartialEq, Eq)]
 pub struct EntraEndpointPolicy {
     provider_ref: ResourceRef,
     consumer_ref: ResourceRef,
+    execution_ref: ResourceRef,
 }
 
 impl EntraEndpointPolicy {
-    /// Require canonical provider visibility and exact orchestration and
-    /// consumer subjects.
+    /// Require canonical provider visibility and exact provider, consumer,
+    /// and Guest execution references.
     pub fn new(
         visibility: &str,
         provider_ref: ResourceRef,
         consumer_ref: ResourceRef,
+        execution_ref: ResourceRef,
     ) -> Result<Self, CredentialServiceError> {
         if visibility != "provider"
             || provider_ref.to_canonical_string() != PROVIDER_REF
             || consumer_ref.resource_type().as_str() != "Provider"
+            || execution_ref.resource_type().as_str() != "Guest"
         {
             return Err(CredentialServiceError::new(
                 CredentialServiceErrorCode::OperationDenied,
@@ -47,6 +53,7 @@ impl EntraEndpointPolicy {
         Ok(Self {
             provider_ref,
             consumer_ref,
+            execution_ref,
         })
     }
 
@@ -58,6 +65,16 @@ impl EntraEndpointPolicy {
     /// Check one exact subject against the two allowed subjects.
     pub fn allows_subject(&self, subject: &ResourceRef) -> bool {
         subject == &self.provider_ref || subject == &self.consumer_ref
+    }
+
+    /// Check a trusted authenticated subject without accepting relay authority.
+    pub fn allows_authenticated_subject(&self, subject: &AuthenticatedSubjectContext) -> bool {
+        subject.transport_binding().locality() == Locality::Local
+            && self.allows_subject(subject.subject_ref())
+            && subject.execution_ref() == Some(&self.execution_ref)
+            && subject
+                .provider_ref()
+                .is_some_and(|provider| provider == &self.provider_ref)
     }
 }
 
@@ -74,6 +91,10 @@ pub struct EntraStatusProjection {
     pub status: CredentialStatus,
     /// Closed client state.
     pub client_state: EntraClientState,
+    /// Typed owning-resource health.
+    pub resource_health: EntraResourceHealth,
+    /// Bounded refresh retry position.
+    pub refresh_attempts: u16,
 }
 
 impl core::fmt::Debug for EntraStatusProjection {
@@ -103,6 +124,17 @@ impl EntraController {
         client_state: EntraClientState,
         metadata: Option<&CredentialMetadata>,
     ) -> Result<EntraStatusProjection, CredentialServiceError> {
+        self.reconcile_with_health(client_state, metadata, EntraResourceHealth::Ready, 0)
+    }
+
+    /// Project bounded non-secret state with owning-resource health.
+    pub fn reconcile_with_health(
+        &self,
+        client_state: EntraClientState,
+        metadata: Option<&CredentialMetadata>,
+        resource_health: EntraResourceHealth,
+        refresh_attempts: u16,
+    ) -> Result<EntraStatusProjection, CredentialServiceError> {
         let lease = metadata
             .map(|metadata| {
                 CredentialLeaseStatus::new(
@@ -128,7 +160,30 @@ impl EntraController {
         Ok(EntraStatusProjection {
             status,
             client_state,
+            resource_health,
+            refresh_attempts,
         })
+    }
+
+    /// Project status only for an authorized local subject.
+    pub fn project_for_subject(
+        &self,
+        policy: &EntraEndpointPolicy,
+        subject: &AuthenticatedSubjectContext,
+        client_state: EntraClientState,
+        metadata: Option<&CredentialMetadata>,
+        resource_health: EntraResourceHealth,
+        refresh_attempts: u16,
+    ) -> Result<EntraStatusProjection, CredentialServiceError> {
+        if !policy.allows_authenticated_subject(subject)
+            || self.placement.validate_zone(subject.zone_ref()).is_err()
+            || subject.execution_ref() != Some(self.placement.execution_ref())
+        {
+            return Err(CredentialServiceError::new(
+                CredentialServiceErrorCode::OperationDenied,
+            ));
+        }
+        self.reconcile_with_health(client_state, metadata, resource_health, refresh_attempts)
     }
 
     /// Build a caller-initiated audit record after the authorization decision.
@@ -242,7 +297,8 @@ mod tests {
 
     fn controller() -> EntraController {
         EntraController::new(
-            EntraPlacement::new(
+            EntraPlacement::new_in_zone(
+                ResourceRef::parse("Zone/work").unwrap(),
                 PlacementBinding::GuestAgent,
                 ResourceRef::parse("Guest/consumer").unwrap(),
                 ResourceRef::parse("Guest/identity").unwrap(),

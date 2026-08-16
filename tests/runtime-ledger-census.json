@@ -27,6 +27,7 @@
     "d2b-core::bundle_resolver::tests::host_nft_script_drops_usbip_input_without_runtime_carveout",
     "d2b-core::bundle_resolver::tests::host_reconcile_and_store_preflight_emit_executable_vm_start_intents",
     "d2b-core::bundle_resolver::tests::host_runtime_carries_persisted_nft_hash",
+    "d2b-core::bundle_resolver::tests::nft_projection_uses_existing_forward_hook_and_preserves_uplink_rules",
     "d2b-core::bundle_resolver::tests::qemu_media_runner_wins_exact_writable_path_owner_score",
     "d2b-core::bundle_resolver::tests::resolves_macvtap_intents_from_process_contract",
     "d2b-core::bundle_resolver::tests::role_device_classes_audio_matches_p1_matrix",
@@ -76,6 +77,7 @@
     "d2b-core::error::tests::error_serializes_as_operator_envelope",
     "d2b-core::error::tests::kind_serializes_as_leaf_discriminant",
     "d2b-core::error::tests::semver_range_matches_valid_server_version",
+    "d2b-core::generic_process_template_lookup_does_not_require_resource_name_to_match_role_id",
     "d2b-core::host::tests::bridge_port_flags_resolve_legacy_defaults",
     "d2b-core::host::tests::host_json_accepts_optional_qemu_media",
     "d2b-core::host::tests::host_json_denies_unknown_fields",
@@ -126,7 +128,7 @@
     "d2b-core::parse_v2_full_document",
     "d2b-core::parse_v2_level_out_of_range_is_error",
     "d2b-core::parse_v2_omitted_levels_are_none",
-    "d2b-core::pre_start_hooks_are_not_long_lived_spawnable_runners",
+    "d2b-core::physical_backing_identity_is_shared_and_domain_separated",
     "d2b-core::privileges::tests::privileges_json_denies_unknown_fields",
     "d2b-core::privileges::tests::w1_matrix_contains_public_and_broker_rows",
     "d2b-core::privileges_json_bounded_byte_inputs_do_not_panic",
@@ -134,12 +136,9 @@
     "d2b-core::privileges_w3::tests::every_w3_operation_has_audit_set",
     "d2b-core::privileges_w3::tests::only_guest_control_sign_grants_secret_access",
     "d2b-core::privileges_w3::tests::wire_tags_are_unique_pascalcase",
-    "d2b-core::process_builder_constructs_existing_process_node_shape",
-    "d2b-core::process_builder_rejects_empty_argv_and_duplicate_readiness",
-    "d2b-core::process_builder_validation_uses_stable_identifiers_only",
     "d2b-core::provider_capabilities_round_trip_json",
+    "d2b-core::provider_class_bypass_is_rejected_before_adapter_use",
     "d2b-core::qemu_media_has_host_only_enforcement",
-    "d2b-core::readiness_and_disk_init_helpers_emit_existing_variants",
     "d2b-core::realm_controller_metadata_accepts_emitted_host_local_unit_metadata",
     "d2b-core::realm_controller_metadata_parses_and_validates_socket_path_user_group_metadata",
     "d2b-core::realm_controller_metadata_rejects_invalid_local_runtime_metadata",
@@ -192,6 +191,7 @@
     "d2b-core::workload_identity::tests::workload_target_parse_canonical",
     "d2b-core::workload_identity::tests::workload_target_parse_nested_realm",
     "d2b-core::workload_identity::tests::workload_target_rejects_missing_d2b_suffix",
-    "d2b-core::workload_identity::tests::workload_target_rejects_no_dot"
+    "d2b-core::workload_identity::tests::workload_target_rejects_no_dot",
+    "d2b-core::zone_and_opt_in_refuse_before_bundle_lookup"
   ]
 }

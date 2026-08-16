@@ -21,8 +21,6 @@ const NON_PROVIDER_PREFIXED: &[&str] = &[
     "d2b-provider-supervisor",
     "d2b-provider-toolkit",
 ];
-const EXEMPT_LEGACY_CRATES: &[&str] = &["d2b-provider-aca", "d2b-provider-relay"];
-
 // These exact README-only integration placeholders are recorded in the
 // existing Provider-state canon. They are not exemptions from the four
 // required paths or the README sections, and new crates cannot join the set.
@@ -78,7 +76,6 @@ struct OnDiskProvider {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ProviderNameKind {
     NonProvider,
-    Legacy,
     Provider,
     Malformed,
 }
@@ -159,7 +156,7 @@ pub fn check(repo_root: &Path) -> Result<(), String> {
                 "provider-crate-name-invalid",
                 &member.package_name,
             )),
-            ProviderNameKind::NonProvider | ProviderNameKind::Legacy => {}
+            ProviderNameKind::NonProvider => {}
         }
     }
 
@@ -305,7 +302,7 @@ fn on_disk_providers(repo_root: &Path) -> Result<Vec<OnDiskProvider>, String> {
         }
         if matches!(
             provider_name_kind(&directory_name),
-            ProviderNameKind::NonProvider | ProviderNameKind::Legacy
+            ProviderNameKind::NonProvider
         ) {
             continue;
         }
@@ -323,9 +320,6 @@ fn on_disk_providers(repo_root: &Path) -> Result<Vec<OnDiskProvider>, String> {
 fn provider_name_kind(name: &str) -> ProviderNameKind {
     if NON_PROVIDER_PREFIXED.contains(&name) {
         return ProviderNameKind::NonProvider;
-    }
-    if EXEMPT_LEGACY_CRATES.contains(&name) {
-        return ProviderNameKind::Legacy;
     }
     let Some(rest) = name.strip_prefix(PROVIDER_PREFIX) else {
         return ProviderNameKind::NonProvider;
@@ -623,12 +617,6 @@ mod tests {
                     assert!(
                         NON_PROVIDER_PREFIXED.contains(&name.as_str()),
                         "{name} is not an explicit non-Provider helper"
-                    );
-                }
-                ProviderNameKind::Legacy => {
-                    assert!(
-                        EXEMPT_LEGACY_CRATES.contains(&name.as_str()),
-                        "{name} is not an explicit legacy exemption"
                     );
                 }
                 ProviderNameKind::Provider => {

@@ -94,11 +94,25 @@ fn exact_role_subresources_and_endpoint_policy_are_closed() {
 
     let provider = ResourceRef::parse("Provider/credential-entra").unwrap();
     let consumer = ResourceRef::parse("Provider/runtime-azure-container-apps").unwrap();
-    let policy = EntraEndpointPolicy::new("provider", provider.clone(), consumer.clone()).unwrap();
+    let policy = EntraEndpointPolicy::new(
+        "provider",
+        provider.clone(),
+        consumer.clone(),
+        ResourceRef::parse("Guest/consumer").unwrap(),
+    )
+    .unwrap();
     assert_eq!(policy.purpose(), LOGIN_ENDPOINT_PURPOSE);
     assert!(policy.allows_subject(&provider));
     assert!(policy.allows_subject(&consumer));
-    assert!(EntraEndpointPolicy::new("zone", provider, consumer).is_err());
+    assert!(
+        EntraEndpointPolicy::new(
+            "zone",
+            provider,
+            consumer,
+            ResourceRef::parse("Guest/consumer").unwrap(),
+        )
+        .is_err()
+    );
 }
 
 #[test]

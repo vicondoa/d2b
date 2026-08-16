@@ -308,9 +308,11 @@ fn providers_and_controllers_use_closed_effect_ports() {
         "d2b-controller-toolkit",
         "d2b-core",
         "d2b-core-controller",
+        "d2b-host-argv",
         "d2b-process",
         "d2b-process-conformance",
         "d2b-provider",
+        "d2b-provider-system-core",
         "d2b-provider-system-minijail",
         "d2b-provider-system-systemd",
         "d2b-provider-toolkit",
@@ -349,9 +351,8 @@ fn providers_and_controllers_use_closed_effect_ports() {
             }
             if rel == "packages/d2b-provider-observability-otel/src/emitter_socket.rs"
                 || rel == "packages/d2b-provider-supervisor/src/broker.rs"
+                || rel == "packages/d2b-provider-supervisor/src/systemd.rs"
                 || rel == "packages/d2b-provider-supervisor/src/lib.rs"
-                || rel.starts_with("packages/d2b-provider-relay/")
-                || rel.starts_with("packages/d2b-provider-aca/")
             {
                 continue;
             }

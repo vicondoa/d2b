@@ -13,10 +13,8 @@ pub mod shell;
 pub mod terminal_io;
 
 use d2b_contracts::guest_wire::{
-    ExecCreateRequest, ExecId, GUEST_CONTROL_PROTOCOL_VERSION, GuestBootId, GuestCapability,
-    GuestControlErrorKind, GuestExecRequestMetadata, GuestSubsystem, HealthOrigin, HealthReason,
-    HealthRemediation, HealthResponse, HealthState, OutputStream, ReadOutputRequest,
-    ReadOutputResponse,
+    GUEST_CONTROL_PROTOCOL_VERSION, GuestCapability, GuestSubsystem, HealthOrigin, HealthReason,
+    HealthRemediation, HealthResponse, HealthState,
 };
 
 pub const MAX_HEALTH_CAPABILITIES: usize = 32;
@@ -100,57 +98,6 @@ pub trait TokenSource {
 pub enum AuthError {
     TokenUnavailable,
     MacRejected,
-}
-
-pub trait ExecRuntime {
-    fn create(&self, request: &ExecCreateRequest) -> Result<ExecId, GuestControlErrorKind>;
-    fn cancel(&self, metadata: &GuestExecRequestMetadata) -> Result<(), GuestControlErrorKind>;
-}
-
-pub trait LogStore {
-    fn read(
-        &self,
-        request: &ReadOutputRequest,
-    ) -> Result<ReadOutputResponse, GuestControlErrorKind>;
-}
-
-pub struct GuestDaemon<H> {
-    health: H,
-}
-
-impl<H> GuestDaemon<H> {
-    pub fn new(health: H) -> Self {
-        Self { health }
-    }
-}
-
-impl<H> GuestDaemon<H>
-where
-    H: GuestHealthProbe,
-{
-    pub fn health(&self) -> Result<HealthResponse, GuestHealthError> {
-        guest_reported(self.health.health()?)
-    }
-}
-
-pub trait GuestHealthProbe {
-    fn health(&self) -> Result<HealthResponse, GuestHealthError>;
-}
-
-pub struct StaticHealthy {
-    pub capabilities: Vec<GuestCapability>,
-}
-
-impl GuestHealthProbe for StaticHealthy {
-    fn health(&self) -> Result<HealthResponse, GuestHealthError> {
-        healthy(self.capabilities.clone())
-    }
-}
-
-pub struct LogReadCapability {
-    pub exec_id: ExecId,
-    pub stream: OutputStream,
-    pub guest_boot_id: GuestBootId,
 }
 
 #[cfg(test)]

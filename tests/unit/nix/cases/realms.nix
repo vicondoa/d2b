@@ -1810,6 +1810,45 @@ let
     };
     expected = true;
   };
+  "realms/zone-control-unix-transport-keeps-settings-closed" = {
+    expr = hasZoneControlFailure "accepts only optional socketKind=seqpacket or socketKind=stream" {
+      d2b.zones.child.resources.child-uplink.spec.transportSettings = {
+        socketKind = "dgram";
+      };
+    };
+    expected = true;
+  };
+  "realms/zone-control-unix-transport-refuses-credentials" = {
+    expr = hasZoneControlFailure "requires an empty transportCredentials list" {
+      d2b.zones.child.resources.child-uplink.spec.transportCredentials = [
+        "Credential/not-permitted"
+      ];
+    };
+    expected = true;
+  };
+  "realms/zone-control-vsock-transport-refuses-credentials" = {
+    expr = hasZoneControlFailure "transportCredentials" {
+      d2b.zones.child.resources.child-guest = {
+        type = "Guest";
+        spec = { };
+      };
+      d2b.zones.child.resources.transport-vsock = {
+        type = "Provider";
+        spec = {
+          config.executionRef = "Guest/child-guest";
+        };
+      };
+      d2b.zones.child.resources.child-uplink.spec.transportProviderRef =
+        "Provider/transport-vsock";
+      d2b.zones.child.resources.child-uplink.spec.transportSettings = {
+        guestRef = "Guest/child-guest";
+      };
+      d2b.zones.child.resources.child-uplink.spec.transportCredentials = [
+        "Credential/not-permitted"
+      ];
+    };
+    expected = true;
+  };
   "realms/zone-control-zone-link-child-name-is-local" = {
     expr = hasZoneControlFailure "must equal the enclosing Zone name" {
       d2b.zones.child.resources.child-uplink.spec.childZoneName = "other";

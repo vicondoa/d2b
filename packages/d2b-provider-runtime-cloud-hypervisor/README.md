@@ -1,61 +1,55 @@
 # `d2b-provider-runtime-cloud-hypervisor`
 
-This is the canonical crate root for
-`Provider/runtime-cloud-hypervisor`. It is a compile-safe scaffold; semantic
-Provider behavior is intentionally not present here.
-
-See [Create a Provider](../../docs/how-to/create-provider.md) and the
-[runtime-cloud-hypervisor dossier](../../docs/specs/providers/ADR-046-provider-runtime-cloud-hypervisor.md)
-for the implementation contract.
+Canonical implementation of `Provider/runtime-cloud-hypervisor`.
 
 ## Provider identity
 
-| Field | Value |
-| --- | --- |
-| Provider name | `runtime-cloud-hypervisor` |
-| Provider reference | `Provider/runtime-cloud-hypervisor` |
-| Package | `packages/d2b-provider-runtime-cloud-hypervisor/` |
+The implementation identifier is `cloud-hypervisor`. It reconciles local
+`Guest` resources and owns the VMM Process lifecycle through a typed effect
+port.
 
 ## Config schema
 
-The Provider-specific configuration is defined by the runtime-cloud-hypervisor
-dossier. This scaffold does not publish a configuration schema.
+`CloudHypervisorConfig` requires an explicit Host execution reference and
+validates bounded VCPU, memory, health, adoption, and startup settings.
+Guest settings require a top-level system artifact and reject raw locators.
 
 ## Exported resource types
 
-The resource types are defined by the dossier. This scaffold exports no
-resource implementation.
+The Provider reconciles `Guest` and creates the semantic VMM Process through
+Core. Device, Network, and Volume resources remain owned by their Providers.
 
 ## Controllers / services / workers / binaries
 
-None are implemented in this scaffold. Controllers, services, workers, and
-binaries belong to the owning Provider implementation.
+`CloudHypervisorController` gates launch on Device, Network, and Volume
+readiness, adopts exact process identity, probes authenticated guest-control,
+and finalizes guest-control before the VMM process.
 
 ## Placement and dependencies
 
-No runtime placement is declared, and the scaffold has no workspace
-dependencies.
+The controller runs on an explicit Host, while the VMM is broker-spawned and
+daemon-supervised. No per-VM systemd unit or direct broker socket is used.
 
 ## RBAC requirements
 
-The scaffold requests no permissions and performs no resource or effect
-operations.
+Only opaque attachment refs and typed launch effects cross the Provider
+boundary. Pidfds are opened after PID, start-time, cgroup, executable,
+template, and generation evidence is verified.
 
 ## Security posture
 
-No host, broker, filesystem, network, process, credential, or device effect is
-reachable from this scaffold.
+Guest readiness requires authenticated guest-control health, not only process
+existence. Ambiguous adoption is quarantined and never broadly killed.
 
 ## State and telemetry
 
-The scaffold owns no state and emits no telemetry.
+Status contains only bounded readiness and lifecycle fields. VMM paths, argv,
+PIDs, store paths, and guest identity bytes are absent from public projections.
 
 ## Build and test
 
-```bash
-cargo check -p d2b-provider-runtime-cloud-hypervisor
+```text
 cargo test -p d2b-provider-runtime-cloud-hypervisor
 ```
 
-The current test targets are structural compile checks. Executable scenarios
-belong to the owning implementation.
+Host/KVM acceptance remains a separate manual host-integration lane.

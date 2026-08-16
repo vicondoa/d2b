@@ -220,6 +220,12 @@ impl fmt::Debug for CreditBundle {
 }
 
 impl CreditBundle {
+    pub(crate) const fn empty() -> Self {
+        Self {
+            reservations: [None, None, None, None, None, None],
+        }
+    }
+
     pub fn release(&mut self, scope: CreditScope) {
         if let Some(reservation) = &mut self.reservations[scope as usize] {
             reservation.release();

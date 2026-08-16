@@ -280,5 +280,5 @@ ownership marker so `ApplyNmUnmanaged` can succeed), the next
 - **Drift policy**: [`packages/d2b-contract-tests/tests/policy_contracts.rs`](../../packages/d2b-contract-tests/tests/policy_contracts.rs) - `tap_dag_contract_doc_matches_implementation` fails if any of the above implementation symbols diverge from this document; it is advisory until the fixture-contract lane is enabled.
 - **Related references**:
   - [host-prep-dag.md](./host-prep-dag.md) - parent host-prep DAG scaffold.
-  - [stop-dag-reconcile.md](./stop-dag-reconcile.md) - reverse-order teardown contract.
+  - [stop-dag-reconcile.md](./stop-dag-reconcile.md) - leftover StopDagOwner page, now retired.
   - [per-vm-state-ownership.md](./per-vm-state-ownership.md) - per-VM uid/gid leaf ownership the persistent-tap mode binds to.

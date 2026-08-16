@@ -5,9 +5,8 @@ use d2b_core::bundle_resolver::{BundleResolver, ResolvedRunnerIntent};
 use d2b_core::host::HostJson;
 use d2b_core::manifest_v04::ManifestV04;
 use d2b_core::minijail_profile::{CgroupPlacement, MountPolicy, NamespaceSet};
-use d2b_core::process_builder::ProcessNodeBuilder;
 use d2b_core::processes::{
-    ProcessNode, ProcessRole, ProcessesJson, RoleProfile, RoleUserNamespace, VmProcessDag,
+    NodeId, ProcessNode, ProcessRole, ProcessesJson, RoleProfile, RoleUserNamespace, VmProcessDag,
     VmProcessInvariants,
 };
 
@@ -147,13 +146,21 @@ fn runner_node(
     argv: &[&str],
     env: &[&str],
 ) -> ProcessNode {
-    ProcessNodeBuilder::new(role, profile(id))
-        .with_id(id)
-        .with_binary_path(binary_path)
-        .with_argv(argv.iter().copied())
-        .with_env(env.iter().copied())
-        .build()
-        .expect("runner node fixture builds")
+    ProcessNode {
+        id: NodeId(id.to_owned()),
+        execution_ref: None,
+        execution_domain: None,
+        user_ref: None,
+        role,
+        unit: None,
+        binary_path: Some(binary_path.to_owned()),
+        argv: argv.iter().map(|value| (*value).to_owned()).collect(),
+        env: env.iter().map(|value| (*value).to_owned()).collect(),
+        plan_ops: Vec::new(),
+        network_interfaces: Vec::new(),
+        profile: profile(id),
+        readiness: Vec::new(),
+    }
 }
 
 fn runner_nodes() -> Vec<ProcessNode> {
@@ -276,4 +283,37 @@ fn bundle_resolver_runner_intents_match_typed_process_node_helper_for_runner_rol
         );
     }
     assert_eq!(resolver.runner_intent_ids().count(), nodes.len());
+}
+
+#[test]
+fn generic_process_template_lookup_does_not_require_resource_name_to_match_role_id() {
+    let nodes = runner_nodes();
+    let processes = ProcessesJson {
+        schema_version: "v2".to_owned(),
+        vms: vec![VmProcessDag {
+            workload_identity: None,
+            vm: VM.to_owned(),
+            nodes: nodes.clone(),
+            edges: Vec::new(),
+            invariants: VmProcessInvariants {
+                swtpm_pre_start_flush: false,
+                per_vm_audit_pipeline: false,
+                usbip_gating: true,
+                tpm_ownership_migration_without_running_vm_mutation: true,
+            },
+        }],
+    };
+    let resolver = BundleResolver::from_artifacts(bundle(), host(), processes, manifest());
+
+    let resource_name = "audio-resource";
+    let intent = resolver
+        .find_runner_intent_for_process(
+            "Guest/test-vm",
+            d2b_core::processes::ProcessExecutionDomain::System,
+            None,
+            "audio",
+        )
+        .expect("trusted template resolves for a generic resource");
+    assert_eq!(intent.role_id, "audio");
+    assert_ne!(intent.role_id, resource_name);
 }

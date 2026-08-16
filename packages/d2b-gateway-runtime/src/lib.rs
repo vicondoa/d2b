@@ -1,5 +1,5 @@
 //! `d2b-gateway-runtime` - the composition root that ties the
-//! `d2b-gateway` per-session handshake to the `d2b-provider-relay`
+//! `d2b-gateway` per-session handshake to the canonical Relay Provider
 //! prologue gate (ADR 0032). It provides the **matched pair** that makes
 //! the session credential gate the display byte stream over Azure Relay:
 //!
@@ -7,7 +7,7 @@
 //!   binding it received over the MI-authenticated ACA control plane; written
 //!   as the relay sender's prologue (the first bytes on the display channel).
 //! - [`make_prologue_verifier`] - the gateway-side
-//!   [`d2b_provider_relay::PrologueVerifier`] the relay
+//!   [`relay_compat::PrologueVerifier`] the relay
 //!   listener runs **before bridging any byte**; it deserializes + verifies the
 //!   handshake (MAC, generation, expiry, field-equality, one-shot anti-replay).
 //!
@@ -22,6 +22,7 @@ pub mod audit_jsonl;
 pub mod credential;
 pub mod display_listener;
 pub mod production;
+pub mod relay_compat;
 pub mod waypipe_display;
 pub use aca_workload::{
     AcaGatewayWorkload, AgentBinaries, RelayCoords, build_agent_command, build_cleanup_command,
@@ -46,7 +47,7 @@ use d2b_gateway::{
     Handshake, SessionBinding, SessionSecret, SetReplayGuard, encode_handshake_frame,
     verify_handshake_frame,
 };
-use d2b_provider_relay::PrologueVerifier;
+use relay_compat::PrologueVerifier;
 
 /// Build the length-delimited handshake prologue the in-sandbox agent writes
 /// as the first bytes on the relay display channel. The agent holds `secret`
@@ -63,7 +64,7 @@ pub type NowFn = Arc<dyn Fn() -> u64 + Send + Sync>;
 
 /// Build the gateway-side prologue verifier for one display session. The
 /// returned closure, when handed each accepted rendezvous's first frame by
-/// [`d2b_provider_relay::run_listener_verified`], admits the connection
+/// [`relay_compat::run_listener_verified`], admits the connection
 /// **only** if the frame is a handshake that verifies against `secret`, the
 /// authorizing `expected` binding, the current `generation`, the current time,
 /// and the one-shot anti-replay guard. Any failure returns `false` and the

@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque, hash_map:
 use std::ffi::OsStr;
 use std::fs::{self, File, OpenOptions};
 use std::future::Future;
-use std::io::{self, IoSliceMut, Read, Write};
+use std::io::{self, IoSlice, IoSliceMut, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::os::fd::{AsFd, AsRawFd, OwnedFd, RawFd};
 use std::os::unix::ffi::OsStrExt;
@@ -21,6 +21,16 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
     mpsc,
 };
+
+type InteractionSupervisor = d2b_provider_supervisor::ProviderSupervisor<
+    d2b_provider_supervisor::BrokerProcessBackend<
+        interaction_composition::BundleDisplayLaunchResolver,
+    >,
+>;
+type InteractionRuntime = interaction_composition::InteractionRuntimeSet<
+    InteractionSupervisor,
+    interaction_composition::AuthenticatedGuestFrontendEffects,
+>;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -66,7 +76,7 @@ use d2b_contracts::{
     guest_proto as pb,
     public_wire::{self, AuthRole, AuthStatusResponse, DeniedCommandHint, SocketReachability},
     types::{BundleClosureRef, BundleOpId, MediaRef, RoleId, ScopeId, TracingSpanId, VmId},
-    v3::ZoneId,
+    v3::{ResourceRef, ResourceUid, ZoneId},
 };
 use d2b_core::bundle::Bundle;
 use d2b_core::bundle_resolver::{
@@ -91,21 +101,24 @@ use d2b_gateway::{
     IdSource, LedgerLimits, ListenerHandle, NoopGatewayAudit, OpenSession, SECRET_LEN,
     SessionBinding, SessionSecret, TargetKey,
 };
+use d2b_gateway_runtime::relay_compat::LocalTarget;
 use d2b_gateway_runtime::{
     AcaGatewayWorkload, AgentBinaries, CredentialFilePolicy, GatewayCredential, RelayCoords,
     RelayDisplayListener, SealingKey, production_deps, relay_sas_token_snippet, system_now_fn,
     system_now_unix,
 };
 use d2b_host::ssh_keygen;
-use d2b_provider_aca::{AcaConfig, AcaDiskImageSource, AcaSandboxDefaults, AcaWorkloadProvider};
-use d2b_provider_relay::{LocalTarget, RelayEndpoint};
+use d2b_provider_runtime_azure_container_apps::gateway_compat::{
+    AcaConfig, AcaDiskImageSource, AcaSandboxDefaults, AcaWorkloadProvider,
+};
+use d2b_provider_transport_azure_relay::gateway_compat::{DEFAULT_SAS_TTL_SECS, RelayEndpoint};
 use d2b_realm_core::{RealmIdentityConfigJson, RealmIdentityConfigSummary, TargetName};
 use d2b_realm_provider::provider::WorkloadProvider;
 use nix::cmsg_space;
 use nix::fcntl::{FcntlArg, FdFlag, Flock, FlockArg, fcntl};
 use nix::sys::socket::{
-    AddressFamily, ControlMessageOwned, MsgFlags, SockFlag, SockType, UnixAddr, connect, recv,
-    recvmsg, send, sendto, socket,
+    AddressFamily, ControlMessage, ControlMessageOwned, MsgFlags, SockFlag, SockType, UnixAddr,
+    connect, recv, recvmsg, send, sendmsg, sendto, socket,
 };
 use nix::unistd::{self, Gid, Group, Uid, User};
 use serde::{Deserialize, Serialize};
@@ -116,6 +129,7 @@ use supervisor::pidfd_table::{
     BrokerReapLog, PidfdEntry, PidfdRegistration, PidfdTable, PidfdTableError, WaitTermination,
 };
 
+mod activation_resource_runtime;
 mod admission;
 pub mod console_session;
 pub mod exec_detached;
@@ -124,7 +138,6 @@ pub mod exec_session_real;
 pub mod guest_control_bridge;
 pub mod guest_control_health;
 pub mod guest_control_vsock;
-pub mod realm_access_resolver;
 pub mod supervisor;
 pub mod terminal_session;
 pub mod typed_error;
@@ -203,6 +216,9 @@ pub mod pidfs_probe;
 // ADR 0034 startup contract check for generated storage/restart/sync artifacts.
 pub mod storage_lifecycle;
 pub mod tpm_effect_port;
+// Core-owned Network effect adapter. Provider/network-local receives only
+// typed results; this module translates its opaque intents into broker calls.
+pub mod network_effect_port;
 // Contract for bringing autostart VMs up on daemon startup (net VMs
 // first, concurrency cap, degraded-mode tolerant, idempotent). See
 // docs/reference/daemon-autostart.md.
@@ -211,10 +227,13 @@ pub mod autostart;
 // `d2b-sys-<env>-usbipd-{backend,proxy}.{service,socket}` units into
 // broker `SpawnRunner` with `RunnerRole::Usbip`, keyed per-env on
 // `vm_id = sys-<env>-usbipd` with role_ids `backend` / `proxy`.
+pub mod usbip_production;
 pub mod usbipd_perenv_autostart;
 // Audio policy dispatch: OFD-locked state I/O, provider capability
 // resolution, host PipeWire enforcement, and guestd RPC dispatch.
 mod audio_dispatch;
+mod audio_resource_runtime;
+mod process_resource_runtime;
 // Host-side audio controller strategy (ADR 0041): typed trait plus
 // PipeWireHostController (wpctl subprocess), QemuAudioController (offline),
 // and FakeHostController (test-only).
@@ -230,21 +249,17 @@ pub mod metrics;
 // singleton (retired in v1.0). See `docs/reference/daemon-metrics.md` for
 // the metric inventory.
 pub mod ch_stats;
+pub mod interaction_composition;
 pub mod provider_shutdown;
 // v3 Provider composition and descriptor-bound lifecycle effects. The
 // modules reuse the shared Provider registry and the typed broker lifecycle
 // path; they are initialized below after the trusted host bundle loads.
 mod authority_persistence;
+pub mod host_generation;
+pub mod process_provider_runtime;
 pub mod provider_effects;
 pub mod provider_registry;
 pub mod resource_runtime;
-// In-daemon replacement for the
-// `d2b-audit-check.{service,timer}` host singleton + timer that
-// previously sanity-checked broker audit log shape on a daily cadence.
-// Exposes `GET /health/audit-check` on the daemon's HTTP surface and
-// a pure check function suitable for invocation from the supervisor
-// event loop. See `docs/reference/daemon-audit-check.md`.
-pub mod audit_check;
 // Typed, per-busid USBIP state machine that pins the canonical bring-up
 // order
 // `modprobe → lock → withhold → firewall → backend → bind → proxy`
@@ -276,11 +291,7 @@ pub mod concurrency;
 // (`SO_PEERCRED`) authentication. Consumes the hidraw fd handed off by
 // `d2b-priv-broker`'s `OpenHidrawSecurityKey` op via `SCM_RIGHTS`.
 pub mod security_key;
-
-// Compile-only peer-module skeletons wiring the realm
-// provider/router trait surface. NOT called from the running
-// daemon (zero behavior change); see the module docs.
-pub mod realm_stubs;
+mod security_key_effect_port;
 
 use typed_error::TypedError;
 
@@ -342,6 +353,37 @@ fn resolve_max_inflight_connections() -> usize {
         .and_then(|raw| raw.trim().parse::<usize>().ok())
         .filter(|cap| *cap > 0)
         .unwrap_or(DEFAULT_MAX_INFLIGHT_CONNECTIONS)
+}
+
+#[cfg(test)]
+mod tpm_migration_inventory_tests {
+    use super::{LegacySwtpmMigrationOutcome, trusted_tpm_migration_anchor};
+
+    #[test]
+    fn only_broker_proven_inventory_selects_the_core_migration_path() {
+        let intent = "legacy-swtpm:vm:vm-a";
+        assert_eq!(
+            trusted_tpm_migration_anchor(intent, LegacySwtpmMigrationOutcome::NeverProvisioned),
+            Ok(None)
+        );
+        assert_eq!(
+            trusted_tpm_migration_anchor(intent, LegacySwtpmMigrationOutcome::AlreadyMigrated),
+            Ok(None)
+        );
+        assert_eq!(
+            trusted_tpm_migration_anchor(intent, LegacySwtpmMigrationOutcome::AdoptionRequired),
+            Ok(Some(intent))
+        );
+        for outcome in [
+            LegacySwtpmMigrationOutcome::Pending,
+            LegacySwtpmMigrationOutcome::Failed,
+            LegacySwtpmMigrationOutcome::Ambiguous,
+            LegacySwtpmMigrationOutcome::Migrated,
+            LegacySwtpmMigrationOutcome::NotApplicable,
+        ] {
+            assert_eq!(trusted_tpm_migration_anchor(intent, outcome), Err(()));
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -684,6 +726,13 @@ struct ServerState {
     /// trusted bundle/storage admission is incomplete; public resource
     /// requests fail closed rather than falling back to the legacy path.
     resource_plane: Arc<Mutex<Option<Arc<resource_runtime::ResourcePlane>>>>,
+    /// Daemon-owned interaction Provider composition and its authenticated
+    /// ComponentSession registrations.
+    interaction_runtime: Arc<tokio::sync::Mutex<Option<InteractionRuntime>>>,
+    /// Listener loops for the daemon-owned interaction ComponentSession
+    /// sockets.  Their stop handle is retained so shutdown closes admission
+    /// before runtime finalization.
+    interaction_listeners: Arc<Mutex<Option<interaction_composition::InteractionListenerSet>>>,
     /// Bounded execution-target bindings for qualified ShellSession resources.
     /// The provider may remove a killed session before a retry arrives, so the
     /// daemon keeps recent exact target bindings independently of provider
@@ -697,6 +746,7 @@ struct ServerState {
     /// `d2b console <vm>`. Sessions are created on first Attach and persist
     /// until the daemon restarts or the VM stops.
     console_sessions: Arc<Mutex<console_session::ConsoleSessionTable>>,
+    #[allow(dead_code)]
     security_key_sessions: Arc<parking_lot::Mutex<security_key::SkSessionTable>>,
     #[allow(dead_code)]
     unsafe_local_helpers: Arc<unsafe_local_helper::HelperRegistry>,
@@ -1596,6 +1646,16 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
     ensure_locks_dir(&config.locks_dir, &runtime_identity)?;
     let _lock_file = acquire_state_lock(&config.state_lock_path, &runtime_identity)?;
     let listener = bind_public_socket(&config.public_socket_path, &runtime_identity)?;
+    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        .map_err(|error| TypedError::InternalIo {
+            context: "install SIGTERM shutdown handler".to_owned(),
+            detail: error.to_string(),
+        })?;
+    let mut sigint = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
+        .map_err(|error| TypedError::InternalIo {
+            context: "install SIGINT shutdown handler".to_owned(),
+            detail: error.to_string(),
+        })?;
     let unsafe_local_helper_uids =
         resolve_unsafe_local_helper_uids(&config, runtime_identity.daemon_uid)?;
     let unsafe_local_helper_listener =
@@ -1725,6 +1785,8 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
             })?,
         ),
         resource_plane: Arc::new(Mutex::new(None)),
+        interaction_runtime: Arc::new(tokio::sync::Mutex::new(None)),
+        interaction_listeners: Arc::new(Mutex::new(None)),
         typed_shell_session_targets: new_typed_shell_session_targets(),
         zone_coordinator: new_zone_coordinator(),
         security_key_sessions: Arc::new(parking_lot::Mutex::new(
@@ -1747,7 +1809,20 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
     match load_bundle_resolver(&state) {
         Ok(resolver) => {
             let provider_ready = match state.provider_runtime.configure_from_host(&resolver.host) {
-                Ok(()) => true,
+                Ok(()) => {
+                    let process_providers =
+                        Arc::new(process_provider_runtime::ProductionProcessProviders::new(
+                            resolver.clone(),
+                            broker_socket_path(&state),
+                            BrokerCallerRole::AdminUid {
+                                uid: state.daemon_uid,
+                            },
+                        ));
+                    state
+                        .provider_runtime
+                        .attach_process_providers(process_providers)
+                        .is_ok()
+                }
                 Err(error) => {
                     tracing::error!(
                         error = %error,
@@ -1784,12 +1859,105 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
                             })?;
                         }
                         if let Ok(mut slot) = state.resource_plane.lock() {
-                            *slot = Some(plane);
+                            *slot = Some(Arc::clone(&plane));
                         } else {
                             return Err(TypedError::InternalIo {
                                 context: "publish resource plane".to_owned(),
                                 detail: "resource-plane state lock unavailable".to_owned(),
                             });
+                        }
+                        let mut runtimes = InteractionRuntime::new();
+                        let mut listener_set: Option<
+                            interaction_composition::InteractionListenerSet,
+                        > = None;
+                        for zone in plane.zone_ids() {
+                            let Some(resource) = plane.zone(&zone).ok() else {
+                                continue;
+                            };
+                            if resource.require_ready().is_err() {
+                                continue;
+                            }
+                            if resource.interaction_provider_configuration_refused() {
+                                tracing::error!(
+                                    zone = %zone,
+                                    "interaction Provider composition refused: committed configuration is incomplete",
+                                );
+                                continue;
+                            }
+                            match interaction_composition::production_interaction_composition(
+                                resolver.clone(),
+                                state.daemon_uid,
+                                state
+                                    .daemon_state_dir
+                                    .join(format!("interaction-display-observations-{zone}.json")),
+                                interaction_composition::ProductionInteractionResourceState::new(
+                                    zone.clone(),
+                                    resource.committed_policy_snapshot(),
+                                    resource.current_revision(),
+                                    true,
+                                    resource.interaction_provider_configuration(),
+                                    resource.interaction_identity(),
+                                ),
+                            ) {
+                                Ok(runtime) => {
+                                    runtimes.insert(zone.clone(), runtime);
+                                }
+                                Err(error) => tracing::error!(
+                                    error = ?error,
+                                    zone = %zone,
+                                    "interaction Provider composition failed closed during startup",
+                                ),
+                            }
+                        }
+                        if !runtimes.is_empty() {
+                            let composed_zones = runtimes
+                                .zone_names()
+                                .map(ToOwned::to_owned)
+                                .collect::<Vec<_>>();
+                            *state.interaction_runtime.lock().await = Some(runtimes);
+                            let shared_stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+                            for zone_name in composed_zones {
+                                let Ok(zone) = ZoneId::parse(&zone_name) else {
+                                    continue;
+                                };
+                                match interaction_composition::spawn_interaction_listeners_with_stop(
+                                    Arc::clone(&state.interaction_runtime),
+                                    state
+                                        .daemon_state_dir
+                                        .join("interaction")
+                                        .join(zone.as_str()),
+                                    zone,
+                                    state.daemon_uid,
+                                    Arc::clone(&shared_stop),
+                                ) {
+                                    Ok(listeners) => {
+                                        if let Some(existing) = listener_set.as_mut() {
+                                            existing.extend(listeners);
+                                        } else {
+                                            listener_set = Some(listeners);
+                                        }
+                                    }
+                                    Err(error) => tracing::error!(
+                                        %error,
+                                        "interaction Provider listeners failed closed during startup",
+                                    ),
+                                }
+                            }
+                            if let Some(listeners) = listener_set {
+                                let paths = listeners.paths().to_owned();
+                                *state
+                                    .interaction_listeners
+                                    .lock()
+                                    .expect("interaction listener lock") = Some(listeners);
+                                tracing::info!(
+                                    listener_count = paths.len(),
+                                    "interaction Provider ComponentSession listeners ready",
+                                );
+                            }
+                        } else {
+                            tracing::error!(
+                                "interaction Provider composition refused: no ready resource Zone",
+                            );
                         }
                     }
                     Err(error) => {
@@ -1997,17 +2165,53 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
     );
     run_startup_autostart(&state, &combined_pre_degraded).await;
     sd_notify_ready(notify_socket.as_deref());
+    let interaction_runtime_ready = state.interaction_runtime.lock().await.is_some();
     tracing::info!(
         socket_kind = "public",
         socket_ready = true,
+        interaction_runtime_ready,
         "d2bd public socket ready; accepting connections",
     );
 
     loop {
-        let (stream, _) = listener.accept().map_err(|err| TypedError::InternalIo {
-            context: "accept public seqpacket client".to_owned(),
-            detail: err.to_string(),
-        })?;
+        let accepted = tokio::select! {
+            _ = sigterm.recv() => {
+                finalize_daemon_interactions(&state).await?;
+                break;
+            }
+            _ = sigint.recv() => {
+                finalize_daemon_interactions(&state).await?;
+                break;
+            }
+            _ = tokio::time::sleep(Duration::from_millis(10)) => {
+                match listener.accept() {
+                    Ok(accepted) => Some(accepted),
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => None,
+                    Err(error) => {
+                        let accept_error = TypedError::InternalIo {
+                            context: "accept public seqpacket client".to_owned(),
+                            detail: error.to_string(),
+                        };
+                        if let Err(cleanup_error) = finalize_daemon_interactions(&state).await {
+                            tracing::error!(
+                                ?cleanup_error,
+                                "interaction Provider finalization failed after accept error",
+                            );
+                        }
+                        return Err(accept_error);
+                    }
+                }
+            }
+        };
+        let Some((stream, _)) = accepted else {
+            continue;
+        };
+        stream
+            .set_nonblocking(false)
+            .map_err(|error| TypedError::InternalIo {
+                context: "set accepted public socket blocking".to_owned(),
+                detail: error.to_string(),
+            })?;
 
         // The `once` test path stays fully synchronous/inline so unit
         // tests can drive a single connection deterministically.
@@ -2015,12 +2219,7 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
             if let Err(error) = handle_connection(stream, &state, None) {
                 eprintln!("{}", error.message());
             }
-            shutdown_resource_plane(&state)
-                .await
-                .map_err(|error| TypedError::InternalIo {
-                    context: "authoritative resource-plane shutdown audit".to_owned(),
-                    detail: error.to_string(),
-                })?;
+            finalize_daemon_interactions(&state).await?;
             break;
         }
 
@@ -2087,6 +2286,30 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
     }
 
     Ok(())
+}
+
+async fn finalize_daemon_interactions(state: &ServerState) -> Result<(), TypedError> {
+    if let Some(listeners) = state
+        .interaction_listeners
+        .lock()
+        .expect("interaction listener lock")
+        .take()
+    {
+        listeners.stop();
+    }
+    if let Some(runtime) = state.interaction_runtime.lock().await.as_mut()
+        && let Err(error) = runtime
+            .finalize_async(d2b_provider_display_wayland::GraceState::Expired)
+            .await
+    {
+        tracing::error!(?error, "interaction Provider finalization failed");
+    }
+    shutdown_resource_plane(state)
+        .await
+        .map_err(|error| TypedError::InternalIo {
+            context: "authoritative resource-plane shutdown audit".to_owned(),
+            detail: error.to_string(),
+        })
 }
 
 pub async fn lock_only(options: LockOnlyOptions) -> Result<(), TypedError> {
@@ -2178,6 +2401,8 @@ impl supervisor::state::PidfdOpener for BrokerPidfdOpener<'_> {
                 role_id: RoleId::new(role_id),
                 pid,
                 expected_start_time_ticks,
+                resource_ref: None,
+                resource_uid: None,
                 tracing_span_id: None,
             }),
             Duration::from_secs(10),
@@ -2218,6 +2443,30 @@ impl supervisor::state::PidfdOpener for BrokerPidfdOpener<'_> {
 }
 
 fn adopt_orphaned_runners_on_startup(state: &ServerState) {
+    if let Some(providers) = state.provider_runtime.process_providers() {
+        let result = block_on_future(async move {
+            for vm in providers.vm_ids() {
+                providers.adopt_vm(&vm).await?;
+                let _guard = state.pidfd_table.mutation_guard();
+                for role in providers.managed_role_ids(&vm) {
+                    let _ = state.pidfd_table.deregister(&vm, &role);
+                    remove_runner_snapshot(state, &vm, &role);
+                }
+                state
+                    .pidfd_table
+                    .snapshot()
+                    .map_err(|error| format!("provider-legacy-authority-cleanup:{error}"))?;
+            }
+            Ok::<(), String>(())
+        });
+        if let Err(error) = result {
+            tracing::warn!(
+                error = %error,
+                "Provider startup adoption failed; ambiguous processes remain quarantined"
+            );
+        }
+        return;
+    }
     let store = supervisor::state::FilesystemSnapshotStore::new(&state.daemon_state_dir);
     let proc_reader = supervisor::state::SystemProcReader;
     let opener = BrokerPidfdOpener { state };
@@ -2390,6 +2639,9 @@ impl autostart::VmStarter for BrokerVmStarter {
         // Idempotency check mirrors the duplicate-pidfd guard in
         // `dispatch_broker_vm_start`: if the ch-runner role is
         // already registered, the VM is supervised.
+        if let Some(providers) = self.state.provider_runtime.process_providers() {
+            return providers.has_active_role(vm, VM_RUNNER_ROLE_ID) || providers.has_active_vm(vm);
+        }
         self.state.pidfd_table.contains(vm, VM_RUNNER_ROLE_ID)
     }
 
@@ -2614,9 +2866,19 @@ impl usbipd_perenv_autostart::PerEnvUsbipdSpawner for BrokerPerEnvUsbipdSpawner 
         // exists for them and threading a synthetic identity would
         // misrepresent their scope in the broker audit trail.
         let request = BrokerRequest::SpawnRunner(BrokerSpawnRunnerRequest {
+            execution_ref: None,
+            execution_domain: None,
+            user_ref: None,
             workload_identity: None,
             vm_id: VmId::new(spec.vm_id.clone()),
             role_id: RoleId::new(spec.role.role_id().to_owned()),
+            resource_ref: None,
+            resource_uid: None,
+            bundle_content_identity: None,
+            provider_identity: None,
+            template_identity: None,
+            generation: None,
+            sandbox_plan: None,
             role: usbipd_perenv_autostart::spawn_runner_role(spec),
             bundle_runner_intent_ref: BundleOpId::new(spec.intent_id()),
             runtime_allocations: vec![],
@@ -2971,6 +3233,12 @@ fn bind_public_socket(path: &Path, identity: &RuntimeIdentity) -> Result<Socket,
         context: format!("listen on public socket {}", path.display()),
         detail: err.to_string(),
     })?;
+    socket
+        .set_nonblocking(true)
+        .map_err(|err| TypedError::InternalIo {
+            context: format!("set public socket {} nonblocking", path.display()),
+            detail: err.to_string(),
+        })?;
     fs::set_permissions(path, fs::Permissions::from_mode(0o660)).map_err(|err| {
         TypedError::InternalIo {
             context: format!("chmod public socket {}", path.display()),
@@ -3665,12 +3933,26 @@ fn dispatch_resource_request(
         Ok(runtime) => runtime,
         Err(error) => return Ok(resource_runtime_error_frame(error)),
     };
+    if is_device_tpm_reconcile_request(&request.value()) {
+        return Ok(dispatch_device_tpm_reconcile(state, peer, &request.value())
+            .unwrap_or_else(resource_runtime_error_frame));
+    }
+    if security_key_effect_port::is_reconcile_request(&request.value()) {
+        return Ok(security_key_effect_port::dispatch_reconcile(
+            state,
+            peer,
+            runtime.as_ref(),
+            &request.value(),
+        )
+        .unwrap_or_else(resource_runtime_error_frame));
+    }
     if typed_shell {
         return Ok(
             dispatch_typed_shell_resource_request(state, peer, &request.value())
                 .unwrap_or_else(|error| typed_shell_resource_error_frame(&error)),
         );
     }
+
     // The public socket currently authenticates only the local peer role. It
     // does not carry a ComponentSession, so never let this compatibility
     // route turn SO_PEERCRED into a Resource API subject.
@@ -3678,6 +3960,161 @@ fn dispatch_resource_request(
         Ok(value) => Ok(value),
         Err(error) => Ok(resource_runtime_error_frame(error)),
     }
+}
+
+fn is_device_tpm_reconcile_request(request: &Value) -> bool {
+    request.get("method").and_then(Value::as_str) == Some("Reconcile")
+        && request.get("resourceType").and_then(Value::as_str) == Some("Device")
+        && request.get("providerRef").and_then(Value::as_str)
+            == Some(d2b_provider_device_tpm::PROVIDER_REF)
+}
+
+fn dispatch_device_tpm_reconcile(
+    state: &ServerState,
+    peer: &PeerIdentity,
+    request: &Value,
+) -> Result<Value, resource_runtime::ResourceRuntimeError> {
+    if !matches!(peer.role, PeerRole::Admin) {
+        return Err(resource_runtime::ResourceRuntimeError::AuthenticationUnavailable);
+    }
+    let zone = request
+        .get("zoneRef")
+        .and_then(Value::as_str)
+        .and_then(|value| value.strip_prefix("Zone/"))
+        .and_then(|value| ZoneId::parse(value.to_owned()).ok())
+        .ok_or(resource_runtime::ResourceRuntimeError::RouteMismatch)?;
+    let vm_id = request
+        .get("vmId")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty() && value.len() <= 64)
+        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+    let device_uid = request
+        .get("resourceUid")
+        .and_then(Value::as_str)
+        .and_then(|value| ResourceUid::parse(value).ok())
+        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+    let device_ref = request
+        .get("deviceRef")
+        .and_then(Value::as_str)
+        .and_then(|value| ResourceRef::parse(value).ok())
+        .filter(|reference| reference.resource_type().as_str() == "Device")
+        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+    let operation_id = request
+        .get("operationId")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty() && value.len() <= 128)
+        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+    let log_level = request
+        .get("logLevel")
+        .and_then(Value::as_u64)
+        .map(|value| {
+            u8::try_from(value).map_err(|_| resource_runtime::ResourceRuntimeError::RequestInvalid)
+        })
+        .transpose()?
+        .unwrap_or(20);
+    if !(1..=20).contains(&log_level) {
+        return Err(resource_runtime::ResourceRuntimeError::RequestInvalid);
+    }
+    let plane = state
+        .resource_plane
+        .lock()
+        .ok()
+        .and_then(|plane| plane.clone())
+        .ok_or(resource_runtime::ResourceRuntimeError::PlaneUnavailable)?;
+    let runtime = plane.zone(&zone)?;
+    let resolver = load_bundle_resolver(state)
+        .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+    let migration_intent = format!("legacy-swtpm:vm:{vm_id}");
+    let inventory = dispatch_broker_legacy_tpm_inventory(
+        state,
+        VmId::new(vm_id),
+        BundleOpId::new(migration_intent.clone()),
+    )
+    .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+    let legacy_intent_anchor = trusted_tpm_migration_anchor(&migration_intent, inventory)
+        .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+    let decision = block_on_future(runtime.tpm_device_is_admitted(
+        &device_uid,
+        &device_ref,
+        vm_id,
+        operation_id,
+        legacy_intent_anchor,
+    ))?;
+    let intent = tpm_state_intent(&device_uid, vm_id);
+    let binary = d2b_provider_device_tpm::SignedBinaryRef::from_core(
+        d2b_provider_device_tpm::BinaryKind::Swtpm,
+        tpm_opaque_bytes("d2b:tpm-binary/v1", vm_id),
+    );
+    let outcome = runtime
+        .device_tpm_controller()
+        .reconcile(
+            state,
+            &resolver,
+            VmId::new(vm_id),
+            BundleOpId::new(migration_intent),
+            decision,
+            tpm_effect_port::AdmittedTpmDevice::new(
+                device_uid,
+                device_ref,
+                zone.as_str(),
+                ResourceRef::parse("Host/host-system")
+                    .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?,
+            ),
+            intent,
+            d2b_provider_device_tpm::SwtpmSettings { log_level },
+            binary,
+            broker_caller_role_for_peer(peer),
+        )
+        .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+    Ok(json!({
+        "resourceType": "Device",
+        "provider": d2b_provider_device_tpm::PROVIDER_REF,
+        "outcome": outcome.code()
+    }))
+}
+
+fn trusted_tpm_migration_anchor(
+    intent: &str,
+    inventory: LegacySwtpmMigrationOutcome,
+) -> Result<Option<&str>, ()> {
+    match inventory {
+        LegacySwtpmMigrationOutcome::NeverProvisioned
+        | LegacySwtpmMigrationOutcome::AlreadyMigrated => Ok(None),
+        LegacySwtpmMigrationOutcome::AdoptionRequired => Ok(Some(intent)),
+        LegacySwtpmMigrationOutcome::Pending
+        | LegacySwtpmMigrationOutcome::Failed
+        | LegacySwtpmMigrationOutcome::Ambiguous
+        | LegacySwtpmMigrationOutcome::Migrated
+        | LegacySwtpmMigrationOutcome::NotApplicable => Err(()),
+    }
+}
+
+fn tpm_opaque_bytes(domain: &str, value: &str) -> [u8; 32] {
+    let digest = Sha256::digest(format!("{domain}:{value}").as_bytes());
+    let mut bytes = [0; 32];
+    bytes.copy_from_slice(&digest);
+    bytes
+}
+
+fn tpm_state_intent(
+    device_uid: &ResourceUid,
+    vm_id: &str,
+) -> d2b_provider_device_tpm::StateDirIntent {
+    d2b_provider_device_tpm::StateDirIntent::new(
+        d2b_provider_device_tpm::StateDirectoryToken::from_core(tpm_opaque_bytes(
+            "d2b:tpm-state/v1",
+            vm_id,
+        )),
+        d2b_provider_device_tpm::TamperMarkerToken::from_core(tpm_opaque_bytes(
+            "d2b:tpm-marker/v1",
+            device_uid.as_str(),
+        )),
+        d2b_provider_device_tpm::StateOwnerToken::from_core(
+            tpm_opaque_bytes("d2b:tpm-owner/v1", vm_id)[..16]
+                .try_into()
+                .expect("fixed owner token length"),
+        ),
+    )
 }
 
 fn resolve_resource_runtime(
@@ -4622,6 +5059,8 @@ mod workload_observability_tests {
             public_status_read_model: Arc::new(PublicStatusReadModel::new()),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
             resource_plane: Arc::new(Mutex::new(None)),
+            interaction_runtime: Arc::new(tokio::sync::Mutex::new(None)),
+            interaction_listeners: Arc::new(Mutex::new(None)),
             typed_shell_session_targets: new_typed_shell_session_targets(),
             zone_coordinator: new_zone_coordinator(),
             console_sessions: Arc::new(Mutex::new(console_session::ConsoleSessionTable::default())),
@@ -5823,10 +6262,7 @@ fn gateway_credential_from_config(
 fn relay_auth_snippet_from_config(config: &GatewayFileConfig) -> Result<String, GatewayError> {
     let credential = gateway_credential_from_config(config)?;
     let token = credential
-        .mint_send_token(
-            &relay_endpoint_from_config(config)?,
-            d2b_provider_relay::DEFAULT_SAS_TTL_SECS,
-        )
+        .mint_send_token(&relay_endpoint_from_config(config)?, DEFAULT_SAS_TTL_SECS)
         .map_err(|_| GatewayError::ProviderAllocationFailed)?;
     Ok(relay_sas_token_snippet(token.expose()))
 }
@@ -5854,7 +6290,7 @@ fn display_listener_from_config(
             uid: validated.uid,
             mode: validated.mode,
         },
-        d2b_provider_relay::DEFAULT_SAS_TTL_SECS,
+        DEFAULT_SAS_TTL_SECS,
         None,
         system_now_fn(),
     ))
@@ -7489,6 +7925,16 @@ fn ensure_usbipd_env_ready_for_attach(
             format!("trusted bundle has no complete per-env USBIP runner plan for env '{env}'"),
         ));
     }
+
+    // Core context must be valid before firewall or runner effects.
+    let _production_context = usbip_production::UsbipBindingContext::before_host_effects(
+        vm,
+        env,
+        intent_id_usbip_bind(env, vm, bus_id),
+        intent_id_runner(vm, "usbip"),
+        format!("{env}:{bus_id}").as_bytes(),
+    )
+    .map_err(|error| daemon_failure_response(verb, error.to_string()))?;
 
     dispatch_broker_ack_request(
         state,
@@ -12598,6 +13044,7 @@ pub(crate) fn dispatch_broker_legacy_tpm_migration(
         BrokerRequest::MigrateLegacySwtpmState(MigrateLegacySwtpmStateRequest {
             bundle_legacy_swtpm_intent_ref: intent_ref,
             vm_id,
+            probe_only: false,
             tracing_span_id: None,
         }),
         caller_role,
@@ -12610,6 +13057,59 @@ pub(crate) fn dispatch_broker_legacy_tpm_migration(
         _ => Err(TypedError::InternalBrokerUnavailable {
             path: broker_socket_path(state),
             detail: "legacy TPM migration response mismatch".to_owned(),
+        }),
+    }
+}
+
+/// Probe the broker-owned legacy swtpm inventory before Core seals the
+/// migration decision. The Provider never receives this response directly.
+#[allow(dead_code)]
+pub(crate) fn dispatch_broker_legacy_tpm_inventory(
+    state: &ServerState,
+    vm_id: VmId,
+    intent_ref: BundleOpId,
+) -> Result<LegacySwtpmMigrationOutcome, TypedError> {
+    let caller_role = BrokerCallerRole::AdminUid {
+        uid: state.daemon_uid,
+    };
+    match dispatch_broker_request_as(
+        state,
+        BrokerRequest::Hello(HelloRequest {
+            client_version: d2b_contracts::PROTOCOL_VERSION.to_string(),
+            supported_features: vec!["MigrateLegacySwtpmState".to_owned()],
+        }),
+        caller_role.clone(),
+    )? {
+        BrokerResponse::Hello(response)
+            if response
+                .capabilities
+                .iter()
+                .any(|capability| capability == "MigrateLegacySwtpmState") => {}
+        _ => {
+            return Err(TypedError::InternalBrokerUnavailable {
+                path: broker_socket_path(state),
+                detail: "broker did not advertise legacy TPM inventory".to_owned(),
+            });
+        }
+    }
+    match dispatch_broker_request_as(
+        state,
+        BrokerRequest::MigrateLegacySwtpmState(MigrateLegacySwtpmStateRequest {
+            bundle_legacy_swtpm_intent_ref: intent_ref,
+            vm_id,
+            probe_only: true,
+            tracing_span_id: None,
+        }),
+        caller_role,
+    )? {
+        BrokerResponse::MigrateLegacySwtpmState(response) => Ok(response.outcome),
+        BrokerResponse::Error(error) => Err(TypedError::InternalBrokerUnavailable {
+            path: broker_socket_path(state),
+            detail: error.message,
+        }),
+        _ => Err(TypedError::InternalBrokerUnavailable {
+            path: broker_socket_path(state),
+            detail: "legacy TPM inventory response mismatch".to_owned(),
         }),
     }
 }
@@ -12903,6 +13403,91 @@ fn dispatch_broker_request_with_fds_timeout_as(
     caller_role: BrokerCallerRole,
     timeout: Duration,
 ) -> Result<(BrokerResponse, Vec<RawFd>), TypedError> {
+    dispatch_broker_request_with_optional_request_fds(state, request, caller_role, &[], timeout)
+}
+
+/// Ask the broker for the peer pidfd bound to one accepted local socket.
+///
+/// The accepted socket remains daemon-owned; this performs one SCM_RIGHTS
+/// request handoff and transfers ownership only of the broker's returned
+/// pidfd.  The broker never accepts a numeric PID or caller-supplied
+/// credential claim for this operation.
+#[allow(dead_code)]
+pub(crate) fn open_accepted_socket_peer_pidfd(
+    state: &ServerState,
+    accepted_socket: &OwnedFd,
+    timeout: Duration,
+) -> Result<OwnedFd, TypedError> {
+    let socket_path = broker_socket_path(state);
+    let (response, received_fds) = dispatch_broker_request_with_request_fd_timeout_as(
+        state,
+        BrokerRequest::OpenPeerPidfdFromAcceptedSocket(
+            d2b_contracts::broker_wire::OpenPeerPidfdFromAcceptedSocketRequest {},
+        ),
+        BrokerCallerRole::AdminUid {
+            uid: state.daemon_uid,
+        },
+        accepted_socket,
+        timeout,
+    )?;
+
+    let result = match response {
+        BrokerResponse::OpenPeerPidfdFromAcceptedSocket(response)
+            if response.pidfd_index == 0 && received_fds.len() == 1 =>
+        {
+            duplicate_received_fd(
+                &received_fds,
+                response.pidfd_index,
+                "duplicate accepted-peer pidfd",
+            )
+        }
+        BrokerResponse::OpenPeerPidfdFromAcceptedSocket(_) => {
+            Err(TypedError::InternalBrokerUnavailable {
+                path: socket_path,
+                detail: "accepted-peer pidfd response did not return exactly one descriptor"
+                    .to_owned(),
+            })
+        }
+        BrokerResponse::Error(error) => Err(TypedError::InternalBrokerUnavailable {
+            path: socket_path,
+            detail: format!("accepted-peer pidfd refused: {}", error.kind),
+        }),
+        other => Err(TypedError::InternalBrokerUnavailable {
+            path: socket_path,
+            detail: format!(
+                "accepted-peer pidfd returned unexpected response: {}",
+                broker_response_kind(&other)
+            ),
+        }),
+    };
+    close_received_fds(&received_fds);
+    result
+}
+
+#[allow(dead_code)]
+fn dispatch_broker_request_with_request_fd_timeout_as(
+    state: &ServerState,
+    request: BrokerRequest,
+    caller_role: BrokerCallerRole,
+    request_fd: &OwnedFd,
+    timeout: Duration,
+) -> Result<(BrokerResponse, Vec<RawFd>), TypedError> {
+    dispatch_broker_request_with_optional_request_fds(
+        state,
+        request,
+        caller_role,
+        &[request_fd.as_raw_fd()],
+        timeout,
+    )
+}
+
+fn dispatch_broker_request_with_optional_request_fds(
+    state: &ServerState,
+    request: BrokerRequest,
+    caller_role: BrokerCallerRole,
+    request_fds: &[RawFd],
+    timeout: Duration,
+) -> Result<(BrokerResponse, Vec<RawFd>), TypedError> {
     let socket_path = broker_socket_path(state);
     let audit_join = default_audit_join_context(&request);
     let socket = Socket::from(connect_seqpacket_with_timeout(&socket_path, Some(timeout))?);
@@ -12918,7 +13503,7 @@ fn dispatch_broker_request_with_fds_timeout_as(
             context: format!("set broker write timeout to {timeout:?}"),
             detail: err.to_string(),
         })?;
-    write_json_frame(
+    write_json_frame_with_fds(
         &socket,
         &BrokerRequestEnvelope {
             request,
@@ -12926,6 +13511,7 @@ fn dispatch_broker_request_with_fds_timeout_as(
             test_peer_uid: None,
             audit_join: audit_join.clone(),
         },
+        request_fds,
     )?;
     let (response, received_fds) = read_frame_with_fds(&socket)?;
     let decoded = serde_json::from_slice(&response).map_err(|err| {
@@ -13373,10 +13959,53 @@ async fn open_resource_plane(
                 }
             };
         runtime.set_provider_path_ready(provider_ready);
+        let installed_provider_count = state
+            .provider_runtime
+            .registered_provider_count()
+            .try_into()
+            .unwrap_or(u32::MAX);
+        let _ = runtime.publish_provider_counts(
+            installed_provider_count,
+            if provider_ready {
+                installed_provider_count
+            } else {
+                0
+            },
+        );
+        if let Err(error) = runtime
+            .reconcile_process_resources(Arc::new(state.clone()))
+            .await
+        {
+            let _ = runtime.shutdown().await;
+            let _ = plane.shutdown().await;
+            return Err(error);
+        }
+        if let Err(error) = runtime
+            .reconcile_activation_resources(Arc::new(state.clone()))
+            .await
+        {
+            let _ = runtime.shutdown().await;
+            let _ = plane.shutdown().await;
+            return Err(error);
+        }
+        if let Err(error) = runtime
+            .reconcile_audio_resources(Arc::new(state.clone()))
+            .await
+        {
+            let _ = runtime.shutdown().await;
+            let _ = plane.shutdown().await;
+            return Err(error);
+        }
+        let _ = runtime.audio_binding_statuses();
         if let Err(error) = runtime.require_ready() {
             let _ = runtime.shutdown().await;
             let _ = plane.shutdown().await;
             return Err(error);
+        }
+        if !runtime.device_tpm_controller_registered() {
+            let _ = runtime.shutdown().await;
+            let _ = plane.shutdown().await;
+            return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
         }
         if let Err(error) = plane.insert(runtime) {
             let _ = plane.shutdown().await;
@@ -13653,6 +14282,12 @@ enum VmStartNodeMode {
     LongLived(RunnerRole),
 }
 
+#[derive(Debug)]
+enum VmRunnerLaunch {
+    Legacy(Box<d2b_contracts::broker_wire::SpawnRunnerResponse>),
+    Provider,
+}
+
 fn vm_start_node_mode(role: &ProcessRole) -> VmStartNodeMode {
     match role {
         ProcessRole::SwtpmPreStartFlush => VmStartNodeMode::OneShot(RunnerRole::SwtpmFlush),
@@ -13810,7 +14445,7 @@ impl VmStartRunner<'_> {
         node: &ProcessNode,
         runner_role: RunnerRole,
         timeout: Duration,
-    ) -> Result<d2b_contracts::broker_wire::SpawnRunnerResponse, String> {
+    ) -> Result<VmRunnerLaunch, String> {
         let intent_id = intent_id_runner(vm, &node.id.0);
         let intent = self
             .resolver
@@ -13879,12 +14514,31 @@ impl VmStartRunner<'_> {
                 }
             }
         }
+        if process_provider_runtime::ProductionProcessProviders::supports_node(node) {
+            let providers = self
+                .state
+                .provider_runtime
+                .process_providers()
+                .ok_or_else(|| "provider-runtime-unavailable".to_owned())?;
+            block_on_future(providers.launch_node(vm, node, timeout))?;
+            return Ok(VmRunnerLaunch::Provider);
+        }
         match dispatch_broker_request_with_fds_timeout_as(
             self.state,
             BrokerRequest::SpawnRunner(BrokerSpawnRunnerRequest {
+                execution_ref: None,
+                execution_domain: None,
+                user_ref: None,
                 workload_identity: self.workload_identity.clone(),
                 vm_id: VmId::new(vm),
                 role_id: RoleId::new(role_id.clone()),
+                resource_ref: None,
+                resource_uid: None,
+                bundle_content_identity: None,
+                provider_identity: None,
+                template_identity: None,
+                generation: None,
+                sandbox_plan: None,
                 role: runner_role,
                 bundle_runner_intent_ref: BundleOpId::new(intent.intent_id.clone()),
                 runtime_allocations: vec![],
@@ -13909,7 +14563,7 @@ impl VmStartRunner<'_> {
                     return Err(error);
                 }
                 close_received_fds(&received_fds);
-                Ok(response)
+                Ok(VmRunnerLaunch::Legacy(Box::new(response)))
             }
             Ok((BrokerResponse::Error(error), received_fds)) => {
                 close_received_fds(&received_fds);
@@ -14082,79 +14736,6 @@ impl VmStartRunner<'_> {
         }
     }
 
-    async fn start_sk_accept_loop(&self, vm: &str, node: &ProcessNode) -> Result<(), String> {
-        let dag = self
-            .resolver
-            .find_process_vm(vm)
-            .ok_or_else(|| "sk-accept-loop:no-process-dag".to_owned())?;
-        let ch = dag
-            .nodes
-            .iter()
-            .find(|candidate| candidate.role == ProcessRole::CloudHypervisorRunner)
-            .ok_or_else(|| "sk-accept-loop:no-cloud-hypervisor-node".to_owned())?;
-        let vsock_base_path = cloud_hypervisor_vsock_socket(&ch.argv)
-            .ok_or_else(|| "sk-accept-loop:no-vsock-socket".to_owned())?;
-        let sk_socket_path = PathBuf::from(format!("{}_14320", vsock_base_path.display()));
-        let expected_uid = ch.profile.uid;
-        let expected_gid = ch.profile.gid;
-
-        let (response, received_fds) = dispatch_broker_request_with_fds_timeout_as(
-            self.state,
-            BrokerRequest::OpenHidrawSecurityKey(
-                d2b_contracts::broker_wire::OpenHidrawSecurityKeyRequest {
-                    vm_id: VmId::new(vm),
-                    selector_id: "default".to_owned(),
-                    tracing_span_id: None,
-                },
-            ),
-            self.caller_role.clone(),
-            Duration::from_secs(30),
-        )
-        .map_err(|error| format!("sk-broker-dispatch:{}", error.message()))?;
-
-        let result = match response {
-            BrokerResponse::OpenHidrawSecurityKey(response) => {
-                let hidraw_fd = duplicate_received_fd(&received_fds, 0, "duplicate hidraw fd")
-                    .map_err(|error| format!("sk-hidraw-fd:{}", error.message()));
-                Ok((response.selector_resolved, hidraw_fd))
-            }
-            BrokerResponse::Error(error) => Err(format!("sk-broker-error:{}", error.kind)),
-            other => Err(format!(
-                "sk-broker-protocol:{}",
-                broker_response_kind(&other)
-            )),
-        };
-        close_received_fds(&received_fds);
-
-        let (selector_resolved, hidraw_fd) = result?;
-        let hidraw = security_key::HidrawDevice::from_owned_fd(hidraw_fd?);
-        let mut security_key_state = security_key::SecurityKeyState::new(selector_resolved);
-        security_key_state.enabled_vms.insert(vm.to_owned());
-        let state = Arc::new(parking_lot::Mutex::new(security_key_state));
-        let listener = security_key::bind_accept_socket(&sk_socket_path)
-            .map_err(|error| format!("sk-bind-socket:{error}"))?;
-        let abort = security_key::spawn_accept_loop(
-            listener,
-            vm.to_owned(),
-            expected_uid,
-            expected_gid,
-            Arc::clone(&state),
-            hidraw,
-        )
-        .map_err(|error| format!("sk-accept-loop:{error}"))?;
-        self.state
-            .security_key_sessions
-            .lock()
-            .register(vm.to_owned(), security_key::SkAcceptHandle { state, abort });
-        tracing::info!(
-            vm = %vm,
-            node = %node.id.0,
-            socket = %sk_socket_path.display(),
-            "security-key accept loop ready"
-        );
-        Ok(())
-    }
-
     /// State-aware readiness for a `GuestControlHealth` node. Resolves the
     /// per-VM probe parameters from the trusted bundle and runs the
     /// authenticated Health probe on a dedicated current-thread runtime
@@ -14227,7 +14808,11 @@ impl supervisor::dag::NodeRunner for VmStartRunner<'_> {
             return self.wait_for_guest_control_health(vm, node, budget).await;
         }
         if node.role == ProcessRole::SecurityKeyFrontend {
-            return self.start_sk_accept_loop(vm, node).await;
+            // Security-key relay/frontend ownership belongs to the
+            // Provider/device-security-key controller. The legacy daemon
+            // accept loop is not allowed to open a blanket hidraw device;
+            // this legacy DAG node is readiness-only during the cutover.
+            return wait_for_readiness(node, readiness, budget.readiness, None);
         }
         match vm_start_node_mode(&node.role) {
             VmStartNodeMode::ReadinessOnly => {
@@ -14239,18 +14824,51 @@ impl supervisor::dag::NodeRunner for VmStartRunner<'_> {
                 wait_for_readiness(node, readiness, budget.readiness, None)
             }
             VmStartNodeMode::OneShot(runner_role) => {
-                let response = self.spawn_runner(vm, node, runner_role, budget.spawn)?;
-                wait_for_one_shot_exit(response.pid, response.start_time_ticks, budget.readiness)
+                match self.spawn_runner(vm, node, runner_role, budget.spawn)? {
+                    VmRunnerLaunch::Legacy(response) => wait_for_one_shot_exit(
+                        response.pid,
+                        response.start_time_ticks,
+                        budget.readiness,
+                    ),
+                    VmRunnerLaunch::Provider => {
+                        let providers = self
+                            .state
+                            .provider_runtime
+                            .process_providers()
+                            .ok_or_else(|| "provider-runtime-unavailable".to_owned())?;
+                        block_on_future(providers.wait_for_exit(vm, node, budget.readiness))
+                    }
+                }
             }
             VmStartNodeMode::LongLived(runner_role) => {
-                let response = self.spawn_runner(vm, node, runner_role, budget.spawn)?;
-                let liveness = supervisor::readiness_liveness::PidfdLivenessProbe::new(
-                    &self.state.pidfd_table,
-                    &self.state.broker_reap_log,
-                    vm,
-                    tracked_role_id(node),
-                );
-                wait_for_readiness(node, readiness, budget.readiness, Some(&liveness))?;
+                let launch = self.spawn_runner(vm, node, runner_role, budget.spawn)?;
+                let provider_liveness;
+                let legacy_liveness;
+                let liveness: &dyn supervisor::readiness_liveness::LivenessProbe = match &launch {
+                    VmRunnerLaunch::Provider => {
+                        let providers = self
+                            .state
+                            .provider_runtime
+                            .process_providers()
+                            .ok_or_else(|| "provider-runtime-unavailable".to_owned())?;
+                        provider_liveness = process_provider_runtime::ProviderLivenessProbe::new(
+                            providers.clone(),
+                            vm,
+                            node,
+                        );
+                        &provider_liveness
+                    }
+                    VmRunnerLaunch::Legacy(_) => {
+                        legacy_liveness = supervisor::readiness_liveness::PidfdLivenessProbe::new(
+                            &self.state.pidfd_table,
+                            &self.state.broker_reap_log,
+                            vm,
+                            tracked_role_id(node),
+                        );
+                        &legacy_liveness
+                    }
+                };
+                wait_for_readiness(node, readiness, budget.readiness, Some(liveness))?;
                 if node.role == ProcessRole::QemuMediaRunner {
                     self.boot_qemu_media(vm, node, budget.readiness)?;
                 }
@@ -14258,8 +14876,7 @@ impl supervisor::dag::NodeRunner for VmStartRunner<'_> {
                     vm = %vm,
                     node = %node.id.0,
                     role_id = %tracked_role_id(node),
-                    pid = response.pid,
-                    start_time_ticks = response.start_time_ticks,
+                    provider_managed = matches!(launch, VmRunnerLaunch::Provider),
                     "vm start node registered and ready"
                 );
                 Ok(())
@@ -14275,13 +14892,12 @@ impl supervisor::dag::NodeRunner for VmStartRunner<'_> {
     ) -> Result<(), String> {
         match vm_start_node_mode(&node.role) {
             VmStartNodeMode::LongLived(runner_role) => {
-                let response = self.spawn_runner(vm, node, runner_role, budget.spawn)?;
+                let launch = self.spawn_runner(vm, node, runner_role, budget.spawn)?;
                 tracing::info!(
                     vm = %vm,
                     node = %node.id.0,
                     role_id = %tracked_role_id(node),
-                    pid = response.pid,
-                    start_time_ticks = response.start_time_ticks,
+                    provider_managed = matches!(launch, VmRunnerLaunch::Provider),
                     "vm start node registered and process-alive"
                 );
                 Ok(())
@@ -14301,13 +14917,28 @@ impl supervisor::dag::NodeRunner for VmStartRunner<'_> {
         // long-lived runner, so wire in the liveness probe: a runner that
         // dies before the api-ready socket appears surfaces as an Error
         // (runner-exited / runner-reused) instead of a full-budget Timeout.
-        let liveness = supervisor::readiness_liveness::PidfdLivenessProbe::new(
-            &self.state.pidfd_table,
-            &self.state.broker_reap_log,
-            vm,
-            tracked_role_id(node),
-        );
-        match wait_for_readiness(node, readiness, timeout, Some(&liveness)) {
+        let provider_liveness;
+        let legacy_liveness;
+        let liveness: &dyn supervisor::readiness_liveness::LivenessProbe =
+            if process_provider_runtime::ProductionProcessProviders::supports_node(node) {
+                let Some(providers) = self.state.provider_runtime.process_providers() else {
+                    return supervisor::dag::ApiReadyState::Error {
+                        reason: "provider-runtime-unavailable".to_owned(),
+                    };
+                };
+                provider_liveness =
+                    process_provider_runtime::ProviderLivenessProbe::new(providers, vm, node);
+                &provider_liveness
+            } else {
+                legacy_liveness = supervisor::readiness_liveness::PidfdLivenessProbe::new(
+                    &self.state.pidfd_table,
+                    &self.state.broker_reap_log,
+                    vm,
+                    tracked_role_id(node),
+                );
+                &legacy_liveness
+            };
+        match wait_for_readiness(node, readiness, timeout, Some(liveness)) {
             Ok(()) => supervisor::dag::ApiReadyState::Yes,
             Err(error) if error == format!("readiness-timeout:{}", node.id.0) => {
                 supervisor::dag::ApiReadyState::Timeout
@@ -14986,6 +15617,8 @@ fn signal_unregistered_spawned_runner(
         signal,
         pid: Some(response.pid),
         expected_start_time_ticks: Some(response.start_time_ticks),
+        resource_ref: None,
+        resource_uid: None,
         tracing_span_id: None,
     });
     match dispatch_broker_request_as(state, request, caller_role) {
@@ -15046,6 +15679,18 @@ fn write_runner_snapshot(
     pid: i32,
     start_time_ticks: u64,
 ) -> Result<(), String> {
+    write_runner_snapshot_owned(state, vm, role_id, role, pid, start_time_ticks, None)
+}
+
+fn write_runner_snapshot_owned(
+    state: &ServerState,
+    vm: &str,
+    role_id: &str,
+    role: RunnerRole,
+    pid: i32,
+    start_time_ticks: u64,
+    owner_resource_uid: Option<&str>,
+) -> Result<(), String> {
     let store = supervisor::state::FilesystemSnapshotStore::new(&state.daemon_state_dir);
     supervisor::state::SnapshotStore::upsert(
         &store,
@@ -15053,6 +15698,7 @@ fn write_runner_snapshot(
             vm: vm.to_owned(),
             role_id: role_id.to_owned(),
             role,
+            owner_resource_uid: owner_resource_uid.map(str::to_owned),
             pid,
             start_time_ticks,
             snapshotted_at: chrono_like_rfc3339(),
@@ -15147,6 +15793,15 @@ fn existing_vm_start_response_if_ready(
     vm: &str,
     runner_role_id: &str,
 ) -> Option<Value> {
+    if let Some(providers) = state.provider_runtime.process_providers() {
+        if providers.has_active_role(vm, runner_role_id) || providers.has_active_vm(vm) {
+            return Some(applied_response(
+                "vm start",
+                format!("vm.{vm}: already running; Provider identity is live"),
+            ));
+        }
+        return None;
+    }
     if !state.pidfd_table.contains(vm, runner_role_id) {
         return None;
     }
@@ -15638,7 +16293,28 @@ fn vm_stop_role_priority(role: Option<RunnerRole>) -> u8 {
 
 fn ordered_vm_stop_entries(state: &ServerState, vm: &str) -> Vec<PidfdRegistration> {
     let role_index = load_vm_stop_role_index(state, vm);
-    let mut entries = state.pidfd_table.list_for_vm(vm);
+    let provider_roles = state
+        .provider_runtime
+        .process_providers()
+        .map(|providers| {
+            providers
+                .active_role_ids(vm)
+                .into_iter()
+                .collect::<BTreeSet<_>>()
+        })
+        .unwrap_or_default();
+    let mut entries = state
+        .pidfd_table
+        .list_for_vm(vm)
+        .into_iter()
+        .filter(|entry| !provider_roles.contains(&entry.role))
+        .collect::<Vec<_>>();
+    entries.extend(provider_roles.into_iter().map(|role| PidfdRegistration {
+        vm: vm.to_owned(),
+        role,
+        pid: 0,
+        start_time_ticks: 0,
+    }));
     entries.sort_by(|left, right| {
         let left_role = role_index
             .get(&left.role)
@@ -15696,6 +16372,8 @@ fn signal_via_broker(
         signal,
         pid: registration.as_ref().map(|entry| entry.pid),
         expected_start_time_ticks: registration.as_ref().map(|entry| entry.start_time_ticks),
+        resource_ref: None,
+        resource_uid: None,
         tracing_span_id: None,
     });
     match dispatch_broker_request_as(state, request, caller_role) {
@@ -15748,6 +16426,20 @@ fn deregister_runner_pidfd_via_broker(
     let request = BrokerRequest::DeregisterRunnerPidfd(DeregisterRunnerPidfdRequest {
         vm_id: VmId::new(vm),
         role_id: RoleId::new(role_id),
+        pid: state
+            .pidfd_table
+            .list_for_vm(vm)
+            .into_iter()
+            .find(|entry| entry.role == role_id)
+            .map(|entry| entry.pid),
+        expected_start_time_ticks: state
+            .pidfd_table
+            .list_for_vm(vm)
+            .into_iter()
+            .find(|entry| entry.role == role_id)
+            .map(|entry| entry.start_time_ticks),
+        resource_ref: None,
+        resource_uid: None,
         tracing_span_id: None,
     });
     match dispatch_broker_request_as(state, request, caller_role) {
@@ -16426,6 +17118,19 @@ fn stop_vmm_runner_with_provider(
     state: &ServerState,
     input: ProviderStopInputs<'_>,
 ) -> Option<Result<VmStopRoleReport, Value>> {
+    if let Some(providers) = state.provider_runtime.process_providers()
+        && providers.has_active_role(input.vm, input.role_id)
+    {
+        return Some(stop_vm_pidfd_role(
+            state,
+            input.caller_role.clone(),
+            input.verb,
+            input.vm,
+            input.role_id,
+            input.term_timeout,
+            input.kill_timeout,
+        ));
+    }
     let manifest_entry = manifest_entry_for_vm(state, input.vm)?;
     let target = provider_shutdown_target_for_role(&manifest_entry, input.vm, input.role_id)?;
     let graceful_timeout = graceful_shutdown_timeout_for(state, &manifest_entry);
@@ -16677,6 +17382,38 @@ fn stop_vm_pidfd_role(
     term_timeout: Duration,
     kill_timeout: Duration,
 ) -> Result<VmStopRoleReport, Value> {
+    if let Some(providers) = state.provider_runtime.process_providers()
+        && providers.has_active_role(vm, role_id)
+    {
+        let node = providers.node_for_role(vm, role_id).ok_or_else(|| {
+            daemon_failure_response(
+                verb,
+                format!("vm stop {vm}: Provider node missing for {role_id}"),
+            )
+        })?;
+        let required_sigkill =
+            match block_on_future(providers.stop_node(vm, &node, term_timeout, kill_timeout)) {
+                Ok(required_sigkill) => required_sigkill,
+                Err(error) if error == "provider-process-not-found" => {
+                    return Err(invalid_request_response(
+                        verb,
+                        format!("vm '{vm}' has no registered Provider process for {role_id}"),
+                    ));
+                }
+                Err(error) => {
+                    return Err(daemon_failure_response(
+                        verb,
+                        format!("vm stop {vm}: Provider stop failed for {role_id}: {error}"),
+                    ));
+                }
+            };
+        let cgroup_empty = prove_role_cgroup_empty_or_escalate(state, caller_role, vm, role_id);
+        return Ok(VmStopRoleReport {
+            role_id: role_id.to_owned(),
+            required_sigkill,
+            shutdown_outcome: (!cgroup_empty).then_some(VmShutdownOutcome::CleanupFailed),
+        });
+    }
     tracing::info!(vm = %vm, role = %role_id, signal = "SIGTERM", "sending pidfd stop signal");
     match state.pidfd_table.signal(vm, role_id, libc::SIGTERM) {
         Ok(()) => {}
@@ -17140,6 +17877,9 @@ fn execute_host_prep_dag(
                     d2b_contracts::broker_wire::CreatePersistentTapRequest {
                         role_id,
                         vm_id: step.bundle_ref.vm_id.clone(),
+                        attachment_id: None,
+                        network_generation: None,
+                        attachment_generation: None,
                         tracing_span_id: None,
                     },
                 );
@@ -18548,7 +19288,10 @@ fn dispatch_broker_vm_stop_with_timeout_as_inner(
             )
         }) {
             Ok(report) => report,
-            Err(response) => return Ok(response),
+            Err(response) => {
+                state.security_key_sessions.lock().stop_vm(&request.vm);
+                return Ok(response);
+            }
         };
         drained_roles.push(report.role_id.clone());
         if let Some(outcome) = report.shutdown_outcome {
@@ -18558,6 +19301,8 @@ fn dispatch_broker_vm_stop_with_timeout_as_inner(
             sigkill_roles.push(report.role_id);
         }
     }
+
+    state.security_key_sessions.lock().stop_vm(&request.vm);
 
     let _mguard = state.pidfd_table.mutation_guard();
     if let Err(error) = state.pidfd_table.snapshot() {
@@ -18749,18 +19494,35 @@ fn dispatch_broker_host_prepare_as(
     ) {
         return Ok(response);
     }
-    if let Err(response) = dispatch_broker_ack_request(
-        state,
-        VERB,
-        "ApplyNmUnmanaged",
-        BrokerRequest::ApplyNmUnmanaged(BrokerApplyNmUnmanagedRequest {
-            bundle_nm_intent_ref: BundleOpId::new(intent_id_nm_unmanaged_host()),
-            scope_id: ScopeId::new("host"),
-            destroy: false,
-            tracing_span_id: None,
-        }),
-    ) {
-        return Ok(response);
+    let resolver = load_bundle_resolver(state)?;
+    let generation =
+        resolver
+            .installed_generation_identity()
+            .ok_or(TypedError::InternalBrokerUnavailable {
+                path: broker_socket_path(state),
+                detail: "installed generation unavailable for Network effect context".to_owned(),
+            })?;
+    let context = d2b_provider_network_local::broker::NetworkEffectContext::for_host_nm(
+        ScopeId::new("host"),
+        BundleOpId::new(intent_id_nm_unmanaged_host()),
+        d2b_contracts::v3::ResourceBundleGenerationId::parse(generation.as_str()).map_err(
+            |_| TypedError::InternalBrokerUnavailable {
+                path: broker_socket_path(state),
+                detail: "installed generation invalid for Network effect context".to_owned(),
+            },
+        )?,
+    );
+    let port = network_effect_port::production_port(state, caller_role.clone(), context.clone());
+    let broker = port.into_broker();
+    if let Err(error) =
+        d2b_provider_network_local::broker::NetworkBroker::apply_nm_unmanaged(&broker, &context)
+    {
+        return Ok(broker_failure_response(
+            VERB,
+            format!("NetworkManager effect refused ({})", error.code()),
+            "Regenerate the trusted network bundle and retry host prepare.".to_owned(),
+            None,
+        ));
     }
 
     Ok(applied_response(
@@ -19899,10 +20661,17 @@ fn dispatch_broker_activation(
                 verb,
             )?;
         }
-        return dispatch_broker_activation_metadata_only(state, request, verb, mode, caller_role);
+        return dispatch_broker_activation_metadata_only(
+            state,
+            request,
+            verb,
+            mode,
+            caller_role,
+            None,
+        );
     }
 
-    dispatch_live_guest_activation(state, request, verb, mode, caller_role)
+    dispatch_live_guest_activation(state, request, verb, mode, caller_role, None)
 }
 
 fn dispatch_run_activation_phase(
@@ -19912,6 +20681,7 @@ fn dispatch_run_activation_phase(
     mode: BrokerActivationMode,
     phase: BrokerActivationPhase,
     caller_role: BrokerCallerRole,
+    system_artifact_id: Option<d2b_contracts::v3::ArtifactId>,
 ) -> Result<d2b_contracts::broker_wire::RunActivationResponse, Value> {
     const OP_NAME: &str = "RunActivation";
     let started = Instant::now();
@@ -19922,6 +20692,7 @@ fn dispatch_run_activation_phase(
             mode,
             phase,
             vm: request.vm.clone(),
+            system_artifact_id,
             tracing_span_id: None,
         }),
         caller_role,
@@ -20002,6 +20773,7 @@ fn dispatch_broker_activation_metadata_only(
     verb: &'static str,
     mode: BrokerActivationMode,
     caller_role: BrokerCallerRole,
+    system_artifact_id: Option<d2b_contracts::v3::ArtifactId>,
 ) -> Result<Value, TypedError> {
     let response = match dispatch_run_activation_phase(
         state,
@@ -20010,6 +20782,7 @@ fn dispatch_broker_activation_metadata_only(
         mode,
         BrokerActivationPhase::MetadataOnly,
         caller_role,
+        system_artifact_id,
     ) {
         Ok(response) => response,
         Err(frame) => return Ok(frame),
@@ -20037,6 +20810,7 @@ fn dispatch_live_guest_activation(
     verb: &'static str,
     mode: BrokerActivationMode,
     caller_role: BrokerCallerRole,
+    system_artifact_id: Option<d2b_contracts::v3::ArtifactId>,
 ) -> Result<Value, TypedError> {
     let _guard = match try_acquire_activation_lock(state, &request.vm) {
         Ok(guard) => guard,
@@ -20104,6 +20878,7 @@ fn dispatch_live_guest_activation(
         mode,
         BrokerActivationPhase::Prepare,
         caller_role.clone(),
+        system_artifact_id.clone(),
     ) {
         Ok(response) => response,
         Err(frame) => return Ok(frame),
@@ -20256,6 +21031,7 @@ fn dispatch_live_guest_activation(
         mode,
         BrokerActivationPhase::Commit,
         caller_role,
+        system_artifact_id,
     ) {
         Ok(response) => response,
         Err(frame) => {
@@ -21927,6 +22703,8 @@ mod public_status_tests {
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
             resource_plane: Arc::new(Mutex::new(None)),
+            interaction_runtime: Arc::new(tokio::sync::Mutex::new(None)),
+            interaction_listeners: Arc::new(Mutex::new(None)),
             typed_shell_session_targets: new_typed_shell_session_targets(),
             zone_coordinator: new_zone_coordinator(),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
@@ -22973,6 +23751,9 @@ mod public_status_tests {
             workload_identity: None,
             vm: "installer".to_owned(),
             nodes: vec![ProcessNode {
+                execution_ref: None,
+                execution_domain: None,
+                user_ref: None,
                 id: NodeId("qemu-media".to_owned()),
                 role: ProcessRole::QemuMediaRunner,
                 unit: None,
@@ -24399,11 +25180,22 @@ fn write_json_frame<T>(socket: &impl AsRawFd, value: &T) -> Result<(), TypedErro
 where
     T: Serialize,
 {
+    write_json_frame_with_fds(socket, value, &[])
+}
+
+fn write_json_frame_with_fds<T>(
+    socket: &impl AsRawFd,
+    value: &T,
+    fds: &[RawFd],
+) -> Result<(), TypedError>
+where
+    T: Serialize,
+{
     let bytes = serde_json::to_vec(value).map_err(|err| TypedError::InternalIo {
         context: "serialize JSON frame".to_owned(),
         detail: err.to_string(),
     })?;
-    write_frame(socket, &bytes)
+    write_frame_with_fds(socket, &bytes, fds)
 }
 
 /// Set (or clear, with `None`) the read timeout on a connection socket.
@@ -24450,6 +25242,14 @@ fn drain_rejected_peer_input(socket: &Socket) {
 }
 
 fn write_frame(socket: &impl AsRawFd, body: &[u8]) -> Result<(), TypedError> {
+    write_frame_with_fds(socket, body, &[])
+}
+
+fn write_frame_with_fds(
+    socket: &impl AsRawFd,
+    body: &[u8],
+    fds: &[RawFd],
+) -> Result<(), TypedError> {
     if body.len() > wire::MAX_FRAME_SIZE {
         return Err(TypedError::WireFrameTooLarge {
             declared: body.len(),
@@ -24458,11 +25258,16 @@ fn write_frame(socket: &impl AsRawFd, body: &[u8]) -> Result<(), TypedError> {
     let mut frame = Vec::with_capacity(body.len() + 4);
     frame.extend_from_slice(&(body.len() as u32).to_le_bytes());
     frame.extend_from_slice(body);
-    let written = send(socket.as_raw_fd(), &frame, MsgFlags::empty()).map_err(|err| {
-        TypedError::InternalIo {
-            context: "send seqpacket frame".to_owned(),
-            detail: err.to_string(),
-        }
+    let written = if fds.is_empty() {
+        send(socket.as_raw_fd(), &frame, MsgFlags::empty())
+    } else {
+        let iov = [IoSlice::new(&frame)];
+        let cmsgs = [ControlMessage::ScmRights(fds)];
+        sendmsg::<()>(socket.as_raw_fd(), &iov, &cmsgs, MsgFlags::empty(), None)
+    }
+    .map_err(|err| TypedError::InternalIo {
+        context: "send seqpacket frame".to_owned(),
+        detail: err.to_string(),
     })?;
     if written != frame.len() {
         return Err(TypedError::InternalIo {
@@ -24566,6 +25371,15 @@ fn read_frame_with_fds(socket: &impl AsRawFd) -> Result<(Vec<u8>, Vec<RawFd>), T
             received_fds.extend(fds);
         }
     }
+    if message
+        .flags
+        .intersects(MsgFlags::MSG_TRUNC | MsgFlags::MSG_CTRUNC)
+    {
+        close_received_fds(&received_fds);
+        return Err(TypedError::WireInvalidFrame {
+            detail: "truncated seqpacket frame with fds".to_owned(),
+        });
+    }
     for fd in &received_fds {
         if let Err(error) = mark_fd_cloexec(*fd, "mark received fd cloexec") {
             close_received_fds(&received_fds);
@@ -24602,6 +25416,48 @@ fn read_frame_with_fds(socket: &impl AsRawFd) -> Result<(Vec<u8>, Vec<RawFd>), T
 fn close_received_fds(fds: &[RawFd]) {
     for fd in fds {
         let _ = unistd::close(*fd);
+    }
+}
+
+#[cfg(test)]
+mod broker_fd_tests {
+    use super::*;
+    use nix::{
+        fcntl::{FcntlArg, FdFlag, fcntl},
+        sys::socket::{AddressFamily, SockFlag, SockType, socketpair},
+        unistd::pipe,
+    };
+    use std::os::fd::AsRawFd;
+
+    #[test]
+    fn request_fd_sender_transfers_one_cloexec_descriptor() {
+        let (sender, receiver) = socketpair(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            None,
+            SockFlag::SOCK_CLOEXEC,
+        )
+        .expect("socket pair");
+        let (read_end, _write_end) = pipe().expect("pipe");
+
+        write_json_frame_with_fds(
+            &sender,
+            &json!({ "request": "peer-pidfd" }),
+            &[read_end.as_raw_fd()],
+        )
+        .expect("send request fd");
+        let (body, received) = read_frame_with_fds(&receiver).expect("receive request fd");
+
+        assert_eq!(body, br#"{"request":"peer-pidfd"}"#);
+        assert_eq!(received.len(), 1);
+        assert!(
+            FdFlag::from_bits_truncate(
+                fcntl(received[0], FcntlArg::F_GETFD).expect("get received fd flags")
+            )
+            .contains(FdFlag::FD_CLOEXEC),
+            "received request fd must be close-on-exec"
+        );
+        close_received_fds(&received);
     }
 }
 
@@ -24964,6 +25820,8 @@ mod detached_exec_routing_tests {
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
             resource_plane: Arc::new(Mutex::new(None)),
+            interaction_runtime: Arc::new(tokio::sync::Mutex::new(None)),
+            interaction_listeners: Arc::new(Mutex::new(None)),
             typed_shell_session_targets: new_typed_shell_session_targets(),
             zone_coordinator: new_zone_coordinator(),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
@@ -25697,6 +26555,8 @@ mod accept_loop_concurrency_tests {
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
             resource_plane: Arc::new(Mutex::new(None)),
+            interaction_runtime: Arc::new(tokio::sync::Mutex::new(None)),
+            interaction_listeners: Arc::new(Mutex::new(None)),
             typed_shell_session_targets: new_typed_shell_session_targets(),
             zone_coordinator: new_zone_coordinator(),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
@@ -26435,6 +27295,8 @@ mod broker_dispatch_tests {
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
             resource_plane: Arc::new(Mutex::new(None)),
+            interaction_runtime: Arc::new(tokio::sync::Mutex::new(None)),
+            interaction_listeners: Arc::new(Mutex::new(None)),
             typed_shell_session_targets: new_typed_shell_session_targets(),
             zone_coordinator: new_zone_coordinator(),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
@@ -26477,6 +27339,8 @@ mod broker_dispatch_tests {
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
             resource_plane: Arc::new(Mutex::new(None)),
+            interaction_runtime: Arc::new(tokio::sync::Mutex::new(None)),
+            interaction_listeners: Arc::new(Mutex::new(None)),
             typed_shell_session_targets: new_typed_shell_session_targets(),
             zone_coordinator: new_zone_coordinator(),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
@@ -28613,6 +29477,8 @@ mod broker_dispatch_tests {
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
             resource_plane: Arc::new(Mutex::new(None)),
+            interaction_runtime: Arc::new(tokio::sync::Mutex::new(None)),
+            interaction_listeners: Arc::new(Mutex::new(None)),
             typed_shell_session_targets: new_typed_shell_session_targets(),
             zone_coordinator: new_zone_coordinator(),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
@@ -28649,6 +29515,13 @@ mod broker_dispatch_tests {
                     vm_id: VmId::new("vm-a"),
                     role_id: RoleId::new(VM_RUNNER_ROLE_ID),
                     role: RunnerRole::CloudHypervisor,
+                    execution_ref: None,
+                    execution_domain: None,
+                    user_ref: None,
+                    provider_identity: None,
+                    template_identity: None,
+                    generation: None,
+                    bundle_content_identity: None,
                     pid: child.child().id() as i32,
                     start_time_ticks: read_child_start_time(child.child()),
                     pidfd_index: 0,
@@ -28842,6 +29715,8 @@ mod broker_dispatch_tests {
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
             resource_plane: Arc::new(Mutex::new(None)),
+            interaction_runtime: Arc::new(tokio::sync::Mutex::new(None)),
+            interaction_listeners: Arc::new(Mutex::new(None)),
             typed_shell_session_targets: new_typed_shell_session_targets(),
             zone_coordinator: new_zone_coordinator(),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
@@ -28925,6 +29800,13 @@ mod broker_dispatch_tests {
                         vm_id: VmId::new("vm-a"),
                         role_id: RoleId::new(request.role_id.as_str()),
                         role: expected_runner_role,
+                        execution_ref: None,
+                        execution_domain: None,
+                        user_ref: None,
+                        provider_identity: None,
+                        template_identity: None,
+                        generation: None,
+                        bundle_content_identity: None,
                         pid: child.child().id() as i32,
                         start_time_ticks: read_child_start_time(child.child()),
                         pidfd_index: 0,
@@ -29073,6 +29955,7 @@ mod broker_dispatch_tests {
                 vm: "vm-a".to_owned(),
                 role_id: "virtiofsd-ro-store".to_owned(),
                 role: RunnerRole::Virtiofsd,
+                owner_resource_uid: None,
                 pid: 4242,
                 start_time_ticks: 55,
                 snapshotted_at: "2026-05-30T00:00:00Z".to_owned(),
@@ -29104,6 +29987,8 @@ mod broker_dispatch_tests {
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
             resource_plane: Arc::new(Mutex::new(None)),
+            interaction_runtime: Arc::new(tokio::sync::Mutex::new(None)),
+            interaction_listeners: Arc::new(Mutex::new(None)),
             typed_shell_session_targets: new_typed_shell_session_targets(),
             zone_coordinator: new_zone_coordinator(),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
@@ -29989,6 +30874,13 @@ mod broker_dispatch_tests {
                 vm_id: VmId::new(vm),
                 role_id: RoleId::new(role),
                 role: RunnerRole::Video,
+                execution_ref: None,
+                execution_domain: None,
+                user_ref: None,
+                provider_identity: None,
+                template_identity: None,
+                generation: None,
+                bundle_content_identity: None,
                 pid,
                 start_time_ticks,
                 pidfd_index: 0,
@@ -31010,6 +31902,8 @@ mod broker_dispatch_tests {
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
             resource_plane: Arc::new(Mutex::new(None)),
+            interaction_runtime: Arc::new(tokio::sync::Mutex::new(None)),
+            interaction_listeners: Arc::new(Mutex::new(None)),
             typed_shell_session_targets: new_typed_shell_session_targets(),
             zone_coordinator: new_zone_coordinator(),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
@@ -31089,6 +31983,9 @@ mod broker_dispatch_tests {
         use d2b_core::processes::{NodeId, ProcessNode, ProcessRole};
 
         let node = ProcessNode {
+            execution_ref: None,
+            execution_domain: None,
+            user_ref: None,
             id: NodeId("cloud-hypervisor".to_owned()),
             role: ProcessRole::CloudHypervisorRunner,
             unit: None,
@@ -31117,6 +32014,9 @@ mod broker_dispatch_tests {
         use std::path::PathBuf;
 
         let node = ProcessNode {
+            execution_ref: None,
+            execution_domain: None,
+            user_ref: None,
             id: NodeId("cloud-hypervisor".to_owned()),
             role: ProcessRole::CloudHypervisorRunner,
             unit: None,
@@ -31198,6 +32098,9 @@ mod broker_dispatch_tests {
     fn readiness_test_node() -> d2b_core::processes::ProcessNode {
         use d2b_core::processes::{NodeId, ProcessNode, ProcessRole};
         ProcessNode {
+            execution_ref: None,
+            execution_domain: None,
+            user_ref: None,
             id: NodeId("swtpm".to_owned()),
             role: ProcessRole::Swtpm,
             unit: None,
@@ -31356,6 +32259,9 @@ mod broker_dispatch_tests {
         };
 
         let node = ProcessNode {
+            execution_ref: None,
+            execution_domain: None,
+            user_ref: None,
             id: NodeId("swtpm-node".to_owned()),
             role: ProcessRole::Swtpm,
             unit: None,
@@ -31426,6 +32332,9 @@ mod broker_dispatch_tests {
         use std::time::Duration;
 
         let node = ProcessNode {
+            execution_ref: None,
+            execution_domain: None,
+            user_ref: None,
             id: NodeId("guest-control-health".to_owned()),
             role: ProcessRole::GuestControlHealth,
             unit: None,
@@ -32262,6 +33171,8 @@ mod broker_dispatch_tests {
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
             resource_plane: Arc::new(Mutex::new(None)),
+            interaction_runtime: Arc::new(tokio::sync::Mutex::new(None)),
+            interaction_listeners: Arc::new(Mutex::new(None)),
             typed_shell_session_targets: new_typed_shell_session_targets(),
             zone_coordinator: new_zone_coordinator(),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
@@ -32391,6 +33302,8 @@ mod broker_dispatch_tests {
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
             resource_plane: Arc::new(Mutex::new(None)),
+            interaction_runtime: Arc::new(tokio::sync::Mutex::new(None)),
+            interaction_listeners: Arc::new(Mutex::new(None)),
             typed_shell_session_targets: new_typed_shell_session_targets(),
             zone_coordinator: new_zone_coordinator(),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(

@@ -97,7 +97,7 @@ spec:
   artifactId:    runtime-qemu-media   # plain bounded ID; resolves in d2b.artifacts
   config:
     controllerExecutionRef: Host/host-system
-    qemuBinaryArtifactId:   qemu-system-x86_64
+    qemuBinaryArtifactId:   qemu-system-x86-64
     qmpReadyTimeoutSeconds: 30
     qmpOperationTimeoutSeconds: 60
     pausedAtBootDefault:    true
@@ -139,8 +139,8 @@ It is never specified directly in Nix.
 | Field | Type | Required | Default | Bounds | Notes |
 | --- | --- | --- | --- | --- | --- |
 | `controllerExecutionRef` | ResourceRef | **yes** | - | `Host/<n>` | Host on which the runtime-qemu-media controller Process runs |
-| `qemuBinaryArtifactId` | string | yes | `"qemu-system-x86_64"` | `^[a-z][a-z0-9-]*$` | Artifact catalog ID for the QEMU binary closure |
-| `qmpReadyTimeoutSeconds` | u32 | no | `30` | 5-300 | Deadline for initial QMP greeting after process start |
+| `qemuBinaryArtifactId` | string | yes | `"qemu-system-x86-64"` | `^[a-z][a-z0-9-]*$` | Artifact catalog ID for the QEMU binary closure |
+| `qmpReadyTimeoutSeconds` | u32 | no | `30` | 5-300 | Deadline for the current initial QMP greeting wait after a fresh launch |
 | `qmpOperationTimeoutSeconds` | u32 | no | `60` | 5-300 | Per-QMP-command timeout |
 | `pausedAtBootDefault` | bool | no | `true` | - | Default `pauseAtBoot` if not set in Guest spec.provider.settings |
 | `displayProviderRef` | ResourceRef? | no | `null` | `Provider/<n>` | Provider for WaylandSession resources; required when any Guest sets `displayWindow: true` |
@@ -173,20 +173,23 @@ metadata:
 spec:
   providerRef: Provider/runtime-qemu-media
   systemArtifactId: null                    # no NixOS guest system; media-boot only
-  vcpu: 4
-  memoryMib: 8192
+  defaultDomain: system
+  allowedDomains: [system]
+  defaultUserRef: null
+  budget: {}
   networkAttachments:
     - networkRef: Network/corp-net
-      macAddress: null                      # null → stable-derived by controller
-      ipv4Address: null                     # null → DHCP
+      default: true
   deviceAttachments:
     - deviceRef: Device/host-kvm            # KVM acceleration; explicit required dependency
       exclusive: false
   volumeAttachmentDefaults: []
   provider:                                  # see §5
     schemaId: runtime-qemu-media.d2bus.org/Guest/spec
-    schemaVersion: 1.0.0
+    schemaVersion: 1.0
     settings:
+      vcpu: 4
+      memoryMib: 8192
       bootMediaRef: Volume/corp-iso-boot-media
       bootMediaView: guest-attach
       removableVolumeRefs:
@@ -258,11 +261,15 @@ an unsupported optional base capability only through its signed capability matri
 plus provider-neutral `unsupported-capability`. `spec.provider` aligns with
 `status.provider` for `Provider/runtime-qemu-media`.
 
-`vcpu` and `memoryMib` are promoted Guest base fields (`spec.vcpu` and
-`spec.memoryMib`); they are not Provider extension fields.
+`vcpu` and `memoryMib` are qemu-media Provider settings. They are not fields
+of the canonical Guest base object. The canonical base contains only the
+shared execution policy and optional `systemArtifactId`; `providerRef` and
+`provider` are universal `ResourceSpec` layers.
 
 | Field | Type | Required | Default | Bounds | Notes |
 | --- | --- | --- | --- | --- | --- |
+| `vcpu` | u16 | no | `2` | 1-1024 | Virtual CPU count |
+| `memoryMib` | u32 | no | `4096` | 128-524288 | Guest memory in MiB |
 | `bootMediaRef` | ResourceRef? | no | `null` | `Volume/<n>` | Primary boot Volume; nil = direct kernel boot if kernelArtifactId set (not yet supported) |
 | `bootMediaView` | string | no | `"guest-attach"` | `^[a-z][a-z0-9-]*$` | View within the boot Volume from which the controller derives the virtio-blk attachment |
 | `removableVolumeRefs` | list | no | `[]` | max 4 entries | Runtime-hotpluggable media Volumes |
@@ -683,8 +690,11 @@ spec:
   # --- Network ---
   # Core/ProviderSupervisor resolves the opaque Network ref and inserts the
   # pre-authorized tap OwnedFd directly into the LaunchTicket inherited-fd
-  # table. The controller never receives the fd; networkUsage remains null.
-  networkUsage: null
+  # table. The controller never receives the fd.
+  networkUsage:
+    networkRef: Network/corp-net
+    ports: []
+    allowEgress: true
 
   # --- Device ---
   deviceUsage:
@@ -1004,6 +1014,10 @@ tmpfs is unmounted only after the runner Process pidfd signals exit.
    the Process Provider delivers the validated `qmp` endpoint connection
    attachment (an owned fd; not a raw socket path) to the controller via the
    ProviderSupervisor ComponentSession channel.
+
+   The greeting deadline applies to this current wait for a freshly launched
+   runner. An adopted runner with temporary QMP unavailability remains under
+   health retry and is not stopped solely because its process is old.
 
 10. **Pause-at-boot (if pauseAtBoot):** Controller receives the QMP
     attachment. QEMU starts in `-S` (paused) state. Controller records
@@ -1365,7 +1379,7 @@ d2b.artifacts = {
     package = pkgs.d2b-provider-runtime-qemu-media;
     type    = "provider";
   };
-  qemu-system-x86_64 = {
+  qemu-system-x86-64 = {
     package = pkgs.qemu-kvm;   # or pkgs.qemu_full, depending on site policy
     type    = "config-bundle"; # sealed QEMU binary closure; not a provider
   };
@@ -1390,7 +1404,7 @@ d2b.zones.corp.resources.runtime-qemu-media = {
     artifactId = "runtime-qemu-media";
     config = {
       controllerExecutionRef  = "Host/host-system";  # required
-      qemuBinaryArtifactId    = "qemu-system-x86_64";
+      qemuBinaryArtifactId    = "qemu-system-x86-64";
       networkProviderRef      = "Provider/network-local";
       volumeProviderRef       = "Provider/volume-local";
       displayProviderRef      = "Provider/display-wayland";  # omit if no display Guests

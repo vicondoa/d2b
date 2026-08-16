@@ -118,6 +118,13 @@
       "description": "Schema version used by this artifact.",
       "type": "string"
     },
+    "securityKeySelectors": {
+      "description": "Stable FIDO/CTAP security-key selectors resolved by the privileged broker. The selector registry is trusted bundle data; no hidraw path is ever emitted.",
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/SecurityKeySelector"
+      }
+    },
     "site": {
       "description": "Host-wide site policy toggles threaded from v0.4.0.",
       "allOf": [
@@ -1413,6 +1420,41 @@
         },
         "volumes": {
           "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "SecurityKeySelector": {
+      "description": "One trusted host-side FIDO/CTAP selector.",
+      "type": "object",
+      "required": [
+        "label",
+        "productId",
+        "selectorId",
+        "vendorId"
+      ],
+      "properties": {
+        "label": {
+          "type": "string"
+        },
+        "productId": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0.0
+        },
+        "selectorId": {
+          "type": "string"
+        },
+        "serial": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "vendorId": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0.0
         }
       },
       "additionalProperties": false

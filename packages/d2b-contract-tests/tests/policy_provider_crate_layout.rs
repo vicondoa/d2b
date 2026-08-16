@@ -22,7 +22,6 @@ const NON_PROVIDER_PREFIXED: &[&str] = &[
     "d2b-provider-supervisor",
     "d2b-provider-toolkit",
 ];
-const EXEMPT_LEGACY_CRATES: &[&str] = &["d2b-provider-aca", "d2b-provider-relay"];
 const README_ONLY_INTEGRATION_RATCHET: &[&str] = &[
     "d2b-provider-credential-entra",
     "d2b-provider-credential-managed-identity",
@@ -74,7 +73,6 @@ struct OnDiskProvider {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ProviderNameKind {
     NonProvider,
-    Legacy,
     Provider,
     Malformed,
 }
@@ -131,7 +129,7 @@ fn workspace_policy(root: &Path) -> Result<Vec<Violation>, String> {
                 crate_name: member.package_name.clone(),
                 missing: Vec::new(),
             }),
-            ProviderNameKind::NonProvider | ProviderNameKind::Legacy => {}
+            ProviderNameKind::NonProvider => {}
         }
     }
 
@@ -263,7 +261,7 @@ fn on_disk_providers(root: &Path) -> Result<Vec<OnDiskProvider>, String> {
         }
         if matches!(
             provider_name_kind(&directory_name),
-            ProviderNameKind::NonProvider | ProviderNameKind::Legacy
+            ProviderNameKind::NonProvider
         ) {
             continue;
         }
@@ -281,9 +279,6 @@ fn on_disk_providers(root: &Path) -> Result<Vec<OnDiskProvider>, String> {
 fn provider_name_kind(name: &str) -> ProviderNameKind {
     if NON_PROVIDER_PREFIXED.contains(&name) {
         return ProviderNameKind::NonProvider;
-    }
-    if EXEMPT_LEGACY_CRATES.contains(&name) {
-        return ProviderNameKind::Legacy;
     }
     let Some(rest) = name.strip_prefix(PROVIDER_PREFIX) else {
         return ProviderNameKind::NonProvider;

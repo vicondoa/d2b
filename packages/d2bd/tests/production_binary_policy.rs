@@ -12,4 +12,10 @@ fn production_binary_contains_no_peer_override_surface() {
         !rendered.contains("peer_override_from_env"),
         "production d2bd must not contain the peer override implementation"
     );
+    let source = fs::read_to_string(format!("{}/src/lib.rs", env!("CARGO_MANIFEST_DIR")))
+        .expect("read d2bd source");
+    assert!(
+        !source.contains("BrokerRequest::OpenHidrawSecurityKey"),
+        "production d2bd must not own the security-key hidraw opener"
+    );
 }

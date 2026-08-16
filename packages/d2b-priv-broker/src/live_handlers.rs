@@ -92,6 +92,9 @@ pub enum LiveHandlerError {
     /// NetworkManager reload failure after writing the unmanaged config
     /// snippet.
     NmReload(String),
+    /// A foreign or ambiguous NetworkManager ownership marker occupied the
+    /// d2b-managed file.
+    NmOwnershipConflict,
     /// swtpm-dir first-run hardening (issue #64) refused to proceed.
     /// Carries the path-free [`SwtpmDirAudit`] (with `result ==
     /// FailedClosed`) so the dispatch layer can emit the terminal
@@ -130,6 +133,7 @@ impl std::fmt::Display for LiveHandlerError {
             Self::KeysRotate(detail) => write!(f, "keys rotate: {detail}"),
             Self::HostKey(detail) => write!(f, "host key: {detail}"),
             Self::NmReload(detail) => write!(f, "networkmanager reload: {detail}"),
+            Self::NmOwnershipConflict => f.write_str("nm-managed-foreign-conflict"),
             Self::SwtpmDirHardening { reason, .. } => {
                 // PATH-FREE: only the closed-set reason slug.
                 write!(f, "swtpm-dir hardening failed: {reason}")
@@ -494,32 +498,56 @@ fn commit_activation_metadata(
     let hardlink_farm_path = &store_view_intent.hardlink_farm_path;
     verify_generation_ready(hardlink_farm_path, target_generation)?;
     let previous_current = read_current_generation(hardlink_farm_path)?;
+    let previous_state_id = hardlink_farm::read_state_current_id(hardlink_farm_path);
+    let previous_meta_id = hardlink_farm::read_meta_current_id(hardlink_farm_path);
+    let previous_rollback = read_rollback_marker(hardlink_farm_path)?;
     let mut rollback_marker_written = None;
     let mut current_generation_updated = None;
-    match mode {
-        ActivationMode::Test => {
-            if let Some(previous_generation) = previous_current.filter(|g| *g != target_generation)
-            {
-                write_rollback_marker(hardlink_farm_path, previous_generation)?;
-                rollback_marker_written = Some(previous_generation);
+    let result: Result<(), LiveHandlerError> = (|| {
+        match mode {
+            ActivationMode::Test => {
+                if let Some(previous_generation) =
+                    previous_current.filter(|g| *g != target_generation)
+                {
+                    write_rollback_marker(hardlink_farm_path, previous_generation)?;
+                    rollback_marker_written = Some(previous_generation);
+                }
+            }
+            ActivationMode::Switch | ActivationMode::Boot => {
+                if let Some(previous_generation) =
+                    previous_current.filter(|g| *g != target_generation)
+                {
+                    write_rollback_marker(hardlink_farm_path, previous_generation)?;
+                    rollback_marker_written = Some(previous_generation);
+                }
+                swap_current_generation(hardlink_farm_path, target_generation)?;
+                publish_split_activation_metadata(store_view_intent)?;
+                current_generation_updated = Some(target_generation);
+            }
+            ActivationMode::Rollback => {
+                swap_current_generation(hardlink_farm_path, target_generation)?;
+                publish_split_activation_metadata(store_view_intent)?;
+                current_generation_updated = Some(target_generation);
+                clear_rollback_marker(hardlink_farm_path)?;
             }
         }
-        ActivationMode::Switch | ActivationMode::Boot => {
-            if let Some(previous_generation) = previous_current.filter(|g| *g != target_generation)
-            {
-                write_rollback_marker(hardlink_farm_path, previous_generation)?;
-                rollback_marker_written = Some(previous_generation);
-            }
-            swap_current_generation(hardlink_farm_path, target_generation)?;
-            publish_split_activation_metadata(store_view_intent)?;
-            current_generation_updated = Some(target_generation);
+        Ok(())
+    })();
+    if let Err(error) = result {
+        if let Err(restore_error) = restore_activation_metadata(
+            hardlink_farm_path,
+            previous_current,
+            previous_state_id.as_deref(),
+            previous_meta_id.as_deref(),
+            previous_rollback,
+        ) {
+            tracing::error!(
+                store_root = %hardlink_farm_path.display(),
+                error = %restore_error,
+                "activation rollback could not restore the source generation metadata"
+            );
         }
-        ActivationMode::Rollback => {
-            swap_current_generation(hardlink_farm_path, target_generation)?;
-            publish_split_activation_metadata(store_view_intent)?;
-            current_generation_updated = Some(target_generation);
-            clear_rollback_marker(hardlink_farm_path)?;
-        }
+        return Err(error);
     }
     if current_generation_updated.is_some() {
         let mut retain = vec![target_generation];
@@ -559,6 +587,73 @@ fn commit_activation_metadata(
         rollback_marker_written,
         current_generation_updated,
     })
+}
+
+fn restore_activation_metadata(
+    hardlink_farm_path: &Path,
+    previous_current: Option<u64>,
+    previous_state_id: Option<&str>,
+    previous_meta_id: Option<&str>,
+    previous_rollback: Option<u64>,
+) -> Result<(), LiveHandlerError> {
+    match previous_current {
+        Some(generation) => swap_current_generation(hardlink_farm_path, generation)?,
+        None => {
+            let current = hardlink_farm_path.join("current");
+            match fs::remove_file(&current) {
+                Ok(()) => {}
+                Err(error) => {
+                    if error.kind() == std::io::ErrorKind::NotFound {
+                        return Ok(());
+                    }
+                    return Err(LiveHandlerError::Activation(format!(
+                        "remove current generation pointer {}: {error}",
+                        current.display()
+                    )));
+                }
+            }
+        }
+    }
+    restore_split_pointer(
+        hardlink_farm_path,
+        "state",
+        previous_state_id,
+        hardlink_farm::swap_state_current,
+    )?;
+    restore_split_pointer(
+        hardlink_farm_path,
+        "meta",
+        previous_meta_id,
+        hardlink_farm::swap_meta_current,
+    )?;
+    match previous_rollback {
+        Some(generation) => write_rollback_marker(hardlink_farm_path, generation)?,
+        None => clear_rollback_marker(hardlink_farm_path)?,
+    }
+    Ok(())
+}
+
+fn restore_split_pointer(
+    hardlink_farm_path: &Path,
+    label: &str,
+    previous_id: Option<&str>,
+    swap: fn(&Path, &str) -> Result<(), d2b_host::hardlink_farm::HardlinkFarmError>,
+) -> Result<(), LiveHandlerError> {
+    match previous_id {
+        Some(id) => swap(hardlink_farm_path, id)
+            .map_err(|error| LiveHandlerError::Activation(error.to_string())),
+        None => {
+            let current = hardlink_farm_path.join(label).join("current");
+            match fs::remove_file(&current) {
+                Ok(()) => Ok(()),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(error) => Err(LiveHandlerError::Activation(format!(
+                    "remove {label} generation pointer {}: {error}",
+                    current.display()
+                ))),
+            }
+        }
+    }
 }
 
 fn cleanup_obsolete_legacy_generations(
@@ -991,6 +1086,13 @@ pub(crate) fn live_apply_nm_unmanaged_with_reload<F>(
 where
     F: FnMut(&[&str]) -> Result<(), String>,
 {
+    let existing = match crate::sys::path_safe::read_to_string_nofollow(&intent.file_path) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => String::new(),
+        Err(_) => return Err(LiveHandlerError::NmOwnershipConflict),
+    };
+    crate::ops::nm::validate_existing_managed_conf(&existing, &intent.contents)
+        .map_err(|_| LiveHandlerError::NmOwnershipConflict)?;
     executor
         .write_atomic_file(&intent.file_path, intent.contents.as_bytes(), intent.mode)
         .map_err(LiveHandlerError::ReconcileExec)?;
@@ -1015,6 +1117,13 @@ where
     D: FnMut() -> Result<(), String>,
     F: FnMut(&[&str]) -> Result<(), String>,
 {
+    let existing = match crate::sys::path_safe::read_to_string_nofollow(&intent.file_path) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => String::new(),
+        Err(_) => return Err(LiveHandlerError::NmOwnershipConflict),
+    };
+    crate::ops::nm::validate_existing_managed_conf(&existing, &intent.contents)
+        .map_err(|_| LiveHandlerError::NmOwnershipConflict)?;
     executor
         .write_atomic_file(&intent.file_path, intent.contents.as_bytes(), intent.mode)
         .map_err(LiveHandlerError::ReconcileExec)?;
@@ -3401,6 +3510,11 @@ pub fn live_spawn_runner(
         }
     }
     validate_qemu_media_runner_hardening(&plan)?;
+    crate::ops::gpu::validate_spawn_plan_preflight(&plan).map_err(|error| {
+        LiveHandlerError::SpawnFailed {
+            detail: error.to_string(),
+        }
+    })?;
 
     let (binary, argv, env) =
         build_cstring_vectors(&plan).map_err(LiveHandlerError::SpawnPreflight)?;
@@ -3444,6 +3558,11 @@ pub fn live_spawn_runner(
         })?;
         pre_opened_device_fds.push(render_fd);
     }
+    crate::ops::gpu::validate_spawn_plan(&plan, pre_opened_device_fds.len()).map_err(|error| {
+        LiveHandlerError::SpawnFailed {
+            detail: error.to_string(),
+        }
+    })?;
 
     let memlock_guest_bytes = qemu_media_memlock_guest_bytes(&plan)?;
     let memlock_limit_bytes = memlock_guest_bytes.map(|guest_bytes| {
@@ -3701,8 +3820,10 @@ mod tests {
             file_path: root.join("00-d2b-unmanaged.conf"),
             contents: concat!(
                 "# d2b-managed begin\n",
+                "# Generated by d2b-priv-broker; do not edit by hand.\n",
                 "[keyfile]\n",
                 "unmanaged-devices=interface-name:d2b-*\n",
+                "# marker-id=nm-unmanaged:host\n",
                 "# d2b-managed end\n"
             )
             .to_owned(),
@@ -4761,6 +4882,49 @@ mod tests {
         assert_eq!(
             fallback_calls.into_inner(),
             vec!["reload NetworkManager".to_owned()]
+        );
+    }
+
+    #[test]
+    fn live_apply_nm_unmanaged_refuses_foreign_file_before_reload() {
+        let exec = FakeReconcileExecutor::new();
+        let root = TestDir::new("nm-unmanaged-foreign");
+        let intent = sample_nm_unmanaged_intent(&root);
+        std::fs::write(
+            &intent.file_path,
+            "# foreign NetworkManager configuration\n[keyfile]\n",
+        )
+        .unwrap();
+
+        assert!(matches!(
+            live_apply_nm_unmanaged_with_reloaders(&exec, &intent, || Ok(()), |_| Ok(())),
+            Err(LiveHandlerError::NmOwnershipConflict)
+        ));
+        assert!(exec.take_log().is_empty());
+    }
+
+    #[test]
+    fn live_apply_nm_unmanaged_adopts_legacy_owned_file() {
+        let exec = FakeReconcileExecutor::new();
+        let root = TestDir::new("nm-unmanaged-legacy");
+        let intent = sample_nm_unmanaged_intent(&root);
+        std::fs::write(
+            &intent.file_path,
+            "# managed by d2b broker - do not edit by hand\n[keyfile]\nunmanaged-devices=interface-name:d2b-*\n",
+        )
+        .unwrap();
+
+        assert_eq!(
+            live_apply_nm_unmanaged_with_reloaders(&exec, &intent, || Ok(()), |_| Ok(())).unwrap(),
+            Some(NmReloadMethod::Dbus)
+        );
+        assert_eq!(
+            exec.take_log(),
+            vec![ReconcileOp::WriteAtomicFile {
+                path: intent.file_path,
+                mode: intent.mode,
+                contents: intent.contents.into_bytes(),
+            }]
         );
     }
 

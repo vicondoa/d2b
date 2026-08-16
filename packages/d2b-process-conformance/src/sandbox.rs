@@ -18,6 +18,34 @@ pub struct CompiledSandbox {
     requires_cgroup_kill: bool,
 }
 
+/// The compiled semantic plan retained by a launch ticket so the privileged
+/// adapter can enforce every public sandbox requirement, not just its digest.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SandboxPlan {
+    compiled: CompiledSandbox,
+    spec: SandboxSpec,
+}
+
+impl SandboxPlan {
+    /// Construct a plan from the validated public specification.
+    pub fn new(spec: &SandboxSpec, compiled: CompiledSandbox) -> Self {
+        Self {
+            compiled,
+            spec: spec.clone(),
+        }
+    }
+
+    /// Borrow the compiled digest and domain binding.
+    pub const fn compiled(&self) -> &CompiledSandbox {
+        &self.compiled
+    }
+
+    /// Borrow every semantic sandbox requirement.
+    pub const fn spec(&self) -> &SandboxSpec {
+        &self.spec
+    }
+}
+
 impl CompiledSandbox {
     /// Borrow the opaque compiled-plan digest.
     pub const fn digest(&self) -> ConfigurationDigest {
@@ -50,6 +78,7 @@ impl SandboxCompiler {
         if sandbox.start_root() && (!provider_allows_root || domain == ExecutionDomain::User) {
             return Err(ProcessConformanceError::SandboxRejected);
         }
+
         let bytes =
             canonical_json_bytes(sandbox).map_err(|_| ProcessConformanceError::SandboxRejected)?;
         let mut input = Vec::with_capacity(bytes.len() + 1);
@@ -68,6 +97,17 @@ impl SandboxCompiler {
             domain,
             requires_cgroup_kill: true,
         })
+    }
+
+    /// Compile and retain the typed semantic plan for privileged admission.
+    pub fn compile_plan(
+        &self,
+        sandbox: &SandboxSpec,
+        domain: ExecutionDomain,
+        provider_allows_root: bool,
+    ) -> Result<SandboxPlan, ProcessConformanceError> {
+        let compiled = self.compile(sandbox, domain, provider_allows_root)?;
+        Ok(SandboxPlan::new(sandbox, compiled))
     }
 }
 

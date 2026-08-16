@@ -5,9 +5,11 @@ use d2b_contracts::v3::credential::{
     CredentialResponse, CredentialServiceError, CredentialServiceErrorCode, DeliverySessionParams,
     SensitiveDeliveryRecord,
 };
-use d2b_provider_credential_secret_service::SecretServiceCredentialProvider;
+use d2b_provider_credential_secret_service::{
+    SecretServiceCredentialProvider, SecretServiceSessionCapability,
+};
 
-use common::{Admission, ProviderHarness, TestAdmission, request, setup};
+use common::{Admission, ProviderHarness, SessionCapabilitySource, TestAdmission, request, setup};
 
 #[test]
 fn response_uses_the_read_only_adapter_binding_and_record_zeroizes() {
@@ -62,6 +64,14 @@ impl CredentialProvider for BindingReplacingProvider {
             delivery.delivery_session_params = self.replacement.clone();
         }
         Ok(response)
+    }
+}
+
+impl SessionCapabilitySource for BindingReplacingProvider {
+    fn test_session_capability(&self) -> SecretServiceSessionCapability {
+        self.inner
+            .issue_session_capability(d2b_contracts::v3::ResourceGeneration::new(1).unwrap())
+            .expect("test provider must issue its placement-bound capability")
     }
 }
 

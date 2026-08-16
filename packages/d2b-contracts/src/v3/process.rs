@@ -218,6 +218,11 @@ impl SandboxSpec {
         self.oom_score_adj
     }
 
+    /// Borrow the optional file-creation mask.
+    pub fn umask(&self) -> Option<&str> {
+        self.umask.as_deref()
+    }
+
     /// Borrow the user-namespace request.
     pub const fn user_namespace(&self) -> Option<&UserNamespaceSpec> {
         self.user_namespace.as_ref()
@@ -947,9 +952,24 @@ impl RestartPolicySpec {
         self.backoff_multiplier_milli
     }
 
+    /// Return the initial restart backoff.
+    pub const fn backoff_base(&self) -> &DurationMs {
+        &self.backoff_base
+    }
+
+    /// Return the maximum restart backoff.
+    pub const fn backoff_max(&self) -> &DurationMs {
+        &self.backoff_max
+    }
+
     /// Return the restart ceiling.
     pub const fn max_restarts(&self) -> Option<u32> {
         self.max_restarts
+    }
+
+    /// Return the duration after which a stable run resets restart attempts.
+    pub const fn reset_after(&self) -> &DurationMs {
+        &self.reset_after
     }
 }
 
@@ -1271,6 +1291,11 @@ impl ProcessSpec {
     pub const fn adoption_policy(&self) -> AdoptionPolicy {
         self.adoption_policy
     }
+
+    /// Return the bounded graceful-drain timeout.
+    pub const fn drain_timeout(&self) -> &DurationMs {
+        &self.drain_timeout
+    }
 }
 
 redacted_debug!(ProcessSpec);
@@ -1412,6 +1437,16 @@ impl EphemeralProcessSpec {
     /// Borrow the successful terminal retention.
     pub const fn successful_ttl(&self) -> &DurationMs {
         &self.successful_ttl
+    }
+
+    /// Borrow the bounded start deadline.
+    pub const fn start_deadline(&self) -> &DurationMs {
+        &self.start_deadline
+    }
+
+    /// Borrow the bounded runtime deadline.
+    pub const fn runtime_deadline(&self) -> &DurationMs {
+        &self.runtime_deadline
     }
 
     /// Borrow the failed terminal retention.

@@ -905,15 +905,12 @@ use devices::virtio::vhost_user_backend::run_video_device;'
 
   mkProcessNode = name: { id, role, readiness, unit ? null, binaryPath ? null, argv ? [ ], env ? [ ], planOps ? [ ], networkInterfaces ? [ ] }:
     let
-      # `vm.supervisor` was removed per ADR 0015; every
-      # enabled VM is daemon-supervised. `emitUnit` is permanently
-      # false so processes.json never reports a systemd unit
-      # reference for a daemon-owned VM (preserves the single-
-      # writer invariant). The retained `_` binding for the local
-      # `vm` keeps the rest of the closure shape intact for
-      # diff hygiene.
+      # `vm.supervisor` was removed per ADR 0015; every enabled VM remains
+      # daemon-supervised. These unit names are only transient-effect
+      # metadata for broker-owned auxiliary processes, never persistent
+      # per-VM framework services or a second lifecycle authority.
       _vm = cfg.vms.${name};
-      emitUnit = false;
+      emitUnit = unit != null;
       emitRunner = binaryPath != null;
     in
     assert (binaryPath == null) == (argv == [ ]);

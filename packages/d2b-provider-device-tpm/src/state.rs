@@ -55,6 +55,11 @@ impl StateOwnerToken {
     pub const fn from_core(bytes: [u8; 16]) -> Self {
         Self(bytes)
     }
+
+    /// Borrow the owner identity for Core-side ticket binding.
+    pub const fn as_bytes(&self) -> &[u8; 16] {
+        &self.0
+    }
 }
 
 impl fmt::Debug for StateOwnerToken {

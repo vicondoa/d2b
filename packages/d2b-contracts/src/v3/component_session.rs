@@ -337,7 +337,12 @@ closed_enum!(ServicePackage {
     ProviderV3 = 3 => "d2b.provider.v3",
     AuditV3 = 4 => "d2b.audit.v3",
     SupportV3 = 5 => "d2b.support.v3",
-    CredentialV3 = 6 => "d2b.credential.v3"
+    CredentialV3 = 6 => "d2b.credential.v3",
+    DisplayV3 = 9 => "d2b.display.v3",
+    ClipboardV3 = 10 => "d2b.clipboard.v3",
+    ClipboardBridgeV3 = 11 => "d2b.clipboard.bridge.v3",
+    ClipboardPickerCoordV3 = 12 => "d2b.clipboard.picker-coord.v3",
+    NotificationV3 = 13 => "d2b.notification.v3"
 });
 
 closed_enum!(NoiseProfile {

@@ -21,3 +21,4 @@ rnix = "0.14"
 serde_yaml_ng = "0.10"
 sha2.workspace = true
 syn = { version = "2", features = ["full", "visit"] }
+sha2.workspace = true

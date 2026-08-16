@@ -1825,25 +1825,26 @@ complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_see
 complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from security-key" -f -a "sessions"
 complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from security-key" -f -a "cancel"
 complete -c d2b -n "__fish_d2b_using_subcommand emergency-policy; and __fish_seen_subcommand_from security-key" -f -a "test"
-complete -c d2b -n "__fish_d2b_using_subcommand activation; and not __fish_seen_subcommand_from apply build generations switch boot test rollback gc migrate keys trust rotate-known-host config" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
-complete -c d2b -n "__fish_d2b_using_subcommand activation; and not __fish_seen_subcommand_from apply build generations switch boot test rollback gc migrate keys trust rotate-known-host config" -l deadline -d 'Bound all Zone requests and streams' -r
-complete -c d2b -n "__fish_d2b_using_subcommand activation; and not __fish_seen_subcommand_from apply build generations switch boot test rollback gc migrate keys trust rotate-known-host config" -l json -d 'Emit the stable JSON envelope'
-complete -c d2b -n "__fish_d2b_using_subcommand activation; and not __fish_seen_subcommand_from apply build generations switch boot test rollback gc migrate keys trust rotate-known-host config" -l human -d 'Force human-readable terminal output'
-complete -c d2b -n "__fish_d2b_using_subcommand activation; and not __fish_seen_subcommand_from apply build generations switch boot test rollback gc migrate keys trust rotate-known-host config" -l no-deadline -d 'Suppress the command default deadline'
-complete -c d2b -n "__fish_d2b_using_subcommand activation; and not __fish_seen_subcommand_from apply build generations switch boot test rollback gc migrate keys trust rotate-known-host config" -s h -l help -d 'Print help'
-complete -c d2b -n "__fish_d2b_using_subcommand activation; and not __fish_seen_subcommand_from apply build generations switch boot test rollback gc migrate keys trust rotate-known-host config" -f -a "apply"
-complete -c d2b -n "__fish_d2b_using_subcommand activation; and not __fish_seen_subcommand_from apply build generations switch boot test rollback gc migrate keys trust rotate-known-host config" -f -a "build"
-complete -c d2b -n "__fish_d2b_using_subcommand activation; and not __fish_seen_subcommand_from apply build generations switch boot test rollback gc migrate keys trust rotate-known-host config" -f -a "generations"
-complete -c d2b -n "__fish_d2b_using_subcommand activation; and not __fish_seen_subcommand_from apply build generations switch boot test rollback gc migrate keys trust rotate-known-host config" -f -a "switch"
-complete -c d2b -n "__fish_d2b_using_subcommand activation; and not __fish_seen_subcommand_from apply build generations switch boot test rollback gc migrate keys trust rotate-known-host config" -f -a "boot"
-complete -c d2b -n "__fish_d2b_using_subcommand activation; and not __fish_seen_subcommand_from apply build generations switch boot test rollback gc migrate keys trust rotate-known-host config" -f -a "test"
-complete -c d2b -n "__fish_d2b_using_subcommand activation; and not __fish_seen_subcommand_from apply build generations switch boot test rollback gc migrate keys trust rotate-known-host config" -f -a "rollback"
-complete -c d2b -n "__fish_d2b_using_subcommand activation; and not __fish_seen_subcommand_from apply build generations switch boot test rollback gc migrate keys trust rotate-known-host config" -f -a "gc"
-complete -c d2b -n "__fish_d2b_using_subcommand activation; and not __fish_seen_subcommand_from apply build generations switch boot test rollback gc migrate keys trust rotate-known-host config" -f -a "migrate"
-complete -c d2b -n "__fish_d2b_using_subcommand activation; and not __fish_seen_subcommand_from apply build generations switch boot test rollback gc migrate keys trust rotate-known-host config" -f -a "keys"
-complete -c d2b -n "__fish_d2b_using_subcommand activation; and not __fish_seen_subcommand_from apply build generations switch boot test rollback gc migrate keys trust rotate-known-host config" -f -a "trust"
-complete -c d2b -n "__fish_d2b_using_subcommand activation; and not __fish_seen_subcommand_from apply build generations switch boot test rollback gc migrate keys trust rotate-known-host config" -f -a "rotate-known-host"
-complete -c d2b -n "__fish_d2b_using_subcommand activation; and not __fish_seen_subcommand_from apply build generations switch boot test rollback gc migrate keys trust rotate-known-host config" -f -a "config"
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and not __fish_seen_subcommand_from apply build generations switch boot test rollback adopt gc migrate keys trust rotate-known-host config" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and not __fish_seen_subcommand_from apply build generations switch boot test rollback adopt gc migrate keys trust rotate-known-host config" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and not __fish_seen_subcommand_from apply build generations switch boot test rollback adopt gc migrate keys trust rotate-known-host config" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and not __fish_seen_subcommand_from apply build generations switch boot test rollback adopt gc migrate keys trust rotate-known-host config" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and not __fish_seen_subcommand_from apply build generations switch boot test rollback adopt gc migrate keys trust rotate-known-host config" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and not __fish_seen_subcommand_from apply build generations switch boot test rollback adopt gc migrate keys trust rotate-known-host config" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and not __fish_seen_subcommand_from apply build generations switch boot test rollback adopt gc migrate keys trust rotate-known-host config" -f -a "apply"
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and not __fish_seen_subcommand_from apply build generations switch boot test rollback adopt gc migrate keys trust rotate-known-host config" -f -a "build"
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and not __fish_seen_subcommand_from apply build generations switch boot test rollback adopt gc migrate keys trust rotate-known-host config" -f -a "generations"
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and not __fish_seen_subcommand_from apply build generations switch boot test rollback adopt gc migrate keys trust rotate-known-host config" -f -a "switch"
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and not __fish_seen_subcommand_from apply build generations switch boot test rollback adopt gc migrate keys trust rotate-known-host config" -f -a "boot"
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and not __fish_seen_subcommand_from apply build generations switch boot test rollback adopt gc migrate keys trust rotate-known-host config" -f -a "test"
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and not __fish_seen_subcommand_from apply build generations switch boot test rollback adopt gc migrate keys trust rotate-known-host config" -f -a "rollback"
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and not __fish_seen_subcommand_from apply build generations switch boot test rollback adopt gc migrate keys trust rotate-known-host config" -f -a "adopt"
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and not __fish_seen_subcommand_from apply build generations switch boot test rollback adopt gc migrate keys trust rotate-known-host config" -f -a "gc"
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and not __fish_seen_subcommand_from apply build generations switch boot test rollback adopt gc migrate keys trust rotate-known-host config" -f -a "migrate"
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and not __fish_seen_subcommand_from apply build generations switch boot test rollback adopt gc migrate keys trust rotate-known-host config" -f -a "keys"
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and not __fish_seen_subcommand_from apply build generations switch boot test rollback adopt gc migrate keys trust rotate-known-host config" -f -a "trust"
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and not __fish_seen_subcommand_from apply build generations switch boot test rollback adopt gc migrate keys trust rotate-known-host config" -f -a "rotate-known-host"
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and not __fish_seen_subcommand_from apply build generations switch boot test rollback adopt gc migrate keys trust rotate-known-host config" -f -a "config"
 complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from apply" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
 complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from apply" -l deadline -d 'Bound all Zone requests and streams' -r
 complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from apply" -l dry-run
@@ -1899,6 +1900,12 @@ complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subc
 complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from rollback" -l human -d 'Force human-readable terminal output'
 complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from rollback" -l no-deadline -d 'Suppress the command default deadline'
 complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from rollback" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from adopt" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from adopt" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from adopt" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from adopt" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from adopt" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from adopt" -s h -l help -d 'Print help'
 complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from gc" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
 complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from gc" -l deadline -d 'Bound all Zone requests and streams' -r
 complete -c d2b -n "__fish_d2b_using_subcommand activation; and __fish_seen_subcommand_from gc" -l dry-run

@@ -18,7 +18,7 @@ use crate::{
 };
 
 struct AuthorizationRuntime {
-    native: NativeAuthorizer,
+    native: std::sync::Arc<NativeAuthorizer>,
     state: AuthorizationState,
 }
 
@@ -33,12 +33,31 @@ impl BusAuthorizer {
         native: NativeAuthorizer,
         state: AuthorizationState,
     ) -> Result<Self, AuthorizationError> {
+        Self::from_shared(std::sync::Arc::new(native), state)
+    }
+
+    /// Construct an authorizer over a native evaluator already shared with a
+    /// generated Resource API service.
+    pub fn from_shared(
+        native: std::sync::Arc<NativeAuthorizer>,
+        state: AuthorizationState,
+    ) -> Result<Self, AuthorizationError> {
         if state.snapshot.policy_revision == 0 {
             return Err(AuthorizationError::PolicyRevisionZero);
         }
         Ok(Self {
             runtime: Mutex::new(AuthorizationRuntime { native, state }),
         })
+    }
+
+    /// Borrow the single native authorizer shared with the Resource API.
+    ///
+    /// The bus and generated resource handlers must evaluate the same policy
+    /// instance and store-bound mutation authority.  Returning the existing
+    /// `Arc` prevents the daemon from accidentally constructing a parallel
+    /// authority for one Zone.
+    pub fn native_authorizer(&self) -> std::sync::Arc<NativeAuthorizer> {
+        std::sync::Arc::clone(&self.lock().native)
     }
 
     /// Install a new durable policy and its exact trusted revision state.

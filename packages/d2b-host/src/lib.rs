@@ -22,7 +22,6 @@
 pub mod bridge_port;
 pub mod cgroup;
 pub mod devices;
-pub mod fake;
 pub mod ifname;
 pub mod ioctl_policy;
 pub mod modules;
@@ -34,8 +33,6 @@ pub mod netlink;
 pub mod nftables;
 pub mod routes;
 pub mod seccomp;
-// Runner-shape preflight + CH net-handoff probe.
-pub mod runner_shape;
 // Static runner lifecycle metadata used by host-side argv dispatch.
 pub mod runner_process;
 // Pure CH argv generator. Consumed by d2bd via the SpawnRunner
@@ -65,6 +62,9 @@ pub mod vsock_relay_argv;
 // Pure `usbip bind|unbind --busid <bus-id>` argv generator. The generator
 // stands alone with a bus-id shape validator.
 pub mod usbip_argv;
+// Neutral Volume effect-port composition wrapper. Concrete broker-backed
+// implementations are supplied by the Zone runtime.
+pub mod volume_effect_adapter;
 // Pure OTel host-bridge argv generator. Replaces the singleton
 // d2b-otel-host-bridge.service with a broker SpawnRunner under
 // RunnerRole::OtelHostBridge.
@@ -76,6 +76,7 @@ pub mod wayland_proxy_argv;
 // check + per-generation marker + atomic current-symlink swap with crash
 // reconciliation.
 pub mod hardlink_farm;
+pub mod host_generation;
 // Live ssh-keygen fingerprint + public-key probe wrapping ssh-keygen -lf
 // and ssh-keygen -y -f for the broker-side rotate / trust / show ops.
 pub mod ssh_keygen;

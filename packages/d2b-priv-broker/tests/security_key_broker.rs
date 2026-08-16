@@ -10,7 +10,12 @@ use d2b_contracts::broker_wire::{
     BrokerRequest, BrokerResponse, OpenHidrawSecurityKeyRequest, OpenHidrawSecurityKeyResponse,
 };
 use d2b_contracts::types::VmId;
+use d2b_contracts::v3::ResourceRef;
 use d2b_priv_broker::ops::audit_op::OperationFields;
+use d2b_priv_broker::{fd_passing::recv_fds, protocol::send_json_frame_with_fds};
+use nix::sys::socket::{AddressFamily, SockFlag, SockType, socketpair};
+use nix::unistd::close;
+use std::os::fd::{AsRawFd, OwnedFd};
 
 /// Audit fields for `OpenHidrawSecurityKey` carry scrubbed metadata
 /// only (no raw device path).
@@ -67,18 +72,28 @@ fn open_hidraw_security_key_audit_round_trips_from_value() {
 /// The `BrokerRequest::OpenHidrawSecurityKey` variant round-trips
 /// through the tagged wire envelope (`kind`/`payload`) and never
 /// serializes a raw device path (the daemon supplies only `vm_id` +
-/// opaque `selector_id`).
+/// opaque `selector_id`, admitted Device reference, and authority key).
 #[test]
 fn open_hidraw_security_key_request_wire_round_trips() {
+    let device_ref = ResourceRef::parse("Device/yk5c-selector").expect("device ref");
+    let expected_authority_key =
+        d2b_contracts::broker_wire::security_key_authority_binding(&device_ref, "yk5c-selector");
     let request = BrokerRequest::OpenHidrawSecurityKey(OpenHidrawSecurityKeyRequest {
         vm_id: VmId::new("personal-dev"),
         selector_id: "yk5c-selector".to_owned(),
+        device_ref: device_ref.clone(),
+        authority_key: expected_authority_key.clone(),
         tracing_span_id: None,
     });
     let json = serde_json::to_value(&request).expect("serialize request");
     assert_eq!(json["kind"], "OpenHidrawSecurityKey");
     assert_eq!(json["payload"]["vmId"], "personal-dev");
     assert_eq!(json["payload"]["selectorId"], "yk5c-selector");
+    assert_eq!(
+        json["payload"]["deviceRef"],
+        device_ref.to_canonical_string()
+    );
+    assert_eq!(json["payload"]["authorityKey"], expected_authority_key);
     assert!(json["payload"].get("hidrawPath").is_none());
 
     let round_tripped: BrokerRequest =
@@ -103,4 +118,33 @@ fn open_hidraw_security_key_response_wire_round_trips() {
     let round_tripped: BrokerResponse =
         serde_json::from_value(json).expect("deserialize response round-trip");
     assert_eq!(round_tripped, response);
+}
+
+/// The production response transport carries the hidraw handle out-of-band
+/// while keeping the JSON body path-free.
+#[test]
+fn open_hidraw_security_key_response_passes_one_fd_with_scm_rights() {
+    let (sender, receiver): (OwnedFd, OwnedFd) = socketpair(
+        AddressFamily::Unix,
+        SockType::SeqPacket,
+        None,
+        SockFlag::SOCK_CLOEXEC,
+    )
+    .expect("socketpair");
+    let source = std::fs::File::open("/dev/null").expect("open fd fixture");
+    let response = BrokerResponse::OpenHidrawSecurityKey(OpenHidrawSecurityKeyResponse {
+        selector_resolved: "yk5c-selector".to_owned(),
+        device_class: "hidraw-fido".to_owned(),
+    });
+
+    send_json_frame_with_fds(sender.as_raw_fd(), &response, &[source.as_raw_fd()])
+        .expect("send SCM_RIGHTS response");
+    let (frame, fds) = recv_fds(receiver.as_raw_fd()).expect("receive SCM_RIGHTS response");
+    let decoded: BrokerResponse = serde_json::from_slice(&frame[4..]).expect("decode response");
+
+    assert_eq!(decoded, response);
+    assert_eq!(fds.len(), 1);
+    for fd in fds {
+        close(fd).expect("close received fd");
+    }
 }

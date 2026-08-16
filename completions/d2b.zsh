@@ -3858,6 +3858,18 @@ _arguments "${_arguments_options[@]}" : \
 ':guest_ref:_default' \
 && ret=0
 ;;
+(adopt)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':guest_ref:_default' \
+&& ret=0
+;;
 (gc)
 _arguments "${_arguments_options[@]}" : \
 '--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
@@ -4254,6 +4266,7 @@ _d2b__subcmd__activation_commands() {
 'boot:' \
 'test:' \
 'rollback:' \
+'adopt:' \
 'gc:' \
 'migrate:' \
 'keys:' \
@@ -4262,6 +4275,11 @@ _d2b__subcmd__activation_commands() {
 'config:' \
     )
     _describe -t commands 'd2b activation commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__activation__subcmd__adopt_commands] )) ||
+_d2b__subcmd__activation__subcmd__adopt_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b activation adopt commands' commands "$@"
 }
 (( $+functions[_d2b__subcmd__activation__subcmd__apply_commands] )) ||
 _d2b__subcmd__activation__subcmd__apply_commands() {

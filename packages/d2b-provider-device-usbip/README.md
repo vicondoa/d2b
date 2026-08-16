@@ -53,6 +53,13 @@ are `usbip-daemon`, `usbip-relay`, and `usbip-guest-proxy`. Module load, physica
 claim, bind, unbind, and Guest attach or detach are one-shot semantic effects,
 not additional Process resources.
 
+Service and Binding teardown are deliberately separate. A Binding detaches its
+Guest, closes its broker-spawned attach runner, removes its private proxy, and
+releases its Service slot. The supervisor drains every Binding before the
+Service unbinds its exact owned device and releases relay then physical
+Host-global authority. Restart adopts only a matching runner pidfd/start-time
+identity; an ambiguous identity is quarantined without a destructive effect.
+
 ## Placement and dependencies
 
 The controller and shared backend run on the configured Host. The relay is

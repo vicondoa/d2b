@@ -38,6 +38,11 @@ library through injected resource and network effect ports. The net-VM
 guest-agent and optional mDNS workers run inside the owned Guest. The controller
 never invokes `nft`, netlink, or the privileged broker directly.
 
+Core binds `broker::BrokerNetworkEffectPort` to the daemon's authenticated
+broker transport. It passes only opaque bundle intent references and a
+generation fence; bridge, route, sysctl, NetworkManager, hosts-file,
+projection, and persistent-TAP mutations stay broker-owned.
+
 ## Placement and dependencies
 
 The controller is placed on the configured Host and the guest-agent is placed
@@ -64,6 +69,10 @@ and the broker authorization matrix.
   device Provider.
 - Cross-Zone bridge-mode physical-NIC multiplexing uses the canonical
   Host-global admission check and is rejected before any host effect.
+- Every external physical-NIC attachment requires Core-admitted Host-global
+  authority before any broker effect.
+- Direct east-west forwarding requires both `NetworkSpec.isolation.allowEastWest`
+  and the site-level unsafe-east-west acknowledgement.
 - IPv6 suppression runs before a new bridge is brought up and is re-applied on
   reconciliation as defense in depth.
 - The generic net-VM module force-neutralizes `10-eth-dhcp`, matches both NICs
