@@ -5,10 +5,10 @@ use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::Duration;
 
-use d2b_contracts::v3::ResourceRef;
 use d2b_contracts::v3::credential::{
     CredentialMethod, CredentialRequest, CredentialServiceErrorCode, PlacementBinding,
 };
+use d2b_contracts::v3::{ResourceRef, ZoneId};
 use d2b_provider_credential_secret_service::{
     LockPolicy, Oo7SecretServicePort, SecretServiceConfig, SecretServiceCredentialProviderFactory,
     SecretServiceFuture, SecretServiceLeaseGrant, SecretServiceLeaseInspection,
@@ -23,6 +23,7 @@ use common::{Admission, ProviderHarness, request, setup};
 fn locked_and_unavailable_map_to_provider_unavailable() {
     for failure in [
         SecretServicePortError::Locked,
+        SecretServicePortError::Missing,
         SecretServicePortError::Unavailable,
     ] {
         let (provider, port) = setup(64);
@@ -86,6 +87,7 @@ fn port_call_stops_at_request_deadline() {
     let provider = SecretServiceCredentialProviderFactory::new(
         SecretServiceConfig::new("login collection", 64, LockPolicy::FailClosed).unwrap(),
         SecretServicePlacement::new(
+            ZoneId::parse("user-zone").unwrap(),
             PlacementBinding::UserAgent,
             ResourceRef::parse("Host/workstation").unwrap(),
             ResourceRef::parse("User/alice").unwrap(),
@@ -95,7 +97,8 @@ fn port_call_stops_at_request_deadline() {
         port.clone(),
     )
     .unwrap()
-    .construct();
+    .construct()
+    .expect("test provider authority must be constructible");
     let server = ProviderHarness::new(provider, Admission);
     let (result_tx, result_rx) = mpsc::channel();
     thread::spawn(move || {

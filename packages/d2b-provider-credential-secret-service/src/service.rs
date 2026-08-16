@@ -8,6 +8,7 @@ use d2b_contracts::v3::credential::{
 
 use crate::{
     LeaseRecord, SecretServiceCredentialProvider, SecretServiceLeaseRef, SecretServiceLeaseRequest,
+    SessionKey,
 };
 
 impl CredentialProvider for SecretServiceCredentialProvider {
@@ -17,11 +18,13 @@ impl CredentialProvider for SecretServiceCredentialProvider {
         request: &CredentialRequest,
         authorization: &CredentialAuthorization,
     ) -> Result<CredentialResponse, CredentialServiceError> {
+        let _lifecycle = self.mutation_guard()?;
+        let session_key = self.authorize_session_locked(authorization)?;
         match method {
-            CredentialMethod::AcquireToken => self.acquire(request, authorization),
-            CredentialMethod::RefreshToken => self.refresh(request, authorization),
-            CredentialMethod::RevokeToken => self.revoke(request),
-            CredentialMethod::InspectMetadata => self.inspect(request),
+            CredentialMethod::AcquireToken => self.acquire(request, authorization, session_key),
+            CredentialMethod::RefreshToken => self.refresh(request, authorization, session_key),
+            CredentialMethod::RevokeToken => self.revoke(request, session_key),
+            CredentialMethod::InspectMetadata => self.inspect(request, session_key),
             CredentialMethod::SignChallenge => Err(CredentialServiceError::new(
                 CredentialServiceErrorCode::Malformed,
             )),
@@ -34,18 +37,19 @@ impl SecretServiceCredentialProvider {
         &self,
         request: &CredentialRequest,
         authorization: &CredentialAuthorization,
+        session_key: SessionKey,
     ) -> Result<CredentialResponse, CredentialServiceError> {
         let delivery = authorization
             .delivery_session_params()
             .cloned()
             .ok_or_else(invariant)?;
         let deadline = Self::operation_deadline(request.deadline_unix_ms())?;
-        let _mutation = self.mutation_guard()?;
         let key = request.credential_ref().to_canonical_string();
+        let lease_key = (session_key, key.clone());
         {
             let mut leases = self.leases.lock().map_err(|_| invariant())?;
             leases.retain(|_, record| record.metadata.state == CredentialLeaseState::Active);
-            if let Some(existing) = leases.get(&key)
+            if let Some(existing) = leases.get(&lease_key)
                 && existing.idempotency_key == request.idempotency_key()
             {
                 return Ok(CredentialResponse::AcquireToken(DeliveryResponse {
@@ -68,7 +72,7 @@ impl SecretServiceCredentialProvider {
         let grant = Self::poll_port(self.port.issue_lease(&port_request), deadline)?;
         let metadata = Self::grant_metadata(grant, request.requested_expiry_unix_ms())?;
         self.leases.lock().map_err(|_| invariant())?.insert(
-            key,
+            lease_key,
             LeaseRecord {
                 idempotency_key: request.idempotency_key().to_owned(),
                 metadata: metadata.clone(),
@@ -84,19 +88,20 @@ impl SecretServiceCredentialProvider {
         &self,
         request: &CredentialRequest,
         authorization: &CredentialAuthorization,
+        session_key: SessionKey,
     ) -> Result<CredentialResponse, CredentialServiceError> {
         let delivery = authorization
             .delivery_session_params()
             .cloned()
             .ok_or_else(invariant)?;
         let deadline = Self::operation_deadline(request.deadline_unix_ms())?;
-        let _mutation = self.mutation_guard()?;
         let key = request.credential_ref().to_canonical_string();
+        let lease_key = (session_key, key);
         let current = self
             .leases
             .lock()
             .map_err(|_| invariant())?
-            .get(&key)
+            .get(&lease_key)
             .cloned()
             .ok_or_else(expired)?;
         if current.metadata.state != CredentialLeaseState::Active {
@@ -115,7 +120,7 @@ impl SecretServiceCredentialProvider {
         let grant = Self::poll_port(self.port.refresh_lease(&lease), deadline)?;
         let metadata = Self::grant_metadata(grant, request.requested_expiry_unix_ms())?;
         self.leases.lock().map_err(|_| invariant())?.insert(
-            key,
+            lease_key,
             LeaseRecord {
                 idempotency_key: request.idempotency_key().to_owned(),
                 metadata: metadata.clone(),
@@ -130,12 +135,13 @@ impl SecretServiceCredentialProvider {
     fn revoke(
         &self,
         request: &CredentialRequest,
+        session_key: SessionKey,
     ) -> Result<CredentialResponse, CredentialServiceError> {
         let deadline = Self::operation_deadline(request.deadline_unix_ms())?;
-        let _mutation = self.mutation_guard()?;
         let key = request.credential_ref().to_canonical_string();
+        let lease_key = (session_key, key);
         let mut leases = self.leases.lock().map_err(|_| invariant())?;
-        let record = leases.get_mut(&key).ok_or_else(expired)?;
+        let record = leases.get_mut(&lease_key).ok_or_else(expired)?;
         let outcome = if record.metadata.state == CredentialLeaseState::Revoked {
             CredentialOutcomeCode::AlreadyRevoked
         } else {
@@ -161,14 +167,16 @@ impl SecretServiceCredentialProvider {
     fn inspect(
         &self,
         request: &CredentialRequest,
+        session_key: SessionKey,
     ) -> Result<CredentialResponse, CredentialServiceError> {
         let deadline = Self::operation_deadline(request.deadline_unix_ms())?;
         let key = request.credential_ref().to_canonical_string();
+        let lease_key = (session_key, key);
         let record = self
             .leases
             .lock()
             .map_err(|_| invariant())?
-            .get(&key)
+            .get(&lease_key)
             .cloned()
             .ok_or_else(expired)?;
         let lease = SecretServiceLeaseRef {
@@ -184,6 +192,116 @@ impl SecretServiceCredentialProvider {
         Ok(CredentialResponse::InspectMetadata(MetadataResponse {
             metadata,
         }))
+    }
+
+    /// Revoke every active lease owned by one admitted session and release its
+    /// capability authority.
+    pub fn disconnect(
+        &self,
+        authorization: &CredentialAuthorization,
+    ) -> Result<(), CredentialServiceError> {
+        let _mutation = self.blocking_mutation_guard()?;
+        let session_key = self.session_capability(authorization)?.session_key();
+        if !self
+            .sessions
+            .lock()
+            .map_err(|_| invariant())?
+            .contains_key(&session_key)
+        {
+            self.discard_session_key(session_key)?;
+            return Ok(());
+        }
+        let deadline = Self::operation_deadline(1_000)?;
+        self.close_session_locked(session_key, deadline)
+    }
+
+    /// Finalize one admitted session using the same revocation semantics as a
+    /// transport disconnect, then prevent further capability minting.
+    pub fn finalize_session(
+        &self,
+        authorization: &CredentialAuthorization,
+    ) -> Result<(), CredentialServiceError> {
+        let _mutation = self.blocking_mutation_guard()?;
+        self.session_capability(authorization)?;
+        self.finalized
+            .store(true, std::sync::atomic::Ordering::Release);
+        self.close_all_sessions_locked(Self::operation_deadline(1_000)?)?;
+        self.authority.clear().map_err(|_| invariant())?;
+        Ok(())
+    }
+
+    /// Finalize every admitted session and prevent later capability minting.
+    pub fn drain(&self) -> Result<(), CredentialServiceError> {
+        let _mutation = self.blocking_mutation_guard()?;
+        self.finalized
+            .store(true, std::sync::atomic::Ordering::Release);
+        let keys = self
+            .sessions
+            .lock()
+            .map_err(|_| invariant())?
+            .keys()
+            .copied()
+            .collect::<Vec<_>>();
+        let deadline = Self::operation_deadline(1_000)?;
+        for session_key in keys {
+            self.close_session_locked(session_key, deadline)?;
+        }
+        self.authority.clear().map_err(|_| invariant())?;
+        Ok(())
+    }
+
+    fn close_all_sessions_locked(
+        &self,
+        deadline: std::time::Instant,
+    ) -> Result<(), CredentialServiceError> {
+        let keys = self
+            .sessions
+            .lock()
+            .map_err(|_| invariant())?
+            .keys()
+            .copied()
+            .collect::<Vec<_>>();
+        for session_key in keys {
+            self.close_session_locked(session_key, deadline)?;
+        }
+        Ok(())
+    }
+
+    fn close_session_locked(
+        &self,
+        session_key: SessionKey,
+        deadline: std::time::Instant,
+    ) -> Result<(), CredentialServiceError> {
+        let records = self
+            .leases
+            .lock()
+            .map_err(|_| invariant())?
+            .iter()
+            .filter(|((key, _), record)| {
+                *key == session_key && record.metadata.state == CredentialLeaseState::Active
+            })
+            .map(|((_, credential), record)| (credential.clone(), record.clone()))
+            .collect::<Vec<_>>();
+
+        for (credential, record) in records {
+            let lease = SecretServiceLeaseRef {
+                credential_ref: d2b_contracts::v3::ResourceRef::parse(&credential)
+                    .map_err(|_| invariant())?,
+                metadata: record.metadata,
+            };
+            Self::poll_port(self.port.revoke_lease(&lease), deadline)?;
+        }
+
+        self.leases
+            .lock()
+            .map_err(|_| invariant())?
+            .retain(|(key, _), _| *key != session_key);
+        self.release_session_key(session_key)?;
+        self.sessions
+            .lock()
+            .map_err(|_| invariant())?
+            .remove(&session_key);
+        Ok(())
     }
 }
 

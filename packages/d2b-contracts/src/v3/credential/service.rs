@@ -1,6 +1,8 @@
 //! Neutral provider-facing DTO and sensitive-record contracts.
 
 use core::fmt;
+use std::any::Any;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 
 use super::{
@@ -648,11 +650,43 @@ impl fmt::Debug for CredentialResponse {
 /// For sensitive-output methods this carries the complete delivery binding
 /// constructed during route authorization. The Provider may use it but cannot
 /// replace any of its authority-bearing fields.
-#[derive(Clone, PartialEq, Eq)]
 pub struct CredentialAuthorization {
     delivery_session_params: Option<DeliverySessionParams>,
     authenticated_subject: Option<AuthenticatedSubjectContext>,
+    session_proof: Option<Arc<dyn Any + Send + Sync>>,
     authenticated_session: Option<CredentialSessionBinding>,
+}
+
+impl Clone for CredentialAuthorization {
+    fn clone(&self) -> Self {
+        Self {
+            delivery_session_params: self.delivery_session_params.clone(),
+            authenticated_subject: self.authenticated_subject.clone(),
+            session_proof: self.session_proof.clone(),
+            authenticated_session: self.authenticated_session.clone(),
+        }
+    }
+}
+
+impl PartialEq for CredentialAuthorization {
+    fn eq(&self, other: &Self) -> bool {
+        self.delivery_session_params == other.delivery_session_params
+            && self.authenticated_subject == other.authenticated_subject
+            && match (&self.session_proof, &other.session_proof) {
+                (None, None) => true,
+                (Some(left), Some(right)) => Arc::ptr_eq(left, right),
+                _ => false,
+            }
+            && self.authenticated_session == other.authenticated_session
+    }
+}
+
+impl Eq for CredentialAuthorization {}
+
+impl fmt::Debug for CredentialAuthorization {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("CredentialAuthorization(<redacted>)")
+    }
 }
 
 impl CredentialAuthorization {
@@ -673,6 +707,7 @@ impl CredentialAuthorization {
         Ok(Self {
             delivery_session_params,
             authenticated_subject: None,
+            session_proof: None,
             authenticated_session: None,
         })
     }
@@ -712,11 +747,37 @@ impl CredentialAuthorization {
     pub const fn authenticated_session(&self) -> Option<&CredentialSessionBinding> {
         self.authenticated_session.as_ref()
     }
-}
 
-impl fmt::Debug for CredentialAuthorization {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("CredentialAuthorization(<redacted>)")
+    /// Attach one provider-owned authenticated session proof.
+    ///
+    /// The proof is intentionally erased at this contract boundary. Each
+    /// Provider downcasts it to its own private proof type and authenticates
+    /// that proof against its retained authority.
+    pub fn with_session_proof<T>(mut self, proof: T) -> Self
+    where
+        T: Any + Send + Sync,
+    {
+        self.session_proof = Some(Arc::new(proof));
+        self
+    }
+
+    /// Attach a shared provider-owned session proof to another authorization.
+    pub fn with_shared_session_proof<T>(mut self, proof: Arc<T>) -> Self
+    where
+        T: Any + Send + Sync,
+    {
+        self.session_proof = Some(proof);
+        self
+    }
+
+    /// Borrow a provider-owned session proof of the requested concrete type.
+    pub fn session_proof<T>(&self) -> Option<&T>
+    where
+        T: Any + Send + Sync,
+    {
+        self.session_proof
+            .as_deref()
+            .and_then(|proof| proof.downcast_ref::<T>())
     }
 }
 
