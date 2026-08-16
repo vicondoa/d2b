@@ -28,10 +28,10 @@ pub use firewall::{
     RelayAuthorityLease, UsbipEffectError, UsbipEffectPort,
 };
 pub use lifecycle::{
-    AttachProcessIdentity, AttachmentObservation, BindingLifecycle, BindingLifecycleError,
-    BindingPhase, BindingPort, OwnedBusBinding, PhysicalAuthorityLease, ServiceLifecycle,
-    ServiceLifecycleError, ServicePhase, ServicePort, ServiceRelayLease, SupervisorFinalizeError,
-    UsbipSupervisor,
+    AttachProcessIdentity, AttachmentObservation, BindingIdentity, BindingLifecycle,
+    BindingLifecycleError, BindingPhase, BindingPort, BindingProxyLease, BindingSlotLease,
+    OwnedBusBinding, PhysicalAuthorityLease, ServiceLifecycle, ServiceLifecycleError, ServicePhase,
+    ServicePort, ServiceRelayLease, SupervisorFinalizeError, UsbipSupervisor,
 };
 pub use process::{AttachSource, EphemeralProcessIntent, EphemeralProcessKind, UsbipDaemonProcess};
 pub use workers::{

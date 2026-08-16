@@ -1,20 +1,33 @@
 use d2b_contracts::v3::ResourceUid;
 use d2b_provider_device_usbip::{
-    AttachProcessIdentity, AttachmentObservation, BindingLifecycle, BindingLifecycleError,
-    BindingPhase, BindingPort, ServiceLifecycle, ServiceLifecycleError, ServicePhase, ServicePort,
-    UsbipSupervisor,
+    AttachProcessIdentity, AttachmentObservation, BindingIdentity, BindingLifecycle,
+    BindingLifecycleError, BindingPort, BindingProxyLease, BindingSlotLease, ServiceLifecycle,
+    ServiceLifecycleError, ServicePhase, ServicePort, UsbipSupervisor,
 };
 
 fn uid(value: &str) -> ResourceUid {
     ResourceUid::parse(value).unwrap()
 }
 
-#[derive(Default)]
 struct FakePort {
     calls: Vec<&'static str>,
     fail_physical: bool,
     fail_relay: bool,
     observation: AttachmentObservation,
+}
+
+impl Default for FakePort {
+    fn default() -> Self {
+        Self {
+            calls: Vec::new(),
+            fail_physical: false,
+            fail_relay: false,
+            observation: AttachmentObservation::Matching {
+                slot: BindingSlotLease::from_adapter([4; 16]),
+                proxy: BindingProxyLease::from_adapter([5; 16]),
+            },
+        }
+    }
 }
 
 impl ServicePort for FakePort {
@@ -80,48 +93,73 @@ impl ServicePort for FakePort {
 }
 
 impl BindingPort for FakePort {
-    fn acquire_slot(&mut self) -> Result<(), BindingLifecycleError> {
+    fn acquire_slot(
+        &mut self,
+        _: &BindingIdentity,
+    ) -> Result<BindingSlotLease, BindingLifecycleError> {
         self.calls.push("slot");
-        Ok(())
+        Ok(BindingSlotLease::from_adapter([4; 16]))
     }
 
-    fn start_proxy(&mut self) -> Result<(), BindingLifecycleError> {
+    fn start_proxy(
+        &mut self,
+        _: &BindingIdentity,
+        _: &BindingSlotLease,
+    ) -> Result<BindingProxyLease, BindingLifecycleError> {
         self.calls.push("proxy");
-        Ok(())
+        Ok(BindingProxyLease::from_adapter([5; 16]))
     }
 
-    fn spawn_attach_runner(&mut self) -> Result<AttachProcessIdentity, BindingLifecycleError> {
+    fn spawn_attach_runner(
+        &mut self,
+        _: &BindingIdentity,
+        _: &BindingProxyLease,
+    ) -> Result<AttachProcessIdentity, BindingLifecycleError> {
         self.calls.push("spawn-attach");
         Ok(AttachProcessIdentity::from_adapter(7, 11))
     }
 
     fn observe_attach_runner(
         &mut self,
+        _: &BindingIdentity,
         _: &AttachProcessIdentity,
     ) -> Result<AttachmentObservation, BindingLifecycleError> {
         self.calls.push("observe-attach");
-        Ok(self.observation)
+        Ok(self.observation.clone())
     }
 
-    fn detach_guest(&mut self) -> Result<(), BindingLifecycleError> {
+    fn detach_guest(
+        &mut self,
+        _: &BindingIdentity,
+        _: &BindingProxyLease,
+    ) -> Result<(), BindingLifecycleError> {
         self.calls.push("detach-guest");
         Ok(())
     }
 
     fn close_attach_runner(
         &mut self,
+        _: &BindingIdentity,
         _: &AttachProcessIdentity,
     ) -> Result<(), BindingLifecycleError> {
         self.calls.push("close-attach");
         Ok(())
     }
 
-    fn close_proxy(&mut self) -> Result<(), BindingLifecycleError> {
+    fn close_proxy(
+        &mut self,
+        _: &BindingIdentity,
+        _: &BindingProxyLease,
+    ) -> Result<(), BindingLifecycleError> {
         self.calls.push("close-proxy");
         Ok(())
     }
 
-    fn release_slot(&mut self) -> Result<(), BindingLifecycleError> {
+    fn release_slot(
+        &mut self,
+        _: &BindingIdentity,
+        _: &BindingSlotLease,
+    ) -> Result<(), BindingLifecycleError> {
         self.calls.push("release-slot");
         Ok(())
     }
@@ -179,23 +217,57 @@ fn authority_conflicts_happen_before_bind() {
 #[test]
 fn matching_restart_adopts_and_stale_identity_quarantines_without_effects() {
     let zone = uid("123e4567-e89b-42d3-a456-426614174000");
-    let mut port = FakePort {
-        observation: AttachmentObservation::Matching,
-        ..Default::default()
-    };
-    let mut binding = BindingLifecycle::new(zone.clone(), zone.clone());
-    binding
-        .adopt(AttachProcessIdentity::from_adapter(7, 11), &mut port)
+    let mut port = FakePort::default();
+    let service = ServiceLifecycle::new(zone.clone(), uid("223e4567-e89b-42d3-a456-426614174001"));
+    let mut supervisor = UsbipSupervisor::new(service);
+    supervisor
+        .add_binding(BindingLifecycle::new(
+            zone.clone(),
+            zone.clone(),
+            BindingIdentity::from_controller(uid("323e4567-e89b-42d3-a456-426614174002")),
+        ))
         .unwrap();
-    assert_eq!(binding.phase(), BindingPhase::Attached);
+    supervisor
+        .adopt_binding(0, AttachProcessIdentity::from_adapter(7, 11), &mut port)
+        .unwrap();
     assert_eq!(port.calls, ["observe-attach"]);
+    supervisor.finalize(&mut port).unwrap();
+    assert_eq!(
+        port.calls,
+        [
+            "observe-attach",
+            "detach-guest",
+            "close-attach",
+            "close-proxy",
+            "release-slot"
+        ]
+    );
 
+    let service = ServiceLifecycle::new(zone.clone(), uid("423e4567-e89b-42d3-a456-426614174003"));
+    let mut supervisor = UsbipSupervisor::new(service);
+    supervisor
+        .add_binding(BindingLifecycle::new(
+            zone.clone(),
+            zone,
+            BindingIdentity::from_controller(uid("523e4567-e89b-42d3-a456-426614174004")),
+        ))
+        .unwrap();
     port.calls.clear();
     port.observation = AttachmentObservation::StaleIdentity;
-    binding
-        .adopt(AttachProcessIdentity::from_adapter(8, 12), &mut port)
+    supervisor
+        .adopt_binding(0, AttachProcessIdentity::from_adapter(8, 12), &mut port)
         .unwrap();
-    assert_eq!(binding.phase(), BindingPhase::Quarantined);
+    assert_eq!(port.calls, ["observe-attach"]);
+    assert_eq!(
+        supervisor.activate_binding(0, &mut port),
+        Err(BindingLifecycleError::Quarantined)
+    );
+    assert_eq!(
+        supervisor.finalize(&mut port),
+        Err(d2b_provider_device_usbip::SupervisorFinalizeError::Binding(
+            BindingLifecycleError::Quarantined
+        ))
+    );
     assert_eq!(port.calls, ["observe-attach"]);
 }
 
@@ -206,7 +278,11 @@ fn binding_closes_its_process_before_service_unbinds_and_releases_authority() {
     let mut service =
         ServiceLifecycle::new(zone.clone(), uid("223e4567-e89b-42d3-a456-426614174001"));
     service.activate(true, zone.clone(), &mut port).unwrap();
-    let binding = BindingLifecycle::new(zone.clone(), zone);
+    let binding = BindingLifecycle::new(
+        zone.clone(),
+        zone,
+        BindingIdentity::from_controller(uid("323e4567-e89b-42d3-a456-426614174002")),
+    );
     let mut supervisor = UsbipSupervisor::new(service);
     supervisor.add_binding(binding).unwrap();
     supervisor.activate_binding(0, &mut port).unwrap();

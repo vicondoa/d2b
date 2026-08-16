@@ -92,8 +92,6 @@ pub enum ServiceLifecycleError {
     Transient,
     /// A foreign binding or marker blocked a safe mutation.
     ForeignOwnership,
-    /// Service finalization was attempted before Bindings drained.
-    BindingsNotDrained,
     /// The requested transition is not valid for the current state.
     InvalidState,
 }
@@ -108,7 +106,6 @@ impl ServiceLifecycleError {
             Self::RelayAuthorityConflict => "usbip-network-relay-authority-conflict",
             Self::Transient => "transient",
             Self::ForeignOwnership => "foreign-ownership",
-            Self::BindingsNotDrained => "bindings-not-drained",
             Self::InvalidState => "invalid-state",
         }
     }
@@ -295,16 +292,81 @@ impl core::fmt::Debug for AttachProcessIdentity {
     }
 }
 
+/// Opaque Binding identity resolved from the trusted Resource graph.
+#[derive(Clone, PartialEq, Eq)]
+pub struct BindingIdentity(ResourceUid);
+
+impl BindingIdentity {
+    /// Construct a Binding identity at the trusted controller boundary.
+    pub const fn from_controller(value: ResourceUid) -> Self {
+        Self(value)
+    }
+}
+
+impl core::fmt::Debug for BindingIdentity {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("BindingIdentity(<redacted>)")
+    }
+}
+
+/// Opaque Service admission slot for one exact Binding.
+#[derive(Clone, PartialEq, Eq)]
+pub struct BindingSlotLease([u8; 16]);
+
+impl BindingSlotLease {
+    /// Construct a slot lease at the trusted adapter boundary.
+    pub const fn from_adapter(value: [u8; 16]) -> Self {
+        Self(value)
+    }
+}
+
+impl core::fmt::Debug for BindingSlotLease {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("BindingSlotLease(<redacted>)")
+    }
+}
+
+/// Opaque private proxy and Endpoint ownership for one exact Binding.
+#[derive(Clone, PartialEq, Eq)]
+pub struct BindingProxyLease([u8; 16]);
+
+impl BindingProxyLease {
+    /// Construct a proxy lease at the trusted adapter boundary.
+    pub const fn from_adapter(value: [u8; 16]) -> Self {
+        Self(value)
+    }
+}
+
+impl core::fmt::Debug for BindingProxyLease {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("BindingProxyLease(<redacted>)")
+    }
+}
+
 /// Restart observation of a previously stored attach-runner identity.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum AttachmentObservation {
     /// A live runner matches the stored pidfd/start-time identity.
-    #[default]
-    Matching,
+    Matching {
+        /// The exact Service admission slot restored with the runner.
+        slot: BindingSlotLease,
+        /// The exact private proxy restored with the runner.
+        proxy: BindingProxyLease,
+    },
     /// No runner exists and normal reconciliation may create one.
     Missing,
     /// A pid or bus identity was reused or could not be proven.
     StaleIdentity,
+}
+
+impl core::fmt::Debug for AttachmentObservation {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Matching { .. } => formatter.write_str("AttachmentObservation::Matching"),
+            Self::Missing => formatter.write_str("AttachmentObservation::Missing"),
+            Self::StaleIdentity => formatter.write_str("AttachmentObservation::StaleIdentity"),
+        }
+    }
 }
 
 /// Closed Binding lifecycle phases.
@@ -339,6 +401,8 @@ pub enum BindingLifecycleError {
     Transient,
     /// A foreign or ambiguous identity blocked safe mutation.
     ForeignIdentity,
+    /// Restart recovery has not resolved an ambiguous prior identity.
+    Quarantined,
 }
 
 impl BindingLifecycleError {
@@ -350,6 +414,7 @@ impl BindingLifecycleError {
             Self::AdmissionDenied => "binding-admission-denied",
             Self::Transient => "transient",
             Self::ForeignIdentity => "foreign-identity",
+            Self::Quarantined => "quarantined",
         }
     }
 }
@@ -365,55 +430,86 @@ impl std::error::Error for BindingLifecycleError {}
 /// Port through which a Binding reaches its supervisor and brokered runner.
 pub trait BindingPort {
     /// Reserve the Service admission slot for this exact Binding.
-    fn acquire_slot(&mut self) -> Result<(), BindingLifecycleError>;
+    fn acquire_slot(
+        &mut self,
+        binding: &BindingIdentity,
+    ) -> Result<BindingSlotLease, BindingLifecycleError>;
 
     /// Start the Binding-private proxy and Endpoint.
-    fn start_proxy(&mut self) -> Result<(), BindingLifecycleError>;
+    fn start_proxy(
+        &mut self,
+        binding: &BindingIdentity,
+        slot: &BindingSlotLease,
+    ) -> Result<BindingProxyLease, BindingLifecycleError>;
 
     /// Spawn the one-shot attach runner through d2bd's `SpawnRunner` path.
-    fn spawn_attach_runner(&mut self) -> Result<AttachProcessIdentity, BindingLifecycleError>;
+    fn spawn_attach_runner(
+        &mut self,
+        binding: &BindingIdentity,
+        proxy: &BindingProxyLease,
+    ) -> Result<AttachProcessIdentity, BindingLifecycleError>;
 
     /// Verify a persisted attach runner by pidfd and start-time identity.
     fn observe_attach_runner(
         &mut self,
+        binding: &BindingIdentity,
         identity: &AttachProcessIdentity,
     ) -> Result<AttachmentObservation, BindingLifecycleError>;
 
     /// Detach the Guest through the Binding-private Endpoint.
-    fn detach_guest(&mut self) -> Result<(), BindingLifecycleError>;
+    fn detach_guest(
+        &mut self,
+        binding: &BindingIdentity,
+        proxy: &BindingProxyLease,
+    ) -> Result<(), BindingLifecycleError>;
 
     /// Close the exact broker-spawned attach runner after Guest detach.
     fn close_attach_runner(
         &mut self,
+        binding: &BindingIdentity,
         identity: &AttachProcessIdentity,
     ) -> Result<(), BindingLifecycleError>;
 
     /// Remove the Binding-private proxy and Endpoint.
-    fn close_proxy(&mut self) -> Result<(), BindingLifecycleError>;
+    fn close_proxy(
+        &mut self,
+        binding: &BindingIdentity,
+        proxy: &BindingProxyLease,
+    ) -> Result<(), BindingLifecycleError>;
 
     /// Release the Service admission slot after proxy closure.
-    fn release_slot(&mut self) -> Result<(), BindingLifecycleError>;
+    fn release_slot(
+        &mut self,
+        binding: &BindingIdentity,
+        slot: &BindingSlotLease,
+    ) -> Result<(), BindingLifecycleError>;
 }
 
 /// Binding lifecycle state, which never owns Service unbind or authority release.
 pub struct BindingLifecycle {
     service_zone_uid: ResourceUid,
     binding_zone_uid: ResourceUid,
+    identity: BindingIdentity,
     phase: BindingPhase,
-    slot_acquired: bool,
-    proxy_started: bool,
+    slot: Option<BindingSlotLease>,
+    proxy: Option<BindingProxyLease>,
     attach: Option<AttachProcessIdentity>,
 }
 
 impl BindingLifecycle {
     /// Construct an inactive Binding for a Service and Guest Zone.
-    pub const fn new(service_zone_uid: ResourceUid, binding_zone_uid: ResourceUid) -> Self {
+    pub const fn new(
+        service_zone_uid: ResourceUid,
+        binding_zone_uid: ResourceUid,
+        identity: BindingIdentity,
+    ) -> Self {
         Self {
             service_zone_uid,
             binding_zone_uid,
+            identity,
             phase: BindingPhase::WaitingForService,
-            slot_acquired: false,
-            proxy_started: false,
+            slot: None,
+            proxy: None,
             attach: None,
         }
     }
@@ -429,13 +525,16 @@ impl BindingLifecycle {
     }
 
     /// Acquire the Service slot, then proxy, then brokered attach runner.
-    pub fn activate<P: BindingPort>(
+    fn activate<P: BindingPort>(
         &mut self,
         service: &ServiceLifecycle,
         port: &mut P,
     ) -> Result<(), BindingLifecycleError> {
         if self.service_zone_uid != self.binding_zone_uid {
             return Err(BindingLifecycleError::WrongZone);
+        }
+        if self.phase == BindingPhase::Quarantined {
+            return Err(BindingLifecycleError::Quarantined);
         }
         if !service.ready_for_bindings() {
             return Err(BindingLifecycleError::ServiceNotReady);
@@ -444,16 +543,22 @@ impl BindingLifecycle {
             return Ok(());
         }
         self.phase = BindingPhase::Attaching;
-        if !self.slot_acquired {
-            port.acquire_slot()?;
-            self.slot_acquired = true;
+        if self.slot.is_none() {
+            self.slot = Some(port.acquire_slot(&self.identity)?);
         }
-        if !self.proxy_started {
-            port.start_proxy()?;
-            self.proxy_started = true;
+        if self.proxy.is_none() {
+            let slot = self
+                .slot
+                .as_ref()
+                .ok_or(BindingLifecycleError::AdmissionDenied)?;
+            self.proxy = Some(port.start_proxy(&self.identity, slot)?);
         }
         if self.attach.is_none() {
-            self.attach = Some(port.spawn_attach_runner()?);
+            let proxy = self
+                .proxy
+                .as_ref()
+                .ok_or(BindingLifecycleError::AdmissionDenied)?;
+            self.attach = Some(port.spawn_attach_runner(&self.identity, proxy)?);
         }
         self.phase = BindingPhase::Attached;
         Ok(())
@@ -461,13 +566,15 @@ impl BindingLifecycle {
 
     /// Adopt only a matching attach process; quarantine stale identity without
     /// starting, closing, or unbinding any host effect.
-    pub fn adopt<P: BindingPort>(
+    fn adopt<P: BindingPort>(
         &mut self,
         identity: AttachProcessIdentity,
         port: &mut P,
     ) -> Result<(), BindingLifecycleError> {
-        match port.observe_attach_runner(&identity)? {
-            AttachmentObservation::Matching => {
+        match port.observe_attach_runner(&self.identity, &identity)? {
+            AttachmentObservation::Matching { slot, proxy } => {
+                self.slot = Some(slot);
+                self.proxy = Some(proxy);
                 self.attach = Some(identity);
                 self.phase = BindingPhase::Attached;
             }
@@ -485,23 +592,30 @@ impl BindingLifecycle {
 
     /// Detach the Guest, close the owned runner and proxy, then release the
     /// slot. It intentionally has no access to Service authority or unbind.
-    pub fn finalize<P: BindingPort>(&mut self, port: &mut P) -> Result<(), BindingLifecycleError> {
+    fn finalize<P: BindingPort>(&mut self, port: &mut P) -> Result<(), BindingLifecycleError> {
         if self.is_closed() {
             return Ok(());
         }
+        if self.phase == BindingPhase::Quarantined {
+            return Err(BindingLifecycleError::Quarantined);
+        }
         self.phase = BindingPhase::Releasing;
         if let Some(identity) = self.attach.as_ref() {
-            port.detach_guest()?;
-            port.close_attach_runner(identity)?;
+            let proxy = self
+                .proxy
+                .as_ref()
+                .ok_or(BindingLifecycleError::AdmissionDenied)?;
+            port.detach_guest(&self.identity, proxy)?;
+            port.close_attach_runner(&self.identity, identity)?;
             self.attach = None;
         }
-        if self.proxy_started {
-            port.close_proxy()?;
-            self.proxy_started = false;
+        if let Some(proxy) = self.proxy.as_ref() {
+            port.close_proxy(&self.identity, proxy)?;
+            self.proxy = None;
         }
-        if self.slot_acquired {
-            port.release_slot()?;
-            self.slot_acquired = false;
+        if let Some(slot) = self.slot.as_ref() {
+            port.release_slot(&self.identity, slot)?;
+            self.slot = None;
         }
         self.phase = BindingPhase::Closed;
         Ok(())
@@ -513,8 +627,8 @@ impl core::fmt::Debug for BindingLifecycle {
         formatter
             .debug_struct("BindingLifecycle")
             .field("phase", &self.phase)
-            .field("has_slot", &self.slot_acquired)
-            .field("has_proxy", &self.proxy_started)
+            .field("has_slot", &self.slot.is_some())
+            .field("has_proxy", &self.proxy.is_some())
             .field("has_attach_runner", &self.attach.is_some())
             .finish()
     }
@@ -565,6 +679,21 @@ impl UsbipSupervisor {
             .get_mut(index)
             .ok_or(BindingLifecycleError::AdmissionDenied)?;
         binding.activate(&self.service, port)
+    }
+
+    /// Restore Binding-owned effects after a daemon restart without starting
+    /// replacement work until the persisted runner identity is verified.
+    pub fn adopt_binding<P: BindingPort>(
+        &mut self,
+        index: usize,
+        identity: AttachProcessIdentity,
+        port: &mut P,
+    ) -> Result<(), BindingLifecycleError> {
+        let binding = self
+            .bindings
+            .get_mut(index)
+            .ok_or(BindingLifecycleError::AdmissionDenied)?;
+        binding.adopt(identity, port)
     }
 
     /// Drain every Binding before unbinding the owned device and releasing
