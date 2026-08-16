@@ -65,10 +65,12 @@ tests/tools/bazel-check --profile local
 tests/tools/bazel-check --profile remote
 ```
 
-`make check` schedules `make bazel-check`, which defaults to the local
-profile and runs the complete `//...` graph. Remote profiles use remote-cache
-read and write bytes as provider evidence. Cargo remains available as a
-standalone workflow.
+`make check` schedules `make bazel-check`. On a developer host that
+defaults to the remote profile so supported Rustc actions use BuildBuddy,
+and falls back to local execution when credentials are withheld. GitHub
+Layer-1 runs `nix develop .#bazel -c make bazel-check` with
+`D2B_BAZEL_PROFILE=local` and `D2B_BAZEL_UNTRUSTED=1`. Cargo remains
+available as a standalone workflow.
 
 The facade always supplies `--repo_contents_cache=` as a local command option.
 Repository-content caching is not a remote profile feature. It runs the

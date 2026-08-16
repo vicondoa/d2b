@@ -86,10 +86,10 @@ check-fast: test-unit
 check-tier0:
 	bash tests/tools/tier0-first-pass.sh
 
-## bazel-check - Bazel aggregate used by make check. It runs the complete
-##                //... graph locally by default; set D2B_BAZEL_PROFILE for a
-##                remote or qualification profile.
-D2B_BAZEL_PROFILE ?= local
+## bazel-check - Bazel aggregate used by make check. Locally this defaults to
+##                the BuildBuddy remote profile and falls back to local when
+##                credentials are withheld. CI sets D2B_BAZEL_PROFILE=local.
+D2B_BAZEL_PROFILE ?= remote
 bazel-check:
 	tests/tools/bazel-check --profile "$(D2B_BAZEL_PROFILE)"
 

@@ -232,6 +232,20 @@ def nix_setup_step(job: dict[str, Any], scope_suffix: str = "") -> str:
     )
 
 
+def bazel_job(job: dict[str, Any]) -> str:
+    return f"""  {job["ciJobId"]}:
+{needs_line(job)}    runs-on: {job["runsOn"]}
+    timeout-minutes: {job["timeoutMinutes"]}
+{ci_env_block(job, 4)}\
+    steps:
+      - uses: {CHECKOUT}
+        with:
+          persist-credentials: false{checkout_fetch_depth_line(job)}
+{nix_setup_step(job)}
+      - name: {job["displayName"]}
+        run: nix develop --no-write-lock-file .#bazel -c make {job["makeTarget"]}"""
+
+
 def simple_nix_job(job: dict[str, Any]) -> str:
     return f"""  {job["ciJobId"]}:
 {needs_line(job)}    runs-on: {job["runsOn"]}
@@ -808,6 +822,7 @@ RENDERERS = {
     "tier0": tier0_job,
     "simple": simple_job,
     "simple-nix": simple_nix_job,
+    "bazel": bazel_job,
     "changelog": changelog_job,
     "rust": rust_job,
     "rust-rollup": rust_rollup_job,

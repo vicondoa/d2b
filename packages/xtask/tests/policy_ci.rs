@@ -37,6 +37,7 @@ const APPROVED_MAKE_TARGETS: &[&str] = &[
     "test-flake",
     "test-nix-unit",
     "test-policy",
+    "bazel-check",
     "test-integration",
     "test-host-integration",
     "test-hardware",
@@ -244,24 +245,29 @@ fn optional_bazel_facade_stays_out_of_ci_schedulers() {
     let mut violations = Vec::new();
     for rel in workflow_files() {
         let content = read_repo_file(&rel);
-        if contains_bazel_facade_invocation(&content) {
+        if content.contains("tests/tools/bazel-check") {
             violations.push(rel);
         }
     }
     assert!(
         violations.is_empty(),
-        "Bazel must enter CI only through a generated Make job, not a raw facade:\n{}",
+        "CI must call Bazel through make bazel-check, not the facade script:\n{}",
         violations.join("\n")
     );
 
     let layer1_manifest = read_repo_file("tests/layer1-jobs.json");
     assert!(
-        layer1_manifest.contains("bazel-check"),
-        "make check must schedule the Bazel aggregate"
+        layer1_manifest.contains("\"ciJobId\": \"bazel-check\""),
+        "CI must schedule a local Bazel aggregate"
     );
     assert!(
-        !layer1_manifest.contains("\"ciJobId\": \"bazel-check\""),
-        "GitHub Layer-1 runners do not host Bazel yet"
+        layer1_manifest.contains("\"D2B_BAZEL_PROFILE\": \"local\""),
+        "CI Bazel must stay on the local profile"
+    );
+    assert!(
+        !layer1_manifest.contains("remote.buildbuddy.io")
+            && !layer1_manifest.contains("d2b.buildbuddy.io"),
+        "CI must not pin a BuildBuddy endpoint"
     );
 }
 

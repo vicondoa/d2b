@@ -30,10 +30,10 @@ Container, host, live, hardware, and performance lanes are conditional on the
 changed surface. See [tests/README.md](./tests/README.md) for the test layering
 and public conditional integration targets.
 
-`make check` schedules `make bazel-check` for the complete local `//...`
-graph. Remote-cache read and write bytes are the BuildBuddy provider
-evidence. Standalone Cargo commands remain available. GitHub Layer-1
-runners stay on generated Cargo/Make jobs until those runners host Bazel.
+`make check` schedules `make bazel-check`. A developer host uses
+BuildBuddy for supported targets; GitHub Layer-1 runs the same
+aggregate locally through `nix develop .#bazel`. Standalone Cargo
+commands remain available.
 
 <a id="rust-workspace-checks"></a>
 

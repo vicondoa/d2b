@@ -83,6 +83,25 @@ jobs:
       - name: Changelog policy gate
         run: make test-changelog
 
+  bazel-check:
+    needs: [tier0]
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      D2B_BAZEL_PROFILE: "local"
+      D2B_BAZEL_UNTRUSTED: "1"
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+      - uses: cachix/install-nix-action@23cf0fec1d55e0b1f2631aedd2a610c21ef8b077
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - name: Bazel local aggregate
+        run: nix develop --no-write-lock-file .#bazel -c make bazel-check
+
   test-rust-main:
     needs: [tier0]
     runs-on: ubuntu-latest
@@ -1430,7 +1449,7 @@ jobs:
 
 
   check:
-    needs: [tier0, check-inventory, test-performance-budgets, test-lint, test-changelog, test-rust, test-fixture-contracts, test-proofs, test-nix-unit, test-flake-x86, test-flake-aarch64, test-drift, test-policy, test-runtime-ledger]
+    needs: [tier0, check-inventory, test-performance-budgets, test-lint, test-changelog, bazel-check, test-rust, test-fixture-contracts, test-proofs, test-nix-unit, test-flake-x86, test-flake-aarch64, test-drift, test-policy, test-runtime-ledger]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -1473,6 +1492,7 @@ jobs:
           require_advisory_success test-performance-budgets '${{ needs.test-performance-budgets.result }}'
           require_success test-lint '${{ needs.test-lint.result }}'
           allow_success_or_skipped test-changelog '${{ needs.test-changelog.result }}'
+          require_success bazel-check '${{ needs.bazel-check.result }}'
           require_success test-rust '${{ needs.test-rust.result }}'
           require_success test-fixture-contracts '${{ needs.test-fixture-contracts.result }}'
           require_success test-proofs '${{ needs.test-proofs.result }}'

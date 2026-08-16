@@ -57,6 +57,7 @@
       "test-performance-budgets",
       "test-lint",
       "test-changelog",
+      "bazel-check",
       "test-rust-main",
       "test-rust-broker",
       "test-rust-guest-shell-runner",
@@ -87,6 +88,7 @@
       "test-performance-budgets",
       "test-lint",
       "test-changelog",
+      "bazel-check",
       "test-rust",
       "test-fixture-contracts",
       "test-proofs",
@@ -167,12 +169,21 @@
       "runsOn": "ubuntu-latest"
     },
     "bazel-check": {
-      "displayName": "Bazel aggregate check graph",
+      "displayName": "Bazel local aggregate",
       "makeTarget": "bazel-check",
       "localEnv": {
-        "D2B_BAZEL_PROFILE": "local"
+        "D2B_BAZEL_PROFILE": "remote"
       },
-      "timeoutMinutes": 45,
+      "ciEnv": {
+        "D2B_BAZEL_PROFILE": "local",
+        "D2B_BAZEL_UNTRUSTED": "1"
+      },
+      "ciKind": "bazel",
+      "ciJobId": "bazel-check",
+      "needs": [
+        "tier0"
+      ],
+      "timeoutMinutes": 90,
       "runsOn": "ubuntu-latest"
     },
     "test-rust-main": {

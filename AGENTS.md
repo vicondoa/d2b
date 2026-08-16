@@ -136,8 +136,9 @@ settings or claim atomic base binding.
 ## Critical subsystem index
 
 `make check` schedules the Bazel aggregate (`make bazel-check`) plus the
-remaining local Layer-1 jobs. Remote-cache read and write bytes are the
-BuildBuddy provider evidence. Standalone Cargo workflows remain available.
+remaining local Layer-1 jobs. Locally the aggregate uses BuildBuddy for
+supported targets. CI runs the same aggregate with the local profile and
+no BuildBuddy. Standalone Cargo workflows remain available.
 
 The full invariants are in
 [`docs/contributing/critical-subsystems.md`](./docs/contributing/critical-subsystems.md).
