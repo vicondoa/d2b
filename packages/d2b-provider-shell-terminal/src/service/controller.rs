@@ -8,16 +8,24 @@ use std::{
 use crate::{
     Authorizer, ShellPool, ShellSession, ShellTerminalError, Subject,
     resources::validate_name,
-    service::supervisor::{Attachment, SessionCapability, SessionSupervisor, ShellAuthorityPort},
+    service::supervisor::{
+        Attachment, SessionCapability, SessionSupervisor, ShellAuthorityPort,
+    },
     session::{AdoptionDecision, SupervisorCandidate, SupervisorIdentity, adopt_supervisor},
 };
 
 /// A validated request to create one pool-derived shell session.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct OpenSessionRequest {
     pool_name: String,
     session_name: String,
     output_ring_capacity: Option<u64>,
+}
+
+impl std::fmt::Debug for OpenSessionRequest {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("OpenSessionRequest(<redacted>)")
+    }
 }
 
 impl OpenSessionRequest {
@@ -81,8 +89,7 @@ impl OpenSessionResult {
         if identity.generation() != self.supervisor_generation {
             return Err(ShellTerminalError::StaleSessionGeneration);
         }
-        self.authority
-            .validate_session(&self.session, self.supervisor_generation)?;
+        self.authority.claim_supervisor(&self.session, &identity)?;
         Ok(SessionSupervisor::new(
             self.session.clone(),
             identity,
@@ -193,7 +200,7 @@ impl ShellTerminalController {
         let authority_trusted = decision == AdoptionDecision::Adopted
             && self
                 .authority
-                .verify_recovery(&session, expected_identity.generation())?;
+                .verify_recovery(&session, expected_identity)?;
         let decision = if decision == AdoptionDecision::Adopted && !authority_trusted {
             AdoptionDecision::Ambiguous
         } else {
@@ -211,7 +218,9 @@ impl ShellTerminalController {
         &mut self,
         subject: &Subject,
         session_name: &str,
+        retiring_identity: Option<&SupervisorIdentity>,
     ) -> Result<OpenSessionResult, ShellTerminalError> {
+        Authorizer::authorize_request(subject)?;
         let session = self
             .sessions
             .get(session_name)
@@ -225,10 +234,11 @@ impl ShellTerminalController {
         if !self.trusted_sessions.contains(session_name) {
             return Err(ShellTerminalError::SupervisorAmbiguous);
         }
-        let supervisor_generation = self.authority.advance_session(&session)?;
-        let capability = self
+        let grant = self
             .authority
-            .mint_capability(&session, supervisor_generation)?;
+            .advance_session(&session, retiring_identity)?;
+        let supervisor_generation = grant.generation();
+        let capability = grant.capability();
         Ok(OpenSessionResult {
             session,
             supervisor_generation,
@@ -243,6 +253,7 @@ impl ShellTerminalController {
         subject: &Subject,
         request: OpenSessionRequest,
     ) -> Result<OpenSessionResult, ShellTerminalError> {
+        Authorizer::authorize_request(subject)?;
         let pool = self
             .pools
             .get(&request.pool_name)
@@ -261,11 +272,9 @@ impl ShellTerminalController {
             request.session_name,
             request.output_ring_capacity,
         )?;
-        self.authority.open_session(&session)?;
-        let supervisor_generation = 1;
-        let capability = self
-            .authority
-            .mint_capability(&session, supervisor_generation)?;
+        let grant = self.authority.open_session(&session)?;
+        let supervisor_generation = grant.generation();
+        let capability = grant.capability();
         let result = OpenSessionResult {
             session: session.clone(),
             supervisor_generation,
@@ -290,5 +299,29 @@ impl ShellTerminalController {
     /// Return whether the Provider correctly declares no persistent state set.
     pub const fn provider_state_is_empty(&self) -> bool {
         true
+    }
+
+    /// Finalize one session after its owned supervisor has stopped.
+    pub fn finalize_session(
+        &mut self,
+        subject: &Subject,
+        session_name: &str,
+        identity: Option<&SupervisorIdentity>,
+    ) -> Result<(), ShellTerminalError> {
+        Authorizer::authorize_request(subject)?;
+        let session = self
+            .sessions
+            .get(session_name)
+            .cloned()
+            .ok_or(ShellTerminalError::CapacityExceeded)?;
+        let pool = self
+            .pools
+            .get(session.pool_name())
+            .ok_or(ShellTerminalError::CapacityExceeded)?;
+        Authorizer::authorize(subject, pool)?;
+        self.authority.finalize_session(&session, identity)?;
+        self.sessions.remove(session_name);
+        self.trusted_sessions.remove(session_name);
+        Ok(())
     }
 }

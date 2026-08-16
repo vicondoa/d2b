@@ -54,6 +54,19 @@ fn supervisor_lifecycle_uses_typed_user_domain_process_conformance() {
         &session(),
     );
     assert!(block_on(lifecycle.launch(&ticket())).is_ok());
+    assert_eq!(
+        format!("{lifecycle:?}"),
+        "SupervisorProcessLifecycle(<redacted>)"
+    );
+
+    let lifecycle = SupervisorProcessLifecycle::for_session(
+        ScriptedEffectPort::launching(required(), WaitReapOwner::Local),
+        &session(),
+    );
+    assert!(matches!(
+        block_on(lifecycle.launch(&ticket())),
+        Err(d2b_process_conformance::ProcessConformanceError::WaitOwnerMismatch)
+    ));
 
     let stale: Vec<_> = required()
         .into_iter()

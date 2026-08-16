@@ -25,11 +25,17 @@ pub enum Role {
 }
 
 /// The request-bound authority supplied by the authenticated session layer.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Subject {
     zone: String,
     origin: CallerOrigin,
     roles: BTreeSet<Role>,
+}
+
+impl std::fmt::Debug for Subject {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("Subject(<redacted>)")
+    }
 }
 
 impl Subject {
@@ -66,6 +72,15 @@ impl Subject {
 pub struct Authorizer;
 
 impl Authorizer {
+    /// Authorize the role bound to the current request before resource lookup.
+    pub fn authorize_request(subject: &Subject) -> Result<(), ShellTerminalError> {
+        if subject.is_admin() {
+            Ok(())
+        } else {
+            Err(ShellTerminalError::NotAuthorized)
+        }
+    }
+
     /// Authorize a shell verb against one pool.
     pub fn authorize(subject: &Subject, pool: &ShellPool) -> Result<(), ShellTerminalError> {
         Self::authorize_target(subject, pool.zone(), pool.execution_target())
@@ -77,9 +92,7 @@ impl Authorizer {
         zone: &str,
         target: &ExecutionTarget,
     ) -> Result<(), ShellTerminalError> {
-        if !subject.is_admin() {
-            return Err(ShellTerminalError::NotAuthorized);
-        }
+        Self::authorize_request(subject)?;
         if subject.zone() != zone {
             return Err(ShellTerminalError::WrongZone);
         }

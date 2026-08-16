@@ -15,12 +15,18 @@ const MIN_RING_CAPACITY: u64 = 4 * 1024;
 const MAX_RING_CAPACITY: u64 = 1024 * 1024;
 
 /// A target that can host a user-domain session supervisor.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum ExecutionTarget {
     /// A local Host resource.
     Host(String),
     /// A Guest resource with user-domain support.
     Guest(String),
+}
+
+impl std::fmt::Debug for ExecutionTarget {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("ExecutionTarget(<redacted>)")
+    }
 }
 
 impl ExecutionTarget {
@@ -52,7 +58,7 @@ impl ExecutionTarget {
 }
 
 /// Immutable policy and capacity configuration for one shell pool.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct PoolSpec {
     execution_target: ExecutionTarget,
     workload_user: String,
@@ -60,6 +66,17 @@ pub struct PoolSpec {
     max_sessions: u32,
     max_attached: u32,
     output_ring_capacity: u64,
+}
+
+impl std::fmt::Debug for PoolSpec {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("PoolSpec")
+            .field("max_sessions", &self.max_sessions)
+            .field("max_attached", &self.max_attached)
+            .field("output_ring_capacity", &self.output_ring_capacity)
+            .finish()
+    }
 }
 
 impl PoolSpec {
@@ -131,11 +148,20 @@ impl PoolSpec {
 }
 
 /// A qualified `ShellPool` resource.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct ShellPool {
     name: String,
     zone: String,
     spec: PoolSpec,
+}
+
+impl std::fmt::Debug for ShellPool {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ShellPool")
+            .field("spec", &self.spec)
+            .finish_non_exhaustive()
+    }
 }
 
 impl ShellPool {

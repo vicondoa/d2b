@@ -93,7 +93,7 @@ fn restored_sessions_block_recreation_after_controller_restart() {
         Err(d2b_provider_shell_terminal::ShellTerminalError::CapacityExceeded)
     ));
     let restarted = recovered_controller
-        .restart_supervisor(&admin, opened.session().name())
+        .restart_supervisor(&admin, opened.session().name(), Some(&identity))
         .unwrap();
     let mut new_supervisor = restarted
         .start_supervisor(
@@ -132,6 +132,27 @@ fn restored_sessions_block_recreation_after_controller_restart() {
 }
 
 #[test]
+fn duplicate_supervisor_start_is_rejected_by_daemon_authority() {
+    let mut controller = controller();
+    controller.insert_pool(pool()).unwrap();
+    let admin = Subject::new("dev", CallerOrigin::Local, [Role::ZoneAdmin]);
+    let opened = controller
+        .open_session(
+            &admin,
+            OpenSessionRequest::new("guest-alice", "main", None).unwrap(),
+        )
+        .unwrap();
+    let identity =
+        SupervisorIdentity::new([1; 32], [2; 32], opened.supervisor_generation()).unwrap();
+    let _supervisor = opened.start_supervisor(identity.clone()).unwrap();
+
+    assert!(matches!(
+        opened.start_supervisor(identity),
+        Err(d2b_provider_shell_terminal::ShellTerminalError::SupervisorAmbiguous)
+    ));
+}
+
+#[test]
 fn restarted_session_advances_generation_and_rejects_old_capability() {
     let mut controller = controller();
     controller.insert_pool(pool()).unwrap();
@@ -144,7 +165,7 @@ fn restarted_session_advances_generation_and_rejects_old_capability() {
         .unwrap();
 
     let restarted = controller
-        .restart_supervisor(&admin, opened.session().name())
+        .restart_supervisor(&admin, opened.session().name(), None)
         .unwrap();
     assert_eq!(restarted.supervisor_generation(), 2);
     let mut supervisor = restarted
@@ -262,7 +283,7 @@ fn recovery_authorities_refuse_different_pool_or_session() {
         AdoptionDecision::Ambiguous
     );
     assert!(matches!(
-        session_recovery.restart_supervisor(&admin, foreign_session.name()),
+        session_recovery.restart_supervisor(&admin, foreign_session.name(), None),
         Err(d2b_provider_shell_terminal::ShellTerminalError::SupervisorAmbiguous)
     ));
 }
@@ -295,7 +316,7 @@ fn ambiguous_recovery_cannot_advance_daemon_session_generation() {
         AdoptionDecision::StaleGeneration
     );
     assert!(matches!(
-        recovered_controller.restart_supervisor(&admin, opened.session().name()),
+        recovered_controller.restart_supervisor(&admin, opened.session().name(), None),
         Err(d2b_provider_shell_terminal::ShellTerminalError::SupervisorAmbiguous)
     ));
 }
@@ -325,6 +346,50 @@ fn daemon_authority_enforces_session_capacity_across_controllers() {
 }
 
 #[test]
+fn finalization_retires_authority_after_owned_attachments_close() {
+    let mut controller = controller();
+    controller.insert_pool(pool()).unwrap();
+    let admin = Subject::new("dev", CallerOrigin::Local, [Role::ZoneAdmin]);
+    let opened = controller
+        .open_session(
+            &admin,
+            OpenSessionRequest::new("guest-alice", "main", None).unwrap(),
+        )
+        .unwrap();
+    let identity =
+        SupervisorIdentity::new([1; 32], [2; 32], opened.supervisor_generation()).unwrap();
+    let mut supervisor = opened.start_supervisor(identity.clone()).unwrap();
+    let attachment = supervisor
+        .attach(
+            &admin,
+            d2b_provider_shell_terminal::AttachRequest::new(
+                opened.supervisor_generation(),
+                0,
+            )
+            .unwrap(),
+        )
+        .unwrap()
+        .attachment();
+
+    assert!(matches!(
+        controller.finalize_session(&admin, opened.session().name(), Some(&identity)),
+        Err(d2b_provider_shell_terminal::ShellTerminalError::CapacityExceeded)
+    ));
+    supervisor.detach(&admin, attachment).unwrap();
+    controller
+        .finalize_session(&admin, opened.session().name(), Some(&identity))
+        .unwrap();
+    assert!(
+        controller
+            .open_session(
+                &admin,
+                OpenSessionRequest::new("guest-alice", "other", None).unwrap(),
+            )
+            .is_ok()
+    );
+}
+
+#[test]
 fn controller_and_open_result_debug_are_redacted() {
     let mut controller = controller();
     controller.insert_pool(pool()).unwrap();
@@ -343,6 +408,18 @@ fn controller_and_open_result_debug_are_redacted() {
     let controller_rendered = format!("{controller:?}");
     assert!(!controller_rendered.contains("guest-alice"));
     assert!(!controller_rendered.contains("alice"));
+    assert!(!format!("{:?}", pool()).contains("guest-alice"));
+    assert!(!format!("{:?}", opened.session()).contains("artifact://"));
+    assert!(!format!(
+        "{:?}",
+        OpenSessionRequest::new("guest-alice", "main", None).unwrap()
+    )
+    .contains("guest-alice"));
+    assert!(!format!(
+        "{:?}",
+        Subject::new("dev", CallerOrigin::Local, [Role::ZoneAdmin])
+    )
+    .contains("dev"));
 }
 
 #[test]
@@ -489,7 +566,7 @@ fn daemon_authority_fences_separate_controller_and_supervisor_processes() {
         AdoptionDecision::Adopted
     );
     let restarted = recovered_controller
-        .restart_supervisor(&admin, opened.session().name())
+        .restart_supervisor(&admin, opened.session().name(), Some(&identity))
         .unwrap();
     let mut new_supervisor = restarted
         .start_supervisor(
@@ -560,7 +637,7 @@ fn daemon_authority_replays_capabilities_once_across_supervisors() {
         AdoptionDecision::Adopted
     );
     let restarted = recovered_controller
-        .restart_supervisor(&admin, opened.session().name())
+        .restart_supervisor(&admin, opened.session().name(), Some(&identity))
         .unwrap();
     let mut second_supervisor = restarted
         .start_supervisor(

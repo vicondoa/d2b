@@ -18,12 +18,17 @@ use d2b_process_conformance::{
 /// This type validates only the semantic process request and calls a typed
 /// effect port. It neither opens a broker or system-manager connection nor
 /// receives raw process identifiers, credentials, paths, or descriptors.
-#[derive(Debug)]
 pub struct SupervisorProcessLifecycle<P: ProcessLaunchEffectPort> {
     port: P,
     profile: ProcessProviderProfile,
     execution_ref: ResourceRef,
     user_ref: ResourceRef,
+}
+
+impl<P: ProcessLaunchEffectPort> std::fmt::Debug for SupervisorProcessLifecycle<P> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("SupervisorProcessLifecycle(<redacted>)")
+    }
 }
 
 impl<P: ProcessLaunchEffectPort> SupervisorProcessLifecycle<P> {
@@ -102,6 +107,24 @@ impl<P: ProcessLaunchEffectPort> SupervisorProcessLifecycle<P> {
             adoption,
         }
     }
+
+    async fn cleanup_failed_launch(
+        &self,
+        launched: &d2b_process_conformance::LaunchedProcess,
+        error: ProcessConformanceError,
+    ) -> ProcessConformanceError {
+        if launched.identity.is_zero() {
+            return error;
+        }
+        match self
+            .port
+            .stop(&launched.identity, StopClass::Terminate)
+            .await
+        {
+            Ok(()) => error,
+            Err(_) => ProcessConformanceError::StopUnavailable,
+        }
+    }
 }
 
 impl<P: ProcessLaunchEffectPort> ProcessProvider for SupervisorProcessLifecycle<P> {
@@ -115,10 +138,15 @@ impl<P: ProcessLaunchEffectPort> ProcessProvider for SupervisorProcessLifecycle<
     ) -> Result<ProcessStatusReport, ProcessConformanceError> {
         self.validate(ticket)?;
         let launched = self.port.launch(ticket).await?;
-        if launched.wait_reap_owner != WaitReapOwner::ServiceManager {
-            return Err(ProcessConformanceError::WaitOwnerMismatch);
+        if let Err(error) = launched.validate(self.profile.required_identity_bindings()) {
+            return Err(self.cleanup_failed_launch(&launched, error).await);
         }
-        launched.validate(self.profile.required_identity_bindings())?;
+        if launched.wait_reap_owner != WaitReapOwner::ServiceManager {
+            return Err(
+                self.cleanup_failed_launch(&launched, ProcessConformanceError::WaitOwnerMismatch)
+                    .await,
+            );
+        }
         Ok(self.report(
             ticket,
             launched.identity,

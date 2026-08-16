@@ -23,7 +23,7 @@ pub enum SessionPhase {
 }
 
 /// A qualified `ShellSession` with pool-inherited placement fields.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct ShellSession {
     name: String,
     zone: String,
@@ -34,6 +34,16 @@ pub struct ShellSession {
     session_name: String,
     output_ring_capacity: u64,
     phase: SessionPhase,
+}
+
+impl std::fmt::Debug for ShellSession {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ShellSession")
+            .field("output_ring_capacity", &self.output_ring_capacity)
+            .field("phase", &self.phase)
+            .finish_non_exhaustive()
+    }
 }
 
 impl ShellSession {

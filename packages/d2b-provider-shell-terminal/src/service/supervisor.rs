@@ -100,11 +100,16 @@ pub struct SessionCapability {
 }
 
 impl SessionCapability {
-    fn new(id: u64, generation: u64, session_name: String) -> Self {
+    /// Construct a capability from a daemon authority response.
+    ///
+    /// Callers must not mint capabilities locally. Production implementations
+    /// of [`ShellAuthorityPort`] use this only to decode an authenticated
+    /// authority response.
+    pub fn from_authority(id: u64, generation: u64, session_name: impl Into<String>) -> Self {
         Self {
             id,
             generation,
-            session_name,
+            session_name: session_name.into(),
         }
     }
 }
@@ -127,9 +132,60 @@ pub struct Attachment {
     generation: u64,
 }
 
+impl Attachment {
+    /// Construct an attachment from a daemon authority response.
+    pub fn from_authority(
+        id: u64,
+        session_name: impl Into<String>,
+        generation: u64,
+    ) -> Self {
+        Self {
+            id,
+            session_name: session_name.into(),
+            generation,
+        }
+    }
+}
+
 impl std::fmt::Debug for Attachment {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str("Attachment(<redacted>)")
+    }
+}
+
+/// The daemon authority's atomic session-generation and capability grant.
+#[derive(Clone, PartialEq, Eq)]
+pub struct SessionGrant {
+    generation: u64,
+    capability: SessionCapability,
+}
+
+impl SessionGrant {
+    /// Construct a grant from an authority response.
+    pub fn from_authority(generation: u64, capability: SessionCapability) -> Self {
+        Self {
+            generation,
+            capability,
+        }
+    }
+
+    /// Return the authority-selected generation.
+    pub const fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// Return the one-shot capability in this grant.
+    pub fn capability(&self) -> SessionCapability {
+        self.capability.clone()
+    }
+}
+
+impl std::fmt::Debug for SessionGrant {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("SessionGrant")
+            .field("generation", &self.generation)
+            .finish_non_exhaustive()
     }
 }
 
@@ -137,6 +193,7 @@ struct SessionEntry {
     fingerprint: SessionFingerprint,
     generation: u64,
     capabilities: BTreeSet<u64>,
+    supervisor_identity: Option<SupervisorIdentity>,
 }
 
 struct PoolEntry {
@@ -167,38 +224,42 @@ pub trait ShellAuthorityPort: Send + Sync {
         attached_streams: u32,
     ) -> Result<(), ShellTerminalError>;
 
-    /// Create one exact session authority before its supervisor starts.
-    fn open_session(&self, session: &ShellSession) -> Result<(), ShellTerminalError>;
+    /// Atomically create one exact session authority and mint its grant.
+    fn open_session(&self, session: &ShellSession) -> Result<SessionGrant, ShellTerminalError>;
 
     /// Verify that a recovered session remains the exact authoritative incumbent.
     fn verify_recovery(
         &self,
         session: &ShellSession,
-        generation: u64,
+        identity: &SupervisorIdentity,
     ) -> Result<bool, ShellTerminalError>;
 
-    /// Advance a session generation after the previous owned supervisor retires.
-    fn advance_session(&self, session: &ShellSession) -> Result<u64, ShellTerminalError>;
+    /// Advance a session after its prior supervisor retires and mint its grant.
+    fn advance_session(
+        &self,
+        session: &ShellSession,
+        retired_identity: Option<&SupervisorIdentity>,
+    ) -> Result<SessionGrant, ShellTerminalError>;
+
+    /// Bind one verified supervisor identity to the current session generation.
+    fn claim_supervisor(
+        &self,
+        session: &ShellSession,
+        identity: &SupervisorIdentity,
+    ) -> Result<(), ShellTerminalError>;
 
     /// Verify one supervisor request against the current session generation.
     fn validate_session(
         &self,
         session: &ShellSession,
-        generation: u64,
+        identity: &SupervisorIdentity,
     ) -> Result<(), ShellTerminalError>;
 
-    /// Mint a one-shot capability for one exact session generation.
-    fn mint_capability(
-        &self,
-        session: &ShellSession,
-        generation: u64,
-    ) -> Result<SessionCapability, ShellTerminalError>;
-
-    /// Consume a capability exactly once.
+    /// Consume a one-shot capability for one exact supervisor identity.
     fn consume_capability(
         &self,
         session: &ShellSession,
-        generation: u64,
+        identity: &SupervisorIdentity,
         capability: &SessionCapability,
     ) -> Result<(), ShellTerminalError>;
 
@@ -206,7 +267,7 @@ pub trait ShellAuthorityPort: Send + Sync {
     fn reserve_attachment(
         &self,
         session: &ShellSession,
-        generation: u64,
+        identity: &SupervisorIdentity,
     ) -> Result<Attachment, ShellTerminalError>;
 
     /// Release one exact attachment after its owning session's named stream closes.
@@ -229,6 +290,13 @@ pub trait ShellAuthorityPort: Send + Sync {
         pool: &ShellPool,
         stale_attachments: &[Attachment],
         attached_streams: u32,
+    ) -> Result<(), ShellTerminalError>;
+
+    /// Retire one exact session after its supervisor is stopped and streams close.
+    fn finalize_session(
+        &self,
+        session: &ShellSession,
+        identity: Option<&SupervisorIdentity>,
     ) -> Result<(), ShellTerminalError>;
 }
 
@@ -331,7 +399,7 @@ impl ShellAuthorityPort for InMemoryShellAuthority {
         Ok(())
     }
 
-    fn open_session(&self, session: &ShellSession) -> Result<(), ShellTerminalError> {
+    fn open_session(&self, session: &ShellSession) -> Result<SessionGrant, ShellTerminalError> {
         let mut state = self.lock()?;
         let pool = state
             .pools
@@ -348,90 +416,118 @@ impl ShellAuthorityPort for InMemoryShellAuthority {
         {
             return Err(ShellTerminalError::CapacityExceeded);
         }
+        let capability_id = state
+            .next_capability
+            .checked_add(1)
+            .ok_or(ShellTerminalError::CapabilityReused)?;
+        state.next_capability = capability_id;
         state.sessions.insert(
             session.name().to_owned(),
             SessionEntry {
                 fingerprint: SessionFingerprint::from_session(session),
                 generation: 1,
-                capabilities: BTreeSet::new(),
+                capabilities: BTreeSet::from([capability_id]),
+                supervisor_identity: None,
             },
         );
-        Ok(())
+        Ok(SessionGrant::from_authority(
+            1,
+            SessionCapability::from_authority(
+                capability_id,
+                1,
+                session.name().to_owned(),
+            ),
+        ))
     }
 
     fn verify_recovery(
         &self,
         session: &ShellSession,
-        generation: u64,
+        identity: &SupervisorIdentity,
     ) -> Result<bool, ShellTerminalError> {
-        let mut state = self.lock()?;
-        let Some(entry) = state.sessions.get_mut(session.name()) else {
+        let state = self.lock()?;
+        let Some(entry) = state.sessions.get(session.name()) else {
             return Ok(false);
         };
         Ok(
             entry.fingerprint == SessionFingerprint::from_session(session)
-                && entry.generation == generation,
+                && entry.generation == identity.generation()
+                && entry.supervisor_identity.as_ref() == Some(identity),
         )
     }
 
-    fn advance_session(&self, session: &ShellSession) -> Result<u64, ShellTerminalError> {
+    fn advance_session(
+        &self,
+        session: &ShellSession,
+        retired_identity: Option<&SupervisorIdentity>,
+    ) -> Result<SessionGrant, ShellTerminalError> {
         let mut state = self.lock()?;
+        let current_identity = Self::session_mut(&mut state, session)?
+            .supervisor_identity
+            .clone();
+        if current_identity.as_ref() != retired_identity {
+            return Err(ShellTerminalError::SupervisorAmbiguous);
+        }
+        let capability_id = state
+            .next_capability
+            .checked_add(1)
+            .ok_or(ShellTerminalError::CapabilityReused)?;
+        state.next_capability = capability_id;
         let entry = Self::session_mut(&mut state, session)?;
         entry.generation = entry
             .generation
             .checked_add(1)
             .ok_or(ShellTerminalError::StaleSessionGeneration)?;
         entry.capabilities.clear();
-        Ok(entry.generation)
+        entry.supervisor_identity = None;
+        let generation = entry.generation;
+        entry.capabilities.insert(capability_id);
+        Ok(SessionGrant::from_authority(
+            generation,
+            SessionCapability::from_authority(
+                capability_id,
+                generation,
+                session.name().to_owned(),
+            ),
+        ))
+    }
+
+    fn claim_supervisor(
+        &self,
+        session: &ShellSession,
+        identity: &SupervisorIdentity,
+    ) -> Result<(), ShellTerminalError> {
+        let mut state = self.lock()?;
+        let entry = Self::session_mut(&mut state, session)?;
+        if entry.generation != identity.generation() || entry.supervisor_identity.is_some() {
+            return Err(ShellTerminalError::SupervisorAmbiguous);
+        }
+        entry.supervisor_identity = Some(identity.clone());
+        Ok(())
     }
 
     fn validate_session(
         &self,
         session: &ShellSession,
-        generation: u64,
+        identity: &SupervisorIdentity,
     ) -> Result<(), ShellTerminalError> {
         let mut state = self.lock()?;
         let entry = Self::session_mut(&mut state, session)?;
-        if entry.generation != generation {
+        if entry.generation != identity.generation()
+            || entry.supervisor_identity.as_ref() != Some(identity)
+        {
             return Err(ShellTerminalError::StaleSessionGeneration);
         }
         Ok(())
     }
 
-    fn mint_capability(
-        &self,
-        session: &ShellSession,
-        generation: u64,
-    ) -> Result<SessionCapability, ShellTerminalError> {
-        let mut state = self.lock()?;
-        {
-            let entry = Self::session_mut(&mut state, session)?;
-            if entry.generation != generation {
-                return Err(ShellTerminalError::StaleSessionGeneration);
-            }
-        }
-        state.next_capability = state
-            .next_capability
-            .checked_add(1)
-            .ok_or(ShellTerminalError::CapabilityReused)?;
-        let id = state.next_capability;
-        Self::session_mut(&mut state, session)?
-            .capabilities
-            .insert(id);
-        Ok(SessionCapability::new(
-            id,
-            generation,
-            session.name().to_owned(),
-        ))
-    }
-
     fn consume_capability(
         &self,
         session: &ShellSession,
-        generation: u64,
+        identity: &SupervisorIdentity,
         capability: &SessionCapability,
     ) -> Result<(), ShellTerminalError> {
-        if capability.generation != generation {
+        if capability.generation != identity.generation() {
             return Err(ShellTerminalError::StaleSessionGeneration);
         }
         if capability.session_name != session.name() {
@@ -439,7 +535,9 @@ impl ShellAuthorityPort for InMemoryShellAuthority {
         }
         let mut state = self.lock()?;
         let entry = Self::session_mut(&mut state, session)?;
-        if entry.generation != generation {
+        if entry.generation != identity.generation()
+            || entry.supervisor_identity.as_ref() != Some(identity)
+        {
             return Err(ShellTerminalError::StaleSessionGeneration);
         }
         if !entry.capabilities.remove(&capability.id) {
@@ -451,11 +549,13 @@ impl ShellAuthorityPort for InMemoryShellAuthority {
     fn reserve_attachment(
         &self,
         session: &ShellSession,
-        generation: u64,
+        identity: &SupervisorIdentity,
     ) -> Result<Attachment, ShellTerminalError> {
         let mut state = self.lock()?;
         let session_entry = Self::session_mut(&mut state, session)?;
-        if session_entry.generation != generation {
+        if session_entry.generation != identity.generation()
+            || session_entry.supervisor_identity.as_ref() != Some(identity)
+        {
             return Err(ShellTerminalError::StaleSessionGeneration);
         }
         let pool = state
@@ -475,7 +575,7 @@ impl ShellAuthorityPort for InMemoryShellAuthority {
         let attachment = Attachment {
             id: pool.next_attachment,
             session_name: session.name().to_owned(),
-            generation,
+            generation: identity.generation(),
         };
         pool.entries.insert(attachment.clone());
         Ok(attachment)
@@ -533,6 +633,36 @@ impl ShellAuthorityPort for InMemoryShellAuthority {
             pool.entries.remove(attachment);
         }
         pool.retained_attachments = attached_streams - remaining_entries;
+        Ok(())
+    }
+
+    fn finalize_session(
+        &self,
+        session: &ShellSession,
+        identity: Option<&SupervisorIdentity>,
+    ) -> Result<(), ShellTerminalError> {
+        let mut state = self.lock()?;
+        let entry = state
+            .sessions
+            .get(session.name())
+            .ok_or(ShellTerminalError::SupervisorAmbiguous)?;
+        if entry.fingerprint != SessionFingerprint::from_session(session)
+            || entry.supervisor_identity.as_ref() != identity
+        {
+            return Err(ShellTerminalError::SupervisorAmbiguous);
+        }
+        let pool = state
+            .pools
+            .get(session.pool_name())
+            .ok_or(ShellTerminalError::CapacityExceeded)?;
+        if pool
+            .entries
+            .iter()
+            .any(|attachment| attachment.session_name == session.name())
+        {
+            return Err(ShellTerminalError::CapacityExceeded);
+        }
+        state.sessions.remove(session.name());
         Ok(())
     }
 }
@@ -609,7 +739,7 @@ impl SessionSupervisor {
         }
         let attachment = self
             .authority
-            .reserve_attachment(&self.session, generation)?;
+            .reserve_attachment(&self.session, &self.identity)?;
         Ok(AttachReceipt {
             generation,
             replay: self.ring.tail(request.tail_bytes as usize),
@@ -626,10 +756,10 @@ impl SessionSupervisor {
         self.authorize(subject)?;
         let generation = self.identity.generation();
         self.authority
-            .consume_capability(&self.session, generation, &capability)?;
+            .consume_capability(&self.session, &self.identity, &capability)?;
         let attachment = self
             .authority
-            .reserve_attachment(&self.session, generation)?;
+            .reserve_attachment(&self.session, &self.identity)?;
         Ok(AttachReceipt {
             generation,
             replay: self.ring.tail(0),
@@ -652,7 +782,7 @@ impl SessionSupervisor {
     pub fn record_pty_output(&mut self, bytes: &[u8]) {
         if self
             .authority
-            .validate_session(&self.session, self.identity.generation())
+            .validate_session(&self.session, &self.identity)
             .is_ok()
         {
             self.ring.append(bytes);
