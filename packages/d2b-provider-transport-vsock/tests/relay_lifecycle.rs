@@ -10,8 +10,11 @@ use std::sync::{Arc, Mutex};
 struct FakeRelayPort {
     calls: Arc<Mutex<Vec<&'static str>>>,
     fail_reserve: Arc<Mutex<bool>>,
+    fail_spawn: Arc<Mutex<bool>>,
+    fail_close_listener: Arc<Mutex<bool>>,
     fail_release: Arc<Mutex<bool>>,
     observed: Arc<Mutex<Option<RelayObservation<u64, u64>>>>,
+    observe_error: Arc<Mutex<Option<RelayEffectError>>>,
 }
 
 #[async_trait]
@@ -48,7 +51,11 @@ impl RelayEffectPort for FakeRelayPort {
         _: &Self::CidReservation,
     ) -> Result<Self::RelayProcess, RelayEffectError> {
         self.calls.lock().unwrap().push("spawn-relay");
-        Ok(3)
+        if *self.fail_spawn.lock().unwrap() {
+            Err(RelayEffectError::ProcessUnavailable)
+        } else {
+            Ok(3)
+        }
     }
 
     async fn close_relay(&self, _: &Self::RelayProcess) -> Result<(), RelayEffectError> {
@@ -58,7 +65,11 @@ impl RelayEffectPort for FakeRelayPort {
 
     async fn close_listener(&self, _: &Self::Listener) -> Result<(), RelayEffectError> {
         self.calls.lock().unwrap().push("close-listener");
-        Ok(())
+        if *self.fail_close_listener.lock().unwrap() {
+            Err(RelayEffectError::CloseUnconfirmed)
+        } else {
+            Ok(())
+        }
     }
 
     async fn release_cid(&self, _: &Self::CidReservation) -> Result<(), RelayEffectError> {
@@ -75,6 +86,9 @@ impl RelayEffectPort for FakeRelayPort {
         _: &RelayBinding,
     ) -> Result<Option<RelayObservation<Self::Listener, Self::RelayProcess>>, RelayEffectError>
     {
+        if let Some(error) = *self.observe_error.lock().unwrap() {
+            return Err(error);
+        }
         Ok(self.observed.lock().unwrap().clone())
     }
 }
@@ -228,4 +242,91 @@ fn failed_cid_release_retains_authority_for_retry() {
         relay.finalize().await.unwrap();
         assert_eq!(relay.phase(), RelayPhase::Closed);
     });
+}
+
+#[test]
+fn listener_close_failure_keeps_cid_authority_for_retry() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let port = FakeRelayPort::default();
+        *port.fail_spawn.lock().unwrap() = true;
+        *port.fail_close_listener.lock().unwrap() = true;
+        let calls = Arc::clone(&port.calls);
+        let fail_close_listener = Arc::clone(&port.fail_close_listener);
+        let key = GuestControlKey::from_core([7; 32]);
+        let guest = binding().guest().clone();
+        let mut authority = SessionAuthority::new(guest.clone(), key.clone(), 1);
+        let session = authority
+            .authenticate(
+                PeerCid::from_core(42).unwrap(),
+                SessionProof::sign(&key, &guest, [13; 32], 1),
+            )
+            .unwrap();
+        let mut relay = NativeGuestRelay::new(port, binding());
+
+        assert_eq!(
+            relay.start(&session).await.unwrap_err(),
+            RelayEffectError::ProcessUnavailable
+        );
+        assert_eq!(relay.phase(), RelayPhase::Degraded);
+        assert_eq!(
+            *calls.lock().unwrap(),
+            vec![
+                "reserve-cid",
+                "bind-listener",
+                "spawn-relay",
+                "close-listener",
+            ]
+        );
+
+        *fail_close_listener.lock().unwrap() = false;
+        relay.finalize().await.unwrap();
+        assert_eq!(relay.phase(), RelayPhase::Closed);
+        assert_eq!(
+            *calls.lock().unwrap(),
+            vec![
+                "reserve-cid",
+                "bind-listener",
+                "spawn-relay",
+                "close-listener",
+                "close-listener",
+                "release-cid",
+            ]
+        );
+    });
+}
+
+#[test]
+fn restart_observation_error_degrades_without_adoption() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let port = FakeRelayPort::default();
+        *port.observe_error.lock().unwrap() = Some(RelayEffectError::Transient);
+        let mut relay = NativeGuestRelay::new(port, binding());
+
+        assert_eq!(
+            relay.adopt(1).await.unwrap_err(),
+            RelayEffectError::Transient
+        );
+        assert_eq!(relay.phase(), RelayPhase::Degraded);
+    });
+}
+
+#[test]
+fn relay_observation_debug_is_redacted() {
+    let observation = RelayObservation {
+        binding: binding(),
+        listener: 1234_u64,
+        process: 5678_u64,
+    };
+    let rendered = format!("{observation:?}");
+    assert!(!rendered.contains("1234"));
+    assert!(!rendered.contains("5678"));
+    assert!(!rendered.contains("guest-a"));
 }

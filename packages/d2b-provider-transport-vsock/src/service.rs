@@ -220,13 +220,31 @@ where
 
     /// Return the current service phase.
     pub async fn phase(&self) -> ServicePhase {
-        let active = self.active.lock().await;
-        if active.values().any(futures_phase_is_degraded) {
+        let active_degraded = self
+            .active
+            .lock()
+            .await
+            .values()
+            .any(futures_phase_is_degraded);
+        if active_degraded {
             ServicePhase::Degraded
-        } else if active.is_empty() {
-            ServicePhase::Ready
         } else {
-            ServicePhase::Serving
+            let completed_degraded = {
+                let completed = self.completed.lock().await;
+                completed
+                    .values()
+                    .any(|observation| observation.phase == TransportPhase::Degraded)
+            };
+            if completed_degraded {
+                ServicePhase::Degraded
+            } else {
+                let active_empty = self.active.lock().await.is_empty();
+                if active_empty {
+                    ServicePhase::Ready
+                } else {
+                    ServicePhase::Serving
+                }
+            }
         }
     }
 
@@ -248,35 +266,47 @@ where
             .try_acquire_owned()
             .map_err(|_| ServiceError::ProviderOverloaded)?;
         let deadline = Instant::now() + Duration::from_millis(u64::from(request.deadline_ms));
-        let effect_stream = self
-            .effect
-            .open(
+        let open_deadline = Duration::from_millis(u64::from(request.deadline_ms));
+        let effect_stream = timeout(
+            open_deadline,
+            self.effect.open(
                 &request.endpoint_id,
                 &request.binding_id,
                 request.role,
                 deadline,
-            )
-            .await
-            .map_err(ServiceError::Effect)?;
-        let open_deadline = Duration::from_millis(u64::from(request.deadline_ms));
+            ),
+        )
+        .await
+        .map_err(|_| ServiceError::Effect(VsockEffectError::DeadlineExceeded))?
+        .map_err(ServiceError::Effect)?;
         let (stream_id, named_stream) =
             match timeout(open_deadline, self.streams.open_named_stream()).await {
                 Ok(Ok(value)) => value,
                 Ok(Err(_)) => {
-                    let _ = timeout(
+                    let closed = timeout(
                         Duration::from_millis(CLOSE_GRACE_MS),
                         self.effect.close(effect_stream),
                     )
-                    .await;
-                    return Err(ServiceError::StreamUnavailable);
+                    .await
+                    .is_ok_and(|result| result.is_ok());
+                    return Err(if closed {
+                        ServiceError::StreamUnavailable
+                    } else {
+                        ServiceError::CloseUnconfirmed
+                    });
                 }
                 Err(_) => {
-                    let _ = timeout(
+                    let closed = timeout(
                         Duration::from_millis(CLOSE_GRACE_MS),
                         self.effect.close(effect_stream),
                     )
-                    .await;
-                    return Err(ServiceError::Effect(VsockEffectError::DeadlineExceeded));
+                    .await
+                    .is_ok_and(|result| result.is_ok());
+                    return Err(if closed {
+                        ServiceError::Effect(VsockEffectError::DeadlineExceeded)
+                    } else {
+                        ServiceError::CloseUnconfirmed
+                    });
                 }
             };
         let handle = TransportHandle::from_core(self.next_handle.fetch_add(1, Ordering::Relaxed));
@@ -332,12 +362,25 @@ where
                     .await;
                 }
             }
-            *task_phase.lock().await = if effect_result && stream_result {
+            let released = effect_result && stream_result;
+            *task_phase.lock().await = if released {
                 TransportPhase::Released
             } else {
                 TransportPhase::Degraded
             };
-            emit_event(&task_subscribers, &task_history, TransportEvent::Released).await;
+            if released {
+                emit_event(&task_subscribers, &task_history, TransportEvent::Released).await;
+            } else {
+                emit_event(
+                    &task_subscribers,
+                    &task_history,
+                    TransportEvent::Error {
+                        kind: "close-unconfirmed",
+                        recoverable: true,
+                    },
+                )
+                .await;
+            }
             task_control.mark_completed();
         });
         let abort = task.abort_handle();
@@ -372,12 +415,16 @@ where
                 .get(&request.transport_handle)
                 .map(|entry| (entry.control.clone(), Arc::clone(&entry.phase)))
         };
-        if self
+        if let Some(observation) = self
             .completed
             .lock()
             .await
-            .contains_key(&request.transport_handle)
+            .get(&request.transport_handle)
+            .copied()
         {
+            if observation.phase == TransportPhase::Degraded {
+                return Err(ServiceError::CloseUnconfirmed);
+            }
             return Ok(());
         }
         let Some((completion, phase)) = entry else {
@@ -390,25 +437,42 @@ where
             }
             return Ok(());
         }
-        if let Some(entry) = self.active.lock().await.get(&request.transport_handle) {
-            entry.control.stop();
-            *entry.phase.lock().await = TransportPhase::Closing;
+        let entry_to_stop = {
+            let active = self.active.lock().await;
+            active
+                .get(&request.transport_handle)
+                .map(|entry| (entry.control.clone(), Arc::clone(&entry.phase)))
+        };
+        if let Some((control, phase)) = entry_to_stop {
+            let mut entry_phase = phase.lock().await;
+            if *entry_phase != TransportPhase::Degraded {
+                control.stop();
+                *entry_phase = TransportPhase::Closing;
+            }
         }
         if timeout(Duration::from_millis(CLOSE_GRACE_MS), completion.wait())
             .await
             .is_err()
         {
-            if let Some(entry) = self.active.lock().await.get(&request.transport_handle) {
+            let entry = self.active.lock().await.remove(&request.transport_handle);
+            if let Some(entry) = entry {
                 entry.abort.abort();
                 *entry.phase.lock().await = TransportPhase::Degraded;
+                self.remember_completed(request.transport_handle, entry)
+                    .await;
             }
             return Err(ServiceError::CloseUnconfirmed);
         }
+        let degraded = *phase.lock().await == TransportPhase::Degraded;
         if let Some(entry) = self.active.lock().await.remove(&request.transport_handle) {
             self.remember_completed(request.transport_handle, entry)
                 .await;
         }
-        Ok(())
+        if degraded {
+            Err(ServiceError::CloseUnconfirmed)
+        } else {
+            Ok(())
+        }
     }
 
     /// Observe one transport snapshot without exposing identity, path, CID, or port.
@@ -418,6 +482,7 @@ where
     ) -> Result<TransportObservation, ServiceError> {
         let active = self.active.lock().await;
         let Some(entry) = active.get(&request.transport_handle) else {
+            drop(active);
             let observation = self
                 .completed
                 .lock()
@@ -472,14 +537,24 @@ where
                 .push((request.include_bytes, sender));
             return Ok(receiver);
         }
-        if self
+        drop(active);
+        let completed_phase = self
             .completed
             .lock()
             .await
-            .contains_key(&request.transport_handle)
-        {
+            .get(&request.transport_handle)
+            .map(|observation| observation.phase);
+        if completed_phase.is_some() {
             let (sender, receiver) = mpsc::channel(2);
-            let _ = sender.try_send(TransportEvent::Released);
+            let event = if completed_phase == Some(TransportPhase::Degraded) {
+                TransportEvent::Error {
+                    kind: "close-unconfirmed",
+                    recoverable: true,
+                }
+            } else {
+                TransportEvent::Released
+            };
+            let _ = sender.try_send(event);
             return Ok(receiver);
         }
         Err(ServiceError::UnknownTransportHandle)
@@ -526,7 +601,7 @@ where
 
     async fn remember_completed(&self, handle: TransportHandle, entry: TransportEntry) {
         let observation = TransportObservation {
-            phase: TransportPhase::Released,
+            phase: *entry.phase.lock().await,
             descriptor: VsockTransportDescriptor::default(),
             bytes_rx: Some(entry.stats.bytes_from_vsock()),
             bytes_tx: Some(entry.stats.bytes_to_vsock()),

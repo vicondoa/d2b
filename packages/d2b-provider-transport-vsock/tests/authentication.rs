@@ -90,3 +90,55 @@ fn replay_cache_refuses_new_sessions_at_its_bound() {
         SessionRejectReason::AuthorityUnavailable
     );
 }
+
+#[test]
+fn guest_zone_and_signature_mismatches_are_refused() {
+    let expected = identity(42);
+    let key = GuestControlKey::from_core([3; 32]);
+    let wrong_key = GuestControlKey::from_core([4; 32]);
+    let mut authority = SessionAuthority::new(expected.clone(), key.clone(), 3);
+
+    let guest = GuestIdentity::new(
+        ResourceRef::parse("Guest/other").unwrap(),
+        ZoneId::parse("work").unwrap(),
+        PeerCid::from_core(42).unwrap(),
+        "boot-a",
+    )
+    .unwrap();
+    assert_eq!(
+        authority
+            .authenticate(
+                PeerCid::from_core(42).unwrap(),
+                SessionProof::sign(&key, &guest, [10; 32], 3),
+            )
+            .unwrap_err(),
+        SessionRejectReason::GuestMismatch
+    );
+
+    let zone = GuestIdentity::new(
+        ResourceRef::parse("Guest/guest-a").unwrap(),
+        ZoneId::parse("personal").unwrap(),
+        PeerCid::from_core(42).unwrap(),
+        "boot-a",
+    )
+    .unwrap();
+    assert_eq!(
+        authority
+            .authenticate(
+                PeerCid::from_core(42).unwrap(),
+                SessionProof::sign(&key, &zone, [11; 32], 3),
+            )
+            .unwrap_err(),
+        SessionRejectReason::ZoneMismatch
+    );
+
+    assert_eq!(
+        authority
+            .authenticate(
+                PeerCid::from_core(42).unwrap(),
+                SessionProof::sign(&wrong_key, &expected, [12; 32], 3),
+            )
+            .unwrap_err(),
+        SessionRejectReason::SignatureInvalid
+    );
+}

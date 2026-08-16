@@ -33,7 +33,7 @@ impl fmt::Debug for RelayBinding {
 }
 
 /// Restart observation supplied by the Core relay adapter.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct RelayObservation<L, R> {
     /// Binding proof attached to the observed listener and relay.
     pub binding: RelayBinding,
@@ -41,6 +41,17 @@ pub struct RelayObservation<L, R> {
     pub listener: L,
     /// Matching relay process handle.
     pub process: R,
+}
+
+impl<L, R> fmt::Debug for RelayObservation<L, R> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RelayObservation")
+            .field("binding", &self.binding)
+            .field("listener", &"<redacted>")
+            .field("process", &"<redacted>")
+            .finish()
+    }
 }
 
 /// Stable relay effect failures.
@@ -248,11 +259,14 @@ where
                 if listener_closed {
                     self.listener = None;
                 }
-                let reservation_released = self
-                    .port
-                    .release_cid(self.reservation.as_ref().expect("reservation"))
-                    .await
-                    .is_ok();
+                let reservation_released = if listener_closed {
+                    self.port
+                        .release_cid(self.reservation.as_ref().expect("reservation"))
+                        .await
+                        .is_ok()
+                } else {
+                    false
+                };
                 if reservation_released {
                     self.reservation = None;
                 }
@@ -275,9 +289,16 @@ where
             return Err(RelayEffectError::Transient);
         }
         self.reservation = Some(reservation);
-        let Some(observation) = self.port.observe(&self.binding).await? else {
-            self.phase = RelayPhase::Degraded;
-            return Err(RelayEffectError::RestartMismatch);
+        let observation = match self.port.observe(&self.binding).await {
+            Ok(Some(observation)) => observation,
+            Ok(None) => {
+                self.phase = RelayPhase::Degraded;
+                return Err(RelayEffectError::RestartMismatch);
+            }
+            Err(error) => {
+                self.phase = RelayPhase::Degraded;
+                return Err(error);
+            }
         };
         if observation.binding != self.binding {
             self.phase = RelayPhase::Degraded;
