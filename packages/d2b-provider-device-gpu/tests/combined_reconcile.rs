@@ -11,6 +11,7 @@ struct FakePort {
     starts: Vec<GpuProcessRole>,
     next: u8,
     missing_roles: Vec<GpuProcessRole>,
+    mismatched_observation: bool,
 }
 
 impl GpuLifecycleEffectPort for FakePort {
@@ -73,6 +74,16 @@ impl GpuLifecycleEffectPort for FakePort {
     ) -> Result<GpuProcessObservation, GpuEffectError> {
         if self.missing_roles.contains(&identity.role()) {
             Ok(GpuProcessObservation::Missing)
+        } else if self.mismatched_observation {
+            Ok(GpuProcessObservation::Matching(
+                GpuProcessIdentity::from_core(
+                    [99; 16],
+                    identity.role(),
+                    identity.principal().clone(),
+                    identity.platform().clone(),
+                    identity.generation(),
+                ),
+            ))
         } else {
             Ok(GpuProcessObservation::Matching(identity.clone()))
         }
@@ -205,4 +216,54 @@ fn partial_restart_adoption_restarts_only_the_missing_video_worker() {
         GpuReconcileOutcome::Converged
     );
     assert_eq!(port.starts, [GpuProcessRole::Video]);
+}
+
+#[test]
+fn mismatched_matching_observation_is_quarantined() {
+    let uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
+    let owner = GpuOwnerProof::new(
+        ResourceRef::parse("Zone/dev").unwrap(),
+        ResourceRef::parse("Guest/workload").unwrap(),
+        uid,
+        ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").unwrap(),
+        ResourceGeneration::new(1).unwrap(),
+    )
+    .unwrap();
+    let admission = GpuAuthorityAdmission::new(
+        owner,
+        GpuBackingToken::from_core([7; 32]),
+        GpuPlatformToken::from_core([8; 32]),
+        DeviceArbitration::Exclusive,
+        1,
+        false,
+        GpuPrincipalToken::from_core([9; 32]),
+    )
+    .unwrap();
+    let tokens = GpuEffectTokenSet::from_core(vec![GpuEffectToken::from_core([2; 32])]).unwrap();
+    let mut controller =
+        GpuController::new_authorized(admission, GpuSettings::default(), tokens).unwrap();
+    let expected = GpuProcessIdentity::from_core(
+        [3; 16],
+        GpuProcessRole::FullGpu,
+        GpuPrincipalToken::from_core([9; 32]),
+        GpuPlatformToken::from_core([8; 32]),
+        ResourceGeneration::new(1).unwrap(),
+    );
+    let mut port = FakePort {
+        mismatched_observation: true,
+        ..FakePort::default()
+    };
+
+    assert_eq!(
+        controller.adopt_lifecycle(
+            GpuAuthorityLease::from_core([1; 16]),
+            &[expected],
+            &mut port,
+        ),
+        Err(d2b_provider_device_gpu::GpuControllerError::Quarantined)
+    );
+    assert_eq!(
+        controller.phase(),
+        d2b_provider_device_gpu::GpuPhase::Quarantined
+    );
 }

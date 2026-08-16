@@ -307,7 +307,13 @@ impl GpuController {
                 .observe_worker(identity)
                 .map_err(GpuControllerError::Effect)?
             {
-                GpuProcessObservation::Matching(observed) => matched.push(observed),
+                GpuProcessObservation::Matching(observed) => {
+                    if observed != *identity {
+                        self.phase = GpuPhase::Quarantined;
+                        return Err(GpuControllerError::Quarantined);
+                    }
+                    matched.push(observed);
+                }
                 GpuProcessObservation::Ambiguous => {
                     self.phase = GpuPhase::Quarantined;
                     return Err(GpuControllerError::Quarantined);
