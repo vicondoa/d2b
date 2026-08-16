@@ -16,6 +16,8 @@ let
     mkdir -p $out/docs/reference/schemas/v3/providers
     cp ${../docs/reference/schemas/v3/providers/transport-azure-relay.transport-settings.json} \
       $out/docs/reference/schemas/v3/providers/transport-azure-relay.transport-settings.json
+    cp ${../docs/reference/schemas/v3/providers/transport-vsock.transport-binding.json} \
+      $out/docs/reference/schemas/v3/providers/transport-vsock.transport-binding.json
   '';
   cargoLock = {
     lockFile = ../packages/Cargo.lock;
