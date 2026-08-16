@@ -27,7 +27,9 @@ rust_library(
         "host-socket",
         "native-vsock",
     ],
-    proc_macro_deps = ["@crates//:async-trait"],
+    proc_macro_deps = [
+        "@crates//:async-trait",
+    ],
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts:d2b_contracts",

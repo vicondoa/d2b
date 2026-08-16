@@ -8,19 +8,19 @@ exports_files(
 )
 
 d2b_provider_srcs = [
-        "src/agent.rs",
-        "src/context.rs",
-        "src/descriptor.rs",
-        "src/error.rs",
-        "src/forwarding.rs",
-        "src/identity.rs",
-        "src/installation.rs",
-        "src/instance.rs",
-        "src/lib.rs",
-        "src/registry.rs",
-        "src/rpc.rs",
-        "src/session.rs",
-        "src/share_adapter.rs",
+    "src/agent.rs",
+    "src/context.rs",
+    "src/descriptor.rs",
+    "src/error.rs",
+    "src/forwarding.rs",
+    "src/identity.rs",
+    "src/installation.rs",
+    "src/instance.rs",
+    "src/lib.rs",
+    "src/registry.rs",
+    "src/rpc.rs",
+    "src/session.rs",
+    "src/share_adapter.rs",
 ]
 
 rust_library(

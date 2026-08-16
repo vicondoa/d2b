@@ -8,11 +8,11 @@ exports_files(
 )
 
 d2b_zone_routing_srcs = [
-        "src/engine.rs",
-        "src/lib.rs",
-        "src/resolver.rs",
-        "src/router.rs",
-        "src/service.rs",
+    "src/engine.rs",
+    "src/lib.rs",
+    "src/resolver.rs",
+    "src/router.rs",
+    "src/service.rs",
 ]
 
 rust_library(

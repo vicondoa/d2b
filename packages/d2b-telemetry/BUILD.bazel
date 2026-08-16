@@ -8,14 +8,14 @@ exports_files(
 )
 
 d2b_telemetry_srcs = [
-        "src/audit_hash.rs",
-        "src/emitter.rs",
-        "src/lib.rs",
-        "src/meter_registry.rs",
-        "src/metric_label_policy.rs",
-        "src/redaction_guard.rs",
-        "src/session_metrics_sink.rs",
-        "src/trace_context.rs",
+    "src/audit_hash.rs",
+    "src/emitter.rs",
+    "src/lib.rs",
+    "src/meter_registry.rs",
+    "src/metric_label_policy.rs",
+    "src/redaction_guard.rs",
+    "src/session_metrics_sink.rs",
+    "src/trace_context.rs",
 ]
 
 rust_library(
@@ -27,7 +27,7 @@ rust_library(
         "//packages/d2b-contracts:d2b_contracts",
         "@crates//:serde",
         "@crates//:serde_json",
-        "@crates//:sha2",
+        "@crates//:sha2",        "@crates//:rustix",
     ],
 )
 
@@ -41,7 +41,7 @@ rust_library(
         "//packages/d2b-contracts:d2b_contracts_test_support",
         "@crates//:serde",
         "@crates//:serde_json",
-        "@crates//:sha2",
+        "@crates//:sha2",        "@crates//:rustix",
     ],
 )
 

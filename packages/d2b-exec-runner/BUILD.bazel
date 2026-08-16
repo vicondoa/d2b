@@ -18,6 +18,9 @@ rust_library(
         "src/spec.rs",
     ],
     compile_data = ["Cargo.toml"],
+    deps = [
+        "@crates//:rustix",
+    ],
     visibility = ["//visibility:public"],
 )
 

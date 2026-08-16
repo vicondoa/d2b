@@ -9,14 +9,14 @@ exports_files(
 # gazelle:ignore
 
 d2b_controller_toolkit_srcs = [
-        "src/context.rs",
-        "src/contract.rs",
-        "src/lib.rs",
-        "src/owner_hints.rs",
-        "src/queue.rs",
-        "src/result.rs",
-        "src/runner.rs",
-        "src/state_migration.rs",
+    "src/context.rs",
+    "src/contract.rs",
+    "src/lib.rs",
+    "src/owner_hints.rs",
+    "src/queue.rs",
+    "src/result.rs",
+    "src/runner.rs",
+    "src/state_migration.rs",
 ]
 
 rust_library(

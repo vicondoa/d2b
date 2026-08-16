@@ -13,7 +13,7 @@ rust_library(
     srcs = [
         "src/cli.rs",
         "src/lib.rs",
-        "src/libshpool_bridge.rs",  # keep
+        "src/libshpool_bridge.rs",
         "src/name.rs",
         "src/output.rs",
         "src/socket.rs",
@@ -24,7 +24,7 @@ rust_library(
     # keep
     deps = [
         "@crates//:serde",
-        "@crates//:thiserror",
+        "@crates//:thiserror",        "@crates//:serde_json",
     ] + select({
         "//bazel/checks/rust:guest-real-libshpool": [
             "@bazel_only_crates//:anyhow",

@@ -21,22 +21,22 @@ exports_files(
 )
 
 d2b_resource_api_srcs = [
-        "src/adapter.rs",
-        "src/admission.rs",
-        "src/authz.rs",
-        "src/client.rs",
-        "src/emergency_gate.rs",
-        "src/error.rs",
-        "src/generated/d2b_resource_v3_ttrpc.rs",
-        "src/generated/mod.rs",
-        "src/identity.rs",
-        "src/lib.rs",
-        "src/metrics.rs",
-        "src/quota_gate.rs",
-        "src/service.rs",
-        "src/store.rs",
-        "src/watch.rs",
-        "src/zone_service.rs",
+    "src/adapter.rs",
+    "src/admission.rs",
+    "src/authz.rs",
+    "src/client.rs",
+    "src/emergency_gate.rs",
+    "src/error.rs",
+    "src/generated/d2b_resource_v3_ttrpc.rs",
+    "src/generated/mod.rs",
+    "src/identity.rs",
+    "src/lib.rs",
+    "src/metrics.rs",
+    "src/quota_gate.rs",
+    "src/service.rs",
+    "src/store.rs",
+    "src/watch.rs",
+    "src/zone_service.rs",
 ]
 
 rust_library(
@@ -46,7 +46,9 @@ rust_library(
         "Cargo.toml",
         "src/watch.rs",
     ],
-    proc_macro_deps = ["@crates//:async-trait"],
+    proc_macro_deps = [
+        "@crates//:async-trait",
+    ],
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts:d2b_contracts",
@@ -70,7 +72,9 @@ rust_library(
         "src/watch.rs",
     ],
     crate_name = "d2b_resource_api",
-    proc_macro_deps = ["@crates//:async-trait"],
+    proc_macro_deps = [
+        "@crates//:async-trait",
+    ],
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts:d2b_contracts_test_support",

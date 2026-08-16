@@ -12,7 +12,9 @@ rust_library(
         "src/local_tcp.rs",
     ],
     compile_data = ["Cargo.toml"],
-    proc_macro_deps = ["@crates//:async-trait"],
+    proc_macro_deps = [
+        "@crates//:async-trait",
+    ],
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-realm-core:d2b_realm_core",

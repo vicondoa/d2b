@@ -17,20 +17,20 @@ exports_files(
 )
 
 d2b_resource_store_redb_srcs = [
-        "src/actor.rs",
-        "src/audit.rs",
-        "src/backup.rs",
-        "src/keys.rs",
-        "src/lib.rs",
-        "src/metrics.rs",
-        "src/migration.rs",
-        "src/ownership.rs",
-        "src/revision_log.rs",
-        "src/schema.rs",
-        "src/tests.rs",
-        "src/tracing.rs",
-        "src/transaction.rs",
-        "src/values.rs",
+    "src/actor.rs",
+    "src/audit.rs",
+    "src/backup.rs",
+    "src/keys.rs",
+    "src/lib.rs",
+    "src/metrics.rs",
+    "src/migration.rs",
+    "src/ownership.rs",
+    "src/revision_log.rs",
+    "src/schema.rs",
+    "src/tests.rs",
+    "src/tracing.rs",
+    "src/transaction.rs",
+    "src/values.rs",
 ]
 
 rust_library(

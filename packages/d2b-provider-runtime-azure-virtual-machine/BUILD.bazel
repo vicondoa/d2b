@@ -7,8 +7,30 @@ exports_files(
 
 rust_library(
     name = "d2b_provider_runtime_azure_virtual_machine",
-    srcs = ["src/lib.rs"],
+    srcs = [
+        "src/audit.rs",
+        "src/bootstrap.rs",
+        "src/bootstrap_svc.rs",
+        "src/config.rs",
+        "src/controller/mod.rs",
+        "src/effect/mod.rs",
+        "src/error.rs",
+        "src/idempotency.rs",
+        "src/lib.rs",
+        "src/telemetry.rs",
+    ],
     compile_data = ["Cargo.toml"],
+    deps = [
+        "@crates//:base64",
+        "//packages/d2b-contracts:d2b_contracts",
+        "@crates//:serde",
+        "@crates//:serde_json",
+        "@crates//:sha2",
+        "@crates//:zeroize",
+    ],
+    proc_macro_deps = [
+        "@crates//:async-trait",
+    ],
     visibility = ["//visibility:public"],
 )
 

@@ -7,8 +7,39 @@ exports_files(
 
 rust_library(
     name = "d2b_provider_transport_vsock",
-    srcs = ["src/lib.rs"],
-    compile_data = ["Cargo.toml"],
+    srcs = [
+        "src/audit.rs",
+        "src/auth.rs",
+        "src/bridge.rs",
+        "src/effect_port.rs",
+        "src/errors.rs",
+        "src/framing.rs",
+        "src/lib.rs",
+        "src/limits.rs",
+        "src/metrics.rs",
+        "src/relay.rs",
+        "src/service.rs",
+        "src/settings.rs",
+        "src/state_volume.rs",
+        "src/topology.rs",
+    ],
+    compile_data = [
+        "Cargo.toml",
+        "//:docs/reference/schemas/v3/providers/transport-vsock.transport-binding.json",  # keep
+    ],
+    deps = [
+        "//packages/d2b-contracts:d2b_contracts",
+        "//packages/d2b-provider:d2b_provider",
+        "//packages/d2b-session:d2b_session",
+        "@crates//:ring",
+        "@crates//:serde",
+        "@crates//:serde_json",
+        "@crates//:tokio",
+        "@crates//:tracing",
+    ],
+    proc_macro_deps = [
+        "@crates//:async-trait",
+    ],
     visibility = ["//visibility:public"],
 )
 

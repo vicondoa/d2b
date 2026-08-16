@@ -23,6 +23,7 @@ rust_library(
         "src/exec_client.rs",
         "src/guest.rs",
         "src/host.rs",
+        "src/host_generation.rs",
         "src/host_validate.rs",
         "src/legacy.rs",
         "src/lib.rs",

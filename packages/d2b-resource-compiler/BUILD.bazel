@@ -22,7 +22,7 @@ rust_library(
         "@crates//:ring",
         "@crates//:rustix",
         "@crates//:serde_json",
-        "@crates//:sha2",
+        "@crates//:sha2",        "@crates//:regex",
     ],
 )
 

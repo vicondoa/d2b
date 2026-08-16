@@ -16,7 +16,9 @@ rust_library(
     ],
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
-    deps = ["//packages/d2b-contracts:d2b_contracts"],
+    deps = ["//packages/d2b-contracts:d2b_contracts",
+        "@crates//:serde_json",
+    ],
 )
 
 rust_binary(

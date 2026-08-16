@@ -7,8 +7,33 @@ exports_files(
 
 rust_library(
     name = "d2b_provider_notification_desktop",
-    srcs = ["src/lib.rs"],
+    srcs = [
+        "src/action_nonce.rs",
+        "src/admission.rs",
+        "src/audit.rs",
+        "src/controller.rs",
+        "src/descriptor.rs",
+        "src/error.rs",
+        "src/guest_source.rs",
+        "src/host_sink.rs",
+        "src/lib.rs",
+        "src/lifecycle.rs",
+        "src/metrics.rs",
+        "src/rbac.rs",
+        "src/redact.rs",
+        "src/runtime.rs",
+        "src/stream_admission.rs",
+        "src/types.rs",
+    ],
     compile_data = ["Cargo.toml"],
+    deps = [
+        "//packages/d2b-contracts:d2b_contracts",
+        "//packages/d2b-provider-toolkit:d2b_provider_toolkit",
+        "@crates//:getrandom-0.2.17",
+        "@crates//:serde",
+        "@crates//:serde_json",
+        "@crates//:sha2",
+    ],
     visibility = ["//visibility:public"],
 )
 

@@ -15,7 +15,10 @@ filegroup(
 
 filegroup(
     name = "d2b_resource_schemas_v3",
-    srcs = glob(["docs/reference/schemas/v3/*.json"]),
+    srcs = glob([
+        "docs/reference/schemas/v3/*.json",
+        "docs/reference/schemas/v3/providers/*.json",
+    ]),
 )
 
 # gazelle:rust_cargo_lockfile Cargo.lock
@@ -127,6 +130,8 @@ exports_files([
     "docs/reference/components-usbip.md",
     "docs/reference/daemon-api.md",
     "docs/reference/bazel-buildbuddy.md",
+    "docs/reference/schemas/v3/providers/transport-azure-relay.transport-settings.json",
+    "docs/reference/schemas/v3/providers/transport-vsock.transport-binding.json",
     "docs/reference/host-prep-dag.md",
     "docs/reference/manifest-bundle.md",
     "docs/reference/realm-access-resolver.md",

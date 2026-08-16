@@ -7,8 +7,21 @@ exports_files(
 
 rust_library(
     name = "d2b_provider_transport_unix",
-    srcs = ["src/lib.rs"],
+    srcs = [
+        "src/admission.rs",
+        "src/audit.rs",
+        "src/identity.rs",
+        "src/lib.rs",
+        "src/metrics.rs",
+        "src/portal.rs",
+        "src/service.rs",
+    ],
     compile_data = ["Cargo.toml"],
+    deps = [
+        "//packages/d2b-contracts:d2b_contracts",
+        "@crates//:getrandom-0.2.17",
+        "@crates//:rustix",
+    ],
     visibility = ["//visibility:public"],
 )
 

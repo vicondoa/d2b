@@ -8,15 +8,15 @@ exports_files(
 )
 
 d2b_audit_srcs = [
-        "src/export.rs",
-        "src/hash_chain.rs",
-        "src/lib.rs",
-        "src/operation.rs",
-        "src/rate_limit.rs",
-        "src/reconcile.rs",
-        "src/record_types.rs",
-        "src/segment.rs",
-        "src/sink.rs",
+    "src/export.rs",
+    "src/hash_chain.rs",
+    "src/lib.rs",
+    "src/operation.rs",
+    "src/rate_limit.rs",
+    "src/reconcile.rs",
+    "src/record_types.rs",
+    "src/segment.rs",
+    "src/sink.rs",
 ]
 
 rust_library(

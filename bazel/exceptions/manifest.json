@@ -182,6 +182,12 @@
       "marker": "# keep"
     },
     {
+      "label": "//packages/d2b-host-argv:cargo_workspace_sources",
+      "path": "packages/d2b-host-argv/BUILD.bazel",
+      "reason": "Cargo workspace source filegroup is hand-owned so Gazelle preserves cross-package source visibility",
+      "marker": "# keep"
+    },
+    {
       "label": "//packages/d2b-notify:cargo_workspace_sources",
       "path": "packages/d2b-notify/BUILD.bazel",
       "reason": "Cargo workspace source filegroup is hand-owned so Gazelle preserves cross-package source visibility",
@@ -196,12 +202,6 @@
     {
       "label": "//packages/d2b-process:cargo_workspace_sources",
       "path": "packages/d2b-process/BUILD.bazel",
-      "reason": "Cargo workspace source filegroup is hand-owned so Gazelle preserves cross-package source visibility",
-      "marker": "# keep"
-    },
-    {
-      "label": "//packages/d2b-provider-aca:cargo_workspace_sources",
-      "path": "packages/d2b-provider-aca/BUILD.bazel",
       "reason": "Cargo workspace source filegroup is hand-owned so Gazelle preserves cross-package source visibility",
       "marker": "# keep"
     },
@@ -268,12 +268,6 @@
     {
       "label": "//packages/d2b-provider-observability-otel:cargo_workspace_sources",
       "path": "packages/d2b-provider-observability-otel/BUILD.bazel",
-      "reason": "Cargo workspace source filegroup is hand-owned so Gazelle preserves cross-package source visibility",
-      "marker": "# keep"
-    },
-    {
-      "label": "//packages/d2b-provider-relay:cargo_workspace_sources",
-      "path": "packages/d2b-provider-relay/BUILD.bazel",
       "reason": "Cargo workspace source filegroup is hand-owned so Gazelle preserves cross-package source visibility",
       "marker": "# keep"
     },

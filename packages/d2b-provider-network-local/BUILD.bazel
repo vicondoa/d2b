@@ -12,6 +12,7 @@ rust_library(
     srcs = [
         "src/artifact.rs",
         "src/bridge_port.rs",
+        "src/broker.rs",
         "src/controller.rs",
         "src/ifname.rs",
         "src/lib.rs",

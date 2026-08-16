@@ -7,8 +7,24 @@ exports_files(
 
 rust_library(
     name = "d2b_provider_audio_pipewire",
-    srcs = ["src/lib.rs"],
+    srcs = [
+        "src/argv.rs",
+        "src/audio_policy.rs",
+        "src/authority.rs",
+        "src/controller.rs",
+        "src/lib.rs",
+        "src/manifest.rs",
+        "src/mediator.rs",
+        "src/resource_type.rs",
+        "src/telemetry.rs",
+    ],
     compile_data = ["Cargo.toml"],
+    deps = [
+        "//packages/d2b-contracts:d2b_contracts",
+        "@crates//:serde",
+        "@crates//:serde_json",
+        "@crates//:schemars",
+    ],
     visibility = ["//visibility:public"],
 )
 

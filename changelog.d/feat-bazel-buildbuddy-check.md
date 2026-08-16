@@ -24,6 +24,9 @@
 
 ### Fixed
 
+- Fixed the Bazel graph after the v3 merge: added `d2b-host-argv`, dropped
+  retired aca/relay labels, refreshed `Cargo.lock` and `MODULE.bazel.lock`,
+  and synced crate source lists and library deps with the merged workspace.
 - Fixed default-config Bazel Rust tests to carry Cargo dev-dependency feature
   variants transitively, including d2bd's `test-support` dependencies.
 - Fixed upstream Gazelle idempotence for hand-owned Bazel package BUILD files.

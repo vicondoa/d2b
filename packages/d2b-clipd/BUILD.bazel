@@ -40,7 +40,9 @@ rust_library(
         "@crates//:wayland-client",
         "@crates//:wayland-protocols",
         "@crates//:wayland-protocols-misc",
-        "@crates//:wayland-protocols-wlr",
+        "@crates//:wayland-protocols-wlr",        "@crates//:env_logger",
+        "@crates//:html2text",
+        "@crates//:nix",
     ],
 )
 

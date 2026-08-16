@@ -8,11 +8,15 @@ exports_files(
 )
 
 d2b_provider_device_tpm_srcs = [
-        "src/controller.rs",
-        "src/lib.rs",
-        "src/migration.rs",
-        "src/runner.rs",
-        "src/state.rs",
+    "src/controller.rs",
+    "src/lib.rs",
+    "src/migration.rs",
+    "src/resource_controller.rs",
+    "src/resource_effect.rs",
+    "src/resources.rs",
+    "src/runner.rs",
+    "src/state.rs",
+    "src/status.rs",
 ]
 
 rust_library(
@@ -22,7 +26,7 @@ rust_library(
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts:d2b_contracts",
-        "@crates//:serde",
+        "@crates//:serde",        "@crates//:serde_json",
     ],
 )
 
@@ -35,7 +39,7 @@ rust_library(
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts:d2b_contracts_test_support",
-        "@crates//:serde",
+        "@crates//:serde",        "@crates//:serde_json",
     ],
 )
 

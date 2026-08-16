@@ -9,7 +9,9 @@ exports_files(
 
 rust_library(
     name = "d2b_contract_tests",
-    srcs = ["src/lib.rs"],
+    srcs = [
+        "src/lib.rs",
+    ],
     compile_data = ["Cargo.toml"],
     data = [
         "//:Cargo.toml",
@@ -494,7 +496,9 @@ rust_library(
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
-        "@crates//:regex",
+        "@crates//:regex",        "//packages/d2b-core:d2b_core",
+        "@crates//:serde",
+        "@crates//:serde_json",
     ],
 )
 

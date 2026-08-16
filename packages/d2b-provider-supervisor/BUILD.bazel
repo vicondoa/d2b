@@ -30,7 +30,8 @@ rust_library(
         "@crates//:rustix",
         "@crates//:serde_json",
         "@crates//:sha2",
-        "@crates//:socket2",
+        "@crates//:socket2",        "//packages/d2b-core:d2b_core",
+        "//packages/d2b-process-conformance:d2b_process_conformance",
     ],
 )
 

@@ -1,45 +1,32 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
+# gazelle:ignore
+
 exports_files(
     ["BUILD.bazel"],
     visibility = ["//visibility:public"],
 )
 
+d2b_host_argv_srcs = [
+    "src/lib.rs",
+]
+
 rust_library(
-    name = "d2b_realm_provider",
-    srcs = [
-        "src/capabilities.rs",
-        "src/conformance.rs",
-        "src/credential.rs",
-        "src/error.rs",
-        "src/lib.rs",
-        "src/mock.rs",
-        "src/provider.rs",
-        "src/rate_limit.rs",
-        "src/types.rs",
-    ],
+    name = "d2b_host_argv",
+    srcs = d2b_host_argv_srcs,
     compile_data = ["Cargo.toml"],
-    proc_macro_deps = [
-        "@crates//:async-trait",
-    ],
     visibility = ["//visibility:public"],
     deps = [
-        "//packages/d2b-realm-core:d2b_realm_core",
-        "@crates//:schemars",
         "@crates//:serde",
-        "@crates//:tokio",
-        "@crates//:tracing",
     ],
 )
 
 rust_test(
-    name = "d2b_realm_provider_test",
+    name = "d2b_host_argv_test",
     compile_data = ["Cargo.toml"],
-    crate = ":d2b_realm_provider",
+    crate = ":d2b_host_argv",
     deps = [
-        "//packages/d2b-realm-core:d2b_realm_core",
         "@crates//:serde_json",
-        "@crates//:tokio",
     ],
 )
 

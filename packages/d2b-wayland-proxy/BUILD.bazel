@@ -37,7 +37,10 @@ rust_library(
         "@crates//:sha2",
         "@crates//:thiserror",
         "@crates//:uapi",
-        "@crates//:wl-proxy",
+        "@crates//:wl-proxy",        "@crates//:clap",
+        "@crates//:libc",
+        "@crates//:env_logger",
+        "@crates//:smallvec",
     ],
 )
 

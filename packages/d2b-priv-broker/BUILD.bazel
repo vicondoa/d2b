@@ -18,7 +18,7 @@ exports_files(
 
 d2b_priv_broker_srcs = [
     "src/audit.rs",
-    "src/bootstrap.rs",  # keep
+    "src/bootstrap.rs",
     "src/fd_passing.rs",
     "src/lib.rs",
     "src/live_handlers.rs",
@@ -27,6 +27,8 @@ d2b_priv_broker_srcs = [
     "src/ops/device.rs",
     "src/ops/disk_init.rs",
     "src/ops/exec_reconcile.rs",
+    "src/ops/gpu.rs",
+    "src/ops/host_generation_handoff.rs",
     "src/ops/hosts.rs",
     "src/ops/media.rs",
     "src/ops/mod.rs",
@@ -49,6 +51,7 @@ d2b_priv_broker_srcs = [
     "src/ops/swtpm_dir.rs",
     "src/ops/swtpm_migration.rs",
     "src/ops/sysctl.rs",
+    "src/ops/systemd.rs",
     "src/ops/tap.rs",
     "src/ops/usbip_firewall.rs",
     "src/ops/usbip_host.rs",
@@ -79,6 +82,7 @@ d2b_priv_broker_shared_deps = [
     "@crates//:sha2",
     "@crates//:tokio",
     "@crates//:tracing",
+    "@crates//:zbus",
 ]
 
 d2b_priv_broker_test_support_deps = [
@@ -93,6 +97,7 @@ d2b_priv_broker_test_support_deps = [
     "@crates//:sha2",
     "@crates//:tokio",
     "@crates//:tracing",
+    "@crates//:zbus",
 ]
 
 rust_library(

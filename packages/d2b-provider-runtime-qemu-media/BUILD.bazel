@@ -7,8 +7,37 @@ exports_files(
 
 rust_library(
     name = "d2b_provider_runtime_qemu_media",
-    srcs = ["src/lib.rs"],
+    srcs = [
+        "src/adoption.rs",
+        "src/audit.rs",
+        "src/config.rs",
+        "src/controller/device_watch.rs",
+        "src/controller/display.rs",
+        "src/controller/hotplug.rs",
+        "src/controller/media_watch.rs",
+        "src/controller/mod.rs",
+        "src/controller/network.rs",
+        "src/controller/process_builder.rs",
+        "src/controller/reconcile.rs",
+        "src/controller/status.rs",
+        "src/controller/volume.rs",
+        "src/descriptor.rs",
+        "src/lib.rs",
+        "src/qmp/mod.rs",
+        "src/state.rs",
+        "src/telemetry.rs",
+        "src/types/guest.rs",
+        "src/types/mod.rs",
+    ],
     compile_data = ["Cargo.toml"],
+    deps = [
+        "//packages/d2b-contracts:d2b_contracts",
+        "//packages/d2b-process-conformance:d2b_process_conformance",
+        "@crates//:schemars",
+        "@crates//:serde",
+        "@crates//:serde_json",
+        "@crates//:sha2",
+    ],
     visibility = ["//visibility:public"],
 )
 

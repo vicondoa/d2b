@@ -8,6 +8,7 @@ exports_files(["BUILD.bazel"], visibility = ["//visibility:public"])
 rust_library(
     name = "d2b_provider_system_core",
     srcs = [
+        "src/audit.rs",
         "src/bootstrap.rs",
         "src/error.rs",
         "src/handler_status.rs",
@@ -16,6 +17,7 @@ rust_library(
         "src/host_reconciler.rs",
         "src/host_status.rs",
         "src/lib.rs",
+        "src/manifest.rs",
         "src/nss.rs",
         "src/ownership.rs",
         "src/testing.rs",
@@ -26,7 +28,7 @@ rust_library(
     deps = [
         "//packages/d2b-contracts:d2b_contracts",
         "@crates//:serde",
-        "@crates//:serde_json",
+        "@crates//:serde_json",        "@crates//:sha2",
     ],
 )
 

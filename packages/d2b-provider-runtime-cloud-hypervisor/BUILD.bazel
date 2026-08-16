@@ -7,8 +7,31 @@ exports_files(
 
 rust_library(
     name = "d2b_provider_runtime_cloud_hypervisor",
-    srcs = ["src/lib.rs"],
+    srcs = [
+        "src/adoption.rs",
+        "src/audit.rs",
+        "src/bootstrap_graph.rs",
+        "src/config.rs",
+        "src/controller.rs",
+        "src/health.rs",
+        "src/lib.rs",
+        "src/metrics.rs",
+        "src/state.rs",
+        "src/vmm_argv.rs",
+    ],
     compile_data = ["Cargo.toml"],
+    deps = [
+        "//packages/d2b-contracts:d2b_contracts",
+        "//packages/d2b-host-argv:d2b_host_argv",
+        "//packages/d2b-process-conformance:d2b_process_conformance",
+        "@crates//:serde",
+        "@crates//:serde_json",
+        "@crates//:sha2",
+        "@crates//:tokio",
+    ],
+    proc_macro_deps = [
+        "@crates//:async-trait",
+    ],
     visibility = ["//visibility:public"],
 )
 

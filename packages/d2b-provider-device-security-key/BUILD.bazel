@@ -14,6 +14,7 @@ rust_library(
         "src/cid.rs",
         "src/controller.rs",
         "src/descriptor.rs",
+        "src/effect_port.rs",
         "src/lease.rs",
         "src/lib.rs",
         "src/process.rs",

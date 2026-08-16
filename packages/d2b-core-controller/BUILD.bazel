@@ -42,6 +42,7 @@ d2b_core_controller_srcs = [
     "src/user_session_authority.rs",
     "src/watches.rs",
     "src/zone_links.rs",
+    "src/zone_status.rs",
     "src/zonelink.rs",
 ]
 
@@ -58,7 +59,7 @@ rust_library(
         "@crates//:serde",
         "@crates//:serde_json",
         "@crates//:sha2",
-        "@crates//:tokio",
+        "@crates//:tokio",        "//packages/d2b-provider-system-core:d2b_provider_system_core",
     ],
 )
 
@@ -77,7 +78,7 @@ rust_library(
         "@crates//:serde",
         "@crates//:serde_json",
         "@crates//:sha2",
-        "@crates//:tokio",
+        "@crates//:tokio",        "//packages/d2b-provider-system-core:d2b_provider_system_core",
     ],
 )
 

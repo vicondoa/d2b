@@ -32,7 +32,9 @@ rust_library(
         "src/transport.rs",
     ],
     compile_data = ["Cargo.toml"],
-    proc_macro_deps = ["@crates//:async-trait"],
+    proc_macro_deps = [
+        "@crates//:async-trait",
+    ],
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-audit:d2b_audit",
@@ -52,7 +54,9 @@ rust_test(
     name = "admission",
     srcs = ["tests/admission.rs"],
     compile_data = ["Cargo.toml"],
-    proc_macro_deps = ["@crates//:async-trait"],
+    proc_macro_deps = [
+        "@crates//:async-trait",
+    ],
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_session",
@@ -66,7 +70,9 @@ rust_test(
     name = "component_session",
     srcs = ["tests/component_session.rs"],
     compile_data = ["Cargo.toml"],
-    proc_macro_deps = ["@crates//:async-trait"],
+    proc_macro_deps = [
+        "@crates//:async-trait",
+    ],
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_session",

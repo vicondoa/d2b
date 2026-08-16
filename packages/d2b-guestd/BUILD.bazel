@@ -25,7 +25,9 @@ rust_library(
         "src/terminal_io.rs",
     ],
     compile_data = ["Cargo.toml"],
-    proc_macro_deps = ["@crates//:async-trait"],
+    proc_macro_deps = [
+        "@crates//:async-trait",
+    ],
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts:d2b_contracts",

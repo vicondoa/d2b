@@ -17,9 +17,9 @@ exports_files(
 )
 
 d2b_resource_store_srcs = [
-        "src/error.rs",
-        "src/lib.rs",
-        "src/mutation_seal.rs",
+    "src/error.rs",
+    "src/lib.rs",
+    "src/mutation_seal.rs",
 ]
 
 rust_library(

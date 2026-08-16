@@ -37,7 +37,7 @@ rust_library(
         "@crates//:sha2",
         "@crates//:socket2",
         "@crates//:uzers",
-        "@crates//:zbus",
+        "@crates//:zbus",        "@crates//:clap",
     ],
 )
 

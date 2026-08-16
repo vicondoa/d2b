@@ -17,6 +17,7 @@ rust_library(
         "src/effect_port.rs",
         "src/error.rs",
         "src/exports.rs",
+        "src/finalization.rs",
         "src/identity.rs",
         "src/layout.rs",
         "src/lib.rs",
