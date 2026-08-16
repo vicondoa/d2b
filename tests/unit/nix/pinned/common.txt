@@ -384,6 +384,8 @@ guest-exec-policy/root-user-rejected
 guest-exec-policy/uid-zero-alias-rejected
 guest-qemu-media/defaults
 guest-qemu-media/invalid-qmp-timeout-rejected
+guest-qemu-media/kvm-required-accepts-in-zone-device
+guest-qemu-media/kvm-required-rejects-missing-device
 guest-shell-policy/custom-positive
 guest-shell-policy/defaults-positive
 guest-shell-policy/enabled-positive

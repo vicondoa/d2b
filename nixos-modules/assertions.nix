@@ -2636,6 +2636,7 @@ let
     (zoneName: zone:
       let
         resources = zone.resources or { };
+        kvmRequired = cfg.qemuMediaRuntime.kvmRequired or true;
         provider = resources.runtime-qemu-media or null;
         providerSpec = if provider == null then { } else provider.spec or { };
         providerConfig = providerSpec.config or { };
@@ -2669,6 +2670,10 @@ let
               settings = extension.settings or { };
               bootMediaRef = settings.bootMediaRef or null;
               removable = settings.removableVolumeRefs or [ ];
+              deviceAttachments = spec.deviceAttachments or [ ];
+              declaresKvm = lib.any
+                (attachment: (attachment.deviceRef or null) == "Device/host-kvm")
+                deviceAttachments;
               displayWindow = settings.displayWindow or false;
               forbidden = [
                 "hostPath"
@@ -2686,6 +2691,11 @@ let
               {
                 assertion = (spec.systemArtifactId or null) == null;
                 message = "d2b.zones.${zoneName}.resources.${guestName}.spec.systemArtifactId must be null for runtime-qemu-media.";
+              }
+              {
+                assertion = !kvmRequired
+                  || (declaresKvm && resolves "Device" "Device/host-kvm");
+                message = "d2b.zones.${zoneName}.resources.${guestName}: runtime-qemu-media Guest must declare Device/host-kvm in deviceAttachments.";
               }
               {
                 assertion = bootMediaRef == null || resolves "Volume" bootMediaRef;

@@ -38,7 +38,7 @@ impl ProcessIdentity {
     /// Return whether this identity matches a Core-provided process token.
     pub fn matches_process_token(&self, value: &str) -> bool {
         let digest = Sha256::digest(value.as_bytes());
-        self.executable_digest == digest[..]
+        self.template_digest == digest[..]
     }
 }
 
@@ -63,5 +63,31 @@ pub fn verify_identity(expected: &ProcessIdentity, observed: &ProcessIdentity) -
         AdoptionOutcome::Adopted
     } else {
         AdoptionOutcome::Quarantined
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn digest(value: &str) -> [u8; 32] {
+        let mut result = [0_u8; 32];
+        result.copy_from_slice(&Sha256::digest(value.as_bytes()));
+        result
+    }
+
+    #[test]
+    fn process_token_matches_template_digest_not_executable_digest() {
+        let mut identity = ProcessIdentity::for_test("actual-qemu-binary");
+        identity.template_digest = digest("qemu-media-runner");
+        assert!(identity.matches_process_token("qemu-media-runner"));
+        assert!(!identity.matches_process_token("actual-qemu-binary"));
+    }
+
+    #[test]
+    fn inverted_template_and_executable_digests_fail_closed() {
+        let mut identity = ProcessIdentity::for_test("qemu-media-runner");
+        identity.template_digest = digest("actual-qemu-binary");
+        assert!(!identity.matches_process_token("qemu-media-runner"));
     }
 }

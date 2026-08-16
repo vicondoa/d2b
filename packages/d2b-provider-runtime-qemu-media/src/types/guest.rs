@@ -2,9 +2,14 @@
 
 use std::collections::BTreeSet;
 
-use d2b_contracts::v3::ResourceRef;
+use d2b_contracts::v3::{
+    CanonicalJsonObject, ProviderSpecExtension, ResourceRef, ResourceSpec, SchemaVersion,
+};
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
+
+pub use d2b_contracts::v3::GuestSpec;
+pub use d2b_contracts::v3::execution_policy::{DeviceAttachment, NetworkAttachment};
 
 /// Maximum removable media attachments on one Guest.
 pub const MAX_REMOVABLE_VOLUMES: usize = 4;
@@ -119,52 +124,14 @@ impl core::fmt::Debug for RemovableVolumeRef {
     }
 }
 
-/// Opaque network dependency.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct NetworkAttachment {
-    /// Referenced Network.
-    pub network_ref: ResourceRef,
-}
-
-impl NetworkAttachment {
-    /// Construct a Network attachment.
-    pub fn new(network_ref: ResourceRef) -> Result<Self, GuestSpecError> {
-        if network_ref.resource_type().as_str() != "Network" {
-            return Err(GuestSpecError::InvalidNetworkRef);
-        }
-        Ok(Self { network_ref })
-    }
-}
-
-/// Opaque device dependency.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct DeviceAttachment {
-    /// Referenced Device.
-    pub device_ref: ResourceRef,
-    /// Whether the Guest requests exclusive access.
-    #[serde(default)]
-    pub exclusive: bool,
-}
-
-impl DeviceAttachment {
-    /// Construct a Device attachment.
-    pub fn new(device_ref: ResourceRef, exclusive: bool) -> Result<Self, GuestSpecError> {
-        if device_ref.resource_type().as_str() != "Device" {
-            return Err(GuestSpecError::InvalidDeviceRef);
-        }
-        Ok(Self {
-            device_ref,
-            exclusive,
-        })
-    }
-}
-
 /// Guest provider-specific settings.
 #[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct GuestProviderSpecSettings {
+    /// Virtual CPU count.
+    pub vcpu: u16,
+    /// Guest memory in MiB.
+    pub memory_mib: u32,
     /// Optional boot Volume.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub boot_media_ref: Option<ResourceRef>,
@@ -195,6 +162,8 @@ pub struct GuestProviderSpecSettings {
 impl Default for GuestProviderSpecSettings {
     fn default() -> Self {
         Self {
+            vcpu: 2,
+            memory_mib: 4096,
             boot_media_ref: None,
             boot_media_view: "guest-attach".to_owned(),
             removable_volume_refs: Vec::new(),
@@ -214,6 +183,9 @@ impl Default for GuestProviderSpecSettings {
 impl GuestProviderSpecSettings {
     /// Validate every provider setting bound.
     pub fn validate(&self) -> Result<(), GuestSpecError> {
+        if self.vcpu == 0 || self.vcpu > 1024 || !(128..=524_288).contains(&self.memory_mib) {
+            return Err(GuestSpecError::InvalidResources);
+        }
         if self
             .boot_media_ref
             .as_ref()
@@ -252,6 +224,10 @@ impl<'de> Deserialize<'de> for GuestProviderSpecSettings {
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase", deny_unknown_fields)]
         struct Wire {
+            #[serde(default = "default_vcpu")]
+            vcpu: u16,
+            #[serde(default = "default_memory_mib")]
+            memory_mib: u32,
             #[serde(default)]
             boot_media_ref: Option<ResourceRef>,
             #[serde(default = "default_boot_media_view")]
@@ -279,6 +255,8 @@ impl<'de> Deserialize<'de> for GuestProviderSpecSettings {
         }
         let wire = Wire::deserialize(deserializer)?;
         let settings = Self {
+            vcpu: wire.vcpu,
+            memory_mib: wire.memory_mib,
             boot_media_ref: wire.boot_media_ref,
             boot_media_view: wire.boot_media_view,
             removable_volume_refs: wire.removable_volume_refs,
@@ -316,153 +294,71 @@ impl core::fmt::Debug for GuestProviderSpecSettings {
     }
 }
 
-/// Provider-specific Guest spec envelope.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct GuestProviderSpec {
-    /// Extension schema identifier.
-    pub schema_id: String,
-    /// Extension schema version.
-    pub schema_version: String,
-    /// Provider settings.
-    pub settings: GuestProviderSpecSettings,
+/// Construct a qemu-media Guest `ResourceSpec` from the canonical Guest base
+/// and the Provider-owned settings envelope.
+pub fn build_guest_resource_spec(
+    boot_media_ref: Option<ResourceRef>,
+    vcpu: u16,
+    memory_mib: u32,
+    mut settings: GuestProviderSpecSettings,
+) -> Result<ResourceSpec, GuestResourceSpecError> {
+    let provider_ref =
+        ResourceRef::parse(PROVIDER_REF).map_err(|_| GuestResourceSpecError::InvalidProviderRef)?;
+    settings.boot_media_ref = boot_media_ref;
+    settings.vcpu = vcpu;
+    settings.memory_mib = memory_mib;
+    settings.validate()?;
+
+    let base = GuestSpec::system_default();
+    let base = serde_json::to_vec(&base).map_err(|_| GuestResourceSpecError::CanonicalJson)?;
+    let base =
+        CanonicalJsonObject::parse(&base).map_err(|_| GuestResourceSpecError::CanonicalJson)?;
+    let settings =
+        serde_json::to_vec(&settings).map_err(|_| GuestResourceSpecError::CanonicalJson)?;
+    let settings =
+        CanonicalJsonObject::parse(&settings).map_err(|_| GuestResourceSpecError::CanonicalJson)?;
+    let provider = ProviderSpecExtension::new(
+        d2b_contracts::v3::ExtensionSchemaId::parse(GUEST_SPEC_SCHEMA_ID)
+            .map_err(|_| GuestResourceSpecError::SchemaMismatch)?,
+        SchemaVersion::parse("1.0").map_err(|_| GuestResourceSpecError::SchemaMismatch)?,
+        settings,
+    )
+    .map_err(|_| GuestResourceSpecError::SchemaMismatch)?;
+    ResourceSpec::new(Some(provider_ref), None, base, Some(provider))
+        .map_err(|_| GuestResourceSpecError::CanonicalJson)
 }
 
-/// Guest ResourceSpec owned by this Provider.
-#[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct GuestSpec {
-    /// Provider reference.
-    pub provider_ref: ResourceRef,
-    /// Optional NixOS system artifact.
-    pub system_artifact_id: Option<String>,
-    /// Virtual CPU count.
-    pub vcpu: u16,
-    /// Guest memory in MiB.
-    pub memory_mib: u32,
-    /// Network dependencies.
-    #[serde(default)]
-    pub network_attachments: Vec<NetworkAttachment>,
-    /// Device dependencies.
-    #[serde(default)]
-    pub device_attachments: Vec<DeviceAttachment>,
-    /// Provider extension.
-    pub provider: GuestProviderSpec,
+/// Failure while building the canonical Guest ResourceSpec envelope.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GuestResourceSpecError {
+    /// The fixed qemu-media Provider reference could not be parsed.
+    InvalidProviderRef,
+    /// Provider settings are invalid.
+    InvalidSettings,
+    /// The canonical Provider extension schema is invalid.
+    SchemaMismatch,
+    /// The canonical JSON base or settings object could not be rendered.
+    CanonicalJson,
 }
 
-impl<'de> Deserialize<'de> for GuestSpec {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            provider_ref: ResourceRef,
-            #[serde(default)]
-            system_artifact_id: Option<String>,
-            vcpu: u16,
-            memory_mib: u32,
-            #[serde(default)]
-            network_attachments: Vec<NetworkAttachment>,
-            #[serde(default)]
-            device_attachments: Vec<DeviceAttachment>,
-            provider: GuestProviderSpec,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        let spec = Self {
-            provider_ref: wire.provider_ref,
-            system_artifact_id: wire.system_artifact_id,
-            vcpu: wire.vcpu,
-            memory_mib: wire.memory_mib,
-            network_attachments: wire.network_attachments,
-            device_attachments: wire.device_attachments,
-            provider: wire.provider,
-        };
-        spec.validate().map_err(serde::de::Error::custom)?;
-        Ok(spec)
+impl From<GuestSpecError> for GuestResourceSpecError {
+    fn from(_: GuestSpecError) -> Self {
+        Self::InvalidSettings
     }
 }
 
-impl GuestSpec {
-    /// Construct the minimal valid qemu-media Guest spec.
-    pub fn new(
-        provider_ref: impl Into<String>,
-        boot_media_ref: Option<ResourceRef>,
-        vcpu: u16,
-        memory_mib: u32,
-        mut settings: GuestProviderSpecSettings,
-    ) -> Result<Self, GuestSpecError> {
-        let provider_ref = provider_ref.into();
-        let provider_ref =
-            ResourceRef::parse(&provider_ref).map_err(|_| GuestSpecError::InvalidProviderRef)?;
-        if provider_ref.to_canonical_string() != PROVIDER_REF {
-            return Err(GuestSpecError::InvalidProviderRef);
-        }
-        if vcpu == 0 || vcpu > 1024 || !(128..=524_288).contains(&memory_mib) {
-            return Err(GuestSpecError::InvalidResources);
-        }
-        settings.boot_media_ref = boot_media_ref;
-        settings.validate()?;
-        Ok(Self {
-            provider_ref,
-            system_artifact_id: None,
-            vcpu,
-            memory_mib,
-            network_attachments: Vec::new(),
-            device_attachments: Vec::new(),
-            provider: GuestProviderSpec {
-                schema_id: GUEST_SPEC_SCHEMA_ID.to_owned(),
-                schema_version: "1.0.0".to_owned(),
-                settings,
-            },
+impl core::fmt::Display for GuestResourceSpecError {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str(match self {
+            Self::InvalidProviderRef => "qemu-media-provider-ref-invalid",
+            Self::InvalidSettings => "qemu-media-guest-settings-invalid",
+            Self::SchemaMismatch => "qemu-media-schema-mismatch",
+            Self::CanonicalJson => "qemu-media-canonical-json-invalid",
         })
     }
-
-    /// Validate the complete Guest spec.
-    pub fn validate(&self) -> Result<(), GuestSpecError> {
-        if self.provider_ref.to_canonical_string() != PROVIDER_REF {
-            return Err(GuestSpecError::InvalidProviderRef);
-        }
-        if self.vcpu == 0 || self.vcpu > 1024 || !(128..=524_288).contains(&self.memory_mib) {
-            return Err(GuestSpecError::InvalidResources);
-        }
-        if self.system_artifact_id.is_some() {
-            return Err(GuestSpecError::SystemArtifactUnsupported);
-        }
-        if self
-            .network_attachments
-            .iter()
-            .any(|attachment| attachment.network_ref.resource_type().as_str() != "Network")
-            || self
-                .device_attachments
-                .iter()
-                .any(|attachment| attachment.device_ref.resource_type().as_str() != "Device")
-        {
-            return Err(GuestSpecError::InvalidReference);
-        }
-        if self.provider.schema_id != GUEST_SPEC_SCHEMA_ID
-            || self.provider.schema_version != "1.0.0"
-        {
-            return Err(GuestSpecError::SchemaMismatch);
-        }
-        self.provider.settings.validate()
-    }
 }
 
-impl core::fmt::Debug for GuestSpec {
-    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        formatter
-            .debug_struct("GuestSpec")
-            .field("provider_ref", &self.provider_ref)
-            .field("system_artifact_id", &self.system_artifact_id.is_some())
-            .field("vcpu", &self.vcpu)
-            .field("memory_mib", &self.memory_mib)
-            .field("network_attachments", &self.network_attachments.len())
-            .field("device_attachments", &self.device_attachments.len())
-            .finish()
-    }
-}
+impl std::error::Error for GuestResourceSpecError {}
 
 /// Common Guest phase.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -767,6 +663,14 @@ fn validate_token(value: &str) -> Result<(), ()> {
 
 const fn default_true() -> bool {
     true
+}
+
+const fn default_vcpu() -> u16 {
+    2
+}
+
+const fn default_memory_mib() -> u32 {
+    4096
 }
 
 fn default_boot_media_view() -> String {

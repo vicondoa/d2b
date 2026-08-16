@@ -39,3 +39,17 @@ fn provider_config_rejects_invalid_bounds() {
     config.runtime_tmpfs_quota_bytes = 1024;
     assert!(config.validate().is_err());
 }
+
+#[test]
+fn omitted_qemu_artifact_uses_a_valid_canonical_token() {
+    let config: ProviderConfig = serde_json::from_str(
+        r#"{
+            "controllerExecutionRef":"Host/host-system",
+            "networkProviderRef":"Provider/network-local",
+            "volumeProviderRef":"Provider/volume-local"
+        }"#,
+    )
+    .unwrap();
+    assert_eq!(config.qemu_binary_artifact_id, "qemu-system-x86-64");
+    assert!(config.validate().is_ok());
+}

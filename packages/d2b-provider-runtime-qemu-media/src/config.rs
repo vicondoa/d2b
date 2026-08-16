@@ -88,7 +88,7 @@ impl Default for ProviderConfig {
     fn default() -> Self {
         Self {
             controller_execution_ref: ResourceRef::parse("Guest/invalid").expect("valid reference"),
-            qemu_binary_artifact_id: "qemu-system-x86_64".to_owned(),
+            qemu_binary_artifact_id: "qemu-system-x86-64".to_owned(),
             qmp_ready_timeout_seconds: DEFAULT_QMP_READY_TIMEOUT_SECONDS,
             qmp_operation_timeout_seconds: DEFAULT_QMP_OPERATION_TIMEOUT_SECONDS,
             paused_at_boot_default: true,
@@ -289,7 +289,7 @@ const fn default_true() -> bool {
 }
 
 fn default_qemu_artifact() -> String {
-    "qemu-system-x86_64".to_owned()
+    "qemu-system-x86-64".to_owned()
 }
 
 const fn default_qmp_ready() -> u32 {

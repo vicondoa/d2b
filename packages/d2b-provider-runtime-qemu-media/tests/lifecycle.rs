@@ -90,8 +90,7 @@ fn config() -> ProviderConfig {
 
 fn controller() -> QemuMediaController<FakeEffect> {
     let settings = GuestProviderSpecSettings::default();
-    let process = d2b_provider_runtime_qemu_media::ProcessSpec::new(
-        ResourceRef::parse("Guest/media-vm").unwrap(),
+    let process = d2b_provider_runtime_qemu_media::build_process_spec(
         ResourceRef::parse("Host/host-system").unwrap(),
         ResourceRef::parse("Volume/runtime").unwrap(),
         Some(ResourceRef::parse("Device/host-kvm").unwrap()),

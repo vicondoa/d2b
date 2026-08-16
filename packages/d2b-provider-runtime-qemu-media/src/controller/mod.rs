@@ -26,6 +26,7 @@ pub use media_watch::{
 pub use network::{NetworkLaunchError, NetworkLaunchEvent, TapAttachment, TapLaunchRouter};
 pub use process_builder::{
     AttachmentKind, AttachmentSlot, LaunchTicket, ProcessSpec, ProcessSpecError,
+    build_process_spec, validate_process_spec,
 };
 pub use reconcile::{
     QemuMediaController, QemuMediaDependencies, QemuMediaEffectPort, QemuMediaError,

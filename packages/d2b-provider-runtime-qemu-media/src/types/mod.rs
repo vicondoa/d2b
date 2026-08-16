@@ -4,7 +4,7 @@ mod guest;
 
 pub use guest::{
     Bios, ConditionStatus, CpuModel, DeviceAttachment, ExtraFeature, GuestCondition, GuestPhase,
-    GuestProviderDetails, GuestProviderSpecSettings, GuestProviderStatus, GuestRuntimeStatus,
-    GuestSpec, GuestSpecError, GuestStatus, MachineType, NetworkAttachment, ProviderPhase,
-    RemovableVolumeRef, RtcBase,
+    GuestProviderDetails, GuestProviderSpecSettings, GuestProviderStatus, GuestResourceSpecError,
+    GuestRuntimeStatus, GuestSpec, GuestSpecError, GuestStatus, MachineType, NetworkAttachment,
+    ProviderPhase, RemovableVolumeRef, RtcBase, build_guest_resource_spec,
 };

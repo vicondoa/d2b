@@ -3,7 +3,7 @@
 use crate::{
     adoption::{AdoptionOutcome, ProcessIdentity, verify_identity},
     config::{ProviderConfig, ProviderConfigError},
-    controller::process_builder::PROCESS_TEMPLATE,
+    controller::process_builder::{PROCESS_TEMPLATE, validate_process_spec},
     controller::{
         DeviceAdmission, DeviceAdmissionError, DeviceObservation, LaunchTicket, ProcessSpec,
         ProcessSpecError,
@@ -242,7 +242,7 @@ impl<E> QemuMediaController<E> {
         config.validate()?;
         let config = config.project_controller();
         settings.validate()?;
-        process.validate()?;
+        validate_process_spec(&process)?;
         if guest_ref.resource_type().as_str() != "Guest" {
             return Err(QemuMediaError::InvalidConfiguration);
         }

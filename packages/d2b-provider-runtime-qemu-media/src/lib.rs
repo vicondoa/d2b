@@ -27,7 +27,8 @@ pub use controller::{
     QemuMediaController, QemuMediaDependencies, QemuMediaEffectPort, QemuMediaError,
     QemuMediaPhase, QemuMediaReconcileOutcome, QemuMediaRecoveryState, RuntimeVolumeSpec,
     RuntimeVolumeView, TapAttachment, TapLaunchRouter, VolumeAttachment, VolumeLayoutType,
-    VolumeObservation, VolumePhase, VolumeQuota, WaylandSessionSpec,
+    VolumeObservation, VolumePhase, VolumeQuota, WaylandSessionSpec, build_process_spec,
+    validate_process_spec,
 };
 pub use descriptor::{DescriptorError, ProviderDescriptor, QemuMediaProviderDescriptor};
 pub use qmp::{
@@ -41,9 +42,9 @@ pub use telemetry::{
 };
 pub use types::{
     Bios, ConditionStatus, CpuModel, DeviceAttachment, ExtraFeature, GuestCondition, GuestPhase,
-    GuestProviderDetails, GuestProviderSpecSettings, GuestProviderStatus, GuestRuntimeStatus,
-    GuestSpec, GuestSpecError, GuestStatus, MachineType, NetworkAttachment, ProviderPhase,
-    RemovableVolumeRef, RtcBase,
+    GuestProviderDetails, GuestProviderSpecSettings, GuestProviderStatus, GuestResourceSpecError,
+    GuestRuntimeStatus, GuestSpec, GuestSpecError, GuestStatus, MachineType, NetworkAttachment,
+    ProviderPhase, RemovableVolumeRef, RtcBase, build_guest_resource_spec,
 };
 
 /// Stable Provider implementation identifier.

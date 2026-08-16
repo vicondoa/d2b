@@ -2,6 +2,7 @@ use d2b_contracts::v3::ResourceRef;
 use d2b_provider_runtime_qemu_media::{
     DeviceAdmission, DeviceObservation, DevicePhase, HostGlobalAuthorityIndex, MediaWatch,
     PlatformClass, ProcessSpec, RuntimeVolumeSpec, VolumeObservation, WaylandSessionSpec,
+    build_process_spec, validate_process_spec,
 };
 
 fn guest() -> ResourceRef {
@@ -87,8 +88,7 @@ fn display_session_has_no_managed_by_or_locator_fields() {
 
 #[test]
 fn process_spec_contains_only_opaque_attachments() {
-    let process = ProcessSpec::new(
-        guest(),
+    let process = build_process_spec(
         ResourceRef::parse("Host/host-system").unwrap(),
         ResourceRef::parse("Volume/runtime").unwrap(),
         Some(ResourceRef::parse("Device/host-kvm").unwrap()),
@@ -100,4 +100,37 @@ fn process_spec_contains_only_opaque_attachments() {
     assert!(!json.contains("argv"));
     assert!(!json.contains("/nix/store"));
     assert!(!json.contains("broker"));
+}
+
+#[test]
+fn process_spec_uses_canonical_contract_and_rejects_shadow_fields() {
+    let process = build_process_spec(
+        ResourceRef::parse("Host/host-system").unwrap(),
+        ResourceRef::parse("Volume/runtime").unwrap(),
+        Some(ResourceRef::parse("Device/host-kvm").unwrap()),
+        [],
+    )
+    .unwrap();
+    validate_process_spec(&process).unwrap();
+    assert!(
+        serde_json::from_str::<ProcessSpec>(
+            r#"{"providerRef":"Provider/runtime-qemu-media","template":"qemu-media-runner"}"#
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn process_validation_checks_the_canonical_execution_template() {
+    let process = build_process_spec(
+        ResourceRef::parse("Host/host-system").unwrap(),
+        ResourceRef::parse("Volume/runtime").unwrap(),
+        Some(ResourceRef::parse("Device/host-kvm").unwrap()),
+        [],
+    )
+    .unwrap();
+    let mut json = serde_json::to_value(&process).unwrap();
+    json["template"] = serde_json::json!("wrong-template");
+    let changed: ProcessSpec = serde_json::from_value(json).unwrap();
+    assert!(validate_process_spec(&changed).is_err());
 }

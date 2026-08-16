@@ -1,10 +1,18 @@
-//! Opaque Process ResourceSpec and LaunchTicket construction.
+//! Canonical Process ResourceSpec and LaunchTicket construction.
 
-use d2b_contracts::v3::ResourceRef;
+pub use d2b_contracts::v3::ProcessSpec;
+use d2b_contracts::v3::{
+    DesiredLifecycle, DeviceAccess, DeviceUsageSpec, EnvironmentClass, ExecutionSpec,
+    HealthCheckClass, HealthCheckSpec, MountAccess, MountSpec, NamespaceClass, NetworkUsageSpec,
+    ProcessClass, ReadinessClass, ReadinessSpec, RestartClass, RestartPolicySpec, SandboxSpec,
+    TelemetrySpec,
+};
+use d2b_contracts::v3::{
+    ResourceRef,
+    execution_policy::{BoundedToken, BudgetSpec, CountBudget, DurationMs, ExecutionDomain},
+};
 use serde::{Deserialize, Serialize};
 
-/// Process spec provider.
-pub const PROCESS_PROVIDER_REF: &str = "Provider/system-minijail";
 /// Process template id.
 pub const PROCESS_TEMPLATE: &str = "qemu-media-runner";
 
@@ -38,111 +46,162 @@ pub struct AttachmentSlot {
     pub source_ref: ResourceRef,
 }
 
-/// Canonical qemu-media Process ResourceSpec projection.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ProcessSpec {
-    /// Process Provider.
-    pub provider_ref: ResourceRef,
-    /// Process execution reference.
-    pub execution_ref: ResourceRef,
-    /// Worker class.
-    pub process_class: String,
-    /// Signed template id.
-    pub template: String,
-    /// Runtime Volume ref.
-    pub runtime_volume_ref: ResourceRef,
-    /// KVM Device ref.
-    pub device_ref: Option<ResourceRef>,
-    /// Network refs.
-    pub network_refs: Vec<ResourceRef>,
-    /// Sandbox classes.
-    pub namespace_classes: Vec<String>,
-    /// Sandbox capabilities.
-    pub capability_classes: Vec<String>,
-    /// Sandbox seccomp class.
-    pub seccomp_class: String,
-    /// Whether no-new-privileges is required.
-    pub no_new_privileges: bool,
-    /// Whether the root filesystem is read-only.
-    pub read_only_root: bool,
-    /// Process restart policy.
-    pub restart_policy: String,
-    /// Desired lifecycle.
-    pub desired_lifecycle: String,
-}
-
-impl ProcessSpec {
-    /// Construct the canonical worker Process spec.
-    pub fn new(
-        guest_ref: ResourceRef,
-        execution_ref: ResourceRef,
-        runtime_volume_ref: ResourceRef,
-        device_ref: Option<ResourceRef>,
-        network_refs: impl IntoIterator<Item = ResourceRef>,
-    ) -> Result<Self, ProcessSpecError> {
-        if guest_ref.resource_type().as_str() != "Guest"
-            || execution_ref.resource_type().as_str() != "Host"
-            || runtime_volume_ref.resource_type().as_str() != "Volume"
-            || device_ref
-                .as_ref()
-                .is_some_and(|reference| reference.resource_type().as_str() != "Device")
-        {
-            return Err(ProcessSpecError::InvalidReference);
-        }
-        let network_refs: Vec<_> = network_refs.into_iter().collect();
-        if network_refs
+/// Construct the canonical qemu-media worker Process base spec.
+pub fn build_process_spec(
+    execution_ref: ResourceRef,
+    runtime_volume_ref: ResourceRef,
+    device_ref: Option<ResourceRef>,
+    network_refs: impl IntoIterator<Item = ResourceRef>,
+) -> Result<ProcessSpec, ProcessSpecError> {
+    if execution_ref.resource_type().as_str() != "Host"
+        || runtime_volume_ref.resource_type().as_str() != "Volume"
+        || device_ref
+            .as_ref()
+            .is_some_and(|reference| reference.resource_type().as_str() != "Device")
+    {
+        return Err(ProcessSpecError::InvalidReference);
+    }
+    let network_refs: Vec<_> = network_refs.into_iter().collect();
+    if network_refs.len() > 1
+        || network_refs
             .iter()
             .any(|reference| reference.resource_type().as_str() != "Network")
-        {
-            return Err(ProcessSpecError::InvalidReference);
-        }
-        Ok(Self {
-            provider_ref: ResourceRef::parse(PROCESS_PROVIDER_REF)
-                .expect("frozen Process Provider ref"),
-            execution_ref,
-            process_class: "worker".to_owned(),
-            template: PROCESS_TEMPLATE.to_owned(),
-            runtime_volume_ref,
-            device_ref,
-            network_refs,
-            namespace_classes: vec!["pid".to_owned(), "mount".to_owned()],
-            capability_classes: Vec::new(),
-            seccomp_class: "qemu-media-runner".to_owned(),
-            no_new_privileges: true,
-            read_only_root: true,
-            restart_policy: "never".to_owned(),
-            desired_lifecycle: "running".to_owned(),
-        })
+    {
+        return Err(ProcessSpecError::InvalidReference);
     }
 
-    /// Validate the no-ambient-authority Process shape.
-    pub fn validate(&self) -> Result<(), ProcessSpecError> {
-        if self.provider_ref.to_canonical_string() != PROCESS_PROVIDER_REF
-            || self.execution_ref.resource_type().as_str() != "Host"
-            || self.runtime_volume_ref.resource_type().as_str() != "Volume"
-            || self
-                .device_ref
-                .as_ref()
-                .is_some_and(|reference| reference.resource_type().as_str() != "Device")
-            || self
-                .network_refs
-                .iter()
-                .any(|reference| reference.resource_type().as_str() != "Network")
-            || self.process_class != "worker"
-            || self.template != PROCESS_TEMPLATE
-            || self.namespace_classes != ["pid".to_owned(), "mount".to_owned()]
-            || !self.capability_classes.is_empty()
-            || !self.no_new_privileges
-            || !self.read_only_root
-            || self.seccomp_class != "qemu-media-runner"
-            || self.restart_policy != "never"
-            || self.desired_lifecycle != "running"
-        {
-            return Err(ProcessSpecError::InvalidShape);
-        }
-        Ok(())
+    let runtime_mount = MountSpec::new(
+        runtime_volume_ref,
+        BoundedToken::parse("runner").map_err(|_| ProcessSpecError::InvalidShape)?,
+        "/run/qemu",
+        MountAccess::ReadWrite,
+        true,
+    )
+    .map_err(|_| ProcessSpecError::InvalidShape)?;
+    let sandbox = SandboxSpec::new(
+        vec![NamespaceClass::Pid, NamespaceClass::Mount],
+        Vec::new(),
+        BoundedToken::parse(PROCESS_TEMPLATE).map_err(|_| ProcessSpecError::InvalidShape)?,
+        true,
+        false,
+        EnvironmentClass::Minimal,
+        true,
+        Some("0022".to_owned()),
+        200,
+        None,
+    )
+    .map_err(|_| ProcessSpecError::InvalidShape)?;
+    let budget = BudgetSpec::new(
+        None,
+        None,
+        Some(CountBudget { limit: Some(512) }),
+        Some(CountBudget { limit: Some(1024) }),
+        None,
+        None,
+        None,
+    )
+    .map_err(|_| ProcessSpecError::InvalidShape)?;
+    let network_usage = network_refs
+        .into_iter()
+        .next()
+        .map(|network_ref| NetworkUsageSpec::new(Some(network_ref), Vec::new(), true))
+        .transpose()
+        .map_err(|_| ProcessSpecError::InvalidShape)?;
+    let device_usage = device_ref
+        .map(|device_ref| {
+            DeviceUsageSpec::new(device_ref, DeviceAccess::Shared, "kvm-acceleration")
+        })
+        .transpose()
+        .map_err(|_| ProcessSpecError::InvalidShape)?
+        .into_iter()
+        .collect();
+    let execution = ExecutionSpec::new(
+        execution_ref,
+        Some(ExecutionDomain::System),
+        None,
+        ProcessClass::Worker,
+        BoundedToken::parse(PROCESS_TEMPLATE).map_err(|_| ProcessSpecError::InvalidShape)?,
+        None,
+        Vec::new(),
+        vec![runtime_mount],
+        sandbox,
+        budget,
+        network_usage,
+        device_usage,
+        TelemetrySpec::default(),
+    )
+    .map_err(|_| ProcessSpecError::InvalidShape)?;
+    let process = ProcessSpec::new(
+        execution,
+        DesiredLifecycle::Running,
+        RestartPolicySpec::new(
+            RestartClass::Never,
+            duration("1s", 0, 60_000)?,
+            duration("60s", 1_000, 3_600_000)?,
+            2_000,
+            None,
+            duration("300s", 0, 86_400_000)?,
+        )
+        .map_err(|_| ProcessSpecError::InvalidShape)?,
+        ReadinessSpec::new(
+            duration("0s", 0, 300_000)?,
+            duration("30s", 1_000, 300_000)?,
+            1,
+            1,
+            ReadinessClass::ProviderDefined,
+        )
+        .map_err(|_| ProcessSpecError::InvalidShape)?,
+        HealthCheckSpec::new(
+            true,
+            duration("10s", 1_000, 3_600_000)?,
+            duration("5s", 1_000, 60_000)?,
+            3,
+            HealthCheckClass::ProviderDefined,
+        )
+        .map_err(|_| ProcessSpecError::InvalidShape)?,
+        d2b_contracts::v3::AdoptionPolicy::AdoptOnRestart,
+        duration("30s", 0, 3_600_000)?,
+    )
+    .map_err(|_| ProcessSpecError::InvalidShape)?;
+    validate_process_spec(&process)?;
+    Ok(process)
+}
+
+/// Validate a qemu-media Process against the canonical v3 Process contract.
+pub fn validate_process_spec(process: &ProcessSpec) -> Result<(), ProcessSpecError> {
+    let encoded = serde_json::to_vec(process).map_err(|_| ProcessSpecError::InvalidShape)?;
+    let decoded: ProcessSpec =
+        serde_json::from_slice(&encoded).map_err(|_| ProcessSpecError::InvalidShape)?;
+    if decoded != *process {
+        return Err(ProcessSpecError::InvalidShape);
     }
+    let execution = process.execution();
+    if execution.execution_ref().resource_type().as_str() != "Host"
+        || execution.process_class() != ProcessClass::Worker
+        || execution.template().as_str() != PROCESS_TEMPLATE
+        || execution.sandbox().namespace_classes() != [NamespaceClass::Pid, NamespaceClass::Mount]
+        || !execution.sandbox().capability_classes().is_empty()
+        || !execution.sandbox().no_new_privileges()
+        || execution.sandbox().start_root()
+        || !execution.sandbox().read_only_root()
+        || execution.sandbox().seccomp_class().as_str() != PROCESS_TEMPLATE
+        || execution.device_usage().len() > 1
+        || process.restart_policy().class() != RestartClass::Never
+        || process.desired_lifecycle() != DesiredLifecycle::Running
+    {
+        return Err(ProcessSpecError::InvalidShape);
+    }
+    if execution.mounts().len() != 1
+        || execution.mounts()[0].mount_path() != "/run/qemu"
+        || execution.mounts()[0].view().as_str() != "runner"
+    {
+        return Err(ProcessSpecError::InvalidShape);
+    }
+    Ok(())
+}
+
+fn duration(value: &str, min_millis: u64, max_millis: u64) -> Result<DurationMs, ProcessSpecError> {
+    DurationMs::parse(value, min_millis, max_millis).map_err(|_| ProcessSpecError::InvalidShape)
 }
 
 /// Opaque Core LaunchTicket.
@@ -162,20 +221,24 @@ impl LaunchTicket {
         media_refs: impl IntoIterator<Item = ResourceRef>,
         display_ref: Option<ResourceRef>,
     ) -> Result<Self, ProcessSpecError> {
-        process.validate()?;
+        validate_process_spec(&process)?;
         let mut attachments = Vec::new();
-        if let Some(device_ref) = &process.device_ref {
+        if let Some(device_ref) = process.execution().device_usage().first() {
             attachments.push(AttachmentSlot {
                 slot: "kvm".to_owned(),
                 kind: AttachmentKind::Kvm,
-                source_ref: device_ref.clone(),
+                source_ref: device_ref.device_ref().clone(),
             });
         }
-        for (index, reference) in process.network_refs.iter().enumerate() {
+        if let Some(network_ref) = process
+            .execution()
+            .network_usage()
+            .and_then(|usage| usage.network_ref())
+        {
             attachments.push(AttachmentSlot {
-                slot: format!("tap-{index}"),
+                slot: "tap-0".to_owned(),
                 kind: AttachmentKind::Tap,
-                source_ref: reference.clone(),
+                source_ref: network_ref.clone(),
             });
         }
         for (index, reference) in media_refs.into_iter().enumerate() {
@@ -206,7 +269,7 @@ impl LaunchTicket {
 
     /// Validate unique slot labels and typed sources.
     pub fn validate(&self) -> Result<(), ProcessSpecError> {
-        self.process.validate()?;
+        validate_process_spec(&self.process)?;
         let mut slots = std::collections::BTreeSet::new();
         for attachment in &self.attachments {
             if !valid_slot(&attachment.slot) || !slots.insert(&attachment.slot) {

@@ -1,5 +1,6 @@
 use d2b_provider_runtime_qemu_media::{
     GuestPhase, GuestProviderSpecSettings, GuestSpec, GuestStatus, ProviderPhase,
+    build_guest_resource_spec,
 };
 
 #[test]
@@ -52,14 +53,39 @@ fn status_provider_phase_is_closed_and_bounded() {
 #[test]
 fn guest_spec_requires_the_runtime_provider() {
     let settings = GuestProviderSpecSettings::default();
-    assert!(GuestSpec::new("Provider/runtime-qemu-media", None, 2, 4096, settings,).is_ok());
+    let resource = build_guest_resource_spec(None, 2, 4096, settings).unwrap();
+    assert_eq!(
+        resource.provider_ref().unwrap().to_canonical_string(),
+        "Provider/runtime-qemu-media"
+    );
     assert!(
-        GuestSpec::new(
-            "Provider/other",
+        d2b_contracts::v3::ResourceSpec::new(
+            Some(d2b_contracts::v3::ResourceRef::parse("Provider/other").unwrap()),
             None,
-            2,
-            4096,
-            GuestProviderSpecSettings::default()
+            d2b_contracts::v3::CanonicalJsonObject::empty(),
+            None,
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn canonical_guest_deserializes_minimal_base_and_rejects_shadow_fields() {
+    let minimal = br#"{
+        "allowedDomains":["system"],
+        "budget":{},
+        "defaultDomain":"system",
+        "defaultUserRef":null,
+        "deviceAttachments":[],
+        "networkAttachments":[],
+        "systemArtifactId":null,
+        "volumeAttachmentDefaults":[]
+    }"#;
+    let guest: GuestSpec = serde_json::from_slice(minimal).unwrap();
+    assert_eq!(guest, GuestSpec::system_default());
+    assert!(
+        serde_json::from_slice::<GuestSpec>(
+            br#"{"providerRef":"Provider/runtime-qemu-media","vcpu":2,"memoryMib":4096}"#
         )
         .is_err()
     );
