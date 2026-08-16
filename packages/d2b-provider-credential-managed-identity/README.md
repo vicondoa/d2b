@@ -43,10 +43,16 @@ creates one co-located agent Process per admitted Credential binding. The
 `d2b-managed-identity-agent` binary alone holds the injected
 `ManagedIdentityCredentialClient`, serves live lease operations, and terminates
 the sensitive delivery session. The controller has no client construction path.
+The standalone binaries fail closed with exit 78 until the authenticated Zone
+runtime supplies the controller source, ComponentSession transport, and
+LaunchTicket effect-port client; this crate does not invent a host-held token
+or ambient runtime fallback.
 
 ## Placement and dependencies
 
-`host-system` is accepted for a Host and `guest-agent` for a Guest.
+`host-system` is accepted for a Host and `guest-agent` for a Guest. Every
+placement is bound to one `Zone`; unbound or non-Zone placement references
+reject closed before Provider construction or client dispatch.
 `user-agent` rejects with `credential placement mismatch`. The client is
 co-located with the exact `consumerRef` execution context. Host and Guest
 dependencies must be Ready before acquisition.
