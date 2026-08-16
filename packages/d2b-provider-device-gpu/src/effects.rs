@@ -3,7 +3,15 @@
 use core::fmt;
 use d2b_contracts::v3::ResourceUid;
 
-use crate::process::GpuProcessRole;
+use crate::{
+    authority::{
+        GpuAuthorityAdmission, GpuAuthorityLease, GpuClosureProof, GpuPlatformToken,
+        GpuProcessIdentity, GpuProcessObservation,
+    },
+    probe::{GpuDeviceSelector, GpuProbeResult},
+    process::GpuProcessRole,
+    workers::{GpuWorkerSpec, VideoWorkerSpec},
+};
 
 /// One Core-derived GPU device effect token.
 #[derive(Clone, PartialEq, Eq)]
@@ -85,6 +93,24 @@ pub enum GpuEffectError {
     SpawnRejected,
     /// A worker can be retried.
     Transient,
+    /// The Core probe adapter is unavailable.
+    ProbeUnavailable,
+    /// Restart observation could not prove one exact process.
+    ProcessObservationUnavailable,
+    /// The request used a different worker principal.
+    WrongPrincipal,
+    /// The request used a different platform identity.
+    PlatformMismatch,
+    /// The request used a stale Device generation or backing identity.
+    StaleDeviceIdentity,
+    /// A Host-global claim conflicts with another owner.
+    AuthorityConflict,
+    /// A restart observation was ambiguous and is quarantined.
+    Quarantined,
+    /// A worker closure did not prove the owned process was gone.
+    CloseUnconfirmed,
+    /// The frozen GPU/video wire contract diverged.
+    WireContractMismatch,
 }
 
 impl GpuEffectError {
@@ -95,6 +121,15 @@ impl GpuEffectError {
             Self::OpenRejected => "device-broker-inaccessible",
             Self::SpawnRejected => "device-worker-failed",
             Self::Transient => "transient",
+            Self::ProbeUnavailable => "gpu-effect-unavailable",
+            Self::ProcessObservationUnavailable => "gpu-process-observation-unavailable",
+            Self::WrongPrincipal => "gpu-process-principal-mismatch",
+            Self::PlatformMismatch => "gpu-platform-mismatch",
+            Self::StaleDeviceIdentity => "gpu-device-identity-stale",
+            Self::AuthorityConflict => "device-claim-conflict",
+            Self::Quarantined => "gpu-authority-quarantined",
+            Self::CloseUnconfirmed => "gpu-worker-close-unconfirmed",
+            Self::WireContractMismatch => "device-wire-contract-mismatch",
         }
     }
 }
@@ -123,4 +158,89 @@ pub trait GpuEffectPort {
     ) -> Result<(), GpuEffectError>;
     /// Stop one worker role during finalization.
     fn stop(&mut self, role: GpuProcessRole) -> Result<(), GpuEffectError>;
+
+    /// Probe a Core-resolved DRM selector.
+    fn probe_drm_device(
+        &mut self,
+        _selector: &GpuDeviceSelector,
+    ) -> Result<GpuProbeResult, GpuEffectError> {
+        Err(GpuEffectError::ProbeUnavailable)
+    }
+
+    /// Observe one worker identity after a daemon restart.
+    fn observe_process(
+        &mut self,
+        _identity: &GpuProcessIdentity,
+    ) -> Result<GpuProcessObservation, GpuEffectError> {
+        Err(GpuEffectError::ProcessObservationUnavailable)
+    }
+
+    /// Close one exact worker and return a broker proof.
+    fn close_process(
+        &mut self,
+        role: GpuProcessRole,
+        identity: &GpuProcessIdentity,
+    ) -> Result<GpuClosureProof, GpuEffectError> {
+        self.stop(role)?;
+        Ok(GpuClosureProof::from_core(identity.clone()))
+    }
+}
+
+/// Extended lifecycle port used by the production Provider path.
+///
+/// The Core adapter implements this trait and owns the mapping to
+/// `HostGlobalAuthorityIndex`, `OpenDevice`, `SpawnRunner`, `OpenPidfd`, and
+/// close/release operations. The Provider only sees opaque identities.
+pub trait GpuLifecycleEffectPort {
+    /// Reserve Host-global GPU authority before any effect.
+    fn reserve_authority(
+        &mut self,
+        admission: &GpuAuthorityAdmission,
+    ) -> Result<GpuAuthorityLease, GpuEffectError>;
+
+    /// Open Core-resolved device grants before worker spawn.
+    fn open_authorized_devices(
+        &mut self,
+        admission: &GpuAuthorityAdmission,
+        tokens: &GpuEffectTokenSet,
+    ) -> Result<GpuLaunchTicket, GpuEffectError>;
+
+    /// Start a GPU or render-node worker with its signed semantic spec.
+    fn start_gpu_worker(
+        &mut self,
+        spec: &GpuWorkerSpec,
+        ticket: &GpuLaunchTicket,
+        principal: &crate::authority::GpuPrincipalToken,
+        platform: &GpuPlatformToken,
+        generation: d2b_contracts::v3::ResourceGeneration,
+    ) -> Result<GpuProcessIdentity, GpuEffectError>;
+
+    /// Start the separate video worker.
+    fn start_video_worker(
+        &mut self,
+        spec: &VideoWorkerSpec,
+        ticket: &GpuLaunchTicket,
+        principal: &crate::authority::GpuPrincipalToken,
+        platform: &GpuPlatformToken,
+        generation: d2b_contracts::v3::ResourceGeneration,
+    ) -> Result<GpuProcessIdentity, GpuEffectError>;
+
+    /// Observe one exact worker after restart.
+    fn observe_worker(
+        &mut self,
+        identity: &GpuProcessIdentity,
+    ) -> Result<GpuProcessObservation, GpuEffectError>;
+
+    /// Close one exact worker and return its closure proof.
+    fn stop_worker(
+        &mut self,
+        identity: &GpuProcessIdentity,
+    ) -> Result<GpuClosureProof, GpuEffectError>;
+
+    /// Release Host-global authority only after worker closure.
+    fn release_authority(
+        &mut self,
+        lease: GpuAuthorityLease,
+        closures: &[GpuClosureProof],
+    ) -> Result<(), GpuEffectError>;
 }
