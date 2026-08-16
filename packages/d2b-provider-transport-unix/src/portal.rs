@@ -196,8 +196,9 @@ impl TransportPortal {
 
     /// Validate one accepted descriptor and transfer it to the caller.
     ///
-    /// The portal retains only a close-on-exec duplicate for observation. The
-    /// original accepted descriptor has exactly one transfer destination.
+    /// The portal retains request binding, peer evidence, and a close-on-exec
+    /// duplicate for observation. The original accepted descriptor has exactly
+    /// one transfer destination.
     pub fn open(
         &self,
         binding: TransportRequestBinding,
@@ -208,7 +209,6 @@ impl TransportPortal {
             AcceptedTransport::bind(binding, fd).map_err(|_| PortalError::PeerCredentials)?;
         let (binding, peer, fd) = accepted.into_parts();
         validate_and_prepare(&fd, request)?;
-        let monitor_fd = fcntl_dupfd_cloexec(fd.as_fd(), 3).map_err(|_| PortalError::Cloexec)?;
         let descriptor = TransportDescriptor {
             socket_kind: request.socket_kind(),
             attachments_enabled: request.attachments_enabled(),
@@ -220,6 +220,7 @@ impl TransportPortal {
         if state.entries.len() == MAX_OPEN_TRANSPORTS {
             return Err(PortalError::HandleTableFull);
         }
+        let monitor_fd = fcntl_dupfd_cloexec(fd.as_fd(), 3).map_err(|_| PortalError::Cloexec)?;
         let handle = next_handle(&state)?;
         state.entries.insert(
             handle,

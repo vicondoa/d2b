@@ -156,3 +156,51 @@ fn portal_refuses_foreign_or_stale_handles_and_observes_disconnects() {
         "a finalized handle cannot be replayed"
     );
 }
+
+#[test]
+fn open_refuses_a_full_handle_table_then_recovers_after_close() {
+    let portal = TransportPortal::new();
+    let mut opened = Vec::new();
+    for _ in 0..256 {
+        let (accepted, _peer) = pair(SocketType::SEQPACKET);
+        opened.push(
+            portal
+                .open(
+                    binding(),
+                    OpenTransportRequest::new(
+                        SocketKind::Seqpacket,
+                        RouteClass::LocalPortal,
+                        false,
+                    ),
+                    accepted,
+                )
+                .expect("open within table bound"),
+        );
+    }
+
+    let (overflow, peer) = pair(SocketType::SEQPACKET);
+    assert_eq!(
+        portal
+            .open(
+                binding(),
+                OpenTransportRequest::new(SocketKind::Seqpacket, RouteClass::LocalPortal, false),
+                overflow,
+            )
+            .expect_err("full table must refuse"),
+        PortalError::HandleTableFull
+    );
+    drop(peer);
+
+    let released = opened.pop().expect("occupied table");
+    portal.close(released.handle()).expect("release one handle");
+
+    let (accepted, _peer) = pair(SocketType::SEQPACKET);
+    let recovered = portal
+        .open(
+            binding(),
+            OpenTransportRequest::new(SocketKind::Seqpacket, RouteClass::LocalPortal, false),
+            accepted,
+        )
+        .expect("close must free a table slot");
+    assert!(portal.close(recovered.handle()).is_ok());
+}

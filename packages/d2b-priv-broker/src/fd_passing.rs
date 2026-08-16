@@ -185,7 +185,8 @@ fn recv_fds_with_capacity_inner(
         }
     }
 
-    Ok((payload[..bytes].to_vec(), fds))
+    payload.truncate(bytes);
+    Ok((payload, fds))
 }
 
 /// Receive exactly one descriptor. The operation-specific broker response

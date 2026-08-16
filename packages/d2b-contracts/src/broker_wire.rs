@@ -900,6 +900,22 @@ impl BrokerRequest {
             crate::v3::canonical_digest("d2b:broker-operation:v2", operation.as_bytes()),
         ))
     }
+
+    /// Return whether this request participates in authoritative audit join.
+    ///
+    /// This is the allocation-free companion of [`Self::authoritative_audit_join`].
+    pub fn requires_authoritative_audit_join(&self) -> bool {
+        !matches!(
+            self,
+            Self::OpenPeerPidfdFromAcceptedSocket(_)
+                | Self::ValidateBundle
+                | Self::ExportBrokerAudit(_)
+                | Self::Hello(_)
+                | Self::PauseBroker
+                | Self::PollChildReaped
+                | Self::ResumeBroker
+        )
+    }
 }
 
 /// Broker-side installer driver. The broker resolves the bundle's

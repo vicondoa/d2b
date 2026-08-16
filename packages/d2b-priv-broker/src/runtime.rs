@@ -1166,8 +1166,7 @@ fn write_refusal_audit_bounded(
 }
 
 /// Real-wire dispatch results can carry zero-or-more `OwnedFd`s
-/// alongside the JSON response (for `OpenPidfd` / `SpawnRunner`).
-/// Bootstrap dispatch never carries fds.
+/// alongside the JSON response. Bootstrap dispatch never carries fds.
 #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
 #[derive(Debug)]
 struct DispatchResult {
@@ -1563,16 +1562,7 @@ impl DispatchAuditContext {
 
     #[cfg(not(feature = "layer1-bootstrap"))]
     fn request_requires_audit_join(request: &BrokerRequest) -> bool {
-        !matches!(
-            request,
-            BrokerRequest::Hello(_)
-                | BrokerRequest::ExportBrokerAudit(_)
-                | BrokerRequest::ValidateBundle
-                | BrokerRequest::PollChildReaped
-                | BrokerRequest::PauseBroker
-                | BrokerRequest::ResumeBroker
-                | BrokerRequest::OpenPeerPidfdFromAcceptedSocket(_)
-        )
+        request.requires_authoritative_audit_join()
     }
 }
 
@@ -2132,7 +2122,7 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
         // daemon's opaque BundleOpId via the trusted-bundle resolver,
         // (2) invokes the matching live_handlers::* executor against the
         // system executor, (3) writes the audit row, (4) returns an
-        // Ack/OpenPidfd/SpawnRunner response.
+        // Ack or fd-bearing response.
         RealBrokerRequest::ApplyNftables(req) => {
             let resolver = require_resolver(resolver)?;
             let intent = resolver

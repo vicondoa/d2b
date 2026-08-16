@@ -12938,40 +12938,7 @@ fn dispatch_broker_request_with_fds_timeout_as(
     caller_role: BrokerCallerRole,
     timeout: Duration,
 ) -> Result<(BrokerResponse, Vec<RawFd>), TypedError> {
-    let socket_path = broker_socket_path(state);
-    let audit_join = default_audit_join_context(&request);
-    let socket = Socket::from(connect_seqpacket_with_timeout(&socket_path, Some(timeout))?);
-    socket
-        .set_read_timeout(Some(timeout))
-        .map_err(|err| TypedError::InternalIo {
-            context: format!("set broker read timeout to {timeout:?}"),
-            detail: err.to_string(),
-        })?;
-    socket
-        .set_write_timeout(Some(timeout))
-        .map_err(|err| TypedError::InternalIo {
-            context: format!("set broker write timeout to {timeout:?}"),
-            detail: err.to_string(),
-        })?;
-    write_json_frame(
-        &socket,
-        &BrokerRequestEnvelope {
-            request,
-            caller_role,
-            test_peer_uid: None,
-            audit_join: audit_join.clone(),
-        },
-    )?;
-    let (response, received_fds) = read_frame_with_fds(&socket)?;
-    let decoded = serde_json::from_slice(&response).map_err(|err| {
-        close_received_fds(&received_fds);
-        TypedError::InternalBrokerUnavailable {
-            path: socket_path,
-            detail: err.to_string(),
-        }
-    })?;
-    ingest_broker_response_evidence(state, audit_join.as_ref(), &decoded);
-    Ok((decoded, received_fds))
+    dispatch_broker_request_with_optional_request_fds(state, request, caller_role, &[], timeout)
 }
 
 /// Ask the broker for the peer pidfd bound to one accepted local socket.
@@ -13040,6 +13007,22 @@ fn dispatch_broker_request_with_request_fd_timeout_as(
     request_fd: &OwnedFd,
     timeout: Duration,
 ) -> Result<(BrokerResponse, Vec<RawFd>), TypedError> {
+    dispatch_broker_request_with_optional_request_fds(
+        state,
+        request,
+        caller_role,
+        &[request_fd.as_raw_fd()],
+        timeout,
+    )
+}
+
+fn dispatch_broker_request_with_optional_request_fds(
+    state: &ServerState,
+    request: BrokerRequest,
+    caller_role: BrokerCallerRole,
+    request_fds: &[RawFd],
+    timeout: Duration,
+) -> Result<(BrokerResponse, Vec<RawFd>), TypedError> {
     let socket_path = broker_socket_path(state);
     let audit_join = default_audit_join_context(&request);
     let socket = Socket::from(connect_seqpacket_with_timeout(&socket_path, Some(timeout))?);
@@ -13063,7 +13046,7 @@ fn dispatch_broker_request_with_request_fd_timeout_as(
             test_peer_uid: None,
             audit_join: audit_join.clone(),
         },
-        &[request_fd.as_raw_fd()],
+        request_fds,
     )?;
     let (response, received_fds) = read_frame_with_fds(&socket)?;
     let decoded = serde_json::from_slice(&response).map_err(|err| {

@@ -13,9 +13,6 @@
       "type": "string"
     }
   },
-  "required": [
-    "socketKind"
-  ],
   "title": "TransportUnixBinding",
   "type": "object"
 }

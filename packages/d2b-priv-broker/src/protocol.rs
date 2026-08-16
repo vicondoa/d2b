@@ -44,8 +44,7 @@ pub fn send_json_frame<T: Serialize>(fd: RawFd, value: &T) -> io::Result<()> {
 /// Send a JSON frame body with zero-or-more accompanying `SCM_RIGHTS`
 /// file descriptors. When the fd slice is empty this is byte-equivalent
 /// to a pure `send()` frame for backward compatibility with all existing
-/// broker / daemon callers; only `OpenPidfd` / `SpawnRunner` responses
-/// carry fds.
+/// broker / daemon callers; fd-bearing responses use the same framing.
 pub fn send_json_frame_with_fds<T: Serialize>(
     fd: RawFd,
     value: &T,
