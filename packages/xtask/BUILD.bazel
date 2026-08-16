@@ -19,6 +19,7 @@ rust_binary(
     name = "xtask",
     srcs = [
         "src/bazel_cache_transfer.rs",
+        "src/bazel_evidence.rs",
         "src/buildbuddy_probe.rs",
         "src/changelog.rs",
         "src/delivery/command.rs",
@@ -104,6 +105,50 @@ rust_test(
         "CARGO_BIN_EXE_xtask": "$(rootpath :xtask)",
         "D2B_REPO_ROOT": "$(rootpath //:Cargo.toml)",
     },
+    env_inherit = ["PATH"],
+    rustc_env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
+    visibility = ["//visibility:public"],
+    deps = ["@crates//:serde_json"],
+)
+
+rust_test(
+    name = "buildbuddy_config",
+    srcs = ["tests/buildbuddy_config.rs"],
+    compile_data = ["Cargo.toml"],
+    data = [
+        ":xtask",
+        "//:BUILD.bazel",
+        "//:Cargo.toml",
+        "//:.bazelrc",
+        "//:.bazelrc.user.example",
+        "//:flake.nix",
+        "//bazel/platforms:BUILD.bazel",
+        "//bazel/remote:BUILD.bazel",
+        "//:docs/reference/bazel-buildbuddy.md",
+        "//:nix/bazel-worker-image.nix",
+        "//:tests/golden/bazel/cache-policy.json",
+    ],
+    env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
+    env_inherit = ["PATH"],
+    rustc_env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
+    visibility = ["//visibility:public"],
+    deps = ["@crates//:serde_json"],
+)
+
+rust_test(
+    name = "bazel_evidence",
+    srcs = ["tests/bazel_evidence.rs"],
+    compile_data = ["Cargo.toml"],
+    data = [
+        ":xtask",
+        "//:BUILD.bazel",
+        "//:Cargo.toml",
+        "//:flake.nix",
+        "//:tests/golden/bazel/cache-policy.json",
+        "//:tests/golden/bazel/cache-transfer-representative.json",
+        "//:tests/golden/bazel/eligibility.json",
+    ],
+    env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
     env_inherit = ["PATH"],
     rustc_env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
     visibility = ["//visibility:public"],

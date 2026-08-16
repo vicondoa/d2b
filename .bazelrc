@@ -1,12 +1,51 @@
+try-import %workspace%/.bazelrc.user
+
 common --lockfile_mode=error
 common --@protobuf//bazel/toolchains:prefer_prebuilt_protoc
 common --per_file_copt=external/.*protobuf.*@--PROTOBUF_WAS_NOT_SUPPOSED_TO_BE_BUILT
 common --host_per_file_copt=external/.*protobuf.*@--PROTOBUF_WAS_NOT_SUPPOSED_TO_BE_BUILT
 common --per_file_copt=external/.*grpc.*@--GRPC_WAS_NOT_SUPPOSED_TO_BE_BUILT
 common --host_per_file_copt=external/.*grpc.*@--GRPC_WAS_NOT_SUPPOSED_TO_BE_BUILT
+common --remote_download_outputs=minimal
+common --remote_retries=0
+common --remote_timeout=60s
 
 # Keep ordinary local/test actions unstamped and avoid unstable workspace data.
 build --stamp=no
 # The Nix C++ toolchain defaults to gold; use the available GNU BFD linker.
 build --linkopt=-fuse-ld=bfd
 build --host_linkopt=-fuse-ld=bfd
+
+# The local profile is the exact same target graph without any provider
+# endpoints. The bazel-check facade supplies the local repository-content
+# option outside the remote profiles.
+build:local --remote_executor=
+build:local --remote_cache=
+build:local --bes_backend=
+
+# Remote profiles use the direct BuildBuddy service. Authentication is
+# supplied only by the credential helper configured in private user setup.
+build:remote --remote_executor=grpcs://remote.buildbuddy.io
+build:remote --remote_cache=grpcs://remote.buildbuddy.io
+build:remote --bes_backend=grpcs://remote.buildbuddy.io
+build:remote --credential_helper=remote.buildbuddy.io=%workspace%/tests/tools/bazel-check
+build:remote --remote_instance_name=d2b/developer/linux-x86_64/rules_rust/worker-v1/minimal/lock-v1
+build:remote --platforms=//bazel/platforms:buildbuddy_x86_64_linux
+build:remote --remote_upload_local_results=false
+
+build:trusted-seed --remote_executor=grpcs://remote.buildbuddy.io
+build:trusted-seed --remote_cache=grpcs://remote.buildbuddy.io
+build:trusted-seed --bes_backend=grpcs://remote.buildbuddy.io
+build:trusted-seed --credential_helper=remote.buildbuddy.io=%workspace%/tests/tools/bazel-check
+build:trusted-seed --remote_instance_name=d2b/trusted-seed/linux-x86_64/rules_rust/worker-v1/minimal/lock-v1
+build:trusted-seed --platforms=//bazel/platforms:buildbuddy_x86_64_linux
+build:trusted-seed --remote_upload_local_results=true
+build:trusted-seed --remote_cache_async=false
+
+build:qualification --remote_executor=grpcs://remote.buildbuddy.io
+build:qualification --remote_cache=grpcs://remote.buildbuddy.io
+build:qualification --bes_backend=grpcs://remote.buildbuddy.io
+build:qualification --credential_helper=remote.buildbuddy.io=%workspace%/tests/tools/bazel-check
+build:qualification --remote_instance_name=d2b/qualification/linux-x86_64/rules_rust/worker-v1/minimal/lock-v1
+build:qualification --platforms=//bazel/platforms:buildbuddy_x86_64_linux
+build:qualification --remote_upload_local_results=false

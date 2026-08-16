@@ -27,6 +27,8 @@ result-*
 
 # Bazel workspace output links
 /bazel-*
+.bazelrc.user
+.config/buildbuddy-credential-helper
 
 # Editor
 *.swp

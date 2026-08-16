@@ -152,8 +152,26 @@ fn default_evidence() -> Value {
 }
 
 fn project_evidence(value: &Value) -> Result<Value, String> {
+    let sentinels = configured_sentinels();
+    project_evidence_with_sentinels(value, &sentinels)
+}
+
+fn configured_sentinels() -> Vec<String> {
+    env::var("D2B_BUILDBUDDY_SENTINELS")
+        .ok()
+        .map(|raw| {
+            raw.split('|')
+                .filter(|sentinel| !sentinel.is_empty())
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
+fn project_evidence_with_sentinels(value: &Value, sentinels: &[String]) -> Result<Value, String> {
     reject_credential_keys(value)?;
     reject_forbidden_auth_fields(value)?;
+    reject_sentinels(value, sentinels)?;
     let input = value
         .as_object()
         .ok_or_else(|| "evidence-root-must-be-object".to_owned())?;
@@ -259,6 +277,23 @@ fn project_evidence(value: &Value) -> Result<Value, String> {
     }
 
     Ok(Value::Object(output.clone()))
+}
+
+fn reject_sentinels(value: &Value, sentinels: &[String]) -> Result<(), String> {
+    if let Some(object) = value.as_object() {
+        for value in object.values() {
+            reject_sentinels(value, sentinels)?;
+        }
+    } else if let Some(array) = value.as_array() {
+        for value in array {
+            reject_sentinels(value, sentinels)?;
+        }
+    } else if let Some(text) = value.as_str()
+        && sentinels.iter().any(|sentinel| text.contains(sentinel))
+    {
+        return Err("evidence-sentinel-rejected".to_owned());
+    }
+    Ok(())
 }
 
 fn validate_evidence_shape(input: &Map<String, Value>, status: &str) -> Result<(), String> {
@@ -754,6 +789,37 @@ mod tests {
             "notes": "Bearer synthetic-secret"
         }));
         assert_eq!(result, Err("evidence-credential-value-rejected".to_owned()));
+    }
+
+    #[test]
+    fn plain_encoded_and_split_sentinels_never_project_into_evidence() {
+        let sentinels = [
+            "plain-buildbuddy-secret".to_owned(),
+            "cGxhaW4tYnVpbGRidWRkeS1zZWNyZXQ=".to_owned(),
+            "x-buildbuddy-api-key=split-buildbuddy-secret".to_owned(),
+        ];
+        for sentinel in &sentinels {
+            let evidence = json!({
+                "provider": "buildbuddy",
+                "status": "non-qualifying",
+                "probe": {
+                    "kind": "credential-isolated-command",
+                    "command": "xtask buildbuddy-probe",
+                    "input": "D2B_BUILDBUDDY_EVIDENCE_FILE",
+                    "readOnly": true,
+                    "fixtureSafe": true,
+                    "credentialMode": "credential-helper"
+                },
+                "secretRedaction": false,
+                "uploadsDisabled": false,
+                "reason": sentinel
+            });
+            let result = project_evidence_with_sentinels(&evidence, &sentinels);
+            assert!(
+                result.is_err(),
+                "sentinel must be rejected before evidence projection: {sentinel}"
+            );
+        }
     }
 
     #[test]

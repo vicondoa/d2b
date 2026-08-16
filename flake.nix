@@ -57,6 +57,12 @@
         import ./pkgs/bazel-9.2.0 {
           pkgs = nixpkgsFor.${system};
         };
+      bazelWorkerImageFor = system:
+        import ./nix/bazel-worker-image.nix {
+          pkgs = nixpkgsFor.${system};
+          bazel = bazel920For system;
+          inherit system;
+        };
 
       # The current Gas City source and the package-only nixpkgs input both
       # require Go 1.26.5. Keep the package set explicit so a future update
@@ -651,6 +657,7 @@
         signozOtelCollector = import ./pkgs/signoz-otel-collector { inherit pkgs; };
         signozSchemaMigrator = import ./pkgs/signoz-schema-migrator { inherit pkgs; };
         bazel-9_2_0 = bazel920;
+        bazel-worker-image = bazelWorkerImageFor system;
         inherit gascity dolt beads copilot gasCityContributor;
         gas-city-contributor = gasCityContributor;
       });
