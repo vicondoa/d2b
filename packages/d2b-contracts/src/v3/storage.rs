@@ -130,6 +130,10 @@ opaque_storage_id!(
     "Opaque identity-marker identifier resolved only by the storage owner."
 );
 opaque_storage_id!(
+    ZoneStoreDirectoryId,
+    "Opaque auxiliary Zone-directory identifier resolved only by the storage owner."
+);
+opaque_storage_id!(
     ZoneStorePrincipal,
     "Validated local storage-owner, file-owner, or file-group principal."
 );
@@ -200,6 +204,42 @@ impl JsonSchema for ZoneStoreFileMode {
             ..Default::default()
         })
     }
+}
+
+/// The sole privileged repair authority for broker-provisioned Zone directories.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum ZoneStoreDirectoryRepairOwner {
+    /// The privileged broker is the only component allowed to create or repair
+    /// the declared directory posture.
+    PrivilegedBroker,
+}
+
+/// Exact ownership and repair requirements for one Zone auxiliary directory.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ZoneStoreAuxiliaryDirectory {
+    /// Opaque identifier for the broker-resolved directory.
+    pub directory_id: ZoneStoreDirectoryId,
+    /// Required directory owner.
+    pub owner: ZoneStorePrincipal,
+    /// Required directory group.
+    pub group: ZoneStorePrincipal,
+    /// Required directory mode.
+    pub mode: ZoneStoreFileMode,
+    /// Sole authority allowed to provision or repair this directory.
+    pub repair_owner: ZoneStoreDirectoryRepairOwner,
+}
+
+/// Broker-resolved directories used by the Zone runtime's audit and telemetry
+/// ports.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ZoneStoreAuxiliaryDirectories {
+    /// Durable authoritative audit directory.
+    pub audit: ZoneStoreAuxiliaryDirectory,
+    /// Best-effort telemetry receiver directory.
+    pub telemetry: ZoneStoreAuxiliaryDirectory,
 }
 
 /// Exact one-link requirement for the database inode.
@@ -329,6 +369,8 @@ pub struct ZoneStoreStorageRow {
     pub parent_directory_id: ZoneStoreParentDirectoryId,
     /// Required owner, group, mode, and link-count posture.
     pub ownership: ZoneStoreOwnershipInvariant,
+    /// Explicit d2bd-owned audit and telemetry directory posture.
+    pub auxiliary_directories: ZoneStoreAuxiliaryDirectories,
     /// Required filesystem capability and path-resolution posture.
     pub filesystem: ZoneStoreFilesystemRequirement,
     /// Required locking capability.
@@ -357,6 +399,22 @@ mod tests {
                 "group": "d2b-zonert",
                 "mode": "0640",
                 "linkCount": 1
+            },
+            "auxiliaryDirectories": {
+                "audit": {
+                    "directoryId": "zone-store-audit-local-root",
+                    "owner": "d2bd",
+                    "group": "d2bd",
+                    "mode": "0700",
+                    "repairOwner": "privileged-broker"
+                },
+                "telemetry": {
+                    "directoryId": "zone-store-telemetry-local-root",
+                    "owner": "d2bd",
+                    "group": "d2bd",
+                    "mode": "0700",
+                    "repairOwner": "privileged-broker"
+                }
             },
             "filesystem": "regular-file-anchored-fd-relative-no-follow",
             "locking": "ofd-close-on-exec",
@@ -406,6 +464,7 @@ mod tests {
             "storageOwnerPrincipal",
             "parentDirectoryId",
             "ownership",
+            "auxiliaryDirectories",
             "filesystem",
             "locking",
             "marker",
@@ -430,6 +489,18 @@ mod tests {
             assert!(
                 serde_json::from_value::<ZoneStoreStorageRow>(candidate).is_err(),
                 "missing ownership invariant {field} must be rejected"
+            );
+        }
+
+        for directory in ["audit", "telemetry"] {
+            let mut candidate = valid_row();
+            candidate["auxiliaryDirectories"][directory]
+                .as_object_mut()
+                .expect("auxiliary directory object")
+                .remove("repairOwner");
+            assert!(
+                serde_json::from_value::<ZoneStoreStorageRow>(candidate).is_err(),
+                "missing auxiliary directory repair owner {directory} must be rejected"
             );
         }
 

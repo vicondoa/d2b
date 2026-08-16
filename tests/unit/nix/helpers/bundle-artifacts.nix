@@ -122,6 +122,22 @@ let
       mode = "0640";
       linkCount = 1;
     };
+    auxiliaryDirectories = {
+      audit = {
+        directoryId = "zone-store-audit-local-root";
+        owner = "d2bd";
+        group = "d2bd";
+        mode = "0700";
+        repairOwner = "privileged-broker";
+      };
+      telemetry = {
+        directoryId = "zone-store-telemetry-local-root";
+        owner = "d2bd";
+        group = "d2bd";
+        mode = "0700";
+        repairOwner = "privileged-broker";
+      };
+    };
     filesystem = "regular-file-anchored-fd-relative-no-follow";
     locking = "ofd-close-on-exec";
     marker.identityMarkerId = "zone-store-marker-local-root";
