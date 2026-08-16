@@ -24,6 +24,7 @@ SHELL := $(CURDIR)/tests/tools/scrub-shell-environment
         test-performance-budgets test-ci-coverage \
         test-flake-list test-flake-partition \
         test-drift test-policy test-integration test-host-integration test-hardware perf \
+        bazel-cache-transfer-report \
         heavy-lane-guard heavy-lane-integration heavy-lane-host-integration \
         heavy-lane-hardware heavy-lane-perf \
         heavy-lane-pre-tag heavy-lane-smoke-lite \
@@ -535,6 +536,53 @@ test-flake-partition:
 ## Layer-1 evidence even though test-flake also evaluates the checks.
 test-nix-unit:
 	bash tests/test-nix-unit.sh
+
+## bazel-cache-transfer-report - analyze an unsorted local Bazel execution log.
+## Override the log and eligibility paths for a real local graph. The checked-in
+## fixture keeps this facade repeatable on hosts without Bazel installed.
+D2B_BAZEL_CACHE_TRANSFER_LOG ?= tests/fixtures/bazel/cache-transfer/baseline-execution-log.json
+D2B_BAZEL_CACHE_TRANSFER_ELIGIBILITY ?= tests/fixtures/bazel/cache-transfer/eligibility.json
+D2B_BAZEL_CACHE_TRANSFER_REPORT ?= .scratch/bazel-cache-transfer/report.json
+D2B_BAZEL_CACHE_TRANSFER_BASELINE ?=
+D2B_BAZEL_CACHE_TRANSFER_CONFIGURATION ?=
+D2B_BAZEL_CACHE_TRANSFER_PLATFORM ?=
+D2B_BAZEL_CACHE_TRANSFER_TOOLCHAIN ?=
+export D2B_BAZEL_CACHE_TRANSFER_LOG
+export D2B_BAZEL_CACHE_TRANSFER_ELIGIBILITY
+export D2B_BAZEL_CACHE_TRANSFER_REPORT
+export D2B_BAZEL_CACHE_TRANSFER_BASELINE
+export D2B_BAZEL_CACHE_TRANSFER_CONFIGURATION
+export D2B_BAZEL_CACHE_TRANSFER_PLATFORM
+export D2B_BAZEL_CACHE_TRANSFER_TOOLCHAIN
+bazel-cache-transfer-report:
+	@set -eu; \
+	set -- \
+	  --execution-log "$$D2B_BAZEL_CACHE_TRANSFER_LOG" \
+	  --eligibility "$$D2B_BAZEL_CACHE_TRANSFER_ELIGIBILITY" \
+	  --output "$$D2B_BAZEL_CACHE_TRANSFER_REPORT"; \
+	log="$$D2B_BAZEL_CACHE_TRANSFER_LOG"; \
+	eligibility="$$D2B_BAZEL_CACHE_TRANSFER_ELIGIBILITY"; \
+	report="$$D2B_BAZEL_CACHE_TRANSFER_REPORT"; \
+	baseline="$$D2B_BAZEL_CACHE_TRANSFER_BASELINE"; \
+	configuration="$$D2B_BAZEL_CACHE_TRANSFER_CONFIGURATION"; \
+	platform="$$D2B_BAZEL_CACHE_TRANSFER_PLATFORM"; \
+	toolchain="$$D2B_BAZEL_CACHE_TRANSFER_TOOLCHAIN"; \
+	test -f "$$log" || { echo "bazel-cache-transfer-report: missing execution log $$log" >&2; exit 2; }; \
+	test -f "$$eligibility" || { echo "bazel-cache-transfer-report: missing eligibility $$eligibility" >&2; exit 2; }; \
+	if [ -n "$$baseline" ]; then \
+	  set -- "$$@" --baseline "$$baseline"; \
+	fi; \
+	if [ -n "$$configuration" ]; then \
+	  set -- "$$@" --configuration "$$configuration"; \
+	fi; \
+	if [ -n "$$platform" ]; then \
+	  set -- "$$@" --platform "$$platform"; \
+	fi; \
+	if [ -n "$$toolchain" ]; then \
+	  set -- "$$@" --toolchain "$$toolchain"; \
+	fi; \
+	cargo run --quiet --locked -p xtask -- bazel-cache-transfer "$$@"; \
+	printf '%s\n' "bazel-cache-transfer-report: $$report"
 
 ## test-drift - generated-artifact drift gates (xtask gen-*, vms-json parity).
 test-drift:

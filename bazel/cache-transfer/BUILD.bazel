@@ -1,0 +1,17 @@
+package(default_visibility = ["//visibility:public"])
+
+exports_files(["BUILD.bazel"])
+
+filegroup(
+    name = "fixtures",
+    srcs = ["//tests/fixtures/bazel/cache-transfer:fixtures"],
+)
+
+filegroup(
+    name = "goldens",
+    srcs = [
+        "//:tests/golden/bazel/cache-transfer-baseline.json",
+        "//:tests/golden/bazel/cache-transfer-optimized.json",
+        "//:tests/golden/bazel/cache-transfer-schema.json",
+    ],
+)

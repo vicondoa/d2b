@@ -7,6 +7,10 @@
   preserves sanitized partial capabilities, and rejects direct header
   authentication or credential material. Provider-accounted transfer evidence
   remains unavailable and does not qualify the integration.
+- Added a local Bazel cache-transfer analyzer and repeatable Make facade that
+  preserve gross and digest-deduplicated input bounds, execution classes,
+  fan-out, artifact exposure, and local-to-remote boundary evidence without
+  enabling BuildBuddy.
 
 ### Fixed
 

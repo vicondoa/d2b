@@ -1,0 +1,54 @@
+{
+  "schemaVersion": 1,
+  "reportKind": "bazel-cache-transfer",
+  "executionClasses": [
+    "rbe",
+    "remote-cache-only",
+    "fully-local"
+  ],
+  "requiredTopLevelFields": [
+    "schemaVersion",
+    "reportKind",
+    "semantics",
+    "source",
+    "wholeGraph",
+    "classes",
+    "actions",
+    "mnemonics",
+    "largestArtifacts",
+    "boundaryCrossings"
+  ],
+  "requiredScopeFields": [
+    "actionCount",
+    "grossInputBytes",
+    "uniqueInputBytes",
+    "outputBytes",
+    "fanOutArtifacts",
+    "maxFanOut",
+    "fanOutRatio",
+    "targets",
+    "responsibleTargets",
+    "largestInputs",
+    "largestOutputs",
+    "highestExposure"
+  ],
+  "requiredSourceFields": [
+    "executionLog",
+    "eligibility",
+    "eligibilityDigest",
+    "graphDigest",
+    "configuration",
+    "platform",
+    "toolchain",
+    "unlistedTargets"
+  ],
+  "semantics": {
+    "grossBytes": "pessimistic cold-executor upper bound",
+    "uniqueBytes": "optimistic warm-executor lower bound",
+    "providerBilling": false,
+    "remoteClasses": [
+      "rbe",
+      "remote-cache-only"
+    ]
+  }
+}
