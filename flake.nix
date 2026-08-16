@@ -264,6 +264,7 @@
           "examples-with-observability.nix"
           "gas-city-contributor.nix"
           "ifname-nix-rust-parity.nix"
+          "interaction-providers.nix"
           "observability.nix"
           "observability-guest.nix"
           "observability-host-collector.nix"

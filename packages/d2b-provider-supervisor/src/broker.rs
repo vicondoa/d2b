@@ -161,6 +161,15 @@ pub trait BrokerLaunchResolver: Send + Sync + 'static {
     ) -> Result<Option<BrokerObservedProcess>, ProcessEffectError> {
         self.observe(request)
     }
+
+    /// Record one broker-verified launch so a later reconciliation in the
+    /// same daemon lifetime can adopt it through the normal observe/open-pidfd
+    /// path. Implementations that have an independent discovery source may
+    /// ignore this callback.
+    fn record_launched(&self, _request: &ProcessRequest, _observed: &BrokerObservedProcess) {}
+
+    /// Forget one stopped process from an in-memory discovery source.
+    fn record_stopped(&self, _observed: &BrokerObservedProcess) {}
 }
 
 /// Bundle-backed resolver for generic Process tickets.
@@ -569,6 +578,7 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
             executable_verified: true,
         };
         observed.validate()?;
+        self.resolver.record_launched(&request, &observed);
         let observation = observed.observation();
         Ok(BackendLaunch::new(
             observation,
@@ -682,6 +692,7 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
                         && response.role_id == handle.observed.intent.role_id => {}
                 _ => return Err(ProcessEffectError::StopFailed),
             }
+            self.resolver.record_stopped(&handle.observed);
         }
         Ok(())
     }

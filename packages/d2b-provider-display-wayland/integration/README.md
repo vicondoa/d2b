@@ -1,7 +1,7 @@
 # Integration fixtures
 
-This directory reserves the integration fixture surface for
-`Provider/display-wayland`. The current crate root has no executable
-integration behavior. The placeholder scenario declaration is required by the
-repository layout policy; replace it with the dossier's real fixture when
-implementation lands.
+The display integration lane uses fake Zone, GPU, portal, and Process
+adapters. It covers session create-to-Ready, dependency Pending, proxy failure
+backoff, finalizer ambiguity, clipboard-boundary denial, and
+`crossDomainTrusted = false` admission. No fixture reads a compositor socket,
+starts a host singleton, or emits a path.
