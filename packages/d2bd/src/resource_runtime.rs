@@ -223,6 +223,29 @@ pub struct ZoneResourceRuntime {
     device_tpm_controller: crate::tpm_effect_port::DeviceTpmControllerRegistration,
 }
 
+/// Store-derived admission evidence for one security-key Device effect.
+///
+/// This contains only the exact values validated against the authoritative
+/// resource record. It is consumed by the Device effect adapter before it can
+/// request a broker-opened descriptor.
+pub(crate) struct SecurityKeyDeviceAdmission {
+    pub(crate) zone_ref: ResourceRef,
+    pub(crate) device_uid: ResourceUid,
+    pub(crate) holder_ref: ResourceRef,
+    pub(crate) selector_id: String,
+}
+
+/// Request fields that select the Device admission record to validate.
+pub(crate) struct SecurityKeyDeviceAdmissionRequest<'a> {
+    pub(crate) device_uid: &'a ResourceUid,
+    pub(crate) device_ref: &'a ResourceRef,
+    pub(crate) request_zone_ref: &'a ResourceRef,
+    pub(crate) holder_ref: &'a ResourceRef,
+    pub(crate) vm_id: &'a str,
+    pub(crate) selector_id: &'a str,
+    pub(crate) operation_id: &'a str,
+}
+
 impl core::fmt::Debug for ZoneResourceRuntime {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -807,7 +830,9 @@ impl ZoneResourceRuntime {
             .get("spec")
             .and_then(Value::as_object)
             .ok_or(ResourceRuntimeError::AuthenticationUnavailable)?;
-        if spec.get("providerRef").and_then(Value::as_str) != Some("Provider/device-tpm") {
+        if spec.get("providerRef").and_then(Value::as_str)
+            != Some(d2b_provider_device_tpm::PROVIDER_REF)
+        {
             return Err(ResourceRuntimeError::AuthenticationUnavailable);
         }
         if !Self::tpm_device_targets_vm(&value, vm_id) {
@@ -819,6 +844,60 @@ impl ZoneResourceRuntime {
             &intent,
             legacy_intent_anchor,
         ))
+    }
+
+    /// Load and validate the persisted Device record before a security-key
+    /// provider constructs its one-use admission. Request fields select a
+    /// candidate only; the returned values all originate from the store.
+    pub(crate) async fn security_key_device_is_admitted(
+        &self,
+        request: SecurityKeyDeviceAdmissionRequest<'_>,
+    ) -> Result<SecurityKeyDeviceAdmission, ResourceRuntimeError> {
+        let resource = self
+            .backend
+            .get(StoreGetRequest {
+                operation: StoreOperationContext {
+                    operation_id: request.operation_id.to_owned(),
+                    idempotency_key: None,
+                    correlation_id: request.operation_id.to_owned(),
+                    trace_id: None,
+                    deadline_ms: 30_000,
+                },
+                zone: self.zone.clone(),
+                target: request.device_ref.clone(),
+                expected_uid: Some(request.device_uid.clone()),
+                projection: StoreProjection::Full,
+            })
+            .await
+            .ok();
+        let Some(resource) = resource.filter(|resource| {
+            resource.uid == *request.device_uid
+                && resource.resource_ref == *request.device_ref
+                && resource.resource_ref.resource_type().as_str() == "Device"
+                && resource.zone == self.zone
+        }) else {
+            return Err(ResourceRuntimeError::AuthenticationUnavailable);
+        };
+        let value = serde_json::from_slice::<Value>(&resource.canonical_json)
+            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
+        if !Self::security_key_device_matches(
+            &value,
+            &self.zone,
+            request.request_zone_ref,
+            request.holder_ref,
+            request.vm_id,
+            request.selector_id,
+        ) {
+            return Err(ResourceRuntimeError::AuthenticationUnavailable);
+        }
+        let zone_ref = ResourceRef::parse(&format!("Zone/{}", self.zone.as_str()))
+            .expect("ZoneId always produces a valid Zone resource reference");
+        Ok(SecurityKeyDeviceAdmission {
+            zone_ref,
+            device_uid: resource.uid,
+            holder_ref: request.holder_ref.clone(),
+            selector_id: request.selector_id.to_owned(),
+        })
     }
 
     /// Publish terminal broker evidence into the live store join index.
@@ -839,6 +918,47 @@ impl ZoneResourceRuntime {
             .and_then(Value::as_str)
             .and_then(|owner| owner.strip_prefix("Guest/"))
             == Some(vm_id)
+    }
+
+    fn security_key_device_matches(
+        resource: &Value,
+        zone: &ZoneId,
+        request_zone_ref: &ResourceRef,
+        holder_ref: &ResourceRef,
+        vm_id: &str,
+        selector_id: &str,
+    ) -> bool {
+        let expected_zone_ref = ResourceRef::parse(&format!("Zone/{}", zone.as_str()))
+            .expect("ZoneId always produces a valid Zone resource reference");
+        if request_zone_ref != &expected_zone_ref
+            || holder_ref.resource_type().as_str() != "Guest"
+            || holder_ref.name().as_str() != vm_id
+        {
+            return false;
+        }
+        let Some(metadata) = resource.get("metadata").and_then(Value::as_object) else {
+            return false;
+        };
+        if metadata.get("zone").and_then(Value::as_str) != Some(zone.as_str())
+            || metadata.get("ownerRef").and_then(Value::as_str)
+                != Some(holder_ref.to_canonical_string().as_str())
+        {
+            return false;
+        }
+        resource
+            .get("spec")
+            .and_then(Value::as_object)
+            .filter(|spec| {
+                spec.get("providerRef").and_then(Value::as_str)
+                    == Some(d2b_provider_device_security_key::PROVIDER_REF)
+            })
+            .and_then(|spec| spec.get("inventory"))
+            .and_then(Value::as_object)
+            .and_then(|inventory| inventory.get("selector"))
+            .and_then(Value::as_object)
+            .and_then(|selector| selector.get("label"))
+            .and_then(Value::as_str)
+            == Some(selector_id)
     }
 
     fn tpm_migration_decision(
@@ -1693,6 +1813,53 @@ mod tests {
             "vm-a"
         ));
         assert!(!ZoneResourceRuntime::tpm_device_targets_vm(&absent, "vm-a"));
+    }
+
+    #[test]
+    fn security_key_device_binding_requires_stored_zone_owner_and_selector() {
+        let matching = json!({
+            "metadata": { "ownerRef": "Guest/vm-a", "zone": "work" },
+            "spec": {
+                "providerRef": "Provider/device-security-key",
+                "inventory": { "selector": { "label": "key-primary" } }
+            }
+        });
+        let zone = ZoneId::parse("work".to_owned()).unwrap();
+        let zone_ref = ResourceRef::parse("Zone/work").unwrap();
+        let holder_ref = ResourceRef::parse("Guest/vm-a").unwrap();
+
+        assert!(ZoneResourceRuntime::security_key_device_matches(
+            &matching,
+            &zone,
+            &zone_ref,
+            &holder_ref,
+            "vm-a",
+            "key-primary",
+        ));
+        assert!(!ZoneResourceRuntime::security_key_device_matches(
+            &matching,
+            &zone,
+            &ResourceRef::parse("Zone/home").unwrap(),
+            &holder_ref,
+            "vm-a",
+            "key-primary",
+        ));
+        assert!(!ZoneResourceRuntime::security_key_device_matches(
+            &matching,
+            &zone,
+            &zone_ref,
+            &ResourceRef::parse("Guest/vm-b").unwrap(),
+            "vm-a",
+            "key-primary",
+        ));
+        assert!(!ZoneResourceRuntime::security_key_device_matches(
+            &matching,
+            &zone,
+            &zone_ref,
+            &holder_ref,
+            "vm-a",
+            "key-secondary",
+        ));
     }
 
     #[test]

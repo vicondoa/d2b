@@ -47,6 +47,7 @@ pub trait TpmResourceEffectPort: Send + Sync {
     fn ensure_state_volume(
         &self,
         device_uid: &ResourceUid,
+        device_ref: &ResourceRef,
         execution_ref: &ResourceRef,
     ) -> impl Future<Output = Result<ResourceRef, TpmResourceEffectError>> + Send;
 
@@ -62,7 +63,6 @@ pub trait TpmResourceEffectPort: Send + Sync {
     fn request_flush_process(
         &self,
         device_uid: &ResourceUid,
-        swtpm_process_ref: &ResourceRef,
         execution_ref: &ResourceRef,
     ) -> impl Future<Output = Result<ResourceRef, TpmResourceEffectError>> + Send;
 

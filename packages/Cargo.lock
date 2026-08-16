@@ -1703,6 +1703,7 @@ dependencies = [
  "d2b-gateway-runtime",
  "d2b-host",
  "d2b-provider",
+ "d2b-provider-device-security-key",
  "d2b-provider-device-tpm",
  "d2b-provider-runtime-azure-container-apps",
  "d2b-provider-transport-azure-relay",

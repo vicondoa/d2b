@@ -105,7 +105,7 @@ impl ExportSpec {
         if volume_ref.resource_type().as_str() != "Volume" {
             return Err(VirtiofsExportError::InvalidExport);
         }
-        if !matches!(execution_ref.resource_type().as_str(), "Host" | "Guest") {
+        if execution_ref.resource_type().as_str() != "Guest" {
             return Err(VirtiofsExportError::InvalidExport);
         }
         Ok(Self {
@@ -241,5 +241,19 @@ mod tests {
                 "unsafe mount path admitted: {rejected:?}"
             );
         }
+    }
+
+    #[test]
+    fn export_rejects_host_execution_targets() {
+        assert!(matches!(
+            ExportSpec::new(
+                ResourceRef::parse("Volume/data").unwrap(),
+                ResourceRef::parse("Host/host-system").unwrap(),
+                BoundedToken::parse("live").unwrap(),
+                AttachmentAccess::ReadOnly,
+                AttachmentSettings::default(),
+            ),
+            Err(VirtiofsExportError::InvalidExport)
+        ));
     }
 }

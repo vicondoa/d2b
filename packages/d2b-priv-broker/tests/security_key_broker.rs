@@ -75,19 +75,25 @@ fn open_hidraw_security_key_audit_round_trips_from_value() {
 /// opaque `selector_id`, admitted Device reference, and authority key).
 #[test]
 fn open_hidraw_security_key_request_wire_round_trips() {
+    let device_ref = ResourceRef::parse("Device/yk5c-selector").expect("device ref");
+    let expected_authority_key =
+        d2b_contracts::broker_wire::security_key_authority_binding(&device_ref, "yk5c-selector");
     let request = BrokerRequest::OpenHidrawSecurityKey(OpenHidrawSecurityKeyRequest {
         vm_id: VmId::new("personal-dev"),
         selector_id: "yk5c-selector".to_owned(),
-        device_ref: Some(ResourceRef::parse("Device/yk5c").expect("device ref")),
-        authority_key: Some("semantic-security-key".to_owned()),
+        device_ref: device_ref.clone(),
+        authority_key: expected_authority_key.clone(),
         tracing_span_id: None,
     });
     let json = serde_json::to_value(&request).expect("serialize request");
     assert_eq!(json["kind"], "OpenHidrawSecurityKey");
     assert_eq!(json["payload"]["vmId"], "personal-dev");
     assert_eq!(json["payload"]["selectorId"], "yk5c-selector");
-    assert_eq!(json["payload"]["deviceRef"], "Device/yk5c");
-    assert_eq!(json["payload"]["authorityKey"], "semantic-security-key");
+    assert_eq!(
+        json["payload"]["deviceRef"],
+        device_ref.to_canonical_string()
+    );
+    assert_eq!(json["payload"]["authorityKey"], expected_authority_key);
     assert!(json["payload"].get("hidrawPath").is_none());
 
     let round_tripped: BrokerRequest =

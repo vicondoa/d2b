@@ -21,6 +21,7 @@ use d2b_core::workload_identity::WorkloadIdentity;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", content = "payload")]
@@ -1804,13 +1805,22 @@ pub struct OpenHidrawSecurityKeyRequest {
     /// its trusted bundle's security-key device registry.
     pub selector_id: String,
     /// Exact Device resource admitted by Core.
-    #[serde(default)]
-    pub device_ref: Option<ResourceRef>,
+    pub device_ref: ResourceRef,
     /// Core-derived Host physical-backing authority digest.
-    #[serde(default)]
-    pub authority_key: Option<String>,
+    pub authority_key: String,
     #[serde(default)]
     pub tracing_span_id: Option<TracingSpanId>,
+}
+
+/// Derive the exact Device-selector binding accepted by the privileged broker.
+pub fn security_key_authority_binding(device_ref: &ResourceRef, selector_id: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"d2b:security-key-authority/v1");
+    hasher.update([0]);
+    hasher.update(device_ref.to_canonical_string().as_bytes());
+    hasher.update([0]);
+    hasher.update(selector_id.as_bytes());
+    format!("sha256:{:x}", hasher.finalize())
 }
 
 /// Confirmation that the broker opened the security-key hidraw node.

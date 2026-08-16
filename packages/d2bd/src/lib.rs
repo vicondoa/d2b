@@ -270,6 +270,7 @@ pub mod concurrency;
 // (`SO_PEERCRED`) authentication. Consumes the hidraw fd handed off by
 // `d2b-priv-broker`'s `OpenHidrawSecurityKey` op via `SCM_RIGHTS`.
 pub mod security_key;
+mod security_key_effect_port;
 
 // Compile-only peer-module skeletons wiring the realm
 // provider/router trait surface. NOT called from the running
@@ -3695,6 +3696,15 @@ fn dispatch_resource_request(
         return Ok(dispatch_device_tpm_reconcile(state, peer, &request.value())
             .unwrap_or_else(resource_runtime_error_frame));
     }
+    if security_key_effect_port::is_reconcile_request(&request.value()) {
+        return Ok(security_key_effect_port::dispatch_reconcile(
+            state,
+            peer,
+            runtime.as_ref(),
+            &request.value(),
+        )
+        .unwrap_or_else(resource_runtime_error_frame));
+    }
     if typed_shell {
         return Ok(
             dispatch_typed_shell_resource_request(state, peer, &request.value())
@@ -3714,7 +3724,8 @@ fn dispatch_resource_request(
 fn is_device_tpm_reconcile_request(request: &Value) -> bool {
     request.get("method").and_then(Value::as_str) == Some("Reconcile")
         && request.get("resourceType").and_then(Value::as_str) == Some("Device")
-        && request.get("providerRef").and_then(Value::as_str) == Some("Provider/device-tpm")
+        && request.get("providerRef").and_then(Value::as_str)
+            == Some(d2b_provider_device_tpm::PROVIDER_REF)
 }
 
 fn dispatch_device_tpm_reconcile(
@@ -3801,6 +3812,13 @@ fn dispatch_device_tpm_reconcile(
             VmId::new(vm_id),
             BundleOpId::new(migration_intent),
             decision,
+            tpm_effect_port::AdmittedTpmDevice::new(
+                device_uid,
+                device_ref,
+                zone.as_str(),
+                ResourceRef::parse("Host/host-system")
+                    .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?,
+            ),
             intent,
             d2b_provider_device_tpm::SwtpmSettings { log_level },
             binary,
@@ -3809,8 +3827,8 @@ fn dispatch_device_tpm_reconcile(
         .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
     Ok(json!({
         "resourceType": "Device",
-        "provider": "Provider/device-tpm",
-        "outcome": format!("{outcome:?}").to_lowercase()
+        "provider": d2b_provider_device_tpm::PROVIDER_REF,
+        "outcome": outcome.code()
     }))
 }
 
@@ -15211,6 +15229,18 @@ fn write_runner_snapshot(
     pid: i32,
     start_time_ticks: u64,
 ) -> Result<(), String> {
+    write_runner_snapshot_owned(state, vm, role_id, role, pid, start_time_ticks, None)
+}
+
+fn write_runner_snapshot_owned(
+    state: &ServerState,
+    vm: &str,
+    role_id: &str,
+    role: RunnerRole,
+    pid: i32,
+    start_time_ticks: u64,
+    owner_resource_uid: Option<&str>,
+) -> Result<(), String> {
     let store = supervisor::state::FilesystemSnapshotStore::new(&state.daemon_state_dir);
     supervisor::state::SnapshotStore::upsert(
         &store,
@@ -15218,6 +15248,7 @@ fn write_runner_snapshot(
             vm: vm.to_owned(),
             role_id: role_id.to_owned(),
             role,
+            owner_resource_uid: owner_resource_uid.map(str::to_owned),
             pid,
             start_time_ticks,
             snapshotted_at: chrono_like_rfc3339(),
@@ -18723,6 +18754,8 @@ fn dispatch_broker_vm_stop_with_timeout_as_inner(
             sigkill_roles.push(report.role_id);
         }
     }
+
+    state.security_key_sessions.lock().stop_vm(&request.vm);
 
     let _mguard = state.pidfd_table.mutation_guard();
     if let Err(error) = state.pidfd_table.snapshot() {
@@ -29238,6 +29271,7 @@ mod broker_dispatch_tests {
                 vm: "vm-a".to_owned(),
                 role_id: "virtiofsd-ro-store".to_owned(),
                 role: RunnerRole::Virtiofsd,
+                owner_resource_uid: None,
                 pid: 4242,
                 start_time_ticks: 55,
                 snapshotted_at: "2026-05-30T00:00:00Z".to_owned(),

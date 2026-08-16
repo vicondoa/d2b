@@ -51,6 +51,9 @@ pub struct RunnerSnapshotRecord {
     pub role_id: String,
     /// Which runner kind: CH / virtiofsd / swtpm.
     pub role: RunnerRole,
+    /// Exact owning Device UID for Device-backed workers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_resource_uid: Option<String>,
     /// Live process id at snapshot time.
     pub pid: i32,
     /// `/proc/<pid>/stat` field-22 starttime ticks captured by the
@@ -393,6 +396,12 @@ impl std::error::Error for SnapshotStoreError {}
 pub trait SnapshotStore: Send + Sync {
     /// Persist or overwrite the snapshot for `(vm, role_id)`.
     fn upsert(&self, record: &RunnerSnapshotRecord) -> Result<(), SnapshotStoreError>;
+    /// Read the snapshot for exactly `(vm, role_id)`, when present.
+    fn get(
+        &self,
+        vm: &str,
+        role_id: &str,
+    ) -> Result<Option<RunnerSnapshotRecord>, SnapshotStoreError>;
     /// Remove the snapshot for `(vm, role_id)`. Idempotent: removing
     /// a non-existent record is not an error.
     fn remove(&self, vm: &str, role_id: &str) -> Result<(), SnapshotStoreError>;
@@ -464,6 +473,30 @@ impl SnapshotStore for FilesystemSnapshotStore {
             let _ = parent_dir.sync_all();
         }
         Ok(())
+    }
+
+    fn get(
+        &self,
+        vm: &str,
+        role_id: &str,
+    ) -> Result<Option<RunnerSnapshotRecord>, SnapshotStoreError> {
+        let path = self.file_path(vm, role_id);
+        let bytes = match std::fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(err) => {
+                return Err(SnapshotStoreError::Io {
+                    path: path.display().to_string(),
+                    detail: err.to_string(),
+                });
+            }
+        };
+        serde_json::from_slice(&bytes)
+            .map(Some)
+            .map_err(|err| SnapshotStoreError::BadJson {
+                path: path.display().to_string(),
+                detail: err.to_string(),
+            })
     }
 
     fn remove(&self, vm: &str, role_id: &str) -> Result<(), SnapshotStoreError> {
@@ -550,6 +583,19 @@ impl SnapshotStore for InMemorySnapshotStore {
         Ok(())
     }
 
+    fn get(
+        &self,
+        vm: &str,
+        role_id: &str,
+    ) -> Result<Option<RunnerSnapshotRecord>, SnapshotStoreError> {
+        Ok(self
+            .inner
+            .lock()
+            .unwrap()
+            .get(&(vm.to_owned(), role_id.to_owned()))
+            .cloned())
+    }
+
     fn remove(&self, vm: &str, role_id: &str) -> Result<(), SnapshotStoreError> {
         self.inner
             .lock()
@@ -581,6 +627,7 @@ mod tests {
             vm: vm.to_owned(),
             role_id: role.to_owned(),
             role: RunnerRole::CloudHypervisor,
+            owner_resource_uid: None,
             pid,
             start_time_ticks: st,
             snapshotted_at: "2026-05-29T03:00:00Z".to_owned(),
@@ -769,6 +816,16 @@ mod tests {
     }
 
     #[test]
+    fn in_memory_store_get_returns_exact_record_or_missing() {
+        let store = InMemorySnapshotStore::new();
+        let record = sample("corp-vm", "ch", 100, 200);
+        store.upsert(&record).unwrap();
+
+        assert_eq!(store.get("corp-vm", "ch").unwrap(), Some(record));
+        assert_eq!(store.get("corp-vm", "swtpm").unwrap(), None);
+    }
+
+    #[test]
     fn in_memory_remove_missing_is_ok() {
         let store = InMemorySnapshotStore::new();
         // Removing a never-inserted slot must not error.
@@ -800,6 +857,50 @@ mod tests {
         let p = snapshot_path(dir.path(), "corp-vm", "ch");
         assert!(p.exists());
         assert!(p.to_string_lossy().ends_with("runtime.ch.json"));
+    }
+
+    #[test]
+    fn filesystem_store_get_returns_exact_record_or_missing() {
+        let dir = tempdir().unwrap();
+        let store = FilesystemSnapshotStore::new(dir.path());
+        let record = sample("corp-vm", "swtpm", 101, 201);
+        store.upsert(&record).unwrap();
+
+        assert_eq!(store.get("corp-vm", "swtpm").unwrap(), Some(record));
+        assert_eq!(store.get("corp-vm", "missing").unwrap(), None);
+    }
+
+    #[test]
+    fn filesystem_store_get_rejects_malformed_snapshot() {
+        let dir = tempdir().unwrap();
+        let path = snapshot_path(dir.path(), "corp-vm", "ch");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, b"not-json").unwrap();
+        let store = FilesystemSnapshotStore::new(dir.path());
+
+        assert!(matches!(
+            store.get("corp-vm", "ch"),
+            Err(SnapshotStoreError::BadJson {
+                path: error_path,
+                ..
+            }) if error_path == path.display().to_string()
+        ));
+    }
+
+    #[test]
+    fn filesystem_store_get_maps_read_failure_to_io() {
+        let dir = tempdir().unwrap();
+        let path = snapshot_path(dir.path(), "corp-vm", "ch");
+        std::fs::create_dir_all(&path).unwrap();
+        let store = FilesystemSnapshotStore::new(dir.path());
+
+        assert!(matches!(
+            store.get("corp-vm", "ch"),
+            Err(SnapshotStoreError::Io {
+                path: error_path,
+                ..
+            }) if error_path == path.display().to_string()
+        ));
     }
 
     #[test]

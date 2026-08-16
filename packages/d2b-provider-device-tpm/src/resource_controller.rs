@@ -71,9 +71,9 @@ impl std::error::Error for TpmResourceControllerError {}
 /// Resource-backed Device TPM controller.
 pub struct TpmResourceController {
     device_uid: ResourceUid,
+    device_ref: ResourceRef,
     execution_ref: ResourceRef,
     phase: TpmResourcePhase,
-    finalizer: bool,
     volume_ref: Option<ResourceRef>,
     process_ref: Option<ResourceRef>,
     flush_ref: Option<ResourceRef>,
@@ -84,8 +84,14 @@ impl TpmResourceController {
     /// Construct a controller for one emulated Device.
     pub fn new(
         device_uid: ResourceUid,
+        device_ref: ResourceRef,
         execution_ref: ResourceRef,
     ) -> Result<Self, TpmResourceControllerError> {
+        if device_ref.resource_type().as_str() != "Device" {
+            return Err(TpmResourceControllerError::Effect(
+                TpmResourceEffectError::InvalidDevice,
+            ));
+        }
         if execution_ref.resource_type().as_str() != "Host" {
             return Err(TpmResourceControllerError::Effect(
                 TpmResourceEffectError::InvalidExecutionRef,
@@ -93,9 +99,9 @@ impl TpmResourceController {
         }
         Ok(Self {
             device_uid,
+            device_ref,
             execution_ref,
             phase: TpmResourcePhase::Pending,
-            finalizer: true,
             volume_ref: None,
             process_ref: None,
             flush_ref: None,
@@ -110,7 +116,7 @@ impl TpmResourceController {
 
     /// Return whether the state-preserving finalizer remains installed.
     pub const fn finalizer_installed(&self) -> bool {
-        self.finalizer
+        !matches!(self.phase, TpmResourcePhase::Finalized)
     }
 
     /// Borrow the observed TPM Endpoint, when ready.
@@ -118,17 +124,18 @@ impl TpmResourceController {
         self.endpoint_ref.as_ref()
     }
 
-    /// Reconcile children in Volume -> Process -> flush -> Endpoint order.
+    /// Reconciliation creates the Volume, starts and observes the long-lived
+    /// Process, completes the mandatory flush, and then exposes the Endpoint.
     pub async fn reconcile<P: TpmResourceEffectPort>(
         &mut self,
         port: &P,
     ) -> Result<TpmResourceOutcome, TpmResourceControllerError> {
-        if !self.finalizer || self.phase == TpmResourcePhase::Finalized {
+        if self.phase == TpmResourcePhase::Finalized {
             return Err(TpmResourceControllerError::InvalidState);
         }
         self.phase = TpmResourcePhase::Reconciling;
         let volume = match port
-            .ensure_state_volume(&self.device_uid, &self.execution_ref)
+            .ensure_state_volume(&self.device_uid, &self.device_ref, &self.execution_ref)
             .await
         {
             Ok(value) => value,
@@ -143,19 +150,26 @@ impl TpmResourceController {
             Err(error) => return self.effect_failed(error),
         };
         self.process_ref = Some(process.clone());
-        let flush = match port
-            .request_flush_process(&self.device_uid, &process, &self.execution_ref)
-            .await
-        {
-            Ok(value) => value,
-            Err(error) => return self.effect_failed(error),
-        };
-        self.flush_ref = Some(flush.clone());
         let endpoint = match port.watch_tpm_endpoint(&process).await {
             Ok(value) => value,
             Err(error) => return self.effect_failed(error),
         };
         self.endpoint_ref = Some(endpoint);
+        let flush = match port
+            .request_flush_process(&self.device_uid, &self.execution_ref)
+            .await
+        {
+            Ok(value) => value,
+            Err(error) => {
+                if let Err(stop_error) = port.stop_swtpm_process(&process).await {
+                    return self.effect_failed(stop_error);
+                }
+                self.process_ref = None;
+                self.endpoint_ref = None;
+                return self.effect_failed(error);
+            }
+        };
+        self.flush_ref = Some(flush);
         self.phase = TpmResourcePhase::Ready;
         Ok(TpmResourceOutcome::Ready)
     }
@@ -165,7 +179,7 @@ impl TpmResourceController {
         &mut self,
         port: &P,
     ) -> Result<TpmResourceOutcome, TpmResourceControllerError> {
-        if !self.finalizer {
+        if self.phase == TpmResourcePhase::Finalized {
             return Ok(TpmResourceOutcome::VolumeRetained);
         }
         if self.phase == TpmResourcePhase::Pending
@@ -190,7 +204,6 @@ impl TpmResourceController {
             return Err(TpmResourceControllerError::Effect(error));
         }
         self.endpoint_ref = None;
-        self.finalizer = false;
         self.phase = TpmResourcePhase::Finalized;
         Ok(TpmResourceOutcome::VolumeRetained)
     }

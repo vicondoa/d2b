@@ -80,18 +80,24 @@ pub fn live_open_hidraw_security_key(
 pub(crate) fn validate_device_authority(
     req: &d2b_contracts::broker_wire::OpenHidrawSecurityKeyRequest,
 ) -> Result<(), OpError> {
-    if req
-        .device_ref
-        .as_ref()
-        .is_none_or(|reference| reference.resource_type().as_str() != "Device")
-        || req
-            .authority_key
-            .as_deref()
-            .is_none_or(|key| key.is_empty() || key.len() > 128)
+    if req.device_ref.resource_type().as_str() != "Device"
+        || req.authority_key.is_empty()
+        || req.authority_key.len() > 128
     {
         return Err(OpError::Refused {
             operation: "OpenHidrawSecurityKey",
             reason: "device-authority-proof-required".to_owned(),
+        });
+    }
+    if req.authority_key
+        != d2b_contracts::broker_wire::security_key_authority_binding(
+            &req.device_ref,
+            &req.selector_id,
+        )
+    {
+        return Err(OpError::Refused {
+            operation: "OpenHidrawSecurityKey",
+            reason: "device-authority-selector-mismatch".to_owned(),
         });
     }
     Ok(())
@@ -277,6 +283,7 @@ pub(crate) fn open_and_validate_hidraw(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use d2b_contracts::v3::ResourceRef;
 
     #[test]
     fn unconfigured_selector_is_rejected_before_sysfs_lookup() {
@@ -356,14 +363,48 @@ mod tests {
         let request = d2b_contracts::broker_wire::OpenHidrawSecurityKeyRequest {
             vm_id: d2b_contracts::types::VmId::new("work-vm"),
             selector_id: "hidraw-0".to_owned(),
-            device_ref: None,
-            authority_key: None,
+            device_ref: ResourceRef::parse("Device/hidraw-0").unwrap(),
+            authority_key: String::new(),
             tracing_span_id: None,
         };
         assert!(matches!(
             validate_device_authority(&request),
             Err(OpError::Refused { reason, .. }) if reason == "device-authority-proof-required"
         ));
+    }
+
+    #[test]
+    fn device_authority_is_bound_to_the_requested_selector() {
+        let request = d2b_contracts::broker_wire::OpenHidrawSecurityKeyRequest {
+            vm_id: d2b_contracts::types::VmId::new("work-vm"),
+            selector_id: "key-b".to_owned(),
+            device_ref: ResourceRef::parse("Device/key-a").unwrap(),
+            authority_key: d2b_contracts::broker_wire::security_key_authority_binding(
+                &ResourceRef::parse("Device/key-a").unwrap(),
+                "key-a",
+            ),
+            tracing_span_id: None,
+        };
+        assert!(matches!(
+            validate_device_authority(&request),
+            Err(OpError::Refused { reason, .. }) if reason == "device-authority-selector-mismatch"
+        ));
+    }
+
+    #[test]
+    fn device_authority_binds_the_store_admitted_device_to_its_selector() {
+        let device_ref = ResourceRef::parse("Device/corp-vm-security-key").unwrap();
+        let request = d2b_contracts::broker_wire::OpenHidrawSecurityKeyRequest {
+            vm_id: d2b_contracts::types::VmId::new("work-vm"),
+            selector_id: "key-primary".to_owned(),
+            authority_key: d2b_contracts::broker_wire::security_key_authority_binding(
+                &device_ref,
+                "key-primary",
+            ),
+            device_ref,
+            tracing_span_id: None,
+        };
+        assert!(validate_device_authority(&request).is_ok());
     }
 
     #[test]

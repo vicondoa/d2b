@@ -7403,27 +7403,21 @@
       "description": "Broker op that resolves a configured FIDO security-key stable selector and opens the physical hidraw node for `d2bd`. The daemon never names raw hidraw paths; the broker re-derives the node from its trusted bundle copy.",
       "type": "object",
       "required": [
+        "authorityKey",
+        "deviceRef",
         "selectorId",
         "vmId"
       ],
       "properties": {
         "authorityKey": {
           "description": "Core-derived Host physical-backing authority digest.",
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "deviceRef": {
           "description": "Exact Device resource admitted by Core.",
-          "default": null,
-          "anyOf": [
+          "allOf": [
             {
               "$ref": "#/definitions/ResourceRef"
-            },
-            {
-              "type": "null"
             }
           ]
         },

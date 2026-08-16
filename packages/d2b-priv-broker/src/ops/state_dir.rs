@@ -14,6 +14,34 @@ use std::path::{Path, PathBuf};
 use d2b_contracts::types::PathClass;
 use d2b_core::bundle_resolver::BundleResolver;
 
+/// Failure from the generic state-directory operation.
+///
+/// swtpm hardening carries its path-free terminal audit record separately so
+/// the runtime can preserve the typed `PrepareSwtpmDir` disposition rather
+/// than reducing it to a generic live-handler error.
+#[derive(Debug)]
+pub enum PrepareStateDirError {
+    Operation(super::OpError),
+    SwtpmDirHardening(crate::ops::swtpm_dir::SwtpmHardenError),
+}
+
+impl From<super::OpError> for PrepareStateDirError {
+    fn from(error: super::OpError) -> Self {
+        Self::Operation(error)
+    }
+}
+
+impl std::fmt::Display for PrepareStateDirError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Operation(error) => error.fmt(formatter),
+            Self::SwtpmDirHardening(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl std::error::Error for PrepareStateDirError {}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum DirKind {
@@ -165,14 +193,15 @@ pub fn live_prepare_state_dir(
     resolver: &BundleResolver,
     req: &d2b_contracts::broker_wire::PrepareDirRequest,
     _audit_log: &crate::audit::AuditLog,
-) -> Result<(), super::OpError> {
+) -> Result<(), PrepareStateDirError> {
     if req.path_class != PathClass::Vm {
         return Err(super::OpError::InvalidInput {
             detail: format!(
                 "PrepareStateDir requires pathClass=vm, got {:?}",
                 req.path_class
             ),
-        });
+        }
+        .into());
     }
     let intent = resolver
         .resolve_prepare_dir_intent(req.vm_id.as_str(), false)
@@ -241,12 +270,8 @@ pub fn live_prepare_state_dir(
             now_ms,
             enforce_root_parents: paths.swtpm_dir.starts_with("/var/lib/d2b"),
         };
-        crate::ops::swtpm_dir::harden(&paths, &config).map_err(|error| {
-            super::OpError::Refused {
-                operation: "PrepareStateDir",
-                reason: error.reason.to_owned(),
-            }
-        })?;
+        crate::ops::swtpm_dir::harden(&paths, &config)
+            .map_err(PrepareStateDirError::SwtpmDirHardening)?;
     }
 
     Ok(())

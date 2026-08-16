@@ -3,11 +3,13 @@ use d2b_provider_device_tpm::{
     TpmResourceController, TpmResourceEffectError, TpmResourceEffectPort, TpmResourceOutcome,
     build_tpm_state_volume_spec,
 };
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 #[test]
 fn controller_uses_opaque_resource_effects_and_preserves_volume_on_finalize() {
     let device = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
+    let device_ref = ResourceRef::parse("Device/work-tpm").unwrap();
     let execution = ResourceRef::parse("Host/host-system").unwrap();
     let spec = build_tpm_state_volume_spec(&device, &execution).unwrap();
     assert_eq!(spec["source"]["settings"]["kind"], "local-path");
@@ -17,7 +19,7 @@ fn controller_uses_opaque_resource_effects_and_preserves_volume_on_finalize() {
     assert_port::<NoopEffects>();
     assert_eq!(TpmResourceOutcome::VolumeRetained.code(), "volume-retained");
 
-    let mut controller = TpmResourceController::new(device, execution).unwrap();
+    let mut controller = TpmResourceController::new(device, device_ref, execution).unwrap();
     let effects = NoopEffects;
     assert_eq!(
         block_on(controller.reconcile(&effects)).unwrap(),
@@ -33,10 +35,11 @@ fn controller_uses_opaque_resource_effects_and_preserves_volume_on_finalize() {
 #[test]
 fn controller_rejects_non_host_execution_refs() {
     let device = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
+    let device_ref = ResourceRef::parse("Device/work-tpm").unwrap();
     let execution = ResourceRef::parse("Zone/zone-a").unwrap();
 
     assert!(matches!(
-        TpmResourceController::new(device, execution),
+        TpmResourceController::new(device, device_ref, execution),
         Err(d2b_provider_device_tpm::TpmResourceControllerError::Effect(
             TpmResourceEffectError::InvalidExecutionRef
         ))
@@ -46,8 +49,9 @@ fn controller_rejects_non_host_execution_refs() {
 #[test]
 fn controller_finalize_before_reconcile_is_invalid() {
     let device = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
+    let device_ref = ResourceRef::parse("Device/work-tpm").unwrap();
     let execution = ResourceRef::parse("Host/host-system").unwrap();
-    let mut controller = TpmResourceController::new(device, execution).unwrap();
+    let mut controller = TpmResourceController::new(device, device_ref, execution).unwrap();
 
     assert_eq!(
         block_on(controller.finalize(&NoopEffects)),
@@ -56,10 +60,11 @@ fn controller_finalize_before_reconcile_is_invalid() {
 }
 
 #[test]
-fn controller_finalizes_children_after_endpoint_watch_failure() {
+fn controller_finalizes_the_swtpm_process_after_endpoint_watch_failure() {
     let device = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
+    let device_ref = ResourceRef::parse("Device/work-tpm").unwrap();
     let execution = ResourceRef::parse("Host/host-system").unwrap();
-    let mut controller = TpmResourceController::new(device, execution).unwrap();
+    let mut controller = TpmResourceController::new(device, device_ref, execution).unwrap();
     let effects = ScriptedEffects {
         endpoint_fails: true,
         ..ScriptedEffects::default()
@@ -76,15 +81,16 @@ fn controller_finalizes_children_after_endpoint_watch_failure() {
         TpmResourceOutcome::VolumeRetained
     );
     assert_eq!(effects.stop_calls.load(Ordering::SeqCst), 1);
-    assert_eq!(effects.delete_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(effects.delete_calls.load(Ordering::SeqCst), 0);
     assert!(!controller.finalizer_installed());
 }
 
 #[test]
 fn controller_retains_process_when_stop_fails_during_finalize() {
     let device = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
+    let device_ref = ResourceRef::parse("Device/work-tpm").unwrap();
     let execution = ResourceRef::parse("Host/host-system").unwrap();
-    let mut controller = TpmResourceController::new(device, execution).unwrap();
+    let mut controller = TpmResourceController::new(device, device_ref, execution).unwrap();
     let effects = ScriptedEffects {
         stop_fails: AtomicBool::new(true),
         ..ScriptedEffects::default()
@@ -112,8 +118,9 @@ fn controller_retains_process_when_stop_fails_during_finalize() {
 #[test]
 fn controller_does_not_repeat_stop_after_flush_delete_retry() {
     let device = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
+    let device_ref = ResourceRef::parse("Device/work-tpm").unwrap();
     let execution = ResourceRef::parse("Host/host-system").unwrap();
-    let mut controller = TpmResourceController::new(device, execution).unwrap();
+    let mut controller = TpmResourceController::new(device, device_ref, execution).unwrap();
     let effects = ScriptedEffects {
         delete_failures: AtomicUsize::new(1),
         ..ScriptedEffects::default()
@@ -138,6 +145,48 @@ fn controller_does_not_repeat_stop_after_flush_delete_retry() {
     assert!(!controller.finalizer_installed());
 }
 
+#[test]
+fn flush_failure_stops_the_long_lived_process_and_retains_state() {
+    let device = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
+    let device_ref = ResourceRef::parse("Device/work-tpm").unwrap();
+    let execution = ResourceRef::parse("Host/host-system").unwrap();
+    let mut controller = TpmResourceController::new(device, device_ref, execution).unwrap();
+    let effects = ScriptedEffects {
+        flush_fails: true,
+        ..ScriptedEffects::default()
+    };
+
+    assert_eq!(
+        block_on(controller.reconcile(&effects)),
+        Err(d2b_provider_device_tpm::TpmResourceControllerError::Effect(
+            TpmResourceEffectError::Transient
+        ))
+    );
+    assert_eq!(
+        effects.events.lock().unwrap().as_slice(),
+        ["volume", "process", "endpoint", "flush"]
+    );
+    assert_eq!(effects.stop_calls.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn controller_waits_for_the_swtpm_endpoint_before_flushing() {
+    let device = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
+    let device_ref = ResourceRef::parse("Device/work-tpm").unwrap();
+    let execution = ResourceRef::parse("Host/host-system").unwrap();
+    let mut controller = TpmResourceController::new(device, device_ref, execution).unwrap();
+    let effects = ScriptedEffects::default();
+
+    assert_eq!(
+        block_on(controller.reconcile(&effects)).unwrap(),
+        TpmResourceOutcome::Ready
+    );
+    assert_eq!(
+        effects.events.lock().unwrap().as_slice(),
+        ["volume", "process", "endpoint", "flush"]
+    );
+}
+
 fn block_on<F: std::future::Future>(future: F) -> F::Output {
     use std::pin::pin;
     use std::task::{Context, Poll, Waker};
@@ -157,18 +206,23 @@ struct NoopEffects;
 #[derive(Default)]
 struct ScriptedEffects {
     endpoint_fails: bool,
+    flush_fails: bool,
     delete_failures: AtomicUsize,
     stop_calls: AtomicUsize,
     delete_calls: AtomicUsize,
     stop_fails: AtomicBool,
+    events: Mutex<Vec<&'static str>>,
 }
 
 impl TpmResourceEffectPort for ScriptedEffects {
     async fn ensure_state_volume(
         &self,
         _: &ResourceUid,
+        device_ref: &ResourceRef,
         _: &ResourceRef,
     ) -> Result<ResourceRef, TpmResourceEffectError> {
+        assert_eq!(device_ref.to_canonical_string(), "Device/work-tpm");
+        self.events.lock().unwrap().push("volume");
         Ok(ResourceRef::parse("Volume/device-state").unwrap())
     }
 
@@ -178,6 +232,7 @@ impl TpmResourceEffectPort for ScriptedEffects {
         _: &ResourceRef,
         _: &ResourceRef,
     ) -> Result<ResourceRef, TpmResourceEffectError> {
+        self.events.lock().unwrap().push("process");
         Ok(ResourceRef::parse("Process/device-swtpm").unwrap())
     }
 
@@ -185,9 +240,13 @@ impl TpmResourceEffectPort for ScriptedEffects {
         &self,
         _: &ResourceUid,
         _: &ResourceRef,
-        _: &ResourceRef,
     ) -> Result<ResourceRef, TpmResourceEffectError> {
-        Ok(ResourceRef::parse("EphemeralProcess/device-flush").unwrap())
+        self.events.lock().unwrap().push("flush");
+        if self.flush_fails {
+            Err(TpmResourceEffectError::Transient)
+        } else {
+            Ok(ResourceRef::parse("EphemeralProcess/device-flush").unwrap())
+        }
     }
 
     fn stop_swtpm_process(
@@ -234,6 +293,7 @@ impl TpmResourceEffectPort for ScriptedEffects {
         _: &ResourceRef,
     ) -> impl std::future::Future<Output = Result<ResourceRef, TpmResourceEffectError>> + Send {
         let fails = self.endpoint_fails;
+        self.events.lock().unwrap().push("endpoint");
         async move {
             if fails {
                 Err(TpmResourceEffectError::Transient)
@@ -249,6 +309,7 @@ impl TpmResourceEffectPort for NoopEffects {
     fn ensure_state_volume(
         &self,
         _: &ResourceUid,
+        _: &ResourceRef,
         _: &ResourceRef,
     ) -> impl std::future::Future<Output = Result<ResourceRef, TpmResourceEffectError>> + Send {
         async { Ok(ResourceRef::parse("Volume/device-state").unwrap()) }
@@ -266,7 +327,6 @@ impl TpmResourceEffectPort for NoopEffects {
     fn request_flush_process(
         &self,
         _: &ResourceUid,
-        _: &ResourceRef,
         _: &ResourceRef,
     ) -> impl std::future::Future<Output = Result<ResourceRef, TpmResourceEffectError>> + Send {
         async { Ok(ResourceRef::parse("EphemeralProcess/device-flush").unwrap()) }

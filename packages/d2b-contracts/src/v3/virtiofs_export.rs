@@ -10,7 +10,7 @@ use super::{
     ResourceRef,
     execution_policy::{BoundedToken, PrimitiveSpecError},
     resource_status::{ResourceCondition, ResourcePhase},
-    volume::AttachmentAccess,
+    volume::{AttachmentAccess, validate_mount_path},
 };
 
 /// Canonical qualified Export ResourceType.
@@ -44,13 +44,15 @@ impl VirtiofsExportSpec {
         if provider_ref.resource_type().as_str() != "Provider"
             || provider_ref.name().as_str() != "volume-virtiofs"
             || volume_ref.resource_type().as_str() != "Volume"
-            || !matches!(execution_ref.resource_type().as_str(), "Host" | "Guest")
+            || execution_ref.resource_type().as_str() != "Guest"
         {
             return Err(PrimitiveSpecError::WrongResourceType);
         }
         let view = BoundedToken::parse(view.into())?;
         let mount_path = mount_path.into();
-        validate_mount_path(&mount_path)?;
+        if !validate_mount_path(&mount_path) {
+            return Err(PrimitiveSpecError::InvalidPath);
+        }
         Ok(Self {
             provider_ref,
             volume_ref,
@@ -76,7 +78,7 @@ impl VirtiofsExportSpec {
         &self.volume_ref
     }
 
-    /// Borrow the Host or Guest execution target.
+    /// Borrow the Guest execution target.
     pub const fn execution_ref(&self) -> &ResourceRef {
         &self.execution_ref
     }
@@ -155,18 +157,4 @@ pub struct VirtiofsExportStatus {
     pub conditions: Vec<ResourceCondition>,
     /// Export-specific readiness facts.
     pub resource: VirtiofsExportStatusResource,
-}
-
-fn validate_mount_path(path: &str) -> Result<(), PrimitiveSpecError> {
-    if path.is_empty()
-        || !path.starts_with('/')
-        || path.len() > MAX_EXPORT_MOUNT_PATH_BYTES
-        || path
-            .bytes()
-            .any(|byte| byte == 0 || byte.is_ascii_control())
-        || path.split('/').any(|component| component == "..")
-    {
-        return Err(PrimitiveSpecError::InvalidPath);
-    }
-    Ok(())
 }

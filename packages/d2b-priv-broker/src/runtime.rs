@@ -3407,8 +3407,31 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                     ))
                 })?;
             let exec = live_exec(config);
-            crate::ops::state_dir::live_prepare_state_dir(&exec, resolver, &req, audit_log)
-                .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
+            match crate::ops::state_dir::live_prepare_state_dir(&exec, resolver, &req, audit_log) {
+                Ok(()) => {}
+                Err(crate::ops::state_dir::PrepareStateDirError::SwtpmDirHardening(error)) => {
+                    write_decision_op_record!(
+                        audit_log,
+                        bundle_metadata,
+                        "PrepareSwtpmDir",
+                        req.vm_id.as_str(),
+                        caller_uid,
+                        caller_gid,
+                        &caller_role,
+                        req.vm_id.as_str(),
+                        req.vm_id.as_str(),
+                        tracing_span_id_str(req.tracing_span_id.as_ref()),
+                        "denied-refused",
+                        Some(error.reason),
+                        OperationFields::PrepareSwtpmDir(error.audit.clone()),
+                    )?;
+                    return Err(BrokerError::SwtpmDirHardening {
+                        audit: error.audit,
+                        reason: error.reason,
+                    });
+                }
+                Err(error) => return Err(BrokerError::LiveHandler(error.to_string())),
+            }
             write_success_op_record!(
                 audit_log,
                 bundle_metadata,
@@ -9917,6 +9940,31 @@ mod tests {
                 b"attacker error text"
             )
         );
+    }
+
+    #[test]
+    fn swtpm_hardening_failure_uses_the_typed_path_free_operation() {
+        let error = BrokerError::SwtpmDirHardening {
+            audit: crate::ops::audit_op::SwtpmDirAudit {
+                vm_id: "work-vm".to_owned(),
+                base_dir_hash: "fnv1a64:0000000000000000".to_owned(),
+                result: crate::ops::audit_op::SwtpmDirResult::FailedClosed,
+                mode: 0o700,
+                owner_uid: 1000,
+                owner_gid: 1000,
+                marker_result: crate::ops::audit_op::SwtpmMarkerResult::FailedClosed,
+                fail_reason: Some("swtpm-dir-marker-mismatch".to_owned()),
+            },
+            reason: "swtpm-dir-marker-mismatch",
+        };
+
+        assert!(matches!(
+            error.into_response(),
+            d2b_contracts::broker_wire::BrokerResponse::Error(response)
+                if response.kind == "Broker.SwtpmDirHardening"
+                    && response.operation == "PrepareSwtpmDir"
+                    && !response.message.contains('/')
+        ));
     }
 
     #[cfg(not(feature = "layer1-bootstrap"))]

@@ -36,3 +36,32 @@ fn export_spec_rejects_noncanonical_provider_identity() {
         .is_err()
     );
 }
+
+#[test]
+fn export_spec_rejects_noncanonical_mount_and_host_target() {
+    for mount_path in ["/guest//data", "/guest/./data", "/guest/../data"] {
+        assert!(
+            VirtiofsExportSpec::new(
+                ResourceRef::parse("Provider/volume-virtiofs").unwrap(),
+                ResourceRef::parse("Volume/store-view").unwrap(),
+                ResourceRef::parse("Guest/work-vm").unwrap(),
+                "ro-store",
+                AttachmentAccess::ReadOnly,
+                mount_path,
+            )
+            .is_err(),
+            "{mount_path} must be rejected"
+        );
+    }
+    assert!(
+        VirtiofsExportSpec::new(
+            ResourceRef::parse("Provider/volume-virtiofs").unwrap(),
+            ResourceRef::parse("Volume/store-view").unwrap(),
+            ResourceRef::parse("Host/host-system").unwrap(),
+            "ro-store",
+            AttachmentAccess::ReadOnly,
+            "/guest/data",
+        )
+        .is_err()
+    );
+}

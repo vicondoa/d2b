@@ -28,6 +28,7 @@ d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
 d2b-audit = { path = "../d2b-audit", version = "0.0.0-bootstrap" }
 d2b-provider = { path = "../d2b-provider", version = "0.0.0-bootstrap" }
 d2b-provider-device-tpm = { path = "../d2b-provider-device-tpm", version = "0.0.0-bootstrap" }
+d2b-provider-device-security-key = { path = "../d2b-provider-device-security-key", version = "0.0.0-bootstrap" }
 # v2 constellation contract crates (ADR 0032). The peer-module skeletons in
 # src/realm_stubs.rs wire this trait surface; they are compile-only
 # and NOT called from the running daemon (zero behavior change).

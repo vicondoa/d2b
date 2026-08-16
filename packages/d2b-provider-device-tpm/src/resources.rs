@@ -3,9 +3,9 @@
 use d2b_contracts::v3::execution_policy::{BoundedToken, DurationMs, ExecutionDomain};
 use d2b_contracts::v3::{
     AdoptionPolicy, DesiredLifecycle, EphemeralProcessSpec, ExecutionSpec, HealthCheckClass,
-    HealthCheckSpec, MountAccess, MountSpec, NamespaceClass, ProcessClass, ProcessSpec,
-    ReadinessClass, ReadinessSpec, ResourceRef, ResourceUid, RestartClass, RestartPolicySpec,
-    SandboxSpec, TelemetrySpec,
+    HealthCheckSpec, MappingClass, MountAccess, MountSpec, NamespaceClass, ProcessClass,
+    ProcessSpec, ReadinessClass, ReadinessSpec, ResourceRef, ResourceUid, RestartClass,
+    RestartPolicySpec, SandboxSpec, TelemetrySpec, UserNamespaceSpec,
 };
 use serde_json::{Value, json};
 
@@ -128,17 +128,18 @@ pub fn build_swtpm_process_spec(
         return Err(TpmResourceEffectError::InvalidExecutionRef);
     }
     let execution = swtpm_execution(
+        device_uid,
         execution_ref,
         ProcessClass::Worker,
         "swtpm-socket",
-        swtpm_mount(device_uid)?,
+        vec![swtpm_mount(device_uid)?],
     )?;
     serde_json::to_value(
         ProcessSpec::new(
             execution,
             DesiredLifecycle::Running,
             RestartPolicySpec::new(
-                RestartClass::Always,
+                RestartClass::OnFailure,
                 DurationMs::parse("1s", 0, 60_000).unwrap(),
                 DurationMs::parse("60s", 1_000, 3_600_000).unwrap(),
                 2_000,
@@ -155,7 +156,7 @@ pub fn build_swtpm_process_spec(
             )
             .map_err(|_| TpmResourceEffectError::InvalidDevice)?,
             HealthCheckSpec::new(
-                true,
+                false,
                 DurationMs::parse("30s", 1_000, 3_600_000).unwrap(),
                 DurationMs::parse("5s", 1_000, 3_600_000).unwrap(),
                 3,
@@ -179,14 +180,22 @@ pub fn build_swtpm_flush_spec(
         return Err(TpmResourceEffectError::InvalidExecutionRef);
     }
     let execution = swtpm_execution(
+        device_uid,
         execution_ref,
         ProcessClass::Worker,
         "swtpm-init-flush",
-        swtpm_mount(device_uid)?,
+        Vec::new(),
     )?;
     serde_json::to_value(
-        EphemeralProcessSpec::minimal(execution)
-            .map_err(|_| TpmResourceEffectError::InvalidDevice)?,
+        EphemeralProcessSpec::new(
+            execution,
+            DurationMs::parse("30s", 1_000, 3_600_000).unwrap(),
+            DurationMs::parse("60s", 1_000, 86_400_000).unwrap(),
+            DurationMs::parse("1h", 0, 7 * 86_400_000).unwrap(),
+            DurationMs::parse("24h", 0, 30 * 86_400_000).unwrap(),
+            false,
+        )
+        .map_err(|_| TpmResourceEffectError::InvalidDevice)?,
     )
     .map_err(|_| TpmResourceEffectError::InvalidDevice)
 }
@@ -197,7 +206,7 @@ fn swtpm_mount(device_uid: &ResourceUid) -> Result<MountSpec, TpmResourceEffectE
         ResourceRef::parse(&format!("Volume/device-{short}-tpm-state"))
             .map_err(|_| TpmResourceEffectError::InvalidDevice)?,
         BoundedToken::parse("swtpm-process").map_err(|_| TpmResourceEffectError::InvalidDevice)?,
-        "/var/lib/swtpm",
+        "/state",
         MountAccess::ReadWrite,
         true,
     )
@@ -205,22 +214,32 @@ fn swtpm_mount(device_uid: &ResourceUid) -> Result<MountSpec, TpmResourceEffectE
 }
 
 fn swtpm_execution(
+    device_uid: &ResourceUid,
     execution_ref: &ResourceRef,
     process_class: ProcessClass,
     template: &str,
-    mount: MountSpec,
+    mounts: Vec<MountSpec>,
 ) -> Result<ExecutionSpec, TpmResourceEffectError> {
+    let principal = ResourceRef::parse(&format!(
+        "User/device-{}-swtpm-system",
+        device_short(device_uid)
+    ))
+    .map_err(|_| TpmResourceEffectError::InvalidDevice)?;
     ExecutionSpec::new(
         execution_ref.clone(),
         Some(ExecutionDomain::System),
-        None,
+        Some(principal),
         process_class,
         BoundedToken::parse(template).map_err(|_| TpmResourceEffectError::InvalidDevice)?,
         None,
         Vec::new(),
-        vec![mount],
+        mounts,
         SandboxSpec::new(
-            vec![NamespaceClass::Pid, NamespaceClass::Mount],
+            vec![
+                NamespaceClass::Pid,
+                NamespaceClass::Mount,
+                NamespaceClass::User,
+            ],
             Vec::new(),
             BoundedToken::parse("strict").map_err(|_| TpmResourceEffectError::InvalidDevice)?,
             true,
@@ -229,7 +248,9 @@ fn swtpm_execution(
             true,
             Some("0022".to_owned()),
             0,
-            None,
+            Some(UserNamespaceSpec {
+                mapping_class: MappingClass::ProcessPrincipalRoot,
+            }),
         )
         .map_err(|_| TpmResourceEffectError::InvalidDevice)?,
         Default::default(),
@@ -258,16 +279,35 @@ mod tests {
         let process: ProcessSpec = serde_json::from_value(process).unwrap();
         assert_eq!(process.execution().process_class(), ProcessClass::Worker);
         assert_eq!(process.execution().mounts().len(), 1);
+        assert_eq!(process.execution().mounts()[0].mount_path(), "/state");
         assert_eq!(
-            process.execution().mounts()[0].mount_path(),
-            "/var/lib/swtpm"
+            process
+                .execution()
+                .user_ref()
+                .unwrap()
+                .to_canonical_string(),
+            "User/device-6f9619ff8b86-swtpm-system"
         );
+        assert_eq!(
+            process.execution().sandbox().namespace_classes(),
+            [
+                NamespaceClass::Pid,
+                NamespaceClass::Mount,
+                NamespaceClass::User
+            ]
+        );
+        assert!(process.execution().sandbox().user_namespace().is_some());
+        let process_json = serde_json::to_value(&process).unwrap();
+        assert_eq!(process_json["restartPolicy"]["class"], "on-failure");
+        assert_eq!(process_json["healthCheck"]["enabled"], false);
 
         let flush = build_swtpm_flush_spec(&device, &host).unwrap();
         let flush: EphemeralProcessSpec = serde_json::from_value(flush).unwrap();
         assert_eq!(flush.execution().process_class(), ProcessClass::Worker);
-        assert_eq!(flush.execution().mounts().len(), 1);
-        assert_eq!(flush.execution().mounts()[0].mount_path(), "/var/lib/swtpm");
+        assert!(flush.execution().mounts().is_empty());
+        let flush_json = serde_json::to_value(&flush).unwrap();
+        assert_eq!(flush_json["startDeadline"], "30s");
+        assert_eq!(flush_json["runtimeDeadline"], "60s");
     }
 
     #[test]
