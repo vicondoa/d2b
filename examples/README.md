@@ -1,25 +1,15 @@
 # d2b examples
 
-Five ready-to-eval consumer flakes plus two doc-friendly alias
-directories. Read the per-directory README first.
+Ready-to-eval consumer flakes. Read the per-directory README first.
 
 | Path | Audience | Notes |
 | --- | --- | --- |
-| [`minimal/`](./minimal/) | Checked headless starter | Canonical flake behind the doc-friendly [`personal-dev/`](./personal-dev/) alias. |
-| [`personal-dev/`](./personal-dev/) | Rust-first README alias | README-only pointer to `minimal/`; VM name `personal-dev`. |
+| [`minimal/`](./minimal/) | Checked headless starter | Canonical headless example. |
 | [`graphics-workstation/`](./graphics-workstation/) | Desktop VM with Wayland + audio + USBIP | Requires a Wayland compositor on the host. |
 | [`multi-env/`](./multi-env/) (`demo`) | Two isolated envs (work + personal) | Demonstrates per-env isolation and route preflight. |
 | [`multi-env/`](./multi-env/) (`multi-env-daemon-experimental`) | Two isolated envs + network-knob variant | Exercises per-env `mtu` / `mssClamp` / `lan.allowEastWest` plus the site-level `allowUnsafeEastWest` acknowledgement. |
 | [`with-observability/`](./with-observability/) | Single workload VM + auto-declared observability stack | Grafana/Prometheus/Loki/Tempo on a dedicated `obs` env. |
-| [`with-entra-id/`](./with-entra-id/) | Checked Entra-ID composition | Canonical flake behind the doc-friendly [`work-entra/`](./work-entra/) alias. |
-| [`work-entra/`](./work-entra/) | Rust-first README alias | README-only pointer to `with-entra-id/`; VM name `work-entra`. |
-
-## Alias-directory policy
-
-`personal-dev/` and `work-entra/` intentionally do **not** ship a
-`flake.nix`. They are lightweight alias READMEs so the docs can use
-stable VM names while CI keeps one checked flake per scenario
-(`minimal/` and `with-entra-id/`).
+| [`with-entra-id/`](./with-entra-id/) | Checked Entra-ID composition | Canonical Entra-ID example. |
 
 ## `flake.lock` policy
 
