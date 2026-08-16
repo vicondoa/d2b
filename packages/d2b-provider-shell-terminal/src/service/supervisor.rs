@@ -6,9 +6,61 @@ use std::{
 };
 
 use crate::{
-    Authorizer, ShellSession, ShellTerminalError, Subject,
+    Authorizer, ExecutionTarget, ShellPool, ShellSession, ShellTerminalError, Subject,
     session::{OutputRing, RingReplay, SupervisorIdentity},
 };
+
+#[derive(PartialEq, Eq)]
+struct SessionFingerprint {
+    name: String,
+    zone: String,
+    pool_name: String,
+    execution_target: ExecutionTarget,
+    workload_user: String,
+    login_shell_ref: String,
+    output_ring_capacity: u64,
+}
+
+impl SessionFingerprint {
+    fn from_session(session: &ShellSession) -> Self {
+        Self {
+            name: session.name().to_owned(),
+            zone: session.zone().to_owned(),
+            pool_name: session.pool_name().to_owned(),
+            execution_target: session.execution_target().clone(),
+            workload_user: session.workload_user().to_owned(),
+            login_shell_ref: session.login_shell_ref().to_owned(),
+            output_ring_capacity: session.output_ring_capacity(),
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct PoolFingerprint {
+    name: String,
+    zone: String,
+    execution_target: ExecutionTarget,
+    workload_user: String,
+    login_shell_ref: String,
+    max_sessions: u32,
+    max_attached: u32,
+    output_ring_capacity: u64,
+}
+
+impl PoolFingerprint {
+    fn from_pool(pool: &ShellPool) -> Self {
+        Self {
+            name: pool.name().to_owned(),
+            zone: pool.zone().to_owned(),
+            execution_target: pool.execution_target().clone(),
+            workload_user: pool.workload_user().to_owned(),
+            login_shell_ref: pool.spec().login_shell_ref().to_owned(),
+            max_sessions: pool.spec().max_sessions(),
+            max_attached: pool.spec().max_attached(),
+            output_ring_capacity: pool.spec().output_ring_capacity(),
+        }
+    }
+}
 
 /// A bounded direct-attach request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -74,7 +126,7 @@ impl std::fmt::Debug for Attachment {
 
 /// The single-flight authority for one session supervisor generation.
 pub struct SessionAuthority {
-    session_name: String,
+    fingerprint: SessionFingerprint,
     generation: Mutex<u64>,
 }
 
@@ -85,16 +137,16 @@ impl std::fmt::Debug for SessionAuthority {
 }
 
 impl SessionAuthority {
-    pub(super) fn new(session_name: String, generation: u64) -> Self {
+    pub(super) fn new(session: &ShellSession, generation: u64) -> Self {
         Self {
-            session_name,
+            fingerprint: SessionFingerprint::from_session(session),
             generation: Mutex::new(generation),
         }
     }
 
     pub(super) fn matches(
         &self,
-        session_name: &str,
+        session: &ShellSession,
         generation: u64,
     ) -> Result<bool, ShellTerminalError> {
         Ok(*self
@@ -102,7 +154,7 @@ impl SessionAuthority {
             .lock()
             .map_err(|_| ShellTerminalError::StaleSessionGeneration)?
             == generation
-            && self.session_name == session_name)
+            && self.fingerprint == SessionFingerprint::from_session(session))
     }
 
     pub(super) fn advance(&self) -> Result<u64, ShellTerminalError> {
@@ -118,7 +170,7 @@ impl SessionAuthority {
 
     fn with_current<T>(
         &self,
-        session_name: &str,
+        session: &ShellSession,
         expected_generation: u64,
         operation: impl FnOnce() -> Result<T, ShellTerminalError>,
     ) -> Result<T, ShellTerminalError> {
@@ -126,7 +178,9 @@ impl SessionAuthority {
             .generation
             .lock()
             .map_err(|_| ShellTerminalError::StaleSessionGeneration)?;
-        if *current != expected_generation || self.session_name != session_name {
+        if *current != expected_generation
+            || self.fingerprint != SessionFingerprint::from_session(session)
+        {
             return Err(ShellTerminalError::StaleSessionGeneration);
         }
         operation()
@@ -195,18 +249,15 @@ impl PoolAttachmentBudget {
             .entries
             .lock()
             .map_err(|_| ShellTerminalError::AttachmentUnknown)?;
-        if entries.remove(attachment) {
-            Ok(())
-        } else {
-            Err(ShellTerminalError::AttachmentUnknown)
-        }
+        entries.remove(attachment);
+        Ok(())
     }
 
     pub(super) fn reconcile_retained_attachments(
         &self,
         retained_attachments: u32,
     ) -> Result<(), ShellTerminalError> {
-        let entries = self
+        let mut entries = self
             .entries
             .lock()
             .map_err(|_| ShellTerminalError::CapacityExceeded)?;
@@ -214,12 +265,11 @@ impl PoolAttachmentBudget {
             .retained_attachments
             .lock()
             .map_err(|_| ShellTerminalError::CapacityExceeded)?;
-        if (retained_attachments as usize) > self.capacity
-            || (retained_attachments as usize) < entries.len()
-        {
+        if (retained_attachments as usize) > self.capacity {
             return Err(ShellTerminalError::CapacityExceeded);
         }
-        *retained = retained_attachments as usize - entries.len();
+        entries.clear();
+        *retained = retained_attachments as usize;
         Ok(())
     }
 }
@@ -227,7 +277,7 @@ impl PoolAttachmentBudget {
 /// The shared attachment authority that survives controller restart adoption.
 #[derive(Clone)]
 pub struct PoolAttachmentAuthority {
-    pool_name: String,
+    fingerprint: PoolFingerprint,
     budget: Arc<PoolAttachmentBudget>,
 }
 
@@ -239,12 +289,12 @@ impl std::fmt::Debug for PoolAttachmentAuthority {
 
 impl PoolAttachmentAuthority {
     pub(super) fn restored(
-        pool_name: String,
+        pool: &ShellPool,
         capacity: u32,
         retained_attachments: u32,
     ) -> Result<Self, ShellTerminalError> {
         Ok(Self {
-            pool_name,
+            fingerprint: PoolFingerprint::from_pool(pool),
             budget: Arc::new(PoolAttachmentBudget::restored(
                 capacity,
                 retained_attachments,
@@ -252,8 +302,9 @@ impl PoolAttachmentAuthority {
         })
     }
 
-    pub(super) fn matches_pool(&self, pool_name: &str, capacity: u32) -> bool {
-        self.pool_name == pool_name && self.budget.capacity == capacity as usize
+    pub(super) fn matches_pool(&self, pool: &ShellPool) -> bool {
+        self.fingerprint == PoolFingerprint::from_pool(pool)
+            && self.budget.capacity == pool.spec().max_attached() as usize
     }
 
     fn reserve(
@@ -351,9 +402,9 @@ impl SessionSupervisor {
     ) -> Result<AttachReceipt, ShellTerminalError> {
         self.authorize(subject)?;
         let authority = Arc::clone(&self.authority);
-        let session_name = self.session.name().to_owned();
+        let session = self.session.clone();
         let generation = self.identity.generation();
-        authority.with_current(&session_name, generation, || {
+        authority.with_current(&session, generation, || {
             if request.expected_generation != generation {
                 return Err(ShellTerminalError::StaleSessionGeneration);
             }
@@ -374,9 +425,9 @@ impl SessionSupervisor {
     ) -> Result<AttachReceipt, ShellTerminalError> {
         self.authorize(subject)?;
         let authority = Arc::clone(&self.authority);
-        let session_name = self.session.name().to_owned();
+        let session = self.session.clone();
         let generation = self.identity.generation();
-        authority.with_current(&session_name, generation, || {
+        authority.with_current(&session, generation, || {
             if capability.generation != generation {
                 return Err(ShellTerminalError::StaleSessionGeneration);
             }
@@ -416,9 +467,9 @@ impl SessionSupervisor {
     /// Append bytes emitted by this supervisor-owned PTY to its bounded replay ring.
     pub fn record_pty_output(&mut self, bytes: &[u8]) {
         let authority = Arc::clone(&self.authority);
-        let session_name = self.session.name().to_owned();
+        let session = self.session.clone();
         let generation = self.identity.generation();
-        let _ = authority.with_current(&session_name, generation, || {
+        let _ = authority.with_current(&session, generation, || {
             self.ring.append(bytes);
             Ok(())
         });

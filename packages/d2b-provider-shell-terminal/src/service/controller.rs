@@ -39,13 +39,22 @@ impl OpenSessionRequest {
 }
 
 /// A controller response carrying a session, its generation, and a one-shot capability.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct OpenSessionResult {
     session: ShellSession,
     supervisor_generation: u64,
     capability: SessionCapability,
     attachment_authority: PoolAttachmentAuthority,
     authority: Arc<SessionAuthority>,
+}
+
+impl std::fmt::Debug for OpenSessionResult {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("OpenSessionResult")
+            .field("supervisor_generation", &self.supervisor_generation)
+            .finish_non_exhaustive()
+    }
 }
 
 impl OpenSessionResult {
@@ -84,7 +93,7 @@ impl OpenSessionResult {
         }
         if !self
             .authority
-            .matches(self.session.name(), self.supervisor_generation)?
+            .matches(&self.session, self.supervisor_generation)?
         {
             return Err(ShellTerminalError::StaleSessionGeneration);
         }
@@ -98,13 +107,23 @@ impl OpenSessionResult {
 }
 
 /// Bounded controller state reconstructed from resource objects on restart.
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct ShellTerminalController {
     pools: BTreeMap<String, ShellPool>,
     attachment_authorities: BTreeMap<String, PoolAttachmentAuthority>,
     sessions: BTreeMap<String, ShellSession>,
     session_authorities: BTreeMap<String, Option<Arc<SessionAuthority>>>,
     next_capability: u64,
+}
+
+impl std::fmt::Debug for ShellTerminalController {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ShellTerminalController")
+            .field("pool_count", &self.pools.len())
+            .field("session_count", &self.sessions.len())
+            .finish()
+    }
 }
 
 impl ShellTerminalController {
@@ -129,17 +148,13 @@ impl ShellTerminalController {
         let pool_name = pool.name().to_owned();
         self.attachment_authorities.insert(
             pool_name.clone(),
-            PoolAttachmentAuthority::restored(
-                pool_name.clone(),
-                pool.spec().max_attached(),
-                attached_streams,
-            )?,
+            PoolAttachmentAuthority::restored(&pool, pool.spec().max_attached(), attached_streams)?,
         );
         self.pools.insert(pool_name, pool);
         Ok(())
     }
 
-    /// Replace restart-restored occupancy with the latest pool status.
+    /// Replace all local attachment entries with the authoritative pool count.
     pub fn reconcile_pool_attachments(
         &self,
         pool_name: &str,
@@ -157,9 +172,7 @@ impl ShellTerminalController {
         pool: ShellPool,
         attachment_authority: PoolAttachmentAuthority,
     ) -> Result<(), ShellTerminalError> {
-        if self.pools.contains_key(pool.name())
-            || !attachment_authority.matches_pool(pool.name(), pool.spec().max_attached())
-        {
+        if self.pools.contains_key(pool.name()) || !attachment_authority.matches_pool(&pool) {
             return Err(ShellTerminalError::CapacityExceeded);
         }
         let pool_name = pool.name().to_owned();
@@ -189,7 +202,7 @@ impl ShellTerminalController {
         let decision = adopt_supervisor(session.name(), expected_identity, candidates);
         let session_name = session.name().to_owned();
         let authority_trusted = decision == AdoptionDecision::Adopted
-            && authority.matches(session.name(), expected_identity.generation())?;
+            && authority.matches(&session, expected_identity.generation())?;
         let decision = if decision == AdoptionDecision::Adopted && !authority_trusted {
             AdoptionDecision::Ambiguous
         } else {
@@ -277,7 +290,7 @@ impl ShellTerminalController {
             request.session_name,
             request.output_ring_capacity,
         )?;
-        let authority = Arc::new(SessionAuthority::new(resource_name.clone(), 1));
+        let authority = Arc::new(SessionAuthority::new(&session, 1));
         self.next_capability = self.next_capability.saturating_add(1);
         let result = OpenSessionResult {
             session: session.clone(),

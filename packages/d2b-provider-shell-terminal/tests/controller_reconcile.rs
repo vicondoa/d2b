@@ -264,3 +264,24 @@ fn recovery_authorities_refuse_different_pool_or_session() {
         Err(d2b_provider_shell_terminal::ShellTerminalError::SupervisorAmbiguous)
     ));
 }
+
+#[test]
+fn controller_and_open_result_debug_are_redacted() {
+    let mut controller = ShellTerminalController::default();
+    controller.insert_pool(pool()).unwrap();
+    let admin = Subject::new("dev", CallerOrigin::Local, [Role::ZoneAdmin]);
+    let opened = controller
+        .open_session(
+            &admin,
+            OpenSessionRequest::new("guest-alice", "main", None).unwrap(),
+        )
+        .unwrap();
+
+    let rendered = format!("{opened:?}");
+    assert!(!rendered.contains("guest-alice"));
+    assert!(!rendered.contains("alice"));
+    assert!(!rendered.contains("artifact://"));
+    let controller_rendered = format!("{controller:?}");
+    assert!(!controller_rendered.contains("guest-alice"));
+    assert!(!controller_rendered.contains("alice"));
+}
