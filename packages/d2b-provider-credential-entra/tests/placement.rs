@@ -46,3 +46,20 @@ fn zone_bound_placement_rejects_a_cross_zone_binding() {
         Err(EntraProviderError::InvalidEndpoint)
     );
 }
+
+#[test]
+fn unbound_placement_never_validates_against_a_zone() {
+    let placement = EntraPlacement::new(
+        PlacementBinding::GuestAgent,
+        ResourceRef::parse("Guest/consumer").unwrap(),
+        ResourceRef::parse("Guest/identity").unwrap(),
+        ResourceRef::parse("Endpoint/entra-login").unwrap(),
+        1,
+    )
+    .unwrap();
+
+    assert_eq!(
+        placement.validate_zone(&ResourceRef::parse("Zone/work").unwrap()),
+        Err(EntraProviderError::InvalidEndpoint)
+    );
+}

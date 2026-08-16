@@ -51,9 +51,13 @@ impl EntraCredentialProvider {
             .ok_or_else(denied)?;
         if subject.transport_binding().locality() != Locality::Local
             || subject.subject_ref() != self.consumer_ref()
+            || subject.execution_ref() != Some(self.placement.execution_ref())
             || subject
                 .execution_ref()
-                .is_some_and(|execution| execution != self.placement.execution_ref())
+                .is_none_or(|execution| execution.resource_type().as_str() != "Guest")
+            || subject
+                .provider_ref()
+                .is_none_or(|provider| provider.to_canonical_string() != crate::PROVIDER_REF)
         {
             return Err(denied());
         }
@@ -78,6 +82,7 @@ impl EntraCredentialProvider {
         let deadline = Self::operation_deadline(request.deadline_unix_ms())?;
         let _mutation = self.mutation_guard()?;
         let key = request.credential_ref().to_canonical_string();
+        self.ensure_lifecycle_active(&key)?;
         {
             let mut leases = self.leases.lock().map_err(|_| invariant())?;
             leases.retain(|_, record| record.metadata.state == CredentialLeaseState::Active);
@@ -131,6 +136,7 @@ impl EntraCredentialProvider {
         let deadline = Self::operation_deadline(request.deadline_unix_ms())?;
         let _mutation = self.mutation_guard()?;
         let key = request.credential_ref().to_canonical_string();
+        self.ensure_lifecycle_active(&key)?;
         let record = self
             .leases
             .lock()
@@ -138,6 +144,11 @@ impl EntraCredentialProvider {
             .get(&key)
             .cloned()
             .ok_or_else(expired)?;
+        if record.metadata.state != CredentialLeaseState::Active {
+            return Err(CredentialServiceError::new(
+                CredentialServiceErrorCode::LeaseRevoked,
+            ));
+        }
         if record.refresh_attempts >= crate::MAX_REFRESH_ATTEMPTS {
             return Err(CredentialServiceError::new(
                 CredentialServiceErrorCode::ProviderUnavailable,
@@ -168,10 +179,13 @@ impl EntraCredentialProvider {
                 return Err(error);
             }
         };
-        let metadata = match Self::grant_metadata(grant, request.requested_expiry_unix_ms()) {
+        let metadata = match Self::grant_metadata(grant.clone(), request.requested_expiry_unix_ms())
+        {
             Ok(metadata) => metadata,
             Err(error) => {
-                self.record_refresh_failure(&key);
+                if !self.adopt_committed_refresh(&key, request.idempotency_key(), grant)? {
+                    self.record_refresh_failure(&key);
+                }
                 return Err(error);
             }
         };

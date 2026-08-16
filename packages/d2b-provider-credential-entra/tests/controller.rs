@@ -6,7 +6,7 @@ use d2b_provider_credential_entra::{
     EntraClientState, EntraController, EntraEndpointPolicy, EntraPlacement, EntraResourceHealth,
 };
 
-use common::{subject_context, subject_context_for};
+use common::{subject_context, subject_context_for, subject_context_with_bindings};
 
 fn controller() -> (EntraController, EntraEndpointPolicy) {
     let placement = EntraPlacement::new_in_zone(
@@ -22,6 +22,7 @@ fn controller() -> (EntraController, EntraEndpointPolicy) {
         "provider",
         ResourceRef::parse("Provider/credential-entra").unwrap(),
         ResourceRef::parse("Provider/runtime-azure-container-apps").unwrap(),
+        ResourceRef::parse("Guest/consumer").unwrap(),
     )
     .unwrap();
     (EntraController::new(placement), policy)
@@ -57,6 +58,73 @@ fn status_projection_is_typed_redacted_and_locality_bound() {
             .project_for_subject(
                 &policy,
                 &relay,
+                EntraClientState::Ready,
+                None,
+                EntraResourceHealth::Ready,
+                0,
+            )
+            .unwrap_err()
+            .code(),
+        CredentialServiceErrorCode::OperationDenied
+    );
+}
+
+#[test]
+fn endpoint_policy_requires_guest_execution_and_exact_provider() {
+    let (_, policy) = controller();
+    for (label, execution_ref, provider_ref) in [
+        (
+            "missing execution",
+            None,
+            Some(ResourceRef::parse("Provider/credential-entra").unwrap()),
+        ),
+        (
+            "host execution",
+            Some(ResourceRef::parse("Host/workstation").unwrap()),
+            Some(ResourceRef::parse("Provider/credential-entra").unwrap()),
+        ),
+        (
+            "wrong Guest execution",
+            Some(ResourceRef::parse("Guest/other").unwrap()),
+            Some(ResourceRef::parse("Provider/credential-entra").unwrap()),
+        ),
+        (
+            "missing provider",
+            Some(ResourceRef::parse("Guest/consumer").unwrap()),
+            None,
+        ),
+        (
+            "wrong provider",
+            Some(ResourceRef::parse("Guest/consumer").unwrap()),
+            Some(ResourceRef::parse("Provider/other").unwrap()),
+        ),
+    ] {
+        let subject = subject_context_with_bindings(
+            ResourceRef::parse("Provider/runtime-azure-container-apps").unwrap(),
+            ResourceRef::parse("Zone/work").unwrap(),
+            Locality::Local,
+            execution_ref,
+            provider_ref,
+        );
+        assert!(!policy.allows_authenticated_subject(&subject), "{label}");
+    }
+}
+
+#[test]
+fn status_projection_requires_the_committed_guest_execution() {
+    let (controller, policy) = controller();
+    let wrong_guest = subject_context_with_bindings(
+        ResourceRef::parse("Provider/runtime-azure-container-apps").unwrap(),
+        ResourceRef::parse("Zone/work").unwrap(),
+        Locality::Local,
+        Some(ResourceRef::parse("Guest/other").unwrap()),
+        Some(ResourceRef::parse("Provider/credential-entra").unwrap()),
+    );
+    assert_eq!(
+        controller
+            .project_for_subject(
+                &policy,
+                &wrong_guest,
                 EntraClientState::Ready,
                 None,
                 EntraResourceHealth::Ready,

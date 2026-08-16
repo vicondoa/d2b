@@ -29,6 +29,7 @@ use crate::{
 pub struct EntraEndpointPolicy {
     provider_ref: ResourceRef,
     consumer_ref: ResourceRef,
+    execution_ref: ResourceRef,
 }
 
 impl EntraEndpointPolicy {
@@ -38,10 +39,12 @@ impl EntraEndpointPolicy {
         visibility: &str,
         provider_ref: ResourceRef,
         consumer_ref: ResourceRef,
+        execution_ref: ResourceRef,
     ) -> Result<Self, CredentialServiceError> {
         if visibility != "provider"
             || provider_ref.to_canonical_string() != PROVIDER_REF
             || consumer_ref.resource_type().as_str() != "Provider"
+            || execution_ref.resource_type().as_str() != "Guest"
         {
             return Err(CredentialServiceError::new(
                 CredentialServiceErrorCode::OperationDenied,
@@ -50,6 +53,7 @@ impl EntraEndpointPolicy {
         Ok(Self {
             provider_ref,
             consumer_ref,
+            execution_ref,
         })
     }
 
@@ -67,9 +71,10 @@ impl EntraEndpointPolicy {
     pub fn allows_authenticated_subject(&self, subject: &AuthenticatedSubjectContext) -> bool {
         subject.transport_binding().locality() == Locality::Local
             && self.allows_subject(subject.subject_ref())
-            && subject.provider_ref().is_none_or(|provider| {
-                provider == &self.provider_ref || provider == &self.consumer_ref
-            })
+            && subject.execution_ref() == Some(&self.execution_ref)
+            && subject
+                .provider_ref()
+                .is_some_and(|provider| provider == &self.provider_ref)
     }
 }
 
@@ -172,6 +177,7 @@ impl EntraController {
     ) -> Result<EntraStatusProjection, CredentialServiceError> {
         if !policy.allows_authenticated_subject(subject)
             || self.placement.validate_zone(subject.zone_ref()).is_err()
+            || subject.execution_ref() != Some(self.placement.execution_ref())
         {
             return Err(CredentialServiceError::new(
                 CredentialServiceErrorCode::OperationDenied,
@@ -291,7 +297,8 @@ mod tests {
 
     fn controller() -> EntraController {
         EntraController::new(
-            EntraPlacement::new(
+            EntraPlacement::new_in_zone(
+                ResourceRef::parse("Zone/work").unwrap(),
                 PlacementBinding::GuestAgent,
                 ResourceRef::parse("Guest/consumer").unwrap(),
                 ResourceRef::parse("Guest/identity").unwrap(),

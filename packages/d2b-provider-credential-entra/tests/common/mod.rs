@@ -175,8 +175,24 @@ pub fn subject_context_for(
     zone_ref: ResourceRef,
     locality: Locality,
 ) -> AuthenticatedSubjectContext {
+    subject_context_with_bindings(
+        subject_ref,
+        zone_ref,
+        locality,
+        Some(ResourceRef::parse("Guest/consumer").unwrap()),
+        Some(ResourceRef::parse("Provider/credential-entra").unwrap()),
+    )
+}
+
+pub fn subject_context_with_bindings(
+    subject_ref: ResourceRef,
+    zone_ref: ResourceRef,
+    locality: Locality,
+    execution_ref: Option<ResourceRef>,
+    provider_ref: Option<ResourceRef>,
+) -> AuthenticatedSubjectContext {
     let digest = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-    AuthenticatedSubjectContext::new(
+    let context = AuthenticatedSubjectContext::new(
         subject_ref,
         ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap(),
         zone_ref,
@@ -189,9 +205,15 @@ pub fn subject_context_for(
             ReconnectGeneration::new(1).unwrap(),
             TranscriptHash::from_bytes([0x5a; 32]),
         ),
-    )
-    .with_execution_ref(ResourceRef::parse("Guest/consumer").unwrap())
-    .with_provider_ref(ResourceRef::parse("Provider/runtime-azure-container-apps").unwrap())
+    );
+    let mut context = context;
+    if let Some(execution) = execution_ref {
+        context = context.with_execution_ref(execution);
+    }
+    if let Some(provider) = provider_ref {
+        context = context.with_provider_ref(provider);
+    }
+    context
 }
 
 pub fn request(idempotency: &str) -> CredentialRequest {

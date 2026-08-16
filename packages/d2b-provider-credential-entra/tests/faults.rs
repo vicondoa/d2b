@@ -8,8 +8,8 @@ use std::time::Duration;
 use d2b_contracts::v3::Locality;
 use d2b_contracts::v3::ResourceRef;
 use d2b_contracts::v3::credential::{
-    CredentialAuthorization, CredentialMethod, CredentialRequest, CredentialServiceErrorCode,
-    PlacementBinding, dispatch_authorized_provider,
+    CredentialAuthorization, CredentialMethod, CredentialRequest, CredentialResponse,
+    CredentialServiceErrorCode, PlacementBinding, dispatch_authorized_provider,
 };
 use d2b_provider_credential_entra::{
     EntraClientError, EntraClientState, EntraConfig, EntraCredentialClient,
@@ -17,7 +17,10 @@ use d2b_provider_credential_entra::{
     EntraLeaseRef, EntraLeaseRenewal, EntraLeaseRequest, EntraLeaseRevocation, EntraPlacement,
 };
 
-use common::{Admission, ProviderHarness, admitted, delivery, request, setup, subject_context_for};
+use common::{
+    Admission, ProviderHarness, admitted, delivery, request, setup, subject_context_for,
+    subject_context_with_bindings,
+};
 
 #[test]
 fn interaction_required_is_unavailable_not_denied() {
@@ -164,6 +167,97 @@ fn unauthorized_and_relay_subjects_cannot_resolve_or_refresh() {
 }
 
 #[test]
+fn missing_or_mismatched_authenticated_claims_are_denied_before_client_dispatch() {
+    let cases = [
+        (
+            "missing execution",
+            None,
+            Some(ResourceRef::parse("Provider/credential-entra").unwrap()),
+        ),
+        (
+            "host execution",
+            Some(ResourceRef::parse("Host/workstation").unwrap()),
+            Some(ResourceRef::parse("Provider/credential-entra").unwrap()),
+        ),
+        (
+            "wrong Guest execution",
+            Some(ResourceRef::parse("Guest/other").unwrap()),
+            Some(ResourceRef::parse("Provider/credential-entra").unwrap()),
+        ),
+        (
+            "missing provider",
+            Some(ResourceRef::parse("Guest/consumer").unwrap()),
+            None,
+        ),
+        (
+            "wrong provider",
+            Some(ResourceRef::parse("Guest/consumer").unwrap()),
+            Some(ResourceRef::parse("Provider/other").unwrap()),
+        ),
+    ];
+
+    for (index, (label, execution_ref, provider_ref)) in cases.into_iter().enumerate() {
+        let (provider, client) = setup();
+        let authorization = CredentialAuthorization::new_for_subject(
+            CredentialMethod::AcquireToken,
+            Some(delivery(CredentialMethod::AcquireToken, 1)),
+            subject_context_with_bindings(
+                ResourceRef::parse("Provider/runtime-azure-container-apps").unwrap(),
+                ResourceRef::parse("Zone/work").unwrap(),
+                Locality::Local,
+                execution_ref,
+                provider_ref,
+            ),
+        )
+        .unwrap();
+
+        assert_eq!(
+            dispatch_authorized_provider(
+                &provider,
+                CredentialMethod::AcquireToken,
+                &request(&format!("idem-claims-{index}")),
+                &authorization,
+            )
+            .unwrap_err()
+            .code(),
+            CredentialServiceErrorCode::OperationDenied,
+            "{label}"
+        );
+        assert_eq!(client.issue_calls.load(Ordering::SeqCst), 0, "{label}");
+    }
+}
+
+#[test]
+fn same_credential_name_from_another_zone_is_denied_before_client_dispatch() {
+    let (provider, client) = setup();
+    let authorization = CredentialAuthorization::new_for_subject(
+        CredentialMethod::AcquireToken,
+        Some(delivery(CredentialMethod::AcquireToken, 1)),
+        subject_context_with_bindings(
+            ResourceRef::parse("Provider/runtime-azure-container-apps").unwrap(),
+            ResourceRef::parse("Zone/personal").unwrap(),
+            Locality::Local,
+            Some(ResourceRef::parse("Guest/consumer").unwrap()),
+            Some(ResourceRef::parse("Provider/credential-entra").unwrap()),
+        ),
+    )
+    .unwrap();
+
+    assert_eq!(
+        dispatch_authorized_provider(
+            &provider,
+            CredentialMethod::AcquireToken,
+            &request("idem-cross-zone"),
+            &authorization,
+        )
+        .unwrap_err()
+        .code(),
+        CredentialServiceErrorCode::OperationDenied
+    );
+    assert_eq!(client.issue_calls.load(Ordering::SeqCst), 0);
+}
+
+#[test]
 fn generation_and_unsupported_operation_fail_closed() {
     let (provider, client) = setup();
     assert_eq!(
@@ -263,13 +357,81 @@ fn refresh_failure_degrades_only_the_owning_resource_with_bounded_retry() {
 }
 
 #[test]
+fn committed_remote_refresh_metadata_is_adopted_for_later_recovery() {
+    let (provider, client) = setup();
+    let server = ProviderHarness::new(&provider, admitted());
+    server
+        .call(
+            CredentialMethod::AcquireToken,
+            request("idem-refresh-adopt"),
+        )
+        .unwrap();
+
+    let too_short = CredentialRequest::new(
+        ResourceRef::parse("Credential/work-entra").unwrap(),
+        "operation-refresh-adopt",
+        "idem-refresh-too-short",
+        10_000,
+        5_000,
+    )
+    .unwrap();
+    assert_eq!(
+        server
+            .call(CredentialMethod::RefreshToken, too_short)
+            .unwrap_err()
+            .code(),
+        CredentialServiceErrorCode::InvariantFailure
+    );
+    assert_eq!(client.refresh_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        provider.refresh_retry_state(&ResourceRef::parse("Credential/work-entra").unwrap()),
+        Some((0, d2b_provider_credential_entra::MAX_REFRESH_ATTEMPTS))
+    );
+
+    let inspected = server
+        .call(
+            CredentialMethod::InspectMetadata,
+            request("idem-inspect-adopted"),
+        )
+        .unwrap();
+    let inspected_metadata = match inspected {
+        CredentialResponse::InspectMetadata(response) => response.metadata,
+        other => panic!("unexpected response: {other:?}"),
+    };
+    assert_eq!(inspected_metadata.rotation_generation, 2);
+
+    let refreshed = server
+        .call(
+            CredentialMethod::RefreshToken,
+            request("idem-refresh-after-adopt"),
+        )
+        .unwrap();
+    let refreshed_metadata = match refreshed {
+        CredentialResponse::RefreshToken(response) => response.metadata,
+        other => panic!("unexpected response: {other:?}"),
+    };
+    assert_eq!(refreshed_metadata.rotation_generation, 2);
+    assert_eq!(
+        provider.resource_health(&ResourceRef::parse("Credential/work-entra").unwrap()),
+        Some(d2b_provider_credential_entra::EntraResourceHealth::Ready)
+    );
+    assert_eq!(
+        provider.refresh_retry_state(&ResourceRef::parse("Credential/work-entra").unwrap()),
+        Some((0, d2b_provider_credential_entra::MAX_REFRESH_ATTEMPTS))
+    );
+    assert_eq!(client.inspect_calls.load(Ordering::SeqCst), 3);
+    assert_eq!(client.refresh_calls.load(Ordering::SeqCst), 2);
+}
+
+#[test]
 fn client_call_stops_at_request_deadline() {
     let client = Arc::new(NeverClient {
         issue_calls: AtomicUsize::new(0),
     });
     let provider = EntraCredentialProviderFactory::new(
         EntraConfig::new("tenant-1234", 64).unwrap(),
-        EntraPlacement::new(
+        EntraPlacement::new_in_zone(
+            ResourceRef::parse("Zone/work").unwrap(),
             PlacementBinding::GuestAgent,
             ResourceRef::parse("Guest/consumer").unwrap(),
             ResourceRef::parse("Guest/identity").unwrap(),

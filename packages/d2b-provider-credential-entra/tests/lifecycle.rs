@@ -145,6 +145,36 @@ fn finalization_revokes_owned_handles_before_clearing_provider_state() {
     );
 }
 
+#[test]
+fn finalized_credential_cannot_mint_again() {
+    let (provider, client) = setup();
+    let server = ProviderHarness::new(&provider, admitted());
+    server
+        .call(
+            CredentialMethod::AcquireToken,
+            request("idem-finalize-once"),
+        )
+        .unwrap();
+    provider
+        .revoke_owned_handles(
+            &ResourceRef::parse("Credential/work-entra").unwrap(),
+            15_000,
+        )
+        .unwrap();
+
+    assert_eq!(
+        server
+            .call(
+                CredentialMethod::AcquireToken,
+                request("idem-after-finalize"),
+            )
+            .unwrap_err()
+            .code(),
+        CredentialServiceErrorCode::ProviderUnavailable
+    );
+    assert_eq!(client.issue_calls.load(Ordering::SeqCst), 1);
+}
+
 struct BlockingClient {
     entered: Mutex<Option<mpsc::Sender<()>>>,
     state: Mutex<BlockingState>,
@@ -233,7 +263,8 @@ fn provider_with_client(
 ) -> EntraCredentialProvider {
     EntraCredentialProviderFactory::new(
         EntraConfig::new("tenant-1234", max_leases).unwrap(),
-        EntraPlacement::new(
+        EntraPlacement::new_in_zone(
+            ResourceRef::parse("Zone/work").unwrap(),
             PlacementBinding::GuestAgent,
             ResourceRef::parse("Guest/consumer").unwrap(),
             ResourceRef::parse("Guest/identity").unwrap(),
