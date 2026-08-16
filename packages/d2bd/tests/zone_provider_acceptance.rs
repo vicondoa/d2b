@@ -49,6 +49,10 @@ use d2b_provider_volume_local::{
     DriftClass, MarkerState, OwnerProof, QuotaCapability, VolumeLayoutEffectPort,
     VolumeLocalController, VolumeLocalProfile, VolumeRootHandle, VolumeSourceEffectPort,
 };
+use d2bd::resource_operator_activation::{
+    Wave6BoundaryError, Wave6Dependencies, Wave6ProviderBoundary, Wave6ReconcileResult,
+    Wave6Resource, Wave6ResourceSet,
+};
 use serde_json::json;
 
 fn block_on<F: std::future::Future>(future: F) -> F::Output {
@@ -225,7 +229,7 @@ impl VolumeLayoutEffectPort for &FilesystemVolume {
     }
 }
 
-fn volume_spec() -> VolumeSpec {
+pub fn volume_spec() -> VolumeSpec {
     serde_json::from_value(json!({
         "source": {
             "executionRef": "Host/host-system",
@@ -449,7 +453,7 @@ impl NetworkResourcePort for &FilesystemNetworkBoundary {
     }
 }
 
-fn network_spec() -> NetworkSpec {
+pub fn network_spec() -> NetworkSpec {
     NetworkSpec::minimal(
         Ipv4Cidr::parse("10.20.0.0/24").unwrap(),
         Ipv4Cidr::parse("192.0.2.0/30").unwrap(),
@@ -642,6 +646,18 @@ impl TpmResourceEffectPort for FilesystemTpm {
         _: &ResourceRef,
         _: &ResourceRef,
     ) -> Result<ResourceRef, TpmResourceEffectError> {
+        if let Some(process) = self
+            .process
+            .lock()
+            .map_err(|_| TpmResourceEffectError::Transient)?
+            .as_mut()
+            && process
+                .try_wait()
+                .map_err(|_| TpmResourceEffectError::Transient)?
+                .is_none()
+        {
+            return Ok(ResourceRef::parse("Process/device-swtpm").unwrap());
+        }
         let child = Command::new("sleep")
             .arg("60")
             .stdin(Stdio::null())
@@ -994,4 +1010,351 @@ async fn cloud_hypervisor_zone_waits_dependencies_reaches_ready_and_adopts_proce
     restarted.finalize().await.unwrap();
     assert_eq!(restarted.phase(), CloudHypervisorPhase::Finalized);
     assert!(effect.current_identity().unwrap().is_none());
+}
+
+/// Shared real-effect boundary used by the daemon-level operator acceptance.
+///
+/// The boundary deliberately owns filesystem and child-process effects and
+/// reconstructs controller state during `adopt_after_restart`; it is not a
+/// call-recording test double.
+pub struct Wave6RealBoundary {
+    root: PathBuf,
+    volume: FilesystemVolume,
+    network: FilesystemNetworkBoundary,
+    tpm: FilesystemTpm,
+    tpm_controller: Mutex<Option<TpmResourceController>>,
+    cloud_effect: Arc<RealCloudHypervisorEffect>,
+    cloud_probe: Arc<FilesystemGuestControl>,
+    guest_controller:
+        Mutex<Option<CloudHypervisorController<RealCloudHypervisorEffect, FilesystemGuestControl>>>,
+}
+
+impl Wave6RealBoundary {
+    pub fn new(root: impl Into<PathBuf>) -> Self {
+        let root = root.into();
+        fs::create_dir_all(&root).expect("create Wave 6 provider effect root");
+        let guest_control = root.join("guest-control");
+        fs::write(&guest_control, b"ready").expect("seed guest-control readiness");
+        Self {
+            volume: FilesystemVolume::new(root.join("volume")),
+            network: FilesystemNetworkBoundary::new(root.join("network")),
+            tpm: FilesystemTpm::new(root.join("tpm")),
+            tpm_controller: Mutex::new(None),
+            cloud_effect: Arc::new(RealCloudHypervisorEffect {
+                process: Mutex::new(None),
+                pidfds: Mutex::new(Vec::new()),
+            }),
+            cloud_probe: Arc::new(FilesystemGuestControl {
+                ready: guest_control,
+            }),
+            guest_controller: Mutex::new(None),
+            root,
+        }
+    }
+
+    fn tpm_controller() -> Result<TpmResourceController, Wave6BoundaryError> {
+        TpmResourceController::new(
+            ResourceUid::parse("323e4567-e89b-42d3-a456-426614174002")
+                .map_err(|_| Wave6BoundaryError::Effect)?,
+            ResourceRef::parse("Device/work-tpm").map_err(|_| Wave6BoundaryError::Effect)?,
+            ResourceRef::parse("Host/host-system").map_err(|_| Wave6BoundaryError::Effect)?,
+        )
+        .map_err(|_| Wave6BoundaryError::Effect)
+    }
+
+    fn guest_controller(
+        &self,
+        expected: Option<ProcessIdentity>,
+    ) -> Result<
+        CloudHypervisorController<RealCloudHypervisorEffect, FilesystemGuestControl>,
+        Wave6BoundaryError,
+    > {
+        Ok(cloud_controller(
+            Arc::clone(&self.cloud_effect),
+            Arc::clone(&self.cloud_probe),
+            expected,
+        ))
+    }
+
+    fn ready_network_input(&self, dependencies: Wave6Dependencies) -> ReconcileInput {
+        network_input(
+            network_spec(),
+            dependencies.volume_ready,
+            dependencies.guest_ready,
+            dependencies.attachment_ready,
+        )
+    }
+}
+
+#[async_trait]
+impl Wave6ProviderBoundary for Wave6RealBoundary {
+    async fn reconcile_volume(
+        &self,
+        resource: &Wave6Resource,
+    ) -> Result<Wave6ReconcileResult, Wave6BoundaryError> {
+        let controller =
+            VolumeLocalController::new(VolumeLocalProfile::shipped(), &self.volume, &self.volume);
+        controller
+            .reconcile(&resource.uid, &volume_spec())
+            .await
+            .map_err(|_| Wave6BoundaryError::Effect)?;
+        Ok(Wave6ReconcileResult::Ready)
+    }
+
+    async fn reconcile_network(
+        &self,
+        _resource: &Wave6Resource,
+        dependencies: Wave6Dependencies,
+    ) -> Result<Wave6ReconcileResult, Wave6BoundaryError> {
+        let reconciler = NetworkReconciler::new(&self.network, &self.network);
+        match reconciler
+            .reconcile(&self.ready_network_input(dependencies))
+            .await
+            .map_err(|_| Wave6BoundaryError::Effect)?
+        {
+            ReconcileProgress::Pending(_) => Ok(Wave6ReconcileResult::Waiting),
+            ReconcileProgress::Requeue(_) => Ok(Wave6ReconcileResult::Waiting),
+            ReconcileProgress::Ready => Ok(Wave6ReconcileResult::Ready),
+            ReconcileProgress::Blocked(_) => Err(Wave6BoundaryError::Lifecycle),
+        }
+    }
+
+    async fn reconcile_device_tpm(
+        &self,
+        _resource: &Wave6Resource,
+    ) -> Result<Wave6ReconcileResult, Wave6BoundaryError> {
+        let mut controller = self
+            .tpm_controller
+            .lock()
+            .map_err(|_| Wave6BoundaryError::Effect)?
+            .take()
+            .unwrap_or(Self::tpm_controller()?);
+        let result = controller
+            .reconcile(&self.tpm)
+            .await
+            .map_err(|_| Wave6BoundaryError::Effect);
+        self.tpm_controller
+            .lock()
+            .map_err(|_| Wave6BoundaryError::Effect)?
+            .replace(controller);
+        result?;
+        Ok(Wave6ReconcileResult::Ready)
+    }
+
+    async fn reconcile_cloud_hypervisor_guest(
+        &self,
+        _resource: &Wave6Resource,
+        dependencies: Wave6Dependencies,
+    ) -> Result<Wave6ReconcileResult, Wave6BoundaryError> {
+        let mut controller = self
+            .guest_controller
+            .lock()
+            .map_err(|_| Wave6BoundaryError::Effect)?
+            .take()
+            .map(Ok)
+            .unwrap_or_else(|| self.guest_controller(None))?;
+        let outcome = controller
+            .reconcile(
+                dependencies.network_ready,
+                dependencies.volume_ready,
+                dependencies.attachment_ready,
+                14,
+            )
+            .await
+            .map_err(|_| Wave6BoundaryError::Effect)?;
+        self.guest_controller
+            .lock()
+            .map_err(|_| Wave6BoundaryError::Effect)?
+            .replace(controller);
+        match outcome {
+            CloudHypervisorReconcileOutcome::Retry { .. }
+            | CloudHypervisorReconcileOutcome::Progressing { .. } => {
+                Ok(Wave6ReconcileResult::Waiting)
+            }
+            CloudHypervisorReconcileOutcome::Converged => Ok(Wave6ReconcileResult::Ready),
+        }
+    }
+
+    async fn adopt_after_restart(
+        &self,
+        resources: &Wave6ResourceSet,
+    ) -> Result<(), Wave6BoundaryError> {
+        let volume =
+            VolumeLocalController::new(VolumeLocalProfile::shipped(), &self.volume, &self.volume);
+        volume
+            .reconcile(&resources.volume.uid, &volume_spec())
+            .await
+            .map_err(|_| Wave6BoundaryError::Effect)?;
+
+        let network = NetworkReconciler::new(&self.network, &self.network);
+        let network_result = network
+            .reconcile(&self.ready_network_input(Wave6Dependencies::guest_ready_for_adoption()))
+            .await
+            .map_err(|_| Wave6BoundaryError::Effect)?;
+        if !matches!(network_result, ReconcileProgress::Ready) {
+            return Err(Wave6BoundaryError::Lifecycle);
+        }
+
+        let mut tpm_controller = Self::tpm_controller()?;
+        tpm_controller
+            .reconcile(&self.tpm)
+            .await
+            .map_err(|_| Wave6BoundaryError::Effect)?;
+        self.tpm_controller
+            .lock()
+            .map_err(|_| Wave6BoundaryError::Effect)?
+            .replace(tpm_controller);
+
+        let (recovery, identity) = {
+            let mut guest_guard = self
+                .guest_controller
+                .lock()
+                .map_err(|_| Wave6BoundaryError::Effect)?;
+            let controller = guest_guard.take().ok_or(Wave6BoundaryError::Lifecycle)?;
+            let identity = self
+                .cloud_effect
+                .current_identity()
+                .map_err(|_| Wave6BoundaryError::Effect)?
+                .ok_or(Wave6BoundaryError::Lifecycle)?;
+            (controller.recovery_state(), identity)
+        };
+        let mut restarted = self
+            .guest_controller(Some(identity))?
+            .restore_recovery_state(recovery)
+            .map_err(|_| Wave6BoundaryError::Lifecycle)?;
+        restarted
+            .adopt(identity, 14)
+            .await
+            .map_err(|_| Wave6BoundaryError::Effect)?;
+        if restarted.phase() != CloudHypervisorPhase::Ready {
+            return Err(Wave6BoundaryError::Lifecycle);
+        }
+        *self
+            .guest_controller
+            .lock()
+            .map_err(|_| Wave6BoundaryError::Effect)? = Some(restarted);
+        Ok(())
+    }
+
+    async fn remove_cloud_hypervisor_guest(
+        &self,
+        _resource: &Wave6Resource,
+    ) -> Result<(), Wave6BoundaryError> {
+        let mut controller = self
+            .guest_controller
+            .lock()
+            .map_err(|_| Wave6BoundaryError::Effect)?
+            .take()
+            .ok_or(Wave6BoundaryError::Lifecycle)?;
+        controller
+            .finalize()
+            .await
+            .map_err(|_| Wave6BoundaryError::Effect)?;
+        if controller.phase() != CloudHypervisorPhase::Finalized
+            || self
+                .cloud_effect
+                .current_identity()
+                .map_err(|_| Wave6BoundaryError::Effect)?
+                .is_some()
+        {
+            return Err(Wave6BoundaryError::Lifecycle);
+        }
+        Ok(())
+    }
+
+    async fn remove_network(&self, _resource: &Wave6Resource) -> Result<(), Wave6BoundaryError> {
+        let reconciler = NetworkReconciler::new(&self.network, &self.network);
+        let mut input = self.ready_network_input(Wave6Dependencies::guest_ready_for_adoption());
+        input.agent_deleted = false;
+        input.mdns_deleted = false;
+        input.volume_attachment_removed = false;
+        input.guest_deleted = false;
+        input.volume_deleted = false;
+        if !matches!(
+            reconciler
+                .finalize(&input)
+                .await
+                .map_err(|_| Wave6BoundaryError::Effect)?,
+            FinalizerStage::Processes
+        ) {
+            return Err(Wave6BoundaryError::Lifecycle);
+        }
+        input.agent_deleted = true;
+        input.mdns_deleted = true;
+        if !matches!(
+            reconciler
+                .finalize(&input)
+                .await
+                .map_err(|_| Wave6BoundaryError::Effect)?,
+            FinalizerStage::VolumeAttachment
+        ) {
+            return Err(Wave6BoundaryError::Lifecycle);
+        }
+        input.volume_attachment_removed = true;
+        if !matches!(
+            reconciler
+                .finalize(&input)
+                .await
+                .map_err(|_| Wave6BoundaryError::Effect)?,
+            FinalizerStage::Guest
+        ) {
+            return Err(Wave6BoundaryError::Lifecycle);
+        }
+        input.guest_deleted = true;
+        if !matches!(
+            reconciler
+                .finalize(&input)
+                .await
+                .map_err(|_| Wave6BoundaryError::Effect)?,
+            FinalizerStage::Volume
+        ) {
+            return Err(Wave6BoundaryError::Lifecycle);
+        }
+        input.volume_deleted = true;
+        if !matches!(
+            reconciler
+                .finalize(&input)
+                .await
+                .map_err(|_| Wave6BoundaryError::Effect)?,
+            FinalizerStage::Complete
+        ) {
+            return Err(Wave6BoundaryError::Lifecycle);
+        }
+        Ok(())
+    }
+
+    async fn remove_device_tpm(
+        &self,
+        _resource: &Wave6Resource,
+    ) -> Result<bool, Wave6BoundaryError> {
+        let mut controller = self
+            .tpm_controller
+            .lock()
+            .map_err(|_| Wave6BoundaryError::Effect)?
+            .take()
+            .ok_or(Wave6BoundaryError::Lifecycle)?;
+        let outcome = controller
+            .finalize(&self.tpm)
+            .await
+            .map_err(|_| Wave6BoundaryError::Effect)?;
+        if !matches!(outcome, TpmResourceOutcome::VolumeRetained)
+            || !self.root.join("tpm/tpm-state").is_dir()
+        {
+            return Err(Wave6BoundaryError::DeviceStateNotRetained);
+        }
+        Ok(true)
+    }
+
+    async fn remove_volume(&self, resource: &Wave6Resource) -> Result<(), Wave6BoundaryError> {
+        let controller =
+            VolumeLocalController::new(VolumeLocalProfile::shipped(), &self.volume, &self.volume);
+        controller
+            .cleanup(&resource.uid, &volume_spec())
+            .await
+            .map_err(|_| Wave6BoundaryError::Effect)?;
+        if self.root.join("volume/state.db").exists() {
+            return Err(Wave6BoundaryError::Lifecycle);
+        }
+        Ok(())
+    }
 }

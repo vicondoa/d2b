@@ -165,6 +165,7 @@ pub fn upgrade_owned(
     if recover_owned_inner(parent, identity)? != RecoveryOutcome::Clean {
         return Ok(MigrationOutcome::Recovered);
     }
+
     let state = backup::publication_state(
         parent,
         DEFAULT_STAGED_FILE_NAME,
@@ -198,6 +199,23 @@ pub fn upgrade_owned(
         from: source_meta.schema_version,
         to: last.to,
     })
+}
+
+/// Upgrade only after the caller has captured and identity-validated a
+/// logical image of the active store.
+///
+/// The backup is intentionally supplied by value so a storage owner cannot
+/// accidentally advance the physical schema without first crossing the
+/// logical recovery boundary. The active file is still validated by
+/// [`upgrade_owned`] before staged publication.
+pub fn upgrade_owned_after_backup(
+    parent: &File,
+    marker: &mut File,
+    identity: &StoreIdentity,
+    backup: LogicalBackup,
+) -> Result<MigrationOutcome, StoreError> {
+    backup.validate_for_identity(identity)?;
+    upgrade_owned(parent, marker, identity)
 }
 
 /// Resume or finalize a publication left by a crash or interrupted owner.
@@ -1336,6 +1354,10 @@ mod tests {
     }
 
     fn empty_backup() -> LogicalBackup {
+        empty_backup_for(&identity())
+    }
+
+    fn empty_backup_for(store_identity: &StoreIdentity) -> LogicalBackup {
         let directory = tempfile::tempdir().unwrap();
         let file = OpenOptions::new()
             .create_new(true)
@@ -1347,9 +1369,8 @@ mod tests {
             .set_cache_size(REDB_CACHE_SIZE)
             .create_with_backend(FileBackend::new(file).unwrap())
             .unwrap();
-        let identity = identity();
-        crate::transaction::initialize(&database, &identity).unwrap();
-        LogicalBackup::from_database(&database, &identity).unwrap()
+        crate::transaction::initialize(&database, store_identity).unwrap();
+        LogicalBackup::from_database(&database, store_identity).unwrap()
     }
 
     fn create_current_file(directory: &tempfile::TempDir, name: &str) {
@@ -1656,6 +1677,42 @@ mod tests {
         );
         let file = open_named_database(&parent_fd, DEFAULT_ACTIVE_FILE_NAME, &identity()).unwrap();
         validate_database(&file, &identity(), Some(CURRENT_PHYSICAL_SCHEMA_VERSION)).unwrap();
+    }
+
+    #[test]
+    fn schema_upgrade_crosses_the_backup_boundary_before_publication() {
+        let (directory, parent_fd, mut marker) = parent();
+        create_current_file(&directory, DEFAULT_ACTIVE_FILE_NAME);
+        set_schema_version(&directory, 1);
+        let backup = empty_backup();
+        let outcome =
+            upgrade_owned_after_backup(&parent_fd, &mut marker, &identity(), backup).unwrap();
+        assert_eq!(
+            outcome,
+            MigrationOutcome::Upgraded {
+                from: 1,
+                to: CURRENT_PHYSICAL_SCHEMA_VERSION
+            }
+        );
+        assert!(
+            !directory.path().join(DEFAULT_STAGED_FILE_NAME).exists(),
+            "staged image must not remain after a validated publication"
+        );
+    }
+
+    #[test]
+    fn schema_upgrade_rejects_a_backup_for_another_store_before_staging() {
+        let (directory, parent_fd, mut marker) = parent();
+        create_current_file(&directory, DEFAULT_ACTIVE_FILE_NAME);
+        set_schema_version(&directory, 1);
+        let backup = empty_backup_for(&other_identity());
+        let error =
+            upgrade_owned_after_backup(&parent_fd, &mut marker, &identity(), backup).unwrap_err();
+        assert_eq!(error.reason_code(), "backup-store-identity-mismatch");
+        assert!(
+            !directory.path().join(DEFAULT_STAGED_FILE_NAME).exists(),
+            "identity refusal must happen before staging"
+        );
     }
 
     #[test]

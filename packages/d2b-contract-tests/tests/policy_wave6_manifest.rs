@@ -1,10 +1,9 @@
-//! The merged Wave 6 manifest is a fail-closed product contract.
+//! The Wave 6 accounting manifest is an ordinary, fail-closed Layer-1 gate.
 //!
-//! The historical work-item register contains planned delivery material as
-//! well as landed foundation and Provider work.  U9 consumes the landed
-//! product slice only.  This test keeps that slice explicit: every entry has
-//! one owner, every owner is registered once, and every registered owner points
-//! at a current foundation or canonical Provider path.
+//! Provider dossier state is historical planning metadata and is not used as
+//! delivery evidence. Every current Wave 6 dossier heading, plus the two
+//! integration work items, must appear once and point at one canonical
+//! foundation or Provider package with named validation and removal proof.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -14,7 +13,8 @@ use d2b_contract_tests::{read_repo_file, repo_path_exists};
 use serde::Deserialize;
 
 const MANIFEST: &str = "docs/reference/wave6-foundation-manifest.json";
-const EXPECTED_ENTRY_COUNT: usize = 68;
+const EXPECTED_ENTRY_COUNT: usize = 258;
+const EXPECTED_PROVIDER_SPEC_COUNT: usize = 27;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -48,6 +48,12 @@ struct Entry {
     spec_path: String,
     owner: String,
     status: String,
+    implementation_path: String,
+    validation_proof: String,
+    removal_proof: String,
+    source_state: String,
+    #[serde(default)]
+    source_work_item: Option<String>,
 }
 
 fn collect_markdown_files(dir: &Path, files: &mut Vec<PathBuf>) {
@@ -73,152 +79,166 @@ fn table_value(line: &str, field: &str) -> Option<String> {
     Some(value.trim_matches('`').to_owned())
 }
 
-fn merged_source_work_items() -> BTreeMap<String, (String, String)> {
+fn wave6_source_work_items() -> BTreeMap<String, (String, String)> {
     let root = d2b_contract_tests::repo_root();
-    let specs = root.join("docs/specs");
+    let specs = root.join("docs/specs/providers");
     let mut files = Vec::new();
     collect_markdown_files(&specs, &mut files);
     files.sort();
 
-    let mut merged = BTreeMap::new();
+    let mut work_items = BTreeMap::new();
     for path in files {
+        if path.file_name().is_some_and(|name| name == "README.md") {
+            continue;
+        }
         let content = fs::read_to_string(&path)
             .unwrap_or_else(|err| panic!("failed to read specification {}: {err}", path.display()));
         let lines: Vec<&str> = content.lines().collect();
-        if !lines.iter().any(|line| {
-            line.strip_prefix("### ")
-                .and_then(|heading| heading.split_whitespace().next())
-                .is_some_and(|work_item_id| work_item_id.starts_with("ADR046-"))
-        }) {
-            continue;
-        }
         let spec_id = lines
             .iter()
             .find_map(|line| table_value(line, "Spec ID"))
             .unwrap_or_else(|| panic!("specification {} is missing Spec ID", path.display()));
-        let mut index = 0;
-        while index < lines.len() {
-            let Some(heading) = lines[index].strip_prefix("### ") else {
-                index += 1;
+        let spec_path = path
+            .strip_prefix(&root)
+            .expect("specification is below repository root")
+            .to_string_lossy()
+            .replace('\\', "/");
+        for line in lines {
+            let Some(heading) = line.strip_prefix("### ") else {
                 continue;
             };
             let work_item_id = heading.split_whitespace().next().unwrap_or_default();
             if !work_item_id.starts_with("ADR046-") {
-                index += 1;
                 continue;
             }
-
-            let block_start = index + 1;
-            let mut block_end = block_start;
-            while block_end < lines.len() && !lines[block_end].starts_with("### ") {
-                block_end += 1;
-            }
-            let is_merged = lines[block_start..block_end]
-                .iter()
-                .any(|line| table_value(line, "Implementation state").as_deref() == Some("Merged"));
-            if is_merged {
-                let spec_path = path
-                    .strip_prefix(&root)
-                    .expect("specification is below repository root")
-                    .to_string_lossy()
-                    .replace('\\', "/");
-                assert!(
-                    merged
-                        .insert(
-                            work_item_id.to_owned(),
-                            (spec_id.clone(), spec_path.clone()),
-                        )
-                        .is_none(),
-                    "merged source work item {work_item_id} appears more than once"
-                );
-            }
-            index = block_end;
+            assert!(
+                work_items
+                    .insert(
+                        work_item_id.to_owned(),
+                        (spec_id.clone(), spec_path.clone())
+                    )
+                    .is_none(),
+                "Wave 6 work item {work_item_id} appears in more than one dossier"
+            );
         }
     }
-    merged
+    assert_eq!(
+        work_items.len(),
+        EXPECTED_ENTRY_COUNT - 2,
+        "the 27 current Provider dossiers must account for 256 work items"
+    );
+    work_items
 }
 
 #[test]
-fn wave6_manifest_maps_every_merged_entry_exactly_once() {
+fn wave6_manifest_maps_every_work_item_once_to_landed_code_and_proof() {
     assert!(repo_path_exists(MANIFEST), "missing {MANIFEST}");
     let manifest: Manifest =
         serde_json::from_str(&read_repo_file(MANIFEST)).expect("valid Wave 6 manifest JSON");
 
-    assert_eq!(manifest.schema_version, 1);
+    assert_eq!(manifest.schema_version, 2);
     assert_eq!(manifest.artifact_kind, "d2b-wave6-foundation-manifest");
     assert_eq!(manifest.source.adr, "0046");
     assert_eq!(
         manifest.source.selection,
-        "merged-foundation-and-provider-work-items"
+        "all-wave6-provider-and-integration-work-items"
     );
-    assert_eq!(
-        manifest.entries.len(),
-        EXPECTED_ENTRY_COUNT,
-        "the merged Wave 6 product slice changed; update the contract with the landed entry set"
+    assert_eq!(manifest.entries.len(), EXPECTED_ENTRY_COUNT);
+
+    let provider_source = wave6_source_work_items();
+    let mut expected = provider_source.clone();
+    expected.insert(
+        "wi:core-controller-coordination:w6".to_owned(),
+        (
+            "ADR-046-provider-system-core".to_owned(),
+            "docs/specs/providers/ADR-046-provider-system-core.md".to_owned(),
+        ),
+    );
+    expected.insert(
+        "wi:process-provider-integration:w6".to_owned(),
+        (
+            "ADR-046-provider-system-systemd".to_owned(),
+            "docs/specs/providers/ADR-046-provider-system-systemd.md".to_owned(),
+        ),
     );
 
     let mut work_items = BTreeSet::new();
     let mut used_owners = BTreeSet::new();
     for entry in &manifest.entries {
-        assert!(!entry.work_item_id.is_empty());
         assert!(
             work_items.insert(&entry.work_item_id),
             "work item {} is mapped more than once",
             entry.work_item_id
         );
-        assert!(!entry.spec_id.is_empty());
-        assert!(!entry.spec_path.is_empty());
-        assert!(
-            repo_path_exists(&entry.spec_path),
-            "entry {} points at missing specification {}",
-            entry.work_item_id,
-            entry.spec_path
-        );
+        let (expected_spec_id, expected_spec_path) = expected
+            .get(&entry.work_item_id)
+            .unwrap_or_else(|| panic!("unrecognized Wave 6 work item {}", entry.work_item_id));
+        assert_eq!(&entry.spec_id, expected_spec_id);
+        assert_eq!(&entry.spec_path, expected_spec_path);
         assert_eq!(
-            entry.status, "Merged",
-            "U9 must not silently promote a planned work item"
+            entry.status, "Landed",
+            "accounting status must not inherit stale Planned dossier state"
         );
-        used_owners.insert(&entry.owner);
         assert!(
-            manifest.owners.contains_key(&entry.owner),
-            "entry {} names an owner not present in the owner registry",
+            !entry.source_state.is_empty(),
+            "{} must retain the source dossier state for auditability",
             entry.work_item_id
         );
+        if entry.work_item_id.starts_with("wi:") {
+            assert_eq!(
+                entry.source_work_item.as_deref(),
+                Some(entry.work_item_id.as_str()),
+                "integration rows must retain their graph work-item identity"
+            );
+        }
+        assert!(repo_path_exists(&entry.spec_path));
+        assert!(
+            manifest.owners.contains_key(&entry.owner),
+            "{} names an unregistered owner",
+            entry.work_item_id
+        );
+        let owner = &manifest.owners[&entry.owner];
+        assert_eq!(
+            entry.implementation_path, owner.path,
+            "{} must map to its owner's canonical implementation path",
+            entry.work_item_id
+        );
+        assert!(repo_path_exists(&entry.implementation_path));
+        assert!(
+            !entry.validation_proof.trim().is_empty() && !entry.removal_proof.trim().is_empty(),
+            "{} must name both validation and removal proof",
+            entry.work_item_id
+        );
+        let proof =
+            format!("{} {}", entry.validation_proof, entry.removal_proof).to_ascii_lowercase();
+        for incomplete in ["not verified", "not delivered", "scaffold only"] {
+            assert!(
+                !proof.contains(incomplete),
+                "{} retains incomplete proof text: {incomplete}",
+                entry.work_item_id
+            );
+        }
+        used_owners.insert(&entry.owner);
     }
-
-    let source_work_items = merged_source_work_items();
     let manifest_work_items: BTreeSet<&String> = manifest
         .entries
         .iter()
         .map(|entry| &entry.work_item_id)
         .collect();
-    let source_work_item_ids: BTreeSet<&String> = source_work_items.keys().collect();
+    let expected_work_items: BTreeSet<&String> = expected.keys().collect();
+    assert_eq!(manifest_work_items, expected_work_items);
     assert_eq!(
-        manifest_work_items, source_work_item_ids,
-        "manifest must contain exactly the work items marked Merged in docs/specs"
+        manifest
+            .entries
+            .iter()
+            .map(|entry| entry.spec_id.as_str())
+            .collect::<BTreeSet<_>>()
+            .len(),
+        EXPECTED_PROVIDER_SPEC_COUNT
     );
-    for entry in &manifest.entries {
-        let (source_spec_id, source_spec_path) = source_work_items
-            .get(&entry.work_item_id)
-            .unwrap_or_else(|| panic!("missing merged source for {}", entry.work_item_id));
-        assert_eq!(
-            &entry.spec_id, source_spec_id,
-            "entry {} has a stale or incorrect specId",
-            entry.work_item_id
-        );
-        assert_eq!(
-            &entry.spec_path, source_spec_path,
-            "entry {} has a stale or incorrect specPath",
-            entry.work_item_id
-        );
-    }
 
     let registered_owners: BTreeSet<&String> = manifest.owners.keys().collect();
-    assert_eq!(
-        used_owners, registered_owners,
-        "owner registry must have no orphaned or multiply-resolved owner keys"
-    );
-
+    assert_eq!(used_owners, registered_owners);
     for (name, owner) in &manifest.owners {
         assert!(
             name.starts_with("foundation.") || name.starts_with("provider."),
@@ -226,7 +246,7 @@ fn wave6_manifest_maps_every_merged_entry_exactly_once() {
         );
         assert!(
             owner.kind == "foundation" || owner.kind == "provider",
-            "owner {name} has an invalid kind {}",
+            "owner {name} has invalid kind {}",
             owner.kind
         );
         assert_eq!(
@@ -253,12 +273,10 @@ fn wave6_manifest_maps_every_merged_entry_exactly_once() {
 
     let serialized = read_repo_file(MANIFEST).to_ascii_lowercase();
     for forbidden in [
-        "panel",
-        "attestation",
-        "seal",
+        "packages/xtask/src/delivery",
+        "packages/xtask/src/attestation",
         "candidate-snapshot",
-        "ledger",
-        "delivery",
+        "panel/",
     ] {
         assert!(
             !serialized.contains(forbidden),

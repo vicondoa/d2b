@@ -250,6 +250,7 @@ pub mod host_generation;
 pub mod process_provider_runtime;
 pub mod provider_effects;
 pub mod provider_registry;
+pub mod resource_operator_activation;
 pub mod resource_runtime;
 // Typed, per-busid USBIP state machine that pins the canonical bring-up
 // order
@@ -3944,10 +3945,10 @@ fn dispatch_resource_request(
         );
     }
 
-    // The public socket currently authenticates only the local peer role. It
-    // does not carry a ComponentSession, so never let this compatibility
-    // route turn SO_PEERCRED into a Resource API subject.
-    match block_on_future(runtime.dispatch_public_cli_request(&request.value())) {
+    // Admission has authenticated this local peer with SO_PEERCRED and
+    // assigned its daemon role. The runtime binds that credential into the
+    // request-scoped ComponentSession subject before invoking Resource API.
+    match block_on_future(runtime.dispatch_public_cli_request(&request.value(), peer.uid)) {
         Ok(value) => Ok(value),
         Err(error) => Ok(resource_runtime_error_frame(error)),
     }

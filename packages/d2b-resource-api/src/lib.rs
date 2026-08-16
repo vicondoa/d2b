@@ -1,7 +1,7 @@
 //! Asynchronous native resource API and authorization contracts.
 //!
-//! Transport dispatch is explicitly unregistered until an authenticated
-//! ComponentSession router is present in the workspace.
+//! Transport dispatch is explicitly authenticated through the d2b-bus
+//! ComponentSession boundary.
 
 pub mod adapter;
 mod admission;
@@ -19,11 +19,11 @@ pub mod watch;
 pub mod zone_service;
 
 pub use adapter::{
-    AdapterBindingError, RESOURCE_API_REACHABILITY, ResourceApiReachability, UnregisteredBusAdapter,
+    AdapterBindingError, RESOURCE_API_REACHABILITY, ResourceApiReachability, ResourceBusAdapter,
 };
 pub use admission::{AdmissionError, AdmittedMutation};
 pub use authz::StoreSealHandoffError;
-pub use client::UnregisteredResourceClient;
+pub use client::ResourceApiClient;
 pub use d2b_resource_store::PreparedStoreMutation;
 pub use identity::AuthenticatedSubjectContext;
 pub use service::ResourceService;
