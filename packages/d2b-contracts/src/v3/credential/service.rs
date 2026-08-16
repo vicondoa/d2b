@@ -1,16 +1,16 @@
 //! Neutral provider-facing DTO and sensitive-record contracts.
 
 use core::fmt;
-use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::any::Any;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU8, Ordering};
 
 use super::{
     AudienceToken, CredentialLeaseHandle, CredentialLeaseState, CredentialSourceVersion,
     OperationClass,
 };
 use crate::v3::component_session::MAX_PROTECTED_PLAINTEXT_BYTES;
-use crate::v3::{ResourceGeneration, ResourceRef, ResourceUid, TranscriptHash, ZoneId};
+use crate::v3::{ResourceGeneration, ResourceRef, ResourceUid, TranscriptHash};
 
 /// Canonical service package routed by the Zone bus.
 pub const CREDENTIAL_SERVICE_NAME: &str = "d2b.credential.v3";
@@ -587,350 +587,42 @@ impl fmt::Debug for CredentialResponse {
     }
 }
 
-/// Stable failure returned while admitting a Credential session capability.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CredentialSessionError {
-    /// The capability is unknown or its binding was altered.
-    InvalidCapability,
-    /// The one-shot capability was already consumed by another presentation.
-    CapabilityAlreadyConsumed,
-    /// The capability was released and cannot be admitted again.
-    CapabilityReleased,
-    /// The authority exhausted its process-local capability counter.
-    CapabilityExhausted,
-    /// One of the authority-issued resource bindings is not admissible.
-    InvalidBinding,
-}
-
-impl fmt::Display for CredentialSessionError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(match self {
-            Self::InvalidCapability => "credential session capability is invalid",
-            Self::CapabilityAlreadyConsumed => "credential session capability was replayed",
-            Self::CapabilityReleased => "credential session capability was released",
-            Self::CapabilityExhausted => "credential session capability space is exhausted",
-            Self::InvalidBinding => "credential session capability binding is invalid",
-        })
-    }
-}
-
-impl std::error::Error for CredentialSessionError {}
-
-/// Exact Zone, workload, subject, consumer, and generation binding issued for
-/// one Credential session.
-#[derive(Clone, PartialEq, Eq)]
-pub struct CredentialSessionBinding {
-    zone: ZoneId,
-    workload: ResourceRef,
-    subject: ResourceRef,
-    consumer: ResourceRef,
-    generation: ResourceGeneration,
-}
-
-impl CredentialSessionBinding {
-    /// Borrow the exact Zone binding.
-    pub const fn zone(&self) -> &ZoneId {
-        &self.zone
-    }
-
-    /// Borrow the exact workload binding.
-    pub const fn workload(&self) -> &ResourceRef {
-        &self.workload
-    }
-
-    /// Borrow the authenticated subject binding.
-    pub const fn subject(&self) -> &ResourceRef {
-        &self.subject
-    }
-
-    /// Borrow the exact consumer Provider binding.
-    pub const fn consumer(&self) -> &ResourceRef {
-        &self.consumer
-    }
-
-    /// Return the authority-issued session generation.
-    pub const fn generation(&self) -> ResourceGeneration {
-        self.generation
-    }
-}
-
-impl fmt::Debug for CredentialSessionBinding {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("CredentialSessionBinding(<redacted>)")
-    }
-}
-
-#[derive(Clone)]
-struct CredentialSessionRecord {
-    binding: CredentialSessionBinding,
-    consumed_presentation: Option<u64>,
-    active: bool,
-}
-
-struct CredentialSessionAuthorityState {
-    next_capability: AtomicU64,
-    next_presentation: AtomicU64,
-    sessions: Mutex<BTreeMap<u64, CredentialSessionRecord>>,
-}
-
-impl fmt::Debug for CredentialSessionAuthorityState {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("CredentialSessionAuthorityState")
-            .field("sessions", &"<redacted>")
-            .finish()
-    }
-}
-
-/// Authority that mints one-shot, process-local Credential session
-/// capabilities.
-#[derive(Clone)]
-pub struct CredentialSessionAuthority {
-    state: Arc<CredentialSessionAuthorityState>,
-}
-
-impl CredentialSessionAuthority {
-    /// Construct an empty capability authority.
-    pub fn new() -> Self {
-        Self {
-            state: Arc::new(CredentialSessionAuthorityState {
-                next_capability: AtomicU64::new(0),
-                next_presentation: AtomicU64::new(0),
-                sessions: Mutex::new(BTreeMap::new()),
-            }),
-        }
-    }
-
-    /// Issue one exact session capability.
-    pub fn issue(
-        &self,
-        zone: ZoneId,
-        workload: ResourceRef,
-        subject: ResourceRef,
-        consumer: ResourceRef,
-        generation: ResourceGeneration,
-    ) -> Result<CredentialSessionCapability, CredentialSessionError> {
-        if !matches!(workload.resource_type().as_str(), "Host" | "Guest")
-            || subject.resource_type().as_str() != "User"
-            || consumer.resource_type().as_str() != "Provider"
-        {
-            return Err(CredentialSessionError::InvalidBinding);
-        }
-        let capability_id = next_counter(&self.state.next_capability)?;
-        let presentation = next_counter(&self.state.next_presentation)?;
-        let binding = CredentialSessionBinding {
-            zone,
-            workload,
-            subject,
-            consumer,
-            generation,
-        };
-        self.state
-            .sessions
-            .lock()
-            .map_err(|_| CredentialSessionError::InvalidCapability)?
-            .insert(
-                capability_id,
-                CredentialSessionRecord {
-                    binding: binding.clone(),
-                    consumed_presentation: None,
-                    active: true,
-                },
-            );
-        Ok(CredentialSessionCapability {
-            authority: self.clone(),
-            capability_id,
-            presentation,
-            binding,
-        })
-    }
-
-    fn consume(
-        &self,
-        capability: &CredentialSessionCapability,
-    ) -> Result<(), CredentialSessionError> {
-        let mut sessions = self
-            .state
-            .sessions
-            .lock()
-            .map_err(|_| CredentialSessionError::InvalidCapability)?;
-        let record = sessions
-            .get_mut(&capability.capability_id)
-            .ok_or(CredentialSessionError::InvalidCapability)?;
-        if record.binding != capability.binding {
-            return Err(CredentialSessionError::InvalidCapability);
-        }
-        if !record.active {
-            return Err(CredentialSessionError::CapabilityReleased);
-        }
-        if record.consumed_presentation.is_some() {
-            return Err(CredentialSessionError::CapabilityAlreadyConsumed);
-        }
-        record.consumed_presentation = Some(capability.presentation);
-        Ok(())
-    }
-
-    fn release(
-        &self,
-        capability: &CredentialSessionCapability,
-    ) -> Result<(), CredentialSessionError> {
-        let mut sessions = self
-            .state
-            .sessions
-            .lock()
-            .map_err(|_| CredentialSessionError::InvalidCapability)?;
-        let record = sessions
-            .get_mut(&capability.capability_id)
-            .ok_or(CredentialSessionError::InvalidCapability)?;
-        if record.binding != capability.binding {
-            return Err(CredentialSessionError::InvalidCapability);
-        }
-        if record.consumed_presentation != Some(capability.presentation) {
-            return Err(CredentialSessionError::CapabilityAlreadyConsumed);
-        }
-        record.active = false;
-        Ok(())
-    }
-}
-
-impl Default for CredentialSessionAuthority {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl fmt::Debug for CredentialSessionAuthority {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("CredentialSessionAuthority(<redacted>)")
-    }
-}
-
-fn next_counter(counter: &AtomicU64) -> Result<u64, CredentialSessionError> {
-    let mut current = counter.load(Ordering::Relaxed);
-    loop {
-        let next = current
-            .checked_add(1)
-            .ok_or(CredentialSessionError::CapabilityExhausted)?;
-        match counter.compare_exchange(current, next, Ordering::AcqRel, Ordering::Relaxed) {
-            Ok(_) => return Ok(next),
-            Err(observed) => current = observed,
-        }
-    }
-}
-
-/// Opaque process-local key for one authenticated Credential session.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct CredentialSessionKey {
-    authority: usize,
-    capability_id: u64,
-    presentation: u64,
-}
-
-impl fmt::Debug for CredentialSessionKey {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("CredentialSessionKey(<redacted>)")
-    }
-}
-
-impl fmt::Display for CredentialSessionKey {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("CredentialSessionKey(<redacted>)")
-    }
-}
-
-/// One authority-issued, one-shot Credential session capability.
-pub struct CredentialSessionCapability {
-    authority: CredentialSessionAuthority,
-    capability_id: u64,
-    presentation: u64,
-    binding: CredentialSessionBinding,
-}
-
-impl Clone for CredentialSessionCapability {
-    fn clone(&self) -> Self {
-        let presentation = next_counter(&self.authority.state.next_presentation)
-            .expect("Credential session presentation space exhausted");
-        Self {
-            authority: self.authority.clone(),
-            capability_id: self.capability_id,
-            presentation,
-            binding: self.binding.clone(),
-        }
-    }
-}
-
-impl PartialEq for CredentialSessionCapability {
-    fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.authority.state, &other.authority.state)
-            && self.capability_id == other.capability_id
-            && self.presentation == other.presentation
-            && self.binding == other.binding
-    }
-}
-
-impl Eq for CredentialSessionCapability {}
-
-impl CredentialSessionCapability {
-    /// Borrow the exact Zone binding.
-    pub const fn zone(&self) -> &ZoneId {
-        self.binding.zone()
-    }
-
-    /// Borrow the exact workload binding.
-    pub const fn workload(&self) -> &ResourceRef {
-        self.binding.workload()
-    }
-
-    /// Borrow the authenticated subject binding.
-    pub const fn subject(&self) -> &ResourceRef {
-        self.binding.subject()
-    }
-
-    /// Borrow the exact consumer Provider binding.
-    pub const fn consumer(&self) -> &ResourceRef {
-        self.binding.consumer()
-    }
-
-    /// Return the authority-issued generation.
-    pub const fn generation(&self) -> ResourceGeneration {
-        self.binding.generation()
-    }
-
-    /// Return the opaque process-local lookup key.
-    pub fn session_key(&self) -> CredentialSessionKey {
-        CredentialSessionKey {
-            authority: Arc::as_ptr(&self.authority.state) as usize,
-            capability_id: self.capability_id,
-            presentation: self.presentation,
-        }
-    }
-
-    /// Consume this capability's one-shot admission claim.
-    pub fn consume(&self) -> Result<(), CredentialSessionError> {
-        self.authority.consume(self)
-    }
-
-    /// Release all authority owned by this exact admitted presentation.
-    pub fn release(&self) -> Result<(), CredentialSessionError> {
-        self.authority.release(self)
-    }
-}
-
-impl fmt::Debug for CredentialSessionCapability {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("CredentialSessionCapability(<redacted>)")
-    }
-}
-
 /// Authorization result derived by the authenticated service adapter.
 ///
 /// For sensitive-output methods this carries the complete delivery binding
 /// constructed during route authorization. The Provider may use it but cannot
 /// replace any of its authority-bearing fields.
-#[derive(Clone, PartialEq, Eq)]
 pub struct CredentialAuthorization {
     delivery_session_params: Option<DeliverySessionParams>,
-    session_capability: Option<Arc<CredentialSessionCapability>>,
+    session_proof: Option<Arc<dyn Any + Send + Sync>>,
+}
+
+impl Clone for CredentialAuthorization {
+    fn clone(&self) -> Self {
+        Self {
+            delivery_session_params: self.delivery_session_params.clone(),
+            session_proof: self.session_proof.clone(),
+        }
+    }
+}
+
+impl PartialEq for CredentialAuthorization {
+    fn eq(&self, other: &Self) -> bool {
+        self.delivery_session_params == other.delivery_session_params
+            && match (&self.session_proof, &other.session_proof) {
+                (None, None) => true,
+                (Some(left), Some(right)) => Arc::ptr_eq(left, right),
+                _ => false,
+            }
+    }
+}
+
+impl Eq for CredentialAuthorization {}
+
+impl fmt::Debug for CredentialAuthorization {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("CredentialAuthorization(<redacted>)")
+    }
 }
 
 impl CredentialAuthorization {
@@ -950,7 +642,7 @@ impl CredentialAuthorization {
         }
         Ok(Self {
             delivery_session_params,
-            session_capability: None,
+            session_proof: None,
         })
     }
 
@@ -959,30 +651,36 @@ impl CredentialAuthorization {
         self.delivery_session_params.as_ref()
     }
 
-    /// Attach one authority-issued authenticated session capability.
-    pub fn with_session_capability(mut self, capability: CredentialSessionCapability) -> Self {
-        self.session_capability = Some(Arc::new(capability));
+    /// Attach one provider-owned authenticated session proof.
+    ///
+    /// The proof is intentionally erased at this contract boundary. Each
+    /// Provider downcasts it to its own private proof type and authenticates
+    /// that proof against its retained authority.
+    pub fn with_session_proof<T>(mut self, proof: T) -> Self
+    where
+        T: Any + Send + Sync,
+    {
+        self.session_proof = Some(Arc::new(proof));
         self
     }
 
-    /// Attach a shared capability presentation to another method authorization.
-    pub fn with_shared_session_capability(
-        mut self,
-        capability: Arc<CredentialSessionCapability>,
-    ) -> Self {
-        self.session_capability = Some(capability);
+    /// Attach a shared provider-owned session proof to another authorization.
+    pub fn with_shared_session_proof<T>(mut self, proof: Arc<T>) -> Self
+    where
+        T: Any + Send + Sync,
+    {
+        self.session_proof = Some(proof);
         self
     }
 
-    /// Borrow the authenticated session capability, when present.
-    pub fn session_capability(&self) -> Option<&CredentialSessionCapability> {
-        self.session_capability.as_deref()
-    }
-}
-
-impl fmt::Debug for CredentialAuthorization {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("CredentialAuthorization(<redacted>)")
+    /// Borrow a provider-owned session proof of the requested concrete type.
+    pub fn session_proof<T>(&self) -> Option<&T>
+    where
+        T: Any + Send + Sync,
+    {
+        self.session_proof
+            .as_deref()
+            .and_then(|proof| proof.downcast_ref::<T>())
     }
 }
 

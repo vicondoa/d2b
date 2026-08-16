@@ -8,9 +8,9 @@ use std::thread;
 use std::time::Duration;
 
 use d2b_contracts::v3::credential::{
-    CredentialLeaseHandle, CredentialLeaseState, CredentialMethod, CredentialOutcomeCode,
-    CredentialRequest, CredentialResponse, CredentialServiceErrorCode, CredentialSourceVersion,
-    PlacementBinding,
+    CredentialAuthorization, CredentialLeaseHandle, CredentialLeaseState, CredentialMethod,
+    CredentialOutcomeCode, CredentialProvider, CredentialRequest, CredentialResponse,
+    CredentialServiceErrorCode, CredentialSourceVersion, PlacementBinding,
 };
 use d2b_contracts::v3::{ResourceRef, ZoneId};
 use d2b_provider_credential_secret_service::{
@@ -120,6 +120,156 @@ fn concurrent_acquires_issue_once() {
 }
 
 #[test]
+fn disconnect_waits_for_inflight_acquire_and_fences_the_session() {
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let port = Arc::new(BlockingPort::new(entered_tx));
+    let provider = Arc::new(provider_with_port(64, port.clone()));
+    let capability = Arc::new(
+        provider
+            .issue_session_capability(d2b_contracts::v3::ResourceGeneration::new(1).unwrap())
+            .unwrap(),
+    );
+    let authorization = Arc::new(
+        CredentialAuthorization::new(
+            CredentialMethod::AcquireToken,
+            Some(common::delivery(CredentialMethod::AcquireToken, 1)),
+        )
+        .unwrap()
+        .with_shared_session_proof(capability),
+    );
+
+    let acquire_provider = provider.clone();
+    let acquire_authorization = authorization.clone();
+    let (acquire_tx, acquire_rx) = mpsc::channel();
+    let acquire = thread::spawn(move || {
+        acquire_tx
+            .send(acquire_provider.dispatch(
+                CredentialMethod::AcquireToken,
+                &request("race-acquire"),
+                &acquire_authorization,
+            ))
+            .unwrap();
+    });
+    entered_rx.recv().unwrap();
+
+    let disconnect_provider = provider.clone();
+    let disconnect_authorization = authorization.clone();
+    let (disconnect_tx, disconnect_rx) = mpsc::channel();
+    let disconnect = thread::spawn(move || {
+        disconnect_tx
+            .send(disconnect_provider.disconnect(&disconnect_authorization))
+            .unwrap();
+    });
+    assert!(
+        disconnect_rx
+            .recv_timeout(Duration::from_millis(50))
+            .is_err()
+    );
+
+    port.release();
+    assert!(
+        acquire_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .is_ok()
+    );
+    assert!(
+        disconnect_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .is_ok()
+    );
+    acquire.join().unwrap();
+    disconnect.join().unwrap();
+    assert_eq!(port.revoke_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        provider
+            .dispatch(
+                CredentialMethod::InspectMetadata,
+                &request("after-race"),
+                &authorization,
+            )
+            .unwrap_err()
+            .code(),
+        CredentialServiceErrorCode::OperationDenied
+    );
+}
+
+#[test]
+fn inspect_waits_on_the_lifecycle_gate_before_disconnect() {
+    let (inspect_tx, inspect_rx) = mpsc::channel();
+    let port = Arc::new(InspectBlockingPort::new(inspect_tx));
+    let provider = Arc::new(provider_with_port(64, port.clone()));
+    let capability = Arc::new(
+        provider
+            .issue_session_capability(d2b_contracts::v3::ResourceGeneration::new(1).unwrap())
+            .unwrap(),
+    );
+    let acquire_authorization = CredentialAuthorization::new(
+        CredentialMethod::AcquireToken,
+        Some(common::delivery(CredentialMethod::AcquireToken, 1)),
+    )
+    .unwrap()
+    .with_shared_session_proof(capability.clone());
+    provider
+        .dispatch(
+            CredentialMethod::AcquireToken,
+            &request("inspect-fence-acquire"),
+            &acquire_authorization,
+        )
+        .unwrap();
+    let inspect_authorization =
+        CredentialAuthorization::new(CredentialMethod::InspectMetadata, None)
+            .unwrap()
+            .with_shared_session_proof(capability);
+
+    let inspect_provider = provider.clone();
+    let inspect_authorization_for_thread = inspect_authorization.clone();
+    let (inspect_result_tx, inspect_result_rx) = mpsc::channel();
+    let inspect = thread::spawn(move || {
+        inspect_result_tx
+            .send(inspect_provider.dispatch(
+                CredentialMethod::InspectMetadata,
+                &request("inspect-fence"),
+                &inspect_authorization_for_thread,
+            ))
+            .unwrap();
+    });
+    inspect_rx.recv().unwrap();
+
+    let disconnect_provider = provider.clone();
+    let disconnect_authorization = acquire_authorization.clone();
+    let (disconnect_tx, disconnect_rx) = mpsc::channel();
+    let disconnect = thread::spawn(move || {
+        disconnect_tx
+            .send(disconnect_provider.disconnect(&disconnect_authorization))
+            .unwrap();
+    });
+    assert!(
+        disconnect_rx
+            .recv_timeout(Duration::from_millis(50))
+            .is_err()
+    );
+
+    port.release();
+    assert!(
+        inspect_result_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .is_ok()
+    );
+    assert!(
+        disconnect_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .is_ok()
+    );
+    inspect.join().unwrap();
+    disconnect.join().unwrap();
+    assert_eq!(port.revoke_calls.load(Ordering::SeqCst), 1);
+}
+
+#[test]
 fn revocation_releases_capacity() {
     let (provider, port) = setup(1);
     let server = ProviderHarness::new(provider, Admission);
@@ -149,6 +299,7 @@ struct BlockingPort {
     entered: Mutex<Option<mpsc::Sender<()>>>,
     state: Mutex<BlockingState>,
     issue_calls: AtomicUsize,
+    revoke_calls: AtomicUsize,
 }
 
 struct BlockingState {
@@ -165,6 +316,7 @@ impl BlockingPort {
                 wakers: Vec::new(),
             }),
             issue_calls: AtomicUsize::new(0),
+            revoke_calls: AtomicUsize::new(0),
         }
     }
 
@@ -235,7 +387,102 @@ impl Oo7SecretServicePort for BlockingPort {
         &self,
         _lease: &SecretServiceLeaseRef,
     ) -> SecretServiceFuture<'_, SecretServiceLeaseRevocation> {
-        Box::pin(async { panic!("unexpected revoke") })
+        self.revoke_calls.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async { Ok(SecretServiceLeaseRevocation::Revoked) })
+    }
+}
+
+struct InspectBlockingPort {
+    entered: Mutex<Option<mpsc::Sender<()>>>,
+    state: Mutex<BlockingState>,
+    revoke_calls: AtomicUsize,
+}
+
+impl InspectBlockingPort {
+    fn new(entered: mpsc::Sender<()>) -> Self {
+        Self {
+            entered: Mutex::new(Some(entered)),
+            state: Mutex::new(BlockingState {
+                released: false,
+                wakers: Vec::new(),
+            }),
+            revoke_calls: AtomicUsize::new(0),
+        }
+    }
+
+    fn release(&self) {
+        let wakers = {
+            let mut state = self.state.lock().unwrap();
+            state.released = true;
+            std::mem::take(&mut state.wakers)
+        };
+        for waker in wakers {
+            waker.wake();
+        }
+    }
+}
+
+impl Oo7SecretServicePort for InspectBlockingPort {
+    fn state(&self) -> SecretServiceFuture<'_, SecretServiceState> {
+        Box::pin(async { Ok(SecretServiceState::Unlocked) })
+    }
+
+    fn issue_lease(
+        &self,
+        request: &SecretServiceLeaseRequest,
+    ) -> SecretServiceFuture<'_, SecretServiceLeaseGrant> {
+        let expiry = request.requested_expiry_unix_ms();
+        Box::pin(async move {
+            Ok(SecretServiceLeaseGrant {
+                lease_handle: CredentialLeaseHandle::parse("inspect-lease").unwrap(),
+                source_version: CredentialSourceVersion::parse("inspect-source").unwrap(),
+                rotation_generation: 1,
+                expires_at_unix_ms: expiry,
+            })
+        })
+    }
+
+    fn inspect_lease(
+        &self,
+        lease: &SecretServiceLeaseRef,
+    ) -> SecretServiceFuture<'_, SecretServiceLeaseInspection> {
+        if let Some(entered) = self.entered.lock().unwrap().take() {
+            entered.send(()).unwrap();
+        }
+        let metadata = lease.metadata().clone();
+        Box::pin(async move {
+            poll_fn(|context| {
+                let mut state = self.state.lock().unwrap();
+                if state.released {
+                    Poll::Ready(())
+                } else {
+                    state.wakers.push(context.waker().clone());
+                    Poll::Pending
+                }
+            })
+            .await;
+            Ok(SecretServiceLeaseInspection {
+                state: CredentialLeaseState::Active,
+                source_version: metadata.source_version,
+                rotation_generation: metadata.rotation_generation,
+                expires_at_unix_ms: metadata.expires_at_unix_ms,
+            })
+        })
+    }
+
+    fn refresh_lease(
+        &self,
+        _lease: &SecretServiceLeaseRef,
+    ) -> SecretServiceFuture<'_, SecretServiceLeaseRenewal> {
+        Box::pin(async { panic!("unexpected refresh") })
+    }
+
+    fn revoke_lease(
+        &self,
+        _lease: &SecretServiceLeaseRef,
+    ) -> SecretServiceFuture<'_, SecretServiceLeaseRevocation> {
+        self.revoke_calls.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async { Ok(SecretServiceLeaseRevocation::Revoked) })
     }
 }
 
@@ -257,4 +504,5 @@ fn provider_with_port(
     )
     .unwrap()
     .construct()
+    .expect("test provider authority must be constructible")
 }

@@ -3,11 +3,12 @@
 use d2b_contracts::v3::credential::{
     CredentialAuthorization, CredentialLeaseState, CredentialMethod, CredentialOutcomeCode,
     CredentialProvider, CredentialRequest, CredentialResponse, CredentialServiceError,
-    CredentialServiceErrorCode, CredentialSessionKey, DeliveryResponse, MetadataResponse,
+    CredentialServiceErrorCode, DeliveryResponse, MetadataResponse,
 };
 
 use crate::{
     LeaseRecord, SecretServiceCredentialProvider, SecretServiceLeaseRef, SecretServiceLeaseRequest,
+    SessionKey,
 };
 
 impl CredentialProvider for SecretServiceCredentialProvider {
@@ -17,7 +18,8 @@ impl CredentialProvider for SecretServiceCredentialProvider {
         request: &CredentialRequest,
         authorization: &CredentialAuthorization,
     ) -> Result<CredentialResponse, CredentialServiceError> {
-        let session_key = self.authorize_session(authorization)?;
+        let _lifecycle = self.mutation_guard()?;
+        let session_key = self.authorize_session_locked(authorization)?;
         match method {
             CredentialMethod::AcquireToken => self.acquire(request, authorization, session_key),
             CredentialMethod::RefreshToken => self.refresh(request, authorization, session_key),
@@ -35,14 +37,13 @@ impl SecretServiceCredentialProvider {
         &self,
         request: &CredentialRequest,
         authorization: &CredentialAuthorization,
-        session_key: CredentialSessionKey,
+        session_key: SessionKey,
     ) -> Result<CredentialResponse, CredentialServiceError> {
         let delivery = authorization
             .delivery_session_params()
             .cloned()
             .ok_or_else(invariant)?;
         let deadline = Self::operation_deadline(request.deadline_unix_ms())?;
-        let _mutation = self.mutation_guard()?;
         let key = request.credential_ref().to_canonical_string();
         let lease_key = (session_key, key.clone());
         {
@@ -87,14 +88,13 @@ impl SecretServiceCredentialProvider {
         &self,
         request: &CredentialRequest,
         authorization: &CredentialAuthorization,
-        session_key: CredentialSessionKey,
+        session_key: SessionKey,
     ) -> Result<CredentialResponse, CredentialServiceError> {
         let delivery = authorization
             .delivery_session_params()
             .cloned()
             .ok_or_else(invariant)?;
         let deadline = Self::operation_deadline(request.deadline_unix_ms())?;
-        let _mutation = self.mutation_guard()?;
         let key = request.credential_ref().to_canonical_string();
         let lease_key = (session_key, key);
         let current = self
@@ -135,10 +135,9 @@ impl SecretServiceCredentialProvider {
     fn revoke(
         &self,
         request: &CredentialRequest,
-        session_key: CredentialSessionKey,
+        session_key: SessionKey,
     ) -> Result<CredentialResponse, CredentialServiceError> {
         let deadline = Self::operation_deadline(request.deadline_unix_ms())?;
-        let _mutation = self.mutation_guard()?;
         let key = request.credential_ref().to_canonical_string();
         let lease_key = (session_key, key);
         let mut leases = self.leases.lock().map_err(|_| invariant())?;
@@ -168,7 +167,7 @@ impl SecretServiceCredentialProvider {
     fn inspect(
         &self,
         request: &CredentialRequest,
-        session_key: CredentialSessionKey,
+        session_key: SessionKey,
     ) -> Result<CredentialResponse, CredentialServiceError> {
         let deadline = Self::operation_deadline(request.deadline_unix_ms())?;
         let key = request.credential_ref().to_canonical_string();
@@ -201,9 +200,78 @@ impl SecretServiceCredentialProvider {
         &self,
         authorization: &CredentialAuthorization,
     ) -> Result<(), CredentialServiceError> {
-        let session_key = self.authorize_session(authorization)?;
-        let _mutation = self.mutation_guard()?;
+        let _mutation = self.blocking_mutation_guard()?;
+        let session_key = self.session_capability(authorization)?.session_key();
+        if !self
+            .sessions
+            .lock()
+            .map_err(|_| invariant())?
+            .contains_key(&session_key)
+        {
+            self.discard_session_key(session_key)?;
+            return Ok(());
+        }
         let deadline = Self::operation_deadline(1_000)?;
+        self.close_session_locked(session_key, deadline)
+    }
+
+    /// Finalize one admitted session using the same revocation semantics as a
+    /// transport disconnect, then prevent further capability minting.
+    pub fn finalize_session(
+        &self,
+        authorization: &CredentialAuthorization,
+    ) -> Result<(), CredentialServiceError> {
+        let _mutation = self.blocking_mutation_guard()?;
+        self.session_capability(authorization)?;
+        self.finalized
+            .store(true, std::sync::atomic::Ordering::Release);
+        self.close_all_sessions_locked(Self::operation_deadline(1_000)?)?;
+        self.authority.clear().map_err(|_| invariant())?;
+        Ok(())
+    }
+
+    /// Finalize every admitted session and prevent later capability minting.
+    pub fn drain(&self) -> Result<(), CredentialServiceError> {
+        let _mutation = self.blocking_mutation_guard()?;
+        self.finalized
+            .store(true, std::sync::atomic::Ordering::Release);
+        let keys = self
+            .sessions
+            .lock()
+            .map_err(|_| invariant())?
+            .keys()
+            .copied()
+            .collect::<Vec<_>>();
+        let deadline = Self::operation_deadline(1_000)?;
+        for session_key in keys {
+            self.close_session_locked(session_key, deadline)?;
+        }
+        self.authority.clear().map_err(|_| invariant())?;
+        Ok(())
+    }
+
+    fn close_all_sessions_locked(
+        &self,
+        deadline: std::time::Instant,
+    ) -> Result<(), CredentialServiceError> {
+        let keys = self
+            .sessions
+            .lock()
+            .map_err(|_| invariant())?
+            .keys()
+            .copied()
+            .collect::<Vec<_>>();
+        for session_key in keys {
+            self.close_session_locked(session_key, deadline)?;
+        }
+        Ok(())
+    }
+
+    fn close_session_locked(
+        &self,
+        session_key: SessionKey,
+        deadline: std::time::Instant,
+    ) -> Result<(), CredentialServiceError> {
         let records = self
             .leases
             .lock()
@@ -224,33 +292,16 @@ impl SecretServiceCredentialProvider {
             Self::poll_port(self.port.revoke_lease(&lease), deadline)?;
         }
 
-        let mut leases = self.leases.lock().map_err(|_| invariant())?;
-        for ((key, _), record) in leases.iter_mut() {
-            if *key == session_key && record.metadata.state == CredentialLeaseState::Active {
-                record.metadata.state = CredentialLeaseState::Revoked;
-                record.metadata.outcome = CredentialOutcomeCode::Revoked;
-            }
-        }
-        drop(leases);
-
-        let capability = authorization.session_capability().ok_or_else(|| {
-            CredentialServiceError::new(CredentialServiceErrorCode::OperationDenied)
-        })?;
-        capability.release().map_err(|_| invariant())?;
+        self.leases
+            .lock()
+            .map_err(|_| invariant())?
+            .retain(|(key, _), _| *key != session_key);
+        self.release_session_key(session_key)?;
         self.sessions
             .lock()
             .map_err(|_| invariant())?
             .remove(&session_key);
         Ok(())
-    }
-
-    /// Finalize one admitted session using the same revocation semantics as a
-    /// transport disconnect.
-    pub fn finalize_session(
-        &self,
-        authorization: &CredentialAuthorization,
-    ) -> Result<(), CredentialServiceError> {
-        self.disconnect(authorization)
     }
 }
 

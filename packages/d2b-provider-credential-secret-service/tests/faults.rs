@@ -97,7 +97,8 @@ fn port_call_stops_at_request_deadline() {
         port.clone(),
     )
     .unwrap()
-    .construct();
+    .construct()
+    .expect("test provider authority must be constructible");
     let server = ProviderHarness::new(provider, Admission);
     let (result_tx, result_rx) = mpsc::channel();
     thread::spawn(move || {

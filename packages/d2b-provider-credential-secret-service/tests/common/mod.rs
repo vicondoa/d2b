@@ -6,9 +6,8 @@ use std::sync::{Arc, Mutex};
 use d2b_contracts::v3::credential::{
     AudienceToken, CredentialAuthorization, CredentialLeaseHandle, CredentialLeaseState,
     CredentialMethod, CredentialProvider, CredentialRequest, CredentialResponse,
-    CredentialServiceError, CredentialSessionCapability, CredentialSourceVersion,
-    DeliveryRouteDigest, DeliverySessionParams, OperationClass, PlacementBinding,
-    dispatch_authorized_provider,
+    CredentialServiceError, CredentialSourceVersion, DeliveryRouteDigest, DeliverySessionParams,
+    OperationClass, PlacementBinding, dispatch_authorized_provider,
 };
 use d2b_contracts::v3::{ResourceGeneration, ResourceRef, ResourceUid, ZoneId};
 use d2b_provider_credential_secret_service::{
@@ -16,7 +15,7 @@ use d2b_provider_credential_secret_service::{
     SecretServiceCredentialProviderFactory, SecretServiceFuture, SecretServiceLeaseGrant,
     SecretServiceLeaseInspection, SecretServiceLeaseRef, SecretServiceLeaseRenewal,
     SecretServiceLeaseRequest, SecretServiceLeaseRevocation, SecretServicePlacement,
-    SecretServicePortError, SecretServiceState,
+    SecretServicePortError, SecretServiceSessionCapability, SecretServiceState,
 };
 
 pub const EXPIRY: u64 = 20_000;
@@ -153,7 +152,12 @@ pub fn setup(max_leases: u32) -> (SecretServiceCredentialProvider, Arc<FakeOo7Po
         port.clone(),
     )
     .unwrap();
-    (factory.construct(), port)
+    (
+        factory
+            .construct()
+            .expect("test provider authority must be constructible"),
+        port,
+    )
 }
 
 pub fn request(idempotency: &str) -> CredentialRequest {
@@ -212,11 +216,11 @@ impl TestAdmission for Admission {
 }
 
 pub trait SessionCapabilitySource {
-    fn test_session_capability(&self) -> CredentialSessionCapability;
+    fn test_session_capability(&self) -> SecretServiceSessionCapability;
 }
 
 impl SessionCapabilitySource for SecretServiceCredentialProvider {
-    fn test_session_capability(&self) -> CredentialSessionCapability {
+    fn test_session_capability(&self) -> SecretServiceSessionCapability {
         self.issue_session_capability(ResourceGeneration::new(1).unwrap())
             .expect("test provider must issue its placement-bound capability")
     }
@@ -225,7 +229,7 @@ impl SessionCapabilitySource for SecretServiceCredentialProvider {
 pub struct ProviderHarness<P, A> {
     provider: P,
     admission: A,
-    capability: Arc<CredentialSessionCapability>,
+    capability: Arc<SecretServiceSessionCapability>,
 }
 
 impl<P, A> ProviderHarness<P, A>
@@ -249,7 +253,7 @@ where
         let authorization = self
             .admission
             .authorize(method, &request)?
-            .with_shared_session_capability(self.capability.clone());
+            .with_shared_session_proof(self.capability.clone());
         dispatch_authorized_provider(&self.provider, method, &request, &authorization)
     }
 }

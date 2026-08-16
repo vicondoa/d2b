@@ -2,7 +2,7 @@ mod common;
 
 use d2b_contracts::v3::credential::{
     CredentialAuthorization, CredentialMethod, CredentialProvider, CredentialServiceErrorCode,
-    CredentialSessionAuthority, PlacementBinding, dispatch_authorized_provider,
+    PlacementBinding, dispatch_authorized_provider,
 };
 use d2b_contracts::v3::{ResourceGeneration, ResourceRef, ZoneId};
 use d2b_provider_credential_secret_service::{
@@ -43,13 +43,12 @@ fn one_session_capability_rejects_clone_replay_and_disconnects_owned_lease() {
     let capability = provider
         .issue_session_capability(ResourceGeneration::new(1).unwrap())
         .unwrap();
-    let cloned_capability = capability.clone();
     let authorization = CredentialAuthorization::new(
         CredentialMethod::AcquireToken,
         Some(delivery(CredentialMethod::AcquireToken, 1)),
     )
     .unwrap()
-    .with_session_capability(capability);
+    .with_session_proof(capability);
     dispatch_authorized_provider(
         &provider,
         CredentialMethod::AcquireToken,
@@ -72,24 +71,7 @@ fn one_session_capability_rejects_clone_replay_and_disconnects_owned_lease() {
     )
     .unwrap();
 
-    let cloned_authorization = CredentialAuthorization::new(
-        CredentialMethod::AcquireToken,
-        Some(delivery(CredentialMethod::AcquireToken, 2)),
-    )
-    .unwrap()
-    .with_session_capability(cloned_capability);
-    assert_eq!(
-        provider
-            .dispatch(
-                CredentialMethod::AcquireToken,
-                &request("clone-replay"),
-                &cloned_authorization,
-            )
-            .unwrap_err()
-            .code(),
-        CredentialServiceErrorCode::OperationDenied
-    );
-
+    provider.disconnect(&authorization).unwrap();
     provider.disconnect(&authorization).unwrap();
     assert_eq!(
         port.revoke_calls.load(std::sync::atomic::Ordering::SeqCst),
@@ -109,9 +91,143 @@ fn one_session_capability_rejects_clone_replay_and_disconnects_owned_lease() {
 }
 
 #[test]
-fn wrong_zone_and_workload_capabilities_are_refused() {
+fn foreign_exact_match_authority_is_refused() {
     let (provider, _) = setup(64);
-    let authority = CredentialSessionAuthority::new();
+    let (foreign_provider, _) = setup(64);
+    let authorization = CredentialAuthorization::new(
+        CredentialMethod::AcquireToken,
+        Some(delivery(CredentialMethod::AcquireToken, 1)),
+    )
+    .unwrap()
+    .with_session_proof(
+        foreign_provider
+            .issue_session_capability(ResourceGeneration::new(1).unwrap())
+            .unwrap(),
+    );
+    assert_eq!(
+        provider
+            .dispatch(
+                CredentialMethod::AcquireToken,
+                &request("foreign-authority"),
+                &authorization,
+            )
+            .unwrap_err()
+            .code(),
+        CredentialServiceErrorCode::OperationDenied
+    );
+}
+
+#[test]
+fn absent_consumer_uses_only_the_canonical_provider_reference() {
+    let port = std::sync::Arc::new(common::FakeOo7Port::new());
+    let provider = SecretServiceCredentialProviderFactory::new(
+        SecretServiceConfig::new("login collection", 64, LockPolicy::FailClosed).unwrap(),
+        SecretServicePlacement::new(
+            ZoneId::parse("user-zone").unwrap(),
+            PlacementBinding::UserAgent,
+            ResourceRef::parse("Host/workstation").unwrap(),
+            ResourceRef::parse("User/alice").unwrap(),
+        )
+        .unwrap(),
+        None,
+        port,
+    )
+    .unwrap()
+    .construct()
+    .expect("test provider authority must be constructible");
+    assert_eq!(
+        provider.consumer_ref().to_canonical_string(),
+        d2b_provider_credential_secret_service::PROVIDER_REF
+    );
+    let own_authorization = CredentialAuthorization::new(
+        CredentialMethod::AcquireToken,
+        Some(delivery(CredentialMethod::AcquireToken, 1)),
+    )
+    .unwrap()
+    .with_session_proof(
+        provider
+            .issue_session_capability(ResourceGeneration::new(1).unwrap())
+            .unwrap(),
+    );
+    provider
+        .dispatch(
+            CredentialMethod::AcquireToken,
+            &request("canonical-consumer"),
+            &own_authorization,
+        )
+        .unwrap();
+    let (_, foreign_port) = setup(64);
+    let authorization = CredentialAuthorization::new(
+        CredentialMethod::AcquireToken,
+        Some(delivery(CredentialMethod::AcquireToken, 1)),
+    )
+    .unwrap()
+    .with_session_proof(
+        SecretServiceCredentialProviderFactory::new(
+            SecretServiceConfig::new("login collection", 64, LockPolicy::FailClosed).unwrap(),
+            SecretServicePlacement::new(
+                ZoneId::parse("user-zone").unwrap(),
+                PlacementBinding::UserAgent,
+                ResourceRef::parse("Host/workstation").unwrap(),
+                ResourceRef::parse("User/alice").unwrap(),
+            )
+            .unwrap(),
+            Some(ResourceRef::parse("Provider/shell-terminal").unwrap()),
+            foreign_port,
+        )
+        .unwrap()
+        .construct()
+        .expect("foreign provider authority must be constructible")
+        .issue_session_capability(ResourceGeneration::new(1).unwrap())
+        .unwrap(),
+    );
+    assert_eq!(
+        provider
+            .dispatch(
+                CredentialMethod::AcquireToken,
+                &request("consumer-none"),
+                &authorization,
+            )
+            .unwrap_err()
+            .code(),
+        CredentialServiceErrorCode::OperationDenied
+    );
+}
+
+#[test]
+fn provider_generation_is_checked_before_admission() {
+    let port = std::sync::Arc::new(common::FakeOo7Port::new());
+    let provider = SecretServiceCredentialProviderFactory::new(
+        SecretServiceConfig::new("login collection", 64, LockPolicy::FailClosed).unwrap(),
+        SecretServicePlacement::new(
+            ZoneId::parse("user-zone").unwrap(),
+            PlacementBinding::UserAgent,
+            ResourceRef::parse("Host/workstation").unwrap(),
+            ResourceRef::parse("User/alice").unwrap(),
+        )
+        .unwrap(),
+        Some(ResourceRef::parse("Provider/shell-terminal").unwrap()),
+        port,
+    )
+    .unwrap()
+    .with_generation(ResourceGeneration::new(2).unwrap())
+    .construct()
+    .expect("test provider authority must be constructible");
+    assert!(
+        provider
+            .issue_session_capability(ResourceGeneration::new(1).unwrap())
+            .is_err()
+    );
+    assert!(
+        provider
+            .issue_session_capability(ResourceGeneration::new(2).unwrap())
+            .is_ok()
+    );
+}
+
+#[test]
+fn foreign_bindings_are_refused() {
+    let (provider, _) = setup(64);
     for (zone, workload, consumer, subject) in [
         (
             "other-zone",
@@ -138,21 +254,23 @@ fn wrong_zone_and_workload_capabilities_are_refused() {
             "User/bob",
         ),
     ] {
-        let capability = authority
-            .issue(
-                ZoneId::parse(zone).unwrap(),
-                ResourceRef::parse(workload).unwrap(),
-                ResourceRef::parse(subject).unwrap(),
-                ResourceRef::parse(consumer).unwrap(),
-                ResourceGeneration::new(1).unwrap(),
-            )
-            .unwrap();
+        let foreign = provider_for_binding(
+            ZoneId::parse(zone).unwrap(),
+            ResourceRef::parse(workload).unwrap(),
+            ResourceRef::parse(subject).unwrap(),
+            ResourceRef::parse(consumer).unwrap(),
+            std::sync::Arc::new(common::FakeOo7Port::new()),
+        );
         let authorization = CredentialAuthorization::new(
             CredentialMethod::AcquireToken,
             Some(delivery(CredentialMethod::AcquireToken, 1)),
         )
         .unwrap()
-        .with_session_capability(capability);
+        .with_session_proof(
+            foreign
+                .issue_session_capability(ResourceGeneration::new(1).unwrap())
+                .unwrap(),
+        );
         assert_eq!(
             provider
                 .dispatch(
@@ -195,13 +313,13 @@ fn disconnect_revokes_only_the_owned_workload_leases() {
         Some(delivery(CredentialMethod::AcquireToken, 1)),
     )
     .unwrap()
-    .with_shared_session_capability(first_capability.clone());
+    .with_shared_session_proof(first_capability.clone());
     let second_auth = CredentialAuthorization::new(
         CredentialMethod::AcquireToken,
         Some(delivery(CredentialMethod::AcquireToken, 1)),
     )
     .unwrap()
-    .with_shared_session_capability(second_capability.clone());
+    .with_shared_session_proof(second_capability.clone());
 
     dispatch_authorized_provider(
         &first,
@@ -221,7 +339,7 @@ fn disconnect_revokes_only_the_owned_workload_leases() {
     first.disconnect(&first_auth).unwrap();
     let second_inspect_auth = CredentialAuthorization::new(CredentialMethod::InspectMetadata, None)
         .unwrap()
-        .with_shared_session_capability(second_capability);
+        .with_shared_session_proof(second_capability);
     dispatch_authorized_provider(
         &second,
         CredentialMethod::InspectMetadata,
@@ -240,23 +358,77 @@ fn disconnect_revokes_only_the_owned_workload_leases() {
     );
 }
 
+#[test]
+fn finalize_releases_leases_and_prevents_later_minting() {
+    let (provider, port) = setup(64);
+    let capability = provider
+        .issue_session_capability(ResourceGeneration::new(1).unwrap())
+        .unwrap();
+    let authorization = CredentialAuthorization::new(
+        CredentialMethod::AcquireToken,
+        Some(delivery(CredentialMethod::AcquireToken, 1)),
+    )
+    .unwrap()
+    .with_session_proof(capability);
+    provider
+        .dispatch(
+            CredentialMethod::AcquireToken,
+            &request("finalize"),
+            &authorization,
+        )
+        .unwrap();
+    provider.finalize_session(&authorization).unwrap();
+    provider.finalize_session(&authorization).unwrap();
+    assert!(
+        provider
+            .issue_session_capability(ResourceGeneration::new(1).unwrap())
+            .is_err()
+    );
+    assert_eq!(
+        provider
+            .dispatch(
+                CredentialMethod::InspectMetadata,
+                &request("after-finalize"),
+                &authorization,
+            )
+            .unwrap_err()
+            .code(),
+        CredentialServiceErrorCode::OperationDenied
+    );
+    assert_eq!(
+        port.revoke_calls.load(std::sync::atomic::Ordering::SeqCst),
+        1
+    );
+}
+
 fn provider_for(
     zone: ZoneId,
     workload: ResourceRef,
     port: std::sync::Arc<FakeOo7Port>,
 ) -> SecretServiceCredentialProvider {
+    provider_for_binding(
+        zone,
+        workload,
+        ResourceRef::parse("User/alice").unwrap(),
+        ResourceRef::parse("Provider/shell-terminal").unwrap(),
+        port,
+    )
+}
+
+fn provider_for_binding(
+    zone: ZoneId,
+    workload: ResourceRef,
+    subject: ResourceRef,
+    consumer: ResourceRef,
+    port: std::sync::Arc<FakeOo7Port>,
+) -> SecretServiceCredentialProvider {
     SecretServiceCredentialProviderFactory::new(
         SecretServiceConfig::new("login collection", 64, LockPolicy::FailClosed).unwrap(),
-        SecretServicePlacement::new(
-            zone,
-            PlacementBinding::UserAgent,
-            workload,
-            ResourceRef::parse("User/alice").unwrap(),
-        )
-        .unwrap(),
-        Some(ResourceRef::parse("Provider/shell-terminal").unwrap()),
+        SecretServicePlacement::new(zone, PlacementBinding::UserAgent, workload, subject).unwrap(),
+        Some(consumer),
         port,
     )
     .unwrap()
     .construct()
+    .expect("test provider authority must be constructible")
 }
