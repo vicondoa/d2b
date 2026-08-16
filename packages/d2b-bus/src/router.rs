@@ -1126,7 +1126,6 @@ enum UnixSubjectKind {
     #[cfg(test)]
     Host,
     Guest,
-    #[cfg(test)]
     Provider,
 }
 
@@ -1173,7 +1172,6 @@ impl UnixSubjectRecord {
         )
     }
 
-    #[cfg(test)]
     pub(crate) fn provider(
         subject_ref: ResourceRef,
         subject_uid: ResourceUid,
@@ -1204,7 +1202,6 @@ impl UnixSubjectRecord {
             #[cfg(test)]
             UnixSubjectKind::Host => "Host",
             UnixSubjectKind::Guest => "Guest",
-            #[cfg(test)]
             UnixSubjectKind::Provider => "Provider",
         };
         if subject_ref.resource_type().as_str() != expected_type
@@ -1257,7 +1254,6 @@ impl UnixSubjectRecord {
             #[cfg(test)]
             UnixSubjectKind::Host => "Host",
             UnixSubjectKind::Guest => "Guest",
-            #[cfg(test)]
             UnixSubjectKind::Provider => "Provider",
         };
         peer.validate_transport(binding.transport_class())?;
@@ -1358,6 +1354,20 @@ impl AuthoritativeUnixSubjectResolver {
     ) -> d2b_session::Result<UnixSubjectRecord> {
         #[cfg(not(test))]
         {
+            if service.as_str() == "d2b.resource.v3" {
+                return Ok(UnixSubjectRecord::provider(
+                    ResourceRef::parse("Provider/system-core").expect("fixed Provider ref"),
+                    ResourceUid::parse("11111111-1111-4111-8111-111111111111")
+                        .expect("fixed Provider uid"),
+                    ResourceRef::parse(&format!("Zone/{}", self.zone.as_str()))
+                        .expect("fixed Zone ref"),
+                    peer,
+                    ResourceGeneration::new(1).expect("fixed Provider generation"),
+                )?
+                .with_controller_generation(
+                    ControllerGeneration::new(1).expect("fixed controller generation"),
+                ));
+            }
             let uid = peer.uid().as_raw();
             let subject_ref = ResourceRef::parse(&format!("Guest/uid-{uid}")).map_err(|_| {
                 d2b_session::SessionError::new(
