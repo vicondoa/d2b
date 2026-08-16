@@ -164,7 +164,10 @@ launched tools.host.d2b item browser (committed)
 
 ### `list`
 
-**Synopsis:** `d2b list <RESOURCE_TYPE> [--zone <ZONE>] [--human|--json]`
+**Synopsis:** `d2b resource list <RESOURCE_TYPE> [--zone <ZONE>] [--human|--json]`
+
+`d2b list <RESOURCE_TYPE>` remains a compatibility alias for this same
+Resource API request; it does not use a legacy inventory fallback.
 
 **Flags**
 

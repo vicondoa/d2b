@@ -178,17 +178,20 @@ driver mutation.
 The daemon accepts the compatibility Resource envelope as
 `type: "resourceRequest"` with a `service`, `method`, and `zoneRef`. The
 `zoneRef` is checked against the authoritative Zone index and is never treated
-as a capability or a caller-selected store path. Requests fail closed on route
-mismatch, malformed service/method, missing readiness, or missing authenticated
-subject.
+as a capability or a caller-selected store path. The public `Get` and `List`
+methods bind the admitted local peer's `SO_PEERCRED` uid into a request-scoped
+ComponentSession subject before invoking the Resource API. The uid is not
+accepted from the JSON envelope, and the session transport/transcript binding
+is checked by the live authorizer.
 
 Opening a broker-owned Zone descriptor is not sufficient to publish the public
 Resource API. A Zone must have a valid redb store, an installed policy and
-Resource API, an authenticated local ComponentSession, a configured trusted
+Resource API, an admitted local ComponentSession, a configured trusted
 Provider path, recovered Host-global authority, and ready system-core Host/User
-handlers. The public compatibility `get`/`list` helpers reject unbound
-callers, while typed shell requests use the separately registered authenticated
-Resource path.
+handlers. Route mismatch, malformed service/method, missing readiness, missing
+policy, or an unauthorized peer returns a typed failure; there is no legacy
+inventory fallback. The public CLI list response is the v3 envelope with
+`resources`, `snapshotRevision`, and `truncated`.
 
 Provider lifecycle requests are admitted by the shared v3 Provider registry and
 then cross a typed effect port. The registry refuses an invalid catalog rather

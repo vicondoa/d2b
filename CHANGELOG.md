@@ -625,6 +625,11 @@ deprecations ship one minor release before removal.
   reasons, the measurements, and the several plausible fixes that proved inert.
 - Added typed Volume storage providers for anchored layouts, bounded quotas,
   snapshots, TPM-safe state, and private virtiofs exports.
+- Added authenticated Zone Resource API lifecycle coverage for Volume, Network,
+  Device TPM, and Cloud Hypervisor Guest resources, including dependency-aware
+  readiness, daemon-restart adoption, and dependency-safe removal.
+- Added logical resource-store backup validation before schema migration and
+  restore checks that preserve resource identity and retained TPM state.
 
 ### Changed
 

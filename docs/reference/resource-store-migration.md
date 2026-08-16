@@ -40,10 +40,12 @@ publication and validation have completed.
 ## Upgrade
 
 The registered chain is explicit and finite. The current physical schema is
-version `1`; the only supported prior version is version `0`, whose table and
-value assignments are unchanged but whose metadata version is not yet
-explicit. The `0 -> 1` step copies every row into a new staged database and
-updates only the staged metadata record before current-schema validation.
+version `2`; supported upgrades are `0 -> 1 -> 2`. Version `0` has an
+unversioned metadata record, and version `1` adds the authority lifecycle
+shape. Each step copies rows into a new staged database and updates only the
+staged metadata before current-schema validation. The public
+`upgrade_owned_after_backup` entry point consumes an identity-validated
+logical backup first, so a schema advance cannot bypass the recovery boundary.
 
 Versions that are unknown or absent from the registered chain return
 `upgrade-required` before staging. No migration guesses a conversion from an
@@ -51,9 +53,10 @@ unapproved version.
 
 Logical restore does not provide a downgrade path. A backup whose physical
 schema is older than the current registered schema is rejected with
-`upgrade-required` before publication; it must be regenerated or explicitly
-advanced through a supported migration before it can be restored. No live
-runtime is adopted from an older or partially converted image.
+`upgrade-required` before staging or publication; it must be regenerated or
+explicitly advanced through a supported migration before it can be restored.
+Older binaries are not supported as a downgrade mechanism, and no live runtime
+is adopted from an older or partially converted image.
 
 ## Crash recovery
 

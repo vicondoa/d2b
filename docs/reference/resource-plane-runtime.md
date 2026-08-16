@@ -31,14 +31,23 @@ The status projection is emitted by the fixed system-core emitter. It contains
 one `system-core-host` and one `system-core-user` handler record; missing,
 duplicate, or `ProviderLifecycle` substitutions are refused.
 
+The Wave 6 accounting contract is checked by
+`policy_wave6_manifest.rs`. It contains all 258 Provider and integration work
+items from the 27 Provider dossiers, maps each item once to a canonical
+foundation or Provider package, and requires named validation and removal
+proof. Dossier `Planned` labels are retained as source history only; they
+cannot make an incomplete accounting row pass.
+
 ## Requests and authorization
 
 The daemon resolves a request's `zoneRef` against its authoritative resource
 plane. The field is a route assertion, not an authority or a way to select a
 different store. Route, service, method, and readiness failures are typed.
-The compatibility `get` and `list` helpers reject unbound callers, and the
-public compatibility Resource route returns an authentication-unavailable
-envelope until an authenticated ComponentSession subject is registered.
+Public `Get` and `List` requests bind the admitted local peer's `SO_PEERCRED`
+uid into a request-scoped authenticated ComponentSession subject before
+calling the same Resource API client used by the registered session path.
+The uid is never accepted from the request envelope; it is included in the
+transport and transcript bindings checked by the authorizer.
 There is no fixed daemon-owned Provider identity and no public fallback to a
 static manifest, SSH, a raw broker request, a caller-supplied path, or a
 provider override.
@@ -92,6 +101,12 @@ publishes only after current-schema and row-integrity validation. Restore
 preserves each ResourceRef, UID, generation, canonical JSON, and payload
 digest; the restored store keeps the same store identity and advances
 `backup_generation`. Runtime adoption occurs only after that publication.
+
+When a live legacy TPM adoption is requested, the production Device admission
+path first captures this logical backup and refuses the adoption if capture
+fails. Physical schema advancement uses the equivalent
+`upgrade_owned_after_backup` boundary, which consumes an identity-validated
+backup before staging.
 
 Logical restore does not support schema downgrade. A backup whose physical
 schema is not the current registered schema returns `upgrade-required` before
