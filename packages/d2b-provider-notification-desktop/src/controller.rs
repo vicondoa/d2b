@@ -1,11 +1,11 @@
 //! Process placement controller for desktop notification components.
 
 use crate::SessionEvidence;
-use d2b_contracts::v3::{EvidenceClass, Locality, ResourceRef, ZoneId};
 use crate::{
     NotificationHostSinkIdentity, NotificationLifecyclePlan, NotificationLifecycleReceipt,
     NotificationSourceIdentity,
 };
+use d2b_contracts::v3::{EvidenceClass, Locality, ResourceRef, ZoneId};
 use d2b_provider_toolkit::AuthenticatedSessionRouteBinding;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
