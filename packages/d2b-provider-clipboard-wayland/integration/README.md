@@ -1,7 +1,7 @@
 # Integration fixtures
 
-This directory reserves the integration fixture surface for
-`Provider/clipboard-wayland`. The current crate root has no executable
-integration behavior. The placeholder scenario declaration is required by the
-repository layout policy; replace it with the dossier's real fixture when
-implementation lands.
+The clipboard integration lane uses fake display host-clipboard and bridge
+services. It covers host capture, Guest capture, picker coordination,
+backpressure, FD rejection, audit queue pressure, Guest lock/destroy purge,
+host-only mode, and cross-Zone denial. No live compositor, filesystem bridge,
+or D-Bus address is used.

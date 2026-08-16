@@ -230,9 +230,11 @@ zone_closed_enum!(
     /// The closed service package a v3 Zone session carries.
     ///
     /// Tags 1 through 6 are preserved from the component-session assignment.
-    /// Tags 7 and 8 are the appended Zone service packages. Protobuf field
-    /// numbers for the v3 services are frozen independently of the v2
-    /// assignments and are not restated by this module.
+    /// Tags 7 and 8 are the appended Zone service packages. Tags 9 through
+    /// 13 carry the interaction Provider packages shared with
+    /// ComponentSession. Protobuf field numbers for the v3 services are
+    /// frozen independently of the v2 assignments and are not restated by
+    /// this module.
     ServicePackage {
         /// `d2b.resource.v3.ResourceService`.
         ResourceV3 = 1 => "d2b.resource.v3",
@@ -250,6 +252,16 @@ zone_closed_enum!(
         ZoneV3 = 7 => "d2b.zone.v3",
         /// The ZoneLink carriage service package.
         ZoneLinkV3 = 8 => "d2b.zonelink.v3",
+        /// The Wayland display Provider package.
+        DisplayV3 = 9 => "d2b.display.v3",
+        /// The Wayland clipboard Provider package.
+        ClipboardV3 = 10 => "d2b.clipboard.v3",
+        /// The Wayland clipboard bridge package.
+        ClipboardBridgeV3 = 11 => "d2b.clipboard.bridge.v3",
+        /// The Wayland clipboard picker-coordination package.
+        ClipboardPickerCoordV3 = 12 => "d2b.clipboard.picker-coord.v3",
+        /// The desktop notification Provider package.
+        NotificationV3 = 13 => "d2b.notification.v3",
     }
 );
 
@@ -370,6 +382,19 @@ mod tests {
         (ServicePackage::CredentialV3, 6, "d2b.credential.v3"),
         (ServicePackage::ZoneV3, 7, "d2b.zone.v3"),
         (ServicePackage::ZoneLinkV3, 8, "d2b.zonelink.v3"),
+        (ServicePackage::DisplayV3, 9, "d2b.display.v3"),
+        (ServicePackage::ClipboardV3, 10, "d2b.clipboard.v3"),
+        (
+            ServicePackage::ClipboardBridgeV3,
+            11,
+            "d2b.clipboard.bridge.v3",
+        ),
+        (
+            ServicePackage::ClipboardPickerCoordV3,
+            12,
+            "d2b.clipboard.picker-coord.v3",
+        ),
+        (ServicePackage::NotificationV3, 13, "d2b.notification.v3"),
     ];
 
     #[test]
@@ -468,7 +493,7 @@ mod tests {
             Err(BinaryError::UnknownEnumTag)
         );
         assert_eq!(
-            ServicePackage::from_tag(9),
+            ServicePackage::from_tag(14),
             Err(BinaryError::UnknownEnumTag)
         );
     }
