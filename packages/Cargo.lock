@@ -1136,7 +1136,6 @@ dependencies = [
 name = "d2b-host"
 version = "0.0.0-bootstrap"
 dependencies = [
- "async-trait",
  "d2b-contracts",
  "d2b-core",
  "d2b-host-argv",

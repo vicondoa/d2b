@@ -172,7 +172,7 @@ stored directly in Nix:
 | --- | --- | --- |
 | `relay` | `enable`, `mode`, `endpoints`, `credentialRef` | `mode` is `disabled`, `static`, or `discovery`. The default opens no listeners and connects no relays. `credentialRef` must point outside the host Nix store. |
 | `discovery` | `enable`, `domain`, `configRef` | Non-secret discovery metadata. |
-| `policy` | `bundleRef`, `bundlePath`, `defaultDeny` | Policy starts from `defaultDeny = true`. `bundlePath` must be an absolute path when set. |
+| `policy` | `allowUnsafeLocal`, `bundleRef`, `bundlePath` | `bundlePath` must be an absolute path when set. |
 | `keys` | `controllerKeyRef`, `trustBundleRef`, `enrollmentRef`, `rotationPolicyRef` | Opaque references to controller, trust, enrollment, and rotation material held outside Nix expressions. |
 
 Relay identity is transport metadata, not local authorization. Future

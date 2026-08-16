@@ -535,7 +535,7 @@ group = "A"
 make_target = "test-rust"
 tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
-successor_ids = ["tests/golden/pinned/runner-shape-preflight.txt (runner_shape::tests::{ch_help_with_fd_selects_tap_fd,ch_help_without_fd_or_tap_fails_closed}) + tests/tools/assert-pinned-tests.sh - existing primary pin owner; not duplicated", "packages/d2b/tests/cli_contract_coverage.rs::host_cli_error_golden_table_is_closed_and_complete + tests/golden/cli-output/host-check-ch-net-handoff-not-supported.{json,txt} guard the retired golden-envelope ch-net-handoff-not-supported residual", "packages/d2b-contract-tests/tests/policy_contracts.rs::tap_dag_contract_doc_matches_implementation (gated via tests/tools/rust-workspace-checks.sh D2B_FIXTURES contract step; recorded in tests/migration-state.d/tap-dag-contract-doc-eval.toml) guards the retired CreateTapFd broker-wire/docs residual"]
+successor_ids = ["packages/d2b/tests/cli_contract_coverage.rs::host_cli_error_golden_table_is_closed_and_complete + tests/golden/cli-output/host-check-ch-net-handoff-not-supported.{json,txt} guard the retired golden-envelope ch-net-handoff-not-supported residual", "packages/d2b-contract-tests/tests/policy_contracts.rs::tap_dag_contract_doc_matches_implementation (gated via tests/tools/rust-workspace-checks.sh D2B_FIXTURES contract step; recorded in tests/migration-state.d/tap-dag-contract-doc-eval.toml) guards the retired CreateTapFd broker-wire/docs residual"]
 exercised_today = "yes"
 
 [[script]]
@@ -643,7 +643,7 @@ group = "A"
 make_target = "test-rust"
 tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
-successor_ids = ["cargo test --workspace (d2b-host runner_shape::tests::*) - already gated in tests/tools/rust-workspace-checks.sh", "tests/golden/pinned/runner-shape-preflight.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin)"]
+successor_ids = ["packages/d2b-contract-tests/tests/runner_shape_contract.rs (fixture runner-role snapshot; leftover d2b-host runner_shape preflight tests were deleted with the unused module)"]
 exercised_today = "yes"
 
 [[script]]
@@ -976,7 +976,7 @@ group = "H"
 make_target = "test-policy"
 tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
-successor_ids = ["packages/d2b-contract-tests/tests/policy_daemon.rs::stop_dag_reconcile_surface (packages/d2bd/src/supervisor/stop_dag.rs StopDagOwner/ObservedHostState/ReconcileReport/Nftables+Usbip reconcile actions+drift reasons/reconcile_on_restart/reconcile surface, supervisor/mod.rs `pub mod stop_dag;`, broker_wire.rs reuses ApplyNftables/UsbipBind/UsbipUnbind variants with no new *Request type in stop_dag.rs, and docs/reference/stop-dag-reconcile.md marker coverage); gated via the D2B_FIXTURES contract step `cargo test -p d2b-contract-tests` in tests/tools/rust-workspace-checks.sh"]
+successor_ids = ["packages/d2b-contract-tests/tests/policy_daemon.rs::stop_dag_reconcile_surface (leftover StopDagOwner deleted; asserts packages/d2bd/src/supervisor/stop_dag.rs is absent and supervisor/mod.rs has no pub mod stop_dag); gated via the D2B_FIXTURES contract step `cargo test -p d2b-contract-tests` in tests/tools/rust-workspace-checks.sh"]
 exercised_today = "yes"
 
 [[script]]

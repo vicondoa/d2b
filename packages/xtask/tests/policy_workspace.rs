@@ -13,7 +13,6 @@ const INDEPENDENT_WORKSPACE_ROOTS: &[&str] = &[
     "packages/d2b-guest-shell-runner",
     "packages/d2b-priv-broker",
     "packages/d2b-resource-api/tests/ui/external-seals",
-    "packages/d2b-wlproxy-spike",
 ];
 const RUST_DRIVER: &str = "tests/test-rust.sh";
 const RELEASE_WORKFLOW: &str = ".github/workflows/release-host-binaries.yml";

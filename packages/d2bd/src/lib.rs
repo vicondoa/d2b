@@ -128,7 +128,6 @@ pub mod exec_session_real;
 pub mod guest_control_bridge;
 pub mod guest_control_health;
 pub mod guest_control_vsock;
-pub mod realm_access_resolver;
 pub mod supervisor;
 pub mod terminal_session;
 pub mod typed_error;
@@ -238,13 +237,6 @@ pub mod process_provider_runtime;
 pub mod provider_effects;
 pub mod provider_registry;
 pub mod resource_runtime;
-// In-daemon replacement for the
-// `d2b-audit-check.{service,timer}` host singleton + timer that
-// previously sanity-checked broker audit log shape on a daily cadence.
-// Exposes `GET /health/audit-check` on the daemon's HTTP surface and
-// a pure check function suitable for invocation from the supervisor
-// event loop. See `docs/reference/daemon-audit-check.md`.
-pub mod audit_check;
 // Typed, per-busid USBIP state machine that pins the canonical bring-up
 // order
 // `modprobe → lock → withhold → firewall → backend → bind → proxy`
@@ -276,11 +268,6 @@ pub mod concurrency;
 // (`SO_PEERCRED`) authentication. Consumes the hidraw fd handed off by
 // `d2b-priv-broker`'s `OpenHidrawSecurityKey` op via `SCM_RIGHTS`.
 pub mod security_key;
-
-// Compile-only peer-module skeletons wiring the realm
-// provider/router trait surface. NOT called from the running
-// daemon (zero behavior change); see the module docs.
-pub mod realm_stubs;
 
 use typed_error::TypedError;
 

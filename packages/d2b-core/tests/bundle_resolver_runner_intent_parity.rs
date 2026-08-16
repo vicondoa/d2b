@@ -5,9 +5,8 @@ use d2b_core::bundle_resolver::{BundleResolver, ResolvedRunnerIntent};
 use d2b_core::host::HostJson;
 use d2b_core::manifest_v04::ManifestV04;
 use d2b_core::minijail_profile::{CgroupPlacement, MountPolicy, NamespaceSet};
-use d2b_core::process_builder::ProcessNodeBuilder;
 use d2b_core::processes::{
-    ProcessNode, ProcessRole, ProcessesJson, RoleProfile, RoleUserNamespace, VmProcessDag,
+    NodeId, ProcessNode, ProcessRole, ProcessesJson, RoleProfile, RoleUserNamespace, VmProcessDag,
     VmProcessInvariants,
 };
 
@@ -147,13 +146,21 @@ fn runner_node(
     argv: &[&str],
     env: &[&str],
 ) -> ProcessNode {
-    ProcessNodeBuilder::new(role, profile(id))
-        .with_id(id)
-        .with_binary_path(binary_path)
-        .with_argv(argv.iter().copied())
-        .with_env(env.iter().copied())
-        .build()
-        .expect("runner node fixture builds")
+    ProcessNode {
+        id: NodeId(id.to_owned()),
+        execution_ref: None,
+        execution_domain: None,
+        user_ref: None,
+        role,
+        unit: None,
+        binary_path: Some(binary_path.to_owned()),
+        argv: argv.iter().map(|value| (*value).to_owned()).collect(),
+        env: env.iter().map(|value| (*value).to_owned()).collect(),
+        plan_ops: Vec::new(),
+        network_interfaces: Vec::new(),
+        profile: profile(id),
+        readiness: Vec::new(),
+    }
 }
 
 fn runner_nodes() -> Vec<ProcessNode> {
