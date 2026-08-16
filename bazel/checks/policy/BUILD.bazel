@@ -47,6 +47,11 @@ sh_test(
         "//:rust-toolchain.toml",
         "//:tests_root_sources",
     ],
+    env_inherit = ["PATH", "ROOT"],
+    tags = [
+        "local",
+        "no-sandbox",
+    ],
 )
 
 test_suite(

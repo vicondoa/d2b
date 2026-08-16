@@ -505,6 +505,8 @@ net-vm-network/v3-resource-canonical-spec
 net-vm-network/v3-resource-cidr-overlap-rejected
 net-vm-network/v3-resource-cross-zone-bridge-multiplex-rejected
 net-vm-network/v3-resource-duplicate-attachment-index-rejected
+net-vm-network/v3-resource-east-west-both-opt-ins-admitted
+net-vm-network/v3-resource-east-west-site-opt-in-required
 net-vm-network/v3-resource-port-forward-target-mutual-exclusion-rejected
 net-vm-network/v3-resource-provider-package-deployed
 net-vm-network/v3-resource-static-prerequisites-only

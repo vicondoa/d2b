@@ -209,7 +209,7 @@ fn policy_pins_representative_u9_bounds_and_trust_partition() {
     );
     assert_eq!(
         gate.get("eligibilityDigest").and_then(Value::as_str),
-        Some("sha256:3e54856cbb0b16d56c8a5482450ab66b9e725c7141c87d2c47a5ab5c80395898")
+        Some("sha256:62b4a9685445237db70b69d673b35205a1a18d835cf7ce7aed55e0edf43a8813")
     );
     assert_eq!(gate["wholeGraph"]["actionCount"].as_u64(), Some(207));
     assert_eq!(

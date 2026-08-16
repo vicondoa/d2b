@@ -22,6 +22,7 @@ rust_library(
         "src/spec.rs",
     ],
     compile_data = ["Cargo.toml"],
+    crate_features = ["test-support"],
     deps = [
         "//packages/d2b-contracts:d2b_contracts",
         "//packages/d2b-provider-toolkit:d2b_provider_toolkit",

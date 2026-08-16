@@ -4,7 +4,14 @@ set -euo pipefail
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 PROFILE=""
 SCRATCH="${D2B_BAZEL_CHECK_SCRATCH:-$ROOT/.scratch/bazel-check}"
-TARGET_SET="//..."
+# Compile-fail UI suites stay on Cargo; they exceed the default Bazel timeout
+# when many rustc invocations share one worker.
+TARGET_SET=(
+  //...
+  -//packages/d2b-bus/tests/ui/...
+  -//packages/d2b-controller-toolkit/tests/ui/...
+  -//packages/d2b-resource-api/tests/ui/...
+)
 REDACTION_FAILURE_STATUS=75
 CONFIGURATION_FAILURE_STATUS=76
 
@@ -154,6 +161,8 @@ if [ -z "$bazel_bin" ]; then
   fi
 fi
 export D2B_BAZEL_BIN="$bazel_bin"
+export D2B_REPO_ROOT="$ROOT"
+export ROOT
 log="$SCRATCH/$PROFILE.log"
 bep="$SCRATCH/$PROFILE.bep.json"
 
@@ -172,8 +181,14 @@ run_bazel() {
     startup_flags=(--nosystem_rc --nohome_rc)
   fi
   set +e
-  D2B_BAZEL_PROFILE="$profile" "$bazel_bin" "${startup_flags[@]}" test "$TARGET_SET" "--config=$profile" \
-    --repo_contents_cache= "--build_event_json_file=$bep_path" "$@" \
+  D2B_BAZEL_PROFILE="$profile" "$bazel_bin" "${startup_flags[@]}" test "--config=$profile" \
+    --repo_contents_cache= "--build_event_json_file=$bep_path" \
+    --test_tag_filters=-local,-manual,-exclusive,-gpu,-kvm \
+    --test_env=D2B_REPO_ROOT="$ROOT" \
+    --test_env=D2B_BAZEL_BIN="$bazel_bin" \
+    --test_env=BAZEL_SH="${BAZEL_SH:-/bin/bash}" \
+    "$@" \
+    -- "${TARGET_SET[@]}" \
     >"$log_path" 2>&1
   local status=$?
   set -e

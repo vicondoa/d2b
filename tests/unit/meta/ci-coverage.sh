@@ -91,19 +91,7 @@ fi
 bash "$ROOT/tests/tools/layer1-jobs" self-test
 
 mapfile -t local_job_ids < <(
-  awk '
-    /^[[:space:]]*"local":[[:space:]]*\{/ { in_local = 1; next }
-    /^[[:space:]]*"ci":[[:space:]]*\{/ { in_local = 0 }
-    in_local && /"jobs":[[:space:]]*\[/ {
-      line = $0
-      sub(/^.*\[/, "", line)
-      sub(/\].*$/, "", line)
-      while (match(line, /"[^"]+"/)) {
-        print substr(line, RSTART + 1, RLENGTH - 2)
-        line = substr(line, RSTART + RLENGTH)
-      }
-    }
-  ' "$MANIFEST"
+  jq -r '.local.phases[]?.jobs[]?' "$MANIFEST"
 )
 
 if [ "${#local_job_ids[@]}" -eq 0 ]; then

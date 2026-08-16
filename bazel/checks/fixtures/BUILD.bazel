@@ -16,6 +16,7 @@ sh_test(
     env = {
         "D2B_ENABLE_FIXTURE_BUILD": "1",
     },
+    env_inherit = ["PATH", "ROOT"],
     tags = [
         "local",
         "no-sandbox",

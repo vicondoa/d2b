@@ -156,6 +156,24 @@ fn cargo_program() -> std::ffi::OsString {
             .join(relative.strip_prefix("/").unwrap_or(relative))
             .into_os_string();
     }
+    if raw.is_relative() {
+        let mut bases = vec![std::env::current_dir().expect("parity test current directory")];
+        for variable in ["TEST_SRCDIR", "RUNFILES_DIR"] {
+            if let Some(base) = std::env::var_os(variable).map(PathBuf::from) {
+                bases.push(base.clone());
+                if let Some(workspace) = std::env::var_os("TEST_WORKSPACE") {
+                    bases.push(base.join(workspace));
+                }
+                bases.push(base.join("_main"));
+            }
+        }
+        for base in bases {
+            let candidate = base.join(&raw);
+            if candidate.is_file() {
+                return candidate.into_os_string();
+            }
+        }
+    }
     raw.into_os_string()
 }
 
@@ -959,20 +977,23 @@ fn cquery_labels(expression: &str) -> BTreeSet<String> {
 }
 
 fn validate_d2bd_test_support_dependencies(labels: &BTreeSet<String>) {
+    // d2bd's test carrier deliberately reuses the production first-party graph
+    // so d2b_contracts has one crate identity. Empty test-support features on
+    // the production libraries expose the APIs needed by the libtest harness.
     let required = [
-        "//packages/d2b-audit:d2b_audit_test_support",
-        "//packages/d2b-contracts:d2b_contracts_test_support",
-        "//packages/d2b-controller-toolkit:d2b_controller_toolkit_test_support",
-        "//packages/d2b-core:d2b_core_test_support",
-        "//packages/d2b-core-controller:d2b_core_controller_test_support",
-        "//packages/d2b-host:d2b_host_test_support",
-        "//packages/d2b-provider:d2b_provider_test_support",
-        "//packages/d2b-provider-device-tpm:d2b_provider_device_tpm_test_support",
-        "//packages/d2b-resource-api:d2b_resource_api_test_support",
-        "//packages/d2b-resource-store:d2b_resource_store_test_support",
-        "//packages/d2b-resource-store-redb:d2b_resource_store_redb_test_support",
-        "//packages/d2b-telemetry:d2b_telemetry_test_support",
-        "//packages/d2b-zone-routing:d2b_zone_routing_test_support",
+        "//packages/d2b-audit:d2b_audit",
+        "//packages/d2b-contracts:d2b_contracts",
+        "//packages/d2b-controller-toolkit:d2b_controller_toolkit",
+        "//packages/d2b-core:d2b_core",
+        "//packages/d2b-core-controller:d2b_core_controller",
+        "//packages/d2b-host:d2b_host",
+        "//packages/d2b-provider:d2b_provider",
+        "//packages/d2b-provider-device-tpm:d2b_provider_device_tpm",
+        "//packages/d2b-resource-api:d2b_resource_api",
+        "//packages/d2b-resource-store:d2b_resource_store",
+        "//packages/d2b-resource-store-redb:d2b_resource_store_redb",
+        "//packages/d2b-telemetry:d2b_telemetry",
+        "//packages/d2b-zone-routing:d2b_zone_routing",
     ];
     let missing = required
         .into_iter()

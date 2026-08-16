@@ -111,6 +111,32 @@
       }
     },
     {
+      "id": "layer1:bazel-check",
+      "kind": "layer1-job",
+      "source": "tests/layer1-jobs.json#jobs.bazel-check",
+      "bazelLabel": "//:bazel_check",
+      "enforcement": "enforcing",
+      "executionClass": "remote-candidate",
+      "architecture": [
+        "x86_64-linux",
+        "aarch64-linux"
+      ],
+      "eligibility": {
+        "eligible": true,
+        "localOnlyReason": null
+      },
+      "carrier": {
+        "kind": "bazel-test",
+        "label": "//:bazel_check",
+        "sources": [
+          "tests/tools/bazel-check",
+          "Makefile",
+          "tests/layer1-jobs.json"
+        ],
+        "remoteCandidate": true
+      }
+    },
+    {
       "id": "layer1:test-rust",
       "kind": "layer1-job",
       "source": "tests/layer1-jobs.json#jobs.test-rust",
@@ -607,6 +633,10 @@
     {
       "id": "layer1:test-changelog",
       "label": "//bazel/checks/policy:changelog"
+    },
+    {
+      "id": "layer1:bazel-check",
+      "label": "//:bazel_check"
     },
     {
       "id": "layer1:test-rust",

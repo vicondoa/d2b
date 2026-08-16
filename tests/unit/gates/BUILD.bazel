@@ -19,6 +19,7 @@ sh_test(
         "//:tests_root_sources",
         "//bazel/checks/rust:repo_policy_sources",
     ],
+    env_inherit = ["PATH", "ROOT"],
     tags = [
         "local",
         "no-sandbox",
@@ -34,6 +35,7 @@ sh_test(
         "//:tests_root_sources",
         "//bazel/checks/rust:repo_policy_sources",
     ],
+    env_inherit = ["PATH", "ROOT"],
     tags = [
         "local",
         "no-sandbox",
@@ -47,6 +49,7 @@ sh_test(
         "//:tests_root_sources",
         "//bazel/checks/rust:repo_policy_sources",
     ],
+    env_inherit = ["PATH", "ROOT"],
     tags = [
         "local",
         "no-sandbox",
@@ -60,6 +63,7 @@ sh_test(
         "//:tests_root_sources",
         "//bazel/checks/rust:repo_policy_sources",
     ],
+    env_inherit = ["PATH", "ROOT"],
     tags = [
         "local",
         "no-sandbox",
@@ -70,9 +74,15 @@ sh_test(
     name = "vms_json_parity",
     srcs = ["vms-json-parity.sh"],
     data = [
+        "//:flake.lock",
+        "//:flake.nix",
+        "//:nix_workspace_sources",
+        "//:nixos_modules_workspace_sources",
         "//:tests_root_sources",
+        "//:tests_workspace_sources",
         "//bazel/checks/rust:repo_policy_sources",
     ],
+    env_inherit = ["PATH", "ROOT"],
     tags = [
         "local",
         "no-sandbox",

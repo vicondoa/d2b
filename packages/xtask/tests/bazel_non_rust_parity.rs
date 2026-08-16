@@ -9,11 +9,12 @@ use serde_json::{Map, Value};
 
 const EXPECTED_BAZEL_VERSION: &str = "bazel 9.2.0";
 
-const NON_RUST_SURFACES: [(&str, &str); 12] = [
+const NON_RUST_SURFACES: [(&str, &str); 13] = [
     ("layer1:tier0", "//bazel/checks/meta:tier0"),
     ("layer1:test-lint", "//bazel/checks/policy:lint"),
     ("layer1:check-inventory", "//bazel/checks/meta:inventory"),
     ("layer1:test-changelog", "//bazel/checks/policy:changelog"),
+    ("layer1:bazel-check", "//:bazel_check"),
     ("layer1:test-proofs", "//bazel/checks/policy:proofs"),
     ("layer1:test-flake", "//bazel/checks/nix:flake"),
     ("layer1:test-nix-unit", "//bazel/checks/nix:nix_unit"),

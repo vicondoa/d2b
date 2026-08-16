@@ -140,7 +140,6 @@ d2bd_shared_deps = [
     "@crates//:uzers",
 ]
 
-
 rust_library(
     name = "d2bd_lib",
     srcs = d2bd_srcs,
@@ -322,8 +321,13 @@ rust_test(
     name = "production_binary_policy",
     srcs = ["tests/production_binary_policy.rs"],
     compile_data = ["Cargo.toml"],
-    data = [":d2bd"],
+    data = [
+        ":d2bd",
+        "src/lib.rs",
+        "//bazel/checks/rust:repo_policy_sources",
+    ],
     env = {"CARGO_BIN_EXE_d2bd": "$(rootpath :d2bd)"},
+    env_inherit = ["D2B_REPO_ROOT", "PATH"],
     rustc_env = {"CARGO_BIN_EXE_d2bd": "$(rootpath :d2bd)"},
     visibility = ["//visibility:public"],
 )
@@ -381,6 +385,7 @@ rust_test(
         "@crates//:protobuf",
         "@crates//:regex",
         "@crates//:rustix",
+        "@crates//:sha2",
         "@crates//:serde_json",
         "@crates//:tempfile",
         "@crates//:tokio",

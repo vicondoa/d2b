@@ -68,7 +68,11 @@ fn now_millis() -> u64 {
 }
 
 fn scratch(name: &str) -> PathBuf {
-    let path = repo_root().join(format!(
+    let base = std::env::var_os("TEST_TMPDIR")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("TEST_UNDECLARED_OUTPUTS_DIR").map(PathBuf::from))
+        .unwrap_or_else(std::env::temp_dir);
+    let path = base.join(format!(
         ".scratch/bazel-qualification-test-{}-{name}",
         std::process::id()
     ));
@@ -200,7 +204,7 @@ fn provider_evidence(observed_at: u64) -> Value {
             "commit": commit,
             "targetSetDigest": "sha256:576bbb5fd15ccdd2ae7db72515aefdf66b2413a60687921d1077f7dab5593dae",
             "configurationDigest": "sha256:d7791e1f2696786528e5c027219fec5ee655e53b88b958b2eb276535d0cf7a8c",
-            "selectedClosureDigest": "sha256:3e54856cbb0b16d56c8a5482450ab66b9e725c7141c87d2c47a5ab5c80395898",
+            "selectedClosureDigest": "sha256:62b4a9685445237db70b69d673b35205a1a18d835cf7ce7aed55e0edf43a8813",
             "namespace": "d2b/qualification/linux-x86_64/rules_rust/worker-v1/minimal/lock-v1",
             "toolchain": "rules_rust",
             "platform": "linux-x86_64"

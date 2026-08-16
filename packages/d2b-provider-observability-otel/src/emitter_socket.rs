@@ -332,17 +332,22 @@ mod tests {
 
     fn test_socket_path(prefix: &str) -> PathBuf {
         let sequence = SOCKET_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-        let runtime_dir = std::env::var_os("XDG_RUNTIME_DIR")
-            .map(PathBuf::from)
-            .or_else(|| std::env::var_os("TEST_TMPDIR"))
-            .map(PathBuf::from)
-            .filter(|path| path.is_absolute())
-            .unwrap_or_else(std::env::temp_dir);
-        let path = runtime_dir.join(format!(
+        let filename = format!(
             "d2b-otel-{prefix}-{:x}-{:x}.sock",
             std::process::id(),
             sequence
-        ));
+        );
+        let path = [
+            std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from),
+            std::env::var_os("TEST_TMPDIR").map(PathBuf::from),
+            Some(std::env::temp_dir()),
+        ]
+        .into_iter()
+        .flatten()
+        .filter(|directory| directory.is_absolute())
+        .map(|directory| directory.join(&filename))
+        .find(|candidate| candidate.as_os_str().len() <= 100)
+        .unwrap_or_else(|| std::env::temp_dir().join(filename));
         assert!(
             path.as_os_str().len() <= 100,
             "AF_UNIX test path must leave sockaddr headroom"

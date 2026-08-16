@@ -57,6 +57,13 @@ fn fixture(relative: &str) -> PathBuf {
         .join(relative)
 }
 
+fn scratch_root() -> PathBuf {
+    std::env::var_os("TEST_TMPDIR")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("TEST_UNDECLARED_OUTPUTS_DIR").map(PathBuf::from))
+        .unwrap_or_else(std::env::temp_dir)
+}
+
 fn run_xtask(args: &[&str]) -> std::process::Output {
     Command::new(env!("CARGO_BIN_EXE_xtask"))
         .args(args)
@@ -80,7 +87,7 @@ fn run_with_log_value(value: &Value, name: &str) -> std::process::Output {
 }
 
 fn run_with_log_bytes(bytes: &[u8], name: &str) -> std::process::Output {
-    let directory = repo_root().join(format!(
+    let directory = scratch_root().join(format!(
         ".scratch/bazel-cache-transfer-invalid-{}-{}",
         std::process::id(),
         name
@@ -111,7 +118,7 @@ fn run_with_log_bytes(bytes: &[u8], name: &str) -> std::process::Output {
 }
 
 fn analyze_value(value: &Value, name: &str) -> Value {
-    let directory = repo_root().join(format!(
+    let directory = scratch_root().join(format!(
         ".scratch/bazel-cache-transfer-report-{}-{}",
         std::process::id(),
         name
@@ -166,8 +173,7 @@ fn u64_field(value: &Value, key: &str, context: &str) -> u64 {
 
 #[test]
 fn reports_action_mnemonic_graph_and_boundary_metrics() {
-    let root = repo_root();
-    let output_path = root.join(format!(
+    let output_path = scratch_root().join(format!(
         ".scratch/bazel-cache-transfer-test-{}/baseline.json",
         std::process::id()
     ));
@@ -390,8 +396,7 @@ fn reports_action_mnemonic_graph_and_boundary_metrics() {
 
 #[test]
 fn compares_compatible_reports_and_rejects_graph_mismatch() {
-    let root = repo_root();
-    let directory = root.join(format!(
+    let directory = scratch_root().join(format!(
         ".scratch/bazel-cache-transfer-compare-{}/",
         std::process::id()
     ));

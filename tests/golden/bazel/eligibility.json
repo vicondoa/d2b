@@ -27,6 +27,12 @@
       "localOnlyReason": null
     },
     {
+      "id": "layer1:bazel-check",
+      "bazelLabel": "//:bazel_check",
+      "eligible": true,
+      "localOnlyReason": null
+    },
+    {
       "id": "layer1:test-rust",
       "bazelLabel": "//tests:rust",
       "eligible": true,

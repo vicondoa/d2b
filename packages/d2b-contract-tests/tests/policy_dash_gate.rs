@@ -191,14 +191,17 @@ fn scan_with_path(root: &Path, extra_path: Option<&Path>) -> (bool, String) {
     (output.status.success(), combined)
 }
 
-fn fixture_tree(name: &str, body: &str) -> PathBuf {
-    let target_tmpdir = option_env!("CARGO_TARGET_TMPDIR")
+fn test_tmpdir() -> PathBuf {
+    option_env!("CARGO_TARGET_TMPDIR")
         .map(PathBuf::from)
-        .or_else(|| std::env::var_os("CARGO_TARGET_TMPDIR").map(PathBuf::from))
+        .filter(|path| path.is_absolute())
         .or_else(|| std::env::var_os("TEST_TMPDIR").map(PathBuf::from))
         .or_else(|| std::env::var_os("TMPDIR").map(PathBuf::from))
-        .unwrap_or_else(|| std::env::current_dir().expect("current directory"));
-    let root = Path::new(&target_tmpdir).join("dash-gate").join(name);
+        .unwrap_or_else(|| std::env::current_dir().expect("current directory"))
+}
+
+fn fixture_tree(name: &str, body: &str) -> PathBuf {
+    let root = test_tmpdir().join("dash-gate").join(name);
     let _ = fs::remove_dir_all(&root);
     fs::create_dir_all(root.join("nested")).expect("create fixture tree");
     fs::write(root.join("clean.md"), "A spaced hyphen - like this.\n").expect("write clean file");
@@ -217,9 +220,7 @@ fn make_executable(path: &Path) {
 }
 
 fn git_fixture_tree(name: &str) -> PathBuf {
-    let root = Path::new(env!("CARGO_TARGET_TMPDIR"))
-        .join("dash-gate")
-        .join(name);
+    let root = test_tmpdir().join("dash-gate").join(name);
     let _ = fs::remove_dir_all(&root);
     fs::create_dir_all(&root).expect("create git fixture tree");
     let status = Command::new("git")
@@ -613,9 +614,7 @@ fn assert_claude_alias(root: &Path) {
 }
 
 fn fake_command_dir(name: &str, command: &str, body: &str) -> PathBuf {
-    let directory = Path::new(env!("CARGO_TARGET_TMPDIR"))
-        .join("dash-gate")
-        .join(name);
+    let directory = test_tmpdir().join("dash-gate").join(name);
     let _ = fs::remove_dir_all(&directory);
     fs::create_dir_all(&directory).expect("create fake command directory");
     let path = directory.join(command);

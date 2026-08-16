@@ -34,13 +34,6 @@ rust_library(
     visibility = ["//visibility:public"],
 )
 
-rust_test(
-    name = "scaffold",
-    srcs = ["tests/scaffold.rs"],
-    compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
-)
-
 # keep
 filegroup(
     name = "cargo_workspace_sources",

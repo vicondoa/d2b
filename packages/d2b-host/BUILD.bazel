@@ -142,10 +142,13 @@ rust_binary(
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_host",
+        "//packages/d2b-contracts:d2b_contracts",
         "@crates//:libc",
         "@crates//:nix",
         "@crates//:rustix",
+        "@crates//:serde",
         "@crates//:serde_json",
+        "@crates//:sha2",
     ],
 )
 

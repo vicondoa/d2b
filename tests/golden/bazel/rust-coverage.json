@@ -992,7 +992,6 @@
         "packages/d2bd/src/admission.rs",
         "packages/d2bd/src/audio_dispatch.rs",
         "packages/d2bd/src/audio_host_controller.rs",
-        "packages/d2bd/src/audit_check.rs",
         "packages/d2bd/src/authority_persistence.rs",
         "packages/d2bd/src/autostart.rs",
         "packages/d2bd/src/ch_api.rs",
@@ -1019,8 +1018,6 @@
         "packages/d2bd/src/provider_effects.rs",
         "packages/d2bd/src/provider_registry.rs",
         "packages/d2bd/src/provider_shutdown.rs",
-        "packages/d2bd/src/realm_access_resolver.rs",
-        "packages/d2bd/src/realm_stubs.rs",
         "packages/d2bd/src/resource_runtime.rs",
         "packages/d2bd/src/security_key.rs",
         "packages/d2bd/src/shell_backend.rs",
@@ -1032,7 +1029,6 @@
         "packages/d2bd/src/supervisor/pidfd_table.rs",
         "packages/d2bd/src/supervisor/readiness_liveness.rs",
         "packages/d2bd/src/supervisor/state.rs",
-        "packages/d2bd/src/supervisor/stop_dag.rs",
         "packages/d2bd/src/terminal_session.rs",
         "packages/d2bd/src/tpm_effect_port.rs",
         "packages/d2bd/src/typed_error.rs",
@@ -1862,14 +1858,6 @@
       "execution": "run"
     },
     {
-      "id": "packages/d2b-contract-tests/usbip_policy_network_scoping",
-      "label": "//packages/d2b-contract-tests:usbip_policy_network_scoping",
-      "sources": [
-        "packages/d2b-contract-tests/tests/usbip_policy_network_scoping.rs"
-      ],
-      "execution": "run"
-    },
-    {
       "id": "packages/d2b-contract-tests/video_binary_contract",
       "label": "//packages/d2b-contract-tests:video_binary_contract",
       "sources": [
@@ -2530,7 +2518,6 @@
         "packages/d2b-core/src/minijail_profile.rs",
         "packages/d2b-core/src/privileges.rs",
         "packages/d2b-core/src/privileges_w3.rs",
-        "packages/d2b-core/src/process_builder.rs",
         "packages/d2b-core/src/processes.rs",
         "packages/d2b-core/src/provider_artifact.rs",
         "packages/d2b-core/src/provider_capabilities.rs",
@@ -2570,7 +2557,6 @@
         "packages/d2b-core/src/minijail_profile.rs",
         "packages/d2b-core/src/privileges.rs",
         "packages/d2b-core/src/privileges_w3.rs",
-        "packages/d2b-core/src/process_builder.rs",
         "packages/d2b-core/src/processes.rs",
         "packages/d2b-core/src/provider_artifact.rs",
         "packages/d2b-core/src/provider_capabilities.rs",
@@ -2610,7 +2596,6 @@
         "packages/d2b-core/src/minijail_profile.rs",
         "packages/d2b-core/src/privileges.rs",
         "packages/d2b-core/src/privileges_w3.rs",
-        "packages/d2b-core/src/process_builder.rs",
         "packages/d2b-core/src/processes.rs",
         "packages/d2b-core/src/provider_artifact.rs",
         "packages/d2b-core/src/provider_capabilities.rs",
@@ -2680,14 +2665,6 @@
       "label": "//packages/d2b-core:manifest_v04_roundtrip",
       "sources": [
         "packages/d2b-core/tests/manifest_v04_roundtrip.rs"
-      ],
-      "execution": "run"
-    },
-    {
-      "id": "packages/d2b-core/process_builder",
-      "label": "//packages/d2b-core:process_builder",
-      "sources": [
-        "packages/d2b-core/tests/process_builder.rs"
       ],
       "execution": "run"
     },
@@ -3006,7 +2983,7 @@
       "sources": [
         "packages/d2b-host-argv/src/lib.rs"
       ],
-      "execution": "library"
+      "execution": "compile-only"
     },
     {
       "id": "packages/d2b-host-argv/d2b_host_argv_test",
@@ -3014,7 +2991,7 @@
       "sources": [
         "packages/d2b-host-argv/src/lib.rs"
       ],
-      "execution": "test"
+      "execution": "run"
     },
     {
       "id": "packages/d2b-host/activation_helper_build_farm",
@@ -4311,14 +4288,6 @@
         "packages/d2b-provider-shell-terminal/src/lib.rs"
       ],
       "execution": "compile-only"
-    },
-    {
-      "id": "packages/d2b-provider-shell-terminal/scaffold",
-      "label": "//packages/d2b-provider-shell-terminal:scaffold",
-      "sources": [
-        "packages/d2b-provider-shell-terminal/tests/scaffold.rs"
-      ],
-      "execution": "run"
     },
     {
       "id": "packages/d2b-provider-supervisor/d2b_provider_supervisor",
@@ -6027,7 +5996,6 @@
         "packages/d2bd/src/admission.rs",
         "packages/d2bd/src/audio_dispatch.rs",
         "packages/d2bd/src/audio_host_controller.rs",
-        "packages/d2bd/src/audit_check.rs",
         "packages/d2bd/src/authority_persistence.rs",
         "packages/d2bd/src/autostart.rs",
         "packages/d2bd/src/ch_api.rs",
@@ -6054,8 +6022,6 @@
         "packages/d2bd/src/provider_effects.rs",
         "packages/d2bd/src/provider_registry.rs",
         "packages/d2bd/src/provider_shutdown.rs",
-        "packages/d2bd/src/realm_access_resolver.rs",
-        "packages/d2bd/src/realm_stubs.rs",
         "packages/d2bd/src/resource_runtime.rs",
         "packages/d2bd/src/security_key.rs",
         "packages/d2bd/src/shell_backend.rs",
@@ -6067,7 +6033,6 @@
         "packages/d2bd/src/supervisor/pidfd_table.rs",
         "packages/d2bd/src/supervisor/readiness_liveness.rs",
         "packages/d2bd/src/supervisor/state.rs",
-        "packages/d2bd/src/supervisor/stop_dag.rs",
         "packages/d2bd/src/terminal_session.rs",
         "packages/d2bd/src/tpm_effect_port.rs",
         "packages/d2bd/src/typed_error.rs",
@@ -6089,7 +6054,6 @@
         "packages/d2bd/src/admission.rs",
         "packages/d2bd/src/audio_dispatch.rs",
         "packages/d2bd/src/audio_host_controller.rs",
-        "packages/d2bd/src/audit_check.rs",
         "packages/d2bd/src/authority_persistence.rs",
         "packages/d2bd/src/autostart.rs",
         "packages/d2bd/src/ch_api.rs",
@@ -6116,8 +6080,6 @@
         "packages/d2bd/src/provider_effects.rs",
         "packages/d2bd/src/provider_registry.rs",
         "packages/d2bd/src/provider_shutdown.rs",
-        "packages/d2bd/src/realm_access_resolver.rs",
-        "packages/d2bd/src/realm_stubs.rs",
         "packages/d2bd/src/resource_runtime.rs",
         "packages/d2bd/src/security_key.rs",
         "packages/d2bd/src/shell_backend.rs",
@@ -6129,7 +6091,6 @@
         "packages/d2bd/src/supervisor/pidfd_table.rs",
         "packages/d2bd/src/supervisor/readiness_liveness.rs",
         "packages/d2bd/src/supervisor/state.rs",
-        "packages/d2bd/src/supervisor/stop_dag.rs",
         "packages/d2bd/src/terminal_session.rs",
         "packages/d2bd/src/tpm_effect_port.rs",
         "packages/d2bd/src/typed_error.rs",
@@ -6151,7 +6112,6 @@
         "packages/d2bd/src/admission.rs",
         "packages/d2bd/src/audio_dispatch.rs",
         "packages/d2bd/src/audio_host_controller.rs",
-        "packages/d2bd/src/audit_check.rs",
         "packages/d2bd/src/authority_persistence.rs",
         "packages/d2bd/src/autostart.rs",
         "packages/d2bd/src/ch_api.rs",
@@ -6178,8 +6138,6 @@
         "packages/d2bd/src/provider_effects.rs",
         "packages/d2bd/src/provider_registry.rs",
         "packages/d2bd/src/provider_shutdown.rs",
-        "packages/d2bd/src/realm_access_resolver.rs",
-        "packages/d2bd/src/realm_stubs.rs",
         "packages/d2bd/src/resource_runtime.rs",
         "packages/d2bd/src/security_key.rs",
         "packages/d2bd/src/shell_backend.rs",
@@ -6191,7 +6149,6 @@
         "packages/d2bd/src/supervisor/pidfd_table.rs",
         "packages/d2bd/src/supervisor/readiness_liveness.rs",
         "packages/d2bd/src/supervisor/state.rs",
-        "packages/d2bd/src/supervisor/stop_dag.rs",
         "packages/d2bd/src/terminal_session.rs",
         "packages/d2bd/src/tpm_effect_port.rs",
         "packages/d2bd/src/typed_error.rs",
@@ -7332,15 +7289,6 @@
     },
     {
       "package": "d2b-contract-tests",
-      "name": "usbip_policy_network_scoping",
-      "kinds": [
-        "test"
-      ],
-      "source": "packages/d2b-contract-tests/tests/usbip_policy_network_scoping.rs",
-      "carrier": "//packages/d2b-contract-tests:usbip_policy_network_scoping"
-    },
-    {
-      "package": "d2b-contract-tests",
       "name": "video_binary_contract",
       "kinds": [
         "test"
@@ -7572,15 +7520,6 @@
       ],
       "source": "packages/d2b-core/tests/manifest_v04_roundtrip.rs",
       "carrier": "//packages/d2b-core:manifest_v04_roundtrip"
-    },
-    {
-      "package": "d2b-core",
-      "name": "process_builder",
-      "kinds": [
-        "test"
-      ],
-      "source": "packages/d2b-core/tests/process_builder.rs",
-      "carrier": "//packages/d2b-core:process_builder"
     },
     {
       "package": "d2b-core",
@@ -8814,15 +8753,6 @@
       ],
       "source": "packages/d2b-provider-shell-terminal/src/lib.rs",
       "carrier": "//packages/d2b-provider-shell-terminal:d2b_provider_shell_terminal"
-    },
-    {
-      "package": "d2b-provider-shell-terminal",
-      "name": "scaffold",
-      "kinds": [
-        "test"
-      ],
-      "source": "packages/d2b-provider-shell-terminal/tests/scaffold.rs",
-      "carrier": "//packages/d2b-provider-shell-terminal:scaffold"
     },
     {
       "package": "d2b-provider-supervisor",

@@ -2,6 +2,12 @@ load("@gazelle//:def.bzl", "gazelle", "gazelle_binary")
 
 package(default_visibility = ["//visibility:public"])
 
+test_suite(
+    name = "bazel_check",
+    tags = ["manual"],
+    tests = [],
+)
+
 filegroup(
     name = "d2b_cli_contract_inputs",
     srcs = glob([
@@ -59,10 +65,12 @@ exports_files([
     ".gitignore",
     "AGENTS.md",
     "CHANGELOG.md",
+    "CONTRIBUTING.md",
     "LICENSE",
     "Makefile",
     "README.md",
     "SECURITY.md",
+    "STRATEGY.md",
     "Cargo.lock",
     "Cargo.toml",
     "packages/Cargo.guest.lock",
@@ -270,6 +278,16 @@ filegroup(
     name = "github_workspace_sources",
     srcs = glob(
         [".github/**/*"],
+        allow_empty = True,
+    ),
+    visibility = ["//visibility:public"],
+)
+
+# keep
+filegroup(
+    name = "third_party_workspace_sources",
+    srcs = glob(
+        ["third_party/**/*"],
         allow_empty = True,
     ),
     visibility = ["//visibility:public"],

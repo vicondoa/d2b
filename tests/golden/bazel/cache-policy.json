@@ -6,7 +6,7 @@
   "u9Gate": {
     "report": "tests/golden/bazel/cache-transfer-representative.json",
     "eligibility": "tests/golden/bazel/eligibility.json",
-    "eligibilityDigest": "sha256:3e54856cbb0b16d56c8a5482450ab66b9e725c7141c87d2c47a5ab5c80395898",
+    "eligibilityDigest": "sha256:62b4a9685445237db70b69d673b35205a1a18d835cf7ce7aed55e0edf43a8813",
     "graphDigest": "sha256:0897be2616a3f790c721ac0ca5c9bd59cbe88aaa025281d9bb7673e1ff123678",
     "configuration": "local",
     "platform": "linux-x86_64",
@@ -105,7 +105,7 @@
       "tests/tools/buildbuddy-qualification"
     ],
     "allowedSecurityDigests": [
-      "sha256:8e8234b0bc8ac0554f7782bcb7ddb3a661a18ab157eb12536c99c9d024373a29"
+      "sha256:9dbdf4d25f3994548f2352b23df45fc21096cb255ff2e5ebb0f895f9df57cfdf"
     ],
     "untrustedCredential": "none",
     "trustedCredential": "credential-helper"

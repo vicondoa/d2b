@@ -70,6 +70,7 @@ d2b_bus_deps = [
     "@crates//:tokio",
 ]
 
+# keep
 rust_library(
     name = "d2b_bus",
     srcs = d2b_bus_srcs,

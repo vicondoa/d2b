@@ -30,6 +30,11 @@ rust_test(
     srcs = ["tests/scaffold.rs"],
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_provider_transport_unix",
+        "//packages/d2b-contracts:d2b_contracts",
+        "@crates//:rustix",
+    ],
 )
 
 # keep

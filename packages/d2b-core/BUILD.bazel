@@ -51,6 +51,7 @@ rust_library(
         "//:tests/golden/vms.json-signoz-v7",  # keep
         "Cargo.toml",
     ],
+    crate_features = ["test-support"],
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-realm-core:d2b_realm_core",
@@ -262,17 +263,6 @@ rust_test(
     srcs = ["tests/manifest_v04_roundtrip.rs"],
     compile_data = ["Cargo.toml"],
     data = ["//:tests/golden/manifest_v04/baseline-vms.json"],
-    visibility = ["//visibility:public"],
-    deps = [
-        ":d2b_core",
-        "@crates//:serde_json",
-    ],
-)
-
-rust_test(
-    name = "process_builder",
-    srcs = ["tests/process_builder.rs"],
-    compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_core",

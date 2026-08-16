@@ -10,7 +10,10 @@ const EXPECTED_BAZEL_VERSION: &str = "bazel 9.2.0";
 
 fn repo_root() -> PathBuf {
     let mut candidates = Vec::new();
-    for variable in ["D2B_REPO_ROOT", "TEST_SRCDIR", "RUNFILES_DIR"] {
+    if let Some(root) = std::env::var_os("D2B_REPO_ROOT") {
+        candidates.push(PathBuf::from(root));
+    }
+    for variable in ["TEST_SRCDIR", "RUNFILES_DIR"] {
         if let Some(base) = std::env::var_os(variable).map(PathBuf::from) {
             candidates.push(base.clone());
             if let Some(workspace) = std::env::var_os("TEST_WORKSPACE") {
@@ -136,6 +139,9 @@ fn bazel_output_user_root() -> PathBuf {
     if let Some(path) = std::env::var_os("D2B_BAZEL_OUTPUT_USER_ROOT") {
         return PathBuf::from(path);
     }
+    if let Some(path) = std::env::var_os("TEST_TMPDIR") {
+        return PathBuf::from(path).join("d2b-bazel-compat-output");
+    }
     if let Some(path) = std::env::var_os("XDG_CACHE_HOME") {
         return PathBuf::from(path).join("d2b-bazel-compat-output");
     }
@@ -188,16 +194,18 @@ fn resolve_bazel_test_tool_path() -> String {
 fn run_bazel_output(arguments: &[&str]) -> std::process::Output {
     let mut command = Command::new(bazel_binary());
     let tool_path = bazel_test_tool_path();
+    let output_root = bazel_output_user_root();
+    std::fs::create_dir_all(&output_root).expect("create Bazel compatibility output root");
     command
         .current_dir(repo_root())
-        .arg(format!(
-            "--output_user_root={}",
-            bazel_output_user_root().display()
-        ))
+        .arg(format!("--output_user_root={}", output_root.display()))
         .arg(arguments.first().expect("Bazel command is non-empty"))
         .arg("--lockfile_mode=error")
         .arg("--repo_contents_cache=")
-        .arg("--symlink_prefix=bazel-");
+        .arg(format!(
+            "--symlink_prefix={}",
+            output_root.join("symlinks/bazel-").display()
+        ));
     if arguments.first() == Some(&"test") {
         command.arg(format!("--test_env=PATH={tool_path}"));
     }

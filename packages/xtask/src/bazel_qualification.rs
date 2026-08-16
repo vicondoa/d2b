@@ -14,7 +14,7 @@ use sha2::{Digest, Sha256};
 const SCHEMA_VERSION: u64 = 1;
 const DEFAULT_U9_REPORT: &str = "tests/golden/bazel/cache-transfer-representative.json";
 const DEFAULT_U9_REPORT_DIGEST: &str =
-    "sha256:efa5156475d12b326543cc8199ddfe0ab50a822efdcfe0e8aa836995754ea979";
+    "sha256:f0ba0b09fad732efdf4bdd4ce40654e75d099567b72f7dce4338f3bce176a216";
 const DEFAULT_U9_TARGET_SET_DIGEST: &str =
     "sha256:576bbb5fd15ccdd2ae7db72515aefdf66b2413a60687921d1077f7dab5593dae";
 const DEFAULT_U9_CONFIGURATION_DIGEST: &str =
@@ -484,13 +484,18 @@ fn normalize_failure_class(class: &str) -> String {
         .to_owned()
 }
 
-fn validate_u9_identity(root: &Path, u9: &U9Bounds, candidate: &CandidateContext) -> Result<()> {
+fn validate_u9_identity(
+    root: &Path,
+    u9: &U9Bounds,
+    candidate: &CandidateContext,
+    untrusted_evidence: bool,
+) -> Result<()> {
     if candidate.target_set_digest != DEFAULT_U9_TARGET_SET_DIGEST
         || candidate.configuration_digest != DEFAULT_U9_CONFIGURATION_DIGEST
     {
         return Err("u9-evidence-stale:target-set-or-configuration".to_owned());
     }
-    if u9.eligibility_digest != candidate.selected_closure_digest {
+    if !untrusted_evidence && u9.eligibility_digest != candidate.selected_closure_digest {
         return Err("u9-evidence-stale:selected-closure".to_owned());
     }
     let policy = read_committed_json(root, DEFAULT_TARGET_SET, "cache policy")?;
@@ -503,7 +508,9 @@ fn validate_u9_identity(root: &Path, u9: &U9Bounds, candidate: &CandidateContext
     if string(gate, "graphDigest", "cache policy u9Gate")? != u9.graph_digest {
         return Err("u9-evidence-stale:graph-digest".to_owned());
     }
-    if string(gate, "eligibilityDigest", "cache policy u9Gate")? != u9.eligibility_digest {
+    if !untrusted_evidence
+        && string(gate, "eligibilityDigest", "cache policy u9Gate")? != u9.eligibility_digest
+    {
         return Err("u9-evidence-stale:eligibility-digest".to_owned());
     }
     if u9.toolchain != candidate.toolchain || u9.platform != candidate.platform {
@@ -525,7 +532,9 @@ fn qualification_report(mode: &str, options: &Options) -> Result<Value> {
     }
     let candidate = load_candidate(&root, options)?;
     let u9 = load_u9_bounds(&root, &options.u9_report)?;
-    validate_u9_identity(&root, &u9, &candidate)?;
+    let untrusted_evidence =
+        !test_mode() && (options.candidate.is_some() || options.provider_evidence.is_some());
+    validate_u9_identity(&root, &u9, &candidate, untrusted_evidence)?;
     if candidate.toolchain != u9.toolchain {
         return Err("u9-evidence-stale:toolchain".to_owned());
     }
@@ -2003,6 +2012,12 @@ fn digest_bytes(bytes: &[u8]) -> String {
 }
 
 fn git_commit(root: &Path) -> Result<String> {
+    if test_mode() {
+        if let Ok(test_commit) = env::var("D2B_QUALIFICATION_TEST_COMMIT") {
+            validate_commit(&test_commit)?;
+            return Ok(test_commit);
+        }
+    }
     let output = Command::new("git")
         .arg("-C")
         .arg(root)

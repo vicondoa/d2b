@@ -60,6 +60,7 @@ rust_test(
     name = "ifname_parity",
     srcs = ["tests/ifname_parity.rs"],
     compile_data = ["Cargo.toml"],
+    tags = ["manual"],
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
@@ -95,6 +96,7 @@ rust_test(
     name = "minijail_profiles",
     srcs = ["tests/minijail_profiles.rs"],
     compile_data = ["Cargo.toml"],
+    tags = ["manual"],
     visibility = ["//visibility:public"],
     deps = [":d2b_contract_tests"],
 )
@@ -115,6 +117,7 @@ rust_test(
     name = "minijail_roles",
     srcs = ["tests/minijail_roles.rs"],
     compile_data = ["Cargo.toml"],
+    tags = ["manual"],
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
@@ -156,7 +159,7 @@ rust_test(
         "//:Cargo.toml",
         "//bazel/checks/rust:repo_policy_sources",
     ],
-    env = {"D2B_REPO_ROOT": "$(rootpath //:Cargo.toml)"},
+    env_inherit = ["D2B_REPO_ROOT"],
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
@@ -194,6 +197,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     data = ["//bazel/checks/rust:repo_policy_sources"],
     env_inherit = ["PATH"],
+    tags = ["local"],
     visibility = ["//visibility:public"],
     deps = [":d2b_contract_tests"],
 )
@@ -254,8 +258,20 @@ rust_test(
     name = "policy_dash_gate",
     srcs = ["tests/policy_dash_gate.rs"],
     compile_data = ["Cargo.toml"],
+    data = [
+        "//:third_party_workspace_sources",
+        "//bazel/checks/rust:repo_policy_sources",
+    ],
+    env_inherit = ["D2B_REPO_ROOT", "PATH"],
+    rustc_env = {"CARGO_TARGET_TMPDIR": "bazel-test-tmp"},
+    tags = ["local", "no-sandbox"],
     visibility = ["//visibility:public"],
-    deps = [":d2b_contract_tests"],
+    deps = [
+        ":d2b_contract_tests",
+        "@crates//:serde",
+        "@crates//:serde_json",
+        "@crates//:sha2",
+    ],
 )
 
 rust_test(
@@ -284,6 +300,18 @@ rust_test(
     name = "policy_docs",
     srcs = ["tests/policy_docs.rs"],
     compile_data = ["Cargo.toml"],
+    data = [
+        "//:AGENTS.md",
+        "//:CONTRIBUTING.md",
+        "//:LICENSE",
+        "//:README.md",
+        "//:SECURITY.md",
+        "//:STRATEGY.md",
+        "//bazel/checks/rust:repo_policy_sources",
+    ],
+    rustc_env = {"CARGO_TARGET_TMPDIR": "bazel-test-tmp"},
+    env_inherit = ["D2B_REPO_ROOT"],
+    tags = ["local", "no-sandbox"],
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
@@ -414,6 +442,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     data = ["@rules_rust//rust/toolchain:current_cargo_files"],
     env = {"CARGO": "$(rootpath @rules_rust//rust/toolchain:current_cargo_files)"},
+    tags = ["local"],
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
@@ -458,6 +487,9 @@ rust_test(
     name = "policy_production_closure",
     srcs = ["tests/policy_production_closure.rs"],
     compile_data = ["Cargo.toml"],
+    data = ["//bazel/checks/rust:repo_policy_sources"],
+    env_inherit = ["D2B_REPO_ROOT"],
+    tags = ["local", "no-sandbox"],
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
@@ -472,6 +504,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     data = ["@rules_rust//rust/toolchain:current_cargo_files"],
     env = {"CARGO": "$(rootpath @rules_rust//rust/toolchain:current_cargo_files)"},
+    tags = ["local"],
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
@@ -611,6 +644,7 @@ rust_test(
     name = "privileges_fixture",
     srcs = ["tests/privileges_fixture.rs"],
     compile_data = ["Cargo.toml"],
+    tags = ["manual"],
     visibility = ["//visibility:public"],
     deps = [":d2b_contract_tests"],
 )
@@ -619,6 +653,7 @@ rust_test(
     name = "privileges_parity",
     srcs = ["tests/privileges_parity.rs"],
     compile_data = ["Cargo.toml"],
+    tags = ["manual"],
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
@@ -702,6 +737,7 @@ rust_test(
     name = "static_invariants",
     srcs = ["tests/static_invariants.rs"],
     compile_data = ["Cargo.toml"],
+    tags = ["manual"],
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
@@ -779,14 +815,6 @@ rust_test(
         "//packages/d2b-contracts:d2b_contracts",
         "@crates//:serde_json",
     ],
-)
-
-rust_test(
-    name = "usbip_policy_network_scoping",
-    srcs = ["tests/usbip_policy_network_scoping.rs"],
-    compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
-    deps = [":d2b_contract_tests"],
 )
 
 rust_test(

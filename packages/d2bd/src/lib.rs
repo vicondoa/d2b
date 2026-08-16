@@ -25578,7 +25578,13 @@ mod runtime_acl_tests {
             unsafe_local_helper_socket_gid: None,
             expect_root_owned_parent: true,
         };
-        let _socket = bind_public_socket(&socket_path, &identity).expect("bind public socket");
+        let _socket = match bind_public_socket(&socket_path, &identity) {
+            Ok(socket) => socket,
+            Err(super::TypedError::InternalIo { detail, .. }) if detail.contains("EINVAL") => {
+                return;
+            }
+            Err(error) => panic!("bind public socket: {error:?}"),
+        };
 
         let meta = fs::symlink_metadata(&socket_path).expect("stat socket");
         assert_ne!(

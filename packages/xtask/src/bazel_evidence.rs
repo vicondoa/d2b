@@ -11,7 +11,7 @@ use sha2::{Digest, Sha256};
 
 const DEFAULT_POLICY: &str = "tests/golden/bazel/cache-policy.json";
 const DEFAULT_U9_REPORT_DIGEST: &str =
-    "sha256:efa5156475d12b326543cc8199ddfe0ab50a822efdcfe0e8aa836995754ea979";
+    "sha256:f0ba0b09fad732efdf4bdd4ce40654e75d099567b72f7dce4338f3bce176a216";
 
 type Result<T> = std::result::Result<T, String>;
 

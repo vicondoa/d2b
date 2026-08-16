@@ -262,6 +262,7 @@ rust_test(
     deps = [
         ":d2b_priv_broker_test_support",
         "//packages/d2b-contracts:d2b_contracts_test_support",
+        "//packages/d2b-core:d2b_core_test_support",
         "@crates//:serde_json",
     ],
 )
@@ -311,6 +312,8 @@ rust_test(
     deps = [
         ":d2b_priv_broker_test_support",
         "//packages/d2b-contracts:d2b_contracts_test_support",
+        "//packages/d2b-core:d2b_core_test_support",
+        "@crates//:nix",
         "@crates//:serde_json",
     ],
 )

@@ -32,6 +32,7 @@ rust_library(
         "src/transport.rs",
     ],
     compile_data = ["Cargo.toml"],
+    crate_features = ["test-support"],
     proc_macro_deps = [
         "@crates//:async-trait",
     ],

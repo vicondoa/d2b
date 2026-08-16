@@ -22,6 +22,7 @@ sh_test(
         "//:tests_root_sources",
         "//bazel/checks/rust:repo_policy_sources",
     ],
+    env_inherit = ["PATH", "ROOT"],
     tags = [
         "local",
         "no-sandbox",
@@ -35,6 +36,7 @@ sh_test(
         "//:tests_root_sources",
         "//bazel/checks/rust:repo_policy_sources",
     ],
+    env_inherit = ["PATH", "ROOT"],
     tags = [
         "local",
         "no-sandbox",
@@ -48,6 +50,7 @@ sh_test(
         "//:tests_root_sources",
         "//bazel/checks/rust:repo_policy_sources",
     ],
+    env_inherit = ["PATH", "ROOT"],
     tags = [
         "local",
         "no-sandbox",
@@ -61,6 +64,7 @@ sh_test(
         "//:tests_root_sources",
         "//bazel/checks/rust:repo_policy_sources",
     ],
+    env_inherit = ["PATH", "ROOT"],
     tags = [
         "local",
         "no-sandbox",

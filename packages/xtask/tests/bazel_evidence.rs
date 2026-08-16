@@ -57,7 +57,8 @@ fn run_xtask(args: &[&str]) -> Output {
 fn scratch(name: &str) -> PathBuf {
     let base = std::env::var_os("TEST_UNDECLARED_OUTPUTS_DIR")
         .map(PathBuf::from)
-        .unwrap_or_else(|| repo_root().join(".scratch"));
+        .or_else(|| std::env::var_os("TEST_TMPDIR").map(PathBuf::from))
+        .unwrap_or_else(std::env::temp_dir);
     let path = base.join(format!("bazel-evidence-test-{}-{name}", std::process::id()));
     std::fs::create_dir_all(&path).expect("create evidence scratch");
     path
@@ -76,7 +77,7 @@ fn current_u9_evidence_is_required_before_remote_use() {
     assert_eq!(value["status"], "pass");
     assert_eq!(
         value["eligibilityDigest"],
-        "sha256:3e54856cbb0b16d56c8a5482450ab66b9e725c7141c87d2c47a5ab5c80395898"
+        "sha256:62b4a9685445237db70b69d673b35205a1a18d835cf7ce7aed55e0edf43a8813"
     );
 }
 

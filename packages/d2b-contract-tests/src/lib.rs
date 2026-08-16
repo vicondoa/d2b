@@ -118,6 +118,12 @@ pub fn repo_root() -> PathBuf {
     if let Some(root) = env::var_os("D2B_REPO_ROOT") {
         candidates.push(PathBuf::from(root));
     }
+    if let Some(manifest_dir) = option_env!("CARGO_MANIFEST_DIR")
+        .map(PathBuf::from)
+        .or_else(|| env::var_os("CARGO_MANIFEST_DIR").map(PathBuf::from))
+    {
+        candidates.push(manifest_dir.join("..").join(".."));
+    }
     for variable in ["TEST_SRCDIR", "RUNFILES_DIR"] {
         if let Some(base) = env::var_os(variable).map(PathBuf::from) {
             candidates.push(base.clone());
@@ -126,12 +132,6 @@ pub fn repo_root() -> PathBuf {
             }
             candidates.push(base.join("_main"));
         }
-    }
-    if let Some(manifest_dir) = option_env!("CARGO_MANIFEST_DIR")
-        .map(PathBuf::from)
-        .or_else(|| env::var_os("CARGO_MANIFEST_DIR").map(PathBuf::from))
-    {
-        candidates.push(manifest_dir.join("..").join(".."));
     }
     if let Ok(current_dir) = env::current_dir() {
         candidates.push(current_dir);
