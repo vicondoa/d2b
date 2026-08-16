@@ -95,6 +95,7 @@ The checked-in machine-readable examples are:
 - `tests/golden/bazel/cache-transfer-schema.json`
 - `tests/golden/bazel/cache-transfer-baseline.json`
 - `tests/golden/bazel/cache-transfer-optimized.json`
+- `tests/golden/bazel/cache-transfer-representative.json`
 
 An optimized report may carry a measured delta by passing the baseline report
 to the analyzer:

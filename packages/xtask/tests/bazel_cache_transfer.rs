@@ -984,6 +984,44 @@ fn records_unlisted_dependency_owners_from_bazel_signals() {
     );
 }
 
+#[test]
+fn representative_local_summary_records_measured_two_crate_bounds() {
+    let summary =
+        read_json(&repo_root().join("tests/golden/bazel/cache-transfer-representative.json"));
+    let summary = summary.as_object().expect("representative summary");
+    assert_eq!(
+        summary.get("reportKind").and_then(Value::as_str),
+        Some("representative-summary")
+    );
+    assert_eq!(
+        u64_field(
+            summary.get("wholeGraph").expect("wholeGraph"),
+            "actionCount",
+            "wholeGraph"
+        ),
+        207
+    );
+    assert_eq!(
+        u64_field(
+            summary.get("wholeGraph").expect("wholeGraph"),
+            "grossInputBytes",
+            "wholeGraph"
+        ),
+        162_901_404_939
+    );
+    let rejected = summary
+        .get("pipeliningRejected")
+        .and_then(Value::as_object)
+        .expect("pipeliningRejected");
+    assert!(
+        rejected
+            .get("pipelinedGrossInputBytes")
+            .and_then(Value::as_u64)
+            .expect("pipelined gross")
+            > 162_901_404_939
+    );
+}
+
 fn stringify_sizes(value: &mut Value) {
     match value {
         Value::Array(values) => values.iter_mut().for_each(stringify_sizes),
