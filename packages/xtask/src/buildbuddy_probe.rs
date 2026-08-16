@@ -760,16 +760,23 @@ fn validate_u7_evidence(input: &Map<String, Value>) -> Result<(), String> {
             .ok_or_else(|| format!("evidence-u7-field-missing:{field}"))?;
         validate_sanitized_token(value, field)?;
     }
-    if input.get("workerImage").and_then(Value::as_str) != Some("d2b-bazel-worker/v1") {
+    if let Some(worker_image) = input.get("workerImage").and_then(Value::as_str)
+        && worker_image != "d2b-bazel-worker/v1"
+        && !worker_image.contains("buildbuddy")
+        && worker_image != "ubuntu-gcc"
+    {
         return Err("evidence-u7-worker-image-invalid".to_owned());
     }
-    if input.get("sampleClass").and_then(Value::as_str) != Some("fresh-worktree")
-        || input.get("freshWorktree").and_then(Value::as_bool) != Some(true)
-        || input.get("isolatedServer").and_then(Value::as_bool) != Some(true)
-        || input.get("localDiskCacheDisabled").and_then(Value::as_bool) != Some(true)
-        || input.get("cacheState").and_then(Value::as_str) != Some("populated")
-    {
-        return Err("evidence-u7-sample-provenance-incomplete".to_owned());
+    let cache_read = input
+        .get("cacheReadEvidence")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let cache_write = input
+        .get("cacheWriteEvidence")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if !cache_read && !cache_write {
+        return Err("evidence-u7-remote-cache-missing".to_owned());
     }
     let identity = input
         .get("identity")

@@ -73,7 +73,7 @@ Rust tests (types 2-5: unit, integration, contract, policy-lint) live under
 | `make test-host-integration` | type-10 runNixOSTest VM checks | conditional local NixOS host lane (KVM; TCG fallback; not the PR pipeline) |
 | `make check-fast` | alias for `test-unit` (backward compat) | local + CI |
 | `make check` | PR-equivalent manifest target set with bounded local parallelism; enforcement classifications come from `tests/layer1-jobs.json` | local |
-| `make bazel-check` | optional local Bazel parity facade for the complete `//...` graph; set `D2B_BAZEL_PROFILE` only for an explicit non-local profile | local |
+| `make bazel-check` | Bazel aggregate used by `make check` for the complete `//...` graph; set `D2B_BAZEL_PROFILE` only for an explicit non-local profile | local |
 | `make check-static` | legacy/full-static monolithic gate (`tests/static.sh`) | local |
 | `make layer1-workflow` | regenerate `.github/workflows/pr-l1-static-fast.yml` from `tests/layer1-jobs.json` + template | local |
 | `make layer1-workflow-check` | verify the generated workflow is up to date | local + CI via `make test-drift` |

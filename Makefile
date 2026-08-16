@@ -59,7 +59,7 @@ NIX_FLAKE := nix --extra-experimental-features 'nix-command flakes'
 
 ## check - the Layer-1 PR-equivalent done-gate. The manifest runner executes
 ##          check-tier0 first, then the fail-fast lint and inventory phases,
-##          then safe L1 sub-targets in parallel, followed by the serial gates.
+##          the Bazel aggregate, remaining L1 sub-targets, then serial gates.
 ##          Tune with D2B_CHECK_JOBS and D2B_FLAKE_JOBS.
 check:
 	bash tests/tools/layer1-jobs run-local
@@ -86,9 +86,9 @@ check-fast: test-unit
 check-tier0:
 	bash tests/tools/tier0-first-pass.sh
 
-## bazel-check - optional Bazel parity facade. It runs the complete //... graph
-##                locally by default; set D2B_BAZEL_PROFILE for a remote or
-##                qualification profile. It is not part of make check.
+## bazel-check - Bazel aggregate used by make check. It runs the complete
+##                //... graph locally by default; set D2B_BAZEL_PROFILE for a
+##                remote or qualification profile.
 D2B_BAZEL_PROFILE ?= local
 bazel-check:
 	tests/tools/bazel-check --profile "$(D2B_BAZEL_PROFILE)"

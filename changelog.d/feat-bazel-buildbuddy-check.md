@@ -22,10 +22,10 @@
 - Run Rustc on BuildBuddy RBE with compressed cache, minimal downloads,
   and 50 jobs. Local results may seed the remote cache. Cargo build
   scripts stay local after they showed the highest remote-cache traffic.
-- Keep the existing Cargo and Make Layer-1 graph authoritative while exposing
-  the complete Bazel graph only through the opt-in local `make bazel-check`
-  facade. Remote qualification remains blocked until provider-accounted
-  transfer evidence is available.
+- Route `make check` through the Bazel aggregate plus remaining local
+  Layer-1 jobs. Remote-cache read and write bytes are the provider
+  evidence used to qualify BuildBuddy. GitHub Layer-1 runners stay on
+  the generated Cargo/Make jobs until those runners host Bazel.
 
 ### Fixed
 

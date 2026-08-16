@@ -65,9 +65,10 @@ tests/tools/bazel-check --profile local
 tests/tools/bazel-check --profile remote
 ```
 
-`make bazel-check` defaults to the local profile and runs the complete `//...`
-graph. It is a parity facade only; `make check` and Cargo remain the current
-Layer-1 and standalone authorities.
+`make check` schedules `make bazel-check`, which defaults to the local
+profile and runs the complete `//...` graph. Remote profiles use remote-cache
+read and write bytes as provider evidence. Cargo remains available as a
+standalone workflow.
 
 The facade always supplies `--repo_contents_cache=` as a local command option.
 Repository-content caching is not a remote profile feature. It runs the

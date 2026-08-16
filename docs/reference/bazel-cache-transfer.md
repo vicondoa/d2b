@@ -133,5 +133,6 @@ fan-out, so it is not part of the default configuration.
 
 Comparison rejects schema, graph, eligibility, configuration, platform, and
 toolchain mismatches. There are no arbitrary transfer thresholds in this
-milestone. Keep BuildBuddy endpoints, credentials, remote-cache flags, and RBE
-flags out of local report generation.
+milestone. Remote-cache read and write bytes are the provider evidence used to
+qualify BuildBuddy. Keep credentials and header flags out of local
+report generation.

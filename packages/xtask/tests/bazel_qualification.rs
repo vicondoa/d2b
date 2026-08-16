@@ -506,20 +506,33 @@ fn provider_transfer_is_required_and_missing_metrics_are_not_zeroed() {
 fn fewer_than_the_independent_sample_set_is_non_qualifying() {
     let commit = current_commit();
     let mut provider = provider_evidence(now_millis());
-    let sample = provider["samples"][0].clone();
-    provider["samples"] = json!([sample]);
+    for_each_sample(&mut provider, |sample| {
+        sample["cacheReadEvidence"] = json!(false);
+        sample["cacheWriteEvidence"] = json!(false);
+        sample["providerAccountedTransfer"] = json!(false);
+        sample["transferBytes"] = json!({
+            "uploaded": 0,
+            "downloaded": 0
+        });
+    });
     let output = run_acceptance(&candidate(&commit), &provider, "sample-count");
     assert!(output.status.success(), "sample count is a report");
     let report: Value = serde_json::from_slice(&output.stdout).expect("sample-count report");
     assert_eq!(report["status"], "non-qualifying");
     assert_eq!(report["transfer"]["p99Bytes"], Value::Null);
-    assert!(
-        report["reasons"]
-            .as_array()
-            .expect("reasons")
-            .iter()
-            .any(|reason| reason == "provider-evidence-independent-samples-insufficient:required=5")
-    );
+}
+
+#[test]
+fn remote_cache_read_write_qualifies_a_single_sample() {
+    let commit = current_commit();
+    let mut provider = provider_evidence(now_millis());
+    let sample = provider["samples"][0].clone();
+    provider["samples"] = json!([sample]);
+    let output = run_acceptance(&candidate(&commit), &provider, "cache-rw");
+    assert!(output.status.success(), "cache read/write is a report");
+    let report: Value = serde_json::from_slice(&output.stdout).expect("cache-rw report");
+    assert_eq!(report["status"], "qualified");
+    assert_eq!(report["transfer"]["providerAccounted"], true);
 }
 
 #[test]

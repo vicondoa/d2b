@@ -6,27 +6,46 @@
       {
         "id": "preflight",
         "mode": "serial",
-        "jobs": ["tier0"]
+        "jobs": [
+          "tier0"
+        ]
       },
       {
         "id": "fast-lint",
         "mode": "serial",
-        "jobs": ["test-lint"]
+        "jobs": [
+          "test-lint"
+        ]
       },
       {
         "id": "inventory",
         "mode": "serial",
-        "jobs": ["check-inventory"]
+        "jobs": [
+          "check-inventory"
+        ]
       },
       {
         "id": "parallel",
         "mode": "parallel",
-        "jobs": ["test-changelog", "test-rust", "test-proofs", "test-flake", "test-nix-unit", "test-policy"]
+        "jobs": [
+          "test-changelog",
+          "bazel-check",
+          "test-rust",
+          "test-proofs",
+          "test-flake",
+          "test-nix-unit",
+          "test-policy"
+        ]
       },
       {
         "id": "serial-after-parallel",
         "mode": "serial",
-        "jobs": ["test-drift", "test-runtime-ledger", "test-performance-budgets", "test-fixture-contracts"]
+        "jobs": [
+          "test-drift",
+          "test-runtime-ledger",
+          "test-performance-budgets",
+          "test-fixture-contracts"
+        ]
       }
     ]
   },
@@ -78,14 +97,19 @@
       "test-policy",
       "test-runtime-ledger"
     ],
-    "allowedSkippedRollupJobs": ["test-changelog"]
+    "allowedSkippedRollupJobs": [
+      "test-changelog"
+    ]
   },
   "jobs": {
     "tier0": {
       "displayName": "Tier 0 first-pass gate",
       "makeTarget": "check-tier0",
       "extraMakeTargets": [
-        { "makeTarget": "test-ci-coverage", "displayName": "CI coverage structural guard" }
+        {
+          "makeTarget": "test-ci-coverage",
+          "displayName": "CI coverage structural guard"
+        }
       ],
       "ciKind": "tier0",
       "ciJobId": "tier0",
@@ -97,7 +121,9 @@
       "makeTarget": "check-inventory",
       "ciKind": "simple",
       "ciJobId": "check-inventory",
-      "needs": ["tier0"],
+      "needs": [
+        "tier0"
+      ],
       "timeoutMinutes": 5,
       "runsOn": "ubuntu-latest"
     },
@@ -108,7 +134,9 @@
       "advisoryReason": "Latency budgets need a pinned self-hosted runner. Without D2B_PERF_STABLE=1 the gate skips, so it must not be counted as an enforcing green job.",
       "ciKind": "simple",
       "ciJobId": "test-performance-budgets",
-      "needs": ["tier0"],
+      "needs": [
+        "tier0"
+      ],
       "timeoutMinutes": 5,
       "runsOn": "ubuntu-latest"
     },
@@ -120,7 +148,9 @@
       },
       "ciKind": "simple-nix",
       "ciJobId": "test-lint",
-      "needs": ["tier0"],
+      "needs": [
+        "tier0"
+      ],
       "checkoutFetchDepth": 0,
       "timeoutMinutes": 10,
       "runsOn": "ubuntu-latest"
@@ -130,8 +160,19 @@
       "makeTarget": "test-changelog",
       "ciKind": "changelog",
       "ciJobId": "test-changelog",
-      "needs": ["tier0"],
+      "needs": [
+        "tier0"
+      ],
       "timeoutMinutes": 10,
+      "runsOn": "ubuntu-latest"
+    },
+    "bazel-check": {
+      "displayName": "Bazel aggregate check graph",
+      "makeTarget": "bazel-check",
+      "localEnv": {
+        "D2B_BAZEL_PROFILE": "local"
+      },
+      "timeoutMinutes": 45,
       "runsOn": "ubuntu-latest"
     },
     "test-rust-main": {
@@ -143,7 +184,9 @@
       "ciKind": "rust",
       "ciJobId": "test-rust-main",
       "ciOnly": true,
-      "needs": ["tier0"],
+      "needs": [
+        "tier0"
+      ],
       "timeoutMinutes": 60,
       "runsOn": "ubuntu-latest"
     },
@@ -156,7 +199,9 @@
       "ciKind": "rust",
       "ciJobId": "test-rust-broker",
       "ciOnly": true,
-      "needs": ["tier0"],
+      "needs": [
+        "tier0"
+      ],
       "timeoutMinutes": 60,
       "runsOn": "ubuntu-latest"
     },
@@ -169,7 +214,9 @@
       "ciKind": "rust",
       "ciJobId": "test-rust-guest-shell-runner",
       "ciOnly": true,
-      "needs": ["tier0"],
+      "needs": [
+        "tier0"
+      ],
       "timeoutMinutes": 60,
       "runsOn": "ubuntu-latest"
     },
@@ -182,7 +229,9 @@
       "ciKind": "rust",
       "ciJobId": "test-rust-no-bash-ast",
       "ciOnly": true,
-      "needs": ["tier0"],
+      "needs": [
+        "tier0"
+      ],
       "timeoutMinutes": 60,
       "runsOn": "ubuntu-latest"
     },
@@ -195,7 +244,9 @@
       "ciKind": "rust",
       "ciJobId": "test-rust-schema",
       "ciOnly": true,
-      "needs": ["tier0"],
+      "needs": [
+        "tier0"
+      ],
       "timeoutMinutes": 60,
       "runsOn": "ubuntu-latest"
     },
@@ -208,7 +259,9 @@
       "ciKind": "rust",
       "ciJobId": "test-rust-inventory",
       "ciOnly": true,
-      "needs": ["tier0"],
+      "needs": [
+        "tier0"
+      ],
       "timeoutMinutes": 60,
       "runsOn": "ubuntu-latest"
     },
@@ -221,7 +274,9 @@
       "ciKind": "rust",
       "ciJobId": "test-rust-supply-chain",
       "ciOnly": true,
-      "needs": ["tier0"],
+      "needs": [
+        "tier0"
+      ],
       "timeoutMinutes": 60,
       "runsOn": "ubuntu-latest"
     },
@@ -257,7 +312,9 @@
       "enforcesForSkip": "test-rust:D2B_SKIP_FIXTURE_BUILD",
       "ciKind": "rust",
       "ciJobId": "test-fixture-contracts",
-      "needs": ["tier0"],
+      "needs": [
+        "tier0"
+      ],
       "timeoutMinutes": 60,
       "runsOn": "ubuntu-latest"
     },
@@ -266,7 +323,9 @@
       "makeTarget": "test-proofs",
       "ciKind": "simple-nix",
       "ciJobId": "test-proofs",
-      "needs": ["tier0"],
+      "needs": [
+        "tier0"
+      ],
       "timeoutMinutes": 15,
       "runsOn": "ubuntu-latest"
     },
@@ -281,7 +340,9 @@
       "displayName": "Enumerate Nix unit checks",
       "ciKind": "nix-unit-discover",
       "ciJobId": "nix-unit-discover",
-      "needs": ["tier0"],
+      "needs": [
+        "tier0"
+      ],
       "timeoutMinutes": 10,
       "runsOn": "ubuntu-latest"
     },
@@ -289,7 +350,9 @@
       "displayName": "Nix unit shard",
       "ciKind": "nix-unit-shards",
       "ciJobId": "nix-unit-shards",
-      "needs": ["nix-unit-discover"],
+      "needs": [
+        "nix-unit-discover"
+      ],
       "timeoutMinutes": 20,
       "runsOn": "ubuntu-latest",
       "maxParallel": 4
@@ -299,7 +362,10 @@
       "makeTarget": "test-nix-unit",
       "ciKind": "nix-unit-rollup",
       "ciJobId": "test-nix-unit",
-      "needs": ["nix-unit-discover", "nix-unit-shards"],
+      "needs": [
+        "nix-unit-discover",
+        "nix-unit-shards"
+      ],
       "timeoutMinutes": 5,
       "runsOn": "ubuntu-latest"
     },
@@ -307,7 +373,9 @@
       "displayName": "Enumerate flake checks (x86_64-linux)",
       "ciKind": "flake-discover",
       "ciJobId": "flake-eval-discover",
-      "needs": ["tier0"],
+      "needs": [
+        "tier0"
+      ],
       "timeoutMinutes": 10,
       "runsOn": "ubuntu-latest"
     },
@@ -315,7 +383,9 @@
       "displayName": "Flake check shard (x86_64-linux)",
       "ciKind": "flake-x86-shards",
       "ciJobId": "flake-eval-x86",
-      "needs": ["flake-eval-discover"],
+      "needs": [
+        "flake-eval-discover"
+      ],
       "timeoutMinutes": 60,
       "runsOn": "ubuntu-latest",
       "maxParallel": 4
@@ -324,7 +394,9 @@
       "displayName": "Flake check shard (x86_64-linux, realized)",
       "ciKind": "flake-x86-realized",
       "ciJobId": "flake-eval-x86-realized",
-      "needs": ["flake-eval-discover"],
+      "needs": [
+        "flake-eval-discover"
+      ],
       "timeoutMinutes": 60,
       "runsOn": "ubuntu-latest",
       "maxParallel": 2
@@ -333,7 +405,9 @@
       "displayName": "Flake non-checks outputs (x86_64-linux)",
       "ciKind": "flake-x86-outputs",
       "ciJobId": "flake-eval-x86-outputs",
-      "needs": ["tier0"],
+      "needs": [
+        "tier0"
+      ],
       "timeoutMinutes": 20,
       "runsOn": "ubuntu-latest"
     },
@@ -341,7 +415,12 @@
       "displayName": "Require all x86 flake jobs to pass",
       "ciKind": "flake-x86-rollup",
       "ciJobId": "test-flake-x86",
-      "needs": ["flake-eval-discover", "flake-eval-x86", "flake-eval-x86-realized", "flake-eval-x86-outputs"],
+      "needs": [
+        "flake-eval-discover",
+        "flake-eval-x86",
+        "flake-eval-x86-realized",
+        "flake-eval-x86-outputs"
+      ],
       "timeoutMinutes": 5,
       "runsOn": "ubuntu-latest"
     },
@@ -349,7 +428,9 @@
       "displayName": "aarch64 smoke eval",
       "ciKind": "flake-aarch64-smoke",
       "ciJobId": "test-flake-aarch64",
-      "needs": ["tier0"],
+      "needs": [
+        "tier0"
+      ],
       "timeoutMinutes": 15,
       "runsOn": "ubuntu-latest"
     },
@@ -358,7 +439,9 @@
       "makeTarget": "test-drift",
       "ciKind": "simple-nix",
       "ciJobId": "test-drift",
-      "needs": ["tier0"],
+      "needs": [
+        "tier0"
+      ],
       "timeoutMinutes": 15,
       "runsOn": "ubuntu-latest"
     },
@@ -367,7 +450,9 @@
       "makeTarget": "test-policy",
       "ciKind": "rust",
       "ciJobId": "test-policy",
-      "needs": ["tier0"],
+      "needs": [
+        "tier0"
+      ],
       "timeoutMinutes": 60,
       "runsOn": "ubuntu-latest"
     },
@@ -376,7 +461,9 @@
       "makeTarget": "test-runtime-ledger",
       "ciKind": "rust",
       "ciJobId": "test-runtime-ledger",
-      "needs": ["tier0"],
+      "needs": [
+        "tier0"
+      ],
       "timeoutMinutes": 30,
       "runsOn": "ubuntu-latest"
     }

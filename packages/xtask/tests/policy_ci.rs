@@ -250,14 +250,18 @@ fn optional_bazel_facade_stays_out_of_ci_schedulers() {
     }
     assert!(
         violations.is_empty(),
-        "optional Bazel parity must not be a CI scheduler target:\n{}",
+        "Bazel must enter CI only through a generated Make job, not a raw facade:\n{}",
         violations.join("\n")
     );
 
     let layer1_manifest = read_repo_file("tests/layer1-jobs.json");
     assert!(
-        !layer1_manifest.contains("bazel-check"),
-        "optional Bazel parity must not enter the Layer-1 manifest"
+        layer1_manifest.contains("bazel-check"),
+        "make check must schedule the Bazel aggregate"
+    );
+    assert!(
+        !layer1_manifest.contains("\"ciJobId\": \"bazel-check\""),
+        "GitHub Layer-1 runners do not host Bazel yet"
     );
 }
 

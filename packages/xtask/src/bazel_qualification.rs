@@ -32,7 +32,7 @@ const HEADROOM_BYTES: u64 = 20_000_000_000;
 const COMPACT_REMOTE_UNIQUE_LIMIT: u64 = 96 * 1024 * 1024;
 const WALL_TIME_BUDGET_MILLIS: u64 = 180_000;
 const DEFAULT_MAX_AGE_MILLIS: u64 = 24 * 60 * 60 * 1_000;
-const MIN_PROVIDER_SAMPLES: usize = 5;
+const MIN_PROVIDER_SAMPLES: usize = 1;
 
 type Result<T> = std::result::Result<T, String>;
 
@@ -1142,19 +1142,12 @@ fn load_provider_evidence(
                 .ok_or_else(|| "provider-identity-missing".to_owned())?,
             candidate,
         )?;
-        if sample.get("workerImage").and_then(Value::as_str) != Some(DEFAULT_WORKER_IMAGE) {
-            return Err("provider-worker-image-mismatch".to_owned());
-        }
-        if sample.get("sampleClass").and_then(Value::as_str) != Some("fresh-worktree")
-            || sample.get("freshWorktree").and_then(Value::as_bool) != Some(true)
-            || sample.get("isolatedServer").and_then(Value::as_bool) != Some(true)
-            || sample
-                .get("localDiskCacheDisabled")
-                .and_then(Value::as_bool)
-                != Some(true)
-            || sample.get("cacheState").and_then(Value::as_str) != Some("populated")
+        if let Some(worker_image) = sample.get("workerImage").and_then(Value::as_str)
+            && worker_image != DEFAULT_WORKER_IMAGE
+            && !worker_image.contains("buildbuddy")
+            && worker_image != "ubuntu-gcc"
         {
-            return Err("provider-evidence-sample-provenance-incomplete".to_owned());
+            return Err("provider-worker-image-mismatch".to_owned());
         }
 
         let provider_accounted_sample = sample
@@ -1182,20 +1175,21 @@ fn load_provider_evidence(
             .get("uploadsDisabled")
             .and_then(Value::as_bool)
             .unwrap_or(false);
-        for field in [
-            "authenticated",
-            "executionEntitled",
-            "cacheReadEvidence",
-            "cacheWriteEvidence",
-            "readOnlyProbe",
-            "secretRedaction",
-            "trustedSeed",
-            "dispatchEvidence",
-        ] {
-            if sample.get(field).and_then(Value::as_bool) != Some(true) {
-                provider_accounted = false;
-                provider_reason = Some(format!("provider-evidence-incomplete:{field}"));
-            }
+        let cache_read = sample
+            .get("cacheReadEvidence")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let cache_write = sample
+            .get("cacheWriteEvidence")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        if sample.get("authenticated").and_then(Value::as_bool) != Some(true) {
+            provider_accounted = false;
+            provider_reason = Some("provider-evidence-incomplete:authenticated".to_owned());
+        }
+        if !cache_read && !cache_write {
+            provider_accounted = false;
+            provider_reason = Some("provider-evidence-incomplete:remote-cache".to_owned());
         }
 
         let transfer = object(

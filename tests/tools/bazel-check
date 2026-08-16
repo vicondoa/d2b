@@ -145,7 +145,15 @@ elif [ ! -r "$(credential_file)" ] || [ ! -s "$(credential_file)" ]; then
 fi
 
 mkdir -p "$SCRATCH"
-bazel_bin="${D2B_BAZEL_BIN:-bazel}"
+bazel_bin="${D2B_BAZEL_BIN:-}"
+if [ -z "$bazel_bin" ]; then
+  if [ -x /nix/store/8jx5b7y9wbx72scyjdv9mvra8qwmjxz9-bazel-9.2.0/bin/bazel ]; then
+    bazel_bin=/nix/store/8jx5b7y9wbx72scyjdv9mvra8qwmjxz9-bazel-9.2.0/bin/bazel
+  else
+    bazel_bin=bazel
+  fi
+fi
+export D2B_BAZEL_BIN="$bazel_bin"
 log="$SCRATCH/$PROFILE.log"
 bep="$SCRATCH/$PROFILE.bep.json"
 
