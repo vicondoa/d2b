@@ -18990,7 +18990,10 @@ fn dispatch_broker_vm_stop_with_timeout_as_inner(
             )
         }) {
             Ok(report) => report,
-            Err(response) => return Ok(response),
+            Err(response) => {
+                state.security_key_sessions.lock().stop_vm(&request.vm);
+                return Ok(response);
+            }
         };
         drained_roles.push(report.role_id.clone());
         if let Some(outcome) = report.shutdown_outcome {

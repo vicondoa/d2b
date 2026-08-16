@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ffi::OsString;
 use std::fs::{self, File};
 use std::io::{self, Write};
@@ -32,6 +32,7 @@ pub struct PidfdTable {
     /// steps via [`PidfdTable::mutation_guard`].
     mutation_lock: Mutex<()>,
     generation: AtomicU64,
+    spawn_reservations: Mutex<HashSet<(String, String)>>,
 }
 
 #[derive(Debug)]
@@ -225,7 +226,23 @@ impl PidfdTable {
             broker_reap_log: OnceLock::new(),
             mutation_lock: Mutex::new(()),
             generation: AtomicU64::new(0),
+            spawn_reservations: Mutex::new(HashSet::new()),
         }
+    }
+
+    /// Reserve one in-flight spawn so a concurrent starter cannot launch a
+    /// second writer against the same VM role.
+    pub fn try_reserve_spawn(&self, vm: &str, role: &str) -> bool {
+        self.spawn_reservations
+            .lock()
+            .insert((vm.to_owned(), role.to_owned()))
+    }
+
+    /// Drop an in-flight spawn reservation.
+    pub fn release_spawn_reservation(&self, vm: &str, role: &str) {
+        self.spawn_reservations
+            .lock()
+            .remove(&(vm.to_owned(), role.to_owned()));
     }
 
     /// Attach a `BrokerReapLog` for ECHILD fast-path handling.
@@ -850,6 +867,16 @@ mod tests {
         ));
         fs::remove_file(&path).ok();
         path
+    }
+
+    #[test]
+    fn spawn_reservation_excludes_a_second_starter() {
+        let path = fresh_state_path("spawn-reservation");
+        let table = PidfdTable::new(path);
+        assert!(table.try_reserve_spawn("work-vm", "swtpm"));
+        assert!(!table.try_reserve_spawn("work-vm", "swtpm"));
+        table.release_spawn_reservation("work-vm", "swtpm");
+        assert!(table.try_reserve_spawn("work-vm", "swtpm"));
     }
 
     fn pipe_owned_fd() -> OwnedFd {

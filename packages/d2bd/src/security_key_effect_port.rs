@@ -87,6 +87,17 @@ pub(crate) fn dispatch_reconcile(
         .map_err(|_| ResourceRuntimeError::ProviderPathUnavailable)?;
     let target = relay_target(&resolver, vm_id)?;
     let backing = backing_token(&admitted.selector_id);
+    if state
+        .security_key_sessions
+        .lock()
+        .has_live_claim(vm_id, &backing)
+    {
+        return Ok(json!({
+            "resourceType": "Device",
+            "provider": PROVIDER_REF,
+            "outcome": "active"
+        }));
+    }
     let admission = SecurityKeyAdmission::from_core(
         admitted.zone_ref,
         admitted.device_uid.clone(),

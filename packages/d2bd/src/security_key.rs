@@ -698,6 +698,9 @@ impl SkSessionTable {
         vm_id: &str,
         backing: d2b_provider_device_security_key::PhysicalUsbBackingToken,
     ) -> bool {
+        if self.has_live_claim(vm_id, &backing) {
+            return true;
+        }
         if self.sessions.contains_key(vm_id)
             || self.backing_holders.contains_key(&backing)
             || self.backing_holders.values().any(|holder| holder == vm_id)
@@ -706,6 +709,19 @@ impl SkSessionTable {
         }
         self.backing_holders.insert(backing, vm_id.to_owned());
         true
+    }
+
+    /// True when this VM already holds this backing token and a live relay.
+    pub fn has_live_claim(
+        &self,
+        vm_id: &str,
+        backing: &d2b_provider_device_security_key::PhysicalUsbBackingToken,
+    ) -> bool {
+        self.sessions.contains_key(vm_id)
+            && self
+                .backing_holders
+                .get(backing)
+                .is_some_and(|holder| holder == vm_id)
     }
 
     /// Release a previously reserved physical key and stop its relay, if one
@@ -1471,6 +1487,20 @@ mod tests {
 
         table.release_backing("vm-a", &backing);
         assert!(table.claim_backing("vm-b", backing));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn live_same_vm_claim_is_adopted() {
+        let mut table = SkSessionTable::default();
+        let backing = d2b_provider_device_security_key::PhysicalUsbBackingToken::from_core([3; 32]);
+        let state = Arc::new(parking_lot::Mutex::new(SecurityKeyState::new("selector")));
+        let (abort, _stopped) = SkAcceptAbort::new();
+
+        assert!(table.claim_backing("vm-a", backing.clone()));
+        table.register("vm-a".to_owned(), SkAcceptHandle { state, abort });
+        assert!(table.has_live_claim("vm-a", &backing));
+        assert!(table.claim_backing("vm-a", backing.clone()));
+        assert!(!table.claim_backing("vm-b", backing));
     }
 
     #[tokio::test(flavor = "current_thread")]

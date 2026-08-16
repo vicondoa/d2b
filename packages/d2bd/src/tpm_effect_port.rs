@@ -72,6 +72,17 @@ pub trait CoreTpmEffectExecutor {
     fn stop(&mut self) -> Result<(), TpmEffectError>;
 }
 
+struct SwtpmSpawnReservation<'a> {
+    table: &'a crate::supervisor::pidfd_table::PidfdTable,
+    vm: String,
+}
+
+impl Drop for SwtpmSpawnReservation<'_> {
+    fn drop(&mut self) {
+        self.table.release_spawn_reservation(&self.vm, "swtpm");
+    }
+}
+
 /// Concrete daemon-side TPM effect executor.
 ///
 /// All host paths, binaries, state markers, and pidfds remain inside the
@@ -86,6 +97,7 @@ pub(crate) struct LiveTpmEffectExecutor<'a> {
     legacy_migration_required: bool,
     prepared_flush_ticket: Option<FlushLaunchTicket>,
     prepared_swtpm_ticket: Option<SwtpmStartLaunchTicket>,
+    adopted_live_worker: bool,
 }
 
 impl<'a> LiveTpmEffectExecutor<'a> {
@@ -106,6 +118,7 @@ impl<'a> LiveTpmEffectExecutor<'a> {
             legacy_migration_required,
             prepared_flush_ticket: None,
             prepared_swtpm_ticket: None,
+            adopted_live_worker: false,
         }
     }
 
@@ -267,6 +280,9 @@ impl CoreTpmEffectExecutor for LiveTpmEffectExecutor<'_> {
     }
 
     fn flush(&mut self, ticket: &FlushLaunchTicket) -> Result<(), TpmEffectError> {
+        if self.adopted_live_worker {
+            return Ok(());
+        }
         if self.prepared_flush_ticket.as_ref() != Some(ticket) {
             return Err(TpmEffectError::StateIntegrity);
         }
@@ -329,7 +345,10 @@ impl CoreTpmEffectExecutor for LiveTpmEffectExecutor<'_> {
             DurableSwtpmLiveness::Missing
         };
         match durable_swtpm_adoption_gate(snapshot.as_ref(), &self.device_uid, liveness)? {
-            DurableSwtpmAdoption::Adopted => return Ok(()),
+            DurableSwtpmAdoption::Adopted => {
+                self.adopted_live_worker = true;
+                return Ok(());
+            }
             DurableSwtpmAdoption::ClaimAndAdopt => {
                 let mut claimed = snapshot.expect("claim requires a durable snapshot");
                 claimed.owner_resource_uid = Some(self.device_uid.as_str().to_owned());
@@ -340,6 +359,7 @@ impl CoreTpmEffectExecutor for LiveTpmEffectExecutor<'_> {
                     &claimed,
                 )
                 .map_err(|_| TpmEffectError::Transient)?;
+                self.adopted_live_worker = true;
                 return Ok(());
             }
             DurableSwtpmAdoption::RemoveAndSpawn => {
@@ -354,6 +374,26 @@ impl CoreTpmEffectExecutor for LiveTpmEffectExecutor<'_> {
             }
             DurableSwtpmAdoption::Spawn => {}
         }
+        if !self
+            .state
+            .pidfd_table
+            .try_reserve_spawn(self.vm_id.as_str(), "swtpm")
+        {
+            if self
+                .state
+                .pidfd_table
+                .still_alive_same_start_time(self.vm_id.as_str(), "swtpm")
+            {
+                self.adopted_live_worker = true;
+                return Ok(());
+            }
+            return Err(TpmEffectError::Transient);
+        }
+        let _spawn_reservation = SwtpmSpawnReservation {
+            table: &self.state.pidfd_table,
+            vm: self.vm_id.as_str().to_owned(),
+        };
+        self.adopted_live_worker = false;
         let swtpm_node = self.swtpm_node()?;
         {
             let _mguard = self.state.pidfd_table.mutation_guard();
