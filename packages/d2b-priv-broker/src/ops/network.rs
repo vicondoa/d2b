@@ -384,10 +384,13 @@ pub fn persist_persistent_tap_realization(
     {
         let current: PersistentTapRealization =
             serde_json::from_reader(existing).map_err(|_| NetworkOpError::RealizationConflict)?;
-        if current == realization {
+        if current.deleted {
+            fs::remove_file(&row_path).map_err(|_| NetworkOpError::RealizationConflict)?;
+        } else if current == realization {
             return Ok(());
+        } else {
+            return Err(NetworkOpError::RealizationConflict);
         }
-        return Err(NetworkOpError::RealizationConflict);
     }
     let temp_path = root.join(format!(".{}.json.tmp", attachment_id.as_str()));
     match fs::symlink_metadata(&temp_path) {
@@ -487,6 +490,16 @@ pub fn mark_persistent_tap_realization_deleted(
     let bytes =
         serde_json::to_vec(&realization).map_err(|_| NetworkOpError::RealizationUnavailable)?;
     let temp_path = root.join(format!(".{}.json.deleted.tmp", attachment_id.as_str()));
+    match fs::symlink_metadata(&temp_path) {
+        Ok(metadata) if metadata.file_type().is_symlink() || metadata.mode() & 0o022 != 0 => {
+            return Err(NetworkOpError::RealizationUnavailable);
+        }
+        Ok(_) => {
+            fs::remove_file(&temp_path).map_err(|_| NetworkOpError::RealizationUnavailable)?;
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => return Err(NetworkOpError::RealizationUnavailable),
+    }
     let mut file = fs::OpenOptions::new()
         .write(true)
         .create_new(true)

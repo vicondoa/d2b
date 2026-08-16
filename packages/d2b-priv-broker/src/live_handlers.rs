@@ -4894,6 +4894,31 @@ mod tests {
     }
 
     #[test]
+    fn live_apply_nm_unmanaged_adopts_legacy_owned_file() {
+        let exec = FakeReconcileExecutor::new();
+        let root = TestDir::new("nm-unmanaged-legacy");
+        let intent = sample_nm_unmanaged_intent(&root);
+        std::fs::write(
+            &intent.file_path,
+            "# managed by d2b broker - do not edit by hand\n[keyfile]\nunmanaged-devices=interface-name:d2b-*\n",
+        )
+        .unwrap();
+
+        assert_eq!(
+            live_apply_nm_unmanaged_with_reloaders(&exec, &intent, || Ok(()), |_| Ok(())).unwrap(),
+            Some(NmReloadMethod::Dbus)
+        );
+        assert_eq!(
+            exec.take_log(),
+            vec![ReconcileOp::WriteAtomicFile {
+                path: intent.file_path,
+                mode: intent.mode,
+                contents: intent.contents.into_bytes(),
+            }]
+        );
+    }
+
+    #[test]
     fn update_host_runtime_nft_hash_rewrites_runtime_json() {
         let root = TestDir::new("host-runtime-nft-hash");
         let runtime = sample_host_runtime(root.join("host-runtime.json"));

@@ -19090,39 +19090,40 @@ fn dispatch_broker_host_prepare_as(
     ) {
         return Ok(response);
     }
-    if let Err(response) = dispatch_broker_ack_request(
-        state,
-        VERB,
-        "ApplyNmUnmanaged",
-        BrokerRequest::ApplyNmUnmanaged(BrokerApplyNmUnmanagedRequest {
-            bundle_nm_intent_ref: BundleOpId::new(intent_id_nm_unmanaged_host()),
-            scope_id: ScopeId::new("host"),
-            destroy: false,
-            tracing_span_id: None,
-        }),
-    ) {
-        return Ok(response);
-    }
-
-    let mut bridge_ops = 0usize;
-    for env in &host.environments {
-        if let Err(error) =
-            network_effect_port::ensure_bridge(state, caller_role.clone(), &resolver, &env.env)
-        {
-            return Ok(broker_failure_response(
-                VERB,
-                format!("network bridge effect refused ({})", error.code()),
-                "Regenerate the trusted network bundle and retry host prepare.".to_owned(),
-                None,
-            ));
-        }
-        bridge_ops += 1;
+    let generation =
+        resolver
+            .installed_generation_identity()
+            .ok_or(TypedError::InternalBrokerUnavailable {
+                path: broker_socket_path(state),
+                detail: "installed generation unavailable for Network effect context".to_owned(),
+            })?;
+    let context = d2b_provider_network_local::broker::NetworkEffectContext::for_host_nm(
+        ScopeId::new("host"),
+        BundleOpId::new(intent_id_nm_unmanaged_host()),
+        d2b_contracts::v3::ResourceBundleGenerationId::parse(generation.as_str()).map_err(
+            |_| TypedError::InternalBrokerUnavailable {
+                path: broker_socket_path(state),
+                detail: "installed generation invalid for Network effect context".to_owned(),
+            },
+        )?,
+    );
+    let port = network_effect_port::production_port(state, caller_role.clone(), context.clone());
+    let broker = port.into_broker();
+    if let Err(error) =
+        d2b_provider_network_local::broker::NetworkBroker::apply_nm_unmanaged(&broker, &context)
+    {
+        return Ok(broker_failure_response(
+            VERB,
+            format!("NetworkManager effect refused ({})", error.code()),
+            "Regenerate the trusted network bundle and retry host prepare.".to_owned(),
+            None,
+        ));
     }
 
     Ok(applied_response(
         VERB,
         format!(
-            "host prepare: applied 1 nft + {route_ops} route + {sysctl_ops} sysctl + 1 hosts + 1 nm-unmanaged + {bridge_ops} bridge ops"
+            "host prepare: applied 1 nft + {route_ops} route + {sysctl_ops} sysctl + 1 hosts + 1 nm-unmanaged ops"
         ),
     ))
 }

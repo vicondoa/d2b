@@ -2365,28 +2365,22 @@ fn render_host_nft_script(host: &HostJson) -> String {
 }
 
 fn render_env_nft_subset(host: &HostJson, env: &NetEnv) -> String {
-    let mut buf = String::new();
     let bridge_ifname = resolved_ifname_for(host, &env.env, None, crate::host::TapRole::NetVmLan)
         .unwrap_or_else(|| env.bridge.as_str().to_owned());
+    let marker = format!(
+        "d2b managed: {}:env:{}",
+        host.nftables.ownership_id, env.env
+    );
+    let chain = format!("forward-{}", env.env);
+    let mut buf = String::new();
     buf.push_str(&format!(
-        "# d2b env nft subset for {} (bridge {})\n",
-        env.env, bridge_ifname
+        "table inet d2b {{\n  chain \"{chain}\" {{ type filter hook forward priority -5; policy drop; comment \"{marker}\";\n"
     ));
-    buf.push_str(&format!("# table parent: {}\n", host.nftables.table));
-    for blocked in &env.net_vm_forward_blocklist {
-        buf.push_str(&format!("# blocklist: {blocked}\n"));
-    }
-    for flag in &env.bridge_port_flags {
-        buf.push_str(&format!(
-            "# bridge-port-flags: role={:?} isolated={} neigh_suppress={} learning={} unicast_flood={} rule={}\n",
-            flag.role,
-            flag.isolated,
-            flag.neigh_suppress,
-            flag.resolved_learning(),
-            flag.resolved_unicast_flood(),
-            flag.rule
-        ));
-    }
+    buf.push_str(&format!(
+        "    iifname \"{}\" ct state new accept comment \"{}\"\n",
+        bridge_ifname, marker
+    ));
+    buf.push_str("  }\n}\n");
     buf
 }
 

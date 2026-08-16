@@ -3579,22 +3579,7 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 match crate::ops::tap::live_create_persistent_tap(&exec, resolver, &req, audit_log)
                 {
                     Ok(outcome) => outcome,
-                    Err(error) => {
-                        if req.attachment_id.is_some() {
-                            if let Err(cleanup) =
-                                crate::ops::network::remove_persistent_tap_realization(
-                                    &config.state_dir,
-                                    req.attachment_id.as_ref().expect("checked above"),
-                                )
-                            {
-                                return Err(BrokerError::RequestValidation {
-                                    operation: "CreatePersistentTap",
-                                    reason: cleanup.code(),
-                                });
-                            }
-                        }
-                        return Err(BrokerError::LiveHandler(error.to_string()));
-                    }
+                    Err(error) => return Err(BrokerError::LiveHandler(error.to_string())),
                 };
             if let Err(error) = crate::ops::network::persist_persistent_tap_realization(
                 &config.state_dir,
@@ -3605,6 +3590,17 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                     &crate::ops::network::SystemPersistentTapBackend,
                     outcome.tap_ifname.as_str(),
                 ) {
+                    return Err(BrokerError::RequestValidation {
+                        operation: "CreatePersistentTap",
+                        reason: cleanup.code(),
+                    });
+                }
+                if let Some(attachment_id) = req.attachment_id.as_ref()
+                    && let Err(cleanup) = crate::ops::network::remove_persistent_tap_realization(
+                        &config.state_dir,
+                        attachment_id,
+                    )
+                {
                     return Err(BrokerError::RequestValidation {
                         operation: "CreatePersistentTap",
                         reason: cleanup.code(),
