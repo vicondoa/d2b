@@ -2522,8 +2522,19 @@ async fn register_system_core_session(
         )
         .await
         .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
+    let controller_generation = authz_state
+        .snapshot
+        .controller_generation
+        .ok_or(ResourceRuntimeError::AuthenticationUnavailable)?;
     let subject = authorizer
-        .issue_authenticated_subject(candidate.route_binding().context().clone(), authz_state)
+        .issue_authenticated_subject(
+            candidate
+                .route_binding()
+                .context()
+                .clone()
+                .with_controller_generation(controller_generation),
+            authz_state,
+        )
         .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?;
     let service = Arc::new(
         UnregisteredBusAdapter::bind_unregistered_session(api, subject)
