@@ -449,11 +449,13 @@ fn exception_manifest_and_generated_ownership_are_closed() {
     let listed = exception_paths();
     for path in package_build_files() {
         let source = read_repo_file(&path);
-        if source.contains("# keep") {
-            assert!(
-                listed.contains(&path),
-                "hand-written BUILD exception is not listed: {path}"
-            );
+        for marker in ["# keep", "# gazelle:ignore"] {
+            if source.contains(marker) {
+                assert!(
+                    listed.contains(&path),
+                    "hand-written BUILD exception marker {marker:?} is not listed: {path}"
+                );
+            }
         }
     }
 }

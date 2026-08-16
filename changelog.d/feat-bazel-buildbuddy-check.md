@@ -12,3 +12,4 @@
 
 - Fixed default-config Bazel Rust tests to carry Cargo dev-dependency feature
   variants transitively, including d2bd's `test-support` dependencies.
+- Fixed upstream Gazelle idempotence for hand-owned Bazel package BUILD files.
