@@ -5,5 +5,20 @@ edition = "2024"
 publish = false
 license.workspace = true
 
+[features]
+test-support = []
+
 [lints]
 workspace = true
+
+[dependencies]
+d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
+d2b-provider-toolkit = { path = "../d2b-provider-toolkit", version = "0.0.0-bootstrap" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+
+[[test]]
+name = "provider_behavior"
+path = "tests/provider_behavior.rs"
+required-features = ["test-support"]

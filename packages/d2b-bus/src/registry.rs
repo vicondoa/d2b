@@ -375,6 +375,12 @@ pub trait BusEndpoint: Send + Sync + 'static {
     /// Deliver one already-authorized method invocation.
     async fn invoke(&self, request: DeliveredInvocation) -> Result<BusResponse, EndpointError>;
 
+    /// Send one response for a request received on the authenticated
+    /// ComponentSession transport.
+    async fn send_inbound_response(&self, _frame: Vec<u8>) -> Result<(), EndpointError> {
+        Err(EndpointError::Unavailable)
+    }
+
     /// Open one already-authorized named stream.
     async fn open_stream(&self, request: DeliveredStream) -> Result<(), EndpointError>;
 
@@ -684,6 +690,7 @@ impl Registry {
             Some(*session) != replacing
                 && registered.identity.subject_ref == registration.identity.subject_ref
                 && registered.identity.subject_uid == registration.identity.subject_uid
+                && registered.identity.service == registration.identity.service
         }) {
             return Err(RegistryError::DuplicateSessionIdentity);
         }

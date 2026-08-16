@@ -360,6 +360,20 @@ pub fn ttrpc_request_id(generation: u64, frame: &[u8]) -> Result<RequestId, Sess
     RequestId::new(bytes).map_err(|_| SessionServerError::Frame)
 }
 
+/// Return whether an exact frame is a ttrpc request.
+pub fn ttrpc_is_request(frame: &[u8]) -> bool {
+    validate_frame(frame)
+        .map(|header| header.type_ == ttrpc::proto::MESSAGE_TYPE_REQUEST)
+        .unwrap_or(false)
+}
+
+/// Return whether an exact frame is a ttrpc response.
+pub fn ttrpc_is_response(frame: &[u8]) -> bool {
+    validate_frame(frame)
+        .map(|header| header.type_ == ttrpc::proto::MESSAGE_TYPE_RESPONSE)
+        .unwrap_or(false)
+}
+
 /// Return the ttrpc stream identifier after exact frame validation.
 pub fn ttrpc_stream_id(frame: &[u8]) -> Result<u32, SessionServerError> {
     Ok(validate_frame(frame)?.stream_id)
