@@ -17,10 +17,11 @@
       "uniqueInputBytes": 1034798612
     },
     "remoteClass": {
-      "actionCount": 55,
-      "grossInputBytes": 388294439,
-      "uniqueInputBytes": 3639469,
-      "highIoLocal": ["Rustc", "CargoBuildScriptRun", "TestRunner"]
+      "actionCount": 59,
+      "grossInputBytes": 467137819,
+      "uniqueInputBytes": 82452586,
+      "highIoLocal": ["Rustc", "CargoBuildScriptRun"],
+      "included": ["ExtractCargoTomlEnvVars", "TestRunner"]
     },
     "pipelining": {
       "status": "rejected",
@@ -78,8 +79,10 @@
   },
   "remote": {
     "provider": "buildbuddy",
-    "endpoint": "grpcs://remote.buildbuddy.io",
-    "besEndpoint": "grpcs://remote.buildbuddy.io",
+    "endpoint": "grpcs://d2b.buildbuddy.io",
+    "besEndpoint": "grpcs://d2b.buildbuddy.io",
+    "besResultsUrl": "https://d2b.buildbuddy.io/invocation/",
+    "remoteTimeout": "10m",
     "auth": "credential-helper",
     "remoteDownloadOutputs": "minimal",
     "remoteRetries": 0,
@@ -102,7 +105,7 @@
       "tests/tools/buildbuddy-qualification"
     ],
     "allowedSecurityDigests": [
-      "sha256:a3b1a9a6a7a8b5fc52464fa665bdfcd58a999ea97b67266ee1958b48fc1b6837"
+      "sha256:22aec4ae748fb6966b68e1baf83708dce8d9d7f68a81bb7de1f6e059dad107fd"
     ],
     "untrustedCredential": "none",
     "trustedCredential": "credential-helper"

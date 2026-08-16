@@ -10,10 +10,12 @@ retry.
 The committed `.bazelrc` defines `common`, `local`, `remote`, `trusted-seed`,
 and `qualification` over the same `//...` target set. Remote profiles use:
 
-- Bazel 9.2 credential-helper authentication only;
+- Bazel 9.2 credential-helper authentication only (never `--remote_header`);
+- the d2b BuildBuddy workspace at `d2b.buildbuddy.io`;
 - `--remote_download_outputs=minimal`;
 - zero Bazel remote retries, because the facade owns fallback;
-- the immutable `d2b-bazel-worker/v1` platform contract; and
+- the immutable `d2b-bazel-worker/v1` platform contract;
+- BuildBuddy Ubuntu GCC via `@toolchains_buildbuddy//toolchains/cc:ubuntu_gcc_x86_64`; and
 - separate developer, trusted-seed, and qualification instance namespaces.
 
 Header authentication is forbidden. Do not add `--remote_header`,
@@ -37,9 +39,10 @@ eligibility digest and cache policy. The current representative bounds are:
 - 207 actions;
 - 162901404939 gross input bytes;
 - 1034798612 unique input bytes;
-- compact remote class limited to 55 `ExtractCargoTomlEnvVars` actions
-  (388 MB gross, 3.6 MB unique);
-- `Rustc`, `CargoBuildScriptRun`, and `TestRunner` forced local; and
+- compact remote class limited to 59 `ExtractCargoTomlEnvVars` and
+  `TestRunner` actions (467 MB gross, 82 MB unique);
+- `Rustc` local-exec with remote cache only (toolchain is 876 MB unique);
+- `CargoBuildScriptRun` forced fully local; and
 - pipelining rejected because it increases gross inputs and fan-out.
 
 The graph, configuration, platform, toolchain, and pipelining values must also

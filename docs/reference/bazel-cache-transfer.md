@@ -121,13 +121,20 @@ cargo run --locked -p xtask -- bazel-cache-transfer compare \
 
 A representative local log of `//packages/d2b-core:d2b_core_test` and
 `//packages/d2b-contracts:d2b_contracts_test` measured 207 actions, about
-163 GB gross inputs, 1.03 GB unique inputs, and a 157x fan-out. Compact
-remote eligibility keeps `Rustc`, `CargoBuildScriptRun`, and `TestRunner`
-fully local, leaving 55 `ExtractCargoTomlEnvVars` actions remote at about
-388 MB gross and 3.6 MB unique. Enabling rules_rust pipelined compilation
-on that same pair increased action count, gross inputs, and fan-out, so it
-is not part of the default configuration. The 80 GB working budget of the
-100 GB monthly allowance is reserved for compact remote classes only.
+163 GB gross inputs, 1.03 GB unique inputs, and a 157x fan-out. The largest
+remote set that still fits the 80 GB working budget of the 100 GB monthly
+allowance is `ExtractCargoTomlEnvVars` plus `TestRunner` (59 actions, 467 MB
+gross, 82 MB unique, about 171 cold runs per month). Adding
+`CargoBuildScriptRun` drops that to three cold runs. `Rustc` is 143 GB
+gross and cannot be remotely executed even once: 876 MB of that unique
+input is the rustc+LLVM toolchain (libLLVM.so listed three times, plus
+librustc_driver, cargo, clippy, rustdoc), while first-party sources are
+about 4 MB. Remote execution would re-upload that toolchain on every
+compile unless the worker image already holds those blobs. Rustc stays
+local-exec with remote-cache-only so later machines reuse rlib outputs
+without paying the 1.1 GB-per-action exec tax. Enabling rules_rust
+pipelined compilation on that same pair increased action count, gross
+inputs, and fan-out, so it is not part of the default configuration.
 
 Comparison rejects schema, graph, eligibility, configuration, platform, and
 toolchain mismatches. There are no arbitrary transfer thresholds in this

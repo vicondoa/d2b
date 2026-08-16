@@ -23,32 +23,46 @@ build:local --remote_executor=
 build:local --remote_cache=
 build:local --bes_backend=
 
-# Remote profiles use the direct BuildBuddy service. Authentication is
-# supplied only by the credential helper configured in private user setup.
-build:remote --remote_executor=grpcs://remote.buildbuddy.io
-build:remote --remote_cache=grpcs://remote.buildbuddy.io
-build:remote --bes_backend=grpcs://remote.buildbuddy.io
-build:remote --credential_helper=remote.buildbuddy.io=%workspace%/tests/tools/bazel-check
+# Remote profiles use the d2b BuildBuddy workspace. Authentication is
+# the credential helper only. Direct API-key headers leak into BEP.
+build:remote --remote_executor=grpcs://d2b.buildbuddy.io
+build:remote --remote_cache=grpcs://d2b.buildbuddy.io
+build:remote --bes_backend=grpcs://d2b.buildbuddy.io
+build:remote --bes_results_url=https://d2b.buildbuddy.io/invocation/
+build:remote --credential_helper=d2b.buildbuddy.io=%workspace%/tests/tools/bazel-check
+build:remote --remote_timeout=10m
 build:remote --remote_instance_name=d2b/developer/linux-x86_64/rules_rust/worker-v1/minimal/lock-v1
-build:remote --platforms=//bazel/platforms:buildbuddy_x86_64_linux
+build:remote --platforms=@toolchains_buildbuddy//platforms:linux_x86_64
+build:remote --extra_execution_platforms=@toolchains_buildbuddy//platforms:linux_x86_64
+build:remote --extra_toolchains=@toolchains_buildbuddy//toolchains/cc:ubuntu_gcc_x86_64
 build:remote --remote_upload_local_results=false
-build:remote --modify_execution_info=Rustc=+no-remote,CargoBuildScriptRun=+no-remote,TestRunner=+no-remote
+# Rustc may use the remote action cache (outputs only). Do not remotely
+# execute it: each compile declares ~1.1 GB of rustc+LLVM inputs.
+build:remote --modify_execution_info=Rustc=+no-remote-exec,CargoBuildScriptRun=+no-remote
 
-build:trusted-seed --remote_executor=grpcs://remote.buildbuddy.io
-build:trusted-seed --remote_cache=grpcs://remote.buildbuddy.io
-build:trusted-seed --bes_backend=grpcs://remote.buildbuddy.io
-build:trusted-seed --credential_helper=remote.buildbuddy.io=%workspace%/tests/tools/bazel-check
+build:trusted-seed --remote_executor=grpcs://d2b.buildbuddy.io
+build:trusted-seed --remote_cache=grpcs://d2b.buildbuddy.io
+build:trusted-seed --bes_backend=grpcs://d2b.buildbuddy.io
+build:trusted-seed --bes_results_url=https://d2b.buildbuddy.io/invocation/
+build:trusted-seed --credential_helper=d2b.buildbuddy.io=%workspace%/tests/tools/bazel-check
+build:trusted-seed --remote_timeout=10m
 build:trusted-seed --remote_instance_name=d2b/trusted-seed/linux-x86_64/rules_rust/worker-v1/minimal/lock-v1
-build:trusted-seed --platforms=//bazel/platforms:buildbuddy_x86_64_linux
+build:trusted-seed --platforms=@toolchains_buildbuddy//platforms:linux_x86_64
+build:trusted-seed --extra_execution_platforms=@toolchains_buildbuddy//platforms:linux_x86_64
+build:trusted-seed --extra_toolchains=@toolchains_buildbuddy//toolchains/cc:ubuntu_gcc_x86_64
 build:trusted-seed --remote_upload_local_results=true
 build:trusted-seed --remote_cache_async=false
-build:trusted-seed --modify_execution_info=Rustc=+no-remote,CargoBuildScriptRun=+no-remote,TestRunner=+no-remote
+build:trusted-seed --modify_execution_info=Rustc=+no-remote-exec,CargoBuildScriptRun=+no-remote
 
-build:qualification --remote_executor=grpcs://remote.buildbuddy.io
-build:qualification --remote_cache=grpcs://remote.buildbuddy.io
-build:qualification --bes_backend=grpcs://remote.buildbuddy.io
-build:qualification --credential_helper=remote.buildbuddy.io=%workspace%/tests/tools/bazel-check
+build:qualification --remote_executor=grpcs://d2b.buildbuddy.io
+build:qualification --remote_cache=grpcs://d2b.buildbuddy.io
+build:qualification --bes_backend=grpcs://d2b.buildbuddy.io
+build:qualification --bes_results_url=https://d2b.buildbuddy.io/invocation/
+build:qualification --credential_helper=d2b.buildbuddy.io=%workspace%/tests/tools/bazel-check
+build:qualification --remote_timeout=10m
 build:qualification --remote_instance_name=d2b/qualification/linux-x86_64/rules_rust/worker-v1/minimal/lock-v1
-build:qualification --platforms=//bazel/platforms:buildbuddy_x86_64_linux
+build:qualification --platforms=@toolchains_buildbuddy//platforms:linux_x86_64
+build:qualification --extra_execution_platforms=@toolchains_buildbuddy//platforms:linux_x86_64
+build:qualification --extra_toolchains=@toolchains_buildbuddy//toolchains/cc:ubuntu_gcc_x86_64
 build:qualification --remote_upload_local_results=false
-build:qualification --modify_execution_info=Rustc=+no-remote,CargoBuildScriptRun=+no-remote,TestRunner=+no-remote
+build:qualification --modify_execution_info=Rustc=+no-remote-exec,CargoBuildScriptRun=+no-remote

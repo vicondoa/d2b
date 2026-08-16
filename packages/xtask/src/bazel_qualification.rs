@@ -14,11 +14,11 @@ use sha2::{Digest, Sha256};
 const SCHEMA_VERSION: u64 = 1;
 const DEFAULT_U9_REPORT: &str = "tests/golden/bazel/cache-transfer-representative.json";
 const DEFAULT_U9_REPORT_DIGEST: &str =
-    "sha256:b95aa3c27f9dda7947f303da7792a09416ce4d1e4092eca75fc9a5e36898f241";
+    "sha256:efa5156475d12b326543cc8199ddfe0ab50a822efdcfe0e8aa836995754ea979";
 const DEFAULT_U9_TARGET_SET_DIGEST: &str =
     "sha256:576bbb5fd15ccdd2ae7db72515aefdf66b2413a60687921d1077f7dab5593dae";
 const DEFAULT_U9_CONFIGURATION_DIGEST: &str =
-    "sha256:abfef8cdc202400e6201136941b083160c5b0fa45fa2cf89085130ca37b43186";
+    "sha256:235901475fb814988c5b6a5672cae92fb6c091dab92ff2ae8abfc33fb41b3436";
 const DEFAULT_TARGET_SET: &str = "tests/golden/bazel/cache-policy.json";
 const DEFAULT_CONFIGURATION: &str = ".bazelrc";
 const DEFAULT_SELECTED_CLOSURE: &str = "tests/golden/bazel/eligibility.json";
@@ -29,7 +29,7 @@ const DEFAULT_WORKER_IMAGE: &str = "d2b-bazel-worker/v1";
 const REQUIRED_PROJECTION: &str = "xtask-buildbuddy-probe/v1";
 const WORKING_BUDGET_BYTES: u64 = 80_000_000_000;
 const HEADROOM_BYTES: u64 = 20_000_000_000;
-const COMPACT_REMOTE_UNIQUE_LIMIT: u64 = 64 * 1024 * 1024;
+const COMPACT_REMOTE_UNIQUE_LIMIT: u64 = 96 * 1024 * 1024;
 const WALL_TIME_BUDGET_MILLIS: u64 = 180_000;
 const DEFAULT_MAX_AGE_MILLIS: u64 = 24 * 60 * 60 * 1_000;
 const MIN_PROVIDER_SAMPLES: usize = 5;

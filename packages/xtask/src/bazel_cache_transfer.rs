@@ -13,8 +13,8 @@ use sha2::{Digest as ShaDigest, Sha256};
 
 const SCHEMA_VERSION: u32 = 1;
 const TOP_ARTIFACT_COUNT: usize = 20;
-const COMPACT_UNIQUE_INPUT_LIMIT: u64 = 64 * 1024 * 1024;
-const HIGH_IO_MNEMONICS: &[&str] = &["Rustc", "CargoBuildScriptRun", "TestRunner"];
+const COMPACT_UNIQUE_INPUT_LIMIT: u64 = 96 * 1024 * 1024;
+const HIGH_IO_MNEMONICS: &[&str] = &["Rustc", "CargoBuildScriptRun"];
 
 type Result<T> = std::result::Result<T, String>;
 

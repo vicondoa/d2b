@@ -446,12 +446,6 @@
       "marker": "# keep"
     },
     {
-      "label": "//packages/d2b-wlproxy-spike:d2b-wlproxy-spike",
-      "path": "packages/d2b-wlproxy-spike/BUILD.bazel",
-      "reason": "standalone Rust spike target is hand-owned because it is outside the generated production package set",
-      "marker": "# keep"
-    },
-    {
       "label": "//packages/d2b-zone-routing:cargo_workspace_sources",
       "path": "packages/d2b-zone-routing/BUILD.bazel",
       "reason": "Cargo workspace source filegroup is hand-owned so Gazelle preserves cross-package source visibility",

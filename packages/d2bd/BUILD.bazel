@@ -143,7 +143,7 @@ d2bd_shared_deps = [
 d2bd_test_shared_deps = [
     "//packages/d2b-audit:d2b_audit_test_support",
     "//packages/d2b-bus:d2b_bus",
-    "//packages/d2b-contracts:d2b_contracts_test_support",
+    "//packages/d2b-contracts:d2b_contracts",
     "//packages/d2b-gateway:d2b_gateway",
     "//packages/d2b-gateway-runtime:d2b_gateway_runtime",
     "//packages/d2b-process:d2b_process",

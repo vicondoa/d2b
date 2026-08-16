@@ -31,21 +31,21 @@
     {
       "key": "fully-local",
       "value": {
-        "actionCount": 152,
-        "grossInputBytes": 162513110500,
-        "uniqueInputBytes": 1031269894,
-        "outputBytes": 355133072,
-        "fanOutRatio": 157.58543078345696
+        "actionCount": 148,
+        "grossInputBytes": 162434267120,
+        "uniqueInputBytes": 952456777,
+        "outputBytes": 355086920,
+        "fanOutRatio": 170.54240259765615
       }
     },
     {
       "key": "rbe",
       "value": {
-        "actionCount": 55,
-        "grossInputBytes": 388294439,
-        "uniqueInputBytes": 3639469,
-        "outputBytes": 28016,
-        "fanOutRatio": 106.68986025159165
+        "actionCount": 59,
+        "grossInputBytes": 467137819,
+        "uniqueInputBytes": 82452586,
+        "outputBytes": 74168,
+        "fanOutRatio": 5.665532661401305
       }
     },
     {
@@ -144,14 +144,14 @@
       "fanOutRatio": 1.0003839843055566,
       "byClass": {
         "fully-local": {
-          "actionCount": 4,
-          "grossInputBytes": 78843380,
-          "uniqueInputBytes": 78813117
-        },
-        "rbe": {
           "actionCount": 0,
           "grossInputBytes": 0,
           "uniqueInputBytes": 0
+        },
+        "rbe": {
+          "actionCount": 4,
+          "grossInputBytes": 78843380,
+          "uniqueInputBytes": 78813117
         },
         "remote-cache-only": {
           "actionCount": 0,

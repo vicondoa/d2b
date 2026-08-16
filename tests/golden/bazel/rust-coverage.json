@@ -5744,22 +5744,6 @@
       "execution": "run"
     },
     {
-      "id": "packages/d2b-wlproxy-spike/d2b-wlproxy-spike",
-      "label": "//packages/d2b-wlproxy-spike:d2b-wlproxy-spike",
-      "sources": [
-        "packages/d2b-wlproxy-spike/src/main.rs"
-      ],
-      "execution": "compile-only"
-    },
-    {
-      "id": "packages/d2b-wlproxy-spike/d2b-wlproxy-spike_test",
-      "label": "//packages/d2b-wlproxy-spike:d2b-wlproxy-spike_test",
-      "sources": [
-        "packages/d2b-wlproxy-spike/src/main.rs"
-      ],
-      "execution": "run"
-    },
-    {
       "id": "packages/d2b-zone-routing/d2b_zone_routing",
       "label": "//packages/d2b-zone-routing:d2b_zone_routing",
       "sources": [

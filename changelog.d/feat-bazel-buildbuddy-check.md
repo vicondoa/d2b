@@ -17,9 +17,14 @@
 - Keep local and pull-request Rust builds unstamped and prefer the available
   GNU BFD linker over gold. rules_rust metadata pipelining stays off after a
   measured two-crate local log showed higher gross input and fan-out.
-- Keep high-input Rustc, Cargo build-script, and TestRunner actions local.
-  Remote BuildBuddy profiles may only reuse compact actions under the 80 GB
-  working budget of the 100 GB monthly transfer allowance.
+- Wire BuildBuddy's Ubuntu GCC C toolchain on remote profiles so rustc
+  linking does not use the host Nix gcc path.
+- Keep high-input Rustc compiles local-exec with remote cache only: 876 MB
+  of each compile's unique input is the rustc+LLVM toolchain, not crate
+  sources. Cargo build scripts stay fully local. The largest remotely
+  executed set under the 80 GB working budget is
+  `ExtractCargoTomlEnvVars` plus `TestRunner` (467 MB gross per two-crate
+  run).
 - Keep the existing Cargo and Make Layer-1 graph authoritative while exposing
   the complete Bazel graph only through the opt-in local `make bazel-check`
   facade. Remote qualification remains blocked until provider-accounted
