@@ -1,0 +1,19 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary")
+
+exports_files(
+    ["BUILD.bazel", "Cargo.lock", "Cargo.toml", "src/main.rs"],
+    visibility = ["//visibility:public"],
+)
+
+rust_binary(
+    name = "no-bash-ast-walker",
+    srcs = ["src/main.rs"],
+    compile_data = [
+        "Cargo.lock",
+        "Cargo.toml",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "@crates//:syn",
+    ],
+)

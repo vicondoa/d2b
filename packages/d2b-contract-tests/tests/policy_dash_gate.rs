@@ -62,9 +62,13 @@ fn scan(root: &Path) -> (bool, String) {
 }
 
 fn fixture_tree(name: &str, body: &str) -> PathBuf {
-    let root = Path::new(env!("CARGO_TARGET_TMPDIR"))
-        .join("dash-gate")
-        .join(name);
+    let target_tmpdir = option_env!("CARGO_TARGET_TMPDIR")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("CARGO_TARGET_TMPDIR").map(PathBuf::from))
+        .or_else(|| std::env::var_os("TEST_TMPDIR").map(PathBuf::from))
+        .or_else(|| std::env::var_os("TMPDIR").map(PathBuf::from))
+        .unwrap_or_else(|| std::env::current_dir().expect("current directory"));
+    let root = Path::new(&target_tmpdir).join("dash-gate").join(name);
     let _ = fs::remove_dir_all(&root);
     fs::create_dir_all(root.join("nested")).expect("create fixture tree");
     fs::write(root.join("clean.md"), "A spaced hyphen - like this.\n").expect("write clean file");
@@ -190,10 +194,17 @@ fn the_gate_matches_codepoints_not_literal_characters() {
             !gate.contains(*dash),
             "{GATE} must not carry a literal {label}; it would flag its own source"
         );
-        let escape = format!(r"$'\u{}'", label.trim_start_matches("U+"));
+        let mut encoded = [0; 4];
+        let byte_escape = dash
+            .encode_utf8(&mut encoded)
+            .as_bytes()
+            .iter()
+            .map(|byte| format!(r"\x{byte:02X}"))
+            .collect::<String>();
+        let escape = format!("$'{byte_escape}'");
         assert!(
             gate.contains(&escape),
-            "{GATE} must match {label} by codepoint escape ({escape}) so the whole class is \
+            "{GATE} must match {label} by byte escape ({escape}) so the whole class is \
              rejected and the pattern survives editing"
         );
     }

@@ -1,6 +1,27 @@
 load("@gazelle//:def.bzl", "gazelle", "gazelle_binary")
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 
+exports_files(
+    [
+        "BUILD.bazel",
+        "Cargo.lock",
+        "Cargo.toml",
+        "MODULE.bazel",
+        "src/exception.rs",
+        "src/lib.rs",
+        "src/main.rs",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "compat_policy_sources",
+    srcs = [
+        "//tests/fixtures/bazel/compat/proto:compat_policy_sources",
+    ],
+    visibility = ["//visibility:public"],
+)
+
 # gazelle:rust_cargo_lockfile Cargo.lock
 # gazelle:rust_crates_prefix @crates//:
 # gazelle:rust_mode generate_from_cargo

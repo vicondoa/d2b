@@ -299,9 +299,15 @@ mod tests {
     };
     use std::io::Write;
 
+    fn writable_manifest_dir() -> std::path::PathBuf {
+        std::env::var_os("TEST_TMPDIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")))
+    }
+
     #[test]
     fn export_reports_hash_breaks_inline_without_old_fields() {
-        let directory = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        let directory = writable_manifest_dir()
             .join("target")
             .join(format!("d2b-audit-export-{}", std::process::id()));
         let _ = fs::remove_dir_all(&directory);

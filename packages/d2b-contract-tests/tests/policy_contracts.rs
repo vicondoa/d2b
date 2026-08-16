@@ -758,8 +758,9 @@ fn tracing_contract_lint() {
 
 /// Enumerate repo-relative `packages/**/*.rs` files, excluding `target/`,
 /// `vendor/`, and `generated/` trees. Mirrors the bash gate's
-/// `find packages -type f -name '*.rs' -not -path '*/target/*' ...` (a plain
-/// filesystem walk that does not follow symlinks), returning sorted paths.
+/// `find packages -type f -name '*.rs' -not -path '*/target/*' ...`. Bazel
+/// runfiles expose source files as symlinks, so regular symlink targets are
+/// included while symlinked directories remain pruned.
 fn collect_workspace_rust_files() -> Vec<String> {
     let root = repo_root();
     let mut out: Vec<String> = Vec::new();
@@ -780,14 +781,20 @@ fn walk_rust_files(dir: &std::path::Path, root: &std::path::Path, out: &mut Vec<
         let Ok(file_type) = entry.file_type() else {
             continue;
         };
-        // Do not follow symlinks (matches `find`'s default), and prune the
-        // excluded trees so the walk stays fast.
+        // Prune excluded trees so the walk stays fast. Bazel source runfiles
+        // are symlinked files, so inspect their targets as regular files.
         if file_type.is_dir() {
             match entry.file_name().to_str() {
                 Some("target") | Some("vendor") | Some("generated") | Some(".git") => continue,
                 _ => walk_rust_files(&path, root, out),
             }
         } else if file_type.is_file()
+            && path.extension().is_some_and(|ext| ext == "rs")
+            && let Ok(rel) = path.strip_prefix(root)
+        {
+            out.push(rel.to_string_lossy().replace('\\', "/"));
+        } else if file_type.is_symlink()
+            && fs::metadata(&path).is_ok_and(|metadata| metadata.is_file())
             && path.extension().is_some_and(|ext| ext == "rs")
             && let Ok(rel) = path.strip_prefix(root)
         {

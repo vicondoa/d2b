@@ -1,5 +1,10 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
+exports_files(
+    ["BUILD.bazel"],
+    visibility = ["//visibility:public"],
+)
+
 rust_library(
     name = "d2b_provider_runtime_qemu_media",
     srcs = ["src/lib.rs"],
@@ -11,5 +16,26 @@ rust_test(
     name = "scaffold",
     srcs = ["tests/scaffold.rs"],
     compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+)
+
+# keep
+filegroup(
+    name = "cargo_workspace_sources",
+    srcs = glob(
+        [
+            "Cargo.lock",
+            "Cargo.toml",
+            "benches/**/*.rs",
+            "build.rs",
+            "examples/**/*.rs",
+            "integration/**/*",
+            "nix/**/*",
+            "README.md",
+            "src/**/*.rs",
+            "tests/**/*.rs",
+        ],
+        allow_empty = True,
+    ),
     visibility = ["//visibility:public"],
 )

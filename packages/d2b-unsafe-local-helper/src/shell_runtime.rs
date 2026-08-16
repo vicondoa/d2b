@@ -1215,10 +1215,7 @@ mod tests {
 
     impl Scratch {
         fn new() -> Self {
-            let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .parent()
-                .and_then(std::path::Path::parent)
-                .unwrap();
+            let root = std::env::temp_dir();
             for _ in 0..32 {
                 let mut random = [0u8; 2];
                 getrandom::getrandom(&mut random).unwrap();
@@ -1228,7 +1225,7 @@ mod tests {
                     return Self(path);
                 }
             }
-            panic!("could not create repository-local shell test directory");
+            panic!("could not create shell test directory");
         }
     }
 

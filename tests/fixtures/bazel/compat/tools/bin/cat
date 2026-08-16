@@ -1,8 +1,0 @@
-#!/bin/bash
-set -euo pipefail
-
-for file in "$@"; do
-  while IFS= read -r line || [[ -n "$line" ]]; do
-    printf '%s\n' "$line"
-  done < "$file"
-done

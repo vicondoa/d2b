@@ -68,8 +68,7 @@ fn daemon_stub_reports_neutral_unsupported_error() {
     .failure()
     .stderr(predicate::str::contains(
         "persistent shell daemon mode is not enabled in this helper build",
-    ))
-    .stderr(predicate::str::contains(r#"home="/home/alice""#));
+    ));
 }
 
 #[test]
@@ -87,7 +86,7 @@ fn attach_stub_reports_neutral_unsupported_error() {
     .assert()
     .failure()
     .stderr(predicate::str::contains(
-        "persistent shell attach mode is not enabled in this helper build: force=true",
+        "persistent shell attach mode is not enabled in this helper build",
     ));
 }
 

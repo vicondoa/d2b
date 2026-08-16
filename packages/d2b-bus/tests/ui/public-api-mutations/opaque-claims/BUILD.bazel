@@ -1,4 +1,17 @@
+# keep
+
 load("@rules_rust//rust:defs.bzl", "rust_library")
+
+exports_files(["BUILD.bazel"], visibility = ["//visibility:public"])
+
+filegroup(
+    name = "cargo_ui_fixtures",
+    srcs = glob([
+        "Cargo.toml",
+        "src/**/*.rs",
+    ], allow_empty = True),
+    visibility = ["//visibility:public"],
+)
 
 rust_library(
     name = "opaque_claims",

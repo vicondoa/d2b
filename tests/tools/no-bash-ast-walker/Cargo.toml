@@ -6,7 +6,6 @@ publish = false
 
 [dependencies]
 syn = { version = "2", features = ["full", "extra-traits", "visit"] }
-walkdir = "2"
 
 [[bin]]
 name = "no-bash-ast-walker"

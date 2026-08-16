@@ -427,11 +427,15 @@ mod tests {
         // (tests/golden/runner-shape/parity-drift.json) and drive
         // runner_shape_preflight against it. Every fail-closed class
         // in the fixture must surface.
-        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent() // packages/
-            .and_then(|p| p.parent()) // repo root
-            .expect("repo root")
-            .join("tests/golden/runner-shape/parity-drift.json");
+        let path = std::env::var_os("D2B_RUNNER_SHAPE_PARITY_DRIFT")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| {
+                std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .parent() // packages/
+                    .and_then(|p| p.parent()) // repo root
+                    .expect("repo root")
+                    .join("tests/golden/runner-shape/parity-drift.json")
+            });
         let body = std::fs::read_to_string(&path)
             .unwrap_or_else(|err| panic!("read {}: {err}", path.display()));
         let input: RunnerShapePreflightInput =

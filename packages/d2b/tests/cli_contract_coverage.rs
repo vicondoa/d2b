@@ -763,6 +763,12 @@ fn host_cli_error_golden_table_is_closed_and_complete() {
 }
 
 fn repo_root() -> PathBuf {
+    if let (Some(runfiles_dir), Some(workspace)) = (
+        std::env::var_os("RUNFILES_DIR"),
+        std::env::var_os("TEST_WORKSPACE"),
+    ) {
+        return PathBuf::from(runfiles_dir).join(workspace);
+    }
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(Path::parent)

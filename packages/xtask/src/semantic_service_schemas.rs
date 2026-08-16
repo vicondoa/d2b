@@ -454,10 +454,7 @@ mod tests {
 
     #[test]
     fn committed_qualified_envelopes_match_the_generator() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .ancestors()
-            .nth(2)
-            .expect("repository root");
+        let root = crate::repo_root().expect("repository root");
         for pair in catalog() {
             let service_type = pair.service().resource_type().to_canonical_string();
             for member in [pair.service(), pair.binding()] {

@@ -1,5 +1,10 @@
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 
+exports_files(
+    ["BUILD.bazel"],
+    visibility = ["//visibility:public"],
+)
+
 rust_library(
     name = "d2b_unsafe_local_helper",
     srcs = [
@@ -49,6 +54,9 @@ rust_test(
     name = "shell_supervisor",
     srcs = ["tests/shell_supervisor.rs"],
     compile_data = ["Cargo.toml"],
+    data = [":d2b-unsafe-local-helper"],
+    env = {"CARGO_BIN_EXE_d2b-unsafe-local-helper": "$(rootpath :d2b-unsafe-local-helper)"},
+    rustc_env = {"CARGO_BIN_EXE_d2b-unsafe-local-helper": "$(rootpath :d2b-unsafe-local-helper)"},
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_unsafe_local_helper",
@@ -66,8 +74,29 @@ rust_test(
     name = "d2b_unsafe_local_helper_test",
     compile_data = ["Cargo.toml"],
     crate = ":d2b_unsafe_local_helper",
+    data = [":d2b-unsafe-local-helper"],
+    env = {"CARGO_BIN_EXE_d2b-unsafe-local-helper": "$(rootpath :d2b-unsafe-local-helper)"},
+    rustc_env = {"CARGO_BIN_EXE_d2b-unsafe-local-helper": "$(rootpath :d2b-unsafe-local-helper)"},
     deps = [
         "@crates//:getrandom-0.2.17",
         "@crates//:rustix",
     ],
+)
+
+# keep
+filegroup(
+    name = "cargo_workspace_sources",
+    srcs = glob(
+        [
+            "Cargo.lock",
+            "Cargo.toml",
+            "benches/**/*.rs",
+            "build.rs",
+            "examples/**/*.rs",
+            "src/**/*.rs",
+            "tests/**/*.rs",
+        ],
+        allow_empty = True,
+    ),
+    visibility = ["//visibility:public"],
 )

@@ -1,4 +1,10 @@
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+load("//bazel/checks/rust:defs.bzl", "test_features")
+
+exports_files(
+    ["BUILD.bazel"],
+    visibility = ["//visibility:public"],
+)
 
 rust_library(
     name = "d2b_host",
@@ -47,6 +53,11 @@ rust_library(
         "//:tests/golden/runner-shape/vsock-relay-argv-minimal.txt",  # keep
         "Cargo.toml",
     ],
+    crate_features = select({
+        "//bazel/checks/rust:broker-fake-backends": ["fake-backends"],
+        "//bazel/checks/rust:test-context": ["fake-backends"],
+        "//conditions:default": [],
+    }),
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts:d2b_contracts",
@@ -80,6 +91,9 @@ rust_test(
     name = "activation_helper_build_farm",
     srcs = ["tests/activation_helper_build_farm.rs"],
     compile_data = ["Cargo.toml"],
+    data = [":d2b-activation-helper"],
+    env = {"CARGO_BIN_EXE_d2b-activation-helper": "$(rootpath :d2b-activation-helper)"},
+    rustc_env = {"CARGO_BIN_EXE_d2b-activation-helper": "$(rootpath :d2b-activation-helper)"},
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_host",
@@ -92,6 +106,9 @@ rust_test(
     name = "activation_helper_fs_posture",
     srcs = ["tests/activation_helper_fs_posture.rs"],
     compile_data = ["Cargo.toml"],
+    data = [":d2b-activation-helper"],
+    env = {"CARGO_BIN_EXE_d2b-activation-helper": "$(rootpath :d2b-activation-helper)"},
+    rustc_env = {"CARGO_BIN_EXE_d2b-activation-helper": "$(rootpath :d2b-activation-helper)"},
     visibility = ["//visibility:public"],
     deps = [
         "@crates//:nix",
@@ -103,6 +120,16 @@ rust_test(
     name = "guest_control_token_materializer",
     srcs = ["tests/guest_control_token_materializer.rs"],
     compile_data = ["Cargo.toml"],
+    data = [
+        ":d2b-activation-helper",
+        "//:nixos-modules/guest-control-token-materialize.py",
+    ],
+    env = {
+        "CARGO_BIN_EXE_d2b-activation-helper": "$(rootpath :d2b-activation-helper)",
+        "D2B_GUEST_CONTROL_TOKEN_MATERIALIZER": "$(rootpath //:nixos-modules/guest-control-token-materialize.py)",
+    },
+    env_inherit = ["PATH"],
+    rustc_env = {"CARGO_BIN_EXE_d2b-activation-helper": "$(rootpath :d2b-activation-helper)"},
     visibility = ["//visibility:public"],
     deps = ["@crates//:serde_json"],
 )
@@ -111,6 +138,9 @@ rust_test(
     name = "guest_vsock_ttrpc_compile",
     srcs = ["tests/guest_vsock_ttrpc_compile.rs"],
     compile_data = ["Cargo.toml"],
+    data = [":d2b-activation-helper"],
+    env = {"CARGO_BIN_EXE_d2b-activation-helper": "$(rootpath :d2b-activation-helper)"},
+    rustc_env = {"CARGO_BIN_EXE_d2b-activation-helper": "$(rootpath :d2b-activation-helper)"},
     visibility = ["//visibility:public"],
     deps = [
         "@crates//:tokio",
@@ -122,9 +152,36 @@ rust_test(
     name = "d2b_host_test",
     compile_data = ["Cargo.toml"],
     crate = ":d2b_host",
+    data = [
+        ":d2b-activation-helper",
+        "//:tests/golden/runner-shape/parity-drift.json",
+    ],
+    env = {
+        "CARGO_BIN_EXE_d2b-activation-helper": "$(rootpath :d2b-activation-helper)",
+        "D2B_RUNNER_SHAPE_PARITY_DRIFT": "$(rootpath //:tests/golden/runner-shape/parity-drift.json)",
+    },
+    rustc_env = {"CARGO_BIN_EXE_d2b-activation-helper": "$(rootpath :d2b-activation-helper)"},
     deps = [
         "@crates//:nix",
         "@crates//:serde_json",
         "@crates//:tempfile",
     ],
+)
+
+# keep
+filegroup(
+    name = "cargo_workspace_sources",
+    srcs = glob(
+        [
+            "Cargo.lock",
+            "Cargo.toml",
+            "benches/**/*.rs",
+            "build.rs",
+            "examples/**/*.rs",
+            "src/**/*.rs",
+            "tests/**/*.rs",
+        ],
+        allow_empty = True,
+    ),
+    visibility = ["//visibility:public"],
 )

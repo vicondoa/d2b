@@ -1,14 +1,18 @@
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 
+exports_files(["BUILD.bazel"], visibility = ["//visibility:public"])
+
 # keep
 # gazelle:ignore
 
 rust_library(
     name = "d2b_provider_credential_secret_service",
     srcs = [
+        "src/audit.rs",
         "src/controller.rs",
         "src/lib.rs",
         "src/service.rs",
+        "src/telemetry.rs",
     ],
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
@@ -41,6 +45,7 @@ rust_test(
 rust_test(
     name = "conformance",
     srcs = [
+        "//packages/d2b-provider-toolkit:src/conformance.rs",
         "tests/common/mod.rs",
         "tests/conformance.rs",
     ],
@@ -113,4 +118,23 @@ rust_test(
     name = "d2b_provider_credential_secret_service_test",
     compile_data = ["Cargo.toml"],
     crate = ":d2b_provider_credential_secret_service",
+)
+# keep
+filegroup(
+    name = "cargo_workspace_sources",
+    srcs = glob([
+        "Cargo.lock",
+        "Cargo.toml",
+        "benches/**/*.rs",
+        "build.rs",
+        "examples/**/*.rs",
+        "integration/**/*",
+        "nix/**/*",
+        "README.md",
+        "src/**/*.rs",
+        "tests/**/*.rs",
+    ],
+        allow_empty = True,
+    ),
+    visibility = ["//visibility:public"],
 )

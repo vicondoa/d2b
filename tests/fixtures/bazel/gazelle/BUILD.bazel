@@ -1,6 +1,19 @@
 load("@gazelle//:def.bzl", "gazelle", "gazelle_binary")
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library")
 
+exports_files(
+    [
+        "BUILD.bazel",
+        "Cargo.lock",
+        "Cargo.toml",
+        "MODULE.bazel",
+        "src/exception.rs",
+        "src/lib.rs",
+        "src/main.rs",
+    ],
+    visibility = ["//visibility:public"],
+)
+
 # gazelle:rust_cargo_lockfile Cargo.lock
 # gazelle:rust_crates_prefix @crates//:
 # gazelle:rust_default_edition 2024

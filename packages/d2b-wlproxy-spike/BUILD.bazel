@@ -1,5 +1,10 @@
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_test")
 
+exports_files(
+    ["BUILD.bazel"],
+    visibility = ["//visibility:public"],
+)
+
 rust_binary(
     name = "d2b-wlproxy-spike",
     srcs = ["src/main.rs"],
@@ -15,4 +20,14 @@ rust_test(
     name = "d2b-wlproxy-spike_test",
     compile_data = ["Cargo.toml"],
     crate = ":d2b-wlproxy-spike",
+)
+
+# keep
+filegroup(
+    name = "cargo_workspace_sources",
+    srcs = [
+        "Cargo.toml",
+        "src/main.rs",
+    ],
+    visibility = ["//visibility:public"],
 )

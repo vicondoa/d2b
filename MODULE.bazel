@@ -24,3 +24,11 @@ crate.from_cargo(
     manifests = ["//:Cargo.toml"],
 )
 use_repo(crate, "crates")
+
+bazel_only_crate = use_extension("@rules_rust//crate_universe:extension.bzl", "crate")
+bazel_only_crate.from_cargo(
+    name = "bazel_only_crates",
+    cargo_lockfile = "//bazel/checks/rust:Cargo.lock",
+    manifests = ["//bazel/checks/rust:Cargo.toml"],
+)
+use_repo(bazel_only_crate, "bazel_only_crates")

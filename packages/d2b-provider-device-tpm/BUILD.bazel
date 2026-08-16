@@ -1,4 +1,10 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+load("//bazel/checks/rust:defs.bzl", "test_features")
+
+exports_files(
+    ["BUILD.bazel"],
+    visibility = ["//visibility:public"],
+)
 
 rust_library(
     name = "d2b_provider_device_tpm",
@@ -10,6 +16,7 @@ rust_library(
         "src/state.rs",
     ],
     compile_data = ["Cargo.toml"],
+    crate_features = test_features(["test-support"]),
     visibility = ["//visibility:public"],
     deps = ["@crates//:serde"],
 )
@@ -29,6 +36,7 @@ rust_test(
     name = "controller_state_machine",
     srcs = ["tests/controller_state_machine.rs"],
     compile_data = ["Cargo.toml"],
+    crate_features = test_features(["test-support"]),
     visibility = ["//visibility:public"],
     deps = [":d2b_provider_device_tpm"],
 )
@@ -37,6 +45,28 @@ rust_test(
     name = "fault_swtpm_missing",
     srcs = ["tests/fault_swtpm_missing.rs"],
     compile_data = ["Cargo.toml"],
+    crate_features = test_features(["test-support"]),
     visibility = ["//visibility:public"],
     deps = [":d2b_provider_device_tpm"],
+)
+
+# keep
+filegroup(
+    name = "cargo_workspace_sources",
+    srcs = glob(
+        [
+            "Cargo.lock",
+            "Cargo.toml",
+            "benches/**/*.rs",
+            "build.rs",
+            "examples/**/*.rs",
+            "integration/**/*",
+            "nix/**/*",
+            "README.md",
+            "src/**/*.rs",
+            "tests/**/*.rs",
+        ],
+        allow_empty = True,
+    ),
+    visibility = ["//visibility:public"],
 )

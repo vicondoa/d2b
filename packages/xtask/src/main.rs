@@ -792,6 +792,12 @@ where
 }
 
 fn repo_root() -> Result<&'static Path, Box<dyn std::error::Error>> {
+    if let Some(runfiles) = std::env::var_os("RUNFILES_DIR") {
+        let runfiles_root = PathBuf::from(runfiles).join("_main");
+        if runfiles_root.join("Cargo.toml").is_file() {
+            return Ok(Box::leak(runfiles_root.into_boxed_path()));
+        }
+    }
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
         .nth(2)

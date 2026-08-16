@@ -1,5 +1,22 @@
 load("@protobuf//bazel:proto_library.bzl", "proto_library")
 
+exports_files(
+    [
+        "BUILD.bazel",
+        "compat.proto",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "compat_policy_sources",
+    srcs = [
+        "BUILD.bazel",
+        "compat.proto",
+    ],
+    visibility = ["//visibility:public"],
+)
+
 # keep
 proto_library(
     name = "compat_proto",

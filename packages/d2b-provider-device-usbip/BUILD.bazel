@@ -1,5 +1,10 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
+exports_files(
+    ["BUILD.bazel"],
+    visibility = ["//visibility:public"],
+)
+
 rust_library(
     name = "d2b_provider_device_usbip",
     srcs = [
@@ -74,4 +79,25 @@ rust_test(
         ":d2b_provider_device_usbip",
         "//packages/d2b-contracts:d2b_contracts",
     ],
+)
+
+# keep
+filegroup(
+    name = "cargo_workspace_sources",
+    srcs = glob(
+        [
+            "Cargo.lock",
+            "Cargo.toml",
+            "benches/**/*.rs",
+            "build.rs",
+            "examples/**/*.rs",
+            "integration/**/*",
+            "nix/**/*",
+            "README.md",
+            "src/**/*.rs",
+            "tests/**/*.rs",
+        ],
+        allow_empty = True,
+    ),
+    visibility = ["//visibility:public"],
 )

@@ -1,5 +1,15 @@
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 
+exports_files(
+    ["BUILD.bazel"],
+    visibility = ["//visibility:public"],
+)
+
+exports_files(
+    ["src/conformance.rs"],
+    visibility = ["//visibility:public"],
+)
+
 rust_library(
     name = "d2b_provider_toolkit",
     srcs = [
@@ -48,6 +58,9 @@ rust_test(
     name = "conformance",
     srcs = ["tests/conformance.rs"],
     compile_data = ["Cargo.toml"],
+    data = [":d2b-provider-toolkit"],
+    env = {"CARGO_BIN_EXE_d2b-provider-toolkit": "$(rootpath :d2b-provider-toolkit)"},
+    rustc_env = {"CARGO_BIN_EXE_d2b-provider-toolkit": "$(rootpath :d2b-provider-toolkit)"},
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_provider_toolkit",
@@ -63,6 +76,9 @@ rust_test(
     name = "fake_provider",
     srcs = ["tests/fake_provider.rs"],
     compile_data = ["Cargo.toml"],
+    data = [":d2b-provider-toolkit"],
+    env = {"CARGO_BIN_EXE_d2b-provider-toolkit": "$(rootpath :d2b-provider-toolkit)"},
+    rustc_env = {"CARGO_BIN_EXE_d2b-provider-toolkit": "$(rootpath :d2b-provider-toolkit)"},
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_provider_toolkit",
@@ -74,6 +90,9 @@ rust_test(
     name = "malicious_provider",
     srcs = ["tests/malicious_provider.rs"],
     compile_data = ["Cargo.toml"],
+    data = [":d2b-provider-toolkit"],
+    env = {"CARGO_BIN_EXE_d2b-provider-toolkit": "$(rootpath :d2b-provider-toolkit)"},
+    rustc_env = {"CARGO_BIN_EXE_d2b-provider-toolkit": "$(rootpath :d2b-provider-toolkit)"},
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_provider_toolkit",
@@ -85,5 +104,29 @@ rust_test(
     name = "d2b_provider_toolkit_test",
     compile_data = ["Cargo.toml"],
     crate = ":d2b_provider_toolkit",
+    data = [":d2b-provider-toolkit"],
+    env = {"CARGO_BIN_EXE_d2b-provider-toolkit": "$(rootpath :d2b-provider-toolkit)"},
+    rustc_env = {"CARGO_BIN_EXE_d2b-provider-toolkit": "$(rootpath :d2b-provider-toolkit)"},
     deps = ["//packages/d2b-provider:d2b_provider"],
+)
+
+# keep
+filegroup(
+    name = "cargo_workspace_sources",
+    srcs = glob(
+        [
+            "Cargo.lock",
+            "Cargo.toml",
+            "benches/**/*.rs",
+            "build.rs",
+            "examples/**/*.rs",
+            "integration/**/*",
+            "nix/**/*",
+            "README.md",
+            "src/**/*.rs",
+            "tests/**/*.rs",
+        ],
+        allow_empty = True,
+    ),
+    visibility = ["//visibility:public"],
 )

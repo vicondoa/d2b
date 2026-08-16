@@ -219,9 +219,7 @@ mod tests {
     use crate::ops::exec_reconcile::{FakeReconcileExecutor, ReconcileOp};
 
     fn scratch() -> PathBuf {
-        let dir = std::env::current_dir()
-            .unwrap_or_else(|_| PathBuf::from("."))
-            .join("target")
+        let dir = crate::test_scratch_root()
             .join("test-scratch")
             .join(format!(
                 "d2b-w3-s2-sysctl-{}-{}",

@@ -1,5 +1,10 @@
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 
+exports_files(
+    ["BUILD.bazel"],
+    visibility = ["//visibility:public"],
+)
+
 rust_library(
     name = "d2b_exec_runner",
     srcs = [
@@ -35,6 +40,9 @@ rust_test(
     name = "fail_closed",
     srcs = ["tests/fail_closed.rs"],
     compile_data = ["Cargo.toml"],
+    data = [":d2b-exec-runner"],
+    env = {"CARGO_BIN_EXE_d2b-exec-runner": "$(rootpath :d2b-exec-runner)"},
+    rustc_env = {"CARGO_BIN_EXE_d2b-exec-runner": "$(rootpath :d2b-exec-runner)"},
     visibility = ["//visibility:public"],
 )
 
@@ -42,6 +50,9 @@ rust_test(
     name = "tty_pty_integration",
     srcs = ["tests/tty_pty_integration.rs"],
     compile_data = ["Cargo.toml"],
+    data = [":d2b-exec-runner"],
+    env = {"CARGO_BIN_EXE_d2b-exec-runner": "$(rootpath :d2b-exec-runner)"},
+    rustc_env = {"CARGO_BIN_EXE_d2b-exec-runner": "$(rootpath :d2b-exec-runner)"},
     visibility = ["//visibility:public"],
     deps = ["@crates//:rustix"],
 )
@@ -50,10 +61,34 @@ rust_test(
     name = "d2b_exec_runner_test",
     compile_data = ["Cargo.toml"],
     crate = ":d2b_exec_runner",
+    data = [":d2b-exec-runner"],
+    env = {"CARGO_BIN_EXE_d2b-exec-runner": "$(rootpath :d2b-exec-runner)"},
+    rustc_env = {"CARGO_BIN_EXE_d2b-exec-runner": "$(rootpath :d2b-exec-runner)"},
 )
 
 rust_test(
     name = "d2b-exec-runner_test",
     compile_data = ["Cargo.toml"],
     crate = ":d2b-exec-runner",
+    data = [":d2b-exec-runner"],
+    env = {"CARGO_BIN_EXE_d2b-exec-runner": "$(rootpath :d2b-exec-runner)"},
+    rustc_env = {"CARGO_BIN_EXE_d2b-exec-runner": "$(rootpath :d2b-exec-runner)"},
+)
+
+# keep
+filegroup(
+    name = "cargo_workspace_sources",
+    srcs = glob(
+        [
+            "Cargo.lock",
+            "Cargo.toml",
+            "benches/**/*.rs",
+            "build.rs",
+            "examples/**/*.rs",
+            "src/**/*.rs",
+            "tests/**/*.rs",
+        ],
+        allow_empty = True,
+    ),
+    visibility = ["//visibility:public"],
 )

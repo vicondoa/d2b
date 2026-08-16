@@ -1,5 +1,10 @@
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 
+exports_files(
+    ["BUILD.bazel"],
+    visibility = ["//visibility:public"],
+)
+
 rust_library(
     name = "d2b_guestd",
     srcs = [
@@ -50,6 +55,9 @@ rust_test(
     name = "fail_closed",
     srcs = ["tests/fail_closed.rs"],
     compile_data = ["Cargo.toml"],
+    data = [":d2b-guestd"],
+    env = {"CARGO_BIN_EXE_d2b-guestd": "$(rootpath :d2b-guestd)"},
+    rustc_env = {"CARGO_BIN_EXE_d2b-guestd": "$(rootpath :d2b-guestd)"},
     visibility = ["//visibility:public"],
 )
 
@@ -57,5 +65,26 @@ rust_test(
     name = "d2b_guestd_test",
     compile_data = ["Cargo.toml"],
     crate = ":d2b_guestd",
+    data = [":d2b-guestd"],
+    env = {"CARGO_BIN_EXE_d2b-guestd": "$(rootpath :d2b-guestd)"},
+    rustc_env = {"CARGO_BIN_EXE_d2b-guestd": "$(rootpath :d2b-guestd)"},
     deps = ["//packages/d2b-exec-runner:d2b_exec_runner"],
+)
+
+# keep
+filegroup(
+    name = "cargo_workspace_sources",
+    srcs = glob(
+        [
+            "Cargo.lock",
+            "Cargo.toml",
+            "benches/**/*.rs",
+            "build.rs",
+            "examples/**/*.rs",
+            "src/**/*.rs",
+            "tests/**/*.rs",
+        ],
+        allow_empty = True,
+    ),
+    visibility = ["//visibility:public"],
 )

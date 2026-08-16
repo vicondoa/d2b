@@ -1,5 +1,7 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
+exports_files(["BUILD.bazel"], visibility = ["//visibility:public"])
+
 # keep
 # gazelle:ignore
 
@@ -42,11 +44,18 @@ rust_test(
 
 rust_test(
     name = "host_posture_contract",
-    srcs = ["tests/host_posture_contract.rs"],
+    srcs = [
+        "src/host_process_audit.rs",  # keep
+        "src/host_reconciler.rs",  # keep
+        "src/host_status.rs",  # keep
+        "tests/host_posture_contract.rs",
+    ],
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
+        ":d2b_provider_system_core",
         "//packages/d2b-contracts:d2b_contracts",
+        "@crates//:serde",
         "@crates//:serde_json",
     ],
 )
@@ -91,4 +100,23 @@ rust_test(
     compile_data = ["Cargo.toml"],
     crate = ":d2b_provider_system_core",
     deps = ["@crates//:serde_json"],
+)
+# keep
+filegroup(
+    name = "cargo_workspace_sources",
+    srcs = glob([
+        "Cargo.lock",
+        "Cargo.toml",
+        "benches/**/*.rs",
+        "build.rs",
+        "examples/**/*.rs",
+        "integration/**/*",
+        "nix/**/*",
+        "README.md",
+        "src/**/*.rs",
+        "tests/**/*.rs",
+    ],
+        allow_empty = True,
+    ),
+    visibility = ["//visibility:public"],
 )

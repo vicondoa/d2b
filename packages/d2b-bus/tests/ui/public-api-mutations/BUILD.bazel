@@ -3,9 +3,38 @@ load("@rules_rust//rust:defs.bzl", "rust_library")
 # keep
 # gazelle:ignore
 
+exports_files(["BUILD.bazel"], visibility = ["//visibility:public"])
+
+filegroup(
+    name = "cargo_ui_fixtures",
+    srcs = glob([
+        "Cargo.lock",
+        "Cargo.toml",
+        "*.rs",
+        "*.txt",
+        "src/**/*.rs",
+    ], allow_empty = True) + [
+        "//packages/d2b-bus/tests/ui/public-api-mutations/opaque-claims:cargo_ui_fixtures",
+    ],
+    visibility = ["//visibility:public"],
+)
+
 rust_library(
     name = "d2b_bus_public_api_mutations",
-    srcs = ["src/lib.rs"],
+    srcs = [
+        "module-cfg-attr-inert.rs",  # keep
+        "src/lib.rs",
+        "trait-impl-glob-cycle-shadowed.rs",  # keep
+        "trait-impl-glob-nested-reexport.rs",  # keep
+        "trait-impl-glob-unknown-destination.rs",  # keep
+        "trait-impl-noncapability-block-glob.rs",  # keep
+        "trait-impl-noncapability-chained-reexport-module.rs",  # keep
+        "trait-impl-noncapability-direct-renamed-module.rs",  # keep
+        "trait-impl-noncapability-plain-module.rs",  # keep
+        "trait-impl-noncapability-plain-self-module.rs",  # keep
+        "trait-impl-noncapability-renamed-glob-target.rs",  # keep
+        "trait-impl-noncapability-self-renamed-module.rs",  # keep
+    ],
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [

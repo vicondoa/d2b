@@ -369,23 +369,15 @@
         pkgs = nixpkgsFor.${system};
         gasCityContributor = gasCityContributorFor system;
         bazel920 = bazel920For system;
-        bazelFhs = pkgs.buildFHSEnv {
-          name = "d2b-bazel-compat-fhs";
-          executableName = "bazel";
+        bazelActionShell = pkgs.buildFHSEnv {
+          name = "d2b-bazel-action-shell";
+          executableName = "bash";
           targetPkgs = fhsPkgs: with fhsPkgs; [
-            bazel920
             bash
             coreutils
-            findutils
             gnugrep
-            gnused
-            rustup
-            binutils
-            stdenv.cc
-            glibc.dev
-            zlib
           ];
-          runScript = "${bazel920}/bin/bazel";
+          runScript = "${pkgs.bash}/bin/bash";
         };
       in {
         default = pkgs.mkShell {
@@ -425,16 +417,16 @@
         };
         # Focused U1 shell: the compatibility proof must use the exact
         # official Bazel release rather than an ambient or Gas City Bazel.
-        # The upstream binary is run inside a standard FHS environment so
-        # strict Bazel shell actions can resolve /bin tools without changing
-        # their action environment or cache keys.
+        # Only Bazel shell actions enter the standard FHS action shell;
+        # Bazel itself and local tests stay in the caller's environment.
         bazel = pkgs.mkShellNoCC {
           name = "d2b-bazel-compat";
-          packages = [ bazelFhs pkgs.rustup ];
+          packages = [ bazel920 pkgs.rustup ];
           shellHook = ''
-            export D2B_BAZEL_BIN="${bazelFhs}/bin/bazel"
+            export D2B_BAZEL_BIN="${bazel920}/bin/bazel"
+            export BAZEL_SH="${bazelActionShell}/bin/bash"
             export D2B_BAZEL_TEST_PATH="${pkgs.bash}/bin:${pkgs.coreutils}/bin:${pkgs.findutils}/bin:${pkgs.gnugrep}/bin:${pkgs.gnused}/bin"
-            echo "d2b Bazel compatibility shell: $(${bazelFhs}/bin/bazel --version)"
+            echo "d2b Bazel compatibility shell: $(${bazel920}/bin/bazel --version)"
           '';
         };
         # Contributor shell: the closure is the only source of executable

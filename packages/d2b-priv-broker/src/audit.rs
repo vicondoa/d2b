@@ -2070,16 +2070,7 @@ mod tests {
     use super::*;
 
     fn target_scratch_root(prefix: &str) -> PathBuf {
-        let base = std::env::var_os("CARGO_TARGET_TMPDIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| {
-                let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-                let repository_root = manifest_dir
-                    .parent()
-                    .and_then(Path::parent)
-                    .expect("broker manifest must be below repository root");
-                repository_root.join("target")
-            });
+        let base = crate::test_scratch_root();
         base.join(format!(
             "{prefix}-{}-{}",
             std::process::id(),

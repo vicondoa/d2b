@@ -240,7 +240,26 @@ fn cargo_workspace_members(repo_root: &Path) -> Result<Vec<WorkspaceMember>, Str
 }
 
 fn cargo_metadata(repo_root: &Path) -> Result<CargoMetadata, String> {
-    let output = Command::new("cargo")
+    let cargo = std::env::var_os("CARGO")
+        .map(PathBuf::from)
+        .map(|path| {
+            if path.is_relative() {
+                std::env::current_dir()
+                    .map(|current| current.join(path))
+                    .unwrap_or_else(|_| PathBuf::from("cargo"))
+            } else {
+                path
+            }
+        })
+        .unwrap_or_else(|| PathBuf::from("cargo"));
+    let mut command = Command::new(cargo);
+    if let Some(tmpdir) = std::env::var_os("TEST_TMPDIR") {
+        let cargo_home = PathBuf::from(tmpdir).join("cargo-home");
+        fs::create_dir_all(&cargo_home)
+            .map_err(|_| "provider-crate-layout-metadata-home-unavailable".to_owned())?;
+        command.env("CARGO_HOME", cargo_home);
+    }
+    let output = command
         .current_dir(repo_root)
         .args([
             "metadata",

@@ -71,11 +71,44 @@ const RUST_BASELINE_LEAF_IDS: &[&str] = &[
 const BROKER_FEATURE_PASSES: &[&str] = &["default", "layer1-bootstrap", "fake-backends"];
 
 fn repo_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(Path::parent)
-        .expect("xtask lives under packages/xtask")
-        .to_path_buf()
+    let mut candidates = Vec::new();
+    for variable in ["D2B_REPO_ROOT", "TEST_SRCDIR", "RUNFILES_DIR"] {
+        if let Some(base) = std::env::var_os(variable).map(PathBuf::from) {
+            candidates.push(base.clone());
+            if let Some(workspace) = std::env::var_os("TEST_WORKSPACE") {
+                candidates.push(base.join(workspace));
+            }
+            candidates.push(base.join("_main"));
+        }
+    }
+    candidates.push(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .expect("xtask lives under packages/xtask")
+            .to_path_buf(),
+    );
+    if let Ok(current_dir) = std::env::current_dir() {
+        candidates.push(current_dir);
+    }
+    for candidate in candidates {
+        let mut path = candidate;
+        if path.is_file() {
+            path.pop();
+        }
+        loop {
+            if path.join("Cargo.toml").is_file()
+                && path.join("BUILD.bazel").is_file()
+                && path.join("flake.nix").is_file()
+            {
+                return path;
+            }
+            if !path.pop() {
+                break;
+            }
+        }
+    }
+    panic!("repository root with Cargo.toml, BUILD.bazel, and flake.nix is not discoverable")
 }
 
 fn read_repo_file(rel: &str) -> String {
@@ -187,19 +220,49 @@ fn git_tracked_files() -> Vec<String> {
         .args(["ls-files", "-z"])
         .output()
         .expect("run git ls-files");
-    assert!(
-        output.status.success(),
-        "git ls-files failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    output
-        .stdout
-        .split(|byte| *byte == 0)
-        .filter(|entry| !entry.is_empty())
-        .map(|entry| String::from_utf8(entry.to_vec()).expect("tracked paths are UTF-8"))
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect()
+    if output.status.success() {
+        return output
+            .stdout
+            .split(|byte| *byte == 0)
+            .filter(|entry| !entry.is_empty())
+            .map(|entry| String::from_utf8(entry.to_vec()).expect("tracked paths are UTF-8"))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+    }
+
+    let root = repo_root();
+    let mut files = BTreeSet::new();
+    collect_runfiles(&root, &root, &mut files);
+    files.into_iter().collect()
+}
+
+fn collect_runfiles(root: &Path, path: &Path, files: &mut BTreeSet<String>) {
+    let Ok(metadata) = std::fs::symlink_metadata(path) else {
+        return;
+    };
+    if metadata.file_type().is_symlink() || metadata.is_file() {
+        if let Ok(relative) = path.strip_prefix(root) {
+            files.insert(relative.to_string_lossy().replace('\\', "/"));
+        }
+        return;
+    }
+    if !metadata.is_dir() {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(path) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let child = entry.path();
+        if child
+            .file_name()
+            .is_some_and(|name| name == ".git" || name == "target")
+        {
+            continue;
+        }
+        collect_runfiles(root, &child, files);
+    }
 }
 
 #[test]

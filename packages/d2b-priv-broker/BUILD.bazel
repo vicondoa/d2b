@@ -1,9 +1,24 @@
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+load("//bazel/checks/rust:defs.bzl", "broker_features", "broker_test_tags")
+
+exports_files(
+    ["BUILD.bazel"],
+    visibility = ["//visibility:public"],
+)
+
+exports_files(
+    [
+        "src/live_handlers.rs",
+        "src/runtime.rs",
+    ],
+    visibility = ["//visibility:public"],
+)
 
 rust_library(
     name = "d2b_priv_broker",
     srcs = [
         "src/audit.rs",
+        "src/bootstrap.rs",  # keep
         "src/fd_passing.rs",
         "src/lib.rs",
         "src/live_handlers.rs",
@@ -50,6 +65,7 @@ rust_library(
         "Cargo.toml",
         "src/sys.rs",
     ],
+    crate_features = broker_features(),
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-audit:d2b_audit",
@@ -72,6 +88,7 @@ rust_binary(
     name = "d2b-priv-broker",
     srcs = ["src/main.rs"],
     compile_data = ["Cargo.toml"],
+    crate_features = broker_features(),
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_priv_broker",
@@ -83,6 +100,11 @@ rust_test(
     name = "bridge_lifecycle",
     srcs = ["tests/bridge_lifecycle.rs"],
     compile_data = ["Cargo.toml"],
+    crate_features = broker_features(),
+    data = [":d2b-priv-broker"],
+    env = {"CARGO_BIN_EXE_d2b-priv-broker": "$(rootpath :d2b-priv-broker)"},
+    rustc_env = {"CARGO_BIN_EXE_d2b-priv-broker": "$(rootpath :d2b-priv-broker)"},
+    tags = broker_test_tags(),
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_priv_broker",
@@ -97,7 +119,12 @@ rust_test(
         "tests/common/mod.rs",
     ],
     compile_data = ["Cargo.toml"],
+    crate_features = broker_features(),
     crate_root = "tests/broker_export_audit.rs",
+    data = [":d2b-priv-broker"],
+    env = {"CARGO_BIN_EXE_d2b-priv-broker": "$(rootpath :d2b-priv-broker)"},
+    rustc_env = {"CARGO_BIN_EXE_d2b-priv-broker": "$(rootpath :d2b-priv-broker)"},
+    tags = broker_test_tags(),
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts:d2b_contracts",
@@ -111,6 +138,11 @@ rust_test(
     name = "broker_protocol_compatibility",
     srcs = ["tests/broker_protocol_compatibility.rs"],
     compile_data = ["Cargo.toml"],
+    crate_features = broker_features(),
+    data = [":d2b-priv-broker"],
+    env = {"CARGO_BIN_EXE_d2b-priv-broker": "$(rootpath :d2b-priv-broker)"},
+    rustc_env = {"CARGO_BIN_EXE_d2b-priv-broker": "$(rootpath :d2b-priv-broker)"},
+    tags = broker_test_tags(),
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts:d2b_contracts",
@@ -126,7 +158,12 @@ rust_test(
         "tests/common/mod.rs",
     ],
     compile_data = ["Cargo.toml"],
+    crate_features = broker_features(),
     crate_root = "tests/broker_socket_acl.rs",
+    data = [":d2b-priv-broker"],
+    env = {"CARGO_BIN_EXE_d2b-priv-broker": "$(rootpath :d2b-priv-broker)"},
+    rustc_env = {"CARGO_BIN_EXE_d2b-priv-broker": "$(rootpath :d2b-priv-broker)"},
+    tags = broker_test_tags(),
     visibility = ["//visibility:public"],
     deps = [
         "@crates//:nix",
@@ -138,6 +175,11 @@ rust_test(
     name = "bundle_tampered_broker",
     srcs = ["tests/bundle_tampered_broker.rs"],
     compile_data = ["Cargo.toml"],
+    crate_features = broker_features(),
+    data = [":d2b-priv-broker"],
+    env = {"CARGO_BIN_EXE_d2b-priv-broker": "$(rootpath :d2b-priv-broker)"},
+    rustc_env = {"CARGO_BIN_EXE_d2b-priv-broker": "$(rootpath :d2b-priv-broker)"},
+    tags = broker_test_tags(),
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_priv_broker",
@@ -153,6 +195,11 @@ rust_test(
     name = "kernel_surface",
     srcs = ["tests/kernel_surface.rs"],
     compile_data = ["Cargo.toml"],
+    crate_features = broker_features(),
+    data = [":d2b-priv-broker"],
+    env = {"CARGO_BIN_EXE_d2b-priv-broker": "$(rootpath :d2b-priv-broker)"},
+    rustc_env = {"CARGO_BIN_EXE_d2b-priv-broker": "$(rootpath :d2b-priv-broker)"},
+    tags = broker_test_tags(),
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_priv_broker",
@@ -165,6 +212,11 @@ rust_test(
     name = "persistent_tap_lifecycle",
     srcs = ["tests/persistent_tap_lifecycle.rs"],
     compile_data = ["Cargo.toml"],
+    crate_features = broker_features(),
+    data = [":d2b-priv-broker"],
+    env = {"CARGO_BIN_EXE_d2b-priv-broker": "$(rootpath :d2b-priv-broker)"},
+    rustc_env = {"CARGO_BIN_EXE_d2b-priv-broker": "$(rootpath :d2b-priv-broker)"},
+    tags = broker_test_tags(),
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_priv_broker",
@@ -177,6 +229,11 @@ rust_test(
     name = "pidfd_handoff_scm_rights",
     srcs = ["tests/pidfd_handoff_scm_rights.rs"],
     compile_data = ["Cargo.toml"],
+    crate_features = broker_features(),
+    data = [":d2b-priv-broker"],
+    env = {"CARGO_BIN_EXE_d2b-priv-broker": "$(rootpath :d2b-priv-broker)"},
+    rustc_env = {"CARGO_BIN_EXE_d2b-priv-broker": "$(rootpath :d2b-priv-broker)"},
+    tags = broker_test_tags(),
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_priv_broker",
@@ -188,6 +245,11 @@ rust_test(
     name = "pidfd_real_spawner",
     srcs = ["tests/pidfd_real_spawner.rs"],
     compile_data = ["Cargo.toml"],
+    crate_features = broker_features(),
+    data = [":d2b-priv-broker"],
+    env = {"CARGO_BIN_EXE_d2b-priv-broker": "$(rootpath :d2b-priv-broker)"},
+    rustc_env = {"CARGO_BIN_EXE_d2b-priv-broker": "$(rootpath :d2b-priv-broker)"},
+    tags = broker_test_tags(),
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_priv_broker",
@@ -199,6 +261,11 @@ rust_test(
     name = "security_key_broker",
     srcs = ["tests/security_key_broker.rs"],
     compile_data = ["Cargo.toml"],
+    crate_features = broker_features(),
+    data = [":d2b-priv-broker"],
+    env = {"CARGO_BIN_EXE_d2b-priv-broker": "$(rootpath :d2b-priv-broker)"},
+    rustc_env = {"CARGO_BIN_EXE_d2b-priv-broker": "$(rootpath :d2b-priv-broker)"},
+    tags = broker_test_tags(),
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_priv_broker",
@@ -211,6 +278,17 @@ rust_test(
     name = "socket_activation",
     srcs = ["tests/socket_activation.rs"],
     compile_data = ["Cargo.toml"],
+    crate_features = broker_features(),
+    data = [
+        ":d2b-priv-broker",
+        "//:tests/tools/scrub-shell-environment",
+    ],
+    env = {
+        "CARGO_BIN_EXE_d2b-priv-broker": "$(rootpath :d2b-priv-broker)",
+        "D2B_TEST_SCRUB_SHELL_ENVIRONMENT": "$(rootpath //:tests/tools/scrub-shell-environment)",
+    },
+    rustc_env = {"CARGO_BIN_EXE_d2b-priv-broker": "$(rootpath :d2b-priv-broker)"},
+    tags = broker_test_tags(),
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_priv_broker",
@@ -224,6 +302,11 @@ rust_test(
     name = "w12_fd_passing_response",
     srcs = ["tests/w12_fd_passing_response.rs"],
     compile_data = ["Cargo.toml"],
+    crate_features = broker_features(),
+    data = [":d2b-priv-broker"],
+    env = {"CARGO_BIN_EXE_d2b-priv-broker": "$(rootpath :d2b-priv-broker)"},
+    rustc_env = {"CARGO_BIN_EXE_d2b-priv-broker": "$(rootpath :d2b-priv-broker)"},
+    tags = broker_test_tags(),
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_priv_broker",
@@ -241,6 +324,11 @@ rust_test(
         "//:tests/golden/manifest_v04/baseline-vms.json",  # keep
         "Cargo.toml",
     ],
+    crate_features = broker_features(),
+    data = [":d2b-priv-broker"],
+    env = {"CARGO_BIN_EXE_d2b-priv-broker": "$(rootpath :d2b-priv-broker)"},
+    rustc_env = {"CARGO_BIN_EXE_d2b-priv-broker": "$(rootpath :d2b-priv-broker)"},
+    tags = broker_test_tags(),
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_priv_broker",
@@ -255,6 +343,11 @@ rust_test(
     name = "zone_store",
     srcs = ["tests/zone_store.rs"],
     compile_data = ["Cargo.toml"],
+    crate_features = broker_features(),
+    data = [":d2b-priv-broker"],
+    env = {"CARGO_BIN_EXE_d2b-priv-broker": "$(rootpath :d2b-priv-broker)"},
+    rustc_env = {"CARGO_BIN_EXE_d2b-priv-broker": "$(rootpath :d2b-priv-broker)"},
+    tags = broker_test_tags(),
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_priv_broker",
@@ -268,6 +361,11 @@ rust_test(
     name = "d2b_priv_broker_test",
     compile_data = ["Cargo.toml"],
     crate = ":d2b_priv_broker",
+    crate_features = broker_features(),
+    data = [":d2b-priv-broker"],
+    env = {"CARGO_BIN_EXE_d2b-priv-broker": "$(rootpath :d2b-priv-broker)"},
+    rustc_env = {"CARGO_BIN_EXE_d2b-priv-broker": "$(rootpath :d2b-priv-broker)"},
+    tags = broker_test_tags(),
     deps = [
         "//packages/d2b-core:d2b_core",
         "//packages/d2b-host:d2b_host",
@@ -277,4 +375,22 @@ rust_test(
         "@crates//:sha2",
         "@crates//:tempfile",
     ],
+)
+
+# keep
+filegroup(
+    name = "cargo_workspace_sources",
+    srcs = glob(
+        [
+            "Cargo.lock",
+            "Cargo.toml",
+            "benches/**/*.rs",
+            "build.rs",
+            "examples/**/*.rs",
+            "src/**/*.rs",
+            "tests/**/*.rs",
+        ],
+        allow_empty = True,
+    ),
+    visibility = ["//visibility:public"],
 )

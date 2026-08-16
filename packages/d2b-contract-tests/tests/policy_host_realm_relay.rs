@@ -1,9 +1,8 @@
 //! Host-side source boundary checks for realm relay credentials.
 
 use std::collections::BTreeSet;
-use std::process::Command;
 
-use d2b_contract_tests::repo_root;
+use d2b_contract_tests::{repo_files, repo_root};
 
 fn read(rel: &str) -> String {
     std::fs::read_to_string(repo_root().join(rel)).unwrap_or_else(|err| {
@@ -12,26 +11,7 @@ fn read(rel: &str) -> String {
 }
 
 fn git_listed_files(roots: &[&str]) -> Vec<String> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(repo_root())
-        .args(["ls-files", "-z", "--"])
-        .args(roots)
-        .output()
-        .expect("run git ls-files");
-    assert!(
-        output.status.success(),
-        "git ls-files failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    output
-        .stdout
-        .split(|byte| *byte == 0)
-        .filter(|entry| !entry.is_empty())
-        .map(|entry| String::from_utf8(entry.to_vec()).expect("tracked paths are UTF-8"))
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect()
+    repo_files(roots)
 }
 
 fn forbidden_needles() -> Vec<String> {

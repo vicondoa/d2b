@@ -95,10 +95,7 @@ mod tests {
     use super::*;
 
     fn committed_pin() -> ProcessMarkerPin {
-        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .and_then(Path::parent)
-            .expect("xtask has a repository parent");
+        let repo_root = crate::repo_root().expect("xtask has a repository parent");
         let bytes = fs::read(repo_root.join(PIN_REL)).expect("read committed pin");
         serde_json::from_slice(&bytes).expect("parse committed pin")
     }

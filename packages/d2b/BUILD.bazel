@@ -1,5 +1,13 @@
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 
+exports_files(
+    [
+        "BUILD.bazel",
+        "src/host_validate.rs",
+    ],
+    visibility = ["//visibility:public"],
+)
+
 rust_library(
     name = "d2b_lib",
     srcs = [
@@ -67,6 +75,9 @@ rust_test(
     ],
     compile_data = ["Cargo.toml"],
     crate_root = "tests/audit_contract.rs",
+    data = [":d2b"],
+    env = {"CARGO_BIN_EXE_d2b": "$(rootpath :d2b)"},
+    rustc_env = {"CARGO_BIN_EXE_d2b": "$(rootpath :d2b)"},
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts:d2b_contracts",
@@ -80,6 +91,9 @@ rust_test(
     name = "auth_status_contract",
     srcs = ["tests/auth_status_contract.rs"],
     compile_data = ["Cargo.toml"],
+    data = [":d2b"],
+    env = {"CARGO_BIN_EXE_d2b": "$(rootpath :d2b)"},
+    rustc_env = {"CARGO_BIN_EXE_d2b": "$(rootpath :d2b)"},
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts:d2b_contracts",
@@ -92,6 +106,9 @@ rust_test(
     name = "cli_contract",
     srcs = ["tests/cli_contract.rs"],
     compile_data = ["Cargo.toml"],
+    data = [":d2b"],
+    env = {"CARGO_BIN_EXE_d2b": "$(rootpath :d2b)"},
+    rustc_env = {"CARGO_BIN_EXE_d2b": "$(rootpath :d2b)"},
     visibility = ["//visibility:public"],
     deps = [
         "@crates//:serde_json",
@@ -103,6 +120,12 @@ rust_test(
     name = "cli_contract_coverage",
     srcs = ["tests/cli_contract_coverage.rs"],
     compile_data = ["Cargo.toml"],
+    data = [
+        ":d2b",
+        "//:d2b_cli_contract_inputs",
+    ],
+    env = {"CARGO_BIN_EXE_d2b": "$(rootpath :d2b)"},
+    rustc_env = {"CARGO_BIN_EXE_d2b": "$(rootpath :d2b)"},
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_lib",
@@ -115,6 +138,9 @@ rust_test(
     name = "cli_json_contract",
     srcs = ["tests/cli_json_contract.rs"],
     compile_data = ["Cargo.toml"],
+    data = [":d2b"],
+    env = {"CARGO_BIN_EXE_d2b": "$(rootpath :d2b)"},
+    rustc_env = {"CARGO_BIN_EXE_d2b": "$(rootpath :d2b)"},
     visibility = ["//visibility:public"],
     deps = [
         "@crates//:rustix",
@@ -127,6 +153,12 @@ rust_test(
     name = "cli_json_output_contract",
     srcs = ["tests/cli_json_output_contract.rs"],
     compile_data = ["Cargo.toml"],
+    data = [
+        ":d2b",
+        "//:d2b_cli_contract_inputs",
+    ],
+    env = {"CARGO_BIN_EXE_d2b": "$(rootpath :d2b)"},
+    rustc_env = {"CARGO_BIN_EXE_d2b": "$(rootpath :d2b)"},
     visibility = ["//visibility:public"],
     deps = [
         "@crates//:nix",
@@ -143,6 +175,9 @@ rust_test(
     ],
     compile_data = ["Cargo.toml"],
     crate_root = "tests/host_check_contract.rs",
+    data = [":d2b"],
+    env = {"CARGO_BIN_EXE_d2b": "$(rootpath :d2b)"},
+    rustc_env = {"CARGO_BIN_EXE_d2b": "$(rootpath :d2b)"},
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts:d2b_contracts",
@@ -157,6 +192,9 @@ rust_test(
     name = "host_doctor_contract",
     srcs = ["tests/host_doctor_contract.rs"],
     compile_data = ["Cargo.toml"],
+    data = [":d2b"],
+    env = {"CARGO_BIN_EXE_d2b": "$(rootpath :d2b)"},
+    rustc_env = {"CARGO_BIN_EXE_d2b": "$(rootpath :d2b)"},
     visibility = ["//visibility:public"],
     deps = [
         "@crates//:nix",
@@ -167,8 +205,17 @@ rust_test(
 
 rust_test(
     name = "host_validate_verb",
-    srcs = ["tests/host_validate_verb.rs"],
+    srcs = [
+        "src/host_validate.rs",  # keep
+        "tests/host_validate_verb.rs",
+    ],
     compile_data = ["Cargo.toml"],
+    data = [
+        ":d2b",
+        "//:d2b_cli_contract_inputs",
+    ],
+    env = {"CARGO_BIN_EXE_d2b": "$(rootpath :d2b)"},
+    rustc_env = {"CARGO_BIN_EXE_d2b": "$(rootpath :d2b)"},
     visibility = ["//visibility:public"],
     deps = [
         "@crates//:serde_json",
@@ -180,6 +227,9 @@ rust_test(
     name = "launch_contract",
     srcs = ["tests/launch_contract.rs"],
     compile_data = ["Cargo.toml"],
+    data = [":d2b"],
+    env = {"CARGO_BIN_EXE_d2b": "$(rootpath :d2b)"},
+    rustc_env = {"CARGO_BIN_EXE_d2b": "$(rootpath :d2b)"},
     visibility = ["//visibility:public"],
     deps = ["@crates//:tempfile"],
 )
@@ -188,6 +238,9 @@ rust_test(
     name = "status_contract",
     srcs = ["tests/status_contract.rs"],
     compile_data = ["Cargo.toml"],
+    data = [":d2b"],
+    env = {"CARGO_BIN_EXE_d2b": "$(rootpath :d2b)"},
+    rustc_env = {"CARGO_BIN_EXE_d2b": "$(rootpath :d2b)"},
     visibility = ["//visibility:public"],
     deps = [
         "@crates//:serde_json",
@@ -199,6 +252,9 @@ rust_test(
     name = "usb_contract",
     srcs = ["tests/usb_contract.rs"],
     compile_data = ["Cargo.toml"],
+    data = [":d2b"],
+    env = {"CARGO_BIN_EXE_d2b": "$(rootpath :d2b)"},
+    rustc_env = {"CARGO_BIN_EXE_d2b": "$(rootpath :d2b)"},
     visibility = ["//visibility:public"],
     deps = [
         "@crates//:serde_json",
@@ -210,6 +266,9 @@ rust_test(
     name = "usb_sk_contract",
     srcs = ["tests/usb_sk_contract.rs"],
     compile_data = ["Cargo.toml"],
+    data = [":d2b"],
+    env = {"CARGO_BIN_EXE_d2b": "$(rootpath :d2b)"},
+    rustc_env = {"CARGO_BIN_EXE_d2b": "$(rootpath :d2b)"},
     visibility = ["//visibility:public"],
     deps = [
         "@crates//:serde_json",
@@ -221,6 +280,9 @@ rust_test(
     name = "vm_verbs_contract",
     srcs = ["tests/vm_verbs_contract.rs"],
     compile_data = ["Cargo.toml"],
+    data = [":d2b"],
+    env = {"CARGO_BIN_EXE_d2b": "$(rootpath :d2b)"},
+    rustc_env = {"CARGO_BIN_EXE_d2b": "$(rootpath :d2b)"},
     visibility = ["//visibility:public"],
     deps = [
         "@crates//:serde_json",
@@ -232,6 +294,9 @@ rust_test(
     name = "zone_audit_contract",
     srcs = ["tests/zone_audit_contract.rs"],
     compile_data = ["Cargo.toml"],
+    data = [":d2b"],
+    env = {"CARGO_BIN_EXE_d2b": "$(rootpath :d2b)"},
+    rustc_env = {"CARGO_BIN_EXE_d2b": "$(rootpath :d2b)"},
     visibility = ["//visibility:public"],
     deps = [
         "@crates//:nix",
@@ -245,6 +310,9 @@ rust_test(
     name = "zone_doctor_contract",
     srcs = ["tests/zone_doctor_contract.rs"],
     compile_data = ["Cargo.toml"],
+    data = [":d2b"],
+    env = {"CARGO_BIN_EXE_d2b": "$(rootpath :d2b)"},
+    rustc_env = {"CARGO_BIN_EXE_d2b": "$(rootpath :d2b)"},
     visibility = ["//visibility:public"],
     deps = [
         "@crates//:nix",
@@ -257,6 +325,9 @@ rust_test(
     name = "zone_support_bundle_contract",
     srcs = ["tests/zone_support_bundle_contract.rs"],
     compile_data = ["Cargo.toml"],
+    data = [":d2b"],
+    env = {"CARGO_BIN_EXE_d2b": "$(rootpath :d2b)"},
+    rustc_env = {"CARGO_BIN_EXE_d2b": "$(rootpath :d2b)"},
     visibility = ["//visibility:public"],
     deps = [
         "@crates//:nix",
@@ -269,5 +340,26 @@ rust_test(
     name = "d2b_lib_test",
     compile_data = ["Cargo.toml"],
     crate = ":d2b_lib",
+    data = [":d2b"],
+    env = {"CARGO_BIN_EXE_d2b": "$(rootpath :d2b)"},
+    rustc_env = {"CARGO_BIN_EXE_d2b": "$(rootpath :d2b)"},
     deps = ["@crates//:nix"],
+)
+
+# keep
+filegroup(
+    name = "cargo_workspace_sources",
+    srcs = glob(
+        [
+            "Cargo.lock",
+            "Cargo.toml",
+            "benches/**/*.rs",
+            "build.rs",
+            "examples/**/*.rs",
+            "src/**/*.rs",
+            "tests/**/*.rs",
+        ],
+        allow_empty = True,
+    ),
+    visibility = ["//visibility:public"],
 )

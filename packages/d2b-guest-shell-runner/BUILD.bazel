@@ -1,4 +1,10 @@
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+load("//bazel/checks/rust:defs.bzl", "guest_features")
+
+exports_files(
+    ["BUILD.bazel"],
+    visibility = ["//visibility:public"],
+)
 
 # gazelle:rust_ignore_import predicate
 
@@ -7,37 +13,62 @@ rust_library(
     srcs = [
         "src/cli.rs",
         "src/lib.rs",
+        "src/libshpool_bridge.rs",  # keep
         "src/name.rs",
         "src/output.rs",
         "src/socket.rs",
     ],
     compile_data = ["Cargo.toml"],
+    crate_features = guest_features(),
     visibility = ["//visibility:public"],
+    # keep
     deps = [
-        "@crates//:anyhow",
-        "@crates//:clap",
         "@crates//:serde",
         "@crates//:thiserror",
-    ],
+    ] + select({
+        "//bazel/checks/rust:guest-real-libshpool": [
+            "@bazel_only_crates//:anyhow",
+            "@bazel_only_crates//:clap",
+            "@bazel_only_crates//:libshpool",
+        ],
+        "//conditions:default": [
+            "@crates//:anyhow",
+            "@crates//:clap",
+        ],
+    }),
 )
 
 rust_binary(
     name = "d2b-guest-shell-runner",
     srcs = ["src/main.rs"],
     compile_data = ["Cargo.toml"],
+    crate_features = guest_features(),
     visibility = ["//visibility:public"],
+    # keep
     deps = [
         ":d2b_guest_shell_runner",
-        "@crates//:anyhow",
-        "@crates//:clap",
         "@crates//:serde_json",
-    ],
+    ] + select({
+        "//bazel/checks/rust:guest-real-libshpool": [
+            "@bazel_only_crates//:anyhow",
+            "@bazel_only_crates//:clap",
+            "@bazel_only_crates//:libshpool",
+        ],
+        "//conditions:default": [
+            "@crates//:anyhow",
+            "@crates//:clap",
+        ],
+    }),
 )
 
 rust_test(
     name = "cli",
     srcs = ["tests/cli.rs"],
     compile_data = ["Cargo.toml"],
+    crate_features = guest_features(),
+    data = [":d2b-guest-shell-runner"],
+    env = {"CARGO_BIN_EXE_d2b-guest-shell-runner": "$(rootpath :d2b-guest-shell-runner)"},
+    rustc_env = {"CARGO_BIN_EXE_d2b-guest-shell-runner": "$(rootpath :d2b-guest-shell-runner)"},
     visibility = ["//visibility:public"],
     deps = [
         "@crates//:assert_cmd",
@@ -49,5 +80,24 @@ rust_test(
     name = "d2b_guest_shell_runner_test",
     compile_data = ["Cargo.toml"],
     crate = ":d2b_guest_shell_runner",
+    crate_features = guest_features(),
     deps = ["@crates//:serde_json"],
+)
+
+# keep
+filegroup(
+    name = "cargo_workspace_sources",
+    srcs = glob(
+        [
+            "Cargo.lock",
+            "Cargo.toml",
+            "benches/**/*.rs",
+            "build.rs",
+            "examples/**/*.rs",
+            "src/**/*.rs",
+            "tests/**/*.rs",
+        ],
+        allow_empty = True,
+    ),
+    visibility = ["//visibility:public"],
 )

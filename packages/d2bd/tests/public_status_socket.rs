@@ -87,8 +87,12 @@ mod public_status_socket {
         )
         .expect("write processes");
         fs::copy(
-            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("../../tests/fixtures/deny-unknown/host-valid.json"),
+            std::env::var_os("D2BD_HOST_FIXTURE")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| {
+                    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                        .join("../../tests/fixtures/deny-unknown/host-valid.json")
+                }),
             &host_path,
         )
         .expect("copy host fixture");

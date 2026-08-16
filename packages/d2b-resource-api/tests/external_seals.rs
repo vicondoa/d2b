@@ -32,10 +32,13 @@ impl Scratch {
 /// Hash `rustc -vV` so a toolchain change lands in a different tree rather than
 /// reusing artifacts the new compiler cannot read.
 fn toolchain_cache_key() -> String {
-    let version = Command::new(std::env::var("RUSTC").as_deref().unwrap_or("rustc"))
+    let rustc = runfile(PathBuf::from(
+        std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into()),
+    ));
+    let version = Command::new(&rustc)
         .arg("-vV")
         .output()
-        .expect("query the active rustc version");
+        .unwrap_or_else(|error| panic!("query the active rustc version at {:?}: {error}", rustc));
     assert!(
         version.status.success(),
         "rustc -vV failed; a scratch tree keyed on an unknown toolchain could be reused across \
@@ -96,7 +99,8 @@ fn force_resource_boundary_recompile(target: &Path) {
 }
 
 struct CompileFailHarness<'a> {
-    cargo: &'a str,
+    cargo: &'a Path,
+    rustc: &'a Path,
     manifest: &'a Path,
     target: &'a Path,
     temp: &'a Path,
@@ -105,6 +109,30 @@ struct CompileFailHarness<'a> {
 }
 
 impl CompileFailHarness<'_> {
+    fn prepare_boundary_compile(&self, test: &str) {
+        let _ = Command::new(self.cargo)
+            .args([
+                "check",
+                "--quiet",
+                "--locked",
+                "--all-features",
+                "--manifest-path",
+            ])
+            .arg(self.manifest)
+            .args(["--test", test])
+            .env("CARGO_TARGET_DIR", self.target)
+            .env("D2B_CFG_TEST_MARKER_DIR", self.cfg_test_marker_dir)
+            .env("D2B_EXTERNAL_SEALS_TARGET", self.target)
+            .env("CARGO_ENCODED_RUSTFLAGS", "--cap-lints\u{1f}allow")
+            .env("RUSTC_WRAPPER", self.rustc_wrapper)
+            .env("RUSTC", self.rustc)
+            .env("RUSTC_WORKSPACE_WRAPPER", "")
+            .env("CARGO_BUILD_RUSTC_WRAPPER", "")
+            .env("TMPDIR", self.temp)
+            .output()
+            .expect("run external-seals boundary compile");
+    }
+
     fn check_rejected(&self, test: &str, expected: &[&str]) {
         let output = Command::new(self.cargo)
             .args([
@@ -134,6 +162,7 @@ impl CompileFailHarness<'_> {
             // reason, so an inherited workspace or config-env wrapper cannot
             // layer that contention back on top of the shim.
             .env("RUSTC_WRAPPER", self.rustc_wrapper)
+            .env("RUSTC", self.rustc)
             .env("RUSTC_WORKSPACE_WRAPPER", "")
             .env("CARGO_BUILD_RUSTC_WRAPPER", "")
             .env("TMPDIR", self.temp)
@@ -151,11 +180,90 @@ impl CompileFailHarness<'_> {
     }
 }
 
+fn runfile(path: PathBuf) -> PathBuf {
+    let path_text = path.to_string_lossy();
+    let manifest_key = path_text
+        .find("/external/")
+        .map(|index| path_text[index + 10..].to_owned())
+        .or_else(|| {
+            path_text
+                .find("/bin/")
+                .map(|index| path_text[index + 5..].to_owned())
+        })
+        .unwrap_or_else(|| path_text.to_string());
+    if path.exists() {
+        path
+    } else if let Some(runfiles_dir) = std::env::var_os("RUNFILES_DIR") {
+        let candidate = PathBuf::from(runfiles_dir).join(&manifest_key);
+        if candidate.exists() { candidate } else { path }
+    } else if let Some(manifest) = std::env::var_os("RUNFILES_MANIFEST_FILE")
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("RUNFILES_DIR")
+                .map(PathBuf::from)
+                .map(|dir| dir.join("MANIFEST"))
+                .filter(|path| path.exists())
+        })
+    {
+        fs::read_to_string(manifest)
+            .ok()
+            .and_then(|contents| {
+                contents.lines().find_map(|line| {
+                    let (candidate, actual) = line.split_once(' ')?;
+                    (candidate == manifest_key).then(|| PathBuf::from(actual))
+                })
+            })
+            .unwrap_or(path)
+    } else if let Some(runfiles_dir) = std::env::var_os("RUNFILES_DIR") {
+        let runfiles_dir = PathBuf::from(runfiles_dir);
+        let runfiles_path = path_text
+            .find("/bin/")
+            .map(|index| PathBuf::from(&path_text[index + 5..]))
+            .unwrap_or(path.clone());
+        let candidate = runfiles_dir.join(runfiles_path);
+        if candidate.exists() {
+            candidate
+        } else {
+            runfiles_dir.join(path)
+        }
+    } else {
+        path
+    }
+}
+
+fn fixture_manifest() -> PathBuf {
+    if let Some(path) = std::env::var_os("D2B_EXTERNAL_SEALS_FIXTURE_MANIFEST") {
+        return runfile(PathBuf::from(path));
+    }
+    PathBuf::from(
+        option_env!("CARGO_MANIFEST_DIR")
+            .expect("Cargo must provide CARGO_MANIFEST_DIR for this fixture"),
+    )
+    .join("tests/ui/external-seals/Cargo.toml")
+}
+
+fn selected_case(name: &str) -> bool {
+    std::env::var("D2B_EXTERNAL_SEALS_CASE")
+        .map(|case| case == name)
+        .unwrap_or(true)
+}
+
 #[test]
 fn dependent_cannot_mint_admission_or_session_capabilities() {
-    let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let repository_root = crate_root.parent().unwrap().parent().unwrap();
-    let fixture = crate_root.join("tests/ui/external-seals");
+    let manifest = fixture_manifest();
+    let repository_root = std::env::var_os("TEST_TMPDIR")
+        .map(PathBuf::from)
+        .or_else(|| {
+            option_env!("CARGO_MANIFEST_DIR").map(|path| {
+                PathBuf::from(path)
+                    .parent()
+                    .expect("packages directory")
+                    .parent()
+                    .expect("repository root")
+                    .to_path_buf()
+            })
+        })
+        .expect("Bazel or Cargo must provide a scratch root");
     let scratch = Scratch::new(repository_root.join(".scratch").join(format!(
         "resource-api-external-seals-{}",
         toolchain_cache_key()
@@ -221,20 +329,33 @@ exec "$rustc" "$@"
     fs::set_permissions(&rustc_wrapper, fs::Permissions::from_mode(0o700))
         .expect("make selective cfg(test) rustc wrapper executable");
 
-    let manifest = fixture.join("Cargo.toml");
-    let cargo = env!("CARGO");
+    let cargo = runfile(
+        std::env::var_os("CARGO")
+            .map(PathBuf::from)
+            .or_else(|| option_env!("CARGO").map(PathBuf::from))
+            .unwrap_or_else(|| PathBuf::from("cargo")),
+    );
+    let rustc = runfile(PathBuf::from(
+        std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into()),
+    ));
     let harness = CompileFailHarness {
-        cargo,
+        cargo: &cargo,
+        rustc: &rustc,
         manifest: &manifest,
         target: &target,
         temp: &temp,
         rustc_wrapper: &rustc_wrapper,
         cfg_test_marker_dir: &cfg_test_marker_dir,
     };
-    harness.check_rejected(
-        "forge_issuer",
-        &["error[E0432]", "no `AdmissionIssuer` in the root"],
-    );
+    let boundary_case =
+        std::env::var("D2B_EXTERNAL_SEALS_CASE").unwrap_or_else(|_| "forge_issuer".to_owned());
+    harness.prepare_boundary_compile(&boundary_case);
+    if selected_case("forge_issuer") {
+        harness.check_rejected(
+            "forge_issuer",
+            &["error[E0432]", "no `AdmissionIssuer` in the root"],
+        );
+    }
     for crate_name in [
         "d2b_resource_api",
         "d2b_resource_store",
@@ -245,59 +366,79 @@ exec "$rustc" "$@"
             "{crate_name} was not compiled under forced cfg(test)"
         );
     }
-    harness.check_rejected(
-        "implement_mutation_view",
-        &["error[E0432]", "no `VerifiedMutationView` in the root"],
-    );
-    harness.check_rejected(
-        "forge_sealed_mutation",
-        &["error[E0451]", "of struct `SealedMutation` are private"],
-    );
-    harness.check_rejected(
-        "open_sealed_without_acceptor",
-        &[
-            "error[E0616]",
-            "field `body` of struct `SealedMutation` is private",
-        ],
-    );
-    harness.check_rejected(
-        "clone_sealed_mutation",
-        &[
-            "error[E0599]",
-            "no method named `clone` found for struct `SealedMutation`",
-        ],
-    );
-    harness.check_rejected(
-        "reuse_sealed_mutation",
-        &["error[E0382]", "use of moved value: `sealed`"],
-    );
-    harness.check_rejected(
-        "clone_seal_acceptor",
-        &[
-            "error[E0599]",
-            "no method named `clone` found for struct `MutationSealAcceptor`",
-        ],
-    );
-    harness.check_rejected(
-        "name_seal_authority",
-        &["error[E0603]", "module `authority` is private"],
-    );
-    harness.check_rejected(
-        "debug_format_sealed_mutation",
-        &["error[E0277]", "`SealedMutation` doesn't implement `Debug`"],
-    );
-    harness.check_rejected(
-        "display_format_seal_identity",
-        &[
-            "error[E0277]",
-            "`StoreSealIdentity` doesn't implement `std::fmt::Display`",
-        ],
-    );
-    harness.check_rejected(
-        "compare_seal_identities",
-        &[
-            "error[E0369]",
-            "binary operation `==` cannot be applied to type `StoreSealIdentity`",
-        ],
-    );
+    if selected_case("implement_mutation_view") {
+        harness.check_rejected(
+            "implement_mutation_view",
+            &["error[E0432]", "no `VerifiedMutationView` in the root"],
+        );
+    }
+    if selected_case("forge_sealed_mutation") {
+        harness.check_rejected(
+            "forge_sealed_mutation",
+            &["error[E0451]", "of struct `SealedMutation` are private"],
+        );
+    }
+    if selected_case("open_sealed_without_acceptor") {
+        harness.check_rejected(
+            "open_sealed_without_acceptor",
+            &[
+                "error[E0616]",
+                "field `body` of struct `SealedMutation` is private",
+            ],
+        );
+    }
+    if selected_case("clone_sealed_mutation") {
+        harness.check_rejected(
+            "clone_sealed_mutation",
+            &[
+                "error[E0599]",
+                "no method named `clone` found for struct `SealedMutation`",
+            ],
+        );
+    }
+    if selected_case("reuse_sealed_mutation") {
+        harness.check_rejected(
+            "reuse_sealed_mutation",
+            &["error[E0382]", "use of moved value: `sealed`"],
+        );
+    }
+    if selected_case("clone_seal_acceptor") {
+        harness.check_rejected(
+            "clone_seal_acceptor",
+            &[
+                "error[E0599]",
+                "no method named `clone` found for struct `MutationSealAcceptor`",
+            ],
+        );
+    }
+    if selected_case("name_seal_authority") {
+        harness.check_rejected(
+            "name_seal_authority",
+            &["error[E0603]", "module `authority` is private"],
+        );
+    }
+    if selected_case("debug_format_sealed_mutation") {
+        harness.check_rejected(
+            "debug_format_sealed_mutation",
+            &["error[E0277]", "`SealedMutation` doesn't implement `Debug`"],
+        );
+    }
+    if selected_case("display_format_seal_identity") {
+        harness.check_rejected(
+            "display_format_seal_identity",
+            &[
+                "error[E0277]",
+                "`StoreSealIdentity` doesn't implement `std::fmt::Display`",
+            ],
+        );
+    }
+    if selected_case("compare_seal_identities") {
+        harness.check_rejected(
+            "compare_seal_identities",
+            &[
+                "error[E0369]",
+                "binary operation `==` cannot be applied to type `StoreSealIdentity`",
+            ],
+        );
+    }
 }

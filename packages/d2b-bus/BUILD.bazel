@@ -1,4 +1,29 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+load("//bazel/checks/rust:defs.bzl", "test_features")
+
+# gazelle:ignore
+exports_files(
+    ["BUILD.bazel"],
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "cargo_workspace_sources",
+    srcs = glob(
+        [
+            "Cargo.lock",
+            "Cargo.toml",
+            "benches/**/*.rs",
+            "build.rs",
+            "examples/**/*.rs",
+            "src/**/*.rs",
+            "tests/**/*.rs",
+            "tests/**/*.txt",
+        ],
+        allow_empty = True,
+    ),
+    visibility = ["//visibility:public"],
+)
 
 rust_library(
     name = "d2b_bus",
@@ -12,6 +37,7 @@ rust_library(
         "src/lifecycle.rs",
         "src/metrics.rs",
         "src/operations.rs",
+        "src/production_rss.rs",  # keep
         "src/registry.rs",
         "src/relay.rs",
         "src/router.rs",
@@ -35,6 +61,7 @@ rust_library(
         "Cargo.toml",
         "src/transport/unix.rs",
     ],
+    crate_features = test_features(["production-rss-fixture"]),
     proc_macro_deps = ["@crates//:async-trait"],
     visibility = ["//visibility:public"],
     deps = [
@@ -82,9 +109,10 @@ rust_test(
         "tests/approved-public-api.txt",
         "tests/public_mint_surface.rs",
     ],
-    proc_macro_deps = ["@crates//:quote"],
+    data = ["//bazel/checks/rust:cargo_workspace_sources"],
     visibility = ["//visibility:public"],
     deps = [
+        "@crates//:quote",
         "@crates//:serde_json",
         "@crates//:syn",
     ],

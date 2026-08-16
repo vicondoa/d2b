@@ -569,6 +569,12 @@ pub fn enclosing_git_worktree(path: &Path) -> Option<PathBuf> {
         if ancestor.join(".git").symlink_metadata().is_ok() {
             return Some(ancestor.to_path_buf());
         }
+        if std::env::var_os("RUNFILES_DIR").is_some()
+            && ancestor.join("Cargo.toml").is_file()
+            && ancestor.join("packages").is_dir()
+        {
+            return Some(ancestor.to_path_buf());
+        }
     }
     None
 }
@@ -1386,6 +1392,12 @@ pub(crate) mod tests {
     static NEXT_SCRATCH: AtomicU32 = AtomicU32::new(0);
 
     pub(crate) fn repo_root() -> PathBuf {
+        if let Some(runfiles) = std::env::var_os("RUNFILES_DIR") {
+            let root = PathBuf::from(runfiles).join("_main");
+            if root.join("Cargo.toml").is_file() {
+                return root;
+            }
+        }
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .and_then(Path::parent)
@@ -1402,8 +1414,11 @@ pub(crate) mod tests {
     impl Scratch {
         pub(crate) fn new(label: &str) -> Self {
             let ordinal = NEXT_SCRATCH.fetch_add(1, Ordering::Relaxed);
-            let path = repo_root()
-                .join("target/xtask-delivery-tests")
+            let base = std::env::var_os("TEST_TMPDIR")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| repo_root().join("target"));
+            let path = base
+                .join("xtask-delivery-tests")
                 .join(format!("{label}-{}-{ordinal}", std::process::id()));
             let _ = fs::remove_dir_all(&path);
             fs::create_dir_all(&path).expect("create scratch directory");

@@ -17,9 +17,13 @@ struct Scratch {
 
 impl Scratch {
     fn new() -> Self {
-        let base = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("target")
-            .join("guest-control-token-materializer-tests");
+        let base = std::env::var_os("TEST_TMPDIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("target")
+                    .join("guest-control-token-materializer-tests")
+            });
         fs::create_dir_all(&base).expect("create guest-control token materializer scratch base");
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -57,8 +61,13 @@ fn repo_root() -> PathBuf {
 }
 
 fn run_materializer(spec: &Path) -> Output {
-    let root = repo_root();
-    let materializer = root.join("nixos-modules/guest-control-token-materialize.py");
+    let materializer = std::env::var_os("D2B_GUEST_CONTROL_TOKEN_MATERIALIZER").map(PathBuf::from);
+    let root = materializer
+        .is_none()
+        .then(repo_root)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let materializer = materializer
+        .unwrap_or_else(|| root.join("nixos-modules/guest-control-token-materialize.py"));
     match Command::new("python3")
         .arg(&materializer)
         .arg(spec)

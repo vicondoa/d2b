@@ -328,17 +328,18 @@ mod tests {
         time::{SystemTime, UNIX_EPOCH},
     };
 
-    #[test]
-    fn receiver_drains_datagrams_and_reports_ready() {
+    fn socket_path(prefix: &str) -> PathBuf {
+        let base = std::env::temp_dir();
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .ancestors()
-            .nth(2)
-            .unwrap()
-            .join(format!("e-{nonce}.sock"));
+        base.join(format!("{prefix}-{nonce}.sock"))
+    }
+
+    #[test]
+    fn receiver_drains_datagrams_and_reports_ready() {
+        let path = socket_path("e");
         let mut receiver = EmitterSocket::bind(&path, 512).unwrap();
         let sender = UnixDatagram::unbound().unwrap();
         sender
@@ -362,15 +363,7 @@ mod tests {
 
     #[test]
     fn receiver_uses_closed_descriptor_accounting_before_queue_insertion() {
-        let nonce = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .ancestors()
-            .nth(2)
-            .unwrap()
-            .join(format!("registry-{nonce}.sock"));
+        let path = socket_path("registry");
         let mut receiver = EmitterSocket::bind(&path, 512).unwrap();
         let sender = UnixDatagram::unbound().unwrap();
         sender
@@ -398,15 +391,7 @@ mod tests {
 
     #[test]
     fn receiver_redacts_or_drops_forbidden_frames_within_bounds() {
-        let nonce = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .ancestors()
-            .nth(2)
-            .unwrap()
-            .join(format!("er-{nonce}.sock"));
+        let path = socket_path("er");
         let mut receiver = EmitterSocket::bind(&path, 512).unwrap();
         let sender = UnixDatagram::unbound().unwrap();
         sender
@@ -428,15 +413,7 @@ mod tests {
 
     #[test]
     fn inode_checked_drop_does_not_remove_replacement_socket() {
-        let nonce = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .ancestors()
-            .nth(2)
-            .unwrap()
-            .join(format!("race-{nonce}.sock"));
+        let path = socket_path("race");
         let receiver = EmitterSocket::bind(&path, 512).unwrap();
         fs::remove_file(&path).unwrap();
         let replacement = UnixDatagram::bind(&path).unwrap();

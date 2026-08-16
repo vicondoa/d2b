@@ -1,5 +1,4 @@
 use std::path::Path;
-use walkdir::WalkDir;
 
 const BASH_LITERALS: &[&str] = &[
     "bash",
@@ -19,21 +18,16 @@ fn main() {
         .map(Path::new)
         .unwrap_or_else(|| Path::new("packages"));
 
-    let mut violations: Vec<String> = Vec::new();
-    let walker = WalkDir::new(root).into_iter().filter_entry(|e| {
-        let name = e.file_name().to_string_lossy();
-        !matches!(name.as_ref(), "target" | "tests" | "fixtures" | ".git")
-    });
+    let mut paths = Vec::new();
+    collect_rust_files(root, &mut paths);
+    paths.sort();
 
-    for entry in walker.filter_map(Result::ok) {
-        if !entry.file_type().is_file() {
-            continue;
-        }
-        let path = entry.path();
+    let mut violations: Vec<String> = Vec::new();
+    for path in paths {
         if path.extension().and_then(|s| s.to_str()) != Some("rs") {
             continue;
         }
-        let src = match std::fs::read_to_string(path) {
+        let src = match std::fs::read_to_string(&path) {
             Ok(s) => s,
             Err(_) => continue,
         };
@@ -64,6 +58,25 @@ fn main() {
             eprintln!("  {v}");
         }
         std::process::exit(1);
+    }
+}
+
+fn collect_rust_files(root: &Path, files: &mut Vec<std::path::PathBuf>) {
+    let entries = match std::fs::read_dir(root) {
+        Ok(entries) => entries,
+        Err(_) => return,
+    };
+    for entry in entries.filter_map(Result::ok) {
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if matches!(name.as_str(), "target" | "tests" | "fixtures" | ".git") {
+            continue;
+        }
+        if path.is_dir() {
+            collect_rust_files(&path, files);
+        } else if path.extension().and_then(|s| s.to_str()) == Some("rs") {
+            files.push(path);
+        }
     }
 }
 

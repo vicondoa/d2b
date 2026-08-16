@@ -7,11 +7,49 @@ use std::process::Command;
 use serde_json::{Map, Value};
 
 fn repo_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(Path::parent)
-        .expect("xtask lives under packages/xtask")
-        .to_path_buf()
+    let mut candidates = Vec::new();
+    if let Some(root) = std::env::var_os("D2B_REPO_ROOT") {
+        candidates.push(PathBuf::from(root));
+    }
+    for variable in ["TEST_SRCDIR", "RUNFILES_DIR"] {
+        if let Some(base) = std::env::var_os(variable).map(PathBuf::from) {
+            candidates.push(base.clone());
+            if let Some(workspace) = std::env::var_os("TEST_WORKSPACE") {
+                candidates.push(base.join(workspace));
+            }
+            candidates.push(base.join("_main"));
+        }
+    }
+    if let Some(manifest_dir) = option_env!("CARGO_MANIFEST_DIR")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("CARGO_MANIFEST_DIR").map(PathBuf::from))
+    {
+        candidates.push(
+            manifest_dir
+                .parent()
+                .and_then(Path::parent)
+                .expect("xtask lives under packages/xtask")
+                .to_path_buf(),
+        );
+    }
+    if let Ok(current_dir) = std::env::current_dir() {
+        candidates.push(current_dir);
+    }
+    for candidate in candidates {
+        let mut path = candidate;
+        loop {
+            if path.join("Cargo.toml").is_file()
+                && path.join("BUILD.bazel").is_file()
+                && path.join("flake.nix").is_file()
+            {
+                return path;
+            }
+            if !path.pop() {
+                break;
+            }
+        }
+    }
+    panic!("repository root with Cargo.toml and BUILD.bazel is not discoverable");
 }
 
 fn read_json(relative: &str) -> Value {

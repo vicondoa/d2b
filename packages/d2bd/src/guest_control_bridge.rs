@@ -2450,7 +2450,16 @@ mod tests {
 
     #[test]
     fn daemon_source_launches_no_ssh_client() {
-        let src_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let src_dir = if let (Some(runfiles_dir), Some(workspace)) = (
+            std::env::var_os("RUNFILES_DIR"),
+            std::env::var_os("TEST_WORKSPACE"),
+        ) {
+            std::path::PathBuf::from(runfiles_dir)
+                .join(workspace)
+                .join("packages/d2bd/src")
+        } else {
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).to_path_buf()
+        };
         let mut sources = Vec::new();
         collect_rs_sources(&src_dir, &mut sources);
         assert!(!sources.is_empty(), "expected daemon source files");

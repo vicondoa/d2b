@@ -47,6 +47,14 @@ pub mod protocol;
 pub mod runtime;
 pub mod sys;
 
+#[cfg(test)]
+pub(crate) fn test_scratch_root() -> std::path::PathBuf {
+    std::env::var_os("TEST_TMPDIR")
+        .or_else(|| std::env::var_os("CARGO_TARGET_TMPDIR"))
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target"))
+}
+
 // Behavioral + regression seccomp BPF tests.
 #[cfg(test)]
 mod seccomp_compile_tests;

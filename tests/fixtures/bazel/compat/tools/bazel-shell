@@ -1,8 +1,0 @@
-#!/bin/bash
-set -euo pipefail
-
-# Bazel's processwrapper sandbox starts shell actions without PATH. Keep the
-# tool root fixed and never inherit the caller's PATH into an action.
-TOOL_DIR="${BASH_SOURCE[0]%/*}"
-export PATH="$TOOL_DIR/bin:${PATH:?PATH is required}"
-exec /bin/bash "$@"

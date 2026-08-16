@@ -82,10 +82,22 @@ where
 }
 
 fn corpus_dir(target: &str) -> PathBuf {
+    runfile_path(&format!("packages/d2b-core/fuzz/corpus/{target}"))
+}
+
+fn runfile_path(relative: &str) -> PathBuf {
+    if let Some(runfiles) = std::env::var_os("RUNFILES_DIR") {
+        let candidate = PathBuf::from(runfiles).join("_main").join(relative);
+        if candidate.exists() {
+            return candidate;
+        }
+    }
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("fuzz")
-        .join("corpus")
-        .join(target)
+        .parent()
+        .expect("d2b-core has a package parent")
+        .parent()
+        .expect("d2b-core has a workspace parent")
+        .join(relative)
 }
 
 fn generated_case(rng: &mut XorShift64, case: usize) -> Vec<u8> {

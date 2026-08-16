@@ -6,9 +6,8 @@
 //! bindings; this Rust port also self-exempts this policy file.
 
 use std::collections::BTreeSet;
-use std::process::Command;
 
-use d2b_contract_tests::repo_root;
+use d2b_contract_tests::{repo_files, repo_root};
 use regex::Regex;
 
 const CLI_NIX: &str = "nixos-modules/cli.nix";
@@ -21,35 +20,7 @@ fn read_repo_file_opt(rel: &str) -> Option<String> {
 }
 
 fn git_listed_files(roots: &[&str]) -> Vec<String> {
-    let root = repo_root();
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(&root)
-        .arg("-c")
-        .arg("core.quotePath=false")
-        .args([
-            "ls-files",
-            "--cached",
-            "--others",
-            "--exclude-standard",
-            "--",
-        ])
-        .args(roots)
-        .output()
-        .expect("run `git ls-files`");
-    assert!(
-        output.status.success(),
-        "git ls-files failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let mut files: BTreeSet<String> = BTreeSet::new();
-    for line in String::from_utf8_lossy(&output.stdout).lines() {
-        if !line.is_empty() {
-            files.insert(line.to_string());
-        }
-    }
-    files.into_iter().collect()
+    repo_files(roots)
 }
 
 fn is_legacy_grep_excluded(rel: &str) -> bool {

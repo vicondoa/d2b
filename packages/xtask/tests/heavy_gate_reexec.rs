@@ -38,7 +38,9 @@ struct Scratch {
 
 impl Scratch {
     fn new(label: &str) -> Self {
-        let target = match std::env::var_os("CARGO_TARGET_DIR") {
+        let target = match std::env::var_os("TEST_TMPDIR")
+            .or_else(|| std::env::var_os("CARGO_TARGET_DIR"))
+        {
             Some(dir) => PathBuf::from(dir),
             None => Path::new(env!("CARGO_MANIFEST_DIR"))
                 .parent()
@@ -68,6 +70,20 @@ impl Drop for Scratch {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.path);
     }
+}
+
+fn runfile_path(relative: &str) -> PathBuf {
+    if let Some(runfiles) = std::env::var_os("RUNFILES_DIR") {
+        let candidate = PathBuf::from(runfiles).join("_main").join(relative);
+        if candidate.exists() {
+            return candidate;
+        }
+    }
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("xtask lives under packages/xtask")
+        .join(relative)
 }
 
 /// Drives the shell re-exec self-guard through bash with a stubbed `cargo`
@@ -103,11 +119,8 @@ fn run_reexec_guard(
     let tools = base.join("tests/tools");
     fs::create_dir_all(&tools).unwrap();
     fs::create_dir_all(base.join("packages")).unwrap();
-    let helper_src = fs::read_to_string(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../tests/tools/heavy-gate-reexec.sh"
-    ))
-    .expect("the shipped re-exec helper is readable");
+    let helper_src = fs::read_to_string(runfile_path("tests/tools/heavy-gate-reexec.sh"))
+        .expect("the shipped re-exec helper is readable");
     let helper = tools.join("heavy-gate-reexec.sh");
     fs::write(&helper, helper_src).unwrap();
 

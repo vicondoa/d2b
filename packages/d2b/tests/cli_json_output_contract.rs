@@ -101,7 +101,8 @@ fn fixtures_dir() -> Option<PathBuf> {
 }
 
 fn target_tempdir(prefix: &str) -> tempfile::TempDir {
-    let base = std::env::var_os("CARGO_TARGET_TMPDIR")
+    let base = std::env::var_os("TEST_TMPDIR")
+        .or_else(|| std::env::var_os("CARGO_TARGET_TMPDIR"))
         .map(PathBuf::from)
         .unwrap_or_else(|| {
             repo_root()
@@ -110,7 +111,7 @@ fn target_tempdir(prefix: &str) -> tempfile::TempDir {
                 .join("tmp")
                 .join(prefix)
         });
-    fs::create_dir_all(&base).expect("mk target temp base");
+    fs::create_dir_all(&base).expect("mk test temp base");
     tempfile::Builder::new()
         .prefix(prefix)
         .tempdir_in(base)
@@ -120,7 +121,7 @@ fn target_tempdir(prefix: &str) -> tempfile::TempDir {
 fn short_repo_tempdir(prefix: &str) -> tempfile::TempDir {
     tempfile::Builder::new()
         .prefix(prefix)
-        .tempdir_in(repo_root())
+        .tempdir()
         .expect("short repo tempdir")
 }
 
@@ -132,6 +133,12 @@ fn short_socket_tempdir(prefix: &str) -> tempfile::TempDir {
 }
 
 fn repo_root() -> PathBuf {
+    if let (Some(runfiles_dir), Some(workspace)) = (
+        std::env::var_os("RUNFILES_DIR"),
+        std::env::var_os("TEST_WORKSPACE"),
+    ) {
+        return PathBuf::from(runfiles_dir).join(workspace);
+    }
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(Path::parent)

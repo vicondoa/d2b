@@ -1,9 +1,18 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
+exports_files(
+    ["BUILD.bazel"],
+    visibility = ["//visibility:public"],
+)
+
 rust_library(
     name = "d2b_contract_tests",
     srcs = ["src/lib.rs"],
     compile_data = ["Cargo.toml"],
+    data = [
+        "//:Cargo.toml",
+        "//bazel/checks/rust:repo_policy_sources",
+    ],
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-core:d2b_core",
@@ -139,6 +148,11 @@ rust_test(
     name = "policy_bazel_layout",
     srcs = ["tests/policy_bazel_layout.rs"],
     compile_data = ["Cargo.toml"],
+    data = [
+        "//:Cargo.toml",
+        "//bazel/checks/rust:repo_policy_sources",
+    ],
+    env = {"D2B_REPO_ROOT": "$(rootpath //:Cargo.toml)"},
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
@@ -174,6 +188,8 @@ rust_test(
     name = "policy_changelog_gate",
     srcs = ["tests/policy_changelog_gate.rs"],
     compile_data = ["Cargo.toml"],
+    data = ["//bazel/checks/rust:repo_policy_sources"],
+    env_inherit = ["PATH"],
     visibility = ["//visibility:public"],
     deps = [":d2b_contract_tests"],
 )
@@ -392,6 +408,8 @@ rust_test(
     name = "policy_modules",
     srcs = ["tests/policy_modules.rs"],
     compile_data = ["Cargo.toml"],
+    data = ["@rules_rust//rust/toolchain:current_cargo_files"],
+    env = {"CARGO": "$(rootpath @rules_rust//rust/toolchain:current_cargo_files)"},
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
@@ -448,6 +466,8 @@ rust_test(
     name = "policy_provider_crate_layout",
     srcs = ["tests/policy_provider_crate_layout.rs"],
     compile_data = ["Cargo.toml"],
+    data = ["@rules_rust//rust/toolchain:current_cargo_files"],
+    env = {"CARGO": "$(rootpath @rules_rust//rust/toolchain:current_cargo_files)"},
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
@@ -464,7 +484,8 @@ rust_test(
     deps = [":d2b_contract_tests"],
 )
 
-rust_test(
+# keep
+rust_library(
     name = "policy_release",
     srcs = ["tests/policy_release.rs"],
     compile_data = ["Cargo.toml"],
@@ -796,4 +817,22 @@ rust_test(
         "//packages/d2b-contracts:d2b_contracts",
         "@crates//:serde_json",
     ],
+)
+
+# keep
+filegroup(
+    name = "cargo_workspace_sources",
+    srcs = glob(
+        [
+            "Cargo.lock",
+            "Cargo.toml",
+            "benches/**/*.rs",
+            "build.rs",
+            "examples/**/*.rs",
+            "src/**/*.rs",
+            "tests/**/*.rs",
+        ],
+        allow_empty = True,
+    ),
+    visibility = ["//visibility:public"],
 )

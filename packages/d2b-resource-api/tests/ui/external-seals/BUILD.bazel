@@ -1,89 +1,250 @@
+# keep
+# gazelle:ignore
+
 load("@rules_rust//rust:defs.bzl", "rust_test")
+
+exports_files(
+    ["BUILD.bazel", "Cargo.lock", "Cargo.toml"],
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "cargo_ui_fixtures",
+    srcs = glob([
+        "Cargo.lock",
+        "Cargo.toml",
+        "tests/**/*.rs",
+    ], allow_empty = True),
+    visibility = ["//visibility:public"],
+)
 
 rust_test(
     name = "clone_seal_acceptor",
-    srcs = ["tests/clone_seal_acceptor.rs"],
-    compile_data = ["Cargo.toml"],
+    srcs = ["//packages/d2b-resource-api:tests/external_seals.rs"],
+    compile_data = ["//packages/d2b-resource-api:Cargo.toml"],
+    data = [
+        "//bazel/checks/rust:cargo_workspace_sources",
+        "@rules_rust//rust/toolchain:current_cargo_files",
+        "@rules_rust//rust/toolchain:current_rustc_files",
+        ":Cargo.toml",
+        ":cargo_ui_fixtures",
+    ],
+    env = {
+        "CARGO": "$(rootpath @rules_rust//rust/toolchain:current_cargo_files)",
+        "D2B_EXTERNAL_SEALS_CASE": "clone_seal_acceptor",
+        "D2B_EXTERNAL_SEALS_FIXTURE_MANIFEST": "$(rootpath :Cargo.toml)",
+        "RUSTC": "$(rootpath @rules_rust//rust/toolchain:current_rustc_files)",
+    },
+    env_inherit = ["HOME", "PATH"],
     visibility = ["//visibility:public"],
-    deps = ["//packages/d2b-resource-store:d2b_resource_store"],
 )
 
 rust_test(
     name = "clone_sealed_mutation",
-    srcs = ["tests/clone_sealed_mutation.rs"],
-    compile_data = ["Cargo.toml"],
+    srcs = ["//packages/d2b-resource-api:tests/external_seals.rs"],
+    compile_data = ["//packages/d2b-resource-api:Cargo.toml"],
+    data = [
+        "//bazel/checks/rust:cargo_workspace_sources",
+        "@rules_rust//rust/toolchain:current_cargo_files",
+        "@rules_rust//rust/toolchain:current_rustc_files",
+        ":Cargo.toml",
+        ":cargo_ui_fixtures",
+    ],
+    env = {
+        "CARGO": "$(rootpath @rules_rust//rust/toolchain:current_cargo_files)",
+        "D2B_EXTERNAL_SEALS_CASE": "clone_sealed_mutation",
+        "D2B_EXTERNAL_SEALS_FIXTURE_MANIFEST": "$(rootpath :Cargo.toml)",
+        "RUSTC": "$(rootpath @rules_rust//rust/toolchain:current_rustc_files)",
+    },
+    env_inherit = ["HOME", "PATH"],
     visibility = ["//visibility:public"],
-    deps = ["//packages/d2b-resource-store:d2b_resource_store"],
 )
 
 rust_test(
     name = "compare_seal_identities",
-    srcs = ["tests/compare_seal_identities.rs"],
-    compile_data = ["Cargo.toml"],
+    srcs = ["//packages/d2b-resource-api:tests/external_seals.rs"],
+    compile_data = ["//packages/d2b-resource-api:Cargo.toml"],
+    data = [
+        "//bazel/checks/rust:cargo_workspace_sources",
+        "@rules_rust//rust/toolchain:current_cargo_files",
+        "@rules_rust//rust/toolchain:current_rustc_files",
+        ":Cargo.toml",
+        ":cargo_ui_fixtures",
+    ],
+    env = {
+        "CARGO": "$(rootpath @rules_rust//rust/toolchain:current_cargo_files)",
+        "D2B_EXTERNAL_SEALS_CASE": "compare_seal_identities",
+        "D2B_EXTERNAL_SEALS_FIXTURE_MANIFEST": "$(rootpath :Cargo.toml)",
+        "RUSTC": "$(rootpath @rules_rust//rust/toolchain:current_rustc_files)",
+    },
+    env_inherit = ["HOME", "PATH"],
     visibility = ["//visibility:public"],
-    deps = ["//packages/d2b-resource-store:d2b_resource_store"],
 )
 
 rust_test(
     name = "debug_format_sealed_mutation",
-    srcs = ["tests/debug_format_sealed_mutation.rs"],
-    compile_data = ["Cargo.toml"],
+    srcs = ["//packages/d2b-resource-api:tests/external_seals.rs"],
+    compile_data = ["//packages/d2b-resource-api:Cargo.toml"],
+    data = [
+        "//bazel/checks/rust:cargo_workspace_sources",
+        "@rules_rust//rust/toolchain:current_cargo_files",
+        "@rules_rust//rust/toolchain:current_rustc_files",
+        ":Cargo.toml",
+        ":cargo_ui_fixtures",
+    ],
+    env = {
+        "CARGO": "$(rootpath @rules_rust//rust/toolchain:current_cargo_files)",
+        "D2B_EXTERNAL_SEALS_CASE": "debug_format_sealed_mutation",
+        "D2B_EXTERNAL_SEALS_FIXTURE_MANIFEST": "$(rootpath :Cargo.toml)",
+        "RUSTC": "$(rootpath @rules_rust//rust/toolchain:current_rustc_files)",
+    },
+    env_inherit = ["HOME", "PATH"],
     visibility = ["//visibility:public"],
-    deps = ["//packages/d2b-resource-store:d2b_resource_store"],
 )
 
 rust_test(
     name = "display_format_seal_identity",
-    srcs = ["tests/display_format_seal_identity.rs"],
-    compile_data = ["Cargo.toml"],
+    srcs = ["//packages/d2b-resource-api:tests/external_seals.rs"],
+    compile_data = ["//packages/d2b-resource-api:Cargo.toml"],
+    data = [
+        "//bazel/checks/rust:cargo_workspace_sources",
+        "@rules_rust//rust/toolchain:current_cargo_files",
+        "@rules_rust//rust/toolchain:current_rustc_files",
+        ":Cargo.toml",
+        ":cargo_ui_fixtures",
+    ],
+    env = {
+        "CARGO": "$(rootpath @rules_rust//rust/toolchain:current_cargo_files)",
+        "D2B_EXTERNAL_SEALS_CASE": "display_format_seal_identity",
+        "D2B_EXTERNAL_SEALS_FIXTURE_MANIFEST": "$(rootpath :Cargo.toml)",
+        "RUSTC": "$(rootpath @rules_rust//rust/toolchain:current_rustc_files)",
+    },
+    env_inherit = ["HOME", "PATH"],
     visibility = ["//visibility:public"],
-    deps = ["//packages/d2b-resource-store:d2b_resource_store"],
 )
 
 rust_test(
     name = "forge_issuer",
-    srcs = ["tests/forge_issuer.rs"],
-    compile_data = ["Cargo.toml"],
+    srcs = ["//packages/d2b-resource-api:tests/external_seals.rs"],
+    compile_data = ["//packages/d2b-resource-api:Cargo.toml"],
+    data = [
+        "//bazel/checks/rust:cargo_workspace_sources",
+        "@rules_rust//rust/toolchain:current_cargo_files",
+        "@rules_rust//rust/toolchain:current_rustc_files",
+        ":Cargo.toml",
+        ":cargo_ui_fixtures",
+    ],
+    env = {
+        "CARGO": "$(rootpath @rules_rust//rust/toolchain:current_cargo_files)",
+        "D2B_EXTERNAL_SEALS_CASE": "forge_issuer",
+        "D2B_EXTERNAL_SEALS_FIXTURE_MANIFEST": "$(rootpath :Cargo.toml)",
+        "RUSTC": "$(rootpath @rules_rust//rust/toolchain:current_rustc_files)",
+    },
+    env_inherit = ["HOME", "PATH"],
     visibility = ["//visibility:public"],
-    deps = ["//packages/d2b-resource-api:d2b_resource_api"],
 )
 
 rust_test(
     name = "forge_sealed_mutation",
-    srcs = ["tests/forge_sealed_mutation.rs"],
-    compile_data = ["Cargo.toml"],
+    srcs = ["//packages/d2b-resource-api:tests/external_seals.rs"],
+    compile_data = ["//packages/d2b-resource-api:Cargo.toml"],
+    data = [
+        "//bazel/checks/rust:cargo_workspace_sources",
+        "@rules_rust//rust/toolchain:current_cargo_files",
+        "@rules_rust//rust/toolchain:current_rustc_files",
+        ":Cargo.toml",
+        ":cargo_ui_fixtures",
+    ],
+    env = {
+        "CARGO": "$(rootpath @rules_rust//rust/toolchain:current_cargo_files)",
+        "D2B_EXTERNAL_SEALS_CASE": "forge_sealed_mutation",
+        "D2B_EXTERNAL_SEALS_FIXTURE_MANIFEST": "$(rootpath :Cargo.toml)",
+        "RUSTC": "$(rootpath @rules_rust//rust/toolchain:current_rustc_files)",
+    },
+    env_inherit = ["HOME", "PATH"],
     visibility = ["//visibility:public"],
-    deps = ["//packages/d2b-resource-store:d2b_resource_store"],
 )
 
 rust_test(
     name = "implement_mutation_view",
-    srcs = ["tests/implement_mutation_view.rs"],
-    compile_data = ["Cargo.toml"],
+    srcs = ["//packages/d2b-resource-api:tests/external_seals.rs"],
+    compile_data = ["//packages/d2b-resource-api:Cargo.toml"],
+    data = [
+        "//bazel/checks/rust:cargo_workspace_sources",
+        "@rules_rust//rust/toolchain:current_cargo_files",
+        "@rules_rust//rust/toolchain:current_rustc_files",
+        ":Cargo.toml",
+        ":cargo_ui_fixtures",
+    ],
+    env = {
+        "CARGO": "$(rootpath @rules_rust//rust/toolchain:current_cargo_files)",
+        "D2B_EXTERNAL_SEALS_CASE": "implement_mutation_view",
+        "D2B_EXTERNAL_SEALS_FIXTURE_MANIFEST": "$(rootpath :Cargo.toml)",
+        "RUSTC": "$(rootpath @rules_rust//rust/toolchain:current_rustc_files)",
+    },
+    env_inherit = ["HOME", "PATH"],
     visibility = ["//visibility:public"],
-    deps = ["//packages/d2b-resource-store-redb:d2b_resource_store_redb"],
 )
 
 rust_test(
     name = "name_seal_authority",
-    srcs = ["tests/name_seal_authority.rs"],
-    compile_data = ["Cargo.toml"],
+    srcs = ["//packages/d2b-resource-api:tests/external_seals.rs"],
+    compile_data = ["//packages/d2b-resource-api:Cargo.toml"],
+    data = [
+        "//bazel/checks/rust:cargo_workspace_sources",
+        "@rules_rust//rust/toolchain:current_cargo_files",
+        "@rules_rust//rust/toolchain:current_rustc_files",
+        ":Cargo.toml",
+        ":cargo_ui_fixtures",
+    ],
+    env = {
+        "CARGO": "$(rootpath @rules_rust//rust/toolchain:current_cargo_files)",
+        "D2B_EXTERNAL_SEALS_CASE": "name_seal_authority",
+        "D2B_EXTERNAL_SEALS_FIXTURE_MANIFEST": "$(rootpath :Cargo.toml)",
+        "RUSTC": "$(rootpath @rules_rust//rust/toolchain:current_rustc_files)",
+    },
+    env_inherit = ["HOME", "PATH"],
     visibility = ["//visibility:public"],
-    deps = ["//packages/d2b-resource-store:d2b_resource_store"],
 )
 
 rust_test(
     name = "open_sealed_without_acceptor",
-    srcs = ["tests/open_sealed_without_acceptor.rs"],
-    compile_data = ["Cargo.toml"],
+    srcs = ["//packages/d2b-resource-api:tests/external_seals.rs"],
+    compile_data = ["//packages/d2b-resource-api:Cargo.toml"],
+    data = [
+        "//bazel/checks/rust:cargo_workspace_sources",
+        "@rules_rust//rust/toolchain:current_cargo_files",
+        "@rules_rust//rust/toolchain:current_rustc_files",
+        ":Cargo.toml",
+        ":cargo_ui_fixtures",
+    ],
+    env = {
+        "CARGO": "$(rootpath @rules_rust//rust/toolchain:current_cargo_files)",
+        "D2B_EXTERNAL_SEALS_CASE": "open_sealed_without_acceptor",
+        "D2B_EXTERNAL_SEALS_FIXTURE_MANIFEST": "$(rootpath :Cargo.toml)",
+        "RUSTC": "$(rootpath @rules_rust//rust/toolchain:current_rustc_files)",
+    },
+    env_inherit = ["HOME", "PATH"],
     visibility = ["//visibility:public"],
-    deps = ["//packages/d2b-resource-store:d2b_resource_store"],
 )
 
 rust_test(
     name = "reuse_sealed_mutation",
-    srcs = ["tests/reuse_sealed_mutation.rs"],
-    compile_data = ["Cargo.toml"],
+    srcs = ["//packages/d2b-resource-api:tests/external_seals.rs"],
+    compile_data = ["//packages/d2b-resource-api:Cargo.toml"],
+    data = [
+        "//bazel/checks/rust:cargo_workspace_sources",
+        "@rules_rust//rust/toolchain:current_cargo_files",
+        "@rules_rust//rust/toolchain:current_rustc_files",
+        ":Cargo.toml",
+        ":cargo_ui_fixtures",
+    ],
+    env = {
+        "CARGO": "$(rootpath @rules_rust//rust/toolchain:current_cargo_files)",
+        "D2B_EXTERNAL_SEALS_CASE": "reuse_sealed_mutation",
+        "D2B_EXTERNAL_SEALS_FIXTURE_MANIFEST": "$(rootpath :Cargo.toml)",
+        "RUSTC": "$(rootpath @rules_rust//rust/toolchain:current_rustc_files)",
+    },
+    env_inherit = ["HOME", "PATH"],
     visibility = ["//visibility:public"],
-    deps = ["//packages/d2b-resource-store:d2b_resource_store"],
 )

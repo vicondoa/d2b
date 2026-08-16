@@ -1,5 +1,10 @@
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 
+exports_files(
+    ["BUILD.bazel"],
+    visibility = ["//visibility:public"],
+)
+
 rust_library(
     name = "d2b_resource_compiler",
     srcs = [
@@ -37,6 +42,16 @@ rust_test(
     name = "cli",
     srcs = ["tests/cli.rs"],
     compile_data = ["Cargo.toml"],
+    data = [
+        ":d2b-resource-compiler",
+        "//:d2b_resource_schemas_v3",
+        "//:docs/reference/schemas/v3/audio.d2bus.org_AudioBinding.schema.json",
+    ],
+    env = {
+        "CARGO_BIN_EXE_d2b-resource-compiler": "$(rootpath :d2b-resource-compiler)",
+        "D2B_RESOURCE_SCHEMA_ROOT": "$(rootpath //:docs/reference/schemas/v3/audio.d2bus.org_AudioBinding.schema.json)",
+    },
+    rustc_env = {"CARGO_BIN_EXE_d2b-resource-compiler": "$(rootpath :d2b-resource-compiler)"},
     visibility = ["//visibility:public"],
     deps = [
         "@crates//:serde_json",
@@ -48,6 +63,9 @@ rust_test(
     name = "phase2",
     srcs = ["tests/phase2.rs"],
     compile_data = ["Cargo.toml"],
+    data = [":d2b-resource-compiler"],
+    env = {"CARGO_BIN_EXE_d2b-resource-compiler": "$(rootpath :d2b-resource-compiler)"},
+    rustc_env = {"CARGO_BIN_EXE_d2b-resource-compiler": "$(rootpath :d2b-resource-compiler)"},
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_resource_compiler",
@@ -63,6 +81,9 @@ rust_test(
     name = "d2b_resource_compiler_test",
     compile_data = ["Cargo.toml"],
     crate = ":d2b_resource_compiler",
+    data = [":d2b-resource-compiler"],
+    env = {"CARGO_BIN_EXE_d2b-resource-compiler": "$(rootpath :d2b-resource-compiler)"},
+    rustc_env = {"CARGO_BIN_EXE_d2b-resource-compiler": "$(rootpath :d2b-resource-compiler)"},
     deps = ["@crates//:tempfile"],
 )
 
@@ -70,4 +91,32 @@ rust_test(
     name = "d2b-resource-compiler_test",
     compile_data = ["Cargo.toml"],
     crate = ":d2b-resource-compiler",
+    data = [
+        ":d2b-resource-compiler",
+        "//:d2b_resource_schemas_v3",
+        "//:docs/reference/schemas/v3/audio.d2bus.org_AudioBinding.schema.json",
+    ],
+    env = {
+        "CARGO_BIN_EXE_d2b-resource-compiler": "$(rootpath :d2b-resource-compiler)",
+        "D2B_RESOURCE_SCHEMA_ROOT": "$(rootpath //:docs/reference/schemas/v3/audio.d2bus.org_AudioBinding.schema.json)",
+    },
+    rustc_env = {"CARGO_BIN_EXE_d2b-resource-compiler": "$(rootpath :d2b-resource-compiler)"},
+)
+
+# keep
+filegroup(
+    name = "cargo_workspace_sources",
+    srcs = glob(
+        [
+            "Cargo.lock",
+            "Cargo.toml",
+            "benches/**/*.rs",
+            "build.rs",
+            "examples/**/*.rs",
+            "src/**/*.rs",
+            "tests/**/*.rs",
+        ],
+        allow_empty = True,
+    ),
+    visibility = ["//visibility:public"],
 )

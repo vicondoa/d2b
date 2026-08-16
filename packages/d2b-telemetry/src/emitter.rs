@@ -549,11 +549,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .ancestors()
-            .nth(2)
-            .unwrap()
-            .join(format!("e-{label}-{nonce}.sock"))
+        std::env::temp_dir().join(format!("e-{label}-{nonce}.sock"))
     }
 
     fn redact_frame(frame: &[u8]) -> Result<Vec<u8>, EmitterError> {

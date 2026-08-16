@@ -1,0 +1,651 @@
+load("@rules_rust//rust:defs.bzl", "rust_doc_test")
+load(":defs.bzl", "rust_doc_carrier")
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files(
+    [
+        "Cargo.lock",
+        "Cargo.toml",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+config_setting(
+    name = "broker-layer1",
+    define_values = {"d2b_broker_context": "layer1-bootstrap"},
+)
+
+config_setting(
+    name = "broker-fake-backends",
+    define_values = {"d2b_broker_context": "fake-backends"},
+)
+
+config_setting(
+    name = "guest-real-libshpool",
+    define_values = {"d2b_guest_context": "real-libshpool"},
+)
+
+config_setting(
+    name = "test-context",
+    define_values = {"d2b_rust_context": "test"},
+)
+
+rust_doc_carrier(
+    name = "d2b_contracts_doc_test",
+    crate = "//packages/d2b-contracts:d2b_contracts",
+)
+
+rust_doc_carrier(
+    name = "d2b_host_doc_test",
+    crate = "//packages/d2b-host:d2b_host",
+)
+
+rust_doc_carrier(
+    name = "d2b_guestd_doc_test",
+    crate = "//packages/d2b-guestd:d2b_guestd",
+)
+
+rust_doc_carrier(
+    name = "d2b_exec_runner_doc_test",
+    crate = "//packages/d2b-exec-runner:d2b_exec_runner",
+)
+
+rust_doc_carrier(
+    name = "d2b_unsafe_local_helper_doc_test",
+    crate = "//packages/d2b-unsafe-local-helper:d2b_unsafe_local_helper",
+)
+
+rust_doc_carrier(
+    name = "d2b_wayland_proxy_doc_test",
+    crate = "//packages/d2b-wayland-proxy:d2b_wayland_proxy",
+)
+
+rust_doc_carrier(
+    name = "d2b_audit_doc_test",
+    crate = "//packages/d2b-audit:d2b_audit",
+)
+
+rust_doc_carrier(
+    name = "d2b_telemetry_doc_test",
+    crate = "//packages/d2b-telemetry:d2b_telemetry",
+)
+
+rust_doc_carrier(
+    name = "d2b_bus_doc_test",
+    crate = "//packages/d2b-bus:d2b_bus",
+)
+
+rust_doc_carrier(
+    name = "d2b_resource_api_doc_test",
+    crate = "//packages/d2b-resource-api:d2b_resource_api",
+)
+
+rust_doc_carrier(
+    name = "d2b_core_controller_doc_test",
+    crate = "//packages/d2b-core-controller:d2b_core_controller",
+)
+
+rust_doc_carrier(
+    name = "d2b_controller_toolkit_doc_test",
+    crate = "//packages/d2b-controller-toolkit:d2b_controller_toolkit",
+)
+
+rust_doc_carrier(
+    name = "d2b_process_doc_test",
+    crate = "//packages/d2b-process:d2b_process",
+)
+
+rust_doc_carrier(
+    name = "d2b_process_conformance_doc_test",
+    crate = "//packages/d2b-process-conformance:d2b_process_conformance",
+)
+
+rust_doc_carrier(
+    name = "d2b_provider_supervisor_doc_test",
+    crate = "//packages/d2b-provider-supervisor:d2b_provider_supervisor",
+)
+
+rust_doc_carrier(
+    name = "d2b_provider_system_minijail_doc_test",
+    crate = "//packages/d2b-provider-system-minijail:d2b_provider_system_minijail",
+)
+
+rust_doc_carrier(
+    name = "d2b_provider_system_systemd_doc_test",
+    crate = "//packages/d2b-provider-system-systemd:d2b_provider_system_systemd",
+)
+
+rust_doc_carrier(
+    name = "d2b_provider_toolkit_doc_test",
+    crate = "//packages/d2b-provider-toolkit:d2b_provider_toolkit",
+)
+
+rust_doc_carrier(
+    name = "d2b_provider_doc_test",
+    crate = "//packages/d2b-provider:d2b_provider",
+)
+
+rust_doc_carrier(
+    name = "d2b_zone_routing_doc_test",
+    crate = "//packages/d2b-zone-routing:d2b_zone_routing",
+)
+
+rust_doc_carrier(
+    name = "d2b_session_doc_test",
+    crate = "//packages/d2b-session:d2b_session",
+)
+
+rust_doc_carrier(
+    name = "d2b_resource_store_doc_test",
+    crate = "//packages/d2b-resource-store:d2b_resource_store",
+)
+
+rust_doc_carrier(
+    name = "d2b_resource_store_redb_doc_test",
+    crate = "//packages/d2b-resource-store-redb:d2b_resource_store_redb",
+)
+
+rust_doc_carrier(
+    name = "d2b_session_unix_doc_test",
+    crate = "//packages/d2b-session-unix:d2b_session_unix",
+)
+
+rust_doc_carrier(
+    name = "d2b_resource_client_doc_test",
+    crate = "//packages/d2b-resource-client:d2b_resource_client",
+)
+
+rust_doc_carrier(
+    name = "d2b_resource_compiler_doc_test",
+    crate = "//packages/d2b-resource-compiler:d2b_resource_compiler",
+)
+
+rust_doc_carrier(
+    name = "d2b_provider_activation_nixos_doc_test",
+    crate = "//packages/d2b-provider-activation-nixos:d2b_provider_activation_nixos",
+)
+
+rust_doc_carrier(
+    name = "d2b_provider_audio_pipewire_doc_test",
+    crate = "//packages/d2b-provider-audio-pipewire:d2b_provider_audio_pipewire",
+)
+
+rust_doc_carrier(
+    name = "d2b_provider_clipboard_wayland_doc_test",
+    crate = "//packages/d2b-provider-clipboard-wayland:d2b_provider_clipboard_wayland",
+)
+
+rust_doc_carrier(
+    name = "d2b_provider_display_wayland_doc_test",
+    crate = "//packages/d2b-provider-display-wayland:d2b_provider_display_wayland",
+)
+
+rust_doc_carrier(
+    name = "d2b_provider_notification_desktop_doc_test",
+    crate = "//packages/d2b-provider-notification-desktop:d2b_provider_notification_desktop",
+)
+
+rust_doc_carrier(
+    name = "d2b_provider_runtime_azure_container_apps_doc_test",
+    crate = "//packages/d2b-provider-runtime-azure-container-apps:d2b_provider_runtime_azure_container_apps",
+)
+
+rust_doc_carrier(
+    name = "d2b_provider_runtime_azure_virtual_machine_doc_test",
+    crate = "//packages/d2b-provider-runtime-azure-virtual-machine:d2b_provider_runtime_azure_virtual_machine",
+)
+
+rust_doc_carrier(
+    name = "d2b_provider_runtime_cloud_hypervisor_doc_test",
+    crate = "//packages/d2b-provider-runtime-cloud-hypervisor:d2b_provider_runtime_cloud_hypervisor",
+)
+
+rust_doc_carrier(
+    name = "d2b_provider_runtime_qemu_media_doc_test",
+    crate = "//packages/d2b-provider-runtime-qemu-media:d2b_provider_runtime_qemu_media",
+)
+
+rust_doc_carrier(
+    name = "d2b_provider_shell_terminal_doc_test",
+    crate = "//packages/d2b-provider-shell-terminal:d2b_provider_shell_terminal",
+)
+
+rust_doc_carrier(
+    name = "d2b_provider_transport_azure_relay_doc_test",
+    crate = "//packages/d2b-provider-transport-azure-relay:d2b_provider_transport_azure_relay",
+)
+
+rust_doc_carrier(
+    name = "d2b_provider_transport_unix_doc_test",
+    crate = "//packages/d2b-provider-transport-unix:d2b_provider_transport_unix",
+)
+
+rust_doc_carrier(
+    name = "d2b_provider_transport_vsock_doc_test",
+    crate = "//packages/d2b-provider-transport-vsock:d2b_provider_transport_vsock",
+)
+
+rust_doc_carrier(
+    name = "d2b_provider_system_core_doc_test",
+    crate = "//packages/d2b-provider-system-core:d2b_provider_system_core",
+)
+
+rust_doc_carrier(
+    name = "d2b_provider_volume_local_doc_test",
+    crate = "//packages/d2b-provider-volume-local:d2b_provider_volume_local",
+)
+
+rust_doc_carrier(
+    name = "d2b_provider_volume_virtiofs_doc_test",
+    crate = "//packages/d2b-provider-volume-virtiofs:d2b_provider_volume_virtiofs",
+)
+
+rust_doc_carrier(
+    name = "d2b_provider_credential_secret_service_doc_test",
+    crate = "//packages/d2b-provider-credential-secret-service:d2b_provider_credential_secret_service",
+)
+
+rust_doc_carrier(
+    name = "d2b_provider_credential_entra_doc_test",
+    crate = "//packages/d2b-provider-credential-entra:d2b_provider_credential_entra",
+)
+
+rust_doc_carrier(
+    name = "d2b_provider_credential_managed_identity_doc_test",
+    crate = "//packages/d2b-provider-credential-managed-identity:d2b_provider_credential_managed_identity",
+)
+
+rust_doc_carrier(
+    name = "d2b_provider_network_local_doc_test",
+    crate = "//packages/d2b-provider-network-local:d2b_provider_network_local",
+)
+
+rust_doc_carrier(
+    name = "d2b_provider_device_gpu_doc_test",
+    crate = "//packages/d2b-provider-device-gpu:d2b_provider_device_gpu",
+)
+
+rust_doc_carrier(
+    name = "d2b_provider_device_security_key_doc_test",
+    crate = "//packages/d2b-provider-device-security-key:d2b_provider_device_security_key",
+)
+
+rust_doc_carrier(
+    name = "d2b_provider_device_tpm_doc_test",
+    crate = "//packages/d2b-provider-device-tpm:d2b_provider_device_tpm",
+)
+
+rust_doc_carrier(
+    name = "d2b_provider_device_usbip_doc_test",
+    crate = "//packages/d2b-provider-device-usbip:d2b_provider_device_usbip",
+)
+
+
+rust_doc_carrier(
+    name = "d2b_provider_observability_otel_doc_test",
+    crate = "//packages/d2b-provider-observability-otel:d2b_provider_observability_otel",
+)
+
+rust_doc_carrier(
+    name = "d2b_credential_service_doc_test",
+    crate = "//packages/d2b-credential-service:d2b_credential_service",
+)
+
+rust_doc_carrier(
+    name = "d2b_doc_test",
+    crate = "//packages/d2b:d2b_lib",
+)
+
+rust_doc_carrier(
+    name = "d2bd_doc_test",
+    crate = "//packages/d2bd:d2bd_lib",
+)
+
+rust_doc_carrier(
+    name = "d2b_clipd_doc_test",
+    crate = "//packages/d2b-clipd:d2b_clipd",
+)
+
+rust_doc_carrier(
+    name = "d2b_notify_doc_test",
+    crate = "//packages/d2b-notify:d2b_notify",
+)
+
+rust_doc_carrier(
+    name = "d2b_contract_tests_doc_test",
+    crate = "//packages/d2b-contract-tests:d2b_contract_tests",
+)
+
+rust_doc_carrier(
+    name = "d2b_priv_broker_doc_test",
+    crate = "//packages/d2b-priv-broker:d2b_priv_broker",
+)
+
+rust_doc_carrier(
+    name = "d2b_guest_shell_runner_doc_test",
+    crate = "//packages/d2b-guest-shell-runner:d2b_guest_shell_runner",
+)
+
+filegroup(
+    name = "cargo_workspace_sources",
+    srcs = [
+        "//:Cargo.lock",
+        "//:Cargo.toml",
+        "//:tests/golden/vms.json-signoz-v7",
+        "//packages/d2b:cargo_workspace_sources",
+        "//packages/d2b-audit:cargo_workspace_sources",
+        "//packages/d2b-bus:cargo_workspace_sources",
+        "//packages/d2b-bus/tests/ui/public-api-mutations:BUILD.bazel",
+        "//packages/d2b-bus/tests/ui/public-api-mutations:cargo_ui_fixtures",
+        "//packages/d2b-bus/tests/ui/public-api-mutations/opaque-claims:BUILD.bazel",
+        "//packages/d2b-clipd:cargo_workspace_sources",
+        "//packages/d2b-contract-tests:cargo_workspace_sources",
+        "//packages/d2b-contracts:cargo_workspace_sources",
+        "//packages/d2b-controller-toolkit:cargo_workspace_sources",
+        "//packages/d2b-controller-toolkit/tests/ui/external-seals:BUILD.bazel",
+        "//packages/d2b-controller-toolkit/tests/ui/external-seals:cargo_ui_fixtures",
+        "//packages/d2b-core:cargo_workspace_sources",
+        "//packages/d2b-core-controller:cargo_workspace_sources",
+        "//packages/d2b-core/fuzz:BUILD.bazel",
+        "//packages/d2b-credential-service:cargo_workspace_sources",
+        "//packages/d2b-exec-runner:cargo_workspace_sources",
+        "//packages/d2b-gateway:cargo_workspace_sources",
+        "//packages/d2b-gateway-runtime:cargo_workspace_sources",
+        "//packages/d2b-guest-shell-runner:cargo_workspace_sources",
+        "//packages/d2b-guestd:cargo_workspace_sources",
+        "//packages/d2b-host:cargo_workspace_sources",
+        "//packages/d2b-host-activation-helper:cargo_workspace_sources",
+        "//packages/d2b-notify:cargo_workspace_sources",
+        "//packages/d2b-priv-broker:cargo_workspace_sources",
+        "//packages/d2b-process:cargo_workspace_sources",
+        "//packages/d2b-process-conformance:cargo_workspace_sources",
+        "//packages/d2b-provider:cargo_workspace_sources",
+        "//packages/d2b-provider-aca:cargo_workspace_sources",
+        "//packages/d2b-provider-activation-nixos:cargo_workspace_sources",
+        "//packages/d2b-provider-audio-pipewire:cargo_workspace_sources",
+        "//packages/d2b-provider-clipboard-wayland:cargo_workspace_sources",
+        "//packages/d2b-provider-credential-entra:cargo_workspace_sources",
+        "//packages/d2b-provider-credential-managed-identity:cargo_workspace_sources",
+        "//packages/d2b-provider-credential-secret-service:cargo_workspace_sources",
+        "//packages/d2b-provider-device-gpu:cargo_workspace_sources",
+        "//packages/d2b-provider-device-security-key:cargo_workspace_sources",
+        "//packages/d2b-provider-device-tpm:cargo_workspace_sources",
+        "//packages/d2b-provider-device-usbip:cargo_workspace_sources",
+        "//packages/d2b-provider-display-wayland:cargo_workspace_sources",
+        "//packages/d2b-provider-network-local:cargo_workspace_sources",
+        "//packages/d2b-provider-notification-desktop:cargo_workspace_sources",
+        "//packages/d2b-provider-observability-otel:cargo_workspace_sources",
+        "//packages/d2b-provider-relay:cargo_workspace_sources",
+        "//packages/d2b-provider-runtime-azure-container-apps:cargo_workspace_sources",
+        "//packages/d2b-provider-runtime-azure-virtual-machine:cargo_workspace_sources",
+        "//packages/d2b-provider-runtime-cloud-hypervisor:cargo_workspace_sources",
+        "//packages/d2b-provider-runtime-qemu-media:cargo_workspace_sources",
+        "//packages/d2b-provider-shell-terminal:cargo_workspace_sources",
+        "//packages/d2b-provider-supervisor:cargo_workspace_sources",
+        "//packages/d2b-provider-system-core:cargo_workspace_sources",
+        "//packages/d2b-provider-system-minijail:cargo_workspace_sources",
+        "//packages/d2b-provider-system-systemd:cargo_workspace_sources",
+        "//packages/d2b-provider-toolkit:cargo_workspace_sources",
+        "//packages/d2b-provider-transport-azure-relay:cargo_workspace_sources",
+        "//packages/d2b-provider-transport-unix:cargo_workspace_sources",
+        "//packages/d2b-provider-transport-vsock:cargo_workspace_sources",
+        "//packages/d2b-provider-volume-local:cargo_workspace_sources",
+        "//packages/d2b-provider-volume-virtiofs:cargo_workspace_sources",
+        "//packages/d2b-realm-codec-protobuf:cargo_workspace_sources",
+        "//packages/d2b-realm-core:cargo_workspace_sources",
+        "//packages/d2b-realm-core:tests/fixtures/workload-execution-posture-v1.json",
+        "//packages/d2b-realm-provider:cargo_workspace_sources",
+        "//packages/d2b-realm-router:cargo_workspace_sources",
+        "//packages/d2b-realm-transport:cargo_workspace_sources",
+        "//packages/d2b-resource-api:cargo_workspace_sources",
+        "//packages/d2b-resource-api/tests/ui/external-seals:BUILD.bazel",
+        "//packages/d2b-resource-api/tests/ui/external-seals:cargo_ui_fixtures",
+        "//packages/d2b-resource-client:cargo_workspace_sources",
+        "//packages/d2b-resource-compiler:cargo_workspace_sources",
+        "//packages/d2b-resource-store:cargo_workspace_sources",
+        "//packages/d2b-resource-store-redb:cargo_workspace_sources",
+        "//packages/d2b-session:cargo_workspace_sources",
+        "//packages/d2b-session-unix:cargo_workspace_sources",
+        "//packages/d2b-sk-frontend:cargo_workspace_sources",
+        "//packages/d2b-telemetry:cargo_workspace_sources",
+        "//packages/d2b-unsafe-local-helper:cargo_workspace_sources",
+        "//packages/d2b-wayland-proxy:cargo_workspace_sources",
+        "//packages/d2b-wlproxy-spike:cargo_workspace_sources",
+        "//packages/d2b-zone-routing:cargo_workspace_sources",
+        "//packages/d2bd:cargo_workspace_sources",
+        "//packages/xtask:cargo_workspace_sources",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+# keep
+filegroup(
+    name = "repo_policy_sources",
+    srcs = [
+        ":cargo_workspace_sources",
+        "//:.bazelrc",
+        "//:.bazelversion",
+        "//:.config/nextest.toml",
+        "//:.github/CODEOWNERS",
+        "//:.github/PULL_REQUEST_TEMPLATE.md",
+        "//:.gitignore",
+        "//:AGENTS.md",
+        "//:BUILD.bazel",
+        "//bazel/checks/rust:Cargo.lock",
+        "//bazel/checks/rust:Cargo.toml",
+        "//:CHANGELOG.md",
+        "//:Cargo.lock",
+        "//:Cargo.toml",
+        "//:LICENSE",
+        "//:MODULE.bazel",
+        "//:MODULE.bazel.lock",
+        "//:Makefile",
+        "//:README.md",
+        "//:SECURITY.md",
+        "//:.bazelignore",
+        "//:bazel_provider_workspace_sources",
+        "//:changelog.d/test-orchestration-speed.md",
+        "//:docs/adr/0008-supported-platforms-and-rejected-targets.md",
+        "//:docs/adr/0015-daemon-only-clean-break.md",
+        "//:docs/adr/README.md",
+        "//:docs/explanation/design.md",
+        "//:docs/how-to/migrate-d2b-v1-0-to-v1-1.md",
+        "//:docs/reference/cli-contract.md",
+        "//:docs/reference/cli-output/list.schema.json",
+        "//:docs/reference/cli-output/status.schema.json",
+        "//:docs/reference/components-usbip.md",
+        "//:docs/reference/daemon-api.md",
+        "//:docs/reference/host-prep-dag.md",
+        "//:docs/reference/manifest-bundle.md",
+        "//:docs/reference/realm-access-resolver.md",
+        "//:docs/reference/realm-routing.md",
+        "//:docs/reference/schemas/v2/allocator.json",
+        "//:docs/reference/schemas/v2/d2b-realm-core.md",
+        "//:docs/reference/schemas/v2/privileges.json",
+        "//:docs/reference/schemas/v2/processes.json",
+        "//:docs/reference/schemas/v2/realm-controllers.json",
+        "//:docs/reference/schemas/v2/realm-workloads-launcher-v2.json",
+        "//:docs/reference/schemas/v2/storage.json",
+        "//:docs/reference/schemas/v2/storage-lifecycle-report.json",
+        "//:docs/reference/schemas/v2/sync.json",
+        "//:docs/reference/schemas/v2/unsafe-local-helper-wire.json",
+        "//:docs/reference/schemas/v2/unsafe-local-workloads.json",
+        "//:docs/reference/storage-lifecycle-report.md",
+        "//:docs/reference/usbip-state-machine.md",
+        "//:docs/specs/providers/ADR-046-provider-volume-local.md",
+        "//:docs_workspace_sources",
+        "//:examples_workspace_sources",
+        "//:flake.nix",
+        "//:github_workspace_sources",
+        "//:nix_workspace_sources",
+        "//:nixos-modules/allocator-json.nix",
+        "//:nixos-modules/bundle.nix",
+        "//:nixos-modules/bundle-artifacts.nix",
+        "//:nixos-modules/default.nix",
+        "//:nixos-modules/gateway-vm.nix",
+        "//:nixos-modules/guest-control.nix",
+        "//:nixos-modules/guest-control-host.nix",
+        "//:nixos-modules/host.nix",
+        "//:nixos-modules/host-activation.d/state-dir-acl.sh",
+        "//:nixos-modules/host-activation.nix",
+        "//:nixos-modules/host-daemon.nix",
+        "//:nixos-modules/host-users.nix",
+        "//:nixos-modules/index.nix",
+        "//:nixos-modules/lib.nix",
+        "//:nixos-modules/options-daemon.nix",
+        "//:nixos-modules/options-vms.nix",
+        "//:nixos-modules/processes-json.nix",
+        "//:nixos-modules/realm-controller-config-json.nix",
+        "//:nixos-modules/realm-identity-config-json.nix",
+        "//:nixos-modules/realm-workloads-launcher-json.nix",
+        "//:nixos-modules/storage-json.nix",
+        "//:nixos-modules/store.nix",
+        "//:nixos_modules_workspace_sources",
+        "//:packages/Cargo.guest.lock",
+        "//:policy_inputs_workspace_sources",
+        "//:scripts/changelog-check.sh",
+        "//:specs/002-optimize-test-orchestration/benchmark-results.md",
+        "//:templates_workspace_sources",
+        "//:tests/AGENTS.md",
+        "//:tests/README.md",
+        "//:tests/fixtures/deny-unknown/bundle-invalid.json",
+        "//:tests/fixtures/deny-unknown/bundle-valid.json",
+        "//:tests/fixtures/deny-unknown/closures-invalid.json",
+        "//:tests/fixtures/deny-unknown/closures-valid.json",
+        "//:tests/fixtures/deny-unknown/host-valid.json",
+        "//:tests/golden/bazel/check-coverage.json",
+        "//:tests/golden/bazel/eligibility.json",
+        "//:tests/golden/bazel/rust-coverage.json",
+        "//:tests/golden/host-json/baseline-host.json",
+        "//:tests/golden/host-json/ifname-collision.json",
+        "//:tests/golden/host-json/ifname-too-long.json",
+        "//:tests/golden/host-json/unknown-field-bridgeportflags.json",
+        "//:tests/golden/host-json/unknown-field-firewallcoexistence.json",
+        "//:tests/golden/host-json/unknown-field-ifnamemapping.json",
+        "//:tests/golden/host-json/unknown-field-kernelmodules.json",
+        "//:tests/golden/manifest_v04/baseline-vms.json",
+        "//:tests/golden/runner-shape/audio-argv-minimal.txt",
+        "//:tests/golden/runner-shape/gpu-argv-minimal.txt",
+        "//:tests/golden/runner-shape/otel-host-bridge-argv-minimal.txt",
+        "//:tests/golden/runner-shape/swtpm-argv-minimal.txt",
+        "//:tests/golden/runner-shape/usbip-argv-minimal.txt",
+        "//:tests/golden/runner-shape/video-argv-minimal.txt",
+        "//:tests/golden/runner-shape/virtiofsd-argv-minimal.txt",
+        "//:tests/golden/runner-shape/vsock-relay-argv-minimal.txt",
+        "//:tests/host-integration/daemon-restart-vm-survival.nix",
+        "//:tests/integration/live/live-vm-smoke.sh",
+        "//:tests/layer1-jobs.json",
+        "//:tests/test-nix-unit.sh",
+        "//:tests/test-rust.sh",
+        "//:tests/unit/nix/eval-jobs.nix",
+        "//:tests_workspace_sources",
+        "//bazel/checks/rust:BUILD.bazel",
+        "//bazel/checks/rust:defs.bzl",
+        "//bazel/exceptions:BUILD.bazel",
+        "//bazel/exceptions:manifest.json",
+        "//bazel/platforms:BUILD.bazel",
+        "//bazel/toolchains:BUILD.bazel",
+        "//packages/d2b:BUILD.bazel",
+        "//packages/d2b-audit:BUILD.bazel",
+        "//packages/d2b-bus:BUILD.bazel",
+        "//packages/d2b-clipd:BUILD.bazel",
+        "//packages/d2b-contract-tests:BUILD.bazel",
+        "//packages/d2b-contracts:BUILD.bazel",
+        "//packages/d2b-controller-toolkit:BUILD.bazel",
+        "//packages/d2b-core:BUILD.bazel",
+        "//packages/d2b-core-controller:BUILD.bazel",
+        "//packages/d2b-core/fuzz:src/bin/bundle.rs",
+        "//packages/d2b-core/fuzz:src/bin/core.rs",
+        "//packages/d2b-core/fuzz:src/bin/host.rs",
+        "//packages/d2b-core/fuzz:src/bin/manifest.rs",
+        "//packages/d2b-core/fuzz:src/bin/privileges.rs",
+        "//packages/d2b-core/fuzz:src/harness.rs",
+        "//packages/d2b-core/fuzz:workspace_sources",
+        "//packages/d2b-credential-service:BUILD.bazel",
+        "//packages/d2b-exec-runner:BUILD.bazel",
+        "//packages/d2b-gateway:BUILD.bazel",
+        "//packages/d2b-gateway-runtime:BUILD.bazel",
+        "//packages/d2b-guest-shell-runner:BUILD.bazel",
+        "//packages/d2b-guestd:BUILD.bazel",
+        "//packages/d2b-host:BUILD.bazel",
+        "//packages/d2b-host-activation-helper:BUILD.bazel",
+        "//packages/d2b-notify:BUILD.bazel",
+        "//packages/d2b-priv-broker:BUILD.bazel",
+        "//packages/d2b-process:BUILD.bazel",
+        "//packages/d2b-process-conformance:BUILD.bazel",
+        "//packages/d2b-provider:BUILD.bazel",
+        "//packages/d2b-provider-aca:BUILD.bazel",
+        "//packages/d2b-provider-activation-nixos:BUILD.bazel",
+        "//packages/d2b-provider-audio-pipewire:BUILD.bazel",
+        "//packages/d2b-provider-clipboard-wayland:BUILD.bazel",
+        "//packages/d2b-provider-credential-entra:BUILD.bazel",
+        "//packages/d2b-provider-credential-managed-identity:BUILD.bazel",
+        "//packages/d2b-provider-credential-secret-service:BUILD.bazel",
+        "//packages/d2b-provider-device-gpu:BUILD.bazel",
+        "//packages/d2b-provider-device-security-key:BUILD.bazel",
+        "//packages/d2b-provider-device-tpm:BUILD.bazel",
+        "//packages/d2b-provider-device-usbip:BUILD.bazel",
+        "//packages/d2b-provider-display-wayland:BUILD.bazel",
+        "//packages/d2b-provider-network-local:BUILD.bazel",
+        "//packages/d2b-provider-notification-desktop:BUILD.bazel",
+        "//packages/d2b-provider-observability-otel:BUILD.bazel",
+        "//packages/d2b-provider-observability-otel:README.md",
+        "//packages/d2b-provider-relay:BUILD.bazel",
+        "//packages/d2b-provider-runtime-azure-container-apps:BUILD.bazel",
+        "//packages/d2b-provider-runtime-azure-virtual-machine:BUILD.bazel",
+        "//packages/d2b-provider-runtime-cloud-hypervisor:BUILD.bazel",
+        "//packages/d2b-provider-runtime-qemu-media:BUILD.bazel",
+        "//packages/d2b-provider-shell-terminal:BUILD.bazel",
+        "//packages/d2b-provider-supervisor:BUILD.bazel",
+        "//packages/d2b-provider-system-core:BUILD.bazel",
+        "//packages/d2b-provider-system-minijail:BUILD.bazel",
+        "//packages/d2b-provider-system-systemd:BUILD.bazel",
+        "//packages/d2b-provider-toolkit:BUILD.bazel",
+        "//packages/d2b-provider-transport-azure-relay:BUILD.bazel",
+        "//packages/d2b-provider-transport-unix:BUILD.bazel",
+        "//packages/d2b-provider-transport-vsock:BUILD.bazel",
+        "//packages/d2b-provider-volume-local:BUILD.bazel",
+        "//packages/d2b-provider-volume-virtiofs:BUILD.bazel",
+        "//packages/d2b-realm-codec-protobuf:BUILD.bazel",
+        "//packages/d2b-realm-core:BUILD.bazel",
+        "//packages/d2b-realm-provider:BUILD.bazel",
+        "//packages/d2b-realm-router:BUILD.bazel",
+        "//packages/d2b-realm-transport:BUILD.bazel",
+        "//packages/d2b-resource-api:BUILD.bazel",
+        "//packages/d2b-resource-client:BUILD.bazel",
+        "//packages/d2b-resource-compiler:BUILD.bazel",
+        "//packages/d2b-resource-store:BUILD.bazel",
+        "//packages/d2b-resource-store-redb:BUILD.bazel",
+        "//packages/d2b-session:BUILD.bazel",
+        "//packages/d2b-session-unix:BUILD.bazel",
+        "//packages/d2b-sk-frontend:BUILD.bazel",
+        "//packages/d2b-telemetry:BUILD.bazel",
+        "//packages/d2b-unsafe-local-helper:BUILD.bazel",
+        "//packages/d2b-wayland-proxy:BUILD.bazel",
+        "//packages/d2b-wlproxy-spike:BUILD.bazel",
+        "//packages/d2b-zone-routing:BUILD.bazel",
+        "//packages/d2bd:BUILD.bazel",
+        "//packages/xtask:BUILD.bazel",
+        "//tests/fixtures/bazel/compat:BUILD.bazel",
+        "//tests/fixtures/bazel/compat:Cargo.lock",
+        "//tests/fixtures/bazel/compat:Cargo.toml",
+        "//tests/fixtures/bazel/compat:MODULE.bazel",
+        "//tests/fixtures/bazel/compat:compat_policy_sources",
+        "//tests/fixtures/bazel/compat:src/exception.rs",
+        "//tests/fixtures/bazel/compat:src/lib.rs",
+        "//tests/fixtures/bazel/compat:src/main.rs",
+        "//tests/fixtures/bazel/gazelle:BUILD.bazel",
+        "//tests/fixtures/bazel/gazelle:Cargo.lock",
+        "//tests/fixtures/bazel/gazelle:Cargo.toml",
+        "//tests/fixtures/bazel/gazelle:MODULE.bazel",
+        "//tests/fixtures/bazel/gazelle:src/exception.rs",
+        "//tests/fixtures/bazel/gazelle:src/lib.rs",
+        "//tests/fixtures/bazel/gazelle:src/main.rs",
+        "//tests/tools/no-bash-ast-walker:BUILD.bazel",
+        "//tests/tools/no-bash-ast-walker:Cargo.lock",
+        "//tests/tools/no-bash-ast-walker:Cargo.toml",
+        "//tests/tools/no-bash-ast-walker:src/main.rs",
+    ],
+    visibility = ["//visibility:public"],
+)

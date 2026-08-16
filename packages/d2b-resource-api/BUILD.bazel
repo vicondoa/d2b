@@ -1,5 +1,23 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
+exports_files(
+    [
+        "BUILD.bazel",
+        "Cargo.toml",
+        "tests/external_seals.rs",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+exports_files(
+    [
+        "src/admission.rs",
+        "src/authz.rs",
+        "src/service.rs",
+    ],
+    visibility = ["//visibility:public"],
+)
+
 rust_library(
     name = "d2b_resource_api",
     srcs = [
@@ -44,6 +62,19 @@ rust_test(
     name = "external_seals",
     srcs = ["tests/external_seals.rs"],
     compile_data = ["Cargo.toml"],
+    data = [
+        "//bazel/checks/rust:cargo_workspace_sources",
+        "//packages/d2b-resource-api/tests/ui/external-seals:Cargo.lock",
+        "//packages/d2b-resource-api/tests/ui/external-seals:Cargo.toml",
+        "//packages/d2b-resource-api/tests/ui/external-seals:cargo_ui_fixtures",
+        "@rules_rust//rust/toolchain:current_cargo_files",
+        "@rules_rust//rust/toolchain:current_rustc_files",
+    ],
+    env = {
+        "D2B_EXTERNAL_SEALS_FIXTURE_MANIFEST": "$(rootpath //packages/d2b-resource-api/tests/ui/external-seals:Cargo.toml)",
+        "CARGO": "$(CARGO)",
+        "RUSTC": "$(RUSTC)",
+    },
     visibility = ["//visibility:public"],
 )
 
@@ -56,4 +87,22 @@ rust_test(
         "@crates//:protobuf",
         "@crates//:tokio",
     ],
+)
+
+# keep
+filegroup(
+    name = "cargo_workspace_sources",
+    srcs = glob(
+        [
+            "Cargo.lock",
+            "Cargo.toml",
+            "benches/**/*.rs",
+            "build.rs",
+            "examples/**/*.rs",
+            "src/**/*.rs",
+            "tests/**/*.rs",
+        ],
+        allow_empty = True,
+    ),
+    visibility = ["//visibility:public"],
 )

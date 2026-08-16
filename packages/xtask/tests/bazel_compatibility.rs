@@ -9,11 +9,44 @@ use serde_json::Value;
 const EXPECTED_BAZEL_VERSION: &str = "bazel 9.2.0";
 
 fn repo_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(Path::parent)
-        .expect("xtask lives under packages/xtask")
-        .to_path_buf()
+    let mut candidates = Vec::new();
+    for variable in ["D2B_REPO_ROOT", "TEST_SRCDIR", "RUNFILES_DIR"] {
+        if let Some(base) = std::env::var_os(variable).map(PathBuf::from) {
+            candidates.push(base.clone());
+            if let Some(workspace) = std::env::var_os("TEST_WORKSPACE") {
+                candidates.push(base.join(workspace));
+            }
+            candidates.push(base.join("_main"));
+        }
+    }
+    candidates.push(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .expect("xtask lives under packages/xtask")
+            .to_path_buf(),
+    );
+    if let Ok(current_dir) = std::env::current_dir() {
+        candidates.push(current_dir);
+    }
+    for candidate in candidates {
+        let mut path = candidate;
+        if path.is_file() {
+            path.pop();
+        }
+        loop {
+            if path.join("Cargo.toml").is_file()
+                && path.join("BUILD.bazel").is_file()
+                && path.join("flake.nix").is_file()
+            {
+                return path;
+            }
+            if !path.pop() {
+                break;
+            }
+        }
+    }
+    panic!("repository root with Cargo.toml, BUILD.bazel, and flake.nix is not discoverable")
 }
 
 fn read_repo_file(relative: &str) -> String {
@@ -112,10 +145,6 @@ fn bazel_output_user_root() -> PathBuf {
         .unwrap_or_else(|| panic!("D2B_BAZEL_OUTPUT_USER_ROOT or HOME is required"))
 }
 
-fn bazel_shell_executable() -> PathBuf {
-    repo_root().join("tests/fixtures/bazel/compat/tools/bazel-shell")
-}
-
 fn bazel_test_tool_path() -> String {
     static TOOL_PATH: OnceLock<String> = OnceLock::new();
     TOOL_PATH.get_or_init(resolve_bazel_test_tool_path).clone()
@@ -166,14 +195,9 @@ fn run_bazel_output(arguments: &[&str]) -> std::process::Output {
             bazel_output_user_root().display()
         ))
         .arg(arguments.first().expect("Bazel command is non-empty"))
-        .arg(format!("--action_env=PATH={tool_path}"))
         .arg("--lockfile_mode=error")
         .arg("--repo_contents_cache=")
-        .arg("--symlink_prefix=.scratch/bazel-")
-        .arg(format!(
-            "--shell_executable={}",
-            bazel_shell_executable().display()
-        ));
+        .arg("--symlink_prefix=bazel-");
     if arguments.first() == Some(&"test") {
         command.arg(format!("--test_env=PATH={tool_path}"));
     }
@@ -312,23 +336,17 @@ fn nix_surface_pins_the_official_bazel_9_2_0_provider_for_supported_systems() {
         "bazel920For = system:",
         "import ./pkgs/bazel-9.2.0",
         "bazel-9_2_0 = bazel920",
-        "bazelFhs = pkgs.buildFHSEnv",
-        "executableName = \"bazel\"",
+        "bazelActionShell = pkgs.buildFHSEnv",
+        "executableName = \"bash\"",
         "targetPkgs =",
-        "bazel920",
         "bash",
         "coreutils",
-        "findutils",
         "gnugrep",
-        "gnused",
-        "rustup",
-        "binutils",
-        "runScript = \"${bazel920}/bin/bazel\"",
-        "packages = [ bazelFhs pkgs.rustup ]",
-        "stdenv.cc",
-        "glibc.dev",
+        "runScript = \"${pkgs.bash}/bin/bash\"",
+        "packages = [ bazel920 pkgs.rustup ]",
         "bazel = pkgs.mkShellNoCC",
-        "export D2B_BAZEL_BIN=",
+        "export D2B_BAZEL_BIN=\"${bazel920}/bin/bazel\"",
+        "export BAZEL_SH=\"${bazelActionShell}/bin/bash\"",
         "export D2B_BAZEL_TEST_PATH=",
         "bazel-9_2_0-provider-smoke",
     ] {
@@ -348,8 +366,18 @@ fn nix_surface_pins_the_official_bazel_9_2_0_provider_for_supported_systems() {
             && !flake.contains("patches =")
             && !flake.contains("overrideAttrs")
             && !flake.contains("local_path_override"),
-        "the Bazel FHS environment must wrap the unmodified upstream provider"
+        "the Bazel action shell must wrap the unmodified upstream provider"
     );
+    for forbidden in [
+        "bazelFhs",
+        "executableName = \"bazel\"",
+        "runScript = \"${bazel920}/bin/bazel\"",
+    ] {
+        assert!(
+            !flake.contains(forbidden),
+            "the Bazel server must not be wrapped by `{forbidden}`"
+        );
+    }
 }
 
 #[test]
@@ -584,27 +612,86 @@ fn compatibility_fixture_declares_the_third_party_and_exception_boundaries() {
 }
 
 #[test]
-fn fixture_shell_adapter_is_checked_in_and_does_not_use_host_path() {
-    let shell = read_repo_file("tests/fixtures/bazel/compat/tools/bazel-shell");
-    for tool in ["tools/bin/grep", "tools/bin/cat"] {
-        assert!(
-            read_repo_file(&format!("tests/fixtures/bazel/compat/{tool}"))
-                .starts_with("#!/bin/bash"),
-            "the fixture must provide the upstream authenticity command {tool}"
-        );
-    }
+fn compatibility_uses_standard_bazel_sh_without_repository_shell_adapter() {
+    let flake = read_repo_file("flake.nix");
     assert!(
-        shell.contains("exec /bin/bash \"$@\""),
-        "the fixture shell adapter must delegate ordinary shell execution to Bash"
+        flake.contains("export BAZEL_SH=\"${bazelActionShell}/bin/bash\""),
+        "the Bazel shell must be supplied through standard BAZEL_SH"
     );
     assert!(
-        shell.contains("TOOL_DIR=")
-            && shell.contains("PATH=\"$TOOL_DIR/bin:${PATH:?PATH is required}\""),
-        "the fixture shell adapter must use a fixed tool root"
+        !read_repo_file("tests/fixtures/bazel/compat/BUILD.bazel").contains("bazel-shell"),
+        "the compatibility fixture must not own a repository shell adapter"
     );
     assert!(
-        !shell.contains("env |") && !shell.contains("export -f"),
-        "the fixture shell adapter must not import host PATH fragments"
+        !repo_root()
+            .join("tests/fixtures/bazel/compat/tools/bazel-shell")
+            .exists(),
+        "the compatibility fixture shell adapter must not remain checked in"
+    );
+}
+
+#[test]
+fn raw_bazel_reuses_server_and_executes_the_declared_action_shell() {
+    let shell = std::env::var_os("BAZEL_SH")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| panic!("BAZEL_SH must be set by `nix develop .#bazel`"));
+    assert!(
+        shell.ends_with("bin/bash"),
+        "BAZEL_SH must point at the standard FHS bash executable: {}",
+        shell.display()
+    );
+
+    let first = run_bazel_output(&["info", "--noshow_progress", "server_pid"]);
+    assert!(
+        first.status.success(),
+        "Bazel server_pid probe failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&first.stdout),
+        String::from_utf8_lossy(&first.stderr)
+    );
+    let first_pid = String::from_utf8_lossy(&first.stdout).trim().to_owned();
+    assert!(
+        first_pid
+            .chars()
+            .all(|character| character.is_ascii_digit()),
+        "Bazel server_pid must be numeric, got `{first_pid}`"
+    );
+
+    run_bazel(&[
+        "build",
+        "--noshow_progress",
+        "//tests/fixtures/gas-city/buildbuddy:round_trip_payload",
+    ]);
+
+    let action = run_bazel_output(&[
+        "aquery",
+        "--noshow_progress",
+        "--output=textproto",
+        "--include_commandline",
+        r#"mnemonic("Genrule", //tests/fixtures/gas-city/buildbuddy:round_trip_payload)"#,
+    ]);
+    assert!(
+        action.status.success(),
+        "Bazel shell action graph probe failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&action.stdout),
+        String::from_utf8_lossy(&action.stderr)
+    );
+    let action_graph = String::from_utf8_lossy(&action.stdout);
+    assert!(
+        action_graph.contains(&format!("arguments: \"{}\"", shell.display())),
+        "the Genrule action must invoke the declared BAZEL_SH executable"
+    );
+
+    let second = run_bazel_output(&["info", "--noshow_progress", "server_pid"]);
+    assert!(
+        second.status.success(),
+        "second Bazel server_pid probe failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&second.stdout),
+        String::from_utf8_lossy(&second.stderr)
+    );
+    let second_pid = String::from_utf8_lossy(&second.stdout).trim().to_owned();
+    assert_eq!(
+        first_pid, second_pid,
+        "Bazel must reuse one server across the shell-action probe"
     );
 }
 

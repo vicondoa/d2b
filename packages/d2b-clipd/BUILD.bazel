@@ -1,5 +1,10 @@
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 
+exports_files(
+    ["BUILD.bazel"],
+    visibility = ["//visibility:public"],
+)
+
 rust_library(
     name = "d2b_clipd",
     srcs = [
@@ -75,6 +80,9 @@ rust_test(
         "Cargo.toml",
         "src/main.rs",
     ],
+    data = [":d2b-clipd"],
+    env = {"CARGO_BIN_EXE_d2b-clipd": "$(rootpath :d2b-clipd)"},
+    rustc_env = {"CARGO_BIN_EXE_d2b-clipd": "$(rootpath :d2b-clipd)"},
     visibility = ["//visibility:public"],
     deps = ["@crates//:serde_json"],
 )
@@ -83,6 +91,9 @@ rust_test(
     name = "test_pipe",
     srcs = ["tests/test_pipe.rs"],
     compile_data = ["Cargo.toml"],
+    data = [":d2b-clipd"],
+    env = {"CARGO_BIN_EXE_d2b-clipd": "$(rootpath :d2b-clipd)"},
+    rustc_env = {"CARGO_BIN_EXE_d2b-clipd": "$(rootpath :d2b-clipd)"},
     visibility = ["//visibility:public"],
     deps = ["@crates//:rustix"],
 )
@@ -91,6 +102,9 @@ rust_test(
     name = "d2b_clipd_test",
     compile_data = ["Cargo.toml"],
     crate = ":d2b_clipd",
+    data = [":d2b-clipd"],
+    env = {"CARGO_BIN_EXE_d2b-clipd": "$(rootpath :d2b-clipd)"},
+    rustc_env = {"CARGO_BIN_EXE_d2b-clipd": "$(rootpath :d2b-clipd)"},
     deps = ["@crates//:serde_json"],
 )
 
@@ -98,10 +112,34 @@ rust_test(
     name = "d2b-clip-debug_test",
     compile_data = ["Cargo.toml"],
     crate = ":d2b-clip-debug",
+    data = [":d2b-clipd"],
+    env = {"CARGO_BIN_EXE_d2b-clipd": "$(rootpath :d2b-clipd)"},
+    rustc_env = {"CARGO_BIN_EXE_d2b-clipd": "$(rootpath :d2b-clipd)"},
 )
 
 rust_test(
     name = "d2b-clipd_test",
     compile_data = ["Cargo.toml"],
     crate = ":d2b-clipd",
+    data = [":d2b-clipd"],
+    env = {"CARGO_BIN_EXE_d2b-clipd": "$(rootpath :d2b-clipd)"},
+    rustc_env = {"CARGO_BIN_EXE_d2b-clipd": "$(rootpath :d2b-clipd)"},
+)
+
+# keep
+filegroup(
+    name = "cargo_workspace_sources",
+    srcs = glob(
+        [
+            "Cargo.lock",
+            "Cargo.toml",
+            "benches/**/*.rs",
+            "build.rs",
+            "examples/**/*.rs",
+            "src/**/*.rs",
+            "tests/**/*.rs",
+        ],
+        allow_empty = True,
+    ),
+    visibility = ["//visibility:public"],
 )

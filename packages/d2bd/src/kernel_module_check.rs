@@ -792,7 +792,7 @@ mod tests {
 
         let base = std::env::var_os("CARGO_TARGET_TMPDIR")
             .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target"));
+            .unwrap_or_else(crate::test_scratch_root);
         let test_dir = base.join("kernel-module-check-sysfs-test");
         let proc_modules_path = test_dir.join("proc_modules");
         let sys_module_dir = test_dir.join("sys_module");

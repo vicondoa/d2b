@@ -392,7 +392,8 @@ mod tests {
 
     impl Scratch {
         fn new(label: &str) -> Self {
-            let target = env::var_os("CARGO_TARGET_DIR")
+            let target = env::var_os("TEST_TMPDIR")
+                .or_else(|| env::var_os("CARGO_TARGET_DIR"))
                 .map(PathBuf::from)
                 .unwrap_or_else(|| {
                     Path::new(env!("CARGO_MANIFEST_DIR"))

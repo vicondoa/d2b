@@ -12,12 +12,21 @@ use std::{
 /// commonly has a different one, so each gets its own cache tree rather than
 /// corrupting a shared one.
 fn toolchain_cache_key() -> String {
-    let version = Command::new("rustc")
+    let rustc = runfile(
+        option_env!("RUSTC")
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("RUSTC").map(PathBuf::from))
+            .unwrap_or_else(|| PathBuf::from("rustc")),
+    );
+    let version = Command::new(rustc)
         .arg("-vV")
         .output()
-        .ok()
-        .filter(|output| output.status.success())
-        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .unwrap_or_else(|error| panic!("rustc -vV failed at the selected compiler: {error}"));
+    let version = version
+        .status
+        .success()
+        .then_some(version.stdout)
+        .and_then(|stdout| String::from_utf8(stdout).ok())
         .expect(
             "rustc -vV must identify the compiler: a cache shared between two \
              unidentified toolchains is the corruption this key prevents",
@@ -65,11 +74,91 @@ impl Scratch {
     }
 }
 
+fn runfile(path: PathBuf) -> PathBuf {
+    let path_text = path.to_string_lossy();
+    let manifest_key = path_text
+        .find("/external/")
+        .map(|index| path_text[index + 10..].to_owned())
+        .or_else(|| {
+            path_text
+                .find("/bin/")
+                .map(|index| path_text[index + 5..].to_owned())
+        })
+        .unwrap_or_else(|| path_text.to_string());
+    if path.exists() {
+        path
+    } else if let Some(runfiles_dir) = std::env::var_os("RUNFILES_DIR") {
+        let candidate = PathBuf::from(runfiles_dir).join(&manifest_key);
+        if candidate.exists() { candidate } else { path }
+    } else if let Some(manifest) = std::env::var_os("RUNFILES_MANIFEST_FILE")
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("RUNFILES_DIR")
+                .map(PathBuf::from)
+                .map(|dir| dir.join("MANIFEST"))
+                .filter(|path| path.exists())
+        })
+    {
+        fs::read_to_string(manifest)
+            .ok()
+            .and_then(|contents| {
+                contents.lines().find_map(|line| {
+                    let (candidate, actual) = line.split_once(' ')?;
+                    (candidate == manifest_key).then(|| PathBuf::from(actual))
+                })
+            })
+            .unwrap_or(path)
+    } else if let Some(runfiles_dir) = std::env::var_os("RUNFILES_DIR") {
+        let runfiles_dir = PathBuf::from(runfiles_dir);
+        let runfiles_path = path_text
+            .find("/bin/")
+            .map(|index| PathBuf::from(&path_text[index + 5..]))
+            .unwrap_or(path.clone());
+        let candidate = runfiles_dir.join(runfiles_path);
+        if candidate.exists() {
+            candidate
+        } else {
+            runfiles_dir.join(path)
+        }
+    } else {
+        path
+    }
+}
+
+fn fixture_manifest() -> PathBuf {
+    if let Some(path) = std::env::var_os("D2B_EXTERNAL_SEALS_FIXTURE_MANIFEST") {
+        return runfile(PathBuf::from(path));
+    }
+    PathBuf::from(
+        option_env!("CARGO_MANIFEST_DIR")
+            .expect("Cargo must provide CARGO_MANIFEST_DIR for this fixture"),
+    )
+    .join("tests/ui/external-seals/Cargo.toml")
+}
+
 #[test]
 fn foreign_source_cannot_mint_committed_decision() {
-    let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let repository_root = crate_root.parent().unwrap().parent().unwrap();
-    let fixture = crate_root.join("tests/ui/external-seals");
+    if let Some(case) = std::env::var_os("D2B_EXTERNAL_SEALS_CASE") {
+        assert_eq!(
+            case.to_string_lossy(),
+            "forge_committed_decision",
+            "unknown external-seals case selector"
+        );
+    }
+    let manifest = fixture_manifest();
+    let repository_root = std::env::var_os("TEST_TMPDIR")
+        .map(PathBuf::from)
+        .or_else(|| {
+            option_env!("CARGO_MANIFEST_DIR").map(|path| {
+                PathBuf::from(path)
+                    .parent()
+                    .expect("packages directory")
+                    .parent()
+                    .expect("repository root")
+                    .to_path_buf()
+            })
+        })
+        .expect("Bazel or Cargo must provide a scratch root");
     let scratch = repository_root
         .join(".scratch/rust-test-cache")
         .join(format!(
@@ -80,18 +169,31 @@ fn foreign_source_cannot_mint_committed_decision() {
     let temp = scratch.path().join("tmp");
     fs::create_dir_all(&temp).expect("create repository-local compiler scratch");
 
-    let output = Command::new(env!("CARGO"))
+    let cargo = runfile(
+        std::env::var_os("CARGO")
+            .map(PathBuf::from)
+            .or_else(|| option_env!("CARGO").map(PathBuf::from))
+            .unwrap_or_else(|| PathBuf::from("cargo")),
+    );
+    let rustc = runfile(
+        std::env::var_os("RUSTC")
+            .map(PathBuf::from)
+            .or_else(|| option_env!("RUSTC").map(PathBuf::from))
+            .unwrap_or_else(|| PathBuf::from("rustc")),
+    );
+    let output = Command::new(cargo)
         .args([
             "check",
             "--quiet",
             "--locked",
             "--manifest-path",
-            fixture.join("Cargo.toml").to_str().unwrap(),
+            manifest.to_str().unwrap(),
             "--test",
             "forge_committed_decision",
         ])
         .env("CARGO_TARGET_DIR", scratch.path().join("target"))
         .env("TMPDIR", &temp)
+        .env("RUSTC", rustc)
         // Compile the fixture without any rustc wrapper. The repository config
         // sets a caching wrapper, whose client or server can exit nonzero under
         // concurrent cargo invocations; that failure is indistinguishable from

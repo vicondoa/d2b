@@ -1,6 +1,8 @@
 #![forbid(unsafe_code)]
 
 use std::collections::BTreeSet;
+use std::fs;
+use std::path::Path;
 use std::process::Command;
 
 use d2b_contract_tests::{read_repo_file, repo_path_exists, repo_root};
@@ -11,6 +13,19 @@ const PRODUCT_BUILD_ROOT: &str = "packages";
 const GAZELLE_FIXTURE_ROOT: &str = "tests/fixtures/bazel/gazelle";
 
 fn git_listed_files(roots: &[&str]) -> Vec<String> {
+    if std::env::var_os("TEST_SRCDIR").is_some()
+        || std::env::var_os("RUNFILES_DIR").is_some()
+        || std::env::var_os("D2B_REPO_ROOT").is_some()
+    {
+        let repo = repo_root();
+        let mut files = Vec::new();
+        for root in roots {
+            let path = repo.join(root);
+            collect_files(&repo, &path, &mut files);
+        }
+        files.sort();
+        return files;
+    }
     let output = Command::new("git")
         .arg("-C")
         .arg(repo_root())
@@ -38,6 +53,26 @@ fn git_listed_files(roots: &[&str]) -> Vec<String> {
         .filter(|entry| !entry.is_empty())
         .map(|entry| String::from_utf8_lossy(entry).into_owned())
         .collect()
+}
+
+fn collect_files(repo: &Path, path: &Path, files: &mut Vec<String>) {
+    if path.is_file() {
+        files.push(
+            path.strip_prefix(repo)
+                .expect("repository file is below repository root")
+                .to_string_lossy()
+                .into_owned(),
+        );
+        return;
+    }
+    let mut entries = fs::read_dir(path)
+        .unwrap_or_else(|error| panic!("read repository directory {}: {error}", path.display()))
+        .map(|entry| entry.expect("read repository directory entry").path())
+        .collect::<Vec<_>>();
+    entries.sort();
+    for entry in entries {
+        collect_files(repo, &entry, files);
+    }
 }
 
 fn root_workspace_members() -> BTreeSet<String> {
@@ -177,9 +212,16 @@ fn production_bazel_layout_has_one_locked_root_authority() {
 
     let module = read_repo_file("MODULE.bazel");
     assert_eq!(
-        module.matches("crate.from_cargo(").count(),
+        module.matches("cargo_lockfile = \"//:Cargo.lock\"").count(),
         1,
-        "the product graph must have exactly one crate_universe Cargo authority"
+        "the product graph must have exactly one root crate_universe Cargo authority"
+    );
+    assert_eq!(
+        module
+            .matches("cargo_lockfile = \"//bazel/checks/rust:Cargo.lock\"")
+            .count(),
+        1,
+        "Bazel-only dependencies must use one separate lock authority"
     );
     assert!(
         module.contains("cargo_lockfile = \"//:Cargo.lock\""),
@@ -188,6 +230,14 @@ fn production_bazel_layout_has_one_locked_root_authority() {
     assert!(
         module.contains("manifests = [\"//:Cargo.toml\"]"),
         "crate_universe must resolve the repository-root Cargo.toml"
+    );
+    assert!(
+        module.contains("manifests = [\"//bazel/checks/rust:Cargo.toml\"]"),
+        "Bazel-only crate_universe must resolve its dedicated manifest"
+    );
+    assert!(
+        !module.contains("crate.spec("),
+        "Bazel dependency inputs must not splice crate.spec entries into Cargo.lock"
     );
     assert!(
         !module.contains("Cargo.guest.lock")
@@ -209,8 +259,14 @@ fn production_bazel_layout_has_one_locked_root_authority() {
     assert!(
         lock.contains("\"lockFileVersion\"")
             && lock.contains("FILE:@@//Cargo.lock")
-            && lock.contains("FILE:@@//Cargo.toml"),
-        "Bzlmod lock must bind the root Cargo authority"
+            && lock.contains("FILE:@@//Cargo.toml")
+            && lock.contains("FILE:@@//bazel/checks/rust/Cargo.lock")
+            && lock.contains("FILE:@@//bazel/checks/rust/Cargo.toml"),
+        "Bzlmod lock must bind the root and Bazel-only Cargo authorities"
+    );
+    assert!(
+        !read_repo_file("Cargo.lock").contains("direct-cargo-bazel-deps"),
+        "root Cargo.lock must not contain crate_universe synthetic direct dependencies"
     );
     assert!(
         !lock.contains("Cargo.guest.lock")
@@ -242,6 +298,11 @@ fn production_bazel_layout_has_one_locked_root_authority() {
         gitignore.lines().any(|line| line.trim() == "/bazel-*"),
         "repository policy must ignore Bazel workspace output links"
     );
+    let bazelignore = read_repo_file(".bazelignore");
+    assert!(
+        bazelignore.lines().any(|line| line.trim() == ".scratch"),
+        "Bazel must ignore local scratch output trees during workspace queries"
+    );
 
     let root_build = read_repo_file("BUILD.bazel");
     for excluded in [
@@ -252,6 +313,7 @@ fn production_bazel_layout_has_one_locked_root_authority() {
         "nixos-modules/host-activation-helper",
         "packages/d2b-bus/tests/ui/public-api-mutations",
         "packages/d2b-core/fuzz",
+        "bazel/checks/rust",
         "proofs/chunked-stdio-conformance",
         "proofs/redb-resource-store-spike",
         "proofs/w0-ch-connect-proof",
@@ -281,6 +343,45 @@ fn production_bazel_layout_has_one_locked_root_authority() {
             "root Cargo workspace is missing {required}"
         );
     }
+}
+
+#[test]
+fn guest_libshpool_feature_boundary_is_preserved_in_cargo_and_bazel() {
+    let cargo = read_repo_file("packages/d2b-guest-shell-runner/Cargo.toml");
+    assert!(
+        cargo.contains("real-libshpool = [\"dep:libshpool\"]"),
+        "guest Cargo feature must own the libshpool dependency"
+    );
+    assert!(
+        cargo.contains("libshpool = { version = \"0.11.0\", optional = true }"),
+        "guest libshpool dependency must remain optional"
+    );
+
+    let build = read_repo_file("packages/d2b-guest-shell-runner/BUILD.bazel");
+    assert!(
+        build.contains("\"//bazel/checks/rust:guest-real-libshpool\": [")
+            && build.contains("@bazel_only_crates//:libshpool"),
+        "Bazel real-libshpool context must provide libshpool"
+    );
+    for required in [
+        "@bazel_only_crates//:anyhow",
+        "@bazel_only_crates//:clap",
+        "@crates//:anyhow",
+        "@crates//:clap",
+    ] {
+        assert!(
+            build.contains(required),
+            "guest Bazel feature contexts must declare {required}"
+        );
+    }
+    assert!(
+        build.contains("\"//conditions:default\": ["),
+        "Bazel guest target must have an explicit default dependency context"
+    );
+    assert!(
+        !build.contains("@crates//:libshpool"),
+        "Bazel default guest targets must not unconditionally depend on libshpool"
+    );
 }
 
 #[test]

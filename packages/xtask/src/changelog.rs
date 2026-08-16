@@ -1340,12 +1340,16 @@ mod tests {
 
     impl TempRepo {
         fn new(tag: &str) -> Self {
-            let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"))
-                .ancestors()
-                .nth(2)
-                .expect("repo root above packages/xtask")
-                .to_path_buf();
-            let base = repo_root.join(".agent-tmp").join("xtask-changelog");
+            let base = std::env::var_os("TEST_TMPDIR")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| {
+                    Path::new(env!("CARGO_MANIFEST_DIR"))
+                        .ancestors()
+                        .nth(2)
+                        .expect("repo root above packages/xtask")
+                        .join(".agent-tmp")
+                })
+                .join("xtask-changelog");
             fs::create_dir_all(&base).expect("create scratch base");
             let unique = format!(
                 "{tag}.{}.{}",

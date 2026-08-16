@@ -15,7 +15,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::process::Command;
 
-use d2b_contract_tests::repo_root;
+use d2b_contract_tests::{repo_files, repo_root};
 use regex::Regex;
 
 /// Read a repo-relative file, returning `None` when the path is absent or not
@@ -29,34 +29,7 @@ fn read_repo_file_opt(rel: &str) -> Option<String> {
 /// (respects `.gitignore`, so build artifacts under `target/` and Nix `result`
 /// symlinks are excluded) that the original bash denylist gate relied on.
 fn git_listed_files(roots: &[&str]) -> Vec<String> {
-    let root = repo_root();
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(&root)
-        .arg("-c")
-        .arg("core.quotePath=false")
-        .args([
-            "ls-files",
-            "--cached",
-            "--others",
-            "--exclude-standard",
-            "--",
-        ])
-        .args(roots)
-        .output()
-        .expect("run `git ls-files`");
-    assert!(
-        output.status.success(),
-        "git ls-files failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let mut files: BTreeSet<String> = BTreeSet::new();
-    for line in String::from_utf8_lossy(&output.stdout).lines() {
-        if !line.is_empty() {
-            files.insert(line.to_string());
-        }
-    }
-    files.into_iter().collect()
+    repo_files(roots)
 }
 
 // ---------------------------------------------------------------------------
@@ -426,7 +399,17 @@ fn providers_and_controllers_use_closed_effect_ports() {
 }
 
 fn provider_controller_crates() -> Vec<(String, String, String)> {
-    let output = Command::new("cargo")
+    let cargo = std::env::var_os("CARGO")
+        .map(std::path::PathBuf::from)
+        .map(|path| {
+            if path.is_absolute() {
+                path
+            } else {
+                repo_root().join(path)
+            }
+        })
+        .unwrap_or_else(|| "cargo".into());
+    let output = Command::new(cargo)
         .current_dir(repo_root())
         .args([
             "metadata",

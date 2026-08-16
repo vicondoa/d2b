@@ -1,4 +1,7 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+load("//bazel/checks/rust:defs.bzl", "test_features")
+
+exports_files(["BUILD.bazel"], visibility = ["//visibility:public"])
 
 # keep
 # gazelle:ignore
@@ -20,6 +23,7 @@ rust_library(
         "src/controllers.rs",
         "src/coordinator.rs",
         "src/dependencies.rs",
+        "src/emergency_policy.rs",
         "src/export_import.rs",
         "src/export_import_projection.rs",
         "src/hints.rs",
@@ -32,6 +36,7 @@ rust_library(
         "src/ownership.rs",
         "src/provider_effects.rs",
         "src/providers.rs",
+        "src/quota.rs",
         "src/rbac.rs",
         "src/resource_store.rs",
         "src/runtime.rs",
@@ -43,6 +48,7 @@ rust_library(
         "src/zonelink.rs",
     ],
     compile_data = ["Cargo.toml"],
+    crate_features = test_features(["test-support"]),
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-audit:d2b_audit",
@@ -158,4 +164,20 @@ rust_test(
     compile_data = ["Cargo.toml"],
     crate = ":d2b_core_controller",
     deps = ["@crates//:serde_json"],
+)
+# keep
+filegroup(
+    name = "cargo_workspace_sources",
+    srcs = glob([
+        "Cargo.lock",
+        "Cargo.toml",
+        "benches/**/*.rs",
+        "build.rs",
+        "examples/**/*.rs",
+        "src/**/*.rs",
+        "tests/**/*.rs",
+    ],
+        allow_empty = True,
+    ),
+    visibility = ["//visibility:public"],
 )

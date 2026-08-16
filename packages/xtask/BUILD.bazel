@@ -1,5 +1,10 @@
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_test")
 
+exports_files(
+    ["BUILD.bazel"],
+    visibility = ["//visibility:public"],
+)
+
 rust_binary(
     name = "manifest_v04_check",
     srcs = ["src/bin/manifest_v04_check.rs"],
@@ -62,14 +67,48 @@ rust_test(
     name = "bazel_compatibility",
     srcs = ["tests/bazel_compatibility.rs"],
     compile_data = ["Cargo.toml"],
+    data = [
+        ":xtask",
+        "//bazel/checks/rust:repo_policy_sources",
+        "//tests/fixtures/gas-city/buildbuddy:BUILD.bazel",
+    ],
+    env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
+    env_inherit = [
+        "BAZEL_SH",
+        "PATH",
+        "D2B_BAZEL_BIN",
+        "D2B_BAZEL_TEST_PATH",
+    ],
+    rustc_env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
     visibility = ["//visibility:public"],
     deps = ["@crates//:serde_json"],
 )
 
 rust_test(
     name = "bazel_inventory",
+    timeout = "long",
     srcs = ["tests/bazel_inventory.rs"],
     compile_data = ["Cargo.toml"],
+    data = [
+        ":xtask",
+        "//:Cargo.toml",
+        "//:proof_workspace_sources",
+        "//bazel/checks/rust:repo_policy_sources",
+        "//packages/d2b-bus/tests/ui/public-api-mutations:BUILD.bazel",
+        "//packages/d2b-bus/tests/ui/public-api-mutations/opaque-claims:BUILD.bazel",
+        "//packages/d2b-controller-toolkit/tests/ui/external-seals:BUILD.bazel",
+        "//packages/d2b-resource-api/tests/ui/external-seals:BUILD.bazel",
+        "@rules_rust//rust/toolchain:current_cargo_files",
+        "@rules_rust//rust/toolchain:current_rustc_files",
+    ],
+    env = {
+        "CARGO": "$(rootpath @rules_rust//rust/toolchain:current_cargo_files)",
+        "CARGO_BIN_EXE_xtask": "$(rootpath :xtask)",
+        "D2B_REPO_ROOT": "$(rootpath //:Cargo.toml)",
+        "RUSTC": "$(rootpath @rules_rust//rust/toolchain:current_rustc_files)",
+    },
+    env_inherit = ["PATH"],
+    rustc_env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
     visibility = ["//visibility:public"],
     deps = ["@crates//:serde_json"],
 )
@@ -78,6 +117,13 @@ rust_test(
     name = "heavy_gate_reexec",
     srcs = ["tests/heavy_gate_reexec.rs"],
     compile_data = ["Cargo.toml"],
+    data = [
+        ":xtask",
+        "//bazel/checks/rust:repo_policy_sources",
+    ],
+    env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
+    env_inherit = ["PATH"],
+    rustc_env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
     visibility = ["//visibility:public"],
     deps = ["@crates//:nix"],
 )
@@ -86,6 +132,13 @@ rust_test(
     name = "policy_ci",
     srcs = ["tests/policy_ci.rs"],
     compile_data = ["Cargo.toml"],
+    data = [
+        ":xtask",
+        "//bazel/checks/rust:repo_policy_sources",
+    ],
+    env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
+    env_inherit = ["PATH"],
+    rustc_env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
     visibility = ["//visibility:public"],
 )
 
@@ -93,6 +146,13 @@ rust_test(
     name = "policy_workspace",
     srcs = ["tests/policy_workspace.rs"],
     compile_data = ["Cargo.toml"],
+    data = [
+        ":xtask",
+        "//bazel/checks/rust:repo_policy_sources",
+    ],
+    env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
+    env_inherit = ["PATH"],
+    rustc_env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
     visibility = ["//visibility:public"],
 )
 
@@ -100,5 +160,70 @@ rust_test(
     name = "xtask_test",
     compile_data = ["Cargo.toml"],
     crate = ":xtask",
+    data = [
+        ":xtask",
+        "//:rust-toolchain.toml",
+        "//bazel/checks/rust:repo_policy_sources",
+        "@rules_rust//rust/toolchain:current_cargo_files",
+    ],
+    env = {
+        "CARGO": "$(rootpath @rules_rust//rust/toolchain:current_cargo_files)",
+        "CARGO_BIN_EXE_xtask": "$(rootpath :xtask)",
+    },
+    env_inherit = ["PATH"],
+    rustc_env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
+    tags = [
+        "local",
+        "no-sandbox",
+    ],
     deps = ["@crates//:serde_json"],
+)
+
+rust_test(
+    name = "bazel_rust_parity",
+    timeout = "long",
+    srcs = ["tests/bazel_rust_parity.rs"],
+    compile_data = ["Cargo.toml"],
+    data = [
+        ":xtask",
+        "//:Cargo.toml",
+        "//:flake.lock",
+        "//:flake.nix",
+        "//:proof_workspace_sources",
+        "//bazel/checks/rust:repo_policy_sources",
+        "//packages/d2b-bus/tests/ui/public-api-mutations:BUILD.bazel",
+        "//packages/d2b-bus/tests/ui/public-api-mutations/opaque-claims:BUILD.bazel",
+        "//packages/d2b-controller-toolkit/tests/ui/external-seals:BUILD.bazel",
+        "//packages/d2b-resource-api/tests/ui/external-seals:BUILD.bazel",
+        "@rules_rust//rust/toolchain:current_cargo_files",
+        "@rules_rust//rust/toolchain:current_rustc_files",
+    ],
+    env = {
+        "CARGO": "$(rootpath @rules_rust//rust/toolchain:current_cargo_files)",
+        "CARGO_BIN_EXE_xtask": "$(rootpath :xtask)",
+        "D2B_REPO_ROOT": "$(rootpath //:Cargo.toml)",
+        "RUSTC": "$(rootpath @rules_rust//rust/toolchain:current_rustc_files)",
+    },
+    env_inherit = ["PATH"],
+    rustc_env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
+    visibility = ["//visibility:public"],
+    deps = ["@crates//:serde_json"],
+)
+
+# keep
+filegroup(
+    name = "cargo_workspace_sources",
+    srcs = glob(
+        [
+            "Cargo.lock",
+            "Cargo.toml",
+            "benches/**/*.rs",
+            "build.rs",
+            "examples/**/*.rs",
+            "src/**/*.rs",
+            "tests/**/*.rs",
+        ],
+        allow_empty = True,
+    ),
+    visibility = ["//visibility:public"],
 )
