@@ -318,16 +318,6 @@ pub trait ObservabilitySinkProvider: Send + Sync {
     async fn healthy(&self) -> ProviderResult<bool>;
 }
 
-/// Rendezvous/listener/sender mechanics (e.g. Azure Relay Hybrid
-/// Connections).
-#[async_trait]
-pub trait RelayProvider: Send + Sync {
-    /// Provider id.
-    fn provider_id(&self) -> ProviderId;
-    /// Open the listener side (outbound-only).
-    async fn open_listener(&self, node: NodeId) -> ProviderResult<Box<dyn TransportListener>>;
-}
-
 /// A registered node that dispatches operations.
 #[async_trait]
 pub trait NodeProvider: Send + Sync {
