@@ -20,14 +20,15 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
 use std::task::{Context, Poll, Wake, Waker};
 use std::thread::{self, Thread};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use d2b_contracts::v3::ResourceRef;
 use d2b_contracts::v3::credential::{
-    CredentialLeaseHandle, CredentialLeaseState, CredentialMetadata, CredentialOutcomeCode,
-    CredentialServiceError, CredentialServiceErrorCode, CredentialSourceVersion, OpaqueAzureRef,
-    PlacementBinding,
+    CREDENTIAL_SERVICE_NAME, CredentialAuthorization, CredentialLeaseHandle, CredentialLeaseState,
+    CredentialMetadata, CredentialMethod, CredentialOutcomeCode, CredentialRequest,
+    CredentialServiceError, CredentialServiceErrorCode, CredentialSessionBinding,
+    CredentialSourceVersion, MAX_PROVIDER_LEASE_LIFETIME_MS, OpaqueAzureRef, PlacementBinding,
 };
+use d2b_contracts::v3::{AuthenticatedSubjectContext, ResourceRef};
 
 pub use agent::ManagedIdentityAgent;
 pub use audit::{
@@ -53,6 +54,11 @@ pub const CONTROLLER_BINARY: &str = "d2b-managed-identity-controller";
 pub const AGENT_BINARY: &str = "d2b-managed-identity-agent";
 /// Exit status used while production Zone runtime registration is unavailable.
 pub const RUNTIME_UNAVAILABLE_EXIT: i32 = 78;
+/// Session purpose expected for Credential service calls.
+pub const CREDENTIAL_SESSION_PURPOSE: &str = "credential-delivery";
+/// Small values remain accepted as relative test/runtime deadlines for
+/// compatibility with the bootstrap service contract.
+const ABSOLUTE_UNIX_MS_THRESHOLD: u64 = 1_000_000_000_000;
 
 /// Enter the secret-free controller role.
 ///
@@ -230,25 +236,37 @@ impl std::error::Error for ManagedIdentityProviderError {}
 pub struct ManagedIdentityPlacement {
     binding: PlacementBinding,
     execution_ref: ResourceRef,
+    zone_ref: ResourceRef,
 }
 
 impl ManagedIdentityPlacement {
-    /// Validate host-system or guest-agent placement.
+    /// Validate host-system or guest-agent placement bound to one Zone.
     pub fn new(
         binding: PlacementBinding,
         execution_ref: ResourceRef,
+        zone_ref: ResourceRef,
     ) -> Result<Self, ManagedIdentityProviderError> {
         let valid = matches!(
             (binding, execution_ref.resource_type().as_str()),
             (PlacementBinding::HostSystem, "Host") | (PlacementBinding::GuestAgent, "Guest")
         );
-        if !valid {
+        if !valid || zone_ref.resource_type().as_str() != "Zone" {
             return Err(ManagedIdentityProviderError::InvalidPlacement);
         }
         Ok(Self {
             binding,
             execution_ref,
+            zone_ref,
         })
+    }
+
+    /// Validate machine placement and bind it to one Zone.
+    pub fn in_zone(
+        binding: PlacementBinding,
+        execution_ref: ResourceRef,
+        zone_ref: ResourceRef,
+    ) -> Result<Self, ManagedIdentityProviderError> {
+        Self::new(binding, execution_ref, zone_ref)
     }
 
     /// Return the placement binding.
@@ -259,6 +277,11 @@ impl ManagedIdentityPlacement {
     /// Borrow the execution context.
     pub const fn execution_ref(&self) -> &ResourceRef {
         &self.execution_ref
+    }
+
+    /// Borrow the Zone bound to this placement.
+    pub const fn zone_ref(&self) -> &ResourceRef {
+        &self.zone_ref
     }
 }
 
@@ -275,6 +298,7 @@ pub struct ManagedIdentityLeaseRequest {
     operation_id: String,
     idempotency_key: String,
     requested_expiry_unix_ms: u64,
+    rotation_generation: u64,
 }
 
 impl ManagedIdentityLeaseRequest {
@@ -296,6 +320,11 @@ impl ManagedIdentityLeaseRequest {
     /// Return requested expiry.
     pub const fn requested_expiry_unix_ms(&self) -> u64 {
         self.requested_expiry_unix_ms
+    }
+
+    /// Return the nonzero rotation generation requested by the Provider.
+    pub const fn rotation_generation(&self) -> u64 {
+        self.rotation_generation
     }
 }
 
@@ -456,6 +485,54 @@ impl fmt::Debug for ManagedIdentityCredentialProviderFactory {
 struct LeaseRecord {
     idempotency_key: String,
     metadata: CredentialMetadata,
+    authenticated_subject: AuthenticatedSubjectContext,
+    session_expires_at_unix_ms: u64,
+}
+
+/// Non-secret restart checkpoint for one managed-identity lease.
+///
+/// The checkpoint contains only opaque metadata and authenticated ownership
+/// evidence. Token bytes remain exclusively inside the injected client.
+#[derive(Clone, PartialEq, Eq)]
+pub struct ManagedIdentityLeaseCheckpoint {
+    credential_ref: ResourceRef,
+    idempotency_key: String,
+    metadata: CredentialMetadata,
+    authenticated_subject: AuthenticatedSubjectContext,
+    session_expires_at_unix_ms: u64,
+}
+
+impl ManagedIdentityLeaseCheckpoint {
+    /// Borrow the Credential reference.
+    pub const fn credential_ref(&self) -> &ResourceRef {
+        &self.credential_ref
+    }
+
+    /// Borrow the non-secret idempotency key.
+    pub fn idempotency_key(&self) -> &str {
+        &self.idempotency_key
+    }
+
+    /// Borrow the non-secret lease metadata.
+    pub const fn metadata(&self) -> &CredentialMetadata {
+        &self.metadata
+    }
+
+    /// Borrow the authenticated owner context.
+    pub const fn authenticated_subject(&self) -> &AuthenticatedSubjectContext {
+        &self.authenticated_subject
+    }
+
+    /// Return the session expiry captured with this checkpoint.
+    pub const fn session_expires_at_unix_ms(&self) -> u64 {
+        self.session_expires_at_unix_ms
+    }
+}
+
+impl fmt::Debug for ManagedIdentityLeaseCheckpoint {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("ManagedIdentityLeaseCheckpoint(<redacted>)")
+    }
 }
 
 /// Managed identity implementation of the prepared Credential service.
@@ -464,7 +541,7 @@ pub struct ManagedIdentityCredentialProvider {
     placement: ManagedIdentityPlacement,
     consumer_ref: ResourceRef,
     client: Arc<dyn ManagedIdentityCredentialClient>,
-    leases: Mutex<BTreeMap<String, LeaseRecord>>,
+    leases: Mutex<BTreeMap<String, Vec<LeaseRecord>>>,
     mutation_gate: Mutex<()>,
 }
 
@@ -494,6 +571,140 @@ impl ManagedIdentityCredentialProvider {
         &self.config
     }
 
+    /// Return the current Unix millisecond clock used for bounded expiry
+    /// checks.
+    pub(crate) fn now_unix_ms() -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
+            .unwrap_or(0)
+    }
+
+    /// Whether a value uses the absolute Unix millisecond representation.
+    pub(crate) const fn is_absolute_unix_ms(value: u64) -> bool {
+        value >= ABSOLUTE_UNIX_MS_THRESHOLD
+    }
+
+    /// Whether an absolute Unix millisecond value has elapsed.
+    pub(crate) fn is_expired(value: u64, now_unix_ms: u64) -> bool {
+        Self::is_absolute_unix_ms(value) && value <= now_unix_ms
+    }
+
+    fn context_matches_provider(&self, subject: &AuthenticatedSubjectContext) -> bool {
+        subject.provider_ref() == Some(&self.consumer_ref)
+            && subject.execution_ref() == Some(self.placement.execution_ref())
+            && subject.zone_ref() == self.placement.zone_ref()
+            && subject.service().as_str() == CREDENTIAL_SERVICE_NAME
+            && subject.session_purpose().as_str() == CREDENTIAL_SESSION_PURPOSE
+            && subject.provider_generation().is_some()
+    }
+
+    /// Validate the authenticated ComponentSession binding for one method.
+    pub(crate) fn validate_authenticated_session<'a>(
+        &self,
+        method: CredentialMethod,
+        request: &CredentialRequest,
+        authorization: &'a CredentialAuthorization,
+    ) -> Result<&'a CredentialSessionBinding, CredentialServiceError> {
+        let session = authorization.authenticated_session().ok_or_else(|| {
+            CredentialServiceError::new(CredentialServiceErrorCode::OperationDenied)
+        })?;
+        let now = Self::now_unix_ms();
+        if Self::is_expired(session.expires_at_unix_ms(), now) {
+            return Err(CredentialServiceError::new(
+                CredentialServiceErrorCode::DeadlineExceeded,
+            ));
+        }
+
+        let subject = session.authenticated_subject();
+        if !self.context_matches_provider(subject) {
+            return Err(CredentialServiceError::new(
+                CredentialServiceErrorCode::OperationDenied,
+            ));
+        }
+
+        if method.requires_delivery() {
+            let delivery = authorization.delivery_session_params().ok_or_else(|| {
+                CredentialServiceError::new(CredentialServiceErrorCode::OperationDenied)
+            })?;
+            if delivery.credential_ref() != request.credential_ref()
+                || delivery.consumer_provider_ref() != &self.consumer_ref
+                || delivery.operation_class() != method.operation_class()
+            {
+                return Err(CredentialServiceError::new(
+                    CredentialServiceErrorCode::OperationDenied,
+                ));
+            }
+            if Self::is_expired(delivery.expiry_unix_ms(), now)
+                || Self::is_expired(delivery.deadline_unix_ms(), now)
+            {
+                return Err(CredentialServiceError::new(
+                    CredentialServiceErrorCode::DeadlineExceeded,
+                ));
+            }
+            if Self::is_absolute_unix_ms(session.expires_at_unix_ms())
+                && Self::is_absolute_unix_ms(delivery.expiry_unix_ms())
+                && session.expires_at_unix_ms() > delivery.expiry_unix_ms()
+            {
+                return Err(CredentialServiceError::new(
+                    CredentialServiceErrorCode::OperationDenied,
+                ));
+            }
+        }
+        Ok(session)
+    }
+
+    /// Compare stable ownership dimensions while deliberately ignoring the
+    /// reconnect transcript that identifies one concrete ComponentSession.
+    pub(crate) fn same_owner(
+        left: &AuthenticatedSubjectContext,
+        right: &AuthenticatedSubjectContext,
+    ) -> bool {
+        left.subject_ref() == right.subject_ref()
+            && left.subject_uid() == right.subject_uid()
+            && left.zone_ref() == right.zone_ref()
+            && left.execution_ref() == right.execution_ref()
+            && left.provider_ref() == right.provider_ref()
+            && left.provider_generation() == right.provider_generation()
+            && left.service() == right.service()
+            && left.session_purpose() == right.session_purpose()
+    }
+
+    /// Compare the complete authenticated session, including transcript and
+    /// reconnect generation.
+    pub(crate) fn same_session(
+        left: &AuthenticatedSubjectContext,
+        right: &AuthenticatedSubjectContext,
+    ) -> bool {
+        left == right
+    }
+
+    /// Mark absolute-time active leases expired before a new operation.
+    pub(crate) fn mark_expired_locked(
+        leases: &mut BTreeMap<String, Vec<LeaseRecord>>,
+        now_unix_ms: u64,
+    ) {
+        for records in leases.values_mut() {
+            for record in records {
+                if record.metadata.state == CredentialLeaseState::Active
+                    && (Self::is_expired(record.metadata.expires_at_unix_ms, now_unix_ms)
+                        || Self::is_expired(record.session_expires_at_unix_ms, now_unix_ms))
+                {
+                    record.metadata.state = CredentialLeaseState::Expired;
+                }
+            }
+        }
+    }
+
+    /// Count active leases across all Credential owners.
+    pub(crate) fn active_lease_count(leases: &BTreeMap<String, Vec<LeaseRecord>>) -> usize {
+        leases
+            .values()
+            .flat_map(|records| records.iter())
+            .filter(|record| record.metadata.state == CredentialLeaseState::Active)
+            .count()
+    }
+
     pub(crate) fn mutation_guard(&self) -> Result<MutexGuard<'_, ()>, CredentialServiceError> {
         match self.mutation_gate.try_lock() {
             Ok(guard) => Ok(guard),
@@ -507,11 +718,68 @@ impl ManagedIdentityCredentialProvider {
     }
 
     pub(crate) fn operation_deadline(deadline_ms: u64) -> Result<Instant, CredentialServiceError> {
+        let now_unix_ms = Self::now_unix_ms();
+        let duration_ms = if Self::is_absolute_unix_ms(deadline_ms) {
+            deadline_ms.saturating_sub(now_unix_ms)
+        } else {
+            deadline_ms
+        };
+        if duration_ms == 0 {
+            return Err(CredentialServiceError::new(
+                CredentialServiceErrorCode::DeadlineExceeded,
+            ));
+        }
         Instant::now()
-            .checked_add(Duration::from_millis(deadline_ms))
+            .checked_add(Duration::from_millis(duration_ms))
             .ok_or_else(|| {
                 CredentialServiceError::new(CredentialServiceErrorCode::DeadlineExceeded)
             })
+    }
+
+    pub(crate) fn bounded_expiry(
+        requested_expiry_unix_ms: u64,
+        session_expiry_unix_ms: u64,
+        delivery_expiry_unix_ms: u64,
+    ) -> Result<u64, CredentialServiceError> {
+        let absolute = Self::is_absolute_unix_ms(requested_expiry_unix_ms)
+            || Self::is_absolute_unix_ms(session_expiry_unix_ms)
+            || Self::is_absolute_unix_ms(delivery_expiry_unix_ms);
+        if !absolute {
+            return Ok(requested_expiry_unix_ms
+                .min(session_expiry_unix_ms)
+                .min(delivery_expiry_unix_ms)
+                .min(MAX_PROVIDER_LEASE_LIFETIME_MS));
+        }
+        let now = Self::now_unix_ms();
+        let to_absolute = |value: u64| {
+            if Self::is_absolute_unix_ms(value) {
+                Some(value)
+            } else {
+                now.checked_add(value)
+            }
+        };
+        let bounded = to_absolute(requested_expiry_unix_ms)
+            .and_then(|requested| {
+                to_absolute(session_expiry_unix_ms).and_then(|session| {
+                    to_absolute(delivery_expiry_unix_ms)
+                        .map(|delivery| requested.min(session).min(delivery))
+                })
+            })
+            .ok_or_else(|| {
+                CredentialServiceError::new(CredentialServiceErrorCode::InvariantFailure)
+            })?;
+        let provider_max = now
+            .checked_add(MAX_PROVIDER_LEASE_LIFETIME_MS)
+            .ok_or_else(|| {
+                CredentialServiceError::new(CredentialServiceErrorCode::InvariantFailure)
+            })?;
+        let bounded = bounded.min(provider_max);
+        if bounded <= now {
+            return Err(CredentialServiceError::new(
+                CredentialServiceErrorCode::DeadlineExceeded,
+            ));
+        }
+        Ok(bounded)
     }
 
     pub(crate) fn poll_client<T>(
@@ -571,10 +839,25 @@ impl ManagedIdentityCredentialProvider {
     pub(crate) fn grant_metadata(
         grant: ManagedIdentityLeaseGrant,
         requested_expiry_unix_ms: u64,
+        minimum_rotation_generation: u64,
     ) -> Result<CredentialMetadata, CredentialServiceError> {
+        let now_unix_ms = Self::now_unix_ms();
+        let max_expiry = if Self::is_absolute_unix_ms(requested_expiry_unix_ms) {
+            now_unix_ms
+                .checked_add(MAX_PROVIDER_LEASE_LIFETIME_MS)
+                .ok_or_else(|| {
+                    CredentialServiceError::new(CredentialServiceErrorCode::InvariantFailure)
+                })?
+        } else {
+            MAX_PROVIDER_LEASE_LIFETIME_MS
+        };
         if grant.rotation_generation == 0
+            || minimum_rotation_generation == 0
+            || grant.rotation_generation < minimum_rotation_generation
             || grant.expires_at_unix_ms == 0
             || grant.expires_at_unix_ms > requested_expiry_unix_ms
+            || grant.expires_at_unix_ms > max_expiry
+            || Self::is_expired(grant.expires_at_unix_ms, now_unix_ms)
         {
             return Err(CredentialServiceError::new(
                 CredentialServiceErrorCode::InvariantFailure,
@@ -589,12 +872,220 @@ impl ManagedIdentityCredentialProvider {
             outcome: CredentialOutcomeCode::Success,
         })
     }
+
+    /// Export bounded, non-secret lease checkpoints for a restart.
+    pub fn export_checkpoints(
+        &self,
+    ) -> Result<Vec<ManagedIdentityLeaseCheckpoint>, CredentialServiceError> {
+        let leases = self.leases.lock().map_err(|_| {
+            CredentialServiceError::new(CredentialServiceErrorCode::InvariantFailure)
+        })?;
+        Ok(leases
+            .iter()
+            .flat_map(|(credential_ref, records)| {
+                records.iter().map(|record| ManagedIdentityLeaseCheckpoint {
+                    credential_ref: ResourceRef::parse(credential_ref)
+                        .expect("lease map keys are validated Credential refs"),
+                    idempotency_key: record.idempotency_key.clone(),
+                    metadata: record.metadata.clone(),
+                    authenticated_subject: record.authenticated_subject.clone(),
+                    session_expires_at_unix_ms: record.session_expires_at_unix_ms,
+                })
+            })
+            .collect())
+    }
+
+    /// Restore bounded lease metadata after a Provider restart.
+    ///
+    /// The injected client and all token bytes are intentionally absent from
+    /// the checkpoint. Active records are revalidated by the next live
+    /// inspect/refresh operation before they can be used.
+    pub fn restore_checkpoints(
+        &self,
+        checkpoints: impl IntoIterator<Item = ManagedIdentityLeaseCheckpoint>,
+    ) -> Result<(), CredentialServiceError> {
+        let now = Self::now_unix_ms();
+        let mut restored: Vec<(String, LeaseRecord)> = Vec::new();
+        for checkpoint in checkpoints {
+            let ManagedIdentityLeaseCheckpoint {
+                credential_ref,
+                idempotency_key,
+                metadata,
+                authenticated_subject,
+                session_expires_at_unix_ms,
+            } = checkpoint;
+            if credential_ref.resource_type().as_str() != "Credential"
+                || !self.context_matches_provider(&authenticated_subject)
+                || metadata.rotation_generation == 0
+                || metadata.expires_at_unix_ms == 0
+                || idempotency_key.is_empty()
+                || session_expires_at_unix_ms == 0
+            {
+                return Err(CredentialServiceError::new(
+                    CredentialServiceErrorCode::InvariantFailure,
+                ));
+            }
+            let mut metadata = metadata;
+            if metadata.state == CredentialLeaseState::Active
+                && (Self::is_expired(metadata.expires_at_unix_ms, now)
+                    || Self::is_expired(session_expires_at_unix_ms, now))
+            {
+                metadata.state = CredentialLeaseState::Expired;
+            }
+            let key = credential_ref.to_canonical_string();
+            let record = LeaseRecord {
+                idempotency_key,
+                metadata,
+                authenticated_subject,
+                session_expires_at_unix_ms,
+            };
+            if let Some((_, existing)) = restored.iter_mut().find(|(existing_key, existing)| {
+                existing_key == &key
+                    && Self::same_owner(
+                        &existing.authenticated_subject,
+                        &record.authenticated_subject,
+                    )
+            }) {
+                *existing = record;
+            } else {
+                restored.push((key, record));
+            }
+        }
+        let _mutation = self.mutation_guard()?;
+        let mut leases = self.leases.lock().map_err(|_| {
+            CredentialServiceError::new(CredentialServiceErrorCode::InvariantFailure)
+        })?;
+        let mut next = leases.clone();
+        for records in next.values_mut() {
+            Self::deduplicate_records(records);
+        }
+        Self::mark_expired_locked(&mut next, now);
+        for (credential_ref, record) in &restored {
+            if let Some(records) = next.get_mut(credential_ref) {
+                records.retain(|existing| {
+                    !Self::same_owner(
+                        &existing.authenticated_subject,
+                        &record.authenticated_subject,
+                    )
+                });
+            }
+        }
+        for (credential_ref, record) in restored {
+            next.entry(credential_ref).or_default().push(record);
+        }
+        next.retain(|_, records| !records.is_empty());
+        if Self::active_lease_count(&next) > self.config.max_leases() as usize {
+            return Err(CredentialServiceError::new(
+                CredentialServiceErrorCode::ProviderUnavailable,
+            ));
+        }
+        *leases = next;
+        Ok(())
+    }
+
+    pub(crate) fn deduplicate_records(records: &mut Vec<LeaseRecord>) {
+        let mut deduplicated: Vec<LeaseRecord> = Vec::with_capacity(records.len());
+        for record in records.drain(..) {
+            if let Some(index) = deduplicated.iter().position(|existing| {
+                Self::same_owner(
+                    &existing.authenticated_subject,
+                    &record.authenticated_subject,
+                )
+            }) {
+                if record.metadata.state == CredentialLeaseState::Active
+                    || deduplicated[index].metadata.state != CredentialLeaseState::Active
+                {
+                    deduplicated[index] = record;
+                }
+            } else {
+                deduplicated.push(record);
+            }
+        }
+        *records = deduplicated;
+    }
+
+    /// Revoke every active handle owned by one authenticated workload.
+    ///
+    /// Stable owner dimensions select the records; a different workload,
+    /// subject, Zone, or Provider generation is never touched.
+    pub fn revoke_owned_handles(
+        &self,
+        session: &CredentialSessionBinding,
+        deadline_unix_ms: u64,
+    ) -> Result<usize, CredentialServiceError> {
+        let now = Self::now_unix_ms();
+        if Self::is_expired(session.expires_at_unix_ms(), now)
+            || !self.context_matches_provider(session.authenticated_subject())
+        {
+            return Err(CredentialServiceError::new(
+                CredentialServiceErrorCode::OperationDenied,
+            ));
+        }
+        let deadline = Self::operation_deadline(deadline_unix_ms)?;
+        let _mutation = self.mutation_guard()?;
+        let owned = {
+            let mut leases = self.leases.lock().map_err(|_| {
+                CredentialServiceError::new(CredentialServiceErrorCode::InvariantFailure)
+            })?;
+            Self::mark_expired_locked(&mut leases, now);
+            leases
+                .iter()
+                .flat_map(|(credential_ref, records)| {
+                    records
+                        .iter()
+                        .filter(|record| {
+                            record.metadata.state == CredentialLeaseState::Active
+                                && Self::same_owner(
+                                    &record.authenticated_subject,
+                                    session.authenticated_subject(),
+                                )
+                        })
+                        .map(|record| {
+                            (
+                                credential_ref.clone(),
+                                record.authenticated_subject.clone(),
+                                record.metadata.clone(),
+                            )
+                        })
+                })
+                .collect::<Vec<_>>()
+        };
+
+        let mut revoked = 0;
+        for (credential_ref, authenticated_subject, metadata) in owned {
+            let lease = ManagedIdentityLeaseRef {
+                credential_ref: ResourceRef::parse(&credential_ref).map_err(|_| {
+                    CredentialServiceError::new(CredentialServiceErrorCode::InvariantFailure)
+                })?,
+                metadata: metadata.clone(),
+            };
+            let _ = Self::poll_client(self.client.revoke_lease(&lease), deadline)?;
+            let mut leases = self.leases.lock().map_err(|_| {
+                CredentialServiceError::new(CredentialServiceErrorCode::InvariantFailure)
+            })?;
+            let records = leases.get_mut(&credential_ref).ok_or_else(invariant)?;
+            for record in records {
+                if record.metadata == metadata
+                    && record.authenticated_subject == authenticated_subject
+                {
+                    record.metadata.state = CredentialLeaseState::Revoked;
+                    record.metadata.outcome = CredentialOutcomeCode::Revoked;
+                    revoked += 1;
+                }
+            }
+        }
+        Ok(revoked)
+    }
 }
 
 impl fmt::Debug for ManagedIdentityCredentialProvider {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("ManagedIdentityCredentialProvider(<redacted>)")
     }
+}
+
+fn invariant() -> CredentialServiceError {
+    CredentialServiceError::new(CredentialServiceErrorCode::InvariantFailure)
 }
 
 #[cfg(test)]
@@ -617,6 +1108,7 @@ mod tests {
             ManagedIdentityPlacement::new(
                 PlacementBinding::UserAgent,
                 ResourceRef::parse("Host/workstation").unwrap(),
+                ResourceRef::parse("Zone/dev").unwrap(),
             ),
             Err(ManagedIdentityProviderError::InvalidPlacement)
         );

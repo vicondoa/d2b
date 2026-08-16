@@ -141,7 +141,6 @@ fn process_unique_managed_identity_canaries_are_absent_from_rendered_surfaces() 
         config_debug,
         request_debug,
         format!("{response:?}"),
-        String::from_utf8_lossy(&encode_outer(delivery).unwrap()).into_owned(),
         format!("{:?}", delivery.metadata.lease_handle),
         delivery.metadata.lease_handle.to_string(),
         format!("{:?}", delivery.metadata.source_version),
@@ -162,23 +161,36 @@ fn process_unique_managed_identity_canaries_are_absent_from_rendered_surfaces() 
         format!("{telemetry_error:?}"),
         telemetry_error.to_string(),
     ];
-    let markers = [
+    let secret_markers = [
         client.token_canary.as_str(),
         client.endpoint_canary.as_str(),
         client.response_canary.as_str(),
         provider_client_id_marker(),
+    ];
+    let identity_markers = [
         credential_name.as_str(),
         credential_ref.as_str(),
         credential_uid.as_str(),
         credential_digest.as_str(),
     ];
-    for surface in surfaces {
-        for marker in markers {
+    for (surface_index, surface) in surfaces.into_iter().enumerate() {
+        for (marker_index, marker) in secret_markers
+            .into_iter()
+            .chain(identity_markers)
+            .enumerate()
+        {
             assert!(
                 !surface.contains(marker),
-                "managed identity canary reached a rendered surface"
+                "managed identity canary reached rendered surface {surface_index} marker {marker_index}"
             );
         }
+    }
+    let delivery_wire = String::from_utf8_lossy(&encode_outer(delivery).unwrap()).into_owned();
+    for marker in secret_markers {
+        assert!(
+            !delivery_wire.contains(marker),
+            "managed identity secret canary reached the authorized delivery binding"
+        );
     }
 }
 

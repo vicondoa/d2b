@@ -7,7 +7,9 @@ use d2b_contracts::v3::credential::{
 };
 use d2b_provider_credential_managed_identity::ManagedIdentityCredentialProvider;
 
-use common::{ProviderHarness, TestAdmission, admitted, delivery, request, setup};
+use common::{
+    ProviderHarness, TestAdmission, admitted, authenticated_session, delivery, request, setup,
+};
 
 #[test]
 fn provider_returns_the_adapter_supplied_binding_unchanged() {
@@ -44,7 +46,15 @@ impl TestAdmission for FixedAdmission {
         method: CredentialMethod,
         _request: &CredentialRequest,
     ) -> Result<CredentialAuthorization, CredentialServiceError> {
-        CredentialAuthorization::new(method, Some(self.authorized.clone()))
+        CredentialAuthorization::new(method, Some(self.authorized.clone()))?
+            .with_authenticated_session(authenticated_session(
+                "Provider/runtime-azure-container-apps",
+                "Zone/dev",
+                "Guest/aca-sandbox",
+                "Provider/runtime-azure-container-apps",
+                1,
+                1,
+            ))
     }
 }
 

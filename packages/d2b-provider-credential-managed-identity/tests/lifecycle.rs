@@ -238,6 +238,7 @@ fn provider_with_client(
         ManagedIdentityPlacement::new(
             PlacementBinding::GuestAgent,
             ResourceRef::parse("Guest/aca-sandbox").unwrap(),
+            ResourceRef::parse("Zone/dev").unwrap(),
         )
         .unwrap(),
         ResourceRef::parse("Provider/runtime-azure-container-apps").unwrap(),
