@@ -4,25 +4,25 @@
   "entries": [
     {
       "id": "layer1:tier0",
-      "bazelLabel": "//tests:check_tier0",
+      "bazelLabel": "//bazel/checks/meta:tier0",
       "eligible": false,
       "localOnlyReason": "preflight-gate"
     },
     {
       "id": "layer1:test-lint",
-      "bazelLabel": "//tests:lint",
+      "bazelLabel": "//bazel/checks/policy:lint",
       "eligible": false,
       "localOnlyReason": "preflight-gate"
     },
     {
       "id": "layer1:check-inventory",
-      "bazelLabel": "//tests:check_inventory",
+      "bazelLabel": "//bazel/checks/meta:inventory",
       "eligible": false,
       "localOnlyReason": "preflight-gate"
     },
     {
       "id": "layer1:test-changelog",
-      "bazelLabel": "//tests:changelog",
+      "bazelLabel": "//bazel/checks/policy:changelog",
       "eligible": true,
       "localOnlyReason": null
     },
@@ -34,49 +34,49 @@
     },
     {
       "id": "layer1:test-proofs",
-      "bazelLabel": "//tests:proofs",
+      "bazelLabel": "//bazel/checks/policy:proofs",
       "eligible": true,
       "localOnlyReason": null
     },
     {
       "id": "layer1:test-flake",
-      "bazelLabel": "//tests:nix_flake",
+      "bazelLabel": "//bazel/checks/nix:flake",
       "eligible": false,
       "localOnlyReason": "nix-realization"
     },
     {
       "id": "layer1:test-nix-unit",
-      "bazelLabel": "//tests:nix_unit",
-      "eligible": false,
-      "localOnlyReason": "nix-evaluation"
+      "bazelLabel": "//bazel/checks/nix:nix_unit",
+      "eligible": true,
+      "localOnlyReason": null
     },
     {
       "id": "layer1:test-policy",
-      "bazelLabel": "//tests:policy",
+      "bazelLabel": "//bazel/checks/policy:policy",
       "eligible": false,
       "localOnlyReason": "preflight-gate"
     },
     {
       "id": "layer1:test-drift",
-      "bazelLabel": "//tests:drift",
+      "bazelLabel": "//bazel/checks/policy:drift",
       "eligible": false,
       "localOnlyReason": "generated-artifact-drift"
     },
     {
       "id": "layer1:test-runtime-ledger",
-      "bazelLabel": "//tests:runtime_ledger",
+      "bazelLabel": "//bazel/checks/policy:runtime_ledger",
       "eligible": true,
       "localOnlyReason": null
     },
     {
       "id": "layer1:test-performance-budgets",
-      "bazelLabel": "//tests:performance_budgets",
+      "bazelLabel": "//bazel/checks/meta:performance_budgets",
       "eligible": false,
       "localOnlyReason": "stable-self-hosted-runner"
     },
     {
       "id": "layer1:test-fixture-contracts",
-      "bazelLabel": "//tests:fixture_contracts",
+      "bazelLabel": "//bazel/checks/fixtures:contracts",
       "eligible": false,
       "localOnlyReason": "fixture-realization"
     },

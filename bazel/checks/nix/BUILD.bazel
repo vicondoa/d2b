@@ -1,0 +1,80 @@
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+
+package(default_visibility = ["//visibility:public"])
+
+sh_test(
+    name = "flake_test",
+    timeout = "long",
+    srcs = ["//:tests/test-flake.sh"],
+    data = [":flake_sources"],
+    tags = [
+        "local",
+        "no-sandbox",
+    ],
+)
+
+test_suite(
+    name = "flake",
+    tags = [
+        "local",
+        "no-sandbox",
+    ],
+    tests = [":flake_test"],
+)
+
+sh_test(
+    name = "nix_unit_test",
+    timeout = "long",
+    srcs = ["//:tests/test-nix-unit.sh"],
+    data = [":flake_sources"],
+)
+
+test_suite(
+    name = "nix_unit",
+    tests = [":nix_unit_test"],
+)
+
+filegroup(
+    name = "nix_unit_sources",
+    srcs = [
+        "//:flake.lock",
+        "//:flake.nix",
+        "//tests/unit/nix:nix_unit_sources",
+    ],
+)
+
+filegroup(
+    name = "flake_sources",
+    srcs = [
+        ":nix_unit_sources",
+        "//:nix_workspace_sources",
+        "//:nixos_modules_workspace_sources",
+        "//:tests_workspace_sources",
+    ],
+)
+
+filegroup(
+    name = "pure_locked_evaluation",
+    srcs = [
+        ":nix_unit_sources",
+        "//tests/unit/nix:eval_jobs",
+    ],
+)
+
+filegroup(
+    name = "realization_worker_image",
+    srcs = [
+        "//:flake.lock",
+        "//:flake.nix",
+        "//:tests_root_sources",
+    ],
+)
+
+filegroup(
+    name = "carrier_sources",
+    srcs = [
+        ":flake_sources",
+        ":pure_locked_evaluation",
+        ":realization_worker_image",
+    ],
+)

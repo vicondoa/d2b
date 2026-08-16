@@ -1,0 +1,25 @@
+package(default_visibility = ["//visibility:public"])
+
+filegroup(
+    name = "carrier_sources",
+    srcs = [
+        "//:tests_workspace_sources",
+        "//bazel/checks/rust:repo_policy_sources",
+        "//tests/unit/meta:meta_sources",
+    ],
+)
+
+test_suite(
+    name = "tier0",
+    tests = ["//packages/xtask:bazel_compatibility"],
+)
+
+test_suite(
+    name = "inventory",
+    tests = ["//packages/xtask:bazel_inventory"],
+)
+
+test_suite(
+    name = "performance_budgets",
+    tests = ["//tests/unit/gates:performance_budgets"],
+)

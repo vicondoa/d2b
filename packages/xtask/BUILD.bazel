@@ -183,6 +183,26 @@ rust_test(
 )
 
 rust_test(
+    name = "runtime_ledger_test",
+    args = ["test_runtime_ledger::"],
+    compile_data = ["Cargo.toml"],
+    crate = ":xtask",
+    data = [
+        ":xtask",
+        "//:rust-toolchain.toml",
+        "//bazel/checks/rust:repo_policy_sources",
+        "@rules_rust//rust/toolchain:current_cargo_files",
+    ],
+    env = {
+        "CARGO": "$(rootpath @rules_rust//rust/toolchain:current_cargo_files)",
+        "CARGO_BIN_EXE_xtask": "$(rootpath :xtask)",
+    },
+    env_inherit = ["PATH"],
+    rustc_env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
+    deps = ["@crates//:serde_json"],
+)
+
+rust_test(
     name = "bazel_rust_parity",
     timeout = "long",
     srcs = ["tests/bazel_rust_parity.rs"],
@@ -206,6 +226,43 @@ rust_test(
         "CARGO_BIN_EXE_xtask": "$(rootpath :xtask)",
         "D2B_REPO_ROOT": "$(rootpath //:Cargo.toml)",
         "RUSTC": "$(rootpath @rules_rust//rust/toolchain:current_rustc_files)",
+    },
+    env_inherit = ["PATH"],
+    rustc_env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
+    visibility = ["//visibility:public"],
+    deps = ["@crates//:serde_json"],
+)
+
+rust_test(
+    name = "bazel_non_rust_parity",
+    timeout = "long",
+    srcs = ["tests/bazel_non_rust_parity.rs"],
+    compile_data = ["Cargo.toml"],
+    data = [
+        ":xtask",
+        "//:Cargo.toml",
+        "//:BUILD.bazel",
+        "//:flake.lock",
+        "//:flake.nix",
+        "//:proof_workspace_sources",
+        "//:tests_workspace_sources",
+        "//bazel/checks/fixtures:contracts",
+        "//bazel/checks/fixtures:BUILD.bazel",
+        "//bazel/checks/meta:carrier_sources",
+        "//bazel/checks/meta:BUILD.bazel",
+        "//bazel/checks/nix:carrier_sources",
+        "//bazel/checks/nix:BUILD.bazel",
+        "//bazel/checks/policy:carrier_sources",
+        "//bazel/checks/policy:BUILD.bazel",
+        "//bazel/checks/rust:repo_policy_sources",
+        "//tests/fixtures:contract_sources",
+        "//tests/unit/gates:gate_sources",
+        "//tests/unit/meta:meta_sources",
+        "//tests/unit/nix:nix_unit_sources",
+    ],
+    env = {
+        "D2B_REPO_ROOT": "$(rootpath //:Cargo.toml)",
+        "CARGO_BIN_EXE_xtask": "$(rootpath :xtask)",
     },
     env_inherit = ["PATH"],
     rustc_env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},

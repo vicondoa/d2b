@@ -74,7 +74,7 @@ d2bd_srcs = [
 ]
 
 d2bd_compile_data = [
-    "//:tests/fixtures/deny-unknown/host-valid.json",  # keep
+    "//tests/fixtures:deny-unknown/host-valid.json",  # keep
     "//:tests/golden/manifest_v04/baseline-vms.json",  # keep
     "Cargo.toml",
     "src/guest_control_bridge.rs",
@@ -204,11 +204,11 @@ rust_test(
     crate_root = "tests/bundle_tampered_envelope.rs",
     data = [
         ":d2bd",
-        "//:tests/fixtures/deny-unknown/host-valid.json",
+        "//tests/fixtures:deny-unknown/host-valid.json",
     ],
     env = {
         "CARGO_BIN_EXE_d2bd": "$(rootpath :d2bd)",
-        "D2BD_HOST_FIXTURE": "$(rootpath //:tests/fixtures/deny-unknown/host-valid.json)",
+        "D2BD_HOST_FIXTURE": "$(rootpath //tests/fixtures:deny-unknown/host-valid.json)",
     },
     rustc_env = {"CARGO_BIN_EXE_d2bd": "$(rootpath :d2bd)"},
     visibility = ["//visibility:public"],
@@ -346,11 +346,11 @@ rust_test(
     crate_root = "tests/public_status_socket.rs",
     data = [
         ":d2bd",
-        "//:tests/fixtures/deny-unknown/host-valid.json",
+        "//tests/fixtures:deny-unknown/host-valid.json",
     ],
     env = {
         "CARGO_BIN_EXE_d2bd": "$(rootpath :d2bd)",
-        "D2BD_HOST_FIXTURE": "$(rootpath //:tests/fixtures/deny-unknown/host-valid.json)",
+        "D2BD_HOST_FIXTURE": "$(rootpath //tests/fixtures:deny-unknown/host-valid.json)",
     },
     rustc_env = {"CARGO_BIN_EXE_d2bd": "$(rootpath :d2bd)"},
     visibility = ["//visibility:public"],
@@ -367,11 +367,11 @@ rust_test(
     data = [
         ":cargo_workspace_sources",
         ":d2bd",
-        "//:tests/fixtures/deny-unknown/host-valid.json",
+        "//tests/fixtures:deny-unknown/host-valid.json",
     ],
     env = {
         "CARGO_BIN_EXE_d2bd": "$(rootpath :d2bd)",
-        "D2BD_HOST_FIXTURE": "$(rootpath //:tests/fixtures/deny-unknown/host-valid.json)",
+        "D2BD_HOST_FIXTURE": "$(rootpath //tests/fixtures:deny-unknown/host-valid.json)",
     },
     env_inherit = ["PATH"],
     proc_macro_deps = ["@crates//:async-trait"],

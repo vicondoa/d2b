@@ -6040,10 +6040,26 @@
       "execution": "run"
     },
     {
+      "id": "packages/xtask/bazel_non_rust_parity",
+      "label": "//packages/xtask:bazel_non_rust_parity",
+      "sources": [
+        "packages/xtask/tests/bazel_non_rust_parity.rs"
+      ],
+      "execution": "run"
+    },
+    {
       "id": "packages/xtask/bazel_rust_parity",
       "label": "//packages/xtask:bazel_rust_parity",
       "sources": [
         "packages/xtask/tests/bazel_rust_parity.rs"
+      ],
+      "execution": "run"
+    },
+    {
+      "id": "packages/xtask/runtime_ledger_test",
+      "label": "//packages/xtask:runtime_ledger_test",
+      "sources": [
+        "packages/xtask/src/test_runtime_ledger.rs"
       ],
       "execution": "run"
     },
@@ -9549,6 +9565,15 @@
     },
     {
       "package": "xtask",
+      "name": "bazel_non_rust_parity",
+      "kinds": [
+        "test"
+      ],
+      "source": "packages/xtask/tests/bazel_non_rust_parity.rs",
+      "carrier": "//packages/xtask:bazel_non_rust_parity"
+    },
+    {
+      "package": "xtask",
       "name": "bazel_rust_parity",
       "kinds": [
         "test"
@@ -11764,6 +11789,14 @@
         "testCount": 7,
         "execution": "run",
         "carrier": "//packages/xtask:bazel_inventory"
+      },
+      {
+        "package": "xtask",
+        "binary": "bazel_non_rust_parity",
+        "kind": "test",
+        "testCount": 9,
+        "execution": "run",
+        "carrier": "//packages/xtask:bazel_non_rust_parity"
       },
       {
         "package": "xtask",

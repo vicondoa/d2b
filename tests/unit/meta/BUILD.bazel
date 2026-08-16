@@ -1,0 +1,68 @@
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files(["BUILD.bazel"])
+
+filegroup(
+    name = "meta_sources",
+    srcs = glob(
+        [
+            "*.py",
+            "*.sh",
+        ],
+        allow_empty = True,
+    ),
+)
+
+sh_test(
+    name = "ci_coverage",
+    srcs = ["ci-coverage.sh"],
+    data = [
+        "//:tests_root_sources",
+        "//bazel/checks/rust:repo_policy_sources",
+    ],
+    tags = [
+        "local",
+        "no-sandbox",
+    ],
+)
+
+sh_test(
+    name = "deliverable_gate_inventory",
+    srcs = ["deliverable-gate-inventory.sh"],
+    data = [
+        "//:tests_root_sources",
+        "//bazel/checks/rust:repo_policy_sources",
+    ],
+    tags = [
+        "local",
+        "no-sandbox",
+    ],
+)
+
+sh_test(
+    name = "layer1_self_inventory",
+    srcs = ["layer1-self-inventory.sh"],
+    data = [
+        "//:tests_root_sources",
+        "//bazel/checks/rust:repo_policy_sources",
+    ],
+    tags = [
+        "local",
+        "no-sandbox",
+    ],
+)
+
+sh_test(
+    name = "w0_dep_direction",
+    srcs = ["w0-dep-direction.sh"],
+    data = [
+        "//:tests_root_sources",
+        "//bazel/checks/rust:repo_policy_sources",
+    ],
+    tags = [
+        "local",
+        "no-sandbox",
+    ],
+)

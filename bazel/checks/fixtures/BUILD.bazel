@@ -1,0 +1,32 @@
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+
+package(default_visibility = ["//visibility:public"])
+
+sh_test(
+    name = "contracts_test",
+    timeout = "long",
+    srcs = ["//:tests/test-rust.sh"],
+    args = ["fixture-contracts"],
+    data = [
+        "//:flake.lock",
+        "//:rust-toolchain.toml",
+        "//bazel/checks/rust:repo_policy_sources",
+        "//tests/fixtures:contract_sources",
+    ],
+    env = {
+        "D2B_ENABLE_FIXTURE_BUILD": "1",
+    },
+    tags = [
+        "local",
+        "no-sandbox",
+    ],
+)
+
+test_suite(
+    name = "contracts",
+    tags = [
+        "local",
+        "no-sandbox",
+    ],
+    tests = [":contracts_test"],
+)

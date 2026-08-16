@@ -61,7 +61,7 @@ d2b_priv_broker_srcs = [
 ]
 
 d2b_priv_broker_compile_data = [
-    "//:tests/fixtures/deny-unknown/host-valid.json",  # keep
+    "//tests/fixtures:deny-unknown/host-valid.json",  # keep
     "//:tests/golden/manifest_v04/baseline-vms.json",  # keep
     "Cargo.toml",
     "src/sys.rs",
@@ -356,7 +356,7 @@ rust_test(
     name = "w15_install_migrate",
     srcs = ["tests/w15_install_migrate.rs"],
     compile_data = [
-        "//:tests/fixtures/deny-unknown/host-valid.json",  # keep
+        "//tests/fixtures:deny-unknown/host-valid.json",  # keep
         "//:tests/golden/manifest_v04/baseline-vms.json",  # keep
         "Cargo.toml",
     ],

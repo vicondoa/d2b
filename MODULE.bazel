@@ -8,6 +8,7 @@ bazel_dep(name = "rules_go", version = "0.59.0")
 bazel_dep(name = "gazelle", version = "0.47.0")
 bazel_dep(name = "gazelle_rust", version = "0.1.0")
 bazel_dep(name = "protobuf", version = "33.4")
+bazel_dep(name = "rules_shell", version = "0.6.1")
 
 rust = use_extension("@rules_rust//rust:extensions.bzl", "rust")
 rust.toolchain(

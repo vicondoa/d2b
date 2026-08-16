@@ -1,0 +1,26 @@
+package(default_visibility = ["//visibility:public"])
+
+exports_files([
+    "BUILD.bazel",
+    "eval-jobs.nix",
+])
+
+filegroup(
+    name = "eval_jobs",
+    srcs = ["eval-jobs.nix"],
+)
+
+filegroup(
+    name = "nix_unit_sources",
+    srcs = glob(
+        [
+            "cases/*.nix",
+            "default.nix",
+            "eval-cases/*.nix",
+            "eval-jobs.nix",
+            "helpers/*.nix",
+            "pinned/*",
+        ],
+        allow_empty = True,
+    ),
+)

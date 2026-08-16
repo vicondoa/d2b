@@ -1,0 +1,74 @@
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+
+package(default_visibility = ["//visibility:public"])
+
+filegroup(
+    name = "carrier_sources",
+    srcs = [
+        "//:nix_workspace_sources",
+        "//:nixos_modules_workspace_sources",
+        "//:proof_workspace_sources",
+        "//:tests_root_sources",
+        "//bazel/checks/rust:repo_policy_sources",
+        "//tests/unit/gates:gate_sources",
+        "//tests/unit/meta:meta_sources",
+    ],
+)
+
+test_suite(
+    name = "changelog",
+    tests = ["//packages/d2b-contract-tests:policy_changelog_gate"],
+)
+
+test_suite(
+    name = "lint",
+    tests = [
+        "//packages/d2b-contract-tests:policy_bazel_layout",
+    ],
+)
+
+test_suite(
+    name = "policy",
+    tests = [
+        "//packages/d2b-contract-tests:policy_bazel_layout",
+        "//packages/xtask:policy_ci",
+        "//packages/xtask:policy_workspace",
+    ],
+)
+
+sh_test(
+    name = "proofs_test",
+    timeout = "long",
+    srcs = ["//:tests/test-proofs.sh"],
+    data = [
+        "//:flake.lock",
+        "//:flake.nix",
+        "//:proof_workspace_sources",
+        "//:rust-toolchain.toml",
+        "//:tests_root_sources",
+    ],
+)
+
+test_suite(
+    name = "proofs",
+    tests = [":proofs_test"],
+)
+
+test_suite(
+    name = "drift",
+    tags = [
+        "local",
+        "no-sandbox",
+    ],
+    tests = [
+        "//tests/unit/gates:ci_rust_cache_sync",
+        "//tests/unit/gates:drift_check",
+        "//tests/unit/gates:flake_check_matrix_sync",
+        "//tests/unit/gates:vms_json_parity",
+    ],
+)
+
+test_suite(
+    name = "runtime_ledger",
+    tests = ["//packages/xtask:runtime_ledger_test"],
+)

@@ -10,7 +10,7 @@
       "id": "layer1:tier0",
       "kind": "layer1-job",
       "source": "tests/layer1-jobs.json#jobs.tier0",
-      "bazelLabel": "//tests:check_tier0",
+      "bazelLabel": "//bazel/checks/meta:tier0",
       "enforcement": "enforcing",
       "executionClass": "local-preflight",
       "architecture": [
@@ -20,13 +20,23 @@
       "eligibility": {
         "eligible": false,
         "localOnlyReason": "preflight-gate"
+      },
+      "carrier": {
+        "kind": "bazel-test",
+        "label": "//bazel/checks/meta:tier0",
+        "sources": [
+          "tests/layer1-jobs.json",
+          "tests/tools/tier0-first-pass.sh",
+          "Makefile"
+        ],
+        "remoteCandidate": false
       }
     },
     {
       "id": "layer1:test-lint",
       "kind": "layer1-job",
       "source": "tests/layer1-jobs.json#jobs.test-lint",
-      "bazelLabel": "//tests:lint",
+      "bazelLabel": "//bazel/checks/policy:lint",
       "enforcement": "enforcing",
       "executionClass": "local-preflight",
       "architecture": [
@@ -36,13 +46,23 @@
       "eligibility": {
         "eligible": false,
         "localOnlyReason": "preflight-gate"
+      },
+      "carrier": {
+        "kind": "bazel-test",
+        "label": "//bazel/checks/policy:lint",
+        "sources": [
+          "tests/test-lint.sh",
+          "tests/tools/preflight-disk-space.sh",
+          "tests/unit/gates"
+        ],
+        "remoteCandidate": false
       }
     },
     {
       "id": "layer1:check-inventory",
       "kind": "layer1-job",
       "source": "tests/layer1-jobs.json#jobs.check-inventory",
-      "bazelLabel": "//tests:check_inventory",
+      "bazelLabel": "//bazel/checks/meta:inventory",
       "enforcement": "enforcing",
       "executionClass": "local-preflight",
       "architecture": [
@@ -52,13 +72,23 @@
       "eligibility": {
         "eligible": false,
         "localOnlyReason": "preflight-gate"
+      },
+      "carrier": {
+        "kind": "bazel-test",
+        "label": "//bazel/checks/meta:inventory",
+        "sources": [
+          "tests/layer1-jobs.json",
+          "tests/tools/gen-migration-ledger.sh",
+          "tests/unit/meta/layer1-self-inventory.sh"
+        ],
+        "remoteCandidate": false
       }
     },
     {
       "id": "layer1:test-changelog",
       "kind": "layer1-job",
       "source": "tests/layer1-jobs.json#jobs.test-changelog",
-      "bazelLabel": "//tests:changelog",
+      "bazelLabel": "//bazel/checks/policy:changelog",
       "enforcement": "enforcing",
       "executionClass": "remote-candidate",
       "architecture": [
@@ -68,6 +98,16 @@
       "eligibility": {
         "eligible": true,
         "localOnlyReason": null
+      },
+      "carrier": {
+        "kind": "bazel-test",
+        "label": "//bazel/checks/policy:changelog",
+        "sources": [
+          "scripts/changelog-check.sh",
+          "packages/d2b-contract-tests/tests/policy_changelog_gate.rs",
+          "CHANGELOG.md"
+        ],
+        "remoteCandidate": true
       }
     },
     {
@@ -90,7 +130,7 @@
       "id": "layer1:test-proofs",
       "kind": "layer1-job",
       "source": "tests/layer1-jobs.json#jobs.test-proofs",
-      "bazelLabel": "//tests:proofs",
+      "bazelLabel": "//bazel/checks/policy:proofs",
       "enforcement": "enforcing",
       "executionClass": "remote-candidate",
       "architecture": [
@@ -100,13 +140,22 @@
       "eligibility": {
         "eligible": true,
         "localOnlyReason": null
+      },
+      "carrier": {
+        "kind": "bazel-test",
+        "label": "//bazel/checks/policy:proofs",
+        "sources": [
+          "tests/test-proofs.sh",
+          "proofs"
+        ],
+        "remoteCandidate": true
       }
     },
     {
       "id": "layer1:test-flake",
       "kind": "layer1-job",
       "source": "tests/layer1-jobs.json#jobs.test-flake",
-      "bazelLabel": "//tests:nix_flake",
+      "bazelLabel": "//bazel/checks/nix:flake",
       "enforcement": "enforcing",
       "executionClass": "local-integration",
       "architecture": [
@@ -116,13 +165,24 @@
       "eligibility": {
         "eligible": false,
         "localOnlyReason": "nix-realization"
+      },
+      "carrier": {
+        "kind": "bazel-test",
+        "label": "//bazel/checks/nix:flake",
+        "sources": [
+          "tests/test-flake.sh",
+          "flake.nix",
+          "flake.lock",
+          "tests/unit/smoke/guest-static-elf.nix"
+        ],
+        "remoteCandidate": false
       }
     },
     {
       "id": "layer1:test-nix-unit",
       "kind": "layer1-job",
       "source": "tests/layer1-jobs.json#jobs.test-nix-unit",
-      "bazelLabel": "//tests:nix_unit",
+      "bazelLabel": "//bazel/checks/nix:nix_unit",
       "enforcement": "enforcing",
       "executionClass": "local-integration",
       "architecture": [
@@ -130,15 +190,25 @@
         "aarch64-linux"
       ],
       "eligibility": {
-        "eligible": false,
-        "localOnlyReason": "nix-evaluation"
+        "eligible": true,
+        "localOnlyReason": null
+      },
+      "carrier": {
+        "kind": "bazel-test",
+        "label": "//bazel/checks/nix:nix_unit",
+        "sources": [
+          "tests/test-nix-unit.sh",
+          "tests/unit/nix/eval-jobs.nix",
+          "tests/unit/nix/default.nix"
+        ],
+        "remoteCandidate": true
       }
     },
     {
       "id": "layer1:test-policy",
       "kind": "layer1-job",
       "source": "tests/layer1-jobs.json#jobs.test-policy",
-      "bazelLabel": "//tests:policy",
+      "bazelLabel": "//bazel/checks/policy:policy",
       "enforcement": "enforcing",
       "executionClass": "local-preflight",
       "architecture": [
@@ -148,13 +218,23 @@
       "eligibility": {
         "eligible": false,
         "localOnlyReason": "preflight-gate"
+      },
+      "carrier": {
+        "kind": "bazel-test",
+        "label": "//bazel/checks/policy:policy",
+        "sources": [
+          "tests/test-policy.sh",
+          "packages/d2b-contract-tests/tests/policy_bazel_layout.rs",
+          "tests/unit/meta"
+        ],
+        "remoteCandidate": false
       }
     },
     {
       "id": "layer1:test-drift",
       "kind": "layer1-job",
       "source": "tests/layer1-jobs.json#jobs.test-drift",
-      "bazelLabel": "//tests:drift",
+      "bazelLabel": "//bazel/checks/policy:drift",
       "enforcement": "enforcing",
       "executionClass": "local-preflight",
       "architecture": [
@@ -164,13 +244,23 @@
       "eligibility": {
         "eligible": false,
         "localOnlyReason": "generated-artifact-drift"
+      },
+      "carrier": {
+        "kind": "bazel-test",
+        "label": "//bazel/checks/policy:drift",
+        "sources": [
+          "tests/unit/gates/drift-check.sh",
+          "tests/unit/gates/flake-check-matrix-sync.sh",
+          "tests/unit/gates/ci-rust-cache-sync.sh"
+        ],
+        "remoteCandidate": false
       }
     },
     {
       "id": "layer1:test-runtime-ledger",
       "kind": "layer1-job",
       "source": "tests/layer1-jobs.json#jobs.test-runtime-ledger",
-      "bazelLabel": "//tests:runtime_ledger",
+      "bazelLabel": "//bazel/checks/policy:runtime_ledger",
       "enforcement": "enforcing",
       "executionClass": "remote-candidate",
       "architecture": [
@@ -180,13 +270,23 @@
       "eligibility": {
         "eligible": true,
         "localOnlyReason": null
+      },
+      "carrier": {
+        "kind": "bazel-test",
+        "label": "//bazel/checks/policy:runtime_ledger",
+        "sources": [
+          "Makefile",
+          "packages/xtask/src/test_runtime_ledger.rs",
+          "tests/runtime-ledger-census.json"
+        ],
+        "remoteCandidate": true
       }
     },
     {
       "id": "layer1:test-performance-budgets",
       "kind": "layer1-job",
       "source": "tests/layer1-jobs.json#jobs.test-performance-budgets",
-      "bazelLabel": "//tests:performance_budgets",
+      "bazelLabel": "//bazel/checks/meta:performance_budgets",
       "enforcement": "advisory",
       "executionClass": "local-preflight",
       "architecture": [
@@ -195,13 +295,22 @@
       "eligibility": {
         "eligible": false,
         "localOnlyReason": "stable-self-hosted-runner"
+      },
+      "carrier": {
+        "kind": "bazel-test",
+        "label": "//bazel/checks/meta:performance_budgets",
+        "sources": [
+          "tests/unit/gates/performance-budgets.sh",
+          "tests/layer1-jobs.json"
+        ],
+        "remoteCandidate": false
       }
     },
     {
       "id": "layer1:test-fixture-contracts",
       "kind": "layer1-job",
       "source": "tests/layer1-jobs.json#jobs.test-fixture-contracts",
-      "bazelLabel": "//tests:fixture_contracts",
+      "bazelLabel": "//bazel/checks/fixtures:contracts",
       "enforcement": "enforcing",
       "executionClass": "local-integration",
       "architecture": [
@@ -210,6 +319,18 @@
       "eligibility": {
         "eligible": false,
         "localOnlyReason": "fixture-realization"
+      },
+      "carrier": {
+        "kind": "bazel-test",
+        "label": "//bazel/checks/fixtures:contracts",
+        "sources": [
+          "tests/test-rust.sh",
+          "packages/d2b-contract-tests",
+          "tests/fixtures"
+        ],
+        "remoteCandidate": false,
+        "fixtureManifest": "tests/fixtures/BUILD.bazel",
+        "fixtureState": "declared"
       }
     },
     {
@@ -451,5 +572,171 @@
         "localOnlyReason": null
       }
     }
-  ]
+  ],
+  "localOnlyReasons": [
+    {
+      "id": "preflight-gate",
+      "description": "The action is a bounded local preflight before the aggregate graph."
+    },
+    {
+      "id": "nix-realization",
+      "description": "Nix realization remains local until an unprivileged worker proof passes."
+    },
+    {
+      "id": "generated-artifact-drift",
+      "description": "The action compares generated outputs with the committed tree."
+    },
+    {
+      "id": "stable-self-hosted-runner",
+      "description": "The advisory budget needs a pinned self-hosted runner."
+    },
+    {
+      "id": "fixture-realization",
+      "description": "The action materializes fixture artifacts locally before contract tests."
+    },
+    {
+      "id": "host-or-device-required",
+      "description": "The successor needs a container, VM, live host, hardware, or host state."
+    },
+    {
+      "id": "provider-evidence-unavailable",
+      "description": "Provider execution is not admitted without independent evidence."
+    }
+  ],
+  "remoteAggregate": [
+    {
+      "id": "layer1:test-changelog",
+      "label": "//bazel/checks/policy:changelog"
+    },
+    {
+      "id": "layer1:test-rust",
+      "label": "//tests:rust"
+    },
+    {
+      "id": "layer1:test-proofs",
+      "label": "//bazel/checks/policy:proofs"
+    },
+    {
+      "id": "layer1:test-nix-unit",
+      "label": "//bazel/checks/nix:nix_unit"
+    },
+    {
+      "id": "layer1:test-runtime-ledger",
+      "label": "//bazel/checks/policy:runtime_ledger"
+    },
+    {
+      "id": "rust:main-workspace",
+      "label": "//packages:rust_main_workspace"
+    },
+    {
+      "id": "rust:broker-default",
+      "label": "//packages/d2b-priv-broker:rust_default"
+    },
+    {
+      "id": "rust:broker-layer1",
+      "label": "//packages/d2b-priv-broker:rust_layer1_bootstrap"
+    },
+    {
+      "id": "rust:broker-fakebackends",
+      "label": "//packages/d2b-priv-broker:rust_fake_backends"
+    },
+    {
+      "id": "rust:guest-shell-runner-real-libshpool",
+      "label": "//packages/d2b-guest-shell-runner:rust_real_libshpool"
+    },
+    {
+      "id": "rust:no-bash-ast",
+      "label": "//tests:rust_no_bash_ast"
+    },
+    {
+      "id": "rust:schema-reproducibility",
+      "label": "//tests:rust_schema_reproducibility"
+    },
+    {
+      "id": "rust:inventory-stub",
+      "label": "//tests:rust_inventory_stub"
+    },
+    {
+      "id": "rust:supply-chain",
+      "label": "//tests:rust_supply_chain"
+    },
+    {
+      "id": "rust:doctests",
+      "label": "//packages:rust_doctests"
+    },
+    {
+      "id": "rust:harness-free-targets",
+      "label": "//packages:rust_harness_free_targets"
+    },
+    {
+      "id": "rust:proof-workspaces",
+      "label": "//proofs:all"
+    },
+    {
+      "id": "rust:benches",
+      "label": "//packages:rust_benches"
+    }
+  ],
+  "integrationSuccessors": [
+    {
+      "id": "integration:containers",
+      "source": "tests/integration/containers",
+      "localOnlyReason": "host-or-device-required",
+      "remoteAggregate": false
+    },
+    {
+      "id": "integration:kvm",
+      "source": "tests/host-integration",
+      "localOnlyReason": "host-or-device-required",
+      "remoteAggregate": false
+    },
+    {
+      "id": "integration:live-host",
+      "source": "tests/integration/live",
+      "localOnlyReason": "host-or-device-required",
+      "remoteAggregate": false
+    },
+    {
+      "id": "integration:hardware",
+      "source": "tests/host-integration/hardware",
+      "localOnlyReason": "host-or-device-required",
+      "remoteAggregate": false
+    },
+    {
+      "id": "integration:host-state",
+      "source": "nixos-modules/host.nix",
+      "localOnlyReason": "host-or-device-required",
+      "remoteAggregate": false
+    }
+  ],
+  "nixPolicy": {
+    "pureEvaluation": {
+      "label": "//bazel/checks/nix:pure_locked_evaluation",
+      "remoteEligible": true,
+      "proofStatus": "proven",
+      "lockedInputs": true,
+      "hermeticFixture": "tests/unit/nix/eval-jobs.nix"
+    },
+    "realization": {
+      "remoteEligible": false,
+      "localOnlyReason": "nix-realization",
+      "workerImageExperiment": {
+        "label": "//bazel/checks/nix:realization_worker_image",
+        "baseline": false,
+        "privileged": false,
+        "immutable": true,
+        "status": "experimental"
+      },
+      "requiredProof": [
+        "uid",
+        "privilege",
+        "store",
+        "closure",
+        "output",
+        "image",
+        "system",
+        "target"
+      ]
+    }
+  }
 }

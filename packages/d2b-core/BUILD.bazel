@@ -45,7 +45,7 @@ rust_library(
     name = "d2b_core",
     srcs = d2b_core_srcs,
     compile_data = [
-        "//:tests/fixtures/deny-unknown/host-valid.json",  # keep
+        "//tests/fixtures:deny-unknown/host-valid.json",  # keep
         "//:tests/golden/manifest_v04/baseline-vms.json",  # keep
         "//:tests/golden/vms.json-signoz-v7",  # keep
         "Cargo.toml",
@@ -66,7 +66,7 @@ rust_library(
     name = "d2b_core_test_support",
     srcs = d2b_core_srcs,
     compile_data = [
-        "//:tests/fixtures/deny-unknown/host-valid.json",  # keep
+        "//tests/fixtures:deny-unknown/host-valid.json",  # keep
         "//:tests/golden/manifest_v04/baseline-vms.json",  # keep
         "//:tests/golden/vms.json-signoz-v7",  # keep
         "Cargo.toml",

@@ -115,7 +115,7 @@ rust_test(
     name = "broker_network_prep",
     srcs = ["tests/broker_network_prep.rs"],
     compile_data = [
-        "//:tests/fixtures/deny-unknown/host-valid.json",  # keep
+        "//tests/fixtures:deny-unknown/host-valid.json",  # keep
         "//:tests/golden/manifest_v04/baseline-vms.json",  # keep
         "Cargo.toml",
     ],

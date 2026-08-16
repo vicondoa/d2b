@@ -1,0 +1,80 @@
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files(["BUILD.bazel"])
+
+filegroup(
+    name = "gate_sources",
+    srcs = glob(
+        ["*.sh"],
+        allow_empty = True,
+    ),
+)
+
+sh_test(
+    name = "ci_rust_cache_sync",
+    srcs = ["ci-rust-cache-sync.sh"],
+    data = [
+        "//:tests_root_sources",
+        "//bazel/checks/rust:repo_policy_sources",
+    ],
+    tags = [
+        "local",
+        "no-sandbox",
+    ],
+)
+
+sh_test(
+    name = "drift_check",
+    srcs = ["drift-check.sh"],
+    data = [
+        "//:nix_workspace_sources",
+        "//:nixos_modules_workspace_sources",
+        "//:tests_root_sources",
+        "//bazel/checks/rust:repo_policy_sources",
+    ],
+    tags = [
+        "local",
+        "no-sandbox",
+    ],
+)
+
+sh_test(
+    name = "flake_check_matrix_sync",
+    srcs = ["flake-check-matrix-sync.sh"],
+    data = [
+        "//:tests_root_sources",
+        "//bazel/checks/rust:repo_policy_sources",
+    ],
+    tags = [
+        "local",
+        "no-sandbox",
+    ],
+)
+
+sh_test(
+    name = "performance_budgets",
+    srcs = ["performance-budgets.sh"],
+    data = [
+        "//:tests_root_sources",
+        "//bazel/checks/rust:repo_policy_sources",
+    ],
+    tags = [
+        "local",
+        "no-sandbox",
+    ],
+)
+
+sh_test(
+    name = "vms_json_parity",
+    srcs = ["vms-json-parity.sh"],
+    data = [
+        "//:tests_root_sources",
+        "//bazel/checks/rust:repo_policy_sources",
+    ],
+    tags = [
+        "local",
+        "no-sandbox",
+    ],
+)
