@@ -37,9 +37,10 @@ pub use registry::{
 };
 pub use router::{
     BusClock, BusConfig, BusError, BusEvent, BusFailureReason, BusIngress, BusObserver, BusStream,
-    CancellationOutcome, CancellationReceipt, ComponentRequestReceiver, ComponentSessionAdmission,
-    DeliveredInvocation, DeliveredStream, LocalOperationLease, ManualClock, NoopBusObserver,
-    ResourceCall, ResourceFilter, ResourceQuery, ZoneBus, ZoneRegistrar,
+    CancellationOutcome, CancellationReceipt, CommittedInteractionSubjectInput,
+    ComponentRequestReceiver, ComponentSessionAdmission, DeliveredInvocation, DeliveredStream,
+    LocalOperationLease, ManualClock, NoopBusObserver, ResourceCall, ResourceFilter, ResourceQuery,
+    ZoneBus, ZoneRegistrar,
 };
 pub use streams::{IncomingStream, ReceivedFrame, StreamError, StreamLimits, StreamName};
 

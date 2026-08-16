@@ -1411,7 +1411,7 @@ impl AuthoritativeUnixSubjectResolver {
     ) -> d2b_session::Result<UnixSubjectRecord> {
         #[cfg(not(test))]
         if *service == ServicePackage::ResourceV3 {
-            return Ok(UnixSubjectRecord::new(
+            return UnixSubjectRecord::new(
                 UnixSubjectKind::Provider,
                 ResourceRef::parse("Provider/system-core").expect("fixed Provider ref"),
                 ResourceUid::parse("11111111-1111-4111-8111-111111111111")
@@ -1419,7 +1419,7 @@ impl AuthoritativeUnixSubjectResolver {
                 ResourceRef::parse(&format!("Zone/{}", self.zone.as_str()))
                     .expect("fixed Zone ref"),
                 peer,
-            )?);
+            );
         }
         let subjects = self
             .subjects
@@ -1480,6 +1480,19 @@ impl core::fmt::Debug for AuthoritativeUnixSubjectResolver {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str("AuthoritativeUnixSubjectResolver(<redacted>)")
     }
+}
+
+/// Trusted committed state used to install daemon-owned interaction subjects.
+pub struct CommittedInteractionSubjectInput {
+    pub subject_ref: ResourceRef,
+    pub subject_uid: ResourceUid,
+    pub zone_ref: ResourceRef,
+    pub expected_peer_uid: u32,
+    pub execution_ref: ResourceRef,
+    pub display_generation: ResourceGeneration,
+    pub clipboard_generation: Option<ResourceGeneration>,
+    pub notification_generation: Option<ResourceGeneration>,
+    pub controller_generation: ControllerGeneration,
 }
 
 /// Single, non-cloneable authority that consumes authenticated registrations.
@@ -2379,16 +2392,19 @@ impl ZoneRegistrar {
     /// controller generation are all supplied by trusted committed state.
     pub fn install_committed_interaction_subject(
         &self,
-        subject_ref: ResourceRef,
-        subject_uid: ResourceUid,
-        zone_ref: ResourceRef,
-        expected_peer_uid: u32,
-        execution_ref: ResourceRef,
-        display_generation: ResourceGeneration,
-        clipboard_generation: Option<ResourceGeneration>,
-        notification_generation: Option<ResourceGeneration>,
-        controller_generation: ControllerGeneration,
+        committed: CommittedInteractionSubjectInput,
     ) -> d2b_session::Result<()> {
+        let CommittedInteractionSubjectInput {
+            subject_ref,
+            subject_uid,
+            zone_ref,
+            expected_peer_uid,
+            execution_ref,
+            display_generation,
+            clipboard_generation,
+            notification_generation,
+            controller_generation,
+        } = committed;
         let services = [(
             ServicePackage::DisplayV3,
             ResourceRef::parse("Provider/display-wayland").expect("fixed display Provider ref"),

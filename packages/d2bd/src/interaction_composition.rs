@@ -24,9 +24,9 @@ use crate::resource_runtime::{
     CommittedInteractionProviderConfiguration, CommittedNotificationProviderConfiguration,
 };
 use d2b_bus::{
-    BusAuthorizer, BusConfig, BusError, BusIngress, ComponentRequestReceiver,
-    ComponentSessionAdmission, NoopBusObserver, OperationId, OperationSpec, RouteGenerations,
-    RouteKey, RouteMember, RouteTarget, ZoneBus, ZoneRegistrar,
+    BusAuthorizer, BusConfig, BusError, BusIngress, CommittedInteractionSubjectInput,
+    ComponentRequestReceiver, ComponentSessionAdmission, NoopBusObserver, OperationId,
+    OperationSpec, RouteGenerations, RouteKey, RouteMember, RouteTarget, ZoneBus, ZoneRegistrar,
 };
 use d2b_contracts::v3::{
     ControllerGeneration, EvidenceClass, ResourceGeneration, ResourceRef, ResourceUid, ServiceName,
@@ -3521,18 +3521,18 @@ pub(crate) fn production_interaction_composition(
     );
     composition
         .registrar
-        .install_committed_interaction_subject(
-            identity.subject_ref().clone(),
-            identity.subject_uid().clone(),
-            ResourceRef::parse(&format!("Zone/{}", resource.zone.as_str()))
+        .install_committed_interaction_subject(CommittedInteractionSubjectInput {
+            subject_ref: identity.subject_ref().clone(),
+            subject_uid: identity.subject_uid().clone(),
+            zone_ref: ResourceRef::parse(&format!("Zone/{}", resource.zone.as_str()))
                 .map_err(|_| BusError::InvalidConfig)?,
-            daemon_uid,
-            identity.host_execution_ref().clone(),
-            identity.display_provider_generation(),
-            identity.clipboard_provider_generation(),
-            identity.notification_provider_generation(),
+            expected_peer_uid: daemon_uid,
+            execution_ref: identity.host_execution_ref().clone(),
+            display_generation: identity.display_provider_generation(),
+            clipboard_generation: identity.clipboard_provider_generation(),
+            notification_generation: identity.notification_provider_generation(),
             controller_generation,
-        )
+        })
         .map_err(|_| BusError::InvalidConfig)?;
     if let Some(configuration) = resource.configuration {
         composition
@@ -4666,17 +4666,19 @@ mod tests {
         )
         .unwrap();
         registrar
-            .install_committed_interaction_subject(
-                subject_ref.clone(),
+            .install_committed_interaction_subject(CommittedInteractionSubjectInput {
+                subject_ref: subject_ref.clone(),
                 subject_uid,
-                ResourceRef::parse(&format!("Zone/{}", zone.as_str())).unwrap(),
-                transport_uid,
-                host_execution_ref.clone(),
-                ResourceGeneration::new(display_generation).unwrap(),
-                Some(ResourceGeneration::new(clipboard_generation).unwrap()),
-                Some(ResourceGeneration::new(notification_generation).unwrap()),
-                ControllerGeneration::new(controller_generation).unwrap(),
-            )
+                zone_ref: ResourceRef::parse(&format!("Zone/{}", zone.as_str())).unwrap(),
+                expected_peer_uid: transport_uid,
+                execution_ref: host_execution_ref.clone(),
+                display_generation: ResourceGeneration::new(display_generation).unwrap(),
+                clipboard_generation: Some(ResourceGeneration::new(clipboard_generation).unwrap()),
+                notification_generation: Some(
+                    ResourceGeneration::new(notification_generation).unwrap(),
+                ),
+                controller_generation: ControllerGeneration::new(controller_generation).unwrap(),
+            })
             .unwrap();
         let mut composition = InteractionComposition::new_with_guest_frontend(
             registrar,
