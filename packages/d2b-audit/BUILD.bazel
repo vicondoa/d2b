@@ -5,9 +5,7 @@ exports_files(
     visibility = ["//visibility:public"],
 )
 
-rust_library(
-    name = "d2b_audit",
-    srcs = [
+d2b_audit_srcs = [
         "src/export.rs",
         "src/hash_chain.rs",
         "src/lib.rs",
@@ -17,11 +15,30 @@ rust_library(
         "src/record_types.rs",
         "src/segment.rs",
         "src/sink.rs",
-    ],
+]
+
+rust_library(
+    name = "d2b_audit",
+    srcs = d2b_audit_srcs,
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-telemetry:d2b_telemetry",
+        "@crates//:libc",
+        "@crates//:rustix",
+        "@crates//:serde",
+        "@crates//:serde_json",
+    ],
+)
+
+rust_library(
+    name = "d2b_audit_test_support",
+    srcs = d2b_audit_srcs,
+    compile_data = ["Cargo.toml"],
+    crate_name = "d2b_audit",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-telemetry:d2b_telemetry_test_support",
         "@crates//:libc",
         "@crates//:rustix",
         "@crates//:serde",

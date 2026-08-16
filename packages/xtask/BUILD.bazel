@@ -65,6 +65,7 @@ rust_binary(
 
 rust_test(
     name = "bazel_compatibility",
+    timeout = "long",
     srcs = ["tests/bazel_compatibility.rs"],
     compile_data = ["Cargo.toml"],
     data = [

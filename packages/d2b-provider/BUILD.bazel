@@ -5,9 +5,7 @@ exports_files(
     visibility = ["//visibility:public"],
 )
 
-rust_library(
-    name = "d2b_provider",
-    srcs = [
+d2b_provider_srcs = [
         "src/agent.rs",
         "src/context.rs",
         "src/descriptor.rs",
@@ -21,12 +19,29 @@ rust_library(
         "src/rpc.rs",
         "src/session.rs",
         "src/share_adapter.rs",
-    ],
+]
+
+rust_library(
+    name = "d2b_provider",
+    srcs = d2b_provider_srcs,
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts:d2b_contracts",
         "//packages/d2b-zone-routing:d2b_zone_routing",
+        "@crates//:tokio",
+    ],
+)
+
+rust_library(
+    name = "d2b_provider_test_support",
+    srcs = d2b_provider_srcs,
+    compile_data = ["Cargo.toml"],
+    crate_name = "d2b_provider",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-contracts:d2b_contracts_test_support",
+        "//packages/d2b-zone-routing:d2b_zone_routing_test_support",
         "@crates//:tokio",
     ],
 )

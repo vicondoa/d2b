@@ -1,5 +1,4 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
-load("//bazel/checks/rust:defs.bzl", "test_features")
 
 # gazelle:ignore
 exports_files(
@@ -25,68 +24,86 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
+d2b_bus_srcs = [
+    "src/audit.rs",
+    "src/authorization.rs",
+    "src/driver.rs",
+    "src/engine.rs",
+    "src/error.rs",
+    "src/lib.rs",
+    "src/lifecycle.rs",
+    "src/metrics.rs",
+    "src/operations.rs",
+    "src/production_rss.rs",  # keep
+    "src/registry.rs",
+    "src/relay.rs",
+    "src/router.rs",
+    "src/routing.rs",
+    "src/service_router.rs",
+    "src/session/contract.rs",
+    "src/session/enrollment.rs",
+    "src/session/mod.rs",
+    "src/session/noise_vectors.rs",
+    "src/session/prologue.rs",
+    "src/session/zone_link.rs",
+    "src/session_seam_tests.rs",
+    "src/streams.rs",
+    "src/transport/credit.rs",
+    "src/transport/mod.rs",
+    "src/transport/unix.rs",
+    "src/wire.rs",
+    "src/zone_route.rs",
+]
+
+d2b_bus_deps = [
+    "//packages/d2b-audit:d2b_audit",
+    "//packages/d2b-contracts:d2b_contracts",
+    "//packages/d2b-resource-api:d2b_resource_api",
+    "//packages/d2b-resource-store:d2b_resource_store",
+    "//packages/d2b-session:d2b_session",
+    "//packages/d2b-session-unix:d2b_session_unix",
+    "//packages/d2b-telemetry:d2b_telemetry",
+    "@crates//:getrandom-0.3.4",
+    "@crates//:serde_json",
+    "@crates//:sha2",
+    "@crates//:snow",
+    "@crates//:tokio",
+]
+
 rust_library(
     name = "d2b_bus",
-    srcs = [
-        "src/audit.rs",
-        "src/authorization.rs",
-        "src/driver.rs",
-        "src/engine.rs",
-        "src/error.rs",
-        "src/lib.rs",
-        "src/lifecycle.rs",
-        "src/metrics.rs",
-        "src/operations.rs",
-        "src/production_rss.rs",  # keep
-        "src/registry.rs",
-        "src/relay.rs",
-        "src/router.rs",
-        "src/routing.rs",
-        "src/service_router.rs",
-        "src/session/contract.rs",
-        "src/session/enrollment.rs",
-        "src/session/mod.rs",
-        "src/session/noise_vectors.rs",
-        "src/session/prologue.rs",
-        "src/session/zone_link.rs",
-        "src/session_seam_tests.rs",
-        "src/streams.rs",
-        "src/transport/credit.rs",
-        "src/transport/mod.rs",
-        "src/transport/unix.rs",
-        "src/wire.rs",
-        "src/zone_route.rs",
-    ],
+    srcs = d2b_bus_srcs,
     compile_data = [
         "Cargo.toml",
         "src/transport/unix.rs",
     ],
-    crate_features = test_features(["production-rss-fixture"]),
     proc_macro_deps = ["@crates//:async-trait"],
     visibility = ["//visibility:public"],
-    deps = [
-        "//packages/d2b-audit:d2b_audit",
-        "//packages/d2b-contracts:d2b_contracts",
-        "//packages/d2b-resource-api:d2b_resource_api",
-        "//packages/d2b-resource-store:d2b_resource_store",
-        "//packages/d2b-session:d2b_session",
-        "//packages/d2b-session-unix:d2b_session_unix",
-        "//packages/d2b-telemetry:d2b_telemetry",
-        "@crates//:getrandom-0.3.4",
-        "@crates//:serde_json",
-        "@crates//:sha2",
-        "@crates//:snow",
-        "@crates//:tokio",
+    deps = d2b_bus_deps,
+)
+
+rust_library(
+    name = "d2b_bus_production_rss_fixture",
+    srcs = d2b_bus_srcs,
+    compile_data = [
+        "Cargo.toml",
+        "src/transport/unix.rs",
     ],
+    crate_features = ["production-rss-fixture"],
+    crate_name = "d2b_bus",
+    proc_macro_deps = ["@crates//:async-trait"],
+    visibility = ["//visibility:public"],
+    deps = d2b_bus_deps,
 )
 
 rust_test(
     name = "production_watch_rss",
     srcs = ["tests/production_watch_rss.rs"],
     compile_data = ["Cargo.toml"],
+    crate_features = ["production-rss-fixture"],
     visibility = ["//visibility:public"],
     deps = [
-        ":d2b_bus",
+        ":d2b_bus_production_rss_fixture",
         "//packages/d2b-contracts:d2b_contracts",
         "//packages/d2b-controller-toolkit:d2b_controller_toolkit",
         "//packages/d2b-resource-api:d2b_resource_api",

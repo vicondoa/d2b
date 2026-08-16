@@ -14,16 +14,27 @@ exports_files(
     visibility = ["//visibility:public"],
 )
 
-rust_library(
-    name = "d2b_resource_store",
-    srcs = [
+d2b_resource_store_srcs = [
         "src/error.rs",
         "src/lib.rs",
         "src/mutation_seal.rs",
-    ],
+]
+
+rust_library(
+    name = "d2b_resource_store",
+    srcs = d2b_resource_store_srcs,
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = ["//packages/d2b-contracts:d2b_contracts"],
+)
+
+rust_library(
+    name = "d2b_resource_store_test_support",
+    srcs = d2b_resource_store_srcs,
+    compile_data = ["Cargo.toml"],
+    crate_name = "d2b_resource_store",
+    visibility = ["//visibility:public"],
+    deps = ["//packages/d2b-contracts:d2b_contracts_test_support"],
 )
 
 rust_test(

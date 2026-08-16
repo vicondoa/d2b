@@ -7,3 +7,8 @@
   preserves sanitized partial capabilities, and rejects direct header
   authentication or credential material. Provider-accounted transfer evidence
   remains unavailable and does not qualify the integration.
+
+### Fixed
+
+- Fixed default-config Bazel Rust tests to carry Cargo dev-dependency feature
+  variants transitively, including d2bd's `test-support` dependencies.

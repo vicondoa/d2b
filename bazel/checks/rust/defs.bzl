@@ -19,13 +19,6 @@ def guest_features():
     })
 
 
-def test_features(features):
-    return select({
-        "//bazel/checks/rust:test-context": features,
-        "//conditions:default": [],
-    })
-
-
 def rust_doc_carrier(name, crate, crate_features = []):
     rust_doc_test(
         name = name,

@@ -26,11 +26,6 @@ config_setting(
     define_values = {"d2b_guest_context": "real-libshpool"},
 )
 
-config_setting(
-    name = "test-context",
-    define_values = {"d2b_rust_context": "test"},
-)
-
 rust_doc_carrier(
     name = "d2b_contracts_doc_test",
     crate = "//packages/d2b-contracts:d2b_contracts",

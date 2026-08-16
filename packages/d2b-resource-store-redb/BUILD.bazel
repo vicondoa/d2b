@@ -14,9 +14,7 @@ exports_files(
     visibility = ["//visibility:public"],
 )
 
-rust_library(
-    name = "d2b_resource_store_redb",
-    srcs = [
+d2b_resource_store_redb_srcs = [
         "src/actor.rs",
         "src/audit.rs",
         "src/backup.rs",
@@ -31,7 +29,11 @@ rust_library(
         "src/tracing.rs",
         "src/transaction.rs",
         "src/values.rs",
-    ],
+]
+
+rust_library(
+    name = "d2b_resource_store_redb",
+    srcs = d2b_resource_store_redb_srcs,
     compile_data = [
         "Cargo.toml",
         "src/actor.rs",
@@ -45,6 +47,33 @@ rust_library(
         "//packages/d2b-controller-toolkit:d2b_controller_toolkit",
         "//packages/d2b-resource-store:d2b_resource_store",
         "//packages/d2b-telemetry:d2b_telemetry",
+        "@crates//:redb",
+        "@crates//:rustix",
+        "@crates//:serde",
+        "@crates//:serde_json",
+        "@crates//:sha2",
+        "@crates//:tempfile",
+        "@crates//:tokio",
+    ],
+)
+
+rust_library(
+    name = "d2b_resource_store_redb_test_support",
+    srcs = d2b_resource_store_redb_srcs,
+    compile_data = [
+        "Cargo.toml",
+        "src/actor.rs",
+        "src/lib.rs",
+        "src/transaction.rs",
+    ],
+    crate_name = "d2b_resource_store_redb",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-audit:d2b_audit_test_support",
+        "//packages/d2b-contracts:d2b_contracts_test_support",
+        "//packages/d2b-controller-toolkit:d2b_controller_toolkit_test_support",
+        "//packages/d2b-resource-store:d2b_resource_store_test_support",
+        "//packages/d2b-telemetry:d2b_telemetry_test_support",
         "@crates//:redb",
         "@crates//:rustix",
         "@crates//:serde",

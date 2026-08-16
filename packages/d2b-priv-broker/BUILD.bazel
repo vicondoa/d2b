@@ -14,73 +14,107 @@ exports_files(
     visibility = ["//visibility:public"],
 )
 
+d2b_priv_broker_srcs = [
+    "src/audit.rs",
+    "src/bootstrap.rs",  # keep
+    "src/fd_passing.rs",
+    "src/lib.rs",
+    "src/live_handlers.rs",
+    "src/ops/audit_op.rs",
+    "src/ops/cgroup.rs",
+    "src/ops/device.rs",
+    "src/ops/disk_init.rs",
+    "src/ops/exec_reconcile.rs",
+    "src/ops/hosts.rs",
+    "src/ops/media.rs",
+    "src/ops/mod.rs",
+    "src/ops/modprobe.rs",
+    "src/ops/network.rs",
+    "src/ops/nft.rs",
+    "src/ops/nm.rs",
+    "src/ops/pidfd.rs",
+    "src/ops/route.rs",
+    "src/ops/security_key.rs",
+    "src/ops/spawn_runner.rs",
+    "src/ops/state_dir.rs",
+    "src/ops/storage_contract.rs",
+    "src/ops/store_sync.rs",
+    "src/ops/store_sync_audit.rs",
+    "src/ops/store_sync_export.rs",
+    "src/ops/store_verify.rs",
+    "src/ops/store_view_farm.rs",
+    "src/ops/store_view_posture.rs",
+    "src/ops/swtpm_dir.rs",
+    "src/ops/swtpm_migration.rs",
+    "src/ops/sysctl.rs",
+    "src/ops/tap.rs",
+    "src/ops/usbip_firewall.rs",
+    "src/ops/usbip_host.rs",
+    "src/ops/usbip_lock.rs",
+    "src/ops/zone_store.rs",
+    "src/protocol.rs",
+    "src/runtime.rs",
+    "src/seccomp_compile_tests.rs",
+    "src/sys.rs",
+]
+
+d2b_priv_broker_compile_data = [
+    "//:tests/fixtures/deny-unknown/host-valid.json",  # keep
+    "//:tests/golden/manifest_v04/baseline-vms.json",  # keep
+    "Cargo.toml",
+    "src/sys.rs",
+]
+
+d2b_priv_broker_shared_deps = [
+    "//packages/d2b-audit:d2b_audit",
+    "//packages/d2b-contracts:d2b_contracts",
+    "//packages/d2b-realm-core:d2b_realm_core",
+    "@crates//:hmac",
+    "@crates//:nix",
+    "@crates//:rustix",
+    "@crates//:serde",
+    "@crates//:serde_json",
+    "@crates//:sha2",
+    "@crates//:tokio",
+    "@crates//:tracing",
+]
+
+d2b_priv_broker_test_support_deps = [
+    "//packages/d2b-audit:d2b_audit_test_support",
+    "//packages/d2b-contracts:d2b_contracts_test_support",
+    "//packages/d2b-realm-core:d2b_realm_core",
+    "@crates//:hmac",
+    "@crates//:nix",
+    "@crates//:rustix",
+    "@crates//:serde",
+    "@crates//:serde_json",
+    "@crates//:sha2",
+    "@crates//:tokio",
+    "@crates//:tracing",
+]
+
 rust_library(
     name = "d2b_priv_broker",
-    srcs = [
-        "src/audit.rs",
-        "src/bootstrap.rs",  # keep
-        "src/fd_passing.rs",
-        "src/lib.rs",
-        "src/live_handlers.rs",
-        "src/ops/audit_op.rs",
-        "src/ops/cgroup.rs",
-        "src/ops/device.rs",
-        "src/ops/disk_init.rs",
-        "src/ops/exec_reconcile.rs",
-        "src/ops/hosts.rs",
-        "src/ops/media.rs",
-        "src/ops/mod.rs",
-        "src/ops/modprobe.rs",
-        "src/ops/network.rs",
-        "src/ops/nft.rs",
-        "src/ops/nm.rs",
-        "src/ops/pidfd.rs",
-        "src/ops/route.rs",
-        "src/ops/security_key.rs",
-        "src/ops/spawn_runner.rs",
-        "src/ops/state_dir.rs",
-        "src/ops/storage_contract.rs",
-        "src/ops/store_sync.rs",
-        "src/ops/store_sync_audit.rs",
-        "src/ops/store_sync_export.rs",
-        "src/ops/store_verify.rs",
-        "src/ops/store_view_farm.rs",
-        "src/ops/store_view_posture.rs",
-        "src/ops/swtpm_dir.rs",
-        "src/ops/swtpm_migration.rs",
-        "src/ops/sysctl.rs",
-        "src/ops/tap.rs",
-        "src/ops/usbip_firewall.rs",
-        "src/ops/usbip_host.rs",
-        "src/ops/usbip_lock.rs",
-        "src/ops/zone_store.rs",
-        "src/protocol.rs",
-        "src/runtime.rs",
-        "src/seccomp_compile_tests.rs",
-        "src/sys.rs",
-    ],
-    compile_data = [
-        "//:tests/fixtures/deny-unknown/host-valid.json",  # keep
-        "//:tests/golden/manifest_v04/baseline-vms.json",  # keep
-        "Cargo.toml",
-        "src/sys.rs",
-    ],
+    srcs = d2b_priv_broker_srcs,
+    compile_data = d2b_priv_broker_compile_data,
     crate_features = broker_features(),
     visibility = ["//visibility:public"],
-    deps = [
-        "//packages/d2b-audit:d2b_audit",
-        "//packages/d2b-contracts:d2b_contracts",
+    deps = d2b_priv_broker_shared_deps + [
         "//packages/d2b-core:d2b_core",
         "//packages/d2b-host:d2b_host",
-        "//packages/d2b-realm-core:d2b_realm_core",
-        "@crates//:hmac",
-        "@crates//:nix",
-        "@crates//:rustix",
-        "@crates//:serde",
-        "@crates//:serde_json",
-        "@crates//:sha2",
-        "@crates//:tokio",
-        "@crates//:tracing",
+    ],
+)
+
+rust_library(
+    name = "d2b_priv_broker_test_support",
+    srcs = d2b_priv_broker_srcs,
+    compile_data = d2b_priv_broker_compile_data,
+    crate_features = broker_features(),
+    crate_name = "d2b_priv_broker",
+    visibility = ["//visibility:public"],
+    deps = d2b_priv_broker_test_support_deps + [
+        "//packages/d2b-core:d2b_core_test_support",
+        "//packages/d2b-host:d2b_host_fake_backends",
     ],
 )
 
@@ -107,8 +141,8 @@ rust_test(
     tags = broker_test_tags(),
     visibility = ["//visibility:public"],
     deps = [
-        ":d2b_priv_broker",
-        "//packages/d2b-core:d2b_core",
+        ":d2b_priv_broker_test_support",
+        "//packages/d2b-core:d2b_core_test_support",
     ],
 )
 
@@ -127,7 +161,7 @@ rust_test(
     tags = broker_test_tags(),
     visibility = ["//visibility:public"],
     deps = [
-        "//packages/d2b-contracts:d2b_contracts",
+        "//packages/d2b-contracts:d2b_contracts_test_support",
         "@crates//:nix",
         "@crates//:serde_json",
         "@crates//:tempfile",
@@ -145,7 +179,7 @@ rust_test(
     tags = broker_test_tags(),
     visibility = ["//visibility:public"],
     deps = [
-        "//packages/d2b-contracts:d2b_contracts",
+        "//packages/d2b-contracts:d2b_contracts_test_support",
         "@crates//:serde",
         "@crates//:serde_json",
     ],
@@ -182,9 +216,9 @@ rust_test(
     tags = broker_test_tags(),
     visibility = ["//visibility:public"],
     deps = [
-        ":d2b_priv_broker",
-        "//packages/d2b-contracts:d2b_contracts",
-        "//packages/d2b-core:d2b_core",
+        ":d2b_priv_broker_test_support",
+        "//packages/d2b-contracts:d2b_contracts_test_support",
+        "//packages/d2b-core:d2b_core_test_support",
         "@crates//:rustix",
         "@crates//:serde_json",
         "@crates//:tempfile",
@@ -202,7 +236,7 @@ rust_test(
     tags = broker_test_tags(),
     visibility = ["//visibility:public"],
     deps = [
-        ":d2b_priv_broker",
+        ":d2b_priv_broker_test_support",
         "@crates//:nix",
         "@crates//:tempfile",
     ],
@@ -219,8 +253,8 @@ rust_test(
     tags = broker_test_tags(),
     visibility = ["//visibility:public"],
     deps = [
-        ":d2b_priv_broker",
-        "//packages/d2b-contracts:d2b_contracts",
+        ":d2b_priv_broker_test_support",
+        "//packages/d2b-contracts:d2b_contracts_test_support",
         "@crates//:serde_json",
     ],
 )
@@ -236,7 +270,7 @@ rust_test(
     tags = broker_test_tags(),
     visibility = ["//visibility:public"],
     deps = [
-        ":d2b_priv_broker",
+        ":d2b_priv_broker_test_support",
         "@crates//:nix",
     ],
 )
@@ -252,7 +286,7 @@ rust_test(
     tags = broker_test_tags(),
     visibility = ["//visibility:public"],
     deps = [
-        ":d2b_priv_broker",
+        ":d2b_priv_broker_test_support",
         "@crates//:nix",
     ],
 )
@@ -268,8 +302,8 @@ rust_test(
     tags = broker_test_tags(),
     visibility = ["//visibility:public"],
     deps = [
-        ":d2b_priv_broker",
-        "//packages/d2b-contracts:d2b_contracts",
+        ":d2b_priv_broker_test_support",
+        "//packages/d2b-contracts:d2b_contracts_test_support",
         "@crates//:serde_json",
     ],
 )
@@ -291,8 +325,8 @@ rust_test(
     tags = broker_test_tags(),
     visibility = ["//visibility:public"],
     deps = [
-        ":d2b_priv_broker",
-        "//packages/d2b-contracts:d2b_contracts",
+        ":d2b_priv_broker_test_support",
+        "//packages/d2b-contracts:d2b_contracts_test_support",
         "@crates//:nix",
         "@crates//:tempfile",
     ],
@@ -309,7 +343,7 @@ rust_test(
     tags = broker_test_tags(),
     visibility = ["//visibility:public"],
     deps = [
-        ":d2b_priv_broker",
+        ":d2b_priv_broker_test_support",
         "@crates//:nix",
         "@crates//:serde",
         "@crates//:serde_json",
@@ -331,9 +365,9 @@ rust_test(
     tags = broker_test_tags(),
     visibility = ["//visibility:public"],
     deps = [
-        ":d2b_priv_broker",
-        "//packages/d2b-contracts:d2b_contracts",
-        "//packages/d2b-core:d2b_core",
+        ":d2b_priv_broker_test_support",
+        "//packages/d2b-contracts:d2b_contracts_test_support",
+        "//packages/d2b-core:d2b_core_test_support",
         "@crates//:nix",
         "@crates//:serde_json",
     ],
@@ -350,8 +384,8 @@ rust_test(
     tags = broker_test_tags(),
     visibility = ["//visibility:public"],
     deps = [
-        ":d2b_priv_broker",
-        "//packages/d2b-contracts:d2b_contracts",
+        ":d2b_priv_broker_test_support",
+        "//packages/d2b-contracts:d2b_contracts_test_support",
         "@crates//:nix",
         "@crates//:serde_json",
     ],
@@ -360,15 +394,13 @@ rust_test(
 rust_test(
     name = "d2b_priv_broker_test",
     compile_data = ["Cargo.toml"],
-    crate = ":d2b_priv_broker",
+    crate = ":d2b_priv_broker_test_support",
     crate_features = broker_features(),
     data = [":d2b-priv-broker"],
     env = {"CARGO_BIN_EXE_d2b-priv-broker": "$(rootpath :d2b-priv-broker)"},
     rustc_env = {"CARGO_BIN_EXE_d2b-priv-broker": "$(rootpath :d2b-priv-broker)"},
     tags = broker_test_tags(),
     deps = [
-        "//packages/d2b-core:d2b_core",
-        "//packages/d2b-host:d2b_host",
         "@crates//:nix",
         "@crates//:serde",
         "@crates//:serde_json",

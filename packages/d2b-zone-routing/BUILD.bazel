@@ -5,18 +5,29 @@ exports_files(
     visibility = ["//visibility:public"],
 )
 
-rust_library(
-    name = "d2b_zone_routing",
-    srcs = [
+d2b_zone_routing_srcs = [
         "src/engine.rs",
         "src/lib.rs",
         "src/resolver.rs",
         "src/router.rs",
         "src/service.rs",
-    ],
+]
+
+rust_library(
+    name = "d2b_zone_routing",
+    srcs = d2b_zone_routing_srcs,
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = ["//packages/d2b-contracts:d2b_contracts"],
+)
+
+rust_library(
+    name = "d2b_zone_routing_test_support",
+    srcs = d2b_zone_routing_srcs,
+    compile_data = ["Cargo.toml"],
+    crate_name = "d2b_zone_routing",
+    visibility = ["//visibility:public"],
+    deps = ["//packages/d2b-contracts:d2b_contracts_test_support"],
 )
 
 rust_test(

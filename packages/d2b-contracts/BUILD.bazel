@@ -10,9 +10,7 @@ exports_files(
     visibility = ["//visibility:public"],
 )
 
-rust_library(
-    name = "d2b_contracts",
-    srcs = [
+d2b_contracts_srcs = [
         "src/broker_wire.rs",
         "src/cli_output.rs",
         "src/generated/d2b_resource_v3.rs",
@@ -74,11 +72,33 @@ rust_library(
         "src/v3/zone_link.rs",
         "src/v3/zone_routing.rs",
         "src/v3/zone_session.rs",
-    ],
+]
+
+rust_library(
+    name = "d2b_contracts",
+    srcs = d2b_contracts_srcs,
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-core:d2b_core",
+        "//packages/d2b-realm-core:d2b_realm_core",
+        "@crates//:protobuf",
+        "@crates//:schemars",
+        "@crates//:serde",
+        "@crates//:serde_json",
+        "@crates//:sha2",
+        "@crates//:unicode-normalization",
+    ],
+)
+
+rust_library(
+    name = "d2b_contracts_test_support",
+    srcs = d2b_contracts_srcs,
+    compile_data = ["Cargo.toml"],
+    crate_name = "d2b_contracts",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-core:d2b_core_test_support",
         "//packages/d2b-realm-core:d2b_realm_core",
         "@crates//:protobuf",
         "@crates//:schemars",

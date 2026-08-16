@@ -1,24 +1,40 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
-load("//bazel/checks/rust:defs.bzl", "test_features")
 
 exports_files(
     ["BUILD.bazel"],
     visibility = ["//visibility:public"],
 )
 
-rust_library(
-    name = "d2b_provider_device_tpm",
-    srcs = [
+d2b_provider_device_tpm_srcs = [
         "src/controller.rs",
         "src/lib.rs",
         "src/migration.rs",
         "src/runner.rs",
         "src/state.rs",
-    ],
+]
+
+rust_library(
+    name = "d2b_provider_device_tpm",
+    srcs = d2b_provider_device_tpm_srcs,
     compile_data = ["Cargo.toml"],
-    crate_features = test_features(["test-support"]),
     visibility = ["//visibility:public"],
-    deps = ["@crates//:serde"],
+    deps = [
+        "//packages/d2b-contracts:d2b_contracts",
+        "@crates//:serde",
+    ],
+)
+
+rust_library(
+    name = "d2b_provider_device_tpm_test_support",
+    srcs = d2b_provider_device_tpm_srcs,
+    compile_data = ["Cargo.toml"],
+    crate_features = ["test-support"],
+    crate_name = "d2b_provider_device_tpm",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-contracts:d2b_contracts_test_support",
+        "@crates//:serde",
+    ],
 )
 
 rust_test(
@@ -36,18 +52,16 @@ rust_test(
     name = "controller_state_machine",
     srcs = ["tests/controller_state_machine.rs"],
     compile_data = ["Cargo.toml"],
-    crate_features = test_features(["test-support"]),
     visibility = ["//visibility:public"],
-    deps = [":d2b_provider_device_tpm"],
+    deps = [":d2b_provider_device_tpm_test_support"],
 )
 
 rust_test(
     name = "fault_swtpm_missing",
     srcs = ["tests/fault_swtpm_missing.rs"],
     compile_data = ["Cargo.toml"],
-    crate_features = test_features(["test-support"]),
     visibility = ["//visibility:public"],
-    deps = [":d2b_provider_device_tpm"],
+    deps = [":d2b_provider_device_tpm_test_support"],
 )
 
 # keep

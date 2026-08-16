@@ -924,6 +924,66 @@ fn query_labels(expression: &str) -> BTreeSet<String> {
         .collect()
 }
 
+fn run_bazel_cquery(expression: &str) -> Output {
+    Command::new(bazel_binary())
+        .arg(format!(
+            "--output_user_root={}",
+            bazel_output_user_root().display()
+        ))
+        .args([
+            "cquery",
+            "--noshow_progress",
+            "--lockfile_mode=error",
+            "--repo_contents_cache=",
+            "--output=label",
+            expression,
+        ])
+        .current_dir(repo_root())
+        .output()
+        .unwrap_or_else(|error| panic!("run Bazel cquery: {error}"))
+}
+
+fn cquery_labels(expression: &str) -> BTreeSet<String> {
+    let output = run_bazel_cquery(expression);
+    assert!(
+        output.status.success(),
+        "Bazel cquery failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| line.split_whitespace().next())
+        .filter(|label| label.starts_with("//"))
+        .map(str::to_owned)
+        .collect()
+}
+
+fn validate_d2bd_test_support_dependencies(labels: &BTreeSet<String>) {
+    let required = [
+        "//packages/d2b-audit:d2b_audit_test_support",
+        "//packages/d2b-contracts:d2b_contracts_test_support",
+        "//packages/d2b-controller-toolkit:d2b_controller_toolkit_test_support",
+        "//packages/d2b-core:d2b_core_test_support",
+        "//packages/d2b-core-controller:d2b_core_controller_test_support",
+        "//packages/d2b-host:d2b_host_test_support",
+        "//packages/d2b-provider:d2b_provider_test_support",
+        "//packages/d2b-provider-device-tpm:d2b_provider_device_tpm_test_support",
+        "//packages/d2b-resource-api:d2b_resource_api_test_support",
+        "//packages/d2b-resource-store:d2b_resource_store_test_support",
+        "//packages/d2b-resource-store-redb:d2b_resource_store_redb_test_support",
+        "//packages/d2b-telemetry:d2b_telemetry_test_support",
+        "//packages/d2b-zone-routing:d2b_zone_routing_test_support",
+    ];
+    let missing = required
+        .into_iter()
+        .filter(|label| !labels.contains(*label))
+        .collect::<Vec<_>>();
+    assert!(
+        missing.is_empty(),
+        "d2bd test carriers are missing test-support dependencies: {missing:?}"
+    );
+}
+
 fn synthetic_carrier(label: &str, sources: &[&str]) -> Value {
     serde_json::json!({
         "schemaVersion": 1,
@@ -1033,6 +1093,12 @@ fn rust_carrier_labels_are_exactly_the_rust_rules_in_bazel_query() {
 }
 
 #[test]
+fn d2bd_test_carriers_preserve_cargo_dev_dependency_features() {
+    let labels = cquery_labels("deps(//packages/d2bd:d2bd_lib_test)");
+    validate_d2bd_test_support_dependencies(&labels);
+}
+
+#[test]
 #[should_panic(expected = "sources must not be empty")]
 fn planted_negative_empty_carrier_is_rejected() {
     validate_carrier_inventory(object(
@@ -1103,6 +1169,14 @@ fn planted_negative_broker_context_without_exclusivity_is_rejected() {
         }]
     });
     validate_contexts(object(&value, "synthetic coverage"));
+}
+
+#[test]
+#[should_panic(expected = "d2bd test carriers are missing test-support dependencies")]
+fn planted_negative_d2bd_test_carrier_without_dev_dependency_features_is_rejected() {
+    validate_d2bd_test_support_dependencies(&BTreeSet::from([
+        "//packages/d2b-core:d2b_core_test_support".to_owned(),
+    ]));
 }
 
 #[test]

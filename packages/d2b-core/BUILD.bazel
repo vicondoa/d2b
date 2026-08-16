@@ -1,55 +1,78 @@
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
-load("//bazel/checks/rust:defs.bzl", "test_features")
 
 exports_files(["BUILD.bazel"], visibility = ["//visibility:public"])
 
 # keep
 # gazelle:ignore
 
+d2b_core_srcs = [
+    "src/allocator_config.rs",
+    "src/audio_policy.rs",
+    "src/base64_codec.rs",
+    "src/bundle.rs",
+    "src/bundle_resolver.rs",
+    "src/closures.rs",
+    "src/configured_argv.rs",
+    "src/console_ring.rs",
+    "src/contract_id.rs",
+    "src/error.rs",
+    "src/host.rs",
+    "src/host_check.rs",
+    "src/host_w3.rs",
+    "src/lib.rs",
+    "src/manifest.rs",
+    "src/manifest_v04.rs",
+    "src/minijail_profile.rs",
+    "src/privileges.rs",
+    "src/privileges_w3.rs",
+    "src/process_builder.rs",
+    "src/processes.rs",
+    "src/provider_artifact.rs",
+    "src/provider_capabilities.rs",
+    "src/realm_controller_config.rs",
+    "src/realm_workloads_launcher.rs",
+    "src/runtime.rs",
+    "src/static_invariants.rs",
+    "src/storage.rs",
+    "src/storage_lifecycle.rs",
+    "src/sync.rs",
+    "src/test_support.rs",
+    "src/unsafe_local_workloads.rs",
+    "src/workload_identity.rs",
+]
+
 rust_library(
     name = "d2b_core",
-    srcs = [
-        "src/allocator_config.rs",
-        "src/audio_policy.rs",
-        "src/base64_codec.rs",
-        "src/bundle.rs",
-        "src/bundle_resolver.rs",
-        "src/closures.rs",
-        "src/configured_argv.rs",
-        "src/console_ring.rs",
-        "src/contract_id.rs",
-        "src/error.rs",
-        "src/host.rs",
-        "src/host_check.rs",
-        "src/host_w3.rs",
-        "src/lib.rs",
-        "src/manifest.rs",
-        "src/manifest_v04.rs",
-        "src/minijail_profile.rs",
-        "src/privileges.rs",
-        "src/privileges_w3.rs",
-        "src/process_builder.rs",
-        "src/processes.rs",
-        "src/provider_artifact.rs",
-        "src/provider_capabilities.rs",
-        "src/realm_controller_config.rs",
-        "src/realm_workloads_launcher.rs",
-        "src/runtime.rs",
-        "src/static_invariants.rs",
-        "src/storage.rs",
-        "src/storage_lifecycle.rs",
-        "src/sync.rs",
-        "src/test_support.rs",
-        "src/unsafe_local_workloads.rs",
-        "src/workload_identity.rs",
-    ],
+    srcs = d2b_core_srcs,
     compile_data = [
         "//:tests/fixtures/deny-unknown/host-valid.json",  # keep
         "//:tests/golden/manifest_v04/baseline-vms.json",  # keep
         "//:tests/golden/vms.json-signoz-v7",  # keep
         "Cargo.toml",
     ],
-    crate_features = test_features(["test-support"]),
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-realm-core:d2b_realm_core",
+        "@crates//:rustix",
+        "@crates//:schemars",
+        "@crates//:semver",
+        "@crates//:serde",
+        "@crates//:serde_json",
+        "@crates//:sha2",
+    ],
+)
+
+rust_library(
+    name = "d2b_core_test_support",
+    srcs = d2b_core_srcs,
+    compile_data = [
+        "//:tests/fixtures/deny-unknown/host-valid.json",  # keep
+        "//:tests/golden/manifest_v04/baseline-vms.json",  # keep
+        "//:tests/golden/vms.json-signoz-v7",  # keep
+        "Cargo.toml",
+    ],
+    crate_features = ["test-support"],
+    crate_name = "d2b_core",
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-realm-core:d2b_realm_core",

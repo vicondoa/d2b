@@ -1,47 +1,48 @@
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
-load("//bazel/checks/rust:defs.bzl", "test_features")
 
 exports_files(
     ["BUILD.bazel"],
     visibility = ["//visibility:public"],
 )
 
+d2b_host_srcs = [
+    "src/audio_argv.rs",
+    "src/bridge_port.rs",
+    "src/cgroup.rs",
+    "src/ch_argv.rs",
+    "src/devices.rs",
+    "src/dnsmasq.rs",
+    "src/fake.rs",
+    "src/gpu_argv.rs",
+    "src/hardlink_farm.rs",
+    "src/host_prep_dag.rs",
+    "src/ifname.rs",
+    "src/ioctl_policy.rs",
+    "src/lib.rs",
+    "src/media.rs",
+    "src/modules.rs",
+    "src/netlink.rs",
+    "src/nftables.rs",
+    "src/otel_host_bridge_argv.rs",
+    "src/ownership_matrix.rs",
+    "src/qemu_media_argv.rs",
+    "src/routes.rs",
+    "src/runner_argv_regenerator.rs",
+    "src/runner_process.rs",
+    "src/runner_shape.rs",
+    "src/seccomp.rs",
+    "src/ssh_keygen.rs",
+    "src/swtpm_argv.rs",
+    "src/usbip_argv.rs",
+    "src/video_argv.rs",
+    "src/virtiofsd_argv.rs",
+    "src/vsock_relay_argv.rs",
+    "src/wayland_proxy_argv.rs",
+]
+
 rust_library(
     name = "d2b_host",
-    srcs = [
-        "src/audio_argv.rs",
-        "src/bridge_port.rs",
-        "src/cgroup.rs",
-        "src/ch_argv.rs",
-        "src/devices.rs",
-        "src/dnsmasq.rs",
-        "src/fake.rs",
-        "src/gpu_argv.rs",
-        "src/hardlink_farm.rs",
-        "src/host_prep_dag.rs",
-        "src/ifname.rs",
-        "src/ioctl_policy.rs",
-        "src/lib.rs",
-        "src/media.rs",
-        "src/modules.rs",
-        "src/netlink.rs",
-        "src/nftables.rs",
-        "src/otel_host_bridge_argv.rs",
-        "src/ownership_matrix.rs",
-        "src/qemu_media_argv.rs",
-        "src/routes.rs",
-        "src/runner_argv_regenerator.rs",
-        "src/runner_process.rs",
-        "src/runner_shape.rs",
-        "src/seccomp.rs",
-        "src/ssh_keygen.rs",
-        "src/swtpm_argv.rs",
-        "src/usbip_argv.rs",
-        "src/video_argv.rs",
-        "src/virtiofsd_argv.rs",
-        "src/vsock_relay_argv.rs",
-        "src/wayland_proxy_argv.rs",
-    ],
+    srcs = d2b_host_srcs,
     compile_data = [
         "//:tests/golden/runner-shape/audio-argv-minimal.txt",  # keep
         "//:tests/golden/runner-shape/gpu-argv-minimal.txt",  # keep
@@ -53,15 +54,71 @@ rust_library(
         "//:tests/golden/runner-shape/vsock-relay-argv-minimal.txt",  # keep
         "Cargo.toml",
     ],
-    crate_features = select({
-        "//bazel/checks/rust:broker-fake-backends": ["fake-backends"],
-        "//bazel/checks/rust:test-context": ["fake-backends"],
-        "//conditions:default": [],
-    }),
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts:d2b_contracts",
         "//packages/d2b-core:d2b_core",
+        "@crates//:libc",
+        "@crates//:miniz_oxide",
+        "@crates//:nix",
+        "@crates//:rustix",
+        "@crates//:schemars",
+        "@crates//:serde",
+        "@crates//:serde_json",
+        "@crates//:sha2",
+    ],
+)
+
+rust_library(
+    name = "d2b_host_test_support",
+    srcs = d2b_host_srcs,
+    compile_data = [
+        "//:tests/golden/runner-shape/audio-argv-minimal.txt",  # keep
+        "//:tests/golden/runner-shape/gpu-argv-minimal.txt",  # keep
+        "//:tests/golden/runner-shape/otel-host-bridge-argv-minimal.txt",  # keep
+        "//:tests/golden/runner-shape/swtpm-argv-minimal.txt",  # keep
+        "//:tests/golden/runner-shape/usbip-argv-minimal.txt",  # keep
+        "//:tests/golden/runner-shape/video-argv-minimal.txt",  # keep
+        "//:tests/golden/runner-shape/virtiofsd-argv-minimal.txt",  # keep
+        "//:tests/golden/runner-shape/vsock-relay-argv-minimal.txt",  # keep
+        "Cargo.toml",
+    ],
+    crate_name = "d2b_host",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-contracts:d2b_contracts_test_support",
+        "//packages/d2b-core:d2b_core_test_support",
+        "@crates//:libc",
+        "@crates//:miniz_oxide",
+        "@crates//:nix",
+        "@crates//:rustix",
+        "@crates//:schemars",
+        "@crates//:serde",
+        "@crates//:serde_json",
+        "@crates//:sha2",
+    ],
+)
+
+rust_library(
+    name = "d2b_host_fake_backends",
+    srcs = d2b_host_srcs,
+    compile_data = [
+        "//:tests/golden/runner-shape/audio-argv-minimal.txt",  # keep
+        "//:tests/golden/runner-shape/gpu-argv-minimal.txt",  # keep
+        "//:tests/golden/runner-shape/otel-host-bridge-argv-minimal.txt",  # keep
+        "//:tests/golden/runner-shape/swtpm-argv-minimal.txt",  # keep
+        "//:tests/golden/runner-shape/usbip-argv-minimal.txt",  # keep
+        "//:tests/golden/runner-shape/video-argv-minimal.txt",  # keep
+        "//:tests/golden/runner-shape/virtiofsd-argv-minimal.txt",  # keep
+        "//:tests/golden/runner-shape/vsock-relay-argv-minimal.txt",  # keep
+        "Cargo.toml",
+    ],
+    crate_features = ["fake-backends"],
+    crate_name = "d2b_host",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-contracts:d2b_contracts_test_support",
+        "//packages/d2b-core:d2b_core_test_support",
         "@crates//:libc",
         "@crates//:miniz_oxide",
         "@crates//:nix",
@@ -96,7 +153,7 @@ rust_test(
     rustc_env = {"CARGO_BIN_EXE_d2b-activation-helper": "$(rootpath :d2b-activation-helper)"},
     visibility = ["//visibility:public"],
     deps = [
-        ":d2b_host",
+        ":d2b_host_test_support",
         "@crates//:serde_json",
         "@crates//:tempfile",
     ],
@@ -151,7 +208,7 @@ rust_test(
 rust_test(
     name = "d2b_host_test",
     compile_data = ["Cargo.toml"],
-    crate = ":d2b_host",
+    crate = ":d2b_host_test_support",
     data = [
         ":d2b-activation-helper",
         "//:tests/golden/runner-shape/parity-drift.json",
