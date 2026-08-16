@@ -1450,7 +1450,6 @@ name = "d2b-provider-transport-unix"
 version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts",
- "d2b-session-unix",
  "getrandom 0.3.4",
  "rustix 0.38.44",
 ]

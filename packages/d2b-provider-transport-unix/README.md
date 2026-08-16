@@ -16,6 +16,22 @@ for the implementation contract.
 | Provider reference | `Provider/transport-unix` |
 | Package | `packages/d2b-provider-transport-unix/` |
 
+## Config schema
+
+The closed binding schema accepts an optional `socketKind` of `seqpacket` or
+`stream`. It accepts no transport credentials, paths, raw descriptors, peer
+identities, or broker role claims.
+
+## Exported resource types
+
+This Provider exports no ResourceType. It supplies only the authenticated local
+transport portal consumed by ZoneLink and ComponentSession routing.
+
+## Controllers / services / workers / binaries
+
+`TransportService` owns one bounded `TransportPortal`. There are no standalone
+workers or binaries: admission and broker access remain daemon-supervised.
+
 ## Transport admission
 
 - `SO_TYPE` is checked against the declared seqpacket or stream route.
@@ -30,15 +46,16 @@ for the implementation contract.
 
 The local handle table is bounded to 256 opaque entries. `close` is idempotent
 and service finalization retires only monitor descriptors owned by that portal.
-The existing `d2b-session-unix` systemd listener adoption path remains the
-restart-safe owner for inherited local listeners.
+The existing Unix session listener adoption path remains the restart-safe owner
+for inherited local listeners.
 
 ## Session substrate
 
-The crate reuses the existing Unix session implementation for seqpacket and
-stream framing, attachment credits, descriptor identity, and pidfd validation.
-It does not resolve a peer into a subject: subject resolution remains owned by
-the authenticated Zone runtime.
+The portal deliberately has no dependency on the session transport
+implementation. It validates only the accepted descriptor and leaves framing,
+attachment credits, descriptor identity, and pidfd validation to the owning
+session runtime. It does not resolve a peer into a subject: subject resolution
+remains owned by the authenticated Zone runtime.
 
 ## Placement and dependencies
 
