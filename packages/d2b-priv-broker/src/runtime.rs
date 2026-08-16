@@ -3525,6 +3525,14 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                     expected_attachment_generation: req.expected_attachment_generation,
                 },
             )?;
+            crate::ops::network::mark_persistent_tap_realization_deleted(
+                &config.state_dir,
+                &req.attachment_id,
+            )
+            .map_err(|error| BrokerError::RequestValidation {
+                operation: "DeletePersistentTap",
+                reason: error.code(),
+            })?;
             Ok(DispatchResult::no_fds(ack_response("DeletePersistentTap")))
         }
         RealBrokerRequest::BindUnixSocket(_) => Err(BrokerError::Unimplemented {
@@ -3537,10 +3545,55 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
         }),
         RealBrokerRequest::CreatePersistentTap(req) => {
             let resolver = require_resolver(resolver)?;
+            let v3_fields = [
+                req.attachment_id.is_some(),
+                req.network_generation.is_some(),
+                req.attachment_generation.is_some(),
+            ];
+            if v3_fields.iter().any(|present| *present) && !v3_fields.iter().all(|present| *present)
+            {
+                return Err(BrokerError::RequestValidation {
+                    operation: "CreatePersistentTap",
+                    reason: "attachment-realization-conflict",
+                });
+            }
             let exec = live_exec(config);
             let outcome =
-                crate::ops::tap::live_create_persistent_tap(&exec, resolver, &req, audit_log)
-                    .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
+                match crate::ops::tap::live_create_persistent_tap(&exec, resolver, &req, audit_log)
+                {
+                    Ok(outcome) => outcome,
+                    Err(error) => return Err(BrokerError::LiveHandler(error.to_string())),
+                };
+            if let Err(error) = crate::ops::network::persist_persistent_tap_realization(
+                &config.state_dir,
+                &req,
+                &outcome.tap_ifname,
+            ) {
+                if let Err(cleanup) = crate::ops::network::PersistentTapBackend::delete_tap(
+                    &crate::ops::network::SystemPersistentTapBackend,
+                    outcome.tap_ifname.as_str(),
+                ) {
+                    return Err(BrokerError::RequestValidation {
+                        operation: "CreatePersistentTap",
+                        reason: cleanup.code(),
+                    });
+                }
+                if let Some(attachment_id) = req.attachment_id.as_ref()
+                    && let Err(cleanup) = crate::ops::network::remove_persistent_tap_realization(
+                        &config.state_dir,
+                        attachment_id,
+                    )
+                {
+                    return Err(BrokerError::RequestValidation {
+                        operation: "CreatePersistentTap",
+                        reason: cleanup.code(),
+                    });
+                }
+                return Err(BrokerError::RequestValidation {
+                    operation: "CreatePersistentTap",
+                    reason: error.code(),
+                });
+            }
             let public_operation_id = format!("{}:{}", req.vm_id.as_str(), req.role_id.as_str());
             let bridge_ifname = outcome
                 .bridge_ifname

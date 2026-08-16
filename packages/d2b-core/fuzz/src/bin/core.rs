@@ -583,7 +583,19 @@ fn bundle_resolver_round_trips_nft_intents() {
         .find_nft_intent(&intent_id_nft_env("work"))
         .expect("env nft");
     assert_eq!(env_intent.scope_label, "env:work");
-    assert!(env_intent.script_body.contains("env nft subset for work"));
+    assert!(env_intent.script_body.contains("chain \"forward-work\""));
+    assert!(
+        env_intent
+            .script_body
+            .contains("ct state established,related accept")
+    );
+    assert!(
+        env_intent
+            .script_body
+            .contains("iifname \"br-work-up\" ct state new accept")
+    );
+    assert!(!env_intent.script_body.contains("hook forward"));
+    assert!(!env_intent.script_body.contains("policy drop"));
 }
 
 fn bundle_resolver_round_trips_route_intents() {

@@ -7,7 +7,10 @@ use std::{
 use d2b_contracts::v3::{
     ResourceBundleGenerationId, ResourceGeneration, ResourceUid,
     execution_policy::BoundedToken,
-    network::{AttachmentGenerationFence, AttachmentHandle, Ipv4Cidr, NetworkSpec},
+    network::{
+        AttachmentGenerationFence, AttachmentHandle, DhcpSpec, DnsSpec, Ipv4Cidr, IsolationSpec,
+        MdnsSpec, NetworkSpec, RoutingSpec,
+    },
 };
 use d2b_provider_network_local::{
     artifact::{ArtifactCatalogEntry, ArtifactKind},
@@ -68,6 +71,14 @@ fn block_on<F: Future>(future: F) -> F::Output {
 }
 
 impl NetworkEffectPort for FakePorts {
+    async fn validate_policy(&self, spec: &NetworkSpec) -> Result<(), NetworkEffectError> {
+        if spec.isolation().allow_east_west {
+            Err(NetworkEffectError::EastWestHostOptInRequired)
+        } else {
+            Ok(())
+        }
+    }
+
     async fn create_bridges(&self, _: &ResourceUid) -> Result<(), NetworkEffectError> {
         self.push("bridges")
     }
@@ -99,6 +110,10 @@ impl NetworkEffectPort for FakePorts {
 
     async fn apply_routes(&self, _: &ResourceUid) -> Result<(), NetworkEffectError> {
         self.push("routes")
+    }
+
+    async fn remove_routes(&self, _: &ResourceUid) -> Result<(), NetworkEffectError> {
+        self.push("routes-remove")
     }
 
     async fn update_hosts(&self, _: &ResourceUid) -> Result<(), NetworkEffectError> {
@@ -185,6 +200,27 @@ fn spec(lan: &str, uplink: &str) -> NetworkSpec {
         Ipv4Cidr::parse(lan).unwrap(),
         Ipv4Cidr::parse(uplink).unwrap(),
         BoundedToken::parse("net-vm-base").unwrap(),
+    )
+    .unwrap()
+}
+
+fn east_west_spec(lan: &str, uplink: &str) -> NetworkSpec {
+    NetworkSpec::new(
+        Ipv4Cidr::parse(lan).unwrap(),
+        Ipv4Cidr::parse(uplink).unwrap(),
+        None,
+        false,
+        IsolationSpec {
+            allow_east_west: true,
+        },
+        RoutingSpec::default(),
+        DhcpSpec::default(),
+        DnsSpec::default(),
+        None,
+        MdnsSpec::default(),
+        None,
+        BoundedToken::parse("net-vm-base").unwrap(),
+        Vec::new(),
     )
     .unwrap()
 }
@@ -337,7 +373,12 @@ fn finalizer_never_deletes_bridge_before_tap_and_children() {
     );
     assert_eq!(
         effects.events(),
-        ["tap-delete", "firewall-remove", "bridge-delete"]
+        [
+            "tap-delete",
+            "firewall-remove",
+            "routes-remove",
+            "bridge-delete"
+        ]
     );
 
     let effects = FakePorts::default();
@@ -397,6 +438,20 @@ fn user_readiness_and_mdns_toggle_are_explicit() {
         ReconcileProgress::Ready
     );
     assert_eq!(*resources.inner.mdns_values.lock().unwrap(), [true]);
+}
+
+#[test]
+fn east_west_requires_the_site_opt_in_before_any_effect() {
+    let effects = FakePorts::default();
+    let resources = FakePorts::default();
+    let controller = NetworkReconciler::new(effects.clone(), resources);
+    let mut state = input();
+    state.spec = east_west_spec("10.20.0.0/24", "192.0.2.0/30");
+    assert_eq!(
+        block_on(controller.reconcile(&state)),
+        Err(NetworkEffectError::EastWestHostOptInRequired)
+    );
+    assert!(effects.events().is_empty());
 }
 
 #[test]

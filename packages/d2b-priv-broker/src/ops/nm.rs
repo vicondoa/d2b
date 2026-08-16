@@ -59,6 +59,7 @@ pub enum ApplyNmError {
     Io(String),
     DeviceNotUnmanaged { ifname: String, state: String },
     ManagedForeignConflict { ifname: String, state: String },
+    ForeignMarkerConflict,
     ReloadFailed,
 }
 
@@ -73,6 +74,7 @@ impl std::fmt::Display for ApplyNmError {
                 f,
                 "nm-managed-foreign-conflict: {ifname:?} held by foreign NM profile (state {state:?})"
             ),
+            Self::ForeignMarkerConflict => f.write_str("nm-managed-foreign-conflict"),
             Self::ReloadFailed => write!(f, "nm-reload-required: reload command failed"),
         }
     }
@@ -106,8 +108,70 @@ pub fn render_nm_conf(entries: &[NmUnmanagedEntry]) -> String {
             ifn = e.if_name.as_str()
         ));
     }
+
     out.push_str("# d2b-managed end\n");
     out
+}
+
+fn marker_ids(contents: &str) -> Vec<&str> {
+    let mut ids = contents
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("# marker-id="))
+        .map(|line| line.split_once(' ').map_or(line, |(id, _)| id))
+        .collect::<Vec<_>>();
+    ids.sort_unstable();
+    ids
+}
+
+fn has_owned_markers(contents: &str) -> bool {
+    let lines = contents.lines().map(str::trim).collect::<Vec<_>>();
+    lines
+        .first()
+        .is_some_and(|line| *line == "# d2b-managed begin")
+        && lines
+            .last()
+            .is_some_and(|line| *line == "# d2b-managed end")
+        && lines
+            .iter()
+            .filter(|line| **line == "# d2b-managed begin")
+            .count()
+            == 1
+        && lines
+            .iter()
+            .filter(|line| **line == "# d2b-managed end")
+            .count()
+            == 1
+}
+
+fn has_legacy_owned_header(contents: &str) -> bool {
+    let mut lines = contents.lines();
+    lines.next() == Some("# managed by d2b broker - do not edit by hand")
+        && contents.contains("[keyfile]\n")
+        && contents
+            .lines()
+            .filter(|line| line.starts_with("unmanaged-devices="))
+            .count()
+            == 1
+        && !contents.contains("# d2b-managed begin")
+        && !contents.contains("# d2b-managed end")
+}
+
+/// Refuse to overwrite a foreign or ambiguous d2b NetworkManager file.
+///
+/// A matching marker-id set proves that the existing file is the prior d2b
+/// projection and may be replaced. Any other bytes at the expected path fail
+/// closed before the atomic write.
+pub fn validate_existing_managed_conf(existing: &str, expected: &str) -> Result<(), ApplyNmError> {
+    if existing.trim().is_empty() {
+        return Ok(());
+    }
+    if has_legacy_owned_header(existing) {
+        return Ok(());
+    }
+    if !has_owned_markers(existing) || marker_ids(existing) != marker_ids(expected) {
+        return Err(ApplyNmError::ForeignMarkerConflict);
+    }
+    Ok(())
 }
 
 /// Returns the correct reload command for the detected NM version.
@@ -198,6 +262,7 @@ pub fn apply_nm_unmanaged(req: &ApplyNmRequest) -> Result<ApplyNmResult, ApplyNm
     let body = render_nm_conf(&req.entries);
     // Snapshot prior content for rollback if reload + verify fail.
     let prior = path_safe::read_to_string_nofollow(&req.conf_path).ok();
+    validate_existing_managed_conf(prior.as_deref().unwrap_or_default(), &body)?;
     path_safe::atomic_replace(&req.conf_path, body.as_bytes())?;
     let reload = select_reload_command(req.nm_version.as_deref());
     if matches!(reload, ReloadCommand::NoOpManagerAbsent) {
@@ -285,6 +350,8 @@ where
         Err(err) if err.kind() == io::ErrorKind::NotFound => None,
         Err(err) => return Err(io_to_live_handler(&intent.file_path, err)),
     };
+    validate_existing_managed_conf(prior.as_deref().unwrap_or_default(), &intent.contents)
+        .map_err(|_| crate::live_handlers::LiveHandlerError::NmOwnershipConflict)?;
     match path_safe::remove_nofollow(&intent.file_path) {
         Ok(()) => {}
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
@@ -373,6 +440,44 @@ mod tests {
     }
 
     #[test]
+    fn foreign_networkmanager_marker_is_rejected_before_replace() {
+        let expected = render_nm_conf(&[entry("d2b-b12345678")]);
+        let foreign = expected.replace("marker-d2b-b12345678", "foreign-owner");
+        assert_eq!(
+            validate_existing_managed_conf(&foreign, &expected),
+            Err(ApplyNmError::ForeignMarkerConflict)
+        );
+    }
+
+    #[test]
+    fn prior_d2b_networkmanager_projection_can_be_replaced() {
+        let prior = render_nm_conf(&[entry("d2b-b12345678")]);
+        let next = render_nm_conf(&[entry("d2b-b12345678")]);
+        assert_eq!(validate_existing_managed_conf(&prior, &next), Ok(()));
+    }
+
+    #[test]
+    fn legacy_networkmanager_projection_is_adoptable() {
+        let legacy = concat!(
+            "# managed by d2b broker - do not edit by hand\n",
+            "[keyfile]\n",
+            "unmanaged-devices=interface-name:d2b-*\n",
+        );
+        let expected = render_nm_conf(&[entry("d2b-b12345678")]);
+        assert_eq!(validate_existing_managed_conf(legacy, &expected), Ok(()));
+    }
+
+    #[test]
+    fn foreign_envelope_marker_is_rejected_for_removal() {
+        let expected = render_nm_conf(&[entry("d2b-b12345678")]);
+        let foreign = expected.replace("marker-d2b-b12345678", "foreign-owner");
+        assert_eq!(
+            validate_existing_managed_conf(&foreign, &expected),
+            Err(ApplyNmError::ForeignMarkerConflict)
+        );
+    }
+
+    #[test]
     fn verify_all_unmanaged_passes_when_unmanaged() {
         let e = entry("d2b-b-x");
         verify_all_unmanaged(&[e], "d2b-b-x:unmanaged\nwlp0:connected\n").unwrap();
@@ -387,18 +492,25 @@ mod tests {
 
     #[test]
     fn reload_failure_rolls_back() {
-        let dir = std::env::temp_dir().join(format!(
-            "d2b-w3-s2-nm-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let dir = std::env::current_dir()
+            .unwrap()
+            .join("target")
+            .join(format!(
+                "nm-reload-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("00-d2b-unmanaged.conf");
-        std::fs::write(&path, "prior=value\n").unwrap();
         let d2b_link = derive_from_env_vm("e", None, DerivedRole::Bridge, None).unwrap();
+        let prior = render_nm_conf(&[NmUnmanagedEntry {
+            if_name: d2b_link.clone(),
+            marker_id: "m1".into(),
+        }]);
+        std::fs::write(&path, &prior).unwrap();
         let req = ApplyNmRequest {
             conf_path: path.clone(),
             entries: vec![NmUnmanagedEntry {
@@ -411,7 +523,7 @@ mod tests {
         };
         let err = apply_nm_unmanaged(&req).unwrap_err();
         assert_eq!(err, ApplyNmError::ReloadFailed);
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "prior=value\n");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), prior);
         std::fs::remove_dir_all(&dir).ok();
     }
 

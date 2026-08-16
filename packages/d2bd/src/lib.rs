@@ -207,6 +207,9 @@ pub mod pidfs_probe;
 // ADR 0034 startup contract check for generated storage/restart/sync artifacts.
 pub mod storage_lifecycle;
 pub mod tpm_effect_port;
+// Core-owned Network effect adapter. Provider/network-local receives only
+// typed results; this module translates its opaque intents into broker calls.
+pub mod network_effect_port;
 // Contract for bringing autostart VMs up on daemon startup (net VMs
 // first, concurrency cap, degraded-mode tolerant, idempotent). See
 // docs/reference/daemon-autostart.md.
@@ -17865,6 +17868,9 @@ fn execute_host_prep_dag(
                     d2b_contracts::broker_wire::CreatePersistentTapRequest {
                         role_id,
                         vm_id: step.bundle_ref.vm_id.clone(),
+                        attachment_id: None,
+                        network_generation: None,
+                        attachment_generation: None,
                         tracing_span_id: None,
                     },
                 );
@@ -19479,18 +19485,35 @@ fn dispatch_broker_host_prepare_as(
     ) {
         return Ok(response);
     }
-    if let Err(response) = dispatch_broker_ack_request(
-        state,
-        VERB,
-        "ApplyNmUnmanaged",
-        BrokerRequest::ApplyNmUnmanaged(BrokerApplyNmUnmanagedRequest {
-            bundle_nm_intent_ref: BundleOpId::new(intent_id_nm_unmanaged_host()),
-            scope_id: ScopeId::new("host"),
-            destroy: false,
-            tracing_span_id: None,
-        }),
-    ) {
-        return Ok(response);
+    let resolver = load_bundle_resolver(state)?;
+    let generation =
+        resolver
+            .installed_generation_identity()
+            .ok_or(TypedError::InternalBrokerUnavailable {
+                path: broker_socket_path(state),
+                detail: "installed generation unavailable for Network effect context".to_owned(),
+            })?;
+    let context = d2b_provider_network_local::broker::NetworkEffectContext::for_host_nm(
+        ScopeId::new("host"),
+        BundleOpId::new(intent_id_nm_unmanaged_host()),
+        d2b_contracts::v3::ResourceBundleGenerationId::parse(generation.as_str()).map_err(
+            |_| TypedError::InternalBrokerUnavailable {
+                path: broker_socket_path(state),
+                detail: "installed generation invalid for Network effect context".to_owned(),
+            },
+        )?,
+    );
+    let port = network_effect_port::production_port(state, caller_role.clone(), context.clone());
+    let broker = port.into_broker();
+    if let Err(error) =
+        d2b_provider_network_local::broker::NetworkBroker::apply_nm_unmanaged(&broker, &context)
+    {
+        return Ok(broker_failure_response(
+            VERB,
+            format!("NetworkManager effect refused ({})", error.code()),
+            "Regenerate the trusted network bundle and retry host prepare.".to_owned(),
+            None,
+        ));
     }
 
     Ok(applied_response(

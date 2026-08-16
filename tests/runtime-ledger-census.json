@@ -27,6 +27,7 @@
     "d2b-core::bundle_resolver::tests::host_nft_script_drops_usbip_input_without_runtime_carveout",
     "d2b-core::bundle_resolver::tests::host_reconcile_and_store_preflight_emit_executable_vm_start_intents",
     "d2b-core::bundle_resolver::tests::host_runtime_carries_persisted_nft_hash",
+    "d2b-core::bundle_resolver::tests::nft_projection_uses_existing_forward_hook_and_preserves_uplink_rules",
     "d2b-core::bundle_resolver::tests::qemu_media_runner_wins_exact_writable_path_owner_score",
     "d2b-core::bundle_resolver::tests::resolves_macvtap_intents_from_process_contract",
     "d2b-core::bundle_resolver::tests::role_device_classes_audio_matches_p1_matrix",

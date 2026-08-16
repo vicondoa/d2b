@@ -391,6 +391,7 @@ struct ProjectionChain {
     name: String,
     declaration: String,
     rules: Vec<String>,
+    marker: String,
 }
 
 impl std::fmt::Debug for ProjectionChain {
@@ -403,7 +404,14 @@ impl std::fmt::Debug for ProjectionChain {
 struct LiveProjectionState {
     table_present: bool,
     owned_chains: Vec<String>,
+    owned_rule_handles: Vec<ProjectionRuleHandle>,
     validated_absent: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProjectionRuleHandle {
+    chain: String,
+    handle: u64,
 }
 
 /// Apply or remove one trusted ownership projection without replacing the
@@ -431,6 +439,17 @@ pub fn apply_nftables_projection(
     let _lock = acquire_projection_lock()?;
     let live_json = read_live_table_json_optional(nft_binary, "inet", "d2b")
         .map_err(|_| ProjectionMutationError::Backend)?;
+    if live_json.is_none()
+        && matches!(
+            action,
+            d2b_contracts::broker_wire::NftablesProjectionAction::Apply
+        )
+        && chains
+            .iter()
+            .any(|chain| chain.name.starts_with("forward-") && chain.name != "forward")
+    {
+        return Err(ProjectionMutationError::InvalidLiveState);
+    }
     let live = inspect_live_projection(live_json.as_deref(), &chains, &expected_comment)?;
     let mutation_script = render_projection_mutation(&chains, &live, action);
     if !mutation_script.is_empty() {
@@ -513,22 +532,24 @@ fn parse_projection_script(
         let declaration = declaration.trim();
         if declaration.ends_with('}') {
             let declaration = declaration.trim_end_matches('}').trim();
-            if !has_exact_comment(declaration, expected_comment) {
+            if !is_regular_projection_declaration(declaration, expected_comment) {
                 return Err(ProjectionMutationError::InvalidProjection);
             }
             chains.push(ProjectionChain {
                 name: name.to_owned(),
                 declaration: declaration.to_owned(),
                 rules: Vec::new(),
+                marker: expected_comment.to_owned(),
             });
         } else {
-            if !has_exact_comment(declaration, expected_comment) {
+            if !is_regular_projection_declaration(declaration, expected_comment) {
                 return Err(ProjectionMutationError::InvalidProjection);
             }
             current = Some(ProjectionChain {
                 name: name.to_owned(),
                 declaration: declaration.to_owned(),
                 rules: Vec::new(),
+                marker: expected_comment.to_owned(),
             });
         }
     }
@@ -543,6 +564,13 @@ fn has_exact_comment(line: &str, expected_comment: &str) -> bool {
     line.matches(&needle).count() == 1
 }
 
+fn is_regular_projection_declaration(line: &str, expected_comment: &str) -> bool {
+    line.trim_end_matches(';')
+        .trim_start()
+        .starts_with("comment ")
+        && has_exact_comment(line, expected_comment)
+}
+
 fn inspect_live_projection(
     live_json: Option<&[u8]>,
     desired: &[ProjectionChain],
@@ -552,6 +580,7 @@ fn inspect_live_projection(
         return Ok(LiveProjectionState {
             table_present: false,
             owned_chains: Vec::new(),
+            owned_rule_handles: Vec::new(),
             validated_absent: true,
         });
     };
@@ -563,6 +592,7 @@ fn inspect_live_projection(
         .ok_or(ProjectionMutationError::InvalidLiveState)?;
     let desired_names: std::collections::BTreeSet<_> =
         desired.iter().map(|chain| chain.name.as_str()).collect();
+    let mut chain_comments = std::collections::BTreeMap::new();
     let mut owned_chains = std::collections::BTreeSet::new();
     for entry in entries {
         if let Some(chain) = entry.get("chain") {
@@ -576,6 +606,7 @@ fn inspect_live_projection(
                 .and_then(serde_json::Value::as_str)
                 .ok_or(ProjectionMutationError::InvalidLiveState)?;
             let comment = chain.get("comment").and_then(serde_json::Value::as_str);
+            chain_comments.insert(name.to_owned(), comment.map(ToOwned::to_owned));
             if desired_names.contains(name) && comment != Some(expected_comment) {
                 return Err(ProjectionMutationError::ForeignMarker);
             }
@@ -583,6 +614,17 @@ fn inspect_live_projection(
                 owned_chains.insert(name.to_owned());
             }
         }
+    }
+    let base_marker = expected_comment
+        .strip_prefix("d2b managed: ")
+        .and_then(|marker| marker.rsplit_once(":env:"))
+        .map(|(owner, _)| format!("d2b managed: {owner}"));
+    let needs_forward_projection = desired
+        .iter()
+        .any(|chain| chain.name.starts_with("forward-") && chain.name != "forward");
+    let mut base_marker_present = false;
+    let mut owned_rule_handles = Vec::new();
+    for entry in entries {
         if let Some(rule) = entry.get("rule") {
             if rule.get("family").and_then(serde_json::Value::as_str) != Some("inet")
                 || rule.get("table").and_then(serde_json::Value::as_str) != Some("d2b")
@@ -593,17 +635,42 @@ fn inspect_live_projection(
                 .get("chain")
                 .and_then(serde_json::Value::as_str)
                 .ok_or(ProjectionMutationError::InvalidLiveState)?;
-            if owned_chains.contains(chain)
-                && rule.get("comment").and_then(serde_json::Value::as_str) != Some(expected_comment)
-            {
+            let comment = rule.get("comment").and_then(serde_json::Value::as_str);
+            if chain == "forward" && base_marker.as_deref() == comment {
+                base_marker_present = true;
+            }
+            if owned_chains.contains(chain) && comment != Some(expected_comment) {
                 return Err(ProjectionMutationError::ForeignMarker);
+            }
+            if desired_names.contains(chain) && comment != Some(expected_comment) {
+                return Err(ProjectionMutationError::ForeignMarker);
+            }
+            if chain == "forward" && comment == Some(expected_comment) {
+                let handle = rule
+                    .get("handle")
+                    .and_then(serde_json::Value::as_u64)
+                    .ok_or(ProjectionMutationError::InvalidLiveState)?;
+                owned_rule_handles.push(ProjectionRuleHandle {
+                    chain: chain.to_owned(),
+                    handle,
+                });
             }
         }
     }
+    if needs_forward_projection && base_marker.is_some() {
+        if !chain_comments.contains_key("forward") {
+            return Err(ProjectionMutationError::InvalidLiveState);
+        }
+        if !base_marker_present {
+            return Err(ProjectionMutationError::ForeignMarker);
+        }
+    }
+    let owned_chains = owned_chains.into_iter().collect::<Vec<_>>();
     Ok(LiveProjectionState {
         table_present: true,
-        validated_absent: owned_chains.is_empty(),
-        owned_chains: owned_chains.into_iter().collect(),
+        validated_absent: owned_chains.is_empty() && owned_rule_handles.is_empty(),
+        owned_chains,
+        owned_rule_handles,
     })
 }
 
@@ -620,6 +687,12 @@ fn render_projection_mutation(
     {
         script.push_str("add table inet d2b\n");
     }
+    for rule in &live.owned_rule_handles {
+        script.push_str(&format!(
+            "delete rule inet d2b {} handle {}\n",
+            rule.chain, rule.handle
+        ));
+    }
     for chain in &live.owned_chains {
         script.push_str(&format!("delete chain inet d2b {chain}\n"));
     }
@@ -634,6 +707,12 @@ fn render_projection_mutation(
             ));
             for rule in &chain.rules {
                 script.push_str(&format!("add rule inet d2b {} {rule}\n", chain.name));
+            }
+            if chain.name.starts_with("forward-") {
+                script.push_str(&format!(
+                    "add rule inet d2b forward jump {} comment \"{}\"\n",
+                    chain.name, chain.marker
+                ));
             }
         }
     }
@@ -775,7 +854,7 @@ mod tests {
 
     fn projection_script(marker: &str, chain: &str, expression: &str) -> String {
         format!(
-            "table inet d2b {{\n  chain {chain} {{ type filter hook forward priority -5; policy drop; comment \"d2b managed: {marker}\";\n    {expression} comment \"d2b managed: {marker}\";\n  }}\n}}\n"
+            "table inet d2b {{\n  chain {chain} {{ comment \"d2b managed: {marker}\";\n    ct state established,related accept comment \"d2b managed: {marker}\";\n    {expression} comment \"d2b managed: {marker}\";\n  }}\n}}\n"
         )
     }
 
@@ -803,6 +882,63 @@ mod tests {
                 ]
             })
             .collect::<Vec<_>>();
+        serde_json::to_vec(&serde_json::json!({ "nftables": entries })).unwrap()
+    }
+
+    fn live_json_with_forward(
+        chains: &[(&str, &str)],
+        base_marker: &str,
+        projection_jump: Option<(&str, u64)>,
+    ) -> Vec<u8> {
+        let mut entries = vec![
+            serde_json::json!({
+                "chain": {
+                    "family": "inet",
+                    "table": "d2b",
+                    "name": "forward",
+                }
+            }),
+            serde_json::json!({
+                "rule": {
+                    "family": "inet",
+                    "table": "d2b",
+                    "chain": "forward",
+                    "comment": base_marker,
+                    "handle": 11,
+                }
+            }),
+        ];
+        if let Some((marker, handle)) = projection_jump {
+            entries.push(serde_json::json!({
+                "rule": {
+                    "family": "inet",
+                    "table": "d2b",
+                    "chain": "forward",
+                    "comment": marker,
+                    "handle": handle,
+                }
+            }));
+        }
+        for (name, marker) in chains {
+            entries.extend([
+                serde_json::json!({
+                    "chain": {
+                        "family": "inet",
+                        "table": "d2b",
+                        "name": name,
+                        "comment": marker,
+                    }
+                }),
+                serde_json::json!({
+                    "rule": {
+                        "family": "inet",
+                        "table": "d2b",
+                        "chain": name,
+                        "comment": marker,
+                    }
+                }),
+            ]);
+        }
         serde_json::to_vec(&serde_json::json!({ "nftables": entries })).unwrap()
     }
 
@@ -856,21 +992,32 @@ mod tests {
     #[test]
     fn projection_apply_preserves_sibling_and_usbip_entries() {
         let exec = FakeReconcileExecutor::new();
-        let script = projection_script("network-a", "forward-a", "ip saddr 10.20.0.0/24 accept");
+        let script = projection_script(
+            "network-a:env:a",
+            "forward-a",
+            "ip saddr 10.20.0.0/24 accept",
+        );
         let trusted_hash = projection_digest(script.as_bytes());
-        let live = live_json(&[
-            ("forward-b", "d2b managed: network-b"),
-            ("usbip-1", "d2b managed: usbip-1"),
-        ]);
-        let desired = parse_projection_script(&script, "d2b managed: network-a").unwrap();
-        let state =
-            inspect_live_projection(Some(&live), &desired, "d2b managed: network-a").unwrap();
+        let live = live_json_with_forward(
+            &[
+                ("forward-b", "d2b managed: network-a:env:b"),
+                ("usbip-1", "d2b managed: usbip-1"),
+            ],
+            "d2b managed: network-a",
+            None,
+        );
+        let expected_comment = "d2b managed: network-a:env:a";
+        let desired = parse_projection_script(&script, expected_comment).unwrap();
+        let state = inspect_live_projection(Some(&live), &desired, expected_comment).unwrap();
         let rendered = render_projection_mutation(
             &desired,
             &state,
             d2b_contracts::broker_wire::NftablesProjectionAction::Apply,
         );
         assert!(rendered.contains("add chain inet d2b forward-a"));
+        assert!(rendered.contains("add rule inet d2b forward jump forward-a"));
+        assert!(!rendered.contains("hook forward"));
+        assert!(!rendered.contains("policy drop"));
         assert!(!rendered.contains("forward-b"));
         assert!(!rendered.contains("usbip-1"));
         assert!(!rendered.contains("delete table"));
@@ -880,43 +1027,70 @@ mod tests {
 
     #[test]
     fn projection_remove_deletes_only_owned_chains_and_keeps_table() {
-        let script = projection_script("network-a", "forward-a", "ip saddr 10.20.0.0/24 accept");
-        let desired = parse_projection_script(&script, "d2b managed: network-a").unwrap();
-        let live = live_json(&[
-            ("forward-a", "d2b managed: network-a"),
-            ("forward-b", "d2b managed: network-b"),
-            ("usbip-1", "d2b managed: usbip-1"),
-        ]);
-        let state =
-            inspect_live_projection(Some(&live), &desired, "d2b managed: network-a").unwrap();
+        let script = projection_script(
+            "network-a:env:a",
+            "forward-a",
+            "ip saddr 10.20.0.0/24 accept",
+        );
+        let expected_comment = "d2b managed: network-a:env:a";
+        let desired = parse_projection_script(&script, expected_comment).unwrap();
+        let live = live_json_with_forward(
+            &[
+                ("forward-a", expected_comment),
+                ("forward-b", "d2b managed: network-a:env:b"),
+                ("usbip-1", "d2b managed: usbip-1"),
+            ],
+            "d2b managed: network-a",
+            Some((expected_comment, 22)),
+        );
+        let state = inspect_live_projection(Some(&live), &desired, expected_comment).unwrap();
         let rendered = render_projection_mutation(
             &desired,
             &state,
             d2b_contracts::broker_wire::NftablesProjectionAction::Remove,
         );
-        assert_eq!(rendered, "delete chain inet d2b forward-a\n");
+        assert_eq!(
+            rendered,
+            "delete rule inet d2b forward handle 22\ndelete chain inet d2b forward-a\n"
+        );
         assert!(!rendered.contains("delete table"));
+        assert!(!rendered.contains("forward-b"));
+        assert!(!rendered.contains("usbip-1"));
     }
 
     #[test]
     fn projection_foreign_marker_fails_closed() {
-        let script = projection_script("network-a", "forward-a", "ip saddr 10.20.0.0/24 accept");
-        let desired = parse_projection_script(&script, "d2b managed: network-a").unwrap();
+        let script = projection_script(
+            "network-a:env:a",
+            "forward-a",
+            "ip saddr 10.20.0.0/24 accept",
+        );
+        let expected_comment = "d2b managed: network-a:env:a";
+        let desired = parse_projection_script(&script, expected_comment).unwrap();
         let live = live_json(&[("forward-a", "foreign marker")]);
         assert_eq!(
-            inspect_live_projection(Some(&live), &desired, "d2b managed: network-a"),
+            inspect_live_projection(Some(&live), &desired, expected_comment),
             Err(ProjectionMutationError::ForeignMarker)
         );
     }
 
     #[test]
     fn projection_validated_absence_is_idempotent() {
-        let script = projection_script("network-a", "forward-a", "ip saddr 10.20.0.0/24 accept");
-        let desired = parse_projection_script(&script, "d2b managed: network-a").unwrap();
+        let script = projection_script(
+            "network-a:env:a",
+            "forward-a",
+            "ip saddr 10.20.0.0/24 accept",
+        );
+        let expected_comment = "d2b managed: network-a:env:a";
+        let desired = parse_projection_script(&script, expected_comment).unwrap();
         let state = inspect_live_projection(
-            Some(&live_json(&[("forward-b", "d2b managed: network-b")])),
+            Some(&live_json_with_forward(
+                &[("forward-b", "d2b managed: network-a:env:b")],
+                "d2b managed: network-a",
+                None,
+            )),
             &desired,
-            "d2b managed: network-a",
+            expected_comment,
         )
         .unwrap();
         assert!(state.validated_absent);
@@ -927,6 +1101,23 @@ mod tests {
                 d2b_contracts::broker_wire::NftablesProjectionAction::Remove,
             )
             .is_empty()
+        );
+    }
+
+    #[test]
+    fn projection_rejects_second_hook_and_policy_drop_chain() {
+        let script = concat!(
+            "table inet d2b {\n",
+            "  chain forward-a { type filter hook forward priority -5; policy drop; ",
+            "comment \"d2b managed: network-a:env:a\";\n",
+            "    iifname \"br-a-up\" ct state new accept comment ",
+            "\"d2b managed: network-a:env:a\";\n",
+            "  }\n",
+            "}\n"
+        );
+        assert_eq!(
+            parse_projection_script(script, "d2b managed: network-a:env:a"),
+            Err(ProjectionMutationError::InvalidProjection)
         );
     }
 
