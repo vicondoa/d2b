@@ -15,6 +15,13 @@ ROOT=${ROOT:-$(cd "$HERE/.." && pwd)}
 D2B_LOG=${D2B_LOG:-/dev/null}
 export ROOT D2B_LOG
 
+# Bazel's source tree is read-only; keep the shared helper's fallback cache in
+# the test's writable sandbox.
+if [ -n "${TEST_TMPDIR:-}" ]; then
+  export _D2B_SMOKE_FALLBACK="${_D2B_SMOKE_FALLBACK:-$TEST_TMPDIR/d2b-smoke-cache}"
+  mkdir -p "$_D2B_SMOKE_FALLBACK"
+fi
+
 # shellcheck disable=SC1091
 . "$ROOT/tests/lib.sh"
 
@@ -84,10 +91,37 @@ fi
 
 log "discovered ${#proofs[@]} proof crate(s): ${proofs[*]}"
 for proof in "${proofs[@]}"; do
-  manifest="$ROOT/proofs/$proof/Cargo.toml"
+  proof_dir="$ROOT/proofs/$proof"
+  if [ -n "${TEST_TMPDIR:-}" ]; then
+    # Runfiles may resolve manifests back into the read-only source tree, and
+    # some proofs write fixtures below CARGO_MANIFEST_DIR/target.
+    proof_dir="$TEST_TMPDIR/d2b-proof-workspaces/$proof"
+    mkdir -p "$proof_dir"
+    cp -R --dereference "$ROOT/proofs/$proof"/. "$proof_dir"/
+  fi
+  manifest="$proof_dir/Cargo.toml"
+  cargo_target_dir=
+  if [ -n "${TEST_TMPDIR:-}" ]; then
+    cargo_target_dir="$TEST_TMPDIR/d2b-cargo-target/$proof"
+    mkdir -p "$cargo_target_dir"
+  fi
+  proof_cargo() {
+    if [ -n "$cargo_target_dir" ]; then
+      (
+        cd "$proof_dir"
+        CARGO_TARGET_DIR="$cargo_target_dir" cargo "$@"
+      )
+    else
+      (
+        cd "$proof_dir"
+        cargo "$@"
+      )
+    fi
+  }
+
   log "--> proofs/$proof: clippy + test"
-  if ! cargo clippy --locked --manifest-path "$manifest" --all-targets -- -D warnings \
-    || ! cargo test --locked --manifest-path "$manifest"; then
+  if ! proof_cargo clippy --locked --manifest-path "$manifest" --all-targets -- -D warnings \
+    || ! proof_cargo test --locked --manifest-path "$manifest"; then
     fail "proofs/$proof"
     rc=1
     continue
@@ -100,7 +134,7 @@ for proof in "${proofs[@]}"; do
   # five-minute lane inside the existing 15-minute CI job timeout.
   if [ "$proof" = "redb-resource-store-spike" ]; then
     log "    running required ignored full-scale suite (expected <=5 minutes)"
-    if ! cargo test --release --locked --manifest-path "$manifest" \
+    if ! proof_cargo test --release --locked --manifest-path "$manifest" \
       --test full_scale -- --ignored --test-threads=1 --nocapture; then
       fail "proofs/$proof full-scale suite"
       rc=1

@@ -9,3 +9,5 @@ publish = false
 unsafe_code = "forbid"
 
 [dependencies]
+
+[workspace]

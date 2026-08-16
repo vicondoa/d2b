@@ -10,3 +10,5 @@
 
 - Centralized the guest static ELF smoke expression and preserved the existing
   static-binary assertions in the flake checks.
+- Run standalone proof crates from writable per-test workspaces so Bazel
+  execution cannot inherit the root Cargo workspace.
