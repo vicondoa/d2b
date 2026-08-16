@@ -260,7 +260,7 @@ fn stale_identity_adoption_is_terminal_and_does_not_respawn() {
     assert_eq!(
         controller.adopt_lifecycle(
             GpuAuthorityLease::from_core([1; 16]),
-            &[expected.clone()],
+            std::slice::from_ref(&expected),
             &mut port,
         ),
         Err(d2b_provider_device_gpu::GpuControllerError::Effect(
@@ -276,7 +276,7 @@ fn stale_identity_adoption_is_terminal_and_does_not_respawn() {
     assert_eq!(
         controller.adopt_lifecycle(
             GpuAuthorityLease::from_core([1; 16]),
-            &[expected.clone()],
+            std::slice::from_ref(&expected),
             &mut port,
         ),
         Err(d2b_provider_device_gpu::GpuControllerError::InvalidState)
@@ -331,7 +331,7 @@ fn mismatched_matching_observation_is_quarantined() {
     assert_eq!(
         controller.adopt_lifecycle(
             GpuAuthorityLease::from_core([1; 16]),
-            &[expected.clone()],
+            std::slice::from_ref(&expected),
             &mut port,
         ),
         Err(d2b_provider_device_gpu::GpuControllerError::Quarantined)
