@@ -7,7 +7,12 @@ use d2b_provider_credential_managed_identity::{
 
 fn controller(binding: PlacementBinding, execution: &str) -> ManagedIdentityController {
     ManagedIdentityController::new(
-        ManagedIdentityPlacement::new(binding, ResourceRef::parse(execution).unwrap()).unwrap(),
+        ManagedIdentityPlacement::new(
+            binding,
+            ResourceRef::parse(execution).unwrap(),
+            ResourceRef::parse("Zone/dev").unwrap(),
+        )
+        .unwrap(),
     )
 }
 

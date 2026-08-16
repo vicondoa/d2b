@@ -10,7 +10,9 @@ use super::{
     OperationClass,
 };
 use crate::v3::component_session::MAX_PROTECTED_PLAINTEXT_BYTES;
-use crate::v3::{ResourceGeneration, ResourceRef, ResourceUid, TranscriptHash};
+use crate::v3::{
+    AuthenticatedSubjectContext, ResourceGeneration, ResourceRef, ResourceUid, TranscriptHash,
+};
 
 /// Canonical service package routed by the Zone bus.
 pub const CREDENTIAL_SERVICE_NAME: &str = "d2b.credential.v3";
@@ -431,6 +433,62 @@ impl DeliverySessionParams {
         self.operation_class
     }
 
+    /// Borrow the Credential reference bound into this delivery session.
+    pub const fn credential_ref(&self) -> &ResourceRef {
+        &self.credential_ref
+    }
+
+    /// Borrow the consumer Provider reference bound into this delivery session.
+    pub const fn consumer_provider_ref(&self) -> &ResourceRef {
+        &self.consumer_provider_ref
+    }
+
+    /// Return the Credential UID bound into this delivery session.
+    pub const fn credential_uid(&self) -> &ResourceUid {
+        &self.credential_uid
+    }
+
+    /// Return the Credential generation bound into this delivery session.
+    pub const fn credential_generation(&self) -> ResourceGeneration {
+        self.credential_generation
+    }
+
+    /// Return the consumer component generation bound into this delivery
+    /// session.
+    pub const fn consumer_component_generation(&self) -> ResourceGeneration {
+        self.consumer_component_generation
+    }
+
+    /// Borrow the audience token bound into this delivery session.
+    pub const fn audience(&self) -> &AudienceToken {
+        &self.audience
+    }
+
+    /// Return the absolute delivery-session expiry.
+    pub const fn expiry_unix_ms(&self) -> u64 {
+        self.expiry_unix_ms
+    }
+
+    /// Return the hard delivery-session deadline.
+    pub const fn deadline_unix_ms(&self) -> u64 {
+        self.deadline_unix_ms
+    }
+
+    /// Borrow the authorized route digest.
+    pub const fn route_digest(&self) -> &DeliveryRouteDigest {
+        &self.route_digest
+    }
+
+    /// Return the fixed binding schema version.
+    pub const fn schema_version(&self) -> u32 {
+        self.schema_version
+    }
+
+    /// Return the maximum plaintext record size.
+    pub const fn max_token_bytes(&self) -> u32 {
+        self.max_token_bytes
+    }
+
     /// Return the replay-safe sequence number.
     pub const fn sequence(&self) -> u64 {
         self.sequence
@@ -595,6 +653,7 @@ impl fmt::Debug for CredentialResponse {
 pub struct CredentialAuthorization {
     delivery_session_params: Option<DeliverySessionParams>,
     session_proof: Option<Arc<dyn Any + Send + Sync>>,
+    authenticated_session: Option<CredentialSessionBinding>,
 }
 
 impl Clone for CredentialAuthorization {
@@ -602,6 +661,7 @@ impl Clone for CredentialAuthorization {
         Self {
             delivery_session_params: self.delivery_session_params.clone(),
             session_proof: self.session_proof.clone(),
+            authenticated_session: self.authenticated_session.clone(),
         }
     }
 }
@@ -614,6 +674,7 @@ impl PartialEq for CredentialAuthorization {
                 (Some(left), Some(right)) => Arc::ptr_eq(left, right),
                 _ => false,
             }
+            && self.authenticated_session == other.authenticated_session
     }
 }
 
@@ -643,12 +704,28 @@ impl CredentialAuthorization {
         Ok(Self {
             delivery_session_params,
             session_proof: None,
+            authenticated_session: None,
         })
+    }
+
+    /// Attach the authenticated Provider session established by the
+    /// ComponentSession adapter.
+    pub fn with_authenticated_session(
+        mut self,
+        session: CredentialSessionBinding,
+    ) -> Result<Self, CredentialServiceError> {
+        self.authenticated_session = Some(session);
+        Ok(self)
     }
 
     /// Borrow the adapter-authorized delivery binding, when the method needs one.
     pub const fn delivery_session_params(&self) -> Option<&DeliverySessionParams> {
         self.delivery_session_params.as_ref()
+    }
+
+    /// Borrow the authenticated session, when the adapter supplied one.
+    pub const fn authenticated_session(&self) -> Option<&CredentialSessionBinding> {
+        self.authenticated_session.as_ref()
     }
 
     /// Attach one provider-owned authenticated session proof.
@@ -681,6 +758,50 @@ impl CredentialAuthorization {
         self.session_proof
             .as_deref()
             .and_then(|proof| proof.downcast_ref::<T>())
+    }
+}
+
+/// Authenticated, bounded lifetime context for one Credential service session.
+///
+/// The subject context is established by the ComponentSession adapter and
+/// cannot be reconstructed from a peer payload. The expiry is deliberately
+/// carried separately from the identity context because it belongs to the
+/// service admission decision rather than to the durable subject identity.
+#[derive(Clone, PartialEq, Eq)]
+pub struct CredentialSessionBinding {
+    authenticated_subject: AuthenticatedSubjectContext,
+    expires_at_unix_ms: u64,
+}
+
+impl CredentialSessionBinding {
+    /// Bind an authenticated subject context to a nonzero session expiry.
+    pub fn new(
+        authenticated_subject: AuthenticatedSubjectContext,
+        expires_at_unix_ms: u64,
+    ) -> Result<Self, CredentialServiceError> {
+        if expires_at_unix_ms == 0 {
+            return Err(malformed());
+        }
+        Ok(Self {
+            authenticated_subject,
+            expires_at_unix_ms,
+        })
+    }
+
+    /// Borrow the authenticated subject context.
+    pub const fn authenticated_subject(&self) -> &AuthenticatedSubjectContext {
+        &self.authenticated_subject
+    }
+
+    /// Return the absolute session expiry.
+    pub const fn expires_at_unix_ms(&self) -> u64 {
+        self.expires_at_unix_ms
+    }
+}
+
+impl fmt::Debug for CredentialSessionBinding {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("CredentialSessionBinding(<redacted>)")
     }
 }
 
