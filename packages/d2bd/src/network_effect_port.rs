@@ -10,6 +10,14 @@ use d2b_contracts::broker_wire::{
     DeletePersistentTapRequest, NftablesProjectionAction, SeedDnsmasqLeaseRequest,
     UpdateHostsFileRequest,
 };
+use d2b_contracts::{
+    types::{BundleOpId, ScopeId, VmId},
+    v3::ResourceBundleGenerationId,
+};
+use d2b_core::bundle_resolver::{
+    BundleResolver, intent_id_bridge_env, intent_id_hosts_host, intent_id_nft_projection_env,
+    intent_id_nm_unmanaged_host,
+};
 use d2b_provider_network_local::{
     broker::{BrokerNetworkEffectPort, NetworkBroker, NetworkBrokerError, NetworkEffectContext},
     controller::FirewallDigest,
@@ -53,6 +61,79 @@ pub(crate) fn production_port<'a>(
     context: NetworkEffectContext,
 ) -> DaemonNetworkEffectPort<'a> {
     BrokerNetworkEffectPort::new(DaemonNetworkBroker::new(state, caller_role), context)
+}
+
+/// Resolve one host environment into the opaque context consumed by the
+/// production broker adapter.
+pub(crate) fn context_for_env(
+    resolver: &BundleResolver,
+    env_name: &str,
+) -> Result<NetworkEffectContext, NetworkBrokerError> {
+    resolver
+        .find_host_env(env_name)
+        .ok_or(NetworkBrokerError::Rejected)?;
+    let generation = resolver
+        .installed_generation_identity()
+        .ok_or(NetworkBrokerError::Rejected)?
+        .as_str()
+        .to_owned();
+    let projection = resolver
+        .find_nft_projection_intent(&intent_id_nft_projection_env(env_name))
+        .ok_or(NetworkBrokerError::Rejected)?;
+    let projection_digest = parse_digest(&projection.desired_hash)?;
+    let route_prefix = format!("route:env:{env_name}:");
+    let sysctl_prefix = format!("sysctl:env:{env_name}:");
+    let route_intent_refs = resolver
+        .route_intent_ids()
+        .filter(|id| id.starts_with(&route_prefix))
+        .map(|id| BundleOpId::new(id.to_owned()))
+        .collect();
+    let sysctl_intent_refs = resolver
+        .sysctl_intent_ids()
+        .filter(|id| id.starts_with(&sysctl_prefix))
+        .map(|id| BundleOpId::new(id.to_owned()))
+        .collect();
+    Ok(NetworkEffectContext::new(
+        ScopeId::new(format!("env:{env_name}")),
+        VmId::new(format!("sys-{env_name}-net")),
+        BundleOpId::new(intent_id_bridge_env(env_name)),
+        BundleOpId::new(intent_id_nft_projection_env(env_name)),
+        BundleOpId::new(intent_id_nm_unmanaged_host()),
+        BundleOpId::new(intent_id_hosts_host()),
+        route_intent_refs,
+        sysctl_intent_refs,
+        ResourceBundleGenerationId::parse(generation).map_err(|_| NetworkBrokerError::Rejected)?,
+        projection_digest,
+        resolver.host.site.allow_unsafe_east_west,
+    ))
+}
+
+/// Ensure one environment bridge through the production adapter.
+pub(crate) fn ensure_bridge(
+    state: &ServerState,
+    caller_role: BrokerCallerRole,
+    resolver: &BundleResolver,
+    env_name: &str,
+) -> Result<(), NetworkBrokerError> {
+    let context = context_for_env(resolver, env_name)?;
+    let port = production_port(state, caller_role, context.clone());
+    let broker = port.into_broker();
+    NetworkBroker::create_bridge(&broker, &context)
+}
+
+fn parse_digest(value: &str) -> Result<[u8; 32], NetworkBrokerError> {
+    let hex = value
+        .strip_prefix("sha256:")
+        .ok_or(NetworkBrokerError::Rejected)?;
+    if hex.len() != 64 {
+        return Err(NetworkBrokerError::Rejected);
+    }
+    let mut digest = [0_u8; 32];
+    for (index, byte) in digest.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&hex[index * 2..index * 2 + 2], 16)
+            .map_err(|_| NetworkBrokerError::Rejected)?;
+    }
+    Ok(digest)
 }
 
 impl NetworkBroker for DaemonNetworkBroker<'_> {
@@ -169,6 +250,9 @@ impl NetworkBroker for DaemonNetworkBroker<'_> {
 
 #[allow(dead_code)]
 fn map_broker_error(kind: &str, message: &str) -> NetworkBrokerError {
+    if message.contains("nm-managed-foreign-conflict") {
+        return NetworkBrokerError::ForeignOwnership;
+    }
     let reason = message
         .split_once("failed: ")
         .map_or(message, |(_, reason)| reason);
@@ -218,6 +302,13 @@ mod tests {
             map_broker_error(
                 "Broker.RequestValidation",
                 "broker request validation failed: attachment-ownership-conflict",
+            ),
+            NetworkBrokerError::ForeignOwnership
+        );
+        assert_eq!(
+            map_broker_error(
+                "Broker.LiveHandler",
+                "broker live handler failed: nm-managed-foreign-conflict",
             ),
             NetworkBrokerError::ForeignOwnership
         );

@@ -50,6 +50,7 @@ fn realization() -> PersistentTapRealization {
         attachment_generation: 7,
         ifname: "d2b-t12345678".to_owned(),
         ownership_marker: format!("d2b managed: attachment:{}", attachment_id().as_str()),
+        deleted: false,
     }
 }
 

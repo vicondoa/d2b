@@ -327,8 +327,9 @@ fn map_broker_error(error: NetworkBrokerError) -> NetworkEffectError {
         NetworkBrokerError::EastWestHostOptInRequired => {
             NetworkEffectError::EastWestHostOptInRequired
         }
-        NetworkBrokerError::Transport
-        | NetworkBrokerError::Rejected
-        | NetworkBrokerError::Transient => NetworkEffectError::Transient,
+        NetworkBrokerError::Transport | NetworkBrokerError::Transient => {
+            NetworkEffectError::Transient
+        }
+        NetworkBrokerError::Rejected => NetworkEffectError::InvalidState,
     }
 }

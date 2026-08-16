@@ -273,7 +273,15 @@ pub fn live_create_persistent_tap(
         path: PathBuf::from("/dev/net/tun"),
         detail: e.to_string(),
     })?;
-    attach_tap_to_bridge(&intent.tap_ifname, &intent.bridge_ifname)?;
+    if let Err(error) = attach_tap_to_bridge(&intent.tap_ifname, &intent.bridge_ifname) {
+        return match run_ip_link(
+            &ip_binary_path(),
+            &["link", "delete", "dev", intent.tap_ifname.as_str()],
+        ) {
+            Ok(()) => Err(error),
+            Err(cleanup) => Err(cleanup),
+        };
+    }
     Ok(LiveCreateTapOutcome {
         bridge_ifname: Some(intent.bridge_ifname),
         tap_ifname: intent.tap_ifname,
@@ -326,6 +334,10 @@ fn existing_persistent_tap(
             detail: "existing persistent TAP does not match trusted bridge intent".to_owned(),
         });
     }
+    run_ip_link(
+        &ip_binary_path(),
+        &["link", "set", "dev", intent.tap_ifname.as_str(), "up"],
+    )?;
     Ok(Some(LiveCreateTapOutcome {
         bridge_ifname: Some(intent.bridge_ifname.clone()),
         tap_ifname: intent.tap_ifname.clone(),

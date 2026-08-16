@@ -321,6 +321,9 @@ pub struct PersistentTapRealization {
     pub ifname: String,
     /// Trusted ownership marker written by the realization owner.
     pub ownership_marker: String,
+    /// Deletion tombstone retained until the next lifecycle reconciliation.
+    #[serde(default)]
+    pub deleted: bool,
 }
 
 fn realization_root(state_dir: &Path) -> Result<PathBuf, NetworkOpError> {
@@ -372,6 +375,7 @@ pub fn persist_persistent_tap_realization(
         attachment_generation: attachment_generation.get(),
         ifname: tap_ifname.as_str().to_owned(),
         ownership_marker: format!("d2b managed: attachment:{}", attachment_id.as_str()),
+        deleted: false,
     };
     if let Ok(existing) = fs::OpenOptions::new()
         .read(true)
@@ -455,6 +459,57 @@ pub fn remove_persistent_tap_realization(
         .map_err(|_| NetworkOpError::RealizationUnavailable)
 }
 
+/// Retain a deletion tombstone so duplicate or lost-response cleanup remains
+/// idempotent after the kernel TAP has already been removed.
+pub fn mark_persistent_tap_realization_deleted(
+    state_dir: &Path,
+    attachment_id: &ResourceUid,
+) -> Result<(), NetworkOpError> {
+    let root = realization_root(state_dir)?;
+    let row_path = root.join(format!("{}.json", attachment_id.as_str()));
+    let row = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW)
+        .open(&row_path)
+        .map_err(|_| NetworkOpError::RealizationUnavailable)?;
+    let mut realization: PersistentTapRealization =
+        serde_json::from_reader(row).map_err(|_| NetworkOpError::RealizationUnavailable)?;
+    if realization.attachment_id != attachment_id.as_str()
+        || realization.ownership_marker
+            != format!("d2b managed: attachment:{}", attachment_id.as_str())
+    {
+        return Err(NetworkOpError::ForeignOwnership);
+    }
+    if realization.deleted {
+        return Ok(());
+    }
+    realization.deleted = true;
+    let bytes =
+        serde_json::to_vec(&realization).map_err(|_| NetworkOpError::RealizationUnavailable)?;
+    let temp_path = root.join(format!(".{}.json.deleted.tmp", attachment_id.as_str()));
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW)
+        .mode(0o640)
+        .open(&temp_path)
+        .map_err(|_| NetworkOpError::RealizationUnavailable)?;
+    use std::io::Write as _;
+    if file.write_all(&bytes).is_err() || file.sync_data().is_err() {
+        drop(file);
+        let _ = fs::remove_file(&temp_path);
+        return Err(NetworkOpError::RealizationUnavailable);
+    }
+    drop(file);
+    fs::rename(&temp_path, &row_path).map_err(|_| {
+        let _ = fs::remove_file(&temp_path);
+        NetworkOpError::RealizationUnavailable
+    })?;
+    fs::File::open(&root)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|_| NetworkOpError::RealizationUnavailable)
+}
+
 impl core::fmt::Debug for PersistentTapRealization {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str("PersistentTapRealization(<redacted>)")
@@ -487,6 +542,9 @@ pub fn delete_persistent_tap<B: PersistentTapBackend>(
     let expected_marker = format!("d2b managed: attachment:{}", realization.attachment_id);
     if realization.ownership_marker != expected_marker {
         return Err(NetworkOpError::ForeignOwnership);
+    }
+    if realization.deleted {
+        return Ok(attachment_digest(&realization.attachment_id));
     }
     if backend.tap_exists(&realization.ifname)? {
         backend.delete_tap(&realization.ifname)?;
@@ -700,6 +758,7 @@ mod tests {
             ifname: "d2b-t12345678".to_owned(),
             ownership_marker: "d2b managed: attachment:123e4567-e89b-42d3-a456-426614174000"
                 .to_owned(),
+            deleted: false,
         }
     }
 
@@ -871,6 +930,51 @@ mod tests {
             persist_persistent_tap_realization(&root, &conflicting, &ifname),
             Err(NetworkOpError::RealizationConflict)
         );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn deleted_realization_tombstone_makes_duplicate_cleanup_idempotent() {
+        let root = std::env::current_dir()
+            .unwrap()
+            .join("target")
+            .join(format!(
+                "network-realization-tombstone-{}",
+                std::process::id()
+            ));
+        let _ = fs::remove_dir_all(&root);
+        fs::DirBuilder::new().mode(0o750).create(&root).unwrap();
+        let attachment_id = ResourceUid::parse("623e4567-e89b-42d3-a456-426614174005").unwrap();
+        let create = CreatePersistentTapRequest {
+            role_id: d2b_contracts::types::RoleId::new("network-attachment"),
+            vm_id: d2b_contracts::types::VmId::new("work-net"),
+            attachment_id: Some(attachment_id.clone()),
+            network_generation: Some(ResourceGeneration::new(4).unwrap()),
+            attachment_generation: Some(ResourceGeneration::new(7).unwrap()),
+            tracing_span_id: None,
+        };
+        persist_persistent_tap_realization(&root, &create, &IfName::new("d2b-t12345678").unwrap())
+            .unwrap();
+        mark_persistent_tap_realization_deleted(&root, &attachment_id).unwrap();
+        let request = DeletePersistentTapRequest {
+            attachment_id,
+            expected_network_generation: ResourceGeneration::new(4).unwrap(),
+            expected_attachment_generation: ResourceGeneration::new(7).unwrap(),
+            tracing_span_id: None,
+        };
+        let backend = FakeTap {
+            present: Cell::new(true),
+            deletes: Cell::new(0),
+        };
+        assert!(
+            delete_persistent_tap(
+                &backend,
+                &load_persistent_tap_realization(&root, &request).unwrap(),
+                &request
+            )
+            .is_ok()
+        );
+        assert_eq!(backend.deletes.get(), 0);
         let _ = fs::remove_dir_all(root);
     }
 }

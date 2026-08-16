@@ -143,6 +143,19 @@ fn has_owned_markers(contents: &str) -> bool {
             == 1
 }
 
+fn has_legacy_owned_header(contents: &str) -> bool {
+    let mut lines = contents.lines();
+    lines.next() == Some("# managed by d2b broker - do not edit by hand")
+        && contents.contains("[keyfile]\n")
+        && contents
+            .lines()
+            .filter(|line| line.starts_with("unmanaged-devices="))
+            .count()
+            == 1
+        && !contents.contains("# d2b-managed begin")
+        && !contents.contains("# d2b-managed end")
+}
+
 /// Refuse to overwrite a foreign or ambiguous d2b NetworkManager file.
 ///
 /// A matching marker-id set proves that the existing file is the prior d2b
@@ -152,18 +165,10 @@ pub fn validate_existing_managed_conf(existing: &str, expected: &str) -> Result<
     if existing.trim().is_empty() {
         return Ok(());
     }
-    if !has_owned_markers(existing) || marker_ids(existing) != marker_ids(expected) {
-        return Err(ApplyNmError::ForeignMarkerConflict);
-    }
-    Ok(())
-}
-
-/// Validate ownership before removing the d2b NetworkManager file.
-pub fn validate_existing_managed_conf_for_removal(existing: &str) -> Result<(), ApplyNmError> {
-    if existing.trim().is_empty() {
+    if has_legacy_owned_header(existing) {
         return Ok(());
     }
-    if !has_owned_markers(existing) {
+    if !has_owned_markers(existing) || marker_ids(existing) != marker_ids(expected) {
         return Err(ApplyNmError::ForeignMarkerConflict);
     }
     Ok(())
@@ -345,7 +350,7 @@ where
         Err(err) if err.kind() == io::ErrorKind::NotFound => None,
         Err(err) => return Err(io_to_live_handler(&intent.file_path, err)),
     };
-    validate_existing_managed_conf_for_removal(prior.as_deref().unwrap_or_default())
+    validate_existing_managed_conf(prior.as_deref().unwrap_or_default(), &intent.contents)
         .map_err(|_| crate::live_handlers::LiveHandlerError::NmOwnershipConflict)?;
     match path_safe::remove_nofollow(&intent.file_path) {
         Ok(()) => {}
@@ -449,7 +454,27 @@ mod tests {
         let prior = render_nm_conf(&[entry("d2b-b12345678")]);
         let next = render_nm_conf(&[entry("d2b-b12345678")]);
         assert_eq!(validate_existing_managed_conf(&prior, &next), Ok(()));
-        assert_eq!(validate_existing_managed_conf_for_removal(&prior), Ok(()));
+    }
+
+    #[test]
+    fn legacy_networkmanager_projection_is_adoptable() {
+        let legacy = concat!(
+            "# managed by d2b broker - do not edit by hand\n",
+            "[keyfile]\n",
+            "unmanaged-devices=interface-name:d2b-*\n",
+        );
+        let expected = render_nm_conf(&[entry("d2b-b12345678")]);
+        assert_eq!(validate_existing_managed_conf(legacy, &expected), Ok(()));
+    }
+
+    #[test]
+    fn foreign_envelope_marker_is_rejected_for_removal() {
+        let expected = render_nm_conf(&[entry("d2b-b12345678")]);
+        let foreign = expected.replace("marker-d2b-b12345678", "foreign-owner");
+        assert_eq!(
+            validate_existing_managed_conf(&foreign, &expected),
+            Err(ApplyNmError::ForeignMarkerConflict)
+        );
     }
 
     #[test]

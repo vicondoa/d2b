@@ -3525,7 +3525,7 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                     expected_attachment_generation: req.expected_attachment_generation,
                 },
             )?;
-            crate::ops::network::remove_persistent_tap_realization(
+            crate::ops::network::mark_persistent_tap_realization_deleted(
                 &config.state_dir,
                 &req.attachment_id,
             )
@@ -3545,6 +3545,18 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
         }),
         RealBrokerRequest::CreatePersistentTap(req) => {
             let resolver = require_resolver(resolver)?;
+            let v3_fields = [
+                req.attachment_id.is_some(),
+                req.network_generation.is_some(),
+                req.attachment_generation.is_some(),
+            ];
+            if v3_fields.iter().any(|present| *present) && !v3_fields.iter().all(|present| *present)
+            {
+                return Err(BrokerError::RequestValidation {
+                    operation: "CreatePersistentTap",
+                    reason: "attachment-realization-conflict",
+                });
+            }
             if req.attachment_id.is_some() {
                 let tap_intent = resolver
                     .resolve_tap_intent(req.vm_id.as_str(), req.role_id.as_str())

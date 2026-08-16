@@ -19019,6 +19019,7 @@ fn dispatch_broker_host_prepare_as(
         };
 
     let host = load_host_artifact(state)?;
+    let resolver = load_bundle_resolver(state)?;
     if let Err(response) = dispatch_broker_ack_request(
         state,
         VERB,
@@ -19103,10 +19104,25 @@ fn dispatch_broker_host_prepare_as(
         return Ok(response);
     }
 
+    let mut bridge_ops = 0usize;
+    for env in &host.environments {
+        if let Err(error) =
+            network_effect_port::ensure_bridge(state, caller_role.clone(), &resolver, &env.env)
+        {
+            return Ok(broker_failure_response(
+                VERB,
+                format!("network bridge effect refused ({})", error.code()),
+                "Regenerate the trusted network bundle and retry host prepare.".to_owned(),
+                None,
+            ));
+        }
+        bridge_ops += 1;
+    }
+
     Ok(applied_response(
         VERB,
         format!(
-            "host prepare: applied 1 nft + {route_ops} route + {sysctl_ops} sysctl + 1 hosts + 1 nm-unmanaged ops"
+            "host prepare: applied 1 nft + {route_ops} route + {sysctl_ops} sysctl + 1 hosts + 1 nm-unmanaged + {bridge_ops} bridge ops"
         ),
     ))
 }
