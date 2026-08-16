@@ -131,8 +131,8 @@ impl AuthorityLedger {
 }
 
 /// Daemon/broker-backed implementation of the Provider dispatcher.
-pub struct DaemonUsbipDispatcher<G = NoGuestUsbipControl> {
-    state: Arc<ServerState>,
+pub struct DaemonUsbipDispatcher<'a, G = NoGuestUsbipControl> {
+    state: &'a ServerState,
     context: UsbipBindingContext,
     ledger: Arc<Mutex<AuthorityLedger>>,
     guest: G,
@@ -144,10 +144,10 @@ pub struct DaemonUsbipDispatcher<G = NoGuestUsbipControl> {
     relay_lease: Option<ServiceRelayLease>,
 }
 
-impl<G> DaemonUsbipDispatcher<G> {
+impl<'a, G> DaemonUsbipDispatcher<'a, G> {
     /// Construct one dispatcher over the daemon's broker and pidfd state.
     pub(crate) fn new(
-        state: Arc<ServerState>,
+        state: &'a ServerState,
         context: UsbipBindingContext,
         ledger: Arc<Mutex<AuthorityLedger>>,
         guest: G,
@@ -178,7 +178,7 @@ impl<G> DaemonUsbipDispatcher<G> {
     }
 
     fn ack(&self, request: BrokerRequest) -> Result<(), ServiceLifecycleError> {
-        match dispatch_broker_request_as(&self.state, request, self.broker_role()) {
+        match dispatch_broker_request_as(self.state, request, self.broker_role()) {
             Ok(BrokerResponse::Ack(response)) if response.accepted => Ok(()),
             Ok(BrokerResponse::Error(_)) | Ok(_) => Err(ServiceLifecycleError::Transient),
             Err(_) => Err(ServiceLifecycleError::Transient),
@@ -214,7 +214,7 @@ impl<G> DaemonUsbipDispatcher<G> {
             tracing_span_id: None,
         });
         let (response, received_fds) =
-            dispatch_broker_request_with_fds_timeout(&self.state, request, Duration::from_secs(10))
+            dispatch_broker_request_with_fds_timeout(self.state, request, Duration::from_secs(10))
                 .map_err(|_| BindingLifecycleError::Transient)?;
         let BrokerResponse::SpawnRunner(response) = response else {
             close_received_fds(&received_fds);
@@ -251,7 +251,7 @@ impl<G> DaemonUsbipDispatcher<G> {
     }
 }
 
-impl<G: GuestUsbipControl> UsbipBrokerDispatcher for DaemonUsbipDispatcher<G> {
+impl<'a, G: GuestUsbipControl> UsbipBrokerDispatcher for DaemonUsbipDispatcher<'a, G> {
     fn reserve_physical(
         &mut self,
         service_uid: &ResourceUid,
@@ -511,11 +511,11 @@ impl<G: GuestUsbipControl> UsbipBrokerDispatcher for DaemonUsbipDispatcher<G> {
 }
 
 /// Construct a production Provider port from a daemon state and Core context.
-pub(crate) fn production_port<G: GuestUsbipControl>(
-    state: Arc<ServerState>,
+pub(crate) fn production_port<'a, G: GuestUsbipControl>(
+    state: &'a ServerState,
     context: UsbipBindingContext,
     ledger: Arc<Mutex<AuthorityLedger>>,
     guest: G,
-) -> ProductionPort<DaemonUsbipDispatcher<G>> {
+) -> ProductionPort<DaemonUsbipDispatcher<'a, G>> {
     DaemonUsbipDispatcher::new(state, context, ledger, guest).into_port()
 }
