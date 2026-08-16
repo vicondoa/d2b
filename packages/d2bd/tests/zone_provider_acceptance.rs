@@ -182,7 +182,7 @@ impl VolumeLayoutEffectPort for &FilesystemVolume {
         _root: &VolumeRootHandle,
         entry: &d2b_provider_volume_local::EntryRequest,
     ) -> Result<(), d2b_provider_volume_local::VolumeLocalError> {
-        FilesystemVolume::provision(*self, entry)
+        FilesystemVolume::provision(self, entry)
             .map_err(|_| d2b_provider_volume_local::VolumeLocalError::EffectFailed)
     }
 
@@ -192,8 +192,8 @@ impl VolumeLayoutEffectPort for &FilesystemVolume {
         entry: &d2b_provider_volume_local::EntryRequest,
         _drift: &std::collections::BTreeSet<DriftClass>,
     ) -> Result<(), d2b_provider_volume_local::VolumeLocalError> {
-        FilesystemVolume::remove(*self, entry)
-            .and_then(|_| FilesystemVolume::provision(*self, entry))
+        FilesystemVolume::remove(self, entry)
+            .and_then(|_| FilesystemVolume::provision(self, entry))
             .map_err(|_| d2b_provider_volume_local::VolumeLocalError::EffectFailed)
     }
 
@@ -210,7 +210,7 @@ impl VolumeLayoutEffectPort for &FilesystemVolume {
         _root: &VolumeRootHandle,
         entry: &d2b_provider_volume_local::EntryRequest,
     ) -> Result<(), d2b_provider_volume_local::VolumeLocalError> {
-        FilesystemVolume::remove(*self, entry)
+        FilesystemVolume::remove(self, entry)
             .map_err(|_| d2b_provider_volume_local::VolumeLocalError::EffectFailed)
     }
 
