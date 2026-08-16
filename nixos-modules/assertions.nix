@@ -2232,6 +2232,11 @@ let
   ];
 
   unixTransportSettingKeys = [ "socketKind" ];
+  vsockTransportSettingKeys = [
+    "connectTimeoutSeconds"
+    "guestRef"
+    "portClass"
+  ];
 
   zoneAttrOr = attrs: name: fallback:
     if builtins.isAttrs attrs && builtins.hasAttr name attrs
@@ -2247,6 +2252,16 @@ let
     && builtins.elemAt parts 0 == "Provider"
     && builtins.hasAttr (builtins.elemAt parts 1) resources
     && resources.${builtins.elemAt parts 1}.type == "Provider";
+
+  zoneResolvesAs = resources: expectedType: ref:
+    let
+      parts = if builtins.isString ref then lib.splitString "/" ref else [ ];
+    in
+    builtins.isString ref
+    && lib.length parts == 2
+    && builtins.elemAt parts 0 == expectedType
+    && builtins.hasAttr (builtins.elemAt parts 1) resources
+    && resources.${builtins.elemAt parts 1}.type == expectedType;
 
   # Walk one Zone's ancestry. Returns true when the walk terminates at a
   # parentless Zone within the depth budget and never revisits a name.
@@ -2364,6 +2379,28 @@ let
               "zones.${zoneName}.resources.${linkName}: Provider/transport-unix"
               + " accepts only optional socketKind=seqpacket or socketKind=stream"
               + " and requires an empty transportCredentials list.";
+          }
+          {
+            assertion =
+              (zoneAttrOr link.spec "transportProviderRef" "")
+                != "Provider/transport-vsock"
+              || (
+                builtins.isAttrs settings
+                && lib.all (key: builtins.elem key vsockTransportSettingKeys)
+                  (builtins.attrNames settings)
+                && builtins.hasAttr "guestRef" settings
+                && zoneResolvesAs zone.resources "Guest" settings.guestRef
+                && (settings.portClass or "d2b-link") == "d2b-link"
+                && builtins.isInt (settings.connectTimeoutSeconds or 30)
+                && (settings.connectTimeoutSeconds or 30) >= 1
+                && (settings.connectTimeoutSeconds or 30) <= 60
+                && zoneAttrOr link.spec "transportCredentials" [ ] == [ ]
+              );
+            message =
+              "zones.${zoneName}.resources.${linkName}: Provider/transport-vsock"
+              + " accepts only guestRef, portClass=d2b-link, and a"
+              + " connectTimeoutSeconds from 1 through 60; transportCredentials"
+              + " must be empty.";
           }
         ])
       links);
