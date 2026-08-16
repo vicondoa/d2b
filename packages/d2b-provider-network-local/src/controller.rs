@@ -96,6 +96,8 @@ pub enum NetworkEffectError {
     Artifact,
     /// The controller reached an invalid state.
     InvalidState,
+    /// East-west forwarding was requested without the site-level opt-in.
+    EastWestHostOptInRequired,
 }
 
 impl NetworkEffectError {
@@ -113,6 +115,7 @@ impl NetworkEffectError {
             Self::CrossZoneL2 => "external-physical-nic-cross-zone-l2",
             Self::Artifact => "net-vm-artifact-resolution",
             Self::InvalidState => "network-controller-invalid-state",
+            Self::EastWestHostOptInRequired => "east-west-host-opt-in-required",
         }
     }
 }
@@ -250,6 +253,18 @@ impl core::fmt::Debug for FirewallDigest {
 
 /// All host effects injected into the controller.
 pub trait NetworkEffectPort: Send + Sync {
+    /// Validate policy that is resolved outside the Network resource.
+    ///
+    /// The default implementation keeps hermetic Providers independent of
+    /// host policy. The production Core adapter overrides it to require the
+    /// site-level east-west opt-in before any host effect is dispatched.
+    fn validate_policy(
+        &self,
+        _spec: &NetworkSpec,
+    ) -> impl Future<Output = Result<(), NetworkEffectError>> + Send {
+        core::future::ready(Ok(()))
+    }
+
     /// Ensure both Network bridges.
     fn create_bridges(
         &self,
@@ -533,6 +548,7 @@ where
         if input.host_memory_budget_available < CONFIG_VOLUME_MAX_BYTES {
             return Err(NetworkEffectError::HostMemoryBudgetExceeded);
         }
+        self.effects.validate_policy(&input.spec).await?;
 
         self.effects
             .create_bridges(&input.network_uid)

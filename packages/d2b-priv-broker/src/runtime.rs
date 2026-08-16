@@ -3508,6 +3508,14 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 operation: "DeletePersistentTap",
                 reason: error.code(),
             })?;
+            crate::ops::network::remove_persistent_tap_realization(
+                &config.state_dir,
+                &req.attachment_id,
+            )
+            .map_err(|error| BrokerError::RequestValidation {
+                operation: "DeletePersistentTap",
+                reason: error.code(),
+            })?;
             write_success_op_record!(
                 audit_log,
                 bundle_metadata,
@@ -3541,6 +3549,20 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
             let outcome =
                 crate::ops::tap::live_create_persistent_tap(&exec, resolver, &req, audit_log)
                     .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
+            if let Err(error) = crate::ops::network::persist_persistent_tap_realization(
+                &config.state_dir,
+                &req,
+                &outcome.tap_ifname,
+            ) {
+                let _ = crate::ops::network::PersistentTapBackend::delete_tap(
+                    &crate::ops::network::SystemPersistentTapBackend,
+                    outcome.tap_ifname.as_str(),
+                );
+                return Err(BrokerError::RequestValidation {
+                    operation: "CreatePersistentTap",
+                    reason: error.code(),
+                });
+            }
             let public_operation_id = format!("{}:{}", req.vm_id.as_str(), req.role_id.as_str());
             let bridge_ifname = outcome
                 .bridge_ifname

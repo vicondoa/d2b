@@ -1647,6 +1647,30 @@ let
       ])
     cfg.envs;
 
+  networkResourceEastWestAssertions = lib.flatten (lib.mapAttrsToList
+    (zoneName: zone:
+      lib.flatten (lib.mapAttrsToList
+        (resourceName: resource:
+          let
+            spec = resource.spec or { };
+            isolation = spec.isolation or { };
+          in
+          lib.optional (
+            resource.type == "Network"
+            && (isolation.allowEastWest or false)
+            && !cfg.site.allowUnsafeEastWest
+          ) {
+            assertion = false;
+            message = ''
+              d2b.zones.${zoneName}.resources.${resourceName}.spec.isolation.allowEastWest
+              requires d2b.site.allowUnsafeEastWest = true. Both the
+              Network resource opt-in and the site-level acknowledgement are
+              required before direct east-west forwarding is enabled.
+            '';
+          })
+        zone.resources))
+    cfg.zones);
+
   externalNetworkAssertions = lib.flatten (lib.mapAttrsToList
     (envName: env:
       let
@@ -2640,6 +2664,7 @@ in
     vmAssertions
     ++ qemuMediaAssertions
     ++ envAssertions
+    ++ networkResourceEastWestAssertions
     ++ externalNetworkAssertions
     ++ vsockAssertions
     ++ siteAssertions

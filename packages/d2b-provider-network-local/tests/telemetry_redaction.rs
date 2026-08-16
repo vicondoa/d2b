@@ -34,6 +34,7 @@ fn expected_error(error: Option<NetworkEffectError>) -> &'static str {
         Some(NetworkEffectError::CrossZoneL2) => "external-physical-nic-cross-zone-l2",
         Some(NetworkEffectError::Artifact) => "net-vm-artifact-resolution",
         Some(NetworkEffectError::InvalidState) => "network-controller-invalid-state",
+        Some(NetworkEffectError::EastWestHostOptInRequired) => "east-west-host-opt-in-required",
     }
 }
 
@@ -69,6 +70,7 @@ fn metric_constructor_projects_only_the_closed_schema_and_values() {
         Some(NetworkEffectError::CrossZoneL2),
         Some(NetworkEffectError::Artifact),
         Some(NetworkEffectError::InvalidState),
+        Some(NetworkEffectError::EastWestHostOptInRequired),
     ];
 
     for operation in operations {

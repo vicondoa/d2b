@@ -5,8 +5,12 @@ use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use d2b_contracts::broker_wire::DeletePersistentTapRequest;
+use d2b_contracts::{
+    broker_wire::{CreatePersistentTapRequest, DeletePersistentTapRequest},
+    v3::ResourceUid,
+};
 use d2b_core::bundle_resolver::ResolvedBridgeIntent;
+use d2b_core::host::IfName;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -29,6 +33,9 @@ pub enum NetworkOpError {
     ForeignOwnership,
     /// Persistent-TAP deletion failed transiently.
     TapDeleteFailed,
+    /// A v3 realization record was incomplete or conflicted with an existing
+    /// broker-owned record.
+    RealizationConflict,
 }
 
 impl NetworkOpError {
@@ -43,6 +50,7 @@ impl NetworkOpError {
             Self::StaleAttachmentGeneration => "stale-attachment-generation",
             Self::ForeignOwnership => "attachment-ownership-conflict",
             Self::TapDeleteFailed => "attachment-delete-failed",
+            Self::RealizationConflict => "attachment-realization-conflict",
         }
     }
 }
@@ -313,6 +321,125 @@ pub struct PersistentTapRealization {
     pub ifname: String,
     /// Trusted ownership marker written by the realization owner.
     pub ownership_marker: String,
+}
+
+fn realization_root(state_dir: &Path) -> Result<PathBuf, NetworkOpError> {
+    let root = state_dir.join("network-attachments");
+    let metadata = match fs::symlink_metadata(&root) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            fs::create_dir(&root).map_err(|_| NetworkOpError::RealizationUnavailable)?;
+            fs::symlink_metadata(&root).map_err(|_| NetworkOpError::RealizationUnavailable)?
+        }
+        Err(_) => return Err(NetworkOpError::RealizationUnavailable),
+    };
+    if !metadata.is_dir() || metadata.file_type().is_symlink() || metadata.mode() & 0o022 != 0 {
+        return Err(NetworkOpError::RealizationUnavailable);
+    }
+    Ok(root)
+}
+
+/// Persist one v3 TAP realization after the kernel link is created.
+///
+/// Legacy host-prep callers omit the v3 identity fields and remain
+/// deliberately stateless. Provider callers supply all fields, which makes
+/// restart adoption and generation-fenced finalization possible.
+pub fn persist_persistent_tap_realization(
+    state_dir: &Path,
+    request: &CreatePersistentTapRequest,
+    tap_ifname: &IfName,
+) -> Result<(), NetworkOpError> {
+    let fields = (
+        request.attachment_id.as_ref(),
+        request.network_generation,
+        request.attachment_generation,
+    );
+    let (Some(attachment_id), Some(network_generation), Some(attachment_generation)) = fields
+    else {
+        if fields.0.is_none() && fields.1.is_none() && fields.2.is_none() {
+            return Ok(());
+        }
+        return Err(NetworkOpError::RealizationConflict);
+    };
+    let root = realization_root(state_dir)?;
+    let row_path = root.join(format!("{}.json", attachment_id.as_str()));
+    let realization = PersistentTapRealization {
+        attachment_id: attachment_id.as_str().to_owned(),
+        network_generation: network_generation.get(),
+        attachment_generation: attachment_generation.get(),
+        ifname: tap_ifname.as_str().to_owned(),
+        ownership_marker: format!("d2b managed: attachment:{}", attachment_id.as_str()),
+    };
+    if let Ok(existing) = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW)
+        .open(&row_path)
+    {
+        let current: PersistentTapRealization = serde_json::from_reader(existing)
+            .map_err(|_| NetworkOpError::RealizationConflict)?;
+        if current == realization {
+            return Ok(());
+        }
+        return Err(NetworkOpError::RealizationConflict);
+    }
+    let temp_path = root.join(format!(".{}.json.tmp", attachment_id.as_str()));
+    let bytes =
+        serde_json::to_vec(&realization).map_err(|_| NetworkOpError::RealizationUnavailable)?;
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW)
+        .mode(0o640)
+        .open(&temp_path)
+        .map_err(|_| NetworkOpError::RealizationUnavailable)?;
+    use std::io::Write as _;
+    if file.write_all(&bytes).is_err() || file.sync_data().is_err() {
+        drop(file);
+        let _ = fs::remove_file(&temp_path);
+        return Err(NetworkOpError::RealizationUnavailable);
+    }
+    drop(file);
+    fs::rename(&temp_path, &row_path).map_err(|_| {
+        let _ = fs::remove_file(&temp_path);
+        NetworkOpError::RealizationUnavailable
+    })?;
+    fs::File::open(&root)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|_| NetworkOpError::RealizationUnavailable)
+}
+
+/// Remove a v3 realization after the broker confirms TAP deletion.
+pub fn remove_persistent_tap_realization(
+    state_dir: &Path,
+    attachment_id: &ResourceUid,
+) -> Result<(), NetworkOpError> {
+    let root = realization_root(state_dir)?;
+    let row_path = root.join(format!("{}.json", attachment_id.as_str()));
+    let row = match fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW)
+        .open(&row_path)
+    {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(_) => return Err(NetworkOpError::RealizationUnavailable),
+    };
+    let realization: PersistentTapRealization = serde_json::from_reader(row)
+        .map_err(|_| NetworkOpError::RealizationUnavailable)?;
+    if realization.attachment_id != attachment_id.as_str()
+        || realization.ownership_marker
+            != format!("d2b managed: attachment:{}", attachment_id.as_str())
+    {
+        return Err(NetworkOpError::ForeignOwnership);
+    }
+    match fs::remove_file(&row_path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(_) => return Err(NetworkOpError::RealizationUnavailable),
+    }
+    fs::File::open(&root)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|_| NetworkOpError::RealizationUnavailable)
 }
 
 impl core::fmt::Debug for PersistentTapRealization {
@@ -615,5 +742,81 @@ mod tests {
             assert!(!digest.contains(forbidden));
         }
         assert!(digest.starts_with("sha256:"));
+    }
+
+    #[test]
+    fn v3_realization_persists_and_removes_after_fenced_cleanup() {
+        let root = std::env::current_dir()
+            .unwrap()
+            .join("target")
+            .join(format!("network-realization-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let attachment_id = ResourceUid::parse("323e4567-e89b-42d3-a456-426614174002").unwrap();
+        let create = CreatePersistentTapRequest {
+            role_id: d2b_contracts::types::RoleId::new("network-attachment"),
+            vm_id: d2b_contracts::types::VmId::new("work-net"),
+            attachment_id: Some(attachment_id.clone()),
+            network_generation: Some(ResourceGeneration::new(4).unwrap()),
+            attachment_generation: Some(ResourceGeneration::new(7).unwrap()),
+            tracing_span_id: None,
+        };
+        let ifname = IfName::new("d2b-t12345678").unwrap();
+        persist_persistent_tap_realization(&root, &create, &ifname).unwrap();
+        let loaded = load_persistent_tap_realization(
+            &root,
+            &DeletePersistentTapRequest {
+                attachment_id: attachment_id.clone(),
+                expected_network_generation: ResourceGeneration::new(4).unwrap(),
+                expected_attachment_generation: ResourceGeneration::new(7).unwrap(),
+                tracing_span_id: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(loaded.ifname, ifname.as_str());
+        remove_persistent_tap_realization(&root, &attachment_id).unwrap();
+        assert_eq!(
+            load_persistent_tap_realization(
+                &root,
+                &DeletePersistentTapRequest {
+                    attachment_id,
+                    expected_network_generation: ResourceGeneration::new(4).unwrap(),
+                    expected_attachment_generation: ResourceGeneration::new(7).unwrap(),
+                    tracing_span_id: None,
+                },
+            ),
+            Err(NetworkOpError::RealizationUnavailable)
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn v3_realization_rejects_partial_identity_without_writing() {
+        let root = std::env::current_dir()
+            .unwrap()
+            .join("target")
+            .join(format!(
+                "network-realization-partial-{}",
+                std::process::id()
+            ));
+        let _ = fs::remove_dir_all(&root);
+        let create = CreatePersistentTapRequest {
+            role_id: d2b_contracts::types::RoleId::new("network-attachment"),
+            vm_id: d2b_contracts::types::VmId::new("work-net"),
+            attachment_id: Some(
+                ResourceUid::parse("423e4567-e89b-42d3-a456-426614174003").unwrap(),
+            ),
+            network_generation: None,
+            attachment_generation: None,
+            tracing_span_id: None,
+        };
+        assert_eq!(
+            persist_persistent_tap_realization(
+                &root,
+                &create,
+                &IfName::new("d2b-t12345678").unwrap()
+            ),
+            Err(NetworkOpError::RealizationConflict)
+        );
+        assert!(!root.exists());
     }
 }

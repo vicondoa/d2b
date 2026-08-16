@@ -9,6 +9,7 @@
 
 pub mod artifact;
 pub mod bridge_port;
+pub mod broker;
 pub mod controller;
 pub mod ifname;
 pub mod netlink;

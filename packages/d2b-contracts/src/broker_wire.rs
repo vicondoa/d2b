@@ -1335,6 +1335,15 @@ pub struct CreateOrReconcileUsersGroupsRequest {
 pub struct CreatePersistentTapRequest {
     pub role_id: RoleId,
     pub vm_id: VmId,
+    /// Optional v3 attachment realization identity. Legacy host-prep callers
+    /// omit these fields; Network Provider callers supply all three so the
+    /// broker can adopt and generation-fence the persistent TAP on restart.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attachment_id: Option<ResourceUid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub network_generation: Option<ResourceGeneration>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attachment_generation: Option<ResourceGeneration>,
     #[serde(default)]
     pub tracing_span_id: Option<TracingSpanId>,
 }

@@ -92,6 +92,9 @@ pub enum LiveHandlerError {
     /// NetworkManager reload failure after writing the unmanaged config
     /// snippet.
     NmReload(String),
+    /// A foreign or ambiguous NetworkManager ownership marker occupied the
+    /// d2b-managed file.
+    NmOwnershipConflict,
     /// swtpm-dir first-run hardening (issue #64) refused to proceed.
     /// Carries the path-free [`SwtpmDirAudit`] (with `result ==
     /// FailedClosed`) so the dispatch layer can emit the terminal
@@ -130,6 +133,7 @@ impl std::fmt::Display for LiveHandlerError {
             Self::KeysRotate(detail) => write!(f, "keys rotate: {detail}"),
             Self::HostKey(detail) => write!(f, "host key: {detail}"),
             Self::NmReload(detail) => write!(f, "networkmanager reload: {detail}"),
+            Self::NmOwnershipConflict => f.write_str("nm-managed-foreign-conflict"),
             Self::SwtpmDirHardening { reason, .. } => {
                 // PATH-FREE: only the closed-set reason slug.
                 write!(f, "swtpm-dir hardening failed: {reason}")
@@ -1082,6 +1086,13 @@ pub(crate) fn live_apply_nm_unmanaged_with_reload<F>(
 where
     F: FnMut(&[&str]) -> Result<(), String>,
 {
+    let existing = match crate::sys::path_safe::read_to_string_nofollow(&intent.file_path) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => String::new(),
+        Err(_) => return Err(LiveHandlerError::NmOwnershipConflict),
+    };
+    crate::ops::nm::validate_existing_managed_conf(&existing, &intent.contents)
+        .map_err(|_| LiveHandlerError::NmOwnershipConflict)?;
     executor
         .write_atomic_file(&intent.file_path, intent.contents.as_bytes(), intent.mode)
         .map_err(LiveHandlerError::ReconcileExec)?;
@@ -1106,6 +1117,13 @@ where
     D: FnMut() -> Result<(), String>,
     F: FnMut(&[&str]) -> Result<(), String>,
 {
+    let existing = match crate::sys::path_safe::read_to_string_nofollow(&intent.file_path) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => String::new(),
+        Err(_) => return Err(LiveHandlerError::NmOwnershipConflict),
+    };
+    crate::ops::nm::validate_existing_managed_conf(&existing, &intent.contents)
+        .map_err(|_| LiveHandlerError::NmOwnershipConflict)?;
     executor
         .write_atomic_file(&intent.file_path, intent.contents.as_bytes(), intent.mode)
         .map_err(LiveHandlerError::ReconcileExec)?;

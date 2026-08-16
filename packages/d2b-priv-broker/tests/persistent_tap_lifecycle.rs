@@ -58,6 +58,9 @@ fn delete_persistent_tap_pairs_with_create() {
     let create = CreatePersistentTapRequest {
         role_id: RoleId::new("vmm"),
         vm_id: VmId::new("work-vm"),
+        attachment_id: None,
+        network_generation: None,
+        attachment_generation: None,
         tracing_span_id: None,
     };
     let delete = request(4, 7);

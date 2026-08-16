@@ -197,6 +197,9 @@ pub mod pidfs_probe;
 // ADR 0034 startup contract check for generated storage/restart/sync artifacts.
 pub mod storage_lifecycle;
 pub mod tpm_effect_port;
+// Core-owned Network effect adapter. Provider/network-local receives only
+// typed results; this module translates its opaque intents into broker calls.
+pub mod network_effect_port;
 // Contract for bringing autostart VMs up on daemon startup (net VMs
 // first, concurrency cap, degraded-mode tolerant, idempotent). See
 // docs/reference/daemon-autostart.md.
@@ -17463,6 +17466,9 @@ fn execute_host_prep_dag(
                     d2b_contracts::broker_wire::CreatePersistentTapRequest {
                         role_id,
                         vm_id: step.bundle_ref.vm_id.clone(),
+                        attachment_id: None,
+                        network_generation: None,
+                        attachment_generation: None,
                         tracing_span_id: None,
                     },
                 );

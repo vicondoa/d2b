@@ -1730,6 +1730,7 @@ dependencies = [
  "d2b-provider-activation-nixos",
  "d2b-provider-audio-pipewire",
  "d2b-provider-device-tpm",
+ "d2b-provider-network-local",
  "d2b-provider-runtime-azure-container-apps",
  "d2b-provider-supervisor",
  "d2b-provider-system-core",
