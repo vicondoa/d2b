@@ -6,7 +6,7 @@ use d2b_contracts::v3::{ResourceUid, device::DeviceArbitration};
 use crate::settings::{GpuSettings, GpuSettingsError};
 
 /// Combined GPU Provider Process role.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum GpuProcessRole {
     /// Full GPU virtio worker.
     FullGpu,
@@ -50,6 +50,29 @@ impl GpuProcessDeclaration {
     /// Return the fixed Host placement.
     pub const fn placement(&self) -> &'static str {
         self.placement
+    }
+
+    /// Return the signed component template for this worker.
+    pub const fn template(&self) -> &'static str {
+        match self.role {
+            GpuProcessRole::FullGpu => "gpu-worker",
+            GpuProcessRole::RenderNode => "render-node-worker",
+            GpuProcessRole::Video => "video-worker",
+        }
+    }
+
+    /// Return the signed seccomp class for this worker.
+    pub const fn seccomp_class(&self) -> &'static str {
+        match self.role {
+            GpuProcessRole::FullGpu => "w1-gpu",
+            GpuProcessRole::RenderNode => "w1-gpu-render-node",
+            GpuProcessRole::Video => "w1-video",
+        }
+    }
+
+    /// Whether this worker uses the broker-pre-established user namespace.
+    pub const fn user_namespace(&self) -> bool {
+        !matches!(self.role, GpuProcessRole::Video)
     }
 }
 

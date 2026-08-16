@@ -43,6 +43,8 @@ pub mod usbip_host;
 
 // Kernel-module + device-fd handoff ops.
 pub mod device;
+// GPU-specific role, allowlist, and restart identity preflight.
+pub mod gpu;
 pub mod modprobe;
 // Security-key hidraw open op: resolves stable selector → opens
 // hidraw fd for `d2bd`'s long-lived CTAPHID relay session.
