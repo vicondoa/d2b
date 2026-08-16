@@ -8,3 +8,5 @@
 
 - Treat pause-at-boot as an initial QMP proof and bound greeting timeouts to
   fresh launches while adopted runners retry through health degradation.
+- Keep a failed fresh-launch generation terminal until finalization so a
+  stopping runner cannot be adopted or reserve device authority again.

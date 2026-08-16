@@ -295,6 +295,129 @@ fn qmp_timeout_retains_authority_until_process_exit_is_proven() {
 }
 
 #[test]
+fn failed_qmp_timeout_does_not_adopt_a_stopping_runner() {
+    let mut controller = controller();
+    let mut effect = FakeEffect::default();
+    let device = DeviceObservation {
+        device_ref: ResourceRef::parse("Device/host-kvm").unwrap(),
+        phase: DevicePhase::Ready,
+        owner_ref: Some(ResourceRef::parse("Guest/media-vm").unwrap()),
+        platform: PlatformClass::X86_64Linux,
+        authority_key: [9; 32],
+        process_identity: Some("qemu-media-runner".to_owned()),
+        media_contract: "qemu-media/v1".to_owned(),
+    };
+    let mut dependencies = d2b_provider_runtime_qemu_media::QemuMediaDependencies::ready(device);
+    dependencies.qmp_ready = false;
+    dependencies.qmp_status = None;
+    dependencies.qmp_elapsed_seconds = 30;
+
+    assert_eq!(
+        controller
+            .reconcile(&dependencies, &mut effect)
+            .unwrap_err(),
+        QemuMediaError::QmpNotReady
+    );
+    assert_eq!(controller.phase(), QemuMediaPhase::Failed);
+    let events_before_reconcile = effect.events.clone();
+
+    dependencies.qmp_ready = true;
+    dependencies.qmp_status = Some(d2b_provider_runtime_qemu_media::QmpVmStatus::Running);
+    assert_eq!(
+        controller
+            .reconcile(&dependencies, &mut effect)
+            .unwrap_err(),
+        QemuMediaError::InvalidState
+    );
+    assert_eq!(controller.phase(), QemuMediaPhase::Failed);
+    assert_eq!(effect.events, events_before_reconcile);
+    assert!(controller.recovery_state().authority_reserved);
+}
+
+#[test]
+fn failed_qmp_timeout_with_exit_proven_does_not_rereserve_on_reconcile() {
+    let mut controller = controller();
+    let mut effect = FakeEffect {
+        stop_clears_observation: true,
+        ..FakeEffect::default()
+    };
+    let device = DeviceObservation {
+        device_ref: ResourceRef::parse("Device/host-kvm").unwrap(),
+        phase: DevicePhase::Ready,
+        owner_ref: Some(ResourceRef::parse("Guest/media-vm").unwrap()),
+        platform: PlatformClass::X86_64Linux,
+        authority_key: [9; 32],
+        process_identity: Some("qemu-media-runner".to_owned()),
+        media_contract: "qemu-media/v1".to_owned(),
+    };
+    let mut dependencies = d2b_provider_runtime_qemu_media::QemuMediaDependencies::ready(device);
+    dependencies.qmp_ready = false;
+    dependencies.qmp_status = None;
+    dependencies.qmp_elapsed_seconds = 30;
+
+    assert_eq!(
+        controller
+            .reconcile(&dependencies, &mut effect)
+            .unwrap_err(),
+        QemuMediaError::QmpNotReady
+    );
+    assert_eq!(controller.phase(), QemuMediaPhase::Failed);
+    assert!(!controller.recovery_state().authority_reserved);
+    assert_eq!(
+        effect.events,
+        vec![
+            "reserve-device",
+            "launch",
+            "open-pidfd",
+            "stop",
+            "release-device",
+        ]
+    );
+
+    dependencies.qmp_ready = true;
+    dependencies.qmp_status = Some(d2b_provider_runtime_qemu_media::QmpVmStatus::Paused);
+    assert_eq!(
+        controller
+            .reconcile(&dependencies, &mut effect)
+            .unwrap_err(),
+        QemuMediaError::InvalidState
+    );
+    assert_eq!(
+        effect.events,
+        vec![
+            "reserve-device",
+            "launch",
+            "open-pidfd",
+            "stop",
+            "release-device",
+        ]
+    );
+
+    controller.finalize(&mut effect).unwrap();
+    assert_eq!(
+        effect.events,
+        vec![
+            "reserve-device",
+            "launch",
+            "open-pidfd",
+            "stop",
+            "release-device",
+            "close-media",
+            "delete-volume",
+        ]
+    );
+    assert_eq!(
+        effect
+            .events
+            .iter()
+            .filter(|event| **event == "release-device")
+            .count(),
+        1
+    );
+    assert_eq!(controller.phase(), QemuMediaPhase::Finalized);
+}
+
+#[test]
 fn adopted_runner_qmp_timeout_uses_health_retry_not_launch_age() {
     let mut controller = controller();
     let identity = ProcessIdentity::for_test("qemu-media-runner");

@@ -68,7 +68,7 @@ pub enum QemuMediaError {
     QmpNotReady,
     /// Finalization could not prove process closure.
     FinalizationIncomplete,
-    /// The controller was already finalized.
+    /// The controller cannot accept a normal reconcile transition.
     InvalidState,
 }
 
@@ -336,7 +336,12 @@ impl<E: QemuMediaEffectPort> QemuMediaController<E> {
         dependencies: &QemuMediaDependencies,
         effect: &mut E,
     ) -> Result<QemuMediaReconcileOutcome, QemuMediaError> {
-        if !self.finalizer_installed {
+        if !self.finalizer_installed
+            || matches!(
+                self.phase,
+                QemuMediaPhase::Failed | QemuMediaPhase::Finalizing | QemuMediaPhase::Finalized
+            )
+        {
             return Err(QemuMediaError::InvalidState);
         }
         let Some(device) = dependencies.device.as_ref() else {
@@ -410,6 +415,8 @@ impl<E: QemuMediaEffectPort> QemuMediaController<E> {
             if self.initial_qmp_wait_pending
                 && dependencies.qmp_elapsed_seconds >= self.config.qmp_ready_timeout_seconds
             {
+                self.initial_qmp_wait_pending = false;
+                self.phase = QemuMediaPhase::Failed;
                 if effect.stop(&identity).is_ok() && matches!(effect.observe(), Ok(None)) {
                     self.process_stopped = true;
                     if self.authority_reserved && !self.authority_released {
@@ -418,7 +425,6 @@ impl<E: QemuMediaEffectPort> QemuMediaController<E> {
                         self.authority_reserved = false;
                     }
                 }
-                self.phase = QemuMediaPhase::Failed;
                 return Err(QemuMediaError::QmpNotReady);
             }
             self.phase = if self.initial_qmp_wait_pending {
