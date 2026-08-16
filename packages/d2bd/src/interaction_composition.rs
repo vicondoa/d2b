@@ -370,6 +370,11 @@ where
         self.runtimes.is_empty()
     }
 
+    /// Borrow the Zone names that already have a composed runtime.
+    pub fn zone_names(&self) -> impl Iterator<Item = &str> {
+        self.runtimes.keys().map(String::as_str)
+    }
+
     fn runtime_for(&self, zone: &ZoneId) -> Option<&InteractionComposition<S, G>> {
         self.runtimes.get(zone.as_str())
     }
@@ -1973,8 +1978,19 @@ where
         source_event: Option<d2b_provider_clipboard_wayland::GuestSelectionEvent>,
         now_secs: u64,
     ) -> Result<String, ClipboardServiceError> {
+        let observer_user = self
+            .display_resource_evidence
+            .as_ref()
+            .map(|evidence| evidence.observer_user_ref.clone());
         self.ensure_clipboard()?
-            .capture_host_route(route, mime, bytes, source_event, now_secs)
+            .capture_host_route(
+                route,
+                mime,
+                bytes,
+                source_event,
+                observer_user.as_ref(),
+                now_secs,
+            )
             .map_err(|error| match error {
                 d2b_provider_clipboard_wayland::ClipboardRuntimeError::Service(error) => error,
                 _ => ClipboardServiceError::SessionUnauthenticated,
@@ -2183,6 +2199,13 @@ where
             .filter(|candidate| candidate.service().as_str() == service)
             .count()
             == 1;
+        let last_clipboard_family = service.starts_with("d2b.clipboard.")
+            && self
+                .sessions
+                .values()
+                .filter(|candidate| candidate.service().as_str().starts_with("d2b.clipboard."))
+                .count()
+                == 1;
         let session = self
             .sessions
             .get_mut(session_key)
@@ -2220,7 +2243,7 @@ where
             d2b_provider_clipboard_wayland::MANAGEMENT_SERVICE
             | d2b_provider_clipboard_wayland::BRIDGE_SERVICE
             | d2b_provider_clipboard_wayland::PICKER_SERVICE
-                if last_for_service =>
+                if last_clipboard_family =>
             {
                 self.clipboard.as_mut().map_or(Ok(()), |clipboard| {
                     clipboard
@@ -2248,7 +2271,7 @@ where
             _ => Ok(()),
         };
         service_cleanup.map_err(|_| "interaction-provider-cleanup-failed".to_owned())?;
-        if service.starts_with("d2b.clipboard.") {
+        if last_clipboard_family {
             self.pending_picker_receipts.clear();
             self.pending_guest_selection_events.clear();
         }

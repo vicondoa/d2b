@@ -1863,15 +1863,16 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
                             }
                         }
                         if !runtimes.is_empty() {
+                            let composed_zones = runtimes
+                                .zone_names()
+                                .map(ToOwned::to_owned)
+                                .collect::<Vec<_>>();
                             *state.interaction_runtime.lock().await = Some(runtimes);
                             let shared_stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
-                            for zone in plane.zone_ids() {
-                                let Some(resource) = plane.zone(&zone).ok() else {
+                            for zone_name in composed_zones {
+                                let Ok(zone) = ZoneId::parse(&zone_name) else {
                                     continue;
                                 };
-                                if resource.require_ready().is_err() {
-                                    continue;
-                                }
                                 match interaction_composition::spawn_interaction_listeners_with_stop(
                                     Arc::clone(&state.interaction_runtime),
                                     state

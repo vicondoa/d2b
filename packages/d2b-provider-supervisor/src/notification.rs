@@ -468,7 +468,7 @@ impl<B: NotificationLifecycleBackend> NotificationLifecycleSupervisor<B> {
             }
             if compensation_failed {
                 drop(state);
-                let _ = self.recover(plan.zone(), plan.provider_ref());
+                self.recover(plan.zone(), plan.provider_ref())?;
                 return Err("notification-lifecycle-recovery-required");
             }
             return Err(error);

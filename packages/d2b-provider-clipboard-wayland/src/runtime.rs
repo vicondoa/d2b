@@ -1,5 +1,6 @@
 //! Authenticated clipboard Provider runtime composition.
 
+use d2b_contracts::v3::ResourceRef;
 use d2b_provider_toolkit::{AuthenticatedComponentSession, AuthenticatedSessionRouteBinding};
 
 use crate::{
@@ -227,10 +228,21 @@ impl<E: ClipboardProcessEffectPort> ClipboardRuntime<E> {
         mime: &str,
         bytes: &[u8],
         source_event: Option<GuestSelectionEvent>,
+        observer_user: Option<&ResourceRef>,
         now_secs: u64,
     ) -> Result<String, ClipboardRuntimeError> {
         let authenticated = AuthenticatedClipboardSession::from_authenticated_route(route.clone())
-            .or_else(|_| AuthenticatedClipboardSession::from_display_observer_route(route))
+            .or_else(|_| AuthenticatedClipboardSession::from_display_observer_route(route.clone()))
+            .or_else(|_| {
+                observer_user
+                    .cloned()
+                    .ok_or(ClipboardServiceError::HostSessionInvalid)
+                    .and_then(|user_ref| {
+                        AuthenticatedClipboardSession::from_display_dependency_route(
+                            route, user_ref,
+                        )
+                    })
+            })
             .map_err(|_| ClipboardRuntimeError::SessionUnauthenticated)?;
         if authenticated.role() != ClipboardServiceRole::Bridge {
             return Err(ClipboardRuntimeError::SessionRoleInvalid);
