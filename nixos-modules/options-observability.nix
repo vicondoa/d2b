@@ -334,16 +334,6 @@ in
         '';
       };
 
-      includeTopologyLabels = lib.mkOption {
-        type = lib.types.bool;
-        default = false;
-        description = ''
-          Re-enable the exporter labels that expose bridge/tap and
-          TPM/graphics/audio/YubiKey topology details. Disabled by
-          default so retained metrics do not keep those host topology
-          labels unless an operator explicitly opts in for debugging.
-        '';
-      };
     };
 
     cli.traces.enable = lib.mkOption {

@@ -321,23 +321,6 @@
       '';
     };
 
-    flakePath = lib.mkOption {
-      type = lib.types.nullOr lib.types.str;
-      default = null;
-      example = "/etc/nixos";
-      description = ''
-        Default flake path the `d2b` CLI uses for per-VM
-        lifecycle subcommands (`build`, `switch`, `boot`, `test`).
-        Each invocation resolves a flake reference of the form
-        `<flakePath>#d2b-<vm>` to build the VM's closure.
-
-        Leave null for users who always pass `D2B_FLAKE` /
-        `--flake` explicitly. Setting it makes
-        `d2b switch <vm>` work without arguments on the
-        consumer's primary nixos configuration.
-      '';
-    };
-
     extraSpecialArgs = lib.mkOption {
       type = lib.types.attrsOf lib.types.unspecified;
       default = { };
