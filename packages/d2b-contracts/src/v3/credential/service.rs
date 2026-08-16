@@ -652,6 +652,7 @@ impl fmt::Debug for CredentialResponse {
 /// replace any of its authority-bearing fields.
 pub struct CredentialAuthorization {
     delivery_session_params: Option<DeliverySessionParams>,
+    authenticated_subject: Option<AuthenticatedSubjectContext>,
     session_proof: Option<Arc<dyn Any + Send + Sync>>,
     authenticated_session: Option<CredentialSessionBinding>,
 }
@@ -660,6 +661,7 @@ impl Clone for CredentialAuthorization {
     fn clone(&self) -> Self {
         Self {
             delivery_session_params: self.delivery_session_params.clone(),
+            authenticated_subject: self.authenticated_subject.clone(),
             session_proof: self.session_proof.clone(),
             authenticated_session: self.authenticated_session.clone(),
         }
@@ -669,6 +671,7 @@ impl Clone for CredentialAuthorization {
 impl PartialEq for CredentialAuthorization {
     fn eq(&self, other: &Self) -> bool {
         self.delivery_session_params == other.delivery_session_params
+            && self.authenticated_subject == other.authenticated_subject
             && match (&self.session_proof, &other.session_proof) {
                 (None, None) => true,
                 (Some(left), Some(right)) => Arc::ptr_eq(left, right),
@@ -703,9 +706,21 @@ impl CredentialAuthorization {
         }
         Ok(Self {
             delivery_session_params,
+            authenticated_subject: None,
             session_proof: None,
             authenticated_session: None,
         })
+    }
+
+    /// Construct an authorization result carrying trusted subject context.
+    pub fn new_for_subject(
+        method: CredentialMethod,
+        delivery_session_params: Option<DeliverySessionParams>,
+        authenticated_subject: AuthenticatedSubjectContext,
+    ) -> Result<Self, CredentialServiceError> {
+        let mut authorization = Self::new(method, delivery_session_params)?;
+        authorization.authenticated_subject = Some(authenticated_subject);
+        Ok(authorization)
     }
 
     /// Attach the authenticated Provider session established by the
@@ -721,6 +736,11 @@ impl CredentialAuthorization {
     /// Borrow the adapter-authorized delivery binding, when the method needs one.
     pub const fn delivery_session_params(&self) -> Option<&DeliverySessionParams> {
         self.delivery_session_params.as_ref()
+    }
+
+    /// Borrow trusted subject context supplied by the authenticated adapter.
+    pub const fn authenticated_subject_context(&self) -> Option<&AuthenticatedSubjectContext> {
+        self.authenticated_subject.as_ref()
     }
 
     /// Borrow the authenticated session, when the adapter supplied one.

@@ -1,5 +1,6 @@
 //! Credential service dispatch for the identity-Guest client.
 
+use d2b_contracts::v3::Locality;
 use d2b_contracts::v3::credential::{
     CredentialAuthorization, CredentialLeaseState, CredentialMethod, CredentialOutcomeCode,
     CredentialProvider, CredentialRequest, CredentialResponse, CredentialServiceError,
@@ -15,6 +16,7 @@ impl CredentialProvider for EntraCredentialProvider {
         request: &CredentialRequest,
         authorization: &CredentialAuthorization,
     ) -> Result<CredentialResponse, CredentialServiceError> {
+        self.authorize_request(request, authorization)?;
         match method {
             CredentialMethod::AcquireToken => self.acquire(request, authorization),
             CredentialMethod::RefreshToken => self.refresh(request, authorization),
@@ -27,7 +29,47 @@ impl CredentialProvider for EntraCredentialProvider {
     }
 }
 
+impl CredentialProvider for &EntraCredentialProvider {
+    fn dispatch(
+        &self,
+        method: CredentialMethod,
+        request: &CredentialRequest,
+        authorization: &CredentialAuthorization,
+    ) -> Result<CredentialResponse, CredentialServiceError> {
+        (*self).dispatch(method, request, authorization)
+    }
+}
+
 impl EntraCredentialProvider {
+    fn authorize_request(
+        &self,
+        request: &CredentialRequest,
+        authorization: &CredentialAuthorization,
+    ) -> Result<(), CredentialServiceError> {
+        let subject = authorization
+            .authenticated_subject_context()
+            .ok_or_else(denied)?;
+        if subject.transport_binding().locality() != Locality::Local
+            || subject.subject_ref() != self.consumer_ref()
+            || subject.execution_ref() != Some(self.placement.execution_ref())
+            || subject
+                .execution_ref()
+                .is_none_or(|execution| execution.resource_type().as_str() != "Guest")
+            || subject
+                .provider_ref()
+                .is_none_or(|provider| provider.to_canonical_string() != crate::PROVIDER_REF)
+        {
+            return Err(denied());
+        }
+        self.placement
+            .validate_zone(subject.zone_ref())
+            .map_err(|_| denied())?;
+        if request.credential_ref().resource_type().as_str() != "Credential" {
+            return Err(denied());
+        }
+        Ok(())
+    }
+
     fn acquire(
         &self,
         request: &CredentialRequest,
@@ -40,6 +82,7 @@ impl EntraCredentialProvider {
         let deadline = Self::operation_deadline(request.deadline_unix_ms())?;
         let _mutation = self.mutation_guard()?;
         let key = request.credential_ref().to_canonical_string();
+        self.ensure_lifecycle_active(&key)?;
         {
             let mut leases = self.leases.lock().map_err(|_| invariant())?;
             leases.retain(|_, record| record.metadata.state == CredentialLeaseState::Active);
@@ -71,6 +114,8 @@ impl EntraCredentialProvider {
             LeaseRecord {
                 idempotency_key: request.idempotency_key().to_owned(),
                 metadata: metadata.clone(),
+                refresh_attempts: 0,
+                health: crate::EntraResourceHealth::Ready,
             },
         );
         Ok(CredentialResponse::AcquireToken(DeliveryResponse {
@@ -91,6 +136,7 @@ impl EntraCredentialProvider {
         let deadline = Self::operation_deadline(request.deadline_unix_ms())?;
         let _mutation = self.mutation_guard()?;
         let key = request.credential_ref().to_canonical_string();
+        self.ensure_lifecycle_active(&key)?;
         let record = self
             .leases
             .lock()
@@ -98,24 +144,58 @@ impl EntraCredentialProvider {
             .get(&key)
             .cloned()
             .ok_or_else(expired)?;
+        if record.metadata.state != CredentialLeaseState::Active {
+            return Err(CredentialServiceError::new(
+                CredentialServiceErrorCode::LeaseRevoked,
+            ));
+        }
+        if record.refresh_attempts >= crate::MAX_REFRESH_ATTEMPTS {
+            return Err(CredentialServiceError::new(
+                CredentialServiceErrorCode::ProviderUnavailable,
+            ));
+        }
         let lease = EntraLeaseRef {
             credential_ref: request.credential_ref().clone(),
-            metadata: record.metadata,
+            metadata: record.metadata.clone(),
             endpoint_generation: self.placement.endpoint_generation(),
         };
-        let inspection = Self::poll_client(self.client.inspect_lease(&lease), deadline)?;
+        let inspection = match Self::poll_client(self.client.inspect_lease(&lease), deadline) {
+            Ok(inspection) => inspection,
+            Err(error) => {
+                self.record_refresh_failure(&key);
+                return Err(error);
+            }
+        };
         if inspection.state != CredentialLeaseState::Active
             || inspection.rotation_generation != lease.metadata.rotation_generation
         {
+            self.record_refresh_failure(&key);
             return Err(invariant());
         }
-        let grant = Self::poll_client(self.client.refresh_lease(&lease), deadline)?;
-        let metadata = Self::grant_metadata(grant, request.requested_expiry_unix_ms())?;
+        let grant = match Self::poll_client(self.client.refresh_lease(&lease), deadline) {
+            Ok(grant) => grant,
+            Err(error) => {
+                self.record_refresh_failure(&key);
+                return Err(error);
+            }
+        };
+        let metadata = match Self::grant_metadata(grant.clone(), request.requested_expiry_unix_ms())
+        {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                if !self.adopt_committed_refresh(&key, request.idempotency_key(), grant)? {
+                    self.record_refresh_failure(&key);
+                }
+                return Err(error);
+            }
+        };
         self.leases.lock().map_err(|_| invariant())?.insert(
-            key,
+            key.clone(),
             LeaseRecord {
                 idempotency_key: request.idempotency_key().to_owned(),
                 metadata: metadata.clone(),
+                refresh_attempts: 0,
+                health: crate::EntraResourceHealth::Ready,
             },
         );
         Ok(CredentialResponse::RefreshToken(DeliveryResponse {
@@ -151,6 +231,7 @@ impl EntraCredentialProvider {
             }
         };
         record.metadata.outcome = outcome;
+        record.health = crate::EntraResourceHealth::Revoked;
         Ok(CredentialResponse::RevokeToken(MetadataResponse {
             metadata: record.metadata.clone(),
         }))
@@ -187,6 +268,10 @@ impl EntraCredentialProvider {
 
 fn invariant() -> CredentialServiceError {
     CredentialServiceError::new(CredentialServiceErrorCode::InvariantFailure)
+}
+
+fn denied() -> CredentialServiceError {
+    CredentialServiceError::new(CredentialServiceErrorCode::OperationDenied)
 }
 
 fn expired() -> CredentialServiceError {

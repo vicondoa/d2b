@@ -7,7 +7,7 @@ use d2b_contracts::v3::credential::{
 };
 use d2b_provider_credential_entra::EntraCredentialProvider;
 
-use common::{ProviderHarness, TestAdmission, admitted, delivery, request, setup};
+use common::{ProviderHarness, TestAdmission, admitted, delivery, request, setup, subject_context};
 
 #[test]
 fn provider_returns_exactly_the_read_only_adapter_binding() {
@@ -44,7 +44,11 @@ impl TestAdmission for FixedAdmission {
         method: CredentialMethod,
         _request: &CredentialRequest,
     ) -> Result<CredentialAuthorization, CredentialServiceError> {
-        CredentialAuthorization::new(method, Some(self.authorized.clone()))
+        CredentialAuthorization::new_for_subject(
+            method,
+            Some(self.authorized.clone()),
+            subject_context(),
+        )
     }
 }
 
