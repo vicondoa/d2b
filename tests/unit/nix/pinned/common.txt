@@ -671,6 +671,7 @@ provider-projection-fields/all-eight-published-fields-match
 provider-projection-fields/every-published-field-mismatch-is-rejected
 provider-projection-fields/legacy-absent-version-is-version-skew
 provider-runtime-contracts/accepts-valid-runtime-provider-bindings
+provider-runtime-contracts-accepts-vsock-settings
 provider-runtime-contracts-allows-aca-without-optional-pull-credential
 provider-runtime-contracts-enforces-vm-arm-credential-scope
 provider-runtime-contracts/rejects-cross-zone-provider-reference
@@ -679,6 +680,9 @@ provider-runtime-contracts-rejects-process-on-wrong-owning-guest
 provider-runtime-contracts-rejects-relay-role-credential-shape
 provider-runtime-contracts-rejects-runtime-credential-with-wrong-provider
 provider-runtime-contracts/rejects-unknown-same-zone-provider-reference
+provider-runtime-contracts-rejects-vsock-credentials
+provider-runtime-contracts-rejects-vsock-raw-cid
+provider-runtime-contracts-rejects-vsock-timeout
 provider-runtime-contracts-requires-acquire-token-for-runtime-credential
 provider-runtime-contracts-requires-exact-relay-settings
 provider-runtime-contracts-requires-provider-resolution-for-processes
@@ -731,6 +735,7 @@ realms/zone-control-role-keeps-resource-and-session-verbs-closed
 realms/zone-control-seals-parent-map-without-zone-spec-parent
 realms/zone-control-unix-transport-keeps-settings-closed
 realms/zone-control-unix-transport-refuses-credentials
+realms/zone-control-vsock-transport-refuses-credentials
 realms/zone-control-zone-link-child-name-is-local
 realms/zone-control-zone-link-limits-are-bounded
 realms/zone-control-zone-link-requires-transport-provider-shape
