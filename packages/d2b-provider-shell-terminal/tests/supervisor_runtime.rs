@@ -353,3 +353,56 @@ fn supervisor_replays_output_recorded_before_reconnect() {
         .to_vec();
     assert_eq!(replay, b"hello");
 }
+
+#[test]
+fn capacity_denial_does_not_consume_the_one_shot_capability() {
+    let mut controller = controller();
+    controller
+        .insert_pool(
+            ShellPool::new(
+                "guest-alice",
+                "dev",
+                PoolSpec::new(
+                    ExecutionTarget::guest("work"),
+                    "alice",
+                    "artifact://shells/bash-login",
+                    1,
+                    1,
+                    4096,
+                )
+                .unwrap(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    let admin = Subject::new("dev", CallerOrigin::Local, [Role::ShellAdmin]);
+    let opened = controller
+        .open_session(
+            &admin,
+            OpenSessionRequest::new("guest-alice", "main", None).unwrap(),
+        )
+        .unwrap();
+    let mut supervisor = opened
+        .start_supervisor(
+            SupervisorIdentity::new([1; 32], [2; 32], opened.supervisor_generation()).unwrap(),
+        )
+        .unwrap();
+
+    let occupied = supervisor
+        .attach(
+            &admin,
+            AttachRequest::new(opened.supervisor_generation(), 0).unwrap(),
+        )
+        .unwrap();
+    let capability = opened.capability();
+    assert!(matches!(
+        supervisor.attach_with_capability(&admin, capability.clone()),
+        Err(ShellTerminalError::CapacityExceeded)
+    ));
+    supervisor.detach(&admin, occupied.attachment()).unwrap();
+    assert!(
+        supervisor
+            .attach_with_capability(&admin, capability)
+            .is_ok()
+    );
+}

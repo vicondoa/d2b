@@ -259,6 +259,16 @@ pub trait ShellAuthorityPort: Send + Sync {
         capability: &SessionCapability,
     ) -> Result<(), ShellTerminalError>;
 
+    /// Consume a one-shot capability and reserve an attachment in one admission.
+    ///
+    /// A retryable capacity refusal must not consume the capability.
+    fn admit_capability_attachment(
+        &self,
+        session: &ShellSession,
+        identity: &SupervisorIdentity,
+        capability: &SessionCapability,
+    ) -> Result<Attachment, ShellTerminalError>;
+
     /// Reserve one pool-wide attachment slot.
     fn reserve_attachment(
         &self,
@@ -534,6 +544,65 @@ impl ShellAuthorityPort for InMemoryShellAuthority {
         Ok(())
     }
 
+    fn admit_capability_attachment(
+        &self,
+        session: &ShellSession,
+        identity: &SupervisorIdentity,
+        capability: &SessionCapability,
+    ) -> Result<Attachment, ShellTerminalError> {
+        if capability.generation != identity.generation() {
+            return Err(ShellTerminalError::StaleSessionGeneration);
+        }
+        if capability.session_name != session.name() {
+            return Err(ShellTerminalError::CapabilitySessionMismatch);
+        }
+        let mut state = self.lock()?;
+        {
+            let entry = Self::session_mut(&mut state, session)?;
+            if entry.generation != identity.generation()
+                || entry.supervisor_identity.as_ref() != Some(identity)
+            {
+                return Err(ShellTerminalError::StaleSessionGeneration);
+            }
+            if !entry.capabilities.contains(&capability.id) {
+                return Err(ShellTerminalError::CapabilityReused);
+            }
+        }
+        let attachment = {
+            let pool = state
+                .pools
+                .get_mut(session.pool_name())
+                .ok_or(ShellTerminalError::CapacityExceeded)?;
+            if pool.fingerprint.name != session.pool_name()
+                || pool.retained_attachments.saturating_add(pool.entries.len())
+                    >= pool.fingerprint.max_attached as usize
+            {
+                return Err(ShellTerminalError::CapacityExceeded);
+            }
+            pool.next_attachment = pool
+                .next_attachment
+                .checked_add(1)
+                .ok_or(ShellTerminalError::CapacityExceeded)?;
+            let attachment = Attachment {
+                id: pool.next_attachment,
+                session_name: session.name().to_owned(),
+                generation: identity.generation(),
+            };
+            pool.entries.insert(attachment.clone());
+            attachment
+        };
+        if !Self::session_mut(&mut state, session)?
+            .capabilities
+            .remove(&capability.id)
+        {
+            if let Some(pool) = state.pools.get_mut(session.pool_name()) {
+                pool.entries.remove(&attachment);
+            }
+            return Err(ShellTerminalError::CapabilityReused);
+        }
+        Ok(attachment)
+    }
+
     fn reserve_attachment(
         &self,
         session: &ShellSession,
@@ -743,11 +812,11 @@ impl SessionSupervisor {
     ) -> Result<AttachReceipt, ShellTerminalError> {
         self.authorize(subject)?;
         let generation = self.identity.generation();
-        self.authority
-            .consume_capability(&self.session, &self.identity, &capability)?;
-        let attachment = self
-            .authority
-            .reserve_attachment(&self.session, &self.identity)?;
+        let attachment = self.authority.admit_capability_attachment(
+            &self.session,
+            &self.identity,
+            &capability,
+        )?;
         Ok(AttachReceipt {
             generation,
             replay: self.ring.tail(0),

@@ -195,6 +195,32 @@ fn restarted_session_advances_generation_and_rejects_old_capability() {
 }
 
 #[test]
+fn mismatched_retiring_identity_cannot_advance_generation() {
+    let mut controller = controller();
+    controller.insert_pool(pool()).unwrap();
+    let admin = Subject::new("dev", CallerOrigin::Local, [Role::ZoneAdmin]);
+    let opened = controller
+        .open_session(
+            &admin,
+            OpenSessionRequest::new("guest-alice", "main", None).unwrap(),
+        )
+        .unwrap();
+    let claimed =
+        SupervisorIdentity::new([1; 32], [2; 32], opened.supervisor_generation()).unwrap();
+    let _supervisor = opened.start_supervisor(claimed.clone()).unwrap();
+    let mismatched = SupervisorIdentity::new([3; 32], [4; 32], claimed.generation()).unwrap();
+
+    assert!(matches!(
+        controller.restart_supervisor(&admin, opened.session().name(), Some(&mismatched)),
+        Err(d2b_provider_shell_terminal::ShellTerminalError::SupervisorAmbiguous)
+    ));
+    let restarted = controller
+        .restart_supervisor(&admin, opened.session().name(), Some(&claimed))
+        .unwrap();
+    assert_eq!(restarted.supervisor_generation(), 2);
+}
+
+#[test]
 fn restored_pool_attachment_count_blocks_new_attachments() {
     let restored_pool = ShellPool::new(
         "guest-alice",
