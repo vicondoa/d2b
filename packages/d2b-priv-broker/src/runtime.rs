@@ -45,7 +45,9 @@ use crate::ops::audit_op::{
 #[cfg(feature = "layer1-bootstrap")]
 use crate::protocol::{bind_seqpacket, connect_seqpacket, recv_json_frame, send_json_frame};
 #[cfg(not(feature = "layer1-bootstrap"))]
-use crate::protocol::{bind_seqpacket, recv_json_frame, send_json_frame, send_json_frame_with_fds};
+use crate::protocol::{
+    bind_seqpacket, recv_json_frame_with_fds, send_json_frame, send_json_frame_with_fds,
+};
 
 #[cfg(feature = "layer1-bootstrap")]
 #[allow(unused_imports)]
@@ -929,6 +931,13 @@ fn handle_connection(
     ipc_rate_limiter: &Arc<Mutex<IpcRateLimiter>>,
 ) -> io::Result<()> {
     let (peer_uid, peer_gid, peer_pid) = peer_credentials(fd.as_raw_fd())?;
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    let (envelope, request_fds) = match recv_json_frame_with_fds::<RequestEnvelope>(fd.as_raw_fd())?
+    {
+        Some(envelope) => envelope,
+        None => return Ok(()),
+    };
+    #[cfg(feature = "layer1-bootstrap")]
     let envelope = match recv_json_frame::<RequestEnvelope>(fd.as_raw_fd())? {
         Some(envelope) => envelope,
         None => return Ok(()),
@@ -1053,7 +1062,7 @@ fn handle_connection(
     let dispatch_outcome = if let Some((path, reason)) = bundle_tamper {
         Err(BrokerError::BundleTampered { path, reason })
     } else {
-        dispatch_request(
+        dispatch_request_with_request_fds(
             request,
             effective_uid,
             peer_gid,
@@ -1062,6 +1071,7 @@ fn handle_connection(
             config,
             audit_log,
             resolver,
+            request_fds,
         )
     };
     #[cfg(feature = "layer1-bootstrap")]
@@ -1156,8 +1166,7 @@ fn write_refusal_audit_bounded(
 }
 
 /// Real-wire dispatch results can carry zero-or-more `OwnedFd`s
-/// alongside the JSON response (for `OpenPidfd` / `SpawnRunner`).
-/// Bootstrap dispatch never carries fds.
+/// alongside the JSON response. Bootstrap dispatch never carries fds.
 #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
 #[derive(Debug)]
 struct DispatchResult {
@@ -1512,6 +1521,12 @@ impl DispatchAuditContext {
         audit_join: Option<&AuditJoinContext>,
     ) -> Result<Self, BrokerError> {
         #[cfg(not(feature = "layer1-bootstrap"))]
+        if matches!(request, BrokerRequest::OpenPeerPidfdFromAcceptedSocket(_))
+            && audit_join.is_some()
+        {
+            return Err(BrokerError::Protocol("audit-join-not-permitted".to_owned()));
+        }
+        #[cfg(not(feature = "layer1-bootstrap"))]
         if audit_join.is_none() && Self::request_requires_audit_join(request) {
             return Err(BrokerError::Protocol("audit-join-required".to_owned()));
         }
@@ -1547,15 +1562,7 @@ impl DispatchAuditContext {
 
     #[cfg(not(feature = "layer1-bootstrap"))]
     fn request_requires_audit_join(request: &BrokerRequest) -> bool {
-        !matches!(
-            request,
-            BrokerRequest::Hello(_)
-                | BrokerRequest::ExportBrokerAudit(_)
-                | BrokerRequest::ValidateBundle
-                | BrokerRequest::PollChildReaped
-                | BrokerRequest::PauseBroker
-                | BrokerRequest::ResumeBroker
-        )
+        request.requires_authoritative_audit_join()
     }
 }
 
@@ -1853,6 +1860,11 @@ fn dispatch_request(
     }
 }
 
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn request_accepts_fd(request: &BrokerRequest) -> bool {
+    matches!(request, BrokerRequest::OpenPeerPidfdFromAcceptedSocket(_))
+}
+
 /// Real-wire dispatch. Matches the opaque-ID
 /// `d2b_contracts::broker_wire::BrokerRequest` tuple-newtype shape and
 /// wires the live executors into the dispatch arms that have a ready
@@ -1874,11 +1886,37 @@ fn dispatch_request(
     audit_log: &AuditLog,
     resolver: Option<&Arc<BundleResolver>>,
 ) -> Result<DispatchResult, BrokerError> {
+    dispatch_request_with_request_fds(
+        request,
+        caller_uid,
+        caller_gid,
+        caller_role,
+        audit_context,
+        config,
+        audit_log,
+        resolver,
+        Vec::new(),
+    )
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+#[allow(clippy::too_many_arguments)]
+fn dispatch_request_with_request_fds(
+    request: BrokerRequest,
+    caller_uid: u32,
+    caller_gid: u32,
+    caller_role: CallerRole,
+    audit_context: &DispatchAuditContext,
+    config: &ServerConfig,
+    audit_log: &AuditLog,
+    resolver: Option<&Arc<BundleResolver>>,
+    request_fds: Vec<OwnedFd>,
+) -> Result<DispatchResult, BrokerError> {
     let backend = LiveDispatchBackend {
         daemon_uid: config.d2bd_uid,
         daemon_gid: config.d2bd_gid,
     };
-    dispatch_request_with_backend(
+    dispatch_request_with_backend_and_request_fds(
         request,
         caller_uid,
         caller_gid,
@@ -1888,6 +1926,7 @@ fn dispatch_request(
         audit_log,
         resolver,
         &backend,
+        request_fds,
     )
 }
 
@@ -1904,6 +1943,34 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
     resolver: Option<&Arc<BundleResolver>>,
     backend: &B,
 ) -> Result<DispatchResult, BrokerError> {
+    dispatch_request_with_backend_and_request_fds(
+        request,
+        caller_uid,
+        caller_gid,
+        caller_role,
+        audit_context,
+        config,
+        audit_log,
+        resolver,
+        backend,
+        Vec::new(),
+    )
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+#[allow(clippy::too_many_arguments)]
+fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
+    request: BrokerRequest,
+    caller_uid: u32,
+    caller_gid: u32,
+    caller_role: CallerRole,
+    audit_context: &DispatchAuditContext,
+    config: &ServerConfig,
+    audit_log: &AuditLog,
+    resolver: Option<&Arc<BundleResolver>>,
+    backend: &B,
+    mut request_fds: Vec<OwnedFd>,
+) -> Result<DispatchResult, BrokerError> {
     use d2b_contracts::broker_wire::BrokerRequest as RealBrokerRequest;
     use d2b_core::bundle_resolver::{
         intent_id_hosts_host, intent_id_nft_env, intent_id_nft_host, intent_id_nm_unmanaged_host,
@@ -1919,6 +1986,11 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
         ($($args:tt)*) => {
             write_success_op_record_impl($($args)* audit_context)
         };
+    }
+    if !request_accepts_fd(&request) && !request_fds.is_empty() {
+        return Err(BrokerError::Protocol(
+            "unexpected request SCM_RIGHTS descriptor".to_owned(),
+        ));
     }
     match request {
         RealBrokerRequest::Hello(req) => {
@@ -2050,7 +2122,7 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
         // daemon's opaque BundleOpId via the trusted-bundle resolver,
         // (2) invokes the matching live_handlers::* executor against the
         // system executor, (3) writes the audit row, (4) returns an
-        // Ack/OpenPidfd/SpawnRunner response.
+        // Ack or fd-bearing response.
         RealBrokerRequest::ApplyNftables(req) => {
             let resolver = require_resolver(resolver)?;
             let intent = resolver
@@ -2351,6 +2423,37 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                     pidfd_index: 0,
                 });
             Ok(DispatchResult::with_fd(response, outcome.pidfd))
+        }
+        RealBrokerRequest::OpenPeerPidfdFromAcceptedSocket(_) => {
+            if request_fds.len() != 1 {
+                return Err(BrokerError::Protocol(
+                    "accepted socket request must carry exactly one descriptor".to_owned(),
+                ));
+            }
+            let accepted_socket = request_fds.pop().expect("checked descriptor count");
+            let pidfd = crate::sys::peer_pidfd_from_accepted_socket(accepted_socket.as_raw_fd())
+                .map_err(|_| BrokerError::Protocol("accepted-peer-pidfd-unavailable".to_owned()))?;
+            write_success_op_record!(
+                audit_log,
+                bundle_metadata,
+                "OpenPeerPidfdFromAcceptedSocket",
+                "accepted-socket",
+                caller_uid,
+                caller_gid,
+                &caller_role,
+                "accepted-socket",
+                "broker",
+                None,
+                OperationFields::OpenPeerPidfdFromAcceptedSocket {},
+            )?;
+            Ok(DispatchResult::with_fd(
+                BrokerResponse::OpenPeerPidfdFromAcceptedSocket(
+                    d2b_contracts::broker_wire::OpenPeerPidfdFromAcceptedSocketResponse {
+                        pidfd_index: 0,
+                    },
+                ),
+                pidfd,
+            ))
         }
         RealBrokerRequest::ObserveRunner(req) => {
             let resolver = require_resolver(resolver)?;
@@ -12856,6 +12959,7 @@ mod tests {
             BrokerResponse::QemuMediaSystemPowerdown(response) => {
                 assert_eq!(response.command, QemuMediaLifecycleAction::SystemPowerdown);
             }
+
             other => panic!("expected QemuMediaSystemPowerdown, got {other:?}"),
         }
 
@@ -12903,6 +13007,84 @@ mod tests {
         assert_eq!(qmp_records[1].operation, "QemuMediaQuit");
 
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn accepted_peer_pidfd_refuses_missing_or_multiple_request_descriptors() {
+        use d2b_contracts::broker_wire::{BrokerCallerRole, BrokerRequest};
+
+        let root = test_audit_dir("accepted-peer-pidfd-request-fds");
+        let bundle = build_test_bundle(&root);
+        let config = test_server_config(&root, &bundle.manifest_path);
+        let (log, _) = AuditLog::open_capturing(
+            &config.audit_dir,
+            Gid::current().as_raw(),
+            true,
+            config.audit_retention_days,
+        )
+        .expect("open capturing audit log");
+        let backend = FakeDispatchBackend::default();
+        let caller_role = BrokerCallerRole::AdminUid { uid: 1000 };
+        let request = BrokerRequest::OpenPeerPidfdFromAcceptedSocket(
+            d2b_contracts::broker_wire::OpenPeerPidfdFromAcceptedSocketRequest {},
+        );
+        let audit_context = DispatchAuditContext::from_request(&request, 4242, &caller_role)
+            .expect("audit context");
+
+        for request_fds in [Vec::new(), vec![dummy_fd(), dummy_fd()]] {
+            let error = dispatch_request_with_backend_and_request_fds(
+                request.clone(),
+                1000,
+                Gid::current().as_raw(),
+                caller_role.clone(),
+                &audit_context,
+                &config,
+                &log,
+                Some(&bundle.resolver),
+                &backend,
+                request_fds,
+            )
+            .expect_err("request fd count must be exact");
+            assert!(
+                matches!(error, BrokerError::Protocol(message) if message == "accepted socket request must carry exactly one descriptor")
+            );
+        }
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn accepted_peer_pidfd_refuses_caller_supplied_audit_join() {
+        use d2b_contracts::broker_wire::{
+            AuditJoinContext, BrokerCallerRole, CanonicalAuditDigest,
+        };
+
+        let request = BrokerRequest::OpenPeerPidfdFromAcceptedSocket(
+            d2b_contracts::broker_wire::OpenPeerPidfdFromAcceptedSocketRequest {},
+        );
+        let audit_join = AuditJoinContext {
+            zone_id: CanonicalAuditDigest::parse(d2b_contracts::v3::canonical_digest(
+                "d2b:test-zone",
+                b"forged zone",
+            ))
+            .expect("canonical zone digest"),
+            operation_identity: CanonicalAuditDigest::parse(d2b_contracts::v3::canonical_digest(
+                "d2b:test-operation",
+                b"forged operation",
+            ))
+            .expect("canonical operation digest"),
+        };
+
+        let error = DispatchAuditContext::from_request_with_join(
+            &request,
+            4242,
+            &BrokerCallerRole::AdminUid { uid: 1000 },
+            Some(&audit_join),
+        )
+        .expect_err("accepted-socket authority must not accept an audit join");
+        assert!(
+            matches!(error, BrokerError::Protocol(message) if message == "audit-join-not-permitted")
+        );
     }
 
     #[cfg(not(feature = "layer1-bootstrap"))]
