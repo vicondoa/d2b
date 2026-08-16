@@ -46,6 +46,23 @@ fn controller_creates_one_pool_derived_session_without_provider_state() {
 }
 
 #[test]
+fn unauthorized_requests_fail_before_resource_lookup() {
+    let mut controller = controller();
+    let viewer = Subject::new("dev", CallerOrigin::Local, [Role::Viewer]);
+    assert!(matches!(
+        controller.open_session(
+            &viewer,
+            OpenSessionRequest::new("missing", "main", None).unwrap(),
+        ),
+        Err(d2b_provider_shell_terminal::ShellTerminalError::NotAuthorized)
+    ));
+    assert!(matches!(
+        controller.restart_supervisor(&viewer, "missing-main", None),
+        Err(d2b_provider_shell_terminal::ShellTerminalError::NotAuthorized)
+    ));
+}
+
+#[test]
 fn restored_sessions_block_recreation_after_controller_restart() {
     let authority = Arc::new(InMemoryShellAuthority::new());
     let mut first_controller = ShellTerminalController::new(authority.clone());
