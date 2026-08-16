@@ -69,6 +69,8 @@ and the broker authorization matrix.
   device Provider.
 - Cross-Zone bridge-mode physical-NIC multiplexing uses the canonical
   Host-global admission check and is rejected before any host effect.
+- Every external physical-NIC attachment requires Core-admitted Host-global
+  authority before any broker effect.
 - Direct east-west forwarding requires both `NetworkSpec.isolation.allowEastWest`
   and the site-level unsafe-east-west acknowledgement.
 - IPv6 suppression runs before a new bridge is brought up and is re-applied on
