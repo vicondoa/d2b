@@ -60,6 +60,15 @@ impl PoolFingerprint {
             output_ring_capacity: pool.spec().output_ring_capacity(),
         }
     }
+
+    fn admits_session(&self, session: &ShellSession) -> bool {
+        self.name == session.pool_name()
+            && self.zone == session.zone()
+            && self.execution_target == *session.execution_target()
+            && self.workload_user == session.workload_user()
+            && self.login_shell_ref == session.login_shell_ref()
+            && session.output_ring_capacity() <= self.output_ring_capacity
+    }
 }
 
 /// A bounded direct-attach request.
@@ -324,7 +333,17 @@ impl ShellAuthorityPort for InMemoryShellAuthority {
 
     fn open_session(&self, session: &ShellSession) -> Result<(), ShellTerminalError> {
         let mut state = self.lock()?;
-        if !state.pools.contains_key(session.pool_name())
+        let pool = state
+            .pools
+            .get(session.pool_name())
+            .ok_or(ShellTerminalError::CapacityExceeded)?;
+        let session_count = state
+            .sessions
+            .values()
+            .filter(|entry| entry.fingerprint.pool_name == session.pool_name())
+            .count();
+        if !pool.fingerprint.admits_session(session)
+            || session_count >= pool.fingerprint.max_sessions as usize
             || state.sessions.contains_key(session.name())
         {
             return Err(ShellTerminalError::CapacityExceeded);
@@ -471,15 +490,15 @@ impl ShellAuthorityPort for InMemoryShellAuthority {
             return Err(ShellTerminalError::AttachmentUnknown);
         }
         let mut state = self.lock()?;
-        let Some(pool) = state
+        let pool = state
             .pools
-            .values_mut()
-            .find(|pool| pool.entries.contains(attachment))
-        else {
-            return Err(ShellTerminalError::AttachmentUnknown);
-        };
-        pool.entries.remove(attachment);
-        Ok(())
+            .get_mut(session.pool_name())
+            .ok_or(ShellTerminalError::AttachmentUnknown)?;
+        if pool.entries.remove(attachment) {
+            Ok(())
+        } else {
+            Err(ShellTerminalError::AttachmentUnknown)
+        }
     }
 
     fn reconcile_pool_attachments(

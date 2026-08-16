@@ -35,9 +35,9 @@ for the implementation contract.
 
 - `ShellTerminalController` creates pool-derived sessions after authorizing
   the current request. It requires a `ShellAuthorityPort` supplied by `d2bd`;
-  the port owns durable generation fencing, one-shot capability consumption,
-  and pool-wide attachment admission across controller and supervisor
-  processes.
+  the port owns durable session admission and generation fencing, one-shot
+  capability consumption, and pool-wide attachment admission across
+  controller and supervisor processes.
 - `SessionSupervisor` owns one session's bounded PTY replay and attachments.
 - `InMemoryShellAuthority` is a hermetic test fake only. Production uses a
   daemon authority client reconstructed from reconciled resource status and

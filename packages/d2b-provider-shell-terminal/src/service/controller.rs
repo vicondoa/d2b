@@ -92,6 +92,7 @@ impl OpenSessionResult {
 pub struct ShellTerminalController {
     pools: BTreeMap<String, ShellPool>,
     sessions: BTreeMap<String, ShellSession>,
+    trusted_sessions: std::collections::BTreeSet<String>,
     authority: Arc<dyn ShellAuthorityPort>,
 }
 
@@ -111,6 +112,7 @@ impl ShellTerminalController {
         Self {
             pools: BTreeMap::new(),
             sessions: BTreeMap::new(),
+            trusted_sessions: std::collections::BTreeSet::new(),
             authority,
         }
     }
@@ -194,6 +196,9 @@ impl ShellTerminalController {
         } else {
             decision
         };
+        if decision == AdoptionDecision::Adopted {
+            self.trusted_sessions.insert(session.name().to_owned());
+        }
         self.sessions.insert(session.name().to_owned(), session);
         Ok(decision)
     }
@@ -214,6 +219,9 @@ impl ShellTerminalController {
             .get(session.pool_name())
             .ok_or(ShellTerminalError::CapacityExceeded)?;
         Authorizer::authorize(subject, pool)?;
+        if !self.trusted_sessions.contains(session_name) {
+            return Err(ShellTerminalError::SupervisorAmbiguous);
+        }
         let supervisor_generation = self.authority.advance_session(&session)?;
         let capability = self
             .authority
@@ -261,6 +269,7 @@ impl ShellTerminalController {
             capability,
             authority: Arc::clone(&self.authority),
         };
+        self.trusted_sessions.insert(resource_name.clone());
         self.sessions.insert(resource_name, session);
         Ok(result)
     }
