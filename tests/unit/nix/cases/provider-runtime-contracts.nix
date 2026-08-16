@@ -182,7 +182,40 @@ let
     };
     d2b.zones.child = {
       parentZone = "local-root";
-      resources = { };
+      resources = {
+        child-guest = {
+          type = "Guest";
+          spec = { };
+        };
+        transport-vsock = {
+          type = "Provider";
+          spec = {
+            config = {
+              executionRef = "Guest/child-guest";
+            };
+          };
+        };
+        child-vsock-link = {
+          type = "ZoneLink";
+          spec = {
+            childZoneName = "child";
+            transportProviderRef = "Provider/transport-vsock";
+            transportSettings = {
+              guestRef = "Guest/child-guest";
+              portClass = "d2b-link";
+              connectTimeoutSeconds = 30;
+            };
+            transportCredentials = [ ];
+            disabled = false;
+            limits = {
+              maxActiveStreams = 32;
+              maxPendingIntents = 256;
+              reconnectMaxAttempts = 10;
+              reconnectWindowSecs = 300;
+            };
+          };
+        };
+      };
     };
   };
 
@@ -364,6 +397,46 @@ in
       ({ ... }: {
         d2b.zones.local-root.resources.relay-send.spec.consumerRef =
           lib.mkForce "Provider/runtime-azure-container-apps";
+      })
+    ];
+    expected = true;
+  };
+
+  "provider-runtime-contracts-accepts-vsock-settings" = {
+    expr = hasFailure "Provider/transport-vsock" [
+      contractBase
+    ];
+    expected = false;
+  };
+
+  "provider-runtime-contracts-rejects-vsock-raw-cid" = {
+    expr = hasFailure "allocator-owned fields" [
+      contractBase
+      ({ ... }: {
+        d2b.zones.child.resources.child-vsock-link.spec.transportSettings.cid =
+          lib.mkForce 42;
+      })
+    ];
+    expected = true;
+  };
+
+  "provider-runtime-contracts-rejects-vsock-credentials" = {
+    expr = hasFailure "must be empty for Provider/transport-vsock" [
+      contractBase
+      ({ ... }: {
+        d2b.zones.child.resources.child-vsock-link.spec.transportCredentials =
+          lib.mkForce [ "Credential/relay-listen" ];
+      })
+    ];
+    expected = true;
+  };
+
+  "provider-runtime-contracts-rejects-vsock-timeout" = {
+    expr = hasFailure "connectTimeoutSeconds must be between 1 and 60" [
+      contractBase
+      ({ ... }: {
+        d2b.zones.child.resources.child-vsock-link.spec.transportSettings.connectTimeoutSeconds =
+          lib.mkForce 61;
       })
     ];
     expected = true;

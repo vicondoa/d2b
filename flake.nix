@@ -427,6 +427,8 @@
           mkdir -p $out/docs/reference/schemas/v3/providers
           cp ${./docs/reference/schemas/v3/providers/transport-azure-relay.transport-settings.json} \
             $out/docs/reference/schemas/v3/providers/transport-azure-relay.transport-settings.json
+          cp ${./docs/reference/schemas/v3/providers/transport-vsock.transport-binding.json} \
+            $out/docs/reference/schemas/v3/providers/transport-vsock.transport-binding.json
         '';
         rustWorkspace = args: pkgs.rustPlatform.buildRustPackage ({
           pname = "d2b-rust-workspace";
@@ -1127,6 +1129,8 @@
           mkdir -p $out/docs/reference/schemas/v3/providers
           cp ${./docs/reference/schemas/v3/providers/transport-azure-relay.transport-settings.json} \
             $out/docs/reference/schemas/v3/providers/transport-azure-relay.transport-settings.json
+          cp ${./docs/reference/schemas/v3/providers/transport-vsock.transport-binding.json} \
+            $out/docs/reference/schemas/v3/providers/transport-vsock.transport-binding.json
           mkdir -p $out/tests
           cp -r ${./tests/golden} $out/tests/golden
           cp -r ${./tests/fixtures} $out/tests/fixtures
