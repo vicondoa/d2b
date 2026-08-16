@@ -312,6 +312,7 @@
           "external-vm-kind-rejections.nix"
           "external-vm-kind-runtime.nix"
           "niri-vm-borders.nix"
+          "guest-qemu-media-spec.nix"
           "provider-runtime-contracts.nix"
           "requested-vm-config.nix"
           "security-key-gating.nix"

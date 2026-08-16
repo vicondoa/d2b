@@ -1381,6 +1381,14 @@ dependencies = [
 [[package]]
 name = "d2b-provider-runtime-qemu-media"
 version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-contracts",
+ "d2b-process-conformance",
+ "schemars",
+ "serde",
+ "serde_json",
+ "sha2",
+]
 
 [[package]]
 name = "d2b-provider-shell-terminal"
