@@ -322,6 +322,7 @@ where
         BTreeMap<String, d2b_provider_clipboard_wayland::GuestSelectionEvent>,
     notification_port: Arc<Mutex<Box<dyn DesktopNotificationPort + Send>>>,
     display_resource_evidence: Option<CoreDisplayResourceEvidence>,
+    interaction_identity: Option<CommittedInteractionIdentity>,
     clipboard_configuration: Option<CommittedClipboardProviderConfiguration>,
     notification_configuration: Option<CommittedNotificationProviderConfiguration>,
 }
@@ -678,6 +679,10 @@ struct ClipboardCaptureRequest {
     bytes: Option<Vec<u8>>,
     #[serde(default)]
     source_entry_digest: Option<String>,
+    #[serde(default)]
+    guest_ref: Option<ResourceRef>,
+    #[serde(default)]
+    zone: Option<ZoneId>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -685,17 +690,29 @@ struct PickerCompletionRequest {
     entry_digest: String,
     mime_types: Vec<String>,
     selected_digest: Option<String>,
+    #[serde(default)]
+    guest_ref: Option<ResourceRef>,
+    #[serde(default)]
+    zone: Option<ZoneId>,
 }
 
 #[derive(Debug, Deserialize)]
 struct PickerMaterializeRequest {
     operation_id: String,
     entry_digest: String,
+    #[serde(default)]
+    guest_ref: Option<ResourceRef>,
+    #[serde(default)]
+    zone: Option<ZoneId>,
 }
 
 #[derive(Debug, Deserialize)]
 struct NotificationDeliverRequest {
     request: NotificationRequest,
+    #[serde(default)]
+    guest_ref: Option<ResourceRef>,
+    #[serde(default)]
+    zone: Option<ZoneId>,
 }
 
 fn daemon_now_secs() -> u64 {
@@ -893,6 +910,7 @@ where
             pending_guest_selection_events: BTreeMap::new(),
             notification_port: Arc::new(Mutex::new(notification_port)),
             display_resource_evidence: None,
+            interaction_identity: None,
             clipboard_configuration: None,
             notification_configuration: None,
         }
@@ -939,6 +957,7 @@ where
             pending_guest_selection_events: BTreeMap::new(),
             notification_port: Arc::new(Mutex::new(notification_port)),
             display_resource_evidence: None,
+            interaction_identity: None,
             clipboard_configuration: None,
             notification_configuration: None,
         }
@@ -1060,6 +1079,10 @@ where
         self.clipboard_configuration = configuration.clipboard().cloned();
         self.notification_configuration = configuration.notification().cloned();
         Ok(())
+    }
+
+    pub(crate) fn bind_interaction_identity(&mut self, identity: &CommittedInteractionIdentity) {
+        self.interaction_identity = Some(identity.clone());
     }
 
     /// Receive and dispatch one request that was demultiplexed by the
@@ -1302,25 +1325,49 @@ where
                     })
                     .cloned()
                     .ok_or(InteractionDispatchError::SessionUnavailable)?;
+                let guest_ref = self
+                    .select_committed_guest(
+                        d2b_provider_clipboard_wayland::BRIDGE_SERVICE,
+                        &bridge_route,
+                        request.guest_ref.as_ref(),
+                        request.zone.as_ref(),
+                    )
+                    .ok_or(InteractionDispatchError::SessionUnavailable)?;
                 let bytes = self
                     .clipboard_payload(
                         request.bytes,
                         attachments,
                         bridge_route.clone(),
+                        Some(&guest_ref),
+                        None,
                         AttachmentClass::GuestTransfer,
                     )
                     .map_err(|_| InteractionDispatchError::RuntimeFailure)?;
                 let token = self
-                    .capture_guest_clipboard_route(
+                    .capture_guest_clipboard_route_for_guest(
                         bridge_route.clone(),
+                        guest_ref.clone(),
                         &request.mime,
                         &bytes,
                         daemon_now_secs(),
                     )
                     .map_err(|_| InteractionDispatchError::RuntimeFailure)?;
                 if let Some(clipboard) = self.clipboard.as_mut() {
-                    let event = clipboard
-                        .guest_selection_event_route(bridge_route, &token, daemon_now_secs())
+                    let event =
+                        if bridge_route.subject_ref().resource_type().as_str() == "Provider" {
+                            clipboard.guest_selection_event_route_for_guest(
+                                bridge_route,
+                                guest_ref,
+                                &token,
+                                daemon_now_secs(),
+                            )
+                        } else {
+                            clipboard.guest_selection_event_route(
+                                bridge_route,
+                                &token,
+                                daemon_now_secs(),
+                            )
+                        }
                         .map_err(|_| InteractionDispatchError::RuntimeFailure)?;
                     if self.pending_guest_selection_events.len() >= 128 {
                         self.pending_guest_selection_events.pop_first();
@@ -1356,11 +1403,19 @@ where
                     .source_entry_digest
                     .as_deref()
                     .and_then(|digest| self.pending_guest_selection_events.remove(digest));
+                let observer_user_ref = self
+                    .display_resource_evidence
+                    .as_ref()
+                    .ok_or(InteractionDispatchError::SessionUnavailable)?
+                    .observer_user_ref
+                    .clone();
                 let bytes = self
                     .clipboard_payload(
                         request.bytes,
                         attachments,
                         display_route.clone(),
+                        None,
+                        Some(&observer_user_ref),
                         AttachmentClass::HostSelectionWrite,
                     )
                     .map_err(|_| InteractionDispatchError::RuntimeFailure)?;
@@ -1423,17 +1478,40 @@ where
                     .route_for_service(d2b_provider_clipboard_wayland::BRIDGE_SERVICE)
                     .cloned()
                     .ok_or(InteractionDispatchError::SessionUnavailable)?;
+                let guest_ref = self
+                    .select_committed_guest(
+                        d2b_provider_clipboard_wayland::PICKER_SERVICE,
+                        &source_route,
+                        request.guest_ref.as_ref(),
+                        request.zone.as_ref(),
+                    )
+                    .ok_or(InteractionDispatchError::SessionUnavailable)?;
                 let source = self
                     .ensure_clipboard()
                     .map_err(|_| InteractionDispatchError::RuntimeFailure)?
-                    .admit_route(source_route)
+                    .admit_route(source_route.clone())
                     .map_err(|_| InteractionDispatchError::SessionUnavailable)?;
                 let destination = self
                     .clipboard
                     .as_ref()
                     .expect("clipboard runtime was just admitted")
-                    .admit_route(destination_route)
+                    .admit_route(destination_route.clone())
                     .map_err(|_| InteractionDispatchError::SessionUnavailable)?;
+                let source = if source.subject_ref().resource_type().as_str() == "Provider" {
+                    d2b_provider_clipboard_wayland::AuthenticatedClipboardSession::
+                        from_authenticated_route_for_guest(source_route, guest_ref.clone())
+                        .map_err(|_| InteractionDispatchError::SessionUnavailable)?
+                } else {
+                    source
+                };
+                let destination =
+                    if destination.subject_ref().resource_type().as_str() == "Provider" {
+                        d2b_provider_clipboard_wayland::AuthenticatedClipboardSession::
+                            from_authenticated_route_for_guest(destination_route, guest_ref)
+                            .map_err(|_| InteractionDispatchError::SessionUnavailable)?
+                    } else {
+                        destination
+                    };
                 let picker_request = d2b_provider_clipboard_wayland::PickerRequest::from_sessions(
                     &source,
                     &destination,
@@ -1490,17 +1568,40 @@ where
                     .route_for_service(d2b_provider_clipboard_wayland::BRIDGE_SERVICE)
                     .cloned()
                     .ok_or(InteractionDispatchError::SessionUnavailable)?;
+                let guest_ref = self
+                    .select_committed_guest(
+                        d2b_provider_clipboard_wayland::PICKER_SERVICE,
+                        &source_route,
+                        request.guest_ref.as_ref(),
+                        request.zone.as_ref(),
+                    )
+                    .ok_or(InteractionDispatchError::SessionUnavailable)?;
                 let source = self
                     .ensure_clipboard()
                     .map_err(|_| InteractionDispatchError::RuntimeFailure)?
-                    .admit_route(source_route)
+                    .admit_route(source_route.clone())
                     .map_err(|_| InteractionDispatchError::SessionUnavailable)?;
                 let destination = self
                     .clipboard
                     .as_ref()
                     .expect("clipboard runtime was just admitted")
-                    .admit_route(destination_route)
+                    .admit_route(destination_route.clone())
                     .map_err(|_| InteractionDispatchError::SessionUnavailable)?;
+                let source = if source.subject_ref().resource_type().as_str() == "Provider" {
+                    d2b_provider_clipboard_wayland::AuthenticatedClipboardSession::
+                        from_authenticated_route_for_guest(source_route, guest_ref.clone())
+                        .map_err(|_| InteractionDispatchError::SessionUnavailable)?
+                } else {
+                    source
+                };
+                let destination =
+                    if destination.subject_ref().resource_type().as_str() == "Provider" {
+                        d2b_provider_clipboard_wayland::AuthenticatedClipboardSession::
+                            from_authenticated_route_for_guest(destination_route, guest_ref)
+                            .map_err(|_| InteractionDispatchError::SessionUnavailable)?
+                    } else {
+                        destination
+                    };
                 let paste_route =
                     d2b_provider_clipboard_wayland::AuthenticatedPasteRoute::from_sessions(
                         &source,
@@ -1556,6 +1657,14 @@ where
                     })
                     .cloned()
                     .ok_or(InteractionDispatchError::SessionUnavailable)?;
+                let guest_ref = self
+                    .select_committed_guest(
+                        d2b_provider_notification_desktop::SERVICE_PACKAGE,
+                        &source_route,
+                        request.guest_ref.as_ref(),
+                        request.zone.as_ref(),
+                    )
+                    .ok_or(InteractionDispatchError::SessionUnavailable)?;
                 let observer_route = self
                     .route_for_service(d2b_provider_display_wayland::SERVICE_PACKAGE)
                     .cloned()
@@ -1567,11 +1676,6 @@ where
                 {
                     return Err(InteractionDispatchError::RuntimeFailure);
                 }
-                let source_evidence =
-                    d2b_provider_notification_desktop::SessionEvidence::from_daemon_route(
-                        source_route.clone(),
-                    )
-                    .map_err(|_| InteractionDispatchError::SessionUnavailable)?;
                 let observer_user_ref = self
                     .display_resource_evidence
                     .as_ref()
@@ -1587,18 +1691,36 @@ where
                     .notification_port
                     .lock()
                     .map_err(|_| InteractionDispatchError::RuntimeFailure)?;
-                let result = self
-                    .notification
-                    .as_mut()
-                    .expect("notification runtime was just installed")
-                    .deliver_evidence(
-                        &mut **notification_port,
-                        &source_evidence,
-                        &observer_evidence,
-                        request.request,
-                        daemon_now_secs(),
-                    )
-                    .map_err(|_| InteractionDispatchError::RuntimeFailure)?;
+                let result = if source_route.subject_ref().resource_type().as_str() == "Provider" {
+                    self.notification
+                        .as_mut()
+                        .expect("notification runtime was just installed")
+                        .deliver_evidence_for_guest(
+                            &mut **notification_port,
+                            source_route,
+                            guest_ref,
+                            &observer_evidence,
+                            request.request,
+                            daemon_now_secs(),
+                        )
+                } else {
+                    let source_evidence =
+                        d2b_provider_notification_desktop::SessionEvidence::from_daemon_route(
+                            source_route,
+                        )
+                        .map_err(|_| InteractionDispatchError::SessionUnavailable)?;
+                    self.notification
+                        .as_mut()
+                        .expect("notification runtime was just installed")
+                        .deliver_evidence(
+                            &mut **notification_port,
+                            &source_evidence,
+                            &observer_evidence,
+                            request.request,
+                            daemon_now_secs(),
+                        )
+                }
+                .map_err(|_| InteractionDispatchError::RuntimeFailure)?;
                 let response = match result {
                     d2b_provider_notification_desktop::NotificationResult::Accepted {
                         notification_id,
@@ -1660,6 +1782,8 @@ where
         inline: Option<Vec<u8>>,
         attachments: Vec<OwnedAttachment>,
         route: AuthenticatedSessionRouteBinding,
+        guest_ref: Option<&ResourceRef>,
+        observer_user: Option<&ResourceRef>,
         attachment_class: AttachmentClass,
     ) -> Result<Vec<u8>, ClipboardServiceError> {
         if attachments.is_empty() {
@@ -1682,9 +1806,35 @@ where
         let packet = VerifiedPacket::from_bound_attachments(attachments)
             .map_err(|_| ClipboardServiceError::AttachmentRejected)?;
         let clipboard = self.ensure_clipboard()?;
-        let session = clipboard
-            .admit_route(route)
-            .map_err(|_| ClipboardServiceError::SessionUnauthenticated)?;
+        let session = match attachment_class {
+            AttachmentClass::GuestTransfer => {
+                let guest_ref = guest_ref
+                    .cloned()
+                    .ok_or(ClipboardServiceError::SessionUnauthenticated)?;
+                if route.subject_ref().resource_type().as_str() == "Provider" {
+                    d2b_provider_clipboard_wayland::AuthenticatedClipboardSession::
+                        from_authenticated_route_for_guest(route, guest_ref)
+                        .map_err(|_| ClipboardServiceError::SessionUnauthenticated)?
+                } else {
+                    clipboard
+                        .admit_route(route)
+                        .map_err(|_| ClipboardServiceError::SessionUnauthenticated)?
+                }
+            }
+            AttachmentClass::HostSelectionRead | AttachmentClass::HostSelectionWrite => {
+                d2b_provider_clipboard_wayland::AuthenticatedClipboardSession::
+                    from_display_observer_route(route.clone())
+                    .or_else(|_| {
+                        observer_user
+                            .cloned()
+                            .ok_or(ClipboardServiceError::HostSessionInvalid)
+                            .and_then(|user_ref| {
+                                d2b_provider_clipboard_wayland::AuthenticatedClipboardSession::
+                                    from_display_dependency_route(route, user_ref)
+                            })
+                    })?
+            }
+        };
         let verified =
             clipboard
                 .host()
@@ -1813,11 +1963,30 @@ where
             let config = match self.notification_configuration.as_ref() {
                 Some(configuration) => configuration.config(),
                 None => {
-                    let source = d2b_provider_notification_desktop::GuestSourceConfig::new(
-                        _source_route.subject_ref().clone(),
-                        _source_route.zone().clone(),
-                        Category::ALL,
-                    )?;
+                    let guest_refs =
+                        if _source_route.subject_ref().resource_type().as_str() == "Guest" {
+                            vec![_source_route.subject_ref().clone()]
+                        } else {
+                            self.interaction_identity
+                                .as_ref()
+                                .map(|identity| {
+                                    identity.allowed_guest_sources().keys().cloned().collect()
+                                })
+                                .unwrap_or_default()
+                        };
+                    if guest_refs.is_empty() {
+                        return Err("notification-guest-sources-unavailable");
+                    }
+                    let sources = guest_refs
+                        .into_iter()
+                        .map(|guest_ref| {
+                            d2b_provider_notification_desktop::GuestSourceConfig::new(
+                                guest_ref,
+                                _source_route.zone().clone(),
+                                Category::ALL,
+                            )
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
                     let display_route = self
                         .route_for_service(d2b_provider_display_wayland::SERVICE_PACKAGE)
                         .ok_or("notification-display-session-unavailable")?;
@@ -1832,14 +2001,12 @@ where
                         .ok_or("notification-display-evidence-unavailable")?
                         .observer_user_ref
                         .clone();
-                    d2b_provider_notification_desktop::NotificationProviderConfig::new(vec![
-                        source,
-                    ])?
-                    .with_host_binding(host_execution_ref, observer_user_ref)?
-                    .with_display_wayland_ref(Some(
-                        ResourceRef::parse("Provider/display-wayland")
-                            .map_err(|_| "notification-display-provider-invalid")?,
-                    ))?
+                    d2b_provider_notification_desktop::NotificationProviderConfig::new(sources)?
+                        .with_host_binding(host_execution_ref, observer_user_ref)?
+                        .with_display_wayland_ref(Some(
+                            ResourceRef::parse("Provider/display-wayland")
+                                .map_err(|_| "notification-display-provider-invalid")?,
+                        ))?
                 }
             };
             self.notification = Some(
@@ -1854,6 +2021,57 @@ where
             .notification
             .as_mut()
             .expect("notification runtime was installed"))
+    }
+
+    fn select_committed_guest(
+        &self,
+        service: &str,
+        route: &AuthenticatedSessionRouteBinding,
+        requested_guest: Option<&ResourceRef>,
+        requested_zone: Option<&ZoneId>,
+    ) -> Option<ResourceRef> {
+        if requested_zone.is_some_and(|zone| zone != route.zone()) {
+            return None;
+        }
+        let configured: Vec<ResourceRef> = match service {
+            d2b_provider_clipboard_wayland::BRIDGE_SERVICE
+            | d2b_provider_clipboard_wayland::PICKER_SERVICE
+            | d2b_provider_clipboard_wayland::MANAGEMENT_SERVICE => self
+                .clipboard_configuration
+                .as_ref()
+                .map(|configuration| configuration.guest_sources().cloned().collect())
+                .unwrap_or_default(),
+            d2b_provider_notification_desktop::SERVICE_PACKAGE => self
+                .notification_configuration
+                .as_ref()
+                .map(|configuration| configuration.guest_sources().cloned().collect())
+                .unwrap_or_default(),
+            _ => return None,
+        };
+        let candidate = requested_guest
+            .cloned()
+            .or_else(|| (configured.len() == 1).then(|| configured[0].clone()))
+            .or_else(|| {
+                (route.subject_ref().resource_type().as_str() == "Guest")
+                    .then(|| route.subject_ref().clone())
+            })?;
+        if candidate.resource_type().as_str() != "Guest"
+            || (!configured.is_empty() && !configured.iter().any(|guest| guest == &candidate))
+            || (route.subject_ref().resource_type().as_str() == "Guest"
+                && route.subject_ref() != &candidate)
+        {
+            return None;
+        }
+        if let Some(identity) = &self.interaction_identity {
+            if !identity.allowed_guest_sources().contains_key(&candidate) {
+                return None;
+            }
+        } else if route.subject_ref().resource_type().as_str() == "Provider"
+            && configured.is_empty()
+        {
+            return None;
+        }
+        Some(candidate)
     }
 
     /// Reconcile the dependent clipboard and notification runtimes after the
@@ -1889,7 +2107,7 @@ where
         let clipboard_dependency =
             d2b_provider_clipboard_wayland::DisplayDependencyEvidence::from_committed_display_route(
                 route.clone(),
-                observer_user_ref,
+                observer_user_ref.clone(),
             )
             .map_err(|_| InteractionDependencyError::DisplayUnavailable)?;
         if self
@@ -1907,9 +2125,38 @@ where
         let source_routes =
             self.routes_for_service(d2b_provider_notification_desktop::SERVICE_PACKAGE);
         if let Some(notification) = self.notification.as_mut() {
-            notification
-                .reconcile_daemon_routes(Some(route), &source_routes)
-                .map_err(InteractionDependencyError::Notification)?;
+            if let Some(configuration) = self.notification_configuration.as_ref() {
+                let guest_refs = configuration.guest_sources().cloned().collect::<Vec<_>>();
+                notification
+                    .reconcile_daemon_routes_for_guests(Some(route), &source_routes, &guest_refs)
+                    .map_err(InteractionDependencyError::Notification)?;
+            } else if let Some(identity) = self.interaction_identity.as_ref() {
+                let guest_refs = identity
+                    .allowed_guest_sources()
+                    .keys()
+                    .cloned()
+                    .collect::<Vec<_>>();
+                if source_routes
+                    .iter()
+                    .all(|source| source.subject_ref().resource_type().as_str() == "Guest")
+                {
+                    notification
+                        .reconcile_daemon_routes(Some(route), &source_routes)
+                        .map_err(InteractionDependencyError::Notification)?;
+                } else {
+                    notification
+                        .reconcile_daemon_routes_for_guests(
+                            Some(route),
+                            &source_routes,
+                            &guest_refs,
+                        )
+                        .map_err(InteractionDependencyError::Notification)?;
+                }
+            } else {
+                notification
+                    .reconcile_daemon_routes(Some(route), &source_routes)
+                    .map_err(InteractionDependencyError::Notification)?;
+            }
         }
         Ok(())
     }
@@ -1937,19 +2184,49 @@ where
         bytes: &[u8],
         now_secs: u64,
     ) -> Result<String, ClipboardServiceError> {
+        let guest = self
+            .select_committed_guest(
+                d2b_provider_clipboard_wayland::BRIDGE_SERVICE,
+                &route,
+                None,
+                None,
+            )
+            .ok_or(ClipboardServiceError::SessionUnauthenticated)?;
+        self.capture_guest_clipboard_route_for_guest(route, guest, mime, bytes, now_secs)
+    }
+
+    /// Dispatch a Guest clipboard capture through an authenticated Provider
+    /// route and a committed Guest selector.
+    pub fn capture_guest_clipboard_route_for_guest(
+        &mut self,
+        route: AuthenticatedSessionRouteBinding,
+        guest_ref: ResourceRef,
+        mime: &str,
+        bytes: &[u8],
+        now_secs: u64,
+    ) -> Result<String, ClipboardServiceError> {
         if self
-            .clipboard_configuration
-            .as_ref()
-            .is_some_and(|configuration| !configuration.allows_guest_source(route.subject_ref()))
+            .select_committed_guest(
+                d2b_provider_clipboard_wayland::BRIDGE_SERVICE,
+                &route,
+                Some(&guest_ref),
+                None,
+            )
+            .is_none()
         {
             return Err(ClipboardServiceError::SessionUnauthenticated);
         }
-        self.ensure_clipboard()?
-            .capture_guest_route(route, mime, bytes, now_secs)
-            .map_err(|error| match error {
-                d2b_provider_clipboard_wayland::ClipboardRuntimeError::Service(error) => error,
-                _ => ClipboardServiceError::SessionUnauthenticated,
-            })
+        let result = if route.subject_ref().resource_type().as_str() == "Provider" {
+            self.ensure_clipboard()?
+                .capture_guest_route_for_guest(route, guest_ref, mime, bytes, now_secs)
+        } else {
+            self.ensure_clipboard()?
+                .capture_guest_route(route, mime, bytes, now_secs)
+        };
+        result.map_err(|error| match error {
+            d2b_provider_clipboard_wayland::ClipboardRuntimeError::Service(error) => error,
+            _ => ClipboardServiceError::SessionUnauthenticated,
+        })
     }
 
     /// Dispatch a bounded host clipboard capture through the authenticated
@@ -3422,6 +3699,22 @@ impl<'a> ProductionInteractionResourceState<'a> {
     }
 }
 
+fn validate_production_interaction_resource_state<'b>(
+    resource: &ProductionInteractionResourceState<'b>,
+) -> Result<&'b CommittedInteractionIdentity, BusError> {
+    let identity = resource.identity.ok_or(BusError::InvalidConfig)?;
+    if identity.subject_ref().resource_type().as_str() != "Guest"
+        || identity.host_execution_ref().resource_type().as_str() != "Host"
+        || identity.user_ref().resource_type().as_str() != "User"
+        || identity.display_provider_generation().get() == 0
+        || identity.allowed_guest_sources().get(identity.subject_ref())
+            != Some(identity.subject_uid())
+    {
+        return Err(BusError::InvalidConfig);
+    }
+    Ok(identity)
+}
+
 /// Construct the daemon-owned authenticated interaction composition for one
 /// trusted Zone. The registrar is created here, rather than in Provider code,
 /// and its resolver binds the verified local peer to committed resources.
@@ -3437,7 +3730,7 @@ pub(crate) fn production_interaction_composition(
     >,
     BusError,
 > {
-    let identity = resource.identity.ok_or(BusError::InvalidConfig)?;
+    let identity = validate_production_interaction_resource_state(&resource)?;
     let controller_generation = resource
         .committed_policy
         .controller_generation
@@ -3467,12 +3760,27 @@ pub(crate) fn production_interaction_composition(
         vec![rule],
     )
     .map_err(|_| BusError::InvalidConfig)?;
+    let mut bound_subjects = vec![BoundSubject {
+        subject_ref: identity.subject_ref().clone(),
+        subject_uid: identity.subject_uid().clone(),
+    }];
+    if let Some(provider_uid) = identity.clipboard_provider_uid() {
+        bound_subjects.push(BoundSubject {
+            subject_ref: ResourceRef::parse("Provider/clipboard-wayland")
+                .expect("fixed clipboard Provider reference"),
+            subject_uid: provider_uid.clone(),
+        });
+    }
+    if let Some(provider_uid) = identity.notification_provider_uid() {
+        bound_subjects.push(BoundSubject {
+            subject_ref: ResourceRef::parse("Provider/notification-desktop")
+                .expect("fixed notification Provider reference"),
+            subject_uid: provider_uid.clone(),
+        });
+    }
     let binding = CompiledRoleBinding::new(
         role.role_ref.clone(),
-        [BoundSubject {
-            subject_ref: identity.subject_ref().clone(),
-            subject_uid: identity.subject_uid().clone(),
-        }],
+        bound_subjects,
         BindingScope::default(),
         d2b_resource_api::authz::RelayGrantAuthority::None,
     )
@@ -3522,8 +3830,8 @@ pub(crate) fn production_interaction_composition(
     composition
         .registrar
         .install_committed_interaction_subject(CommittedInteractionSubjectInput {
-            subject_ref: identity.subject_ref().clone(),
-            subject_uid: identity.subject_uid().clone(),
+            display_subject_ref: identity.subject_ref().clone(),
+            display_subject_uid: identity.subject_uid().clone(),
             zone_ref: ResourceRef::parse(&format!("Zone/{}", resource.zone.as_str()))
                 .map_err(|_| BusError::InvalidConfig)?,
             expected_peer_uid: daemon_uid,
@@ -3531,25 +3839,18 @@ pub(crate) fn production_interaction_composition(
             display_generation: identity.display_provider_generation(),
             clipboard_generation: identity.clipboard_provider_generation(),
             notification_generation: identity.notification_provider_generation(),
+            clipboard_provider_uid: identity.clipboard_provider_uid().cloned(),
+            notification_provider_uid: identity.notification_provider_uid().cloned(),
             controller_generation,
         })
         .map_err(|_| BusError::InvalidConfig)?;
+    composition.bind_interaction_identity(identity);
     if let Some(configuration) = resource.configuration {
         composition
             .bind_interaction_provider_configuration(configuration)
             .map_err(|_| BusError::InvalidConfig)?;
     }
-    let observer_user_ref = resource
-        .configuration
-        .and_then(CommittedInteractionProviderConfiguration::notification)
-        .map(|notification| notification.observer_user_ref().clone())
-        .or_else(|| {
-            resource
-                .configuration
-                .and_then(CommittedInteractionProviderConfiguration::clipboard)
-                .map(|clipboard| clipboard.host_user_ref().clone())
-        })
-        .ok_or(BusError::InvalidConfig)?;
+    let observer_user_ref = identity.user_ref().clone();
     let policy_ref = ResourceRef::parse("display-wayland.d2bus.org.WaylandPolicy/display-wayland")
         .map_err(|_| BusError::InvalidConfig)?;
     let dependencies = DependencyState::ready().with_zone(resource.zone);
@@ -4579,12 +4880,15 @@ mod tests {
             ResourceRef::parse("Host/host-system").unwrap(),
             ResourceRef::parse(&format!("User/uid-{uid}")).unwrap(),
             1,
+            Some(1),
+            Some(1),
             1,
-            1,
-            1,
+            None,
+            None,
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn test_interaction_composition_with_identity(
         zone: &ZoneId,
         transport_uid: u32,
@@ -4593,9 +4897,11 @@ mod tests {
         host_execution_ref: ResourceRef,
         observer_user_ref: ResourceRef,
         display_generation: u64,
-        clipboard_generation: u64,
-        notification_generation: u64,
+        clipboard_generation: Option<u64>,
+        notification_generation: Option<u64>,
         controller_generation: u64,
+        clipboard_provider_uid: Option<ResourceUid>,
+        notification_provider_uid: Option<ResourceUid>,
     ) -> InteractionComposition<ProviderSupervisor<Backend>, TestGuestFrontend> {
         let catalog = ApiCatalog::standard();
         let role = CompiledRole::new(
@@ -4623,12 +4929,25 @@ mod tests {
             ],
         )
         .expect("interaction role");
+        let mut bound_subjects = vec![BoundSubject {
+            subject_ref: subject_ref.clone(),
+            subject_uid: subject_uid.clone(),
+        }];
+        if let Some(provider_uid) = clipboard_provider_uid.as_ref() {
+            bound_subjects.push(BoundSubject {
+                subject_ref: ResourceRef::parse("Provider/clipboard-wayland").unwrap(),
+                subject_uid: provider_uid.clone(),
+            });
+        }
+        if let Some(provider_uid) = notification_provider_uid.as_ref() {
+            bound_subjects.push(BoundSubject {
+                subject_ref: ResourceRef::parse("Provider/notification-desktop").unwrap(),
+                subject_uid: provider_uid.clone(),
+            });
+        }
         let binding = CompiledRoleBinding::new(
             role.role_ref.clone(),
-            [BoundSubject {
-                subject_ref: subject_ref.clone(),
-                subject_uid: subject_uid.clone(),
-            }],
+            bound_subjects,
             BindingScope::default(),
             d2b_resource_api::authz::RelayGrantAuthority::None,
         )
@@ -4667,16 +4986,18 @@ mod tests {
         .unwrap();
         registrar
             .install_committed_interaction_subject(CommittedInteractionSubjectInput {
-                subject_ref: subject_ref.clone(),
-                subject_uid,
+                display_subject_ref: subject_ref.clone(),
+                display_subject_uid: subject_uid.clone(),
                 zone_ref: ResourceRef::parse(&format!("Zone/{}", zone.as_str())).unwrap(),
                 expected_peer_uid: transport_uid,
                 execution_ref: host_execution_ref.clone(),
                 display_generation: ResourceGeneration::new(display_generation).unwrap(),
-                clipboard_generation: Some(ResourceGeneration::new(clipboard_generation).unwrap()),
-                notification_generation: Some(
-                    ResourceGeneration::new(notification_generation).unwrap(),
-                ),
+                clipboard_generation: clipboard_generation
+                    .map(|generation| ResourceGeneration::new(generation).unwrap()),
+                notification_generation: notification_generation
+                    .map(|generation| ResourceGeneration::new(generation).unwrap()),
+                clipboard_provider_uid: clipboard_provider_uid.clone(),
+                notification_provider_uid: notification_provider_uid.clone(),
                 controller_generation: ControllerGeneration::new(controller_generation).unwrap(),
             })
             .unwrap();
@@ -4705,12 +5026,24 @@ mod tests {
                 FilterInput::default(),
                 FilterInput::default(),
                 DependencyState::ready().with_zone(zone.clone()),
-                observer_user_ref,
+                observer_user_ref.clone(),
                 ZoneRevision::new(display_generation),
                 true,
             )
             .unwrap(),
         );
+        composition.bind_interaction_identity(&CommittedInteractionIdentity::for_test(
+            subject_ref.clone(),
+            subject_uid.clone(),
+            host_execution_ref.clone(),
+            observer_user_ref.clone(),
+            BTreeMap::from([(subject_ref, subject_uid)]),
+            ResourceGeneration::new(display_generation).unwrap(),
+            clipboard_generation.map(|generation| ResourceGeneration::new(generation).unwrap()),
+            clipboard_provider_uid,
+            notification_generation.map(|generation| ResourceGeneration::new(generation).unwrap()),
+            notification_provider_uid,
+        ));
         composition
     }
 
@@ -4738,12 +5071,83 @@ mod tests {
                 ResourceRef::parse("Host/host").unwrap(),
                 ResourceRef::parse("User/alice").unwrap(),
                 7,
-                11,
-                13,
+                Some(11),
+                Some(13),
                 17,
+                None,
+                None,
             ),
         );
         runtimes
+    }
+
+    fn provider_bound_test_interaction_composition(
+        zone: &ZoneId,
+        transport_uid: u32,
+        guest_sources: &[(&str, &str)],
+    ) -> InteractionComposition<ProviderSupervisor<Backend>, TestGuestFrontend> {
+        let first_guest = ResourceRef::parse(guest_sources[0].0).unwrap();
+        let first_uid = ResourceUid::parse(guest_sources[0].1).unwrap();
+        let clipboard_provider_uid =
+            ResourceUid::parse("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb").unwrap();
+        let notification_provider_uid =
+            ResourceUid::parse("cccccccc-cccc-4ccc-8ccc-cccccccccccc").unwrap();
+        let mut composition = test_interaction_composition_with_identity(
+            zone,
+            transport_uid,
+            first_guest.clone(),
+            first_uid.clone(),
+            ResourceRef::parse("Host/host").unwrap(),
+            ResourceRef::parse("User/alice").unwrap(),
+            7,
+            Some(11),
+            Some(13),
+            17,
+            Some(clipboard_provider_uid.clone()),
+            Some(notification_provider_uid.clone()),
+        );
+        let allowed_guest_sources = guest_sources
+            .iter()
+            .map(|(guest_ref, guest_uid)| {
+                (
+                    ResourceRef::parse(guest_ref).unwrap(),
+                    ResourceUid::parse(*guest_uid).unwrap(),
+                )
+            })
+            .collect();
+        composition.bind_interaction_identity(&CommittedInteractionIdentity::for_test(
+            first_guest,
+            first_uid,
+            ResourceRef::parse("Host/host").unwrap(),
+            ResourceRef::parse("User/alice").unwrap(),
+            allowed_guest_sources,
+            ResourceGeneration::new(7).unwrap(),
+            Some(ResourceGeneration::new(11).unwrap()),
+            Some(clipboard_provider_uid),
+            Some(ResourceGeneration::new(13).unwrap()),
+            Some(notification_provider_uid),
+        ));
+        composition
+    }
+
+    fn display_only_test_interaction_composition(
+        zone: &ZoneId,
+        transport_uid: u32,
+    ) -> InteractionComposition<ProviderSupervisor<Backend>, TestGuestFrontend> {
+        test_interaction_composition_with_identity(
+            zone,
+            transport_uid,
+            ResourceRef::parse("Guest/work").unwrap(),
+            ResourceUid::parse("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa").unwrap(),
+            ResourceRef::parse("Host/host").unwrap(),
+            ResourceRef::parse("User/alice").unwrap(),
+            7,
+            None,
+            None,
+            17,
+            None,
+            None,
+        )
     }
 
     fn test_unix_transport(
@@ -5166,6 +5570,321 @@ mod tests {
                 .map_or(0, InteractionComposition::session_count),
             0
         );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn provider_transport_authorizes_each_committed_guest_and_preserves_display() {
+        let directory = tempfile::tempdir().unwrap();
+        let zone = ZoneId::parse("work").unwrap();
+        let uid = nix::unistd::getuid().as_raw();
+        let runtime = Arc::new(AsyncMutex::new(Some({
+            let mut runtimes = InteractionRuntimeSet::new();
+            runtimes.insert(
+                zone.clone(),
+                provider_bound_test_interaction_composition(
+                    &zone,
+                    uid,
+                    &[
+                        ("Guest/alpha", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"),
+                        ("Guest/beta", "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"),
+                    ],
+                ),
+            );
+            runtimes
+        })));
+        let services = [
+            d2b_provider_display_wayland::SERVICE_PACKAGE,
+            d2b_provider_clipboard_wayland::BRIDGE_SERVICE,
+            d2b_provider_notification_desktop::SERVICE_PACKAGE,
+        ];
+        let mut clients = Vec::new();
+        for service in services {
+            let path = directory
+                .path()
+                .join(service.replace('.', "-"))
+                .with_extension("sock");
+            let listener = bind_interaction_listener(&path, uid).unwrap();
+            let (client, server) =
+                establish_test_client(&listener, &runtime, &zone, service, uid, &path).await;
+            clients.push((service, path, listener, client, server));
+        }
+
+        let (display_service, _, _, display, _) = &clients[0];
+        let display_spec = WaylandSessionSpec::new(
+            ResourceRef::parse("Guest/alpha").unwrap(),
+            ResourceRef::parse("Host/host").unwrap(),
+            ResourceRef::parse("User/alice").unwrap(),
+            ResourceRef::parse("display-wayland.d2bus.org.WaylandPolicy/display-wayland").unwrap(),
+            d2b_provider_display_wayland::DisplayIdentity::new(
+                "provider-transport-display",
+                "#112233",
+                "#223344",
+                "#334455",
+            )
+            .unwrap(),
+            true,
+        )
+        .unwrap();
+        let ready = dispatch_test_request(
+            display,
+            display_service,
+            200,
+            "DisplayService/Reconcile",
+            serde_json::to_vec(&serde_json::json!({"spec": display_spec})).unwrap(),
+        )
+        .await;
+        assert_eq!(ready.status().code(), TtrpcCode::OK);
+
+        let (bridge_service, _, _, bridge, _) = &clients[1];
+        for (stream_id, guest_ref) in [(201, "Guest/alpha"), (202, "Guest/beta")] {
+            let response = dispatch_test_request(
+                bridge,
+                bridge_service,
+                stream_id,
+                "ClipboardBridgeService/CaptureGuest",
+                serde_json::to_vec(&serde_json::json!({
+                    "guest_ref": guest_ref,
+                    "zone": "work",
+                    "mime": "text/plain",
+                    "bytes": [stream_id as u8],
+                }))
+                .unwrap(),
+            )
+            .await;
+            assert_eq!(response.status().code(), TtrpcCode::OK);
+        }
+        let third_guest = dispatch_test_request(
+            bridge,
+            bridge_service,
+            203,
+            "ClipboardBridgeService/CaptureGuest",
+            serde_json::to_vec(&serde_json::json!({
+                "guest_ref": "Guest/third",
+                "zone": "work",
+                "mime": "text/plain",
+                "bytes": [1],
+            }))
+            .unwrap(),
+        )
+        .await;
+        assert_eq!(third_guest.status().code(), TtrpcCode::UNAUTHENTICATED);
+        let wrong_zone = dispatch_test_request(
+            bridge,
+            bridge_service,
+            204,
+            "ClipboardBridgeService/CaptureGuest",
+            serde_json::to_vec(&serde_json::json!({
+                "guest_ref": "Guest/alpha",
+                "zone": "other",
+                "mime": "text/plain",
+                "bytes": [1],
+            }))
+            .unwrap(),
+        )
+        .await;
+        assert_eq!(wrong_zone.status().code(), TtrpcCode::UNAUTHENTICATED);
+
+        let (notification_service, _, _, notification, _) = &clients[2];
+        for (stream_id, guest_ref, key) in [
+            (205, "Guest/alpha", "provider-alpha"),
+            (206, "Guest/beta", "provider-beta"),
+        ] {
+            let response = dispatch_test_request(
+                notification,
+                notification_service,
+                stream_id,
+                "NotificationService/Deliver",
+                serde_json::to_vec(&serde_json::json!({
+                    "guest_ref": guest_ref,
+                    "zone": "work",
+                    "request": {
+                        "summary": "Update",
+                        "body": "A bounded body",
+                        "category": "system.info",
+                        "idempotencyKey": key,
+                    },
+                }))
+                .unwrap(),
+            )
+            .await;
+            assert_eq!(response.status().code(), TtrpcCode::OK);
+        }
+        let bad_notification = dispatch_test_request(
+            notification,
+            notification_service,
+            207,
+            "NotificationService/Deliver",
+            serde_json::to_vec(&serde_json::json!({
+                "guest_ref": "Guest/third",
+                "zone": "work",
+                "request": {
+                    "summary": "Update",
+                    "body": "A bounded body",
+                    "category": "system.info",
+                    "idempotencyKey": "provider-third",
+                },
+            }))
+            .unwrap(),
+        )
+        .await;
+        assert_eq!(bad_notification.status().code(), TtrpcCode::UNAUTHENTICATED);
+
+        let display_observe = dispatch_test_request(
+            display,
+            display_service,
+            208,
+            "DisplayService/Observe",
+            Vec::new(),
+        )
+        .await;
+        assert_eq!(display_observe.status().code(), TtrpcCode::OK);
+        assert!(
+            String::from_utf8(display_observe.payload)
+                .unwrap()
+                .contains("\"ready\":true")
+        );
+
+        let finalize = dispatch_test_request(
+            display,
+            display_service,
+            209,
+            "DisplayService/Finalize",
+            Vec::new(),
+        )
+        .await;
+        assert_eq!(finalize.status().code(), TtrpcCode::OK);
+        for (_, _, _, _, server) in clients {
+            assert!(server.await.unwrap().is_ok());
+        }
+    }
+
+    #[test]
+    fn production_composition_refuses_missing_or_wrong_committed_identity() {
+        let zone = ZoneId::parse("work").unwrap();
+        let policy = PolicySnapshot {
+            policy_revision: 7,
+            api_catalog_revision: 1,
+            active_configuration_revision: d2b_contracts::v3::ConfigurationGeneration::new(7)
+                .unwrap(),
+            controller_generation: Some(d2b_contracts::v3::ControllerGeneration::new(17).unwrap()),
+        };
+        let missing = ProductionInteractionResourceState::new(
+            zone.clone(),
+            policy,
+            ZoneRevision::new(7),
+            true,
+            None,
+            None,
+        );
+        assert!(validate_production_interaction_resource_state(&missing).is_err());
+
+        let guest_ref = ResourceRef::parse("Guest/work").unwrap();
+        let guest_uid = ResourceUid::parse("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa").unwrap();
+        let wrong_uid = ResourceUid::parse("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb").unwrap();
+        let wrong = CommittedInteractionIdentity::for_test(
+            guest_ref.clone(),
+            guest_uid.clone(),
+            ResourceRef::parse("Host/host").unwrap(),
+            ResourceRef::parse("User/alice").unwrap(),
+            BTreeMap::from([(guest_ref, wrong_uid.clone())]),
+            ResourceGeneration::new(7).unwrap(),
+            None,
+            None,
+            None,
+            None,
+        );
+        let wrong_state = ProductionInteractionResourceState::new(
+            zone,
+            policy,
+            ZoneRevision::new(7),
+            true,
+            None,
+            Some(&wrong),
+        );
+        assert!(validate_production_interaction_resource_state(&wrong_state).is_err());
+        assert_ne!(wrong.subject_uid(), &wrong_uid);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn display_only_composition_is_ready_from_committed_wayland_identity() {
+        let directory = tempfile::tempdir().unwrap();
+        let zone = ZoneId::parse("work").unwrap();
+        let uid = nix::unistd::getuid().as_raw();
+        let runtime = Arc::new(AsyncMutex::new(Some({
+            let mut runtimes = InteractionRuntimeSet::new();
+            runtimes.insert(
+                zone.clone(),
+                display_only_test_interaction_composition(&zone, uid),
+            );
+            runtimes
+        })));
+        let service = d2b_provider_display_wayland::SERVICE_PACKAGE;
+        let path = directory
+            .path()
+            .join(service.replace('.', "-"))
+            .with_extension("sock");
+        let listener = bind_interaction_listener(&path, uid).unwrap();
+        let (client, server) =
+            establish_test_client(&listener, &runtime, &zone, service, uid, &path).await;
+        let display_spec = WaylandSessionSpec::new(
+            ResourceRef::parse("Guest/work").unwrap(),
+            ResourceRef::parse("Host/host").unwrap(),
+            ResourceRef::parse("User/alice").unwrap(),
+            ResourceRef::parse("display-wayland.d2bus.org.WaylandPolicy/display-wayland").unwrap(),
+            d2b_provider_display_wayland::DisplayIdentity::new(
+                "display-only",
+                "#112233",
+                "#223344",
+                "#334455",
+            )
+            .unwrap(),
+            true,
+        )
+        .unwrap();
+        let reconcile = dispatch_test_request(
+            &client,
+            service,
+            300,
+            "DisplayService/Reconcile",
+            serde_json::to_vec(&serde_json::json!({"spec": display_spec})).unwrap(),
+        )
+        .await;
+        assert_eq!(reconcile.status().code(), TtrpcCode::OK);
+        {
+            let guard = runtime.lock().await;
+            let composition = guard
+                .as_ref()
+                .and_then(|set| set.runtime_for(&zone))
+                .unwrap();
+            assert!(
+                composition
+                    .display
+                    .as_ref()
+                    .is_some_and(|display| display.is_ready())
+            );
+            let route = composition.route_for_service(service).unwrap();
+            assert_eq!(
+                route
+                    .context()
+                    .execution_ref()
+                    .unwrap()
+                    .to_canonical_string(),
+                "Host/host"
+            );
+            assert_eq!(route.provider_generation().unwrap().get(), 7);
+            assert!(
+                !composition.has_service_session(d2b_provider_clipboard_wayland::BRIDGE_SERVICE)
+            );
+            assert!(
+                !composition
+                    .has_service_session(d2b_provider_notification_desktop::SERVICE_PACKAGE)
+            );
+        }
+        let finalize =
+            dispatch_test_request(&client, service, 301, "DisplayService/Finalize", Vec::new())
+                .await;
+        assert_eq!(finalize.status().code(), TtrpcCode::OK);
+        assert!(server.await.unwrap().is_ok());
     }
 
     #[test]

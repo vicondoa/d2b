@@ -83,6 +83,34 @@ impl SessionEvidence {
         })
     }
 
+    /// Project an authenticated Provider transport into one Guest selected
+    /// from committed daemon state.
+    pub fn from_daemon_route_for_guest(
+        route: AuthenticatedSessionRouteBinding,
+        guest_ref: ResourceRef,
+    ) -> Result<Self, AdmissionError> {
+        if route.service().as_str() != crate::SERVICE_PACKAGE
+            || route
+                .provider_ref()
+                .is_none_or(|provider| provider.to_canonical_string() != crate::PROVIDER_REF)
+            || route.provider_generation().is_none()
+            || route.evidence_class() != EvidenceClass::UnixPeer
+            || route.locality() != d2b_contracts::v3::Locality::Local
+            || route.subject_ref().resource_type().as_str() != "Provider"
+            || guest_ref.resource_type().as_str() != "Guest"
+            || route.reconnect_generation().get() == 0
+        {
+            return Err(AdmissionError::SessionUnauthenticated);
+        }
+        Ok(Self {
+            subject_ref: guest_ref,
+            zone: route.zone().clone(),
+            generation: route.reconnect_generation().get(),
+            purpose: AdmissionPurpose::NotificationSource,
+            transport: TransportClass::UnixSeqpacket,
+        })
+    }
+
     /// Admit a local desktop observer from the daemon's authenticated display
     /// route.  The observer identity is still taken from verified route
     /// metadata; only the service package differs because the display route

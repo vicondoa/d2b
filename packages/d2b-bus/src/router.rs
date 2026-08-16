@@ -1259,6 +1259,34 @@ impl UnixSubjectRecord {
         })
     }
 
+    fn provider_for_uid(
+        subject_ref: ResourceRef,
+        subject_uid: ResourceUid,
+        zone_ref: ResourceRef,
+        expected_peer_uid: u32,
+    ) -> d2b_session::Result<Self> {
+        if subject_ref.resource_type().as_str() != "Provider"
+            || zone_ref.resource_type().as_str() != "Zone"
+        {
+            return Err(d2b_session::SessionError::new(
+                d2b_session::contract::SessionErrorCode::SubjectMismatch,
+            ));
+        }
+        Ok(Self {
+            kind: UnixSubjectKind::Provider,
+            subject_ref,
+            subject_uid,
+            zone_ref,
+            expected_peer: None,
+            expected_peer_uid: Some(expected_peer_uid),
+            service: None,
+            provider_ref: None,
+            provider_generation: None,
+            controller_generation: None,
+            execution_ref: None,
+        })
+    }
+
     pub(crate) fn with_provider(
         mut self,
         provider_ref: ResourceRef,
@@ -1484,14 +1512,20 @@ impl core::fmt::Debug for AuthoritativeUnixSubjectResolver {
 
 /// Trusted committed state used to install daemon-owned interaction subjects.
 pub struct CommittedInteractionSubjectInput {
-    pub subject_ref: ResourceRef,
-    pub subject_uid: ResourceUid,
+    /// The Guest identity committed by the display WaylandSession.
+    pub display_subject_ref: ResourceRef,
+    /// The UID committed for the display WaylandSession Guest.
+    pub display_subject_uid: ResourceUid,
     pub zone_ref: ResourceRef,
     pub expected_peer_uid: u32,
     pub execution_ref: ResourceRef,
     pub display_generation: ResourceGeneration,
     pub clipboard_generation: Option<ResourceGeneration>,
     pub notification_generation: Option<ResourceGeneration>,
+    /// The committed Provider UID used for clipboard service routes.
+    pub clipboard_provider_uid: Option<ResourceUid>,
+    /// The committed Provider UID used for notification service routes.
+    pub notification_provider_uid: Option<ResourceUid>,
     pub controller_generation: ControllerGeneration,
 }
 
@@ -2395,14 +2429,16 @@ impl ZoneRegistrar {
         committed: CommittedInteractionSubjectInput,
     ) -> d2b_session::Result<()> {
         let CommittedInteractionSubjectInput {
-            subject_ref,
-            subject_uid,
+            display_subject_ref,
+            display_subject_uid,
             zone_ref,
             expected_peer_uid,
             execution_ref,
             display_generation,
             clipboard_generation,
             notification_generation,
+            clipboard_provider_uid,
+            notification_provider_uid,
             controller_generation,
         } = committed;
         let services = [(
@@ -2414,8 +2450,8 @@ impl ZoneRegistrar {
         for (service, provider_ref, generation) in services {
             subjects.push(
                 UnixSubjectRecord::guest_for_uid(
-                    subject_ref.clone(),
-                    subject_uid.clone(),
+                    display_subject_ref.clone(),
+                    display_subject_uid.clone(),
                     zone_ref.clone(),
                     expected_peer_uid,
                 )?
@@ -2426,23 +2462,45 @@ impl ZoneRegistrar {
             );
         }
         if let Some(generation) = clipboard_generation {
+            let (subject_ref, subject_uid, provider_ref) =
+                if let Some(provider_uid) = clipboard_provider_uid {
+                    (
+                        ResourceRef::parse("Provider/clipboard-wayland")
+                            .expect("fixed clipboard Provider ref"),
+                        provider_uid,
+                        ResourceRef::parse("Provider/clipboard-wayland")
+                            .expect("fixed clipboard Provider ref"),
+                    )
+                } else {
+                    (
+                        display_subject_ref.clone(),
+                        display_subject_uid.clone(),
+                        ResourceRef::parse("Provider/clipboard-wayland")
+                            .expect("fixed clipboard Provider ref"),
+                    )
+                };
             for service in [
                 ServicePackage::ClipboardV3,
                 ServicePackage::ClipboardBridgeV3,
                 ServicePackage::ClipboardPickerCoordV3,
             ] {
                 subjects.push(
-                    UnixSubjectRecord::guest_for_uid(
-                        subject_ref.clone(),
-                        subject_uid.clone(),
-                        zone_ref.clone(),
-                        expected_peer_uid,
-                    )?
-                    .with_provider(
-                        ResourceRef::parse("Provider/clipboard-wayland")
-                            .expect("fixed clipboard Provider ref"),
-                        generation,
-                    )?
+                    if provider_uid_is_provider(&subject_ref) {
+                        UnixSubjectRecord::provider_for_uid(
+                            subject_ref.clone(),
+                            subject_uid.clone(),
+                            zone_ref.clone(),
+                            expected_peer_uid,
+                        )?
+                    } else {
+                        UnixSubjectRecord::guest_for_uid(
+                            subject_ref.clone(),
+                            subject_uid.clone(),
+                            zone_ref.clone(),
+                            expected_peer_uid,
+                        )?
+                    }
+                    .with_provider(provider_ref.clone(), generation)?
                     .with_controller_generation(controller_generation)
                     .with_execution_ref(execution_ref.clone())?
                     .for_service(service),
@@ -2450,18 +2508,40 @@ impl ZoneRegistrar {
             }
         }
         if let Some(generation) = notification_generation {
+            let (subject_ref, subject_uid, provider_ref) =
+                if let Some(provider_uid) = notification_provider_uid {
+                    (
+                        ResourceRef::parse("Provider/notification-desktop")
+                            .expect("fixed notification Provider ref"),
+                        provider_uid,
+                        ResourceRef::parse("Provider/notification-desktop")
+                            .expect("fixed notification Provider ref"),
+                    )
+                } else {
+                    (
+                        display_subject_ref,
+                        display_subject_uid,
+                        ResourceRef::parse("Provider/notification-desktop")
+                            .expect("fixed notification Provider ref"),
+                    )
+                };
             subjects.push(
-                UnixSubjectRecord::guest_for_uid(
-                    subject_ref,
-                    subject_uid,
-                    zone_ref,
-                    expected_peer_uid,
-                )?
-                .with_provider(
-                    ResourceRef::parse("Provider/notification-desktop")
-                        .expect("fixed notification Provider ref"),
-                    generation,
-                )?
+                if provider_uid_is_provider(&subject_ref) {
+                    UnixSubjectRecord::provider_for_uid(
+                        subject_ref,
+                        subject_uid,
+                        zone_ref,
+                        expected_peer_uid,
+                    )?
+                } else {
+                    UnixSubjectRecord::guest_for_uid(
+                        subject_ref,
+                        subject_uid,
+                        zone_ref.clone(),
+                        expected_peer_uid,
+                    )?
+                }
+                .with_provider(provider_ref, generation)?
                 .with_controller_generation(controller_generation)
                 .with_execution_ref(execution_ref)?
                 .for_service(ServicePackage::NotificationV3),
@@ -2682,6 +2762,10 @@ impl ZoneRegistrar {
         ingress.closed = true;
         Ok(())
     }
+}
+
+fn provider_uid_is_provider(subject_ref: &ResourceRef) -> bool {
+    subject_ref.resource_type().as_str() == "Provider"
 }
 
 impl core::fmt::Debug for ZoneRegistrar {

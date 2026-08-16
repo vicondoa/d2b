@@ -192,6 +192,27 @@ impl<E: ClipboardProcessEffectPort> ClipboardRuntime<E> {
             .map_err(ClipboardRuntimeError::Service)
     }
 
+    /// Capture one Guest selection through an authenticated Provider
+    /// transport and a daemon-validated committed Guest projection.
+    pub fn capture_guest_route_for_guest(
+        &mut self,
+        route: AuthenticatedSessionRouteBinding,
+        guest_ref: ResourceRef,
+        mime: &str,
+        bytes: &[u8],
+        now_secs: u64,
+    ) -> Result<String, ClipboardRuntimeError> {
+        let authenticated =
+            AuthenticatedClipboardSession::from_authenticated_route_for_guest(route, guest_ref)
+                .map_err(|_| ClipboardRuntimeError::SessionUnauthenticated)?;
+        if authenticated.role() != ClipboardServiceRole::Bridge {
+            return Err(ClipboardRuntimeError::SessionRoleInvalid);
+        }
+        self.host
+            .capture_guest(&authenticated, mime, bytes, now_secs)
+            .map_err(ClipboardRuntimeError::Service)
+    }
+
     /// Issue an authenticated, opaque echo-suppression event for one live
     /// Guest selection.
     pub fn guest_selection_event_route(
@@ -201,6 +222,23 @@ impl<E: ClipboardProcessEffectPort> ClipboardRuntime<E> {
         now_secs: u64,
     ) -> Result<GuestSelectionEvent, ClipboardRuntimeError> {
         let authenticated = self.admit_route(route)?;
+        self.host
+            .guest_selection_event(&authenticated, entry_digest, now_secs)
+            .map_err(ClipboardRuntimeError::Service)
+    }
+
+    /// Issue an echo-suppression event for a daemon-validated committed Guest
+    /// projection over an authenticated Provider transport.
+    pub fn guest_selection_event_route_for_guest(
+        &mut self,
+        route: AuthenticatedSessionRouteBinding,
+        guest_ref: ResourceRef,
+        entry_digest: &str,
+        now_secs: u64,
+    ) -> Result<GuestSelectionEvent, ClipboardRuntimeError> {
+        let authenticated =
+            AuthenticatedClipboardSession::from_authenticated_route_for_guest(route, guest_ref)
+                .map_err(|_| ClipboardRuntimeError::SessionUnauthenticated)?;
         self.host
             .guest_selection_event(&authenticated, entry_digest, now_secs)
             .map_err(ClipboardRuntimeError::Service)

@@ -81,6 +81,25 @@ impl AuthenticatedClipboardSession {
         })
     }
 
+    /// Project an authenticated Provider transport into one Guest selected
+    /// from committed daemon state.
+    pub fn from_authenticated_route_for_guest(
+        route: AuthenticatedSessionRouteBinding,
+        guest_ref: ResourceRef,
+    ) -> Result<Self, ClipboardServiceError> {
+        let mut session = Self::from_authenticated_route(route.clone())?;
+        if guest_ref.resource_type().as_str() != "Guest"
+            || route.subject_ref().resource_type().as_str() != "Provider"
+            || route.evidence_class() != d2b_contracts::v3::EvidenceClass::UnixPeer
+            || route.locality() != d2b_contracts::v3::Locality::Local
+            || route.reconnect_generation().get() == 0
+        {
+            return Err(ClipboardServiceError::SessionUnauthenticated);
+        }
+        session.subject_ref = guest_ref;
+        Ok(session)
+    }
+
     /// Admit the daemon's authenticated desktop User route for host capture.
     pub fn from_display_observer_route(
         route: AuthenticatedSessionRouteBinding,

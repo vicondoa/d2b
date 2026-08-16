@@ -1,5 +1,6 @@
 //! Authenticated notification Provider runtime composition.
 
+use d2b_contracts::v3::ResourceRef;
 use d2b_provider_toolkit::{AuthenticatedComponentSession, AuthenticatedSessionRouteBinding};
 
 use crate::{
@@ -150,6 +151,22 @@ impl<E: NotificationProcessEffectPort> NotificationRuntime<E> {
         )
     }
 
+    /// Deliver using an authenticated Provider transport and one Guest
+    /// selected from committed daemon state.
+    pub fn deliver_evidence_for_guest<P: DesktopNotificationPort + ?Sized>(
+        &mut self,
+        port: &mut P,
+        source_route: AuthenticatedSessionRouteBinding,
+        guest_ref: ResourceRef,
+        observer_session: &SessionEvidence,
+        request: NotificationRequest,
+        now_secs: u64,
+    ) -> Result<NotificationResult, NotificationError> {
+        let source_session = SessionEvidence::from_daemon_route_for_guest(source_route, guest_ref)
+            .map_err(|_| NotificationError::InvalidOpaqueKey)?;
+        self.deliver_evidence(port, &source_session, observer_session, request, now_secs)
+    }
+
     /// Consume one action capability using an authenticated observer session.
     pub fn invoke_action<C>(
         &mut self,
@@ -291,6 +308,33 @@ impl<E: NotificationProcessEffectPort> NotificationRuntime<E> {
             .iter()
             .cloned()
             .map(|route| self.daemon_source_route_evidence(route))
+            .collect::<Result<Vec<_>, _>>()?;
+        self.controller
+            .reconcile_daemon_display_with_effects(
+                display,
+                &self.config,
+                &source_evidence,
+                &mut self.effects,
+            )
+            .map_err(|_| NotificationRuntimeError::ReconciliationFailed)
+    }
+
+    /// Reconcile configured Guest source projections over one authenticated
+    /// daemon-owned Provider transport.
+    pub fn reconcile_daemon_routes_for_guests(
+        &mut self,
+        display: Option<AuthenticatedSessionRouteBinding>,
+        source_routes: &[AuthenticatedSessionRouteBinding],
+        guest_refs: &[ResourceRef],
+    ) -> Result<SourceReconcileResult, NotificationRuntimeError> {
+        let source_evidence = source_routes
+            .iter()
+            .flat_map(|route| {
+                guest_refs.iter().map(|guest_ref| {
+                    SessionEvidence::from_daemon_route_for_guest(route.clone(), guest_ref.clone())
+                        .map_err(|_| NotificationRuntimeError::SessionAdmissionFailed)
+                })
+            })
             .collect::<Result<Vec<_>, _>>()?;
         self.controller
             .reconcile_daemon_display_with_effects(

@@ -79,6 +79,7 @@ use d2b_core_controller::zone_status::{
     SystemCoreStatusEmitter, ZoneRuntimeMetadata, ZoneStatusInput,
 };
 use d2b_provider_clipboard_wayland::Policy as ClipboardPolicy;
+use d2b_provider_display_wayland::WaylandSessionSpec;
 use d2b_provider_notification_desktop::{Category, GuestSourceConfig, NotificationProviderConfig};
 use d2b_provider_system_core::{
     HostCapabilityClass, HostObservationReport, HostProbeEffectPort, HostProbeMetadata,
@@ -255,12 +256,44 @@ pub(crate) struct CommittedInteractionIdentity {
     subject_ref: ResourceRef,
     subject_uid: ResourceUid,
     host_execution_ref: ResourceRef,
+    user_ref: ResourceRef,
+    allowed_guest_sources: BTreeMap<ResourceRef, ResourceUid>,
     display_provider_generation: ResourceGeneration,
     clipboard_provider_generation: Option<ResourceGeneration>,
+    clipboard_provider_uid: Option<ResourceUid>,
     notification_provider_generation: Option<ResourceGeneration>,
+    notification_provider_uid: Option<ResourceUid>,
 }
 
 impl CommittedInteractionIdentity {
+    #[cfg(test)]
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn for_test(
+        subject_ref: ResourceRef,
+        subject_uid: ResourceUid,
+        host_execution_ref: ResourceRef,
+        user_ref: ResourceRef,
+        allowed_guest_sources: BTreeMap<ResourceRef, ResourceUid>,
+        display_provider_generation: ResourceGeneration,
+        clipboard_provider_generation: Option<ResourceGeneration>,
+        clipboard_provider_uid: Option<ResourceUid>,
+        notification_provider_generation: Option<ResourceGeneration>,
+        notification_provider_uid: Option<ResourceUid>,
+    ) -> Self {
+        Self {
+            subject_ref,
+            subject_uid,
+            host_execution_ref,
+            user_ref,
+            allowed_guest_sources,
+            display_provider_generation,
+            clipboard_provider_generation,
+            clipboard_provider_uid,
+            notification_provider_generation,
+            notification_provider_uid,
+        }
+    }
+
     pub(crate) fn subject_ref(&self) -> &ResourceRef {
         &self.subject_ref
     }
@@ -273,6 +306,14 @@ impl CommittedInteractionIdentity {
         &self.host_execution_ref
     }
 
+    pub(crate) fn user_ref(&self) -> &ResourceRef {
+        &self.user_ref
+    }
+
+    pub(crate) fn allowed_guest_sources(&self) -> &BTreeMap<ResourceRef, ResourceUid> {
+        &self.allowed_guest_sources
+    }
+
     pub(crate) const fn display_provider_generation(&self) -> ResourceGeneration {
         self.display_provider_generation
     }
@@ -281,8 +322,16 @@ impl CommittedInteractionIdentity {
         self.clipboard_provider_generation
     }
 
+    pub(crate) fn clipboard_provider_uid(&self) -> Option<&ResourceUid> {
+        self.clipboard_provider_uid.as_ref()
+    }
+
     pub(crate) const fn notification_provider_generation(&self) -> Option<ResourceGeneration> {
         self.notification_provider_generation
+    }
+
+    pub(crate) fn notification_provider_uid(&self) -> Option<&ResourceUid> {
+        self.notification_provider_uid.as_ref()
     }
 }
 
@@ -335,10 +384,15 @@ impl CommittedClipboardProviderConfiguration {
         self.audit_capacity
     }
 
-    pub(crate) fn host_user_ref(&self) -> &ResourceRef {
-        &self.host_user_ref
+    pub(crate) fn resource_uid(&self) -> &ResourceUid {
+        &self.resource_uid
     }
 
+    pub(crate) fn guest_sources(&self) -> impl Iterator<Item = &ResourceRef> {
+        self.guest_sources.iter()
+    }
+
+    #[cfg(test)]
     pub(crate) fn allows_guest_source(&self, source: &ResourceRef) -> bool {
         self.guest_sources.contains(source)
     }
@@ -392,6 +446,17 @@ impl CommittedNotificationProviderConfiguration {
         self.config
             .host_user_ref()
             .expect("committed notification configuration always binds a host User")
+    }
+
+    pub(crate) fn resource_uid(&self) -> &ResourceUid {
+        &self.resource_uid
+    }
+
+    pub(crate) fn guest_sources(&self) -> impl Iterator<Item = &ResourceRef> {
+        self.config
+            .guest_sources()
+            .iter()
+            .map(|source| source.source_ref())
     }
 
     fn is_integrity_bound(&self) -> bool {
@@ -920,24 +985,19 @@ impl ZoneResourceRuntime {
                 }
                 Ok(Some(_)) | Err(_) => (None, true),
             };
-        let interaction_identity = match interaction_provider_configuration.as_ref() {
-            Some(configuration) => {
-                match load_committed_interaction_identity(
-                    &zone,
-                    &store,
-                    store_metadata.current_revision,
-                    configuration,
-                )
-                .await
-                {
-                    Ok(identity) => Some(identity),
-                    Err(_) => {
-                        interaction_provider_configuration_refused = true;
-                        None
-                    }
-                }
+        let interaction_identity = match load_committed_interaction_identity(
+            &zone,
+            &store,
+            store_metadata.current_revision,
+            interaction_provider_configuration.as_ref(),
+        )
+        .await
+        {
+            Ok(identity) => Some(identity),
+            Err(_) => {
+                interaction_provider_configuration_refused = true;
+                None
             }
-            None => None,
         };
         let backend = Arc::new(RedbBackend::from_arc(Arc::clone(&store)));
         let api = Arc::new(
@@ -2985,37 +3045,52 @@ async fn load_committed_interaction_identity(
     zone: &ZoneId,
     store: &RedbResourceStore,
     current_revision: ZoneRevision,
-    configuration: &CommittedInteractionProviderConfiguration,
+    configuration: Option<&CommittedInteractionProviderConfiguration>,
 ) -> Result<CommittedInteractionIdentity, ResourceRuntimeError> {
-    let mut guest_refs = BTreeSet::new();
-    let mut host_execution_refs = BTreeSet::new();
-    if let Some(clipboard) = configuration.clipboard() {
-        guest_refs.extend(clipboard.guest_sources.iter().cloned());
-        host_execution_refs.insert(clipboard.host_execution_ref.clone());
-    }
-    if let Some(notification) = configuration.notification() {
-        guest_refs.extend(
-            notification
-                .config
-                .guest_sources()
-                .iter()
-                .map(|source| source.source_ref().clone()),
-        );
-        host_execution_refs.insert(notification.host_execution_ref.clone());
-    }
-    let [subject_ref] = guest_refs
-        .into_iter()
-        .collect::<Vec<_>>()
-        .try_into()
+    let session_resource_type = ResourceTypeName::parse("display-wayland.d2bus.org.WaylandSession")
         .map_err(|_| ResourceRuntimeError::InteractionConfigurationUnavailable)?;
-    let [host_execution_ref] = host_execution_refs
-        .into_iter()
-        .collect::<Vec<_>>()
-        .try_into()
+    let operation = StoreOperationContext {
+        operation_id: "interaction-wayland-session".to_owned(),
+        idempotency_key: None,
+        correlation_id: "interaction-wayland-session".to_owned(),
+        trace_id: None,
+        deadline_ms: 10_000,
+    };
+    let page = store
+        .list(StoreListRequest {
+            operation,
+            zone: zone.clone(),
+            resource_types: vec![session_resource_type],
+            resource_names: Vec::new(),
+            filters: Vec::new(),
+            page_size: 2,
+            cursor: None,
+            projection: StoreProjection::Full,
+        })
+        .await
         .map_err(|_| ResourceRuntimeError::InteractionConfigurationUnavailable)?;
+    if page.next_cursor.is_some() || page.resources.len() != 1 {
+        return Err(ResourceRuntimeError::InteractionConfigurationUnavailable);
+    }
+    let session_resource = page
+        .resources
+        .into_iter()
+        .next()
+        .ok_or(ResourceRuntimeError::InteractionConfigurationUnavailable)?;
+    let session_spec = committed_wayland_session_spec(zone, current_revision, &session_resource)?;
+    let subject_ref = session_spec.guest_ref().clone();
+    let host_execution_ref = session_spec.host_ref().clone();
+    let user_ref = session_spec.user_ref().clone();
+    let expected_policy_ref =
+        ResourceRef::parse("display-wayland.d2bus.org.WaylandPolicy/display-wayland")
+            .map_err(|_| ResourceRuntimeError::InteractionConfigurationUnavailable)?;
+    if session_spec.policy_ref() != &expected_policy_ref {
+        return Err(ResourceRuntimeError::InteractionConfigurationUnavailable);
+    }
     let subject_uid = committed_resource_uid(zone, store, current_revision, &subject_ref).await?;
     let _host_uid =
         committed_resource_uid(zone, store, current_revision, &host_execution_ref).await?;
+    let _user_uid = committed_resource_uid(zone, store, current_revision, &user_ref).await?;
 
     let display_ref = ResourceRef::parse("Provider/display-wayland")
         .map_err(|_| ResourceRuntimeError::InteractionConfigurationUnavailable)?;
@@ -3028,20 +3103,92 @@ async fn load_committed_interaction_identity(
         "display-wayland",
     )?;
 
+    let mut allowed_guest_sources = BTreeMap::from([(subject_ref.clone(), subject_uid.clone())]);
+    let mut clipboard_provider_generation = None;
+    let mut clipboard_provider_uid = None;
+    let mut notification_provider_generation = None;
+    let mut notification_provider_uid = None;
+    if let Some(configuration) = configuration {
+        if !configuration.is_complete() {
+            return Err(ResourceRuntimeError::InteractionConfigurationUnavailable);
+        }
+        if let Some(clipboard) = configuration.clipboard() {
+            if clipboard.host_execution_ref != host_execution_ref
+                || clipboard.host_user_ref != user_ref
+                || clipboard.display_wayland_ref != display_ref
+            {
+                return Err(ResourceRuntimeError::InteractionConfigurationUnavailable);
+            }
+            for guest_ref in &clipboard.guest_sources {
+                let uid = committed_resource_uid(zone, store, current_revision, guest_ref).await?;
+                allowed_guest_sources.insert(guest_ref.clone(), uid);
+            }
+            clipboard_provider_generation = Some(clipboard.resource_generation);
+            clipboard_provider_uid = Some(clipboard.resource_uid().clone());
+        }
+        if let Some(notification) = configuration.notification() {
+            if notification.host_execution_ref != host_execution_ref
+                || notification.observer_user_ref() != &user_ref
+                || notification.config.display_wayland_ref() != Some(&display_ref)
+            {
+                return Err(ResourceRuntimeError::InteractionConfigurationUnavailable);
+            }
+            for guest_ref in notification.guest_sources() {
+                let uid = committed_resource_uid(zone, store, current_revision, guest_ref).await?;
+                allowed_guest_sources.insert(guest_ref.clone(), uid);
+            }
+            notification_provider_generation = Some(notification.resource_generation);
+            notification_provider_uid = Some(notification.resource_uid().clone());
+        }
+    }
+
     Ok(CommittedInteractionIdentity {
         subject_ref,
         subject_uid,
         host_execution_ref,
+        user_ref,
+        allowed_guest_sources,
         display_provider_generation,
-        clipboard_provider_generation: configuration
-            .clipboard
-            .as_ref()
-            .map(|clipboard| clipboard.resource_generation),
-        notification_provider_generation: configuration
-            .notification
-            .as_ref()
-            .map(|notification| notification.resource_generation),
+        clipboard_provider_generation,
+        clipboard_provider_uid,
+        notification_provider_generation,
+        notification_provider_uid,
     })
+}
+
+fn committed_wayland_session_spec(
+    zone: &ZoneId,
+    current_revision: ZoneRevision,
+    resource: &StoredResource,
+) -> Result<WaylandSessionSpec, ResourceRuntimeError> {
+    let expected_type = ResourceTypeName::parse("display-wayland.d2bus.org.WaylandSession")
+        .map_err(|_| ResourceRuntimeError::InteractionConfigurationUnavailable)?;
+    if &resource.zone != zone
+        || resource.resource_ref.resource_type() != &expected_type
+        || resource.generation.get() == 0
+        || resource.revision.get() == 0
+        || resource.revision > current_revision
+    {
+        return Err(ResourceRuntimeError::InteractionConfigurationUnavailable);
+    }
+    let envelope = ResourceEnvelope::from_json(&resource.canonical_json)
+        .map_err(|_| ResourceRuntimeError::InteractionConfigurationUnavailable)?;
+    if envelope.resource_type() != &expected_type
+        || envelope.metadata().zone() != zone
+        || envelope.metadata().uid() != &resource.uid
+        || envelope.metadata().generation() != resource.generation
+        || envelope.metadata().revision() != resource.revision
+        || envelope
+            .digest()
+            .map_err(|_| ResourceRuntimeError::InteractionConfigurationUnavailable)?
+            != resource.payload_digest
+    {
+        return Err(ResourceRuntimeError::InteractionConfigurationUnavailable);
+    }
+    let spec =
+        serde_json::from_slice::<WaylandSessionSpec>(&envelope.spec().base().to_canonical_bytes())
+            .map_err(|_| ResourceRuntimeError::InteractionConfigurationUnavailable)?;
+    Ok(spec)
 }
 
 async fn committed_resource_uid(
@@ -3062,7 +3209,7 @@ async fn committed_resource(
 ) -> Result<StoredResource, ResourceRuntimeError> {
     if !matches!(
         resource_ref.resource_type().as_str(),
-        "Guest" | "Host" | "Provider"
+        "Guest" | "Host" | "Provider" | "User"
     ) {
         return Err(ResourceRuntimeError::InteractionConfigurationUnavailable);
     }
