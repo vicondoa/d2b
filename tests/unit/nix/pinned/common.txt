@@ -243,6 +243,8 @@ daemon-lifecycle/manifest-workload-graceful-enabled
 daemon-lifecycle/manifest-workload-timeout-override
 daemon-lifecycle/per-vm-timeout-lower-bound-assertion
 daemon-lifecycle/timeout-stop-sec-uses-phase-maxima
+device-gpu/platform-gate
+device-gpu/valid-shape
 examples-with-observability/obs-enable
 examples-with-observability/obs-env-declared
 examples-with-observability/obs-env-name

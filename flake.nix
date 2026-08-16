@@ -307,6 +307,7 @@
         ];
         nix-unit-runtime = [
           "clipboard.nix"
+          "device-gpu-eval.nix"
           "external-vm-kind.nix"
           "external-vm-kind-rejections.nix"
           "external-vm-kind-runtime.nix"
