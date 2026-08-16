@@ -1315,6 +1315,7 @@ name = "d2b-provider-notification-desktop"
 version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts",
+ "d2b-provider-supervisor",
  "d2b-provider-toolkit",
  "getrandom 0.2.17",
  "serde",

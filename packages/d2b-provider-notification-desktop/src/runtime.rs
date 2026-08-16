@@ -369,6 +369,7 @@ mod tests {
         fn apply(
             &mut self,
             plan: &SourceReconcileResult,
+            _lifecycle: &d2b_provider_supervisor::NotificationLifecyclePlan,
         ) -> Result<crate::SourceProcessEffectReceipt, &'static str> {
             self.plans += 1;
             Ok(crate::SourceProcessEffectReceipt::complete(plan))
@@ -388,6 +389,14 @@ mod tests {
     }
 
     impl DesktopNotificationPort for Port {
+        fn activate(&mut self) -> Result<(), SinkError> {
+            Ok(())
+        }
+
+        fn deactivate(&mut self) -> Result<(), SinkError> {
+            Ok(())
+        }
+
         fn notify(
             &mut self,
             notification: &crate::SanitizedNotification,
@@ -411,7 +420,7 @@ mod tests {
                 authority_released: true
             }
         );
-        assert_eq!(runtime.effects.plans, 1);
+        assert_eq!(runtime.effects.plans, 0);
         assert_eq!(runtime.effects.authority_releases, 1);
         assert_eq!(runtime.finalize().unwrap(), report);
     }

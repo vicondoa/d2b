@@ -106,6 +106,7 @@ pub const GENERATED_OPERATION_CATALOG: &[OperationCatalogEntry] = &[
     interaction("d2b.display.v3", "DisplayService/Reconcile"),
     interaction("d2b.display.v3", "DisplayService/Finalize"),
     interaction("d2b.display.v3", "DisplayService/Observe"),
+    interaction("d2b.display.v3", "ClipboardBridgeService/CaptureHost"),
     interaction("d2b.clipboard.v3", "ClipboardService/Reconcile"),
     interaction("d2b.clipboard.v3", "ClipboardService/Drain"),
     interaction(
@@ -127,8 +128,6 @@ pub const GENERATED_OPERATION_CATALOG: &[OperationCatalogEntry] = &[
     ),
     interaction("d2b.notification.v3", "NotificationService/Reconcile"),
     interaction("d2b.notification.v3", "NotificationService/Deliver"),
-    interaction("d2b.notification.v3", "NotificationService/InvokeAction"),
-    interaction("d2b.notification.v3", "NotificationService/CloseObserver"),
     interaction("d2b.notification.v3", "NotificationService/Drain"),
 ];
 

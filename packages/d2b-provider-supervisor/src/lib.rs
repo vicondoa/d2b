@@ -10,6 +10,7 @@
 mod adapter;
 mod broker;
 mod metrics;
+mod notification;
 mod systemd;
 mod tracing;
 
@@ -17,6 +18,11 @@ pub use adapter::{DEFAULT_BLOCKING_LIMIT, ProviderSupervisor};
 pub use broker::{
     BrokerLaunchIntent, BrokerLaunchResolver, BrokerObservedProcess, BrokerPidfdHandle,
     BrokerProcessBackend, BundleBackedLaunchResolver, runner_role_for_process_role,
+};
+pub use notification::{
+    NotificationHostSinkIdentity, NotificationLifecycleBackend, NotificationLifecycleObservation,
+    NotificationLifecyclePlan, NotificationLifecycleReceipt, NotificationLifecycleSupervisor,
+    NotificationSourceIdentity,
 };
 pub use systemd::{
     BrokerSystemdEffectOwner, BrokerSystemdPidfdHandle, SystemdEffectLaunch, SystemdEffectOwner,

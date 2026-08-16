@@ -2,6 +2,10 @@
 
 use crate::SessionEvidence;
 use d2b_contracts::v3::{EvidenceClass, Locality, ResourceRef, ZoneId};
+use d2b_provider_supervisor::{
+    NotificationHostSinkIdentity, NotificationLifecyclePlan, NotificationLifecycleReceipt,
+    NotificationSourceIdentity,
+};
 use d2b_provider_toolkit::AuthenticatedSessionRouteBinding;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
@@ -565,14 +569,7 @@ pub struct SourceProcessEffectReceipt {
 }
 
 impl SourceProcessEffectReceipt {
-    /// Complete a receipt from the daemon-owned effect adapter.
-    #[cfg(any(feature = "daemon-support", test))]
-    pub fn from_daemon(plan: &SourceReconcileResult) -> Result<Self, &'static str> {
-        Ok(Self::complete(plan))
-    }
-
-    /// Start collecting typed acknowledgements for one reconciliation plan.
-    pub fn builder(plan: &SourceReconcileResult) -> SourceProcessEffectReceiptBuilder {
+    fn builder(plan: &SourceReconcileResult) -> SourceProcessEffectReceiptBuilder {
         SourceProcessEffectReceiptBuilder {
             plan_digest: plan.digest(),
             display_fingerprint: plan.display_fingerprint,
@@ -582,9 +579,19 @@ impl SourceProcessEffectReceipt {
         }
     }
 
-    #[cfg(any(feature = "daemon-support", test))]
-    /// Mint a receipt after every requested process effect was observed.
-    pub fn complete(plan: &SourceReconcileResult) -> Self {
+    /// Bind the Provider acknowledgement to the supervisor's authoritative receipt.
+    pub fn from_supervisor(
+        plan: &SourceReconcileResult,
+        lifecycle: &NotificationLifecyclePlan,
+        receipt: &NotificationLifecycleReceipt,
+    ) -> Result<Self, &'static str> {
+        if !receipt.matches(lifecycle) {
+            return Err("notification-supervisor-receipt-mismatch");
+        }
+        Ok(Self::complete(plan))
+    }
+
+    pub(crate) fn complete(plan: &SourceReconcileResult) -> Self {
         let mut builder = Self::builder(plan);
         for endpoint in &plan.start_endpoints {
             builder.acknowledge_source_start(endpoint);
@@ -643,6 +650,20 @@ impl SourceProcessEffectReceipt {
         self.plan_digest == plan.digest()
             && self.acknowledgements == Self::expected_acknowledgements(plan)
     }
+
+    fn no_effects(plan: &SourceReconcileResult) -> Result<Self, &'static str> {
+        if !plan.start_endpoints.is_empty()
+            || !plan.stop_endpoints.is_empty()
+            || plan.start_host_sink
+            || plan.stop_host_sink
+        {
+            return Err("notification-process-effect-incomplete");
+        }
+        Ok(Self {
+            plan_digest: plan.digest(),
+            acknowledgements: Vec::new(),
+        })
+    }
 }
 
 /// Builder for a complete, typed process-effect receipt.
@@ -650,7 +671,7 @@ impl SourceProcessEffectReceipt {
 /// Each acknowledgement method corresponds to one effect in the plan. The
 /// builder refuses to mint a receipt unless the complete expected set was
 /// observed, so an effect adapter cannot acknowledge only a plan digest.
-pub struct SourceProcessEffectReceiptBuilder {
+struct SourceProcessEffectReceiptBuilder {
     plan_digest: [u8; 32],
     display_fingerprint: [u8; 32],
     sink_fingerprint: [u8; 32],
@@ -660,7 +681,7 @@ pub struct SourceProcessEffectReceiptBuilder {
 
 impl SourceProcessEffectReceiptBuilder {
     /// Acknowledge a Guest-source process start.
-    pub fn acknowledge_source_start(&mut self, endpoint: &SourceEndpoint) {
+    fn acknowledge_source_start(&mut self, endpoint: &SourceEndpoint) {
         self.acknowledgements
             .push(SourceEffectAcknowledgement::Source {
                 start: true,
@@ -671,7 +692,7 @@ impl SourceProcessEffectReceiptBuilder {
     }
 
     /// Acknowledge a Guest-source process stop.
-    pub fn acknowledge_source_stop(&mut self, endpoint: &SourceEndpoint) {
+    fn acknowledge_source_stop(&mut self, endpoint: &SourceEndpoint) {
         self.acknowledgements
             .push(SourceEffectAcknowledgement::Source {
                 start: false,
@@ -682,7 +703,7 @@ impl SourceProcessEffectReceiptBuilder {
     }
 
     /// Acknowledge starting the host sink for this plan.
-    pub fn acknowledge_host_sink_start(&mut self) {
+    fn acknowledge_host_sink_start(&mut self) {
         self.acknowledgements
             .push(SourceEffectAcknowledgement::HostSink {
                 start: true,
@@ -692,7 +713,7 @@ impl SourceProcessEffectReceiptBuilder {
     }
 
     /// Acknowledge stopping the host sink for this plan.
-    pub fn acknowledge_host_sink_stop(&mut self) {
+    fn acknowledge_host_sink_stop(&mut self) {
         self.acknowledgements
             .push(SourceEffectAcknowledgement::HostSink {
                 start: false,
@@ -702,7 +723,7 @@ impl SourceProcessEffectReceiptBuilder {
     }
 
     /// Finish the receipt only when every planned effect was acknowledged.
-    pub fn finish(mut self) -> Result<SourceProcessEffectReceipt, &'static str> {
+    fn finish(mut self) -> Result<SourceProcessEffectReceipt, &'static str> {
         self.acknowledgements.sort();
         if self.acknowledgements != self.expected {
             return Err("notification-process-effect-incomplete");
@@ -724,6 +745,7 @@ pub trait SourceProcessEffectPort {
     fn apply(
         &mut self,
         plan: &SourceReconcileResult,
+        lifecycle: &NotificationLifecyclePlan,
     ) -> Result<SourceProcessEffectReceipt, &'static str>;
 }
 
@@ -731,6 +753,7 @@ pub trait SourceProcessEffectPort {
 #[derive(Clone, PartialEq, Eq)]
 pub struct SourceEndpoint {
     source_ref: ResourceRef,
+    zone: ZoneId,
     source_generation: u64,
     display_generation: u64,
     endpoint_digest: String,
@@ -781,6 +804,7 @@ impl SourceEndpoint {
         );
         Ok(Self {
             source_ref: source.source_ref().clone(),
+            zone: source.zone().clone(),
             source_generation: session.generation(),
             display_generation: display.generation(),
             endpoint_digest,
@@ -790,6 +814,11 @@ impl SourceEndpoint {
     /// Borrow the exact configured Guest reference.
     pub const fn source_ref(&self) -> &ResourceRef {
         &self.source_ref
+    }
+
+    /// Borrow the configured Zone of the exact Guest source.
+    pub const fn zone(&self) -> &ZoneId {
+        &self.zone
     }
 
     /// Return the authenticated Guest reconnect generation.
@@ -839,6 +868,7 @@ pub struct NotificationController {
     active_sources: std::collections::BTreeMap<ResourceRef, SourceEndpoint>,
     active_display_fingerprint: Option<[u8; 32]>,
     host_sink_fingerprint: Option<[u8; 32]>,
+    active_host_sink: Option<NotificationHostSinkIdentity>,
 }
 
 impl NotificationController {
@@ -854,6 +884,7 @@ impl NotificationController {
             active_sources: std::collections::BTreeMap::new(),
             active_display_fingerprint: None,
             host_sink_fingerprint: None,
+            active_host_sink: None,
         })
     }
 
@@ -935,7 +966,7 @@ impl NotificationController {
             }
         };
         let source_error = result.source_error;
-        self.commit_reconciliation(display, result.clone());
+        self.commit_reconciliation(display, config, result.clone())?;
         source_error.map_or(Ok(result), Err)
     }
 
@@ -951,16 +982,16 @@ impl NotificationController {
         let result = match self.plan_reconciliation(display, config, source_sessions) {
             Ok(result) => result,
             Err(error) => {
-                self.apply_drain_with_effects(effects)?;
+                self.apply_drain_with_effects(config, effects)?;
                 return Err(error);
             }
         };
-        let receipt = effects.apply(&result)?;
+        let receipt = self.apply_with_effects(Some(display), config, &result, effects)?;
         if !receipt.matches(&result) {
             return Err("notification-process-effect-proof-mismatch");
         }
         let source_error = result.source_error;
-        self.commit_reconciliation(display, result.clone());
+        self.commit_reconciliation(display, config, result.clone())?;
         source_error.map_or(Ok(result), Err)
     }
 
@@ -1077,14 +1108,16 @@ impl NotificationController {
         self.active_sources.clear();
         self.active_display_fingerprint = None;
         self.host_sink_fingerprint = None;
+        self.active_host_sink = None;
     }
 
     fn apply_drain_with_effects<E: SourceProcessEffectPort>(
         &mut self,
+        config: &NotificationProviderConfig,
         effects: &mut E,
     ) -> Result<(), &'static str> {
         let result = self.drain_plan();
-        let receipt = effects.apply(&result)?;
+        let receipt = self.apply_with_effects(None, config, &result, effects)?;
         if !receipt.matches(&result) {
             return Err("notification-process-effect-proof-mismatch");
         }
@@ -1092,11 +1125,117 @@ impl NotificationController {
         Ok(())
     }
 
+    fn source_lifecycle_identity(
+        &self,
+        endpoint: &SourceEndpoint,
+    ) -> Result<NotificationSourceIdentity, &'static str> {
+        NotificationSourceIdentity::new(
+            endpoint.zone().clone(),
+            self.provider_ref.clone(),
+            endpoint.source_ref().clone(),
+            endpoint.source_generation(),
+            endpoint.display_generation(),
+            endpoint.endpoint_digest(),
+        )
+    }
+
+    fn host_sink_identity(
+        &self,
+        display: &DisplayDependencyEvidence,
+        config: &NotificationProviderConfig,
+    ) -> Result<NotificationHostSinkIdentity, &'static str> {
+        NotificationHostSinkIdentity::new(
+            display.zone().clone(),
+            self.provider_ref.clone(),
+            config
+                .host_execution_ref()
+                .ok_or("notification-host-binding-missing")?
+                .clone(),
+            config
+                .host_user_ref()
+                .ok_or("notification-host-binding-missing")?
+                .clone(),
+            display.provider_ref().clone(),
+            display.generation(),
+            display.controller_generation(),
+        )
+    }
+
+    fn lifecycle_plan(
+        &self,
+        display: Option<&DisplayDependencyEvidence>,
+        config: &NotificationProviderConfig,
+        result: &SourceReconcileResult,
+    ) -> Result<Option<NotificationLifecyclePlan>, &'static str> {
+        if result.start_endpoints.is_empty()
+            && result.stop_endpoints.is_empty()
+            && !result.start_host_sink
+            && !result.stop_host_sink
+        {
+            return Ok(None);
+        }
+        let start_sources = result
+            .start_endpoints
+            .iter()
+            .map(|endpoint| self.source_lifecycle_identity(endpoint))
+            .collect::<Result<Vec<_>, _>>()?;
+        let stop_sources = result
+            .stop_endpoints
+            .iter()
+            .map(|endpoint| self.source_lifecycle_identity(endpoint))
+            .collect::<Result<Vec<_>, _>>()?;
+        let start_host_sink = result
+            .start_host_sink
+            .then(|| {
+                self.host_sink_identity(
+                    display.ok_or("notification-display-dependency-unavailable")?,
+                    config,
+                )
+            })
+            .transpose()?;
+        let stop_host_sink = result
+            .stop_host_sink
+            .then(|| {
+                self.active_host_sink
+                    .clone()
+                    .ok_or("notification-lifecycle-host-sink-missing")
+            })
+            .transpose()?;
+        let zone = display
+            .map(|display| display.zone().clone())
+            .or_else(|| start_sources.first().map(|source| source.zone().clone()))
+            .or_else(|| stop_sources.first().map(|source| source.zone().clone()))
+            .or_else(|| stop_host_sink.as_ref().map(|sink| sink.zone().clone()))
+            .ok_or("notification-lifecycle-zone-unavailable")?;
+        Ok(Some(NotificationLifecyclePlan::new(
+            zone,
+            self.provider_ref.clone(),
+            start_sources,
+            stop_sources,
+            start_host_sink,
+            stop_host_sink,
+        )?))
+    }
+
+    fn apply_with_effects<E: SourceProcessEffectPort>(
+        &self,
+        display: Option<&DisplayDependencyEvidence>,
+        config: &NotificationProviderConfig,
+        result: &SourceReconcileResult,
+        effects: &mut E,
+    ) -> Result<SourceProcessEffectReceipt, &'static str> {
+        match self.lifecycle_plan(display, config, result)? {
+            Some(lifecycle) => effects.apply(result, &lifecycle),
+            None => SourceProcessEffectReceipt::no_effects(result),
+        }
+    }
+
     fn commit_reconciliation(
         &mut self,
         display: &DisplayDependencyEvidence,
+        config: &NotificationProviderConfig,
         result: SourceReconcileResult,
-    ) {
+    ) -> Result<(), &'static str> {
         for source in result.stop {
             self.active_sources.remove(&source);
         }
@@ -1108,10 +1247,13 @@ impl NotificationController {
         self.active_display_fingerprint = fingerprint;
         if result.stop_host_sink {
             self.host_sink_fingerprint = None;
+            self.active_host_sink = None;
         }
         if result.start_host_sink {
             self.host_sink_fingerprint = Some(result.host_sink_fingerprint);
+            self.active_host_sink = Some(self.host_sink_identity(display, config)?);
         }
+        Ok(())
     }
 
     /// Reconcile from a Core-authenticated display route.
@@ -1152,7 +1294,7 @@ impl NotificationController {
     ) -> Result<SourceReconcileResult, &'static str> {
         let Some(proof) = display else {
             let result = self.drain_plan();
-            let receipt = effects.apply(&result)?;
+            let receipt = self.apply_with_effects(None, config, &result, effects)?;
             if !receipt.matches(&result) {
                 return Err("notification-process-effect-proof-mismatch");
             }
@@ -1162,7 +1304,7 @@ impl NotificationController {
         let evidence = match DisplayDependencyEvidence::from_authenticated_route(proof) {
             Ok(evidence) => evidence,
             Err(error) => {
-                self.apply_drain_with_effects(effects)?;
+                self.apply_drain_with_effects(config, effects)?;
                 return Err(error);
             }
         };
@@ -1180,7 +1322,7 @@ impl NotificationController {
     ) -> Result<SourceReconcileResult, &'static str> {
         let Some(proof) = display else {
             let result = self.drain_plan();
-            let receipt = effects.apply(&result)?;
+            let receipt = self.apply_with_effects(None, config, &result, effects)?;
             if !receipt.matches(&result) {
                 return Err("notification-process-effect-proof-mismatch");
             }
@@ -1194,7 +1336,7 @@ impl NotificationController {
         let evidence = match DisplayDependencyEvidence::from_daemon_route(proof, user_ref) {
             Ok(evidence) => evidence,
             Err(error) => {
-                self.apply_drain_with_effects(effects)?;
+                self.apply_drain_with_effects(config, effects)?;
                 return Err(error);
             }
         };
@@ -1446,6 +1588,7 @@ mod tests {
         fn apply(
             &mut self,
             _plan: &SourceReconcileResult,
+            _lifecycle: &NotificationLifecyclePlan,
         ) -> Result<SourceProcessEffectReceipt, &'static str> {
             Err("process-effect-failed")
         }
@@ -1457,6 +1600,7 @@ mod tests {
         fn apply(
             &mut self,
             plan: &SourceReconcileResult,
+            _lifecycle: &NotificationLifecyclePlan,
         ) -> Result<SourceProcessEffectReceipt, &'static str> {
             Ok(SourceProcessEffectReceipt::complete(plan))
         }
@@ -1486,6 +1630,7 @@ mod tests {
         fn apply(
             &mut self,
             plan: &SourceReconcileResult,
+            _lifecycle: &NotificationLifecyclePlan,
         ) -> Result<SourceProcessEffectReceipt, &'static str> {
             self.plans.push(plan.clone());
             Ok(SourceProcessEffectReceipt::complete(plan))

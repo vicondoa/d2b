@@ -32,6 +32,15 @@ let
       caps = c.caps or { };
       policy = c.policy or { };
       display = c.displayWaylandRef or null;
+      sources = c.guestSources or [ ];
+      sourceAssertions = lib.concatMap
+        (rawSource:
+          let source = if builtins.isAttrs rawSource then rawSource else { };
+          in [{
+            assertion = resolves row.zoneName "Guest" (source.guestRef or null);
+            message = "${row.path}.spec.config.guestSources guestRef must resolve to a same-Zone Guest.";
+          }])
+        sources;
     in [
       {
         assertion = resolves row.zoneName "Host" (c.hostExecutionRef or null);
@@ -42,10 +51,8 @@ let
         message = "${row.path}.spec.config.hostUserRef must resolve to a same-Zone User.";
       }
       {
-        assertion =
-          display == null
-          || resolvesExact row.zoneName "Provider" "display-wayland" display;
-        message = "${row.path}.spec.config.displayWaylandRef must be null or Provider/display-wayland.";
+        assertion = resolvesExact row.zoneName "Provider" "display-wayland" display;
+        message = "${row.path}.spec.config.displayWaylandRef must select Provider/display-wayland.";
       }
       {
         assertion = (caps.maxHistoryEntries or 20) >= 1
@@ -62,7 +69,17 @@ let
         assertion = ((policy.crossZone or { }).enable or false) == false;
         message = "${row.path}.spec.config.policy.crossZone.enable must remain false.";
       }
-    ];
+      {
+        assertion = lib.length sources >= 1 && lib.length sources <= 16;
+        message = "${row.path}.spec.config.guestSources must contain between one and sixteen sources.";
+      }
+      {
+        assertion =
+          let guestRefs = map (source: (if builtins.isAttrs source then source else { }).guestRef or null) sources;
+          in lib.length guestRefs == lib.length (lib.unique guestRefs);
+        message = "${row.path}.spec.config.guestSources must not contain duplicate guestRef values.";
+      }
+    ] ++ sourceAssertions;
 in
 {
   config.assertions = lib.concatMap assertionsFor providerRows;

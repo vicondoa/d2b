@@ -11,6 +11,10 @@ let
       package = pkgs.writeText "d2b-test-notification-desktop" "notification-desktop";
       type = "provider";
     };
+    clipboard-wayland = {
+      package = pkgs.writeText "d2b-test-clipboard-wayland" "clipboard-wayland";
+      type = "provider";
+    };
   };
 
   provider = artifactId: {
@@ -41,6 +45,18 @@ let
         spec.providerRef = "Provider/notification-desktop";
       };
       display-wayland = provider "display-wayland";
+      clipboard-wayland = {
+        type = "Provider";
+        spec = {
+          artifactId = "clipboard-wayland";
+          config = {
+            hostExecutionRef = "Host/host";
+            hostUserRef = "User/alice";
+            displayWaylandRef = "Provider/display-wayland";
+            guestSources = [{ guestRef = "Guest/guest"; }];
+          };
+        };
+      };
       notification-desktop = {
         type = "Provider";
         spec = {
@@ -80,6 +96,34 @@ in
     expected = [ ];
   };
 
+  "interaction-providers/clipboard-invalid-guest-source" = {
+    expr = map (assertion: assertion.message)
+      (lib.filter
+        (assertion:
+          !(assertion.assertion or false)
+          && lib.hasInfix "clipboard-wayland" (assertion.message or ""))
+        (mkEval [ base {
+          d2b.zones.work.resources.clipboard-wayland.spec.config.guestSources = [ ];
+        }]).config.assertions);
+    expected = [
+      "d2b.zones.work.resources.clipboard-wayland.spec.config.guestSources must contain between one and sixteen sources."
+    ];
+  };
+
+  "interaction-providers/clipboard-missing-display-ref" = {
+    expr = map (assertion: assertion.message)
+      (lib.filter
+        (assertion:
+          !(assertion.assertion or false)
+          && lib.hasInfix "clipboard-wayland" (assertion.message or ""))
+        (mkEval [ base {
+          d2b.zones.work.resources.clipboard-wayland.spec.config.displayWaylandRef = null;
+        }]).config.assertions);
+    expected = [
+      "d2b.zones.work.resources.clipboard-wayland.spec.config.displayWaylandRef must select Provider/display-wayland."
+    ];
+  };
+
   "interaction-providers/notification-invalid-display-ref" = {
     expr = map (assertion: assertion.message)
       (failureFor {
@@ -88,7 +132,7 @@ in
       });
     expected = [
       "d2b.zones.work.resources.notification-desktop: every ResourceRef must be canonical and resolve in the same Zone."
-      "d2b.zones.work.resources.notification-desktop.spec.config.displayWaylandRef must select Provider/display-wayland when D-Bus is enabled."
+      "d2b.zones.work.resources.notification-desktop.spec.config.displayWaylandRef must select Provider/display-wayland."
     ];
   };
 

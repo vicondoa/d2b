@@ -81,6 +81,29 @@ impl AuthenticatedClipboardSession {
         })
     }
 
+    /// Admit the daemon's authenticated desktop User route for host capture.
+    pub fn from_display_observer_route(
+        route: AuthenticatedSessionRouteBinding,
+    ) -> Result<Self, ClipboardServiceError> {
+        if route
+            .provider_ref()
+            .is_none_or(|provider| provider.to_canonical_string() != "Provider/display-wayland")
+            || route.service().as_str() != "d2b.display.v3"
+            || route.evidence_class() != d2b_contracts::v3::EvidenceClass::UnixPeer
+            || route.locality() != d2b_contracts::v3::Locality::Local
+            || route.subject_ref().resource_type().as_str() != "User"
+            || route.reconnect_generation().get() == 0
+        {
+            return Err(ClipboardServiceError::HostSessionInvalid);
+        }
+        Ok(Self {
+            subject_ref: route.subject_ref().clone(),
+            zone: route.zone().clone(),
+            reconnect_generation: route.reconnect_generation().get(),
+            role: ClipboardServiceRole::Bridge,
+        })
+    }
+
     /// Borrow the authenticated subject reference.
     pub fn subject_ref(&self) -> &ResourceRef {
         &self.subject_ref

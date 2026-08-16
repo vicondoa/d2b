@@ -37,11 +37,11 @@ use crate::process_resource_runtime::{
 use d2b_audit::{AuditSink, DurabilityEvidence};
 use d2b_bus::{BusAuthorizer, BusConfig, BusIngress, ZoneBus, ZoneRegistrar};
 use d2b_contracts::v3::identity::STANDARD_RESOURCE_TYPES;
+use d2b_contracts::v3::provider::ProviderSpec;
 #[cfg(test)]
 use d2b_contracts::v3::{
     DEFAULT_LIST_PAGE_SIZE, MAX_FILTER_VALUES, MAX_LIST_FILTERS, MAX_LIST_PAGE_SIZE,
     MAX_LIST_RESOURCE_TYPES, MAX_PAGE_CURSOR_BYTES, MAX_RESPONSE_CANONICAL_BYTES,
-    ResourceGeneration, ResourceName,
 };
 use d2b_contracts::v3::{
     host::{HOST_PROVIDER_REF, HostSpec},
@@ -52,9 +52,9 @@ use d2b_contracts::{
     resource_proto as wire,
     v3::{
         BindingDigest, CanonicalJsonValue, ConfigurationGeneration, ControllerGeneration,
-        ResourceEnvelope, ResourceError, ResourceErrorKind, ResourceErrorReason, ResourcePhase,
-        ResourceRef, ResourceTypeName, ResourceUid, RetryClass, Timestamp, ZoneId, ZoneRevision,
-        ZoneStatusResource,
+        ResourceEnvelope, ResourceError, ResourceErrorKind, ResourceErrorReason,
+        ResourceGeneration, ResourceName, ResourcePhase, ResourceRef, ResourceTypeName,
+        ResourceUid, RetryClass, Timestamp, ZoneId, ZoneRevision, ZoneStatusResource,
         component_session::{
             AttachmentPolicy, EndpointPolicy, EndpointPurpose, EndpointRole,
             IdentityEvidenceRequirement, LimitProfile, Locality, NoiseProfile, PurposeClass,
@@ -77,6 +77,8 @@ use d2b_core_controller::main::{
 use d2b_core_controller::zone_status::{
     SystemCoreStatusEmitter, ZoneRuntimeMetadata, ZoneStatusInput,
 };
+use d2b_provider_clipboard_wayland::Policy as ClipboardPolicy;
+use d2b_provider_notification_desktop::{Category, GuestSourceConfig, NotificationProviderConfig};
 use d2b_provider_system_core::{
     HostCapabilityClass, HostObservationReport, HostProbeEffectPort, HostProbeMetadata,
     HostReconciler, MinijailPlatformGate, UserBinding, UserDiscoveryEffectPort, UserIdentityDigest,
@@ -110,6 +112,7 @@ use d2b_session_unix::{
     UnixSeqpacketTransport, UnixSessionError, VerifiedUnixPeer, prearmed_seqpacket_pair,
 };
 use nix::unistd::{Group, Uid, User};
+use serde::Deserialize;
 #[cfg(test)]
 use serde_json::json;
 use serde_json::{Map, Value};
@@ -164,6 +167,8 @@ pub enum ResourceRuntimeError {
     HandlerNotReady,
     /// The provider path has not completed startup.
     ProviderPathUnavailable,
+    /// Committed interaction Provider configuration is absent or invalid.
+    InteractionConfigurationUnavailable,
     /// A shutdown was refused because request owners are still live.
     LiveRequestOwners,
     /// No authenticated subject was bound to the request.
@@ -199,6 +204,9 @@ impl ResourceRuntimeError {
             Self::AuthorityUnavailable => "resource-runtime-authority-unavailable",
             Self::HandlerNotReady => "resource-runtime-handler-not-ready",
             Self::ProviderPathUnavailable => "resource-runtime-provider-path-unavailable",
+            Self::InteractionConfigurationUnavailable => {
+                "resource-runtime-interaction-configuration-unavailable"
+            }
             Self::LiveRequestOwners => "resource-runtime-live-request-owners",
             Self::IdentityUnbound => "resource-runtime-identity-unbound",
             Self::CapabilityUnavailable => "resource-runtime-capability-unavailable",
@@ -232,6 +240,306 @@ impl core::fmt::Debug for OpenedZoneStore {
             .field("has_external_inventory", &self.external_inventory.is_some())
             .finish()
     }
+}
+
+#[derive(Clone)]
+pub(crate) struct CommittedInteractionProviderConfiguration {
+    clipboard: Option<CommittedClipboardProviderConfiguration>,
+    notification: Option<CommittedNotificationProviderConfiguration>,
+}
+
+impl CommittedInteractionProviderConfiguration {
+    pub(crate) fn clipboard(&self) -> Option<&CommittedClipboardProviderConfiguration> {
+        self.clipboard.as_ref()
+    }
+
+    pub(crate) fn notification(&self) -> Option<&CommittedNotificationProviderConfiguration> {
+        self.notification.as_ref()
+    }
+
+    pub(crate) fn is_complete(&self) -> bool {
+        self.clipboard
+            .as_ref()
+            .is_none_or(|config| config.is_integrity_bound())
+            && self
+                .notification
+                .as_ref()
+                .is_none_or(|config| config.is_integrity_bound())
+    }
+}
+
+impl core::fmt::Debug for CommittedInteractionProviderConfiguration {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("CommittedInteractionProviderConfiguration(<redacted>)")
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct CommittedClipboardProviderConfiguration {
+    policy: ClipboardPolicy,
+    audit_capacity: usize,
+    host_execution_ref: ResourceRef,
+    host_user_ref: ResourceRef,
+    display_wayland_ref: ResourceRef,
+    guest_sources: BTreeSet<ResourceRef>,
+    resource_uid: ResourceUid,
+    resource_generation: ResourceGeneration,
+    resource_revision: ZoneRevision,
+    provenance_digest: String,
+}
+
+impl CommittedClipboardProviderConfiguration {
+    pub(crate) fn policy(&self) -> ClipboardPolicy {
+        self.policy.clone()
+    }
+
+    pub(crate) const fn audit_capacity(&self) -> usize {
+        self.audit_capacity
+    }
+
+    pub(crate) fn host_user_ref(&self) -> &ResourceRef {
+        &self.host_user_ref
+    }
+
+    pub(crate) fn allows_guest_source(&self, source: &ResourceRef) -> bool {
+        self.guest_sources.contains(source)
+    }
+
+    pub(crate) fn matches_display(
+        &self,
+        display: &d2b_provider_clipboard_wayland::DisplayDependencyEvidence,
+    ) -> bool {
+        display.host_execution_ref() == &self.host_execution_ref
+            && display.user_ref() == &self.host_user_ref
+            && display.provider_ref() == &self.display_wayland_ref
+    }
+
+    fn is_integrity_bound(&self) -> bool {
+        committed_resource_is_integrity_bound(
+            &self.resource_uid,
+            self.resource_generation,
+            self.resource_revision,
+            &self.provenance_digest,
+        )
+    }
+}
+
+impl core::fmt::Debug for CommittedClipboardProviderConfiguration {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("CommittedClipboardProviderConfiguration")
+            .field("guest_source_count", &self.guest_sources.len())
+            .field("resource_generation", &self.resource_generation)
+            .field("resource_revision", &self.resource_revision)
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct CommittedNotificationProviderConfiguration {
+    config: NotificationProviderConfig,
+    resource_uid: ResourceUid,
+    resource_generation: ResourceGeneration,
+    resource_revision: ZoneRevision,
+    provenance_digest: String,
+}
+
+impl CommittedNotificationProviderConfiguration {
+    pub(crate) fn config(&self) -> NotificationProviderConfig {
+        self.config.clone()
+    }
+
+    pub(crate) fn observer_user_ref(&self) -> &ResourceRef {
+        self.config
+            .host_user_ref()
+            .expect("committed notification configuration always binds a host User")
+    }
+
+    fn is_integrity_bound(&self) -> bool {
+        committed_resource_is_integrity_bound(
+            &self.resource_uid,
+            self.resource_generation,
+            self.resource_revision,
+            &self.provenance_digest,
+        )
+    }
+}
+
+fn committed_resource_is_integrity_bound(
+    uid: &ResourceUid,
+    generation: ResourceGeneration,
+    revision: ZoneRevision,
+    digest: &str,
+) -> bool {
+    !uid.as_str().is_empty()
+        && generation.get() > 0
+        && revision.get() > 0
+        && digest.starts_with("sha256:")
+}
+
+impl core::fmt::Debug for CommittedNotificationProviderConfiguration {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("CommittedNotificationProviderConfiguration")
+            .field("resource_generation", &self.resource_generation)
+            .field("resource_revision", &self.resource_revision)
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ClipboardProviderConfigWire {
+    host_execution_ref: ResourceRef,
+    host_user_ref: ResourceRef,
+    display_wayland_ref: ResourceRef,
+    guest_sources: Vec<ClipboardGuestSourceWire>,
+    #[serde(default)]
+    caps: ClipboardCapsWire,
+    #[serde(default)]
+    policy: ClipboardPolicyWire,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ClipboardGuestSourceWire {
+    guest_ref: ResourceRef,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ClipboardCapsWire {
+    #[serde(default = "default_clipboard_history_entries")]
+    max_history_entries: usize,
+    #[serde(default = "default_clipboard_item_bytes")]
+    max_item_bytes: usize,
+    #[serde(default = "default_clipboard_total_bytes")]
+    max_total_bytes: usize,
+    #[serde(default = "default_clipboard_concurrent_fds")]
+    max_concurrent_fds: usize,
+    #[serde(default = "default_clipboard_guest_rate")]
+    max_guest_rate_per_min: u32,
+    #[serde(default = "default_clipboard_fd_timeout")]
+    fd_write_timeout_seconds: u64,
+}
+
+impl Default for ClipboardCapsWire {
+    fn default() -> Self {
+        Self {
+            max_history_entries: default_clipboard_history_entries(),
+            max_item_bytes: default_clipboard_item_bytes(),
+            max_total_bytes: default_clipboard_total_bytes(),
+            max_concurrent_fds: default_clipboard_concurrent_fds(),
+            max_guest_rate_per_min: default_clipboard_guest_rate(),
+            fd_write_timeout_seconds: default_clipboard_fd_timeout(),
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ClipboardPolicyWire {
+    #[serde(default = "default_true")]
+    allow_host_capture: bool,
+    #[serde(default = "default_true")]
+    allow_guest_capture: bool,
+    #[serde(default = "default_true")]
+    require_picker_for_paste: bool,
+    #[serde(default = "default_true")]
+    suppress_echo: bool,
+    #[serde(default)]
+    cross_zone: ClipboardCrossZoneWire,
+}
+
+impl Default for ClipboardPolicyWire {
+    fn default() -> Self {
+        Self {
+            allow_host_capture: true,
+            allow_guest_capture: true,
+            require_picker_for_paste: true,
+            suppress_echo: true,
+            cross_zone: ClipboardCrossZoneWire::default(),
+        }
+    }
+}
+
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ClipboardCrossZoneWire {
+    #[serde(default)]
+    enable: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct NotificationProviderConfigWire {
+    host_execution_ref: ResourceRef,
+    host_user_ref: ResourceRef,
+    display_wayland_ref: ResourceRef,
+    guest_sources: Vec<NotificationGuestSourceWire>,
+    #[serde(default = "default_notification_pending")]
+    max_pending_notifications: usize,
+    #[serde(default = "default_notification_nonce_ttl")]
+    action_nonce_ttl_secs: u64,
+    #[serde(default = "default_notification_nonce_store")]
+    action_nonce_store_size: usize,
+    #[serde(default = "default_notification_ack_timeout")]
+    acknowledge_timeout_secs: u64,
+    #[serde(default = "default_true")]
+    dbus_sink_enabled: bool,
+    #[serde(default = "default_true")]
+    observer_enabled: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct NotificationGuestSourceWire {
+    guest_ref: ResourceRef,
+    categories: Vec<Category>,
+}
+
+const fn default_true() -> bool {
+    true
+}
+
+const fn default_clipboard_history_entries() -> usize {
+    20
+}
+
+const fn default_clipboard_item_bytes() -> usize {
+    8 * 1024 * 1024
+}
+
+const fn default_clipboard_total_bytes() -> usize {
+    64 * 1024 * 1024
+}
+
+const fn default_clipboard_concurrent_fds() -> usize {
+    32
+}
+
+const fn default_clipboard_guest_rate() -> u32 {
+    60
+}
+
+const fn default_clipboard_fd_timeout() -> u64 {
+    30
+}
+
+const fn default_notification_pending() -> usize {
+    64
+}
+
+const fn default_notification_nonce_ttl() -> u64 {
+    120
+}
+
+const fn default_notification_nonce_store() -> usize {
+    256
+}
+
+const fn default_notification_ack_timeout() -> u64 {
+    3_600
 }
 
 /// Readiness projection for one Zone runtime.
@@ -287,6 +595,8 @@ pub struct ZoneResourceRuntime {
     process_watch_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
     activation_runtime: Arc<Mutex<Option<ActivationResourceRuntime>>>,
     activation_watch_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    interaction_provider_configuration: Option<CommittedInteractionProviderConfiguration>,
+    interaction_provider_configuration_refused: bool,
 }
 
 impl core::fmt::Debug for ZoneResourceRuntime {
@@ -532,6 +842,20 @@ impl ZoneResourceRuntime {
             .runtime_metadata()
             .await
             .map_err(|_| ResourceRuntimeError::StoreReadFailed)?;
+        let (interaction_provider_configuration, interaction_provider_configuration_refused) =
+            match load_interaction_provider_configuration(
+                &zone,
+                &store,
+                store_metadata.current_revision,
+            )
+            .await
+            {
+                Ok(None) => (None, false),
+                Ok(Some(configuration)) if configuration.is_complete() => {
+                    (Some(configuration), false)
+                }
+                Ok(Some(_)) | Err(_) => (None, true),
+            };
         let backend = Arc::new(RedbBackend::from_arc(Arc::clone(&store)));
         let api = Arc::new(
             ResourceService::new(Arc::clone(&backend), Arc::clone(&authorizer))
@@ -706,6 +1030,8 @@ impl ZoneResourceRuntime {
             process_watch_task: Mutex::new(None),
             activation_runtime: Arc::new(Mutex::new(None)),
             activation_watch_task: Mutex::new(None),
+            interaction_provider_configuration,
+            interaction_provider_configuration_refused,
         })
     }
 
@@ -736,6 +1062,18 @@ impl ZoneResourceRuntime {
     /// evidence against a later store commit.
     pub const fn current_revision(&self) -> ZoneRevision {
         self.store_metadata.current_revision
+    }
+
+    /// Borrow sealed, committed interaction Provider configuration when the
+    /// Zone declares the complete interaction Provider set.
+    pub(crate) fn interaction_provider_configuration(
+        &self,
+    ) -> Option<&CommittedInteractionProviderConfiguration> {
+        self.interaction_provider_configuration.as_ref()
+    }
+
+    pub(crate) const fn interaction_provider_configuration_refused(&self) -> bool {
+        self.interaction_provider_configuration_refused
     }
 
     /// Return the current core-controller stage.
@@ -2283,6 +2621,247 @@ async fn discover_local_user(
     }))
 }
 
+async fn load_interaction_provider_configuration(
+    zone: &ZoneId,
+    store: &RedbResourceStore,
+    current_revision: ZoneRevision,
+) -> Result<Option<CommittedInteractionProviderConfiguration>, ResourceRuntimeError> {
+    let provider_type =
+        ResourceTypeName::parse("Provider").map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
+    let operation = StoreOperationContext {
+        operation_id: "interaction-provider-config".to_owned(),
+        idempotency_key: None,
+        correlation_id: "interaction-provider-config".to_owned(),
+        trace_id: None,
+        deadline_ms: 10_000,
+    };
+    let clipboard_ref = ResourceRef::parse("Provider/clipboard-wayland")
+        .map_err(|_| ResourceRuntimeError::InteractionConfigurationUnavailable)?;
+    let notification_ref = ResourceRef::parse("Provider/notification-desktop")
+        .map_err(|_| ResourceRuntimeError::InteractionConfigurationUnavailable)?;
+    let page = store
+        .list(StoreListRequest {
+            operation,
+            zone: zone.clone(),
+            resource_types: vec![provider_type],
+            resource_names: vec![
+                ResourceName::parse("clipboard-wayland")
+                    .map_err(|_| ResourceRuntimeError::InteractionConfigurationUnavailable)?,
+                ResourceName::parse("notification-desktop")
+                    .map_err(|_| ResourceRuntimeError::InteractionConfigurationUnavailable)?,
+            ],
+            filters: Vec::new(),
+            page_size: 2,
+            cursor: None,
+            projection: StoreProjection::Full,
+        })
+        .await
+        .map_err(|_| ResourceRuntimeError::StoreReadFailed)?;
+    if page.next_cursor.is_some() {
+        return Err(ResourceRuntimeError::InteractionConfigurationUnavailable);
+    }
+    let mut clipboard = None;
+    let mut notification = None;
+    for resource in page.resources {
+        if resource.resource_ref == clipboard_ref {
+            if clipboard.is_some() {
+                return Err(ResourceRuntimeError::InteractionConfigurationUnavailable);
+            }
+            clipboard = Some(parse_committed_clipboard_configuration(
+                zone,
+                current_revision,
+                &resource,
+            )?);
+        } else if resource.resource_ref == notification_ref {
+            if notification.is_some() {
+                return Err(ResourceRuntimeError::InteractionConfigurationUnavailable);
+            }
+            notification = Some(parse_committed_notification_configuration(
+                zone,
+                current_revision,
+                &resource,
+            )?);
+        }
+    }
+    if clipboard.is_none() && notification.is_none() {
+        Ok(None)
+    } else {
+        Ok(Some(CommittedInteractionProviderConfiguration {
+            clipboard,
+            notification,
+        }))
+    }
+}
+
+fn committed_provider_spec(
+    zone: &ZoneId,
+    current_revision: ZoneRevision,
+    resource: &StoredResource,
+    expected_ref: &ResourceRef,
+    expected_artifact_id: &str,
+) -> Result<
+    (
+        ProviderSpec,
+        ResourceUid,
+        ResourceGeneration,
+        ZoneRevision,
+        String,
+    ),
+    ResourceRuntimeError,
+> {
+    if &resource.zone != zone
+        || &resource.resource_ref != expected_ref
+        || resource.generation.get() == 0
+        || resource.revision.get() == 0
+        || resource.revision > current_revision
+    {
+        return Err(ResourceRuntimeError::InteractionConfigurationUnavailable);
+    }
+    let envelope = ResourceEnvelope::from_json(&resource.canonical_json)
+        .map_err(|_| ResourceRuntimeError::InteractionConfigurationUnavailable)?;
+    if envelope.resource_type().as_str() != "Provider"
+        || envelope.metadata().zone() != zone
+        || envelope.metadata().uid() != &resource.uid
+        || envelope.metadata().generation() != resource.generation
+        || envelope.metadata().revision() != resource.revision
+        || envelope
+            .digest()
+            .map_err(|_| ResourceRuntimeError::InteractionConfigurationUnavailable)?
+            != resource.payload_digest
+    {
+        return Err(ResourceRuntimeError::InteractionConfigurationUnavailable);
+    }
+    let spec = serde_json::from_slice::<ProviderSpec>(&envelope.spec().base().to_canonical_bytes())
+        .map_err(|_| ResourceRuntimeError::InteractionConfigurationUnavailable)?;
+    if spec.artifact_id().as_str() != expected_artifact_id {
+        return Err(ResourceRuntimeError::InteractionConfigurationUnavailable);
+    }
+    Ok((
+        spec,
+        resource.uid.clone(),
+        resource.generation,
+        resource.revision,
+        resource.payload_digest.clone(),
+    ))
+}
+
+fn parse_committed_clipboard_configuration(
+    zone: &ZoneId,
+    current_revision: ZoneRevision,
+    resource: &StoredResource,
+) -> Result<CommittedClipboardProviderConfiguration, ResourceRuntimeError> {
+    let expected_ref = ResourceRef::parse("Provider/clipboard-wayland")
+        .map_err(|_| ResourceRuntimeError::InteractionConfigurationUnavailable)?;
+    let (spec, resource_uid, resource_generation, resource_revision, provenance_digest) =
+        committed_provider_spec(
+            zone,
+            current_revision,
+            resource,
+            &expected_ref,
+            "clipboard-wayland",
+        )?;
+    let wire =
+        serde_json::from_slice::<ClipboardProviderConfigWire>(&spec.config().to_canonical_bytes())
+            .map_err(|_| ResourceRuntimeError::InteractionConfigurationUnavailable)?;
+    if wire.host_execution_ref.resource_type().as_str() != "Host"
+        || wire.host_user_ref.resource_type().as_str() != "User"
+        || wire.display_wayland_ref.to_canonical_string() != "Provider/display-wayland"
+        || wire.policy.cross_zone.enable
+        || wire.guest_sources.is_empty()
+    {
+        return Err(ResourceRuntimeError::InteractionConfigurationUnavailable);
+    }
+    let mut guest_sources = BTreeSet::new();
+    for source in wire.guest_sources {
+        if source.guest_ref.resource_type().as_str() != "Guest"
+            || !guest_sources.insert(source.guest_ref)
+        {
+            return Err(ResourceRuntimeError::InteractionConfigurationUnavailable);
+        }
+    }
+    let policy = ClipboardPolicy::new_with_fd_write_timeout_seconds(
+        wire.policy.allow_host_capture,
+        wire.policy.allow_guest_capture,
+        wire.policy.require_picker_for_paste,
+        wire.policy.suppress_echo,
+        false,
+        wire.caps.max_history_entries,
+        wire.caps.max_item_bytes,
+        wire.caps.max_total_bytes,
+        wire.caps.max_concurrent_fds,
+        wire.caps.max_guest_rate_per_min,
+        wire.caps.fd_write_timeout_seconds,
+    )
+    .map_err(|_| ResourceRuntimeError::InteractionConfigurationUnavailable)?;
+    Ok(CommittedClipboardProviderConfiguration {
+        policy,
+        audit_capacity: wire.caps.max_history_entries,
+        host_execution_ref: wire.host_execution_ref,
+        host_user_ref: wire.host_user_ref,
+        display_wayland_ref: wire.display_wayland_ref,
+        guest_sources,
+        resource_uid,
+        resource_generation,
+        resource_revision,
+        provenance_digest,
+    })
+}
+
+fn parse_committed_notification_configuration(
+    zone: &ZoneId,
+    current_revision: ZoneRevision,
+    resource: &StoredResource,
+) -> Result<CommittedNotificationProviderConfiguration, ResourceRuntimeError> {
+    let expected_ref = ResourceRef::parse("Provider/notification-desktop")
+        .map_err(|_| ResourceRuntimeError::InteractionConfigurationUnavailable)?;
+    let (spec, resource_uid, resource_generation, resource_revision, provenance_digest) =
+        committed_provider_spec(
+            zone,
+            current_revision,
+            resource,
+            &expected_ref,
+            "notification-desktop",
+        )?;
+    let wire = serde_json::from_slice::<NotificationProviderConfigWire>(
+        &spec.config().to_canonical_bytes(),
+    )
+    .map_err(|_| ResourceRuntimeError::InteractionConfigurationUnavailable)?;
+    if wire.host_execution_ref.resource_type().as_str() != "Host"
+        || wire.host_user_ref.resource_type().as_str() != "User"
+        || wire.display_wayland_ref.to_canonical_string() != "Provider/display-wayland"
+        || wire.guest_sources.is_empty()
+    {
+        return Err(ResourceRuntimeError::InteractionConfigurationUnavailable);
+    }
+    let mut sources = Vec::with_capacity(wire.guest_sources.len());
+    for source in wire.guest_sources {
+        sources.push(
+            GuestSourceConfig::new(source.guest_ref, zone.clone(), source.categories)
+                .map_err(|_| ResourceRuntimeError::InteractionConfigurationUnavailable)?,
+        );
+    }
+    let config = NotificationProviderConfig::new(sources)
+        .and_then(|config| config.with_host_binding(wire.host_execution_ref, wire.host_user_ref))
+        .and_then(|config| config.with_display_wayland_ref(Some(wire.display_wayland_ref)))
+        .and_then(|config| config.with_max_pending_notifications(wire.max_pending_notifications))
+        .and_then(|config| config.with_action_nonce_ttl_secs(wire.action_nonce_ttl_secs))
+        .and_then(|config| config.with_action_nonce_store_size(wire.action_nonce_store_size))
+        .and_then(|config| config.with_acknowledge_timeout_secs(wire.acknowledge_timeout_secs))
+        .map(|config| {
+            config
+                .with_dbus_sink_enabled(wire.dbus_sink_enabled)
+                .with_observer_enabled(wire.observer_enabled)
+        })
+        .map_err(|_| ResourceRuntimeError::InteractionConfigurationUnavailable)?;
+    Ok(CommittedNotificationProviderConfiguration {
+        config,
+        resource_uid,
+        resource_generation,
+        resource_revision,
+        provenance_digest,
+    })
+}
+
 async fn reconcile_system_core_resources(
     zone: &ZoneId,
     store: &RedbResourceStore,
@@ -3021,6 +3600,183 @@ mod tests {
 
     fn test_audit_sink(directory: &std::path::Path, name: &str) -> Arc<AuditSink> {
         Arc::new(AuditSink::open(directory.join(name)).unwrap())
+    }
+
+    fn committed_provider_resource(name: &str, artifact_id: &str, config: Value) -> StoredResource {
+        let zone = ZoneId::parse("work").unwrap();
+        let uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
+        let envelope = json!({
+            "apiVersion": "resources.d2bus.org/v3",
+            "type": "Provider",
+            "metadata": {
+                "name": name,
+                "zone": zone.as_str(),
+                "uid": uid.as_str(),
+                "generation": 1,
+                "revision": 1,
+                "ownerRef": null,
+                "finalizers": [],
+                "deletionRequestedAt": null,
+                "createdAt": "2026-07-22T00:00:00.000Z",
+                "updatedAt": "2026-07-22T00:00:00.000Z",
+                "managedBy": "configuration",
+                "configurationGeneration": 1,
+            },
+            "spec": {
+                "artifactId": artifact_id,
+                "config": config,
+            },
+            "status": {
+                "completedAt": null,
+                "conditions": [],
+                "lastReconciledAt": null,
+                "observedGeneration": 0,
+                "outcome": null,
+                "phase": "Pending",
+                "resource": {},
+                "startedAt": null,
+                "update": {
+                    "dependencies": {"count": 0, "refs": []},
+                    "disruption": "None",
+                    "lastAssessedAt": null,
+                    "observedGeneration": 0,
+                    "operationId": null,
+                    "owned": {"count": 0, "refs": []},
+                    "preserveState": true,
+                    "reasons": [],
+                    "state": "Unknown",
+                    "targetGeneration": 1,
+                },
+            },
+        });
+        let canonical_json = d2b_contracts::v3::canonical_json_bytes(&envelope).unwrap();
+        let parsed = ResourceEnvelope::from_json(&canonical_json).unwrap();
+        StoredResource {
+            resource_ref: ResourceRef::parse(&format!("Provider/{name}")).unwrap(),
+            zone,
+            uid,
+            generation: ResourceGeneration::new(1).unwrap(),
+            revision: ZoneRevision::new(1),
+            canonical_json,
+            payload_digest: parsed.digest().unwrap(),
+        }
+    }
+
+    fn clipboard_provider_config() -> Value {
+        json!({
+            "hostExecutionRef": "Host/host-system",
+            "hostUserRef": "User/alice",
+            "displayWaylandRef": "Provider/display-wayland",
+            "guestSources": [{"guestRef": "Guest/workstation"}],
+        })
+    }
+
+    fn notification_provider_config() -> Value {
+        json!({
+            "hostExecutionRef": "Host/host-system",
+            "hostUserRef": "User/alice",
+            "displayWaylandRef": "Provider/display-wayland",
+            "guestSources": [{
+                "guestRef": "Guest/workstation",
+                "categories": ["system.info"],
+            }],
+        })
+    }
+
+    #[test]
+    fn committed_interaction_provider_configuration_requires_integrity_bound_typed_rows() {
+        let zone = ZoneId::parse("work").unwrap();
+        let clipboard = committed_provider_resource(
+            "clipboard-wayland",
+            "clipboard-wayland",
+            clipboard_provider_config(),
+        );
+        let notification = committed_provider_resource(
+            "notification-desktop",
+            "notification-desktop",
+            notification_provider_config(),
+        );
+        let clipboard =
+            parse_committed_clipboard_configuration(&zone, ZoneRevision::new(1), &clipboard)
+                .expect("clipboard configuration is accepted");
+        let notification =
+            parse_committed_notification_configuration(&zone, ZoneRevision::new(1), &notification)
+                .expect("notification configuration is accepted");
+        let configuration = CommittedInteractionProviderConfiguration {
+            clipboard: Some(clipboard),
+            notification: Some(notification),
+        };
+
+        assert!(configuration.is_complete());
+        assert!(
+            CommittedInteractionProviderConfiguration {
+                clipboard: configuration.clipboard().cloned(),
+                notification: None,
+            }
+            .is_complete()
+        );
+        assert!(
+            CommittedInteractionProviderConfiguration {
+                clipboard: None,
+                notification: configuration.notification().cloned(),
+            }
+            .is_complete()
+        );
+        assert!(
+            configuration
+                .clipboard()
+                .unwrap()
+                .allows_guest_source(&ResourceRef::parse("Guest/workstation").unwrap())
+        );
+        assert_eq!(
+            configuration
+                .notification()
+                .unwrap()
+                .config()
+                .max_pending_notifications(),
+            64
+        );
+        assert_eq!(
+            configuration.notification().unwrap().observer_user_ref(),
+            &ResourceRef::parse("User/alice").unwrap()
+        );
+    }
+
+    #[test]
+    fn committed_interaction_provider_configuration_rejects_tampered_or_invalid_rows() {
+        let zone = ZoneId::parse("work").unwrap();
+        let mut tampered = committed_provider_resource(
+            "clipboard-wayland",
+            "clipboard-wayland",
+            clipboard_provider_config(),
+        );
+        tampered.payload_digest = "sha256:tampered".to_owned();
+        assert!(matches!(
+            parse_committed_clipboard_configuration(&zone, ZoneRevision::new(1), &tampered),
+            Err(ResourceRuntimeError::InteractionConfigurationUnavailable)
+        ));
+
+        let invalid_guest_source = committed_provider_resource(
+            "notification-desktop",
+            "notification-desktop",
+            json!({
+                "hostExecutionRef": "Host/host-system",
+                "hostUserRef": "User/alice",
+                "displayWaylandRef": "Provider/display-wayland",
+                "guestSources": [{
+                    "guestRef": "Host/host-system",
+                    "categories": ["system.info"],
+                }],
+            }),
+        );
+        assert!(matches!(
+            parse_committed_notification_configuration(
+                &zone,
+                ZoneRevision::new(1),
+                &invalid_guest_source,
+            ),
+            Err(ResourceRuntimeError::InteractionConfigurationUnavailable)
+        ));
     }
 
     #[test]

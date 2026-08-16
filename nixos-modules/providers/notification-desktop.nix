@@ -39,7 +39,6 @@ let
     let
       spec = row.resource.spec or { };
       c = spec.config or { };
-      dbusEnabled = c.dbusSinkEnabled or true;
       sources = c.guestSources or [ ];
       sourceAssertions = lib.concatMap
         (rawSource:
@@ -62,14 +61,12 @@ let
         message = "${row.path}.spec.config.hostExecutionRef must resolve to a same-Zone Host.";
       }
       {
-        assertion = !dbusEnabled || resolves row.zoneName "User" (c.hostUserRef or null);
-        message = "${row.path}.spec.config.hostUserRef must resolve to a same-Zone User when D-Bus is enabled.";
+        assertion = resolves row.zoneName "User" (c.hostUserRef or null);
+        message = "${row.path}.spec.config.hostUserRef must resolve to a same-Zone User.";
       }
       {
-        assertion = !dbusEnabled || (
-          resolvesExact row.zoneName "Provider" "display-wayland" (c.displayWaylandRef or null)
-        );
-        message = "${row.path}.spec.config.displayWaylandRef must select Provider/display-wayland when D-Bus is enabled.";
+        assertion = resolvesExact row.zoneName "Provider" "display-wayland" (c.displayWaylandRef or null);
+        message = "${row.path}.spec.config.displayWaylandRef must select Provider/display-wayland.";
       }
       {
         assertion = (c.maxPendingNotifications or 64) >= 8
@@ -92,8 +89,8 @@ let
         message = "${row.path}.spec.config.acknowledgeTimeoutSecs must be between 1 and 86400.";
       }
       {
-        assertion = lib.length sources <= 16;
-        message = "${row.path}.spec.config.guestSources must contain at most 16 entries.";
+        assertion = lib.length sources >= 1 && lib.length sources <= 16;
+        message = "${row.path}.spec.config.guestSources must contain between one and sixteen sources.";
       }
       {
         assertion =

@@ -229,7 +229,9 @@ impl<E: ClipboardProcessEffectPort> ClipboardRuntime<E> {
         source_event: Option<GuestSelectionEvent>,
         now_secs: u64,
     ) -> Result<String, ClipboardRuntimeError> {
-        let authenticated = self.admit_route(route)?;
+        let authenticated = AuthenticatedClipboardSession::from_authenticated_route(route.clone())
+            .or_else(|_| AuthenticatedClipboardSession::from_display_observer_route(route))
+            .map_err(|_| ClipboardRuntimeError::SessionUnauthenticated)?;
         if authenticated.role() != ClipboardServiceRole::Bridge {
             return Err(ClipboardRuntimeError::SessionRoleInvalid);
         }

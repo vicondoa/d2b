@@ -1844,16 +1844,26 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
                             if resource.require_ready().is_err() {
                                 continue;
                             }
+                            if resource.interaction_provider_configuration_refused() {
+                                tracing::error!(
+                                    zone = %zone,
+                                    "interaction Provider composition refused: committed configuration is incomplete",
+                                );
+                                continue;
+                            }
                             match interaction_composition::production_interaction_composition(
                                 resolver.clone(),
                                 state.daemon_uid,
                                 state
                                     .daemon_state_dir
                                     .join(format!("interaction-display-observations-{zone}.json")),
-                                zone.clone(),
-                                resource.committed_policy_snapshot(),
-                                resource.current_revision(),
-                                true,
+                                interaction_composition::ProductionInteractionResourceState::new(
+                                    zone.clone(),
+                                    resource.committed_policy_snapshot(),
+                                    resource.current_revision(),
+                                    true,
+                                    resource.interaction_provider_configuration(),
+                                ),
                             ) {
                                 Ok(runtime) => {
                                     runtimes.insert(zone.clone(), runtime);

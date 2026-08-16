@@ -13,6 +13,7 @@ daemon-support = []
 
 [dependencies]
 d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
+d2b-provider-supervisor = { path = "../d2b-provider-supervisor", version = "0.0.0-bootstrap" }
 d2b-provider-toolkit = { path = "../d2b-provider-toolkit", version = "0.0.0-bootstrap" }
 getrandom = "0.2"
 serde = { workspace = true }

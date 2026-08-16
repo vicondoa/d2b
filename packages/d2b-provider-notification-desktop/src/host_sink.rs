@@ -32,11 +32,23 @@ impl std::error::Error for SinkError {}
 /// Presentation effect port. Implementations own the pre-opened desktop
 /// session connection and never receive an address or path.
 pub trait DesktopNotificationPort {
+    /// Confirm that the host presentation boundary accepted sink activation.
+    fn activate(&mut self) -> Result<(), SinkError>;
+    /// Confirm that the host presentation boundary accepted sink deactivation.
+    fn deactivate(&mut self) -> Result<(), SinkError>;
     /// Present one sanitized notification and return an opaque desktop ID.
     fn notify(&mut self, notification: &SanitizedNotification) -> Result<u32, SinkError>;
 }
 
 impl<T: DesktopNotificationPort + ?Sized> DesktopNotificationPort for Box<T> {
+    fn activate(&mut self) -> Result<(), SinkError> {
+        (**self).activate()
+    }
+
+    fn deactivate(&mut self) -> Result<(), SinkError> {
+        (**self).deactivate()
+    }
+
     fn notify(&mut self, notification: &SanitizedNotification) -> Result<u32, SinkError> {
         (**self).notify(notification)
     }
@@ -474,6 +486,14 @@ mod tests {
     }
 
     impl DesktopNotificationPort for TestPort {
+        fn activate(&mut self) -> Result<(), SinkError> {
+            Ok(())
+        }
+
+        fn deactivate(&mut self) -> Result<(), SinkError> {
+            Ok(())
+        }
+
         fn notify(&mut self, notification: &SanitizedNotification) -> Result<u32, SinkError> {
             self.next_id = self.next_id.saturating_add(1);
             self.summaries.push(notification.summary().to_owned());
@@ -491,6 +511,14 @@ mod tests {
     struct FailingPort;
 
     impl DesktopNotificationPort for FailingPort {
+        fn activate(&mut self) -> Result<(), SinkError> {
+            Ok(())
+        }
+
+        fn deactivate(&mut self) -> Result<(), SinkError> {
+            Ok(())
+        }
+
         fn notify(&mut self, _notification: &SanitizedNotification) -> Result<u32, SinkError> {
             Err(SinkError::Unavailable)
         }
