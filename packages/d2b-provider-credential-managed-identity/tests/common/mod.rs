@@ -2,14 +2,20 @@
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use d2b_contracts::v3::credential::{
     AudienceToken, CredentialAuthorization, CredentialLeaseHandle, CredentialLeaseState,
     CredentialMethod, CredentialProvider, CredentialRequest, CredentialResponse,
-    CredentialServiceError, CredentialServiceErrorCode, CredentialSourceVersion,
-    DeliveryRouteDigest, DeliverySessionParams, PlacementBinding, dispatch_authorized_provider,
+    CredentialServiceError, CredentialServiceErrorCode, CredentialSessionBinding,
+    CredentialSourceVersion, DeliveryRouteDigest, DeliverySessionParams, PlacementBinding,
+    dispatch_authorized_provider,
 };
-use d2b_contracts::v3::{ResourceGeneration, ResourceRef, ResourceUid};
+use d2b_contracts::v3::{
+    AuthenticatedSubjectContext, BindingDigest, EvidenceClass, Locality, ReconnectGeneration,
+    ResourceGeneration, ResourceRef, ResourceUid, SchemaFingerprint, ServiceName, SessionBinding,
+    SessionPurpose, TranscriptHash, TransportBinding,
+};
 use d2b_provider_credential_managed_identity::{
     ManagedIdentityClientConfig, ManagedIdentityClientError, ManagedIdentityClientState,
     ManagedIdentityCredentialClient, ManagedIdentityCredentialProvider,
@@ -19,6 +25,15 @@ use d2b_provider_credential_managed_identity::{
 };
 
 pub const EXPIRY: u64 = 20_000;
+
+pub fn session_expiry() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis()
+        .min(u128::from(u64::MAX)) as u64
+        + 20_000
+}
 
 pub struct FakeClient {
     pub state: Mutex<ManagedIdentityClientState>,
@@ -148,6 +163,8 @@ pub fn setup() -> (ManagedIdentityCredentialProvider, Arc<FakeClient>) {
         PlacementBinding::GuestAgent,
         ResourceRef::parse("Guest/aca-sandbox").unwrap(),
     )
+    .unwrap()
+    .with_zone_ref(ResourceRef::parse("Zone/dev").unwrap())
     .unwrap();
     let factory = ManagedIdentityCredentialProviderFactory::new(
         config,
@@ -171,21 +188,120 @@ pub fn request(idempotency: &str) -> CredentialRequest {
 }
 
 pub fn delivery(method: CredentialMethod, sequence: u64) -> DeliverySessionParams {
-    DeliverySessionParams::new(
+    delivery_for(
+        method,
+        sequence,
         ResourceRef::parse("Credential/aca-relay-mi").unwrap(),
+    )
+}
+
+pub fn delivery_for(
+    method: CredentialMethod,
+    sequence: u64,
+    credential_ref: ResourceRef,
+) -> DeliverySessionParams {
+    delivery_for_timing(method, sequence, credential_ref, EXPIRY, 15_000)
+}
+
+pub fn delivery_for_timing(
+    method: CredentialMethod,
+    sequence: u64,
+    credential_ref: ResourceRef,
+    expiry_unix_ms: u64,
+    deadline_unix_ms: u64,
+) -> DeliverySessionParams {
+    DeliverySessionParams::new(
+        credential_ref,
         ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap(),
         ResourceGeneration::new(1).unwrap(),
         ResourceRef::parse("Provider/runtime-azure-container-apps").unwrap(),
         ResourceGeneration::new(1).unwrap(),
         AudienceToken::parse("azure-resource-manager").unwrap(),
         method.operation_class(),
-        EXPIRY,
-        15_000,
+        expiry_unix_ms,
+        deadline_unix_ms,
         DeliveryRouteDigest::parse(format!("sha256:{}", "d".repeat(64))).unwrap(),
         4_096,
         sequence,
     )
     .unwrap()
+}
+
+pub fn authenticated_session(
+    subject_ref: &str,
+    zone_ref: &str,
+    execution_ref: &str,
+    provider_ref: &str,
+    provider_generation: u64,
+    reconnect_generation: u64,
+) -> CredentialSessionBinding {
+    authenticated_session_with_expiry(
+        subject_ref,
+        zone_ref,
+        execution_ref,
+        provider_ref,
+        provider_generation,
+        reconnect_generation,
+        session_expiry(),
+    )
+}
+
+pub fn authenticated_session_with_expiry(
+    subject_ref: &str,
+    zone_ref: &str,
+    execution_ref: &str,
+    provider_ref: &str,
+    provider_generation: u64,
+    reconnect_generation: u64,
+    expires_at_unix_ms: u64,
+) -> CredentialSessionBinding {
+    let subject = AuthenticatedSubjectContext::new(
+        ResourceRef::parse(subject_ref).unwrap(),
+        ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap(),
+        ResourceRef::parse(zone_ref).unwrap(),
+        EvidenceClass::EnrolledKk,
+        SessionPurpose::parse("credential-delivery").unwrap(),
+        ServiceName::parse("d2b.credential.v3").unwrap(),
+        SessionBinding::new(
+            SchemaFingerprint::parse(format!("sha256:{}", "a".repeat(64))).unwrap(),
+            TransportBinding::new(
+                Locality::Local,
+                BindingDigest::parse(format!("sha256:{}", "b".repeat(64))).unwrap(),
+            ),
+            ReconnectGeneration::new(reconnect_generation).unwrap(),
+            TranscriptHash::from_bytes([7; 32]),
+        ),
+    )
+    .with_execution_ref(ResourceRef::parse(execution_ref).unwrap())
+    .with_provider_ref(ResourceRef::parse(provider_ref).unwrap())
+    .with_process_ref(ResourceRef::parse("Process/mi-agent-aca-relay-mi").unwrap())
+    .with_provider_generation(ResourceGeneration::new(provider_generation).unwrap());
+    CredentialSessionBinding::new(subject, expires_at_unix_ms).unwrap()
+}
+
+pub fn authorization(
+    method: CredentialMethod,
+    session: CredentialSessionBinding,
+) -> Result<CredentialAuthorization, CredentialServiceError> {
+    authorization_for(
+        method,
+        session,
+        ResourceRef::parse("Credential/aca-relay-mi").unwrap(),
+    )
+}
+
+pub fn authorization_for(
+    method: CredentialMethod,
+    session: CredentialSessionBinding,
+    credential_ref: ResourceRef,
+) -> Result<CredentialAuthorization, CredentialServiceError> {
+    CredentialAuthorization::new(
+        method,
+        method
+            .requires_delivery()
+            .then(|| delivery_for(method, 1, credential_ref)),
+    )?
+    .with_authenticated_session(session)
 }
 
 #[derive(Clone)]
@@ -214,9 +330,17 @@ impl TestAdmission for Admission {
                 CredentialServiceErrorCode::OperationDenied,
             ));
         }
-        CredentialAuthorization::new(
+        authorization_for(
             method,
-            method.requires_delivery().then(|| delivery(method, 1)),
+            authenticated_session(
+                "Provider/runtime-azure-container-apps",
+                "Zone/dev",
+                "Guest/aca-sandbox",
+                "Provider/runtime-azure-container-apps",
+                1,
+                1,
+            ),
+            _request.credential_ref().clone(),
         )
     }
 }
