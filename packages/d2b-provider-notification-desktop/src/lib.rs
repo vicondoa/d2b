@@ -11,6 +11,7 @@ mod descriptor;
 mod error;
 mod guest_source;
 mod host_sink;
+mod lifecycle;
 mod metrics;
 mod rbac;
 mod redact;
@@ -31,6 +32,11 @@ pub use guest_source::GuestSource;
 pub use host_sink::{
     DesktopNotificationPort, NotificationProjection, NotificationResult, NotificationSink,
     SinkError,
+};
+pub use lifecycle::{
+    NotificationHostSinkIdentity, NotificationLifecycleBackend, NotificationLifecycleObservation,
+    NotificationLifecyclePlan, NotificationLifecycleReceipt, NotificationLifecycleSupervisor,
+    NotificationSourceIdentity,
 };
 pub use metrics::{NotificationOutcome, NotificationTelemetryField, NotificationTelemetryFrame};
 pub use rbac::{NotificationRbac, NotificationRole};

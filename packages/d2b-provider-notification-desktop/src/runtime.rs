@@ -369,7 +369,7 @@ mod tests {
         fn apply(
             &mut self,
             plan: &SourceReconcileResult,
-            _lifecycle: &d2b_provider_supervisor::NotificationLifecyclePlan,
+            _lifecycle: &crate::NotificationLifecyclePlan,
         ) -> Result<crate::SourceProcessEffectReceipt, &'static str> {
             self.plans += 1;
             Ok(crate::SourceProcessEffectReceipt::complete(plan))

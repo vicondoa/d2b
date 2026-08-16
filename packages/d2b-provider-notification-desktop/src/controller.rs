@@ -2,7 +2,7 @@
 
 use crate::SessionEvidence;
 use d2b_contracts::v3::{EvidenceClass, Locality, ResourceRef, ZoneId};
-use d2b_provider_supervisor::{
+use crate::{
     NotificationHostSinkIdentity, NotificationLifecyclePlan, NotificationLifecycleReceipt,
     NotificationSourceIdentity,
 };
