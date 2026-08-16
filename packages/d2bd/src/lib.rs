@@ -19229,7 +19229,6 @@ fn dispatch_broker_host_prepare_as(
         };
 
     let host = load_host_artifact(state)?;
-    let resolver = load_bundle_resolver(state)?;
     if let Err(response) = dispatch_broker_ack_request(
         state,
         VERB,
@@ -19300,6 +19299,7 @@ fn dispatch_broker_host_prepare_as(
     ) {
         return Ok(response);
     }
+    let resolver = load_bundle_resolver(state)?;
     let generation =
         resolver
             .installed_generation_identity()

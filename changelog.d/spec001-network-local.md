@@ -9,3 +9,8 @@
 
 - Require both the Network resource and site-level east-west opt-ins before
   direct workload forwarding can be enabled.
+
+### Fixed
+
+- Preserve broker-first host preparation error precedence while retaining
+  bundle validation before v3 NetworkManager effects.
