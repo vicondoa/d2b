@@ -1,6 +1,9 @@
 //! Pool/session controller lifecycle backed by daemon-owned authority.
 
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 
 use crate::{
     Authorizer, ShellPool, ShellSession, ShellTerminalError, Subject,
@@ -92,7 +95,7 @@ impl OpenSessionResult {
 pub struct ShellTerminalController {
     pools: BTreeMap<String, ShellPool>,
     sessions: BTreeMap<String, ShellSession>,
-    trusted_sessions: std::collections::BTreeSet<String>,
+    trusted_sessions: BTreeSet<String>,
     authority: Arc<dyn ShellAuthorityPort>,
 }
 
@@ -112,7 +115,7 @@ impl ShellTerminalController {
         Self {
             pools: BTreeMap::new(),
             sessions: BTreeMap::new(),
-            trusted_sessions: std::collections::BTreeSet::new(),
+            trusted_sessions: BTreeSet::new(),
             authority,
         }
     }
