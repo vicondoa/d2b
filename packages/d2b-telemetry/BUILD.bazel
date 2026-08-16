@@ -49,6 +49,7 @@ rust_test(
     name = "d2b_telemetry_test",
     compile_data = ["Cargo.toml"],
     crate = ":d2b_telemetry",
+    tags = ["local"],
     deps = ["@crates//:serde_json"],
 )
 
@@ -67,6 +68,5 @@ filegroup(
         ],
         allow_empty = True,
     ),
-    tags = ["local"],
     visibility = ["//visibility:public"],
 )

@@ -90,6 +90,7 @@ rust_test(
     name = "d2b_resource_store_redb_test",
     compile_data = ["Cargo.toml"],
     crate = ":d2b_resource_store_redb",
+    tags = ["local"],
     deps = [
         "@crates//:serde_json",
         "@crates//:tempfile",
@@ -111,6 +112,5 @@ filegroup(
         ],
         allow_empty = True,
     ),
-    tags = ["local"],
     visibility = ["//visibility:public"],
 )

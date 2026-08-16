@@ -69,6 +69,7 @@ rust_test(
     name = "d2b_guestd_test",
     compile_data = ["Cargo.toml"],
     crate = ":d2b_guestd",
+    tags = ["local"],
     data = [":d2b-guestd"],
     env = {"CARGO_BIN_EXE_d2b-guestd": "$(rootpath :d2b-guestd)"},
     rustc_env = {"CARGO_BIN_EXE_d2b-guestd": "$(rootpath :d2b-guestd)"},
@@ -90,6 +91,5 @@ filegroup(
         ],
         allow_empty = True,
     ),
-    tags = ["local"],
     visibility = ["//visibility:public"],
 )
