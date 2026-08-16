@@ -1,0 +1,234 @@
+use d2b_contracts::v3::ResourceUid;
+use d2b_provider_device_usbip::{
+    AttachProcessIdentity, AttachmentObservation, BindingLifecycle, BindingLifecycleError,
+    BindingPhase, BindingPort, ServiceLifecycle, ServiceLifecycleError, ServicePhase, ServicePort,
+    UsbipSupervisor,
+};
+
+fn uid(value: &str) -> ResourceUid {
+    ResourceUid::parse(value).unwrap()
+}
+
+#[derive(Default)]
+struct FakePort {
+    calls: Vec<&'static str>,
+    fail_physical: bool,
+    fail_relay: bool,
+    observation: AttachmentObservation,
+}
+
+impl ServicePort for FakePort {
+    fn reserve_physical(
+        &mut self,
+        _: &ResourceUid,
+    ) -> Result<d2b_provider_device_usbip::PhysicalAuthorityLease, ServiceLifecycleError> {
+        self.calls.push("reserve-physical");
+        if self.fail_physical {
+            Err(ServiceLifecycleError::PhysicalAuthorityConflict)
+        } else {
+            Ok(d2b_provider_device_usbip::PhysicalAuthorityLease::from_adapter([1; 16]))
+        }
+    }
+
+    fn reserve_relay(
+        &mut self,
+        _: &ResourceUid,
+    ) -> Result<d2b_provider_device_usbip::ServiceRelayLease, ServiceLifecycleError> {
+        self.calls.push("reserve-relay");
+        if self.fail_relay {
+            Err(ServiceLifecycleError::RelayAuthorityConflict)
+        } else {
+            Ok(d2b_provider_device_usbip::ServiceRelayLease::from_adapter(
+                [2; 16],
+            ))
+        }
+    }
+
+    fn bind_owned(
+        &mut self,
+        _: &d2b_provider_device_usbip::PhysicalAuthorityLease,
+    ) -> Result<d2b_provider_device_usbip::OwnedBusBinding, ServiceLifecycleError> {
+        self.calls.push("bind");
+        Ok(d2b_provider_device_usbip::OwnedBusBinding::from_adapter(
+            [3; 16],
+        ))
+    }
+
+    fn unbind_owned(
+        &mut self,
+        _: &d2b_provider_device_usbip::OwnedBusBinding,
+    ) -> Result<(), ServiceLifecycleError> {
+        self.calls.push("unbind");
+        Ok(())
+    }
+
+    fn release_relay(
+        &mut self,
+        _: d2b_provider_device_usbip::ServiceRelayLease,
+    ) -> Result<(), ServiceLifecycleError> {
+        self.calls.push("release-relay");
+        Ok(())
+    }
+
+    fn release_physical(
+        &mut self,
+        _: d2b_provider_device_usbip::PhysicalAuthorityLease,
+    ) -> Result<(), ServiceLifecycleError> {
+        self.calls.push("release-physical");
+        Ok(())
+    }
+}
+
+impl BindingPort for FakePort {
+    fn acquire_slot(&mut self) -> Result<(), BindingLifecycleError> {
+        self.calls.push("slot");
+        Ok(())
+    }
+
+    fn start_proxy(&mut self) -> Result<(), BindingLifecycleError> {
+        self.calls.push("proxy");
+        Ok(())
+    }
+
+    fn spawn_attach_runner(&mut self) -> Result<AttachProcessIdentity, BindingLifecycleError> {
+        self.calls.push("spawn-attach");
+        Ok(AttachProcessIdentity::from_adapter(7, 11))
+    }
+
+    fn observe_attach_runner(
+        &mut self,
+        _: &AttachProcessIdentity,
+    ) -> Result<AttachmentObservation, BindingLifecycleError> {
+        self.calls.push("observe-attach");
+        Ok(self.observation)
+    }
+
+    fn detach_guest(&mut self) -> Result<(), BindingLifecycleError> {
+        self.calls.push("detach-guest");
+        Ok(())
+    }
+
+    fn close_attach_runner(
+        &mut self,
+        _: &AttachProcessIdentity,
+    ) -> Result<(), BindingLifecycleError> {
+        self.calls.push("close-attach");
+        Ok(())
+    }
+
+    fn close_proxy(&mut self) -> Result<(), BindingLifecycleError> {
+        self.calls.push("close-proxy");
+        Ok(())
+    }
+
+    fn release_slot(&mut self) -> Result<(), BindingLifecycleError> {
+        self.calls.push("release-slot");
+        Ok(())
+    }
+}
+
+#[test]
+fn wrong_zone_and_opt_out_refuse_before_authority_or_bind() {
+    let service_zone = uid("123e4567-e89b-42d3-a456-426614174000");
+    let mut port = FakePort::default();
+    let mut service = ServiceLifecycle::new(
+        service_zone.clone(),
+        uid("223e4567-e89b-42d3-a456-426614174001"),
+    );
+
+    assert_eq!(
+        service.activate(false, service_zone.clone(), &mut port),
+        Err(ServiceLifecycleError::ZoneNotOptedIn)
+    );
+    assert!(port.calls.is_empty());
+    assert_eq!(
+        service.activate(true, uid("323e4567-e89b-42d3-a456-426614174002"), &mut port),
+        Err(ServiceLifecycleError::WrongZone)
+    );
+    assert!(port.calls.is_empty());
+}
+
+#[test]
+fn authority_conflicts_happen_before_bind() {
+    let zone = uid("123e4567-e89b-42d3-a456-426614174000");
+    let mut physical_conflict = FakePort {
+        fail_physical: true,
+        ..Default::default()
+    };
+    let mut service =
+        ServiceLifecycle::new(zone.clone(), uid("223e4567-e89b-42d3-a456-426614174001"));
+    assert_eq!(
+        service.activate(true, zone.clone(), &mut physical_conflict),
+        Err(ServiceLifecycleError::PhysicalAuthorityConflict)
+    );
+    assert_eq!(physical_conflict.calls, ["reserve-physical"]);
+
+    let mut relay_conflict = FakePort {
+        fail_relay: true,
+        ..Default::default()
+    };
+    let mut service =
+        ServiceLifecycle::new(zone.clone(), uid("223e4567-e89b-42d3-a456-426614174001"));
+    assert_eq!(
+        service.activate(true, zone, &mut relay_conflict),
+        Err(ServiceLifecycleError::RelayAuthorityConflict)
+    );
+    assert_eq!(relay_conflict.calls, ["reserve-physical", "reserve-relay"]);
+}
+
+#[test]
+fn matching_restart_adopts_and_stale_identity_quarantines_without_effects() {
+    let zone = uid("123e4567-e89b-42d3-a456-426614174000");
+    let mut port = FakePort {
+        observation: AttachmentObservation::Matching,
+        ..Default::default()
+    };
+    let mut binding = BindingLifecycle::new(zone.clone(), zone.clone());
+    binding
+        .adopt(AttachProcessIdentity::from_adapter(7, 11), &mut port)
+        .unwrap();
+    assert_eq!(binding.phase(), BindingPhase::Attached);
+    assert_eq!(port.calls, ["observe-attach"]);
+
+    port.calls.clear();
+    port.observation = AttachmentObservation::StaleIdentity;
+    binding
+        .adopt(AttachProcessIdentity::from_adapter(8, 12), &mut port)
+        .unwrap();
+    assert_eq!(binding.phase(), BindingPhase::Quarantined);
+    assert_eq!(port.calls, ["observe-attach"]);
+}
+
+#[test]
+fn binding_closes_its_process_before_service_unbinds_and_releases_authority() {
+    let zone = uid("123e4567-e89b-42d3-a456-426614174000");
+    let mut port = FakePort::default();
+    let mut service =
+        ServiceLifecycle::new(zone.clone(), uid("223e4567-e89b-42d3-a456-426614174001"));
+    service.activate(true, zone.clone(), &mut port).unwrap();
+    let binding = BindingLifecycle::new(zone.clone(), zone);
+    let mut supervisor = UsbipSupervisor::new(service);
+    supervisor.add_binding(binding).unwrap();
+    supervisor.activate_binding(0, &mut port).unwrap();
+    supervisor.finalize(&mut port).unwrap();
+
+    assert_eq!(supervisor.service().phase(), ServicePhase::Closed);
+    assert_eq!(
+        port.calls,
+        [
+            "reserve-physical",
+            "reserve-relay",
+            "bind",
+            "slot",
+            "proxy",
+            "spawn-attach",
+            "detach-guest",
+            "close-attach",
+            "close-proxy",
+            "release-slot",
+            "unbind",
+            "release-relay",
+            "release-physical",
+        ]
+    );
+}
