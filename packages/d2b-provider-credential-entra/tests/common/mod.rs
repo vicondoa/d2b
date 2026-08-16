@@ -32,6 +32,7 @@ pub struct FakeEntraClient {
     pub revoke_calls: AtomicUsize,
     pub issue_error: Mutex<Option<EntraClientError>>,
     pub refresh_error: Mutex<Option<EntraClientError>>,
+    pub revoke_error: Mutex<Option<EntraClientError>>,
     pub observed_request: Mutex<Option<(String, String, String)>>,
     pub token_canary: String,
     pub endpoint_canary: String,
@@ -50,6 +51,7 @@ impl FakeEntraClient {
             revoke_calls: AtomicUsize::new(0),
             issue_error: Mutex::new(None),
             refresh_error: Mutex::new(None),
+            revoke_error: Mutex::new(None),
             observed_request: Mutex::new(None),
             token_canary: format!("entra-token-canary-{nonce}"),
             endpoint_canary: format!("entra-endpoint-canary-{nonce}"),
@@ -136,7 +138,13 @@ impl EntraCredentialClient for FakeEntraClient {
 
     fn revoke_lease(&self, _lease: &EntraLeaseRef) -> EntraFuture<'_, EntraLeaseRevocation> {
         self.revoke_calls.fetch_add(1, Ordering::SeqCst);
-        Box::pin(async { Ok(EntraLeaseRevocation::Revoked) })
+        let error = *self.revoke_error.lock().unwrap();
+        Box::pin(async move {
+            if let Some(error) = error {
+                return Err(error);
+            }
+            Ok(EntraLeaseRevocation::Revoked)
+        })
     }
 }
 

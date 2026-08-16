@@ -13,9 +13,10 @@ use d2b_contracts::v3::credential::{
     CredentialServiceErrorCode, CredentialSourceVersion, PlacementBinding,
 };
 use d2b_provider_credential_entra::{
-    EntraClientState, EntraConfig, EntraCredentialClient, EntraCredentialProvider,
-    EntraCredentialProviderFactory, EntraFuture, EntraLeaseGrant, EntraLeaseInspection,
-    EntraLeaseRef, EntraLeaseRenewal, EntraLeaseRequest, EntraLeaseRevocation, EntraPlacement,
+    EntraClientError, EntraClientState, EntraConfig, EntraCredentialClient,
+    EntraCredentialProvider, EntraCredentialProviderFactory, EntraFuture, EntraLeaseGrant,
+    EntraLeaseInspection, EntraLeaseRef, EntraLeaseRenewal, EntraLeaseRequest,
+    EntraLeaseRevocation, EntraPlacement,
 };
 
 use common::{ProviderHarness, admitted, request, setup};
@@ -173,6 +174,42 @@ fn finalized_credential_cannot_mint_again() {
         CredentialServiceErrorCode::ProviderUnavailable
     );
     assert_eq!(client.issue_calls.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn draining_credential_cannot_mint_while_revocation_retries() {
+    let (provider, client) = setup();
+    let server = ProviderHarness::new(&provider, admitted());
+    server
+        .call(
+            CredentialMethod::AcquireToken,
+            request("idem-draining-before-revoke"),
+        )
+        .unwrap();
+    *client.revoke_error.lock().unwrap() = Some(EntraClientError::Unavailable);
+
+    assert_eq!(
+        provider
+            .revoke_owned_handles(
+                &ResourceRef::parse("Credential/work-entra").unwrap(),
+                15_000,
+            )
+            .unwrap_err()
+            .code(),
+        CredentialServiceErrorCode::ProviderUnavailable
+    );
+    assert_eq!(
+        server
+            .call(
+                CredentialMethod::AcquireToken,
+                request("idem-draining-after-failure"),
+            )
+            .unwrap_err()
+            .code(),
+        CredentialServiceErrorCode::ProviderUnavailable
+    );
+    assert_eq!(client.issue_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(client.revoke_calls.load(Ordering::SeqCst), 1);
 }
 
 struct BlockingClient {
