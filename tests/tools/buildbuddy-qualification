@@ -1,0 +1,176 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
+MODE="acceptance"
+SCRATCH_ROOT="${D2B_BUILDBUDDY_QUALIFICATION_SCRATCH_ROOT:-$ROOT/.scratch/buildbuddy-qualification}"
+PROVIDER_EVIDENCE="${D2B_BUILDBUDDY_PROVIDER_EVIDENCE:-}"
+CANDIDATE="${D2B_BUILDBUDDY_CANDIDATE:-}"
+OUTPUT="${D2B_BUILDBUDDY_QUALIFICATION_OUTPUT:-}"
+if [ "${D2B_QUALIFICATION_TEST_MODE:-0}" = 1 ]; then
+  NONCE="${D2B_BUILDBUDDY_QUALIFICATION_NONCE:-qualification-$(date +%s%N)-$$}"
+else
+  [ -z "${D2B_BUILDBUDDY_QUALIFICATION_NONCE:-}" ] || {
+    echo "qualification nonce is wrapper-owned outside test mode" >&2
+    exit 2
+  }
+  NONCE="qualification-$(date +%s%N)-$$"
+fi
+export D2B_BUILDBUDDY_QUALIFICATION_NONCE="$NONCE"
+SCRATCH="${D2B_BUILDBUDDY_QUALIFICATION_SCRATCH:-$SCRATCH_ROOT/$NONCE}"
+
+if [ "${D2B_BUILDBUDDY_LIVE:-0}" = 1 ]; then
+  # shellcheck source=tests/tools/heavy-gate-reexec.sh
+  . "$ROOT/tests/tools/heavy-gate-reexec.sh"
+  d2b_heavy_gate_reexec "$ROOT" "$0" "$@"
+fi
+
+xtask() {
+  if [ -n "${D2B_XTASK_BIN:-}" ] && [ -x "${D2B_XTASK_BIN}" ]; then
+    D2B_REPO_ROOT="$ROOT" "$D2B_XTASK_BIN" "$@"
+  else
+    D2B_REPO_ROOT="$ROOT" \
+      cargo run --quiet --locked --manifest-path "$ROOT/Cargo.toml" -p xtask -- "$@"
+  fi
+}
+
+usage() {
+  cat >&2 <<'EOF'
+usage: tests/tools/buildbuddy-qualification [--mode acceptance|cache]
+       [--candidate <path>] [--provider-evidence <path>] [--output <path>]
+
+The provider evidence file must already be sanitized and provider-accounted.
+Without it the command emits a non-qualifying report and never invents
+transfer metrics.
+EOF
+}
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --mode)
+      [ "$#" -ge 2 ] || { echo "--mode requires a value" >&2; exit 2; }
+      MODE="$2"
+      shift 2
+      ;;
+    --candidate)
+      [ "$#" -ge 2 ] || { echo "--candidate requires a value" >&2; exit 2; }
+      CANDIDATE="$2"
+      shift 2
+      ;;
+    --provider-evidence|--evidence)
+      [ "$#" -ge 2 ] || { echo "$1 requires a value" >&2; exit 2; }
+      PROVIDER_EVIDENCE="$2"
+      shift 2
+      ;;
+    --output)
+      [ "$#" -ge 2 ] || { echo "--output requires a value" >&2; exit 2; }
+      OUTPUT="$2"
+      shift 2
+      ;;
+    --help|-h)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "unknown option $1" >&2
+      usage
+      exit 2
+      ;;
+  esac
+done
+
+case "$MODE" in
+  acceptance|cache) ;;
+  *)
+    echo "--mode must be acceptance or cache" >&2
+    exit 2
+    ;;
+esac
+
+mkdir -p "$SCRATCH"
+
+# Qualification must not turn an untrusted shell into a credentialed run.
+# The helper itself reads the private key; this wrapper never reads or prints
+# that key.
+if [ "${D2B_BUILDBUDDY_LIVE:-0}" = 1 ]; then
+  [ "${D2B_QUALIFICATION_TEST_MODE:-0}" != 1 ] || {
+    echo "live qualification cannot use test mode" >&2
+    exit 2
+  }
+  [ "${D2B_BAZEL_TRUSTED:-0}" = 1 ] || {
+    echo "live qualification requires D2B_BAZEL_TRUSTED=1" >&2
+    exit 2
+  }
+  [ "${GITHUB_REF:-}" = "refs/heads/v3" ] || {
+    echo "live qualification requires the protected v3 ref" >&2
+    exit 2
+  }
+  [ -n "$PROVIDER_EVIDENCE" ] || {
+    echo "live qualification requires a provider evidence output path" >&2
+    exit 2
+  }
+  if ! git -C "$ROOT" diff --quiet ||
+    ! git -C "$ROOT" diff --cached --quiet ||
+    [ -n "$(git -C "$ROOT" ls-files --others --exclude-standard)" ]; then
+    echo "live qualification requires a clean worktree" >&2
+    exit 2
+  fi
+  [ -x "$ROOT/tests/tools/bazel-check" ] || {
+    echo "credential-helper facade is unavailable" >&2
+    exit 2
+  }
+  credential_file="${D2B_BUILDBUDDY_CREDENTIAL_FILE:-${HOME:-}/.config/d2b/buildbuddy-api-key}"
+  [ -r "$credential_file" ] && [ -s "$credential_file" ] || {
+    echo "credential-helper configuration is unavailable" >&2
+    exit 2
+  }
+  export D2B_BUILDBUDDY_EVIDENCE_FILE="$PROVIDER_EVIDENCE"
+  live_status=0
+  set +e
+  D2B_BAZEL_CHECK_SCRATCH="$SCRATCH/bazel-check" \
+    D2B_BAZEL_PROFILE=qualification \
+    "$ROOT/tests/tools/bazel-check" --profile qualification
+  live_status=$?
+  set -e
+  if [ "$live_status" -ne 0 ] || [ ! -s "$PROVIDER_EVIDENCE" ]; then
+    echo "live qualification did not produce a complete provider-accounted run; reporting non-qualifying" >&2
+    PROVIDER_EVIDENCE=""
+  fi
+fi
+
+if [ -n "$PROVIDER_EVIDENCE" ]; then
+  SANITIZED_PROVIDER_EVIDENCE="$SCRATCH/provider-evidence.sanitized.json"
+  [ "$PROVIDER_EVIDENCE" != "$SANITIZED_PROVIDER_EVIDENCE" ] || {
+    echo "provider evidence input and output must differ" >&2
+    exit 2
+  }
+  xtask buildbuddy-probe --evidence-file "$PROVIDER_EVIDENCE" \
+    >"$SANITIZED_PROVIDER_EVIDENCE"
+  PROVIDER_EVIDENCE="$SANITIZED_PROVIDER_EVIDENCE"
+fi
+
+args=(bazel-qualification "$MODE")
+if [ -n "$CANDIDATE" ]; then
+  args+=(--candidate "$CANDIDATE")
+fi
+if [ -n "$PROVIDER_EVIDENCE" ]; then
+  args+=(--provider-evidence "$PROVIDER_EVIDENCE")
+fi
+args+=(--nonce "$NONCE")
+args+=(--report-only)
+if [ -n "$OUTPUT" ]; then
+  args+=(--output "$OUTPUT")
+fi
+
+if [ -n "$OUTPUT" ]; then
+  result="$(xtask "${args[@]}")"
+  printf '%s\n' "$result"
+else
+  result="$(xtask "${args[@]}")"
+  printf '%s\n' "$result"
+fi
+
+if ! printf '%s\n' "$result" | jq -e '.status == "qualified"' >/dev/null; then
+  echo "buildbuddy qualification is non-qualifying; scheduler replacement remains blocked" >&2
+  exit 1
+fi

@@ -1,0 +1,174 @@
+{
+  "schemaVersion": 1,
+  "reportKind": "bazel-qualification",
+  "statuses": [
+    "qualified",
+    "non-qualifying"
+  ],
+  "modes": [
+    "acceptance",
+    "cache"
+  ],
+  "requiredTopLevelFields": [
+    "schemaVersion",
+    "reportKind",
+    "mode",
+    "status",
+    "reason",
+    "reasons",
+    "candidate",
+    "candidateEvidenceOriginTrusted",
+    "coverage",
+    "cache",
+    "fallback",
+    "provider",
+    "transfer",
+    "latency",
+    "u9Comparison",
+    "redaction"
+  ],
+  "requiredCandidateFields": [
+    "commit",
+    "targetSetDigest",
+    "configurationDigest",
+    "selectedClosureDigest",
+    "namespace",
+    "toolchain",
+    "platform"
+  ],
+  "requiredCacheEvidenceFields": [
+    "trustedSeedComplete",
+    "asyncUploadsDrained",
+    "unchangedCacheableExecutions",
+    "approvedUncacheableReasons",
+    "cacheMatrix"
+  ],
+  "requiredCacheMatrixFields": [
+    "warm",
+    "unchanged",
+    "sourceInvalidation",
+    "toolchainInvalidation",
+    "featureInvalidation",
+    "lockInvalidation",
+    "platformInvalidation",
+    "agedCache",
+    "eviction",
+    "compression",
+    "architecture",
+    "empty",
+    "workerImageInvalidation",
+    "crossMachine",
+    "retry",
+    "fallback"
+  ],
+  "requiredProviderFields": [
+    "projection",
+    "status",
+    "authenticated",
+    "evidenceOriginTrusted",
+    "executionEntitled",
+    "secretRedaction",
+    "trustedSeed",
+    "sampleCount",
+    "invocationIds",
+    "sampleIds",
+    "observedAtMillis",
+    "workerArchitectures",
+    "workerImage",
+    "source",
+    "sampleClass",
+    "freshWorktree",
+    "isolatedServer",
+    "localDiskCacheDisabled",
+    "cacheState",
+    "uploadsDisabled",
+    "worktreeIds",
+    "outputRootIds",
+    "outputBaseIds",
+    "bazelServerIds",
+    "localCacheIds",
+    "metrics"
+  ],
+  "requiredTransferFields": [
+    "providerAccounted",
+    "sampleCount",
+    "uploaded",
+    "downloaded",
+    "p50Bytes",
+    "p95Bytes",
+    "p99Bytes",
+    "maxBytes",
+    "workingBudgetBytes",
+    "headroomBytes",
+    "monthlyRuns",
+    "u9Comparison"
+  ],
+  "requiredMetricFields": [
+    "wallTimeMillis",
+    "actionCacheHits",
+    "actionCacheMisses",
+    "casHits",
+    "casMisses",
+    "remoteExecutions",
+    "repositoryTrafficBytes",
+    "besTrafficBytes",
+    "retryTrafficBytes",
+    "localNixMillis"
+  ],
+  "identity": {
+    "digestPrefix": "sha256:",
+    "commitSource": "git-rev-parse-HEAD",
+    "targetSetDigest": "sorted canonical Bazel labels",
+    "configurationDigest": "committed configuration bytes",
+    "selectedClosureDigest": "selected closure bytes",
+    "namespace": "provider cache namespace",
+    "toolchain": "provider toolchain identity"
+  },
+  "transfer": {
+    "providerAccountedOnly": true,
+    "providerSource": "credential-helper-probe",
+    "workerImage": "d2b-bazel-worker/v1",
+    "p99Definition": "nearest-rank percentile over uploaded plus downloaded bytes",
+    "workingBudgetBytes": 80000000000,
+    "headroomBytes": 20000000000,
+    "monthlyRuns": "floor(workingBudgetBytes / p99Bytes)",
+    "missingMetricValue": null
+  },
+  "u9Binding": {
+    "reportDigest": "sha256:7b7df84d16442b5e2314d416944b09174244b284b02b52049df57632da6d5907",
+    "targetSetDigest": "sha256:576bbb5fd15ccdd2ae7db72515aefdf66b2413a60687921d1077f7dab5593dae",
+    "configurationDigest": "sha256:0aa9e883656411026b29209da57c0de9b52e1edc718f8bb8d226d2221678afb7"
+  },
+  "latency": {
+    "wallTimeBudgetMillis": 180000,
+    "requiredPercentile": "p95"
+  },
+  "rejectedEvidence": [
+    "missing",
+    "stale",
+    "duplicate",
+    "replayed",
+    "forged",
+    "path-bearing",
+    "secret-bearing",
+    "client-supplied",
+    "untrusted-origin",
+    "cross-commit",
+    "post-dispatch-fallback",
+    "provider-transfer-below-u9-bounds",
+    "provider-transfer-over-working-budget"
+  ],
+  "providerEvidence": {
+    "source": [
+      "provider",
+      "credential-helper-probe"
+    ],
+    "originTrust": "caller-authored candidate and provider JSON is quarantined outside explicit test-fixture mode until a provider attestation or generated evidence collector exists",
+    "credentialMode": "credential-helper",
+    "requiredTransferFlag": "providerAccountedTransfer",
+    "requiredProbeNonce": true,
+    "minimumIndependentSamples": 5,
+    "rawEvidenceRetained": false
+  },
+  "qualificationRule": "Any missing, stale, replayed, forged, path-bearing, secret-bearing, client-supplied, cross-commit, or provider-unaccounted field is fail-closed; missing provider transfer is non-qualifying and never represented as zero."
+}

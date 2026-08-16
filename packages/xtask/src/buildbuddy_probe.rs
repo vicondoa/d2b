@@ -4,6 +4,7 @@ use serde_json::{Map, Value, json};
 
 pub const EVIDENCE_ENV: &str = "D2B_BUILDBUDDY_EVIDENCE_FILE";
 const PROBE_COMMAND: &str = "xtask buildbuddy-probe";
+const PROJECTION_ID: &str = "xtask-buildbuddy-probe/v1";
 
 const QUALIFICATION_METRIC_FIELDS: &[&str] = &[
     "wallTimeMillis",
@@ -41,9 +42,30 @@ const PARTIAL_BOOLEAN_FIELDS: &[&str] = &[
 ];
 
 const EVIDENCE_FIELDS: &[&str] = &[
+    "schemaVersion",
     "provider",
+    "projection",
     "status",
     "reason",
+    "source",
+    "providerAccountedTransfer",
+    "observedAtMillis",
+    "sampleId",
+    "commit",
+    "identity",
+    "workerArchitecture",
+    "workerImage",
+    "sampleClass",
+    "freshWorktree",
+    "isolatedServer",
+    "localDiskCacheDisabled",
+    "cacheState",
+    "worktreeId",
+    "outputRootId",
+    "outputBaseId",
+    "bazelServerId",
+    "localCacheId",
+    "samples",
     "probe",
     "authenticated",
     "executionEntitled",
@@ -67,9 +89,39 @@ const PROBE_FIELDS: &[&str] = &[
     "readOnly",
     "fixtureSafe",
     "credentialMode",
+    "nonce",
 ];
 
 const TRANSFER_FIELDS: &[&str] = &["uploaded", "downloaded"];
+const U7_FIELDS: &[&str] = &[
+    "source",
+    "providerAccountedTransfer",
+    "observedAtMillis",
+    "sampleId",
+    "commit",
+    "identity",
+    "workerArchitecture",
+    "workerImage",
+    "sampleClass",
+    "freshWorktree",
+    "isolatedServer",
+    "localDiskCacheDisabled",
+    "cacheState",
+    "worktreeId",
+    "outputRootId",
+    "outputBaseId",
+    "bazelServerId",
+    "localCacheId",
+];
+const IDENTITY_FIELDS: &[&str] = &[
+    "commit",
+    "targetSetDigest",
+    "configurationDigest",
+    "selectedClosureDigest",
+    "namespace",
+    "toolchain",
+    "platform",
+];
 
 pub fn run_cli(args: &[String]) -> ExitCode {
     match run(args) {
@@ -175,8 +227,31 @@ fn project_evidence_with_sentinels(value: &Value, sentinels: &[String]) -> Resul
     let input = value
         .as_object()
         .ok_or_else(|| "evidence-root-must-be-object".to_owned())?;
+    if let Some(samples) = input.get("samples") {
+        let samples = samples
+            .as_array()
+            .ok_or_else(|| "evidence-samples-invalid".to_owned())?;
+        if samples.is_empty() {
+            return Err("evidence-samples-empty".to_owned());
+        }
+        let projected = samples
+            .iter()
+            .map(|sample| project_evidence_with_sentinels(sample, sentinels))
+            .collect::<Result<Vec<_>, _>>()?;
+        return Ok(json!({ "samples": projected }));
+    }
+    if let Some(version) = input.get("schemaVersion")
+        && version.as_u64() != Some(1)
+    {
+        return Err("evidence-schema-version-invalid".to_owned());
+    }
     if input.get("provider").and_then(Value::as_str) != Some("buildbuddy") {
         return Err("evidence-provider-must-be-buildbuddy".to_owned());
+    }
+    if let Some(projection) = input.get("projection")
+        && projection.as_str() != Some(PROJECTION_ID)
+    {
+        return Err("evidence-projection-invalid".to_owned());
     }
 
     let status = input
@@ -198,6 +273,10 @@ fn project_evidence_with_sentinels(value: &Value, sentinels: &[String]) -> Resul
         .as_object_mut()
         .expect("default BuildBuddy evidence is an object");
     output.insert("status".to_owned(), Value::String(status.to_owned()));
+    output.insert(
+        "projection".to_owned(),
+        Value::String(PROJECTION_ID.to_owned()),
+    );
     output
         .get_mut("probe")
         .and_then(Value::as_object_mut)
@@ -206,6 +285,17 @@ fn project_evidence_with_sentinels(value: &Value, sentinels: &[String]) -> Resul
             "credentialMode".to_owned(),
             Value::String(credential_mode.clone()),
         );
+    if let Some(nonce) = input
+        .get("probe")
+        .and_then(Value::as_object)
+        .and_then(|probe| probe.get("nonce"))
+    {
+        output
+            .get_mut("probe")
+            .and_then(Value::as_object_mut)
+            .expect("default BuildBuddy probe is an object")
+            .insert("nonce".to_owned(), nonce.clone());
+    }
     if let Some(reason) = input.get("reason") {
         if !reason.is_string() {
             return Err("evidence-reason-must-be-string".to_owned());
@@ -229,14 +319,34 @@ fn project_evidence_with_sentinels(value: &Value, sentinels: &[String]) -> Resul
             "transferBytes",
             "qualificationMetrics",
             "workerArchitectures",
+            "uploadsDisabled",
         ] {
             let value = match field {
                 "transferBytes" => sanitized_transfer_bytes(input)?,
                 "qualificationMetrics" => sanitized_metrics(input)?,
                 "workerArchitectures" => sanitized_worker_architectures(input)?,
+                "uploadsDisabled" => input
+                    .get(field)
+                    .cloned()
+                    .ok_or_else(|| "evidence-field-missing:uploadsDisabled".to_owned())?,
                 _ => unreachable!("all qualified projection fields are handled"),
             };
             output.insert(field.to_owned(), value);
+        }
+        if input
+            .keys()
+            .any(|field| U7_FIELDS.contains(&field.as_str()))
+        {
+            validate_u7_evidence(input)?;
+            for field in U7_FIELDS {
+                output.insert(
+                    (*field).to_owned(),
+                    input
+                        .get(*field)
+                        .cloned()
+                        .ok_or_else(|| format!("evidence-u7-field-missing:{field}"))?,
+                );
+            }
         }
         output.insert(
             "invocationId".to_owned(),
@@ -345,6 +455,57 @@ fn validate_evidence_shape(input: &Map<String, Value>, status: &str) -> Result<(
             .ok_or_else(|| "evidence-invocation-id-invalid".to_owned())?;
         validate_sanitized_token(invocation_id, "invocationId")?;
     }
+    if let Some(value) = input.get("source") {
+        value
+            .as_str()
+            .ok_or_else(|| "evidence-source-invalid".to_owned())?;
+    }
+    if let Some(value) = input.get("providerAccountedTransfer")
+        && !value.is_boolean()
+    {
+        return Err("evidence-provider-accounted-transfer-invalid".to_owned());
+    }
+    for field in ["freshWorktree", "isolatedServer", "localDiskCacheDisabled"] {
+        if let Some(value) = input.get(field)
+            && !value.is_boolean()
+        {
+            return Err(format!("evidence-{field}-invalid"));
+        }
+    }
+    if let Some(value) = input.get("observedAtMillis")
+        && value.as_u64().is_none()
+    {
+        return Err("evidence-observed-at-invalid".to_owned());
+    }
+    for field in [
+        "sampleId",
+        "commit",
+        "workerArchitecture",
+        "workerImage",
+        "sampleClass",
+        "cacheState",
+        "worktreeId",
+        "outputRootId",
+        "outputBaseId",
+        "bazelServerId",
+        "localCacheId",
+    ] {
+        if let Some(value) = input.get(field)
+            && value.as_str().is_none()
+        {
+            return Err(format!("evidence-{field}-invalid"));
+        }
+    }
+    if let Some(identity) = input.get("identity") {
+        let identity = identity
+            .as_object()
+            .ok_or_else(|| "evidence-identity-invalid".to_owned())?;
+        for key in identity.keys() {
+            if !IDENTITY_FIELDS.contains(&key.as_str()) {
+                return Err(format!("evidence-identity-field-unknown:{key}"));
+            }
+        }
+    }
     if status != "unavailable" && input.get("probe").is_none() {
         return Err("evidence-credential-mode-missing".to_owned());
     }
@@ -374,6 +535,9 @@ fn validate_probe_shape(value: &Value) -> Result<(), String> {
     }
     if probe.get("fixtureSafe").and_then(Value::as_bool) != Some(true) {
         return Err("evidence-probe-must-be-fixture-safe".to_owned());
+    }
+    if let Some(nonce) = probe.get("nonce").and_then(Value::as_str) {
+        validate_sanitized_token(nonce, "nonce")?;
     }
     Ok(())
 }
@@ -542,6 +706,79 @@ fn validate_qualified(input: &Map<String, Value>, credential_mode: &str) -> Resu
         .is_none_or(str::is_empty)
     {
         return Err("qualified-evidence-invocation-id-missing".to_owned());
+    }
+    Ok(())
+}
+
+fn validate_u7_evidence(input: &Map<String, Value>) -> Result<(), String> {
+    if input.get("source").and_then(Value::as_str) != Some("credential-helper-probe") {
+        return Err("evidence-u7-source-invalid".to_owned());
+    }
+    if input
+        .get("providerAccountedTransfer")
+        .and_then(Value::as_bool)
+        != Some(true)
+    {
+        return Err("evidence-u7-provider-accounting-required".to_owned());
+    }
+    for field in [
+        "observedAtMillis",
+        "sampleId",
+        "commit",
+        "identity",
+        "workerArchitecture",
+        "workerImage",
+    ] {
+        if !input.contains_key(field) {
+            return Err(format!("evidence-u7-field-missing:{field}"));
+        }
+    }
+    if input
+        .get("observedAtMillis")
+        .and_then(Value::as_u64)
+        .is_none()
+    {
+        return Err("evidence-u7-observed-at-invalid".to_owned());
+    }
+    for field in ["sampleId", "commit", "workerArchitecture"] {
+        let value = input
+            .get(field)
+            .and_then(Value::as_str)
+            .ok_or_else(|| format!("evidence-u7-{field}-invalid"))?;
+        validate_sanitized_token(value, field)?;
+    }
+    for field in [
+        "worktreeId",
+        "outputRootId",
+        "outputBaseId",
+        "bazelServerId",
+        "localCacheId",
+    ] {
+        let value = input
+            .get(field)
+            .and_then(Value::as_str)
+            .ok_or_else(|| format!("evidence-u7-field-missing:{field}"))?;
+        validate_sanitized_token(value, field)?;
+    }
+    if input.get("workerImage").and_then(Value::as_str) != Some("d2b-bazel-worker/v1") {
+        return Err("evidence-u7-worker-image-invalid".to_owned());
+    }
+    if input.get("sampleClass").and_then(Value::as_str) != Some("fresh-worktree")
+        || input.get("freshWorktree").and_then(Value::as_bool) != Some(true)
+        || input.get("isolatedServer").and_then(Value::as_bool) != Some(true)
+        || input.get("localDiskCacheDisabled").and_then(Value::as_bool) != Some(true)
+        || input.get("cacheState").and_then(Value::as_str) != Some("populated")
+    {
+        return Err("evidence-u7-sample-provenance-incomplete".to_owned());
+    }
+    let identity = input
+        .get("identity")
+        .and_then(Value::as_object)
+        .ok_or_else(|| "evidence-u7-identity-invalid".to_owned())?;
+    for field in IDENTITY_FIELDS {
+        if identity.get(*field).and_then(Value::as_str).is_none() {
+            return Err(format!("evidence-u7-identity-field-missing:{field}"));
+        }
     }
     Ok(())
 }
@@ -877,6 +1114,95 @@ mod tests {
         assert_eq!(
             project_evidence(&evidence),
             Err("evidence-field-missing:uploadsDisabled".to_owned())
+        );
+    }
+
+    #[test]
+    fn qualified_u7_evidence_preserves_provider_binding_fields() {
+        let evidence = json!({
+            "provider": "buildbuddy",
+            "status": "qualified",
+            "source": "credential-helper-probe",
+            "providerAccountedTransfer": true,
+            "observedAtMillis": 1_700_000_000_000u64,
+            "sampleId": "sample-1",
+            "commit": "533681f1aabbccddee00112233445566778899aa",
+            "identity": {
+                "commit": "533681f1aabbccddee00112233445566778899aa",
+                "targetSetDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+                "configurationDigest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+                "selectedClosureDigest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+                "namespace": "d2b/qualification/linux-x86_64/rules_rust/worker-v1/minimal/lock-v1",
+                "toolchain": "rules_rust",
+                "platform": "linux-x86_64"
+            },
+            "workerArchitecture": "linux-x86_64",
+            "workerImage": "d2b-bazel-worker/v1",
+            "sampleClass": "fresh-worktree",
+            "freshWorktree": true,
+            "isolatedServer": true,
+            "localDiskCacheDisabled": true,
+            "cacheState": "populated",
+            "worktreeId": "worktree-1",
+            "outputRootId": "output-root-1",
+            "outputBaseId": "output-base-1",
+            "bazelServerId": "bazel-server-1",
+            "localCacheId": "local-cache-1",
+            "probe": {
+                "kind": "credential-isolated-command",
+                "command": "xtask buildbuddy-probe",
+                "input": "D2B_BUILDBUDDY_EVIDENCE_FILE",
+                "readOnly": true,
+                "fixtureSafe": true,
+                "credentialMode": "credential-helper",
+                "nonce": "nonce-1"
+            },
+            "authenticated": true,
+            "executionEntitled": true,
+            "cacheReadEvidence": true,
+            "cacheWriteEvidence": true,
+            "readOnlyProbe": true,
+            "uploadsDisabled": false,
+            "secretRedaction": true,
+            "trustedSeed": true,
+            "dispatchEvidence": true,
+            "transferBytes": {"uploaded": 1, "downloaded": 1},
+            "qualificationMetrics": {
+                "wallTimeMillis": 1,
+                "actionCacheHits": 1,
+                "actionCacheMisses": 1,
+                "casHits": 1,
+                "casMisses": 1,
+                "remoteExecutions": 1,
+                "repositoryTrafficBytes": 1,
+                "besTrafficBytes": 1,
+                "retryTrafficBytes": 0,
+                "localNixMillis": 1
+            },
+            "workerArchitectures": ["linux-x86_64"],
+            "invocationId": "invocation-1"
+        });
+        let projected = project_evidence(&evidence).expect("project U7 evidence");
+        for field in U7_FIELDS {
+            assert!(projected.get(*field).is_some(), "missing projected {field}");
+        }
+        assert_eq!(projected["source"], "credential-helper-probe");
+        assert_eq!(projected["providerAccountedTransfer"], true);
+        assert_eq!(projected["uploadsDisabled"], false);
+        assert_eq!(projected["probe"]["nonce"], "nonce-1");
+
+        let projected_samples = project_evidence(&json!({
+            "samples": [evidence.clone(), evidence]
+        }))
+        .expect("project U7 sample set");
+        assert_eq!(
+            projected_samples["samples"].as_array().map(Vec::len),
+            Some(2)
+        );
+        assert!(
+            projected_samples["samples"][0]
+                .get("providerAccountedTransfer")
+                .is_some()
         );
     }
 }

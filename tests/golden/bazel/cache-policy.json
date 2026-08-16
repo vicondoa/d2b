@@ -92,10 +92,11 @@
       "MODULE.bazel.lock",
       "bazel/platforms/BUILD.bazel",
       "bazel/remote/BUILD.bazel",
-      "tests/tools/bazel-check"
+      "tests/tools/bazel-check",
+      "tests/tools/buildbuddy-qualification"
     ],
     "allowedSecurityDigests": [
-      "sha256:78882533cb97ce47d9cbb58461f3090ca23b580e27234041c54d0c8ba4fedc0a"
+      "sha256:029405523197af7662b7e10c280a19d81cdd9a4d968c4d46fcc57929241fdd68"
     ],
     "untrustedCredential": "none",
     "trustedCredential": "credential-helper"

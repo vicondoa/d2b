@@ -20,6 +20,7 @@ rust_binary(
     srcs = [
         "src/bazel_cache_transfer.rs",
         "src/bazel_evidence.rs",
+        "src/bazel_qualification.rs",
         "src/buildbuddy_probe.rs",
         "src/changelog.rs",
         "src/delivery/command.rs",
@@ -149,6 +150,34 @@ rust_test(
         "//:tests/golden/bazel/eligibility.json",
     ],
     env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
+    env_inherit = ["PATH"],
+    rustc_env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
+    visibility = ["//visibility:public"],
+    deps = ["@crates//:serde_json"],
+)
+
+rust_test(
+    name = "bazel_qualification",
+    timeout = "long",
+    srcs = ["tests/bazel_qualification.rs"],
+    compile_data = ["Cargo.toml"],
+    data = [
+        ":xtask",
+        "//:BUILD.bazel",
+        "//:Cargo.toml",
+        "//:flake.nix",
+        "//:.bazelrc",
+        "//:tests/golden/bazel/cache-policy.json",
+        "//:tests/golden/bazel/cache-transfer-representative.json",
+        "//:tests/golden/bazel/eligibility.json",
+        "//:tests/golden/bazel/qualification-schema.json",
+    ],
+    env = {
+        "CARGO_BIN_EXE_xtask": "$(rootpath :xtask)",
+        "D2B_REPO_ROOT": "$(rootpath //:Cargo.toml)",
+        "D2B_QUALIFICATION_TEST_COMMIT": "0000000000000000000000000000000000000000",
+        "D2B_QUALIFICATION_TEST_AUTH": "1",
+    },
     env_inherit = ["PATH"],
     rustc_env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
     visibility = ["//visibility:public"],

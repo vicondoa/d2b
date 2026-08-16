@@ -10,6 +10,8 @@ use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
 const DEFAULT_POLICY: &str = "tests/golden/bazel/cache-policy.json";
+const DEFAULT_U9_REPORT_DIGEST: &str =
+    "sha256:7b7df84d16442b5e2314d416944b09174244b284b02b52049df57632da6d5907";
 
 type Result<T> = std::result::Result<T, String>;
 
@@ -253,7 +255,14 @@ fn check_u9(options: &CheckU9Options) -> Result<Value> {
         None => PathBuf::from(string(gate, "report", "u9Gate")?),
     };
     let report_path = resolve_path(&root, &report_relative);
-    let report = read_json(&report_path)
+    let report_bytes = fs::read(&report_path)
+        .map_err(|_| "u9-evidence-missing:representative-report".to_owned())?;
+    if options.report.is_none() {
+        if digest_bytes(&report_bytes) != DEFAULT_U9_REPORT_DIGEST {
+            return Err("u9-evidence-stale:report-digest".to_owned());
+        }
+    }
+    let report: Value = serde_json::from_slice(&report_bytes)
         .map_err(|_| "u9-evidence-missing:representative-report".to_owned())?;
     let report_object = object(&report, "representative report")?;
     if u64_field(report_object, "schemaVersion", "representative report")? != 1

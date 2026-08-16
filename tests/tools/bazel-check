@@ -5,6 +5,8 @@ ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 PROFILE=""
 SCRATCH="${D2B_BAZEL_CHECK_SCRATCH:-$ROOT/.scratch/bazel-check}"
 TARGET_SET="//..."
+REDACTION_FAILURE_STATUS=75
+CONFIGURATION_FAILURE_STATUS=76
 
 xtask() {
   if [ -n "${D2B_XTASK_BIN:-}" ] && [ -x "${D2B_XTASK_BIN}" ]; then
@@ -118,6 +120,12 @@ case "$PROFILE" in
     ;;
 esac
 
+REQUESTED_PROFILE="$PROFILE"
+QUALIFICATION_RC_ISOLATION=0
+if [ "$REQUESTED_PROFILE" = qualification ]; then
+  QUALIFICATION_RC_ISOLATION=1
+fi
+
 if [ "$PROFILE" != local ]; then
   xtask bazel-evidence check-u9 >/dev/null
 fi
@@ -145,32 +153,65 @@ run_bazel() {
   local profile="$1"
   local log_path="$2"
   local bep_path="$3"
+  local -a startup_flags=()
   shift 3
+  if [ "$profile" = qualification ] ||
+    [ "${D2B_BAZEL_QUALIFICATION_ISOLATE_RC:-0}" = 1 ]; then
+    [ ! -e "$ROOT/.bazelrc.user" ] || {
+      echo "qualification rejects an external workspace Bazel rc" >&2
+      return "$CONFIGURATION_FAILURE_STATUS"
+    }
+    startup_flags=(--nosystem_rc --nohome_rc)
+  fi
   set +e
-  D2B_BAZEL_PROFILE="$profile" "$bazel_bin" test "$TARGET_SET" "--config=$profile" \
+  D2B_BAZEL_PROFILE="$profile" "$bazel_bin" "${startup_flags[@]}" test "$TARGET_SET" "--config=$profile" \
     --repo_contents_cache= "--build_event_json_file=$bep_path" "$@" \
     >"$log_path" 2>&1
   local status=$?
   set -e
-  redact_file "$log_path"
-  redact_file "$bep_path"
+  if ! redact_file "$log_path" || ! redact_file "$bep_path"; then
+    echo "bazel-check: evidence redaction failed; refusing to publish the run" >&2
+    return "$REDACTION_FAILURE_STATUS"
+  fi
   return "$status"
 }
 
-if run_bazel "$PROFILE" "$log" "$bep" "$@"; then
+initial_status=0
+if [ "$QUALIFICATION_RC_ISOLATION" -eq 1 ]; then
+  D2B_BAZEL_QUALIFICATION_ISOLATE_RC=1 \
+    run_bazel "$PROFILE" "$log" "$bep" "$@" || initial_status=$?
+else
+  run_bazel "$PROFILE" "$log" "$bep" "$@" || initial_status=$?
+fi
+if [ "$initial_status" -eq 0 ]; then
   printf '%s\n' "bazel-check: $PROFILE passed"
   exit 0
 fi
+if [ "$initial_status" -eq "$REDACTION_FAILURE_STATUS" ] ||
+  [ "$initial_status" -eq "$CONFIGURATION_FAILURE_STATUS" ]; then
+  exit "$initial_status"
+fi
 
 if [ "$PROFILE" != local ]; then
-  classification="$(xtask bazel-evidence classify-failure --log "$log")"
+  classification_args=(bazel-evidence classify-failure --log "$log")
+  if [ -s "$bep" ]; then
+    classification_args+=(--dispatch-evidence)
+  fi
+  classification="$(xtask "${classification_args[@]}")"
   if printf '%s' "$classification" | jq -e '.retryLocally == true' >/dev/null; then
     local_log="$SCRATCH/local.log"
     local_bep="$SCRATCH/local.bep.json"
     echo "BuildBuddy failed before dispatch; retrying the identical target set locally"
-    if run_bazel local "$local_log" "$local_bep" "$@"; then
+    local_status=0
+    D2B_BAZEL_QUALIFICATION_ISOLATE_RC=1 \
+      run_bazel local "$local_log" "$local_bep" "$@" || local_status=$?
+    if [ "$local_status" -eq 0 ]; then
       printf '%s\n' "bazel-check: local fallback passed"
       exit 0
+    fi
+    if [ "$local_status" -eq "$REDACTION_FAILURE_STATUS" ] ||
+      [ "$local_status" -eq "$CONFIGURATION_FAILURE_STATUS" ]; then
+      exit "$local_status"
     fi
     printf '%s\n' "bazel-check: local fallback failed"
     exit 1
