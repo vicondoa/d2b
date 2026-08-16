@@ -11,16 +11,14 @@ live one level up under
 - [`../templates/default/`](../templates/default/) - `nix flake init`
   scaffold with sentinel TODOs and eval-time assertions. The
   fastest path to a working host.
-- [`../examples/personal-dev/`](../examples/personal-dev/) -
-  doc-friendly alias for the checked `examples/minimal/` flake;
-  VM name `personal-dev`.
+- [`../examples/minimal/`](../examples/minimal/) -
+  checked headless starter; VM name `personal-dev`.
 - [`../examples/graphics-workstation/`](../examples/graphics-workstation/) -
   desktop VM with Wayland + audio + USBIP YubiKey.
 - [`../examples/multi-env/`](../examples/multi-env/) - two
   isolated envs side-by-side; demonstrates per-env isolation.
-- [`../examples/work-entra/`](../examples/work-entra/) -
-  doc-friendly alias for the checked `examples/with-entra-id/`
-  flake; VM name `work-entra`.
+- [`../examples/with-entra-id/`](../examples/with-entra-id/) -
+  checked Entra-ID composition; VM name `work-entra`.
 
 [entrablau]: https://github.com/vicondoa/entrablau.nix
 

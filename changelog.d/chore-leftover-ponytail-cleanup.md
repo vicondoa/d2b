@@ -1,6 +1,6 @@
 ### Removed
 
-- Removed leftover unused published Nix options `d2b.site.flakePath`, `d2b.realms.<realm>.policy.defaultDeny`, and `ch.exporter.includeTopologyLabels`.
+- Removed leftover unused published Nix options `d2b.site.flakePath`, `d2b.realms.<realm>.policy.defaultDeny`, and `ch.exporter.includeTopologyLabels`. Consumer README and realm-options docs now match.
 - Removed the historical v0.1.0 host migration script and write-up. Use the current v0-to-v1 and v1-to-v1.1 guides.
 - Removed empty flake `apps` and `overlays.default` outputs.
 - Removed docs-only `examples/personal-dev` and `examples/work-entra` alias directories. Use `examples/minimal` and `examples/with-entra-id`.

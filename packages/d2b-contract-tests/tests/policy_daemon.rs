@@ -86,9 +86,8 @@ fn broker_systemd_unit_declarations() {
 // ---------------------------------------------------------------------------
 // Migrated from tests/stop-dag-reconcile-eval.sh.
 //
-// Asserts the stop-DAG owner module + docs carry the documented surface and
-// that the planner only dispatches through existing broker ops (no new wire
-// variants smuggled in via the planner).
+// Leftover StopDagOwner stays deleted: the module and supervisor
+// declaration must not return.
 // ---------------------------------------------------------------------------
 #[test]
 fn stop_dag_reconcile_surface() {
