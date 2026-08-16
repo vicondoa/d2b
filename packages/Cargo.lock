@@ -1362,6 +1362,10 @@ version = "0.0.0-bootstrap"
 [[package]]
 name = "d2b-provider-shell-terminal"
 version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-contracts",
+ "d2b-process-conformance",
+]
 
 [[package]]
 name = "d2b-provider-supervisor"
