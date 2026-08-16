@@ -488,7 +488,9 @@ rpc OpenTransport(OpenTransportRequest) -> OpenTransportResponse
 
 **Error cases**: `deadline-exceeded`, `connect-refused`, `cid-unreachable`,
 `port-conflict`, `invalid-endpoint-id`, `invalid-binding-id`,
-`provider-overloaded` (max concurrent transports exceeded).
+`provider-overloaded` (max concurrent transports exceeded), and
+`stream-unavailable` when the ComponentSession named-stream boundary cannot
+be opened.
 
 ### `CloseTransport`
 
@@ -794,7 +796,9 @@ produced by this Provider.
 | `invalid-endpoint-id` | `endpoint_id` failed format validation | No |
 | `invalid-binding-id` | `binding_id` failed format validation | No |
 | `provider-overloaded` | Max concurrent open transports exceeded | Yes (backoff) |
+| `stream-unavailable` | ComponentSession named-stream allocation failed | Yes |
 | `unknown-transport-handle` | `CloseTransport` or `ObserveTransport` on unknown handle | No |
+| `close-unconfirmed` | Bridge or endpoint closure was not confirmed within the grace period | Yes |
 | `bridge-task-panicked` | Internal bridge task exited unexpectedly | No; core must reopen |
 | `framing-error` | 2-byte length prefix violated protocol | No |
 
