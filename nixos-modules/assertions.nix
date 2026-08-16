@@ -2207,6 +2207,8 @@ let
     "key"
   ];
 
+  unixTransportSettingKeys = [ "socketKind" ];
+
   zoneAttrOr = attrs: name: fallback:
     if builtins.isAttrs attrs && builtins.hasAttr name attrs
     then attrs.${name}
@@ -2319,6 +2321,25 @@ let
               + " key(s) from spec.transportSettings: transport endpoints are"
               + " allocator-issued and secrets are referenced as Credential"
               + " resources.";
+          }
+          {
+            assertion =
+              (zoneAttrOr link.spec "transportProviderRef" "")
+                != "Provider/transport-unix"
+              || (
+                builtins.isAttrs settings
+                && lib.all (key: builtins.elem key unixTransportSettingKeys)
+                  (builtins.attrNames settings)
+                && (
+                  !builtins.hasAttr "socketKind" settings
+                  || builtins.elem settings.socketKind [ "seqpacket" "stream" ]
+                )
+                && zoneAttrOr link.spec "transportCredentials" [ ] == [ ]
+              );
+            message =
+              "zones.${zoneName}.resources.${linkName}: Provider/transport-unix"
+              + " accepts only optional socketKind=seqpacket or socketKind=stream"
+              + " and requires an empty transportCredentials list.";
           }
         ])
       links);

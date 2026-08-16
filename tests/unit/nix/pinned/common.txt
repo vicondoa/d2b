@@ -727,6 +727,8 @@ realms/zone-control-role-binding-has-no-expiry-field
 realms/zone-control-role-binding-subjects-are-resolved-and-bounded
 realms/zone-control-role-keeps-resource-and-session-verbs-closed
 realms/zone-control-seals-parent-map-without-zone-spec-parent
+realms/zone-control-unix-transport-keeps-settings-closed
+realms/zone-control-unix-transport-refuses-credentials
 realms/zone-control-zone-link-child-name-is-local
 realms/zone-control-zone-link-limits-are-bounded
 realms/zone-control-zone-link-requires-transport-provider-shape

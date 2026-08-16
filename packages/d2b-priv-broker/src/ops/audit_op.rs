@@ -299,6 +299,8 @@ pub enum OperationFields {
         pid: i32,
         expected_start_time_ticks: u64,
     },
+    /// Accepted-socket peer pidfd handoff has no caller-controlled fields.
+    OpenPeerPidfdFromAcceptedSocket {},
     ObserveRunner {
         vm_id: String,
         role_id: String,
