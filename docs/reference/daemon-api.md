@@ -173,6 +173,32 @@ USBIP bind and unbind rather than performing those writes on daemon status/read
 paths or an async reactor thread. Status/read-model paths never trigger sysfs
 driver mutation.
 
+### Zone resource requests and Provider lifecycle
+
+The daemon accepts the compatibility Resource envelope as
+`type: "resourceRequest"` with a `service`, `method`, and `zoneRef`. The
+`zoneRef` is checked against the authoritative Zone index and is never treated
+as a capability or a caller-selected store path. Requests fail closed on route
+mismatch, malformed service/method, missing readiness, or missing authenticated
+subject.
+
+Opening a broker-owned Zone descriptor is not sufficient to publish the public
+Resource API. A Zone must have a valid redb store, an installed policy and
+Resource API, an authenticated local ComponentSession, a configured trusted
+Provider path, recovered Host-global authority, and ready system-core Host/User
+handlers. The public compatibility `get`/`list` helpers reject unbound
+callers, while typed shell requests use the separately registered authenticated
+Resource path.
+
+Provider lifecycle requests are admitted by the shared v3 Provider registry and
+then cross a typed effect port. The registry refuses an invalid catalog rather
+than silently using a legacy route; the selected Provider must own the Guest
+route and publish the requested method. Caller role, Zone, capability,
+idempotency, and per-Guest mutation ownership are checked before an effect is
+invoked. Durable pending lifecycle state is reconstructed from the daemon-owned
+`provider-lifecycle.json`, allowing a restart to reconcile actual downstream
+state and avoid duplicate activation.
+
 ## Broker socket
 
 `/run/d2b/priv.sock` is the daemon-to-broker control path.

@@ -95,6 +95,23 @@ feature. Unsupported peers return an update remediation and never fall back.
 | `70` | Capability unavailable, provider mismatch, or required feature/version skew. |
 | `76` | Protocol response or operation-id conflict. |
 
+### Resource-plane lifecycle and readiness
+
+Provider-neutral CLI operations are routed through the daemon-owned Zone
+resource plane. The `--zone` value is a route assertion; it cannot select a
+different store or grant authority. A request is served only after the Zone
+store, Resource API, authenticated local session, trusted Provider path,
+authority recovery, and mandatory system-core handlers have reached their
+readiness barrier.
+
+The daemon validates Provider registration and capability before invoking a
+typed effect. An unauthorized caller, an unavailable Provider, a missing
+capability, or a refused catalog returns a typed failure; the CLI does not
+fall back to SSH, a raw broker operation, a static manifest, or a caller-owned
+Provider override. Lifecycle retries use their operation identity, so a
+daemon restart can reconcile a pending request or return the already-applied
+result without launching a duplicate.
+
 ## Command reference
 
 ### `launch`
@@ -213,8 +230,10 @@ fallback.
 
 **Native**
 
-- Pure read-only public-socket inventory query; no broker op and no guest
-  contact. The static manifest/local status path is fallback only.
+- Pure read-only public-socket inventory query against the authoritative Zone
+  Resource API; no broker op and no guest contact. If the Zone route or
+  readiness barrier is unavailable, the command returns a typed failure rather
+  than falling back to a static manifest or legacy VM array.
 
 **Bash**
 

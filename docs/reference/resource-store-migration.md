@@ -30,6 +30,13 @@ Restore never writes the active database in place. A failure while building or
 validating the staged file removes only that staged file and leaves the active
 file untouched.
 
+The logical image carries the store UUID, Zone identity, physical schema,
+revision metadata, and validated table rows. Restoring it therefore preserves
+the ResourceRef, UID, generation, canonical JSON, and payload digest of each
+resource. The restored store retains its store identity and advances
+`backup_generation`; Provider and process adoption starts only after staged
+publication and validation have completed.
+
 ## Upgrade
 
 The registered chain is explicit and finite. The current physical schema is
@@ -41,6 +48,12 @@ updates only the staged metadata record before current-schema validation.
 Versions that are unknown or absent from the registered chain return
 `upgrade-required` before staging. No migration guesses a conversion from an
 unapproved version.
+
+Logical restore does not provide a downgrade path. A backup whose physical
+schema is older than the current registered schema is rejected with
+`upgrade-required` before publication; it must be regenerated or explicitly
+advanced through a supported migration before it can be restored. No live
+runtime is adopted from an older or partially converted image.
 
 ## Crash recovery
 

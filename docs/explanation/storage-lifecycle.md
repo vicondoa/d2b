@@ -134,3 +134,24 @@ TPM NVRAM, store-view metadata, SSH keys, daemon adoption metadata, audit
 history, host-runtime metadata, and disk images is preserved and verified.
 
 After the cutover, normal restarts are continuation events again.
+
+## Logical backup and restore
+
+The redb resource store exports a validated logical backup, not a copied open
+database file. The image contains bounded, checksummed table rows plus the
+store and Zone identity and revision metadata. It can therefore be verified
+before any runtime adopts it.
+
+Restore is an anchored storage-owner operation. The target descriptor must be
+empty and its provisioning marker must match the requested store identity.
+Rows are restored into a staged database, validated against the current
+physical schema and identity, and published atomically with directory syncs.
+Only after publication does the daemon reopen the store and reconstruct
+Provider/process adoption state. ResourceRef, UID, generation, canonical JSON,
+and payload digest remain unchanged; `backup_generation` advances on the
+restored store.
+
+Downgrade is unsupported. A logical image for an older physical schema returns
+`upgrade-required` before staging or adoption. The restore path never guesses a
+conversion, writes the active database in place, or starts a runtime from a
+partially validated image.
