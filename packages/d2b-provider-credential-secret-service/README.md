@@ -48,7 +48,9 @@ The `d2b-provider-credential-secret-service` binary hosts the user-domain
 Only `user-agent` is accepted, on a same-Zone `Host` or `Guest` with an exact
 `User` reference. `host-system` and system-domain `guest-agent` fail with
 `credential placement mismatch`. The execution context and user must be Ready
-before acquisition. An optional `consumerRef` must name a Provider.
+before acquisition. An optional `consumerRef` must name a Provider; when it is
+absent, the canonical `Provider/credential-secret-service` reference is used
+and no other Provider is accepted.
 
 ## RBAC requirements
 
@@ -68,10 +70,14 @@ There is no ambient D-Bus or path fallback.
 
 ## State and telemetry
 
-There is no Provider state Volume. Bounded observations live in Credential
-status and the core operation ledger. Audit permits only authorized bounded
-identity digests. Logs, errors, status, OTEL attributes, metric labels, and
-Debug output exclude credential and object-path canaries. The test
+There is no Provider state Volume. Session capabilities are issued by one
+provider-owned, non-Clone authority and are bound to the exact Zone, workload,
+subject, consumer, and Provider generation. Every operation, inspect, and
+disconnect/finalize path uses the same lifecycle gate; finalization drains
+leases and prevents later capability minting. Bounded observations live in
+Credential status and the core operation ledger. Audit permits only authorized
+bounded identity digests. Logs, errors, status, OTEL attributes, metric labels,
+and Debug output exclude credential and object-path canaries. The test
 `process_unique_secret_service_canaries_are_absent_from_every_rendered_surface`
 enforces this.
 
