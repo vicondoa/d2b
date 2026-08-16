@@ -98,6 +98,9 @@ pub enum NetworkEffectError {
     InvalidState,
     /// East-west forwarding was requested without the site-level opt-in.
     EastWestHostOptInRequired,
+    /// An external physical-NIC claim was requested without Host-global
+    /// authority admission.
+    ExternalNicAuthorityRequired,
 }
 
 impl NetworkEffectError {
@@ -116,6 +119,7 @@ impl NetworkEffectError {
             Self::Artifact => "net-vm-artifact-resolution",
             Self::InvalidState => "network-controller-invalid-state",
             Self::EastWestHostOptInRequired => "east-west-host-opt-in-required",
+            Self::ExternalNicAuthorityRequired => "external-nic-authority-required",
         }
     }
 }
@@ -256,8 +260,9 @@ pub trait NetworkEffectPort: Send + Sync {
     /// Validate policy that is resolved outside the Network resource.
     ///
     /// The default implementation keeps hermetic Providers independent of
-    /// host policy. The production Core adapter overrides it to require the
-    /// site-level east-west opt-in before any host effect is dispatched.
+    /// host policy. The production Core adapter overrides it to require
+    /// site-level east-west opt-in and Host-global physical-NIC admission
+    /// before any host effect is dispatched.
     fn validate_policy(
         &self,
         _spec: &NetworkSpec,

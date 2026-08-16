@@ -2,7 +2,8 @@
 
 - Route Network host effects through the typed broker adapter with
   generation-fenced persistent TAP realization cleanup and fail-closed
-  NetworkManager ownership checks.
+  NetworkManager ownership checks. Require Core-admitted Host-global
+  physical-NIC claims before external attachment effects.
 
 ### Security
 

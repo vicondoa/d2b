@@ -73,6 +73,7 @@ pub struct NetworkEffectContext {
     expected_generation_id: ResourceBundleGenerationId,
     projection_digest: [u8; 32],
     site_allows_unsafe_east_west: bool,
+    host_global_nic_admitted: bool,
 }
 
 impl NetworkEffectContext {
@@ -103,7 +104,15 @@ impl NetworkEffectContext {
             expected_generation_id,
             projection_digest,
             site_allows_unsafe_east_west,
+            host_global_nic_admitted: false,
         }
+    }
+
+    /// Mark the context after Core has admitted all requested physical-NIC
+    /// claims through the Host-global authority index.
+    pub fn with_host_global_nic_admission(mut self) -> Self {
+        self.host_global_nic_admitted = true;
+        self
     }
 
     /// Construct the minimal Core context used by the daemon's aggregate
@@ -182,6 +191,11 @@ impl NetworkEffectContext {
     pub const fn site_allows_unsafe_east_west(&self) -> bool {
         self.site_allows_unsafe_east_west
     }
+
+    /// Return whether Core admitted requested physical-NIC claims.
+    pub const fn host_global_nic_admitted(&self) -> bool {
+        self.host_global_nic_admitted
+    }
 }
 
 impl fmt::Debug for NetworkEffectContext {
@@ -251,6 +265,9 @@ impl<B: NetworkBroker> NetworkEffectPort for BrokerNetworkEffectPort<B> {
     async fn validate_policy(&self, spec: &NetworkSpec) -> Result<(), NetworkEffectError> {
         if spec.isolation().allow_east_west && !self.context.site_allows_unsafe_east_west() {
             return Err(NetworkEffectError::EastWestHostOptInRequired);
+        }
+        if spec.external_attachment().is_some() && !self.context.host_global_nic_admitted() {
+            return Err(NetworkEffectError::ExternalNicAuthorityRequired);
         }
         Ok(())
     }
@@ -371,8 +388,11 @@ mod tests {
         v3::{
             ResourceBundleGenerationId, ResourceUid,
             execution_policy::BoundedToken,
+            ifname::IfName,
             network::{
-                AttachmentGenerationFence, AttachmentHandle, Ipv4Cidr, IsolationSpec, NetworkSpec,
+                AttachmentGenerationFence, AttachmentHandle, EgressSpec,
+                ExternalAttachmentMode, ExternalAttachmentSpec, ExternalIpv4Spec, Ipv4Cidr,
+                IsolationSpec, MacvtapMode, NetworkSpec, SharingPolicy,
             },
         },
     };
@@ -505,6 +525,36 @@ mod tests {
         .unwrap()
     }
 
+    fn external_network_spec() -> NetworkSpec {
+        let external = ExternalAttachmentSpec::new(
+            ExternalAttachmentMode::Macvtap,
+            IfName::parse("eno1").unwrap(),
+            MacvtapMode::Bridge,
+            SharingPolicy::Exclusive,
+            None,
+            ExternalIpv4Spec::default(),
+            EgressSpec::default(),
+            Vec::new(),
+        )
+        .unwrap();
+        NetworkSpec::new(
+            Ipv4Cidr::parse("10.20.0.0/24").unwrap(),
+            Ipv4Cidr::parse("192.0.2.0/30").unwrap(),
+            None,
+            false,
+            IsolationSpec::default(),
+            Default::default(),
+            Default::default(),
+            Default::default(),
+            Some(external),
+            Default::default(),
+            None,
+            BoundedToken::parse("net-vm-base").unwrap(),
+            Vec::new(),
+        )
+        .unwrap()
+    }
+
     #[test]
     fn broker_port_requires_site_opt_in_before_dispatch() {
         let broker = RecordingBroker::default();
@@ -513,6 +563,22 @@ mod tests {
             block_on(port.validate_policy(&network_spec(true))),
             Err(NetworkEffectError::EastWestHostOptInRequired)
         );
+        assert!(broker.events().is_empty());
+    }
+
+    #[test]
+    fn broker_port_requires_host_global_nic_admission_before_dispatch() {
+        let broker = RecordingBroker::default();
+        let port = BrokerNetworkEffectPort::new(broker.clone(), context(true));
+        let error = block_on(port.validate_policy(&external_network_spec())).unwrap_err();
+        assert_eq!(error.code(), "external-nic-authority-required");
+        assert!(broker.events().is_empty());
+
+        let admitted = BrokerNetworkEffectPort::new(
+            broker.clone(),
+            context(true).with_host_global_nic_admission(),
+        );
+        assert!(block_on(admitted.validate_policy(&external_network_spec())).is_ok());
         assert!(broker.events().is_empty());
     }
 

@@ -35,6 +35,9 @@ fn expected_error(error: Option<NetworkEffectError>) -> &'static str {
         Some(NetworkEffectError::Artifact) => "net-vm-artifact-resolution",
         Some(NetworkEffectError::InvalidState) => "network-controller-invalid-state",
         Some(NetworkEffectError::EastWestHostOptInRequired) => "east-west-host-opt-in-required",
+        Some(NetworkEffectError::ExternalNicAuthorityRequired) => {
+            "external-nic-authority-required"
+        }
     }
 }
 
@@ -71,6 +74,7 @@ fn metric_constructor_projects_only_the_closed_schema_and_values() {
         Some(NetworkEffectError::Artifact),
         Some(NetworkEffectError::InvalidState),
         Some(NetworkEffectError::EastWestHostOptInRequired),
+        Some(NetworkEffectError::ExternalNicAuthorityRequired),
     ];
 
     for operation in operations {
