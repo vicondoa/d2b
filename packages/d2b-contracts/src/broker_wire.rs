@@ -3601,7 +3601,9 @@ mod tests {
 
     /// CreatePersistentTap and CreateTapFd carry only opaque
     /// (role_id, vm_id) on the wire; the broker derives
-    /// ifname/owner/attrs from the trusted bundle.
+    /// ifname/owner/attrs from the trusted bundle. The v3 attachment
+    /// identity and generation fences are optional typed fields used only
+    /// for broker-owned restart adoption and finalization.
     #[test]
     fn create_persistent_tap_request_is_opaque_only() {
         let frame = encode_frame(&serde_json::json!({

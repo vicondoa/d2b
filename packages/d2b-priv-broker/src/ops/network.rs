@@ -1,7 +1,7 @@
 //! Trusted bridge lifecycle and opaque persistent-TAP deletion operations.
 
 use std::fs;
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -328,7 +328,10 @@ fn realization_root(state_dir: &Path) -> Result<PathBuf, NetworkOpError> {
     let metadata = match fs::symlink_metadata(&root) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            fs::create_dir(&root).map_err(|_| NetworkOpError::RealizationUnavailable)?;
+            fs::DirBuilder::new()
+                .mode(0o750)
+                .create(&root)
+                .map_err(|_| NetworkOpError::RealizationUnavailable)?;
             fs::symlink_metadata(&root).map_err(|_| NetworkOpError::RealizationUnavailable)?
         }
         Err(_) => return Err(NetworkOpError::RealizationUnavailable),
@@ -375,8 +378,8 @@ pub fn persist_persistent_tap_realization(
         .custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW)
         .open(&row_path)
     {
-        let current: PersistentTapRealization = serde_json::from_reader(existing)
-            .map_err(|_| NetworkOpError::RealizationConflict)?;
+        let current: PersistentTapRealization =
+            serde_json::from_reader(existing).map_err(|_| NetworkOpError::RealizationConflict)?;
         if current == realization {
             return Ok(());
         }
@@ -424,8 +427,8 @@ pub fn remove_persistent_tap_realization(
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(_) => return Err(NetworkOpError::RealizationUnavailable),
     };
-    let realization: PersistentTapRealization = serde_json::from_reader(row)
-        .map_err(|_| NetworkOpError::RealizationUnavailable)?;
+    let realization: PersistentTapRealization =
+        serde_json::from_reader(row).map_err(|_| NetworkOpError::RealizationUnavailable)?;
     if realization.attachment_id != attachment_id.as_str()
         || realization.ownership_marker
             != format!("d2b managed: attachment:{}", attachment_id.as_str())
@@ -751,6 +754,7 @@ mod tests {
             .join("target")
             .join(format!("network-realization-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
+        fs::DirBuilder::new().mode(0o750).create(&root).unwrap();
         let attachment_id = ResourceUid::parse("323e4567-e89b-42d3-a456-426614174002").unwrap();
         let create = CreatePersistentTapRequest {
             role_id: d2b_contracts::types::RoleId::new("network-attachment"),

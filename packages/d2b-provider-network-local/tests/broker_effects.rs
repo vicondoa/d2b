@@ -63,8 +63,18 @@ impl NetworkBroker for RecordingBroker {
         Ok(())
     }
 
+    fn remove_nm_unmanaged(&self, _: &NetworkEffectContext) -> Result<(), NetworkBrokerError> {
+        self.record("nm-unmanaged-remove");
+        Ok(())
+    }
+
     fn apply_routes(&self, _: &NetworkEffectContext) -> Result<(), NetworkBrokerError> {
         self.record("routes");
+        Ok(())
+    }
+
+    fn remove_routes(&self, _: &NetworkEffectContext) -> Result<(), NetworkBrokerError> {
+        self.record("routes-remove");
         Ok(())
     }
 
@@ -75,6 +85,11 @@ impl NetworkBroker for RecordingBroker {
 
     fn update_hosts(&self, _: &NetworkEffectContext) -> Result<(), NetworkBrokerError> {
         self.record("hosts");
+        Ok(())
+    }
+
+    fn remove_hosts(&self, _: &NetworkEffectContext) -> Result<(), NetworkBrokerError> {
+        self.record("hosts-remove");
         Ok(())
     }
 
@@ -184,6 +199,9 @@ fn broker_port_maps_host_effects_to_typed_broker_calls() {
     block_on(port.seed_dhcp(&uid)).unwrap();
     block_on(port.delete_persistent_tap(&handle, handle.generation_fence())).unwrap();
     block_on(port.remove_host_firewall(&firewall)).unwrap();
+    block_on(port.remove_routes(&uid)).unwrap();
+    block_on(port.remove_hosts(&uid)).unwrap();
+    block_on(port.remove_nm_unmanaged()).unwrap();
     block_on(port.delete_bridges(&uid)).unwrap();
 
     assert_eq!(
@@ -198,6 +216,9 @@ fn broker_port_maps_host_effects_to_typed_broker_calls() {
             "dhcp",
             "tap-delete",
             "projection-remove",
+            "routes-remove",
+            "hosts-remove",
+            "nm-unmanaged-remove",
             "delete-bridge",
         ]
     );

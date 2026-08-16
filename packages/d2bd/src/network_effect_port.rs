@@ -99,12 +99,36 @@ impl NetworkBroker for DaemonNetworkBroker<'_> {
         }))
     }
 
+    fn remove_nm_unmanaged(
+        &self,
+        context: &NetworkEffectContext,
+    ) -> Result<(), NetworkBrokerError> {
+        self.dispatch(BrokerRequest::ApplyNmUnmanaged(ApplyNmUnmanagedRequest {
+            bundle_nm_intent_ref: context.nm_intent_ref().clone(),
+            scope_id: context.scope_id().clone(),
+            destroy: true,
+            tracing_span_id: None,
+        }))
+    }
+
     fn apply_routes(&self, context: &NetworkEffectContext) -> Result<(), NetworkBrokerError> {
         for intent_ref in context.route_intent_refs() {
             self.dispatch(BrokerRequest::ApplyRoute(ApplyRouteRequest {
                 bundle_route_intent_ref: intent_ref.clone(),
                 scope_id: context.scope_id().clone(),
                 destroy: false,
+                tracing_span_id: None,
+            }))?;
+        }
+        Ok(())
+    }
+
+    fn remove_routes(&self, context: &NetworkEffectContext) -> Result<(), NetworkBrokerError> {
+        for intent_ref in context.route_intent_refs() {
+            self.dispatch(BrokerRequest::ApplyRoute(ApplyRouteRequest {
+                bundle_route_intent_ref: intent_ref.clone(),
+                scope_id: context.scope_id().clone(),
+                destroy: true,
                 tracing_span_id: None,
             }))?;
         }
@@ -127,6 +151,14 @@ impl NetworkBroker for DaemonNetworkBroker<'_> {
         self.dispatch(BrokerRequest::UpdateHostsFile(UpdateHostsFileRequest {
             bundle_hosts_intent_ref: context.hosts_intent_ref().clone(),
             destroy: false,
+            tracing_span_id: None,
+        }))
+    }
+
+    fn remove_hosts(&self, context: &NetworkEffectContext) -> Result<(), NetworkBrokerError> {
+        self.dispatch(BrokerRequest::UpdateHostsFile(UpdateHostsFileRequest {
+            bundle_hosts_intent_ref: context.hosts_intent_ref().clone(),
+            destroy: true,
             tracing_span_id: None,
         }))
     }

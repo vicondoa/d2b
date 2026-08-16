@@ -112,12 +112,24 @@ impl NetworkEffectPort for FakePorts {
         self.push("routes")
     }
 
+    async fn remove_routes(&self, _: &ResourceUid) -> Result<(), NetworkEffectError> {
+        self.push("routes-remove")
+    }
+
     async fn update_hosts(&self, _: &ResourceUid) -> Result<(), NetworkEffectError> {
         self.push("hosts")
     }
 
+    async fn remove_hosts(&self, _: &ResourceUid) -> Result<(), NetworkEffectError> {
+        self.push("hosts-remove")
+    }
+
     async fn seed_dhcp(&self, _: &ResourceUid) -> Result<(), NetworkEffectError> {
         self.push("dhcp")
+    }
+
+    async fn remove_nm_unmanaged(&self) -> Result<(), NetworkEffectError> {
+        self.push("nm-remove")
     }
 
     async fn delete_persistent_tap(
@@ -369,7 +381,14 @@ fn finalizer_never_deletes_bridge_before_tap_and_children() {
     );
     assert_eq!(
         effects.events(),
-        ["tap-delete", "firewall-remove", "bridge-delete"]
+        [
+            "tap-delete",
+            "firewall-remove",
+            "routes-remove",
+            "hosts-remove",
+            "nm-remove",
+            "bridge-delete"
+        ]
     );
 
     let effects = FakePorts::default();

@@ -179,12 +179,27 @@ pub trait NetworkBroker: Send + Sync {
     ) -> Result<FirewallDigest, NetworkBrokerError>;
     /// Apply the trusted NetworkManager unmanaged projection.
     fn apply_nm_unmanaged(&self, context: &NetworkEffectContext) -> Result<(), NetworkBrokerError>;
+    /// Remove the trusted NetworkManager unmanaged projection.
+    fn remove_nm_unmanaged(
+        &self,
+        _context: &NetworkEffectContext,
+    ) -> Result<(), NetworkBrokerError> {
+        Ok(())
+    }
     /// Apply all trusted route intents for the Network.
     fn apply_routes(&self, context: &NetworkEffectContext) -> Result<(), NetworkBrokerError>;
+    /// Remove all trusted route intents for the Network.
+    fn remove_routes(&self, _context: &NetworkEffectContext) -> Result<(), NetworkBrokerError> {
+        Ok(())
+    }
     /// Apply all trusted IPv6 suppression sysctls for the Network.
     fn apply_sysctls(&self, context: &NetworkEffectContext) -> Result<(), NetworkBrokerError>;
     /// Apply the trusted `/etc/hosts` projection.
     fn update_hosts(&self, context: &NetworkEffectContext) -> Result<(), NetworkBrokerError>;
+    /// Remove the trusted `/etc/hosts` projection.
+    fn remove_hosts(&self, _context: &NetworkEffectContext) -> Result<(), NetworkBrokerError> {
+        Ok(())
+    }
     /// Seed the Network's DHCP state.
     fn seed_dhcp(&self, context: &NetworkEffectContext) -> Result<(), NetworkBrokerError>;
     /// Delete one generation-fenced persistent TAP.
@@ -269,15 +284,33 @@ impl<B: NetworkBroker> NetworkEffectPort for BrokerNetworkEffectPort<B> {
             .map_err(map_broker_error)
     }
 
+    async fn remove_nm_unmanaged(&self) -> Result<(), NetworkEffectError> {
+        self.broker
+            .remove_nm_unmanaged(&self.context)
+            .map_err(map_broker_error)
+    }
+
     async fn apply_routes(&self, _: &ResourceUid) -> Result<(), NetworkEffectError> {
         self.broker
             .apply_routes(&self.context)
             .map_err(map_broker_error)
     }
 
+    async fn remove_routes(&self, _: &ResourceUid) -> Result<(), NetworkEffectError> {
+        self.broker
+            .remove_routes(&self.context)
+            .map_err(map_broker_error)
+    }
+
     async fn update_hosts(&self, _: &ResourceUid) -> Result<(), NetworkEffectError> {
         self.broker
             .update_hosts(&self.context)
+            .map_err(map_broker_error)
+    }
+
+    async fn remove_hosts(&self, _: &ResourceUid) -> Result<(), NetworkEffectError> {
+        self.broker
+            .remove_hosts(&self.context)
             .map_err(map_broker_error)
     }
 
