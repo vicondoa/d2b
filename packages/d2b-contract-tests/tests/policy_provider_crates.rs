@@ -67,6 +67,7 @@ const ALLOWED_WORKSPACE_DEPS: &[&str] = &[
     "d2b-provider-toolkit",
     "d2b-realm-core",
     "d2b-realm-provider",
+    "d2b-session",
 ];
 
 /// Workspace crates whose appearance in a Provider crate names a specific

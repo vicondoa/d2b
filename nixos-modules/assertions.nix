@@ -2208,6 +2208,11 @@ let
   ];
 
   unixTransportSettingKeys = [ "socketKind" ];
+  vsockTransportSettingKeys = [
+    "connectTimeoutSeconds"
+    "guestRef"
+    "portClass"
+  ];
 
   zoneAttrOr = attrs: name: fallback:
     if builtins.isAttrs attrs && builtins.hasAttr name attrs
@@ -2340,6 +2345,28 @@ let
               "zones.${zoneName}.resources.${linkName}: Provider/transport-unix"
               + " accepts only optional socketKind=seqpacket or socketKind=stream"
               + " and requires an empty transportCredentials list.";
+          }
+          {
+            assertion =
+              (zoneAttrOr link.spec "transportProviderRef" "")
+                != "Provider/transport-vsock"
+              || (
+                builtins.isAttrs settings
+                && lib.all (key: builtins.elem key vsockTransportSettingKeys)
+                  (builtins.attrNames settings)
+                && builtins.hasAttr "guestRef" settings
+                && lib.hasPrefix "Guest/" settings.guestRef
+                && (settings.portClass or "d2b-link") == "d2b-link"
+                && builtins.isInt (settings.connectTimeoutSeconds or 30)
+                && (settings.connectTimeoutSeconds or 30) >= 1
+                && (settings.connectTimeoutSeconds or 30) <= 60
+                && zoneAttrOr link.spec "transportCredentials" [ ] == [ ]
+              );
+            message =
+              "zones.${zoneName}.resources.${linkName}: Provider/transport-vsock"
+              + " accepts only guestRef, portClass=d2b-link, and a"
+              + " connectTimeoutSeconds from 1 through 60; transportCredentials"
+              + " must be empty.";
           }
         ])
       links);
