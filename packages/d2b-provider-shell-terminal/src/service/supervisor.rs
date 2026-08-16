@@ -134,11 +134,7 @@ pub struct Attachment {
 
 impl Attachment {
     /// Construct an attachment from a daemon authority response.
-    pub fn from_authority(
-        id: u64,
-        session_name: impl Into<String>,
-        generation: u64,
-    ) -> Self {
+    pub fn from_authority(id: u64, session_name: impl Into<String>, generation: u64) -> Self {
         Self {
             id,
             session_name: session_name.into(),
@@ -432,11 +428,7 @@ impl ShellAuthorityPort for InMemoryShellAuthority {
         );
         Ok(SessionGrant::from_authority(
             1,
-            SessionCapability::from_authority(
-                capability_id,
-                1,
-                session.name().to_owned(),
-            ),
+            SessionCapability::from_authority(capability_id, 1, session.name().to_owned()),
         ))
     }
 
@@ -484,11 +476,7 @@ impl ShellAuthorityPort for InMemoryShellAuthority {
         entry.capabilities.insert(capability_id);
         Ok(SessionGrant::from_authority(
             generation,
-            SessionCapability::from_authority(
-                capability_id,
-                generation,
-                session.name().to_owned(),
-            ),
+            SessionCapability::from_authority(capability_id, generation, session.name().to_owned()),
         ))
     }
 

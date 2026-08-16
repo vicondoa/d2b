@@ -8,9 +8,7 @@ use std::{
 use crate::{
     Authorizer, ShellPool, ShellSession, ShellTerminalError, Subject,
     resources::validate_name,
-    service::supervisor::{
-        Attachment, SessionCapability, SessionSupervisor, ShellAuthorityPort,
-    },
+    service::supervisor::{Attachment, SessionCapability, SessionSupervisor, ShellAuthorityPort},
     session::{AdoptionDecision, SupervisorCandidate, SupervisorIdentity, adopt_supervisor},
 };
 

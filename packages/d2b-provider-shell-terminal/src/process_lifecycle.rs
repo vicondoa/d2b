@@ -142,10 +142,9 @@ impl<P: ProcessLaunchEffectPort> ProcessProvider for SupervisorProcessLifecycle<
             return Err(self.cleanup_failed_launch(&launched, error).await);
         }
         if launched.wait_reap_owner != WaitReapOwner::ServiceManager {
-            return Err(
-                self.cleanup_failed_launch(&launched, ProcessConformanceError::WaitOwnerMismatch)
-                    .await,
-            );
+            return Err(self
+                .cleanup_failed_launch(&launched, ProcessConformanceError::WaitOwnerMismatch)
+                .await);
         }
         Ok(self.report(
             ticket,

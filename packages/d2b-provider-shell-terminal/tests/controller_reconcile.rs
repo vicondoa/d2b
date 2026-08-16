@@ -379,11 +379,8 @@ fn finalization_retires_authority_after_owned_attachments_close() {
     let attachment = supervisor
         .attach(
             &admin,
-            d2b_provider_shell_terminal::AttachRequest::new(
-                opened.supervisor_generation(),
-                0,
-            )
-            .unwrap(),
+            d2b_provider_shell_terminal::AttachRequest::new(opened.supervisor_generation(), 0)
+                .unwrap(),
         )
         .unwrap()
         .attachment();
@@ -427,16 +424,20 @@ fn controller_and_open_result_debug_are_redacted() {
     assert!(!controller_rendered.contains("alice"));
     assert!(!format!("{:?}", pool()).contains("guest-alice"));
     assert!(!format!("{:?}", opened.session()).contains("artifact://"));
-    assert!(!format!(
-        "{:?}",
-        OpenSessionRequest::new("guest-alice", "main", None).unwrap()
-    )
-    .contains("guest-alice"));
-    assert!(!format!(
-        "{:?}",
-        Subject::new("dev", CallerOrigin::Local, [Role::ZoneAdmin])
-    )
-    .contains("dev"));
+    assert!(
+        !format!(
+            "{:?}",
+            OpenSessionRequest::new("guest-alice", "main", None).unwrap()
+        )
+        .contains("guest-alice")
+    );
+    assert!(
+        !format!(
+            "{:?}",
+            Subject::new("dev", CallerOrigin::Local, [Role::ZoneAdmin])
+        )
+        .contains("dev")
+    );
 }
 
 #[test]
