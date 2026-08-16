@@ -43,6 +43,7 @@ side-effect audit operation that never reaches the wire dispatcher).
 | OpenHidrawSecurityKey | promoted-live | Resolves a configured FIDO security-key stable selector from the trusted bundle, opens the physical `hidraw` node, and returns the fd over `SCM_RIGHTS`. | live in production broker |
 | OpenKvm | promoted-live | Opens the allowed KVM device path and returns the fd over `SCM_RIGHTS`. | live in production broker |
 | OpenPidfd | promoted-live | Opens a runner pidfd, re-verifies the process start time, and returns the fd over `SCM_RIGHTS`. | live in production broker |
+| OpenPeerPidfdFromAcceptedSocket | callable-read-only | Derives a close-on-exec pidfd only from the peer of one SCM_RIGHTS accepted Unix socket; numeric PID, credential, and subject claims are refused. | live read-only callable |
 | OpenSystemdUnitPidfd | promoted-live | Opens a pidfd for the declared systemd-owned process after identity verification and returns it over `SCM_RIGHTS`. | live in production broker |
 | OpenVhostNet | promoted-live | Opens the allowed vhost-net device path and returns the fd over `SCM_RIGHTS`. | live in production broker |
 | OpenZoneStore | promoted-live | Resolves and validates the signed opaque storage row, provisions or opens its database inode idempotently, and returns exactly one close-on-exec descriptor over `SCM_RIGHTS` without a host path. | live in production broker |

@@ -1992,11 +1992,11 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
             write_success_op_record_impl($($args)* audit_context)
         };
     }
-    if !matches!(
+    let accepts_request_fd = matches!(
         &request,
         RealBrokerRequest::OpenPeerPidfdFromAcceptedSocket(_)
-    ) && !request_fds.is_empty()
-    {
+    );
+    if !accepts_request_fd && !request_fds.is_empty() {
         return Err(BrokerError::Protocol(
             "unexpected request SCM_RIGHTS descriptor".to_owned(),
         ));
