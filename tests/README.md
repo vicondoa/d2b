@@ -73,6 +73,7 @@ Rust tests (types 2-5: unit, integration, contract, policy-lint) live under
 | `make test-host-integration` | type-10 runNixOSTest VM checks | conditional local NixOS host lane (KVM; TCG fallback; not the PR pipeline) |
 | `make check-fast` | alias for `test-unit` (backward compat) | local + CI |
 | `make check` | PR-equivalent manifest target set with bounded local parallelism; enforcement classifications come from `tests/layer1-jobs.json` | local |
+| `make bazel-check` | optional local Bazel parity facade for the complete `//...` graph; set `D2B_BAZEL_PROFILE` only for an explicit non-local profile | local |
 | `make check-static` | legacy/full-static monolithic gate (`tests/static.sh`) | local |
 | `make layer1-workflow` | regenerate `.github/workflows/pr-l1-static-fast.yml` from `tests/layer1-jobs.json` + template | local |
 | `make layer1-workflow-check` | verify the generated workflow is up to date | local + CI via `make test-drift` |
@@ -80,6 +81,12 @@ Rust tests (types 2-5: unit, integration, contract, policy-lint) live under
 | `make nix-unit-pin` | regenerate the nix-unit case-presence pins | local |
 | `make runtime-ledger-pin` | regenerate the runtime-ledger census pin after adding, removing or renaming a timed test | local |
 | `cargo run --manifest-path Cargo.toml -p xtask -- heavy-gate -- env D2B_LIVE=1 bash tests/integration/live/<x>.sh` | type-11 live-host tests, through the heavy-gate semaphore | **manual, against a deployed d2b host** |
+
+`make bazel-check` and `tests/tools/bazel-check --profile local` are
+diagnostic parity entry points, not Layer-1 scheduler replacements. They run
+the same Bazel `//...` graph locally while `make check`, CI, and standalone
+Cargo workflows retain authority. BuildBuddy and qualification profiles are
+opt-in and remain non-qualifying without provider-accounted transfer evidence.
 
 `make test-policy` includes the fail-closed `guest-workspace-drift` guard. The
 guard checks that the crates copied by `mkGuestRustPackagesSrc`, the members and

@@ -30,14 +30,20 @@ Container, host, live, hardware, and performance lanes are conditional on the
 changed surface. See [tests/README.md](./tests/README.md) for the test layering
 and public conditional integration targets.
 
+The Bazel graph is available for local parity checks with
+`make bazel-check` or `tests/tools/bazel-check --profile local`. This facade
+does not replace `make check`, the current CI graph, or standalone Cargo
+commands. Do not use a remote or qualification profile as acceptance evidence
+until provider-accounted transfer has qualified it.
+
 <a id="rust-workspace-checks"></a>
 
 ### Rust workspace checks
 
-The `packages/` Cargo workspace is covered by CI's Layer-1 jobs. For a local
-change, run the focused test and lint commands for the components you changed;
-the aggregate gates remain available when the changed surface needs broader
-coverage.
+The repository-root Cargo workspace is covered by CI's Layer-1 jobs. For a
+local change, run the focused test and lint commands for the components you
+changed; the aggregate gates remain available when the changed surface needs
+broader coverage.
 
 ```bash
 # Examples; select the commands that cover the changed components.

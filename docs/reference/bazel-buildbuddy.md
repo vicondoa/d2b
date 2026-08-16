@@ -53,9 +53,14 @@ Use the pinned Bazel provider in the Bazel Nix shell:
 
 ```bash
 nix develop .#bazel
+make bazel-check
 tests/tools/bazel-check --profile local
 tests/tools/bazel-check --profile remote
 ```
+
+`make bazel-check` defaults to the local profile and runs the complete `//...`
+graph. It is a parity facade only; `make check` and Cargo remain the current
+Layer-1 and standalone authorities.
 
 The facade always supplies `--repo_contents_cache=` as a local command option.
 Repository-content caching is not a remote profile feature. It runs the
@@ -139,8 +144,9 @@ system and home Bazel rc files so the committed `.bazelrc` digest is the
 effective configuration binding.
 
 Provider transfer is the sum of uploaded and downloaded bytes. The monthly
-projection is `floor(80,000,000,000 / P99)` and leaves 20,000,000,000 bytes of
-the stated allowance as headroom. Qualification requires five independent
+projection is `floor(80,000,000,000 / T_99)` where `T_99` is the observed
+99th-percentile transfer, and leaves 20,000,000,000 bytes of the stated
+allowance as headroom. Qualification requires five independent
 fresh-worktree samples. Upload and download distributions are checked against
 the U9 input and output bounds before the combined transfer comparison; the U9
 representative report supplies the pessimistic upper bound, and material
@@ -151,7 +157,7 @@ representative report is accepted.
 
 Missing or incomplete provider-accounted transfer produces
 `"status": "non-qualifying"` with null transfer percentiles and monthly runs.
-The command never replaces missing metrics with zero; a valid P99 may still
+The command never replaces missing metrics with zero; a valid `T_99` may still
 publish its projection when another qualification reason blocks the result.
 Stale, duplicate,
 replayed, forged, path-bearing, secret-bearing, client-supplied, and

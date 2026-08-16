@@ -10,6 +10,7 @@ SHELL := $(CURDIR)/tests/tools/scrub-shell-environment
 
 .PHONY: pre-tag smoke-lite \
         check check-static check-ci check-all check-fast check-tier0 \
+        bazel-check \
         test test-unit \
         test-lint test-rust test-rust-main \
         test-rust-broker test-rust-guest-shell-runner test-rust-no-bash-ast \
@@ -84,6 +85,13 @@ check-all:
 check-fast: test-unit
 check-tier0:
 	bash tests/tools/tier0-first-pass.sh
+
+## bazel-check - optional Bazel parity facade. It runs the complete //... graph
+##                locally by default; set D2B_BAZEL_PROFILE for a remote or
+##                qualification profile. It is not part of make check.
+D2B_BAZEL_PROFILE ?= local
+bazel-check:
+	tests/tools/bazel-check --profile "$(D2B_BAZEL_PROFILE)"
 
 # ===========================================================================
 # Umbrella test targets (local / agent development).

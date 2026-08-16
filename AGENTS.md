@@ -128,6 +128,13 @@ Individual Layer-1 jobs, in `tests/layer1-jobs.json` order:
 `test-proofs`, `test-flake`, `test-nix-unit`, `test-policy`, `test-drift`,
 `test-runtime-ledger`, `test-performance-budgets`, `test-fixture-contracts`.
 
+The Bazel graph is available as an optional parity facade:
+`make bazel-check` (or `tests/tools/bazel-check --profile local`) runs the
+same local `//...` target set. It is not part of the Layer-1 manifest and does
+not replace `make check` or the standalone Cargo workflows. Remote and
+qualification profiles remain opt-in until provider-accounted transfer
+evidence qualifies them.
+
 **`tests/layer1-jobs.json` is authoritative** for the job list and enforcement
 classification. A job is enforcing unless it carries
 `"enforcement": "advisory"`. Advisory means command still runs and a

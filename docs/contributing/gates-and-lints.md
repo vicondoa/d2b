@@ -74,6 +74,22 @@ make check-static
 make test
 ```
 
+### Optional Bazel parity facade
+
+The committed Bazel graph can be exercised without changing the Layer-1
+scheduler:
+
+```bash
+make bazel-check
+# equivalent direct invocation
+tests/tools/bazel-check --profile local
+```
+
+The facade runs the complete local `//...` graph. It is not in
+`tests/layer1-jobs.json`, does not replace `make check`, and does not make
+BuildBuddy qualification evidence enforcing. Keep Cargo and the existing Make
+targets available for standalone and CI workflows.
+
 Local `make check` runs `test-lint` as a serial fail-fast phase before
 inventory and the long parallel jobs. That lane checks every gated Rust
 workspace with `cargo fmt --check` and runs clippy only for changed

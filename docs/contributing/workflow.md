@@ -137,6 +137,13 @@ protected target, let CI run, then squash-merge. Commit conventions in [changelo
 apply to in-development commits on those feature branches; `v3` remains the
 clean-break integration lineage and `main` remains a by-release history.
 
+The Bazel graph is an optional local parity check, not a scheduler cutover.
+Use `make bazel-check` or
+`tests/tools/bazel-check --profile local` when the Bazel surface needs direct
+validation. Keep `make check`, the Cargo targets, and the Cargo-based CI
+workflows usable; provider-accounted transfer evidence is required before any
+remote profile can become enforcing.
+
 PR bodies record the change, validation evidence, and substantive review
 outcomes only. Do **not** tag or list the AI assistant or model used to author
 or review a change.
