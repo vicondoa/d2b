@@ -77,3 +77,81 @@ fn restored_sessions_block_recreation_after_controller_restart() {
         Err(d2b_provider_shell_terminal::ShellTerminalError::CapacityExceeded)
     ));
 }
+
+#[test]
+fn restarted_session_advances_generation_and_rejects_old_capability() {
+    let mut controller = ShellTerminalController::default();
+    controller.insert_pool(pool()).unwrap();
+    let admin = Subject::new("dev", CallerOrigin::Local, [Role::ZoneAdmin]);
+    let opened = controller
+        .open_session(
+            &admin,
+            OpenSessionRequest::new("guest-alice", "main", None).unwrap(),
+        )
+        .unwrap();
+
+    let restarted = controller
+        .restart_supervisor(&admin, opened.session().name())
+        .unwrap();
+    assert_eq!(restarted.supervisor_generation(), 2);
+    let mut supervisor = restarted
+        .start_supervisor(SupervisorIdentity::new([3; 32], [4; 32], 2).unwrap())
+        .unwrap();
+    assert!(matches!(
+        supervisor.attach_with_capability(&admin, opened.capability()),
+        Err(d2b_provider_shell_terminal::ShellTerminalError::StaleSessionGeneration)
+    ));
+}
+
+#[test]
+fn restored_pool_attachment_count_blocks_new_attachments() {
+    let restored_pool = ShellPool::new(
+        "guest-alice",
+        "dev",
+        PoolSpec::new(
+            ExecutionTarget::guest("work"),
+            "alice",
+            "artifact://shells/bash-login",
+            2,
+            1,
+            4096,
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let mut controller = ShellTerminalController::default();
+    controller.restore_pool(restored_pool, 1).unwrap();
+    let admin = Subject::new("dev", CallerOrigin::Local, [Role::ZoneAdmin]);
+    let opened = controller
+        .open_session(
+            &admin,
+            OpenSessionRequest::new("guest-alice", "main", None).unwrap(),
+        )
+        .unwrap();
+    let mut supervisor = opened
+        .start_supervisor(
+            SupervisorIdentity::new([1; 32], [2; 32], opened.supervisor_generation()).unwrap(),
+        )
+        .unwrap();
+
+    assert!(matches!(
+        supervisor.attach(
+            &admin,
+            d2b_provider_shell_terminal::AttachRequest::new(opened.supervisor_generation(), 0,)
+                .unwrap(),
+        ),
+        Err(d2b_provider_shell_terminal::ShellTerminalError::CapacityExceeded)
+    ));
+    controller
+        .reconcile_pool_attachments("guest-alice", 0)
+        .unwrap();
+    assert!(
+        supervisor
+            .attach(
+                &admin,
+                d2b_provider_shell_terminal::AttachRequest::new(opened.supervisor_generation(), 0,)
+                    .unwrap(),
+            )
+            .is_ok()
+    );
+}

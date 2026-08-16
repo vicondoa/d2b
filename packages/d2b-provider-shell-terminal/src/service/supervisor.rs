@@ -76,17 +76,25 @@ impl std::fmt::Debug for Attachment {
 #[derive(Debug)]
 pub(super) struct PoolAttachmentBudget {
     capacity: usize,
+    retained_attachments: Mutex<usize>,
     entries: Mutex<BTreeSet<Attachment>>,
     next_id: Mutex<u64>,
 }
 
 impl PoolAttachmentBudget {
-    pub(super) fn new(capacity: u32) -> Self {
-        Self {
+    pub(super) fn restored(
+        capacity: u32,
+        retained_attachments: u32,
+    ) -> Result<Self, ShellTerminalError> {
+        if retained_attachments > capacity {
+            return Err(ShellTerminalError::CapacityExceeded);
+        }
+        Ok(Self {
             capacity: capacity as usize,
+            retained_attachments: Mutex::new(retained_attachments as usize),
             entries: Mutex::new(BTreeSet::new()),
             next_id: Mutex::new(0),
-        }
+        })
     }
 
     fn reserve(
@@ -98,7 +106,11 @@ impl PoolAttachmentBudget {
             .entries
             .lock()
             .map_err(|_| ShellTerminalError::CapacityExceeded)?;
-        if entries.len() >= self.capacity {
+        let retained_attachments = self
+            .retained_attachments
+            .lock()
+            .map_err(|_| ShellTerminalError::CapacityExceeded)?;
+        if retained_attachments.saturating_add(entries.len()) >= self.capacity {
             return Err(ShellTerminalError::CapacityExceeded);
         }
         let mut next_id = self
@@ -127,6 +139,25 @@ impl PoolAttachmentBudget {
         } else {
             Err(ShellTerminalError::AttachmentUnknown)
         }
+    }
+
+    pub(super) fn reconcile_retained_attachments(
+        &self,
+        retained_attachments: u32,
+    ) -> Result<(), ShellTerminalError> {
+        let entries = self
+            .entries
+            .lock()
+            .map_err(|_| ShellTerminalError::CapacityExceeded)?;
+        let mut retained = self
+            .retained_attachments
+            .lock()
+            .map_err(|_| ShellTerminalError::CapacityExceeded)?;
+        if entries.len().saturating_add(retained_attachments as usize) > self.capacity {
+            return Err(ShellTerminalError::CapacityExceeded);
+        }
+        *retained = retained_attachments as usize;
+        Ok(())
     }
 }
 
@@ -170,6 +201,7 @@ pub struct SessionSupervisor {
     identity: SupervisorIdentity,
     ring: OutputRing,
     attachment_budget: Arc<PoolAttachmentBudget>,
+    generation: Arc<Mutex<u64>>,
     attached: BTreeSet<Attachment>,
     consumed_capabilities: BTreeSet<u64>,
 }
@@ -180,6 +212,7 @@ impl SessionSupervisor {
         session: ShellSession,
         identity: SupervisorIdentity,
         attachment_budget: Arc<PoolAttachmentBudget>,
+        generation: Arc<Mutex<u64>>,
     ) -> Self {
         let ring = OutputRing::new(session.output_ring_capacity() as usize)
             .expect("a validated session has a valid output ring capacity");
@@ -188,6 +221,7 @@ impl SessionSupervisor {
             identity,
             ring,
             attachment_budget,
+            generation,
             attached: BTreeSet::new(),
             consumed_capabilities: BTreeSet::new(),
         }
@@ -200,6 +234,7 @@ impl SessionSupervisor {
         request: AttachRequest,
     ) -> Result<AttachReceipt, ShellTerminalError> {
         self.authorize(subject)?;
+        self.require_current_generation()?;
         if request.expected_generation != self.identity.generation() {
             return Err(ShellTerminalError::StaleSessionGeneration);
         }
@@ -218,6 +253,7 @@ impl SessionSupervisor {
         capability: SessionCapability,
     ) -> Result<AttachReceipt, ShellTerminalError> {
         self.authorize(subject)?;
+        self.require_current_generation()?;
         if capability.generation != self.identity.generation() {
             return Err(ShellTerminalError::StaleSessionGeneration);
         }
@@ -242,6 +278,7 @@ impl SessionSupervisor {
         attachment: Attachment,
     ) -> Result<(), ShellTerminalError> {
         self.authorize(subject)?;
+        self.require_current_generation()?;
         if attachment.generation != self.identity.generation() {
             return Err(ShellTerminalError::StaleSessionGeneration);
         }
@@ -255,7 +292,9 @@ impl SessionSupervisor {
 
     /// Append bytes emitted by this supervisor-owned PTY to its bounded replay ring.
     pub fn record_pty_output(&mut self, bytes: &[u8]) {
-        self.ring.append(bytes);
+        if self.require_current_generation().is_ok() {
+            self.ring.append(bytes);
+        }
     }
 
     fn authorize(&self, subject: &Subject) -> Result<(), ShellTerminalError> {
@@ -264,6 +303,17 @@ impl SessionSupervisor {
             self.session.zone(),
             self.session.execution_target(),
         )
+    }
+
+    fn require_current_generation(&self) -> Result<(), ShellTerminalError> {
+        let current = self
+            .generation
+            .lock()
+            .map_err(|_| ShellTerminalError::StaleSessionGeneration)?;
+        if *current != self.identity.generation() {
+            return Err(ShellTerminalError::StaleSessionGeneration);
+        }
+        Ok(())
     }
 
     fn reserve_attachment(&mut self) -> Result<Attachment, ShellTerminalError> {
