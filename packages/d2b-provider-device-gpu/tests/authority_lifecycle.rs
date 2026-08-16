@@ -449,7 +449,7 @@ fn lifecycle_reserves_before_effects_and_closes_video_before_gpu() {
 }
 
 #[test]
-fn lifecycle_rejects_worker_identity_from_the_wrong_principal() {
+fn lifecycle_rejects_worker_identity_and_finalizes_owned_process() {
     let admission = admission(DeviceArbitration::Exclusive, false, 1);
     let tokens = GpuEffectTokenSet::from_core(vec![GpuEffectToken::from_core([1; 32])]).unwrap();
     let mut controller =
@@ -469,6 +469,24 @@ fn lifecycle_rejects_worker_identity_from_the_wrong_principal() {
         controller.phase(),
         d2b_provider_device_gpu::GpuPhase::Failed
     );
+    assert!(controller.gpu_identity().is_some());
+    assert_eq!(
+        controller.reconcile_lifecycle(&mut port),
+        Err(d2b_provider_device_gpu::GpuControllerError::InvalidState)
+    );
+    assert_eq!(port.events, ["reserve", "open", "gpu"]);
+
+    controller.finalize_lifecycle(&mut port).unwrap();
+    assert_eq!(
+        port.events,
+        ["reserve", "open", "gpu", "stop-gpu", "release"]
+    );
+    assert_eq!(
+        controller.phase(),
+        d2b_provider_device_gpu::GpuPhase::Finalized
+    );
+    assert!(!controller.finalizer_installed());
+    assert!(!controller.authority_reserved());
 }
 
 #[test]

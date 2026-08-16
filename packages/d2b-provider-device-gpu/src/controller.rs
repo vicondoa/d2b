@@ -195,7 +195,10 @@ impl GpuController {
         if !self.finalizer
             || matches!(
                 self.phase,
-                GpuPhase::Finalizing | GpuPhase::Finalized | GpuPhase::Quarantined
+                GpuPhase::Failed
+                    | GpuPhase::Finalizing
+                    | GpuPhase::Finalized
+                    | GpuPhase::Quarantined
             )
         {
             return Err(GpuControllerError::InvalidState);
@@ -241,6 +244,8 @@ impl GpuController {
                     generation,
                 )
                 .map_err(GpuControllerError::Effect)?;
+            self.gpu_role = Some(spec.process().role());
+            self.gpu_identity = Some(identity.clone());
             if let Err(error) = validate_started_identity(
                 &identity,
                 spec.process().role(),
@@ -251,8 +256,6 @@ impl GpuController {
                 self.phase = GpuPhase::Failed;
                 return Err(GpuControllerError::Effect(error));
             }
-            self.gpu_role = Some(spec.process().role());
-            self.gpu_identity = Some(identity);
         }
         self.phase = GpuPhase::GpuReady;
         if self.settings.video_sidecar && self.video_identity.is_none() {
@@ -266,6 +269,8 @@ impl GpuController {
             let identity = port
                 .start_video_worker(&spec, ticket, principal, admission.platform(), generation)
                 .map_err(GpuControllerError::Effect)?;
+            self.video_identity = Some(identity.clone());
+            self.video_started = true;
             if let Err(error) = validate_started_identity(
                 &identity,
                 GpuProcessRole::Video,
@@ -276,8 +281,6 @@ impl GpuController {
                 self.phase = GpuPhase::Failed;
                 return Err(GpuControllerError::Effect(error));
             }
-            self.video_identity = Some(identity);
-            self.video_started = true;
         }
         self.phase = GpuPhase::Ready;
         Ok(GpuReconcileOutcome::Converged)

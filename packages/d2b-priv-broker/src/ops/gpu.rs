@@ -326,9 +326,9 @@ fn validate_spawn_plan_shape(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ops::spawn_runner::UserNamespaceSpec;
     use d2b_core::minijail_profile::{CgroupPlacement, MountPolicy, NamespaceSet};
     use std::path::PathBuf;
-    use crate::ops::spawn_runner::UserNamespaceSpec;
 
     fn identity(value: u8) -> GpuOpaqueIdentity {
         GpuOpaqueIdentity::from_core([value; 32])

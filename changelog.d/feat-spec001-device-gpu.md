@@ -11,3 +11,8 @@
 - Make shared Host-global leases unique, validate GPU/video identities and
   closure proofs, recover partial restarts without duplicate workers, and
   reject malformed GPU runner shapes before device opens.
+
+### Fixed
+
+- Keep rejected GPU worker identities owned through finalization so failed
+  starts cannot respawn or release Host-global authority before closure.
