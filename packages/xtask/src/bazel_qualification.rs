@@ -18,7 +18,7 @@ const DEFAULT_U9_REPORT_DIGEST: &str =
 const DEFAULT_U9_TARGET_SET_DIGEST: &str =
     "sha256:576bbb5fd15ccdd2ae7db72515aefdf66b2413a60687921d1077f7dab5593dae";
 const DEFAULT_U9_CONFIGURATION_DIGEST: &str =
-    "sha256:235901475fb814988c5b6a5672cae92fb6c091dab92ff2ae8abfc33fb41b3436";
+    "sha256:d7791e1f2696786528e5c027219fec5ee655e53b88b958b2eb276535d0cf7a8c";
 const DEFAULT_TARGET_SET: &str = "tests/golden/bazel/cache-policy.json";
 const DEFAULT_CONFIGURATION: &str = ".bazelrc";
 const DEFAULT_SELECTED_CLOSURE: &str = "tests/golden/bazel/eligibility.json";

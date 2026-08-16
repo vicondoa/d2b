@@ -12,7 +12,8 @@ and `qualification` over the same `//...` target set. Remote profiles use:
 
 - Bazel 9.2 credential-helper authentication only (never `--remote_header`);
 - the d2b BuildBuddy workspace at `d2b.buildbuddy.io`;
-- `--remote_download_outputs=minimal`;
+- `--remote_download_minimal` / `--remote_download_outputs=minimal`;
+- `--jobs=50`, `--remote_cache_compression`, and profile labels;
 - zero Bazel remote retries, because the facade owns fallback;
 - the immutable `d2b-bazel-worker/v1` platform contract;
 - BuildBuddy Ubuntu GCC via `@toolchains_buildbuddy//toolchains/cc:ubuntu_gcc_x86_64`; and
@@ -41,8 +42,8 @@ eligibility digest and cache policy. The current representative bounds are:
 - 1034798612 unique input bytes;
 - compact remote class limited to 59 `ExtractCargoTomlEnvVars` and
   `TestRunner` actions (467 MB gross, 82 MB unique);
-- `Rustc` local-exec with remote cache only (toolchain is 876 MB unique);
-- `CargoBuildScriptRun` forced fully local; and
+- `Rustc` on BuildBuddy RBE (client remote-cache traffic stayed low);
+- `CargoBuildScriptRun` forced local after it dominated remote-cache bytes; and
 - pipelining rejected because it increases gross inputs and fan-out.
 
 The graph, configuration, platform, toolchain, and pipelining values must also

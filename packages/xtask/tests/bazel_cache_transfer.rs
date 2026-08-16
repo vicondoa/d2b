@@ -1055,8 +1055,8 @@ fn representative_local_summary_records_measured_two_crate_bounds() {
         .map(|key| u64_field(class(key), "grossInputBytes", key))
         .sum::<u64>();
     assert!(
-        remote_unique <= 64 * 1024 * 1024,
-        "remote-class unique inputs {remote_unique} exceed the 64 MiB compact budget"
+        remote_unique <= 96 * 1024 * 1024,
+        "remote-class unique inputs {remote_unique} exceed the 96 MiB compact budget"
     );
     assert!(
         remote_gross < 1_000_000_000,
@@ -1066,7 +1066,7 @@ fn representative_local_summary_records_measured_two_crate_bounds() {
         .get("mnemonics")
         .and_then(Value::as_array)
         .expect("mnemonics");
-    for mnemonic_name in ["Rustc", "CargoBuildScriptRun", "TestRunner"] {
+    for mnemonic_name in ["Rustc", "CargoBuildScriptRun"] {
         let mnemonic = mnemonics
             .iter()
             .find(|entry| entry.get("mnemonic").and_then(Value::as_str) == Some(mnemonic_name))

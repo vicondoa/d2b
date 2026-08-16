@@ -19,12 +19,9 @@
   measured two-crate local log showed higher gross input and fan-out.
 - Wire BuildBuddy's Ubuntu GCC C toolchain on remote profiles so rustc
   linking does not use the host Nix gcc path.
-- Keep high-input Rustc compiles local-exec with remote cache only: 876 MB
-  of each compile's unique input is the rustc+LLVM toolchain, not crate
-  sources. Cargo build scripts stay fully local. The largest remotely
-  executed set under the 80 GB working budget is
-  `ExtractCargoTomlEnvVars` plus `TestRunner` (467 MB gross per two-crate
-  run).
+- Run Rustc on BuildBuddy RBE with compressed cache, minimal downloads,
+  and 50 jobs. Local results may seed the remote cache. Cargo build
+  scripts stay local after they showed the highest remote-cache traffic.
 - Keep the existing Cargo and Make Layer-1 graph authoritative while exposing
   the complete Bazel graph only through the opt-in local `make bazel-check`
   facade. Remote qualification remains blocked until provider-accounted

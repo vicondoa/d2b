@@ -12,6 +12,9 @@ common --remote_timeout=60s
 
 # Keep ordinary local/test actions unstamped and avoid unstable workspace data.
 build --stamp=no
+build --noslim_profile
+build --experimental_profile_include_target_label
+build --experimental_profile_include_primary_output
 # The Nix C++ toolchain defaults to gold; use the available GNU BFD linker.
 build --linkopt=-fuse-ld=bfd
 build --host_linkopt=-fuse-ld=bfd
@@ -35,10 +38,12 @@ build:remote --remote_instance_name=d2b/developer/linux-x86_64/rules_rust/worker
 build:remote --platforms=@toolchains_buildbuddy//platforms:linux_x86_64
 build:remote --extra_execution_platforms=@toolchains_buildbuddy//platforms:linux_x86_64
 build:remote --extra_toolchains=@toolchains_buildbuddy//toolchains/cc:ubuntu_gcc_x86_64
-build:remote --remote_upload_local_results=false
-# Rustc may use the remote action cache (outputs only). Do not remotely
-# execute it: each compile declares ~1.1 GB of rustc+LLVM inputs.
-build:remote --modify_execution_info=Rustc=+no-remote-exec,CargoBuildScriptRun=+no-remote
+build:remote --remote_download_minimal
+build:remote --jobs=50
+build:remote --remote_cache_compression
+# Cargo build scripts measured high remote-cache traffic; keep them local.
+# Rustc uses BuildBuddy RBE plus the action cache.
+build:remote --modify_execution_info=CargoBuildScriptRun=+no-remote
 
 build:trusted-seed --remote_executor=grpcs://d2b.buildbuddy.io
 build:trusted-seed --remote_cache=grpcs://d2b.buildbuddy.io
@@ -52,7 +57,10 @@ build:trusted-seed --extra_execution_platforms=@toolchains_buildbuddy//platforms
 build:trusted-seed --extra_toolchains=@toolchains_buildbuddy//toolchains/cc:ubuntu_gcc_x86_64
 build:trusted-seed --remote_upload_local_results=true
 build:trusted-seed --remote_cache_async=false
-build:trusted-seed --modify_execution_info=Rustc=+no-remote-exec,CargoBuildScriptRun=+no-remote
+build:trusted-seed --remote_download_minimal
+build:trusted-seed --jobs=50
+build:trusted-seed --remote_cache_compression
+build:trusted-seed --modify_execution_info=CargoBuildScriptRun=+no-remote
 
 build:qualification --remote_executor=grpcs://d2b.buildbuddy.io
 build:qualification --remote_cache=grpcs://d2b.buildbuddy.io
@@ -64,5 +72,7 @@ build:qualification --remote_instance_name=d2b/qualification/linux-x86_64/rules_
 build:qualification --platforms=@toolchains_buildbuddy//platforms:linux_x86_64
 build:qualification --extra_execution_platforms=@toolchains_buildbuddy//platforms:linux_x86_64
 build:qualification --extra_toolchains=@toolchains_buildbuddy//toolchains/cc:ubuntu_gcc_x86_64
-build:qualification --remote_upload_local_results=false
-build:qualification --modify_execution_info=Rustc=+no-remote-exec,CargoBuildScriptRun=+no-remote
+build:qualification --remote_download_minimal
+build:qualification --jobs=50
+build:qualification --remote_cache_compression
+build:qualification --modify_execution_info=CargoBuildScriptRun=+no-remote

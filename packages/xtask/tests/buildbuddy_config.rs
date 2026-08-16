@@ -85,16 +85,25 @@ fn committed_profiles_share_targets_and_use_credential_helper_only() {
         "remote profiles must use minimal output downloads"
     );
     assert!(
-        bazelrc.contains("Rustc=+no-remote-exec"),
-        "Rustc may be cache-only; do not remotely execute toolchain-heavy compiles"
-    );
-    assert!(
         bazelrc.contains("CargoBuildScriptRun=+no-remote"),
-        "remote profiles must keep CargoBuildScriptRun local"
+        "remote profiles must keep high-cache CargoBuildScriptRun local"
     );
     assert!(
-        !bazelrc.contains("Rustc=+no-remote,"),
-        "Rustc must remain cache-eligible"
+        !bazelrc.contains("Rustc=+no-remote"),
+        "Rustc must use BuildBuddy remote execution and cache"
+    );
+    assert!(
+        bazelrc.contains("--jobs=50"),
+        "remote profiles should cap concurrency"
+    );
+    assert!(
+        bazelrc.contains("--remote_cache_compression"),
+        "remote profiles should compress cache blobs"
+    );
+    assert!(
+        bazelrc.contains("--remote_download_minimal")
+            || bazelrc.contains("--remote_download_outputs=minimal"),
+        "remote profiles must avoid downloading unused outputs"
     );
     assert!(
         bazelrc.contains("--remote_retries=0"),
