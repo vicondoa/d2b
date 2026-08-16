@@ -6,6 +6,7 @@ use crate::{
 use d2b_contracts::v3::component_session::{
     AttachmentAccess, AttachmentKind, AttachmentPacket, AttachmentPolicy, KernelObjectType,
 };
+use d2b_session::OwnedAttachment;
 use rustix::{
     fd::{AsFd, OwnedFd},
     fs::{FileType, OFlags, fcntl_get_seals, fcntl_getfl, fstat},
@@ -147,6 +148,10 @@ impl PidfdIdentityPolicy {
 #[derive(Clone)]
 pub enum DescriptorPolicy {
     File(ObjectIdentity),
+    /// The transport has authenticated the descriptor envelope and checked
+    /// its declared kernel type/access. The Provider performs the final
+    /// operation-specific safety admission.
+    ProviderValidatedFile,
     SealedReadOnlyMemfd,
     Pidfd(PidfdIdentityPolicy),
     Credentials(PeerCredentials),
@@ -156,6 +161,7 @@ impl fmt::Debug for DescriptorPolicy {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
             Self::File(_) => "DescriptorPolicy::File(REDACTED)",
+            Self::ProviderValidatedFile => "DescriptorPolicy::ProviderValidatedFile",
             Self::SealedReadOnlyMemfd => "DescriptorPolicy::SealedReadOnlyMemfd",
             Self::Pidfd(_) => "DescriptorPolicy::Pidfd(REDACTED)",
             Self::Credentials(_) => "DescriptorPolicy::Credentials(REDACTED)",
@@ -208,6 +214,38 @@ impl VerifiedPacket {
 
     pub fn into_parts(self) -> (Vec<u8>, Vec<AcceptedAttachment>, CreditBundle) {
         (self.payload, self.attachments, self.credits)
+    }
+
+    /// Convert attachments that have already passed ComponentSession
+    /// descriptor binding into the Provider-facing verified representation.
+    ///
+    /// The transport credit reservation remains owned by the attachment
+    /// payload and is released when the payload is consumed or dropped. The
+    /// empty bundle is intentional: this conversion is only for the
+    /// post-session dispatch path, not raw transport admission.
+    pub fn from_bound_attachments(
+        attachments: Vec<OwnedAttachment>,
+    ) -> Result<Self, UnixSessionError> {
+        let mut accepted = Vec::with_capacity(attachments.len());
+        for attachment in attachments {
+            let descriptor = attachment
+                .descriptor()
+                .ok_or(UnixSessionError::DescriptorMismatch)?;
+            if descriptor.kind != AttachmentKind::FileDescriptor {
+                return Err(UnixSessionError::DescriptorMismatch);
+            }
+            let payload = attachment
+                .into_any()
+                .ok_or(UnixSessionError::DescriptorMismatch)?
+                .downcast::<crate::UnixAttachmentPayload>()
+                .map_err(|_| UnixSessionError::DescriptorMismatch)?;
+            accepted.push(AcceptedAttachment::File(payload.into_owned_file()));
+        }
+        Ok(Self {
+            payload: Vec::new(),
+            attachments: accepted,
+            credits: CreditBundle::empty(),
+        })
     }
 }
 
@@ -305,6 +343,22 @@ impl ReceivedPacket {
                     DescriptorPolicy::Credentials(expected),
                 ) if actual == *expected => {
                     accepted.push(AcceptedAttachment::Credentials(actual));
+                }
+                (
+                    ReceivedControl::File(fd),
+                    AttachmentKind::FileDescriptor,
+                    DescriptorPolicy::ProviderValidatedFile,
+                ) => {
+                    let actual =
+                        inspect_identity(&fd, descriptor.object_type, descriptor.access, false)?;
+                    if identities.iter().any(|(prior, prior_allows)| {
+                        prior.same_kernel_object(&actual)
+                            && (!descriptor.duplicate_object_allowed || !prior_allows)
+                    }) {
+                        return Err(UnixSessionError::DuplicateObject);
+                    }
+                    identities.push((actual, descriptor.duplicate_object_allowed));
+                    accepted.push(AcceptedAttachment::File(fd));
                 }
                 (
                     ReceivedControl::File(fd),
@@ -513,6 +567,12 @@ pub(crate) fn validate_owned_file_identity(
             )?;
             require_fully_sealed(&actual)?;
             Ok(actual)
+        }
+        DescriptorPolicy::ProviderValidatedFile => {
+            if descriptor.kind != AttachmentKind::FileDescriptor {
+                return Err(UnixSessionError::DescriptorMismatch);
+            }
+            inspect_identity(fd, descriptor.object_type, descriptor.access, false)
         }
         DescriptorPolicy::File(_)
         | DescriptorPolicy::SealedReadOnlyMemfd

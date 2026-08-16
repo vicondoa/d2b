@@ -150,6 +150,20 @@ pub trait GuestControlRpc {
         let _ = request;
         Err(GuestControlHealthError::Protocol)
     }
+    async fn exec_create(
+        &self,
+        request: pb::ExecCreateRequest,
+    ) -> Result<pb::ExecCreateResponse, GuestControlHealthError> {
+        let _ = request;
+        Err(GuestControlHealthError::Protocol)
+    }
+    async fn exec_wait(
+        &self,
+        request: pb::ExecWaitRequest,
+    ) -> Result<pb::ExecWaitResponse, GuestControlHealthError> {
+        let _ = request;
+        Err(GuestControlHealthError::Protocol)
+    }
 }
 
 pub trait GuestControlSigner {
@@ -326,6 +340,20 @@ impl GuestControlRpc for TtrpcGuestControlClient {
         request: pb::AudioSetRequest,
     ) -> Result<pb::AudioSetResponse, GuestControlHealthError> {
         self.unary("AudioSet", request).await
+    }
+
+    async fn exec_create(
+        &self,
+        request: pb::ExecCreateRequest,
+    ) -> Result<pb::ExecCreateResponse, GuestControlHealthError> {
+        self.unary("ExecCreate", request).await
+    }
+
+    async fn exec_wait(
+        &self,
+        request: pb::ExecWaitRequest,
+    ) -> Result<pb::ExecWaitResponse, GuestControlHealthError> {
+        self.unary("ExecWait", request).await
     }
 }
 
@@ -1092,10 +1120,14 @@ fn validate_health_evidence(health: &pb::HealthResponse) -> Result<(), GuestCont
     Ok(())
 }
 
-fn request_metadata(vm_id: &str) -> pb::RequestMetadata {
+pub(crate) fn request_metadata(vm_id: &str) -> pb::RequestMetadata {
+    request_metadata_with_id(vm_id, "guest-health-probe")
+}
+
+pub(crate) fn request_metadata_with_id(vm_id: &str, request_id: &str) -> pb::RequestMetadata {
     let mut metadata = pb::RequestMetadata::new();
     metadata.vm_id = vm_id.to_owned();
-    metadata.request_id = "guest-health-probe".to_owned();
+    metadata.request_id = request_id.to_owned();
     metadata.protocol_version = GUEST_CONTROL_PROTOCOL_VERSION;
     metadata
 }
