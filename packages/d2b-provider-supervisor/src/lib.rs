@@ -18,11 +18,6 @@ pub use broker::{
     BrokerLaunchIntent, BrokerLaunchResolver, BrokerObservedProcess, BrokerPidfdHandle,
     BrokerProcessBackend, BundleBackedLaunchResolver, runner_role_for_process_role,
 };
-pub use d2b_provider_notification_desktop::{
-    NotificationHostSinkIdentity, NotificationLifecycleBackend, NotificationLifecycleObservation,
-    NotificationLifecyclePlan, NotificationLifecycleReceipt, NotificationLifecycleSupervisor,
-    NotificationSourceIdentity,
-};
 pub use systemd::{
     BrokerSystemdEffectOwner, BrokerSystemdPidfdHandle, SystemdEffectLaunch, SystemdEffectOwner,
     SystemdIdentityContext, SystemdInvocationIdentity, SystemdProcessBackend,

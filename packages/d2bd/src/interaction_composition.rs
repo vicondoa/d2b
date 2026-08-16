@@ -67,13 +67,13 @@ use d2b_provider_display_wayland::{
 #[cfg(test)]
 use d2b_provider_notification_desktop::Category;
 use d2b_provider_notification_desktop::{
-    DesktopNotificationPort, NotificationProcessEffectPort, NotificationRequest,
+    DesktopNotificationPort, NotificationHostSinkIdentity, NotificationLifecycleBackend,
+    NotificationLifecycleObservation, NotificationLifecyclePlan, NotificationLifecycleSupervisor,
+    NotificationProcessEffectPort, NotificationRequest, NotificationSourceIdentity,
     SourceProcessEffectPort, SourceProcessEffectReceipt, SourceReconcileResult,
 };
 use d2b_provider_supervisor::{
     BrokerLaunchIntent, BrokerLaunchResolver, BrokerObservedProcess, BrokerProcessBackend,
-    NotificationHostSinkIdentity, NotificationLifecycleBackend, NotificationLifecycleObservation,
-    NotificationLifecyclePlan, NotificationLifecycleSupervisor, NotificationSourceIdentity,
     ProviderSupervisor,
 };
 use d2b_resource_api::authz::{

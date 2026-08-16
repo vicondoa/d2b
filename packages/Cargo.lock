@@ -1398,7 +1398,6 @@ dependencies = [
  "d2b-core",
  "d2b-process",
  "d2b-process-conformance",
- "d2b-provider-notification-desktop",
  "d2b-provider-system-minijail",
  "d2b-provider-system-systemd",
  "d2b-telemetry",

@@ -8,3 +8,8 @@
   host-sink receipts, and keep short AF_UNIX telemetry test sockets faithful.
 - Hardened nonce/idempotency cleanup, display principal lifecycle reuse, and
   clipboard rate-bucket garbage collection.
+
+### Fixed
+
+- Keep notification source and host-sink lifecycle tests in the Provider crate
+  so supervisor packaging stays on the closed effect-port allowlist.
