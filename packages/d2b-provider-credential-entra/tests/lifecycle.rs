@@ -120,6 +120,31 @@ fn revocation_releases_capacity() {
     assert_eq!(client.issue_calls.load(Ordering::SeqCst), 2);
 }
 
+#[test]
+fn finalization_revokes_owned_handles_before_clearing_provider_state() {
+    let (provider, client) = setup();
+    let server = ProviderHarness::new(&provider, admitted());
+    server
+        .call(CredentialMethod::AcquireToken, request("idem-finalize"))
+        .unwrap();
+
+    let cleanup = provider
+        .revoke_owned_handles(
+            &ResourceRef::parse("Credential/work-entra").unwrap(),
+            15_000,
+        )
+        .unwrap();
+
+    assert_eq!(cleanup.revoked, 1);
+    assert_eq!(cleanup.remaining, 0);
+    assert_eq!(client.revoke_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        provider.active_lease_count(),
+        0,
+        "finalization must not clear state before owned revocation"
+    );
+}
+
 struct BlockingClient {
     entered: Mutex<Option<mpsc::Sender<()>>>,
     state: Mutex<BlockingState>,

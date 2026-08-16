@@ -9,7 +9,11 @@ use d2b_contracts::v3::credential::{
     CredentialServiceError, CredentialServiceErrorCode, CredentialSourceVersion,
     DeliveryRouteDigest, DeliverySessionParams, PlacementBinding, dispatch_authorized_provider,
 };
-use d2b_contracts::v3::{ResourceGeneration, ResourceRef, ResourceUid};
+use d2b_contracts::v3::{
+    AuthenticatedSubjectContext, BindingDigest, EvidenceClass, Locality, ReconnectGeneration,
+    ResourceGeneration, ResourceRef, ResourceUid, SchemaFingerprint, ServiceName, SessionBinding,
+    SessionPurpose, TranscriptHash, TransportBinding,
+};
 use d2b_provider_credential_entra::{
     EntraClientError, EntraClientState, EntraConfig, EntraCredentialClient,
     EntraCredentialProvider, EntraCredentialProviderFactory, EntraFuture, EntraLeaseGrant,
@@ -27,6 +31,7 @@ pub struct FakeEntraClient {
     pub refresh_calls: AtomicUsize,
     pub revoke_calls: AtomicUsize,
     pub issue_error: Mutex<Option<EntraClientError>>,
+    pub refresh_error: Mutex<Option<EntraClientError>>,
     pub observed_request: Mutex<Option<(String, String, String)>>,
     pub token_canary: String,
     pub endpoint_canary: String,
@@ -44,6 +49,7 @@ impl FakeEntraClient {
             refresh_calls: AtomicUsize::new(0),
             revoke_calls: AtomicUsize::new(0),
             issue_error: Mutex::new(None),
+            refresh_error: Mutex::new(None),
             observed_request: Mutex::new(None),
             token_canary: format!("entra-token-canary-{nonce}"),
             endpoint_canary: format!("entra-endpoint-canary-{nonce}"),
@@ -105,9 +111,13 @@ impl EntraCredentialClient for FakeEntraClient {
 
     fn refresh_lease(&self, lease: &EntraLeaseRef) -> EntraFuture<'_, EntraLeaseRenewal> {
         self.refresh_calls.fetch_add(1, Ordering::SeqCst);
+        let error = *self.refresh_error.lock().unwrap();
         let expiry = lease.metadata().expires_at_unix_ms;
         let inspection = &self.inspection;
         Box::pin(async move {
+            if let Some(error) = error {
+                return Err(error);
+            }
             let grant = EntraLeaseGrant {
                 lease_handle: CredentialLeaseHandle::parse("entra-lease").unwrap(),
                 source_version: CredentialSourceVersion::parse("entra-source-2").unwrap(),
@@ -133,7 +143,8 @@ impl EntraCredentialClient for FakeEntraClient {
 pub fn setup() -> (EntraCredentialProvider, Arc<FakeEntraClient>) {
     let client = Arc::new(FakeEntraClient::new());
     let config = EntraConfig::new("tenant-1234", 64).unwrap();
-    let placement = EntraPlacement::new(
+    let placement = EntraPlacement::new_in_zone(
+        ResourceRef::parse("Zone/work").unwrap(),
         PlacementBinding::GuestAgent,
         ResourceRef::parse("Guest/consumer").unwrap(),
         ResourceRef::parse("Guest/identity").unwrap(),
@@ -149,6 +160,38 @@ pub fn setup() -> (EntraCredentialProvider, Arc<FakeEntraClient>) {
     )
     .unwrap();
     (factory.construct(), client)
+}
+
+pub fn subject_context() -> AuthenticatedSubjectContext {
+    subject_context_for(
+        ResourceRef::parse("Provider/runtime-azure-container-apps").unwrap(),
+        ResourceRef::parse("Zone/work").unwrap(),
+        Locality::Local,
+    )
+}
+
+pub fn subject_context_for(
+    subject_ref: ResourceRef,
+    zone_ref: ResourceRef,
+    locality: Locality,
+) -> AuthenticatedSubjectContext {
+    let digest = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    AuthenticatedSubjectContext::new(
+        subject_ref,
+        ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap(),
+        zone_ref,
+        EvidenceClass::UnixPeer,
+        SessionPurpose::parse("credential").unwrap(),
+        ServiceName::parse("d2b.credential.v3").unwrap(),
+        SessionBinding::new(
+            SchemaFingerprint::parse(digest).unwrap(),
+            TransportBinding::new(locality, BindingDigest::parse(digest).unwrap()),
+            ReconnectGeneration::new(1).unwrap(),
+            TranscriptHash::from_bytes([0x5a; 32]),
+        ),
+    )
+    .with_execution_ref(ResourceRef::parse("Guest/consumer").unwrap())
+    .with_provider_ref(ResourceRef::parse("Provider/runtime-azure-container-apps").unwrap())
 }
 
 pub fn request(idempotency: &str) -> CredentialRequest {
@@ -206,9 +249,10 @@ impl TestAdmission for Admission {
                 CredentialServiceErrorCode::OperationDenied,
             ));
         }
-        CredentialAuthorization::new(
+        CredentialAuthorization::new_for_subject(
             method,
             method.requires_delivery().then(|| delivery(method, 1)),
+            subject_context(),
         )
     }
 }

@@ -5,9 +5,11 @@ use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::Duration;
 
+use d2b_contracts::v3::Locality;
 use d2b_contracts::v3::ResourceRef;
 use d2b_contracts::v3::credential::{
-    CredentialMethod, CredentialRequest, CredentialServiceErrorCode, PlacementBinding,
+    CredentialAuthorization, CredentialMethod, CredentialRequest, CredentialServiceErrorCode,
+    PlacementBinding, dispatch_authorized_provider,
 };
 use d2b_provider_credential_entra::{
     EntraClientError, EntraClientState, EntraConfig, EntraCredentialClient,
@@ -15,7 +17,7 @@ use d2b_provider_credential_entra::{
     EntraLeaseRef, EntraLeaseRenewal, EntraLeaseRequest, EntraLeaseRevocation, EntraPlacement,
 };
 
-use common::{Admission, ProviderHarness, admitted, request, setup};
+use common::{Admission, ProviderHarness, admitted, delivery, request, setup, subject_context_for};
 
 #[test]
 fn interaction_required_is_unavailable_not_denied() {
@@ -50,6 +52,118 @@ fn exact_consumer_mismatch_is_denied_before_client_dispatch() {
 }
 
 #[test]
+fn unauthorized_and_relay_subjects_cannot_resolve_or_refresh() {
+    let (provider, client) = setup();
+    let unauthorized_request = request("idem-unauthorized");
+    let missing_context = CredentialAuthorization::new(
+        CredentialMethod::AcquireToken,
+        Some(delivery(CredentialMethod::AcquireToken, 1)),
+    )
+    .unwrap();
+    assert_eq!(
+        dispatch_authorized_provider(
+            &provider,
+            CredentialMethod::AcquireToken,
+            &unauthorized_request,
+            &missing_context,
+        )
+        .unwrap_err()
+        .code(),
+        CredentialServiceErrorCode::OperationDenied
+    );
+    let unauthorized = CredentialAuthorization::new_for_subject(
+        CredentialMethod::AcquireToken,
+        Some(delivery(CredentialMethod::AcquireToken, 1)),
+        subject_context_for(
+            ResourceRef::parse("User/alice").unwrap(),
+            ResourceRef::parse("Zone/work").unwrap(),
+            Locality::Local,
+        ),
+    )
+    .unwrap();
+    assert_eq!(
+        dispatch_authorized_provider(
+            &provider,
+            CredentialMethod::AcquireToken,
+            &unauthorized_request,
+            &unauthorized,
+        )
+        .unwrap_err()
+        .code(),
+        CredentialServiceErrorCode::OperationDenied
+    );
+
+    ProviderHarness::new(&provider, admitted())
+        .call(CredentialMethod::AcquireToken, request("idem-authorized"))
+        .unwrap();
+    let unauthorized_inspect = CredentialAuthorization::new_for_subject(
+        CredentialMethod::InspectMetadata,
+        None,
+        subject_context_for(
+            ResourceRef::parse("User/alice").unwrap(),
+            ResourceRef::parse("Zone/work").unwrap(),
+            Locality::Local,
+        ),
+    )
+    .unwrap();
+    assert_eq!(
+        dispatch_authorized_provider(
+            &provider,
+            CredentialMethod::InspectMetadata,
+            &request("idem-inspect-unauthorized"),
+            &unauthorized_inspect,
+        )
+        .unwrap_err()
+        .code(),
+        CredentialServiceErrorCode::OperationDenied
+    );
+    let unauthorized_refresh = CredentialAuthorization::new_for_subject(
+        CredentialMethod::RefreshToken,
+        Some(delivery(CredentialMethod::RefreshToken, 1)),
+        subject_context_for(
+            ResourceRef::parse("User/alice").unwrap(),
+            ResourceRef::parse("Zone/work").unwrap(),
+            Locality::Local,
+        ),
+    )
+    .unwrap();
+    assert_eq!(
+        dispatch_authorized_provider(
+            &provider,
+            CredentialMethod::RefreshToken,
+            &request("idem-refresh-unauthorized"),
+            &unauthorized_refresh,
+        )
+        .unwrap_err()
+        .code(),
+        CredentialServiceErrorCode::OperationDenied
+    );
+
+    let relay = CredentialAuthorization::new_for_subject(
+        CredentialMethod::AcquireToken,
+        Some(delivery(CredentialMethod::AcquireToken, 1)),
+        subject_context_for(
+            ResourceRef::parse("Provider/runtime-azure-container-apps").unwrap(),
+            ResourceRef::parse("Zone/work").unwrap(),
+            Locality::AdjacentZone,
+        ),
+    )
+    .unwrap();
+    assert_eq!(
+        dispatch_authorized_provider(
+            &provider,
+            CredentialMethod::AcquireToken,
+            &unauthorized_request,
+            &relay,
+        )
+        .unwrap_err()
+        .code(),
+        CredentialServiceErrorCode::OperationDenied
+    );
+    assert_eq!(client.issue_calls.load(Ordering::SeqCst), 1);
+}
+
+#[test]
 fn generation_and_unsupported_operation_fail_closed() {
     let (provider, client) = setup();
     assert_eq!(
@@ -76,6 +190,76 @@ fn generation_and_unsupported_operation_fail_closed() {
         CredentialServiceErrorCode::Malformed
     );
     assert_eq!(client.issue_calls.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn refresh_failure_degrades_only_the_owning_resource_with_bounded_retry() {
+    let (provider, client) = setup();
+    let server = ProviderHarness::new(&provider, admitted());
+    server
+        .call(
+            CredentialMethod::AcquireToken,
+            request("idem-refresh-failure"),
+        )
+        .unwrap();
+    server
+        .call(
+            CredentialMethod::AcquireToken,
+            CredentialRequest::new(
+                ResourceRef::parse("Credential/other-entra").unwrap(),
+                "operation-other",
+                "idem-other",
+                common::EXPIRY,
+                15_000,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    *client.refresh_error.lock().unwrap() = Some(EntraClientError::Unavailable);
+
+    for attempt in 0..d2b_provider_credential_entra::MAX_REFRESH_ATTEMPTS {
+        assert_eq!(
+            server
+                .call(
+                    CredentialMethod::RefreshToken,
+                    request(&format!("idem-refresh-failure-refresh-{attempt}"))
+                )
+                .unwrap_err()
+                .code(),
+            CredentialServiceErrorCode::ProviderUnavailable
+        );
+    }
+    let refresh_calls = client.refresh_calls.load(Ordering::SeqCst);
+    assert_eq!(
+        server
+            .call(
+                CredentialMethod::RefreshToken,
+                request("idem-refresh-failure-bounded")
+            )
+            .unwrap_err()
+            .code(),
+        CredentialServiceErrorCode::ProviderUnavailable
+    );
+    assert_eq!(
+        client.refresh_calls.load(Ordering::SeqCst),
+        refresh_calls,
+        "refresh retry must stop at the bounded attempt ceiling"
+    );
+    assert_eq!(
+        provider.resource_health(&ResourceRef::parse("Credential/work-entra").unwrap()),
+        Some(d2b_provider_credential_entra::EntraResourceHealth::Degraded)
+    );
+    assert_eq!(
+        provider.refresh_retry_state(&ResourceRef::parse("Credential/work-entra").unwrap()),
+        Some((
+            d2b_provider_credential_entra::MAX_REFRESH_ATTEMPTS,
+            d2b_provider_credential_entra::MAX_REFRESH_ATTEMPTS,
+        ))
+    );
+    assert_eq!(
+        provider.resource_health(&ResourceRef::parse("Credential/other-entra").unwrap()),
+        Some(d2b_provider_credential_entra::EntraResourceHealth::Ready)
+    );
 }
 
 #[test]

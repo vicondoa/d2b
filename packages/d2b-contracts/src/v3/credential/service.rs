@@ -8,7 +8,9 @@ use super::{
     OperationClass,
 };
 use crate::v3::component_session::MAX_PROTECTED_PLAINTEXT_BYTES;
-use crate::v3::{ResourceGeneration, ResourceRef, ResourceUid, TranscriptHash};
+use crate::v3::{
+    AuthenticatedSubjectContext, ResourceGeneration, ResourceRef, ResourceUid, TranscriptHash,
+};
 
 /// Canonical service package routed by the Zone bus.
 pub const CREDENTIAL_SERVICE_NAME: &str = "d2b.credential.v3";
@@ -593,6 +595,7 @@ impl fmt::Debug for CredentialResponse {
 #[derive(Clone, PartialEq, Eq)]
 pub struct CredentialAuthorization {
     delivery_session_params: Option<DeliverySessionParams>,
+    authenticated_subject: Option<AuthenticatedSubjectContext>,
 }
 
 impl CredentialAuthorization {
@@ -612,12 +615,29 @@ impl CredentialAuthorization {
         }
         Ok(Self {
             delivery_session_params,
+            authenticated_subject: None,
         })
+    }
+
+    /// Construct an authorization result carrying trusted subject context.
+    pub fn new_for_subject(
+        method: CredentialMethod,
+        delivery_session_params: Option<DeliverySessionParams>,
+        authenticated_subject: AuthenticatedSubjectContext,
+    ) -> Result<Self, CredentialServiceError> {
+        let mut authorization = Self::new(method, delivery_session_params)?;
+        authorization.authenticated_subject = Some(authenticated_subject);
+        Ok(authorization)
     }
 
     /// Borrow the adapter-authorized delivery binding, when the method needs one.
     pub const fn delivery_session_params(&self) -> Option<&DeliverySessionParams> {
         self.delivery_session_params.as_ref()
+    }
+
+    /// Borrow trusted subject context supplied by the authenticated adapter.
+    pub const fn authenticated_subject_context(&self) -> Option<&AuthenticatedSubjectContext> {
+        self.authenticated_subject.as_ref()
     }
 }
 
