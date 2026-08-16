@@ -198,6 +198,7 @@ rust_test(
     data = [":d2b"],
     env = {"CARGO_BIN_EXE_d2b": "$(rootpath :d2b)"},
     rustc_env = {"CARGO_BIN_EXE_d2b": "$(rootpath :d2b)"},
+    tags = ["local"],
     visibility = ["//visibility:public"],
     deps = [
         "@crates//:nix",

@@ -195,6 +195,7 @@ rust_test(
     },
     env_inherit = ["PATH"],
     rustc_env = {"CARGO_BIN_EXE_d2b-activation-helper": "$(rootpath :d2b-activation-helper)"},
+    tags = ["local"],
     visibility = ["//visibility:public"],
     deps = ["@crates//:serde_json"],
 )

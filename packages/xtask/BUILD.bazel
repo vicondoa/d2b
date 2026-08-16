@@ -112,6 +112,7 @@ rust_test(
     },
     env_inherit = ["D2B_REPO_ROOT", "PATH"],
     rustc_env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
+    tags = ["local"],
     visibility = ["//visibility:public"],
     deps = ["@crates//:serde_json"],
 )
@@ -136,6 +137,7 @@ rust_test(
     env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
     env_inherit = ["D2B_REPO_ROOT", "PATH"],
     rustc_env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
+    tags = ["local"],
     visibility = ["//visibility:public"],
     deps = ["@crates//:serde_json"],
 )
@@ -156,6 +158,7 @@ rust_test(
     env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
     env_inherit = ["D2B_REPO_ROOT", "PATH"],
     rustc_env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
+    tags = ["local"],
     visibility = ["//visibility:public"],
     deps = ["@crates//:serde_json"],
 )
@@ -230,6 +233,7 @@ rust_test(
     env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
     env_inherit = ["PATH"],
     rustc_env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
+    tags = ["local"],
     visibility = ["//visibility:public"],
     deps = ["@crates//:nix"],
 )
@@ -245,6 +249,7 @@ rust_test(
     env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
     env_inherit = ["PATH"],
     rustc_env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
+    tags = ["local"],
     visibility = ["//visibility:public"],
 )
 
@@ -259,6 +264,7 @@ rust_test(
     env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
     env_inherit = ["PATH"],
     rustc_env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
+    tags = ["local"],
     visibility = ["//visibility:public"],
 )
 
@@ -302,6 +308,7 @@ rust_test(
     },
     env_inherit = ["D2B_REPO_ROOT", "PATH"],
     rustc_env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
+    tags = ["local"],
     deps = ["@crates//:serde_json"],
 )
 
@@ -377,6 +384,7 @@ rust_test(
         "PATH",
     ],
     rustc_env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
+    tags = ["local"],
     visibility = ["//visibility:public"],
     deps = ["@crates//:serde_json"],
 )

@@ -100,5 +100,6 @@ filegroup(
         ],
         allow_empty = True,
     ),
+    tags = ["local"],
     visibility = ["//visibility:public"],
 )
