@@ -135,7 +135,7 @@ pub struct QemuMediaDependencies {
     pub display_ref: Option<ResourceRef>,
     /// Controller-created runtime Volume is Ready.
     pub runtime_volume_ready: bool,
-    /// Elapsed seconds since runner launch while waiting for QMP.
+    /// Elapsed seconds in the current initial QMP greeting wait.
     pub qmp_elapsed_seconds: u32,
 }
 
@@ -211,6 +211,8 @@ pub struct QemuMediaRecoveryState {
     pub expected_identity: Option<ProcessIdentity>,
     /// Whether authority was reserved.
     pub authority_reserved: bool,
+    /// Whether the pause-at-boot initial state was observed.
+    pub initial_pause_observed: bool,
 }
 
 /// QEMU media lifecycle controller.
@@ -223,6 +225,8 @@ pub struct QemuMediaController<E> {
     expected_identity: Option<ProcessIdentity>,
     finalizer_installed: bool,
     authority_reserved: bool,
+    initial_qmp_wait_pending: bool,
+    initial_pause_observed: bool,
     pidfd_opened: bool,
     media_closed: bool,
     process_stopped: bool,
@@ -255,6 +259,8 @@ impl<E> QemuMediaController<E> {
             expected_identity: None,
             finalizer_installed: true,
             authority_reserved: false,
+            initial_qmp_wait_pending: false,
+            initial_pause_observed: false,
             pidfd_opened: false,
             media_closed: false,
             process_stopped: false,
@@ -286,6 +292,7 @@ impl<E> QemuMediaController<E> {
             finalizer_installed: self.finalizer_installed,
             expected_identity: self.expected_identity.clone(),
             authority_reserved: self.authority_reserved,
+            initial_pause_observed: self.initial_pause_observed,
         }
     }
 
@@ -302,6 +309,8 @@ impl<E> QemuMediaController<E> {
         self.expected_identity = recovery.expected_identity;
         self.authority_reserved =
             recovery.authority_reserved && recovery.phase != QemuMediaPhase::Finalized;
+        self.initial_qmp_wait_pending = false;
+        self.initial_pause_observed = recovery.initial_pause_observed;
         self.pidfd_opened = false;
         self.media_closed = false;
         self.process_stopped = recovery.phase == QemuMediaPhase::Finalized;
@@ -316,6 +325,7 @@ impl<E> QemuMediaController<E> {
         self.phase = QemuMediaPhase::Ready;
         self.finalizer_installed = true;
         self.authority_reserved = true;
+        self.initial_pause_observed = self.settings.pause_at_boot;
     }
 }
 
@@ -391,12 +401,15 @@ impl<E: QemuMediaEffectPort> QemuMediaController<E> {
                 }
                 self.pidfd_opened = true;
                 self.expected_identity = Some(candidate.clone());
+                self.initial_qmp_wait_pending = true;
                 candidate
             }
         };
 
         if !dependencies.qmp_ready {
-            if dependencies.qmp_elapsed_seconds >= self.config.qmp_ready_timeout_seconds {
+            if self.initial_qmp_wait_pending
+                && dependencies.qmp_elapsed_seconds >= self.config.qmp_ready_timeout_seconds
+            {
                 if effect.stop(&identity).is_ok() && matches!(effect.observe(), Ok(None)) {
                     self.process_stopped = true;
                     if self.authority_reserved && !self.authority_released {
@@ -408,9 +421,14 @@ impl<E: QemuMediaEffectPort> QemuMediaController<E> {
                 self.phase = QemuMediaPhase::Failed;
                 return Err(QemuMediaError::QmpNotReady);
             }
-            self.phase = QemuMediaPhase::WaitingQmp;
+            self.phase = if self.initial_qmp_wait_pending {
+                QemuMediaPhase::WaitingQmp
+            } else {
+                QemuMediaPhase::Degraded
+            };
             return Ok(QemuMediaReconcileOutcome::Retry { after_ms: 250 });
         }
+        self.initial_qmp_wait_pending = false;
         let Some(qmp_status) = dependencies.qmp_status else {
             self.phase = QemuMediaPhase::WaitingQmp;
             return Ok(QemuMediaReconcileOutcome::Retry { after_ms: 250 });
@@ -423,14 +441,17 @@ impl<E: QemuMediaEffectPort> QemuMediaController<E> {
             QmpVmStatus::Paused if !self.settings.pause_at_boot => {
                 effect.continue_guest()?;
             }
-            QmpVmStatus::Running if self.settings.pause_at_boot => {
+            QmpVmStatus::Paused => {
+                self.initial_pause_observed = true;
+            }
+            QmpVmStatus::Running if self.settings.pause_at_boot && !self.initial_pause_observed => {
                 self.phase = QemuMediaPhase::Degraded;
                 return Err(QemuMediaError::QmpNotReady);
             }
-            QmpVmStatus::Paused | QmpVmStatus::Running => {}
+            QmpVmStatus::Running => {}
         }
         self.expected_identity = Some(identity);
-        self.phase = if self.settings.pause_at_boot {
+        self.phase = if self.settings.pause_at_boot && matches!(qmp_status, QmpVmStatus::Paused) {
             QemuMediaPhase::PausedAtBoot
         } else {
             QemuMediaPhase::Ready

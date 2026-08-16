@@ -135,6 +135,68 @@ fn ready_requires_process_device_and_qmp_health() {
 }
 
 #[test]
+fn pause_at_boot_is_initial_proof_then_running_is_ready() {
+    let mut controller = controller();
+    let mut effect = FakeEffect::default();
+    let device = DeviceObservation {
+        device_ref: ResourceRef::parse("Device/host-kvm").unwrap(),
+        phase: DevicePhase::Ready,
+        owner_ref: Some(ResourceRef::parse("Guest/media-vm").unwrap()),
+        platform: PlatformClass::X86_64Linux,
+        authority_key: [4; 32],
+        process_identity: Some("qemu-media-runner".to_owned()),
+        media_contract: "qemu-media/v1".to_owned(),
+    };
+    let mut dependencies = d2b_provider_runtime_qemu_media::QemuMediaDependencies::ready(device);
+
+    assert_eq!(
+        controller.reconcile(&dependencies, &mut effect).unwrap(),
+        QemuMediaReconcileOutcome::Ready
+    );
+    assert_eq!(controller.phase(), QemuMediaPhase::PausedAtBoot);
+
+    dependencies.qmp_status = Some(d2b_provider_runtime_qemu_media::QmpVmStatus::Running);
+    assert_eq!(
+        controller.reconcile(&dependencies, &mut effect).unwrap(),
+        QemuMediaReconcileOutcome::Ready
+    );
+    assert_eq!(controller.phase(), QemuMediaPhase::Ready);
+    assert_eq!(
+        effect.events,
+        vec!["reserve-device", "launch", "open-pidfd"]
+    );
+}
+
+#[test]
+fn pause_at_boot_rejects_running_before_pause_proof() {
+    let mut controller = controller();
+    let mut effect = FakeEffect::default();
+    let device = DeviceObservation {
+        device_ref: ResourceRef::parse("Device/host-kvm").unwrap(),
+        phase: DevicePhase::Ready,
+        owner_ref: Some(ResourceRef::parse("Guest/media-vm").unwrap()),
+        platform: PlatformClass::X86_64Linux,
+        authority_key: [4; 32],
+        process_identity: Some("qemu-media-runner".to_owned()),
+        media_contract: "qemu-media/v1".to_owned(),
+    };
+    let mut dependencies = d2b_provider_runtime_qemu_media::QemuMediaDependencies::ready(device);
+    dependencies.qmp_status = Some(d2b_provider_runtime_qemu_media::QmpVmStatus::Running);
+
+    assert_eq!(
+        controller
+            .reconcile(&dependencies, &mut effect)
+            .unwrap_err(),
+        QemuMediaError::QmpNotReady
+    );
+    assert_eq!(controller.phase(), QemuMediaPhase::Degraded);
+    assert_eq!(
+        effect.events,
+        vec!["reserve-device", "launch", "open-pidfd"]
+    );
+}
+
+#[test]
 fn matching_restart_process_is_adopted_without_launch() {
     let mut controller = controller();
     let identity = ProcessIdentity::for_test("qemu-media-runner");
@@ -189,6 +251,52 @@ fn finalization_closes_media_before_releasing_authority() {
 #[test]
 fn qmp_timeout_retains_authority_until_process_exit_is_proven() {
     let mut controller = controller();
+    let mut effect = FakeEffect::default();
+    let device = DeviceObservation {
+        device_ref: ResourceRef::parse("Device/host-kvm").unwrap(),
+        phase: DevicePhase::Ready,
+        owner_ref: Some(ResourceRef::parse("Guest/media-vm").unwrap()),
+        platform: PlatformClass::X86_64Linux,
+        authority_key: [9; 32],
+        process_identity: Some("qemu-media-runner".to_owned()),
+        media_contract: "qemu-media/v1".to_owned(),
+    };
+    let mut dependencies = d2b_provider_runtime_qemu_media::QemuMediaDependencies::ready(device);
+    dependencies.qmp_ready = false;
+    dependencies.qmp_status = None;
+    dependencies.qmp_elapsed_seconds = 30;
+
+    assert_eq!(
+        controller
+            .reconcile(&dependencies, &mut effect)
+            .unwrap_err(),
+        QemuMediaError::QmpNotReady
+    );
+    assert_eq!(
+        effect.events,
+        vec!["reserve-device", "launch", "open-pidfd", "stop"]
+    );
+    assert!(controller.recovery_state().authority_reserved);
+
+    effect.observed = None;
+    controller.finalize(&mut effect).unwrap();
+    assert_eq!(
+        effect.events,
+        vec![
+            "reserve-device",
+            "launch",
+            "open-pidfd",
+            "stop",
+            "close-media",
+            "release-device",
+            "delete-volume",
+        ]
+    );
+}
+
+#[test]
+fn adopted_runner_qmp_timeout_uses_health_retry_not_launch_age() {
+    let mut controller = controller();
     let identity = ProcessIdentity::for_test("qemu-media-runner");
     let mut effect = FakeEffect {
         observed: Some(identity.clone()),
@@ -210,27 +318,12 @@ fn qmp_timeout_retains_authority_until_process_exit_is_proven() {
     dependencies.qmp_elapsed_seconds = 30;
 
     assert_eq!(
-        controller
-            .reconcile(&dependencies, &mut effect)
-            .unwrap_err(),
-        QemuMediaError::QmpNotReady
+        controller.reconcile(&dependencies, &mut effect).unwrap(),
+        QemuMediaReconcileOutcome::Retry { after_ms: 250 }
     );
-    assert_eq!(effect.events, vec!["reserve-device", "open-pidfd", "stop"]);
+    assert_eq!(controller.phase(), QemuMediaPhase::Degraded);
+    assert_eq!(effect.events, vec!["reserve-device", "open-pidfd"]);
     assert!(controller.recovery_state().authority_reserved);
-
-    effect.observed = None;
-    controller.finalize(&mut effect).unwrap();
-    assert_eq!(
-        effect.events,
-        vec![
-            "reserve-device",
-            "open-pidfd",
-            "stop",
-            "close-media",
-            "release-device",
-            "delete-volume",
-        ]
-    );
 }
 
 #[test]
@@ -240,6 +333,7 @@ fn finalized_recovery_state_cannot_retain_device_authority() {
         finalizer_installed: false,
         expected_identity: None,
         authority_reserved: true,
+        initial_pause_observed: false,
     };
     let restored = controller()
         .restore_recovery_state(recovery)

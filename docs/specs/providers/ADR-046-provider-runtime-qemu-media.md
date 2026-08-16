@@ -140,7 +140,7 @@ It is never specified directly in Nix.
 | --- | --- | --- | --- | --- | --- |
 | `controllerExecutionRef` | ResourceRef | **yes** | - | `Host/<n>` | Host on which the runtime-qemu-media controller Process runs |
 | `qemuBinaryArtifactId` | string | yes | `"qemu-system-x86-64"` | `^[a-z][a-z0-9-]*$` | Artifact catalog ID for the QEMU binary closure |
-| `qmpReadyTimeoutSeconds` | u32 | no | `30` | 5-300 | Deadline for initial QMP greeting after process start |
+| `qmpReadyTimeoutSeconds` | u32 | no | `30` | 5-300 | Deadline for the current initial QMP greeting wait after a fresh launch |
 | `qmpOperationTimeoutSeconds` | u32 | no | `60` | 5-300 | Per-QMP-command timeout |
 | `pausedAtBootDefault` | bool | no | `true` | - | Default `pauseAtBoot` if not set in Guest spec.provider.settings |
 | `displayProviderRef` | ResourceRef? | no | `null` | `Provider/<n>` | Provider for WaylandSession resources; required when any Guest sets `displayWindow: true` |
@@ -1014,6 +1014,10 @@ tmpfs is unmounted only after the runner Process pidfd signals exit.
    the Process Provider delivers the validated `qmp` endpoint connection
    attachment (an owned fd; not a raw socket path) to the controller via the
    ProviderSupervisor ComponentSession channel.
+
+   The greeting deadline applies to this current wait for a freshly launched
+   runner. An adopted runner with temporary QMP unavailability remains under
+   health retry and is not stopped solely because its process is old.
 
 10. **Pause-at-boot (if pauseAtBoot):** Controller receives the QMP
     attachment. QEMU starts in `-S` (paused) state. Controller records
