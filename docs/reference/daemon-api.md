@@ -75,17 +75,17 @@ compatibility surface.
 
 | Type | Kind | Rust definition | Shape |
 | --- | --- | --- | --- |
-| `FeatureFlag` | struct | [`FeatureFlag`](../../packages/d2b-contracts/src/lib.rs#L110) | empty struct |
+| `FeatureFlag` | struct | [`FeatureFlag`](../../packages/d2b-contracts/src/lib.rs#L111) | empty struct |
 | `GuestCapability` | enum | [`GuestCapability`](../../packages/d2b-contracts/src/guest_wire.rs#L351) | `Health`; `Capabilities`; `ExecAttached`; `ExecDetached`; `ExecTty`; `ExecLogs`; `TtyResize`; `Signals`; `ReadGuestFile`; `UsbipImport`; `ShellAttached`; `ShellManagement`; `ShellForceAttach`; `UsbipStatus`; `SystemActivation`; `AudioStatus`; `AudioSet` |
-| `Hello` | struct | [`Hello`](../../packages/d2b-contracts/src/lib.rs#L191) | struct { `client_version`: `SemverRange`; `supported_features`: `Vec<FeatureFlag>` } |
-| `HelloOk` | struct | [`HelloOk`](../../packages/d2b-contracts/src/lib.rs#L199) | struct { `server_version`: `Version`; `selected_version`: `Version`; `capabilities`: `Vec<FeatureFlag>` } |
-| `HelloRejected` | struct | [`HelloRejected`](../../packages/d2b-contracts/src/lib.rs#L207) | struct { `reason`: `HelloRejectedReason` } |
-| `HelloRejectedReason` | enum | [`HelloRejectedReason`](../../packages/d2b-contracts/src/lib.rs#L213) | `VersionMismatch`; `CapabilityNegotiationFailed`; `InternalError` |
+| `Hello` | struct | [`Hello`](../../packages/d2b-contracts/src/lib.rs#L192) | struct { `client_version`: `SemverRange`; `supported_features`: `Vec<FeatureFlag>` } |
+| `HelloOk` | struct | [`HelloOk`](../../packages/d2b-contracts/src/lib.rs#L200) | struct { `server_version`: `Version`; `selected_version`: `Version`; `capabilities`: `Vec<FeatureFlag>` } |
+| `HelloRejected` | struct | [`HelloRejected`](../../packages/d2b-contracts/src/lib.rs#L208) | struct { `reason`: `HelloRejectedReason` } |
+| `HelloRejectedReason` | enum | [`HelloRejectedReason`](../../packages/d2b-contracts/src/lib.rs#L214) | `VersionMismatch`; `CapabilityNegotiationFailed`; `InternalError` |
 | `HelloRequest` | struct | [`HelloRequest`](../../packages/d2b-contracts/src/broker_wire.rs#L1090) | struct { `client_version`: `String`; `supported_features`: `Vec<String>` } |
 | `HelloRequest` | struct | [`HelloRequest`](../../packages/d2b-contracts/src/guest_wire.rs#L581) | struct { `metadata`: `GuestRequestMetadata`; `host_nonce`: `GuestNonce`; `transcript_version`: `u32` } |
 | `HelloResponse` | struct | [`HelloResponse`](../../packages/d2b-contracts/src/broker_wire.rs#L1221) | struct { `server_version`: `String`; `selected_version`: `String`; `capabilities`: `Vec<String>` } |
 | `HelloResponse` | struct | [`HelloResponse`](../../packages/d2b-contracts/src/guest_wire.rs#L589) | struct { `guest_nonce`: `GuestNonce`; `guest_boot_id`: `GuestBootId`; `protocol_version`: `u32` } |
-| `KnownFeatureFlag` | enum | [`KnownFeatureFlag`](../../packages/d2b-contracts/src/lib.rs#L163) | `TypedErrors`; `ManifestV04`; `StatusCheckBridges`; `ExportBrokerAudit`; `ConfiguredLaunchV1`; `UnsafeLocalProviderV1` |
+| `KnownFeatureFlag` | enum | [`KnownFeatureFlag`](../../packages/d2b-contracts/src/lib.rs#L164) | `TypedErrors`; `ManifestV04`; `StatusCheckBridges`; `ExportBrokerAudit`; `ConfiguredLaunchV1`; `UnsafeLocalProviderV1` |
 <!-- END AUTO-GENERATED: handshake-types -->
 
 ## Public socket
@@ -555,7 +555,7 @@ running live guest activation.
 | `ExecCancelReason` | enum | [`ExecCancelReason`](../../packages/d2b-contracts/src/guest_wire.rs#L1480) | `ClientDisconnect`; `UserRequested`; `SlowConsumer`; `ProtocolError` |
 | `HandoffCallerRole` | enum | [`HandoffCallerRole`](../../packages/d2b-contracts/src/host_generation.rs#L131) | `Lifecycle`; `Admin` |
 | `HandoffState` | enum | [`HandoffState`](../../packages/d2b-contracts/src/host_generation.rs#L175) | `Recorded`; `Validated`; `Mutating`; `Transferred`; `Completed`; `RolledBack`; `Refused` |
-| `KnownFeatureFlag` | enum | [`KnownFeatureFlag`](../../packages/d2b-contracts/src/lib.rs#L163) | `TypedErrors`; `ManifestV04`; `StatusCheckBridges`; `ExportBrokerAudit`; `ConfiguredLaunchV1`; `UnsafeLocalProviderV1` |
+| `KnownFeatureFlag` | enum | [`KnownFeatureFlag`](../../packages/d2b-contracts/src/lib.rs#L164) | `TypedErrors`; `ManifestV04`; `StatusCheckBridges`; `ExportBrokerAudit`; `ConfiguredLaunchV1`; `UnsafeLocalProviderV1` |
 | `WorkloadOp` | enum | [`WorkloadOp`](../../packages/d2b-contracts/src/public_wire.rs#L197) | `List` - (WorkloadListArgs); `Status` - (WorkloadStatusArgs); `LauncherExec` - (LauncherExecArgs) |
 | `WorkloadAvailability` | enum | [`WorkloadAvailability`](../../packages/d2b-contracts/src/public_wire.rs#L237) | `Ready`; `HelperUnavailable`; `HelperStale`; `UserManagerUnavailable`; `GraphicalSessionInactive`; `WaylandUnavailable`; `ProxyUnavailable`; `Degraded` |
 | `GraphicalLaunchPosture` | enum | [`GraphicalLaunchPosture`](../../packages/d2b-contracts/src/public_wire.rs#L251) | `Proxied`; `NotApplicable`; `GraphicalSessionInactive`; `WaylandUnavailable`; `ProxyUnavailable` |
@@ -604,6 +604,11 @@ running live guest activation.
 | `DaemonToUnsafeLocalHelper` | enum | [`DaemonToUnsafeLocalHelper`](../../packages/d2b-contracts/src/unsafe_local_wire.rs#L975) | `HelloAccepted` - (HelperHelloAccepted); `Heartbeat` - (HelperHeartbeat); `Launch` - (HelperLaunchRequest); `Shell` - (HelperShellRequest) |
 | `UnsafeLocalHelperToDaemon` | enum | [`UnsafeLocalHelperToDaemon`](../../packages/d2b-contracts/src/unsafe_local_wire.rs#L984) | `Hello` - (HelperHello); `Snapshot` - (HelperSnapshot); `Heartbeat` - (HelperHeartbeat); `Operation` - (HelperOperationResult); `TerminalReady` - (HelperTerminalReady); `Shell` - (HelperShellResponse); `Rejected` - (HelperOperationRejected) |
 | `UsbipClaimSource` | enum | [`UsbipClaimSource`](../../packages/d2b-contracts/src/usbip.rs#L99) | `Declared` - struct { `firewall_ref`: `String`; `bind_ref`: `String` }; `Explicit` |
+| `FirewallAction` | enum | [`FirewallAction`](../../packages/d2b-contracts/src/usbip_effect_port.rs#L175) | `Apply`; `Remove` |
+| `KernelModuleClass` | enum | [`KernelModuleClass`](../../packages/d2b-contracts/src/usbip_effect_port.rs#L277) | `UsbipHost` |
+| `DeviceProbeResult` | enum | [`DeviceProbeResult`](../../packages/d2b-contracts/src/usbip_effect_port.rs#L284) | `Present`; `Missing`; `Mismatch`; `Ambiguous` |
+| `TransientDetail` | enum | [`TransientDetail`](../../packages/d2b-contracts/src/usbip_effect_port.rs#L297) | `EffectUnavailable`; `StaleGeneration`; `DrainInProgress` |
+| `FirewallConfirmation` | enum | [`FirewallConfirmation`](../../packages/d2b-contracts/src/usbip_effect_port.rs#L381) | `Applied` - struct { `token`: `FirewallToken`; `digest`: `FirewallDigest` }; `Removed`; `ValidatedAbsent` |
 <!-- END AUTO-GENERATED: enum-variants -->
 
 ## Error envelope
@@ -669,6 +674,7 @@ the failure class, for example `host check`, `audit`, `status`, or
 | `AudioErrorKind` | enum | [`AudioErrorKind`](../../packages/d2b-contracts/src/public_wire.rs#L1849) | `ProviderMisconfigured`; `VmNotFound`; `EnforcementUnavailable`; `AudioNotEnabled`; `InternalError` |
 | `AudioVmError` | struct | [`AudioVmError`](../../packages/d2b-contracts/src/public_wire.rs#L1950) | struct { `vm`: `String`; `kind`: `AudioErrorKind`; `remediation`: `Option<String>` } |
 | `BusIdError` | enum | [`BusIdError`](../../packages/d2b-contracts/src/usbip.rs#L22) | `Empty`; `Invalid`; `TooLong` - struct { `max`: `usize` } |
+| `UsbipEffectError` | enum | [`UsbipEffectError`](../../packages/d2b-contracts/src/usbip_effect_port.rs#L320) | `WrongZone`; `PhysicalBackingConflict`; `HostModuleConflict`; `RelayAuthorityConflict`; `DeviceUnavailable`; `AntiSpoofFailed`; `EffectRejected`; `ForeignOwnership`; `FirewallGenerationMismatch`; `Transient` - (TransientDetail) |
 <!-- END AUTO-GENERATED: error-envelope -->
 
 ## Audit

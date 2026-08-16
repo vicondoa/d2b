@@ -1362,6 +1362,10 @@ version = "0.0.0-bootstrap"
 [[package]]
 name = "d2b-provider-shell-terminal"
 version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-contracts",
+ "d2b-process-conformance",
+]
 
 [[package]]
 name = "d2b-provider-supervisor"
@@ -1731,6 +1735,7 @@ dependencies = [
  "d2b-provider-audio-pipewire",
  "d2b-provider-device-tpm",
  "d2b-provider-network-local",
+ "d2b-provider-device-usbip",
  "d2b-provider-runtime-azure-container-apps",
  "d2b-provider-supervisor",
  "d2b-provider-system-core",

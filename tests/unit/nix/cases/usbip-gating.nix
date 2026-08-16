@@ -128,9 +128,14 @@ let
     ({ lib, ... }: {
       d2b.site.yubikey.enable = lib.mkForce true;
       d2b.vms.corp-vm.usbip.yubikey = true;
+      d2b.vms.corp-vm.usbip.busids = [ "1-2" ];
       d2b.vms.corp-vm.guest.control.enable = true;
     })
   ];
+
+  hostData = sys: sys.config.d2b._bundle.hostJson.data;
+  envData = sys: name:
+    lib.findFirst (entry: entry.env == name) null (hostData sys).environments;
 
   multiEnv = mkEval [ multiEnvModule ];
   multiFw = fwOf multiEnv;
@@ -267,6 +272,14 @@ in
   "usbip-gating/enabled-backend-firewall-rule-absent" = {
     expr = lib.hasInfix "--dport 3241" (fwOf enabled);
     expected = false;
+  };
+  "usbip-gating/enabled-host-busid-claim-emitted" = {
+    expr = (builtins.head (envData enabled "work").usbipBusidLocks).busIds;
+    expected = [ "1-2" ];
+  };
+  "usbip-gating/site-disabled-host-busid-claim-absent" = {
+    expr = (envData vmEnabledSiteDisabled "work").usbipBusidLocks;
+    expected = [ ];
   };
 
   # --- usbip-multi-env-scoped: host enabled, dev-vm opts in, work-vm
