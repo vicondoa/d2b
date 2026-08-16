@@ -9,7 +9,7 @@ use std::{
 const PIN_REL: &str = "tests/golden/pinned/process-marker-legacy-paths.json";
 const SCHEMA_VERSION: u32 = 1;
 const FROZEN_UNIVERSE_SHA256: &str =
-    "f3cf1b92ddafdb734a89c433ccc641a764dd1d98e8508c5c756e8f4d9714e229";
+    "0f6899e939fd8e0b49f41b56a0221f33552d79348adc2853927d338e610f8f34";
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
