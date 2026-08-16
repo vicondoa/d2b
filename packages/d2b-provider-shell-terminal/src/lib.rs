@@ -31,8 +31,8 @@ pub use resources::{
 };
 pub use service::{
     AttachReceipt, AttachRequest, Attachment, CONTROLLER_SERVICE, OpenSessionRequest,
-    OpenSessionResult, SUPERVISOR_SERVICE, SessionCapability, SessionSupervisor,
-    ShellTerminalController, TERMINAL_STREAM,
+    OpenSessionResult, PoolAttachmentAuthority, SUPERVISOR_SERVICE, SessionAuthority,
+    SessionCapability, SessionSupervisor, ShellTerminalController, TERMINAL_STREAM,
 };
 pub use session::{
     AdoptionDecision, OutputRing, SupervisorCandidate, SupervisorIdentity, adopt_supervisor,

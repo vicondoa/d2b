@@ -1,14 +1,13 @@
 //! Pool/session controller lifecycle without persistent Provider state.
 
-use std::{
-    collections::BTreeMap,
-    sync::{Arc, Mutex},
-};
+use std::{collections::BTreeMap, sync::Arc};
 
 use crate::{
     Authorizer, ShellPool, ShellSession, ShellTerminalError, Subject,
     resources::validate_name,
-    service::supervisor::{PoolAttachmentBudget, SessionCapability, SessionSupervisor},
+    service::supervisor::{
+        PoolAttachmentAuthority, SessionAuthority, SessionCapability, SessionSupervisor,
+    },
     session::{AdoptionDecision, SupervisorCandidate, SupervisorIdentity, adopt_supervisor},
 };
 
@@ -45,8 +44,8 @@ pub struct OpenSessionResult {
     session: ShellSession,
     supervisor_generation: u64,
     capability: SessionCapability,
-    attachment_budget: Arc<PoolAttachmentBudget>,
-    generation: Arc<Mutex<u64>>,
+    attachment_authority: PoolAttachmentAuthority,
+    authority: Arc<SessionAuthority>,
 }
 
 impl OpenSessionResult {
@@ -65,6 +64,16 @@ impl OpenSessionResult {
         self.capability.clone()
     }
 
+    /// Return the authoritative session-generation fence for restart adoption.
+    pub fn recovery_authority(&self) -> Arc<SessionAuthority> {
+        Arc::clone(&self.authority)
+    }
+
+    /// Return the shared pool attachment authority for restart adoption.
+    pub fn pool_attachment_authority(&self) -> PoolAttachmentAuthority {
+        self.attachment_authority.clone()
+    }
+
     /// Build an in-memory supervisor model once the process adapter proves identity.
     pub fn start_supervisor(
         &self,
@@ -73,19 +82,14 @@ impl OpenSessionResult {
         if identity.generation() != self.supervisor_generation {
             return Err(ShellTerminalError::StaleSessionGeneration);
         }
-        if *self
-            .generation
-            .lock()
-            .map_err(|_| ShellTerminalError::StaleSessionGeneration)?
-            != self.supervisor_generation
-        {
+        if !self.authority.matches(self.supervisor_generation)? {
             return Err(ShellTerminalError::StaleSessionGeneration);
         }
         Ok(SessionSupervisor::new(
             self.session.clone(),
             identity,
-            Arc::clone(&self.attachment_budget),
-            Arc::clone(&self.generation),
+            self.attachment_authority.clone(),
+            Arc::clone(&self.authority),
         ))
     }
 }
@@ -94,9 +98,9 @@ impl OpenSessionResult {
 #[derive(Debug, Default)]
 pub struct ShellTerminalController {
     pools: BTreeMap<String, ShellPool>,
-    attachment_budgets: BTreeMap<String, Arc<PoolAttachmentBudget>>,
+    attachment_authorities: BTreeMap<String, PoolAttachmentAuthority>,
     sessions: BTreeMap<String, ShellSession>,
-    session_generations: BTreeMap<String, Arc<Mutex<u64>>>,
+    session_authorities: BTreeMap<String, Option<Arc<SessionAuthority>>>,
     next_capability: u64,
 }
 
@@ -120,12 +124,9 @@ impl ShellTerminalController {
             return Err(ShellTerminalError::CapacityExceeded);
         }
         let pool_name = pool.name().to_owned();
-        self.attachment_budgets.insert(
+        self.attachment_authorities.insert(
             pool_name.clone(),
-            Arc::new(PoolAttachmentBudget::restored(
-                pool.spec().max_attached(),
-                attached_streams,
-            )?),
+            PoolAttachmentAuthority::restored(pool.spec().max_attached(), attached_streams)?,
         );
         self.pools.insert(pool_name, pool);
         Ok(())
@@ -137,10 +138,28 @@ impl ShellTerminalController {
         pool_name: &str,
         attached_streams: u32,
     ) -> Result<(), ShellTerminalError> {
-        self.attachment_budgets
+        self.attachment_authorities
             .get(pool_name)
             .ok_or(ShellTerminalError::CapacityExceeded)?
             .reconcile_retained_attachments(attached_streams)
+    }
+
+    /// Restore a pool while preserving the live adopted supervisors' quota.
+    pub fn restore_pool_with_authority(
+        &mut self,
+        pool: ShellPool,
+        attachment_authority: PoolAttachmentAuthority,
+    ) -> Result<(), ShellTerminalError> {
+        if self.pools.contains_key(pool.name())
+            || !attachment_authority.has_capacity(pool.spec().max_attached())
+        {
+            return Err(ShellTerminalError::CapacityExceeded);
+        }
+        let pool_name = pool.name().to_owned();
+        self.attachment_authorities
+            .insert(pool_name.clone(), attachment_authority);
+        self.pools.insert(pool_name, pool);
+        Ok(())
     }
 
     /// Restore a reconciled session before the controller admits new sessions.
@@ -153,6 +172,7 @@ impl ShellTerminalController {
         session: ShellSession,
         expected_identity: &SupervisorIdentity,
         candidates: &[SupervisorCandidate],
+        authority: Arc<SessionAuthority>,
     ) -> Result<AdoptionDecision, ShellTerminalError> {
         if !self.pools.contains_key(session.pool_name())
             || self.sessions.contains_key(session.name())
@@ -161,10 +181,15 @@ impl ShellTerminalController {
         }
         let decision = adopt_supervisor(session.name(), expected_identity, candidates);
         let session_name = session.name().to_owned();
-        self.session_generations.insert(
-            session_name.clone(),
-            Arc::new(Mutex::new(expected_identity.generation())),
-        );
+        let authority = if decision == AdoptionDecision::Adopted
+            && authority.matches(expected_identity.generation())?
+        {
+            Some(authority)
+        } else {
+            None
+        };
+        self.session_authorities
+            .insert(session_name.clone(), authority);
         self.sessions.insert(session_name, session);
         Ok(decision)
     }
@@ -185,25 +210,19 @@ impl ShellTerminalController {
             .get(session.pool_name())
             .ok_or(ShellTerminalError::CapacityExceeded)?;
         Authorizer::authorize(subject, pool)?;
-        let generation = Arc::clone(
-            self.session_generations
+        let authority = Arc::clone(
+            self.session_authorities
                 .get(session_name)
-                .ok_or(ShellTerminalError::StaleSessionGeneration)?,
+                .and_then(Option::as_ref)
+                .ok_or(ShellTerminalError::SupervisorAmbiguous)?,
         );
-        let mut current = generation
-            .lock()
-            .map_err(|_| ShellTerminalError::StaleSessionGeneration)?;
-        *current = current
-            .checked_add(1)
-            .ok_or(ShellTerminalError::StaleSessionGeneration)?;
-        let supervisor_generation = *current;
-        drop(current);
+        let supervisor_generation = authority.advance()?;
         self.next_capability = self.next_capability.saturating_add(1);
-        let attachment_budget = Arc::clone(
-            self.attachment_budgets
-                .get(session.pool_name())
-                .ok_or(ShellTerminalError::CapacityExceeded)?,
-        );
+        let attachment_authority = self
+            .attachment_authorities
+            .get(session.pool_name())
+            .cloned()
+            .ok_or(ShellTerminalError::CapacityExceeded)?;
         Ok(OpenSessionResult {
             capability: SessionCapability::new(
                 self.next_capability,
@@ -212,8 +231,8 @@ impl ShellTerminalController {
             ),
             session,
             supervisor_generation,
-            attachment_budget,
-            generation,
+            attachment_authority,
+            authority,
         })
     }
 
@@ -227,11 +246,11 @@ impl ShellTerminalController {
             .pools
             .get(&request.pool_name)
             .ok_or(ShellTerminalError::CapacityExceeded)?;
-        let attachment_budget = Arc::clone(
-            self.attachment_budgets
-                .get(&request.pool_name)
-                .ok_or(ShellTerminalError::CapacityExceeded)?,
-        );
+        let attachment_authority = self
+            .attachment_authorities
+            .get(&request.pool_name)
+            .cloned()
+            .ok_or(ShellTerminalError::CapacityExceeded)?;
         Authorizer::authorize(subject, pool)?;
         if self.session_count(pool.name()) >= pool.active_session_capacity() {
             return Err(ShellTerminalError::CapacityExceeded);
@@ -246,18 +265,18 @@ impl ShellTerminalController {
             request.session_name,
             request.output_ring_capacity,
         )?;
-        let generation = Arc::new(Mutex::new(1));
+        let authority = Arc::new(SessionAuthority::new(1));
         self.next_capability = self.next_capability.saturating_add(1);
         let result = OpenSessionResult {
             session: session.clone(),
             supervisor_generation: 1,
             capability: SessionCapability::new(self.next_capability, 1, resource_name.clone()),
-            attachment_budget,
-            generation: Arc::clone(&generation),
+            attachment_authority,
+            authority: Arc::clone(&authority),
         };
         self.sessions.insert(resource_name, session);
-        self.session_generations
-            .insert(result.session.name().to_owned(), generation);
+        self.session_authorities
+            .insert(result.session.name().to_owned(), Some(authority));
         Ok(result)
     }
 

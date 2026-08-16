@@ -52,9 +52,20 @@ fn restored_sessions_block_recreation_after_controller_restart() {
         .unwrap();
     let identity =
         SupervisorIdentity::new([1; 32], [2; 32], opened.supervisor_generation()).unwrap();
+    let mut old_supervisor = opened.start_supervisor(identity.clone()).unwrap();
+    let old_attachment = old_supervisor
+        .attach(
+            &admin,
+            d2b_provider_shell_terminal::AttachRequest::new(opened.supervisor_generation(), 0)
+                .unwrap(),
+        )
+        .unwrap()
+        .attachment();
 
     let mut recovered_controller = ShellTerminalController::default();
-    recovered_controller.insert_pool(pool()).unwrap();
+    recovered_controller
+        .restore_pool_with_authority(pool(), opened.pool_attachment_authority())
+        .unwrap();
     assert_eq!(
         recovered_controller
             .restore_session(
@@ -64,6 +75,7 @@ fn restored_sessions_block_recreation_after_controller_restart() {
                     opened.session().name(),
                     identity.clone(),
                 )],
+                opened.recovery_authority(),
             )
             .unwrap(),
         AdoptionDecision::Adopted
@@ -76,6 +88,43 @@ fn restored_sessions_block_recreation_after_controller_restart() {
         ),
         Err(d2b_provider_shell_terminal::ShellTerminalError::CapacityExceeded)
     ));
+    let restarted = recovered_controller
+        .restart_supervisor(&admin, opened.session().name())
+        .unwrap();
+    let mut new_supervisor = restarted
+        .start_supervisor(
+            SupervisorIdentity::new([3; 32], [4; 32], restarted.supervisor_generation()).unwrap(),
+        )
+        .unwrap();
+    assert!(matches!(
+        old_supervisor.attach(
+            &admin,
+            d2b_provider_shell_terminal::AttachRequest::new(opened.supervisor_generation(), 0,)
+                .unwrap(),
+        ),
+        Err(d2b_provider_shell_terminal::ShellTerminalError::StaleSessionGeneration)
+    ));
+    assert!(matches!(
+        new_supervisor.attach(
+            &admin,
+            d2b_provider_shell_terminal::AttachRequest::new(restarted.supervisor_generation(), 0,)
+                .unwrap(),
+        ),
+        Err(d2b_provider_shell_terminal::ShellTerminalError::CapacityExceeded)
+    ));
+    old_supervisor.detach(&admin, old_attachment).unwrap();
+    assert!(
+        new_supervisor
+            .attach(
+                &admin,
+                d2b_provider_shell_terminal::AttachRequest::new(
+                    restarted.supervisor_generation(),
+                    0,
+                )
+                .unwrap(),
+            )
+            .is_ok()
+    );
 }
 
 #[test]
