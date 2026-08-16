@@ -4517,6 +4517,37 @@
         "vmId"
       ],
       "properties": {
+        "attachmentGeneration": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceGeneration"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "attachmentId": {
+          "description": "Optional v3 attachment realization identity. Legacy host-prep callers omit these fields; Network Provider callers supply all three so the broker can adopt and generation-fence the persistent TAP on restart.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceUid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "networkGeneration": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceGeneration"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "roleId": {
           "type": "string"
         },

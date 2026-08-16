@@ -2365,19 +2365,21 @@ fn render_host_nft_script(host: &HostJson) -> String {
 }
 
 fn render_env_nft_subset(host: &HostJson, env: &NetEnv) -> String {
-    let bridge_ifname = resolved_ifname_for(host, &env.env, None, crate::host::TapRole::NetVmLan)
-        .unwrap_or_else(|| env.bridge.as_str().to_owned());
     let marker = format!(
         "d2b managed: {}:env:{}",
         host.nftables.ownership_id, env.env
     );
     let chain = format!("forward-{}", env.env);
+    let bridge_ifname = format!("br-{}-up", env.env);
     let mut buf = String::new();
     buf.push_str(&format!(
-        "table inet d2b {{\n  chain \"{chain}\" {{ type filter hook forward priority -5; policy drop; comment \"{marker}\";\n"
+        "table inet d2b {{\n  chain \"{chain}\" {{ comment \"{marker}\";\n"
     ));
     buf.push_str(&format!(
-        "    iifname \"{}\" ct state new accept comment \"{}\"\n",
+        "    ct state established,related accept comment \"{marker}\";\n",
+    ));
+    buf.push_str(&format!(
+        "    iifname \"{}\" ct state new accept comment \"{}\";\n",
         bridge_ifname, marker
     ));
     buf.push_str("  }\n}\n");
@@ -3429,6 +3431,25 @@ mod tests {
         let mut body = serde_json::to_vec_pretty(value).expect("serialize test json");
         body.push(b'\n');
         fs::write(path, body).expect("write test json");
+    }
+
+    #[test]
+    fn nft_projection_uses_existing_forward_hook_and_preserves_uplink_rules() {
+        let root = test_root("nft-projection");
+        let resolver = build_personal_dev_bundle(&root);
+        let intent = resolver
+            .find_nft_projection_intent(&intent_id_nft_projection_env("personal"))
+            .expect("personal nft projection intent");
+        let script = &intent.script_body;
+
+        assert!(script.contains("chain \"forward-personal\" { comment"));
+        assert!(script.contains("ct state established,related accept"));
+        assert!(script.contains("iifname \"br-personal-up\" ct state new accept"));
+        assert!(!script.contains("hook forward"));
+        assert!(!script.contains("policy drop"));
+        assert_eq!(script.matches("priority -5").count(), 0);
+
+        let _ = fs::remove_dir_all(root);
     }
 
     fn role_profile(uid: u32, gid: u32, writable_paths: &[&str], subtree: &str) -> RoleProfile {

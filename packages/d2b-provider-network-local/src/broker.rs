@@ -390,9 +390,9 @@ mod tests {
             execution_policy::BoundedToken,
             ifname::IfName,
             network::{
-                AttachmentGenerationFence, AttachmentHandle, EgressSpec,
-                ExternalAttachmentMode, ExternalAttachmentSpec, ExternalIpv4Spec, Ipv4Cidr,
-                IsolationSpec, MacvtapMode, NetworkSpec, SharingPolicy,
+                AttachmentGenerationFence, AttachmentHandle, EgressSpec, ExternalAttachmentMode,
+                ExternalAttachmentSpec, ExternalIpv4Spec, Ipv4Cidr, IsolationSpec, MacvtapMode,
+                NetworkSpec, SharingPolicy,
             },
         },
     };

@@ -3557,23 +3557,6 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                     reason: "attachment-realization-conflict",
                 });
             }
-            if req.attachment_id.is_some() {
-                let tap_intent = resolver
-                    .resolve_tap_intent(req.vm_id.as_str(), req.role_id.as_str())
-                    .ok_or(BrokerError::RequestValidation {
-                        operation: "CreatePersistentTap",
-                        reason: "attachment-realization-unavailable",
-                    })?;
-                crate::ops::network::persist_persistent_tap_realization(
-                    &config.state_dir,
-                    &req,
-                    &tap_intent.tap_ifname,
-                )
-                .map_err(|error| BrokerError::RequestValidation {
-                    operation: "CreatePersistentTap",
-                    reason: error.code(),
-                })?;
-            }
             let exec = live_exec(config);
             let outcome =
                 match crate::ops::tap::live_create_persistent_tap(&exec, resolver, &req, audit_log)

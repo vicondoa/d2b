@@ -9,7 +9,7 @@ use d2b_priv_broker::ops::{
     audit_op::OperationFields,
     network::{
         NetworkOpError, PersistentTapBackend, PersistentTapRealization, attachment_digest,
-        delete_persistent_tap,
+        delete_persistent_tap, load_persistent_tap_realization, persist_persistent_tap_realization,
     },
 };
 
@@ -52,6 +52,63 @@ fn realization() -> PersistentTapRealization {
         ownership_marker: format!("d2b managed: attachment:{}", attachment_id().as_str()),
         deleted: false,
     }
+}
+
+fn create_request() -> CreatePersistentTapRequest {
+    CreatePersistentTapRequest {
+        role_id: RoleId::new("network-attachment"),
+        vm_id: VmId::new("work-vm"),
+        attachment_id: Some(attachment_id()),
+        network_generation: Some(ResourceGeneration::new(4).unwrap()),
+        attachment_generation: Some(ResourceGeneration::new(7).unwrap()),
+        tracing_span_id: None,
+    }
+}
+
+fn state_dir(test_name: &str) -> std::path::PathBuf {
+    let path = std::env::current_dir()
+        .unwrap()
+        .join("target")
+        .join(format!("{test_name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&path);
+    std::fs::create_dir_all(&path).unwrap();
+    path
+}
+
+#[test]
+fn failed_create_leaves_no_realization_and_retry_is_safe() {
+    let root = state_dir("persistent-tap-lifecycle");
+    let create = create_request();
+    let delete = request(4, 7);
+    let ifname = d2b_core::host::IfName::new("d2b-t12345678").unwrap();
+
+    // A failed live create has no post-create persistence callback. The
+    // realization row must therefore remain absent and a retry must be able
+    // to persist the successful outcome normally.
+    assert_eq!(
+        load_persistent_tap_realization(&root, &delete),
+        Err(NetworkOpError::RealizationUnavailable)
+    );
+    assert!(
+        !root
+            .join("network-attachments")
+            .join(format!("{}.json", attachment_id().as_str()))
+            .exists()
+    );
+
+    persist_persistent_tap_realization(&root, &create, &ifname).unwrap();
+    let loaded = load_persistent_tap_realization(&root, &delete).unwrap();
+    assert_eq!(loaded.ifname, ifname.as_str());
+
+    // Replaying the successful post-create persistence is idempotent, so a
+    // retry after a lost response does not create a conflicting row.
+    persist_persistent_tap_realization(&root, &create, &ifname).unwrap();
+    assert_eq!(
+        load_persistent_tap_realization(&root, &delete).unwrap(),
+        loaded
+    );
+
+    let _ = std::fs::remove_dir_all(root);
 }
 
 #[test]

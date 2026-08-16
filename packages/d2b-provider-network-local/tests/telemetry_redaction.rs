@@ -35,9 +35,7 @@ fn expected_error(error: Option<NetworkEffectError>) -> &'static str {
         Some(NetworkEffectError::Artifact) => "net-vm-artifact-resolution",
         Some(NetworkEffectError::InvalidState) => "network-controller-invalid-state",
         Some(NetworkEffectError::EastWestHostOptInRequired) => "east-west-host-opt-in-required",
-        Some(NetworkEffectError::ExternalNicAuthorityRequired) => {
-            "external-nic-authority-required"
-        }
+        Some(NetworkEffectError::ExternalNicAuthorityRequired) => "external-nic-authority-required",
     }
 }
 
