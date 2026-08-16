@@ -7526,9 +7526,7 @@ fn ensure_usbipd_env_ready_for_attach(
         ));
     }
 
-    // Admit the Core-resolved Service/Binding context before any host-side
-    // firewall or runner effect. The resource reconciler later supplies the
-    // authenticated GuestUsbipControl implementation to the production port.
+    // Core context must be valid before firewall or runner effects.
     let _production_context = usbip_production::UsbipBindingContext::before_host_effects(
         vm,
         env,

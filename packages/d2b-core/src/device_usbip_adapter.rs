@@ -87,7 +87,6 @@ impl core::fmt::Debug for UsbipAuthorityKey {
 pub struct UsbipBindingProjection {
     env: String,
     vm: String,
-    bus_id: String,
     firewall_intent_ref: String,
     bind_intent_ref: String,
     generation_id: String,
@@ -220,7 +219,6 @@ impl UsbipCoreAdapter {
         Ok(UsbipBindingProjection {
             env: env.to_owned(),
             vm: vm.to_owned(),
-            bus_id: bus_id.to_owned(),
             firewall_intent_ref,
             bind_intent_ref,
             generation_id,
