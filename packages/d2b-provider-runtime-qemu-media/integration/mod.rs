@@ -1,3 +1,4 @@
+//! integration-target: container
 //! Fake-host integration fixtures for the qemu-media Provider.
 
 mod scaffold;
