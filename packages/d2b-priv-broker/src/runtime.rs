@@ -9958,9 +9958,22 @@ mod tests {
             reason: "swtpm-dir-marker-mismatch",
         };
 
+        #[cfg(feature = "layer1-bootstrap")]
         assert!(matches!(
             error.into_response(),
-            d2b_contracts::broker_wire::BrokerResponse::Error(response)
+            BrokerResponse::Error {
+                kind,
+                operation,
+                message,
+                ..
+            } if kind == "Broker.SwtpmDirHardening"
+                && operation == "PrepareSwtpmDir"
+                && !message.contains('/')
+        ));
+        #[cfg(not(feature = "layer1-bootstrap"))]
+        assert!(matches!(
+            error.into_response(),
+            BrokerResponse::Error(response)
                 if response.kind == "Broker.SwtpmDirHardening"
                     && response.operation == "PrepareSwtpmDir"
                     && !response.message.contains('/')
