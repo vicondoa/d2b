@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "devices": {
+      "type": "array",
+      "maxItems": 16,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["label", "vendorId", "productId"],
+        "properties": {
+          "label": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,62}$"
+          },
+          "vendorId": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 65534
+          },
+          "productId": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 65534
+          },
+          "serial": {
+            "type": ["string", "null"],
+            "maxLength": 128
+          }
+        }
+      }
+    },
+    "sessionRingSize": {
+      "type": "integer",
+      "minimum": 8,
+      "maximum": 256,
+      "default": 32
+    },
+    "leaseTimeoutSecs": {
+      "type": "integer",
+      "minimum": 30,
+      "maximum": 3600,
+      "default": 120
+    },
+    "queueWaitTimeoutSecs": {
+      "type": "integer",
+      "minimum": 5,
+      "maximum": 120,
+      "default": 15
+    }
+  }
+}

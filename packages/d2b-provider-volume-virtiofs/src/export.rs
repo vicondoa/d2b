@@ -13,6 +13,7 @@ use d2b_contracts::v3::ResourceRef;
 use d2b_contracts::v3::execution_policy::BoundedToken;
 use d2b_contracts::v3::volume::{
     AttachmentAccess, AttachmentSettings, AttachmentTransport, VolumeAttachment,
+    validate_mount_path,
 };
 
 use crate::error::VirtiofsExportError;
@@ -64,7 +65,12 @@ impl SocketIdentity {
 
     /// Return the eight-character tag used by the private socket filename.
     pub fn short_tag(self) -> String {
-        self.to_hex()[..8].to_owned()
+        let mut out = String::with_capacity(8);
+        for byte in self.0.into_iter().take(4) {
+            out.push(char::from_digit(u32::from(byte >> 4), 16).unwrap_or('0'));
+            out.push(char::from_digit(u32::from(byte & 0x0f), 16).unwrap_or('0'));
+        }
+        out
     }
 }
 
@@ -78,6 +84,7 @@ impl fmt::Debug for SocketIdentity {
 /// target.
 #[derive(Clone, PartialEq, Eq)]
 pub struct ExportSpec {
+    provider_ref: ResourceRef,
     volume_ref: ResourceRef,
     execution_ref: ResourceRef,
     view: BoundedToken,
@@ -98,10 +105,12 @@ impl ExportSpec {
         if volume_ref.resource_type().as_str() != "Volume" {
             return Err(VirtiofsExportError::InvalidExport);
         }
-        if !matches!(execution_ref.resource_type().as_str(), "Host" | "Guest") {
+        if execution_ref.resource_type().as_str() != "Guest" {
             return Err(VirtiofsExportError::InvalidExport);
         }
         Ok(Self {
+            provider_ref: ResourceRef::parse("Provider/volume-virtiofs")
+                .map_err(|_| VirtiofsExportError::InvalidExport)?,
             volume_ref,
             execution_ref,
             view,
@@ -109,6 +118,11 @@ impl ExportSpec {
             settings,
             mount_path: "/".to_owned(),
         })
+    }
+
+    /// Borrow the Provider that owns this Export.
+    pub const fn provider_ref(&self) -> &ResourceRef {
+        &self.provider_ref
     }
 
     /// Translate one virtiofs Volume attachment into one Export.
@@ -129,7 +143,7 @@ impl ExportSpec {
             attachment.access(),
             attachment.settings().clone(),
         )
-        .map(|export| export.with_mount_path(attachment.mount_path()))
+        .and_then(|export| export.with_mount_path(attachment.mount_path()))
     }
 
     /// Borrow the Volume this Export serves.
@@ -162,11 +176,18 @@ impl ExportSpec {
         &self.mount_path
     }
 
-    /// Set the typed base mount path while retaining the compatibility
-    /// constructor used by older callers.
-    pub fn with_mount_path(mut self, mount_path: impl Into<String>) -> Self {
-        self.mount_path = mount_path.into();
-        self
+    /// Set the mount path after applying the same closed path contract as
+    /// the public Volume attachment.
+    pub fn with_mount_path(
+        mut self,
+        mount_path: impl Into<String>,
+    ) -> Result<Self, VirtiofsExportError> {
+        let mount_path = mount_path.into();
+        if !validate_mount_path(&mount_path) {
+            return Err(VirtiofsExportError::InvalidExport);
+        }
+        self.mount_path = mount_path;
+        Ok(self)
     }
 
     /// Derive the stable per-Volume worker principal name.
@@ -190,5 +211,49 @@ impl fmt::Debug for ExportSpec {
 impl Serialize for SocketIdentity {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.serialize_str(&self.to_hex())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compatibility_mount_path_setter_keeps_the_closed_path_contract() {
+        let export = ExportSpec::new(
+            ResourceRef::parse("Volume/data").unwrap(),
+            ResourceRef::parse("Guest/work-vm").unwrap(),
+            BoundedToken::parse("live").unwrap(),
+            AttachmentAccess::ReadOnly,
+            AttachmentSettings::default(),
+        )
+        .unwrap();
+        assert!(export.clone().with_mount_path("/guest/data").is_ok());
+        for rejected in [
+            "../escape",
+            "/guest/\u{FF0F}data",
+            "/guest/\u{FF0E}/data",
+            "/guest/\u{0001}data",
+            "/guest/\0data",
+        ] {
+            assert!(
+                export.clone().with_mount_path(rejected).is_err(),
+                "unsafe mount path admitted: {rejected:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn export_rejects_host_execution_targets() {
+        assert!(matches!(
+            ExportSpec::new(
+                ResourceRef::parse("Volume/data").unwrap(),
+                ResourceRef::parse("Host/host-system").unwrap(),
+                BoundedToken::parse("live").unwrap(),
+                AttachmentAccess::ReadOnly,
+                AttachmentSettings::default(),
+            ),
+            Err(VirtiofsExportError::InvalidExport)
+        ));
     }
 }

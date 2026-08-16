@@ -424,6 +424,13 @@ let
         reloadBehavior = "Broker writes root-only runtime udev rules with UDISKS_IGNORE=1 and reloads udev rules after physical USB resolution; direct image-file paths do not use runtime USB rules.";
         sources = qemuMediaSources;
       };
+     securityKeySelectors = map (device: {
+      selectorId = device.label;
+      label = device.label;
+      vendorId = device.vendorId;
+      productId = device.productId;
+      serial = device.serial;
+     }) cfg.host.usb.securityKey.devices;
     cloudHypervisorCapabilities = [
       (capabilityRow "headless" "required"
         [ "/dev/kvm" "tun" "vhost_net" "fuse" ]

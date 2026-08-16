@@ -48,7 +48,7 @@ impl PrivateSocketPath {
                 .skip(1)
                 .all(|component| !component.is_empty() && component != "." && component != "..")
         }
-        if !matches!(execution_ref.resource_type().as_str(), "Guest" | "Host") {
+        if execution_ref.resource_type().as_str() != "Guest" {
             return Err(SocketPathError::InvalidResource);
         }
 

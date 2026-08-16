@@ -1,8 +1,8 @@
 //! Broker op: `OpenHidrawSecurityKey`.
 //!
 //! Resolves a configured FIDO security-key stable selector, opens the
-//! physical `hidraw` node, validates it is a character device owned by
-//! an acceptable group (`plugdev`/`input`/`fido`), and returns an
+//! physical `hidraw` node, validates it is a character device with a
+//! readable FIDO report descriptor, and returns an
 //! `OwnedFd` to be passed to `d2bd` via `SCM_RIGHTS`. Long-lived
 //! CTAPHID session state (CID isolation, lease serialization, relay)
 //! lives in `d2bd::security_key`, not here. This module only opens the
@@ -14,17 +14,14 @@
 //! - The broker opens the node `O_RDWR | O_NONBLOCK | O_NOFOLLOW` so
 //!   no symlink can be substituted after the path safety check, and a
 //!   post-open `fstat` re-confirms the character-device type.
-//! - In this initial implementation the selector is resolved by
-//!   scanning `/sys/class/hidraw/` for the first FIDO-class device
-//!   (report descriptor contains the 0xF1D0 usage page, with a
-//!   group-ownership fallback for kernels that restrict `rdesc`
-//!   reads). When the contracts/manifest workstream lands per-host
-//!   security-key bundle entries, this function will look up
-//!   `selector_id` against the resolver's registry instead.
+//! - The selector is an opaque, bundle-resolved device token. The broker
+//!   opens exactly that hidraw entry and never scans for the first matching
+//!   device or grants blanket hidraw access.
 
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::path::{Path, PathBuf};
 
+use d2b_core::host::SecurityKeySelector;
 use nix::sys::stat::{SFlag, fstat};
 
 use super::OpError;
@@ -32,10 +29,6 @@ use super::OpError;
 /// FIDO HID usage page (0xF1D0), little-endian, as it appears inside a
 /// HID report descriptor's usage-page item payload.
 const FIDO_USAGE_PAGE_LE: &[u8] = &[0xD0, 0xF1];
-
-/// Groups that may own a FIDO hidraw node. `plugdev` is the typical
-/// libfido2 udev rule target; `input`/`fido` cover other distros.
-const ALLOWED_GROUPS: &[&str] = &["plugdev", "input", "fido"];
 
 /// Device-class label recorded in the audit trail and response body.
 pub const DEVICE_CLASS_HIDRAW_FIDO: &str = "hidraw-fido";
@@ -45,10 +38,11 @@ pub const DEVICE_CLASS_HIDRAW_FIDO: &str = "hidraw-fido";
 pub struct ResolvedSecurityKeySelector {
     /// Opaque selector label (no raw path) for audit/response.
     pub selector_label: String,
-    /// Resolved absolute path to the hidraw node.
+    /// Resolved absolute `/dev` path to the hidraw node. The path is derived
+    /// from the trusted sysfs entry name and is never supplied by the caller.
     pub hidraw_path: PathBuf,
     /// True when the HID report descriptor was readable and explicitly matched
-    /// the FIDO usage page. False means resolution used the udev-group fallback.
+    /// the FIDO usage page.
     pub descriptor_verified: bool,
 }
 
@@ -65,9 +59,15 @@ pub struct LiveOpenHidrawSecurityKeyOutcome {
 /// record and wire response.
 pub fn live_open_hidraw_security_key(
     req: &d2b_contracts::broker_wire::OpenHidrawSecurityKeyRequest,
+    selectors: &[SecurityKeySelector],
     _audit_log: &crate::audit::AuditLog,
 ) -> Result<LiveOpenHidrawSecurityKeyOutcome, OpError> {
-    let resolved = resolve_selector(req.selector_id.as_str())?;
+    validate_device_authority(req)?;
+    let resolved = resolve_selector(
+        req.selector_id.as_str(),
+        selectors,
+        Path::new("/sys/class/hidraw"),
+    )?;
     let fd = open_and_validate_hidraw(&resolved.hidraw_path, resolved.descriptor_verified)?;
     Ok(LiveOpenHidrawSecurityKeyOutcome {
         fd,
@@ -76,46 +76,134 @@ pub fn live_open_hidraw_security_key(
     })
 }
 
-/// Scan `/sys/class/hidraw/` for FIDO-class devices.
-///
-/// Returns the first device whose report descriptor contains the FIDO
-/// HID usage page, falling back to group ownership when the report
-/// descriptor can't be read (some kernels restrict `rdesc` to root).
-pub(crate) fn resolve_selector(selector_id: &str) -> Result<ResolvedSecurityKeySelector, OpError> {
-    let sysfs_hidraw = Path::new("/sys/class/hidraw");
-    let entries = std::fs::read_dir(sysfs_hidraw).map_err(|e| OpError::Io {
-        path: sysfs_hidraw.to_owned(),
-        detail: e.to_string(),
-    })?;
+/// Require Core's exact Device and Host-backing proof before any node lookup.
+pub(crate) fn validate_device_authority(
+    req: &d2b_contracts::broker_wire::OpenHidrawSecurityKeyRequest,
+) -> Result<(), OpError> {
+    if req.device_ref.resource_type().as_str() != "Device"
+        || req.authority_key.is_empty()
+        || req.authority_key.len() > 128
+    {
+        return Err(OpError::Refused {
+            operation: "OpenHidrawSecurityKey",
+            reason: "device-authority-proof-required".to_owned(),
+        });
+    }
+    if req.authority_key
+        != d2b_contracts::broker_wire::security_key_authority_binding(
+            &req.device_ref,
+            &req.selector_id,
+        )
+    {
+        return Err(OpError::Refused {
+            operation: "OpenHidrawSecurityKey",
+            reason: "device-authority-selector-mismatch".to_owned(),
+        });
+    }
+    Ok(())
+}
 
-    for entry in entries.flatten() {
+/// Resolve a configured stable selector.
+///
+/// Raw `hidraw-N` identifiers are deliberately rejected. Resolution is
+/// limited to the trusted vendor/product/serial selector registry.
+pub(crate) fn resolve_selector(
+    selector_id: &str,
+    selectors: &[SecurityKeySelector],
+    sysfs_root: &Path,
+) -> Result<ResolvedSecurityKeySelector, OpError> {
+    if selector_id.is_empty()
+        || selector_id.len() > 63
+        || !selector_id.bytes().enumerate().all(|(index, byte)| {
+            (index == 0 && byte.is_ascii_lowercase())
+                || (index > 0
+                    && (byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-'))
+        })
+        || selector_id.starts_with("hidraw-")
+    {
+        return Err(OpError::UnknownSubject {
+            operation: "OpenHidrawSecurityKey",
+            subject: selector_id.to_owned(),
+        });
+    }
+    let Some(selector) = selectors
+        .iter()
+        .find(|selector| selector.selector_id == selector_id)
+    else {
+        return Err(OpError::UnknownSubject {
+            operation: "OpenHidrawSecurityKey",
+            subject: selector_id.to_owned(),
+        });
+    };
+
+    let mut matches = Vec::new();
+    let entries = std::fs::read_dir(sysfs_root).map_err(|error| OpError::Io {
+        path: sysfs_root.to_owned(),
+        detail: error.to_string(),
+    })?;
+    for entry in entries {
+        let entry = entry.map_err(|error| OpError::Io {
+            path: sysfs_root.to_owned(),
+            detail: error.to_string(),
+        })?;
         let name = entry.file_name();
-        let name_str = name.to_string_lossy();
-        if !name_str.starts_with("hidraw") {
+        let name = name.to_string_lossy();
+        if !name.starts_with("hidraw") {
             continue;
         }
-        let dev_path = PathBuf::from("/dev").join(&*name_str);
-        let sysfs_path = entry.path();
-
-        if let Some(descriptor_verified) = fido_device_match(&sysfs_path) {
-            return Ok(ResolvedSecurityKeySelector {
-                // Stable selector label combines the caller-supplied
-                // opaque id with the resolved sysfs index; no raw
-                // path leaks into audit/response fields.
-                selector_label: format!("{selector_id}:{name_str}"),
-                hidraw_path: dev_path,
-                descriptor_verified,
-            });
+        let path = entry.path();
+        let Some((vendor_id, product_id, serial)) = hidraw_identity(&path) else {
+            continue;
+        };
+        if vendor_id == selector.vendor_id
+            && product_id == selector.product_id
+            && selector
+                .serial
+                .as_deref()
+                .is_none_or(|expected| serial.as_deref() == Some(expected))
+            && fido_device_match(&path).is_some()
+        {
+            matches.push(PathBuf::from("/dev").join(name.as_ref()));
         }
     }
 
-    Err(OpError::UnknownSubject {
-        operation: "OpenHidrawSecurityKey",
-        subject: selector_id.to_owned(),
+    let [hidraw_path] = matches.as_slice() else {
+        return Err(OpError::UnknownSubject {
+            operation: "OpenHidrawSecurityKey",
+            subject: selector_id.to_owned(),
+        });
+    };
+    Ok(ResolvedSecurityKeySelector {
+        selector_label: selector.label.clone(),
+        hidraw_path: hidraw_path.clone(),
+        descriptor_verified: true,
     })
 }
 
+fn hidraw_identity(path: &Path) -> Option<(u16, u16, Option<String>)> {
+    let mut current = std::fs::canonicalize(path.join("device")).ok()?;
+    for _ in 0..8 {
+        let vendor = read_hex_attr(&current.join("idVendor"));
+        let product = read_hex_attr(&current.join("idProduct"));
+        if let (Some(vendor), Some(product)) = (vendor, product) {
+            let serial = std::fs::read_to_string(current.join("serial"))
+                .ok()
+                .map(|value| value.trim_end_matches(['\r', '\n']).to_owned());
+            return Some((vendor, product, serial));
+        }
+        current = current.parent()?.to_owned();
+    }
+    None
+}
+
+fn read_hex_attr(path: &Path) -> Option<u16> {
+    let value = std::fs::read_to_string(path).ok()?;
+    let value = value.trim();
+    u16::from_str_radix(value.strip_prefix("0x").unwrap_or(value), 16).ok()
+}
+
 /// Check whether a sysfs hidraw entry is a FIDO-class device.
+#[cfg(test)]
 fn is_fido_device(sysfs_entry: &Path) -> bool {
     fido_device_match(sysfs_entry).is_some()
 }
@@ -123,28 +211,11 @@ fn is_fido_device(sysfs_entry: &Path) -> bool {
 fn fido_device_match(sysfs_entry: &Path) -> Option<bool> {
     let rdesc_path = sysfs_entry.join("device/report_descriptor");
     match std::fs::read(&rdesc_path) {
-        Ok(rdesc) => {
-            return rdesc
-                .windows(FIDO_USAGE_PAGE_LE.len())
-                .any(|w| w == FIDO_USAGE_PAGE_LE)
-                .then_some(true);
-        }
-        Err(_) => {
-            // Fall through to the distro udev-group fallback only when
-            // the kernel refuses descriptor access.
-        }
-    }
-    // Fallback: accept if the /dev node is owned by an allowed group.
-    let dev_name = sysfs_entry.file_name().unwrap_or_default();
-    let dev_path = PathBuf::from("/dev").join(dev_name);
-    let Ok(meta) = std::fs::metadata(&dev_path) else {
-        return None;
-    };
-    use std::os::unix::fs::MetadataExt;
-    let gid = meta.gid();
-    match nix::unistd::Group::from_gid(nix::unistd::Gid::from_raw(gid)) {
-        Ok(Some(group)) if ALLOWED_GROUPS.contains(&group.name.as_str()) => Some(false),
-        _ => None,
+        Ok(rdesc) => rdesc
+            .windows(FIDO_USAGE_PAGE_LE.len())
+            .any(|w| w == FIDO_USAGE_PAGE_LE)
+            .then_some(true),
+        Err(_) => None,
     }
 }
 
@@ -154,7 +225,7 @@ pub(crate) fn open_and_validate_hidraw(
     descriptor_verified: bool,
 ) -> Result<OwnedFd, OpError> {
     use std::fs::OpenOptions;
-    use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt};
+    use std::os::unix::fs::{FileTypeExt, OpenOptionsExt};
 
     // Pre-open check (defence-in-depth; O_NOFOLLOW below prevents a
     // symlink swap between this stat and the actual open).
@@ -171,19 +242,10 @@ pub(crate) fn open_and_validate_hidraw(
             ),
         });
     }
-    let gid = meta.gid();
-    let group_name = nix::unistd::Group::from_gid(nix::unistd::Gid::from_raw(gid))
-        .ok()
-        .flatten()
-        .map(|g| g.name)
-        .unwrap_or_else(|| gid.to_string());
-    if !descriptor_verified && !ALLOWED_GROUPS.contains(&group_name.as_str()) {
+    if !descriptor_verified {
         return Err(OpError::Refused {
             operation: "OpenHidrawSecurityKey",
-            reason: format!(
-                "{}: device group {group_name:?} not in allowed set",
-                path.display()
-            ),
+            reason: "fido-report-descriptor-required".to_owned(),
         });
     }
 
@@ -221,24 +283,128 @@ pub(crate) fn open_and_validate_hidraw(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use d2b_contracts::v3::ResourceRef;
 
     #[test]
-    fn selector_not_found_or_sysfs_absent_is_safe() {
-        // In a hermetic test environment /sys/class/hidraw may be
-        // absent or contain no FIDO devices; the resolver must return
-        // a typed error, never panic.
-        match resolve_selector("test-selector") {
-            Err(OpError::UnknownSubject { subject, .. }) => {
-                assert_eq!(subject, "test-selector");
-            }
-            Err(OpError::Io { .. }) => {
-                // /sys/class/hidraw absent in this sandbox: acceptable.
-            }
-            Ok(_) => {
-                // A real FIDO device happened to be present; fine too.
-            }
-            Err(other) => panic!("unexpected error: {other}"),
-        }
+    fn unconfigured_selector_is_rejected_before_sysfs_lookup() {
+        assert!(matches!(
+            resolve_selector("test-selector", &[], Path::new("/sys/class/hidraw")),
+            Err(OpError::UnknownSubject { subject, .. }) if subject == "test-selector"
+        ));
+    }
+
+    #[test]
+    fn configured_selector_reports_sysfs_io_errors() {
+        let selector = SecurityKeySelector {
+            selector_id: "test-selector".to_owned(),
+            label: "test-selector".to_owned(),
+            vendor_id: 0x1050,
+            product_id: 0x0407,
+            serial: None,
+        };
+        assert!(matches!(
+            resolve_selector(
+                "test-selector",
+                std::slice::from_ref(&selector),
+                Path::new("/does-not-exist"),
+            ),
+            Err(OpError::Io { .. })
+        ));
+    }
+
+    #[test]
+    fn raw_hidraw_selector_is_rejected() {
+        assert!(matches!(
+            resolve_selector("hidraw-0", &[], Path::new("/sys/class/hidraw")),
+            Err(OpError::UnknownSubject { .. })
+        ));
+    }
+
+    #[test]
+    fn trusted_selector_resolves_one_fido_hidraw_and_refuses_ambiguity() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = tmp.path().join("hidraw");
+        std::fs::create_dir_all(root.join("hidraw0/device")).expect("hidraw0");
+        std::fs::write(root.join("hidraw0/device/idVendor"), "1050\n").expect("vendor");
+        std::fs::write(root.join("hidraw0/device/idProduct"), "0407\n").expect("product");
+        std::fs::write(
+            root.join("hidraw0/device/report_descriptor"),
+            [0x06, 0xD0, 0xF1],
+        )
+        .expect("descriptor");
+        let selector = SecurityKeySelector {
+            selector_id: "primary".to_owned(),
+            label: "primary".to_owned(),
+            vendor_id: 0x1050,
+            product_id: 0x0407,
+            serial: None,
+        };
+        let resolved =
+            resolve_selector("primary", std::slice::from_ref(&selector), &root).expect("resolve");
+        assert_eq!(resolved.selector_label, "primary");
+        assert!(resolved.descriptor_verified);
+
+        std::fs::create_dir_all(root.join("hidraw1/device")).expect("hidraw1");
+        std::fs::write(root.join("hidraw1/device/idVendor"), "1050\n").expect("vendor");
+        std::fs::write(root.join("hidraw1/device/idProduct"), "0407\n").expect("product");
+        std::fs::write(
+            root.join("hidraw1/device/report_descriptor"),
+            [0x06, 0xD0, 0xF1],
+        )
+        .expect("descriptor");
+        assert!(matches!(
+            resolve_selector("primary", &[selector], &root),
+            Err(OpError::UnknownSubject { .. })
+        ));
+    }
+
+    #[test]
+    fn missing_core_device_authority_refuses_before_lookup() {
+        let request = d2b_contracts::broker_wire::OpenHidrawSecurityKeyRequest {
+            vm_id: d2b_contracts::types::VmId::new("work-vm"),
+            selector_id: "hidraw-0".to_owned(),
+            device_ref: ResourceRef::parse("Device/hidraw-0").unwrap(),
+            authority_key: String::new(),
+            tracing_span_id: None,
+        };
+        assert!(matches!(
+            validate_device_authority(&request),
+            Err(OpError::Refused { reason, .. }) if reason == "device-authority-proof-required"
+        ));
+    }
+
+    #[test]
+    fn device_authority_is_bound_to_the_requested_selector() {
+        let request = d2b_contracts::broker_wire::OpenHidrawSecurityKeyRequest {
+            vm_id: d2b_contracts::types::VmId::new("work-vm"),
+            selector_id: "key-b".to_owned(),
+            device_ref: ResourceRef::parse("Device/key-a").unwrap(),
+            authority_key: d2b_contracts::broker_wire::security_key_authority_binding(
+                &ResourceRef::parse("Device/key-a").unwrap(),
+                "key-a",
+            ),
+            tracing_span_id: None,
+        };
+        assert!(matches!(
+            validate_device_authority(&request),
+            Err(OpError::Refused { reason, .. }) if reason == "device-authority-selector-mismatch"
+        ));
+    }
+
+    #[test]
+    fn device_authority_binds_the_store_admitted_device_to_its_selector() {
+        let device_ref = ResourceRef::parse("Device/corp-vm-security-key").unwrap();
+        let request = d2b_contracts::broker_wire::OpenHidrawSecurityKeyRequest {
+            vm_id: d2b_contracts::types::VmId::new("work-vm"),
+            selector_id: "key-primary".to_owned(),
+            authority_key: d2b_contracts::broker_wire::security_key_authority_binding(
+                &device_ref,
+                "key-primary",
+            ),
+            device_ref,
+            tracing_span_id: None,
+        };
+        assert!(validate_device_authority(&request).is_ok());
     }
 
     #[test]

@@ -242,6 +242,28 @@ fn cleanup_is_leaf_first_and_root_last() {
 }
 
 #[test]
+fn finalization_waits_for_dependents_and_store_writer_before_cleanup() {
+    assert_eq!(
+        d2b_provider_volume_local::finalization_plan(
+            d2b_provider_volume_local::FinalizationObservation::new(1, false),
+        ),
+        d2b_provider_volume_local::FinalizationAction::WaitForDependents
+    );
+    assert_eq!(
+        d2b_provider_volume_local::finalization_plan(
+            d2b_provider_volume_local::FinalizationObservation::new(0, false),
+        ),
+        d2b_provider_volume_local::FinalizationAction::WaitForStoreWriter
+    );
+    assert_eq!(
+        d2b_provider_volume_local::finalization_plan(
+            d2b_provider_volume_local::FinalizationObservation::new(0, true),
+        ),
+        d2b_provider_volume_local::FinalizationAction::Cleanup
+    );
+}
+
+#[test]
 fn hard_quota_on_a_filesystem_that_cannot_enforce_it_fails_the_volume() {
     use d2b_provider_volume_local::QuotaCapability;
     let spec: d2b_contracts::v3::volume::VolumeSpec = serde_json::from_value(serde_json::json!({

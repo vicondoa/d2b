@@ -74,6 +74,7 @@ use d2b_core_controller::main::{
     CoreProcess, RecoverySnapshot, RuntimeReadiness as CoreRuntimeReadiness, StartupError,
     StartupStage,
 };
+use d2b_core_controller::migration::LegacyTpmMigrationDecision;
 use d2b_core_controller::zone_status::{
     SystemCoreStatusEmitter, ZoneRuntimeMetadata, ZoneStatusInput,
 };
@@ -85,7 +86,8 @@ use d2b_provider_system_core::{
     UserObservation, UserReconciler,
 };
 use d2b_resource_api::{
-    RedbBackend, ResourceService, UnregisteredBusAdapter, UnregisteredResourceClient,
+    RedbBackend, ResourceService, ResourceStoreBackend, UnregisteredBusAdapter,
+    UnregisteredResourceClient,
     authz::{
         ApiCatalog, AuthorizationState, BindingScope, BootstrapPhase, BoundSubject, CompiledRole,
         CompiledRoleBinding, NativeAuthorizer, PolicyRule, PolicySet, RelayGrantAuthority,
@@ -94,8 +96,8 @@ use d2b_resource_api::{
     service::UnavailableUpgradeDispatcher,
 };
 use d2b_resource_store::{
-    PolicySnapshot, StoreListRequest, StoreOperationContext, StoreProjection, StoreSlot,
-    StoredResource,
+    PolicySnapshot, StoreGetRequest, StoreListRequest, StoreOperationContext, StoreProjection,
+    StoreSlot, StoredResource,
 };
 #[cfg(test)]
 use d2b_resource_store::{StoreFilter, StoreListResult};
@@ -588,6 +590,7 @@ pub struct ZoneResourceRuntime {
     authority_index: Arc<tokio::sync::Mutex<HostGlobalAuthorityIndex>>,
     authority_persistence: Arc<RedbAuthorityPersistence>,
     authority_recovery: Arc<AuthorityRecoveryCoordinator>,
+    device_tpm_controller: crate::tpm_effect_port::DeviceTpmControllerRegistration,
     zone_status: Mutex<ZoneStatusResource>,
     audio_runtime: Arc<Mutex<Option<AudioResourceRuntime>>>,
     audio_watch_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
@@ -597,6 +600,29 @@ pub struct ZoneResourceRuntime {
     activation_watch_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
     interaction_provider_configuration: Option<CommittedInteractionProviderConfiguration>,
     interaction_provider_configuration_refused: bool,
+}
+
+/// Store-derived admission evidence for one security-key Device effect.
+///
+/// This contains only the exact values validated against the authoritative
+/// resource record. It is consumed by the Device effect adapter before it can
+/// request a broker-opened descriptor.
+pub(crate) struct SecurityKeyDeviceAdmission {
+    pub(crate) zone_ref: ResourceRef,
+    pub(crate) device_uid: ResourceUid,
+    pub(crate) holder_ref: ResourceRef,
+    pub(crate) selector_id: String,
+}
+
+/// Request fields that select the Device admission record to validate.
+pub(crate) struct SecurityKeyDeviceAdmissionRequest<'a> {
+    pub(crate) device_uid: &'a ResourceUid,
+    pub(crate) device_ref: &'a ResourceRef,
+    pub(crate) request_zone_ref: &'a ResourceRef,
+    pub(crate) holder_ref: &'a ResourceRef,
+    pub(crate) vm_id: &'a str,
+    pub(crate) selector_id: &'a str,
+    pub(crate) operation_id: &'a str,
 }
 
 impl core::fmt::Debug for ZoneResourceRuntime {
@@ -1023,6 +1049,7 @@ impl ZoneResourceRuntime {
             authority_index,
             authority_persistence,
             authority_recovery,
+            device_tpm_controller: crate::tpm_effect_port::register_device_tpm_controller(),
             zone_status: Mutex::new(zone_status),
             audio_runtime: Arc::new(Mutex::new(None)),
             audio_watch_task: Mutex::new(None),
@@ -1082,6 +1109,18 @@ impl ZoneResourceRuntime {
             .lock()
             .map(|core| core.stage())
             .map_err(|_| ResourceRuntimeError::CoreStartupFailed)
+    }
+
+    /// Whether the production Device TPM reconcile entry point is registered.
+    pub(crate) const fn device_tpm_controller_registered(&self) -> bool {
+        self.device_tpm_controller.is_registered()
+    }
+
+    /// Borrow the registered Device TPM reconcile entry point.
+    pub(crate) const fn device_tpm_controller(
+        &self,
+    ) -> crate::tpm_effect_port::DeviceTpmControllerRegistration {
+        self.device_tpm_controller
     }
 
     /// Borrow the production Zone status projection.
@@ -1577,6 +1616,119 @@ impl ZoneResourceRuntime {
         )))
     }
 
+    /// Verify the trusted persisted Device row used by the TPM reconcile
+    /// adapter and return Core's sealed legacy-state decision. The VM binding
+    /// is read from the authenticated Device record, while the legacy-state
+    /// decision comes from the trusted Core bundle resolver; request fields
+    /// cannot select either independently.
+    pub(crate) async fn tpm_device_is_admitted(
+        &self,
+        device_uid: &ResourceUid,
+        device_ref: &ResourceRef,
+        vm_id: &str,
+        operation_id: &str,
+        legacy_intent_anchor: Option<&str>,
+    ) -> Result<LegacyTpmMigrationDecision, ResourceRuntimeError> {
+        let resource = self
+            .backend
+            .get(StoreGetRequest {
+                operation: StoreOperationContext {
+                    operation_id: operation_id.to_owned(),
+                    idempotency_key: None,
+                    correlation_id: operation_id.to_owned(),
+                    trace_id: None,
+                    deadline_ms: 30_000,
+                },
+                zone: self.zone.clone(),
+                target: device_ref.clone(),
+                expected_uid: Some(device_uid.clone()),
+                projection: StoreProjection::Full,
+            })
+            .await
+            .ok();
+        let Some(resource) = resource.filter(|resource| {
+            resource.uid == *device_uid
+                && resource.resource_ref == *device_ref
+                && resource.resource_ref.resource_type().as_str() == "Device"
+        }) else {
+            return Err(ResourceRuntimeError::AuthenticationUnavailable);
+        };
+        let value = serde_json::from_slice::<Value>(&resource.canonical_json)
+            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
+        let spec = value
+            .get("spec")
+            .and_then(Value::as_object)
+            .ok_or(ResourceRuntimeError::AuthenticationUnavailable)?;
+        if spec.get("providerRef").and_then(Value::as_str)
+            != Some(d2b_provider_device_tpm::PROVIDER_REF)
+        {
+            return Err(ResourceRuntimeError::AuthenticationUnavailable);
+        }
+        if !Self::tpm_device_targets_vm(&value, vm_id) {
+            return Err(ResourceRuntimeError::AuthenticationUnavailable);
+        }
+        let intent = format!("legacy-swtpm:vm:{vm_id}");
+        Ok(Self::tpm_migration_decision(
+            vm_id,
+            &intent,
+            legacy_intent_anchor,
+        ))
+    }
+
+    /// Load and validate the persisted Device record before a security-key
+    /// provider constructs its one-use admission. Request fields select a
+    /// candidate only; the returned values all originate from the store.
+    pub(crate) async fn security_key_device_is_admitted(
+        &self,
+        request: SecurityKeyDeviceAdmissionRequest<'_>,
+    ) -> Result<SecurityKeyDeviceAdmission, ResourceRuntimeError> {
+        let resource = self
+            .backend
+            .get(StoreGetRequest {
+                operation: StoreOperationContext {
+                    operation_id: request.operation_id.to_owned(),
+                    idempotency_key: None,
+                    correlation_id: request.operation_id.to_owned(),
+                    trace_id: None,
+                    deadline_ms: 30_000,
+                },
+                zone: self.zone.clone(),
+                target: request.device_ref.clone(),
+                expected_uid: Some(request.device_uid.clone()),
+                projection: StoreProjection::Full,
+            })
+            .await
+            .ok();
+        let Some(resource) = resource.filter(|resource| {
+            resource.uid == *request.device_uid
+                && resource.resource_ref == *request.device_ref
+                && resource.resource_ref.resource_type().as_str() == "Device"
+                && resource.zone == self.zone
+        }) else {
+            return Err(ResourceRuntimeError::AuthenticationUnavailable);
+        };
+        let value = serde_json::from_slice::<Value>(&resource.canonical_json)
+            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
+        if !Self::security_key_device_matches(
+            &value,
+            &self.zone,
+            request.request_zone_ref,
+            request.holder_ref,
+            request.vm_id,
+            request.selector_id,
+        ) {
+            return Err(ResourceRuntimeError::AuthenticationUnavailable);
+        }
+        let zone_ref = ResourceRef::parse(&format!("Zone/{}", self.zone.as_str()))
+            .expect("ZoneId always produces a valid Zone resource reference");
+        Ok(SecurityKeyDeviceAdmission {
+            zone_ref,
+            device_uid: resource.uid,
+            holder_ref: request.holder_ref.clone(),
+            selector_id: request.selector_id.to_owned(),
+        })
+    }
+
     /// Publish terminal broker evidence into the live store join index.
     pub fn ingest_broker_evidence(
         &self,
@@ -1585,6 +1737,69 @@ impl ZoneResourceRuntime {
         self.store
             .ingest_broker_evidence(evidence)
             .map_err(|_| ResourceRuntimeError::StoreOpenFailed)
+    }
+
+    fn tpm_device_targets_vm(resource: &Value, vm_id: &str) -> bool {
+        resource
+            .get("metadata")
+            .and_then(Value::as_object)
+            .and_then(|metadata| metadata.get("ownerRef"))
+            .and_then(Value::as_str)
+            .and_then(|owner| owner.strip_prefix("Guest/"))
+            == Some(vm_id)
+    }
+
+    fn security_key_device_matches(
+        resource: &Value,
+        zone: &ZoneId,
+        request_zone_ref: &ResourceRef,
+        holder_ref: &ResourceRef,
+        vm_id: &str,
+        selector_id: &str,
+    ) -> bool {
+        let expected_zone_ref = ResourceRef::parse(&format!("Zone/{}", zone.as_str()))
+            .expect("ZoneId always produces a valid Zone resource reference");
+        if request_zone_ref != &expected_zone_ref
+            || holder_ref.resource_type().as_str() != "Guest"
+            || holder_ref.name().as_str() != vm_id
+        {
+            return false;
+        }
+        let Some(metadata) = resource.get("metadata").and_then(Value::as_object) else {
+            return false;
+        };
+        if metadata.get("zone").and_then(Value::as_str) != Some(zone.as_str())
+            || metadata.get("ownerRef").and_then(Value::as_str)
+                != Some(holder_ref.to_canonical_string().as_str())
+        {
+            return false;
+        }
+        resource
+            .get("spec")
+            .and_then(Value::as_object)
+            .filter(|spec| {
+                spec.get("providerRef").and_then(Value::as_str)
+                    == Some(d2b_provider_device_security_key::PROVIDER_REF)
+            })
+            .and_then(|spec| spec.get("inventory"))
+            .and_then(Value::as_object)
+            .and_then(|inventory| inventory.get("selector"))
+            .and_then(Value::as_object)
+            .and_then(|selector| selector.get("label"))
+            .and_then(Value::as_str)
+            == Some(selector_id)
+    }
+
+    fn tpm_migration_decision(
+        vm_id: &str,
+        intent: &str,
+        legacy_intent_anchor: Option<&str>,
+    ) -> LegacyTpmMigrationDecision {
+        if let Some(anchor) = legacy_intent_anchor {
+            LegacyTpmMigrationDecision::adoption_required(vm_id, intent, anchor)
+        } else {
+            LegacyTpmMigrationDecision::not_applicable(vm_id, intent)
+        }
     }
 
     /// Close the production redb workers before the runtime is discarded.
@@ -3787,6 +4002,86 @@ mod tests {
     }
 
     #[test]
+    fn tpm_device_binding_requires_the_authenticated_guest_owner() {
+        let matching = json!({ "metadata": { "ownerRef": "Guest/vm-a" } });
+        let mismatched = json!({ "metadata": { "ownerRef": "Guest/vm-b" } });
+        let absent = json!({ "metadata": {} });
+
+        assert!(ZoneResourceRuntime::tpm_device_targets_vm(
+            &matching, "vm-a"
+        ));
+        assert!(!ZoneResourceRuntime::tpm_device_targets_vm(
+            &mismatched,
+            "vm-a"
+        ));
+        assert!(!ZoneResourceRuntime::tpm_device_targets_vm(&absent, "vm-a"));
+    }
+
+    #[test]
+    fn security_key_device_binding_requires_stored_zone_owner_and_selector() {
+        let matching = json!({
+            "metadata": { "ownerRef": "Guest/vm-a", "zone": "work" },
+            "spec": {
+                "providerRef": "Provider/device-security-key",
+                "inventory": { "selector": { "label": "key-primary" } }
+            }
+        });
+        let zone = ZoneId::parse("work".to_owned()).unwrap();
+        let zone_ref = ResourceRef::parse("Zone/work").unwrap();
+        let holder_ref = ResourceRef::parse("Guest/vm-a").unwrap();
+
+        assert!(ZoneResourceRuntime::security_key_device_matches(
+            &matching,
+            &zone,
+            &zone_ref,
+            &holder_ref,
+            "vm-a",
+            "key-primary",
+        ));
+        assert!(!ZoneResourceRuntime::security_key_device_matches(
+            &matching,
+            &zone,
+            &ResourceRef::parse("Zone/home").unwrap(),
+            &holder_ref,
+            "vm-a",
+            "key-primary",
+        ));
+        assert!(!ZoneResourceRuntime::security_key_device_matches(
+            &matching,
+            &zone,
+            &zone_ref,
+            &ResourceRef::parse("Guest/vm-b").unwrap(),
+            "vm-a",
+            "key-primary",
+        ));
+        assert!(!ZoneResourceRuntime::security_key_device_matches(
+            &matching,
+            &zone,
+            &zone_ref,
+            &holder_ref,
+            "vm-a",
+            "key-secondary",
+        ));
+    }
+
+    #[test]
+    fn trusted_bundle_inventory_selects_fresh_or_legacy_tpm_path() {
+        let fresh =
+            ZoneResourceRuntime::tpm_migration_decision("vm-a", "legacy-swtpm:vm:vm-a", None);
+        assert!(!fresh.requires_migration());
+        assert!(fresh.validates_binding("vm-a", "legacy-swtpm:vm:vm-a"));
+
+        let legacy = ZoneResourceRuntime::tpm_migration_decision(
+            "vm-a",
+            "legacy-swtpm:vm:vm-a",
+            Some("legacy-swtpm:vm:vm-a"),
+        );
+        assert!(legacy.requires_migration());
+        assert!(legacy.validates_binding("vm-a", "legacy-swtpm:vm:vm-a"));
+        assert!(!legacy.validates_binding("vm-b", "legacy-swtpm:vm:vm-a"));
+    }
+
+    #[test]
     fn core_progression_reaches_handler_gate_before_readiness_check() {
         let mut core = CoreProcess::new();
         let authority = HostGlobalAuthorityIndex::new_for_tests_ready();
@@ -4073,6 +4368,7 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(runtime.zone(), &zone);
+        assert!(runtime.device_tpm_controller_registered());
         assert!(runtime.readiness().store_ready);
         assert!(!runtime.readiness().resource_api_ready);
         assert!(!runtime.readiness().local_session_ready);

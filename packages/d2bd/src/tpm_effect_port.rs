@@ -5,12 +5,26 @@
 //! the state/runner operations; this adapter is the only place that maps the
 //! private decision to the typed broker operation.
 
-use d2b_contracts::types::{BundleOpId, VmId};
+use std::{sync::Mutex, time::Duration};
+
+use d2b_contracts::v3::{ResourceRef, ResourceUid};
+use d2b_contracts::{
+    broker_wire::{
+        BrokerCallerRole, BrokerRequest, BrokerResponse, RunnerRole, SpawnRunnerRequest,
+    },
+    types::{BundleOpId, PathClass, RoleId, VmId},
+};
+use d2b_core::bundle_resolver::BundleResolver;
+use d2b_core::processes::{ProcessNode, ProcessRole};
 use d2b_core_controller::migration::LegacyTpmMigrationDecision;
 use d2b_provider_device_tpm::{
-    FlushLaunchTicket, LegacyMigrationOutcome, SignedBinaryRef, StateDirIntent, SwtpmSettings,
-    SwtpmStartLaunchTicket, TpmEffectError, TpmEffectPort, TpmStatePreparationResult,
+    BinaryKind, FlushLaunchTicket, LegacyMigrationOutcome, SignedBinaryRef, StateDirIntent,
+    SwtpmSettings, SwtpmStartLaunchTicket, TpmEffectError, TpmEffectPort, TpmResourceController,
+    TpmResourceEffectError, TpmResourceEffectPort, TpmResourceOutcome, TpmStateObservation,
+    TpmStateObservationKind, TpmStatePreparationResult, build_swtpm_flush_spec,
+    build_swtpm_process_spec, build_tpm_state_volume_resource,
 };
+use sha2::{Digest, Sha256};
 
 #[allow(dead_code)]
 fn map_legacy_migration_outcome(
@@ -35,6 +49,10 @@ fn map_legacy_migration_outcome(
         d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::Ambiguous => {
             LegacyMigrationOutcome::Ambiguous
         }
+        d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::AdoptionRequired
+        | d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::NeverProvisioned => {
+            LegacyMigrationOutcome::Ambiguous
+        }
     }
 }
 
@@ -52,6 +70,425 @@ pub trait CoreTpmEffectExecutor {
         binary: &SignedBinaryRef,
     ) -> Result<(), TpmEffectError>;
     fn stop(&mut self) -> Result<(), TpmEffectError>;
+}
+
+struct SwtpmSpawnReservation<'a> {
+    table: &'a crate::supervisor::pidfd_table::PidfdTable,
+    vm: String,
+}
+
+impl Drop for SwtpmSpawnReservation<'_> {
+    fn drop(&mut self) {
+        self.table.release_spawn_reservation(&self.vm, "swtpm");
+    }
+}
+
+/// Concrete daemon-side TPM effect executor.
+///
+/// All host paths, binaries, state markers, and pidfds remain inside the
+/// trusted bundle/broker boundary. The Provider sees only the opaque tickets
+/// returned by this executor.
+pub(crate) struct LiveTpmEffectExecutor<'a> {
+    state: &'a crate::ServerState,
+    resolver: &'a BundleResolver,
+    vm_id: VmId,
+    caller_role: BrokerCallerRole,
+    device_uid: ResourceUid,
+    legacy_migration_required: bool,
+    prepared_flush_ticket: Option<FlushLaunchTicket>,
+    prepared_swtpm_ticket: Option<SwtpmStartLaunchTicket>,
+    adopted_live_worker: bool,
+}
+
+impl<'a> LiveTpmEffectExecutor<'a> {
+    pub(crate) fn new(
+        state: &'a crate::ServerState,
+        resolver: &'a BundleResolver,
+        vm_id: VmId,
+        caller_role: BrokerCallerRole,
+        device_uid: ResourceUid,
+        legacy_migration_required: bool,
+    ) -> Self {
+        Self {
+            state,
+            resolver,
+            vm_id,
+            caller_role,
+            device_uid,
+            legacy_migration_required,
+            prepared_flush_ticket: None,
+            prepared_swtpm_ticket: None,
+            adopted_live_worker: false,
+        }
+    }
+
+    fn ticket_bytes(&self, domain: &str, intent: &StateDirIntent) -> [u8; 16] {
+        let mut hasher = Sha256::new();
+        hasher.update(domain.as_bytes());
+        hasher.update([0]);
+        hasher.update(self.vm_id.as_str().as_bytes());
+        hasher.update([0]);
+        hasher.update(intent.directory().as_bytes());
+        hasher.update(intent.marker().as_bytes());
+        hasher.update(intent.owner().as_bytes());
+        let digest = hasher.finalize();
+        let mut out = [0; 16];
+        out.copy_from_slice(&digest[..16]);
+        out
+    }
+
+    fn runner_intent(&self, role: &str) -> Result<BundleOpId, TpmEffectError> {
+        let intent_id = crate::intent_id_runner(self.vm_id.as_str(), role);
+        self.resolver
+            .find_runner_intent(&intent_id)
+            .map(|intent| BundleOpId::new(intent.intent_id.clone()))
+            .ok_or(TpmEffectError::SpawnRejected)
+    }
+
+    fn swtpm_node(&self) -> Result<&ProcessNode, TpmEffectError> {
+        self.resolver
+            .find_process_vm(self.vm_id.as_str())
+            .and_then(|dag| {
+                dag.nodes
+                    .iter()
+                    .find(|node| node.role == ProcessRole::Swtpm)
+            })
+            .ok_or(TpmEffectError::SpawnRejected)
+    }
+
+    fn spawn(
+        &self,
+        role: RunnerRole,
+        role_id: &str,
+        intent: BundleOpId,
+        timeout: Duration,
+    ) -> Result<
+        (
+            d2b_contracts::broker_wire::SpawnRunnerResponse,
+            Vec<std::os::fd::RawFd>,
+        ),
+        TpmEffectError,
+    > {
+        crate::dispatch_broker_request_with_fds_timeout_as(
+            self.state,
+            BrokerRequest::SpawnRunner(SpawnRunnerRequest {
+                vm_id: self.vm_id.clone(),
+                role_id: RoleId::new(role_id),
+                resource_ref: None,
+                resource_uid: None,
+                bundle_content_identity: None,
+                provider_identity: None,
+                template_identity: None,
+                generation: None,
+                sandbox_plan: None,
+                role,
+                bundle_runner_intent_ref: intent,
+                execution_ref: None,
+                execution_domain: None,
+                user_ref: None,
+                runtime_allocations: Vec::new(),
+                tracing_span_id: None,
+                workload_identity: None,
+            }),
+            self.caller_role.clone(),
+            timeout,
+        )
+        .map_err(|_| TpmEffectError::Transient)
+        .and_then(|(response, fds)| match response {
+            BrokerResponse::SpawnRunner(response) => Ok((response, fds)),
+            BrokerResponse::Error(_) => {
+                crate::close_received_fds(&fds);
+                Err(TpmEffectError::SpawnRejected)
+            }
+            _ => {
+                crate::close_received_fds(&fds);
+                Err(TpmEffectError::SpawnRejected)
+            }
+        })
+    }
+
+    fn cleanup_failed_start(
+        &self,
+        response: &d2b_contracts::broker_wire::SpawnRunnerResponse,
+        received_fds: &[std::os::fd::RawFd],
+    ) {
+        let removed = {
+            let _guard = self.state.pidfd_table.mutation_guard();
+            let removed = self.state.pidfd_table.deregister_if_matches(
+                self.vm_id.as_str(),
+                "swtpm",
+                response.pid,
+                response.start_time_ticks,
+            );
+            if removed {
+                let _ = self.state.pidfd_table.snapshot();
+            }
+            removed
+        };
+        if removed {
+            tracing::warn!(
+                vm = %self.vm_id,
+                role = "swtpm",
+                "removed failed TPM runner registration"
+            );
+        }
+        crate::stop_unregistered_spawned_runner(
+            self.state,
+            self.vm_id.as_str(),
+            "swtpm",
+            response,
+            received_fds,
+            self.caller_role.clone(),
+        );
+        crate::close_received_fds(received_fds);
+    }
+}
+
+impl CoreTpmEffectExecutor for LiveTpmEffectExecutor<'_> {
+    fn prepare_state_dir(
+        &mut self,
+        intent: &StateDirIntent,
+    ) -> Result<TpmStatePreparationResult, TpmEffectError> {
+        let response = crate::dispatch_broker_request_as(
+            self.state,
+            BrokerRequest::PrepareStateDir(d2b_contracts::broker_wire::PrepareDirRequest {
+                vm_id: self.vm_id.clone(),
+                path_class: PathClass::Vm,
+                tracing_span_id: None,
+            }),
+            self.caller_role.clone(),
+        )
+        .map_err(|_| TpmEffectError::Transient)?;
+        if !matches!(response, BrokerResponse::Ack(_)) {
+            return Err(TpmEffectError::StateIntegrity);
+        }
+        let flush_ticket =
+            FlushLaunchTicket::from_core(self.ticket_bytes("d2b:tpm-flush-ticket/v2", intent));
+        let swtpm_ticket =
+            SwtpmStartLaunchTicket::from_core(self.ticket_bytes("d2b:tpm-start-ticket/v2", intent));
+        self.prepared_flush_ticket = Some(flush_ticket.clone());
+        self.prepared_swtpm_ticket = Some(swtpm_ticket.clone());
+        Ok(TpmStatePreparationResult {
+            observation: TpmStateObservation::from_core(if self.legacy_migration_required {
+                TpmStateObservationKind::ExistingWithMarker
+            } else {
+                TpmStateObservationKind::Fresh
+            }),
+            flush_ticket,
+            swtpm_ticket,
+        })
+    }
+
+    fn flush(&mut self, ticket: &FlushLaunchTicket) -> Result<(), TpmEffectError> {
+        if self.adopted_live_worker {
+            return Ok(());
+        }
+        if self.prepared_flush_ticket.as_ref() != Some(ticket) {
+            return Err(TpmEffectError::StateIntegrity);
+        }
+        let intent = self.runner_intent("swtpm-flush")?;
+        let (response, fds) = self.spawn(
+            RunnerRole::SwtpmFlush,
+            "swtpm-flush",
+            intent,
+            Duration::from_secs(30),
+        )?;
+        let result = crate::wait_for_one_shot_exit(
+            response.pid,
+            response.start_time_ticks,
+            Duration::from_secs(30),
+        );
+        if result.is_err() {
+            crate::stop_unregistered_spawned_runner(
+                self.state,
+                self.vm_id.as_str(),
+                "swtpm-flush",
+                &response,
+                &fds,
+                self.caller_role.clone(),
+            );
+        }
+        crate::close_received_fds(&fds);
+        result.map_err(|_| TpmEffectError::FlushFailed)
+    }
+
+    fn start(
+        &mut self,
+        ticket: &SwtpmStartLaunchTicket,
+        settings: SwtpmSettings,
+        binary: &SignedBinaryRef,
+    ) -> Result<(), TpmEffectError> {
+        if self.prepared_swtpm_ticket.as_ref() != Some(ticket)
+            || binary.kind() != BinaryKind::Swtpm
+            || d2b_provider_device_tpm::SwtpmArgv::for_settings(settings).is_err()
+        {
+            return Err(TpmEffectError::SpawnRejected);
+        }
+        let pidfd_alive = self
+            .state
+            .pidfd_table
+            .still_alive_same_start_time(self.vm_id.as_str(), "swtpm");
+        let snapshot = crate::supervisor::state::SnapshotStore::get(
+            &crate::supervisor::state::FilesystemSnapshotStore::new(&self.state.daemon_state_dir),
+            self.vm_id.as_str(),
+            "swtpm",
+        )
+        .map_err(|_| TpmEffectError::Transient)?;
+        let liveness = if pidfd_alive {
+            DurableSwtpmLiveness::Live
+        } else if let Some(snapshot) = snapshot.as_ref() {
+            match crate::supervisor::pidfd_table::read_proc_start_time_pub(snapshot.pid) {
+                Ok(None) => DurableSwtpmLiveness::Missing,
+                Ok(Some(_)) | Err(_) => DurableSwtpmLiveness::Ambiguous,
+            }
+        } else {
+            DurableSwtpmLiveness::Missing
+        };
+        match durable_swtpm_adoption_gate(snapshot.as_ref(), &self.device_uid, liveness)? {
+            DurableSwtpmAdoption::Adopted => {
+                self.adopted_live_worker = true;
+                return Ok(());
+            }
+            DurableSwtpmAdoption::ClaimAndAdopt => {
+                let mut claimed = snapshot.expect("claim requires a durable snapshot");
+                claimed.owner_resource_uid = Some(self.device_uid.as_str().to_owned());
+                crate::supervisor::state::SnapshotStore::upsert(
+                    &crate::supervisor::state::FilesystemSnapshotStore::new(
+                        &self.state.daemon_state_dir,
+                    ),
+                    &claimed,
+                )
+                .map_err(|_| TpmEffectError::Transient)?;
+                self.adopted_live_worker = true;
+                return Ok(());
+            }
+            DurableSwtpmAdoption::RemoveAndSpawn => {
+                crate::supervisor::state::SnapshotStore::remove(
+                    &crate::supervisor::state::FilesystemSnapshotStore::new(
+                        &self.state.daemon_state_dir,
+                    ),
+                    self.vm_id.as_str(),
+                    "swtpm",
+                )
+                .map_err(|_| TpmEffectError::Transient)?;
+            }
+            DurableSwtpmAdoption::Spawn => {}
+        }
+        if !self
+            .state
+            .pidfd_table
+            .try_reserve_spawn(self.vm_id.as_str(), "swtpm")
+        {
+            return Err(TpmEffectError::Transient);
+        }
+        let _spawn_reservation = SwtpmSpawnReservation {
+            table: &self.state.pidfd_table,
+            vm: self.vm_id.as_str().to_owned(),
+        };
+        if self
+            .state
+            .pidfd_table
+            .still_alive_same_start_time(self.vm_id.as_str(), "swtpm")
+        {
+            self.adopted_live_worker = true;
+            return Ok(());
+        }
+        self.adopted_live_worker = false;
+        let swtpm_node = self.swtpm_node()?;
+        {
+            let _mguard = self.state.pidfd_table.mutation_guard();
+            if self
+                .state
+                .pidfd_table
+                .deregister(self.vm_id.as_str(), "swtpm")
+                .is_some()
+            {
+                let _ = self.state.pidfd_table.snapshot();
+            }
+        }
+        let intent = self.runner_intent("swtpm")?;
+        let (response, fds) =
+            self.spawn(RunnerRole::Swtpm, "swtpm", intent, Duration::from_secs(30))?;
+        let pidfd = match crate::duplicate_received_fd(&fds, response.pidfd_index, "TPM pidfd") {
+            Ok(pidfd) => pidfd,
+            Err(_) => {
+                self.cleanup_failed_start(&response, &fds);
+                return Err(TpmEffectError::Transient);
+            }
+        };
+        let registration_result = {
+            let _guard = self.state.pidfd_table.mutation_guard();
+            (|| {
+                self.state.pidfd_table.register(
+                    self.vm_id.as_str().to_owned(),
+                    "swtpm".to_owned(),
+                    crate::supervisor::pidfd_table::PidfdEntry {
+                        pidfd,
+                        pid: response.pid,
+                        start_time_ticks: response.start_time_ticks,
+                    },
+                )?;
+                self.state.pidfd_table.snapshot()
+            })()
+        };
+        if let Err(error) = registration_result {
+            let duplicate = matches!(
+                error,
+                crate::supervisor::pidfd_table::PidfdTableError::DuplicateRegistration { .. }
+            );
+            self.cleanup_failed_start(&response, &fds);
+            return Err(if duplicate {
+                TpmEffectError::SpawnRejected
+            } else {
+                TpmEffectError::Transient
+            });
+        }
+        if let Err(error) = crate::write_runner_snapshot_owned(
+            self.state,
+            self.vm_id.as_str(),
+            "swtpm",
+            RunnerRole::Swtpm,
+            response.pid,
+            response.start_time_ticks,
+            Some(self.device_uid.as_str()),
+        ) {
+            self.cleanup_failed_start(&response, &fds);
+            tracing::warn!(error = %error, "TPM runner snapshot persistence failed");
+            return Err(TpmEffectError::Transient);
+        }
+        crate::close_received_fds(&fds);
+        let liveness = crate::supervisor::readiness_liveness::PidfdLivenessProbe::new(
+            &self.state.pidfd_table,
+            &self.state.broker_reap_log,
+            self.vm_id.as_str(),
+            "swtpm",
+        );
+        crate::wait_for_readiness(
+            swtpm_node,
+            &swtpm_node.readiness,
+            Duration::from_secs(30),
+            Some(&liveness),
+        )
+        .map_err(|_| {
+            let _ = self.stop();
+            TpmEffectError::Transient
+        })?;
+        Ok(())
+    }
+
+    fn stop(&mut self) -> Result<(), TpmEffectError> {
+        crate::stop_vm_pidfd_role(
+            self.state,
+            self.caller_role.clone(),
+            "device-tpm",
+            self.vm_id.as_str(),
+            "swtpm",
+            Duration::from_secs(5),
+            Duration::from_secs(5),
+        )
+        .map(|_| ())
+        .map_err(|_| TpmEffectError::Transient)
+    }
 }
 
 /// Production adapter bound to one Core-issued migration decision.
@@ -134,6 +571,313 @@ impl<E: CoreTpmEffectExecutor> TpmEffectPort for ProductionTpmEffectPort<'_, E> 
     }
 }
 
+/// Production Device controller reconcile callsite.
+///
+/// Core supplies the migration decision and opaque state intent; the daemon
+/// supplies only the concrete broker-backed executor. The migration receipt
+/// never crosses into the Provider crate.
+pub(crate) struct AdmittedTpmDevice {
+    device_uid: ResourceUid,
+    device_ref: ResourceRef,
+    zone: String,
+    execution_ref: ResourceRef,
+}
+
+impl AdmittedTpmDevice {
+    pub(crate) fn new(
+        device_uid: ResourceUid,
+        device_ref: ResourceRef,
+        zone: impl Into<String>,
+        execution_ref: ResourceRef,
+    ) -> Self {
+        Self {
+            device_uid,
+            device_ref,
+            zone: zone.into(),
+            execution_ref,
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn reconcile_device_tpm(
+    state: &crate::ServerState,
+    resolver: &BundleResolver,
+    vm_id: VmId,
+    migration_intent_ref: BundleOpId,
+    migration_decision: LegacyTpmMigrationDecision,
+    admitted_device: AdmittedTpmDevice,
+    state_intent: StateDirIntent,
+    settings: SwtpmSettings,
+    binary: SignedBinaryRef,
+    caller_role: BrokerCallerRole,
+) -> Result<TpmResourceOutcome, d2b_provider_device_tpm::TpmResourceControllerError> {
+    let AdmittedTpmDevice {
+        device_uid,
+        device_ref,
+        zone,
+        execution_ref,
+    } = admitted_device;
+    let executor = LiveTpmEffectExecutor::new(
+        state,
+        resolver,
+        vm_id.clone(),
+        caller_role,
+        device_uid.clone(),
+        migration_decision.requires_migration(),
+    );
+    let effect = ProductionTpmEffectPort::new(
+        state,
+        vm_id,
+        migration_intent_ref,
+        migration_decision,
+        executor,
+    );
+    let resource_effect = LiveTpmResourceEffectPort {
+        effect: Mutex::new(effect),
+        device_uid: device_uid.clone(),
+        device_ref: device_ref.clone(),
+        zone,
+        execution_ref: execution_ref.clone(),
+        state_intent,
+        settings,
+        binary,
+        preparation: Mutex::new(None),
+    };
+    let mut controller = TpmResourceController::new(device_uid, device_ref, execution_ref)?;
+    crate::block_on_future(controller.reconcile(&resource_effect))
+}
+
+struct LiveTpmResourceEffectPort<'a, E> {
+    effect: Mutex<ProductionTpmEffectPort<'a, E>>,
+    device_uid: ResourceUid,
+    device_ref: ResourceRef,
+    zone: String,
+    execution_ref: ResourceRef,
+    state_intent: StateDirIntent,
+    settings: SwtpmSettings,
+    binary: SignedBinaryRef,
+    preparation: Mutex<Option<TpmStatePreparationResult>>,
+}
+
+impl<E: CoreTpmEffectExecutor + Send> TpmResourceEffectPort for LiveTpmResourceEffectPort<'_, E> {
+    async fn ensure_state_volume(
+        &self,
+        device_uid: &ResourceUid,
+        device_ref: &ResourceRef,
+        execution_ref: &ResourceRef,
+    ) -> Result<ResourceRef, TpmResourceEffectError> {
+        if device_ref != &self.device_ref || execution_ref != &self.execution_ref {
+            return Err(TpmResourceEffectError::StateIntegrity);
+        }
+        build_tpm_state_volume_resource(device_uid, device_ref, &self.zone, execution_ref)?;
+        let mut effect = self
+            .effect
+            .lock()
+            .map_err(|_| TpmResourceEffectError::Transient)?;
+        if effect.legacy_migration_required() {
+            match effect
+                .migrate_legacy_state()
+                .map_err(map_resource_effect_error)?
+            {
+                LegacyMigrationOutcome::Migrated
+                | LegacyMigrationOutcome::AlreadyMigrated
+                | LegacyMigrationOutcome::NotApplicable => {}
+                LegacyMigrationOutcome::Pending => return Err(TpmResourceEffectError::Transient),
+                LegacyMigrationOutcome::Failed | LegacyMigrationOutcome::Ambiguous => {
+                    return Err(TpmResourceEffectError::StateIntegrity);
+                }
+            }
+        }
+        let preparation = effect
+            .prepare_state_dir(&self.state_intent)
+            .map_err(map_resource_effect_error)?;
+        *self
+            .preparation
+            .lock()
+            .map_err(|_| TpmResourceEffectError::Transient)? = Some(preparation);
+        child_ref("Volume", device_uid, "tpm-state")
+    }
+
+    async fn request_flush_process(
+        &self,
+        device_uid: &ResourceUid,
+        execution_ref: &ResourceRef,
+    ) -> Result<ResourceRef, TpmResourceEffectError> {
+        build_swtpm_flush_spec(device_uid, execution_ref)?;
+        let ticket = self
+            .preparation
+            .lock()
+            .map_err(|_| TpmResourceEffectError::Transient)?
+            .as_ref()
+            .map(|preparation| preparation.flush_ticket.clone())
+            .ok_or(TpmResourceEffectError::StateIntegrity)?;
+        self.effect
+            .lock()
+            .map_err(|_| TpmResourceEffectError::Transient)?
+            .flush(&ticket)
+            .map_err(map_resource_effect_error)?;
+        child_ref("EphemeralProcess", device_uid, "tpm-flush")
+    }
+
+    async fn request_swtpm_process(
+        &self,
+        device_uid: &ResourceUid,
+        _volume_ref: &ResourceRef,
+        execution_ref: &ResourceRef,
+    ) -> Result<ResourceRef, TpmResourceEffectError> {
+        build_swtpm_process_spec(device_uid, execution_ref)?;
+        let ticket = self
+            .preparation
+            .lock()
+            .map_err(|_| TpmResourceEffectError::Transient)?
+            .as_ref()
+            .map(|preparation| preparation.swtpm_ticket.clone())
+            .ok_or(TpmResourceEffectError::StateIntegrity)?;
+        self.effect
+            .lock()
+            .map_err(|_| TpmResourceEffectError::Transient)?
+            .start(&ticket, self.settings, &self.binary)
+            .map_err(map_resource_effect_error)?;
+        child_ref("Process", device_uid, "swtpm")
+    }
+
+    async fn stop_swtpm_process(
+        &self,
+        _process_ref: &ResourceRef,
+    ) -> Result<(), TpmResourceEffectError> {
+        self.effect
+            .lock()
+            .map_err(|_| TpmResourceEffectError::Transient)?
+            .stop()
+            .map_err(map_resource_effect_error)
+    }
+
+    async fn delete_flush_process(
+        &self,
+        _process_ref: &ResourceRef,
+    ) -> Result<(), TpmResourceEffectError> {
+        Ok(())
+    }
+
+    async fn watch_tpm_endpoint(
+        &self,
+        _process_ref: &ResourceRef,
+    ) -> Result<ResourceRef, TpmResourceEffectError> {
+        child_ref("Endpoint", &self.device_uid, "tpm")
+    }
+}
+
+fn child_ref(
+    resource_type: &str,
+    device_uid: &ResourceUid,
+    suffix: &str,
+) -> Result<ResourceRef, TpmResourceEffectError> {
+    let short: String = device_uid
+        .as_str()
+        .bytes()
+        .filter(|byte| byte.is_ascii_hexdigit())
+        .take(12)
+        .map(char::from)
+        .collect();
+    ResourceRef::parse(&format!("{resource_type}/device-{short}-{suffix}"))
+        .map_err(|_| TpmResourceEffectError::InvalidDevice)
+}
+
+fn map_resource_effect_error(error: TpmEffectError) -> TpmResourceEffectError {
+    match error {
+        TpmEffectError::Transient => TpmResourceEffectError::Transient,
+        TpmEffectError::StateIntegrity => TpmResourceEffectError::StateIntegrity,
+        _ => TpmResourceEffectError::EffectRejected,
+    }
+}
+
+/// Registered production Device controller entry point.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct DeviceTpmControllerRegistration {
+    registered: bool,
+}
+
+impl DeviceTpmControllerRegistration {
+    pub(crate) const fn is_registered(self) -> bool {
+        self.registered
+    }
+
+    /// Reconcile one Core-admitted Device through the live broker executor.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn reconcile(
+        self,
+        state: &crate::ServerState,
+        resolver: &BundleResolver,
+        vm_id: VmId,
+        migration_intent_ref: BundleOpId,
+        migration_decision: LegacyTpmMigrationDecision,
+        admitted_device: AdmittedTpmDevice,
+        state_intent: StateDirIntent,
+        settings: SwtpmSettings,
+        binary: SignedBinaryRef,
+        caller_role: BrokerCallerRole,
+    ) -> Result<TpmResourceOutcome, d2b_provider_device_tpm::TpmResourceControllerError> {
+        reconcile_device_tpm(
+            state,
+            resolver,
+            vm_id,
+            migration_intent_ref,
+            migration_decision,
+            admitted_device,
+            state_intent,
+            settings,
+            binary,
+            caller_role,
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DurableSwtpmAdoption {
+    Adopted,
+    ClaimAndAdopt,
+    RemoveAndSpawn,
+    Spawn,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DurableSwtpmLiveness {
+    Live,
+    Missing,
+    Ambiguous,
+}
+
+fn durable_swtpm_adoption_gate(
+    snapshot: Option<&crate::supervisor::state::RunnerSnapshotRecord>,
+    device_uid: &ResourceUid,
+    liveness: DurableSwtpmLiveness,
+) -> Result<DurableSwtpmAdoption, TpmEffectError> {
+    let Some(snapshot) = snapshot else {
+        return Ok(if liveness == DurableSwtpmLiveness::Live {
+            DurableSwtpmAdoption::Adopted
+        } else {
+            DurableSwtpmAdoption::Spawn
+        });
+    };
+    if liveness == DurableSwtpmLiveness::Ambiguous {
+        return Err(TpmEffectError::Transient);
+    }
+    match snapshot.owner_resource_uid.as_deref() {
+        Some(owner) if owner != device_uid.as_str() => Err(TpmEffectError::StateIntegrity),
+        Some(_) if liveness == DurableSwtpmLiveness::Live => Ok(DurableSwtpmAdoption::Adopted),
+        Some(_) => Ok(DurableSwtpmAdoption::RemoveAndSpawn),
+        None if liveness == DurableSwtpmLiveness::Live => Ok(DurableSwtpmAdoption::ClaimAndAdopt),
+        None => Err(TpmEffectError::Transient),
+    }
+}
+
+/// Register the real Device TPM controller at the daemon/Core composition
+/// boundary. The returned registration is retained by the Zone runtime.
+pub(crate) fn register_device_tpm_controller() -> DeviceTpmControllerRegistration {
+    DeviceTpmControllerRegistration { registered: true }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -169,5 +913,87 @@ mod tests {
         ] {
             assert_eq!(map_legacy_migration_outcome(broker), provider);
         }
+    }
+
+    #[test]
+    fn confirmed_dead_durable_snapshot_allows_replacement_spawn() {
+        let uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
+        let snapshot = crate::supervisor::state::RunnerSnapshotRecord {
+            vm: "work-vm".to_owned(),
+            role_id: "swtpm".to_owned(),
+            role: RunnerRole::Swtpm,
+            owner_resource_uid: Some(uid.as_str().to_owned()),
+            pid: 123,
+            start_time_ticks: 456,
+            snapshotted_at: "2026-08-15T00:00:00Z".to_owned(),
+        };
+        assert_eq!(
+            durable_swtpm_adoption_gate(Some(&snapshot), &uid, DurableSwtpmLiveness::Missing,),
+            Ok(DurableSwtpmAdoption::RemoveAndSpawn)
+        );
+    }
+
+    #[test]
+    fn live_legacy_snapshot_is_adopted() {
+        let uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
+        let snapshot = crate::supervisor::state::RunnerSnapshotRecord {
+            vm: "work-vm".to_owned(),
+            role_id: "swtpm".to_owned(),
+            role: RunnerRole::Swtpm,
+            owner_resource_uid: None,
+            pid: 123,
+            start_time_ticks: 456,
+            snapshotted_at: "2026-08-15T00:00:00Z".to_owned(),
+        };
+        assert_eq!(
+            durable_swtpm_adoption_gate(Some(&snapshot), &uid, DurableSwtpmLiveness::Live),
+            Ok(DurableSwtpmAdoption::ClaimAndAdopt)
+        );
+    }
+
+    #[test]
+    fn live_pidfd_without_snapshot_is_adopted() {
+        let uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
+        assert_eq!(
+            durable_swtpm_adoption_gate(None, &uid, DurableSwtpmLiveness::Live),
+            Ok(DurableSwtpmAdoption::Adopted)
+        );
+    }
+
+    #[test]
+    fn ambiguous_durable_snapshot_stays_fail_closed() {
+        let uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
+        let snapshot = crate::supervisor::state::RunnerSnapshotRecord {
+            vm: "work-vm".to_owned(),
+            role_id: "swtpm".to_owned(),
+            role: RunnerRole::Swtpm,
+            owner_resource_uid: Some(uid.as_str().to_owned()),
+            pid: 123,
+            start_time_ticks: 456,
+            snapshotted_at: "2026-08-15T00:00:00Z".to_owned(),
+        };
+        assert_eq!(
+            durable_swtpm_adoption_gate(Some(&snapshot), &uid, DurableSwtpmLiveness::Ambiguous,),
+            Err(TpmEffectError::Transient)
+        );
+    }
+
+    #[test]
+    fn durable_snapshot_refuses_replaced_device_uid_for_same_vm() {
+        let old_uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
+        let new_uid = ResourceUid::parse("223e4567-e89b-42d3-a456-426614174000").unwrap();
+        let snapshot = crate::supervisor::state::RunnerSnapshotRecord {
+            vm: "work-vm".to_owned(),
+            role_id: "swtpm".to_owned(),
+            role: RunnerRole::Swtpm,
+            owner_resource_uid: Some(old_uid.as_str().to_owned()),
+            pid: 123,
+            start_time_ticks: 456,
+            snapshotted_at: "2026-08-15T00:00:00Z".to_owned(),
+        };
+        assert_eq!(
+            durable_swtpm_adoption_gate(Some(&snapshot), &new_uid, DurableSwtpmLiveness::Live),
+            Err(TpmEffectError::StateIntegrity)
+        );
     }
 }

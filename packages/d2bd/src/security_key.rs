@@ -334,6 +334,11 @@ impl SecurityKeyState {
         }
     }
 
+    /// Authorize a VM to use this relay's resolved physical key.
+    pub fn enable_vm(&mut self, vm_id: impl Into<String>) {
+        self.enabled_vms.insert(vm_id.into());
+    }
+
     /// Try to acquire the lease for `vm_id`. Returns the [`LeaseId`] on
     /// success, or `None` if another VM holds an unexpired lease.
     pub fn try_acquire_lease(&mut self, vm_id: &str) -> Option<LeaseId> {
@@ -681,9 +686,63 @@ pub struct SkAcceptHandle {
 #[derive(Debug, Default)]
 pub struct SkSessionTable {
     sessions: HashMap<String, SkAcceptHandle>,
+    backing_holders: HashMap<d2b_provider_device_security_key::PhysicalUsbBackingToken, String>,
 }
 
 impl SkSessionTable {
+    /// Reserve one resolved physical key before the broker opens its
+    /// descriptor. The table is daemon-global, so it also serializes
+    /// Device requests from different VMs and Zones.
+    pub fn claim_backing(
+        &mut self,
+        vm_id: &str,
+        backing: d2b_provider_device_security_key::PhysicalUsbBackingToken,
+    ) -> bool {
+        if self.has_live_claim(vm_id, &backing) {
+            return true;
+        }
+        if self.sessions.contains_key(vm_id)
+            || self.backing_holders.contains_key(&backing)
+            || self.backing_holders.values().any(|holder| holder == vm_id)
+        {
+            return false;
+        }
+        self.backing_holders.insert(backing, vm_id.to_owned());
+        true
+    }
+
+    /// True when this VM already holds this backing token and a live relay.
+    pub fn has_live_claim(
+        &self,
+        vm_id: &str,
+        backing: &d2b_provider_device_security_key::PhysicalUsbBackingToken,
+    ) -> bool {
+        self.sessions.contains_key(vm_id)
+            && self
+                .backing_holders
+                .get(backing)
+                .is_some_and(|holder| holder == vm_id)
+    }
+
+    /// Release a previously reserved physical key and stop its relay, if one
+    /// was started. A mismatched owner cannot release another VM's claim.
+    pub fn release_backing(
+        &mut self,
+        vm_id: &str,
+        backing: &d2b_provider_device_security_key::PhysicalUsbBackingToken,
+    ) {
+        if self
+            .backing_holders
+            .get(backing)
+            .is_some_and(|holder| holder == vm_id)
+        {
+            self.backing_holders.remove(backing);
+            if let Some(handle) = self.sessions.remove(vm_id) {
+                handle.abort.abort();
+            }
+        }
+    }
+
     pub fn register(&mut self, vm_id: String, handle: SkAcceptHandle) {
         if let Some(previous) = self.sessions.insert(vm_id, handle) {
             previous.abort.abort();
@@ -691,7 +750,15 @@ impl SkSessionTable {
     }
 
     pub fn remove(&mut self, vm_id: &str) -> Option<SkAcceptHandle> {
+        self.backing_holders.retain(|_, holder| holder != vm_id);
         self.sessions.remove(vm_id)
+    }
+
+    /// Stop a VM relay and release its physical-key reservation.
+    pub fn stop_vm(&mut self, vm_id: &str) {
+        if let Some(handle) = self.remove(vm_id) {
+            handle.abort.abort();
+        }
     }
 }
 
@@ -1404,11 +1471,51 @@ mod tests {
 
         first_rx.await.expect("first accept loop should be aborted");
 
-        if let Some(handle) = table.remove("vm-a") {
-            handle.abort.abort();
-        }
+        table.stop_vm("vm-a");
         second_rx
             .await
             .expect("second accept loop should be aborted during cleanup");
+    }
+
+    #[test]
+    fn physical_backing_claim_excludes_other_vms_until_release() {
+        let mut table = SkSessionTable::default();
+        let backing = d2b_provider_device_security_key::PhysicalUsbBackingToken::from_core([7; 32]);
+
+        assert!(table.claim_backing("vm-a", backing.clone()));
+        assert!(!table.claim_backing("vm-b", backing.clone()));
+
+        table.release_backing("vm-a", &backing);
+        assert!(table.claim_backing("vm-b", backing));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn live_same_vm_claim_is_adopted() {
+        let mut table = SkSessionTable::default();
+        let backing = d2b_provider_device_security_key::PhysicalUsbBackingToken::from_core([3; 32]);
+        let state = Arc::new(parking_lot::Mutex::new(SecurityKeyState::new("selector")));
+        let (abort, _stopped) = SkAcceptAbort::new();
+
+        assert!(table.claim_backing("vm-a", backing.clone()));
+        table.register("vm-a".to_owned(), SkAcceptHandle { state, abort });
+        assert!(table.has_live_claim("vm-a", &backing));
+        assert!(table.claim_backing("vm-a", backing.clone()));
+        assert!(!table.claim_backing("vm-b", backing));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn stopping_vm_releases_backing_and_aborts_relay() {
+        let mut table = SkSessionTable::default();
+        let backing = d2b_provider_device_security_key::PhysicalUsbBackingToken::from_core([9; 32]);
+        let state = Arc::new(parking_lot::Mutex::new(SecurityKeyState::new("selector")));
+        let (abort, stopped) = SkAcceptAbort::new();
+
+        assert!(table.claim_backing("vm-a", backing.clone()));
+        table.register("vm-a".to_owned(), SkAcceptHandle { state, abort });
+
+        table.stop_vm("vm-a");
+
+        stopped.await.expect("stopping a VM should abort its relay");
+        assert!(table.claim_backing("vm-b", backing));
     }
 }

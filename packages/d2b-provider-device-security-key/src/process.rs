@@ -21,6 +21,60 @@ pub struct FrontendProcessDeclaration {
     domain: &'static str,
 }
 
+/// Host relay Process declaration.
+#[derive(Clone, PartialEq, Eq)]
+pub struct RelayProcessDeclaration {
+    name: String,
+    execution_ref: ResourceRef,
+}
+
+impl RelayProcessDeclaration {
+    /// Construct the Host relay declaration for one authority Service.
+    pub fn new(
+        device_uid: &ResourceUid,
+        execution_ref: ResourceRef,
+    ) -> Result<Self, ProcessDeclarationError> {
+        if execution_ref.resource_type().as_str() != "Host" {
+            return Err(ProcessDeclarationError::WrongExecutionRef);
+        }
+        Ok(Self {
+            name: security_key_process_name(device_uid, SecurityKeyProcessRole::HostRelay)?,
+            execution_ref,
+        })
+    }
+
+    /// Borrow the deterministic Process resource name.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Borrow the Host execution reference.
+    pub const fn execution_ref(&self) -> &ResourceRef {
+        &self.execution_ref
+    }
+
+    /// Return the fixed system domain.
+    pub const fn domain(&self) -> &'static str {
+        "system"
+    }
+
+    /// Return the fixed relay role.
+    pub const fn role(&self) -> SecurityKeyProcessRole {
+        SecurityKeyProcessRole::HostRelay
+    }
+}
+
+impl fmt::Debug for RelayProcessDeclaration {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RelayProcessDeclaration")
+            .field("name", &self.name)
+            .field("execution_ref", &self.execution_ref)
+            .field("domain", &self.domain())
+            .finish()
+    }
+}
+
 impl FrontendProcessDeclaration {
     /// Construct the Guest frontend declaration for one Device and Guest.
     pub fn new(
