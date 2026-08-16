@@ -19,11 +19,13 @@ use std::task::{Context, Poll, Wake, Waker};
 use std::thread::{self, Thread};
 use std::time::{Duration, Instant};
 
-use d2b_contracts::v3::ResourceRef;
 use d2b_contracts::v3::credential::{
-    CredentialLeaseHandle, CredentialLeaseState, CredentialMetadata, CredentialOutcomeCode,
-    CredentialServiceError, CredentialServiceErrorCode, CredentialSourceVersion, PlacementBinding,
+    CredentialAuthorization, CredentialLeaseHandle, CredentialLeaseState, CredentialMetadata,
+    CredentialOutcomeCode, CredentialServiceError, CredentialServiceErrorCode,
+    CredentialSessionAuthority, CredentialSessionCapability, CredentialSessionKey,
+    CredentialSourceVersion, PlacementBinding,
 };
+use d2b_contracts::v3::{ResourceGeneration, ResourceRef, ZoneId};
 
 pub use controller::{
     SecretServiceController, SecretServiceControllerHealth, SecretServiceStatusProjection,
@@ -70,6 +72,8 @@ pub enum SecretServiceState {
 pub enum SecretServicePortError {
     /// The backing collection is locked.
     Locked,
+    /// The requested secret is absent from the backing collection.
+    Missing,
     /// Backing policy denied the operation.
     Denied,
     /// The backing service is unavailable.
@@ -85,7 +89,7 @@ pub enum SecretServicePortError {
 impl fmt::Display for SecretServicePortError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
-            Self::Locked | Self::Unavailable => "credential-provider-unavailable",
+            Self::Locked | Self::Missing | Self::Unavailable => "credential-provider-unavailable",
             Self::Denied => "credential-operation-denied",
             Self::LeaseExpired => "credential-lease-expired",
             Self::LeaseRevoked => "credential-lease-revoked",
@@ -184,6 +188,7 @@ impl std::error::Error for SecretServiceProviderError {}
 /// User-domain placement fixed by the Provider factory.
 #[derive(Clone, PartialEq, Eq)]
 pub struct SecretServicePlacement {
+    zone: ZoneId,
     execution_ref: ResourceRef,
     user_ref: ResourceRef,
 }
@@ -191,6 +196,7 @@ pub struct SecretServicePlacement {
 impl SecretServicePlacement {
     /// Validate user-agent placement on a Host or Guest execution context.
     pub fn new(
+        zone: ZoneId,
         binding: PlacementBinding,
         execution_ref: ResourceRef,
         user_ref: ResourceRef,
@@ -204,9 +210,15 @@ impl SecretServicePlacement {
             return Err(SecretServiceProviderError::InvalidScope);
         }
         Ok(Self {
+            zone,
             execution_ref,
             user_ref,
         })
+    }
+
+    /// Borrow the fixed Zone binding.
+    pub const fn zone(&self) -> &ZoneId {
+        &self.zone
     }
 
     /// Borrow the fixed execution context.
@@ -404,6 +416,7 @@ impl SecretServiceCredentialProviderFactory {
             placement: self.placement,
             consumer_ref: self.consumer_ref,
             port: self.port,
+            sessions: Mutex::new(BTreeMap::new()),
             leases: Mutex::new(BTreeMap::new()),
             mutation_gate: Mutex::new(()),
         }
@@ -428,7 +441,8 @@ pub struct SecretServiceCredentialProvider {
     placement: SecretServicePlacement,
     consumer_ref: Option<ResourceRef>,
     port: Arc<dyn Oo7SecretServicePort>,
-    leases: Mutex<BTreeMap<String, LeaseRecord>>,
+    sessions: Mutex<BTreeMap<CredentialSessionKey, ()>>,
+    leases: Mutex<BTreeMap<(CredentialSessionKey, String), LeaseRecord>>,
     mutation_gate: Mutex<()>,
 }
 
@@ -453,9 +467,66 @@ impl SecretServiceCredentialProvider {
         &self.config
     }
 
+    /// Issue one authority-backed capability for this exact placement and
+    /// configured consumer.
+    pub fn issue_session_capability(
+        &self,
+        generation: ResourceGeneration,
+    ) -> Result<CredentialSessionCapability, SecretServiceProviderError> {
+        let consumer = self.consumer_ref.clone().unwrap_or_else(|| {
+            ResourceRef::parse(PROVIDER_REF)
+                .expect("the canonical Provider reference is a validated constant")
+        });
+        CredentialSessionAuthority::new()
+            .issue(
+                self.placement.zone().clone(),
+                self.placement.execution_ref().clone(),
+                self.placement.user_ref().clone(),
+                consumer,
+                generation,
+            )
+            .map_err(|_| SecretServiceProviderError::InvalidScope)
+    }
+
+    pub(crate) fn authorize_session(
+        &self,
+        authorization: &CredentialAuthorization,
+    ) -> Result<CredentialSessionKey, CredentialServiceError> {
+        let capability = authorization.session_capability().ok_or_else(|| {
+            CredentialServiceError::new(CredentialServiceErrorCode::OperationDenied)
+        })?;
+        if capability.zone() != self.placement.zone()
+            || capability.workload() != self.placement.execution_ref()
+            || capability.subject() != self.placement.user_ref()
+            || self
+                .consumer_ref
+                .as_ref()
+                .is_some_and(|expected| capability.consumer() != expected)
+            || capability.consumer().resource_type().as_str() != "Provider"
+        {
+            return Err(CredentialServiceError::new(
+                CredentialServiceErrorCode::OperationDenied,
+            ));
+        }
+        let key = capability.session_key();
+        let mut sessions = self.sessions.lock().map_err(|_| {
+            CredentialServiceError::new(CredentialServiceErrorCode::InvariantFailure)
+        })?;
+        if sessions.contains_key(&key) {
+            return Ok(key);
+        }
+        capability.consume().map_err(|_| {
+            CredentialServiceError::new(CredentialServiceErrorCode::OperationDenied)
+        })?;
+        sessions.insert(key, ());
+        Ok(key)
+    }
+
     pub(crate) fn map_port_error(error: SecretServicePortError) -> CredentialServiceError {
         let code = match error {
-            SecretServicePortError::Locked | SecretServicePortError::Unavailable => {
+            SecretServicePortError::Locked
+            | SecretServicePortError::Missing
+            | SecretServicePortError::Unavailable => {
                 CredentialServiceErrorCode::ProviderUnavailable
             }
             SecretServicePortError::Denied => CredentialServiceErrorCode::OperationDenied,
@@ -573,11 +644,21 @@ mod tests {
         let host = ResourceRef::parse("Host/workstation").unwrap();
         let user = ResourceRef::parse("User/alice").unwrap();
         assert!(
-            SecretServicePlacement::new(PlacementBinding::UserAgent, host.clone(), user.clone())
-                .is_ok()
+            SecretServicePlacement::new(
+                ZoneId::parse("user-zone").unwrap(),
+                PlacementBinding::UserAgent,
+                host.clone(),
+                user.clone(),
+            )
+            .is_ok()
         );
         assert_eq!(
-            SecretServicePlacement::new(PlacementBinding::HostSystem, host, user),
+            SecretServicePlacement::new(
+                ZoneId::parse("user-zone").unwrap(),
+                PlacementBinding::HostSystem,
+                host,
+                user,
+            ),
             Err(SecretServiceProviderError::InvalidPlacement)
         );
     }

@@ -7,12 +7,12 @@ use std::task::{Poll, Waker};
 use std::thread;
 use std::time::Duration;
 
-use d2b_contracts::v3::ResourceRef;
 use d2b_contracts::v3::credential::{
     CredentialLeaseHandle, CredentialLeaseState, CredentialMethod, CredentialOutcomeCode,
     CredentialRequest, CredentialResponse, CredentialServiceErrorCode, CredentialSourceVersion,
     PlacementBinding,
 };
+use d2b_contracts::v3::{ResourceRef, ZoneId};
 use d2b_provider_credential_secret_service::{
     LockPolicy, Oo7SecretServicePort, SecretServiceConfig, SecretServiceCredentialProvider,
     SecretServiceCredentialProviderFactory, SecretServiceFuture, SecretServiceLeaseGrant,
@@ -246,6 +246,7 @@ fn provider_with_port(
     SecretServiceCredentialProviderFactory::new(
         SecretServiceConfig::new("login collection", max_leases, LockPolicy::FailClosed).unwrap(),
         SecretServicePlacement::new(
+            ZoneId::parse("user-zone").unwrap(),
             PlacementBinding::UserAgent,
             ResourceRef::parse("Host/workstation").unwrap(),
             ResourceRef::parse("User/alice").unwrap(),

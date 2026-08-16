@@ -6,10 +6,11 @@ use std::sync::{Arc, Mutex};
 use d2b_contracts::v3::credential::{
     AudienceToken, CredentialAuthorization, CredentialLeaseHandle, CredentialLeaseState,
     CredentialMethod, CredentialProvider, CredentialRequest, CredentialResponse,
-    CredentialServiceError, CredentialSourceVersion, DeliveryRouteDigest, DeliverySessionParams,
-    OperationClass, PlacementBinding, dispatch_authorized_provider,
+    CredentialServiceError, CredentialSessionCapability, CredentialSourceVersion,
+    DeliveryRouteDigest, DeliverySessionParams, OperationClass, PlacementBinding,
+    dispatch_authorized_provider,
 };
-use d2b_contracts::v3::{ResourceGeneration, ResourceRef, ResourceUid};
+use d2b_contracts::v3::{ResourceGeneration, ResourceRef, ResourceUid, ZoneId};
 use d2b_provider_credential_secret_service::{
     LockPolicy, Oo7SecretServicePort, SecretServiceConfig, SecretServiceCredentialProvider,
     SecretServiceCredentialProviderFactory, SecretServiceFuture, SecretServiceLeaseGrant,
@@ -139,6 +140,7 @@ pub fn setup(max_leases: u32) -> (SecretServiceCredentialProvider, Arc<FakeOo7Po
     let config =
         SecretServiceConfig::new("login collection", max_leases, LockPolicy::FailClosed).unwrap();
     let placement = SecretServicePlacement::new(
+        ZoneId::parse("user-zone").unwrap(),
         PlacementBinding::UserAgent,
         ResourceRef::parse("Host/workstation").unwrap(),
         ResourceRef::parse("User/alice").unwrap(),
@@ -209,18 +211,31 @@ impl TestAdmission for Admission {
     }
 }
 
+pub trait SessionCapabilitySource {
+    fn test_session_capability(&self) -> CredentialSessionCapability;
+}
+
+impl SessionCapabilitySource for SecretServiceCredentialProvider {
+    fn test_session_capability(&self) -> CredentialSessionCapability {
+        self.issue_session_capability(ResourceGeneration::new(1).unwrap())
+            .expect("test provider must issue its placement-bound capability")
+    }
+}
+
 pub struct ProviderHarness<P, A> {
     provider: P,
     admission: A,
+    capability: Arc<CredentialSessionCapability>,
 }
 
 impl<P, A> ProviderHarness<P, A>
 where
-    P: CredentialProvider,
+    P: CredentialProvider + SessionCapabilitySource,
     A: TestAdmission,
 {
-    pub const fn new(provider: P, admission: A) -> Self {
+    pub fn new(provider: P, admission: A) -> Self {
         Self {
+            capability: Arc::new(provider.test_session_capability()),
             provider,
             admission,
         }
@@ -231,7 +246,10 @@ where
         method: CredentialMethod,
         request: CredentialRequest,
     ) -> Result<CredentialResponse, CredentialServiceError> {
-        let authorization = self.admission.authorize(method, &request)?;
+        let authorization = self
+            .admission
+            .authorize(method, &request)?
+            .with_shared_session_capability(self.capability.clone());
         dispatch_authorized_provider(&self.provider, method, &request, &authorization)
     }
 }
