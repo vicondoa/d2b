@@ -75,6 +75,7 @@ in
           };
 
           environment.variables.D2B_MANIFEST_PATH = config.d2b._manifestJsonPath;
+          environment.systemPackages = [ config.d2b._manifestPkg ];
 
           # runNixOSTest runs first-boot activation before systemd-tmpfiles has
           # materialized the d2b state tree. Pre-create the key directory so

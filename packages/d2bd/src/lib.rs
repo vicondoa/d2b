@@ -13906,13 +13906,25 @@ async fn open_resource_plane(
         return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
     }
     let mut plane = resource_runtime::ResourcePlane::new();
-    let broker_evidence = load_broker_audit_evidence(state)?;
-    let zones = authoritative_zone_ids(resolver)
-        .map_err(|_| resource_runtime::ResourceRuntimeError::ZoneStoreIdInvalid)?;
+    let broker_evidence = match load_broker_audit_evidence(state) {
+        Ok(evidence) => evidence,
+        Err(error) => {
+            tracing::error!(error = ?error, "Zone resource broker evidence load failed");
+            return Err(error);
+        }
+    };
+    let zones = match authoritative_zone_ids(resolver) {
+        Ok(zones) => zones,
+        Err(error) => {
+            tracing::error!(error = ?error, "Zone resource authority index load failed");
+            return Err(resource_runtime::ResourceRuntimeError::ZoneStoreIdInvalid);
+        }
+    };
     for zone in zones {
         let opened = match open_zone_store_from_broker(state, &zone) {
             Ok(opened) => opened,
-            Err(_) => {
+            Err(error) => {
+                tracing::error!(zone = ?zone, error = ?error, "Zone resource store broker open failed");
                 let _ = plane.shutdown().await;
                 return Err(resource_runtime::ResourceRuntimeError::StoreOpenFailed);
             }
@@ -13930,12 +13942,22 @@ async fn open_resource_plane(
             let _ = plane.shutdown().await;
             return Err(resource_runtime::ResourceRuntimeError::StoreOpenFailed);
         }
-        let audit_sink = Arc::new(
-            AuditSink::open(&audit_dir)
-                .map_err(|_| resource_runtime::ResourceRuntimeError::StoreOpenFailed)?,
-        );
+        let audit_sink = match AuditSink::open(&audit_dir) {
+            Ok(sink) => Arc::new(sink),
+            Err(error) => {
+                tracing::error!(
+                    zone = %zone.as_str(),
+                    audit_dir = %audit_dir.display(),
+                    error = ?error,
+                    "Zone resource audit sink open failed",
+                );
+                let _ = plane.shutdown().await;
+                return Err(resource_runtime::ResourceRuntimeError::StoreOpenFailed);
+            }
+        };
+        let zone_name = zone.as_str().to_owned();
         let mut runtime =
-            match resource_runtime::ZoneResourceRuntime::open_with_audit_and_evidence_and_telemetry(
+            match resource_runtime::ZoneResourceRuntime::open_production_with_audit_and_evidence_and_telemetry(
                 zone,
                 opened,
                 audit_sink,
@@ -13946,6 +13968,7 @@ async fn open_resource_plane(
             {
                 Ok(runtime) => runtime,
                 Err(error) => {
+                    tracing::error!(zone = %zone_name, error = ?error, "Zone resource runtime store open failed");
                     let _ = plane.shutdown().await;
                     return Err(error);
                 }

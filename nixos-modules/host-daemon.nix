@@ -84,6 +84,18 @@ EOF
   netVmNames = map
     (envName: cfg.envs.${envName}.netName or "sys-${envName}-net")
     (lib.attrNames cfg.envs);
+  zoneResourceRuntimeNames = lib.unique (
+    [ (cfg._zoneCompiler.localRoot or "local-root") ]
+    ++ lib.attrNames (lib.filterAttrs (_: env: env.enable) cfg.envs)
+    ++ lib.attrNames cfg.zones
+  );
+  zoneResourceRuntimeTmpfiles = lib.concatMap
+    (zoneName: [
+      "d ${cfg.site.stateDir}/zones/${zoneName} 0750 root d2bd -"
+      "d ${cfg.site.stateDir}/zones/${zoneName}/audit 0750 d2bd d2bd -"
+      "d ${cfg.site.stateDir}/zones/${zoneName}/telemetry 0750 d2bd d2bd -"
+    ])
+    zoneResourceRuntimeNames;
   gracefulTimeoutFor = vm:
     if vm.enable && vm.lifecycle.gracefulShutdown.enable then
       if vm.lifecycle.gracefulShutdown.timeoutSeconds == null
@@ -554,7 +566,8 @@ in
       "d /var/lib/d2b/daemon-state 0700 d2bd d2bd -"
       "d /var/cache/d2b 0750 root d2bd -"
       "d /etc/d2b 0750 root d2bd -"
-    ] ++ lib.concatMap realmTmpfilesFor hostLocalRealms;
+    ] ++ zoneResourceRuntimeTmpfiles
+    ++ lib.concatMap realmTmpfilesFor hostLocalRealms;
 
     systemd.services = {
       d2bd = {

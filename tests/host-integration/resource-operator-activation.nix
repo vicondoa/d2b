@@ -32,7 +32,8 @@ pkgs.testers.runNixOSTest {
     for resource_type in ["Volume", "Network", "Device", "Guest"]:
         path = f"/run/d2b-resource-{resource_type.lower()}-before.json"
         machine.succeed(
-            f"runuser -u alice -- d2b --zone work --json resource list "
+            f"runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
+            f"d2b --zone work --json resource list "
             f"{resource_type} >{path}"
         )
         machine.succeed(f"jq -e '.resources | type == \"array\"' {path}")
@@ -44,7 +45,8 @@ pkgs.testers.runNixOSTest {
     for resource_type in ["Volume", "Network", "Device", "Guest"]:
         path = f"/run/d2b-resource-{resource_type.lower()}-after.json"
         machine.succeed(
-            f"runuser -u alice -- d2b --zone work --json resource list "
+            f"runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
+            f"d2b --zone work --json resource list "
             f"{resource_type} >{path}"
         )
         machine.succeed(f"jq -e '.resources | type == \"array\"' {path}")

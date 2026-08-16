@@ -121,9 +121,7 @@ use d2b_session_unix::{
 };
 use nix::unistd::{Group, Uid, User};
 use serde::Deserialize;
-#[cfg(test)]
-use serde_json::json;
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
 /// Maximum number of Zone runtimes owned by one daemon.
@@ -765,6 +763,7 @@ impl ZoneResourceRuntime {
             None,
             Arc::new(BrokerEvidenceIndex::default()),
             None,
+            false,
         )
         .await
     }
@@ -781,6 +780,7 @@ impl ZoneResourceRuntime {
             Some(audit_sink),
             Arc::new(BrokerEvidenceIndex::default()),
             None,
+            false,
         )
         .await
     }
@@ -792,7 +792,7 @@ impl ZoneResourceRuntime {
         audit_sink: Arc<AuditSink>,
         broker_evidence: Arc<BrokerEvidenceIndex>,
     ) -> Result<Self, ResourceRuntimeError> {
-        Self::open_internal(zone, opened, Some(audit_sink), broker_evidence, None).await
+        Self::open_internal(zone, opened, Some(audit_sink), broker_evidence, None, false).await
     }
 
     /// Open one Zone with explicit audit, broker-evidence, and telemetry
@@ -810,6 +810,30 @@ impl ZoneResourceRuntime {
             Some(audit_sink),
             broker_evidence,
             Some(telemetry_path.into()),
+            false,
+        )
+        .await
+    }
+
+    /// Open a newly provisioned production Zone with the immutable bootstrap
+    /// policy and system-core Host authority required for first readiness.
+    ///
+    /// Existing stores are never promoted by this path; their durable policy
+    /// snapshot remains the authority for restart and migration decisions.
+    pub(crate) async fn open_production_with_audit_and_evidence_and_telemetry(
+        zone: ZoneId,
+        opened: OpenedZoneStore,
+        audit_sink: Arc<AuditSink>,
+        broker_evidence: Arc<BrokerEvidenceIndex>,
+        telemetry_path: impl Into<std::path::PathBuf>,
+    ) -> Result<Self, ResourceRuntimeError> {
+        Self::open_internal(
+            zone,
+            opened,
+            Some(audit_sink),
+            broker_evidence,
+            Some(telemetry_path.into()),
+            true,
         )
         .await
     }
@@ -820,6 +844,7 @@ impl ZoneResourceRuntime {
         audit_sink: Option<Arc<AuditSink>>,
         broker_evidence: Arc<BrokerEvidenceIndex>,
         telemetry_path: Option<std::path::PathBuf>,
+        bootstrap_provisioned_store: bool,
     ) -> Result<Self, ResourceRuntimeError> {
         #[cfg(test)]
         let audit_sink = audit_sink.or_else(|| {
@@ -849,6 +874,7 @@ impl ZoneResourceRuntime {
             audit_sink,
             broker_evidence,
             telemetry_path,
+            bootstrap_provisioned_store,
         )
         .await
     }
@@ -866,6 +892,7 @@ impl ZoneResourceRuntime {
             None,
             Arc::new(BrokerEvidenceIndex::default()),
             None,
+            false,
         )
         .await
     }
@@ -877,6 +904,7 @@ impl ZoneResourceRuntime {
         audit_sink: Option<Arc<AuditSink>>,
         broker_evidence: Arc<BrokerEvidenceIndex>,
         telemetry_path: Option<std::path::PathBuf>,
+        bootstrap_provisioned_store: bool,
     ) -> Result<Self, ResourceRuntimeError> {
         let expected_store_id = format!("zone-store-{}", zone.as_str());
         if opened.response.zone_store_id.as_str() != expected_store_id {
@@ -892,12 +920,18 @@ impl ZoneResourceRuntime {
             return Err(ResourceRuntimeError::BrokerDispositionInvalid);
         }
 
+        let disposition = opened.response.disposition;
         let store_identity = store_identity(&zone, &opened.response.store_identity)?;
+        let store_identity =
+            if bootstrap_provisioned_store && disposition == ZoneStoreDisposition::Provisioned {
+                store_identity.with_revisions(initial_policy_snapshot()?)
+            } else {
+                store_identity
+            };
         let authorizer = Arc::new(runtime_authorizer()?);
         let acceptor = authorizer
             .take_store_seal(store_identity.seal_identity())
             .map_err(|_| ResourceRuntimeError::StoreSealUnavailable)?;
-        let disposition = opened.response.disposition;
         let file = File::from(opened.database_fd);
         let store = match disposition {
             ZoneStoreDisposition::Provisioned => {
@@ -1087,8 +1121,22 @@ impl ZoneResourceRuntime {
             )
             .await?;
             process_status_client = Some(Arc::clone(&status_client));
+            if bootstrap_provisioned_store && disposition == ZoneStoreDisposition::Provisioned {
+                ensure_bootstrap_host_resource(&zone, &store, &status_client).await?;
+            }
+            let store_metadata = store
+                .runtime_metadata()
+                .await
+                .map_err(|_| ResourceRuntimeError::StoreReadFailed)?;
             let system_core =
                 reconcile_system_core_resources(&zone, &store, Arc::clone(&status_client)).await?;
+            tracing::debug!(
+                zone = %zone.as_str(),
+                host_phase = ?system_core.host_phase,
+                user_phase = ?system_core.user_phase,
+                total_resources = system_core.total_resource_count,
+                "system-core bootstrap reconciliation completed",
+            );
             let aggregate_handler_phase = if system_core.host_phase == HandlerPhase::Ready
                 && system_core.user_phase == HandlerPhase::Ready
             {
@@ -1158,6 +1206,10 @@ impl ZoneResourceRuntime {
                 Some(state),
             )
         };
+        let store_metadata = store
+            .runtime_metadata()
+            .await
+            .map_err(|_| ResourceRuntimeError::StoreReadFailed)?;
         Ok(Self {
             zone,
             store_id: expected_store_id,
@@ -3256,7 +3308,10 @@ async fn load_interaction_provider_configuration(
             projection: StoreProjection::Full,
         })
         .await
-        .map_err(|_| ResourceRuntimeError::StoreReadFailed)?;
+        .map_err(|error| {
+            tracing::error!(zone = %zone.as_str(), error = ?error, "bootstrap Host list failed");
+            ResourceRuntimeError::StoreReadFailed
+        })?;
     if page.next_cursor.is_some() {
         return Err(ResourceRuntimeError::InteractionConfigurationUnavailable);
     }
@@ -4570,6 +4625,139 @@ fn runtime_authorizer() -> Result<NativeAuthorizer, ResourceRuntimeError> {
         .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)
 }
 
+fn initial_policy_snapshot() -> Result<PolicySnapshot, ResourceRuntimeError> {
+    Ok(PolicySnapshot {
+        policy_revision: 1,
+        api_catalog_revision: 1,
+        active_configuration_revision: ConfigurationGeneration::new(1)
+            .map_err(|_| ResourceRuntimeError::StoreOpenFailed)?,
+        controller_generation: Some(
+            ControllerGeneration::new(1).map_err(|_| ResourceRuntimeError::StoreOpenFailed)?,
+        ),
+    })
+}
+
+async fn ensure_bootstrap_host_resource(
+    zone: &ZoneId,
+    store: &RedbResourceStore,
+    client: &ResourceApiClient<RedbBackend, UnavailableUpgradeDispatcher>,
+) -> Result<(), ResourceRuntimeError> {
+    let host_type =
+        ResourceTypeName::parse("Host").map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
+    let page = store
+        .list(StoreListRequest {
+            operation: StoreOperationContext {
+                operation_id: "system-core-bootstrap-list-host".to_owned(),
+                idempotency_key: None,
+                correlation_id: "system-core-bootstrap-list-host".to_owned(),
+                trace_id: None,
+                deadline_ms: 10_000,
+            },
+            zone: zone.clone(),
+            resource_types: vec![host_type],
+            resource_names: Vec::new(),
+            filters: Vec::new(),
+            page_size: 2,
+            cursor: None,
+            projection: StoreProjection::MetadataOnly,
+        })
+        .await
+        .map_err(|_| ResourceRuntimeError::StoreReadFailed)?;
+    if !page.resources.is_empty() {
+        return Ok(());
+    }
+
+    let payload = CanonicalJsonValue::parse(
+        &serde_json::to_vec(&json!({
+            "apiVersion": "resources.d2bus.org/v3",
+            "metadata": {
+                "configurationGeneration": 1,
+                "createdAt": "1970-01-01T00:00:00.000Z",
+                "deletionRequestedAt": null,
+                "finalizers": [],
+                "generation": 1,
+                "managedBy": "configuration",
+                "name": "host-system",
+                "ownerRef": null,
+                "revision": 1,
+                "updatedAt": "1970-01-01T00:00:00.000Z",
+                "zone": zone.as_str()
+            },
+            "spec": {
+                "providerRef": HOST_PROVIDER_REF,
+                "updatePolicy": {
+                    "disruptive": "manual",
+                    "nonDisruptive": "automatic"
+                }
+            },
+            "status": {
+                "completedAt": null,
+                "conditions": [],
+                "lastReconciledAt": null,
+                "observedGeneration": 0,
+                "outcome": null,
+                "phase": "Pending",
+                "resource": {},
+                "startedAt": null,
+                "update": {
+                    "dependencies": {"count": 0, "refs": []},
+                    "disruption": "None",
+                    "lastAssessedAt": null,
+                    "observedGeneration": 0,
+                    "operationId": null,
+                    "owned": {"count": 0, "refs": []},
+                    "preserveState": true,
+                    "reasons": [],
+                    "state": "Unknown",
+                    "targetGeneration": 1
+                }
+            },
+            "type": "Host"
+        }))
+        .map_err(|_| ResourceRuntimeError::HandlerNotReady)?,
+    )
+    .map_err(|_| ResourceRuntimeError::HandlerNotReady)?
+    .to_canonical_bytes();
+    let mut identity = wire::ResourceIdentity::new();
+    identity.zone = zone.as_str().to_owned();
+    identity.resource_type = "Host".to_owned();
+    identity.name = "host-system".to_owned();
+    let mut body = wire::ResourceEnvelopeBytes::new();
+    body.identity = protobuf::MessageField::some(identity.clone());
+    body.payload_digest = d2b_contracts::v3::canonical_digest(
+        d2b_contracts::v3::RESOURCE_ENVELOPE_DOMAIN_TAG,
+        &payload,
+    );
+    body.canonical_json = payload;
+    let mut precondition = wire::Precondition::new();
+    precondition.kind =
+        protobuf::EnumOrUnknown::new(wire::PreconditionKind::PRECONDITION_KIND_CREATE_ABSENT);
+    let mut mutation = wire::Mutation::new();
+    mutation.kind = protobuf::EnumOrUnknown::new(wire::MutationKind::MUTATION_KIND_CREATE);
+    mutation.target = protobuf::MessageField::some(identity);
+    mutation.precondition = protobuf::MessageField::some(precondition);
+    mutation.resource = protobuf::MessageField::some(body);
+    let mut request = wire::CreateRequest::new();
+    let mut meta = wire::RequestMeta::new();
+    meta.operation_id = "system-core-bootstrap-host".to_owned();
+    meta.correlation_id = meta.operation_id.clone();
+    meta.idempotency_key = meta.operation_id.clone();
+    request.meta = protobuf::MessageField::some(meta);
+    request.mutation = protobuf::MessageField::some(mutation);
+    let response = client.create(request).await;
+    if let Some(error) = response.error.as_ref() {
+        tracing::error!(
+            zone = %zone.as_str(),
+            error_kind = ?error.kind,
+            reason = %error.reason.as_str(),
+            retry_class = ?error.retry_class,
+            "bootstrap Host create failed",
+        );
+        return Err(ResourceRuntimeError::HandlerNotReady);
+    }
+    Ok(())
+}
+
 fn store_identity(
     zone: &ZoneId,
     store_identity: &str,
@@ -4578,15 +4766,8 @@ fn store_identity(
     let zone_uid = stable_uid("zone", zone.as_str());
     let created_at = Timestamp::parse("1970-01-01T00:00:00.000Z")
         .map_err(|_| ResourceRuntimeError::StoreOpenFailed)?;
-    let revisions = PolicySnapshot {
-        policy_revision: 0,
-        api_catalog_revision: 1,
-        active_configuration_revision: ConfigurationGeneration::new(1)
-            .map_err(|_| ResourceRuntimeError::StoreOpenFailed)?,
-        controller_generation: Some(
-            ControllerGeneration::new(1).map_err(|_| ResourceRuntimeError::StoreOpenFailed)?,
-        ),
-    };
+    let mut revisions = initial_policy_snapshot()?;
+    revisions.policy_revision = 0;
     Ok(StoreIdentity::new(
         StoreSlot::new(0).map_err(|_| ResourceRuntimeError::StoreOpenFailed)?,
         store_uuid,
