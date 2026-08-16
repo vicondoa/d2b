@@ -7539,28 +7539,17 @@ fn ensure_usbipd_env_ready_for_attach(
         ));
     }
 
-    // Compose the typed Service/Binding dispatcher before any host-side
-    // firewall or runner effect. The resource reconciler supplies its
-    // authenticated GuestUsbipControl implementation; the legacy CLI path
-    // continues to use the existing per-env readiness sequence below.
-    let physical_key = d2b_core::device_usbip_adapter::UsbipCoreAdapter::physical_usb_backing_key(
+    // Admit the Core-resolved Service/Binding context before any host-side
+    // firewall or runner effect. The resource reconciler later supplies the
+    // authenticated GuestUsbipControl implementation to the production port.
+    let _production_context = usbip_production::UsbipBindingContext::before_host_effects(
+        vm,
+        env,
+        intent_id_usbip_bind(env, vm, bus_id),
+        intent_id_runner(vm, "usbip"),
         format!("{env}:{bus_id}").as_bytes(),
     )
-    .as_bytes();
-    let production_context = usbip_production::UsbipBindingContext::new(
-        vm.to_owned(),
-        env.to_owned(),
-        intent_id_usbip_bind(env, vm, bus_id),
-        d2b_core::bundle_resolver::intent_id_runner(vm, "usbip"),
-        physical_key,
-    )
     .map_err(|error| daemon_failure_response(verb, error.to_string()))?;
-    let _production_port = usbip_production::production_port(
-        state,
-        production_context,
-        Arc::new(Mutex::new(usbip_production::AuthorityLedger::default())),
-        usbip_production::NoGuestUsbipControl,
-    );
 
     dispatch_broker_ack_request(
         state,

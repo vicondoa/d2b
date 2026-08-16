@@ -8,8 +8,8 @@
 use std::{
     collections::BTreeMap,
     sync::{
-        Arc, Mutex,
         atomic::{AtomicU64, Ordering},
+        Arc, Mutex,
     },
     time::Duration,
 };
@@ -28,9 +28,11 @@ use d2b_provider_device_usbip::{
     ServiceLifecycleError, ServiceRelayLease, UsbipBrokerDispatcher,
 };
 
+use d2b_core::device_usbip_adapter::UsbipCoreAdapter;
+
 use crate::{
-    ServerState, close_received_fds, dispatch_broker_request_as,
-    dispatch_broker_request_with_fds_timeout, duplicate_received_fd,
+    close_received_fds, dispatch_broker_request_as, dispatch_broker_request_with_fds_timeout,
+    duplicate_received_fd, ServerState,
 };
 
 /// Trusted context resolved by Core for one Service/Binding pair.
@@ -84,6 +86,23 @@ impl UsbipBindingContext {
             runner_intent_ref,
             physical_key,
         })
+    }
+
+    /// Resolve Core-owned context before any host firewall or runner effect.
+    pub(crate) fn before_host_effects(
+        vm_id: impl Into<String>,
+        env: impl Into<String>,
+        bind_intent_ref: impl Into<String>,
+        runner_intent_ref: impl Into<String>,
+        physical_identity: &[u8],
+    ) -> Result<Self, ServiceLifecycleError> {
+        Self::new(
+            vm_id,
+            env,
+            bind_intent_ref,
+            runner_intent_ref,
+            UsbipCoreAdapter::physical_usb_backing_key(physical_identity).as_bytes(),
+        )
     }
 }
 
@@ -144,6 +163,7 @@ pub struct DaemonUsbipDispatcher<'a, G = NoGuestUsbipControl> {
     relay_lease: Option<ServiceRelayLease>,
 }
 
+#[allow(dead_code)]
 impl<'a, G> DaemonUsbipDispatcher<'a, G> {
     /// Construct one dispatcher over the daemon's broker and pidfd state.
     pub(crate) fn new(
@@ -511,6 +531,7 @@ impl<'a, G: GuestUsbipControl> UsbipBrokerDispatcher for DaemonUsbipDispatcher<'
 }
 
 /// Construct a production Provider port from a daemon state and Core context.
+#[allow(dead_code)]
 pub(crate) fn production_port<'a, G: GuestUsbipControl>(
     state: &'a ServerState,
     context: UsbipBindingContext,
@@ -518,4 +539,63 @@ pub(crate) fn production_port<'a, G: GuestUsbipControl>(
     guest: G,
 ) -> ProductionPort<DaemonUsbipDispatcher<'a, G>> {
     DaemonUsbipDispatcher::new(state, context, ledger, guest).into_port()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{GuestUsbipControl, NoGuestUsbipControl, UsbipBindingContext};
+    use d2b_provider_device_usbip::{BindingIdentity, BindingLifecycleError, BindingProxyLease};
+
+    fn context() -> UsbipBindingContext {
+        UsbipBindingContext::before_host_effects(
+            "corp-vm",
+            "work",
+            "bind-intent",
+            "runner-intent",
+            b"work:1-2",
+        )
+        .expect("valid USBIP context")
+    }
+
+    #[test]
+    fn context_is_required_before_host_effects() {
+        assert!(UsbipBindingContext::before_host_effects(
+            "",
+            "work",
+            "bind",
+            "runner",
+            b"work:1-2"
+        )
+        .is_err());
+        assert!(UsbipBindingContext::before_host_effects(
+            "corp-vm",
+            "",
+            "bind",
+            "runner",
+            b"work:1-2"
+        )
+        .is_err());
+        let first = context();
+        let second = UsbipBindingContext::before_host_effects(
+            "corp-vm",
+            "work",
+            "bind-intent",
+            "runner-intent",
+            b"work:1-2",
+        )
+        .expect("matching USBIP context");
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn guest_control_must_be_injected_for_detach() {
+        let binding = BindingIdentity::from_controller(
+            d2b_contracts::v3::ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap(),
+        );
+        let proxy = BindingProxyLease::from_adapter([5; 16]);
+        assert_eq!(
+            NoGuestUsbipControl.detach(&binding, &proxy),
+            Err(BindingLifecycleError::AdmissionDenied)
+        );
+    }
 }
