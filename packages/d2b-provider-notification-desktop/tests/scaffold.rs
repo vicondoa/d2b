@@ -1,2 +1,2 @@
 #[test]
-fn canonical_provider_scaffold_compiles() {}
+fn provider_behavior_suite_is_in_named_files() {}

@@ -1,7 +1,7 @@
 # Integration fixtures
 
-This directory reserves the integration fixture surface for
-`Provider/notification-desktop`. The current crate root has no executable
-integration behavior. The placeholder scenario declaration is required by the
-repository layout policy; replace it with the dossier's real fixture when
-implementation lands.
+The notification integration lane uses fake enrolled ComponentSession and
+desktop effect ports. It covers Guest source admission, bounded stream
+delivery, display dependency readiness, observer projection, action invocation,
+drain, and restart invalidation. Notification content remains in the
+presentation-only fake and never enters evidence or diagnostics.

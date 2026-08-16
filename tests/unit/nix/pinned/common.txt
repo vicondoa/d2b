@@ -412,6 +412,12 @@ index/observability-and-shell-subsets
 index/qemu-media-and-runtime-subsets
 index/shape-and-sorting
 index/site-yubikey-disabled-suppresses-runtime-usbip
+interaction-providers/clipboard-invalid-guest-source
+interaction-providers/clipboard-missing-display-ref
+interaction-providers/notification-invalid-acknowledge-timeout
+interaction-providers/notification-invalid-display-ref
+interaction-providers/notification-invalid-nonce-store-size
+interaction-providers/notification-valid-config
 multi-env-daemon/daemon-personal-app-unit-count
 multi-env-daemon/daemon-work-app-unit-count
 multi-env-daemon/demo-personal-app-unit-count
