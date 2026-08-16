@@ -204,6 +204,11 @@ impl GpuController {
             .admission
             .as_ref()
             .ok_or(GpuControllerError::InvalidState)?;
+        if self.settings.video_sidecar && admission.video_principal().is_none() {
+            return Err(GpuControllerError::Authority(
+                GpuAuthorityError::PrincipalNotSeparated,
+            ));
+        }
         if self.authority_lease.is_none() {
             self.authority_lease = Some(
                 port.reserve_authority(admission)
@@ -236,6 +241,16 @@ impl GpuController {
                     generation,
                 )
                 .map_err(GpuControllerError::Effect)?;
+            if let Err(error) = validate_started_identity(
+                &identity,
+                spec.process().role(),
+                admission.gpu_principal(),
+                admission.platform(),
+                generation,
+            ) {
+                self.phase = GpuPhase::Failed;
+                return Err(GpuControllerError::Effect(error));
+            }
             self.gpu_role = Some(spec.process().role());
             self.gpu_identity = Some(identity);
         }
@@ -251,6 +266,16 @@ impl GpuController {
             let identity = port
                 .start_video_worker(&spec, ticket, principal, admission.platform(), generation)
                 .map_err(GpuControllerError::Effect)?;
+            if let Err(error) = validate_started_identity(
+                &identity,
+                GpuProcessRole::Video,
+                principal,
+                admission.platform(),
+                generation,
+            ) {
+                self.phase = GpuPhase::Failed;
+                return Err(GpuControllerError::Effect(error));
+            }
             self.video_identity = Some(identity);
             self.video_started = true;
         }
@@ -269,6 +294,11 @@ impl GpuController {
             .admission
             .as_ref()
             .ok_or(GpuControllerError::InvalidState)?;
+        if self.settings.video_sidecar && admission.video_principal().is_none() {
+            return Err(GpuControllerError::Authority(
+                GpuAuthorityError::PrincipalNotSeparated,
+            ));
+        }
         self.authority_lease = Some(lease);
         let mut matched = Vec::new();
         let mut missing = false;
@@ -294,34 +324,63 @@ impl GpuController {
             }
         }
         for identity in matched {
-            if identity.platform() != admission.platform()
-                || identity.generation() != admission.owner().generation()
-            {
-                self.phase = GpuPhase::Failed;
-                return Err(GpuControllerError::Effect(GpuEffectError::PlatformMismatch));
-            }
-            let principal_matches = match identity.role() {
-                GpuProcessRole::Video => admission
-                    .video_principal()
-                    .is_some_and(|principal| principal == identity.principal()),
-                _ => identity.principal() == admission.gpu_principal(),
+            let expected_role = if identity.role() == GpuProcessRole::Video {
+                GpuProcessRole::Video
+            } else if self.settings.render_node_only {
+                GpuProcessRole::RenderNode
+            } else {
+                GpuProcessRole::FullGpu
             };
-            if !principal_matches {
+            let expected_principal = match identity.role() {
+                GpuProcessRole::Video => admission.video_principal(),
+                GpuProcessRole::FullGpu | GpuProcessRole::RenderNode => {
+                    Some(admission.gpu_principal())
+                }
+            };
+            let Some(expected_principal) = expected_principal else {
+                self.phase = GpuPhase::Failed;
+                return Err(GpuControllerError::Effect(GpuEffectError::WrongPrincipal));
+            };
+            if identity.role() != expected_role
+                || identity.principal() != expected_principal
+                || (identity.role() == GpuProcessRole::Video && !self.settings.video_sidecar)
+            {
                 self.phase = GpuPhase::Failed;
                 return Err(GpuControllerError::Effect(GpuEffectError::WrongPrincipal));
             }
+            if identity.platform() != admission.platform() {
+                self.phase = GpuPhase::Failed;
+                return Err(GpuControllerError::Effect(GpuEffectError::PlatformMismatch));
+            }
+            if identity.generation() != admission.owner().generation() {
+                self.phase = GpuPhase::Failed;
+                return Err(GpuControllerError::Effect(
+                    GpuEffectError::StaleDeviceIdentity,
+                ));
+            }
             match identity.role() {
                 GpuProcessRole::Video => {
+                    if self.video_identity.is_some() {
+                        self.phase = GpuPhase::Quarantined;
+                        return Err(GpuControllerError::Quarantined);
+                    }
                     self.video_started = true;
                     self.video_identity = Some(identity);
                 }
                 role => {
+                    if self.gpu_identity.is_some() {
+                        self.phase = GpuPhase::Quarantined;
+                        return Err(GpuControllerError::Quarantined);
+                    }
                     self.gpu_role = Some(role);
                     self.gpu_identity = Some(identity);
                 }
             }
         }
-        if missing || self.gpu_identity.is_none() {
+        if missing
+            || self.gpu_identity.is_none()
+            || (self.settings.video_sidecar && self.video_identity.is_none())
+        {
             self.phase = GpuPhase::Pending;
             return Ok(GpuReconcileOutcome::Retry);
         }
@@ -341,18 +400,26 @@ impl GpuController {
         if self.video_closure.is_none()
             && let Some(identity) = self.video_identity.as_ref()
         {
-            self.video_closure = Some(
-                port.stop_worker(identity)
-                    .map_err(GpuControllerError::Effect)?,
-            );
+            let closure = port
+                .stop_worker(identity)
+                .map_err(GpuControllerError::Effect)?;
+            if closure.identity() != identity {
+                self.phase = GpuPhase::Failed;
+                return Err(GpuControllerError::Effect(GpuEffectError::CloseUnconfirmed));
+            }
+            self.video_closure = Some(closure);
         }
         if self.gpu_closure.is_none()
             && let Some(identity) = self.gpu_identity.as_ref()
         {
-            self.gpu_closure = Some(
-                port.stop_worker(identity)
-                    .map_err(GpuControllerError::Effect)?,
-            );
+            let closure = port
+                .stop_worker(identity)
+                .map_err(GpuControllerError::Effect)?;
+            if closure.identity() != identity {
+                self.phase = GpuPhase::Failed;
+                return Err(GpuControllerError::Effect(GpuEffectError::CloseUnconfirmed));
+            }
+            self.gpu_closure = Some(closure);
         }
         let closures = self
             .video_closure
@@ -377,6 +444,25 @@ impl GpuController {
         self.phase = GpuPhase::Finalized;
         Ok(())
     }
+}
+
+fn validate_started_identity(
+    identity: &GpuProcessIdentity,
+    expected_role: GpuProcessRole,
+    expected_principal: &crate::GpuPrincipalToken,
+    expected_platform: &crate::GpuPlatformToken,
+    expected_generation: d2b_contracts::v3::ResourceGeneration,
+) -> Result<(), GpuEffectError> {
+    if identity.role() != expected_role || identity.principal() != expected_principal {
+        return Err(GpuEffectError::WrongPrincipal);
+    }
+    if identity.platform() != expected_platform {
+        return Err(GpuEffectError::PlatformMismatch);
+    }
+    if identity.generation() != expected_generation {
+        return Err(GpuEffectError::StaleDeviceIdentity);
+    }
+    Ok(())
 }
 
 impl fmt::Debug for GpuController {

@@ -8,3 +8,6 @@
 
 - Reject GPU Device resources on unsupported host platforms during Nix
   evaluation.
+- Make shared Host-global leases unique, validate GPU/video identities and
+  closure proofs, recover partial restarts without duplicate workers, and
+  reject malformed GPU runner shapes before device opens.

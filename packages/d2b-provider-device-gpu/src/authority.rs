@@ -540,6 +540,29 @@ struct AuthorityEntry {
     owners: Vec<AuthorityOwner>,
 }
 
+fn validate_process_identity(
+    admission: &GpuAuthorityAdmission,
+    process: &GpuProcessIdentity,
+) -> Result<(), GpuAuthorityError> {
+    let expected_principal = match process.role {
+        GpuProcessRole::Video => admission
+            .video_principal
+            .as_ref()
+            .ok_or(GpuAuthorityError::ProcessPrincipalMismatch)?,
+        GpuProcessRole::FullGpu | GpuProcessRole::RenderNode => &admission.gpu_principal,
+    };
+    if process.principal != *expected_principal {
+        return Err(GpuAuthorityError::ProcessPrincipalMismatch);
+    }
+    if process.platform != admission.platform {
+        return Err(GpuAuthorityError::PlatformMismatch);
+    }
+    if process.generation != admission.owner.generation {
+        return Err(GpuAuthorityError::GenerationMismatch);
+    }
+    Ok(())
+}
+
 /// Host-global GPU authority index.
 ///
 /// The index is deliberately small and in-memory. Core's durable operation
@@ -573,8 +596,29 @@ impl GpuAuthorityIndex {
     pub fn rehydrate(snapshot: GpuRecoverySnapshot) -> Result<Self, GpuAuthorityError> {
         let mut index = Self::new_unrehydrated();
         for record in snapshot.records {
+            for process in &record.processes {
+                validate_process_identity(&record.admission, process)?;
+            }
             let key = record.admission.backing.clone();
             if index.quarantined.contains(&key) {
+                continue;
+            }
+            let duplicate_lease = index.entries.iter().find_map(|(existing_key, entry)| {
+                entry.owners.iter().find_map(|owner| {
+                    (owner.lease == record.lease
+                        && !(existing_key == &key && owner.admission == record.admission))
+                        .then(|| existing_key.clone())
+                })
+            });
+            if let Some(existing_key) = duplicate_lease {
+                index.quarantined.insert(existing_key.clone());
+                index.quarantined.insert(key.clone());
+                if let Some(entry) = index.entries.get_mut(&existing_key) {
+                    entry.owners.clear();
+                }
+                if let Some(entry) = index.entries.get_mut(&key) {
+                    entry.owners.clear();
+                }
                 continue;
             }
             let entry = index
@@ -600,12 +644,16 @@ impl GpuAuthorityIndex {
                 .iter_mut()
                 .find(|owner| owner.admission.owner == record.admission.owner)
             {
-                if owner.lease != record.lease {
+                if owner.lease != record.lease || owner.admission != record.admission {
                     entry.owners.clear();
                     index.quarantined.insert(key);
                     continue;
                 }
-                owner.processes.extend(record.processes);
+                for process in record.processes {
+                    if !owner.processes.contains(&process) {
+                        owner.processes.push(process);
+                    }
+                }
             } else {
                 entry.lease_seq = entry.lease_seq.saturating_add(1);
                 entry.owners.push(AuthorityOwner {
@@ -640,38 +688,47 @@ impl GpuAuthorityIndex {
         if self.quarantined.contains(&admission.backing) {
             return Err(GpuAuthorityError::Quarantined);
         }
+        let next_ordinal = {
+            let entry = self
+                .entries
+                .entry(admission.backing.clone())
+                .or_insert_with(|| AuthorityEntry {
+                    arbitration: admission.arbitration,
+                    max_holders: admission.max_holders,
+                    platform: admission.platform.clone(),
+                    lease_seq: 0,
+                    owners: Vec::new(),
+                });
+            if entry.arbitration != admission.arbitration
+                || entry.max_holders != admission.max_holders
+            {
+                return Err(GpuAuthorityError::ArbitrationViolation);
+            }
+            if entry.platform != admission.platform {
+                return Err(GpuAuthorityError::StaleDeviceIdentity);
+            }
+            if entry
+                .owners
+                .iter()
+                .any(|owner| owner.admission.owner == admission.owner)
+            {
+                return Err(GpuAuthorityError::DuplicateActiveReservation);
+            }
+            if admission.arbitration == DeviceArbitration::Exclusive && !entry.owners.is_empty() {
+                return Err(GpuAuthorityError::ClaimConflict);
+            }
+            if entry.owners.len() >= admission.max_holders as usize {
+                return Err(GpuAuthorityError::MaxClaimsExceeded);
+            }
+            entry.lease_seq.saturating_add(1).max(1)
+        };
+        let backing = admission.backing.clone();
+        let (ordinal, lease) = self.allocate_lease(&backing, next_ordinal)?;
         let entry = self
             .entries
-            .entry(admission.backing.clone())
-            .or_insert_with(|| AuthorityEntry {
-                arbitration: admission.arbitration,
-                max_holders: admission.max_holders,
-                platform: admission.platform.clone(),
-                lease_seq: 0,
-                owners: Vec::new(),
-            });
-        if entry.arbitration != admission.arbitration || entry.max_holders != admission.max_holders
-        {
-            return Err(GpuAuthorityError::ArbitrationViolation);
-        }
-        if entry.platform != admission.platform {
-            return Err(GpuAuthorityError::StaleDeviceIdentity);
-        }
-        if entry
-            .owners
-            .iter()
-            .any(|owner| owner.admission.owner == admission.owner)
-        {
-            return Err(GpuAuthorityError::DuplicateActiveReservation);
-        }
-        if admission.arbitration == DeviceArbitration::Exclusive && !entry.owners.is_empty() {
-            return Err(GpuAuthorityError::ClaimConflict);
-        }
-        if entry.owners.len() >= admission.max_holders as usize {
-            return Err(GpuAuthorityError::MaxClaimsExceeded);
-        }
-        entry.lease_seq = entry.lease_seq.saturating_add(1);
-        let lease = GpuAuthorityLease::from_core(lease_bytes(&admission.backing, entry.lease_seq));
+            .get_mut(&backing)
+            .expect("authority entry exists after validation");
+        entry.lease_seq = ordinal;
         entry.owners.push(AuthorityOwner {
             admission,
             lease: lease.clone(),
@@ -687,17 +744,7 @@ impl GpuAuthorityIndex {
         process: GpuProcessIdentity,
     ) -> Result<(), GpuAuthorityError> {
         let owner = self.find_owner_mut(lease)?;
-        if process.principal != owner.admission.gpu_principal
-            && Some(&process.principal) != owner.admission.video_principal.as_ref()
-        {
-            return Err(GpuAuthorityError::ProcessPrincipalMismatch);
-        }
-        if process.platform != owner.admission.platform {
-            return Err(GpuAuthorityError::PlatformMismatch);
-        }
-        if process.generation != owner.admission.owner.generation {
-            return Err(GpuAuthorityError::GenerationMismatch);
-        }
+        validate_process_identity(&owner.admission, &process)?;
         if !owner.processes.iter().any(|known| known == &process) {
             owner.processes.push(process);
         }
@@ -720,19 +767,14 @@ impl GpuAuthorityIndex {
         let Some(owner) = owner else {
             return Ok(GpuAdoption::Missing);
         };
+        if owner.admission != *admission {
+            return Err(GpuAuthorityError::OwnerProofMismatch);
+        }
+        let owner_lease = owner.lease.clone();
+        let owner_processes = owner.processes.clone();
         for observation in observations {
             if let GpuProcessObservation::Matching(identity) = observation {
-                if identity.generation != admission.owner.generation {
-                    return Err(GpuAuthorityError::GenerationMismatch);
-                }
-                if identity.platform != admission.platform {
-                    return Err(GpuAuthorityError::PlatformMismatch);
-                }
-                if identity.principal != admission.gpu_principal
-                    && Some(&identity.principal) != admission.video_principal.as_ref()
-                {
-                    return Err(GpuAuthorityError::ProcessPrincipalMismatch);
-                }
+                validate_process_identity(admission, identity)?;
             }
         }
         let mut matched_roles = BTreeSet::new();
@@ -741,7 +783,7 @@ impl GpuAuthorityIndex {
             let GpuProcessObservation::Matching(identity) = observation else {
                 continue;
             };
-            if owner.processes.iter().any(|known| known == identity) {
+            if owner_processes.iter().any(|known| known == identity) {
                 if !matched_roles.insert(identity.role()) {
                     self.quarantined.insert(admission.backing.clone());
                     return Ok(GpuAdoption::Quarantined);
@@ -750,7 +792,7 @@ impl GpuAuthorityIndex {
             }
         }
         if matched_count > 0 {
-            Ok(GpuAdoption::Adopted(owner.lease.clone()))
+            Ok(GpuAdoption::Adopted(owner_lease))
         } else if observations
             .iter()
             .any(|observation| matches!(observation, GpuProcessObservation::StaleIdentity))
@@ -823,6 +865,30 @@ impl GpuAuthorityIndex {
             .values_mut()
             .find_map(|entry| entry.owners.iter_mut().find(|owner| &owner.lease == lease))
             .ok_or(GpuAuthorityError::OwnerProofMismatch)
+    }
+
+    fn allocate_lease(
+        &self,
+        backing: &GpuBackingToken,
+        start_ordinal: u64,
+    ) -> Result<(u64, GpuAuthorityLease), GpuAuthorityError> {
+        let mut ordinal = start_ordinal.max(1);
+        loop {
+            let lease = GpuAuthorityLease::from_core(lease_bytes(backing, ordinal));
+            if !self.lease_in_use(&lease) {
+                return Ok((ordinal, lease));
+            }
+            ordinal = ordinal
+                .checked_add(1)
+                .ok_or(GpuAuthorityError::MaxClaimsExceeded)?;
+        }
+    }
+
+    fn lease_in_use(&self, lease: &GpuAuthorityLease) -> bool {
+        self.entries
+            .values()
+            .flat_map(|entry| entry.owners.iter())
+            .any(|owner| &owner.lease == lease)
     }
 }
 

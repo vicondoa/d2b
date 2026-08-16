@@ -264,6 +264,18 @@ pub fn validate_spawn_plan(
     plan: &SpawnRunnerPlan,
     pre_opened_device_fds: usize,
 ) -> Result<(), GpuBrokerError> {
+    validate_spawn_plan_shape(plan, Some(pre_opened_device_fds))
+}
+
+/// Validate a GPU runner shape before the broker opens any device.
+pub fn validate_spawn_plan_preflight(plan: &SpawnRunnerPlan) -> Result<(), GpuBrokerError> {
+    validate_spawn_plan_shape(plan, None)
+}
+
+fn validate_spawn_plan_shape(
+    plan: &SpawnRunnerPlan,
+    pre_opened_device_fds: Option<usize>,
+) -> Result<(), GpuBrokerError> {
     let Some(policy) = plan.seccomp_policy_ref.as_deref() else {
         return Ok(());
     };
@@ -289,7 +301,7 @@ pub fn validate_spawn_plan(
             if !plan.namespaces.user
                 || plan.user_namespace.is_none()
                 || !plan.mount_policy.device_binds.is_empty()
-                || pre_opened_device_fds != 1
+                || pre_opened_device_fds.is_some_and(|count| count != 1)
             {
                 return Err(GpuBrokerError::PlanShapeMismatch);
             }
@@ -314,6 +326,9 @@ pub fn validate_spawn_plan(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use d2b_core::minijail_profile::{CgroupPlacement, MountPolicy, NamespaceSet};
+    use std::path::PathBuf;
+    use crate::ops::spawn_runner::UserNamespaceSpec;
 
     fn identity(value: u8) -> GpuOpaqueIdentity {
         GpuOpaqueIdentity::from_core([value; 32])
@@ -391,5 +406,58 @@ mod tests {
             ),
             Ok(GpuProcessObservation::Matching)
         );
+    }
+
+    fn render_node_plan() -> SpawnRunnerPlan {
+        SpawnRunnerPlan {
+            binary_path: PathBuf::from("/bin/crosvm"),
+            argv: vec!["crosvm".to_owned()],
+            uid: 1000,
+            gid: 1000,
+            supplementary_groups: vec![],
+            env: vec![],
+            capabilities: vec![],
+            namespaces: NamespaceSet {
+                mount: false,
+                pid: false,
+                net: false,
+                ipc: false,
+                uts: false,
+                user: true,
+            },
+            seccomp_policy_ref: Some("w1-gpu-render-node".to_owned()),
+            mount_policy: MountPolicy {
+                read_only_paths: vec![],
+                writable_paths: vec![],
+                nix_store_read_only: false,
+                hide_device_nodes_by_default: false,
+                device_binds: vec![],
+                bind_mounts: vec![],
+            },
+            cgroup_placement: CgroupPlacement {
+                subtree: String::new(),
+                controllers: vec![],
+                delegated: false,
+            },
+            user_namespace: Some(UserNamespaceSpec {
+                host_uid_for_zero: 1000,
+                host_gid_for_zero: 1000,
+            }),
+            umask: None,
+        }
+    }
+
+    #[test]
+    fn runner_shape_is_rejected_before_device_open() {
+        let mut invalid = render_node_plan();
+        invalid.namespaces.user = false;
+        assert_eq!(
+            validate_spawn_plan_preflight(&invalid),
+            Err(GpuBrokerError::PlanShapeMismatch)
+        );
+
+        let valid = render_node_plan();
+        assert_eq!(validate_spawn_plan_preflight(&valid), Ok(()));
+        assert_eq!(validate_spawn_plan(&valid, 1), Ok(()));
     }
 }

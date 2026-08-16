@@ -3492,6 +3492,11 @@ pub fn live_spawn_runner(
         }
     }
     validate_qemu_media_runner_hardening(&plan)?;
+    crate::ops::gpu::validate_spawn_plan_preflight(&plan).map_err(|error| {
+        LiveHandlerError::SpawnFailed {
+            detail: error.to_string(),
+        }
+    })?;
 
     let (binary, argv, env) =
         build_cstring_vectors(&plan).map_err(LiveHandlerError::SpawnPreflight)?;

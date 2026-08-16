@@ -10,6 +10,7 @@ use d2b_provider_device_gpu::{
 struct FakePort {
     starts: Vec<GpuProcessRole>,
     next: u8,
+    missing_roles: Vec<GpuProcessRole>,
 }
 
 impl GpuLifecycleEffectPort for FakePort {
@@ -70,7 +71,11 @@ impl GpuLifecycleEffectPort for FakePort {
         &mut self,
         identity: &GpuProcessIdentity,
     ) -> Result<GpuProcessObservation, GpuEffectError> {
-        Ok(GpuProcessObservation::Matching(identity.clone()))
+        if self.missing_roles.contains(&identity.role()) {
+            Ok(GpuProcessObservation::Missing)
+        } else {
+            Ok(GpuProcessObservation::Matching(identity.clone()))
+        }
     }
 
     fn stop_worker(
@@ -128,4 +133,76 @@ fn video_starts_only_after_gpu_worker_is_ready() {
         port.starts,
         [GpuProcessRole::FullGpu, GpuProcessRole::Video]
     );
+}
+
+#[test]
+fn partial_restart_adoption_restarts_only_the_missing_video_worker() {
+    let uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
+    let owner = GpuOwnerProof::new(
+        ResourceRef::parse("Zone/dev").unwrap(),
+        ResourceRef::parse("Guest/workload").unwrap(),
+        uid,
+        ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").unwrap(),
+        ResourceGeneration::new(1).unwrap(),
+    )
+    .unwrap();
+    let admission = GpuAuthorityAdmission::new(
+        owner,
+        GpuBackingToken::from_core([7; 32]),
+        GpuPlatformToken::from_core([8; 32]),
+        DeviceArbitration::Exclusive,
+        1,
+        false,
+        GpuPrincipalToken::from_core([9; 32]),
+    )
+    .unwrap()
+    .with_video_principal(GpuPrincipalToken::from_core([10; 32]))
+    .unwrap();
+    let settings = GpuSettings {
+        video_sidecar: true,
+        ..GpuSettings::default()
+    };
+    let tokens = GpuEffectTokenSet::from_core(vec![GpuEffectToken::from_core([2; 32])]).unwrap();
+    let mut controller =
+        GpuController::new_authorized(admission.clone(), settings, tokens).unwrap();
+    let gpu = GpuProcessIdentity::from_core(
+        [3; 16],
+        GpuProcessRole::FullGpu,
+        GpuPrincipalToken::from_core([9; 32]),
+        GpuPlatformToken::from_core([8; 32]),
+        ResourceGeneration::new(1).unwrap(),
+    );
+    let video = GpuProcessIdentity::from_core(
+        [4; 16],
+        GpuProcessRole::Video,
+        GpuPrincipalToken::from_core([10; 32]),
+        GpuPlatformToken::from_core([8; 32]),
+        ResourceGeneration::new(1).unwrap(),
+    );
+    let mut port = FakePort {
+        missing_roles: vec![GpuProcessRole::Video],
+        ..FakePort::default()
+    };
+
+    assert_eq!(
+        controller
+            .adopt_lifecycle(
+                GpuAuthorityLease::from_core([1; 16]),
+                &[gpu, video],
+                &mut port,
+            )
+            .unwrap(),
+        GpuReconcileOutcome::Retry
+    );
+    assert_eq!(
+        controller.gpu_identity().map(|identity| identity.role()),
+        Some(GpuProcessRole::FullGpu)
+    );
+    assert!(controller.video_identity().is_none());
+
+    assert_eq!(
+        controller.reconcile_lifecycle(&mut port).unwrap(),
+        GpuReconcileOutcome::Converged
+    );
+    assert_eq!(port.starts, [GpuProcessRole::Video]);
 }
