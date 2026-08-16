@@ -757,6 +757,9 @@ impl GpuAuthorityIndex {
         admission: &GpuAuthorityAdmission,
         observations: &[GpuProcessObservation],
     ) -> Result<GpuAdoption, GpuAuthorityError> {
+        if self.quarantined.contains(&admission.backing) {
+            return Ok(GpuAdoption::Quarantined);
+        }
         let Some(entry) = self.entries.get(&admission.backing) else {
             return Ok(GpuAdoption::Missing);
         };
@@ -772,6 +775,13 @@ impl GpuAuthorityIndex {
         }
         let owner_lease = owner.lease.clone();
         let owner_processes = owner.processes.clone();
+        if observations
+            .iter()
+            .any(|observation| matches!(observation, GpuProcessObservation::Ambiguous))
+        {
+            self.quarantined.insert(admission.backing.clone());
+            return Ok(GpuAdoption::Quarantined);
+        }
         for observation in observations {
             if let GpuProcessObservation::Matching(identity) = observation {
                 validate_process_identity(admission, identity)?;

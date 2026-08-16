@@ -293,6 +293,17 @@ impl GpuController {
         expected: &[GpuProcessIdentity],
         port: &mut P,
     ) -> Result<GpuReconcileOutcome, GpuControllerError> {
+        if !self.finalizer
+            || matches!(
+                self.phase,
+                GpuPhase::Failed
+                    | GpuPhase::Finalizing
+                    | GpuPhase::Finalized
+                    | GpuPhase::Quarantined
+            )
+        {
+            return Err(GpuControllerError::InvalidState);
+        }
         let admission = self
             .admission
             .as_ref()

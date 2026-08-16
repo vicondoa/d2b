@@ -54,6 +54,24 @@ fn admission_with_backing(backing: [u8; 32], generation: u64) -> GpuAuthorityAdm
     .unwrap()
 }
 
+fn recovered_authority() -> (GpuAuthorityAdmission, GpuProcessIdentity, GpuAuthorityIndex) {
+    let current = admission(DeviceArbitration::Exclusive, false, 1);
+    let process = GpuProcessIdentity::from_core(
+        [2; 16],
+        GpuProcessRole::FullGpu,
+        GpuPrincipalToken::from_core([9; 32]),
+        GpuPlatformToken::from_core([8; 32]),
+        ResourceGeneration::new(1).unwrap(),
+    );
+    let record = GpuRecoveryRecord::from_core(
+        current.clone(),
+        process.clone(),
+        GpuAuthorityLease::from_core([3; 16]),
+    );
+    let index = GpuAuthorityIndex::rehydrate(GpuRecoverySnapshot::from_core(vec![record])).unwrap();
+    (current, process, index)
+}
+
 #[test]
 fn conflicting_full_device_claim_is_rejected_before_effects() {
     let first = admission(DeviceArbitration::Exclusive, false, 1);
@@ -199,21 +217,7 @@ fn same_owner_rehydration_rejects_conflicting_gpu_video_admission() {
 
 #[test]
 fn restart_adopts_one_matching_worker_and_quarantines_ambiguity() {
-    let current = admission(DeviceArbitration::Exclusive, false, 1);
-    let process = GpuProcessIdentity::from_core(
-        [2; 16],
-        GpuProcessRole::FullGpu,
-        GpuPrincipalToken::from_core([9; 32]),
-        GpuPlatformToken::from_core([8; 32]),
-        ResourceGeneration::new(1).unwrap(),
-    );
-    let record = GpuRecoveryRecord::from_core(
-        current.clone(),
-        process.clone(),
-        GpuAuthorityLease::from_core([3; 16]),
-    );
-    let mut index =
-        GpuAuthorityIndex::rehydrate(GpuRecoverySnapshot::from_core(vec![record])).unwrap();
+    let (current, process, mut index) = recovered_authority();
     assert!(matches!(
         index.adopt(
             &current,
@@ -232,6 +236,52 @@ fn restart_adopts_one_matching_worker_and_quarantines_ambiguity() {
         Ok(d2b_provider_device_gpu::GpuAdoption::Quarantined)
     ));
     assert!(index.is_quarantined(current.backing()));
+}
+
+#[test]
+fn ambiguous_restart_observation_quarantines_backing() {
+    let (current, _, mut index) = recovered_authority();
+
+    assert!(matches!(
+        index.adopt(&current, &[GpuProcessObservation::Ambiguous]),
+        Ok(d2b_provider_device_gpu::GpuAdoption::Quarantined)
+    ));
+    assert!(index.is_quarantined(current.backing()));
+    assert_eq!(index.holder_count(current.backing()), 1);
+}
+
+#[test]
+fn matching_observation_cannot_escape_ambiguous_adoption() {
+    let (current, process, mut index) = recovered_authority();
+
+    assert!(matches!(
+        index.adopt(
+            &current,
+            &[
+                GpuProcessObservation::Matching(process),
+                GpuProcessObservation::Ambiguous
+            ]
+        ),
+        Ok(d2b_provider_device_gpu::GpuAdoption::Quarantined)
+    ));
+    assert!(index.is_quarantined(current.backing()));
+    assert_eq!(index.holder_count(current.backing()), 1);
+}
+
+#[test]
+fn quarantined_restart_adoption_rejects_later_matching_worker() {
+    let (current, process, mut index) = recovered_authority();
+    assert!(matches!(
+        index.adopt(&current, &[GpuProcessObservation::Ambiguous]),
+        Ok(d2b_provider_device_gpu::GpuAdoption::Quarantined)
+    ));
+
+    assert!(matches!(
+        index.adopt(&current, &[GpuProcessObservation::Matching(process)]),
+        Ok(d2b_provider_device_gpu::GpuAdoption::Quarantined)
+    ));
+    assert_eq!(index.holder_count(current.backing()), 1);
+    assert_eq!(index.reserve(current), Err(GpuAuthorityError::Quarantined));
 }
 
 #[test]

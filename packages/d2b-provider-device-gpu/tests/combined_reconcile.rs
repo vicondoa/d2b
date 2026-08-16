@@ -260,12 +260,26 @@ fn stale_identity_adoption_is_terminal_and_does_not_respawn() {
     assert_eq!(
         controller.adopt_lifecycle(
             GpuAuthorityLease::from_core([1; 16]),
-            &[expected],
+            &[expected.clone()],
             &mut port,
         ),
         Err(d2b_provider_device_gpu::GpuControllerError::Effect(
             GpuEffectError::StaleDeviceIdentity
         ))
+    );
+    assert_eq!(
+        controller.phase(),
+        d2b_provider_device_gpu::GpuPhase::Failed
+    );
+    port.stale_roles.clear();
+    port.missing_roles.push(GpuProcessRole::FullGpu);
+    assert_eq!(
+        controller.adopt_lifecycle(
+            GpuAuthorityLease::from_core([1; 16]),
+            &[expected.clone()],
+            &mut port,
+        ),
+        Err(d2b_provider_device_gpu::GpuControllerError::InvalidState)
     );
     assert_eq!(
         controller.phase(),
@@ -317,10 +331,24 @@ fn mismatched_matching_observation_is_quarantined() {
     assert_eq!(
         controller.adopt_lifecycle(
             GpuAuthorityLease::from_core([1; 16]),
-            &[expected],
+            &[expected.clone()],
             &mut port,
         ),
         Err(d2b_provider_device_gpu::GpuControllerError::Quarantined)
+    );
+    assert_eq!(
+        controller.phase(),
+        d2b_provider_device_gpu::GpuPhase::Quarantined
+    );
+    port.mismatched_observation = false;
+    port.missing_roles.push(GpuProcessRole::FullGpu);
+    assert_eq!(
+        controller.adopt_lifecycle(
+            GpuAuthorityLease::from_core([1; 16]),
+            &[expected],
+            &mut port,
+        ),
+        Err(d2b_provider_device_gpu::GpuControllerError::InvalidState)
     );
     assert_eq!(
         controller.phase(),

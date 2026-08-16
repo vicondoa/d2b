@@ -16,3 +16,5 @@
 
 - Keep rejected GPU worker identities owned through finalization so failed
   starts cannot respawn or release Host-global authority before closure.
+- Fail closed on ambiguous or quarantined GPU restart adoption to prevent
+  duplicate workers.
