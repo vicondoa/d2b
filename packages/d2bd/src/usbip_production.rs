@@ -8,8 +8,8 @@
 use std::{
     collections::BTreeMap,
     sync::{
-        atomic::{AtomicU64, Ordering},
         Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
     },
     time::Duration,
 };
@@ -31,8 +31,8 @@ use d2b_provider_device_usbip::{
 use d2b_core::device_usbip_adapter::UsbipCoreAdapter;
 
 use crate::{
-    close_received_fds, dispatch_broker_request_as, dispatch_broker_request_with_fds_timeout,
-    duplicate_received_fd, ServerState,
+    ServerState, close_received_fds, dispatch_broker_request_as,
+    dispatch_broker_request_with_fds_timeout, duplicate_received_fd,
 };
 
 /// Trusted context resolved by Core for one Service/Binding pair.
@@ -566,22 +566,14 @@ mod tests {
 
     #[test]
     fn context_is_required_before_host_effects() {
-        assert!(UsbipBindingContext::before_host_effects(
-            "",
-            "work",
-            "bind",
-            "runner",
-            b"work:1-2"
-        )
-        .is_err());
-        assert!(UsbipBindingContext::before_host_effects(
-            "corp-vm",
-            "",
-            "bind",
-            "runner",
-            b"work:1-2"
-        )
-        .is_err());
+        assert!(
+            UsbipBindingContext::before_host_effects("", "work", "bind", "runner", b"work:1-2")
+                .is_err()
+        );
+        assert!(
+            UsbipBindingContext::before_host_effects("corp-vm", "", "bind", "runner", b"work:1-2")
+                .is_err()
+        );
         let first = context();
         let second = UsbipBindingContext::before_host_effects(
             "corp-vm",
