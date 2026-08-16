@@ -44,7 +44,7 @@ pub use probe::{
 pub use process::{
     GpuProcessDeclaration, GpuProcessRole, GpuProcessSelectionError, gpu_process_name,
 };
-pub use production::{GpuBrokerDispatcher, LegacyEffectAdapter, ProductionPort};
+pub use production::{GpuBrokerDispatcher, ProductionPort};
 pub use settings::{ContextType, DisplayConfig, GpuSettings, GpuSettingsError};
 pub use status::{
     GpuCondition, GpuConditionState, GpuConditionType, GpuStatus, GpuStatusError, GpuStatusPhase,

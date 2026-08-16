@@ -7,9 +7,9 @@
 use d2b_contracts::v3::ResourceGeneration;
 
 use crate::{
-    GpuAuthorityAdmission, GpuAuthorityLease, GpuClosureProof, GpuEffectError, GpuEffectPort,
-    GpuEffectTokenSet, GpuLaunchTicket, GpuLifecycleEffectPort, GpuPlatformToken,
-    GpuProcessIdentity, GpuProcessObservation, GpuWorkerSpec, VideoWorkerSpec,
+    GpuAuthorityAdmission, GpuAuthorityLease, GpuClosureProof, GpuEffectError, GpuEffectTokenSet,
+    GpuLaunchTicket, GpuLifecycleEffectPort, GpuPlatformToken, GpuProcessIdentity,
+    GpuProcessObservation, GpuWorkerSpec, VideoWorkerSpec,
 };
 
 /// Daemon-owned GPU dispatch surface.
@@ -153,50 +153,5 @@ impl<D: GpuBrokerDispatcher> GpuLifecycleEffectPort for ProductionPort<D> {
         closures: &[GpuClosureProof],
     ) -> Result<(), GpuEffectError> {
         self.dispatcher.release_gpu_authority(lease, closures)
-    }
-}
-
-/// A small adapter that exposes a legacy `GpuEffectPort` as an observation
-/// and stop-only lifecycle port for migration tests.
-pub struct LegacyEffectAdapter<P> {
-    port: P,
-}
-
-impl<P> LegacyEffectAdapter<P> {
-    /// Wrap an existing effect port.
-    pub const fn new(port: P) -> Self {
-        Self { port }
-    }
-
-    /// Borrow the wrapped port.
-    pub const fn port(&self) -> &P {
-        &self.port
-    }
-
-    /// Mutably borrow the wrapped port.
-    pub const fn port_mut(&mut self) -> &mut P {
-        &mut self.port
-    }
-}
-
-impl<P: GpuEffectPort> GpuEffectPort for LegacyEffectAdapter<P> {
-    fn open_devices(
-        &mut self,
-        device_uid: &d2b_contracts::v3::ResourceUid,
-        tokens: &GpuEffectTokenSet,
-    ) -> Result<GpuLaunchTicket, GpuEffectError> {
-        self.port.open_devices(device_uid, tokens)
-    }
-
-    fn start(
-        &mut self,
-        role: crate::GpuProcessRole,
-        ticket: &GpuLaunchTicket,
-    ) -> Result<(), GpuEffectError> {
-        self.port.start(role, ticket)
-    }
-
-    fn stop(&mut self, role: crate::GpuProcessRole) -> Result<(), GpuEffectError> {
-        self.port.stop(role)
     }
 }
