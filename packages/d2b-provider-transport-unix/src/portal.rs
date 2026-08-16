@@ -220,11 +220,7 @@ impl TransportPortal {
         if state.entries.len() == MAX_OPEN_TRANSPORTS {
             return Err(PortalError::HandleTableFull);
         }
-        let handle = next_handle(&state.entries)?;
-        state.finalized.remove(&handle);
-        state
-            .finalized_order
-            .retain(|candidate| *candidate != handle);
+        let handle = next_handle(&state)?;
         state.entries.insert(
             handle,
             MonitorEntry {
@@ -308,16 +304,37 @@ impl fmt::Debug for TransportPortal {
     }
 }
 
-fn next_handle(
-    entries: &HashMap<TransportHandle, MonitorEntry>,
-) -> Result<TransportHandle, PortalError> {
+fn next_handle(state: &PortalState) -> Result<TransportHandle, PortalError> {
     for _ in 0..8 {
         let mut bytes = [0_u8; 16];
         fill(&mut bytes).map_err(|_| PortalError::MonitorUnavailable)?;
         let handle = TransportHandle(bytes);
-        if !entries.contains_key(&handle) {
+        if handle_is_available(state, handle) {
             return Ok(handle);
         }
     }
     Err(PortalError::MonitorUnavailable)
+}
+
+fn handle_is_available(state: &PortalState, handle: TransportHandle) -> bool {
+    !state.entries.contains_key(&handle) && !state.finalized.contains(&handle)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn finalized_handles_cannot_be_reissued() {
+        let handle = TransportHandle([42; 16]);
+        let mut state = PortalState {
+            entries: HashMap::new(),
+            finalized: HashSet::new(),
+            finalized_order: VecDeque::new(),
+        };
+
+        state.mark_finalized(handle);
+
+        assert!(!handle_is_available(&state, handle));
+    }
 }

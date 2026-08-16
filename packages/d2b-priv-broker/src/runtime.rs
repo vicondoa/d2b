@@ -1522,6 +1522,12 @@ impl DispatchAuditContext {
         audit_join: Option<&AuditJoinContext>,
     ) -> Result<Self, BrokerError> {
         #[cfg(not(feature = "layer1-bootstrap"))]
+        if matches!(request, BrokerRequest::OpenPeerPidfdFromAcceptedSocket(_))
+            && audit_join.is_some()
+        {
+            return Err(BrokerError::Protocol("audit-join-not-permitted".to_owned()));
+        }
+        #[cfg(not(feature = "layer1-bootstrap"))]
         if audit_join.is_none() && Self::request_requires_audit_join(request) {
             return Err(BrokerError::Protocol("audit-join-required".to_owned()));
         }
@@ -13053,6 +13059,41 @@ mod tests {
                 matches!(error, BrokerError::Protocol(message) if message == "accepted socket request must carry exactly one descriptor")
             );
         }
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn accepted_peer_pidfd_refuses_caller_supplied_audit_join() {
+        use d2b_contracts::broker_wire::{
+            AuditJoinContext, BrokerCallerRole, CanonicalAuditDigest,
+        };
+
+        let request = BrokerRequest::OpenPeerPidfdFromAcceptedSocket(
+            d2b_contracts::broker_wire::OpenPeerPidfdFromAcceptedSocketRequest {},
+        );
+        let audit_join = AuditJoinContext {
+            zone_id: CanonicalAuditDigest::parse(d2b_contracts::v3::canonical_digest(
+                "d2b:test-zone",
+                b"forged zone",
+            ))
+            .expect("canonical zone digest"),
+            operation_identity: CanonicalAuditDigest::parse(d2b_contracts::v3::canonical_digest(
+                "d2b:test-operation",
+                b"forged operation",
+            ))
+            .expect("canonical operation digest"),
+        };
+
+        let error = DispatchAuditContext::from_request_with_join(
+            &request,
+            4242,
+            &BrokerCallerRole::AdminUid { uid: 1000 },
+            Some(&audit_join),
+        )
+        .expect_err("accepted-socket authority must not accept an audit join");
+        assert!(
+            matches!(error, BrokerError::Protocol(message) if message == "audit-join-not-permitted")
+        );
     }
 
     #[cfg(not(feature = "layer1-bootstrap"))]

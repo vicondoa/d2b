@@ -121,7 +121,14 @@ pub fn recv_json_frame_with_fds<T: DeserializeOwned>(
         crate::fd_passing::recv_fds_with_capacity_allow_empty(fd, MAX_FRAME_SIZE + 4)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, format!("{error:?}")))?;
     if buffer.is_empty() {
-        return Ok(None);
+        if raw_fds.is_empty() {
+            return Ok(None);
+        }
+        crate::fd_passing::close_received_fds(&raw_fds);
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "empty SCM_RIGHTS packet",
+        ));
     }
     if buffer.len() < 4 {
         crate::fd_passing::close_received_fds(&raw_fds);
@@ -160,6 +167,7 @@ fn io_error(err: nix::errno::Errno) -> io::Error {
 mod tests {
     use super::*;
     use nix::sys::socket::{AddressFamily, SockFlag, SockType, socketpair};
+    use nix::unistd::pipe;
     use serde::{Deserialize, Serialize};
 
     #[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -190,5 +198,24 @@ mod tests {
             fds.is_empty(),
             "ordinary broker requests carry no SCM_RIGHTS"
         );
+    }
+
+    #[test]
+    fn request_receiver_rejects_empty_packets_with_descriptors() {
+        let (sender, receiver) = socketpair(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            None,
+            SockFlag::SOCK_CLOEXEC,
+        )
+        .expect("socket pair");
+        let (read_end, _write_end) = pipe().expect("pipe");
+
+        crate::fd_passing::send_fds(sender.as_raw_fd(), b"", &[read_end.as_raw_fd()])
+            .expect("send empty packet with descriptor");
+
+        let error = recv_json_frame_with_fds::<Frame>(receiver.as_raw_fd())
+            .expect_err("empty packet with descriptor must fail closed");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
     }
 }
