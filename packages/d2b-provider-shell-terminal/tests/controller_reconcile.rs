@@ -377,14 +377,15 @@ fn stale_retirement_preserves_the_authoritative_attachment_total() {
         .unwrap();
 
     controller
-        .retire_pool_attachments("guest-alice", &[first], 2)
+        .retire_pool_attachments("guest-alice", &[first.clone(), first], 1)
         .unwrap();
-    assert!(matches!(
-        supervisor.attach(
-            &admin,
-            d2b_provider_shell_terminal::AttachRequest::new(opened.supervisor_generation(), 0,)
-                .unwrap(),
-        ),
-        Err(d2b_provider_shell_terminal::ShellTerminalError::CapacityExceeded)
-    ));
+    assert!(
+        supervisor
+            .attach(
+                &admin,
+                d2b_provider_shell_terminal::AttachRequest::new(opened.supervisor_generation(), 0)
+                    .unwrap(),
+            )
+            .is_ok()
+    );
 }

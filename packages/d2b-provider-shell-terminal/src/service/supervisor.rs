@@ -290,17 +290,17 @@ impl PoolAttachmentBudget {
             .retained_attachments
             .lock()
             .map_err(|_| ShellTerminalError::CapacityExceeded)?;
-        let retired_count = stale_attachments
+        let distinct_stale: BTreeSet<_> = stale_attachments
             .iter()
             .filter(|attachment| entries.contains(*attachment))
-            .count();
-        let remaining_entries = entries.len().saturating_sub(retired_count);
+            .collect();
+        let remaining_entries = entries.len().saturating_sub(distinct_stale.len());
         if (attached_streams as usize) > self.capacity
             || (attached_streams as usize) < remaining_entries
         {
             return Err(ShellTerminalError::CapacityExceeded);
         }
-        for attachment in stale_attachments {
+        for attachment in distinct_stale {
             entries.remove(attachment);
         }
         *retained = attached_streams as usize - remaining_entries;
