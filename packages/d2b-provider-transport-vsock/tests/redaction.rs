@@ -3,12 +3,10 @@ use d2b_provider_transport_vsock::{
     GuestControlKey, GuestIdentity, OpaqueBindingId, OpaqueEndpointId, PeerCid, SessionAuthority,
     SessionProof, VsockTransportSettings,
 };
-use ring::rand::{SecureRandom, SystemRandom};
+use ring::rand::{SystemRandom, generate};
 
 fn nonce() -> [u8; 32] {
-    let mut nonce = [0_u8; 32];
-    SystemRandom::new().fill(&mut nonce).unwrap();
-    nonce
+    generate::<[u8; 32]>(&SystemRandom::new()).unwrap().expose()
 }
 
 #[test]

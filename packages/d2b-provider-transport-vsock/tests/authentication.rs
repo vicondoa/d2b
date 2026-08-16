@@ -3,11 +3,10 @@ use d2b_provider_transport_vsock::{
     GuestControlKey, GuestIdentity, MAX_REPLAY_ENTRIES, PeerCid, SessionAuthority, SessionProof,
     SessionRejectReason, SessionState,
 };
-use ring::rand::{SecureRandom, SystemRandom};
+use ring::rand::{SystemRandom, generate};
 
 fn nonce_for(index: u16) -> [u8; 32] {
-    let mut nonce = [0_u8; 32];
-    SystemRandom::new().fill(&mut nonce).unwrap();
+    let mut nonce = generate::<[u8; 32]>(&SystemRandom::new()).unwrap().expose();
     nonce[..2].copy_from_slice(&index.to_be_bytes());
     nonce
 }

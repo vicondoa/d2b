@@ -4,13 +4,11 @@ use d2b_provider_transport_vsock::{
     GuestControlKey, GuestIdentity, NativeGuestRelay, PeerCid, RelayBinding, RelayEffectError,
     RelayEffectPort, RelayObservation, RelayPhase, SessionAuthority, SessionProof,
 };
-use ring::rand::{SecureRandom, SystemRandom};
+use ring::rand::{SystemRandom, generate};
 use std::sync::{Arc, Mutex};
 
 fn nonce() -> [u8; 32] {
-    let mut nonce = [0_u8; 32];
-    SystemRandom::new().fill(&mut nonce).unwrap();
-    nonce
+    generate::<[u8; 32]>(&SystemRandom::new()).unwrap().expose()
 }
 
 #[derive(Default)]

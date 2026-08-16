@@ -6,7 +6,7 @@ use d2b_provider_transport_vsock::{
     PeerCid, ReadySession, ServiceError, SessionAuthority, SessionProof, TransportPhase,
     TransportRole, VsockEffectError, VsockEffectPort, VsockTransportService,
 };
-use ring::rand::{SecureRandom, SystemRandom};
+use ring::rand::{SystemRandom, generate};
 use std::{
     sync::{Arc, Mutex},
     time::{Duration, Instant},
@@ -14,9 +14,7 @@ use std::{
 use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream, duplex};
 
 fn nonce() -> [u8; 32] {
-    let mut nonce = [0_u8; 32];
-    SystemRandom::new().fill(&mut nonce).unwrap();
-    nonce
+    generate::<[u8; 32]>(&SystemRandom::new()).unwrap().expose()
 }
 
 #[derive(Clone)]
