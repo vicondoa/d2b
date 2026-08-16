@@ -82,6 +82,7 @@ impl ManagedIdentityCredentialClient for FakeClient {
         let error = *self.issue_error.lock().unwrap();
         let state = *self.state.lock().unwrap();
         let expiry = request.requested_expiry_unix_ms();
+        let rotation_generation = request.rotation_generation();
         let token = self.token_canary.clone();
         let endpoint = self.endpoint_canary.clone();
         *self.observed_request.lock().unwrap() = Some((
@@ -100,7 +101,7 @@ impl ManagedIdentityCredentialClient for FakeClient {
             let grant = ManagedIdentityLeaseGrant {
                 lease_handle: CredentialLeaseHandle::parse(&token).unwrap(),
                 source_version: CredentialSourceVersion::parse(&endpoint).unwrap(),
-                rotation_generation: 1,
+                rotation_generation,
                 expires_at_unix_ms: expiry,
             };
             *inspection.lock().unwrap() = Some(ManagedIdentityLeaseInspection {
@@ -128,13 +129,14 @@ impl ManagedIdentityCredentialClient for FakeClient {
     ) -> ManagedIdentityFuture<'_, ManagedIdentityLeaseRenewal> {
         self.refresh_calls.fetch_add(1, Ordering::SeqCst);
         let expiry = lease.metadata().expires_at_unix_ms;
+        let rotation_generation = lease.metadata().rotation_generation;
         let inspection = &self.inspection;
         Box::pin(async move {
             let grant = ManagedIdentityLeaseGrant {
                 lease_handle: CredentialLeaseHandle::parse("managed-identity-lease").unwrap(),
                 source_version: CredentialSourceVersion::parse("managed-identity-source-2")
                     .unwrap(),
-                rotation_generation: 2,
+                rotation_generation: rotation_generation + 1,
                 expires_at_unix_ms: expiry,
             };
             *inspection.lock().unwrap() = Some(ManagedIdentityLeaseInspection {
@@ -162,9 +164,8 @@ pub fn setup() -> (ManagedIdentityCredentialProvider, Arc<FakeClient>) {
     let placement = ManagedIdentityPlacement::new(
         PlacementBinding::GuestAgent,
         ResourceRef::parse("Guest/aca-sandbox").unwrap(),
+        ResourceRef::parse("Zone/dev").unwrap(),
     )
-    .unwrap()
-    .with_zone_ref(ResourceRef::parse("Zone/dev").unwrap())
     .unwrap();
     let factory = ManagedIdentityCredentialProviderFactory::new(
         config,

@@ -58,31 +58,35 @@ impl ManagedIdentityCredentialProvider {
             let mut leases = self.leases.lock().map_err(|_| invariant())?;
             Self::mark_expired_locked(&mut leases, now);
             let records = leases.get(&key);
-            if let Some(records) = records {
-                if records.iter().any(|record| {
-                    Self::same_owner(
-                        &record.authenticated_subject,
-                        session.authenticated_subject(),
-                    )
-                }) {
-                    if let Some(existing) = records.iter().find(|record| {
-                        record.metadata.state == CredentialLeaseState::Active
-                            && record.idempotency_key == request.idempotency_key()
-                            && Self::same_owner(
-                                &record.authenticated_subject,
-                                session.authenticated_subject(),
-                            )
-                    }) {
-                        return Ok(CredentialResponse::AcquireToken(DeliveryResponse {
-                            metadata: existing.metadata.clone(),
-                            delivery_session_params: delivery,
-                        }));
-                    }
-                } else if !records.is_empty() {
-                    return Err(operation_denied());
-                }
+            if let Some(records) = records
+                && let Some(existing) = records.iter().find(|record| {
+                    record.metadata.state == CredentialLeaseState::Active
+                        && record.idempotency_key == request.idempotency_key()
+                        && Self::same_session(
+                            &record.authenticated_subject,
+                            session.authenticated_subject(),
+                        )
+                })
+            {
+                return Ok(CredentialResponse::AcquireToken(DeliveryResponse {
+                    metadata: existing.metadata.clone(),
+                    delivery_session_params: delivery,
+                }));
             }
-            if Self::active_lease_count(&leases) >= self.config.max_leases() as usize {
+            let active_for_owner = records
+                .into_iter()
+                .flatten()
+                .filter(|record| {
+                    record.metadata.state == CredentialLeaseState::Active
+                        && Self::same_owner(
+                            &record.authenticated_subject,
+                            session.authenticated_subject(),
+                        )
+                })
+                .count();
+            if Self::active_lease_count(&leases).saturating_sub(active_for_owner)
+                >= self.config.max_leases() as usize
+            {
                 return Err(CredentialServiceError::new(
                     CredentialServiceErrorCode::ProviderUnavailable,
                 ));
@@ -99,7 +103,7 @@ impl ManagedIdentityCredentialProvider {
                 .map(|record| record.metadata.rotation_generation)
                 .max()
                 .unwrap_or(0);
-            prior_generation.checked_add(1).ok_or_else(|| invariant())?
+            prior_generation.checked_add(1).ok_or_else(invariant)?
         };
         let client_request = ManagedIdentityLeaseRequest {
             credential_ref: request.credential_ref().clone(),
@@ -110,17 +114,20 @@ impl ManagedIdentityCredentialProvider {
         };
         let grant = Self::poll_client(self.client.issue_lease(&client_request), deadline)?;
         let metadata = Self::grant_metadata(grant, requested_expiry, rotation_generation)?;
-        self.leases
-            .lock()
-            .map_err(|_| invariant())?
-            .entry(key)
-            .or_default()
-            .push(LeaseRecord {
-                idempotency_key: request.idempotency_key().to_owned(),
-                metadata: metadata.clone(),
-                authenticated_subject: session.authenticated_subject().clone(),
-                session_expires_at_unix_ms: session.expires_at_unix_ms(),
-            });
+        let mut leases = self.leases.lock().map_err(|_| invariant())?;
+        let records = leases.entry(key).or_default();
+        records.retain(|record| {
+            !Self::same_owner(
+                &record.authenticated_subject,
+                session.authenticated_subject(),
+            )
+        });
+        records.push(LeaseRecord {
+            idempotency_key: request.idempotency_key().to_owned(),
+            metadata: metadata.clone(),
+            authenticated_subject: session.authenticated_subject().clone(),
+            session_expires_at_unix_ms: session.expires_at_unix_ms(),
+        });
         Ok(CredentialResponse::AcquireToken(DeliveryResponse {
             metadata,
             delivery_session_params: delivery,
@@ -157,18 +164,12 @@ impl ManagedIdentityCredentialProvider {
             let record = records
                 .iter()
                 .find(|record| {
-                    Self::same_owner(
+                    Self::same_session(
                         &record.authenticated_subject,
                         session.authenticated_subject(),
                     )
                 })
                 .ok_or_else(operation_denied)?;
-            if !Self::same_session(
-                &record.authenticated_subject,
-                session.authenticated_subject(),
-            ) {
-                return Err(operation_denied());
-            }
             ensure_active(record)?;
             record.clone()
         };
@@ -195,7 +196,7 @@ impl ManagedIdentityCredentialProvider {
             )?;
             return Err(expired());
         }
-        if inspection.rotation_generation < record.metadata.rotation_generation {
+        if inspection.rotation_generation != record.metadata.rotation_generation {
             return Err(invariant());
         }
         let grant = Self::poll_client(self.client.refresh_lease(&lease), deadline)?;
@@ -229,18 +230,12 @@ impl ManagedIdentityCredentialProvider {
             let record = records
                 .iter()
                 .find(|record| {
-                    Self::same_owner(
+                    Self::same_session(
                         &record.authenticated_subject,
                         session.authenticated_subject(),
                     )
                 })
                 .ok_or_else(operation_denied)?;
-            if !Self::same_session(
-                &record.authenticated_subject,
-                session.authenticated_subject(),
-            ) {
-                return Err(operation_denied());
-            }
             record.clone()
         };
         if record.metadata.state == CredentialLeaseState::Revoked {
@@ -290,18 +285,12 @@ impl ManagedIdentityCredentialProvider {
             let record = records
                 .iter()
                 .find(|record| {
-                    Self::same_owner(
+                    Self::same_session(
                         &record.authenticated_subject,
                         session.authenticated_subject(),
                     )
                 })
                 .ok_or_else(operation_denied)?;
-            if !Self::same_session(
-                &record.authenticated_subject,
-                session.authenticated_subject(),
-            ) {
-                return Err(operation_denied());
-            }
             ensure_active_or_observable(record)?;
             record.clone()
         };
@@ -313,9 +302,10 @@ impl ManagedIdentityCredentialProvider {
         let mut metadata = record.metadata.clone();
         metadata.state = inspection.state;
         metadata.source_version = inspection.source_version;
-        metadata.rotation_generation = inspection
-            .rotation_generation
-            .max(metadata.rotation_generation);
+        if inspection.rotation_generation < metadata.rotation_generation {
+            return Err(invariant());
+        }
+        metadata.rotation_generation = inspection.rotation_generation;
         metadata.expires_at_unix_ms = inspection.expires_at_unix_ms;
         if Self::is_expired(metadata.expires_at_unix_ms, Self::now_unix_ms())
             && metadata.state == CredentialLeaseState::Active

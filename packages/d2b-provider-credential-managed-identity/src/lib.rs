@@ -236,26 +236,27 @@ impl std::error::Error for ManagedIdentityProviderError {}
 pub struct ManagedIdentityPlacement {
     binding: PlacementBinding,
     execution_ref: ResourceRef,
-    zone_ref: Option<ResourceRef>,
+    zone_ref: ResourceRef,
 }
 
 impl ManagedIdentityPlacement {
-    /// Validate host-system or guest-agent placement.
+    /// Validate host-system or guest-agent placement bound to one Zone.
     pub fn new(
         binding: PlacementBinding,
         execution_ref: ResourceRef,
+        zone_ref: ResourceRef,
     ) -> Result<Self, ManagedIdentityProviderError> {
         let valid = matches!(
             (binding, execution_ref.resource_type().as_str()),
             (PlacementBinding::HostSystem, "Host") | (PlacementBinding::GuestAgent, "Guest")
         );
-        if !valid {
+        if !valid || zone_ref.resource_type().as_str() != "Zone" {
             return Err(ManagedIdentityProviderError::InvalidPlacement);
         }
         Ok(Self {
             binding,
             execution_ref,
-            zone_ref: None,
+            zone_ref,
         })
     }
 
@@ -265,24 +266,7 @@ impl ManagedIdentityPlacement {
         execution_ref: ResourceRef,
         zone_ref: ResourceRef,
     ) -> Result<Self, ManagedIdentityProviderError> {
-        if zone_ref.resource_type().as_str() != "Zone" {
-            return Err(ManagedIdentityProviderError::InvalidPlacement);
-        }
-        let mut placement = Self::new(binding, execution_ref)?;
-        placement.zone_ref = Some(zone_ref);
-        Ok(placement)
-    }
-
-    /// Bind an existing placement to one Zone.
-    pub fn with_zone_ref(
-        mut self,
-        zone_ref: ResourceRef,
-    ) -> Result<Self, ManagedIdentityProviderError> {
-        if zone_ref.resource_type().as_str() != "Zone" {
-            return Err(ManagedIdentityProviderError::InvalidPlacement);
-        }
-        self.zone_ref = Some(zone_ref);
-        Ok(self)
+        Self::new(binding, execution_ref, zone_ref)
     }
 
     /// Return the placement binding.
@@ -295,9 +279,9 @@ impl ManagedIdentityPlacement {
         &self.execution_ref
     }
 
-    /// Borrow the expected Zone when this placement was explicitly Zone-bound.
-    pub fn zone_ref(&self) -> Option<&ResourceRef> {
-        self.zone_ref.as_ref()
+    /// Borrow the Zone bound to this placement.
+    pub const fn zone_ref(&self) -> &ResourceRef {
+        &self.zone_ref
     }
 }
 
@@ -609,13 +593,10 @@ impl ManagedIdentityCredentialProvider {
     fn context_matches_provider(&self, subject: &AuthenticatedSubjectContext) -> bool {
         subject.provider_ref() == Some(&self.consumer_ref)
             && subject.execution_ref() == Some(self.placement.execution_ref())
+            && subject.zone_ref() == self.placement.zone_ref()
             && subject.service().as_str() == CREDENTIAL_SERVICE_NAME
             && subject.session_purpose().as_str() == CREDENTIAL_SESSION_PURPOSE
             && subject.provider_generation().is_some()
-            && self
-                .placement
-                .zone_ref()
-                .is_none_or(|zone| subject.zone_ref() == zone)
     }
 
     /// Validate the authenticated ComponentSession binding for one method.
@@ -872,6 +853,7 @@ impl ManagedIdentityCredentialProvider {
         };
         if grant.rotation_generation == 0
             || minimum_rotation_generation == 0
+            || grant.rotation_generation < minimum_rotation_generation
             || grant.expires_at_unix_ms == 0
             || grant.expires_at_unix_ms > requested_expiry_unix_ms
             || grant.expires_at_unix_ms > max_expiry
@@ -883,7 +865,7 @@ impl ManagedIdentityCredentialProvider {
         }
         Ok(CredentialMetadata {
             lease_handle: grant.lease_handle,
-            rotation_generation: grant.rotation_generation.max(minimum_rotation_generation),
+            rotation_generation: grant.rotation_generation,
             source_version: grant.source_version,
             expires_at_unix_ms: grant.expires_at_unix_ms,
             state: CredentialLeaseState::Active,
@@ -923,7 +905,7 @@ impl ManagedIdentityCredentialProvider {
         checkpoints: impl IntoIterator<Item = ManagedIdentityLeaseCheckpoint>,
     ) -> Result<(), CredentialServiceError> {
         let now = Self::now_unix_ms();
-        let mut restored = Vec::new();
+        let mut restored: Vec<(String, LeaseRecord)> = Vec::new();
         for checkpoint in checkpoints {
             let ManagedIdentityLeaseCheckpoint {
                 credential_ref,
@@ -950,33 +932,76 @@ impl ManagedIdentityCredentialProvider {
             {
                 metadata.state = CredentialLeaseState::Expired;
             }
-            restored.push((
-                credential_ref.to_canonical_string(),
-                LeaseRecord {
-                    idempotency_key,
-                    metadata,
-                    authenticated_subject,
-                    session_expires_at_unix_ms,
-                },
-            ));
+            let key = credential_ref.to_canonical_string();
+            let record = LeaseRecord {
+                idempotency_key,
+                metadata,
+                authenticated_subject,
+                session_expires_at_unix_ms,
+            };
+            if let Some((_, existing)) = restored.iter_mut().find(|(existing_key, existing)| {
+                existing_key == &key
+                    && Self::same_owner(
+                        &existing.authenticated_subject,
+                        &record.authenticated_subject,
+                    )
+            }) {
+                *existing = record;
+            } else {
+                restored.push((key, record));
+            }
         }
         let _mutation = self.mutation_guard()?;
         let mut leases = self.leases.lock().map_err(|_| {
             CredentialServiceError::new(CredentialServiceErrorCode::InvariantFailure)
         })?;
-        let restored_active = restored
-            .iter()
-            .filter(|(_, record)| record.metadata.state == CredentialLeaseState::Active)
-            .count();
-        if Self::active_lease_count(&leases) + restored_active > self.config.max_leases() as usize {
+        let mut next = leases.clone();
+        for records in next.values_mut() {
+            Self::deduplicate_records(records);
+        }
+        Self::mark_expired_locked(&mut next, now);
+        for (credential_ref, record) in &restored {
+            if let Some(records) = next.get_mut(credential_ref) {
+                records.retain(|existing| {
+                    !Self::same_owner(
+                        &existing.authenticated_subject,
+                        &record.authenticated_subject,
+                    )
+                });
+            }
+        }
+        for (credential_ref, record) in restored {
+            next.entry(credential_ref).or_default().push(record);
+        }
+        next.retain(|_, records| !records.is_empty());
+        if Self::active_lease_count(&next) > self.config.max_leases() as usize {
             return Err(CredentialServiceError::new(
                 CredentialServiceErrorCode::ProviderUnavailable,
             ));
         }
-        for (credential_ref, record) in restored {
-            leases.entry(credential_ref).or_default().push(record);
-        }
+        *leases = next;
         Ok(())
+    }
+
+    pub(crate) fn deduplicate_records(records: &mut Vec<LeaseRecord>) {
+        let mut deduplicated: Vec<LeaseRecord> = Vec::with_capacity(records.len());
+        for record in records.drain(..) {
+            if let Some(index) = deduplicated.iter().position(|existing| {
+                Self::same_owner(
+                    &existing.authenticated_subject,
+                    &record.authenticated_subject,
+                )
+            }) {
+                if record.metadata.state == CredentialLeaseState::Active
+                    || deduplicated[index].metadata.state != CredentialLeaseState::Active
+                {
+                    deduplicated[index] = record;
+                }
+            } else {
+                deduplicated.push(record);
+            }
+        }
+        *records = deduplicated;
     }
 
     /// Revoke every active handle owned by one authenticated workload.
@@ -1006,20 +1031,22 @@ impl ManagedIdentityCredentialProvider {
             leases
                 .iter()
                 .flat_map(|(credential_ref, records)| {
-                    records.iter().filter_map(|record| {
-                        (record.metadata.state == CredentialLeaseState::Active
-                            && Self::same_owner(
-                                &record.authenticated_subject,
-                                session.authenticated_subject(),
-                            ))
-                        .then(|| {
+                    records
+                        .iter()
+                        .filter(|record| {
+                            record.metadata.state == CredentialLeaseState::Active
+                                && Self::same_owner(
+                                    &record.authenticated_subject,
+                                    session.authenticated_subject(),
+                                )
+                        })
+                        .map(|record| {
                             (
                                 credential_ref.clone(),
                                 record.authenticated_subject.clone(),
                                 record.metadata.clone(),
                             )
                         })
-                    })
                 })
                 .collect::<Vec<_>>()
         };
@@ -1081,6 +1108,7 @@ mod tests {
             ManagedIdentityPlacement::new(
                 PlacementBinding::UserAgent,
                 ResourceRef::parse("Host/workstation").unwrap(),
+                ResourceRef::parse("Zone/dev").unwrap(),
             ),
             Err(ManagedIdentityProviderError::InvalidPlacement)
         );

@@ -156,6 +156,34 @@ fn lease_operations_bind_to_authenticated_zone_workload_subject_and_session() {
 }
 
 #[test]
+fn wrong_zone_acquire_is_denied_before_first_client_call() {
+    let (provider, client) = setup();
+    let wrong_zone = authenticated_session(
+        "Provider/workload-a",
+        "Zone/other",
+        "Guest/aca-sandbox",
+        "Provider/runtime-azure-container-apps",
+        1,
+        1,
+    );
+    assert_eq!(
+        dispatch(
+            &provider,
+            CredentialMethod::AcquireToken,
+            &request("wrong-zone-first"),
+            wrong_zone,
+        )
+        .unwrap_err()
+        .code(),
+        CredentialServiceErrorCode::OperationDenied
+    );
+    assert_eq!(
+        client.issue_calls.load(std::sync::atomic::Ordering::SeqCst),
+        0
+    );
+}
+
+#[test]
 fn expired_sessions_and_leases_fail_closed() {
     let (provider, client) = setup();
     let expired_session = authenticated_session_with_expiry(
@@ -222,6 +250,228 @@ fn expired_sessions_and_leases_fail_closed() {
 }
 
 #[test]
+fn expired_lease_reacquire_replaces_predecessor_before_refresh() {
+    let (provider, client) = setup();
+    let session = authenticated_session(
+        "Provider/workload-a",
+        "Zone/dev",
+        "Guest/aca-sandbox",
+        "Provider/runtime-azure-container-apps",
+        1,
+        1,
+    );
+    let expiry = now_unix_ms() + 5;
+    let first_request = CredentialRequest::new(
+        ResourceRef::parse("Credential/aca-relay-mi").unwrap(),
+        "expire-reacquire-first",
+        "expire-reacquire-first",
+        expiry,
+        expiry - 1,
+    )
+    .unwrap();
+    let first = dispatch(
+        &provider,
+        CredentialMethod::AcquireToken,
+        &first_request,
+        session.clone(),
+    )
+    .unwrap();
+    let CredentialResponse::AcquireToken(first) = first else {
+        panic!("acquire response");
+    };
+    assert_eq!(first.metadata.rotation_generation, 1);
+
+    thread::sleep(Duration::from_millis(20));
+    let reacquired = dispatch(
+        &provider,
+        CredentialMethod::AcquireToken,
+        &request("expire-reacquire-second"),
+        session.clone(),
+    )
+    .unwrap();
+    let CredentialResponse::AcquireToken(reacquired) = reacquired else {
+        panic!("reacquire response");
+    };
+    assert_eq!(reacquired.metadata.rotation_generation, 2);
+
+    let refreshed = dispatch(
+        &provider,
+        CredentialMethod::RefreshToken,
+        &request("expire-reacquire-refresh"),
+        session,
+    )
+    .unwrap();
+    let CredentialResponse::RefreshToken(refreshed) = refreshed else {
+        panic!("refresh response");
+    };
+    assert_eq!(refreshed.metadata.rotation_generation, 3);
+    assert_eq!(
+        client.issue_calls.load(std::sync::atomic::Ordering::SeqCst),
+        2
+    );
+    assert_eq!(
+        client
+            .refresh_calls
+            .load(std::sync::atomic::Ordering::SeqCst),
+        1
+    );
+}
+
+#[test]
+fn revoked_lease_reacquire_targets_only_the_current_record() {
+    let (provider, client) = setup();
+    let session = authenticated_session(
+        "Provider/workload-a",
+        "Zone/dev",
+        "Guest/aca-sandbox",
+        "Provider/runtime-azure-container-apps",
+        1,
+        1,
+    );
+    dispatch(
+        &provider,
+        CredentialMethod::AcquireToken,
+        &request("revoke-reacquire-first"),
+        session.clone(),
+    )
+    .unwrap();
+    dispatch(
+        &provider,
+        CredentialMethod::RevokeToken,
+        &request("revoke-reacquire-revoke-first"),
+        session.clone(),
+    )
+    .unwrap();
+    let reacquired = dispatch(
+        &provider,
+        CredentialMethod::AcquireToken,
+        &request("revoke-reacquire-second"),
+        session.clone(),
+    )
+    .unwrap();
+    let CredentialResponse::AcquireToken(reacquired) = reacquired else {
+        panic!("reacquire response");
+    };
+    assert_eq!(reacquired.metadata.rotation_generation, 2);
+
+    dispatch(
+        &provider,
+        CredentialMethod::RevokeToken,
+        &request("revoke-reacquire-revoke-second"),
+        session.clone(),
+    )
+    .unwrap();
+    assert_eq!(
+        client
+            .revoke_calls
+            .load(std::sync::atomic::Ordering::SeqCst),
+        2
+    );
+    assert_eq!(
+        dispatch(
+            &provider,
+            CredentialMethod::RefreshToken,
+            &request("revoke-reacquire-refresh"),
+            session,
+        )
+        .unwrap_err()
+        .code(),
+        CredentialServiceErrorCode::LeaseRevoked
+    );
+    assert_eq!(
+        client
+            .refresh_calls
+            .load(std::sync::atomic::Ordering::SeqCst),
+        0
+    );
+}
+
+#[test]
+fn reconnect_reacquire_replaces_stale_session_before_refresh() {
+    let (provider, client) = setup();
+    let first_session = authenticated_session(
+        "Provider/workload-a",
+        "Zone/dev",
+        "Guest/aca-sandbox",
+        "Provider/runtime-azure-container-apps",
+        1,
+        1,
+    );
+    let reconnected_session = authenticated_session(
+        "Provider/workload-a",
+        "Zone/dev",
+        "Guest/aca-sandbox",
+        "Provider/runtime-azure-container-apps",
+        1,
+        2,
+    );
+    dispatch(
+        &provider,
+        CredentialMethod::AcquireToken,
+        &request("reconnect-first"),
+        first_session.clone(),
+    )
+    .unwrap();
+    let reacquired = dispatch(
+        &provider,
+        CredentialMethod::AcquireToken,
+        &request("reconnect-second"),
+        reconnected_session.clone(),
+    )
+    .unwrap();
+    let CredentialResponse::AcquireToken(reacquired) = reacquired else {
+        panic!("reacquire response");
+    };
+    assert_eq!(reacquired.metadata.rotation_generation, 2);
+
+    assert_eq!(
+        dispatch(
+            &provider,
+            CredentialMethod::RefreshToken,
+            &request("reconnect-stale-refresh"),
+            first_session.clone(),
+        )
+        .unwrap_err()
+        .code(),
+        CredentialServiceErrorCode::OperationDenied
+    );
+    assert_eq!(
+        dispatch(
+            &provider,
+            CredentialMethod::InspectMetadata,
+            &request("reconnect-stale-inspect"),
+            first_session,
+        )
+        .unwrap_err()
+        .code(),
+        CredentialServiceErrorCode::OperationDenied
+    );
+    let refreshed = dispatch(
+        &provider,
+        CredentialMethod::RefreshToken,
+        &request("reconnect-current-refresh"),
+        reconnected_session,
+    )
+    .unwrap();
+    let CredentialResponse::RefreshToken(refreshed) = refreshed else {
+        panic!("refresh response");
+    };
+    assert_eq!(refreshed.metadata.rotation_generation, 3);
+    assert_eq!(
+        client
+            .inspect_calls
+            .load(std::sync::atomic::Ordering::SeqCst),
+        1
+    );
+    assert_eq!(
+        client
+            .refresh_calls
+            .load(std::sync::atomic::Ordering::SeqCst),
+        1
+    );
+}
+
+#[test]
 fn lease_lifetime_is_capped_by_provider_maximum() {
     let (provider, _) = setup();
     let now = now_unix_ms();
@@ -269,7 +519,7 @@ fn lease_lifetime_is_capped_by_provider_maximum() {
 }
 
 #[test]
-fn checkpoints_restore_and_refresh_without_secret_material() {
+fn checkpoints_restore_is_idempotent_and_refreshes_without_secret_material() {
     let (provider, client) = setup();
     let session = authenticated_session(
         "Provider/workload-a",
@@ -293,7 +543,9 @@ fn checkpoints_restore_and_refresh_without_secret_material() {
     assert!(!checkpoint_debug.contains(client.endpoint_canary.as_str()));
 
     let restored = restart_provider(&provider, client.clone());
+    restored.restore_checkpoints(checkpoints.clone()).unwrap();
     restored.restore_checkpoints(checkpoints).unwrap();
+    assert_eq!(restored.export_checkpoints().unwrap().len(), 1);
     assert!(matches!(
         dispatch(
             &restored,
@@ -335,7 +587,7 @@ fn finalization_revokes_only_the_callers_owned_handles() {
         &provider,
         CredentialMethod::AcquireToken,
         &CredentialRequest::new(
-            ResourceRef::parse("Credential/owned-a").unwrap(),
+            ResourceRef::parse("Credential/shared").unwrap(),
             "operation-owner-a",
             "owner-a",
             common::EXPIRY,
@@ -349,14 +601,14 @@ fn finalization_revokes_only_the_callers_owned_handles() {
         &provider,
         CredentialMethod::AcquireToken,
         &CredentialRequest::new(
-            ResourceRef::parse("Credential/owned-b").unwrap(),
+            ResourceRef::parse("Credential/shared").unwrap(),
             "operation-owner-b",
             "owner-b",
             common::EXPIRY,
             15_000,
         )
         .unwrap(),
-        owner_b,
+        owner_b.clone(),
     )
     .unwrap();
 
@@ -384,4 +636,21 @@ fn finalization_revokes_only_the_callers_owned_handles() {
             .count(),
         1
     );
+    assert!(matches!(
+        dispatch(
+            &provider,
+            CredentialMethod::RefreshToken,
+            &CredentialRequest::new(
+                ResourceRef::parse("Credential/shared").unwrap(),
+                "operation-owner-b-refresh",
+                "owner-b-refresh",
+                common::EXPIRY,
+                15_000,
+            )
+            .unwrap(),
+            owner_b,
+        )
+        .unwrap(),
+        CredentialResponse::RefreshToken(_)
+    ));
 }
