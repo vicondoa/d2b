@@ -54,6 +54,7 @@ let
     "Provider/runtime-azure-virtual-machine"
     "Provider/runtime-cloud-hypervisor"
     "Provider/transport-azure-relay"
+    "Provider/transport-vsock"
   ];
 
   providerRows = lib.filter
@@ -180,6 +181,13 @@ let
           assertion = resolvesAs row "Network" (providerConfig.networkRef or null);
           message = "${row.path}.spec.config.networkRef must resolve to a Network.";
         }
+      ] else [ ])
+      ++ (if providerRef == "Provider/transport-vsock" then [
+        {
+          assertion = resolvesAs row "Host" (providerConfig.executionRef or null)
+            || resolvesAs row "Guest" (providerConfig.executionRef or null);
+          message = "${row.path}.spec.config.executionRef must resolve to a same-Zone Host or Guest.";
+        }
       ] else [ ]);
 
   guestAssertions = row:
@@ -262,6 +270,8 @@ let
       then providerConfig.gatewayExecutionRef or null
       else if providerRef == "Provider/transport-azure-relay"
       then providerConfig.executionRef or null
+      else if providerRef == "Provider/transport-vsock"
+      then providerConfig.executionRef or null
       else providerConfig.controllerExecutionRef or null;
     in (lib.optionals (lib.elem providerRef runtimeProviderRefs) [
       {
@@ -335,6 +345,11 @@ let
         "relayNamespaceId"
       ];
       unixSettings = [ "socketKind" ];
+      vsockSettings = [
+        "connectTimeoutSeconds"
+        "guestRef"
+        "portClass"
+      ];
     in [
       {
         assertion = lib.all (key: !secretKey key) (lib.attrNames settings);
@@ -388,6 +403,28 @@ let
         {
           assertion = credentialRefs == [ ];
           message = "${row.path}.spec.transportCredentials must be empty for Provider/transport-unix.";
+        }
+      ]
+      ++ lib.optionals (providerRef == "Provider/transport-vsock") [
+        {
+          assertion = lib.all (key: builtins.elem key vsockSettings) (lib.attrNames settings)
+            && builtins.hasAttr "guestRef" settings
+            && resolvesAs row "Guest" settings.guestRef;
+          message = "${row.path}.spec.transportSettings for Provider/transport-vsock must contain a same-Zone guestRef and only allocator-owned fields.";
+        }
+        {
+          assertion = (settings.portClass or "d2b-link") == "d2b-link";
+          message = "${row.path}.spec.transportSettings.portClass must be d2b-link.";
+        }
+        {
+          assertion = builtins.isInt (settings.connectTimeoutSeconds or 30)
+            && (settings.connectTimeoutSeconds or 30) >= 1
+            && (settings.connectTimeoutSeconds or 30) <= 60;
+          message = "${row.path}.spec.transportSettings.connectTimeoutSeconds must be between 1 and 60.";
+        }
+        {
+          assertion = credentialRefs == [ ];
+          message = "${row.path}.spec.transportCredentials must be empty for Provider/transport-vsock.";
         }
       ];
 

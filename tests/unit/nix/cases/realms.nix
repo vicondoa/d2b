@@ -1826,6 +1826,29 @@ let
     };
     expected = true;
   };
+  "realms/zone-control-vsock-transport-refuses-credentials" = {
+    expr = hasZoneControlFailure "transportCredentials" {
+      d2b.zones.child.resources.child-guest = {
+        type = "Guest";
+        spec = { };
+      };
+      d2b.zones.child.resources.transport-vsock = {
+        type = "Provider";
+        spec = {
+          config.executionRef = "Guest/child-guest";
+        };
+      };
+      d2b.zones.child.resources.child-uplink.spec.transportProviderRef =
+        "Provider/transport-vsock";
+      d2b.zones.child.resources.child-uplink.spec.transportSettings = {
+        guestRef = "Guest/child-guest";
+      };
+      d2b.zones.child.resources.child-uplink.spec.transportCredentials = [
+        "Credential/not-permitted"
+      ];
+    };
+    expected = true;
+  };
   "realms/zone-control-zone-link-child-name-is-local" = {
     expr = hasZoneControlFailure "must equal the enclosing Zone name" {
       d2b.zones.child.resources.child-uplink.spec.childZoneName = "other";
