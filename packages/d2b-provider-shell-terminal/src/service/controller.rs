@@ -154,7 +154,7 @@ impl ShellTerminalController {
         Ok(())
     }
 
-    /// Replace all local attachment entries with the authoritative pool count.
+    /// Update remote occupancy without invalidating locally tracked streams.
     pub fn reconcile_pool_attachments(
         &self,
         pool_name: &str,
@@ -164,6 +164,19 @@ impl ShellTerminalController {
             .get(pool_name)
             .ok_or(ShellTerminalError::CapacityExceeded)?
             .reconcile_retained_attachments(attached_streams)
+    }
+
+    /// Retire attachment handles proved stale by the authoritative stream census.
+    pub fn retire_pool_attachments(
+        &self,
+        pool_name: &str,
+        stale_attachments: &[crate::Attachment],
+        remote_attachments: u32,
+    ) -> Result<(), ShellTerminalError> {
+        self.attachment_authorities
+            .get(pool_name)
+            .ok_or(ShellTerminalError::CapacityExceeded)?
+            .retire_proven_stale(stale_attachments, remote_attachments)
     }
 
     /// Restore a pool while preserving the live adopted supervisors' quota.

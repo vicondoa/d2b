@@ -249,13 +249,38 @@ impl PoolAttachmentBudget {
             .entries
             .lock()
             .map_err(|_| ShellTerminalError::AttachmentUnknown)?;
-        entries.remove(attachment);
-        Ok(())
+        if entries.remove(attachment) {
+            Ok(())
+        } else {
+            Err(ShellTerminalError::AttachmentUnknown)
+        }
     }
 
     pub(super) fn reconcile_retained_attachments(
         &self,
         retained_attachments: u32,
+    ) -> Result<(), ShellTerminalError> {
+        let entries = self
+            .entries
+            .lock()
+            .map_err(|_| ShellTerminalError::CapacityExceeded)?;
+        let mut retained = self
+            .retained_attachments
+            .lock()
+            .map_err(|_| ShellTerminalError::CapacityExceeded)?;
+        if (retained_attachments as usize) > self.capacity
+            || (retained_attachments as usize) < entries.len()
+        {
+            return Err(ShellTerminalError::CapacityExceeded);
+        }
+        *retained = retained_attachments as usize - entries.len();
+        Ok(())
+    }
+
+    fn retire_proven_stale(
+        &self,
+        stale_attachments: &[Attachment],
+        remote_attachments: u32,
     ) -> Result<(), ShellTerminalError> {
         let mut entries = self
             .entries
@@ -265,11 +290,13 @@ impl PoolAttachmentBudget {
             .retained_attachments
             .lock()
             .map_err(|_| ShellTerminalError::CapacityExceeded)?;
-        if (retained_attachments as usize) > self.capacity {
+        for attachment in stale_attachments {
+            entries.remove(attachment);
+        }
+        if entries.len().saturating_add(remote_attachments as usize) > self.capacity {
             return Err(ShellTerminalError::CapacityExceeded);
         }
-        entries.clear();
-        *retained = retained_attachments as usize;
+        *retained = remote_attachments as usize;
         Ok(())
     }
 }
@@ -325,6 +352,15 @@ impl PoolAttachmentAuthority {
     ) -> Result<(), ShellTerminalError> {
         self.budget
             .reconcile_retained_attachments(retained_attachments)
+    }
+
+    pub(super) fn retire_proven_stale(
+        &self,
+        stale_attachments: &[Attachment],
+        remote_attachments: u32,
+    ) -> Result<(), ShellTerminalError> {
+        self.budget
+            .retire_proven_stale(stale_attachments, remote_attachments)
     }
 }
 

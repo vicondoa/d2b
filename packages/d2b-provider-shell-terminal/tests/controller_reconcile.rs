@@ -285,3 +285,47 @@ fn controller_and_open_result_debug_are_redacted() {
     assert!(!controller_rendered.contains("guest-alice"));
     assert!(!controller_rendered.contains("alice"));
 }
+
+#[test]
+fn attachment_reconciliation_needs_proven_stale_handles() {
+    let mut controller = ShellTerminalController::default();
+    controller.insert_pool(pool()).unwrap();
+    let admin = Subject::new("dev", CallerOrigin::Local, [Role::ZoneAdmin]);
+    let opened = controller
+        .open_session(
+            &admin,
+            OpenSessionRequest::new("guest-alice", "main", None).unwrap(),
+        )
+        .unwrap();
+    let mut supervisor = opened
+        .start_supervisor(
+            SupervisorIdentity::new([1; 32], [2; 32], opened.supervisor_generation()).unwrap(),
+        )
+        .unwrap();
+    let attachment = supervisor
+        .attach(
+            &admin,
+            d2b_provider_shell_terminal::AttachRequest::new(opened.supervisor_generation(), 0)
+                .unwrap(),
+        )
+        .unwrap()
+        .attachment();
+
+    assert!(
+        controller
+            .reconcile_pool_attachments("guest-alice", 0)
+            .is_err()
+    );
+    controller
+        .retire_pool_attachments("guest-alice", &[attachment], 0)
+        .unwrap();
+    assert!(
+        supervisor
+            .attach(
+                &admin,
+                d2b_provider_shell_terminal::AttachRequest::new(opened.supervisor_generation(), 0,)
+                    .unwrap(),
+            )
+            .is_ok()
+    );
+}
