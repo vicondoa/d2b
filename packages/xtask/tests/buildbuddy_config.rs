@@ -85,8 +85,8 @@ fn committed_profiles_share_targets_and_use_credential_helper_only() {
         "remote profiles must use minimal output downloads"
     );
     assert!(
-        bazelrc.contains("CargoBuildScriptRun=+no-remote"),
-        "remote profiles must keep high-cache CargoBuildScriptRun local"
+        !bazelrc.contains("CargoBuildScriptRun=+no-remote"),
+        "Cargo build scripts must compile on BuildBuddy so C objects match the worker glibc"
     );
     assert!(
         !bazelrc.contains("Rustc=+no-remote"),

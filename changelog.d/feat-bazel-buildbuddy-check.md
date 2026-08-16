@@ -19,9 +19,9 @@
   measured two-crate local log showed higher gross input and fan-out.
 - Wire BuildBuddy's Ubuntu GCC C toolchain on remote profiles so rustc
   linking does not use the host Nix gcc path.
-- Run Rustc on BuildBuddy RBE with compressed cache, minimal downloads,
-  and 50 jobs. Local results may seed the remote cache. Cargo build
-  scripts stay local after they showed the highest remote-cache traffic.
+- Run Rustc and Cargo build scripts on BuildBuddy RBE so C objects
+  match the Ubuntu worker glibc. Compressed cache, minimal downloads,
+  and 50 jobs stay on. Local results may seed the remote cache.
 - Route local `make check` through BuildBuddy for supported Bazel
   targets, with an automatic local fallback. GitHub Layer-1 now runs
   the same Bazel aggregate with `--config=local` and no BuildBuddy.

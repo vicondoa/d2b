@@ -203,7 +203,7 @@ fn provider_evidence(observed_at: u64) -> Value {
         "identity": {
             "commit": commit,
             "targetSetDigest": "sha256:576bbb5fd15ccdd2ae7db72515aefdf66b2413a60687921d1077f7dab5593dae",
-            "configurationDigest": "sha256:d7791e1f2696786528e5c027219fec5ee655e53b88b958b2eb276535d0cf7a8c",
+            "configurationDigest": "sha256:9a3445cd0effe8b5a31bc0c8d87d74c6ea479f32bb8e5c63cefba8aebe58fa59",
             "selectedClosureDigest": "sha256:62b4a9685445237db70b69d673b35205a1a18d835cf7ce7aed55e0edf43a8813",
             "namespace": "d2b/qualification/linux-x86_64/rules_rust/worker-v1/minimal/lock-v1",
             "toolchain": "rules_rust",

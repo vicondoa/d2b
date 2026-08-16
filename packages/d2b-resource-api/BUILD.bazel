@@ -107,6 +107,7 @@ rust_test(
         "CARGO": "$(CARGO)",
         "RUSTC": "$(RUSTC)",
     },
+    tags = ["local"],
     visibility = ["//visibility:public"],
 )
 

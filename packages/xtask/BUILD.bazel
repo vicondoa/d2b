@@ -214,6 +214,7 @@ rust_test(
         "PATH",
     ],
     rustc_env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
+    tags = ["local"],
     visibility = ["//visibility:public"],
     deps = ["@crates//:serde_json"],
 )

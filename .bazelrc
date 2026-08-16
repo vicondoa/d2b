@@ -15,9 +15,10 @@ build --stamp=no
 build --noslim_profile
 build --experimental_profile_include_target_label
 build --experimental_profile_include_primary_output
-# The Nix C++ toolchain defaults to gold; use the available GNU BFD linker.
-build --linkopt=-fuse-ld=bfd
-build --host_linkopt=-fuse-ld=bfd
+# The Nix C++ toolchain defaults to gold; use the available GNU BFD linker
+# only on the local profile. Remote workers use Ubuntu's default linker.
+build:local --linkopt=-fuse-ld=bfd
+build:local --host_linkopt=-fuse-ld=bfd
 
 # The local profile is the exact same target graph without any provider
 # endpoints. The bazel-check facade supplies the local repository-content
@@ -41,9 +42,9 @@ build:remote --extra_toolchains=@toolchains_buildbuddy//toolchains/cc:ubuntu_gcc
 build:remote --remote_download_minimal
 build:remote --jobs=50
 build:remote --remote_cache_compression
-# Cargo build scripts measured high remote-cache traffic; keep them local.
+# Rustc and C build scripts both run on BuildBuddy so locally compiled
+# glibc objects are not linked on the Ubuntu worker.
 # Rustc uses BuildBuddy RBE plus the action cache.
-build:remote --modify_execution_info=CargoBuildScriptRun=+no-remote
 
 build:trusted-seed --remote_executor=grpcs://d2b.buildbuddy.io
 build:trusted-seed --remote_cache=grpcs://d2b.buildbuddy.io
@@ -60,7 +61,7 @@ build:trusted-seed --remote_cache_async=false
 build:trusted-seed --remote_download_minimal
 build:trusted-seed --jobs=50
 build:trusted-seed --remote_cache_compression
-build:trusted-seed --modify_execution_info=CargoBuildScriptRun=+no-remote
+# Build scripts execute remotely with the Ubuntu toolchain.
 
 build:qualification --remote_executor=grpcs://d2b.buildbuddy.io
 build:qualification --remote_cache=grpcs://d2b.buildbuddy.io
@@ -75,4 +76,4 @@ build:qualification --extra_toolchains=@toolchains_buildbuddy//toolchains/cc:ubu
 build:qualification --remote_download_minimal
 build:qualification --jobs=50
 build:qualification --remote_cache_compression
-build:qualification --modify_execution_info=CargoBuildScriptRun=+no-remote
+# Build scripts execute remotely with the Ubuntu toolchain.
