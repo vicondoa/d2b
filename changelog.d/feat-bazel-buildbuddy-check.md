@@ -13,3 +13,5 @@
 - Fixed default-config Bazel Rust tests to carry Cargo dev-dependency feature
   variants transitively, including d2bd's `test-support` dependencies.
 - Fixed upstream Gazelle idempotence for hand-owned Bazel package BUILD files.
+- Fixed broker guest-control signing tests to use a path-safe test scratch root
+  instead of a world-writable host temp directory.

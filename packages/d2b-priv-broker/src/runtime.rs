@@ -10934,6 +10934,17 @@ mod tests {
     }
 
     #[cfg(not(feature = "layer1-bootstrap"))]
+    fn guest_control_test_root(prefix: &str) -> tempfile::TempDir {
+        let base = crate::test_scratch_root().join("guest-control-tests");
+        crate::sys::path_safe::ensure_dir(&base, 0o750, None, None)
+            .expect("create guest-control test root");
+        tempfile::Builder::new()
+            .prefix(prefix)
+            .tempdir_in(base)
+            .expect("create guest-control test directory")
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
     fn write_guest_control_token(state_dir: &Path, vm: &str, mode: u32) {
         use std::os::unix::fs::PermissionsExt;
         let dir = state_dir.join(format!("guest-control-{vm}"));
@@ -10978,7 +10989,7 @@ mod tests {
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn guest_control_sign_returns_only_fixed_tag() {
-        let root = tempfile::tempdir().expect("tempdir");
+        let root = guest_control_test_root("guest-control-sign-");
         let bundle = build_test_bundle(root.path());
         let config = test_server_config(root.path(), &bundle.bundle_path);
         write_guest_control_token(&config.state_dir, "corp-vm", 0o440);
@@ -10996,7 +11007,7 @@ mod tests {
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn guest_control_sign_rejects_role_confusion_and_unsafe_token() {
-        let root = tempfile::tempdir().expect("tempdir");
+        let root = guest_control_test_root("guest-control-sign-reject-");
         let bundle = build_test_bundle(root.path());
         let config = test_server_config(root.path(), &bundle.bundle_path);
         write_guest_control_token(&config.state_dir, "corp-vm", 0o440);
