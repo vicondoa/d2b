@@ -3,10 +3,16 @@
 use core::fmt;
 use d2b_contracts::v3::ResourceUid;
 
-use crate::{
-    PhysicalUsbBackingClaim, SecurityKeyEffectError, SecurityKeyEffectPort, SecurityKeyLease,
-    SecurityKeyLeaseError, SecurityKeySessionId, SessionRecord, SessionResult, SessionRing,
+use crate::effect_port::{
+    DeviceId, InventoryEffectError, InventoryObservation, ObservationPolicyId,
+    SecurityKeyInventoryEffectPort,
 };
+use crate::{
+    PhysicalUsbBackingClaim, SecurityKeyAdmission, SecurityKeyEffectError, SecurityKeyEffectPort,
+    SecurityKeyLease, SecurityKeyLeaseError, SecurityKeySessionId, SessionRecord, SessionResult,
+    SessionRing,
+};
+use d2b_contracts::v3::ResourceRef;
 
 /// Controller-level failures.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,9 +66,33 @@ impl SecurityKeyController {
         })
     }
 
+    /// Construct a controller from one exact Core Device admission.
+    pub fn new_authorized(
+        device_uid: ResourceUid,
+        admission: SecurityKeyAdmission,
+        ring_capacity: usize,
+    ) -> Result<Self, SecurityKeyControllerError> {
+        Ok(Self {
+            lease: SecurityKeyLease::new_authorized(device_uid, admission)
+                .map_err(SecurityKeyControllerError::Lease)?,
+            ring: SessionRing::new(ring_capacity)
+                .map_err(|_| SecurityKeyControllerError::RingCapacity)?,
+        })
+    }
+
     /// Borrow the underlying lease state.
     pub const fn lease(&self) -> &SecurityKeyLease {
         &self.lease
+    }
+
+    /// Observe the exact physical Device through Core's injected port.
+    pub async fn observe_inventory<P: SecurityKeyInventoryEffectPort>(
+        &self,
+        device_id: &DeviceId,
+        policy_id: &ObservationPolicyId,
+        port: &P,
+    ) -> Result<InventoryObservation, InventoryEffectError> {
+        port.observe_inventory(device_id, policy_id).await
     }
 
     /// Start a session through the authority-before-open sequence.
@@ -78,6 +108,34 @@ impl SecurityKeyController {
         self.ring
             .push(SessionRecord::new(session, SessionResult::InProgress));
         Ok(SecurityKeyReconcileOutcome::Active)
+    }
+
+    /// Acquire a session after exact Device and holder revalidation.
+    pub fn acquire_authorized<P: SecurityKeyEffectPort>(
+        &mut self,
+        session: SecurityKeySessionId,
+        device_uid: ResourceUid,
+        holder: &ResourceRef,
+        port: &mut P,
+    ) -> Result<SecurityKeyReconcileOutcome, SecurityKeyControllerError> {
+        self.lease
+            .acquire_authorized(session, device_uid, holder, port)
+            .map_err(SecurityKeyControllerError::Lease)?;
+        self.ring
+            .push(SessionRecord::new(session, SessionResult::InProgress));
+        Ok(SecurityKeyReconcileOutcome::Active)
+    }
+
+    /// Rebind the controller to fresh Core admission evidence after a
+    /// completed session.
+    pub fn rebind_authorized(
+        &mut self,
+        device_uid: ResourceUid,
+        admission: SecurityKeyAdmission,
+    ) -> Result<(), SecurityKeyControllerError> {
+        self.lease
+            .rebind_authorized(device_uid, admission)
+            .map_err(SecurityKeyControllerError::Lease)
     }
 
     /// Complete and record the active session.

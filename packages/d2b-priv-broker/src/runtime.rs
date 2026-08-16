@@ -3830,8 +3830,13 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
             ))
         }
         RealBrokerRequest::OpenHidrawSecurityKey(req) => {
-            let outcome = crate::ops::security_key::live_open_hidraw_security_key(&req, audit_log)
-                .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
+            let resolver = require_resolver(resolver)?;
+            let outcome = crate::ops::security_key::live_open_hidraw_security_key(
+                &req,
+                &resolver.host.security_key_selectors,
+                audit_log,
+            )
+            .map_err(|error| BrokerError::LiveHandler(error.to_string()))?;
             write_success_op_record!(
                 audit_log,
                 bundle_metadata,
@@ -3845,18 +3850,20 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 tracing_span_id_str(req.tracing_span_id.as_ref()),
                 OperationFields::OpenHidrawSecurityKey {
                     vm_id: req.vm_id.as_str().to_owned(),
-                    selector_id: req.selector_id.clone(),
+                    selector_id: outcome.selector_label.clone(),
                     device_class: outcome.device_class.clone(),
                     resolved: true,
                 },
             )?;
-            let response = BrokerResponse::OpenHidrawSecurityKey(
-                d2b_contracts::broker_wire::OpenHidrawSecurityKeyResponse {
-                    selector_resolved: outcome.selector_label,
-                    device_class: outcome.device_class,
-                },
-            );
-            Ok(DispatchResult::with_fd(response, outcome.fd))
+            Ok(DispatchResult::with_fd(
+                BrokerResponse::OpenHidrawSecurityKey(
+                    d2b_contracts::broker_wire::OpenHidrawSecurityKeyResponse {
+                        selector_resolved: outcome.selector_label,
+                        device_class: outcome.device_class,
+                    },
+                ),
+                outcome.fd,
+            ))
         }
         RealBrokerRequest::SecurityKeyOpenDevice(_) => Err(BrokerError::Unimplemented {
             operation: "SecurityKeyOpenDevice",
@@ -4173,8 +4180,31 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                     ))
                 })?;
             let exec = live_exec(config);
-            crate::ops::state_dir::live_prepare_state_dir(&exec, resolver, &req, audit_log)
-                .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
+            match crate::ops::state_dir::live_prepare_state_dir(&exec, resolver, &req, audit_log) {
+                Ok(()) => {}
+                Err(crate::ops::state_dir::PrepareStateDirError::SwtpmDirHardening(error)) => {
+                    write_decision_op_record!(
+                        audit_log,
+                        bundle_metadata,
+                        "PrepareSwtpmDir",
+                        req.vm_id.as_str(),
+                        caller_uid,
+                        caller_gid,
+                        &caller_role,
+                        req.vm_id.as_str(),
+                        req.vm_id.as_str(),
+                        tracing_span_id_str(req.tracing_span_id.as_ref()),
+                        "denied-refused",
+                        Some(error.reason),
+                        OperationFields::PrepareSwtpmDir(error.audit.clone()),
+                    )?;
+                    return Err(BrokerError::SwtpmDirHardening {
+                        audit: error.audit,
+                        reason: error.reason,
+                    });
+                }
+                Err(error) => return Err(BrokerError::LiveHandler(error.to_string())),
+            }
             write_success_op_record!(
                 audit_log,
                 bundle_metadata,
@@ -4216,28 +4246,56 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 (intent.owner_uid, intent.owner_gid),
             )
             .map_err(|error| BrokerError::LiveHandler(error.to_string()))?;
-            let outcome = match crate::ops::swtpm_migration::migrate(&paths) {
-                Ok(outcome) => outcome,
-                Err(_) => crate::ops::swtpm_migration::LegacyMigrationOutcome::Failed,
-            };
-            let wire_outcome = match outcome {
-                crate::ops::swtpm_migration::LegacyMigrationOutcome::Migrated => {
-                    d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::Migrated
+            let wire_outcome = if req.probe_only {
+                match crate::ops::swtpm_migration::probe(&paths) {
+                    Ok(crate::ops::swtpm_migration::LegacyInventoryState::NeverProvisioned) => {
+                        d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::NeverProvisioned
+                    }
+                    Ok(crate::ops::swtpm_migration::LegacyInventoryState::ValidLegacy) => {
+                        d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::AdoptionRequired
+                    }
+                    Ok(crate::ops::swtpm_migration::LegacyInventoryState::AlreadyCommitted) => {
+                        d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::AlreadyMigrated
+                    }
+                    Ok(
+                        crate::ops::swtpm_migration::LegacyInventoryState::Missing
+                        | crate::ops::swtpm_migration::LegacyInventoryState::Replaced
+                        | crate::ops::swtpm_migration::LegacyInventoryState::Ambiguous
+                        | crate::ops::swtpm_migration::LegacyInventoryState::Foreign,
+                    )
+                    | Err(crate::ops::swtpm_migration::LegacyMigrationError::InventoryInvalid)
+                    | Err(crate::ops::swtpm_migration::LegacyMigrationError::ForeignOwner) => {
+                        d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::Ambiguous
+                    }
+                    Err(crate::ops::swtpm_migration::LegacyMigrationError::LockUnavailable) => {
+                        d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::Pending
+                    }
+                    Err(_) => d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::Failed,
                 }
-                crate::ops::swtpm_migration::LegacyMigrationOutcome::AlreadyMigrated => {
-                    d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::AlreadyMigrated
-                }
-                crate::ops::swtpm_migration::LegacyMigrationOutcome::NotApplicable => {
-                    d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::NotApplicable
-                }
-                crate::ops::swtpm_migration::LegacyMigrationOutcome::Pending => {
-                    d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::Pending
-                }
-                crate::ops::swtpm_migration::LegacyMigrationOutcome::Failed => {
-                    d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::Failed
-                }
-                crate::ops::swtpm_migration::LegacyMigrationOutcome::Ambiguous => {
-                    d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::Ambiguous
+            } else {
+                let outcome = match crate::ops::swtpm_migration::migrate(&paths) {
+                    Ok(outcome) => outcome,
+                    Err(_) => crate::ops::swtpm_migration::LegacyMigrationOutcome::Failed,
+                };
+                match outcome {
+                    crate::ops::swtpm_migration::LegacyMigrationOutcome::Migrated => {
+                        d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::Migrated
+                    }
+                    crate::ops::swtpm_migration::LegacyMigrationOutcome::AlreadyMigrated => {
+                        d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::AlreadyMigrated
+                    }
+                    crate::ops::swtpm_migration::LegacyMigrationOutcome::NotApplicable => {
+                        d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::NotApplicable
+                    }
+                    crate::ops::swtpm_migration::LegacyMigrationOutcome::Pending => {
+                        d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::Pending
+                    }
+                    crate::ops::swtpm_migration::LegacyMigrationOutcome::Failed => {
+                        d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::Failed
+                    }
+                    crate::ops::swtpm_migration::LegacyMigrationOutcome::Ambiguous => {
+                        d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::Ambiguous
+                    }
                 }
             };
             write_success_op_record!(
@@ -11372,6 +11430,44 @@ mod tests {
         );
     }
 
+    #[test]
+    fn swtpm_hardening_failure_uses_the_typed_path_free_operation() {
+        let error = BrokerError::SwtpmDirHardening {
+            audit: crate::ops::audit_op::SwtpmDirAudit {
+                vm_id: "work-vm".to_owned(),
+                base_dir_hash: "fnv1a64:0000000000000000".to_owned(),
+                result: crate::ops::audit_op::SwtpmDirResult::FailedClosed,
+                mode: 0o700,
+                owner_uid: 1000,
+                owner_gid: 1000,
+                marker_result: crate::ops::audit_op::SwtpmMarkerResult::FailedClosed,
+                fail_reason: Some("swtpm-dir-marker-mismatch".to_owned()),
+            },
+            reason: "swtpm-dir-marker-mismatch",
+        };
+
+        #[cfg(feature = "layer1-bootstrap")]
+        assert!(matches!(
+            error.into_response(),
+            BrokerResponse::Error {
+                kind,
+                operation,
+                message,
+                ..
+            } if kind == "Broker.SwtpmDirHardening"
+                && operation == "PrepareSwtpmDir"
+                && !message.contains('/')
+        ));
+        #[cfg(not(feature = "layer1-bootstrap"))]
+        assert!(matches!(
+            error.into_response(),
+            BrokerResponse::Error(response)
+                if response.kind == "Broker.SwtpmDirHardening"
+                    && response.operation == "PrepareSwtpmDir"
+                    && !response.message.contains('/')
+        ));
+    }
+
     #[cfg(not(feature = "layer1-bootstrap"))]
     fn usb_sysfs_test_lock() -> MutexGuard<'static, ()> {
         TEST_USB_SYSFS_LOCK
@@ -11875,6 +11971,7 @@ mod tests {
 
         let host = HostJson {
             schema_version: "v2".to_owned(),
+            security_key_selectors: Vec::new(),
             site: SitePolicy {
                 allow_unsafe_east_west: false,
             },

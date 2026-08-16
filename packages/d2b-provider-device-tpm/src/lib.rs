@@ -9,14 +9,26 @@
 
 mod controller;
 mod migration;
+mod resource_controller;
+mod resource_effect;
+mod resources;
 mod runner;
 mod state;
+mod status;
 
 pub use controller::{
     TpmController, TpmControllerError, TpmEffectError, TpmEffectPort, TpmPhase,
     TpmReconcileDisposition, TpmReconcileOutcome, TpmStatePreparationResult,
 };
 pub use migration::LegacyMigrationOutcome;
+pub use resource_controller::{
+    TpmResourceController, TpmResourceControllerError, TpmResourceOutcome, TpmResourcePhase,
+};
+pub use resource_effect::{TpmResourceEffectError, TpmResourceEffectPort};
+pub use resources::{
+    build_swtpm_flush_spec, build_swtpm_process_spec, build_tpm_state_volume_resource,
+    build_tpm_state_volume_spec,
+};
 pub use runner::{
     BinaryKind, FlushLaunchTicket, SignedBinaryRef, SwtpmArgv, SwtpmArgvError, SwtpmSettings,
     SwtpmStartLaunchTicket, validate_start_ticket,
@@ -25,6 +37,7 @@ pub use state::{
     StateDirIntent, StateDirectoryToken, StateOwnerToken, TamperMarkerToken, TpmStateObservation,
     TpmStateObservationKind, TpmStatePreparation, TpmStateValidationError,
 };
+pub use status::{TpmMarkerStatus, TpmStatusReport};
 
 /// Provider identity.
 pub const PROVIDER_REF: &str = "Provider/device-tpm";

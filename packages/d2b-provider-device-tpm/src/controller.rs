@@ -184,29 +184,8 @@ pub struct TpmController {
 }
 
 impl TpmController {
-    /// Construct a controller with the state-preserving finalizer installed.
-    #[allow(dead_code)]
-    pub(crate) fn new(
-        intent: StateDirIntent,
-        settings: SwtpmSettings,
-        binary: SignedBinaryRef,
-    ) -> Result<Self, TpmControllerError> {
-        Self::new_inner(intent, settings, binary)
-    }
-
-    /// Construct the test fixture.
-    #[doc(hidden)]
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn new_for_tests(
-        intent: StateDirIntent,
-        settings: SwtpmSettings,
-        binary: SignedBinaryRef,
-    ) -> Result<Self, TpmControllerError> {
-        Self::new_inner(intent, settings, binary)
-    }
-
-    #[allow(dead_code)]
-    fn new_inner(
+    /// Construct the production controller with the state-preserving finalizer installed.
+    pub fn new(
         intent: StateDirIntent,
         settings: SwtpmSettings,
         binary: SignedBinaryRef,
@@ -222,6 +201,17 @@ impl TpmController {
             volume_preserved: true,
             worker_started: false,
         })
+    }
+
+    /// Construct the test fixture.
+    #[doc(hidden)]
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn new_for_tests(
+        intent: StateDirIntent,
+        settings: SwtpmSettings,
+        binary: SignedBinaryRef,
+    ) -> Result<Self, TpmControllerError> {
+        Self::new(intent, settings, binary)
     }
 
     /// Return the current lifecycle phase.

@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "threadPoolSize": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 256
+    },
+    "cache": {
+      "enum": ["auto", "always", "never"],
+      "default": "auto"
+    }
+  }
+}

@@ -3562,6 +3562,7 @@ mod tests {
             fd_ownership: Vec::new(),
             runtime_providers: Vec::new(),
             vm_runtimes: Vec::new(),
+            security_key_selectors: Vec::new(),
             cloud_hypervisor_capabilities: Vec::new(),
             if_name_mappings: Vec::<IfNameMapping>::new(),
             qemu_media: None,

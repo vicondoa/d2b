@@ -1733,6 +1733,7 @@ dependencies = [
  "d2b-provider",
  "d2b-provider-activation-nixos",
  "d2b-provider-audio-pipewire",
+ "d2b-provider-device-security-key",
  "d2b-provider-device-tpm",
  "d2b-provider-device-usbip",
  "d2b-provider-network-local",

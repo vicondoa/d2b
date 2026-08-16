@@ -1,11 +1,11 @@
 //! Single-session security-key lease state machine.
 
 use core::fmt;
-use d2b_contracts::v3::ResourceUid;
+use d2b_contracts::v3::{ResourceRef, ResourceUid};
 
 use crate::authority::{
-    PhysicalAuthorityLease, PhysicalUsbBackingClaim, RelayLaunchTicket, SecurityKeyEffectError,
-    SecurityKeyEffectPort, SecurityKeyOpenIntent,
+    PhysicalAuthorityLease, PhysicalUsbBackingClaim, RelayLaunchTicket, SecurityKeyAdmission,
+    SecurityKeyEffectError, SecurityKeyEffectPort, SecurityKeyOpenIntent,
 };
 
 /// Opaque security-key session identity.
@@ -51,6 +51,8 @@ pub enum SecurityKeyLeaseError {
     Effect(SecurityKeyEffectError),
     /// A transition was requested from the wrong state.
     InvalidTransition,
+    /// Core-bound Device, Zone, or holder evidence did not match.
+    AuthorizationDenied,
 }
 
 impl SecurityKeyLeaseError {
@@ -60,6 +62,7 @@ impl SecurityKeyLeaseError {
             Self::SessionConflict => "device-claim-conflict",
             Self::Effect(error) => error.code(),
             Self::InvalidTransition => "device-session-invalid-transition",
+            Self::AuthorizationDenied => "device-authority-denied",
         }
     }
 }
@@ -75,7 +78,9 @@ impl std::error::Error for SecurityKeyLeaseError {}
 /// Active lease state held by one Device controller.
 pub struct SecurityKeyLease {
     holder: ResourceUid,
-    backing: PhysicalUsbBackingClaim,
+    backing: Option<PhysicalUsbBackingClaim>,
+    authorized_device: Option<ResourceUid>,
+    authorized_holder: Option<ResourceRef>,
     state: LeaseState,
     session: Option<SecurityKeySessionId>,
     authority_lease: Option<PhysicalAuthorityLease>,
@@ -87,12 +92,39 @@ impl SecurityKeyLease {
     pub fn new(holder: ResourceUid, backing: PhysicalUsbBackingClaim) -> Self {
         Self {
             holder,
-            backing,
+            backing: Some(backing),
+            authorized_device: None,
+            authorized_holder: None,
             state: LeaseState::Idle,
             session: None,
             authority_lease: None,
             relay_ticket: None,
         }
+    }
+
+    /// Construct a lease bound to one Core-admitted Device and holder.
+    pub fn new_authorized(
+        device_uid: ResourceUid,
+        admission: SecurityKeyAdmission,
+    ) -> Result<Self, SecurityKeyLeaseError> {
+        if admission.device_uid() != &device_uid
+            || admission.zone_ref().resource_type().as_str() != "Zone"
+            || admission.holder_ref().resource_type().as_str() != "Guest"
+        {
+            return Err(SecurityKeyLeaseError::AuthorizationDenied);
+        }
+        let holder = device_uid.clone();
+        let authorized_holder = admission.holder_ref().clone();
+        Ok(Self {
+            holder,
+            backing: Some(admission.into_claim()),
+            authorized_device: Some(device_uid),
+            authorized_holder: Some(authorized_holder),
+            state: LeaseState::Idle,
+            session: None,
+            authority_lease: None,
+            relay_ticket: None,
+        })
     }
 
     /// Return the current lifecycle state.
@@ -124,8 +156,12 @@ impl SecurityKeyLease {
         {
             return Err(SecurityKeyLeaseError::SessionConflict);
         }
+        let backing = self
+            .backing
+            .clone()
+            .ok_or(SecurityKeyLeaseError::AuthorizationDenied)?;
         self.state = LeaseState::AwaitingLease;
-        let authority_lease = match port.claim_physical_backing(&self.backing) {
+        let authority_lease = match port.claim_physical_backing(&backing) {
             Ok(lease) => lease,
             Err(error) => {
                 self.state = LeaseState::Idle;
@@ -133,7 +169,7 @@ impl SecurityKeyLease {
             }
         };
         self.authority_lease = Some(authority_lease);
-        let intent = SecurityKeyOpenIntent::from_core(device_uid, session, self.backing.clone());
+        let intent = SecurityKeyOpenIntent::from_core(device_uid, session, backing.clone());
         let relay_ticket = match port.open_hidraw(&intent) {
             Ok(ticket) => ticket,
             Err(error) => {
@@ -157,6 +193,49 @@ impl SecurityKeyLease {
         self.session = Some(session);
         self.relay_ticket = Some(relay_ticket);
         self.state = LeaseState::Active;
+        Ok(())
+    }
+
+    /// Start a session after rechecking the exact Core Device and holder
+    /// binding. The check happens before any physical claim or hidraw open.
+    pub fn acquire_authorized<P: SecurityKeyEffectPort>(
+        &mut self,
+        session: SecurityKeySessionId,
+        device_uid: ResourceUid,
+        holder: &ResourceRef,
+        port: &mut P,
+    ) -> Result<(), SecurityKeyLeaseError> {
+        if self.authorized_device.as_ref() != Some(&device_uid)
+            || self.authorized_holder.as_ref() != Some(holder)
+        {
+            return Err(SecurityKeyLeaseError::AuthorizationDenied);
+        }
+        self.acquire(session, device_uid, port)
+    }
+
+    /// Replace consumed admission evidence with a fresh Core admission.
+    pub fn rebind_authorized(
+        &mut self,
+        device_uid: ResourceUid,
+        admission: SecurityKeyAdmission,
+    ) -> Result<(), SecurityKeyLeaseError> {
+        if !matches!(
+            self.state,
+            LeaseState::Completed | LeaseState::Cancelled | LeaseState::Expired
+        ) || self.session.is_some()
+            || self.authority_lease.is_some()
+            || admission.device_uid() != &device_uid
+            || admission.zone_ref().resource_type().as_str() != "Zone"
+            || admission.holder_ref().resource_type().as_str() != "Guest"
+        {
+            return Err(SecurityKeyLeaseError::AuthorizationDenied);
+        }
+        let holder = admission.holder_ref().clone();
+        self.holder = device_uid.clone();
+        self.backing = Some(admission.into_claim());
+        self.authorized_device = Some(device_uid);
+        self.authorized_holder = Some(holder);
+        self.state = LeaseState::Idle;
         Ok(())
     }
 
@@ -202,6 +281,13 @@ impl SecurityKeyLease {
         self.authority_lease = None;
         self.relay_ticket = None;
         self.session = None;
+        // Core admission evidence is single-use. A later session must carry
+        // a fresh admission rather than replaying the prior physical claim.
+        if self.authorized_device.is_some() {
+            self.backing = None;
+            self.authorized_device = None;
+            self.authorized_holder = None;
+        }
         self.state = terminal;
         Ok(())
     }

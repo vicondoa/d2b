@@ -23,6 +23,7 @@ use d2b_core::workload_identity::WorkloadIdentity;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", content = "payload")]
@@ -2244,8 +2245,23 @@ pub struct OpenHidrawSecurityKeyRequest {
     /// Opaque stable-selector id that the broker resolves against
     /// its trusted bundle's security-key device registry.
     pub selector_id: String,
+    /// Exact Device resource admitted by Core.
+    pub device_ref: ResourceRef,
+    /// Core-derived Host physical-backing authority digest.
+    pub authority_key: String,
     #[serde(default)]
     pub tracing_span_id: Option<TracingSpanId>,
+}
+
+/// Derive the exact Device-selector binding accepted by the privileged broker.
+pub fn security_key_authority_binding(device_ref: &ResourceRef, selector_id: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"d2b:security-key-authority/v1");
+    hasher.update([0]);
+    hasher.update(device_ref.to_canonical_string().as_bytes());
+    hasher.update([0]);
+    hasher.update(selector_id.as_bytes());
+    format!("sha256:{:x}", hasher.finalize())
 }
 
 /// Confirmation that the broker opened the security-key hidraw node.
@@ -2273,12 +2289,17 @@ pub struct PrepareDirRequest {
     pub tracing_span_id: Option<TracingSpanId>,
 }
 
-/// Opaque request for one trusted legacy swtpm migration.
+/// Opaque request for one trusted legacy swtpm migration or inventory probe.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MigrateLegacySwtpmStateRequest {
     pub bundle_legacy_swtpm_intent_ref: BundleOpId,
     pub vm_id: VmId,
+    /// When true, inspect the broker-owned legacy inventory without mutating
+    /// state. The closed outcome is used by Core to seal the migration
+    /// decision before the Provider reconcile starts.
+    #[serde(default)]
+    pub probe_only: bool,
     #[serde(default)]
     pub tracing_span_id: Option<TracingSpanId>,
 }
@@ -2293,6 +2314,11 @@ pub enum LegacySwtpmMigrationOutcome {
     Pending,
     Failed,
     Ambiguous,
+    /// The broker inventory proves that legacy state exists and adoption is
+    /// required before a new TPM state can be ensured.
+    AdoptionRequired,
+    /// The broker inventory proves that no prior state exists.
+    NeverProvisioned,
 }
 
 impl LegacySwtpmMigrationOutcome {
@@ -2304,6 +2330,8 @@ impl LegacySwtpmMigrationOutcome {
             Self::Pending => "pending",
             Self::Failed => "failed",
             Self::Ambiguous => "ambiguous",
+            Self::AdoptionRequired => "adoption-required",
+            Self::NeverProvisioned => "never-provisioned",
         }
     }
 }

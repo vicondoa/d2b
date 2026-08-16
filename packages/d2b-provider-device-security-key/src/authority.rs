@@ -1,7 +1,7 @@
 //! Core-derived physical USB authority and hidraw effect boundary.
 
 use core::fmt;
-use d2b_contracts::v3::ResourceUid;
+use d2b_contracts::v3::{ResourceRef, ResourceUid};
 
 /// Core-derived opaque physical USB backing identity.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -32,6 +32,9 @@ pub struct PhysicalUsbBackingClaim {
     pub authority_scope: &'static str,
     /// Physical backing class, fixed by the Device contract.
     pub backing_class: &'static str,
+    device_uid: Option<ResourceUid>,
+    zone_ref: Option<ResourceRef>,
+    holder_ref: Option<ResourceRef>,
     token: PhysicalUsbBackingToken,
 }
 
@@ -41,13 +44,43 @@ impl PhysicalUsbBackingClaim {
         Self {
             authority_scope: "Host",
             backing_class: "physical-usb-backing",
+            device_uid: None,
+            zone_ref: None,
+            holder_ref: None,
             token,
+        }
+    }
+
+    /// Construct an exact Core-admitted Device claim.
+    pub fn from_admission(admission: SecurityKeyAdmission) -> Self {
+        Self {
+            authority_scope: "Host",
+            backing_class: "physical-usb-backing",
+            device_uid: Some(admission.device_uid),
+            zone_ref: Some(admission.zone_ref),
+            holder_ref: Some(admission.holder_ref),
+            token: admission.backing,
         }
     }
 
     /// Borrow the Core-derived opaque key.
     pub const fn token(&self) -> &PhysicalUsbBackingToken {
         &self.token
+    }
+
+    /// Return the Core-bound Device identity, when this is an exact claim.
+    pub const fn device_uid(&self) -> Option<&ResourceUid> {
+        self.device_uid.as_ref()
+    }
+
+    /// Borrow the Core-bound Zone reference, when this is an exact claim.
+    pub const fn zone_ref(&self) -> Option<&ResourceRef> {
+        self.zone_ref.as_ref()
+    }
+
+    /// Borrow the Core-bound holder reference, when this is an exact claim.
+    pub const fn holder_ref(&self) -> Option<&ResourceRef> {
+        self.holder_ref.as_ref()
     }
 }
 
@@ -64,7 +97,7 @@ impl fmt::Debug for PhysicalUsbBackingClaim {
 
 /// Opaque hidraw open request. No path, bus ID, selector string, or fd is
 /// represented here.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(PartialEq, Eq)]
 pub struct SecurityKeyOpenIntent {
     device_uid: ResourceUid,
     session_id: super::SecurityKeySessionId,
@@ -118,6 +151,8 @@ pub enum SecurityKeyEffectError {
     EffectRejected,
     /// The operation can be retried.
     Transient,
+    /// Core-bound Device, Zone, or holder evidence did not match.
+    AuthorizationDenied,
 }
 
 impl SecurityKeyEffectError {
@@ -128,6 +163,7 @@ impl SecurityKeyEffectError {
             Self::BrokerInaccessible => "device-broker-inaccessible",
             Self::EffectRejected => "effect-rejected",
             Self::Transient => "transient",
+            Self::AuthorizationDenied => "device-authority-denied",
         }
     }
 }
@@ -139,6 +175,61 @@ impl fmt::Display for SecurityKeyEffectError {
 }
 
 impl std::error::Error for SecurityKeyEffectError {}
+
+/// Core-issued, exact physical Device admission.
+///
+/// The admission binds the Device, Zone, consumer holder, and physical
+/// backing digest before any hidraw open. It is intentionally not `Clone`;
+/// Core hands one admission to one Provider controller.
+pub struct SecurityKeyAdmission {
+    zone_ref: ResourceRef,
+    device_uid: ResourceUid,
+    holder_ref: ResourceRef,
+    backing: PhysicalUsbBackingToken,
+}
+
+impl SecurityKeyAdmission {
+    /// Construct an admission at the trusted Core boundary.
+    pub fn from_core(
+        zone_ref: ResourceRef,
+        device_uid: ResourceUid,
+        holder_ref: ResourceRef,
+        backing: PhysicalUsbBackingToken,
+    ) -> Self {
+        Self {
+            zone_ref,
+            device_uid,
+            holder_ref,
+            backing,
+        }
+    }
+
+    /// Borrow the exact Zone binding.
+    pub const fn zone_ref(&self) -> &ResourceRef {
+        &self.zone_ref
+    }
+
+    /// Borrow the exact Device identity.
+    pub const fn device_uid(&self) -> &ResourceUid {
+        &self.device_uid
+    }
+
+    /// Borrow the exact consumer holder.
+    pub const fn holder_ref(&self) -> &ResourceRef {
+        &self.holder_ref
+    }
+
+    /// Consume the admission into the one physical backing claim.
+    pub fn into_claim(self) -> PhysicalUsbBackingClaim {
+        PhysicalUsbBackingClaim::from_admission(self)
+    }
+}
+
+impl fmt::Debug for SecurityKeyAdmission {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("SecurityKeyAdmission(<sealed>)")
+    }
+}
 
 /// Core effect port. The returned fd is represented only by an opaque
 /// LaunchTicket token and is never exposed as a path.
