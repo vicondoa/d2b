@@ -1957,6 +1957,25 @@
           }
         },
         {
+          "description": "Obtain a pidfd for the peer of exactly one accepted Unix socket.\n\nThe accepted socket is the sole SCM_RIGHTS request attachment. The request body deliberately contains no descriptor number, PID, credential tuple, path, or subject claim.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "OpenPeerPidfdFromAcceptedSocket"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/OpenPeerPidfdFromAcceptedSocketRequest"
+            }
+          }
+        },
+        {
           "description": "Observe one broker-owned runner after validating its retained pidfd-backed identity against the trusted bundle.",
           "type": "object",
           "required": [
@@ -3340,6 +3359,25 @@
             },
             "payload": {
               "$ref": "#/definitions/OpenPidfdResponse"
+            }
+          }
+        },
+        {
+          "description": "Response for [`BrokerRequest::OpenPeerPidfdFromAcceptedSocket`]. The only attachment is the returned close-on-exec pidfd.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "OpenPeerPidfdFromAcceptedSocket"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/OpenPeerPidfdFromAcceptedSocketResponse"
             }
           }
         },
@@ -8296,6 +8334,27 @@
             "string",
             "null"
           ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "OpenPeerPidfdFromAcceptedSocketRequest": {
+      "description": "A request whose authority is the sole attached accepted Unix socket.",
+      "type": "object",
+      "additionalProperties": false
+    },
+    "OpenPeerPidfdFromAcceptedSocketResponse": {
+      "description": "Response metadata for an accepted-socket-bound peer pidfd handoff.",
+      "type": "object",
+      "required": [
+        "pidfdIndex"
+      ],
+      "properties": {
+        "pidfdIndex": {
+          "description": "The sole SCM_RIGHTS pidfd attachment index.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
         }
       },
       "additionalProperties": false

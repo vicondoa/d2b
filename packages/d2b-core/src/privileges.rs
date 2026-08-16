@@ -1030,6 +1030,16 @@ pub const BROKER_OPERATION_AUTHZ: &[OperationAuthzRow] = &[
         AuditMode::Yes,
     ),
     row(
+        "OpenPeerPidfdFromAcceptedSocket",
+        "pidfd",
+        "accepted Unix socket",
+        &["d2bd"],
+        false,
+        SecretAccess::None,
+        BrokerRequirement::Yes,
+        AuditMode::Yes,
+    ),
+    row(
         "ObserveRunner",
         "runner",
         "per-VM/role",

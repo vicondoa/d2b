@@ -1,0 +1,68 @@
+{
+  "allowedDomains": [
+    "system"
+  ],
+  "budget": {
+    "cpu": {
+      "limit": "200m"
+    },
+    "fds": {
+      "limit": 512
+    },
+    "memory": {
+      "limit": "16Mi"
+    }
+  },
+  "component": {
+    "id": "unix-transport-service",
+    "type": "service"
+  },
+  "endpoints": [
+    {
+      "name": "portal",
+      "purpose": "transport-unix-portal",
+      "transport": "unix"
+    }
+  ],
+  "exportedMethods": [
+    "OpenTransport",
+    "CloseTransport",
+    "ObserveTransport"
+  ],
+  "permissionClaims": [
+    {
+      "verb": "receive-attachment"
+    },
+    {
+      "verb": "invoke"
+    }
+  ],
+  "processClass": "service",
+  "readiness": {
+    "class": "provider-defined",
+    "failureThreshold": 1,
+    "initialDelay": "0s",
+    "successThreshold": 1,
+    "timeout": "5s"
+  },
+  "restartPolicy": {
+    "backoffBase": "2s",
+    "backoffMax": "60s",
+    "backoffMultiplierMilli": 2000,
+    "class": "always",
+    "maxRestarts": 10,
+    "resetAfter": "1h"
+  },
+  "sandbox": {
+    "capabilityClasses": [],
+    "namespaceClasses": [
+      "mount"
+    ],
+    "seccompClass": "strict"
+  },
+  "stateNamespaces": [],
+  "supportedHostProviders": [
+    "system-minijail"
+  ],
+  "template": "unix-transport-service"
+}
