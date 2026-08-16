@@ -1,6 +1,6 @@
 use d2b_provider_shell_terminal::{
     AdoptionDecision, CallerOrigin, ExecutionTarget, OpenSessionRequest, PoolSpec, Role, ShellPool,
-    ShellTerminalController, Subject, SupervisorCandidate, SupervisorIdentity,
+    ShellSession, ShellTerminalController, Subject, SupervisorCandidate, SupervisorIdentity,
 };
 
 fn pool() -> ShellPool {
@@ -203,4 +203,64 @@ fn restored_pool_attachment_count_blocks_new_attachments() {
             )
             .is_ok()
     );
+}
+
+#[test]
+fn recovery_authorities_refuse_different_pool_or_session() {
+    let mut controller = ShellTerminalController::default();
+    let source_pool = pool();
+    controller.insert_pool(source_pool.clone()).unwrap();
+    let admin = Subject::new("dev", CallerOrigin::Local, [Role::ZoneAdmin]);
+    let first = controller
+        .open_session(
+            &admin,
+            OpenSessionRequest::new("guest-alice", "main", None).unwrap(),
+        )
+        .unwrap();
+    let different_pool = ShellPool::new(
+        "guest-bob",
+        "dev",
+        PoolSpec::new(
+            ExecutionTarget::guest("work"),
+            "bob",
+            "artifact://shells/bash-login",
+            1,
+            1,
+            4096,
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let mut recovered_controller = ShellTerminalController::default();
+    assert!(
+        recovered_controller
+            .restore_pool_with_authority(different_pool, first.pool_attachment_authority())
+            .is_err()
+    );
+
+    let foreign_session =
+        ShellSession::from_pool(&source_pool, "guest-alice-other", "other", None).unwrap();
+    let identity = SupervisorIdentity::new([1; 32], [2; 32], 1).unwrap();
+    let mut session_recovery = ShellTerminalController::default();
+    session_recovery
+        .restore_pool_with_authority(source_pool, first.pool_attachment_authority())
+        .unwrap();
+    assert_eq!(
+        session_recovery
+            .restore_session(
+                foreign_session.clone(),
+                &identity,
+                &[SupervisorCandidate::new(
+                    foreign_session.name(),
+                    identity.clone(),
+                )],
+                first.recovery_authority(),
+            )
+            .unwrap(),
+        AdoptionDecision::Ambiguous
+    );
+    assert!(matches!(
+        session_recovery.restart_supervisor(&admin, foreign_session.name()),
+        Err(d2b_provider_shell_terminal::ShellTerminalError::SupervisorAmbiguous)
+    ));
 }

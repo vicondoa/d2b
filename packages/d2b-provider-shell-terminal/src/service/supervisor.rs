@@ -73,24 +73,36 @@ impl std::fmt::Debug for Attachment {
 }
 
 /// The single-flight authority for one session supervisor generation.
-#[derive(Debug)]
 pub struct SessionAuthority {
+    session_name: String,
     generation: Mutex<u64>,
 }
 
+impl std::fmt::Debug for SessionAuthority {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("SessionAuthority(<redacted>)")
+    }
+}
+
 impl SessionAuthority {
-    pub(super) fn new(generation: u64) -> Self {
+    pub(super) fn new(session_name: String, generation: u64) -> Self {
         Self {
+            session_name,
             generation: Mutex::new(generation),
         }
     }
 
-    pub(super) fn matches(&self, generation: u64) -> Result<bool, ShellTerminalError> {
+    pub(super) fn matches(
+        &self,
+        session_name: &str,
+        generation: u64,
+    ) -> Result<bool, ShellTerminalError> {
         Ok(*self
             .generation
             .lock()
             .map_err(|_| ShellTerminalError::StaleSessionGeneration)?
-            == generation)
+            == generation
+            && self.session_name == session_name)
     }
 
     pub(super) fn advance(&self) -> Result<u64, ShellTerminalError> {
@@ -106,6 +118,7 @@ impl SessionAuthority {
 
     fn with_current<T>(
         &self,
+        session_name: &str,
         expected_generation: u64,
         operation: impl FnOnce() -> Result<T, ShellTerminalError>,
     ) -> Result<T, ShellTerminalError> {
@@ -113,7 +126,7 @@ impl SessionAuthority {
             .generation
             .lock()
             .map_err(|_| ShellTerminalError::StaleSessionGeneration)?;
-        if *current != expected_generation {
+        if *current != expected_generation || self.session_name != session_name {
             return Err(ShellTerminalError::StaleSessionGeneration);
         }
         operation()
@@ -212,17 +225,26 @@ impl PoolAttachmentBudget {
 }
 
 /// The shared attachment authority that survives controller restart adoption.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct PoolAttachmentAuthority {
+    pool_name: String,
     budget: Arc<PoolAttachmentBudget>,
+}
+
+impl std::fmt::Debug for PoolAttachmentAuthority {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("PoolAttachmentAuthority(<redacted>)")
+    }
 }
 
 impl PoolAttachmentAuthority {
     pub(super) fn restored(
+        pool_name: String,
         capacity: u32,
         retained_attachments: u32,
     ) -> Result<Self, ShellTerminalError> {
         Ok(Self {
+            pool_name,
             budget: Arc::new(PoolAttachmentBudget::restored(
                 capacity,
                 retained_attachments,
@@ -230,8 +252,8 @@ impl PoolAttachmentAuthority {
         })
     }
 
-    pub(super) fn has_capacity(&self, capacity: u32) -> bool {
-        self.budget.capacity == capacity as usize
+    pub(super) fn matches_pool(&self, pool_name: &str, capacity: u32) -> bool {
+        self.pool_name == pool_name && self.budget.capacity == capacity as usize
     }
 
     fn reserve(
@@ -329,13 +351,15 @@ impl SessionSupervisor {
     ) -> Result<AttachReceipt, ShellTerminalError> {
         self.authorize(subject)?;
         let authority = Arc::clone(&self.authority);
-        authority.with_current(self.identity.generation(), || {
-            if request.expected_generation != self.identity.generation() {
+        let session_name = self.session.name().to_owned();
+        let generation = self.identity.generation();
+        authority.with_current(&session_name, generation, || {
+            if request.expected_generation != generation {
                 return Err(ShellTerminalError::StaleSessionGeneration);
             }
             let attachment = self.reserve_attachment()?;
             Ok(AttachReceipt {
-                generation: self.identity.generation(),
+                generation,
                 replay: self.ring.tail(request.tail_bytes as usize),
                 attachment,
             })
@@ -350,8 +374,10 @@ impl SessionSupervisor {
     ) -> Result<AttachReceipt, ShellTerminalError> {
         self.authorize(subject)?;
         let authority = Arc::clone(&self.authority);
-        authority.with_current(self.identity.generation(), || {
-            if capability.generation != self.identity.generation() {
+        let session_name = self.session.name().to_owned();
+        let generation = self.identity.generation();
+        authority.with_current(&session_name, generation, || {
+            if capability.generation != generation {
                 return Err(ShellTerminalError::StaleSessionGeneration);
             }
             if capability.session_name != self.session.name() {
@@ -362,7 +388,7 @@ impl SessionSupervisor {
             }
             let attachment = self.reserve_attachment()?;
             Ok(AttachReceipt {
-                generation: self.identity.generation(),
+                generation,
                 replay: self.ring.tail(0),
                 attachment,
             })
@@ -390,7 +416,9 @@ impl SessionSupervisor {
     /// Append bytes emitted by this supervisor-owned PTY to its bounded replay ring.
     pub fn record_pty_output(&mut self, bytes: &[u8]) {
         let authority = Arc::clone(&self.authority);
-        let _ = authority.with_current(self.identity.generation(), || {
+        let session_name = self.session.name().to_owned();
+        let generation = self.identity.generation();
+        let _ = authority.with_current(&session_name, generation, || {
             self.ring.append(bytes);
             Ok(())
         });

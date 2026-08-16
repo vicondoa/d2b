@@ -82,7 +82,10 @@ impl OpenSessionResult {
         if identity.generation() != self.supervisor_generation {
             return Err(ShellTerminalError::StaleSessionGeneration);
         }
-        if !self.authority.matches(self.supervisor_generation)? {
+        if !self
+            .authority
+            .matches(self.session.name(), self.supervisor_generation)?
+        {
             return Err(ShellTerminalError::StaleSessionGeneration);
         }
         Ok(SessionSupervisor::new(
@@ -126,7 +129,11 @@ impl ShellTerminalController {
         let pool_name = pool.name().to_owned();
         self.attachment_authorities.insert(
             pool_name.clone(),
-            PoolAttachmentAuthority::restored(pool.spec().max_attached(), attached_streams)?,
+            PoolAttachmentAuthority::restored(
+                pool_name.clone(),
+                pool.spec().max_attached(),
+                attached_streams,
+            )?,
         );
         self.pools.insert(pool_name, pool);
         Ok(())
@@ -151,7 +158,7 @@ impl ShellTerminalController {
         attachment_authority: PoolAttachmentAuthority,
     ) -> Result<(), ShellTerminalError> {
         if self.pools.contains_key(pool.name())
-            || !attachment_authority.has_capacity(pool.spec().max_attached())
+            || !attachment_authority.matches_pool(pool.name(), pool.spec().max_attached())
         {
             return Err(ShellTerminalError::CapacityExceeded);
         }
@@ -181,9 +188,14 @@ impl ShellTerminalController {
         }
         let decision = adopt_supervisor(session.name(), expected_identity, candidates);
         let session_name = session.name().to_owned();
-        let authority = if decision == AdoptionDecision::Adopted
-            && authority.matches(expected_identity.generation())?
-        {
+        let authority_trusted = decision == AdoptionDecision::Adopted
+            && authority.matches(session.name(), expected_identity.generation())?;
+        let decision = if decision == AdoptionDecision::Adopted && !authority_trusted {
+            AdoptionDecision::Ambiguous
+        } else {
+            decision
+        };
+        let authority = if authority_trusted {
             Some(authority)
         } else {
             None
@@ -265,7 +277,7 @@ impl ShellTerminalController {
             request.session_name,
             request.output_ring_capacity,
         )?;
-        let authority = Arc::new(SessionAuthority::new(1));
+        let authority = Arc::new(SessionAuthority::new(resource_name.clone(), 1));
         self.next_capability = self.next_capability.saturating_add(1);
         let result = OpenSessionResult {
             session: session.clone(),
