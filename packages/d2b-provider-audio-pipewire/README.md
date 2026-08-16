@@ -1,8 +1,10 @@
 # `d2b-provider-audio-pipewire`
 
-This is the canonical crate root for `Provider/audio-pipewire`. It is a
-compile-safe scaffold; semantic Provider behavior is intentionally not present
-here.
+This is the canonical implementation crate for `Provider/audio-pipewire`.
+It keeps the existing audio policy as the migration source while exposing
+typed owner/projection admission, bounded speaker mixing, exclusive
+microphone arbitration, and host/guest readiness through an AudioMediator
+effect port.
 
 See [Create a Provider](../../docs/how-to/create-provider.md) and the
 [audio-pipewire dossier](../../docs/specs/providers/ADR-046-provider-audio-pipewire.md)
@@ -18,37 +20,43 @@ for the implementation contract.
 
 ## Config schema
 
-The Provider-specific configuration is defined by the audio-pipewire dossier.
-This scaffold does not publish a configuration schema.
+Provider configuration contains only bounded implementation settings such as a
+capture alias. PipeWire sockets, node IDs, process argv, and store paths are
+never public resource fields.
 
 ## Exported resource types
 
-The resource types are defined by the dossier. This scaffold exports no
-resource implementation.
+The Provider implements the provider-neutral
+`audio.d2bus.org.AudioService` and `audio.d2bus.org.AudioBinding` contracts.
+Bindings reference same-Zone Services and Guest targets; projection Services
+cannot open PipeWire locally.
 
 ## Controllers / services / workers / binaries
 
-None are implemented in this scaffold. Controllers, services, workers, and
-binaries belong to the owning Provider implementation.
+`AudioBindingController` uses the existing policy DTO and a typed
+`AudioMediator`. Private component templates omit live Process argv and
+socket arguments. Process launch remains owned by the Process Providers.
 
 ## Placement and dependencies
 
-No runtime placement is declared, and the scaffold has no workspace
-dependencies.
+The owner mediator is a same-UID user-session effect boundary. Guest
+readiness and host PipeWire readiness are separate status observations.
 
 ## RBAC requirements
 
-The scaffold requests no permissions and performs no resource or effect
-operations.
+Audio effects are requested through the mediator/controller boundary; no
+direct broker, pidfd, filesystem, or user mutation is performed by this crate.
 
 ## Security posture
 
-No host, broker, filesystem, network, process, credential, or device effect is
-reachable from this scaffold.
+Projection routes are refused if they would open a local PipeWire session.
+Microphone release mutes before the next queued lease is granted.
 
 ## State and telemetry
 
-The scaffold owns no state and emits no telemetry.
+The Provider owns no state Volume. Grants are durable in AudioBinding spec;
+telemetry uses only closed role/channel/outcome labels and rejects paths or
+Zone/resource identity labels.
 
 ## Build and test
 

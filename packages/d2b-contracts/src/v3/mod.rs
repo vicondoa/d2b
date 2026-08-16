@@ -1,5 +1,6 @@
 //! Canonical d2b v3 resource-plane contracts.
 
+pub mod activation_nixos;
 pub mod component_session;
 pub mod credential;
 pub mod credential_controller;
@@ -42,6 +43,10 @@ pub mod zone_link;
 pub mod zone_routing;
 pub mod zone_session;
 
+pub use activation_nixos::{
+    ActivationDetail, ActivationMode, ActivationOutcomeCode, NIXOS_GENERATION_RESOURCE_TYPE,
+    NixosGenerationSpec, NixosGenerationSpecError, NixosGenerationStatus,
+};
 pub use effect_port::{
     AccessClass, CleanupTrigger, EffectError, LayoutEntryId, ProvisionOutcome, QuotaCapacityStatus,
     RepairOutcome, RotateSealingKeyDisposition, RotateSealingKeyRequest, RotateSealingKeyResult,

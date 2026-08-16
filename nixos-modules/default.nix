@@ -27,6 +27,7 @@
 {
   imports = [
     ./options.nix
+    ./host-generation-rebuild-ref.nix
     ./options-volumes.nix
     ./resources-zone-control.nix
     ./resource-compiler.nix
@@ -34,6 +35,9 @@
     ./options-observability.nix
     ./provider-catalog.nix
     ./provider-runtime-contracts.nix
+    ./providers/activation-nixos.nix
+    ./providers/system-minijail.nix
+    ./providers/system-systemd.nix
     ./provider-projection-validate.nix
     ./options-ownership-matrix.nix
     ./index.nix
@@ -84,6 +88,7 @@
     # for the static gates.
     (import ./host-broker.nix { inherit inputs; })
     ./components/audio/host.nix
+    ./components/audio/v3-resource.nix
     ./components/observability/default.nix
     ./niri-vm-borders.nix
   ];

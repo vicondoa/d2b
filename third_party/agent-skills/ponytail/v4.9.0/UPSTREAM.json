@@ -1,0 +1,31 @@
+{
+  "excluded_surfaces": [
+    "all other files",
+    "commands/",
+    "hooks/",
+    "plugin manifests"
+  ],
+  "files": {
+    "LICENSE": "fb1bc6909ac3ef82d5c22106e32ef682b0cff66788fa915fb9b53b15c9d2f3ab",
+    "skills/ponytail-audit/SKILL.md": "5560b8e383dbe2ddfddc873a1e2bf2e586e23e0cd7d995537482b2315331f6d1",
+    "skills/ponytail-debt/SKILL.md": "c84fba75f0ca12bfe83f9a78ea02fd125c5dd3f1fbb18124105a489937f284e6",
+    "skills/ponytail-gain/SKILL.md": "24e01d1c9715cb136ba1c4f1e52a95940c0193558b876828e537736480d6408b",
+    "skills/ponytail-help/SKILL.md": "2264d1615117b02b0fd5a69ec84cd2757006471a78e4d6c22eed6d581c1d37a4",
+    "skills/ponytail-review/SKILL.md": "40df33b58fc6ef889b93585733feb9566b76e9586efa7f376785c1e995197ac0",
+    "skills/ponytail/SKILL.md": "1316a2f3f95741d2300b116fe0c2d81ce4a9568656ed0a62643f54aaf09957f2"
+  },
+  "imported_paths": [
+    "LICENSE",
+    "skills/ponytail",
+    "skills/ponytail-audit",
+    "skills/ponytail-debt",
+    "skills/ponytail-gain",
+    "skills/ponytail-help",
+    "skills/ponytail-review"
+  ],
+  "license": "MIT",
+  "upstream_commit": "0a4dd63ad4541f4f655c4108a295916f3c1d8fda",
+  "upstream_repository": "https://github.com/DietrichGebert/ponytail",
+  "upstream_tag": "v4.9.0",
+  "vendor_date": "2026-08-14"
+}

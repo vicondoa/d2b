@@ -88,13 +88,33 @@ let
       def digest_path(path):
           digest = hashlib.sha256()
           root = pathlib.Path(path)
+          store_root = pathlib.Path("/nix/store")
+
+          def add_file(file_path, relative):
+              if file_path.is_symlink():
+                  target = file_path.resolve()
+                  if store_root not in target.parents or not target.is_file():
+                      raise RuntimeError(f"unsafe artifact symlink: {file_path}")
+              digest.update(str(relative).encode())
+              digest.update(b"\0")
+              digest.update(file_path.read_bytes())
+
+          def visit(directory, relative_root):
+              children = sorted(directory.iterdir(), key=lambda child: child.name)
+              for child in children:
+                  relative = relative_root / child.name
+                  if child.is_symlink():
+                      if child.is_file():
+                          add_file(child, relative)
+                  elif child.is_dir():
+                      visit(child, relative)
+                  elif child.is_file():
+                      add_file(child, relative)
+
           if root.is_file():
               digest.update(root.read_bytes())
           else:
-              for child in sorted(p for p in root.rglob("*") if p.is_file()):
-                  digest.update(str(child.relative_to(root)).encode())
-                  digest.update(b"\0")
-                  digest.update(child.read_bytes())
+              visit(root, pathlib.Path())
           return "sha256:" + digest.hexdigest()
 
       def size_path(path):

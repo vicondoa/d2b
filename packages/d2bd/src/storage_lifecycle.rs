@@ -573,6 +573,9 @@ mod tests {
                 workload_identity: None,
                 vm: "corp-vm".to_owned(),
                 nodes: vec![ProcessNode {
+                    execution_ref: None,
+                    execution_domain: None,
+                    user_ref: None,
                     id: d2b_core::processes::NodeId("cloud-hypervisor".to_owned()),
                     role: ProcessRole::CloudHypervisorRunner,
                     unit: None,

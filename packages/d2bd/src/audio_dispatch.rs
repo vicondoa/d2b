@@ -18,6 +18,7 @@ use std::io;
 use std::os::unix::fs::OpenOptionsExt as _;
 use std::os::unix::io::AsRawFd as _;
 use std::path::Path;
+use std::sync::Arc;
 
 use nix::fcntl::{FcntlArg, fcntl};
 
@@ -37,6 +38,11 @@ use d2b_core::provider_capabilities::{
     AudioGuestEnforcementKind, AudioHostEnforcementKind, AudioProviderCapability,
 };
 use d2b_core::runtime::{RuntimeKind, RuntimeProviderDriver};
+use d2b_provider_audio_pipewire::{
+    AudioChannel as ProviderAudioChannel, AudioGrant as ProviderAudioGrant, AudioMediator,
+    AudioMediatorError, AudioReadiness, GuestAudioReadiness, HostAudioReadiness,
+    LevelPercent as ProviderLevelPercent,
+};
 use serde_json::Value;
 
 use crate::ServerState;
@@ -321,6 +327,7 @@ fn build_host_controller(
     state: &ServerState,
     vm_name: &str,
     cap: &AudioProviderCapability,
+    caller_role: BrokerCallerRole,
 ) -> Option<Box<dyn HostAudioController>> {
     match cap.host_enforcement {
         AudioHostEnforcementKind::PipeWireVhostUserSound => {
@@ -337,8 +344,12 @@ fn build_host_controller(
                     }
                 };
             let audio_node = PipeWireHostController::find_audio_node(&processes, vm_name)?;
-            PipeWireHostController::from_audio_node(audio_node)
-                .map(|ctrl| -> Box<dyn HostAudioController> { Box::new(ctrl) })
+            Some(Box::new(PipeWireHostController::from_audio_node(
+                audio_node,
+                vm_name,
+                crate::broker_socket_path(state),
+                caller_role,
+            )) as Box<dyn HostAudioController>)
         }
         AudioHostEnforcementKind::QemuAudioBackend => Some(Box::new(QemuAudioController)),
         AudioHostEnforcementKind::None => {
@@ -358,10 +369,11 @@ pub fn enforce_host_grant(
     state: &ServerState,
     vm_name: &str,
     cap: &AudioProviderCapability,
+    caller_role: BrokerCallerRole,
     grant: AudioGrant,
     channel: AudioChannel,
 ) -> HostEnforcementResult {
-    match build_host_controller(state, vm_name, cap) {
+    match build_host_controller(state, vm_name, cap, caller_role) {
         Some(ctrl) => ctrl.enforce_grant(vm_name, grant, channel),
         None => HostEnforcementResult::Unsupported,
     }
@@ -374,10 +386,11 @@ pub fn enforce_host_level(
     state: &ServerState,
     vm_name: &str,
     cap: &AudioProviderCapability,
+    caller_role: BrokerCallerRole,
     level: LevelPercent,
     channel: AudioChannel,
 ) -> HostEnforcementResult {
-    match build_host_controller(state, vm_name, cap) {
+    match build_host_controller(state, vm_name, cap, caller_role) {
         Some(ctrl) => ctrl.enforce_level(vm_name, level, channel),
         None => HostEnforcementResult::Unsupported,
     }
@@ -417,6 +430,215 @@ pub enum GuestEnforcementResult {
     Unavailable,
     /// guestd was reachable but returned an error (PipeWire unavailable, etc.).
     Failed,
+}
+
+/// Production AudioMediator backed by the daemon's existing broker and
+/// authenticated guest-control paths.
+///
+/// The mediator owns no host handles or paths. It translates the Provider's
+/// channel-neutral effect port into the existing capability-resolved daemon
+/// controllers, which keep PipeWire mutations broker-owned and guest effects
+/// on the authenticated guest-control transport.
+pub(crate) struct DaemonAudioMediator {
+    state: Arc<ServerState>,
+    vm_name: String,
+    capability: AudioProviderCapability,
+    caller_role: BrokerCallerRole,
+}
+
+impl std::fmt::Debug for DaemonAudioMediator {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("DaemonAudioMediator")
+            .field("vm_name", &"<opaque>")
+            .field("capability", &self.capability)
+            .finish()
+    }
+}
+
+impl DaemonAudioMediator {
+    pub(crate) fn new(
+        state: &ServerState,
+        vm_name: impl Into<String>,
+        capability: AudioProviderCapability,
+        caller_role: BrokerCallerRole,
+    ) -> Self {
+        Self {
+            state: Arc::new(state.clone()),
+            vm_name: vm_name.into(),
+            capability,
+            caller_role,
+        }
+    }
+
+    fn wire_channel(channel: ProviderAudioChannel) -> AudioChannel {
+        match channel {
+            ProviderAudioChannel::Microphone => AudioChannel::Microphone,
+            ProviderAudioChannel::Speaker => AudioChannel::Speaker,
+        }
+    }
+
+    fn host_error(&self, result: HostEnforcementResult) -> Result<(), AudioMediatorError> {
+        match (self.capability.host_enforcement, result) {
+            (AudioHostEnforcementKind::None, _) | (_, HostEnforcementResult::Applied) => Ok(()),
+            (_, HostEnforcementResult::Unsupported | HostEnforcementResult::Failed) => {
+                Err(AudioMediatorError::ProviderSessionUnavailable)
+            }
+        }
+    }
+
+    fn guest_error(&self, result: GuestEnforcementResult) -> Result<(), AudioMediatorError> {
+        match (self.capability.guest_enforcement, result) {
+            (AudioGuestEnforcementKind::Unsupported, _) => Ok(()),
+            (_, GuestEnforcementResult::Applied) => Ok(()),
+            (AudioGuestEnforcementKind::GuestdCapable, GuestEnforcementResult::Unavailable) => {
+                Err(AudioMediatorError::GuestSessionUnavailable)
+            }
+            (AudioGuestEnforcementKind::GuestdCapable, GuestEnforcementResult::Failed) => {
+                Err(AudioMediatorError::GuestSessionUnavailable)
+            }
+        }
+    }
+}
+
+impl AudioMediator for DaemonAudioMediator {
+    fn set_grant(&mut self, grant: ProviderAudioGrant) -> Result<(), AudioMediatorError> {
+        self.set_channel_grant(ProviderAudioChannel::Speaker, grant)
+    }
+
+    fn set_channel_grant(
+        &mut self,
+        channel: ProviderAudioChannel,
+        grant: ProviderAudioGrant,
+    ) -> Result<(), AudioMediatorError> {
+        let wire_channel = Self::wire_channel(channel);
+        let host = enforce_host_grant(
+            &self.state,
+            &self.vm_name,
+            &self.capability,
+            self.caller_role.clone(),
+            core_audio_grant(grant),
+            wire_channel,
+        );
+        self.host_error(host)?;
+        let guest = if self.capability.guest_enforcement == AudioGuestEnforcementKind::GuestdCapable
+        {
+            enforce_guest_grant(
+                &self.state,
+                &self.vm_name,
+                self.caller_role.clone(),
+                core_audio_grant(grant),
+                wire_channel,
+            )
+        } else {
+            GuestEnforcementResult::Unavailable
+        };
+        if let Err(error) = self.guest_error(guest) {
+            if host == HostEnforcementResult::Applied {
+                let rollback = match grant {
+                    ProviderAudioGrant::On => ProviderAudioGrant::Off,
+                    ProviderAudioGrant::Off => ProviderAudioGrant::On,
+                };
+                let _ = enforce_host_grant(
+                    &self.state,
+                    &self.vm_name,
+                    &self.capability,
+                    self.caller_role.clone(),
+                    core_audio_grant(rollback),
+                    wire_channel,
+                );
+            }
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    fn set_level(&mut self, level: ProviderLevelPercent) -> Result<(), AudioMediatorError> {
+        self.set_channel_level(ProviderAudioChannel::Speaker, level)
+    }
+
+    fn set_channel_level(
+        &mut self,
+        channel: ProviderAudioChannel,
+        level: ProviderLevelPercent,
+    ) -> Result<(), AudioMediatorError> {
+        let wire_channel = Self::wire_channel(channel);
+        let level = core_audio_level(level)?;
+        let host = enforce_host_level(
+            &self.state,
+            &self.vm_name,
+            &self.capability,
+            self.caller_role.clone(),
+            level,
+            wire_channel,
+        );
+        self.host_error(host)?;
+        let guest = if self.capability.guest_enforcement == AudioGuestEnforcementKind::GuestdCapable
+        {
+            enforce_guest_level(
+                &self.state,
+                &self.vm_name,
+                self.caller_role.clone(),
+                level,
+                wire_channel,
+            )
+        } else {
+            GuestEnforcementResult::Unavailable
+        };
+        self.guest_error(guest)
+    }
+
+    fn readiness(&self) -> AudioReadiness {
+        match (self.host_readiness(), self.guest_readiness()) {
+            (HostAudioReadiness::Ready, GuestAudioReadiness::Ready) => AudioReadiness::Ready,
+            _ => AudioReadiness::Unavailable,
+        }
+    }
+
+    fn host_readiness(&self) -> HostAudioReadiness {
+        if self.capability.host_enforcement == AudioHostEnforcementKind::None
+            || build_host_controller(
+                &self.state,
+                &self.vm_name,
+                &self.capability,
+                self.caller_role.clone(),
+            )
+            .is_some()
+        {
+            HostAudioReadiness::Ready
+        } else {
+            HostAudioReadiness::Unavailable
+        }
+    }
+
+    fn guest_readiness(&self) -> GuestAudioReadiness {
+        if self.capability.guest_enforcement == AudioGuestEnforcementKind::Unsupported {
+            return GuestAudioReadiness::Ready;
+        }
+        let ready = crate::load_bundle_resolver(&self.state)
+            .ok()
+            .and_then(|resolver| {
+                crate::resolve_guest_control_probe_params(&self.state, &resolver, &self.vm_name)
+                    .ok()
+            })
+            .is_some();
+        if ready {
+            GuestAudioReadiness::Ready
+        } else {
+            GuestAudioReadiness::Unavailable
+        }
+    }
+}
+
+fn core_audio_grant(grant: ProviderAudioGrant) -> AudioGrant {
+    match grant {
+        ProviderAudioGrant::On => AudioGrant::On,
+        ProviderAudioGrant::Off => AudioGrant::Off,
+    }
+}
+
+fn core_audio_level(level: ProviderLevelPercent) -> Result<LevelPercent, AudioMediatorError> {
+    LevelPercent::new(level.get()).map_err(|_| AudioMediatorError::LevelOutOfRange)
 }
 
 // ── Enforcement result → AudioSetApplied mapping ──────────────────────────────
@@ -462,7 +684,7 @@ pub(crate) fn combined_audio_applied(
 /// vsock socket, or the capability is not advertised. Returns `Failed` when
 /// the guestd call is reachable but fails (e.g. PipeWire unavailable in the
 /// guest).
-fn enforce_guest_grant(
+pub(crate) fn enforce_guest_grant(
     state: &ServerState,
     vm_name: &str,
     caller_role: BrokerCallerRole,
@@ -485,7 +707,7 @@ fn enforce_guest_grant(
 }
 
 /// Issue a guestd AudioSet (volume) call for a VM.
-fn enforce_guest_level(
+pub(crate) fn enforce_guest_level(
     state: &ServerState,
     vm_name: &str,
     caller_role: BrokerCallerRole,
@@ -646,6 +868,19 @@ fn resolve_vm_audio_status(
     })?;
 
     let mut vm_state = state_to_vm_state(vm_name, &audio_state, &cap);
+    let mediator = DaemonAudioMediator::new(state, vm_name, cap.clone(), caller_role.clone());
+    vm_state.enforcement = match (mediator.host_readiness(), mediator.guest_readiness()) {
+        (HostAudioReadiness::Ready, GuestAudioReadiness::Ready) => public_enforcement_posture(&cap),
+        (HostAudioReadiness::Ready, GuestAudioReadiness::Unavailable) => {
+            AudioEnforcementPosture::HostOnly
+        }
+        (HostAudioReadiness::Unavailable, GuestAudioReadiness::Ready) => {
+            AudioEnforcementPosture::GuestOnly
+        }
+        (HostAudioReadiness::Unavailable, GuestAudioReadiness::Unavailable) => {
+            AudioEnforcementPosture::Unsupported
+        }
+    };
     if matches!(
         cap.guest_enforcement,
         AudioGuestEnforcementKind::GuestdCapable
@@ -653,9 +888,9 @@ fn resolve_vm_audio_status(
         if let Some(guest_status) = query_guest_audio_status(state, vm_name, caller_role) {
             apply_guest_status(&mut vm_state, guest_status);
         } else {
-            vm_state.enforcement = match cap.host_enforcement {
-                AudioHostEnforcementKind::None => AudioEnforcementPosture::Unsupported,
-                _ => AudioEnforcementPosture::HostOnly,
+            vm_state.enforcement = match mediator.host_readiness() {
+                HostAudioReadiness::Ready => AudioEnforcementPosture::HostOnly,
+                HostAudioReadiness::Unavailable => AudioEnforcementPosture::Unsupported,
             };
         }
     }
@@ -756,7 +991,7 @@ fn dispatch_audio_set_volume(
     }
 
     let host_result = if cap.host_enforcement == AudioHostEnforcementKind::PipeWireVhostUserSound {
-        let result = enforce_host_level(state, vm_name, &cap, level, channel);
+        let result = enforce_host_level(state, vm_name, &cap, caller_role.clone(), level, channel);
         if level_increase && matches!(result, HostEnforcementResult::Failed) {
             return Err(TypedError::InternalIo {
                 context: "audio host enforcement".to_owned(),
@@ -778,7 +1013,7 @@ fn dispatch_audio_set_volume(
     }
 
     let host_result = if cap.host_enforcement == AudioHostEnforcementKind::QemuAudioBackend {
-        enforce_host_level(state, vm_name, &cap, level, channel)
+        enforce_host_level(state, vm_name, &cap, caller_role.clone(), level, channel)
     } else {
         host_result
     };
@@ -871,7 +1106,7 @@ fn dispatch_audio_mute(
     }
 
     let host_result = if cap.host_enforcement == AudioHostEnforcementKind::PipeWireVhostUserSound {
-        let result = enforce_host_grant(state, vm_name, &cap, grant, channel);
+        let result = enforce_host_grant(state, vm_name, &cap, caller_role.clone(), grant, channel);
         if grant == AudioGrant::On && matches!(result, HostEnforcementResult::Failed) {
             return Err(TypedError::InternalIo {
                 context: "audio host enforcement".to_owned(),
@@ -893,7 +1128,7 @@ fn dispatch_audio_mute(
     }
 
     let host_result = if cap.host_enforcement == AudioHostEnforcementKind::QemuAudioBackend {
-        enforce_host_grant(state, vm_name, &cap, grant, channel)
+        enforce_host_grant(state, vm_name, &cap, caller_role.clone(), grant, channel)
     } else {
         host_result
     };

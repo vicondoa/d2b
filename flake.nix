@@ -277,6 +277,7 @@
           "provider-elf-shim.nix"
           "provider-projection-exportability.nix"
           "provider-projection-fields.nix"
+          "provider-system-providers.nix"
           "readiness-waves.nix"
           "resource-sharing.nix"
           "resources-bundle-telemetry.nix"
@@ -336,11 +337,9 @@
       #
       # Future work will populate the remaining surface:
       #   packages.<sys>       - patched cloud-hypervisor, crosvm, etc.
-      #   apps.<sys>           - the `d2b` CLI as a runnable app
       #   templates.default    - `nix flake init -t github:vicondoa/d2b`
       #   checks.<sys>         - flake-eval CI gates
       #   lib                  - re-exported helpers (subnetIp, mkMac, …)
-      #   overlays.default     - adds vhostDeviceSound, crosvmPatched, …
       nixosModules.default = import ./nixos-modules { inherit inputs; };
       # U4's contributor environment is a separate consumer module.  The
       # generic framework module above remains unchanged.
@@ -424,6 +423,9 @@
         rustPackagesSrc = pkgs.runCommand "d2b-rust-src" { } ''
           mkdir -p $out/packages
           cp -r ${./packages}/. $out/packages/
+          mkdir -p $out/docs/reference/schemas/v3/providers
+          cp ${./docs/reference/schemas/v3/providers/transport-azure-relay.transport-settings.json} \
+            $out/docs/reference/schemas/v3/providers/transport-azure-relay.transport-settings.json
         '';
         rustWorkspace = args: pkgs.rustPlatform.buildRustPackage ({
           pname = "d2b-rust-workspace";
@@ -616,8 +618,6 @@
         inherit gascity dolt beads copilot gasCityContributor;
         gas-city-contributor = gasCityContributor;
       });
-
-      apps = forAllSystems (system: { });
 
       # Container-based integration test images (the type-G layer), built by
       # Nix and run with podman, rootless. Exposed under `containerImages`,
@@ -1114,7 +1114,8 @@
         # (compile-time
         # include_str! goldens) and tests/fixtures/ (compile-time +
         # runtime fixture-path reads from unit/integration tests).
-        # Compose a sandbox src that holds packages/ plus those fixture
+        # Compose a sandbox src that holds packages/, the runtime schemas
+        # embedded by provider crates, plus those fixture
         # trees so the cargo workspace never reads outside its packaged
         # source in the Nix sandbox. Operators running cargo OUTSIDE
         # the sandbox use the raw ./packages tree and the same relative
@@ -1122,6 +1123,9 @@
         rustPackagesSrc = pkgs.runCommand "d2b-rust-src" { } ''
           mkdir -p $out/packages
           cp -r ${./packages}/. $out/packages/
+          mkdir -p $out/docs/reference/schemas/v3/providers
+          cp ${./docs/reference/schemas/v3/providers/transport-azure-relay.transport-settings.json} \
+            $out/docs/reference/schemas/v3/providers/transport-azure-relay.transport-settings.json
           mkdir -p $out/tests
           cp -r ${./tests/golden} $out/tests/golden
           cp -r ${./tests/fixtures} $out/tests/fixtures
@@ -1788,6 +1792,5 @@
         buildProviderElfShim = providerElfShim;
       });
 
-      overlays.default = _final: _prev: { };
     };
 }

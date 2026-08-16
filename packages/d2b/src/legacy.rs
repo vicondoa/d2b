@@ -13652,6 +13652,9 @@ mod host_install_dispatch_tests {
                 workload_identity: None,
                 vm: vm.to_owned(),
                 nodes: vec![d2b_core::processes::ProcessNode {
+                    execution_ref: None,
+                    execution_domain: None,
+                    user_ref: None,
                     id: d2b_core::processes::NodeId("guest-control-health".to_owned()),
                     role: d2b_core::processes::ProcessRole::GuestControlHealth,
                     unit: None,
@@ -15516,6 +15519,9 @@ mod host_install_dispatch_tests {
             vm: "vm-a".to_owned(),
             nodes: vec![
                 d2b_core::processes::ProcessNode {
+                    execution_ref: None,
+                    execution_domain: None,
+                    user_ref: None,
                     id: d2b_core::processes::NodeId("ch-runner".to_owned()),
                     role: d2b_core::processes::ProcessRole::CloudHypervisorRunner,
                     unit: None,
@@ -15528,6 +15534,9 @@ mod host_install_dispatch_tests {
                     network_interfaces: Vec::new(),
                 },
                 d2b_core::processes::ProcessNode {
+                    execution_ref: None,
+                    execution_domain: None,
+                    user_ref: None,
                     id: d2b_core::processes::NodeId("video".to_owned()),
                     role: d2b_core::processes::ProcessRole::Video,
                     unit: None,

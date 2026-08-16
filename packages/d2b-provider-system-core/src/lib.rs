@@ -33,6 +33,7 @@
 
 #![deny(missing_docs)]
 
+pub mod audit;
 mod bootstrap;
 mod error;
 pub mod handler_status;
@@ -40,12 +41,14 @@ mod host;
 mod host_process_audit;
 mod host_reconciler;
 mod host_status;
+pub mod manifest;
 mod nss;
 mod user;
 
 pub mod ownership;
 pub mod testing;
 
+pub use audit::{ReconcileOutcome, ReconciledResourceType, ResourceReconciledAudit};
 pub use bootstrap::{BootstrapCapability, BootstrapError, BootstrapSequence, BootstrapStage};
 pub use error::SystemCoreError;
 pub use handler_status::{
@@ -57,6 +60,7 @@ pub use host::{
     HostProbeMetadata, HostProbeSnapshot, HostReconciler, HostStatusReport,
     ISOLATION_POSTURE_MESSAGE, MinijailPlatformGate, NO_ISOLATION_STATUS_FIELDS,
 };
+pub use manifest::{ManifestError, SystemCoreManifest};
 pub use nss::{
     MAX_OBSERVED_GROUPS, NssUserEffectPort, NssUserReconciler, NssUserRecord, NssUserStatus,
 };

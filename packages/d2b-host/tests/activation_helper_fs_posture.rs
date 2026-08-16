@@ -90,7 +90,8 @@ fn ensure_regular_file_happy_path_and_re_assert() {
     );
     assert_eq!(mode_of(&target), 0o600, "must apply mode 0600");
 
-    // Existing-file re-assert (size-mib=0): re-applies mode, preserves content.
+    // Existing-file re-assert with a declared size resizes the file and
+    // re-applies its mode.
     let exist = dir.path().join("exist.img");
     fs::write(&exist, b"existing content").unwrap();
     fs::set_permissions(&exist, fs::Permissions::from_mode(0o644)).unwrap();
@@ -105,14 +106,14 @@ fn ensure_regular_file_happy_path_and_re_assert() {
         "--mode",
         "0600",
         "--size-mib",
-        "0",
+        "1",
     ]);
     assert_eq!(rc, Some(0), "re-assert must exit 0");
     assert_eq!(mode_of(&exist), 0o600, "re-assert must re-apply mode 0600");
     assert_eq!(
-        fs::read(&exist).unwrap(),
-        b"existing content",
-        "re-assert must not modify content"
+        fs::metadata(&exist).unwrap().len(),
+        1024 * 1024,
+        "re-assert must resize an existing file to the declared size"
     );
 }
 

@@ -33,6 +33,30 @@ DASHES=(
   $'\u2015' $'\u2212' $'\uFE58' $'\uFF0D'
 )
 
+# These are the only repository-owned paths whose upstream agent payloads may
+# retain non-ASCII punctuation. The paths are deliberately enumerated instead
+# of admitting a broad vendor or adapter directory.
+DASH_EXEMPT_INSTRUCTION_PATHS=(
+  AGENTS.md
+  tests/AGENTS.md
+  labs/venus-vulkan-video/AGENTS.md
+  CLAUDE.md
+)
+DASH_APPROVED_SKILL_ROOTS=(
+  third_party/agent-skills/ponytail/v4.9.0/skills
+  third_party/agent-skills/caveman/v2.0.0/skills
+  third_party/agent-skills/compound-engineering/compound-engineering-v3.21.4/skills
+)
+DASH_EXEMPT_NOTICE_PATHS=(
+  third_party/agent-skills/ponytail/v4.9.0/LICENSE
+  third_party/agent-skills/caveman/v2.0.0/LICENSE
+  third_party/agent-skills/compound-engineering/compound-engineering-v3.21.4/LICENSE
+)
+DASH_APPROVED_ADAPTER_ROOTS=(
+  .agents/skills
+  .claude/skills
+)
+
 # A process marker is a delimited wave (`W3`, `W4-fu`, `W1fu3`), phase
 # (`P6`, `P2.3`, `ph6`), follow-up (`fu3`), high finding (`H20`),
 # contextual finding/revision (`finding M2`, `revision R5`), or reviewer finding
@@ -135,6 +159,89 @@ fail() {
   exit 1
 }
 
+dash_canonical_skill_dir() {
+  local skill="$1"
+
+  case "$skill" in
+    ponytail|ponytail-audit|ponytail-debt|ponytail-gain|ponytail-help|ponytail-review)
+      printf '%s/%s\n' "${DASH_APPROVED_SKILL_ROOTS[0]}" "$skill"
+      ;;
+    caveman)
+      printf '%s/%s\n' "${DASH_APPROVED_SKILL_ROOTS[1]}" "$skill"
+      ;;
+    ce-babysit-pr|ce-brainstorm|ce-code-review|ce-commit-push-pr|ce-debug|ce-doc-review|ce-plan|ce-resolve-pr-feedback|ce-simplify-code|ce-work|ce-worktree)
+      printf '%s/%s\n' "${DASH_APPROVED_SKILL_ROOTS[2]}" "$skill"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+dash_symlink_matches() {
+  local entry="$1" expected="$2"
+  local link_target actual expected_real
+
+  [ -L "$entry" ] || return 1
+  link_target=$(readlink -- "$entry" 2>/dev/null) || return 1
+  case "$link_target" in
+    /*) return 1 ;;
+  esac
+  actual=$(readlink -f -- "$entry" 2>/dev/null) || return 1
+  expected_real=$(readlink -f -- "$expected" 2>/dev/null) || return 1
+  [ "$actual" = "$expected_real" ]
+}
+
+dash_path_is_exempt() {
+  local root="$1" f="$2"
+  local adapter path skill_root remainder skill component canonical entry expected
+
+  for path in "${DASH_EXEMPT_INSTRUCTION_PATHS[@]}"; do
+    [ "$f" = "$path" ] && return 0
+  done
+  for path in "${DASH_EXEMPT_NOTICE_PATHS[@]}"; do
+    [ "$f" = "$path" ] && return 0
+  done
+
+  for skill_root in "${DASH_APPROVED_SKILL_ROOTS[@]}"; do
+    case "$f" in
+      "$skill_root"/*)
+        remainder=${f#"$skill_root"/}
+        skill=${remainder%%/*}
+        [ "$remainder" != "$skill" ] || continue
+        canonical=$(dash_canonical_skill_dir "$skill" 2>/dev/null) || continue
+        [ "$canonical" = "$skill_root/$skill" ] && return 0
+        ;;
+    esac
+  done
+
+  for adapter in "${DASH_APPROVED_ADAPTER_ROOTS[@]}"; do
+    case "$f" in
+      "$adapter"/*)
+        remainder=${f#"$adapter"/}
+        skill=${remainder%%/*}
+        canonical=$(dash_canonical_skill_dir "$skill" 2>/dev/null) || continue
+        entry="$root/$f"
+        if [ "$remainder" = "$skill" ]; then
+          dash_symlink_matches "$entry" "$root/$canonical" && return 0
+          continue
+        fi
+        [ "$adapter" = ".claude/skills" ] || continue
+        component=${remainder#"$skill"/}
+        case "$component" in
+          ""|/*|.|./*|*/.|..|../*|*/..|*/../*)
+            continue
+            ;;
+        esac
+        expected="$root/$canonical/$component"
+        dash_symlink_matches "$entry" "$expected" && return 0
+        ;;
+    esac
+  done
+
+  return 1
+}
+
 # Fail closed on any non-ASCII dash under `$1`.
 #
 # When `$1` is the root of a git work tree the scope is every file git would
@@ -147,8 +254,9 @@ fail() {
 # grep -I drops binaries so the scan cannot choke on one.
 scan_dashes() {
   local root="$1"
-  local -a files=() patterns=()
+  local -a files=() patterns=() scan_files=()
   local dash hits toplevel enum_status grep_status
+  local enumerated_count exempt_count=0
 
   root=$(cd "$root" 2>/dev/null && pwd -P) \
     || fail "dash scan cannot resolve its scan root"
@@ -186,6 +294,20 @@ scan_dashes() {
     || fail "dash scan could not enumerate files (enumerator exited $enum_status)"
   [ "${#files[@]}" -gt 0 ] || fail "dash scan found no files in its scan root"
 
+  enumerated_count=${#files[@]}
+  for f in "${files[@]}"; do
+    if dash_path_is_exempt "$root" "$f"; then
+      exempt_count=$((exempt_count + 1))
+    else
+      scan_files+=("$f")
+    fi
+  done
+  files=("${scan_files[@]}")
+  if [ "${#files[@]}" -eq 0 ]; then
+    ok "no non-ASCII dash in ${enumerated_count} enumerated files (${exempt_count} exempt; grep skipped)"
+    return 0
+  fi
+
   for dash in "${DASHES[@]}"; do
     patterns+=(-e "$dash")
   done
@@ -212,7 +334,7 @@ scan_dashes() {
     printf '%s\n' "$hits" >&2
     fail "only the ASCII hyphen '-' may spell a dash; a banned dash codepoint matched (see grep output above)"
   fi
-  ok "no non-ASCII dash in ${#files[@]} files"
+  ok "no non-ASCII dash in ${enumerated_count} enumerated files (${exempt_count} exempt)"
 }
 
 # Fail closed on process markers in artifacts governed by AGENTS.md.
@@ -292,7 +414,7 @@ scan_process_markers() {
       # exempt by accident rather than by decision.
       AGENTS.md|docs/contributing/*|docs/adr/*|docs/specs/*|changelog.d/*)
         ;;
-      README.md|SECURITY.md|docs/reference/*|docs/how-to/*|docs/explanation/*|examples/*/README*)
+      README.md|SECURITY.md|STRATEGY.md|docs/reference/*|docs/how-to/*|docs/explanation/*|examples/*/README*)
         full_files+=("$f")
         filename_files+=("$f")
         ;;

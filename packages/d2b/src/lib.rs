@@ -14,6 +14,7 @@ mod exec;
 mod exec_client;
 mod guest;
 mod host;
+pub mod host_generation;
 mod host_validate;
 mod legacy;
 mod provider;

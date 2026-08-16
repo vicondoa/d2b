@@ -24,7 +24,7 @@ use std::fmt;
 use std::os::fd::OwnedFd;
 use std::path::{Path, PathBuf};
 
-use d2b_contracts::broker_wire::OpenCgroupDirRequest;
+use d2b_contracts::broker_wire::{CgroupKillRequest, OpenCgroupDirRequest};
 use d2b_contracts::types::{PathClass as BrokerPathClass, ScopeId};
 use d2b_core::bundle_resolver::BundleResolver;
 use d2b_host::cgroup::{
@@ -588,6 +588,67 @@ pub fn live_open_cgroup_dir(
         }
     })?;
     Ok(LiveOpenCgroupDirOutcome { cgroup_path, fd })
+}
+
+fn resolve_runner_cgroup_leaf(
+    resolver: &BundleResolver,
+    req: &CgroupKillRequest,
+) -> Result<PathBuf, super::OpError> {
+    let mut matching_intent = None;
+    for intent_id in resolver.runner_intent_ids() {
+        let Some(intent) = resolver.find_runner_intent(intent_id) else {
+            continue;
+        };
+        if intent.vm_name == req.vm_id.as_str() && intent.role_id == req.role_id.as_str() {
+            if matching_intent.is_some() {
+                return Err(super::OpError::InvalidInput {
+                    detail: "ambiguous trusted runner cgroup intent".to_owned(),
+                });
+            }
+            matching_intent = Some(intent);
+        }
+    }
+    let intent = matching_intent.ok_or_else(|| super::OpError::UnknownSubject {
+        operation: "CgroupKill",
+        subject: format!("{}:{}", req.vm_id.as_str(), req.role_id.as_str()),
+    })?;
+
+    // Runner placements are trusted bundle data, but still require the
+    // broker's leaf-only shape before any destructive write. The VM interior
+    // remains process-free and only the third segment may receive cgroup.kill.
+    let components = Path::new(&intent.cgroup_placement.subtree)
+        .components()
+        .collect::<Vec<_>>();
+    if components.len() != 3
+        || !matches!(components[0], std::path::Component::Normal(value) if value == "d2b.slice")
+        || !matches!(components[1], std::path::Component::Normal(value) if value == req.vm_id.as_str())
+        || !matches!(components[2], std::path::Component::Normal(_))
+    {
+        return Err(super::OpError::Refused {
+            operation: "CgroupKill",
+            reason: "runner-cgroup-leaf-invalid".to_owned(),
+        });
+    }
+    Ok(Path::new("/sys/fs/cgroup").join(&intent.cgroup_placement.subtree))
+}
+
+/// Kill one trusted runner leaf during intentional teardown.
+///
+/// The request carries only `(vm_id, role_id)`. The broker resolves the
+/// cgroup placement from its bundle copy and refuses anything other than the
+/// canonical `d2b.slice/<vm>/<role>` leaf shape.
+pub fn live_kill_runner_cgroup(
+    resolver: &BundleResolver,
+    req: &CgroupKillRequest,
+) -> Result<(), super::OpError> {
+    let leaf = resolve_runner_cgroup_leaf(resolver, req)?;
+    let backend = host_cgroup::RealCgroupBackend::new();
+    host_cgroup::cgroup_kill_leaf_only(&backend, &leaf, std::slice::from_ref(&leaf)).map_err(
+        |error| super::OpError::Refused {
+            operation: "CgroupKill",
+            reason: error.code().to_owned(),
+        },
+    )
 }
 
 #[cfg(test)]

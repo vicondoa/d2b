@@ -1,4 +1,17 @@
-//! Canonical crate root for `Provider/activation-nixos`.
-//!
-//! The crate root is intentionally compile-safe and contains no semantic
-//! Provider implementation.
+//! Activation-NixOS Provider lifecycle and typed effect boundaries.
+
+#![deny(missing_docs)]
+
+pub mod controller;
+pub mod manifest;
+pub mod runner;
+
+pub use controller::{
+    ActivationCaller, ActivationController, ActivationError, CallerRole, GenerationObservation,
+    GenerationPhase, RetentionPlan, RunnerRequest, RunnerResult,
+};
+pub use manifest::ActivationManifest;
+pub use runner::{
+    ActivationHelper, ActivationRunner, ActivationRunnerError, ActivationRunnerRequest,
+    ActivationRunnerResult, RunnerOutcomeCode,
+};

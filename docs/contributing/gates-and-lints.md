@@ -1,14 +1,53 @@
 # Gates and lints
 
 Reference for the heavy-lane semaphore and policy lints whose exemptions are
-easy to get wrong. The binding summary, Layer-1 job list, and
-enforcing/advisory rule live in
-[`../../AGENTS.md`](../../AGENTS.md) under "Build and validate"; read that
-first. This file covers the parts needing more than a rule.
+easy to get wrong. The binding summary and enforcing/advisory rule live under
+[worktree, validation, and landing rules](../../AGENTS.md#worktree-validation-and-landing-rules);
+read that first. This file covers the parts needing more than a rule.
 
 `tests/layer1-jobs.json` remains authoritative for the job list and its
 enforcement classification. Where this file disagrees with that manifest or
 with the `Makefile`, those win.
+
+## Non-ASCII dash scan exemption
+
+The tier0 dash gate keeps its repository-wide fail-closed behavior while
+allowing punctuation that is part of approved upstream agent assets. The
+exemption is a closed path set, owned by
+`tests/tools/tier0-first-pass.sh`, and is not a general vendor or adapter
+directory exemption.
+
+The exact instruction files are `AGENTS.md`, `tests/AGENTS.md`,
+`labs/venus-vulkan-video/AGENTS.md`, and `CLAUDE.md`. Canonical skill payloads
+are exempt only below these exact pinned roots, and only for the approved skill
+directories:
+
+- `third_party/agent-skills/ponytail/v4.9.0/skills`
+- `third_party/agent-skills/caveman/v2.0.0/skills`
+- `third_party/agent-skills/compound-engineering/compound-engineering-v3.21.4/skills`
+
+The matching root `LICENSE` file under each of those three pinned version
+directories is also exempt so its upstream bytes and legal notice stay exact.
+No other notice file, source, version, or sibling path is admitted.
+
+The admitted child directory names are `ponytail`, `ponytail-audit`,
+`ponytail-debt`, `ponytail-gain`, `ponytail-help`, `ponytail-review`,
+`caveman`, `ce-babysit-pr`, `ce-brainstorm`, `ce-code-review`,
+`ce-commit-push-pr`, `ce-debug`, `ce-doc-review`, `ce-plan`,
+`ce-resolve-pr-feedback`, `ce-simplify-code`, `ce-work`, and `ce-worktree`.
+
+The `.agents/skills/<skill>` and `.claude/skills/<skill>` adapter entries are
+admitted only when they are relative symlinks to the matching canonical skill.
+The static Claude fallback additionally admits only relative symlinks for
+components that resolve to the matching canonical component. Regular files in
+adapter trees, lookalike names, other versions, and links to other targets
+remain in the scanned set. Product documentation, plans, changelog entries,
+configuration, and ordinary source files have no exemption.
+
+Enumeration happens before filtering and must still be non-empty and
+successful. The gate then removes only these validated paths before invoking
+`grep`; if every enumerated path is exempt, it reports success without invoking
+`grep`. Any non-exempt `grep` error remains a failure.
 
 ## Build and validate, in detail
 
