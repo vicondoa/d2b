@@ -83,9 +83,6 @@ pub(crate) fn dispatch_reconcile(
             operation_id,
         },
     ))?;
-    let resolver = crate::load_bundle_resolver(state)
-        .map_err(|_| ResourceRuntimeError::ProviderPathUnavailable)?;
-    let target = relay_target(&resolver, vm_id)?;
     let backing = backing_token(&admitted.selector_id);
     if state
         .security_key_sessions
@@ -98,6 +95,9 @@ pub(crate) fn dispatch_reconcile(
             "outcome": "active"
         }));
     }
+    let resolver = crate::load_bundle_resolver(state)
+        .map_err(|_| ResourceRuntimeError::ProviderPathUnavailable)?;
+    let target = relay_target(&resolver, vm_id)?;
     let admission = SecurityKeyAdmission::from_core(
         admitted.zone_ref,
         admitted.device_uid.clone(),

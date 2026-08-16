@@ -379,20 +379,20 @@ impl CoreTpmEffectExecutor for LiveTpmEffectExecutor<'_> {
             .pidfd_table
             .try_reserve_spawn(self.vm_id.as_str(), "swtpm")
         {
-            if self
-                .state
-                .pidfd_table
-                .still_alive_same_start_time(self.vm_id.as_str(), "swtpm")
-            {
-                self.adopted_live_worker = true;
-                return Ok(());
-            }
             return Err(TpmEffectError::Transient);
         }
         let _spawn_reservation = SwtpmSpawnReservation {
             table: &self.state.pidfd_table,
             vm: self.vm_id.as_str().to_owned(),
         };
+        if self
+            .state
+            .pidfd_table
+            .still_alive_same_start_time(self.vm_id.as_str(), "swtpm")
+        {
+            self.adopted_live_worker = true;
+            return Ok(());
+        }
         self.adopted_live_worker = false;
         let swtpm_node = self.swtpm_node()?;
         {
