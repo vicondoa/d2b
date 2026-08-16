@@ -4,3 +4,9 @@ common --per_file_copt=external/.*protobuf.*@--PROTOBUF_WAS_NOT_SUPPOSED_TO_BE_B
 common --host_per_file_copt=external/.*protobuf.*@--PROTOBUF_WAS_NOT_SUPPOSED_TO_BE_BUILT
 common --per_file_copt=external/.*grpc.*@--GRPC_WAS_NOT_SUPPOSED_TO_BE_BUILT
 common --host_per_file_copt=external/.*grpc.*@--GRPC_WAS_NOT_SUPPOSED_TO_BE_BUILT
+
+# Keep ordinary local/test actions unstamped and avoid unstable workspace data.
+build --stamp=no
+# The Nix C++ toolchain defaults to gold; use the available GNU BFD linker.
+build --linkopt=-fuse-ld=bfd
+build --host_linkopt=-fuse-ld=bfd

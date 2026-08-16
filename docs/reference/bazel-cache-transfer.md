@@ -118,6 +118,12 @@ cargo run --locked -p xtask -- bazel-cache-transfer compare \
   --optimized .scratch/bazel-cache-transfer/optimized-report.json
 ```
 
+A representative local log of `//packages/d2b-core:d2b_core_test` and
+`//packages/d2b-contracts:d2b_contracts_test` measured 207 actions, about
+163 GB gross inputs, 1.03 GB unique inputs, and a 157x fan-out. Enabling
+rules_rust pipelined compilation on that same pair increased action count,
+gross inputs, and fan-out, so it is not part of the default configuration.
+
 Comparison rejects schema, graph, eligibility, configuration, platform, and
 toolchain mismatches. There are no arbitrary transfer thresholds in this
 milestone. Keep BuildBuddy endpoints, credentials, remote-cache flags, and RBE

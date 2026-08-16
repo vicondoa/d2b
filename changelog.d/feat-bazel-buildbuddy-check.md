@@ -12,6 +12,12 @@
   fan-out, artifact exposure, and local-to-remote boundary evidence without
   enabling BuildBuddy.
 
+### Changed
+
+- Keep local and pull-request Rust builds unstamped and prefer the available
+  GNU BFD linker over gold. rules_rust metadata pipelining stays off after a
+  measured two-crate local log showed higher gross input and fan-out.
+
 ### Fixed
 
 - Fixed default-config Bazel Rust tests to carry Cargo dev-dependency feature
