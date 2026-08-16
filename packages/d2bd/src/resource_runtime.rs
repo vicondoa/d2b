@@ -250,6 +250,42 @@ pub(crate) struct CommittedInteractionProviderConfiguration {
     notification: Option<CommittedNotificationProviderConfiguration>,
 }
 
+#[derive(Clone)]
+pub(crate) struct CommittedInteractionIdentity {
+    subject_ref: ResourceRef,
+    subject_uid: ResourceUid,
+    host_execution_ref: ResourceRef,
+    display_provider_generation: ResourceGeneration,
+    clipboard_provider_generation: Option<ResourceGeneration>,
+    notification_provider_generation: Option<ResourceGeneration>,
+}
+
+impl CommittedInteractionIdentity {
+    pub(crate) fn subject_ref(&self) -> &ResourceRef {
+        &self.subject_ref
+    }
+
+    pub(crate) fn subject_uid(&self) -> &ResourceUid {
+        &self.subject_uid
+    }
+
+    pub(crate) fn host_execution_ref(&self) -> &ResourceRef {
+        &self.host_execution_ref
+    }
+
+    pub(crate) const fn display_provider_generation(&self) -> ResourceGeneration {
+        self.display_provider_generation
+    }
+
+    pub(crate) const fn clipboard_provider_generation(&self) -> Option<ResourceGeneration> {
+        self.clipboard_provider_generation
+    }
+
+    pub(crate) const fn notification_provider_generation(&self) -> Option<ResourceGeneration> {
+        self.notification_provider_generation
+    }
+}
+
 impl CommittedInteractionProviderConfiguration {
     pub(crate) fn clipboard(&self) -> Option<&CommittedClipboardProviderConfiguration> {
         self.clipboard.as_ref()
@@ -340,6 +376,7 @@ impl core::fmt::Debug for CommittedClipboardProviderConfiguration {
 #[derive(Clone)]
 pub(crate) struct CommittedNotificationProviderConfiguration {
     config: NotificationProviderConfig,
+    host_execution_ref: ResourceRef,
     resource_uid: ResourceUid,
     resource_generation: ResourceGeneration,
     resource_revision: ZoneRevision,
@@ -599,6 +636,7 @@ pub struct ZoneResourceRuntime {
     activation_runtime: Arc<Mutex<Option<ActivationResourceRuntime>>>,
     activation_watch_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
     interaction_provider_configuration: Option<CommittedInteractionProviderConfiguration>,
+    interaction_identity: Option<CommittedInteractionIdentity>,
     interaction_provider_configuration_refused: bool,
 }
 
@@ -868,7 +906,7 @@ impl ZoneResourceRuntime {
             .runtime_metadata()
             .await
             .map_err(|_| ResourceRuntimeError::StoreReadFailed)?;
-        let (interaction_provider_configuration, interaction_provider_configuration_refused) =
+        let (interaction_provider_configuration, mut interaction_provider_configuration_refused) =
             match load_interaction_provider_configuration(
                 &zone,
                 &store,
@@ -882,6 +920,25 @@ impl ZoneResourceRuntime {
                 }
                 Ok(Some(_)) | Err(_) => (None, true),
             };
+        let interaction_identity = match interaction_provider_configuration.as_ref() {
+            Some(configuration) => {
+                match load_committed_interaction_identity(
+                    &zone,
+                    &store,
+                    store_metadata.current_revision,
+                    configuration,
+                )
+                .await
+                {
+                    Ok(identity) => Some(identity),
+                    Err(_) => {
+                        interaction_provider_configuration_refused = true;
+                        None
+                    }
+                }
+            }
+            None => None,
+        };
         let backend = Arc::new(RedbBackend::from_arc(Arc::clone(&store)));
         let api = Arc::new(
             ResourceService::new(Arc::clone(&backend), Arc::clone(&authorizer))
@@ -1058,6 +1115,7 @@ impl ZoneResourceRuntime {
             activation_runtime: Arc::new(Mutex::new(None)),
             activation_watch_task: Mutex::new(None),
             interaction_provider_configuration,
+            interaction_identity,
             interaction_provider_configuration_refused,
         })
     }
@@ -1097,6 +1155,10 @@ impl ZoneResourceRuntime {
         &self,
     ) -> Option<&CommittedInteractionProviderConfiguration> {
         self.interaction_provider_configuration.as_ref()
+    }
+
+    pub(crate) fn interaction_identity(&self) -> Option<&CommittedInteractionIdentity> {
+        self.interaction_identity.as_ref()
     }
 
     pub(crate) const fn interaction_provider_configuration_refused(&self) -> bool {
@@ -2919,6 +2981,137 @@ async fn load_interaction_provider_configuration(
     }
 }
 
+async fn load_committed_interaction_identity(
+    zone: &ZoneId,
+    store: &RedbResourceStore,
+    current_revision: ZoneRevision,
+    configuration: &CommittedInteractionProviderConfiguration,
+) -> Result<CommittedInteractionIdentity, ResourceRuntimeError> {
+    let mut guest_refs = BTreeSet::new();
+    let mut host_execution_refs = BTreeSet::new();
+    if let Some(clipboard) = configuration.clipboard() {
+        guest_refs.extend(clipboard.guest_sources.iter().cloned());
+        host_execution_refs.insert(clipboard.host_execution_ref.clone());
+    }
+    if let Some(notification) = configuration.notification() {
+        guest_refs.extend(
+            notification
+                .config
+                .guest_sources()
+                .iter()
+                .map(|source| source.source_ref().clone()),
+        );
+        host_execution_refs.insert(notification.host_execution_ref.clone());
+    }
+    let [subject_ref] = guest_refs
+        .into_iter()
+        .collect::<Vec<_>>()
+        .try_into()
+        .map_err(|_| ResourceRuntimeError::InteractionConfigurationUnavailable)?;
+    let [host_execution_ref] = host_execution_refs
+        .into_iter()
+        .collect::<Vec<_>>()
+        .try_into()
+        .map_err(|_| ResourceRuntimeError::InteractionConfigurationUnavailable)?;
+    let subject_uid = committed_resource_uid(zone, store, current_revision, &subject_ref).await?;
+    let _host_uid =
+        committed_resource_uid(zone, store, current_revision, &host_execution_ref).await?;
+
+    let display_ref = ResourceRef::parse("Provider/display-wayland")
+        .map_err(|_| ResourceRuntimeError::InteractionConfigurationUnavailable)?;
+    let display_resource = committed_resource(zone, store, current_revision, &display_ref).await?;
+    let (_, _, display_provider_generation, _, _) = committed_provider_spec(
+        zone,
+        current_revision,
+        &display_resource,
+        &display_ref,
+        "display-wayland",
+    )?;
+
+    Ok(CommittedInteractionIdentity {
+        subject_ref,
+        subject_uid,
+        host_execution_ref,
+        display_provider_generation,
+        clipboard_provider_generation: configuration
+            .clipboard
+            .as_ref()
+            .map(|clipboard| clipboard.resource_generation),
+        notification_provider_generation: configuration
+            .notification
+            .as_ref()
+            .map(|notification| notification.resource_generation),
+    })
+}
+
+async fn committed_resource_uid(
+    zone: &ZoneId,
+    store: &RedbResourceStore,
+    current_revision: ZoneRevision,
+    resource_ref: &ResourceRef,
+) -> Result<ResourceUid, ResourceRuntimeError> {
+    let resource = committed_resource(zone, store, current_revision, resource_ref).await?;
+    Ok(resource.uid)
+}
+
+async fn committed_resource(
+    zone: &ZoneId,
+    store: &RedbResourceStore,
+    current_revision: ZoneRevision,
+    resource_ref: &ResourceRef,
+) -> Result<StoredResource, ResourceRuntimeError> {
+    if !matches!(
+        resource_ref.resource_type().as_str(),
+        "Guest" | "Host" | "Provider"
+    ) {
+        return Err(ResourceRuntimeError::InteractionConfigurationUnavailable);
+    }
+    let operation_id = format!(
+        "interaction-identity:{}",
+        resource_ref.to_canonical_string()
+    );
+    let resource = store
+        .get(StoreGetRequest {
+            operation: StoreOperationContext {
+                operation_id: operation_id.clone(),
+                idempotency_key: None,
+                correlation_id: operation_id,
+                trace_id: None,
+                deadline_ms: 10_000,
+            },
+            zone: zone.clone(),
+            target: resource_ref.clone(),
+            expected_uid: None,
+            projection: StoreProjection::Full,
+        })
+        .await
+        .map_err(|_| ResourceRuntimeError::InteractionConfigurationUnavailable)?;
+    if resource.zone != *zone
+        || resource.resource_ref != *resource_ref
+        || resource.generation.get() == 0
+        || resource.revision.get() == 0
+        || resource.revision > current_revision
+    {
+        return Err(ResourceRuntimeError::InteractionConfigurationUnavailable);
+    }
+    let envelope = ResourceEnvelope::from_json(&resource.canonical_json)
+        .map_err(|_| ResourceRuntimeError::InteractionConfigurationUnavailable)?;
+    if envelope.resource_type() != resource_ref.resource_type()
+        || envelope.metadata().name() != resource_ref.name()
+        || envelope.metadata().zone() != zone
+        || envelope.metadata().uid() != &resource.uid
+        || envelope.metadata().generation() != resource.generation
+        || envelope.metadata().revision() != resource.revision
+        || envelope
+            .digest()
+            .map_err(|_| ResourceRuntimeError::InteractionConfigurationUnavailable)?
+            != resource.payload_digest
+    {
+        return Err(ResourceRuntimeError::InteractionConfigurationUnavailable);
+    }
+    Ok(resource)
+}
+
 fn committed_provider_spec(
     zone: &ZoneId,
     current_revision: ZoneRevision,
@@ -3067,7 +3260,9 @@ fn parse_committed_notification_configuration(
         );
     }
     let config = NotificationProviderConfig::new(sources)
-        .and_then(|config| config.with_host_binding(wire.host_execution_ref, wire.host_user_ref))
+        .and_then(|config| {
+            config.with_host_binding(wire.host_execution_ref.clone(), wire.host_user_ref)
+        })
         .and_then(|config| config.with_display_wayland_ref(Some(wire.display_wayland_ref)))
         .and_then(|config| config.with_max_pending_notifications(wire.max_pending_notifications))
         .and_then(|config| config.with_action_nonce_ttl_secs(wire.action_nonce_ttl_secs))
@@ -3081,6 +3276,7 @@ fn parse_committed_notification_configuration(
         .map_err(|_| ResourceRuntimeError::InteractionConfigurationUnavailable)?;
     Ok(CommittedNotificationProviderConfiguration {
         config,
+        host_execution_ref: wire.host_execution_ref,
         resource_uid,
         resource_generation,
         resource_revision,

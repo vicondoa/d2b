@@ -27,8 +27,6 @@ use d2b_session::{
 };
 use d2b_session::{SessionAuthenticationBinding, TransportEvidence};
 use d2b_session_unix::{PeerCredentials, VerifiedUnixPeer};
-#[cfg(not(test))]
-use sha2::{Digest, Sha256};
 use tokio::sync::{Mutex as AsyncMutex, mpsc, oneshot};
 
 use crate::{
@@ -1122,6 +1120,7 @@ impl core::fmt::Debug for ZoneBus {
     }
 }
 
+#[derive(Clone)]
 enum UnixSubjectKind {
     #[cfg(test)]
     Host,
@@ -1129,15 +1128,19 @@ enum UnixSubjectKind {
     Provider,
 }
 
+#[derive(Clone)]
 pub(crate) struct UnixSubjectRecord {
     kind: UnixSubjectKind,
     subject_ref: ResourceRef,
     subject_uid: ResourceUid,
     zone_ref: ResourceRef,
-    expected_peer: PeerCredentials,
+    expected_peer: Option<PeerCredentials>,
+    expected_peer_uid: Option<u32>,
+    service: Option<ServicePackage>,
     provider_ref: Option<ResourceRef>,
     provider_generation: Option<ResourceGeneration>,
     controller_generation: Option<ControllerGeneration>,
+    execution_ref: Option<ResourceRef>,
 }
 
 impl UnixSubjectRecord {
@@ -1157,6 +1160,7 @@ impl UnixSubjectRecord {
         )
     }
 
+    #[cfg(test)]
     pub(crate) fn guest(
         subject_ref: ResourceRef,
         subject_uid: ResourceUid,
@@ -1172,6 +1176,7 @@ impl UnixSubjectRecord {
         )
     }
 
+    #[cfg(test)]
     pub(crate) fn provider(
         subject_ref: ResourceRef,
         subject_uid: ResourceUid,
@@ -1216,10 +1221,41 @@ impl UnixSubjectRecord {
             subject_ref,
             subject_uid,
             zone_ref,
-            expected_peer,
+            expected_peer: Some(expected_peer),
+            expected_peer_uid: None,
+            service: None,
             provider_ref: None,
             provider_generation: None,
             controller_generation: None,
+            execution_ref: None,
+        })
+    }
+
+    fn guest_for_uid(
+        subject_ref: ResourceRef,
+        subject_uid: ResourceUid,
+        zone_ref: ResourceRef,
+        expected_peer_uid: u32,
+    ) -> d2b_session::Result<Self> {
+        if subject_ref.resource_type().as_str() != "Guest"
+            || zone_ref.resource_type().as_str() != "Zone"
+        {
+            return Err(d2b_session::SessionError::new(
+                d2b_session::contract::SessionErrorCode::SubjectMismatch,
+            ));
+        }
+        Ok(Self {
+            kind: UnixSubjectKind::Guest,
+            subject_ref,
+            subject_uid,
+            zone_ref,
+            expected_peer: None,
+            expected_peer_uid: Some(expected_peer_uid),
+            service: None,
+            provider_ref: None,
+            provider_generation: None,
+            controller_generation: None,
+            execution_ref: None,
         })
     }
 
@@ -1243,6 +1279,24 @@ impl UnixSubjectRecord {
         self
     }
 
+    fn for_service(mut self, service: ServicePackage) -> Self {
+        self.service = Some(service);
+        self
+    }
+
+    pub(crate) fn with_execution_ref(
+        mut self,
+        execution_ref: ResourceRef,
+    ) -> d2b_session::Result<Self> {
+        if execution_ref.resource_type().as_str() != "Host" {
+            return Err(d2b_session::SessionError::new(
+                d2b_session::contract::SessionErrorCode::SubjectMismatch,
+            ));
+        }
+        self.execution_ref = Some(execution_ref);
+        Ok(self)
+    }
+
     pub(crate) fn bind(
         self,
         peer: VerifiedUnixPeer,
@@ -1257,7 +1311,13 @@ impl UnixSubjectRecord {
             UnixSubjectKind::Provider => "Provider",
         };
         peer.validate_transport(binding.transport_class())?;
-        if peer.credentials() != self.expected_peer
+        let peer_matches = self
+            .expected_peer
+            .is_some_and(|expected| peer.credentials() == expected)
+            || self
+                .expected_peer_uid
+                .is_some_and(|expected| peer.credentials().uid().as_raw() == expected);
+        if !peer_matches
             || evidence.class() != EvidenceClass::UnixPeer
             || binding.evidence_class() != EvidenceClass::UnixPeer
             || binding.transport_binding().locality() != Locality::Local
@@ -1299,10 +1359,13 @@ impl UnixSubjectRecord {
             ),
         );
         if binding.service().as_str() == "d2b.display.v3" {
-            context = context.with_execution_ref(
-                ResourceRef::parse("Host/host-system")
-                    .expect("daemon-owned local display execution reference"),
-            );
+            context = context.with_execution_ref(self.execution_ref.ok_or_else(|| {
+                d2b_session::SessionError::new(
+                    d2b_session::contract::SessionErrorCode::SubjectConfigurationMismatch,
+                )
+            })?);
+        } else if let Some(execution_ref) = self.execution_ref {
+            context = context.with_execution_ref(execution_ref);
         }
         if let (Some(provider_ref), Some(provider_generation)) =
             (provider_ref, self.provider_generation)
@@ -1325,26 +1388,20 @@ impl core::fmt::Debug for UnixSubjectRecord {
 }
 
 struct AuthoritativeUnixSubjectResolver {
-    #[cfg(test)]
     subjects: Mutex<Vec<UnixSubjectRecord>>,
-    #[cfg(test)]
     max_subjects: usize,
     #[cfg(not(test))]
     zone: ZoneId,
 }
 
 impl AuthoritativeUnixSubjectResolver {
-    #[cfg(test)]
     fn deny_all(_zone: ZoneId, _max_subjects: usize) -> Self {
         Self {
             subjects: Mutex::new(Vec::new()),
             max_subjects: _max_subjects,
+            #[cfg(not(test))]
+            zone: _zone,
         }
-    }
-
-    #[cfg(not(test))]
-    fn deny_all(zone: ZoneId, _max_subjects: usize) -> Self {
-        Self { zone }
     }
 
     fn resolve_for_service(
@@ -1353,95 +1410,52 @@ impl AuthoritativeUnixSubjectResolver {
         service: &ServicePackage,
     ) -> d2b_session::Result<UnixSubjectRecord> {
         #[cfg(not(test))]
-        {
-            if service.as_str() == "d2b.resource.v3" {
-                return Ok(UnixSubjectRecord::provider(
-                    ResourceRef::parse("Provider/system-core").expect("fixed Provider ref"),
-                    ResourceUid::parse("11111111-1111-4111-8111-111111111111")
-                        .expect("fixed Provider uid"),
-                    ResourceRef::parse(&format!("Zone/{}", self.zone.as_str()))
-                        .expect("fixed Zone ref"),
-                    peer,
-                    ResourceGeneration::new(1).expect("fixed Provider generation"),
-                )?
-                .with_controller_generation(
-                    ControllerGeneration::new(1).expect("fixed controller generation"),
-                ));
-            }
-            let uid = peer.uid().as_raw();
-            let subject_ref = ResourceRef::parse(&format!("Guest/uid-{uid}")).map_err(|_| {
-                d2b_session::SessionError::new(
-                    d2b_session::contract::SessionErrorCode::SubjectConfigurationMismatch,
-                )
-            })?;
-            let mut digest = Sha256::new();
-            digest.update(b"d2b-unix-guest-subject-v1");
-            digest.update(uid.to_be_bytes());
-            let mut uid_bytes = [0u8; 16];
-            uid_bytes.copy_from_slice(&digest.finalize()[..16]);
-            uid_bytes[6] = (uid_bytes[6] & 0x0f) | 0x40;
-            uid_bytes[8] = (uid_bytes[8] & 0x3f) | 0x80;
-            let subject_uid = ResourceUid::parse(format!(
-                "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
-                uid_bytes[0], uid_bytes[1], uid_bytes[2], uid_bytes[3],
-                uid_bytes[4], uid_bytes[5], uid_bytes[6], uid_bytes[7],
-                uid_bytes[8], uid_bytes[9], uid_bytes[10], uid_bytes[11],
-                uid_bytes[12], uid_bytes[13], uid_bytes[14], uid_bytes[15],
-            ))
-            .map_err(|_| {
-                d2b_session::SessionError::new(
-                    d2b_session::contract::SessionErrorCode::SubjectConfigurationMismatch,
-                )
-            })?;
-            let provider = match service.as_str() {
-                "d2b.display.v3" => "Provider/display-wayland",
-                "d2b.clipboard.v3"
-                | "d2b.clipboard.bridge.v3"
-                | "d2b.clipboard.picker-coord.v3" => "Provider/clipboard-wayland",
-                "d2b.notification.v3" => "Provider/notification-desktop",
-                _ => {
-                    return Err(d2b_session::SessionError::new(
-                        d2b_session::contract::SessionErrorCode::SubjectConfigurationMismatch,
-                    ));
-                }
-            };
-            let subject = UnixSubjectRecord::guest(
-                subject_ref,
-                subject_uid,
+        if *service == ServicePackage::ResourceV3 {
+            return Ok(UnixSubjectRecord::new(
+                UnixSubjectKind::Provider,
+                ResourceRef::parse("Provider/system-core").expect("fixed Provider ref"),
+                ResourceUid::parse("11111111-1111-4111-8111-111111111111")
+                    .expect("fixed Provider uid"),
                 ResourceRef::parse(&format!("Zone/{}", self.zone.as_str()))
                     .expect("fixed Zone ref"),
                 peer,
-            )?
-            .with_provider(
-                ResourceRef::parse(provider).expect("fixed Provider ref"),
-                ResourceGeneration::new(1).expect("fixed Provider generation"),
-            )?
-            .with_controller_generation(
-                ControllerGeneration::new(1).expect("fixed controller generation"),
-            );
-            Ok(subject)
+            )?);
         }
-
+        let subjects = self
+            .subjects
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let index = subjects
+            .iter()
+            .position(|subject| {
+                let peer_matches = subject
+                    .expected_peer
+                    .is_some_and(|expected| expected == peer)
+                    || subject
+                        .expected_peer_uid
+                        .is_some_and(|expected| peer.uid().as_raw() == expected);
+                peer_matches
+                    && subject
+                        .service
+                        .as_ref()
+                        .is_none_or(|expected| expected == service)
+            })
+            .ok_or_else(|| {
+                d2b_session::SessionError::new(
+                    d2b_session::contract::SessionErrorCode::SubjectConfigurationMismatch,
+                )
+            })?;
         #[cfg(test)]
         {
-            let _ = service;
-            let mut subjects = self
-                .subjects
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            let index = subjects
-                .iter()
-                .position(|subject| subject.expected_peer == peer)
-                .ok_or_else(|| {
-                    d2b_session::SessionError::new(
-                        d2b_session::contract::SessionErrorCode::SubjectConfigurationMismatch,
-                    )
-                })?;
+            let mut subjects = subjects;
             Ok(subjects.swap_remove(index))
+        }
+        #[cfg(not(test))]
+        {
+            Ok(subjects[index].clone())
         }
     }
 
-    #[cfg(test)]
     fn install(&self, subject: UnixSubjectRecord, zone: &ZoneId) -> d2b_session::Result<()> {
         if subject.zone_ref.name().as_str() != zone.as_str() {
             return Err(d2b_session::SessionError::new(
@@ -2357,6 +2371,90 @@ impl ZoneRegistrar {
                 identity: Arc::clone(&self.component_admission.identity),
             },
         )
+    }
+
+    /// Install the daemon-owned interaction subject projection from the
+    /// committed resource snapshot. The Unix peer UID authenticates the
+    /// transport only; the Guest/Host refs, resource generations, and
+    /// controller generation are all supplied by trusted committed state.
+    pub fn install_committed_interaction_subject(
+        &self,
+        subject_ref: ResourceRef,
+        subject_uid: ResourceUid,
+        zone_ref: ResourceRef,
+        expected_peer_uid: u32,
+        execution_ref: ResourceRef,
+        display_generation: ResourceGeneration,
+        clipboard_generation: Option<ResourceGeneration>,
+        notification_generation: Option<ResourceGeneration>,
+        controller_generation: ControllerGeneration,
+    ) -> d2b_session::Result<()> {
+        let services = [(
+            ServicePackage::DisplayV3,
+            ResourceRef::parse("Provider/display-wayland").expect("fixed display Provider ref"),
+            display_generation,
+        )];
+        let mut subjects = Vec::with_capacity(5);
+        for (service, provider_ref, generation) in services {
+            subjects.push(
+                UnixSubjectRecord::guest_for_uid(
+                    subject_ref.clone(),
+                    subject_uid.clone(),
+                    zone_ref.clone(),
+                    expected_peer_uid,
+                )?
+                .with_provider(provider_ref, generation)?
+                .with_controller_generation(controller_generation)
+                .with_execution_ref(execution_ref.clone())?
+                .for_service(service),
+            );
+        }
+        if let Some(generation) = clipboard_generation {
+            for service in [
+                ServicePackage::ClipboardV3,
+                ServicePackage::ClipboardBridgeV3,
+                ServicePackage::ClipboardPickerCoordV3,
+            ] {
+                subjects.push(
+                    UnixSubjectRecord::guest_for_uid(
+                        subject_ref.clone(),
+                        subject_uid.clone(),
+                        zone_ref.clone(),
+                        expected_peer_uid,
+                    )?
+                    .with_provider(
+                        ResourceRef::parse("Provider/clipboard-wayland")
+                            .expect("fixed clipboard Provider ref"),
+                        generation,
+                    )?
+                    .with_controller_generation(controller_generation)
+                    .with_execution_ref(execution_ref.clone())?
+                    .for_service(service),
+                );
+            }
+        }
+        if let Some(generation) = notification_generation {
+            subjects.push(
+                UnixSubjectRecord::guest_for_uid(
+                    subject_ref,
+                    subject_uid,
+                    zone_ref,
+                    expected_peer_uid,
+                )?
+                .with_provider(
+                    ResourceRef::parse("Provider/notification-desktop")
+                        .expect("fixed notification Provider ref"),
+                    generation,
+                )?
+                .with_controller_generation(controller_generation)
+                .with_execution_ref(execution_ref)?
+                .for_service(ServicePackage::NotificationV3),
+            );
+        }
+        for subject in subjects {
+            self.unix_subjects.install(subject, &self.core.zone)?;
+        }
+        Ok(())
     }
 
     /// Consume an authenticated candidate and install it only after native

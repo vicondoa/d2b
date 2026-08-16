@@ -13,3 +13,11 @@
 
 - Keep notification source and host-sink lifecycle tests in the Provider crate
   so supervisor packaging stays on the closed effect-port allowlist.
+- Resolve interaction ComponentSession Guest subjects and Host execution
+  references from committed Zone resources, and carry committed Provider and
+  controller generations instead of transport-derived identities or
+  generation-one placeholders. Missing or ambiguous committed identity state
+  refuses composition while preserving durable process restart adoption.
+- Cover display reconciliation, notification delivery, and clipboard capture
+  on the production composition path with non-default generations and
+  wrong-Guest refusal.

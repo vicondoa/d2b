@@ -1884,6 +1884,7 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
                                     resource.current_revision(),
                                     true,
                                     resource.interaction_provider_configuration(),
+                                    resource.interaction_identity(),
                                 ),
                             ) {
                                 Ok(runtime) => {

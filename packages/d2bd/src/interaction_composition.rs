@@ -20,8 +20,8 @@ use std::{
 };
 
 use crate::resource_runtime::{
-    CommittedClipboardProviderConfiguration, CommittedInteractionProviderConfiguration,
-    CommittedNotificationProviderConfiguration,
+    CommittedClipboardProviderConfiguration, CommittedInteractionIdentity,
+    CommittedInteractionProviderConfiguration, CommittedNotificationProviderConfiguration,
 };
 use d2b_bus::{
     BusAuthorizer, BusConfig, BusError, BusIngress, ComponentRequestReceiver,
@@ -2036,8 +2036,12 @@ where
             .route_for_service(d2b_provider_display_wayland::SERVICE_PACKAGE)
             .ok_or(DisplayRuntimeError::SessionUnauthenticated)?
             .clone();
+        let execution_ref = route
+            .context()
+            .execution_ref()
+            .ok_or(DisplayRuntimeError::SessionMismatch)?;
         if request.spec.guest_ref() != route.subject_ref()
-            || request.spec.host_ref().resource_type().as_str() != "Host"
+            || request.spec.host_ref() != execution_ref
         {
             return Err(DisplayRuntimeError::SessionMismatch);
         }
@@ -2335,6 +2339,7 @@ pub struct DisplaySupervisorEffects<S, G = UnavailableGuestFrontendEffects> {
     supervisor: S,
     guest_frontend: G,
     guest_subject: Option<ResourceRef>,
+    host_execution_ref: Option<ResourceRef>,
     identities: BTreeMap<DisplayProcessRole, LiveWorker>,
     guest_worker: Option<GuestWorker>,
     consumed_grants: BTreeMap<[u8; 32], u64>,
@@ -2371,6 +2376,7 @@ where
             supervisor,
             guest_frontend: UnavailableGuestFrontendEffects,
             guest_subject: None,
+            host_execution_ref: None,
             identities: BTreeMap::new(),
             guest_worker: None,
             consumed_grants: BTreeMap::new(),
@@ -2401,6 +2407,7 @@ where
             supervisor,
             guest_frontend,
             guest_subject: None,
+            host_execution_ref: None,
             identities: BTreeMap::new(),
             guest_worker: None,
             consumed_grants: BTreeMap::new(),
@@ -2478,6 +2485,7 @@ where
         }
         self.session_digest = session_digest;
         self.guest_subject = Some(session.guest_ref().clone());
+        self.host_execution_ref = Some(session.host_ref().clone());
         self.reconnect_generation = session.reconnect_generation();
         self.policy_generation = policy.generation();
         self.teardown_generation = teardown_generation;
@@ -2536,7 +2544,11 @@ where
             });
             return Ok(receipt);
         }
-        let process_ticket = process_ticket(&binding)?;
+        let execution_ref = self
+            .host_execution_ref
+            .as_ref()
+            .ok_or(WorkerEffectError::LaunchRejected)?;
+        let process_ticket = process_ticket(&binding, execution_ref)?;
         let role = binding.role();
         if let Some(previous) = self.identities.get(&role).copied() {
             let supervisor = self.supervisor.clone();
@@ -2970,6 +2982,7 @@ impl NotificationProcessEffectPort for InteractionDrainEffects {
 
 fn process_ticket(
     binding: &DisplayLaunchBinding,
+    execution_ref: &ResourceRef,
 ) -> Result<ProcessLaunchTicket, WorkerEffectError> {
     let role_name = match binding.role() {
         DisplayProcessRole::HostProxy => "host-proxy",
@@ -2977,8 +2990,6 @@ fn process_ticket(
     };
     let process_ref = ResourceRef::parse(&format!("EphemeralProcess/display-{role_name}"))
         .map_err(|_| WorkerEffectError::LaunchRejected)?;
-    let execution_ref =
-        ResourceRef::parse("Host/host-system").map_err(|_| WorkerEffectError::LaunchRejected)?;
     let owner_provider =
         BoundedToken::parse("display-wayland").map_err(|_| WorkerEffectError::LaunchRejected)?;
     let component =
@@ -3020,7 +3031,7 @@ fn process_ticket(
         owner_provider,
         component,
         template,
-        execution_ref,
+        execution_ref.clone(),
         ExecutionDomain::System,
         None,
         selected_provider,
@@ -3387,6 +3398,7 @@ pub(crate) struct ProductionInteractionResourceState<'a> {
     resource_revision: ZoneRevision,
     resource_ready: bool,
     configuration: Option<&'a CommittedInteractionProviderConfiguration>,
+    identity: Option<&'a CommittedInteractionIdentity>,
 }
 
 impl<'a> ProductionInteractionResourceState<'a> {
@@ -3397,6 +3409,7 @@ impl<'a> ProductionInteractionResourceState<'a> {
         resource_revision: ZoneRevision,
         resource_ready: bool,
         configuration: Option<&'a CommittedInteractionProviderConfiguration>,
+        identity: Option<&'a CommittedInteractionIdentity>,
     ) -> Self {
         Self {
             zone,
@@ -3404,14 +3417,14 @@ impl<'a> ProductionInteractionResourceState<'a> {
             resource_revision,
             resource_ready,
             configuration,
+            identity,
         }
     }
 }
 
 /// Construct the daemon-owned authenticated interaction composition for one
-/// trusted Zone.  The registrar is created here, rather than in Provider
-/// code, and its production resolver derives the Provider identity from the
-/// verified local peer.
+/// trusted Zone. The registrar is created here, rather than in Provider code,
+/// and its resolver binds the verified local peer to committed resources.
 pub(crate) fn production_interaction_composition(
     bundle: BundleResolver,
     daemon_uid: u32,
@@ -3424,10 +3437,12 @@ pub(crate) fn production_interaction_composition(
     >,
     BusError,
 > {
+    let identity = resource.identity.ok_or(BusError::InvalidConfig)?;
+    let controller_generation = resource
+        .committed_policy
+        .controller_generation
+        .ok_or(BusError::InvalidConfig)?;
     let catalog = ApiCatalog::standard();
-    let subject_ref = ResourceRef::parse(&format!("Guest/uid-{daemon_uid}"))
-        .map_err(|_| BusError::InvalidConfig)?;
-    let subject_uid = unix_guest_subject_uid(daemon_uid);
     let rule = PolicyRule::new(
         &catalog,
         [],
@@ -3455,8 +3470,8 @@ pub(crate) fn production_interaction_composition(
     let binding = CompiledRoleBinding::new(
         role.role_ref.clone(),
         [BoundSubject {
-            subject_ref,
-            subject_uid,
+            subject_ref: identity.subject_ref().clone(),
+            subject_uid: identity.subject_uid().clone(),
         }],
         BindingScope::default(),
         d2b_resource_api::authz::RelayGrantAuthority::None,
@@ -3504,6 +3519,21 @@ pub(crate) fn production_interaction_composition(
         guest_frontend,
         Box::new(NotifyRustNotificationPort::default()),
     );
+    composition
+        .registrar
+        .install_committed_interaction_subject(
+            identity.subject_ref().clone(),
+            identity.subject_uid().clone(),
+            ResourceRef::parse(&format!("Zone/{}", resource.zone.as_str()))
+                .map_err(|_| BusError::InvalidConfig)?,
+            daemon_uid,
+            identity.host_execution_ref().clone(),
+            identity.display_provider_generation(),
+            identity.clipboard_provider_generation(),
+            identity.notification_provider_generation(),
+            controller_generation,
+        )
+        .map_err(|_| BusError::InvalidConfig)?;
     if let Some(configuration) = resource.configuration {
         composition
             .bind_interaction_provider_configuration(configuration)
@@ -3519,10 +3549,7 @@ pub(crate) fn production_interaction_composition(
                 .and_then(CommittedInteractionProviderConfiguration::clipboard)
                 .map(|clipboard| clipboard.host_user_ref().clone())
         })
-        .unwrap_or(
-            ResourceRef::parse(&format!("User/uid-{daemon_uid}"))
-                .map_err(|_| BusError::InvalidConfig)?,
-        );
+        .ok_or(BusError::InvalidConfig)?;
     let policy_ref = ResourceRef::parse("display-wayland.d2bus.org.WaylandPolicy/display-wayland")
         .map_err(|_| BusError::InvalidConfig)?;
     let dependencies = DependencyState::ready().with_zone(resource.zone);
@@ -3542,6 +3569,7 @@ pub(crate) fn production_interaction_composition(
     Ok(composition)
 }
 
+#[cfg(test)]
 fn unix_guest_subject_uid(uid: u32) -> ResourceUid {
     let mut digest = Sha256::new();
     digest.update(b"d2b-unix-guest-subject-v1");
@@ -3555,7 +3583,7 @@ fn unix_guest_subject_uid(uid: u32) -> ResourceUid {
         bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
         bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15],
     ))
-    .expect("digest-derived guest UID is valid")
+    .expect("digest-derived test guest UID is valid")
 }
 
 /// Bind and retain the daemon-owned ComponentSession listeners for all
@@ -4353,7 +4381,9 @@ mod tests {
             )
             .unwrap(),
         );
-        let ticket = process_ticket(&binding).unwrap();
+        let host_ref = ResourceRef::parse("Host/host").unwrap();
+        let ticket = process_ticket(&binding, &host_ref).unwrap();
+        assert_eq!(ticket.execution_ref().to_canonical_string(), "Host/host");
         assert_eq!(ticket.inherited_fd_table().count(), 2);
         let _ = ticket.digests().fd_table;
     }
@@ -4376,6 +4406,7 @@ mod tests {
         effects.policy_generation = 1;
         effects.teardown_generation = 1;
         effects.session_digest = [8; 32];
+        effects.host_execution_ref = Some(ResourceRef::parse("Host/host").unwrap());
         effects.launch(ticket).unwrap();
         effects.stop(DisplayProcessRole::HostProxy).unwrap();
         assert_eq!(backend.observes.load(Ordering::Acquire), 1);
@@ -4391,6 +4422,7 @@ mod tests {
         effects.policy_generation = 1;
         effects.teardown_generation = 1;
         effects.session_digest = [10; 32];
+        effects.host_execution_ref = Some(ResourceRef::parse("Host/host").unwrap());
         let ticket = d2b_provider_display_wayland::LaunchTicket::new_for_daemon(
             DisplayProcessRole::HostProxy,
             Some(d2b_provider_display_wayland::AttachmentGrantHandle::from_daemon([5; 32])),
@@ -4539,9 +4571,33 @@ mod tests {
         zone: &ZoneId,
         uid: u32,
     ) -> InteractionComposition<ProviderSupervisor<Backend>, TestGuestFrontend> {
+        test_interaction_composition_with_identity(
+            zone,
+            uid,
+            ResourceRef::parse(&format!("Guest/uid-{uid}")).unwrap(),
+            unix_guest_subject_uid(uid),
+            ResourceRef::parse("Host/host-system").unwrap(),
+            ResourceRef::parse(&format!("User/uid-{uid}")).unwrap(),
+            1,
+            1,
+            1,
+            1,
+        )
+    }
+
+    fn test_interaction_composition_with_identity(
+        zone: &ZoneId,
+        transport_uid: u32,
+        subject_ref: ResourceRef,
+        subject_uid: ResourceUid,
+        host_execution_ref: ResourceRef,
+        observer_user_ref: ResourceRef,
+        display_generation: u64,
+        clipboard_generation: u64,
+        notification_generation: u64,
+        controller_generation: u64,
+    ) -> InteractionComposition<ProviderSupervisor<Backend>, TestGuestFrontend> {
         let catalog = ApiCatalog::standard();
-        let subject_ref =
-            ResourceRef::parse(&format!("Guest/uid-{uid}")).expect("guest subject reference");
         let role = CompiledRole::new(
             ResourceRef::parse("Role/interaction-provider").expect("role reference"),
             vec![
@@ -4570,34 +4626,36 @@ mod tests {
         let binding = CompiledRoleBinding::new(
             role.role_ref.clone(),
             [BoundSubject {
-                subject_ref,
-                subject_uid: unix_guest_subject_uid(uid),
+                subject_ref: subject_ref.clone(),
+                subject_uid: subject_uid.clone(),
             }],
             BindingScope::default(),
             d2b_resource_api::authz::RelayGrantAuthority::None,
         )
         .expect("interaction role binding");
-        let policy =
-            PolicySet::new(&catalog, 1, vec![role], vec![binding]).expect("interaction policy");
-        let authorizer =
-            BusAuthorizer::new(
-                NativeAuthorizer::new(catalog, Some(policy)).unwrap(),
-                d2b_resource_api::authz::AuthorizationState {
-                    snapshot: PolicySnapshot {
-                        policy_revision: 1,
-                        api_catalog_revision: 1,
-                        active_configuration_revision:
-                            d2b_contracts::v3::ConfigurationGeneration::new(1).unwrap(),
-                        controller_generation: Some(
-                            d2b_contracts::v3::ControllerGeneration::new(1).unwrap(),
-                        ),
-                    },
-                    zone_policy_revision: ZoneRevision::new(1),
-                    bootstrap_phase: BootstrapPhase::Disabled,
-                    now_tick: 1,
+        let policy = PolicySet::new(&catalog, display_generation, vec![role], vec![binding])
+            .expect("interaction policy");
+        let authorizer = BusAuthorizer::new(
+            NativeAuthorizer::new(catalog, Some(policy)).unwrap(),
+            d2b_resource_api::authz::AuthorizationState {
+                snapshot: PolicySnapshot {
+                    policy_revision: display_generation,
+                    api_catalog_revision: 1,
+                    active_configuration_revision: d2b_contracts::v3::ConfigurationGeneration::new(
+                        display_generation,
+                    )
+                    .unwrap(),
+                    controller_generation: Some(
+                        d2b_contracts::v3::ControllerGeneration::new(controller_generation)
+                            .unwrap(),
+                    ),
                 },
-            )
-            .unwrap();
+                zone_policy_revision: ZoneRevision::new(display_generation),
+                bootstrap_phase: BootstrapPhase::Disabled,
+                now_tick: 1,
+            },
+        )
+        .unwrap();
         let (_bus, registrar) = ZoneBus::with_clock_observer_and_metrics(
             zone.clone(),
             authorizer,
@@ -4607,6 +4665,19 @@ mod tests {
             Arc::new(d2b_bus::metrics::NoopBusTelemetry),
         )
         .unwrap();
+        registrar
+            .install_committed_interaction_subject(
+                subject_ref.clone(),
+                subject_uid,
+                ResourceRef::parse(&format!("Zone/{}", zone.as_str())).unwrap(),
+                transport_uid,
+                host_execution_ref.clone(),
+                ResourceGeneration::new(display_generation).unwrap(),
+                Some(ResourceGeneration::new(clipboard_generation).unwrap()),
+                Some(ResourceGeneration::new(notification_generation).unwrap()),
+                ControllerGeneration::new(controller_generation).unwrap(),
+            )
+            .unwrap();
         let mut composition = InteractionComposition::new_with_guest_frontend(
             registrar,
             ProviderSupervisor::new(Backend::default()),
@@ -4617,22 +4688,23 @@ mod tests {
                 ResourceRef::parse("display-wayland.d2bus.org.WaylandPolicy/display-wayland")
                     .unwrap(),
                 PolicySnapshot {
-                    policy_revision: 1,
+                    policy_revision: display_generation,
                     api_catalog_revision: 1,
                     active_configuration_revision: d2b_contracts::v3::ConfigurationGeneration::new(
-                        1,
+                        display_generation,
                     )
                     .unwrap(),
                     controller_generation: Some(
-                        d2b_contracts::v3::ControllerGeneration::new(1).unwrap(),
+                        d2b_contracts::v3::ControllerGeneration::new(controller_generation)
+                            .unwrap(),
                     ),
                 },
-                1,
+                display_generation,
                 FilterInput::default(),
                 FilterInput::default(),
                 DependencyState::ready().with_zone(zone.clone()),
-                ResourceRef::parse(&format!("User/uid-{uid}")).unwrap(),
-                ZoneRevision::new(1),
+                observer_user_ref,
+                ZoneRevision::new(display_generation),
                 true,
             )
             .unwrap(),
@@ -4646,6 +4718,29 @@ mod tests {
     ) -> InteractionRuntimeSet<ProviderSupervisor<Backend>, TestGuestFrontend> {
         let mut runtimes = InteractionRuntimeSet::new();
         runtimes.insert(zone.clone(), test_interaction_composition(zone, uid));
+        runtimes
+    }
+
+    fn committed_test_interaction_runtime(
+        zone: &ZoneId,
+        transport_uid: u32,
+    ) -> InteractionRuntimeSet<ProviderSupervisor<Backend>, TestGuestFrontend> {
+        let mut runtimes = InteractionRuntimeSet::new();
+        runtimes.insert(
+            zone.clone(),
+            test_interaction_composition_with_identity(
+                zone,
+                transport_uid,
+                ResourceRef::parse("Guest/work").unwrap(),
+                ResourceUid::parse("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa").unwrap(),
+                ResourceRef::parse("Host/host").unwrap(),
+                ResourceRef::parse("User/alice").unwrap(),
+                7,
+                11,
+                13,
+                17,
+            ),
+        );
         runtimes
     }
 
@@ -4777,11 +4872,14 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn hermetic_listener_dispatches_clipboard_notification_and_ordered_shutdown() {
+    async fn hermetic_production_composition_dispatches_committed_interactions_and_ordered_shutdown()
+     {
         let directory = tempfile::tempdir().unwrap();
         let zone = ZoneId::parse("work").unwrap();
         let uid = nix::unistd::getuid().as_raw();
-        let runtime = Arc::new(AsyncMutex::new(Some(test_interaction_runtime(&zone, uid))));
+        let runtime = Arc::new(AsyncMutex::new(Some(committed_test_interaction_runtime(
+            &zone, uid,
+        ))));
         let services = [
             d2b_provider_display_wayland::SERVICE_PACKAGE,
             d2b_provider_clipboard_wayland::BRIDGE_SERVICE,
@@ -4799,12 +4897,68 @@ mod tests {
                 establish_test_client(&listener, &runtime, &zone, service, uid, &path).await;
             clients.push((service, path, listener, client, server));
         }
+        {
+            let guard = runtime.lock().await;
+            let composition = guard
+                .as_ref()
+                .and_then(|set| set.runtime_for(&zone))
+                .expect("committed interaction composition");
+            let display_route = composition
+                .route_for_service(d2b_provider_display_wayland::SERVICE_PACKAGE)
+                .expect("display route");
+            assert_eq!(
+                display_route.subject_ref().to_canonical_string(),
+                "Guest/work"
+            );
+            assert_eq!(
+                display_route
+                    .provider_generation()
+                    .expect("display resource generation")
+                    .get(),
+                7
+            );
+            assert_eq!(
+                display_route
+                    .controller_generation()
+                    .expect("controller generation")
+                    .get(),
+                17
+            );
+            assert_eq!(
+                display_route
+                    .context()
+                    .execution_ref()
+                    .expect("committed Host execution")
+                    .to_canonical_string(),
+                "Host/host"
+            );
+            let clipboard_route = composition
+                .route_for_service(d2b_provider_clipboard_wayland::BRIDGE_SERVICE)
+                .expect("clipboard route");
+            assert_eq!(
+                clipboard_route
+                    .provider_generation()
+                    .expect("clipboard resource generation")
+                    .get(),
+                11
+            );
+            let notification_route = composition
+                .route_for_service(d2b_provider_notification_desktop::SERVICE_PACKAGE)
+                .expect("notification route");
+            assert_eq!(
+                notification_route
+                    .provider_generation()
+                    .expect("notification resource generation")
+                    .get(),
+                13
+            );
+        }
 
         let (display_service, _, _, display, _) = &clients[0];
         let display_spec = WaylandSessionSpec::new(
-            ResourceRef::parse(&format!("Guest/uid-{uid}")).unwrap(),
-            ResourceRef::parse("Host/host-system").unwrap(),
-            ResourceRef::parse(&format!("User/uid-{uid}")).unwrap(),
+            ResourceRef::parse("Guest/work").unwrap(),
+            ResourceRef::parse("Host/host").unwrap(),
+            ResourceRef::parse("User/alice").unwrap(),
             ResourceRef::parse("display-wayland.d2bus.org.WaylandPolicy/display-wayland").unwrap(),
             d2b_provider_display_wayland::DisplayIdentity::new(
                 "test-display",
@@ -4829,6 +4983,36 @@ mod tests {
         )
         .await;
         assert_eq!(reconcile.status().code(), TtrpcCode::OK);
+        let wrong_display_spec = WaylandSessionSpec::new(
+            ResourceRef::parse("Guest/other").unwrap(),
+            ResourceRef::parse("Host/host").unwrap(),
+            ResourceRef::parse("User/alice").unwrap(),
+            ResourceRef::parse("display-wayland.d2bus.org.WaylandPolicy/display-wayland").unwrap(),
+            d2b_provider_display_wayland::DisplayIdentity::new(
+                "wrong-display",
+                "#112233",
+                "#223344",
+                "#334455",
+            )
+            .unwrap(),
+            true,
+        )
+        .unwrap();
+        let wrong_reconcile = dispatch_test_request(
+            display,
+            display_service,
+            110,
+            "DisplayService/Reconcile",
+            serde_json::to_vec(&serde_json::json!({
+                "spec": wrong_display_spec,
+            }))
+            .unwrap(),
+        )
+        .await;
+        assert_eq!(
+            wrong_reconcile.status().code(),
+            TtrpcCode::FAILED_PRECONDITION
+        );
         let observe = dispatch_test_request(
             display,
             display_service,
