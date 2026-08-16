@@ -39,8 +39,10 @@ let
   flakeSource = builtins.readFile (flakeRoot + "/flake.nix");
   hostDaemonSource =
     builtins.readFile (flakeRoot + "/nixos-modules/host-daemon.nix");
-  providerSchemaPath =
-    "docs/reference/schemas/v3/providers/transport-azure-relay.transport-settings.json";
+  providerSchemaPaths = [
+    "docs/reference/schemas/v3/providers/transport-azure-relay.transport-settings.json"
+    "docs/reference/schemas/v3/providers/transport-vsock.transport-binding.json"
+  ];
   shardEntryLines = builtins.filter
     (line: lib.hasInfix ''"test-infrastructure.nix"'' line)
     (lib.splitString "\n" flakeSource);
@@ -102,8 +104,8 @@ in
 
   "test-infrastructure/provider-runtime-schema-is-staged-with-rust-sources" = {
     expr = {
-      flakeSource = lib.hasInfix providerSchemaPath flakeSource;
-      hostDaemonSource = lib.hasInfix providerSchemaPath hostDaemonSource;
+      flakeSource = lib.all (path: lib.hasInfix path flakeSource) providerSchemaPaths;
+      hostDaemonSource = lib.all (path: lib.hasInfix path hostDaemonSource) providerSchemaPaths;
     };
     expected = {
       flakeSource = true;
