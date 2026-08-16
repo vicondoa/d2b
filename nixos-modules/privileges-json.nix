@@ -1026,6 +1026,18 @@ let
     "auditMode": "yes"
   },
   {
+    "operation": "OpenPeerPidfdFromAcceptedSocket",
+    "subject": "pidfd",
+    "scope": "accepted Unix socket",
+    "allowedGroups": [
+      "d2bd"
+    ],
+    "destructive": false,
+    "secretAccess": "none",
+    "brokerRequired": "yes",
+    "auditMode": "yes"
+  },
+  {
     "operation": "OpenZoneStore",
     "subject": "resource-store",
     "scope": "per-Zone",

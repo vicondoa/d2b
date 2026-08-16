@@ -1,0 +1,18 @@
+{
+  "$id": "https://d2bus.org/schemas/v3/providers/transport-unix.transport-binding.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Closed Unix transport settings for a ZoneLink binding.",
+  "properties": {
+    "socketKind": {
+      "description": "The validated AF_UNIX socket type.",
+      "enum": [
+        "seqpacket",
+        "stream"
+      ],
+      "type": "string"
+    }
+  },
+  "title": "TransportUnixBinding",
+  "type": "object"
+}
