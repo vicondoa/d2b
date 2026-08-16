@@ -2,21 +2,21 @@
 { mkEval, ... }:
 
 let
-  positive = mkEval {
-    override = { ... }: {
+  positive = mkEval [
+    ({ ... }: {
       d2b.qemuMediaRuntime = {
         enable = true;
         kvmRequired = true;
       };
-    };
-  };
+    })
+  ];
 
   invalid = builtins.tryEval (
-    (mkEval {
-      override = { ... }: {
+    (mkEval [
+      ({ ... }: {
         d2b.qemuMediaRuntime.qmpReadyTimeoutSeconds = 4;
-      };
-    }).config.d2b.qemuMediaRuntime.qmpReadyTimeoutSeconds
+      })
+    ]).config.d2b.qemuMediaRuntime.qmpReadyTimeoutSeconds
   );
 in
 {
