@@ -321,16 +321,14 @@ in
   };
   "net-vm-network/v3-resource-east-west-site-opt-in-required" = {
     expr = v3Rejects "site.allowUnsafeEastWest" {
-      d2b.zones.local-root.resources.work-net.spec.isolation.allowEastWest =
-        lib.mkForce true;
+      d2b.zones.local-root.resources.work-net.spec.isolation.allowEastWest = true;
     };
     expected = true;
   };
   "net-vm-network/v3-resource-east-west-both-opt-ins-admitted" = {
     expr = !(v3Rejects "site.allowUnsafeEastWest" {
       d2b.site.allowUnsafeEastWest = true;
-      d2b.zones.local-root.resources.work-net.spec.isolation.allowEastWest =
-        lib.mkForce true;
+      d2b.zones.local-root.resources.work-net.spec.isolation.allowEastWest = true;
     });
     expected = true;
   };
