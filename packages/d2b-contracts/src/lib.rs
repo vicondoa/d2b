@@ -23,6 +23,7 @@ pub mod terminal_wire;
 pub mod types;
 pub mod unsafe_local_wire;
 pub mod usbip;
+pub mod usbip_effect_port;
 
 pub use d2b_core::error::{Error, SemverRange, Version};
 pub use d2b_core::privileges_w3::W3BrokerOperation;

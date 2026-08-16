@@ -127,6 +127,7 @@
     "d2b-core::parse_v2_full_document",
     "d2b-core::parse_v2_level_out_of_range_is_error",
     "d2b-core::parse_v2_omitted_levels_are_none",
+    "d2b-core::physical_backing_identity_is_shared_and_domain_separated",
     "d2b-core::privileges::tests::privileges_json_denies_unknown_fields",
     "d2b-core::privileges::tests::w1_matrix_contains_public_and_broker_rows",
     "d2b-core::privileges_json_bounded_byte_inputs_do_not_panic",
@@ -135,6 +136,7 @@
     "d2b-core::privileges_w3::tests::only_guest_control_sign_grants_secret_access",
     "d2b-core::privileges_w3::tests::wire_tags_are_unique_pascalcase",
     "d2b-core::provider_capabilities_round_trip_json",
+    "d2b-core::provider_class_bypass_is_rejected_before_adapter_use",
     "d2b-core::qemu_media_has_host_only_enforcement",
     "d2b-core::realm_controller_metadata_accepts_emitted_host_local_unit_metadata",
     "d2b-core::realm_controller_metadata_parses_and_validates_socket_path_user_group_metadata",
@@ -188,6 +190,7 @@
     "d2b-core::workload_identity::tests::workload_target_parse_canonical",
     "d2b-core::workload_identity::tests::workload_target_parse_nested_realm",
     "d2b-core::workload_identity::tests::workload_target_rejects_missing_d2b_suffix",
-    "d2b-core::workload_identity::tests::workload_target_rejects_no_dot"
+    "d2b-core::workload_identity::tests::workload_target_rejects_no_dot",
+    "d2b-core::zone_and_opt_in_refuse_before_bundle_lookup"
   ]
 }
