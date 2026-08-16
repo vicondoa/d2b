@@ -171,12 +171,12 @@ impl ShellTerminalController {
         &self,
         pool_name: &str,
         stale_attachments: &[crate::Attachment],
-        remote_attachments: u32,
+        attached_streams: u32,
     ) -> Result<(), ShellTerminalError> {
         self.attachment_authorities
             .get(pool_name)
             .ok_or(ShellTerminalError::CapacityExceeded)?
-            .retire_proven_stale(stale_attachments, remote_attachments)
+            .retire_proven_stale(stale_attachments, attached_streams)
     }
 
     /// Restore a pool while preserving the live adopted supervisors' quota.

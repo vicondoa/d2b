@@ -280,7 +280,7 @@ impl PoolAttachmentBudget {
     fn retire_proven_stale(
         &self,
         stale_attachments: &[Attachment],
-        remote_attachments: u32,
+        attached_streams: u32,
     ) -> Result<(), ShellTerminalError> {
         let mut entries = self
             .entries
@@ -290,13 +290,20 @@ impl PoolAttachmentBudget {
             .retained_attachments
             .lock()
             .map_err(|_| ShellTerminalError::CapacityExceeded)?;
+        let retired_count = stale_attachments
+            .iter()
+            .filter(|attachment| entries.contains(*attachment))
+            .count();
+        let remaining_entries = entries.len().saturating_sub(retired_count);
+        if (attached_streams as usize) > self.capacity
+            || (attached_streams as usize) < remaining_entries
+        {
+            return Err(ShellTerminalError::CapacityExceeded);
+        }
         for attachment in stale_attachments {
             entries.remove(attachment);
         }
-        if entries.len().saturating_add(remote_attachments as usize) > self.capacity {
-            return Err(ShellTerminalError::CapacityExceeded);
-        }
-        *retained = remote_attachments as usize;
+        *retained = attached_streams as usize - remaining_entries;
         Ok(())
     }
 }
@@ -357,10 +364,10 @@ impl PoolAttachmentAuthority {
     pub(super) fn retire_proven_stale(
         &self,
         stale_attachments: &[Attachment],
-        remote_attachments: u32,
+        attached_streams: u32,
     ) -> Result<(), ShellTerminalError> {
         self.budget
-            .retire_proven_stale(stale_attachments, remote_attachments)
+            .retire_proven_stale(stale_attachments, attached_streams)
     }
 }
 

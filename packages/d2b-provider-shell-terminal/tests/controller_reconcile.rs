@@ -329,3 +329,62 @@ fn attachment_reconciliation_needs_proven_stale_handles() {
             .is_ok()
     );
 }
+
+#[test]
+fn stale_retirement_preserves_the_authoritative_attachment_total() {
+    let two_attachment_pool = ShellPool::new(
+        "guest-alice",
+        "dev",
+        PoolSpec::new(
+            ExecutionTarget::guest("work"),
+            "alice",
+            "artifact://shells/bash-login",
+            2,
+            2,
+            4096,
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let mut controller = ShellTerminalController::default();
+    controller.insert_pool(two_attachment_pool).unwrap();
+    let admin = Subject::new("dev", CallerOrigin::Local, [Role::ZoneAdmin]);
+    let opened = controller
+        .open_session(
+            &admin,
+            OpenSessionRequest::new("guest-alice", "main", None).unwrap(),
+        )
+        .unwrap();
+    let mut supervisor = opened
+        .start_supervisor(
+            SupervisorIdentity::new([1; 32], [2; 32], opened.supervisor_generation()).unwrap(),
+        )
+        .unwrap();
+    let first = supervisor
+        .attach(
+            &admin,
+            d2b_provider_shell_terminal::AttachRequest::new(opened.supervisor_generation(), 0)
+                .unwrap(),
+        )
+        .unwrap()
+        .attachment();
+    supervisor
+        .attach(
+            &admin,
+            d2b_provider_shell_terminal::AttachRequest::new(opened.supervisor_generation(), 0)
+                .unwrap(),
+        )
+        .unwrap();
+
+    controller
+        .retire_pool_attachments("guest-alice", &[first], 2)
+        .unwrap();
+    assert!(matches!(
+        supervisor.attach(
+            &admin,
+            d2b_provider_shell_terminal::AttachRequest::new(opened.supervisor_generation(), 0,)
+                .unwrap(),
+        ),
+        Err(d2b_provider_shell_terminal::ShellTerminalError::CapacityExceeded)
+    ));
+}
