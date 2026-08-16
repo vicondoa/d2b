@@ -195,7 +195,23 @@ fn create_seal_body_with_resource(
     canonical_resource: Vec<u8>,
     payload_digest: String,
 ) -> MutationSealBody {
-    let target = ResourceRef::parse(&format!("Host/{name}")).unwrap();
+    create_seal_body_for_type(
+        operation_id,
+        "Host",
+        name,
+        canonical_resource,
+        payload_digest,
+    )
+}
+
+fn create_seal_body_for_type(
+    operation_id: &str,
+    resource_type: &str,
+    name: &str,
+    canonical_resource: Vec<u8>,
+    payload_digest: String,
+) -> MutationSealBody {
+    let target = ResourceRef::parse(&format!("{resource_type}/{name}")).unwrap();
     MutationSealBody {
         mutations: vec![PreparedStoreMutation::new(
             StoreMutation {
@@ -219,7 +235,7 @@ fn create_seal_body_with_resource(
             subject_ref: ResourceRef::parse("Provider/system-core").unwrap(),
             subject_uid: ResourceUid::parse("33333333-3333-4333-8333-333333333333").unwrap(),
             targets: vec![AdmittedAuthorizationTarget {
-                resource_type: ResourceTypeName::parse("Host").unwrap(),
+                resource_type: ResourceTypeName::parse(resource_type).unwrap(),
                 resource_name: Some(target.name().clone()),
                 verb: AdmittedVerb::Create,
                 subresource: None,
@@ -234,6 +250,51 @@ fn create_seal_body_with_resource(
         },
         operation: operation(operation_id),
     }
+}
+
+fn create_provider_resource_body(resource_type: &str, name: &str) -> Vec<u8> {
+    let mut value: serde_json::Value = serde_json::from_slice(&stored_body(name)).unwrap();
+    value["type"] = serde_json::Value::String(resource_type.to_owned());
+    let spec = value["spec"].as_object_mut().unwrap();
+    match resource_type {
+        "Device" => {
+            spec.insert("deviceClass".to_owned(), serde_json::json!("emulated"));
+            spec.insert("arbitration".to_owned(), serde_json::json!("exclusive"));
+            spec.insert("maxConcurrentClaims".to_owned(), serde_json::json!(1));
+            spec.insert("inventory".to_owned(), serde_json::json!({}));
+        }
+        "Volume" => {
+            spec.insert(
+                "source".to_owned(),
+                serde_json::json!({
+                    "executionRef": "Host/host-system",
+                    "settings": {
+                        "kind": "local-path",
+                        "sourcePolicyId": "state-root"
+                    }
+                }),
+            );
+            spec.insert("kind".to_owned(), serde_json::json!("durable"));
+            spec.insert("layout".to_owned(), serde_json::json!([]));
+            spec.insert(
+                "views".to_owned(),
+                serde_json::json!({
+                    "controller": {
+                        "path": "",
+                        "rights": ["read", "write", "traverse"]
+                    }
+                }),
+            );
+            spec.insert("attachments".to_owned(), serde_json::json!([]));
+            spec.insert("quota".to_owned(), serde_json::Value::Null);
+        }
+        other => panic!("provider resource fixture not defined for {other}"),
+    }
+    value["metadata"].as_object_mut().unwrap().remove("uid");
+    let bytes = serde_json::to_vec(&value).unwrap();
+    CanonicalJsonValue::parse(&bytes)
+        .unwrap()
+        .to_canonical_bytes()
 }
 
 fn owned_file() -> (tempfile::TempDir, File) {
@@ -776,6 +837,94 @@ async fn initialized_schema_catalog_is_digest_bound_and_complete() {
             .reason_code(),
         "resource-not-found"
     );
+}
+
+#[tokio::test]
+async fn logical_backup_restore_preserves_device_and_volume_identity_before_adoption() {
+    let (_source_directory, source_file, source_marker) = provisioned_store();
+    let store_identity = identity();
+    let (issuer, source_acceptor) = mutation_seal_pair(store_identity.seal_identity());
+    let source = RedbResourceStore::provision_owned(
+        source_file,
+        source_marker,
+        store_identity.clone(),
+        source_acceptor,
+    )
+    .await
+    .unwrap();
+
+    let mut originals = Vec::new();
+    for (resource_type, name, operation_id) in [
+        ("Device", "tpm-host", "backup-device"),
+        ("Volume", "tpm-host-state", "backup-volume"),
+    ] {
+        let canonical = create_provider_resource_body(resource_type, name);
+        let payload_digest = canonical_digest(RESOURCE_ENVELOPE_DOMAIN_TAG, &canonical);
+        source
+            .commit_verified(issuer.seal(create_seal_body_for_type(
+                operation_id,
+                resource_type,
+                name,
+                canonical,
+                payload_digest,
+            )))
+            .await
+            .unwrap();
+        originals.push(
+            source
+                .get(StoreGetRequest {
+                    operation: operation(&format!("{operation_id}-read")),
+                    zone: ZoneId::parse("work").unwrap(),
+                    target: ResourceRef::parse(&format!("{resource_type}/{name}")).unwrap(),
+                    expected_uid: None,
+                    projection: StoreProjection::Full,
+                })
+                .await
+                .unwrap(),
+        );
+    }
+
+    let backup = source.logical_backup().await.unwrap();
+    assert_eq!(backup.backup_generation, 0);
+    source.shutdown().await.unwrap();
+
+    let (_target_directory, target_file, target_marker) = provisioned_store();
+    let restored = RedbResourceStore::restore_owned(
+        target_file,
+        target_marker,
+        backup,
+        store_identity.clone(),
+        acceptor(&store_identity),
+    )
+    .await
+    .unwrap();
+
+    for original in originals {
+        let restored_resource = restored
+            .get(StoreGetRequest {
+                operation: operation(&format!(
+                    "restore-{}",
+                    original.resource_ref.to_canonical_string()
+                )),
+                zone: ZoneId::parse("work").unwrap(),
+                target: original.resource_ref.clone(),
+                expected_uid: None,
+                projection: StoreProjection::Full,
+            })
+            .await
+            .unwrap();
+        assert_eq!(restored_resource.resource_ref, original.resource_ref);
+        assert_eq!(restored_resource.uid, original.uid);
+        assert_eq!(restored_resource.generation, original.generation);
+        assert_eq!(restored_resource.canonical_json, original.canonical_json);
+        assert_eq!(restored_resource.payload_digest, original.payload_digest);
+    }
+
+    let restored_backup = restored.logical_backup().await.unwrap();
+    assert_eq!(restored_backup.current_revision, 2);
+    assert_eq!(restored_backup.backup_generation, 1);
+    assert_eq!(restored.identity(), &store_identity);
+    restored.shutdown().await.unwrap();
 }
 
 #[tokio::test]

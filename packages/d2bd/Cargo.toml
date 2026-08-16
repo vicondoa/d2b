@@ -78,5 +78,7 @@ uzers = "0.12"
 d2b-core = { path = "../d2b-core", version = "0.0.0-bootstrap", features = ["test-support"] }
 d2b-core-controller = { path = "../d2b-core-controller", version = "0.0.0-bootstrap", features = ["test-support"] }
 d2b-provider-display-wayland = { path = "../d2b-provider-display-wayland", version = "0.0.0-bootstrap", features = ["test-support"] }
+d2b-provider-runtime-cloud-hypervisor = { path = "../d2b-provider-runtime-cloud-hypervisor", version = "0.0.0-bootstrap" }
+d2b-provider-volume-local = { path = "../d2b-provider-volume-local", version = "0.0.0-bootstrap" }
 regex = "1"
 tempfile = "3"

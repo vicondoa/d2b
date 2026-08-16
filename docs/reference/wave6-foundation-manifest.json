@@ -1,0 +1,608 @@
+{
+  "schemaVersion": 1,
+  "artifactKind": "d2b-wave6-foundation-manifest",
+  "source": {
+    "adr": "0046",
+    "selection": "merged-foundation-and-provider-work-items"
+  },
+  "owners": {
+    "foundation.authorization": {
+      "kind": "foundation",
+      "path": "packages/d2b-core-controller"
+    },
+    "foundation.bus": {
+      "kind": "foundation",
+      "path": "packages/d2b-bus"
+    },
+    "foundation.contracts": {
+      "kind": "foundation",
+      "path": "packages/d2b-contracts"
+    },
+    "foundation.controller-toolkit": {
+      "kind": "foundation",
+      "path": "packages/d2b-controller-toolkit"
+    },
+    "foundation.core-controller": {
+      "kind": "foundation",
+      "path": "packages/d2b-core-controller"
+    },
+    "foundation.credential-audit": {
+      "kind": "foundation",
+      "path": "packages/d2b-contract-tests"
+    },
+    "foundation.credential-controller": {
+      "kind": "foundation",
+      "path": "packages/d2b-contracts"
+    },
+    "foundation.credential-service": {
+      "kind": "foundation",
+      "path": "packages/d2b-credential-service"
+    },
+    "foundation.decisions": {
+      "kind": "foundation",
+      "path": "docs/reference"
+    },
+    "foundation.nixos-modules": {
+      "kind": "foundation",
+      "path": "nixos-modules"
+    },
+    "foundation.process": {
+      "kind": "foundation",
+      "path": "packages/d2b-process"
+    },
+    "foundation.provider-model": {
+      "kind": "foundation",
+      "path": "packages/d2b-provider"
+    },
+    "foundation.provider-packaging": {
+      "kind": "foundation",
+      "path": "packages/d2b-contract-tests"
+    },
+    "foundation.provider-toolkit": {
+      "kind": "foundation",
+      "path": "packages/d2b-provider-toolkit"
+    },
+    "foundation.resource-api": {
+      "kind": "foundation",
+      "path": "packages/d2b-resource-api"
+    },
+    "foundation.resource-client": {
+      "kind": "foundation",
+      "path": "packages/d2b-resource-client"
+    },
+    "foundation.resource-store": {
+      "kind": "foundation",
+      "path": "packages/d2b-resource-store"
+    },
+    "foundation.resource-store-redb": {
+      "kind": "foundation",
+      "path": "packages/d2b-resource-store-redb"
+    },
+    "foundation.semantic-services": {
+      "kind": "foundation",
+      "path": "packages/d2b-contracts"
+    },
+    "foundation.session": {
+      "kind": "foundation",
+      "path": "packages/d2b-session"
+    },
+    "foundation.session-unix": {
+      "kind": "foundation",
+      "path": "packages/d2b-session-unix"
+    },
+    "foundation.zone-routing": {
+      "kind": "foundation",
+      "path": "packages/d2b-zone-routing"
+    },
+    "provider.credential-entra": {
+      "kind": "provider",
+      "path": "packages/d2b-provider-credential-entra"
+    },
+    "provider.credential-managed-identity": {
+      "kind": "provider",
+      "path": "packages/d2b-provider-credential-managed-identity"
+    },
+    "provider.credential-secret-service": {
+      "kind": "provider",
+      "path": "packages/d2b-provider-credential-secret-service"
+    },
+    "provider.device-usbip": {
+      "kind": "provider",
+      "path": "packages/d2b-provider-device-usbip"
+    },
+    "provider.network-local": {
+      "kind": "provider",
+      "path": "packages/d2b-provider-network-local"
+    },
+    "provider.system-core": {
+      "kind": "provider",
+      "path": "packages/d2b-provider-system-core"
+    },
+    "provider.system-process": {
+      "kind": "provider",
+      "path": "packages/d2b-provider-system-systemd"
+    },
+    "provider.volume-local": {
+      "kind": "provider",
+      "path": "packages/d2b-provider-volume-local"
+    }
+  },
+  "entries": [
+    {
+      "workItemId": "ADR046-api-001",
+      "specId": "ADR-046-resource-api-and-authorization",
+      "specPath": "docs/specs/ADR-046-resource-api-and-authorization.md",
+      "owner": "foundation.resource-api",
+      "status": "Merged"
+    },
+    {
+      "workItemId": "ADR046-api-002",
+      "specId": "ADR-046-resource-api-and-authorization",
+      "specPath": "docs/specs/ADR-046-resource-api-and-authorization.md",
+      "owner": "foundation.authorization",
+      "status": "Merged"
+    },
+    {
+      "workItemId": "ADR046-bus-001",
+      "specId": "ADR-046-componentsession-and-bus",
+      "specPath": "docs/specs/ADR-046-componentsession-and-bus.md",
+      "owner": "foundation.bus",
+      "status": "Merged"
+    },
+    {
+      "workItemId": "ADR046-core-001",
+      "specId": "ADR-046-core-controllers",
+      "specPath": "docs/specs/ADR-046-core-controllers.md",
+      "owner": "foundation.core-controller",
+      "status": "Merged"
+    },
+    {
+      "workItemId": "ADR046-credential-001",
+      "specId": "ADR-046-resources-credential",
+      "specPath": "docs/specs/ADR-046-resources-credential.md",
+      "owner": "foundation.contracts",
+      "status": "Merged"
+    },
+    {
+      "workItemId": "ADR046-credential-002",
+      "specId": "ADR-046-resources-credential",
+      "specPath": "docs/specs/ADR-046-resources-credential.md",
+      "owner": "foundation.credential-service",
+      "status": "Merged"
+    },
+    {
+      "workItemId": "ADR046-credential-003",
+      "specId": "ADR-046-resources-credential",
+      "specPath": "docs/specs/ADR-046-resources-credential.md",
+      "owner": "provider.credential-secret-service",
+      "status": "Merged"
+    },
+    {
+      "workItemId": "ADR046-credential-004",
+      "specId": "ADR-046-resources-credential",
+      "specPath": "docs/specs/ADR-046-resources-credential.md",
+      "owner": "provider.credential-entra",
+      "status": "Merged"
+    },
+    {
+      "workItemId": "ADR046-credential-005",
+      "specId": "ADR-046-resources-credential",
+      "specPath": "docs/specs/ADR-046-resources-credential.md",
+      "owner": "provider.credential-managed-identity",
+      "status": "Merged"
+    },
+    {
+      "workItemId": "ADR046-credential-006",
+      "specId": "ADR-046-resources-credential",
+      "specPath": "docs/specs/ADR-046-resources-credential.md",
+      "owner": "foundation.credential-controller",
+      "status": "Merged"
+    },
+    {
+      "workItemId": "ADR046-credential-007",
+      "specId": "ADR-046-resources-credential",
+      "specPath": "docs/specs/ADR-046-resources-credential.md",
+      "owner": "foundation.nixos-modules",
+      "status": "Merged"
+    },
+    {
+      "workItemId": "ADR046-credential-008",
+      "specId": "ADR-046-resources-credential",
+      "specPath": "docs/specs/ADR-046-resources-credential.md",
+      "owner": "foundation.credential-audit",
+      "status": "Merged"
+    },
+    {
+      "workItemId": "ADR046-decisions-001",
+      "specId": "ADR-046-decision-register",
+      "specPath": "docs/specs/ADR-046-decision-register.md",
+      "owner": "foundation.decisions",
+      "status": "Merged"
+    },
+    {
+      "workItemId": "ADR046-feasibility-001",
+      "specId": "ADR-046-feasibility-and-spikes",
+      "specPath": "docs/specs/ADR-046-feasibility-and-spikes.md",
+      "owner": "foundation.resource-store-redb",
+      "status": "Merged"
+    },
+    {
+      "workItemId": "ADR046-identities-001",
+      "specId": "ADR-046-terminology-and-identities",
+      "specPath": "docs/specs/ADR-046-terminology-and-identities.md",
+      "owner": "foundation.contracts",
+      "status": "Merged"
+    },
+    {
+      "workItemId": "ADR046-identities-002",
+      "specId": "ADR-046-terminology-and-identities",
+      "specPath": "docs/specs/ADR-046-terminology-and-identities.md",
+      "owner": "foundation.nixos-modules",
+      "status": "Merged"
+    },
+    {
+      "workItemId": "ADR046-network-001",
+      "specId": "ADR-046-resources-network",
+      "specPath": "docs/specs/ADR-046-resources-network.md",
+      "owner": "foundation.contracts",
+      "status": "Merged"
+    },
+    {
+      "workItemId": "ADR046-network-002",
+      "specId": "ADR-046-resources-network",
+      "specPath": "docs/specs/ADR-046-resources-network.md",
+      "owner": "provider.network-local",
+      "status": "Merged"
+    },
+    {
+      "workItemId": "ADR046-network-003",
+      "specId": "ADR-046-resources-network",
+      "specPath": "docs/specs/ADR-046-resources-network.md",
+      "owner": "provider.network-local",
+      "status": "Merged"
+    },
+    {
+      "workItemId": "ADR046-network-004",
+      "specId": "ADR-046-resources-network",
+      "specPath": "docs/specs/ADR-046-resources-network.md",
+      "owner": "foundation.nixos-modules",
+      "status": "Merged"
+    },
+    {
+      "workItemId": "ADR046-network-005",
+      "specId": "ADR-046-resources-network",
+      "specPath": "docs/specs/ADR-046-resources-network.md",
+      "owner": "provider.network-local",
+      "status": "Merged"
+    },
+    {
+      "workItemId": "ADR046-network-006",
+      "specId": "ADR-046-resources-network",
+      "specPath": "docs/specs/ADR-046-resources-network.md",
+      "owner": "provider.network-local",
+      "status": "Merged"
+    },
+    {
+      "workItemId": "ADR046-network-007",
+      "specId": "ADR-046-resources-network",
+      "specPath": "docs/specs/ADR-046-resources-network.md",
+      "owner": "provider.device-usbip",
+      "status": "Merged"
+    },
+    {
+      "workItemId": "ADR046-network-008",
+      "specId": "ADR-046-resources-network",
+      "specPath": "docs/specs/ADR-046-resources-network.md",
+      "owner": "foundation.core-controller",
+      "status": "Merged"
+    },
+    {
+      "workItemId": "ADR046-network-009",
+      "specId": "ADR-046-resources-network",
+      "specPath": "docs/specs/ADR-046-resources-network.md",
+      "owner": "provider.network-local",
+      "status": "Merged"
+    },
+    {
+      "workItemId": "ADR046-object-001",
+      "specId": "ADR-046-resource-object-model",
+      "specPath": "docs/specs/ADR-046-resource-object-model.md",
+      "owner": "foundation.contracts",
+      "status": "Merged"
+    },
+    {
+      "workItemId": "ADR046-object-002",
+      "specId": "ADR-046-resource-object-model",
+      "specPath": "docs/specs/ADR-046-resource-object-model.md",
+      "owner": "foundation.resource-store",
+      "status": "Merged"
+    },
+    {
+      "workItemId": "ADR046-primitives-001",
+      "specId": "ADR-046-primitive-resource-composition",
+      "specPath": "docs/specs/ADR-046-primitive-resource-composition.md",
+      "owner": "foundation.contracts",
+      "status": "Merged"
+    },
+    {
+      "workItemId": "ADR046-primitives-002",
+      "specId": "ADR-046-primitive-resource-composition",
+      "specPath": "docs/specs/ADR-046-primitive-resource-composition.md",
+      "owner": "provider.system-process",
+      "status": "Merged"
+    },
+    {
+      "workItemId": "ADR046-primitives-003",
+      "specId": "ADR-046-primitive-resource-composition",
+      "specPath": "docs/specs/ADR-046-primitive-resource-composition.md",
+      "owner": "provider.volume-local",
+      "status": "Merged"
+    },
+    {
+      "workItemId": "ADR046-process-001",
+      "specId": "ADR-046-components-processes-and-sandbox",
+      "specPath": "docs/specs/ADR-046-components-processes-and-sandbox.md",
+      "owner": "foundation.process",
+      "status": "Merged"
+    },
+    {
+      "workItemId": "ADR046-provider-001",
+      "specId": "ADR-046-provider-model-and-packaging",
+      "specPath": "docs/specs/ADR-046-provider-model-and-packaging.md",
+      "owner": "foundation.provider-model",
+      "status": "Merged"
+    },
+    {
+      "workItemId": "ADR046-provider-002",
+      "specId": "ADR-046-provider-model-and-packaging",
+      "specPath": "docs/specs/ADR-046-provider-model-and-packaging.md",
+      "owner": "foundation.provider-packaging",
+      "status": "Merged"
+    },
+    {
+      "workItemId": "ADR046-provider-003",
+      "specId": "ADR-046-provider-model-and-packaging",
+      "specPath": "docs/specs/ADR-046-provider-model-and-packaging.md",
+      "owner": "provider.system-core",
+      "status": "Merged"
+    },
+    {
+      "workItemId": "ADR046-provider-004",
+      "specId": "ADR-046-provider-model-and-packaging",
+      "specPath": "docs/specs/ADR-046-provider-model-and-packaging.md",
+      "owner": "foundation.semantic-services",
+      "status": "Merged"
+    },
+    {
+      "workItemId": "ADR046-pstate-001",
+      "specId": "ADR-046-provider-state",
+      "specPath": "docs/specs/ADR-046-provider-state.md",
+      "owner": "foundation.contracts",
+      "status": "Merged"
+    },
+    {
+      "workItemId": "ADR046-pstate-002",
+      "specId": "ADR-046-provider-state",
+      "specPath": "docs/specs/ADR-046-provider-state.md",
+      "owner": "foundation.provider-model",
+      "status": "Merged"
+    },
+    {
+      "workItemId": "ADR046-pstate-003",
+      "specId": "ADR-046-provider-state",
+      "specPath": "docs/specs/ADR-046-provider-state.md",
+      "owner": "provider.volume-local",
+      "status": "Merged"
+    },
+    {
+      "workItemId": "ADR046-pstate-004",
+      "specId": "ADR-046-provider-state",
+      "specPath": "docs/specs/ADR-046-provider-state.md",
+      "owner": "provider.volume-local",
+      "status": "Merged"
+    },
+    {
+      "workItemId": "ADR046-pstate-005",
+      "specId": "ADR-046-provider-state",
+      "specPath": "docs/specs/ADR-046-provider-state.md",
+      "owner": "provider.volume-local",
+      "status": "Merged"
+    },
+    {
+      "workItemId": "ADR046-pstate-006",
+      "specId": "ADR-046-provider-state",
+      "specPath": "docs/specs/ADR-046-provider-state.md",
+      "owner": "provider.volume-local",
+      "status": "Merged"
+    },
+    {
+      "workItemId": "ADR046-pstate-007",
+      "specId": "ADR-046-provider-state",
+      "specPath": "docs/specs/ADR-046-provider-state.md",
+      "owner": "provider.volume-local",
+      "status": "Merged"
+    },
+    {
+      "workItemId": "ADR046-pstate-008",
+      "specId": "ADR-046-provider-state",
+      "specPath": "docs/specs/ADR-046-provider-state.md",
+      "owner": "provider.volume-local",
+      "status": "Merged"
+    },
+    {
+      "workItemId": "ADR046-pstate-009",
+      "specId": "ADR-046-provider-state",
+      "specPath": "docs/specs/ADR-046-provider-state.md",
+      "owner": "provider.volume-local",
+      "status": "Merged"
+    },
+    {
+      "workItemId": "ADR046-pstate-010",
+      "specId": "ADR-046-provider-state",
+      "specPath": "docs/specs/ADR-046-provider-state.md",
+      "owner": "foundation.core-controller",
+      "status": "Merged"
+    },
+    {
+      "workItemId": "ADR046-pstate-011",
+      "specId": "ADR-046-provider-state",
+      "specPath": "docs/specs/ADR-046-provider-state.md",
+      "owner": "foundation.provider-packaging",
+      "status": "Merged"
+    },
+    {
+      "workItemId": "ADR046-pstate-012",
+      "specId": "ADR-046-provider-state",
+      "specPath": "docs/specs/ADR-046-provider-state.md",
+      "owner": "foundation.core-controller",
+      "status": "Merged"
+    },
+    {
+      "workItemId": "ADR046-reconcile-001",
+      "specId": "ADR-046-resource-reconciliation",
+      "specPath": "docs/specs/ADR-046-resource-reconciliation.md",
+      "owner": "foundation.controller-toolkit",
+      "status": "Merged"
+    },
+    {
+      "workItemId": "ADR046-reconcile-002",
+      "specId": "ADR-046-resource-reconciliation",
+      "specPath": "docs/specs/ADR-046-resource-reconciliation.md",
+      "owner": "foundation.core-controller",
+      "status": "Merged"
+    },
+    {
+      "workItemId": "ADR046-routing-001",
+      "specId": "ADR-046-zone-routing",
+      "specPath": "docs/specs/ADR-046-zone-routing.md",
+      "owner": "foundation.contracts",
+      "status": "Merged"
+    },
+    {
+      "workItemId": "ADR046-routing-002",
+      "specId": "ADR-046-zone-routing",
+      "specPath": "docs/specs/ADR-046-zone-routing.md",
+      "owner": "foundation.zone-routing",
+      "status": "Merged"
+    },
+    {
+      "workItemId": "ADR046-routing-003",
+      "specId": "ADR-046-zone-routing",
+      "specPath": "docs/specs/ADR-046-zone-routing.md",
+      "owner": "foundation.zone-routing",
+      "status": "Merged"
+    },
+    {
+      "workItemId": "ADR046-routing-004",
+      "specId": "ADR-046-zone-routing",
+      "specPath": "docs/specs/ADR-046-zone-routing.md",
+      "owner": "foundation.core-controller",
+      "status": "Merged"
+    },
+    {
+      "workItemId": "ADR046-routing-005",
+      "specId": "ADR-046-zone-routing",
+      "specPath": "docs/specs/ADR-046-zone-routing.md",
+      "owner": "foundation.bus",
+      "status": "Merged"
+    },
+    {
+      "workItemId": "ADR046-routing-006",
+      "specId": "ADR-046-zone-routing",
+      "specPath": "docs/specs/ADR-046-zone-routing.md",
+      "owner": "foundation.zone-routing",
+      "status": "Merged"
+    },
+    {
+      "workItemId": "ADR046-routing-007",
+      "specId": "ADR-046-zone-routing",
+      "specPath": "docs/specs/ADR-046-zone-routing.md",
+      "owner": "foundation.session",
+      "status": "Merged"
+    },
+    {
+      "workItemId": "ADR046-routing-008",
+      "specId": "ADR-046-zone-routing",
+      "specPath": "docs/specs/ADR-046-zone-routing.md",
+      "owner": "foundation.session-unix",
+      "status": "Merged"
+    },
+    {
+      "workItemId": "ADR046-routing-009",
+      "specId": "ADR-046-zone-routing",
+      "specPath": "docs/specs/ADR-046-zone-routing.md",
+      "owner": "foundation.contracts",
+      "status": "Merged"
+    },
+    {
+      "workItemId": "ADR046-routing-010",
+      "specId": "ADR-046-zone-routing",
+      "specPath": "docs/specs/ADR-046-zone-routing.md",
+      "owner": "foundation.resource-client",
+      "status": "Merged"
+    },
+    {
+      "workItemId": "ADR046-routing-011",
+      "specId": "ADR-046-zone-routing",
+      "specPath": "docs/specs/ADR-046-zone-routing.md",
+      "owner": "foundation.nixos-modules",
+      "status": "Merged"
+    },
+    {
+      "workItemId": "ADR046-routing-012",
+      "specId": "ADR-046-zone-routing",
+      "specPath": "docs/specs/ADR-046-zone-routing.md",
+      "owner": "foundation.nixos-modules",
+      "status": "Merged"
+    },
+    {
+      "workItemId": "ADR046-routing-013",
+      "specId": "ADR-046-zone-routing",
+      "specPath": "docs/specs/ADR-046-zone-routing.md",
+      "owner": "foundation.core-controller",
+      "status": "Merged"
+    },
+    {
+      "workItemId": "ADR046-routing-014",
+      "specId": "ADR-046-zone-routing",
+      "specPath": "docs/specs/ADR-046-zone-routing.md",
+      "owner": "foundation.provider-model",
+      "status": "Merged"
+    },
+    {
+      "workItemId": "ADR046-routing-015",
+      "specId": "ADR-046-zone-routing",
+      "specPath": "docs/specs/ADR-046-zone-routing.md",
+      "owner": "foundation.provider-toolkit",
+      "status": "Merged"
+    },
+    {
+      "workItemId": "ADR046-routing-016",
+      "specId": "ADR-046-zone-routing",
+      "specPath": "docs/specs/ADR-046-zone-routing.md",
+      "owner": "foundation.zone-routing",
+      "status": "Merged"
+    },
+    {
+      "workItemId": "ADR046-session-001",
+      "specId": "ADR-046-componentsession-and-bus",
+      "specPath": "docs/specs/ADR-046-componentsession-and-bus.md",
+      "owner": "foundation.session",
+      "status": "Merged"
+    },
+    {
+      "workItemId": "ADR046-session-002",
+      "specId": "ADR-046-componentsession-and-bus",
+      "specPath": "docs/specs/ADR-046-componentsession-and-bus.md",
+      "owner": "foundation.session-unix",
+      "status": "Merged"
+    },
+    {
+      "workItemId": "ADR046-store-001",
+      "specId": "ADR-046-resource-store-redb",
+      "specPath": "docs/specs/ADR-046-resource-store-redb.md",
+      "owner": "foundation.resource-store-redb",
+      "status": "Merged"
+    }
+  ]
+}

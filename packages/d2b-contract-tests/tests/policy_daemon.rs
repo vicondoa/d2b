@@ -12,8 +12,9 @@
 //!   * tests/processes-json-eval.sh          -> processes_json_consumers_route_through_helpers
 //!   * tests/kernel-modules-parity-eval.sh   -> kernel_modules_parity_evaluator_shape
 
-use d2b_contract_tests::{read_repo_file, repo_path_exists};
+use d2b_contract_tests::{read_repo_file, repo_path_exists, repo_root};
 use regex::Regex;
+use std::process::Command;
 
 /// Whether any single line of `content` matches `pattern`. This mirrors `grep`'s
 /// per-line evaluation faithfully (so a `\s*` in the pattern can never span a
@@ -171,5 +172,109 @@ fn kernel_modules_parity_evaluator_shape() {
         any_line_matches(&lib_module, r"config\.d2b\._computed"),
         "kernel-modules-parity-eval: vmRunner helper does not route through d2b._computed \
          (kernel paths unreadable)"
+    );
+}
+
+fn fixed_unit_keys(module: &str, declaration: &str) -> Vec<String> {
+    let marker = format!("systemd.{declaration} = {{");
+    let mut in_block = false;
+    let mut depth = 0_i32;
+    let mut keys = Vec::new();
+    for line in module.lines() {
+        if !in_block {
+            if line.contains(&marker) {
+                in_block = true;
+                depth = 1;
+            }
+            continue;
+        }
+        if depth == 1
+            && let Some(key) = line
+                .trim()
+                .strip_suffix("= {")
+                .map(str::trim)
+                .filter(|key| {
+                    !key.is_empty()
+                        && key.bytes().all(|byte| {
+                            byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-'
+                        })
+                })
+        {
+            keys.push(key.to_owned());
+        }
+        depth += line.matches('{').count() as i32;
+        depth -= line.matches('}').count() as i32;
+        if depth <= 0 {
+            break;
+        }
+    }
+    keys
+}
+
+#[test]
+fn daemon_only_unit_census_is_exact_and_providers_do_not_declare_services() {
+    let daemon = read_repo_file("nixos-modules/host-daemon.nix");
+    let broker = read_repo_file("nixos-modules/host-broker.nix");
+    let services: std::collections::BTreeSet<_> = [
+        fixed_unit_keys(&daemon, "services"),
+        fixed_unit_keys(&broker, "services"),
+    ]
+    .concat()
+    .into_iter()
+    .collect();
+    let sockets: std::collections::BTreeSet<_> =
+        fixed_unit_keys(&broker, "sockets").into_iter().collect();
+
+    assert_eq!(
+        services,
+        std::collections::BTreeSet::from(["d2bd".to_owned(), "d2b-priv-broker".to_owned()])
+    );
+    assert_eq!(
+        sockets,
+        std::collections::BTreeSet::from(["d2b-priv-broker".to_owned()])
+    );
+
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo_root())
+        .args([
+            "ls-files",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "--",
+        ])
+        .arg("packages/d2b-provider-*")
+        .output()
+        .expect("enumerate Provider files");
+    assert!(output.status.success(), "git ls-files failed");
+    let mut violations = Vec::new();
+    for path in String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter(|path| path.ends_with(".rs") || path.ends_with(".nix") || path.ends_with(".sh"))
+    {
+        let content = std::fs::read_to_string(repo_root().join(path))
+            .unwrap_or_else(|error| panic!("read Provider file {path}: {error}"));
+        for (line_number, line) in content.lines().enumerate() {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("//")
+                || trimmed.starts_with('#')
+                || trimmed.starts_with("/*")
+                || trimmed.starts_with('*')
+            {
+                continue;
+            }
+            if trimmed.contains("systemd.services")
+                || trimmed.contains("systemd.sockets")
+                || trimmed.contains("systemctl enable")
+            {
+                violations.push(format!("{path}:{}: {line}", line_number + 1));
+            }
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "Provider packages must not own persistent systemd services:\n{}",
+        violations.join("\n")
     );
 }
