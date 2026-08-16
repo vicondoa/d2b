@@ -389,10 +389,31 @@ impl fmt::Debug for GpuProcessObservation {
 pub struct GpuRecoveryRecord {
     /// The Core admission that owned the worker.
     pub admission: GpuAuthorityAdmission,
-    /// The worker identity observed before restart.
-    pub process: GpuProcessIdentity,
+    /// Worker identities observed before restart.
+    pub processes: Vec<GpuProcessIdentity>,
     /// The opaque lease proof persisted by the Core adapter.
     pub lease: GpuAuthorityLease,
+}
+
+impl GpuRecoveryRecord {
+    /// Construct a recovery record for one GPU worker.
+    pub fn from_core(
+        admission: GpuAuthorityAdmission,
+        process: GpuProcessIdentity,
+        lease: GpuAuthorityLease,
+    ) -> Self {
+        Self {
+            admission,
+            processes: vec![process],
+            lease,
+        }
+    }
+
+    /// Add another same-Device worker, such as the video sidecar.
+    pub fn with_process(mut self, process: GpuProcessIdentity) -> Self {
+        self.processes.push(process);
+        self
+    }
 }
 
 impl fmt::Debug for GpuRecoveryRecord {
@@ -515,6 +536,7 @@ struct AuthorityEntry {
     arbitration: DeviceArbitration,
     max_holders: u32,
     platform: GpuPlatformToken,
+    lease_seq: u64,
     owners: Vec<AuthorityOwner>,
 }
 
@@ -562,25 +584,36 @@ impl GpuAuthorityIndex {
                     arbitration: record.admission.arbitration,
                     max_holders: record.admission.max_holders,
                     platform: record.admission.platform.clone(),
+                    lease_seq: 0,
                     owners: Vec::new(),
                 });
             if entry.arbitration != record.admission.arbitration
                 || entry.max_holders != record.admission.max_holders
                 || entry.platform != record.admission.platform
-                || entry
-                    .owners
-                    .iter()
-                    .any(|owner| owner.admission.owner == record.admission.owner)
             {
                 entry.owners.clear();
                 index.quarantined.insert(key);
                 continue;
             }
-            entry.owners.push(AuthorityOwner {
-                admission: record.admission,
-                lease: record.lease,
-                processes: vec![record.process],
-            });
+            if let Some(owner) = entry
+                .owners
+                .iter_mut()
+                .find(|owner| owner.admission.owner == record.admission.owner)
+            {
+                if owner.lease != record.lease {
+                    entry.owners.clear();
+                    index.quarantined.insert(key);
+                    continue;
+                }
+                owner.processes.extend(record.processes);
+            } else {
+                entry.lease_seq = entry.lease_seq.saturating_add(1);
+                entry.owners.push(AuthorityOwner {
+                    admission: record.admission,
+                    lease: record.lease,
+                    processes: record.processes,
+                });
+            }
         }
         index.rehydrated = true;
         Ok(index)
@@ -614,6 +647,7 @@ impl GpuAuthorityIndex {
                 arbitration: admission.arbitration,
                 max_holders: admission.max_holders,
                 platform: admission.platform.clone(),
+                lease_seq: 0,
                 owners: Vec::new(),
             });
         if entry.arbitration != admission.arbitration || entry.max_holders != admission.max_holders
@@ -636,10 +670,8 @@ impl GpuAuthorityIndex {
         if entry.owners.len() >= admission.max_holders as usize {
             return Err(GpuAuthorityError::MaxClaimsExceeded);
         }
-        let lease = GpuAuthorityLease::from_core(lease_bytes(
-            &admission.backing,
-            entry.owners.len() as u64 + 1,
-        ));
+        entry.lease_seq = entry.lease_seq.saturating_add(1);
+        let lease = GpuAuthorityLease::from_core(lease_bytes(&admission.backing, entry.lease_seq));
         entry.owners.push(AuthorityOwner {
             admission,
             lease: lease.clone(),
@@ -703,41 +735,29 @@ impl GpuAuthorityIndex {
                 }
             }
         }
-        let mut matches = observations
-            .iter()
-            .filter_map(|observation| match observation {
-                GpuProcessObservation::Matching(identity)
-                    if identity.platform == admission.platform
-                        && identity.generation == admission.owner.generation
-                        && (identity.principal == admission.gpu_principal
-                            || Some(&identity.principal) == admission.video_principal.as_ref()) =>
-                {
-                    Some(identity)
+        let mut matched_roles = BTreeSet::new();
+        let mut matched_count = 0;
+        for observation in observations {
+            let GpuProcessObservation::Matching(identity) = observation else {
+                continue;
+            };
+            if owner.processes.iter().any(|known| known == identity) {
+                if !matched_roles.insert(identity.role()) {
+                    self.quarantined.insert(admission.backing.clone());
+                    return Ok(GpuAdoption::Quarantined);
                 }
-                _ => None,
-            });
-        let first = matches.next();
-        if matches.next().is_some() {
-            self.quarantined.insert(admission.backing.clone());
-            return Ok(GpuAdoption::Quarantined);
+                matched_count += 1;
+            }
         }
-        match first {
-            Some(identity) => {
-                if owner.processes.iter().all(|known| known != identity) {
-                    return Ok(GpuAdoption::StaleIdentity);
-                }
-                Ok(GpuAdoption::Adopted(owner.lease.clone()))
-            }
-            None => {
-                if observations
-                    .iter()
-                    .any(|observation| matches!(observation, GpuProcessObservation::StaleIdentity))
-                {
-                    Ok(GpuAdoption::StaleIdentity)
-                } else {
-                    Ok(GpuAdoption::Missing)
-                }
-            }
+        if matched_count > 0 {
+            Ok(GpuAdoption::Adopted(owner.lease.clone()))
+        } else if observations
+            .iter()
+            .any(|observation| matches!(observation, GpuProcessObservation::StaleIdentity))
+        {
+            Ok(GpuAdoption::StaleIdentity)
+        } else {
+            Ok(GpuAdoption::Missing)
         }
     }
 

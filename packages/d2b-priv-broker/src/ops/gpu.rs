@@ -6,6 +6,8 @@
 
 use core::fmt;
 
+use super::spawn_runner::SpawnRunnerPlan;
+
 /// Closed GPU worker roles.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GpuBrokerRole {
@@ -198,6 +200,8 @@ pub enum GpuBrokerError {
     GenerationMismatch,
     /// Restart found more than one matching process.
     AmbiguousIdentity,
+    /// A trusted runner plan does not match its GPU isolation profile.
+    PlanShapeMismatch,
 }
 
 impl GpuBrokerError {
@@ -210,6 +214,7 @@ impl GpuBrokerError {
             Self::PlatformMismatch => "gpu-platform-mismatch",
             Self::GenerationMismatch => "gpu-device-generation-stale",
             Self::AmbiguousIdentity => "gpu-process-identity-ambiguous",
+            Self::PlanShapeMismatch => "gpu-runner-shape-mismatch",
         }
     }
 }
@@ -247,9 +252,63 @@ pub fn validate_observed_identity(
         return Err(GpuBrokerError::AmbiguousIdentity);
     }
     Ok(observations
-        .first()
+        .iter()
+        .find(|observation| **observation == GpuProcessObservation::Matching)
         .copied()
         .unwrap_or(GpuProcessObservation::Missing))
+}
+
+/// Validate a resolved SpawnRunner plan against the closed GPU isolation
+/// profile before the broker opens devices or clones a child.
+pub fn validate_spawn_plan(
+    plan: &SpawnRunnerPlan,
+    pre_opened_device_fds: usize,
+) -> Result<(), GpuBrokerError> {
+    let Some(policy) = plan.seccomp_policy_ref.as_deref() else {
+        return Ok(());
+    };
+    if !matches!(policy, "w1-gpu" | "w1-gpu-render-node" | "w1-video") {
+        return Ok(());
+    }
+    if !plan.capabilities.is_empty() {
+        return Err(GpuBrokerError::PlanShapeMismatch);
+    }
+    match policy {
+        "w1-gpu" => {
+            let required = ["/dev/kvm", "/dev/dri/renderD128", "/dev/udmabuf"];
+            if !required.iter().all(|path| {
+                plan.mount_policy
+                    .device_binds
+                    .iter()
+                    .any(|bind| bind == path)
+            }) {
+                return Err(GpuBrokerError::PlanShapeMismatch);
+            }
+        }
+        "w1-gpu-render-node" => {
+            if !plan.namespaces.user
+                || plan.user_namespace.is_none()
+                || !plan.mount_policy.device_binds.is_empty()
+                || pre_opened_device_fds != 1
+            {
+                return Err(GpuBrokerError::PlanShapeMismatch);
+            }
+        }
+        "w1-video" => {
+            if !plan.namespaces.pid
+                || plan.user_namespace.is_some()
+                || !plan
+                    .mount_policy
+                    .device_binds
+                    .iter()
+                    .any(|bind| bind == "/dev/dri/renderD128")
+            {
+                return Err(GpuBrokerError::PlanShapeMismatch);
+            }
+        }
+        _ => unreachable!(),
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -318,6 +377,19 @@ mod tests {
                 ],
             ),
             Err(GpuBrokerError::AmbiguousIdentity)
+        );
+        assert_eq!(
+            validate_observed_identity(
+                &request,
+                identity(3),
+                identity(2),
+                4,
+                &[
+                    GpuProcessObservation::Missing,
+                    GpuProcessObservation::Matching
+                ],
+            ),
+            Ok(GpuProcessObservation::Matching)
         );
     }
 }

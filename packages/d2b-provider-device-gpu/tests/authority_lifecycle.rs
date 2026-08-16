@@ -105,11 +105,11 @@ fn restart_adopts_one_matching_worker_and_quarantines_ambiguity() {
         GpuPlatformToken::from_core([8; 32]),
         ResourceGeneration::new(1).unwrap(),
     );
-    let record = GpuRecoveryRecord {
-        admission: current.clone(),
-        process: process.clone(),
-        lease: GpuAuthorityLease::from_core([3; 16]),
-    };
+    let record = GpuRecoveryRecord::from_core(
+        current.clone(),
+        process.clone(),
+        GpuAuthorityLease::from_core([3; 16]),
+    );
     let mut index =
         GpuAuthorityIndex::rehydrate(GpuRecoverySnapshot::from_core(vec![record])).unwrap();
     assert!(matches!(
@@ -130,6 +130,46 @@ fn restart_adopts_one_matching_worker_and_quarantines_ambiguity() {
         Ok(d2b_provider_device_gpu::GpuAdoption::Quarantined)
     ));
     assert!(index.is_quarantined(current.backing()));
+}
+
+#[test]
+fn video_sidecar_recovery_keeps_one_host_authority() {
+    let current = admission(DeviceArbitration::Exclusive, false, 1)
+        .with_video_principal(GpuPrincipalToken::from_core([10; 32]))
+        .unwrap();
+    let gpu = GpuProcessIdentity::from_core(
+        [2; 16],
+        GpuProcessRole::FullGpu,
+        GpuPrincipalToken::from_core([9; 32]),
+        GpuPlatformToken::from_core([8; 32]),
+        ResourceGeneration::new(1).unwrap(),
+    );
+    let video = GpuProcessIdentity::from_core(
+        [3; 16],
+        GpuProcessRole::Video,
+        GpuPrincipalToken::from_core([10; 32]),
+        GpuPlatformToken::from_core([8; 32]),
+        ResourceGeneration::new(1).unwrap(),
+    );
+    let record = GpuRecoveryRecord::from_core(
+        current.clone(),
+        gpu.clone(),
+        GpuAuthorityLease::from_core([3; 16]),
+    )
+    .with_process(video.clone());
+    let mut index =
+        GpuAuthorityIndex::rehydrate(GpuRecoverySnapshot::from_core(vec![record])).unwrap();
+    assert!(matches!(
+        index.adopt(
+            &current,
+            &[
+                GpuProcessObservation::Matching(gpu),
+                GpuProcessObservation::Matching(video)
+            ]
+        ),
+        Ok(d2b_provider_device_gpu::GpuAdoption::Adopted(_))
+    ));
+    assert!(!index.is_quarantined(current.backing()));
 }
 
 #[test]

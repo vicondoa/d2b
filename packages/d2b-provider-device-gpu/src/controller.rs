@@ -161,51 +161,17 @@ impl GpuController {
     /// Start the GPU worker and only then the optional video worker.
     pub fn reconcile<P: GpuEffectPort>(
         &mut self,
-        port: &mut P,
+        _port: &mut P,
     ) -> Result<GpuReconcileOutcome, GpuControllerError> {
+        if self.admission.is_none() || self.authority_lease.is_none() {
+            return Err(GpuControllerError::Authority(
+                GpuAuthorityError::StartupRehydrationRequired,
+            ));
+        }
         if !self.finalizer || matches!(self.phase, GpuPhase::Finalizing | GpuPhase::Finalized) {
             return Err(GpuControllerError::InvalidState);
         }
-        if self.phase == GpuPhase::Ready {
-            return Ok(GpuReconcileOutcome::Converged);
-        }
-        let declarations = select_processes(&self.device_uid, self.arbitration, &self.settings)
-            .map_err(GpuControllerError::Selection)?;
-        let gpu = declarations
-            .first()
-            .ok_or(GpuControllerError::InvalidState)?
-            .role();
-        self.phase = GpuPhase::GpuStarting;
-        if self.ticket.is_none() {
-            self.ticket = match port.open_devices(&self.device_uid, &self.tokens) {
-                Ok(ticket) => Some(ticket),
-                Err(error) => return self.effect_failed(error),
-            };
-        }
-        if self.gpu_role.is_none() {
-            let ticket = self
-                .ticket
-                .as_ref()
-                .ok_or(GpuControllerError::InvalidState)?;
-            if let Err(error) = port.start(gpu, ticket) {
-                return self.effect_failed(error);
-            }
-            self.gpu_role = Some(gpu);
-        }
-        self.phase = GpuPhase::GpuReady;
-        if self.settings.video_sidecar && !self.video_started {
-            self.phase = GpuPhase::VideoStarting;
-            let ticket = self
-                .ticket
-                .as_ref()
-                .ok_or(GpuControllerError::InvalidState)?;
-            if let Err(error) = port.start(GpuProcessRole::Video, ticket) {
-                return self.effect_failed(error);
-            }
-            self.video_started = true;
-        }
-        self.phase = GpuPhase::Ready;
-        Ok(GpuReconcileOutcome::Converged)
+        Err(GpuControllerError::InvalidState)
     }
 
     /// Stop video first and the GPU/render-node worker second.
@@ -213,23 +179,8 @@ impl GpuController {
         if !self.finalizer {
             return Ok(());
         }
-        self.phase = GpuPhase::Finalizing;
-        if self.video_started {
-            port.stop(GpuProcessRole::Video)
-                .map_err(GpuControllerError::Effect)?;
-            self.video_started = false;
-        }
-        if let Some(role) = self.gpu_role.take() {
-            port.stop(role).map_err(GpuControllerError::Effect)?;
-        }
-        self.ticket = None;
-        self.gpu_identity = None;
-        self.video_identity = None;
-        self.gpu_closure = None;
-        self.video_closure = None;
-        self.finalizer = false;
-        self.phase = GpuPhase::Finalized;
-        Ok(())
+        let _ = port;
+        Err(GpuControllerError::InvalidState)
     }
 
     /// Reconcile through the authority-aware production effect boundary.
@@ -320,6 +271,7 @@ impl GpuController {
             .ok_or(GpuControllerError::InvalidState)?;
         self.authority_lease = Some(lease);
         let mut matched = Vec::new();
+        let mut missing = false;
         for identity in expected {
             match port
                 .observe_worker(identity)
@@ -337,8 +289,7 @@ impl GpuController {
                     ));
                 }
                 GpuProcessObservation::Missing => {
-                    self.phase = GpuPhase::Pending;
-                    return Ok(GpuReconcileOutcome::Retry);
+                    missing = true;
                 }
             }
         }
@@ -348,6 +299,16 @@ impl GpuController {
             {
                 self.phase = GpuPhase::Failed;
                 return Err(GpuControllerError::Effect(GpuEffectError::PlatformMismatch));
+            }
+            let principal_matches = match identity.role() {
+                GpuProcessRole::Video => admission
+                    .video_principal()
+                    .is_some_and(|principal| principal == identity.principal()),
+                _ => identity.principal() == admission.gpu_principal(),
+            };
+            if !principal_matches {
+                self.phase = GpuPhase::Failed;
+                return Err(GpuControllerError::Effect(GpuEffectError::WrongPrincipal));
             }
             match identity.role() {
                 GpuProcessRole::Video => {
@@ -360,9 +321,11 @@ impl GpuController {
                 }
             }
         }
-        if self.gpu_identity.is_some() {
-            self.phase = GpuPhase::Ready;
+        if missing || self.gpu_identity.is_none() {
+            self.phase = GpuPhase::Pending;
+            return Ok(GpuReconcileOutcome::Retry);
         }
+        self.phase = GpuPhase::Ready;
         Ok(GpuReconcileOutcome::Converged)
     }
 
@@ -413,15 +376,6 @@ impl GpuController {
         self.finalizer = false;
         self.phase = GpuPhase::Finalized;
         Ok(())
-    }
-
-    fn effect_failed<T>(&mut self, error: GpuEffectError) -> Result<T, GpuControllerError> {
-        self.phase = if error == GpuEffectError::Transient {
-            GpuPhase::Degraded
-        } else {
-            GpuPhase::Failed
-        };
-        Err(GpuControllerError::Effect(error))
     }
 }
 
