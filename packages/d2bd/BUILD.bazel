@@ -373,6 +373,7 @@ rust_test(
         "CARGO_BIN_EXE_d2bd": "$(rootpath :d2bd)",
         "D2BD_HOST_FIXTURE": "$(rootpath //:tests/fixtures/deny-unknown/host-valid.json)",
     },
+    env_inherit = ["PATH"],
     proc_macro_deps = ["@crates//:async-trait"],
     rustc_env = {"CARGO_BIN_EXE_d2bd": "$(rootpath :d2bd)"},
     tags = [
