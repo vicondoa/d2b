@@ -872,8 +872,8 @@ deprecations ship one minor release before removal.
   (D107) and `status.update` (D091) currency object, including the flat-status
   shell-pool and shell-session examples that the first pass left populated but
   un-nested. This pass did not reach every complete envelope; the remaining
-  complete envelopes still missing `status.update` are swept in the ADR046-W0fu3
-  pass.
+  complete envelopes still missing `status.update` are swept in the subsequent
+  status-envelope pass.
 - ADR 0046 ZoneLink profile: aligned every normative handshake statement across
   the zone-routing, Unix transport, and Azure Relay Provider specs so a ZoneLink
   consumes the allocator-issued single-use PSK exactly once under IKpsk2, persists
@@ -1597,7 +1597,7 @@ deprecations ship one minor release before removal.
   provider behavior.
 - ADR 0046 spec docs: corrected stale current-state prose that still described
   the spec set as `Proposed`.
-- ADR 0046 topology: replaced the obsolete `W0`-`W10` program range with the
+- ADR 0046 topology: replaced the obsolete delivery-wave program range with the
   current topology terminology in the decision register.
 - The tier-0 dash scan no longer reports success when the scan itself errors
   (unreadable file, vanished file, bad pattern) or when file enumeration fails;
@@ -1657,15 +1657,15 @@ deprecations ship one minor release before removal.
   could kill the wrapper and orphan slot-holding survivors.
 - Reworded a doc comment whose prose parenthetical left a hyphen at the start
   of a line, which rustdoc parsed as a malformed list item.
-- Corrected the ADR 0046 body prose, which still described a W0 to W7 launch
+- Corrected the ADR 0046 body prose, which still described an obsolete launch
   range after the terminal friction-closure wave was added.
 - ADR 0046 spec set: completed the universal-status sweep across every complete
   resource envelope, adding the mandatory `status.update` (D091) currency object
   and nesting type-specific fields under `status.resource` (D107) wherever a
   complete envelope still omitted them, including the Credential example that had
   used `status.credential` instead of `status.resource`. The corresponding
-  claim in the earlier ADR046-W0fu2 changelog fragment, which asserted the sweep
-  was already complete, has been corrected.
+  claim in an earlier changelog fragment, which asserted the sweep was already
+  complete, has been corrected.
 - ADR 0046 Host/Guest execution policy: added a valid `defaultUserRef` to every
   mixed-domain example that still omitted it or set it null (D116), retaining the
   omission only in explicitly labelled rejection fixtures, so the superset
