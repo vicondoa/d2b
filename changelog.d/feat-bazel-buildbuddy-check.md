@@ -17,6 +17,9 @@
 - Keep local and pull-request Rust builds unstamped and prefer the available
   GNU BFD linker over gold. rules_rust metadata pipelining stays off after a
   measured two-crate local log showed higher gross input and fan-out.
+- Keep high-input Rustc, Cargo build-script, and TestRunner actions local.
+  Remote BuildBuddy profiles may only reuse compact actions under the 80 GB
+  working budget of the 100 GB monthly transfer allowance.
 - Keep the existing Cargo and Make Layer-1 graph authoritative while exposing
   the complete Bazel graph only through the opt-in local `make bazel-check`
   facade. Remote qualification remains blocked until provider-accounted

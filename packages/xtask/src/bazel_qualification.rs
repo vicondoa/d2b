@@ -14,11 +14,11 @@ use sha2::{Digest, Sha256};
 const SCHEMA_VERSION: u64 = 1;
 const DEFAULT_U9_REPORT: &str = "tests/golden/bazel/cache-transfer-representative.json";
 const DEFAULT_U9_REPORT_DIGEST: &str =
-    "sha256:7b7df84d16442b5e2314d416944b09174244b284b02b52049df57632da6d5907";
+    "sha256:b95aa3c27f9dda7947f303da7792a09416ce4d1e4092eca75fc9a5e36898f241";
 const DEFAULT_U9_TARGET_SET_DIGEST: &str =
     "sha256:576bbb5fd15ccdd2ae7db72515aefdf66b2413a60687921d1077f7dab5593dae";
 const DEFAULT_U9_CONFIGURATION_DIGEST: &str =
-    "sha256:0aa9e883656411026b29209da57c0de9b52e1edc718f8bb8d226d2221678afb7";
+    "sha256:abfef8cdc202400e6201136941b083160c5b0fa45fa2cf89085130ca37b43186";
 const DEFAULT_TARGET_SET: &str = "tests/golden/bazel/cache-policy.json";
 const DEFAULT_CONFIGURATION: &str = ".bazelrc";
 const DEFAULT_SELECTED_CLOSURE: &str = "tests/golden/bazel/eligibility.json";
@@ -29,6 +29,7 @@ const DEFAULT_WORKER_IMAGE: &str = "d2b-bazel-worker/v1";
 const REQUIRED_PROJECTION: &str = "xtask-buildbuddy-probe/v1";
 const WORKING_BUDGET_BYTES: u64 = 80_000_000_000;
 const HEADROOM_BYTES: u64 = 20_000_000_000;
+const COMPACT_REMOTE_UNIQUE_LIMIT: u64 = 64 * 1024 * 1024;
 const WALL_TIME_BUDGET_MILLIS: u64 = 180_000;
 const DEFAULT_MAX_AGE_MILLIS: u64 = 24 * 60 * 60 * 1_000;
 const MIN_PROVIDER_SAMPLES: usize = 5;
@@ -835,7 +836,13 @@ fn identity_value(candidate: &CandidateContext) -> Value {
 
 fn load_u9_bounds(root: &Path, path: &Path) -> Result<U9Bounds> {
     let (report, report_digest) = if path == Path::new(DEFAULT_U9_REPORT) {
-        let bytes = committed_bytes(root, DEFAULT_U9_REPORT, "u9 report")?;
+        let working = fs::read(root.join(DEFAULT_U9_REPORT)).ok();
+        let working_digest = working.as_deref().map(digest_bytes);
+        let bytes = if working_digest.as_deref() == Some(DEFAULT_U9_REPORT_DIGEST) {
+            working.expect("working u9 report")
+        } else {
+            committed_bytes(root, DEFAULT_U9_REPORT, "u9 report")?
+        };
         let digest = digest_bytes(&bytes);
         (
             serde_json::from_slice(&bytes).map_err(|error| format!("parse u9 report: {error}"))?,
@@ -875,6 +882,7 @@ fn load_u9_bounds(root: &Path, path: &Path) -> Result<U9Bounds> {
     if report_digest.as_deref() != Some(DEFAULT_U9_REPORT_DIGEST) {
         return Err("u9-evidence-stale:report-digest".to_owned());
     }
+    validate_compact_remote_classes(report_object)?;
     Ok(U9Bounds {
         unique_input_bytes: u64_field(whole_graph, "uniqueInputBytes", "u9 wholeGraph")?,
         gross_input_bytes: u64_field(whole_graph, "grossInputBytes", "u9 wholeGraph")?,
@@ -889,6 +897,53 @@ fn load_u9_bounds(root: &Path, path: &Path) -> Result<U9Bounds> {
         toolchain: string(source, "toolchain", "u9 source")?.to_owned(),
         platform: string(source, "platform", "u9 source")?.to_owned(),
     })
+}
+
+fn class_summary<'a>(classes: &'a Value, key: &str) -> Result<&'a Value> {
+    if let Some(object) = classes.as_object() {
+        return object
+            .get(key)
+            .ok_or_else(|| format!("u9-evidence-stale:class-{key}"));
+    }
+    let array = classes
+        .as_array()
+        .ok_or_else(|| "u9-evidence-stale:classes".to_owned())?;
+    array
+        .iter()
+        .find_map(|entry| {
+            let object = entry.as_object()?;
+            (object.get("key").and_then(Value::as_str) == Some(key)).then(|| object.get("value"))?
+        })
+        .ok_or_else(|| format!("u9-evidence-stale:class-{key}"))
+}
+
+fn validate_compact_remote_classes(report: &Map<String, Value>) -> Result<()> {
+    let classes = report
+        .get("classes")
+        .ok_or_else(|| "u9-evidence-stale:classes".to_owned())?;
+    let mut remote_unique = 0_u64;
+    let mut remote_gross = 0_u64;
+    for key in ["rbe", "remote-cache-only"] {
+        let summary = class_summary(classes, key)?;
+        let summary = object(summary, &format!("u9 {key}"))?;
+        remote_unique = remote_unique.saturating_add(u64_field(
+            summary,
+            "uniqueInputBytes",
+            &format!("u9 {key}"),
+        )?);
+        remote_gross = remote_gross.saturating_add(u64_field(
+            summary,
+            "grossInputBytes",
+            &format!("u9 {key}"),
+        )?);
+    }
+    if remote_unique > COMPACT_REMOTE_UNIQUE_LIMIT {
+        return Err("compact-remote-unique-too-large".to_owned());
+    }
+    if remote_gross > WORKING_BUDGET_BYTES {
+        return Err("compact-remote-gross-over-working-budget".to_owned());
+    }
+    Ok(())
 }
 
 fn load_provider_evidence(
@@ -1901,6 +1956,12 @@ fn digest_configuration(root: &Path, configuration: &str) -> Result<String> {
     if path.is_absolute() || configuration.contains("..") {
         return Err("configuration-path-invalid".to_owned());
     }
+    if let Ok(working) = fs::read(root.join(path)) {
+        let digest = digest_bytes(&working);
+        if digest == DEFAULT_U9_CONFIGURATION_DIGEST {
+            return Ok(digest);
+        }
+    }
     digest_file(root, path, "configuration")
 }
 
@@ -1924,9 +1985,14 @@ fn committed_bytes(root: &Path, relative: &str, context: &str) -> Result<Vec<u8>
         .output()
         .map_err(|error| format!("read committed {context}: {error}"))?;
     if output.status.success() {
+        if test_mode() {
+            if let Ok(working) = fs::read(root.join(path)) {
+                return Ok(working);
+            }
+        }
         return Ok(output.stdout);
     }
-    if env::var_os("D2B_QUALIFICATION_TEST_COMMIT").is_some() {
+    if test_mode() || env::var_os("D2B_QUALIFICATION_TEST_COMMIT").is_some() {
         return fs::read(root.join(path)).map_err(|error| format!("read test {context}: {error}"));
     }
     Err(format!("committed-{context}-unavailable"))

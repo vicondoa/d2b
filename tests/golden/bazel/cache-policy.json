@@ -16,6 +16,12 @@
       "grossInputBytes": 162901404939,
       "uniqueInputBytes": 1034798612
     },
+    "remoteClass": {
+      "actionCount": 55,
+      "grossInputBytes": 388294439,
+      "uniqueInputBytes": 3639469,
+      "highIoLocal": ["Rustc", "CargoBuildScriptRun", "TestRunner"]
+    },
     "pipelining": {
       "status": "rejected",
       "reason": "increased gross inputs and fan-out",
@@ -96,7 +102,7 @@
       "tests/tools/buildbuddy-qualification"
     ],
     "allowedSecurityDigests": [
-      "sha256:029405523197af7662b7e10c280a19d81cdd9a4d968c4d46fcc57929241fdd68"
+      "sha256:a3b1a9a6a7a8b5fc52464fa665bdfcd58a999ea97b67266ee1958b48fc1b6837"
     ],
     "untrustedCredential": "none",
     "trustedCredential": "credential-helper"

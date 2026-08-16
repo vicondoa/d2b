@@ -13,6 +13,8 @@ use sha2::{Digest as ShaDigest, Sha256};
 
 const SCHEMA_VERSION: u32 = 1;
 const TOP_ARTIFACT_COUNT: usize = 20;
+const COMPACT_UNIQUE_INPUT_LIMIT: u64 = 64 * 1024 * 1024;
+const HIGH_IO_MNEMONICS: &[&str] = &["Rustc", "CargoBuildScriptRun", "TestRunner"];
 
 type Result<T> = std::result::Result<T, String>;
 
@@ -695,7 +697,11 @@ fn parse_action(
         )?;
         remotable || remote_cacheable
     };
-    let execution_class = classify_action(payload, eligible, &record_name)?;
+    let execution_class = apply_compact_remote_policy(
+        classify_action(payload, eligible, &record_name)?,
+        &mnemonic,
+        &inputs,
+    );
     if execution_class.is_remote() && !eligible {
         return Err(format!(
             "SpawnExec {record_name} is classified as {execution_class:?} but target {target_label} is ineligible"
@@ -778,6 +784,36 @@ fn spawn_payload(value: &Value) -> Option<&Map<String, Value>> {
     } else {
         None
     }
+}
+
+fn apply_compact_remote_policy(
+    class: ExecutionClass,
+    mnemonic: &str,
+    inputs: &[Artifact],
+) -> ExecutionClass {
+    if class.is_remote() && !compact_remote_allowed(mnemonic, inputs) {
+        ExecutionClass::FullyLocal
+    } else {
+        class
+    }
+}
+
+fn compact_remote_allowed(mnemonic: &str, inputs: &[Artifact]) -> bool {
+    if HIGH_IO_MNEMONICS.contains(&mnemonic) {
+        return false;
+    }
+    unique_input_bytes(inputs) <= COMPACT_UNIQUE_INPUT_LIMIT
+}
+
+fn unique_input_bytes(inputs: &[Artifact]) -> u64 {
+    let mut seen = BTreeSet::new();
+    let mut total = 0_u64;
+    for artifact in inputs {
+        if seen.insert(artifact.digest.as_str()) {
+            total = total.saturating_add(artifact.size_bytes);
+        }
+    }
+    total
 }
 
 fn classify_action(

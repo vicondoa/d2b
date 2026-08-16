@@ -32,6 +32,7 @@ build:remote --credential_helper=remote.buildbuddy.io=%workspace%/tests/tools/ba
 build:remote --remote_instance_name=d2b/developer/linux-x86_64/rules_rust/worker-v1/minimal/lock-v1
 build:remote --platforms=//bazel/platforms:buildbuddy_x86_64_linux
 build:remote --remote_upload_local_results=false
+build:remote --modify_execution_info=Rustc=+no-remote,CargoBuildScriptRun=+no-remote,TestRunner=+no-remote
 
 build:trusted-seed --remote_executor=grpcs://remote.buildbuddy.io
 build:trusted-seed --remote_cache=grpcs://remote.buildbuddy.io
@@ -41,6 +42,7 @@ build:trusted-seed --remote_instance_name=d2b/trusted-seed/linux-x86_64/rules_ru
 build:trusted-seed --platforms=//bazel/platforms:buildbuddy_x86_64_linux
 build:trusted-seed --remote_upload_local_results=true
 build:trusted-seed --remote_cache_async=false
+build:trusted-seed --modify_execution_info=Rustc=+no-remote,CargoBuildScriptRun=+no-remote,TestRunner=+no-remote
 
 build:qualification --remote_executor=grpcs://remote.buildbuddy.io
 build:qualification --remote_cache=grpcs://remote.buildbuddy.io
@@ -49,3 +51,4 @@ build:qualification --credential_helper=remote.buildbuddy.io=%workspace%/tests/t
 build:qualification --remote_instance_name=d2b/qualification/linux-x86_64/rules_rust/worker-v1/minimal/lock-v1
 build:qualification --platforms=//bazel/platforms:buildbuddy_x86_64_linux
 build:qualification --remote_upload_local_results=false
+build:qualification --modify_execution_info=Rustc=+no-remote,CargoBuildScriptRun=+no-remote,TestRunner=+no-remote

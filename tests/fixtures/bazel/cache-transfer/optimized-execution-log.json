@@ -93,7 +93,7 @@
       "type": "SpawnExec",
       "id": "rbe-compile",
       "spawnExec": {
-        "mnemonic": "Rustc",
+        "mnemonic": "ExtractCargoTomlEnvVars",
         "targetLabel": "//demo:rbe",
         "remotable": true,
         "cacheable": true,
@@ -137,7 +137,7 @@
       "type": "SpawnExec",
       "id": "cache-only",
       "spawnExec": {
-        "mnemonic": "Rustc",
+        "mnemonic": "ExtractCargoTomlEnvVars",
         "targetLabel": "//demo:cache",
         "cacheable": true,
         "remoteCacheable": true,

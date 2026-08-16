@@ -280,12 +280,20 @@ fn reports_action_mnemonic_graph_and_boundary_metrics() {
         .get("mnemonics")
         .and_then(Value::as_array)
         .expect("report.mnemonics");
-    let rustc = mnemonics
+    let compact = mnemonics
         .iter()
-        .find(|mnemonic| mnemonic.get("mnemonic").and_then(Value::as_str) == Some("Rustc"))
-        .expect("Rustc mnemonic");
-    assert_eq!(u64_field(rustc, "grossInputBytes", "Rustc"), 150);
-    assert_eq!(u64_field(rustc, "uniqueInputBytes", "Rustc"), 130);
+        .find(|mnemonic| {
+            mnemonic.get("mnemonic").and_then(Value::as_str) == Some("ExtractCargoTomlEnvVars")
+        })
+        .expect("ExtractCargoTomlEnvVars mnemonic");
+    assert_eq!(
+        u64_field(compact, "grossInputBytes", "ExtractCargoTomlEnvVars"),
+        150
+    );
+    assert_eq!(
+        u64_field(compact, "uniqueInputBytes", "ExtractCargoTomlEnvVars"),
+        130
+    );
 
     let boundaries = object(&report, "report")
         .get("boundaryCrossings")
@@ -816,7 +824,7 @@ fn keeps_empty_symlink_and_path_identity_semantics() {
                 "type": "SpawnExec",
                 "id": "remote-different-path",
                 "spawnExec": {
-                    "mnemonic": "Rustc",
+                    "mnemonic": "ExtractCargoTomlEnvVars",
                     "targetLabel": "//demo:rbe",
                     "remotable": true,
                     "inputs": [{
@@ -842,7 +850,7 @@ fn keeps_empty_symlink_and_path_identity_semantics() {
                 "type": "SpawnExec",
                 "id": "remote-cross",
                 "spawnExec": {
-                    "mnemonic": "Rustc",
+                    "mnemonic": "ExtractCargoTomlEnvVars",
                     "targetLabel": "//demo:rbe",
                     "remotable": true,
                     "inputs": [{
@@ -941,7 +949,7 @@ fn records_unlisted_dependency_owners_from_bazel_signals() {
         "records": [{
             "type": "SpawnExec",
             "spawnExec": {
-                "mnemonic": "Rustc",
+                "mnemonic": "ExtractCargoTomlEnvVars",
                 "targetLabel": "//demo:dependency",
                 "remotable": true,
                 "inputs": [{
@@ -1019,6 +1027,111 @@ fn representative_local_summary_records_measured_two_crate_bounds() {
             .and_then(Value::as_u64)
             .expect("pipelined gross")
             > 162_901_404_939
+    );
+
+    let classes_value = summary.get("classes").expect("classes");
+    let class = |key: &str| -> &Value {
+        if let Some(object) = classes_value.as_object() {
+            return object.get(key).unwrap_or_else(|| panic!("{key} class"));
+        }
+        classes_value
+            .as_array()
+            .expect("representative classes")
+            .iter()
+            .find_map(|entry| {
+                let object = entry.as_object()?;
+                (object.get("key").and_then(Value::as_str) == Some(key))
+                    .then(|| object.get("value"))
+                    .flatten()
+            })
+            .unwrap_or_else(|| panic!("{key} class"))
+    };
+    let remote_unique = ["rbe", "remote-cache-only"]
+        .iter()
+        .map(|key| u64_field(class(key), "uniqueInputBytes", key))
+        .sum::<u64>();
+    let remote_gross = ["rbe", "remote-cache-only"]
+        .iter()
+        .map(|key| u64_field(class(key), "grossInputBytes", key))
+        .sum::<u64>();
+    assert!(
+        remote_unique <= 64 * 1024 * 1024,
+        "remote-class unique inputs {remote_unique} exceed the 64 MiB compact budget"
+    );
+    assert!(
+        remote_gross < 1_000_000_000,
+        "compact-only remote class must stay far below the 80 GB working budget, got {remote_gross}"
+    );
+    let mnemonics = summary
+        .get("mnemonics")
+        .and_then(Value::as_array)
+        .expect("mnemonics");
+    for mnemonic_name in ["Rustc", "CargoBuildScriptRun", "TestRunner"] {
+        let mnemonic = mnemonics
+            .iter()
+            .find(|entry| entry.get("mnemonic").and_then(Value::as_str) == Some(mnemonic_name))
+            .unwrap_or_else(|| panic!("{mnemonic_name} mnemonic"));
+        let remote_actions = ["rbe", "remote-cache-only"]
+            .iter()
+            .map(|class_name| {
+                mnemonic
+                    .get("byClass")
+                    .and_then(Value::as_object)
+                    .and_then(|by_class| by_class.get(*class_name))
+                    .and_then(|class| class.get("actionCount"))
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0)
+            })
+            .sum::<u64>();
+        assert_eq!(
+            remote_actions, 0,
+            "{mnemonic_name} must stay fully local, not {remote_actions} remote-class actions"
+        );
+    }
+}
+
+#[test]
+fn high_io_remotable_rustc_stays_fully_local() {
+    let report = analyze_value(
+        &serde_json::json!({
+            "metadata": {
+                "configuration": "local",
+                "platform": "linux-x86_64",
+                "toolchain": "rules_rust-fixture"
+            },
+            "records": [{
+                "type": "SpawnExec",
+                "id": "rustc-heavy",
+                "spawnExec": {
+                    "mnemonic": "Rustc",
+                    "targetLabel": "//demo:remote-consumer",
+                    "remotable": true,
+                    "remoteCacheable": true,
+                    "inputs": [{
+                        "path": "large.rlib",
+                        "digest": { "hash": "large", "sizeBytes": 2_000_000 }
+                    }],
+                    "actualOutputs": [{
+                        "path": "out.rlib",
+                        "digest": { "hash": "out", "sizeBytes": 1 }
+                    }]
+                }
+            }]
+        }),
+        "high-io-rustc",
+    );
+    let classes = object(report.get("classes").expect("classes"), "classes");
+    assert_eq!(
+        u64_field(classes.get("rbe").expect("rbe"), "actionCount", "rbe"),
+        0
+    );
+    assert_eq!(
+        u64_field(
+            classes.get("fully-local").expect("fully-local"),
+            "actionCount",
+            "fully-local"
+        ),
+        1
     );
 }
 

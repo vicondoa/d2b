@@ -31,21 +31,21 @@
     {
       "key": "fully-local",
       "value": {
-        "actionCount": 0,
-        "grossInputBytes": 0,
-        "uniqueInputBytes": 0,
-        "outputBytes": 0,
-        "fanOutRatio": 0.0
+        "actionCount": 152,
+        "grossInputBytes": 162513110500,
+        "uniqueInputBytes": 1031269894,
+        "outputBytes": 355133072,
+        "fanOutRatio": 157.58543078345696
       }
     },
     {
       "key": "rbe",
       "value": {
-        "actionCount": 207,
-        "grossInputBytes": 162901404939,
-        "uniqueInputBytes": 1034798612,
-        "outputBytes": 355161088,
-        "fanOutRatio": 157.42329285130506
+        "actionCount": 55,
+        "grossInputBytes": 388294439,
+        "uniqueInputBytes": 3639469,
+        "outputBytes": 28016,
+        "fanOutRatio": 106.68986025159165
       }
     },
     {
@@ -66,7 +66,24 @@
       "grossInputBytes": 19667085771,
       "uniqueInputBytes": 646994816,
       "outputBytes": 5688,
-      "fanOutRatio": 30.3975940527474
+      "fanOutRatio": 30.3975940527474,
+      "byClass": {
+        "fully-local": {
+          "actionCount": 18,
+          "grossInputBytes": 19667085771,
+          "uniqueInputBytes": 646994816
+        },
+        "rbe": {
+          "actionCount": 0,
+          "grossInputBytes": 0,
+          "uniqueInputBytes": 0
+        },
+        "remote-cache-only": {
+          "actionCount": 0,
+          "grossInputBytes": 0,
+          "uniqueInputBytes": 0
+        }
+      }
     },
     {
       "mnemonic": "ExtractCargoTomlEnvVars",
@@ -74,7 +91,24 @@
       "grossInputBytes": 388294439,
       "uniqueInputBytes": 3639469,
       "outputBytes": 28016,
-      "fanOutRatio": 106.68986025159165
+      "fanOutRatio": 106.68986025159165,
+      "byClass": {
+        "fully-local": {
+          "actionCount": 0,
+          "grossInputBytes": 0,
+          "uniqueInputBytes": 0
+        },
+        "rbe": {
+          "actionCount": 55,
+          "grossInputBytes": 388294439,
+          "uniqueInputBytes": 3639469
+        },
+        "remote-cache-only": {
+          "actionCount": 0,
+          "grossInputBytes": 0,
+          "uniqueInputBytes": 0
+        }
+      }
     },
     {
       "mnemonic": "Rustc",
@@ -82,7 +116,24 @@
       "grossInputBytes": 142767181349,
       "uniqueInputBytes": 942480340,
       "outputBytes": 355081232,
-      "fanOutRatio": 151.48027527980054
+      "fanOutRatio": 151.48027527980054,
+      "byClass": {
+        "fully-local": {
+          "actionCount": 130,
+          "grossInputBytes": 142767181349,
+          "uniqueInputBytes": 942480340
+        },
+        "rbe": {
+          "actionCount": 0,
+          "grossInputBytes": 0,
+          "uniqueInputBytes": 0
+        },
+        "remote-cache-only": {
+          "actionCount": 0,
+          "grossInputBytes": 0,
+          "uniqueInputBytes": 0
+        }
+      }
     },
     {
       "mnemonic": "TestRunner",
@@ -90,7 +141,24 @@
       "grossInputBytes": 78843380,
       "uniqueInputBytes": 78813117,
       "outputBytes": 46152,
-      "fanOutRatio": 1.0003839843055566
+      "fanOutRatio": 1.0003839843055566,
+      "byClass": {
+        "fully-local": {
+          "actionCount": 4,
+          "grossInputBytes": 78843380,
+          "uniqueInputBytes": 78813117
+        },
+        "rbe": {
+          "actionCount": 0,
+          "grossInputBytes": 0,
+          "uniqueInputBytes": 0
+        },
+        "remote-cache-only": {
+          "actionCount": 0,
+          "grossInputBytes": 0,
+          "uniqueInputBytes": 0
+        }
+      }
     }
   ],
   "pipeliningRejected": {

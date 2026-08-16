@@ -36,7 +36,10 @@ eligibility digest and cache policy. The current representative bounds are:
 
 - 207 actions;
 - 162901404939 gross input bytes;
-- 1034798612 unique input bytes; and
+- 1034798612 unique input bytes;
+- compact remote class limited to 55 `ExtractCargoTomlEnvVars` actions
+  (388 MB gross, 3.6 MB unique);
+- `Rustc`, `CargoBuildScriptRun`, and `TestRunner` forced local; and
 - pipelining rejected because it increases gross inputs and fan-out.
 
 The graph, configuration, platform, toolchain, and pipelining values must also

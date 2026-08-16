@@ -84,6 +84,12 @@ fn committed_profiles_share_targets_and_use_credential_helper_only() {
         bazelrc.contains("--remote_download_outputs=minimal"),
         "remote profiles must use minimal output downloads"
     );
+    for mnemonic in ["Rustc", "CargoBuildScriptRun", "TestRunner"] {
+        assert!(
+            bazelrc.contains(&format!("{mnemonic}=+no-remote")),
+            "remote profiles must keep {mnemonic} local"
+        );
+    }
     assert!(
         bazelrc.contains("--remote_retries=0"),
         "the wrapper owns the single local retry"

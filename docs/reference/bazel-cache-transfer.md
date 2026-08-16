@@ -121,9 +121,13 @@ cargo run --locked -p xtask -- bazel-cache-transfer compare \
 
 A representative local log of `//packages/d2b-core:d2b_core_test` and
 `//packages/d2b-contracts:d2b_contracts_test` measured 207 actions, about
-163 GB gross inputs, 1.03 GB unique inputs, and a 157x fan-out. Enabling
-rules_rust pipelined compilation on that same pair increased action count,
-gross inputs, and fan-out, so it is not part of the default configuration.
+163 GB gross inputs, 1.03 GB unique inputs, and a 157x fan-out. Compact
+remote eligibility keeps `Rustc`, `CargoBuildScriptRun`, and `TestRunner`
+fully local, leaving 55 `ExtractCargoTomlEnvVars` actions remote at about
+388 MB gross and 3.6 MB unique. Enabling rules_rust pipelined compilation
+on that same pair increased action count, gross inputs, and fan-out, so it
+is not part of the default configuration. The 80 GB working budget of the
+100 GB monthly allowance is reserved for compact remote classes only.
 
 Comparison rejects schema, graph, eligibility, configuration, platform, and
 toolchain mismatches. There are no arbitrary transfer thresholds in this
