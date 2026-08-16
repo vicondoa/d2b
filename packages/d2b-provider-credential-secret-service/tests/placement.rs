@@ -1,5 +1,5 @@
-use d2b_contracts::v3::ResourceRef;
 use d2b_contracts::v3::credential::PlacementBinding;
+use d2b_contracts::v3::{ResourceRef, ZoneId};
 use d2b_provider_credential_secret_service::{SecretServicePlacement, SecretServiceProviderError};
 
 #[test]
@@ -8,6 +8,7 @@ fn only_user_agent_on_host_or_guest_is_accepted() {
     for execution in ["Host/workstation", "Guest/work-vm"] {
         assert!(
             SecretServicePlacement::new(
+                ZoneId::parse("user-zone").unwrap(),
                 PlacementBinding::UserAgent,
                 ResourceRef::parse(execution).unwrap(),
                 user.clone(),
@@ -18,6 +19,7 @@ fn only_user_agent_on_host_or_guest_is_accepted() {
     for binding in [PlacementBinding::HostSystem, PlacementBinding::GuestAgent] {
         assert_eq!(
             SecretServicePlacement::new(
+                ZoneId::parse("user-zone").unwrap(),
                 binding,
                 ResourceRef::parse("Guest/work-vm").unwrap(),
                 user.clone(),
