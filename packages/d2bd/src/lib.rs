@@ -206,6 +206,7 @@ pub mod autostart;
 // `d2b-sys-<env>-usbipd-{backend,proxy}.{service,socket}` units into
 // broker `SpawnRunner` with `RunnerRole::Usbip`, keyed per-env on
 // `vm_id = sys-<env>-usbipd` with role_ids `backend` / `proxy`.
+pub mod usbip_production;
 pub mod usbipd_perenv_autostart;
 // Audio policy dispatch: OFD-locked state I/O, provider capability
 // resolution, host PipeWire enforcement, and guestd RPC dispatch.

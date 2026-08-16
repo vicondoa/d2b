@@ -301,6 +301,11 @@ impl BindingIdentity {
     pub const fn from_controller(value: ResourceUid) -> Self {
         Self(value)
     }
+
+    /// Borrow the opaque resource identity for a daemon adapter.
+    pub const fn as_resource_uid(&self) -> &ResourceUid {
+        &self.0
+    }
 }
 
 impl core::fmt::Debug for BindingIdentity {
@@ -524,13 +529,17 @@ impl BindingLifecycle {
         matches!(self.phase, BindingPhase::Closed)
     }
 
+    fn is_same_zone(&self) -> bool {
+        self.service_zone_uid == self.binding_zone_uid
+    }
+
     /// Acquire the Service slot, then proxy, then brokered attach runner.
     fn activate<P: BindingPort>(
         &mut self,
         service: &ServiceLifecycle,
         port: &mut P,
     ) -> Result<(), BindingLifecycleError> {
-        if self.service_zone_uid != self.binding_zone_uid {
+        if !self.is_same_zone() {
             return Err(BindingLifecycleError::WrongZone);
         }
         if self.phase == BindingPhase::Quarantined {
@@ -571,6 +580,9 @@ impl BindingLifecycle {
         identity: AttachProcessIdentity,
         port: &mut P,
     ) -> Result<(), BindingLifecycleError> {
+        if !self.is_same_zone() {
+            return Err(BindingLifecycleError::WrongZone);
+        }
         match port.observe_attach_runner(&self.identity, &identity)? {
             AttachmentObservation::Matching { slot, proxy } => {
                 self.slot = Some(slot);
@@ -661,7 +673,7 @@ impl UsbipSupervisor {
 
     /// Add one Binding that is already validated to reference this Service.
     pub fn add_binding(&mut self, binding: BindingLifecycle) -> Result<(), BindingLifecycleError> {
-        if binding.service_zone_uid != self.service.zone_uid {
+        if binding.service_zone_uid != self.service.zone_uid || !binding.is_same_zone() {
             return Err(BindingLifecycleError::WrongZone);
         }
         self.bindings.push(binding);
@@ -694,6 +706,20 @@ impl UsbipSupervisor {
             .get_mut(index)
             .ok_or(BindingLifecycleError::AdmissionDenied)?;
         binding.adopt(identity, port)
+    }
+
+    /// Finalize one Binding without unbinding the Service or releasing
+    /// Host-global authority needed by its remaining Bindings.
+    pub fn finalize_binding<P: BindingPort>(
+        &mut self,
+        index: usize,
+        port: &mut P,
+    ) -> Result<(), BindingLifecycleError> {
+        let binding = self
+            .bindings
+            .get_mut(index)
+            .ok_or(BindingLifecycleError::AdmissionDenied)?;
+        binding.finalize(port)
     }
 
     /// Drain every Binding before unbinding the owned device and releasing

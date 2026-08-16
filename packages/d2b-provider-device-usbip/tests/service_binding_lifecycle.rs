@@ -308,3 +308,59 @@ fn binding_closes_its_process_before_service_unbinds_and_releases_authority() {
         ]
     );
 }
+
+#[test]
+fn one_binding_can_finalize_without_unbinding_the_shared_service() {
+    let zone = uid("123e4567-e89b-42d3-a456-426614174000");
+    let mut port = FakePort::default();
+    let mut service =
+        ServiceLifecycle::new(zone.clone(), uid("223e4567-e89b-42d3-a456-426614174001"));
+    service.activate(true, zone.clone(), &mut port).unwrap();
+    let mut supervisor = UsbipSupervisor::new(service);
+    for value in [
+        "323e4567-e89b-42d3-a456-426614174002",
+        "423e4567-e89b-42d3-a456-426614174003",
+    ] {
+        supervisor
+            .add_binding(BindingLifecycle::new(
+                zone.clone(),
+                zone.clone(),
+                BindingIdentity::from_controller(uid(value)),
+            ))
+            .unwrap();
+    }
+    supervisor.activate_binding(0, &mut port).unwrap();
+    supervisor.activate_binding(1, &mut port).unwrap();
+    supervisor.finalize_binding(0, &mut port).unwrap();
+
+    assert_eq!(supervisor.service().phase(), ServicePhase::Bound);
+    assert!(!port.calls.contains(&"unbind"));
+
+    supervisor.finalize(&mut port).unwrap();
+    assert_eq!(supervisor.service().phase(), ServicePhase::Closed);
+}
+
+#[test]
+fn foreign_zone_binding_is_refused_before_recovery_observation() {
+    let service_zone = uid("123e4567-e89b-42d3-a456-426614174000");
+    let foreign_zone = uid("223e4567-e89b-42d3-a456-426614174001");
+    let service = ServiceLifecycle::new(
+        service_zone.clone(),
+        uid("323e4567-e89b-42d3-a456-426614174002"),
+    );
+    let mut supervisor = UsbipSupervisor::new(service);
+    assert_eq!(
+        supervisor.add_binding(BindingLifecycle::new(
+            service_zone,
+            foreign_zone,
+            BindingIdentity::from_controller(uid("423e4567-e89b-42d3-a456-426614174003")),
+        )),
+        Err(BindingLifecycleError::WrongZone)
+    );
+    let mut port = FakePort::default();
+    assert_eq!(
+        supervisor.adopt_binding(0, AttachProcessIdentity::from_adapter(7, 11), &mut port),
+        Err(BindingLifecycleError::AdmissionDenied)
+    );
+    assert!(port.calls.is_empty());
+}
