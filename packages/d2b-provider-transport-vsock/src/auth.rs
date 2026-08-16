@@ -9,10 +9,7 @@ use d2b_contracts::{
     v3::{ResourceRef, ZoneId},
 };
 use ring::hmac;
-use std::{
-    collections::{HashSet, VecDeque},
-    fmt,
-};
+use std::{collections::HashSet, fmt};
 
 const TAG_BYTES: usize = 32;
 
@@ -242,7 +239,6 @@ pub struct SessionAuthority {
     key: GuestControlKey,
     generation: u64,
     replayed: HashSet<[u8; 32]>,
-    replay_order: VecDeque<[u8; 32]>,
 }
 
 impl SessionAuthority {
@@ -253,16 +249,16 @@ impl SessionAuthority {
             key,
             generation,
             replayed: HashSet::new(),
-            replay_order: VecDeque::new(),
         }
     }
 
     /// Authenticate one proof and consume its nonce.
     pub fn authenticate(
         &mut self,
+        observed_cid: PeerCid,
         proof: SessionProof,
     ) -> Result<ReadySession, SessionRejectReason> {
-        if !self.expected.cid.matches(proof.identity.cid) {
+        if !self.expected.cid.matches(observed_cid) || !observed_cid.matches(proof.identity.cid) {
             return Err(SessionRejectReason::CidMismatch);
         }
         if self.expected.guest != proof.identity.guest {
@@ -277,17 +273,14 @@ impl SessionAuthority {
         if self.replayed.contains(&proof.nonce) {
             return Err(SessionRejectReason::Replay);
         }
+        if self.replayed.len() >= MAX_REPLAY_ENTRIES {
+            return Err(SessionRejectReason::AuthorityUnavailable);
+        }
         let expected_tag = sign_tag(&self.key, &proof.identity, &proof.nonce, proof.generation);
         if !constant_time_equal(&expected_tag, proof.tag()) {
             return Err(SessionRejectReason::SignatureInvalid);
         }
         self.replayed.insert(proof.nonce);
-        self.replay_order.push_back(proof.nonce);
-        if self.replay_order.len() > MAX_REPLAY_ENTRIES
-            && let Some(oldest) = self.replay_order.pop_front()
-        {
-            self.replayed.remove(&oldest);
-        }
         Ok(ReadySession {
             identity: self.expected.clone(),
             state: SessionState::Ready,

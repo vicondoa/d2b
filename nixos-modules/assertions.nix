@@ -2229,6 +2229,16 @@ let
     && builtins.hasAttr (builtins.elemAt parts 1) resources
     && resources.${builtins.elemAt parts 1}.type == "Provider";
 
+  zoneResolvesAs = resources: expectedType: ref:
+    let
+      parts = if builtins.isString ref then lib.splitString "/" ref else [ ];
+    in
+    builtins.isString ref
+    && lib.length parts == 2
+    && builtins.elemAt parts 0 == expectedType
+    && builtins.hasAttr (builtins.elemAt parts 1) resources
+    && resources.${builtins.elemAt parts 1}.type == expectedType;
+
   # Walk one Zone's ancestry. Returns true when the walk terminates at a
   # parentless Zone within the depth budget and never revisits a name.
   # A parent that is not declared terminates the walk: the missing-parent
@@ -2355,7 +2365,7 @@ let
                 && lib.all (key: builtins.elem key vsockTransportSettingKeys)
                   (builtins.attrNames settings)
                 && builtins.hasAttr "guestRef" settings
-                && lib.hasPrefix "Guest/" settings.guestRef
+                && zoneResolvesAs zone.resources "Guest" settings.guestRef
                 && (settings.portClass or "d2b-link") == "d2b-link"
                 && builtins.isInt (settings.connectTimeoutSeconds or 30)
                 && (settings.connectTimeoutSeconds or 30) >= 1

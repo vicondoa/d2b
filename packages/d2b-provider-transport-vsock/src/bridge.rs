@@ -1,6 +1,7 @@
 //! Named-stream bridge lifecycle.
 
 use async_trait::async_trait;
+use std::sync::atomic::AtomicBool;
 use std::{
     fmt,
     sync::{
@@ -118,9 +119,11 @@ impl BridgeStats {
 }
 
 /// A cancel signal and completion notification for one bridge task.
+#[derive(Clone)]
 pub struct BridgeControl {
     stop: watch::Sender<bool>,
     completed: Arc<Notify>,
+    done: Arc<AtomicBool>,
 }
 
 impl BridgeControl {
@@ -131,6 +134,7 @@ impl BridgeControl {
             Self {
                 stop,
                 completed: Arc::new(Notify::new()),
+                done: Arc::new(AtomicBool::new(false)),
             },
             receiver,
         )
@@ -141,14 +145,22 @@ impl BridgeControl {
         let _ = self.stop.send(true);
     }
 
-    /// Wait for the bridge task to finish.
-    pub async fn wait(&self) {
-        self.completed.notified().await;
+    /// Mark the bridge as finished.
+    pub(crate) fn mark_completed(&self) {
+        self.done.store(true, Ordering::Release);
+        self.completed.notify_waiters();
     }
 
-    /// Clone the completion signal for the bridge task.
-    pub(crate) fn completion(&self) -> Arc<Notify> {
-        Arc::clone(&self.completed)
+    /// Wait for the bridge task to finish.
+    pub async fn wait(&self) {
+        if self.done.load(Ordering::Acquire) {
+            return;
+        }
+        let notified = self.completed.notified();
+        if self.done.load(Ordering::Acquire) {
+            return;
+        }
+        notified.await;
     }
 }
 

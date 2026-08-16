@@ -196,40 +196,85 @@ where
             return Err(RelayEffectError::Transient);
         }
         self.phase = RelayPhase::Starting;
-        let reservation = self.port.reserve_cid(&self.binding).await?;
-        let listener = match self.port.bind_listener(&self.binding, &reservation).await {
-            Ok(listener) => listener,
+        let reservation = match self.port.reserve_cid(&self.binding).await {
+            Ok(reservation) => reservation,
             Err(error) => {
-                let _ = self.port.release_cid(&reservation).await;
-                self.phase = RelayPhase::Degraded;
-                return Err(error);
-            }
-        };
-        let process = match self
-            .port
-            .spawn_relay(&self.binding, &listener, &reservation)
-            .await
-        {
-            Ok(process) => process,
-            Err(error) => {
-                let _ = self.port.close_listener(&listener).await;
-                let _ = self.port.release_cid(&reservation).await;
-                self.phase = RelayPhase::Degraded;
+                self.phase = RelayPhase::Idle;
                 return Err(error);
             }
         };
         self.reservation = Some(reservation);
+        let listener = match self
+            .port
+            .bind_listener(
+                &self.binding,
+                self.reservation.as_ref().expect("reservation"),
+            )
+            .await
+        {
+            Ok(listener) => listener,
+            Err(error) => {
+                if self
+                    .port
+                    .release_cid(self.reservation.as_ref().expect("reservation"))
+                    .await
+                    .is_ok()
+                {
+                    self.reservation = None;
+                    self.phase = RelayPhase::Idle;
+                } else {
+                    self.phase = RelayPhase::Degraded;
+                }
+                return Err(error);
+            }
+        };
         self.listener = Some(listener);
+        let process = match self
+            .port
+            .spawn_relay(
+                &self.binding,
+                self.listener.as_ref().expect("listener"),
+                self.reservation.as_ref().expect("reservation"),
+            )
+            .await
+        {
+            Ok(process) => process,
+            Err(error) => {
+                let listener_closed = self
+                    .port
+                    .close_listener(self.listener.as_ref().expect("listener"))
+                    .await
+                    .is_ok();
+                if listener_closed {
+                    self.listener = None;
+                }
+                let reservation_released = self
+                    .port
+                    .release_cid(self.reservation.as_ref().expect("reservation"))
+                    .await
+                    .is_ok();
+                if reservation_released {
+                    self.reservation = None;
+                }
+                self.phase = if listener_closed && reservation_released {
+                    RelayPhase::Idle
+                } else {
+                    RelayPhase::Degraded
+                };
+                return Err(error);
+            }
+        };
         self.process = Some(process);
         self.phase = RelayPhase::Ready;
         Ok(())
     }
 
     /// Adopt only the exact matching listener and relay after restart.
-    pub async fn adopt(&mut self) -> Result<(), RelayEffectError> {
+    pub async fn adopt(&mut self, reservation: P::CidReservation) -> Result<(), RelayEffectError> {
         if !matches!(self.phase, RelayPhase::Idle | RelayPhase::Closed) {
             return Err(RelayEffectError::Transient);
         }
+        self.reservation = Some(reservation);
         let Some(observation) = self.port.observe(&self.binding).await? else {
             self.phase = RelayPhase::Degraded;
             return Err(RelayEffectError::RestartMismatch);
@@ -241,18 +286,6 @@ where
         self.listener = Some(observation.listener);
         self.process = Some(observation.process);
         self.phase = RelayPhase::Ready;
-        Ok(())
-    }
-
-    /// Attach an already rehydrated CID reservation to an adopted relay.
-    pub fn attach_reservation(
-        &mut self,
-        reservation: P::CidReservation,
-    ) -> Result<(), RelayEffectError> {
-        if !matches!(self.phase, RelayPhase::Idle | RelayPhase::Closed) {
-            return Err(RelayEffectError::Transient);
-        }
-        self.reservation = Some(reservation);
         Ok(())
     }
 

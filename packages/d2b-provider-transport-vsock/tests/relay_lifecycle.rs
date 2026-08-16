@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex};
 #[derive(Default)]
 struct FakeRelayPort {
     calls: Arc<Mutex<Vec<&'static str>>>,
+    fail_reserve: Arc<Mutex<bool>>,
     fail_release: Arc<Mutex<bool>>,
     observed: Arc<Mutex<Option<RelayObservation<u64, u64>>>>,
 }
@@ -24,7 +25,11 @@ impl RelayEffectPort for FakeRelayPort {
         _: &RelayBinding,
     ) -> Result<Self::CidReservation, RelayEffectError> {
         self.calls.lock().unwrap().push("reserve-cid");
-        Ok(1)
+        if *self.fail_reserve.lock().unwrap() {
+            Err(RelayEffectError::CidAuthorityConflict)
+        } else {
+            Ok(1)
+        }
     }
 
     async fn bind_listener(
@@ -100,7 +105,10 @@ fn finalization_closes_relay_before_releasing_cid_authority() {
         let guest = binding().guest().clone();
         let mut authority = SessionAuthority::new(guest.clone(), key.clone(), 1);
         let session = authority
-            .authenticate(SessionProof::sign(&key, &guest, [1; 32], 1))
+            .authenticate(
+                PeerCid::from_core(42).unwrap(),
+                SessionProof::sign(&key, &guest, [1; 32], 1),
+            )
             .unwrap();
         let mut relay = NativeGuestRelay::new(port, binding());
         relay.start(&session).await.unwrap();
@@ -135,8 +143,9 @@ fn restart_adopts_only_the_matching_listener_and_process() {
             process: 3,
         });
         let mut relay = NativeGuestRelay::new(port, binding.clone());
-        relay.adopt().await.unwrap();
+        relay.adopt(1).await.unwrap();
         assert_eq!(relay.phase(), RelayPhase::Ready);
+        relay.finalize().await.unwrap();
 
         let port = FakeRelayPort::default();
         *port.observed.lock().unwrap() = Some(RelayObservation {
@@ -155,10 +164,37 @@ fn restart_adopts_only_the_matching_listener_and_process() {
         });
         let mut relay = NativeGuestRelay::new(port, binding);
         assert_eq!(
-            relay.adopt().await.unwrap_err(),
+            relay.adopt(1).await.unwrap_err(),
             RelayEffectError::RestartMismatch
         );
         assert_eq!(relay.phase(), RelayPhase::Degraded);
+    });
+}
+
+#[test]
+fn reserve_failure_leaves_relay_retryable() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let port = FakeRelayPort::default();
+        *port.fail_reserve.lock().unwrap() = true;
+        let key = GuestControlKey::from_core([7; 32]);
+        let guest = binding().guest().clone();
+        let mut authority = SessionAuthority::new(guest.clone(), key.clone(), 1);
+        let session = authority
+            .authenticate(
+                PeerCid::from_core(42).unwrap(),
+                SessionProof::sign(&key, &guest, [4; 32], 1),
+            )
+            .unwrap();
+        let mut relay = NativeGuestRelay::new(port, binding());
+        assert_eq!(
+            relay.start(&session).await.unwrap_err(),
+            RelayEffectError::CidAuthorityConflict
+        );
+        assert_eq!(relay.phase(), RelayPhase::Idle);
     });
 }
 
@@ -175,7 +211,10 @@ fn failed_cid_release_retains_authority_for_retry() {
         let guest = binding().guest().clone();
         let mut authority = SessionAuthority::new(guest.clone(), key.clone(), 1);
         let session = authority
-            .authenticate(SessionProof::sign(&key, &guest, [3; 32], 1))
+            .authenticate(
+                PeerCid::from_core(42).unwrap(),
+                SessionProof::sign(&key, &guest, [3; 32], 1),
+            )
             .unwrap();
         let mut relay = NativeGuestRelay::new(port, binding());
         relay.start(&session).await.unwrap();

@@ -65,18 +65,25 @@ impl NamedStreamPort for FakeStreams {
     }
 }
 
-fn session() -> ReadySession {
-    let identity = GuestIdentity::new(
+fn identity() -> GuestIdentity {
+    GuestIdentity::new(
         ResourceRef::parse("Guest/guest-a").unwrap(),
         ZoneId::parse("work").unwrap(),
         PeerCid::from_core(42).unwrap(),
         "boot-a",
     )
-    .unwrap();
+    .unwrap()
+}
+
+fn session() -> ReadySession {
+    let identity = identity();
     let key = GuestControlKey::from_core([1; 32]);
     let mut authority = SessionAuthority::new(identity.clone(), key.clone(), 1);
     authority
-        .authenticate(SessionProof::sign(&key, &identity, [2; 32], 1))
+        .authenticate(
+            PeerCid::from_core(42).unwrap(),
+            SessionProof::sign(&key, &identity, [2; 32], 1),
+        )
         .unwrap()
 }
 
@@ -109,7 +116,7 @@ fn open_observe_and_close_release_the_bridge() {
         };
         let stream_closes = Arc::clone(&streams.closes);
         let stream_peers = Arc::clone(&streams.peers);
-        let service = VsockTransportService::new(effect, streams);
+        let service = VsockTransportService::new(effect, streams, identity());
         let opened = service.open_transport(&session(), request()).await.unwrap();
         let mut effect_peer = effect_peers.lock().unwrap().pop().unwrap();
         let mut stream_peer = stream_peers.lock().unwrap().pop().unwrap();
@@ -122,24 +129,48 @@ fn open_observe_and_close_release_the_bridge() {
         effect_peer.read_exact(&mut received).await.unwrap();
         assert_eq!(&received, b"core-to-guest");
         let observed = service
-            .observe_transport(d2b_provider_transport_vsock::ObserveTransportRequest {
+            .observe_snapshot(d2b_provider_transport_vsock::ObserveTransportRequest {
                 transport_handle: opened.transport_handle,
                 include_bytes: true,
             })
             .await
             .unwrap();
         assert_eq!(observed.phase, TransportPhase::Acquired);
+        let mut events = service
+            .observe_transport(d2b_provider_transport_vsock::ObserveTransportRequest {
+                transport_handle: opened.transport_handle,
+                include_bytes: true,
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            events.recv().await,
+            Some(d2b_provider_transport_vsock::TransportEvent::Acquired)
+        );
         service
             .close_transport(d2b_provider_transport_vsock::CloseTransportRequest {
                 transport_handle: opened.transport_handle,
             })
             .await
             .unwrap();
+        loop {
+            match events.recv().await {
+                Some(d2b_provider_transport_vsock::TransportEvent::BytesTransferred {
+                    rx_bytes,
+                    tx_bytes,
+                }) => {
+                    assert_eq!((rx_bytes, tx_bytes), (13, 13));
+                }
+                Some(d2b_provider_transport_vsock::TransportEvent::Released) => break,
+                Some(_) => {}
+                None => panic!("event stream ended before release"),
+            }
+        }
         assert_eq!(*effect_closes.lock().unwrap(), 1);
         assert_eq!(*stream_closes.lock().unwrap(), 1);
         assert_eq!(
             service
-                .observe_transport(d2b_provider_transport_vsock::ObserveTransportRequest {
+                .observe_snapshot(d2b_provider_transport_vsock::ObserveTransportRequest {
                     transport_handle: opened.transport_handle,
                     include_bytes: false,
                 })
@@ -150,7 +181,7 @@ fn open_observe_and_close_release_the_bridge() {
         );
         assert_eq!(
             service
-                .observe_transport(d2b_provider_transport_vsock::ObserveTransportRequest {
+                .observe_snapshot(d2b_provider_transport_vsock::ObserveTransportRequest {
                     transport_handle: d2b_provider_transport_vsock::TransportHandle::from_core(999),
                     include_bytes: false,
                 })

@@ -31,7 +31,7 @@ pub use errors::{ServiceError, TransportError, VsockEffectError};
 pub use framing::{FramedVsockTransport, VsockTransportDescriptor};
 pub use limits::{
     CLOSE_GRACE_MS, MAX_ACTIVE_TRANSPORTS, MAX_FRAME_BYTES, MAX_OPEN_DEADLINE_MS,
-    MIN_OPEN_DEADLINE_MS,
+    MAX_REPLAY_ENTRIES, MIN_OPEN_DEADLINE_MS,
 };
 pub use metrics::{TransportMetricLabels, TransportMetricOperation, TransportMetricOutcome};
 pub use relay::{
@@ -39,7 +39,7 @@ pub use relay::{
 };
 pub use service::{
     CloseTransportRequest, ObserveTransportRequest, OpenTransportRequest, OpenTransportResponse,
-    ServicePhase, TransportObservation, TransportPhase, VsockTransportService,
+    ServicePhase, TransportEvent, TransportObservation, TransportPhase, VsockTransportService,
 };
 pub use settings::{PortClass, SettingsError, VsockTransportSettings};
 pub use state_volume::{EMPTY_STATE_SCHEMA, STATE_LAYOUT_USER, StateVolumeSpec};

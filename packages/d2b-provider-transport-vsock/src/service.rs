@@ -7,7 +7,7 @@ use crate::{
         TransportHandle, run_bridge,
     },
     effect_port::{OpaqueBindingId, OpaqueEndpointId, TransportRole, VsockEffectPort},
-    errors::ServiceError,
+    errors::{ServiceError, VsockEffectError},
     framing::VsockTransportDescriptor,
     limits::{CLOSE_GRACE_MS, MAX_ACTIVE_TRANSPORTS, MAX_OPEN_DEADLINE_MS, MIN_OPEN_DEADLINE_MS},
 };
@@ -20,7 +20,7 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::{
-    sync::{Mutex, OwnedSemaphorePermit, Semaphore},
+    sync::{Mutex, OwnedSemaphorePermit, Semaphore, mpsc},
     time::timeout,
 };
 
@@ -104,6 +104,29 @@ pub struct ObserveTransportRequest {
     pub include_bytes: bool,
 }
 
+/// Bounded lifecycle event emitted by ObserveTransport.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransportEvent {
+    /// The effect stream and named stream were acquired.
+    Acquired,
+    /// Bounded byte counters for one observation interval.
+    BytesTransferred {
+        /// Bytes received from the vsock side.
+        rx_bytes: u64,
+        /// Bytes sent to the vsock side.
+        tx_bytes: u64,
+    },
+    /// A bridge error occurred.
+    Error {
+        /// Closed error class.
+        kind: &'static str,
+        /// Whether the owner may reopen the transport.
+        recoverable: bool,
+    },
+    /// The bridge and both endpoints were released.
+    Released,
+}
+
 /// Provider lifecycle phase for one transport handle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TransportPhase {
@@ -143,6 +166,9 @@ pub enum ServicePhase {
     Degraded,
 }
 
+type EventSubscriber = (bool, mpsc::Sender<TransportEvent>);
+type EventSubscribers = Arc<Mutex<Vec<EventSubscriber>>>;
+
 /// The single transport-vsock service component for one Zone.
 pub struct VsockTransportService<P, N>
 where
@@ -151,6 +177,7 @@ where
 {
     effect: Arc<P>,
     streams: Arc<N>,
+    expected_identity: crate::GuestIdentity,
     active: Arc<Mutex<HashMap<TransportHandle, TransportEntry>>>,
     completed: Arc<Mutex<HashMap<TransportHandle, TransportObservation>>>,
     slots: Arc<Semaphore>,
@@ -159,6 +186,9 @@ where
 
 struct TransportEntry {
     control: BridgeControl,
+    abort: tokio::task::AbortHandle,
+    subscribers: EventSubscribers,
+    history: Arc<Mutex<Vec<TransportEvent>>>,
     phase: Arc<Mutex<TransportPhase>>,
     exit: Arc<Mutex<Option<BridgeExit>>>,
     stats: Arc<BridgeStats>,
@@ -171,10 +201,11 @@ where
     N: NamedStreamPort,
 {
     /// Construct a service over the child-core effect and stream ports.
-    pub fn new(effect: P, streams: N) -> Self {
+    pub fn new(effect: P, streams: N, expected_identity: crate::GuestIdentity) -> Self {
         Self {
             effect: Arc::new(effect),
             streams: Arc::new(streams),
+            expected_identity,
             active: Arc::new(Mutex::new(HashMap::new())),
             completed: Arc::new(Mutex::new(HashMap::new())),
             slots: Arc::new(Semaphore::new(MAX_ACTIVE_TRANSPORTS)),
@@ -205,8 +236,12 @@ where
         session: &ReadySession,
         request: OpenTransportRequest,
     ) -> Result<OpenTransportResponse, ServiceError> {
+        self.reap_released().await;
         if session.state() != crate::SessionState::Ready {
             return Err(ServiceError::SessionNotReady);
+        }
+        if !session.matches(&self.expected_identity) {
+            return Err(ServiceError::SessionIdentityMismatch);
         }
         request.validate()?;
         let permit = Arc::clone(&self.slots)
@@ -223,41 +258,96 @@ where
             )
             .await
             .map_err(ServiceError::Effect)?;
-        let (stream_id, named_stream) = match self.streams.open_named_stream().await {
-            Ok(value) => value,
-            Err(_) => {
-                let _ = self.effect.close(effect_stream).await;
-                return Err(ServiceError::StreamUnavailable);
-            }
-        };
+        let open_deadline = Duration::from_millis(u64::from(request.deadline_ms));
+        let (stream_id, named_stream) =
+            match timeout(open_deadline, self.streams.open_named_stream()).await {
+                Ok(Ok(value)) => value,
+                Ok(Err(_)) => {
+                    let _ = timeout(
+                        Duration::from_millis(CLOSE_GRACE_MS),
+                        self.effect.close(effect_stream),
+                    )
+                    .await;
+                    return Err(ServiceError::StreamUnavailable);
+                }
+                Err(_) => {
+                    let _ = timeout(
+                        Duration::from_millis(CLOSE_GRACE_MS),
+                        self.effect.close(effect_stream),
+                    )
+                    .await;
+                    return Err(ServiceError::Effect(VsockEffectError::DeadlineExceeded));
+                }
+            };
         let handle = TransportHandle::from_core(self.next_handle.fetch_add(1, Ordering::Relaxed));
         let (control, stop) = BridgeControl::new();
-        let completion = control.completion();
+        let task_control = control.clone();
         let phase = Arc::new(Mutex::new(TransportPhase::Acquired));
         let exit = Arc::new(Mutex::new(None));
         let stats = Arc::new(BridgeStats::default());
+        let subscribers = Arc::new(Mutex::new(Vec::new()));
+        let history = Arc::new(Mutex::new(vec![TransportEvent::Acquired]));
         let task_effect = Arc::clone(&self.effect);
         let task_streams = Arc::clone(&self.streams);
         let task_phase = Arc::clone(&phase);
         let task_exit = Arc::clone(&exit);
         let task_stats = Arc::clone(&stats);
-        tokio::spawn(async move {
+        let task_subscribers = Arc::clone(&subscribers);
+        let task_history = Arc::clone(&history);
+        let task = tokio::spawn(async move {
             let (effect_stream, _named_stream, reason) =
-                run_bridge(effect_stream, named_stream, stop, task_stats).await;
-            let effect_result = task_effect.close(effect_stream).await;
-            let stream_result = task_streams.close_named_stream(stream_id).await;
+                run_bridge(effect_stream, named_stream, stop, Arc::clone(&task_stats)).await;
+            let effect_result = timeout(
+                Duration::from_millis(CLOSE_GRACE_MS),
+                task_effect.close(effect_stream),
+            )
+            .await
+            .is_ok_and(|result| result.is_ok());
+            let stream_result = timeout(
+                Duration::from_millis(CLOSE_GRACE_MS),
+                task_streams.close_named_stream(stream_id),
+            )
+            .await
+            .is_ok_and(|result| result.is_ok());
             *task_exit.lock().await = Some(reason);
-            *task_phase.lock().await = if effect_result.is_ok() && stream_result.is_ok() {
+            if reason == BridgeExit::IoError {
+                emit_event(
+                    &task_subscribers,
+                    &task_history,
+                    TransportEvent::Error {
+                        kind: "bridge-io",
+                        recoverable: false,
+                    },
+                )
+                .await;
+            } else {
+                let rx_bytes = task_stats.bytes_from_vsock();
+                let tx_bytes = task_stats.bytes_to_vsock();
+                if rx_bytes != 0 || tx_bytes != 0 {
+                    emit_event(
+                        &task_subscribers,
+                        &task_history,
+                        TransportEvent::BytesTransferred { rx_bytes, tx_bytes },
+                    )
+                    .await;
+                }
+            }
+            *task_phase.lock().await = if effect_result && stream_result {
                 TransportPhase::Released
             } else {
                 TransportPhase::Degraded
             };
-            completion.notify_waiters();
+            emit_event(&task_subscribers, &task_history, TransportEvent::Released).await;
+            task_control.mark_completed();
         });
+        let abort = task.abort_handle();
         self.active.lock().await.insert(
             handle,
             TransportEntry {
                 control,
+                abort,
+                subscribers,
+                history,
                 phase,
                 exit,
                 stats,
@@ -280,7 +370,7 @@ where
             let active = self.active.lock().await;
             active
                 .get(&request.transport_handle)
-                .map(|entry| (entry.control.completion(), Arc::clone(&entry.phase)))
+                .map(|entry| (entry.control.clone(), Arc::clone(&entry.phase)))
         };
         if self
             .completed
@@ -295,16 +385,8 @@ where
         };
         if *phase.lock().await == TransportPhase::Released {
             if let Some(entry) = self.active.lock().await.remove(&request.transport_handle) {
-                self.completed.lock().await.insert(
-                    request.transport_handle,
-                    TransportObservation {
-                        phase: TransportPhase::Released,
-                        descriptor: VsockTransportDescriptor::default(),
-                        bytes_rx: Some(entry.stats.bytes_from_vsock()),
-                        bytes_tx: Some(entry.stats.bytes_to_vsock()),
-                        last_exit: *entry.exit.lock().await,
-                    },
-                );
+                self.remember_completed(request.transport_handle, entry)
+                    .await;
             }
             return Ok(());
         }
@@ -312,48 +394,46 @@ where
             entry.control.stop();
             *entry.phase.lock().await = TransportPhase::Closing;
         }
-        if timeout(Duration::from_millis(CLOSE_GRACE_MS), completion.notified())
+        if timeout(Duration::from_millis(CLOSE_GRACE_MS), completion.wait())
             .await
             .is_err()
         {
             if let Some(entry) = self.active.lock().await.get(&request.transport_handle) {
+                entry.abort.abort();
                 *entry.phase.lock().await = TransportPhase::Degraded;
             }
             return Err(ServiceError::CloseUnconfirmed);
         }
         if let Some(entry) = self.active.lock().await.remove(&request.transport_handle) {
-            let observation = TransportObservation {
-                phase: TransportPhase::Released,
-                descriptor: VsockTransportDescriptor::default(),
-                bytes_rx: Some(entry.stats.bytes_from_vsock()),
-                bytes_tx: Some(entry.stats.bytes_to_vsock()),
-                last_exit: *entry.exit.lock().await,
-            };
-            let mut completed = self.completed.lock().await;
-            if completed.len() >= MAX_ACTIVE_TRANSPORTS
-                && let Some(oldest) = completed.keys().next().copied()
-            {
-                completed.remove(&oldest);
-            }
-            completed.insert(request.transport_handle, observation);
+            self.remember_completed(request.transport_handle, entry)
+                .await;
         }
         Ok(())
     }
 
-    /// Observe one transport without exposing identity, path, CID, or port.
-    pub async fn observe_transport(
+    /// Observe one transport snapshot without exposing identity, path, CID, or port.
+    pub async fn observe_snapshot(
         &self,
         request: ObserveTransportRequest,
     ) -> Result<TransportObservation, ServiceError> {
         let active = self.active.lock().await;
         let Some(entry) = active.get(&request.transport_handle) else {
-            return self
+            let observation = self
                 .completed
                 .lock()
                 .await
                 .get(&request.transport_handle)
                 .copied()
-                .ok_or(ServiceError::UnknownTransportHandle);
+                .ok_or(ServiceError::UnknownTransportHandle)?;
+            return Ok(if request.include_bytes {
+                observation
+            } else {
+                TransportObservation {
+                    bytes_rx: None,
+                    bytes_tx: None,
+                    ..observation
+                }
+            });
         };
         let phase = *entry.phase.lock().await;
         let stats = if request.include_bytes {
@@ -370,17 +450,112 @@ where
         })
     }
 
+    /// Subscribe to one transport's bounded lifecycle event stream.
+    pub async fn observe_transport(
+        &self,
+        request: ObserveTransportRequest,
+    ) -> Result<mpsc::Receiver<TransportEvent>, ServiceError> {
+        let active = self.active.lock().await;
+        if let Some(entry) = active.get(&request.transport_handle) {
+            let (sender, receiver) = mpsc::channel(16);
+            for event in entry.history.lock().await.iter().copied() {
+                if request.include_bytes
+                    || !matches!(event, TransportEvent::BytesTransferred { .. })
+                {
+                    let _ = sender.try_send(event);
+                }
+            }
+            entry
+                .subscribers
+                .lock()
+                .await
+                .push((request.include_bytes, sender));
+            return Ok(receiver);
+        }
+        if self
+            .completed
+            .lock()
+            .await
+            .contains_key(&request.transport_handle)
+        {
+            let (sender, receiver) = mpsc::channel(2);
+            let _ = sender.try_send(TransportEvent::Released);
+            return Ok(receiver);
+        }
+        Err(ServiceError::UnknownTransportHandle)
+    }
+
     /// Finalize all handles owned by this service.
     pub async fn finalize(&self) -> Result<(), ServiceError> {
         let handles = self.active.lock().await.keys().copied().collect::<Vec<_>>();
+        let mut first_error = None;
         for handle in handles {
-            self.close_transport(CloseTransportRequest {
-                transport_handle: handle,
-            })
-            .await?;
+            if let Err(error) = self
+                .close_transport(CloseTransportRequest {
+                    transport_handle: handle,
+                })
+                .await
+            {
+                first_error.get_or_insert(error);
+            }
         }
-        Ok(())
+        first_error.map_or(Ok(()), Err)
     }
+
+    async fn reap_released(&self) {
+        let handles = {
+            let active = self.active.lock().await;
+            active
+                .iter()
+                .filter_map(|(handle, entry)| {
+                    entry
+                        .phase
+                        .try_lock()
+                        .ok()
+                        .filter(|phase| **phase == TransportPhase::Released)
+                        .map(|_| *handle)
+                })
+                .collect::<Vec<_>>()
+        };
+        for handle in handles {
+            if let Some(entry) = self.active.lock().await.remove(&handle) {
+                self.remember_completed(handle, entry).await;
+            }
+        }
+    }
+
+    async fn remember_completed(&self, handle: TransportHandle, entry: TransportEntry) {
+        let observation = TransportObservation {
+            phase: TransportPhase::Released,
+            descriptor: VsockTransportDescriptor::default(),
+            bytes_rx: Some(entry.stats.bytes_from_vsock()),
+            bytes_tx: Some(entry.stats.bytes_to_vsock()),
+            last_exit: *entry.exit.lock().await,
+        };
+        let mut completed = self.completed.lock().await;
+        if completed.len() >= MAX_ACTIVE_TRANSPORTS
+            && let Some(oldest) = completed.keys().next().copied()
+        {
+            completed.remove(&oldest);
+        }
+        completed.insert(handle, observation);
+    }
+}
+
+async fn emit_event(
+    subscribers: &EventSubscribers,
+    history: &Arc<Mutex<Vec<TransportEvent>>>,
+    event: TransportEvent,
+) {
+    history.lock().await.push(event);
+    let mut active = subscribers.lock().await;
+    active.retain(|(include_bytes, sender)| {
+        if !*include_bytes && matches!(event, TransportEvent::BytesTransferred { .. }) {
+            true
+        } else {
+            sender.try_send(event).is_ok()
+        }
+    });
 }
 
 fn futures_phase_is_degraded(entry: &TransportEntry) -> bool {

@@ -91,6 +91,8 @@ impl Error for VsockEffectError {}
 pub enum ServiceError {
     /// The supplied session is not Ready for transport use.
     SessionNotReady,
+    /// The supplied session is not bound to this Provider's Guest/Zone.
+    SessionIdentityMismatch,
     /// The request's endpoint ID is malformed.
     InvalidEndpointId,
     /// The request's binding ID is malformed.
@@ -114,6 +116,7 @@ impl ServiceError {
     pub const fn code(self) -> &'static str {
         match self {
             Self::SessionNotReady => "session-not-ready",
+            Self::SessionIdentityMismatch => "session-identity-mismatch",
             Self::InvalidEndpointId => "invalid-endpoint-id",
             Self::InvalidBindingId => "invalid-binding-id",
             Self::InvalidDeadline => "invalid-deadline",
