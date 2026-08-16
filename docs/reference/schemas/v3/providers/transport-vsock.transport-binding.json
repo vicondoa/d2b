@@ -1,0 +1,30 @@
+{
+  "$id": "https://d2bus.org/schemas/v3/providers/transport-vsock.transport-binding.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Closed ZoneLink settings for allocator-backed vsock transport.",
+  "properties": {
+    "connectTimeoutSeconds": {
+      "default": 30,
+      "maximum": 60,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "guestRef": {
+      "pattern": "^Guest/.+$",
+      "type": "string"
+    },
+    "portClass": {
+      "default": "d2b-link",
+      "enum": [
+        "d2b-link"
+      ],
+      "type": "string"
+    }
+  },
+  "required": [
+    "guestRef"
+  ],
+  "title": "TransportVsockBinding",
+  "type": "object"
+}

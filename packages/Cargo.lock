@@ -1468,6 +1468,17 @@ dependencies = [
 [[package]]
 name = "d2b-provider-transport-vsock"
 version = "0.0.0-bootstrap"
+dependencies = [
+ "async-trait",
+ "d2b-contracts",
+ "d2b-provider",
+ "d2b-session",
+ "ring",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
 
 [[package]]
 name = "d2b-provider-volume-local"
