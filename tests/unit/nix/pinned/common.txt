@@ -849,6 +849,7 @@ usbip-gating/disabled-proxy-firewall-rule-absent
 usbip-gating/disabled-socket-absent
 usbip-gating/enabled-backend-absent
 usbip-gating/enabled-backend-firewall-rule-absent
+usbip-gating/enabled-host-busid-claim-emitted
 usbip-gating/enabled-kernel-module-present
 usbip-gating/enabled-proxy-absent
 usbip-gating/enabled-proxy-firewall-rule-absent
@@ -863,6 +864,7 @@ usbip-gating/multi-env-work-backend-firewall-rule-absent
 usbip-gating/multi-env-work-proxy-absent
 usbip-gating/multi-env-work-proxy-firewall-rule-absent
 usbip-gating/multi-env-work-socket-absent
+usbip-gating/site-disabled-host-busid-claim-absent
 usbip-gating/site-enabled-disabled-vm-backend-absent
 usbip-gating/site-enabled-disabled-vm-backend-firewall-rule-absent
 usbip-gating/site-enabled-disabled-vm-kernel-module-absent
