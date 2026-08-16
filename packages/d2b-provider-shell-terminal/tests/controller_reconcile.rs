@@ -1,7 +1,9 @@
 use d2b_provider_shell_terminal::{
-    AdoptionDecision, CallerOrigin, ExecutionTarget, OpenSessionRequest, PoolSpec, Role, ShellPool,
-    ShellSession, ShellTerminalController, Subject, SupervisorCandidate, SupervisorIdentity,
+    AdoptionDecision, CallerOrigin, ExecutionTarget, InMemoryShellAuthority, OpenSessionRequest,
+    PoolSpec, Role, ShellPool, ShellSession, ShellTerminalController, Subject, SupervisorCandidate,
+    SupervisorIdentity,
 };
+use std::sync::Arc;
 
 fn pool() -> ShellPool {
     ShellPool::new(
@@ -20,10 +22,14 @@ fn pool() -> ShellPool {
     .unwrap()
 }
 
+fn controller() -> ShellTerminalController {
+    ShellTerminalController::new(Arc::new(InMemoryShellAuthority::new()))
+}
+
 #[test]
 fn controller_creates_one_pool_derived_session_without_provider_state() {
     assert!(OpenSessionRequest::new("guest_alice", "main", None).is_err());
-    let mut controller = ShellTerminalController::default();
+    let mut controller = controller();
     controller.insert_pool(pool()).unwrap();
     let request = Subject::new("dev", CallerOrigin::Local, [Role::ZoneAdmin]);
     let opened = controller
@@ -41,7 +47,8 @@ fn controller_creates_one_pool_derived_session_without_provider_state() {
 
 #[test]
 fn restored_sessions_block_recreation_after_controller_restart() {
-    let mut first_controller = ShellTerminalController::default();
+    let authority = Arc::new(InMemoryShellAuthority::new());
+    let mut first_controller = ShellTerminalController::new(authority.clone());
     first_controller.insert_pool(pool()).unwrap();
     let admin = Subject::new("dev", CallerOrigin::Local, [Role::ZoneAdmin]);
     let opened = first_controller
@@ -62,10 +69,8 @@ fn restored_sessions_block_recreation_after_controller_restart() {
         .unwrap()
         .attachment();
 
-    let mut recovered_controller = ShellTerminalController::default();
-    recovered_controller
-        .restore_pool_with_authority(pool(), opened.pool_attachment_authority())
-        .unwrap();
+    let mut recovered_controller = ShellTerminalController::new(authority);
+    recovered_controller.restore_pool(pool(), 1).unwrap();
     assert_eq!(
         recovered_controller
             .restore_session(
@@ -75,7 +80,6 @@ fn restored_sessions_block_recreation_after_controller_restart() {
                     opened.session().name(),
                     identity.clone(),
                 )],
-                opened.recovery_authority(),
             )
             .unwrap(),
         AdoptionDecision::Adopted
@@ -129,7 +133,7 @@ fn restored_sessions_block_recreation_after_controller_restart() {
 
 #[test]
 fn restarted_session_advances_generation_and_rejects_old_capability() {
-    let mut controller = ShellTerminalController::default();
+    let mut controller = controller();
     controller.insert_pool(pool()).unwrap();
     let admin = Subject::new("dev", CallerOrigin::Local, [Role::ZoneAdmin]);
     let opened = controller
@@ -168,7 +172,7 @@ fn restored_pool_attachment_count_blocks_new_attachments() {
         .unwrap(),
     )
     .unwrap();
-    let mut controller = ShellTerminalController::default();
+    let mut controller = controller();
     controller.restore_pool(restored_pool, 1).unwrap();
     let admin = Subject::new("dev", CallerOrigin::Local, [Role::ZoneAdmin]);
     let opened = controller
@@ -207,18 +211,19 @@ fn restored_pool_attachment_count_blocks_new_attachments() {
 
 #[test]
 fn recovery_authorities_refuse_different_pool_or_session() {
-    let mut controller = ShellTerminalController::default();
+    let authority = Arc::new(InMemoryShellAuthority::new());
+    let mut controller = ShellTerminalController::new(authority.clone());
     let source_pool = pool();
     controller.insert_pool(source_pool.clone()).unwrap();
     let admin = Subject::new("dev", CallerOrigin::Local, [Role::ZoneAdmin]);
-    let first = controller
+    let _first = controller
         .open_session(
             &admin,
             OpenSessionRequest::new("guest-alice", "main", None).unwrap(),
         )
         .unwrap();
     let different_pool = ShellPool::new(
-        "guest-bob",
+        "guest-alice",
         "dev",
         PoolSpec::new(
             ExecutionTarget::guest("work"),
@@ -231,20 +236,18 @@ fn recovery_authorities_refuse_different_pool_or_session() {
         .unwrap(),
     )
     .unwrap();
-    let mut recovered_controller = ShellTerminalController::default();
+    let mut recovered_controller = ShellTerminalController::new(authority.clone());
     assert!(
         recovered_controller
-            .restore_pool_with_authority(different_pool, first.pool_attachment_authority())
+            .restore_pool(different_pool, 0)
             .is_err()
     );
 
     let foreign_session =
         ShellSession::from_pool(&source_pool, "guest-alice-other", "other", None).unwrap();
     let identity = SupervisorIdentity::new([1; 32], [2; 32], 1).unwrap();
-    let mut session_recovery = ShellTerminalController::default();
-    session_recovery
-        .restore_pool_with_authority(source_pool, first.pool_attachment_authority())
-        .unwrap();
+    let mut session_recovery = ShellTerminalController::new(authority);
+    session_recovery.restore_pool(source_pool, 0).unwrap();
     assert_eq!(
         session_recovery
             .restore_session(
@@ -254,20 +257,19 @@ fn recovery_authorities_refuse_different_pool_or_session() {
                     foreign_session.name(),
                     identity.clone(),
                 )],
-                first.recovery_authority(),
             )
             .unwrap(),
         AdoptionDecision::Ambiguous
     );
     assert!(matches!(
         session_recovery.restart_supervisor(&admin, foreign_session.name()),
-        Err(d2b_provider_shell_terminal::ShellTerminalError::SupervisorAmbiguous)
+        Err(d2b_provider_shell_terminal::ShellTerminalError::StaleSessionGeneration)
     ));
 }
 
 #[test]
 fn controller_and_open_result_debug_are_redacted() {
-    let mut controller = ShellTerminalController::default();
+    let mut controller = controller();
     controller.insert_pool(pool()).unwrap();
     let admin = Subject::new("dev", CallerOrigin::Local, [Role::ZoneAdmin]);
     let opened = controller
@@ -288,7 +290,7 @@ fn controller_and_open_result_debug_are_redacted() {
 
 #[test]
 fn attachment_reconciliation_needs_proven_stale_handles() {
-    let mut controller = ShellTerminalController::default();
+    let mut controller = controller();
     controller.insert_pool(pool()).unwrap();
     let admin = Subject::new("dev", CallerOrigin::Local, [Role::ZoneAdmin]);
     let opened = controller
@@ -346,7 +348,7 @@ fn stale_retirement_preserves_the_authoritative_attachment_total() {
         .unwrap(),
     )
     .unwrap();
-    let mut controller = ShellTerminalController::default();
+    let mut controller = controller();
     controller.insert_pool(two_attachment_pool).unwrap();
     let admin = Subject::new("dev", CallerOrigin::Local, [Role::ZoneAdmin]);
     let opened = controller
@@ -385,6 +387,85 @@ fn stale_retirement_preserves_the_authoritative_attachment_total() {
                 &admin,
                 d2b_provider_shell_terminal::AttachRequest::new(opened.supervisor_generation(), 0)
                     .unwrap(),
+            )
+            .is_ok()
+    );
+}
+
+#[test]
+fn daemon_authority_fences_separate_controller_and_supervisor_processes() {
+    let authority = Arc::new(InMemoryShellAuthority::new());
+    let mut first_controller = ShellTerminalController::new(authority.clone());
+    first_controller.insert_pool(pool()).unwrap();
+    let admin = Subject::new("dev", CallerOrigin::Local, [Role::ZoneAdmin]);
+    let opened = first_controller
+        .open_session(
+            &admin,
+            OpenSessionRequest::new("guest-alice", "main", None).unwrap(),
+        )
+        .unwrap();
+    let identity =
+        SupervisorIdentity::new([1; 32], [2; 32], opened.supervisor_generation()).unwrap();
+    let mut old_supervisor = opened.start_supervisor(identity.clone()).unwrap();
+    let old_attachment = old_supervisor
+        .attach(
+            &admin,
+            d2b_provider_shell_terminal::AttachRequest::new(opened.supervisor_generation(), 0)
+                .unwrap(),
+        )
+        .unwrap()
+        .attachment();
+
+    let mut recovered_controller = ShellTerminalController::new(authority);
+    recovered_controller.restore_pool(pool(), 1).unwrap();
+    assert_eq!(
+        recovered_controller
+            .restore_session(
+                opened.session().clone(),
+                &identity,
+                &[SupervisorCandidate::new(
+                    opened.session().name(),
+                    identity.clone(),
+                )],
+            )
+            .unwrap(),
+        AdoptionDecision::Adopted
+    );
+    let restarted = recovered_controller
+        .restart_supervisor(&admin, opened.session().name())
+        .unwrap();
+    let mut new_supervisor = restarted
+        .start_supervisor(
+            SupervisorIdentity::new([3; 32], [4; 32], restarted.supervisor_generation()).unwrap(),
+        )
+        .unwrap();
+
+    assert!(matches!(
+        old_supervisor.attach(
+            &admin,
+            d2b_provider_shell_terminal::AttachRequest::new(opened.supervisor_generation(), 0)
+                .unwrap(),
+        ),
+        Err(d2b_provider_shell_terminal::ShellTerminalError::StaleSessionGeneration)
+    ));
+    assert!(matches!(
+        new_supervisor.attach(
+            &admin,
+            d2b_provider_shell_terminal::AttachRequest::new(restarted.supervisor_generation(), 0)
+                .unwrap(),
+        ),
+        Err(d2b_provider_shell_terminal::ShellTerminalError::CapacityExceeded)
+    ));
+    old_supervisor.detach(&admin, old_attachment).unwrap();
+    assert!(
+        new_supervisor
+            .attach(
+                &admin,
+                d2b_provider_shell_terminal::AttachRequest::new(
+                    restarted.supervisor_generation(),
+                    0,
+                )
+                .unwrap(),
             )
             .is_ok()
     );

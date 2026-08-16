@@ -1,8 +1,8 @@
 //! Per-session terminal supervisor contracts.
 
 use std::{
-    collections::BTreeSet,
-    sync::{Arc, Mutex},
+    collections::{BTreeMap, BTreeSet},
+    sync::Mutex,
 };
 
 use crate::{
@@ -91,7 +91,7 @@ pub struct SessionCapability {
 }
 
 impl SessionCapability {
-    pub(super) fn new(id: u64, generation: u64, session_name: String) -> Self {
+    fn new(id: u64, generation: u64, session_name: String) -> Self {
         Self {
             id,
             generation,
@@ -124,250 +124,397 @@ impl std::fmt::Debug for Attachment {
     }
 }
 
-/// The single-flight authority for one session supervisor generation.
-pub struct SessionAuthority {
+struct SessionEntry {
     fingerprint: SessionFingerprint,
-    generation: Mutex<u64>,
+    generation: u64,
+    capabilities: BTreeSet<u64>,
 }
 
-impl std::fmt::Debug for SessionAuthority {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("SessionAuthority(<redacted>)")
+struct PoolEntry {
+    fingerprint: PoolFingerprint,
+    retained_attachments: usize,
+    entries: BTreeSet<Attachment>,
+    next_attachment: u64,
+}
+
+#[derive(Default)]
+struct AuthorityState {
+    pools: BTreeMap<String, PoolEntry>,
+    sessions: BTreeMap<String, SessionEntry>,
+    next_capability: u64,
+}
+
+/// Daemon-owned authority operations required by controller and supervisor processes.
+///
+/// Production implementations must forward every operation to one durable
+/// daemon authority owner. The `Arc` held by provider objects is only a
+/// transport client; it must not contain the authoritative session generation,
+/// capability census, or attachment quota state.
+pub trait ShellAuthorityPort: Send + Sync {
+    /// Reconcile one pool's authoritative attachment census.
+    fn restore_pool(
+        &self,
+        pool: &ShellPool,
+        attached_streams: u32,
+    ) -> Result<(), ShellTerminalError>;
+
+    /// Create one exact session authority before its supervisor starts.
+    fn open_session(&self, session: &ShellSession) -> Result<(), ShellTerminalError>;
+
+    /// Verify that a recovered session remains the exact authoritative incumbent.
+    fn verify_recovery(
+        &self,
+        session: &ShellSession,
+        generation: u64,
+    ) -> Result<bool, ShellTerminalError>;
+
+    /// Advance a session generation after the previous owned supervisor retires.
+    fn advance_session(&self, session: &ShellSession) -> Result<u64, ShellTerminalError>;
+
+    /// Verify one supervisor request against the current session generation.
+    fn validate_session(
+        &self,
+        session: &ShellSession,
+        generation: u64,
+    ) -> Result<(), ShellTerminalError>;
+
+    /// Mint a one-shot capability for one exact session generation.
+    fn mint_capability(
+        &self,
+        session: &ShellSession,
+        generation: u64,
+    ) -> Result<SessionCapability, ShellTerminalError>;
+
+    /// Consume a capability exactly once.
+    fn consume_capability(
+        &self,
+        session: &ShellSession,
+        generation: u64,
+        capability: &SessionCapability,
+    ) -> Result<(), ShellTerminalError>;
+
+    /// Reserve one pool-wide attachment slot.
+    fn reserve_attachment(
+        &self,
+        session: &ShellSession,
+        generation: u64,
+    ) -> Result<Attachment, ShellTerminalError>;
+
+    /// Release one exact attachment after its owning session's named stream closes.
+    fn release_attachment(
+        &self,
+        session: &ShellSession,
+        attachment: &Attachment,
+    ) -> Result<(), ShellTerminalError>;
+
+    /// Reconcile a pool's observed attachment total without discarding live handles.
+    fn reconcile_pool_attachments(
+        &self,
+        pool: &ShellPool,
+        attached_streams: u32,
+    ) -> Result<(), ShellTerminalError>;
+
+    /// Retire only handles proved stale by the daemon's authoritative stream census.
+    fn retire_proven_stale(
+        &self,
+        pool: &ShellPool,
+        stale_attachments: &[Attachment],
+        attached_streams: u32,
+    ) -> Result<(), ShellTerminalError>;
+}
+
+/// Hermetic daemon-authority model for tests and integration fakes.
+///
+/// This type deliberately models a single daemon owner. Production callers
+/// must implement [`ShellAuthorityPort`] with the daemon's durable authority
+/// service and construct one client in each controller or supervisor process.
+#[derive(Default)]
+pub struct InMemoryShellAuthority {
+    state: Mutex<AuthorityState>,
+}
+
+impl InMemoryShellAuthority {
+    /// Construct an empty test authority owner.
+    pub fn new() -> Self {
+        Self::default()
     }
-}
 
-impl SessionAuthority {
-    pub(super) fn new(session: &ShellSession, generation: u64) -> Self {
-        Self {
-            fingerprint: SessionFingerprint::from_session(session),
-            generation: Mutex::new(generation),
+    fn lock(&self) -> Result<std::sync::MutexGuard<'_, AuthorityState>, ShellTerminalError> {
+        self.state
+            .lock()
+            .map_err(|_| ShellTerminalError::CapacityExceeded)
+    }
+
+    fn pool_mut<'a>(
+        state: &'a mut AuthorityState,
+        pool: &ShellPool,
+    ) -> Result<&'a mut PoolEntry, ShellTerminalError> {
+        let entry = state
+            .pools
+            .get_mut(pool.name())
+            .ok_or(ShellTerminalError::CapacityExceeded)?;
+        if entry.fingerprint != PoolFingerprint::from_pool(pool) {
+            return Err(ShellTerminalError::CapacityExceeded);
         }
+        Ok(entry)
     }
 
-    pub(super) fn matches(
+    fn session_mut<'a>(
+        state: &'a mut AuthorityState,
+        session: &ShellSession,
+    ) -> Result<&'a mut SessionEntry, ShellTerminalError> {
+        let entry = state
+            .sessions
+            .get_mut(session.name())
+            .ok_or(ShellTerminalError::StaleSessionGeneration)?;
+        if entry.fingerprint != SessionFingerprint::from_session(session) {
+            return Err(ShellTerminalError::StaleSessionGeneration);
+        }
+        Ok(entry)
+    }
+
+    fn reconcile_pool(
+        entry: &mut PoolEntry,
+        attached_streams: u32,
+    ) -> Result<(), ShellTerminalError> {
+        let attached_streams = attached_streams as usize;
+        let capacity = entry.fingerprint.max_attached as usize;
+        if attached_streams > capacity || attached_streams < entry.entries.len() {
+            return Err(ShellTerminalError::CapacityExceeded);
+        }
+        entry.retained_attachments = attached_streams - entry.entries.len();
+        Ok(())
+    }
+}
+
+impl std::fmt::Debug for InMemoryShellAuthority {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("InMemoryShellAuthority(<test-only>)")
+    }
+}
+
+impl ShellAuthorityPort for InMemoryShellAuthority {
+    fn restore_pool(
+        &self,
+        pool: &ShellPool,
+        attached_streams: u32,
+    ) -> Result<(), ShellTerminalError> {
+        let mut state = self.lock()?;
+        if let Some(entry) = state.pools.get_mut(pool.name()) {
+            if entry.fingerprint != PoolFingerprint::from_pool(pool) {
+                return Err(ShellTerminalError::CapacityExceeded);
+            }
+            return Self::reconcile_pool(entry, attached_streams);
+        }
+        let capacity = pool.spec().max_attached() as usize;
+        if attached_streams as usize > capacity {
+            return Err(ShellTerminalError::CapacityExceeded);
+        }
+        state.pools.insert(
+            pool.name().to_owned(),
+            PoolEntry {
+                fingerprint: PoolFingerprint::from_pool(pool),
+                retained_attachments: attached_streams as usize,
+                entries: BTreeSet::new(),
+                next_attachment: 0,
+            },
+        );
+        Ok(())
+    }
+
+    fn open_session(&self, session: &ShellSession) -> Result<(), ShellTerminalError> {
+        let mut state = self.lock()?;
+        if !state.pools.contains_key(session.pool_name())
+            || state.sessions.contains_key(session.name())
+        {
+            return Err(ShellTerminalError::CapacityExceeded);
+        }
+        state.sessions.insert(
+            session.name().to_owned(),
+            SessionEntry {
+                fingerprint: SessionFingerprint::from_session(session),
+                generation: 1,
+                capabilities: BTreeSet::new(),
+            },
+        );
+        Ok(())
+    }
+
+    fn verify_recovery(
         &self,
         session: &ShellSession,
         generation: u64,
     ) -> Result<bool, ShellTerminalError> {
-        Ok(*self
-            .generation
-            .lock()
-            .map_err(|_| ShellTerminalError::StaleSessionGeneration)?
-            == generation
-            && self.fingerprint == SessionFingerprint::from_session(session))
+        let mut state = self.lock()?;
+        let Some(entry) = state.sessions.get_mut(session.name()) else {
+            return Ok(false);
+        };
+        Ok(
+            entry.fingerprint == SessionFingerprint::from_session(session)
+                && entry.generation == generation,
+        )
     }
 
-    pub(super) fn advance(&self) -> Result<u64, ShellTerminalError> {
-        let mut generation = self
+    fn advance_session(&self, session: &ShellSession) -> Result<u64, ShellTerminalError> {
+        let mut state = self.lock()?;
+        let entry = Self::session_mut(&mut state, session)?;
+        entry.generation = entry
             .generation
-            .lock()
-            .map_err(|_| ShellTerminalError::StaleSessionGeneration)?;
-        *generation = generation
             .checked_add(1)
             .ok_or(ShellTerminalError::StaleSessionGeneration)?;
-        Ok(*generation)
+        entry.capabilities.clear();
+        Ok(entry.generation)
     }
 
-    fn with_current<T>(
+    fn validate_session(
         &self,
         session: &ShellSession,
-        expected_generation: u64,
-        operation: impl FnOnce() -> Result<T, ShellTerminalError>,
-    ) -> Result<T, ShellTerminalError> {
-        let current = self
-            .generation
-            .lock()
-            .map_err(|_| ShellTerminalError::StaleSessionGeneration)?;
-        if *current != expected_generation
-            || self.fingerprint != SessionFingerprint::from_session(session)
-        {
+        generation: u64,
+    ) -> Result<(), ShellTerminalError> {
+        let mut state = self.lock()?;
+        let entry = Self::session_mut(&mut state, session)?;
+        if entry.generation != generation {
             return Err(ShellTerminalError::StaleSessionGeneration);
         }
-        operation()
-    }
-}
-
-/// A synchronized attachment quota shared by all supervisors in one pool.
-#[derive(Debug)]
-pub(super) struct PoolAttachmentBudget {
-    capacity: usize,
-    retained_attachments: Mutex<usize>,
-    entries: Mutex<BTreeSet<Attachment>>,
-    next_id: Mutex<u64>,
-}
-
-impl PoolAttachmentBudget {
-    pub(super) fn restored(
-        capacity: u32,
-        retained_attachments: u32,
-    ) -> Result<Self, ShellTerminalError> {
-        if retained_attachments > capacity {
-            return Err(ShellTerminalError::CapacityExceeded);
-        }
-        Ok(Self {
-            capacity: capacity as usize,
-            retained_attachments: Mutex::new(retained_attachments as usize),
-            entries: Mutex::new(BTreeSet::new()),
-            next_id: Mutex::new(0),
-        })
+        Ok(())
     }
 
-    fn reserve(
+    fn mint_capability(
         &self,
-        session_name: &str,
+        session: &ShellSession,
+        generation: u64,
+    ) -> Result<SessionCapability, ShellTerminalError> {
+        let mut state = self.lock()?;
+        {
+            let entry = Self::session_mut(&mut state, session)?;
+            if entry.generation != generation {
+                return Err(ShellTerminalError::StaleSessionGeneration);
+            }
+        }
+        state.next_capability = state
+            .next_capability
+            .checked_add(1)
+            .ok_or(ShellTerminalError::CapabilityReused)?;
+        let id = state.next_capability;
+        Self::session_mut(&mut state, session)?
+            .capabilities
+            .insert(id);
+        Ok(SessionCapability::new(
+            id,
+            generation,
+            session.name().to_owned(),
+        ))
+    }
+
+    fn consume_capability(
+        &self,
+        session: &ShellSession,
+        generation: u64,
+        capability: &SessionCapability,
+    ) -> Result<(), ShellTerminalError> {
+        if capability.generation != generation {
+            return Err(ShellTerminalError::StaleSessionGeneration);
+        }
+        if capability.session_name != session.name() {
+            return Err(ShellTerminalError::CapabilitySessionMismatch);
+        }
+        let mut state = self.lock()?;
+        let entry = Self::session_mut(&mut state, session)?;
+        if entry.generation != generation {
+            return Err(ShellTerminalError::StaleSessionGeneration);
+        }
+        if !entry.capabilities.remove(&capability.id) {
+            return Err(ShellTerminalError::CapabilityReused);
+        }
+        Ok(())
+    }
+
+    fn reserve_attachment(
+        &self,
+        session: &ShellSession,
         generation: u64,
     ) -> Result<Attachment, ShellTerminalError> {
-        let mut entries = self
-            .entries
-            .lock()
-            .map_err(|_| ShellTerminalError::CapacityExceeded)?;
-        let retained_attachments = self
-            .retained_attachments
-            .lock()
-            .map_err(|_| ShellTerminalError::CapacityExceeded)?;
-        if retained_attachments.saturating_add(entries.len()) >= self.capacity {
+        let mut state = self.lock()?;
+        let session_entry = Self::session_mut(&mut state, session)?;
+        if session_entry.generation != generation {
+            return Err(ShellTerminalError::StaleSessionGeneration);
+        }
+        let pool = state
+            .pools
+            .get_mut(session.pool_name())
+            .ok_or(ShellTerminalError::CapacityExceeded)?;
+        if pool.fingerprint.name != session.pool_name()
+            || pool.retained_attachments.saturating_add(pool.entries.len())
+                >= pool.fingerprint.max_attached as usize
+        {
             return Err(ShellTerminalError::CapacityExceeded);
         }
-        let mut next_id = self
-            .next_id
-            .lock()
-            .map_err(|_| ShellTerminalError::CapacityExceeded)?;
-        *next_id = next_id
+        pool.next_attachment = pool
+            .next_attachment
             .checked_add(1)
             .ok_or(ShellTerminalError::CapacityExceeded)?;
         let attachment = Attachment {
-            id: *next_id,
-            session_name: session_name.to_owned(),
+            id: pool.next_attachment,
+            session_name: session.name().to_owned(),
             generation,
         };
-        entries.insert(attachment.clone());
+        pool.entries.insert(attachment.clone());
         Ok(attachment)
     }
 
-    fn release(&self, attachment: &Attachment) -> Result<(), ShellTerminalError> {
-        let mut entries = self
-            .entries
-            .lock()
-            .map_err(|_| ShellTerminalError::AttachmentUnknown)?;
-        if entries.remove(attachment) {
-            Ok(())
-        } else {
-            Err(ShellTerminalError::AttachmentUnknown)
+    fn release_attachment(
+        &self,
+        session: &ShellSession,
+        attachment: &Attachment,
+    ) -> Result<(), ShellTerminalError> {
+        if attachment.session_name != session.name() {
+            return Err(ShellTerminalError::AttachmentUnknown);
         }
+        let mut state = self.lock()?;
+        let Some(pool) = state
+            .pools
+            .values_mut()
+            .find(|pool| pool.entries.contains(attachment))
+        else {
+            return Err(ShellTerminalError::AttachmentUnknown);
+        };
+        pool.entries.remove(attachment);
+        Ok(())
     }
 
-    pub(super) fn reconcile_retained_attachments(
+    fn reconcile_pool_attachments(
         &self,
-        retained_attachments: u32,
+        pool: &ShellPool,
+        attached_streams: u32,
     ) -> Result<(), ShellTerminalError> {
-        let entries = self
-            .entries
-            .lock()
-            .map_err(|_| ShellTerminalError::CapacityExceeded)?;
-        let mut retained = self
-            .retained_attachments
-            .lock()
-            .map_err(|_| ShellTerminalError::CapacityExceeded)?;
-        if (retained_attachments as usize) > self.capacity
-            || (retained_attachments as usize) < entries.len()
-        {
-            return Err(ShellTerminalError::CapacityExceeded);
-        }
-        *retained = retained_attachments as usize - entries.len();
-        Ok(())
+        let mut state = self.lock()?;
+        Self::reconcile_pool(Self::pool_mut(&mut state, pool)?, attached_streams)
     }
 
     fn retire_proven_stale(
         &self,
+        pool: &ShellPool,
         stale_attachments: &[Attachment],
         attached_streams: u32,
     ) -> Result<(), ShellTerminalError> {
-        let mut entries = self
-            .entries
-            .lock()
-            .map_err(|_| ShellTerminalError::CapacityExceeded)?;
-        let mut retained = self
-            .retained_attachments
-            .lock()
-            .map_err(|_| ShellTerminalError::CapacityExceeded)?;
+        let mut state = self.lock()?;
+        let pool = Self::pool_mut(&mut state, pool)?;
         let distinct_stale: BTreeSet<_> = stale_attachments
             .iter()
-            .filter(|attachment| entries.contains(*attachment))
+            .filter(|attachment| pool.entries.contains(*attachment))
             .collect();
-        let remaining_entries = entries.len().saturating_sub(distinct_stale.len());
-        if (attached_streams as usize) > self.capacity
-            || (attached_streams as usize) < remaining_entries
+        let remaining_entries = pool.entries.len().saturating_sub(distinct_stale.len());
+        let attached_streams = attached_streams as usize;
+        if attached_streams > pool.fingerprint.max_attached as usize
+            || attached_streams < remaining_entries
         {
             return Err(ShellTerminalError::CapacityExceeded);
         }
         for attachment in distinct_stale {
-            entries.remove(attachment);
+            pool.entries.remove(attachment);
         }
-        *retained = attached_streams as usize - remaining_entries;
+        pool.retained_attachments = attached_streams - remaining_entries;
         Ok(())
-    }
-}
-
-/// The shared attachment authority that survives controller restart adoption.
-#[derive(Clone)]
-pub struct PoolAttachmentAuthority {
-    fingerprint: PoolFingerprint,
-    budget: Arc<PoolAttachmentBudget>,
-}
-
-impl std::fmt::Debug for PoolAttachmentAuthority {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("PoolAttachmentAuthority(<redacted>)")
-    }
-}
-
-impl PoolAttachmentAuthority {
-    pub(super) fn restored(
-        pool: &ShellPool,
-        capacity: u32,
-        retained_attachments: u32,
-    ) -> Result<Self, ShellTerminalError> {
-        Ok(Self {
-            fingerprint: PoolFingerprint::from_pool(pool),
-            budget: Arc::new(PoolAttachmentBudget::restored(
-                capacity,
-                retained_attachments,
-            )?),
-        })
-    }
-
-    pub(super) fn matches_pool(&self, pool: &ShellPool) -> bool {
-        self.fingerprint == PoolFingerprint::from_pool(pool)
-            && self.budget.capacity == pool.spec().max_attached() as usize
-    }
-
-    fn reserve(
-        &self,
-        session_name: &str,
-        generation: u64,
-    ) -> Result<Attachment, ShellTerminalError> {
-        self.budget.reserve(session_name, generation)
-    }
-
-    fn release(&self, attachment: &Attachment) -> Result<(), ShellTerminalError> {
-        self.budget.release(attachment)
-    }
-
-    pub(super) fn reconcile_retained_attachments(
-        &self,
-        retained_attachments: u32,
-    ) -> Result<(), ShellTerminalError> {
-        self.budget
-            .reconcile_retained_attachments(retained_attachments)
-    }
-
-    pub(super) fn retire_proven_stale(
-        &self,
-        stale_attachments: &[Attachment],
-        attached_streams: u32,
-    ) -> Result<(), ShellTerminalError> {
-        self.budget
-            .retire_proven_stale(stale_attachments, attached_streams)
     }
 }
 
@@ -410,10 +557,7 @@ pub struct SessionSupervisor {
     session: ShellSession,
     identity: SupervisorIdentity,
     ring: OutputRing,
-    attachment_authority: PoolAttachmentAuthority,
-    authority: Arc<SessionAuthority>,
-    attached: BTreeSet<Attachment>,
-    consumed_capabilities: BTreeSet<u64>,
+    authority: std::sync::Arc<dyn ShellAuthorityPort>,
 }
 
 impl SessionSupervisor {
@@ -421,8 +565,7 @@ impl SessionSupervisor {
     pub(super) fn new(
         session: ShellSession,
         identity: SupervisorIdentity,
-        attachment_authority: PoolAttachmentAuthority,
-        authority: Arc<SessionAuthority>,
+        authority: std::sync::Arc<dyn ShellAuthorityPort>,
     ) -> Self {
         let ring = OutputRing::new(session.output_ring_capacity() as usize)
             .expect("a validated session has a valid output ring capacity");
@@ -430,10 +573,7 @@ impl SessionSupervisor {
             session,
             identity,
             ring,
-            attachment_authority,
             authority,
-            attached: BTreeSet::new(),
-            consumed_capabilities: BTreeSet::new(),
         }
     }
 
@@ -444,19 +584,17 @@ impl SessionSupervisor {
         request: AttachRequest,
     ) -> Result<AttachReceipt, ShellTerminalError> {
         self.authorize(subject)?;
-        let authority = Arc::clone(&self.authority);
-        let session = self.session.clone();
         let generation = self.identity.generation();
-        authority.with_current(&session, generation, || {
-            if request.expected_generation != generation {
-                return Err(ShellTerminalError::StaleSessionGeneration);
-            }
-            let attachment = self.reserve_attachment()?;
-            Ok(AttachReceipt {
-                generation,
-                replay: self.ring.tail(request.tail_bytes as usize),
-                attachment,
-            })
+        if request.expected_generation != generation {
+            return Err(ShellTerminalError::StaleSessionGeneration);
+        }
+        let attachment = self
+            .authority
+            .reserve_attachment(&self.session, generation)?;
+        Ok(AttachReceipt {
+            generation,
+            replay: self.ring.tail(request.tail_bytes as usize),
+            attachment,
         })
     }
 
@@ -467,25 +605,16 @@ impl SessionSupervisor {
         capability: SessionCapability,
     ) -> Result<AttachReceipt, ShellTerminalError> {
         self.authorize(subject)?;
-        let authority = Arc::clone(&self.authority);
-        let session = self.session.clone();
         let generation = self.identity.generation();
-        authority.with_current(&session, generation, || {
-            if capability.generation != generation {
-                return Err(ShellTerminalError::StaleSessionGeneration);
-            }
-            if capability.session_name != self.session.name() {
-                return Err(ShellTerminalError::CapabilitySessionMismatch);
-            }
-            if !self.consumed_capabilities.insert(capability.id) {
-                return Err(ShellTerminalError::CapabilityReused);
-            }
-            let attachment = self.reserve_attachment()?;
-            Ok(AttachReceipt {
-                generation,
-                replay: self.ring.tail(0),
-                attachment,
-            })
+        self.authority
+            .consume_capability(&self.session, generation, &capability)?;
+        let attachment = self
+            .authority
+            .reserve_attachment(&self.session, generation)?;
+        Ok(AttachReceipt {
+            generation,
+            replay: self.ring.tail(0),
+            attachment,
         })
     }
 
@@ -496,26 +625,19 @@ impl SessionSupervisor {
         attachment: Attachment,
     ) -> Result<(), ShellTerminalError> {
         self.authorize(subject)?;
-        if attachment.generation != self.identity.generation()
-            || attachment.session_name != self.session.name()
-            || !self.attached.contains(&attachment)
-        {
-            return Err(ShellTerminalError::AttachmentUnknown);
-        }
-        self.attachment_authority.release(&attachment)?;
-        self.attached.remove(&attachment);
-        Ok(())
+        self.authority
+            .release_attachment(&self.session, &attachment)
     }
 
     /// Append bytes emitted by this supervisor-owned PTY to its bounded replay ring.
     pub fn record_pty_output(&mut self, bytes: &[u8]) {
-        let authority = Arc::clone(&self.authority);
-        let session = self.session.clone();
-        let generation = self.identity.generation();
-        let _ = authority.with_current(&session, generation, || {
+        if self
+            .authority
+            .validate_session(&self.session, self.identity.generation())
+            .is_ok()
+        {
             self.ring.append(bytes);
-            Ok(())
-        });
+        }
     }
 
     fn authorize(&self, subject: &Subject) -> Result<(), ShellTerminalError> {
@@ -525,14 +647,6 @@ impl SessionSupervisor {
             self.session.execution_target(),
         )
     }
-
-    fn reserve_attachment(&mut self) -> Result<Attachment, ShellTerminalError> {
-        let attachment = self
-            .attachment_authority
-            .reserve(self.session.name(), self.identity.generation())?;
-        self.attached.insert(attachment.clone());
-        Ok(attachment)
-    }
 }
 
 impl std::fmt::Debug for SessionSupervisor {
@@ -540,7 +654,6 @@ impl std::fmt::Debug for SessionSupervisor {
         formatter
             .debug_struct("SessionSupervisor")
             .field("generation", &self.identity.generation())
-            .field("attached", &self.attached.len())
             .field("ring", &self.ring)
             .finish()
     }

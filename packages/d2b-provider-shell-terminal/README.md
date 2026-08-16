@@ -34,8 +34,14 @@ for the implementation contract.
 ## Controllers / services / workers / binaries
 
 - `ShellTerminalController` creates pool-derived sessions after authorizing
-  the current request.
+  the current request. It requires a `ShellAuthorityPort` supplied by `d2bd`;
+  the port owns durable generation fencing, one-shot capability consumption,
+  and pool-wide attachment admission across controller and supervisor
+  processes.
 - `SessionSupervisor` owns one session's bounded PTY replay and attachments.
+- `InMemoryShellAuthority` is a hermetic test fake only. Production uses a
+  daemon authority client reconstructed from reconciled resource status and
+  the operation ledger after restart.
 - This provider crate declares no workers or binaries.
 
 ## Placement and dependencies
@@ -57,6 +63,9 @@ route lookup. Relay-authenticated callers cannot use Host user-domain pools.
   process conformance seam. The provider cannot open a broker or
   system-manager connection, inherit credentials, or receive raw process
   identifiers.
+- Provider-local `Arc` values are transport clients only. They cannot own
+  session generations, capabilities, or attachment quotas, which are always
+  checked by the daemon authority port.
 - The public controller service is `shell-terminal.v3`; supervisors expose
   `shell-session-supervisor.v1` and the named `terminal` stream.
 - Reconnect replays only bounded in-memory output. Stale generations and
