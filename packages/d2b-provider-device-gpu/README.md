@@ -60,6 +60,11 @@ The worker declarations are `device-<uid-short>-gpu`,
 component descriptor selects the crosvm and video-decoder artifacts. GPU and
 video finalization is ordered video first, then GPU/render-node.
 
+Host-global authority is reserved before `OpenDevice` or `SpawnRunner`.
+Restart adoption accepts one exact principal, platform, and generation
+identity and quarantines ambiguity. Finalization releases authority only after
+the broker confirms closure of every owned worker.
+
 ## Placement and dependencies
 
 All Provider workers are Host-placed and are supervised through Core's
@@ -96,6 +101,10 @@ physical-device identity are not copied into status. Metrics use fixed
 Provider, component, operation, outcome, and error labels only. Zone/resource
 names, selectors, paths, sockets, PIDs, and device identity are excluded.
 Core owns path-free audit records for broker effects.
+
+The component descriptor declares an empty ProviderStateSet and no `/state`
+mount. Provider diagnostics reject raw device paths, runtime socket paths, and
+unbounded text.
 
 ## Build and test
 
