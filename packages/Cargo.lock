@@ -1386,6 +1386,10 @@ version = "0.0.0-bootstrap"
 [[package]]
 name = "d2b-provider-shell-terminal"
 version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-contracts",
+ "d2b-process-conformance",
+]
 
 [[package]]
 name = "d2b-provider-supervisor"
@@ -1472,6 +1476,11 @@ dependencies = [
 [[package]]
 name = "d2b-provider-transport-unix"
 version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-contracts",
+ "getrandom 0.3.4",
+ "rustix 0.38.44",
+]
 
 [[package]]
 name = "d2b-provider-transport-vsock"
@@ -1751,6 +1760,7 @@ dependencies = [
  "d2b-provider-audio-pipewire",
  "d2b-provider-clipboard-wayland",
  "d2b-provider-device-tpm",
+ "d2b-provider-device-usbip",
  "d2b-provider-display-wayland",
  "d2b-provider-notification-desktop",
  "d2b-provider-runtime-azure-container-apps",
