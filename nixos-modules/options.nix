@@ -32,6 +32,7 @@
     ./options-envs.nix
     ./options-realms.nix
     ./options-vms.nix
+    ./options-guest-qemu-media.nix
     ./options-daemon.nix
     ./options-gateway.nix
   ];
