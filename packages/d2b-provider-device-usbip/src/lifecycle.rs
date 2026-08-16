@@ -592,6 +592,8 @@ impl BindingLifecycle {
             }
             AttachmentObservation::Missing => {
                 self.attach = None;
+                self.slot = None;
+                self.proxy = None;
                 self.phase = BindingPhase::WaitingForService;
             }
             AttachmentObservation::StaleIdentity => {

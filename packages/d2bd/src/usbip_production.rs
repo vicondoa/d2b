@@ -209,6 +209,10 @@ impl<'a, G> DaemonUsbipDispatcher<'a, G> {
         binding.as_resource_uid().to_canonical_string()
     }
 
+    fn attach_role(binding: &BindingIdentity) -> String {
+        format!("usbip-attach:{}", Self::binding_key(binding))
+    }
+
     fn spawn_runner(
         &mut self,
         binding: &BindingIdentity,
@@ -249,11 +253,12 @@ impl<'a, G> DaemonUsbipDispatcher<'a, G> {
         close_received_fds(&received_fds);
         let identity =
             AttachProcessIdentity::from_adapter(response.pid as u32, response.start_time_ticks);
+        let role = Self::attach_role(binding);
         self.state
             .pidfd_table
             .register(
                 self.context.vm_id.clone(),
-                "usbip-attach".to_owned(),
+                role.clone(),
                 crate::supervisor::pidfd_table::PidfdEntry {
                     pidfd,
                     pid: response.pid,
@@ -261,11 +266,12 @@ impl<'a, G> DaemonUsbipDispatcher<'a, G> {
                 },
             )
             .map_err(|_| BindingLifecycleError::Transient)?;
-        self.state
-            .pidfd_table
-            .snapshot()
-            .map_err(|_| BindingLifecycleError::Transient)?;
-        let _ = binding;
+        if self.state.pidfd_table.snapshot().is_err() {
+            self.state
+                .pidfd_table
+                .deregister(&self.context.vm_id, &role);
+            return Err(BindingLifecycleError::Transient);
+        }
         let _ = proxy;
         Ok(identity)
     }
@@ -441,13 +447,13 @@ impl<'a, G: GuestUsbipControl> UsbipBrokerDispatcher for DaemonUsbipDispatcher<'
 
     fn observe_attach_runner(
         &mut self,
-        _binding: &BindingIdentity,
+        binding: &BindingIdentity,
         identity: &AttachProcessIdentity,
     ) -> Result<AttachmentObservation, BindingLifecycleError> {
         if !self
             .state
             .pidfd_table
-            .contains(&self.context.vm_id, "usbip-attach")
+            .contains(&self.context.vm_id, &Self::attach_role(binding))
         {
             return Ok(AttachmentObservation::Missing);
         }
@@ -475,19 +481,20 @@ impl<'a, G: GuestUsbipControl> UsbipBrokerDispatcher for DaemonUsbipDispatcher<'
 
     fn close_attach_runner(
         &mut self,
-        _binding: &BindingIdentity,
+        binding: &BindingIdentity,
         identity: &AttachProcessIdentity,
     ) -> Result<(), BindingLifecycleError> {
         if self.attach_identity.as_ref() != Some(identity) {
             return Err(BindingLifecycleError::ForeignIdentity);
         }
+        let role = Self::attach_role(binding);
         self.state
             .pidfd_table
-            .signal(&self.context.vm_id, "usbip-attach", libc::SIGTERM)
+            .signal(&self.context.vm_id, &role, libc::SIGTERM)
             .map_err(|_| BindingLifecycleError::Transient)?;
         self.state
             .pidfd_table
-            .deregister(&self.context.vm_id, "usbip-attach");
+            .deregister(&self.context.vm_id, &role);
         self.attach_identity = None;
         Ok(())
     }

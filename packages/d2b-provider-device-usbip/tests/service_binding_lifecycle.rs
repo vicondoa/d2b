@@ -272,6 +272,34 @@ fn matching_restart_adopts_and_stale_identity_quarantines_without_effects() {
 }
 
 #[test]
+fn missing_restart_identity_drops_slot_and_proxy_before_reactivate() {
+    let zone = uid("123e4567-e89b-42d3-a456-426614174000");
+    let mut port = FakePort::default();
+    let mut service =
+        ServiceLifecycle::new(zone.clone(), uid("223e4567-e89b-42d3-a456-426614174001"));
+    service.activate(true, zone.clone(), &mut port).unwrap();
+    let mut supervisor = UsbipSupervisor::new(service);
+    supervisor
+        .add_binding(BindingLifecycle::new(
+            zone.clone(),
+            zone,
+            BindingIdentity::from_controller(uid("323e4567-e89b-42d3-a456-426614174002")),
+        ))
+        .unwrap();
+    supervisor.activate_binding(0, &mut port).unwrap();
+    port.calls.clear();
+    port.observation = AttachmentObservation::Missing;
+    supervisor
+        .adopt_binding(0, AttachProcessIdentity::from_adapter(7, 11), &mut port)
+        .unwrap();
+    supervisor.activate_binding(0, &mut port).unwrap();
+    assert_eq!(
+        port.calls,
+        ["observe-attach", "slot", "proxy", "spawn-attach",]
+    );
+}
+
+#[test]
 fn binding_closes_its_process_before_service_unbinds_and_releases_authority() {
     let zone = uid("123e4567-e89b-42d3-a456-426614174000");
     let mut port = FakePort::default();
