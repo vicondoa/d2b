@@ -33,8 +33,8 @@ pub struct EntraEndpointPolicy {
 }
 
 impl EntraEndpointPolicy {
-    /// Require canonical provider visibility and exact orchestration and
-    /// consumer subjects.
+    /// Require canonical provider visibility and exact provider, consumer,
+    /// and Guest execution references.
     pub fn new(
         visibility: &str,
         provider_ref: ResourceRef,
