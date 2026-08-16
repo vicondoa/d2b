@@ -62,6 +62,9 @@ pub mod vsock_relay_argv;
 // Pure `usbip bind|unbind --busid <bus-id>` argv generator. The generator
 // stands alone with a bus-id shape validator.
 pub mod usbip_argv;
+// Neutral Volume effect-port composition wrapper. Concrete broker-backed
+// implementations are supplied by the Zone runtime.
+pub mod volume_effect_adapter;
 // Pure OTel host-bridge argv generator. Replaces the singleton
 // d2b-otel-host-bridge.service with a broker SpawnRunner under
 // RunnerRole::OtelHostBridge.

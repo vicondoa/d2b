@@ -1313,6 +1313,7 @@ fn validate_anchored_path(value: &str) -> Result<(), PrimitiveSpecError> {
         || value.contains('\0')
         || value.contains('\\')
         || value.contains(':')
+        || value.chars().any(char::is_control)
         || value.chars().any(is_path_separator_homoglyph)
     {
         return Err(PrimitiveSpecError::InvalidPath);
@@ -1345,11 +1346,16 @@ fn is_path_separator_homoglyph(character: char) -> bool {
     )
 }
 
-fn validate_mount_path(value: &str) -> bool {
+/// Validate the canonical guest-side attachment mount path.
+///
+/// Providers that materialize an attachment-derived resource must reuse this
+/// predicate so every transport admits exactly the same path language.
+pub fn validate_mount_path(value: &str) -> bool {
     if value.len() > MAX_LAYOUT_PATH_BYTES
         || !value.starts_with('/')
         || value.contains('\0')
         || value.contains('\\')
+        || value.chars().any(char::is_control)
         || value.chars().any(is_path_separator_homoglyph)
     {
         return false;

@@ -748,6 +748,29 @@ pub(crate) fn inventory(
     })
 }
 
+/// Probe the broker-owned migration inventory without changing any state.
+///
+/// The short-lived lock gives the Core caller a stable classification while a
+/// migration attempt cannot publish a journal or marker concurrently.
+pub(crate) fn probe(
+    paths: &LegacyMigrationPaths,
+) -> Result<LegacyInventoryState, LegacyMigrationError> {
+    let anchored = anchored_paths(paths)?;
+    let _lock = acquire_lock(&anchored.lock)?;
+    let current = inventory(paths)?;
+    if !matches!(current.state, LegacyInventoryState::AlreadyCommitted) {
+        return Ok(current.state);
+    }
+    let Some(journal) = read_journal(&anchored.journal)? else {
+        return Ok(LegacyInventoryState::Ambiguous);
+    };
+    if destination_and_marker_match(paths, &anchored, &journal)? {
+        Ok(LegacyInventoryState::AlreadyCommitted)
+    } else {
+        Ok(LegacyInventoryState::Ambiguous)
+    }
+}
+
 fn acquire_lock(path: &AnchoredPath) -> Result<MigrationLock, LegacyMigrationError> {
     let fd = openat(
         path.parent.as_fd(),
@@ -1626,6 +1649,39 @@ mod tests {
         assert_eq!(migrate(&paths).unwrap(), LegacyMigrationOutcome::Ambiguous);
         assert!(!paths.destination.exists());
         assert!(!paths.marker.exists());
+    }
+
+    #[test]
+    fn inventory_probe_distinguishes_fresh_and_legacy_state_without_mutation() {
+        let scratch = Scratch::new("probe-fresh");
+        let paths = scratch.paths();
+        assert_eq!(
+            probe(&paths).unwrap(),
+            LegacyInventoryState::NeverProvisioned
+        );
+        assert!(!paths.destination.exists());
+        drop(scratch);
+
+        let scratch = Scratch::new("probe-legacy");
+        let paths = scratch.paths();
+        fs::create_dir_all(&paths.source).unwrap();
+        fs::write(paths.source.join("nvram"), b"legacy").unwrap();
+        assert_eq!(probe(&paths).unwrap(), LegacyInventoryState::ValidLegacy);
+        assert!(paths.source.exists());
+        assert!(!paths.destination.exists());
+    }
+
+    #[test]
+    fn inventory_probe_requires_matching_committed_destination_evidence() {
+        let (scratch, paths) = committed_fixture("probe-committed");
+        assert_eq!(migrate(&paths).unwrap(), LegacyMigrationOutcome::Migrated);
+        assert_eq!(
+            probe(&paths).unwrap(),
+            LegacyInventoryState::AlreadyCommitted
+        );
+        fs::remove_dir_all(&paths.destination).unwrap();
+        assert_eq!(probe(&paths).unwrap(), LegacyInventoryState::Ambiguous);
+        drop(scratch);
     }
 
     #[test]

@@ -13,6 +13,9 @@ use d2b_contracts::v3::execution_policy::BoundedToken;
 use d2b_contracts::v3::volume::{SourceKind, VolumeSpec};
 
 use crate::error::VolumeLocalError;
+use crate::finalization::{
+    FinalizationAction, FinalizationObservation, FinalizationResult, finalization_plan,
+};
 use crate::identity::VolumeRootHandle;
 use crate::layout::{ConditionSeverity, EntryCondition, EntryRequest, plan_cleanup, plan_entry};
 use crate::port::{QuotaCapability, VolumeLayoutEffectPort, VolumeSourceEffectPort};
@@ -231,6 +234,22 @@ impl<S: VolumeSourceEffectPort, L: VolumeLayoutEffectPort> VolumeLocalController
             }
         }
         Ok(removed)
+    }
+
+    /// Finalize only after dependents and the store-view writer have closed.
+    pub async fn finalize(
+        &self,
+        volume_uid: &ResourceUid,
+        spec: &VolumeSpec,
+        observation: FinalizationObservation,
+    ) -> Result<FinalizationResult, VolumeLocalError> {
+        match finalization_plan(observation) {
+            FinalizationAction::Cleanup => self
+                .cleanup(volume_uid, spec)
+                .await
+                .map(FinalizationResult::Cleaned),
+            action => Ok(FinalizationResult::Waiting(action)),
+        }
     }
 
     async fn assert_quota(

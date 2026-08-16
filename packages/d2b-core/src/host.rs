@@ -129,6 +129,11 @@ pub struct HostJson {
     /// identities are never part of the Nix-store-backed bundle.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub qemu_media: Option<HostQemuMedia>,
+    /// Stable FIDO/CTAP security-key selectors resolved by the privileged
+    /// broker. The selector registry is trusted bundle data; no hidraw path
+    /// is ever emitted.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub security_key_selectors: Vec<SecurityKeySelector>,
     /// VMM/device capability matrix anchored to Cloud Hypervisor.
     pub cloud_hypervisor_capabilities: Vec<CloudHypervisorCapability>,
     /// Hash-derived IfName mapping exposure. One row per managed
@@ -150,6 +155,18 @@ pub struct HostJson {
     /// implicit "no managed firewall detected" Coexist default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub firewall_coexistence_policy: Option<crate::host_w3::FirewallCoexistencePolicy>,
+}
+
+/// One trusted host-side FIDO/CTAP selector.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SecurityKeySelector {
+    pub selector_id: String,
+    pub label: String,
+    pub vendor_id: u16,
+    pub product_id: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub serial: Option<String>,
 }
 
 /// Per-VM runtime row emitted in host.json for daemon lifecycle/status joins.

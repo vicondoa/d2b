@@ -26,6 +26,7 @@ mod acl;
 mod controller;
 mod error;
 mod exports;
+mod finalization;
 mod identity;
 mod layout;
 mod port;
@@ -56,6 +57,9 @@ pub use acl::{
 pub use controller::{VolumeLocalController, VolumeLocalProfile};
 pub use error::VolumeLocalError;
 pub use exports::{EXPORT_RESOURCE_TYPE, ExportIntent, desired_export_intents};
+pub use finalization::{
+    FinalizationAction, FinalizationObservation, FinalizationResult, finalization_plan,
+};
 pub use identity::{EntryDigest, MarkerState, OwnerProof, VolumeRootHandle};
 pub use layout::{
     ConditionSeverity, EntryCondition, EntryPlan, EntryRequest, plan_cleanup, plan_entry,
