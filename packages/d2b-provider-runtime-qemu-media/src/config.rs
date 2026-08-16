@@ -2,7 +2,7 @@
 
 use d2b_contracts::v3::ResourceRef;
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 /// Default QMP greeting timeout in seconds.
 pub const DEFAULT_QMP_READY_TIMEOUT_SECONDS: u32 = 30;
@@ -14,7 +14,7 @@ pub const DEFAULT_RUNTIME_TMPFS_QUOTA_BYTES: u64 = 10 * 1024 * 1024;
 pub const DEFAULT_RUNTIME_TMPFS_QUOTA_INODES: u32 = 1024;
 
 /// Provider root configuration.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProviderConfig {
     /// Host on which the controller Process runs.
@@ -38,6 +38,50 @@ pub struct ProviderConfig {
     pub runtime_tmpfs_quota_bytes: u64,
     /// Runtime tmpfs inode quota.
     pub runtime_tmpfs_quota_inodes: u32,
+}
+
+impl<'de> Deserialize<'de> for ProviderConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase", deny_unknown_fields)]
+        struct Wire {
+            controller_execution_ref: ResourceRef,
+            #[serde(default = "default_qemu_artifact")]
+            qemu_binary_artifact_id: String,
+            #[serde(default = "default_qmp_ready")]
+            qmp_ready_timeout_seconds: u32,
+            #[serde(default = "default_qmp_operation")]
+            qmp_operation_timeout_seconds: u32,
+            #[serde(default = "default_true")]
+            paused_at_boot_default: bool,
+            #[serde(default)]
+            display_provider_ref: Option<ResourceRef>,
+            network_provider_ref: ResourceRef,
+            volume_provider_ref: ResourceRef,
+            #[serde(default = "default_runtime_bytes")]
+            runtime_tmpfs_quota_bytes: u64,
+            #[serde(default = "default_runtime_inodes")]
+            runtime_tmpfs_quota_inodes: u32,
+        }
+        let wire = Wire::deserialize(deserializer)?;
+        let config = Self {
+            controller_execution_ref: wire.controller_execution_ref,
+            qemu_binary_artifact_id: wire.qemu_binary_artifact_id,
+            qmp_ready_timeout_seconds: wire.qmp_ready_timeout_seconds,
+            qmp_operation_timeout_seconds: wire.qmp_operation_timeout_seconds,
+            paused_at_boot_default: wire.paused_at_boot_default,
+            display_provider_ref: wire.display_provider_ref,
+            network_provider_ref: wire.network_provider_ref,
+            volume_provider_ref: wire.volume_provider_ref,
+            runtime_tmpfs_quota_bytes: wire.runtime_tmpfs_quota_bytes,
+            runtime_tmpfs_quota_inodes: wire.runtime_tmpfs_quota_inodes,
+        };
+        config.validate().map_err(serde::de::Error::custom)?;
+        Ok(config)
+    }
 }
 
 impl Default for ProviderConfig {
@@ -203,4 +247,28 @@ fn valid_token(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+}
+
+const fn default_true() -> bool {
+    true
+}
+
+fn default_qemu_artifact() -> String {
+    "qemu-system-x86_64".to_owned()
+}
+
+const fn default_qmp_ready() -> u32 {
+    DEFAULT_QMP_READY_TIMEOUT_SECONDS
+}
+
+const fn default_qmp_operation() -> u32 {
+    DEFAULT_QMP_OPERATION_TIMEOUT_SECONDS
+}
+
+const fn default_runtime_bytes() -> u64 {
+    DEFAULT_RUNTIME_TMPFS_QUOTA_BYTES
+}
+
+const fn default_runtime_inodes() -> u32 {
+    DEFAULT_RUNTIME_TMPFS_QUOTA_INODES
 }

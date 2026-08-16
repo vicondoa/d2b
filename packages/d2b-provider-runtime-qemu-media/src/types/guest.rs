@@ -329,7 +329,7 @@ pub struct GuestProviderSpec {
 }
 
 /// Guest ResourceSpec owned by this Provider.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GuestSpec {
     /// Provider reference.
@@ -348,6 +348,40 @@ pub struct GuestSpec {
     pub device_attachments: Vec<DeviceAttachment>,
     /// Provider extension.
     pub provider: GuestProviderSpec,
+}
+
+impl<'de> Deserialize<'de> for GuestSpec {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase", deny_unknown_fields)]
+        struct Wire {
+            provider_ref: ResourceRef,
+            #[serde(default)]
+            system_artifact_id: Option<String>,
+            vcpu: u16,
+            memory_mib: u32,
+            #[serde(default)]
+            network_attachments: Vec<NetworkAttachment>,
+            #[serde(default)]
+            device_attachments: Vec<DeviceAttachment>,
+            provider: GuestProviderSpec,
+        }
+        let wire = Wire::deserialize(deserializer)?;
+        let spec = Self {
+            provider_ref: wire.provider_ref,
+            system_artifact_id: wire.system_artifact_id,
+            vcpu: wire.vcpu,
+            memory_mib: wire.memory_mib,
+            network_attachments: wire.network_attachments,
+            device_attachments: wire.device_attachments,
+            provider: wire.provider,
+        };
+        spec.validate().map_err(serde::de::Error::custom)?;
+        Ok(spec)
+    }
 }
 
 impl GuestSpec {
@@ -557,7 +591,7 @@ pub struct GuestProviderStatus {
 }
 
 /// Redacted Guest status projection.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GuestStatus {
     /// Common phase.
@@ -569,6 +603,40 @@ pub struct GuestStatus {
     /// Bounded conditions.
     #[serde(default)]
     pub conditions: Vec<GuestCondition>,
+}
+
+impl<'de> Deserialize<'de> for GuestStatus {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase", deny_unknown_fields)]
+        struct Wire {
+            phase: GuestPhase,
+            resource: GuestRuntimeStatus,
+            provider: GuestProviderStatus,
+            #[serde(default)]
+            conditions: Vec<GuestCondition>,
+        }
+        let wire = Wire::deserialize(deserializer)?;
+        if wire.conditions.len() > 16
+            || wire.provider.provider_ref.to_canonical_string() != PROVIDER_REF
+            || wire.provider.schema_id != GUEST_STATUS_SCHEMA_ID
+            || wire.provider.schema_version != "1.0.0"
+            || wire.provider.details.provider_phase.len() > MAX_PROVIDER_PHASE_BYTES
+        {
+            return Err(serde::de::Error::custom(GuestSpecError::SchemaMismatch));
+        }
+        ProviderPhase::parse(&wire.provider.details.provider_phase)
+            .map_err(serde::de::Error::custom)?;
+        Ok(Self {
+            phase: wire.phase,
+            resource: wire.resource,
+            provider: wire.provider,
+            conditions: wire.conditions,
+        })
+    }
 }
 
 impl GuestStatus {

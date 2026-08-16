@@ -382,6 +382,8 @@ guest-exec-policy/invalid-user-rejected
 guest-exec-policy/missing-user-rejected
 guest-exec-policy/root-user-rejected
 guest-exec-policy/uid-zero-alias-rejected
+guest-qemu-media/defaults
+guest-qemu-media/invalid-qmp-timeout-rejected
 guest-shell-policy/custom-positive
 guest-shell-policy/defaults-positive
 guest-shell-policy/enabled-positive

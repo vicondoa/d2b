@@ -321,6 +321,10 @@ impl<E: QemuMediaEffectPort> QemuMediaController<E> {
                 let ticket =
                     LaunchTicket::new(self.process.clone(), Vec::<ResourceRef>::new(), None)?;
                 let candidate = effect.launch(&ticket)?;
+                if !candidate.matches_process_token(expected_process) {
+                    self.phase = QemuMediaPhase::Failed;
+                    return Err(QemuMediaError::AdoptionAmbiguous);
+                }
                 self.expected_identity = Some(candidate.clone());
                 effect.open_pidfd(&candidate)?;
                 candidate

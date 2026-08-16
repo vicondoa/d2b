@@ -14,7 +14,7 @@ fn provider_config_requires_host_and_projects_controller_only() {
     )
     .unwrap();
     assert!(config.validate().is_ok());
-    assert_eq!(config.project_worker(), WorkerConfigProjection::default());
+    assert_eq!(config.project_worker(), WorkerConfigProjection);
     assert_eq!(
         config.project_controller().controller_execution_ref(),
         "Host/host-system"

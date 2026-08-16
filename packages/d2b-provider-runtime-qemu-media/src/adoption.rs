@@ -34,6 +34,12 @@ impl ProcessIdentity {
             generation: 1,
         }
     }
+
+    /// Return whether this identity matches a Core-provided process token.
+    pub fn matches_process_token(&self, value: &str) -> bool {
+        let digest = Sha256::digest(value.as_bytes());
+        self.executable_digest == digest[..]
+    }
 }
 
 impl core::fmt::Debug for ProcessIdentity {
