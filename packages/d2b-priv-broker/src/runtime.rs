@@ -3508,14 +3508,6 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 operation: "DeletePersistentTap",
                 reason: error.code(),
             })?;
-            crate::ops::network::remove_persistent_tap_realization(
-                &config.state_dir,
-                &req.attachment_id,
-            )
-            .map_err(|error| BrokerError::RequestValidation {
-                operation: "DeletePersistentTap",
-                reason: error.code(),
-            })?;
             write_success_op_record!(
                 audit_log,
                 bundle_metadata,
@@ -3533,6 +3525,14 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                     expected_attachment_generation: req.expected_attachment_generation,
                 },
             )?;
+            crate::ops::network::remove_persistent_tap_realization(
+                &config.state_dir,
+                &req.attachment_id,
+            )
+            .map_err(|error| BrokerError::RequestValidation {
+                operation: "DeletePersistentTap",
+                reason: error.code(),
+            })?;
             Ok(DispatchResult::no_fds(ack_response("DeletePersistentTap")))
         }
         RealBrokerRequest::BindUnixSocket(_) => Err(BrokerError::Unimplemented {
@@ -3545,19 +3545,59 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
         }),
         RealBrokerRequest::CreatePersistentTap(req) => {
             let resolver = require_resolver(resolver)?;
+            if req.attachment_id.is_some() {
+                let tap_intent = resolver
+                    .resolve_tap_intent(req.vm_id.as_str(), req.role_id.as_str())
+                    .ok_or(BrokerError::RequestValidation {
+                        operation: "CreatePersistentTap",
+                        reason: "attachment-realization-unavailable",
+                    })?;
+                crate::ops::network::persist_persistent_tap_realization(
+                    &config.state_dir,
+                    &req,
+                    &tap_intent.tap_ifname,
+                )
+                .map_err(|error| BrokerError::RequestValidation {
+                    operation: "CreatePersistentTap",
+                    reason: error.code(),
+                })?;
+            }
             let exec = live_exec(config);
             let outcome =
-                crate::ops::tap::live_create_persistent_tap(&exec, resolver, &req, audit_log)
-                    .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
+                match crate::ops::tap::live_create_persistent_tap(&exec, resolver, &req, audit_log)
+                {
+                    Ok(outcome) => outcome,
+                    Err(error) => {
+                        if req.attachment_id.is_some() {
+                            if let Err(cleanup) =
+                                crate::ops::network::remove_persistent_tap_realization(
+                                    &config.state_dir,
+                                    req.attachment_id.as_ref().expect("checked above"),
+                                )
+                            {
+                                return Err(BrokerError::RequestValidation {
+                                    operation: "CreatePersistentTap",
+                                    reason: cleanup.code(),
+                                });
+                            }
+                        }
+                        return Err(BrokerError::LiveHandler(error.to_string()));
+                    }
+                };
             if let Err(error) = crate::ops::network::persist_persistent_tap_realization(
                 &config.state_dir,
                 &req,
                 &outcome.tap_ifname,
             ) {
-                let _ = crate::ops::network::PersistentTapBackend::delete_tap(
+                if let Err(cleanup) = crate::ops::network::PersistentTapBackend::delete_tap(
                     &crate::ops::network::SystemPersistentTapBackend,
                     outcome.tap_ifname.as_str(),
-                );
+                ) {
+                    return Err(BrokerError::RequestValidation {
+                        operation: "CreatePersistentTap",
+                        reason: cleanup.code(),
+                    });
+                }
                 return Err(BrokerError::RequestValidation {
                     operation: "CreatePersistentTap",
                     reason: error.code(),

@@ -292,17 +292,6 @@ pub trait NetworkEffectPort: Send + Sync {
     ) -> impl Future<Output = Result<(), NetworkEffectError>> + Send {
         core::future::ready(Ok(()))
     }
-    /// Remove this Network's managed hosts-file projection.
-    fn remove_hosts(
-        &self,
-        _network_uid: &ResourceUid,
-    ) -> impl Future<Output = Result<(), NetworkEffectError>> + Send {
-        core::future::ready(Ok(()))
-    }
-    /// Remove this Network's NetworkManager unmanaged projection.
-    fn remove_nm_unmanaged(&self) -> impl Future<Output = Result<(), NetworkEffectError>> + Send {
-        core::future::ready(Ok(()))
-    }
     /// Reconcile NetworkManager unmanaged state.
     fn apply_nm_unmanaged(&self) -> impl Future<Output = Result<(), NetworkEffectError>> + Send;
     /// Reconcile host routes.
@@ -702,8 +691,6 @@ where
         );
         self.effects.remove_host_firewall(&firewall).await?;
         self.effects.remove_routes(&input.network_uid).await?;
-        self.effects.remove_hosts(&input.network_uid).await?;
-        self.effects.remove_nm_unmanaged().await?;
         self.effects.delete_bridges(&input.network_uid).await?;
         Ok(FinalizerStage::Complete)
     }

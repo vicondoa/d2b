@@ -326,6 +326,14 @@ in
     };
     expected = true;
   };
+  "net-vm-network/v3-resource-east-west-both-opt-ins-admitted" = {
+    expr = !(v3Rejects "site.allowUnsafeEastWest" {
+      d2b.site.allowUnsafeEastWest = true;
+      d2b.zones.local-root.resources.work-net.spec.isolation.allowEastWest =
+        lib.mkForce true;
+    });
+    expected = true;
+  };
   "net-vm-network/v3-resource-duplicate-attachment-index-rejected" = {
     expr = v3Rejects "unique indices" {
       d2b.zones.local-root.resources = {

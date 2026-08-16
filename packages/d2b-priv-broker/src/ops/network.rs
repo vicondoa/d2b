@@ -386,6 +386,16 @@ pub fn persist_persistent_tap_realization(
         return Err(NetworkOpError::RealizationConflict);
     }
     let temp_path = root.join(format!(".{}.json.tmp", attachment_id.as_str()));
+    match fs::symlink_metadata(&temp_path) {
+        Ok(metadata) if metadata.file_type().is_symlink() || metadata.mode() & 0o022 != 0 => {
+            return Err(NetworkOpError::RealizationUnavailable);
+        }
+        Ok(_) => {
+            fs::remove_file(&temp_path).map_err(|_| NetworkOpError::RealizationUnavailable)?;
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => return Err(NetworkOpError::RealizationUnavailable),
+    }
     let bytes =
         serde_json::to_vec(&realization).map_err(|_| NetworkOpError::RealizationUnavailable)?;
     let mut file = fs::OpenOptions::new()
@@ -822,5 +832,45 @@ mod tests {
             Err(NetworkOpError::RealizationConflict)
         );
         assert!(!root.exists());
+    }
+
+    #[test]
+    fn v3_realization_reclaims_stale_temp_and_rejects_conflicting_row() {
+        let root = std::env::current_dir()
+            .unwrap()
+            .join("target")
+            .join(format!("network-realization-retry-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::DirBuilder::new().mode(0o750).create(&root).unwrap();
+        let attachment_id = ResourceUid::parse("523e4567-e89b-42d3-a456-426614174004").unwrap();
+        let create = CreatePersistentTapRequest {
+            role_id: d2b_contracts::types::RoleId::new("network-attachment"),
+            vm_id: d2b_contracts::types::VmId::new("work-net"),
+            attachment_id: Some(attachment_id.clone()),
+            network_generation: Some(ResourceGeneration::new(4).unwrap()),
+            attachment_generation: Some(ResourceGeneration::new(7).unwrap()),
+            tracing_span_id: None,
+        };
+        let attachments = root.join("network-attachments");
+        fs::DirBuilder::new()
+            .mode(0o750)
+            .create(&attachments)
+            .unwrap();
+        fs::write(
+            attachments.join(format!(".{}.json.tmp", attachment_id.as_str())),
+            b"stale",
+        )
+        .unwrap();
+        let ifname = IfName::new("d2b-t12345678").unwrap();
+        persist_persistent_tap_realization(&root, &create, &ifname).unwrap();
+        let conflicting = CreatePersistentTapRequest {
+            attachment_generation: Some(ResourceGeneration::new(8).unwrap()),
+            ..create
+        };
+        assert_eq!(
+            persist_persistent_tap_realization(&root, &conflicting, &ifname),
+            Err(NetworkOpError::RealizationConflict)
+        );
+        let _ = fs::remove_dir_all(root);
     }
 }

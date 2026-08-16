@@ -239,6 +239,9 @@ pub fn live_create_persistent_tap(
             operation: "CreatePersistentTap",
             subject: req.vm_id.as_str().to_owned(),
         })?;
+    if let Some(existing) = existing_persistent_tap(&intent)? {
+        return Ok(existing);
+    }
     let dev_net =
         crate::sys::path_safe::open_dir_path_safe(Path::new("/dev/net")).map_err(|e| {
             super::OpError::Io {
@@ -276,6 +279,58 @@ pub fn live_create_persistent_tap(
         tap_ifname: intent.tap_ifname,
         fd: None,
     })
+}
+
+fn existing_persistent_tap(
+    intent: &d2b_core::bundle_resolver::ResolvedTapIntent,
+) -> Result<Option<LiveCreateTapOutcome>, super::OpError> {
+    let output = Command::new(ip_binary_path())
+        .args([
+            "-d",
+            "-j",
+            "link",
+            "show",
+            "dev",
+            intent.tap_ifname.as_str(),
+        ])
+        .env_remove("NOTIFY_SOCKET")
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|err| super::OpError::Io {
+            path: PathBuf::from("ip"),
+            detail: err.to_string(),
+        })?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if stderr.contains("does not exist") || stderr.contains("Cannot find device") {
+            return Ok(None);
+        }
+        return Err(super::OpError::Io {
+            path: PathBuf::from("ip"),
+            detail: stderr.trim().to_owned(),
+        });
+    }
+    let links: Vec<serde_json::Value> =
+        serde_json::from_slice(&output.stdout).map_err(|err| super::OpError::InvalidInput {
+            detail: format!("invalid existing persistent TAP link output: {err}"),
+        })?;
+    let link = links.first().ok_or_else(|| super::OpError::InvalidInput {
+        detail: "existing persistent TAP link output was empty".to_owned(),
+    })?;
+    let kind = link
+        .pointer("/linkinfo/info_kind")
+        .and_then(serde_json::Value::as_str);
+    let master = link.get("master").and_then(serde_json::Value::as_str);
+    if !matches!(kind, Some("tun" | "tap")) || master != Some(intent.bridge_ifname.as_str()) {
+        return Err(super::OpError::InvalidInput {
+            detail: "existing persistent TAP does not match trusted bridge intent".to_owned(),
+        });
+    }
+    Ok(Some(LiveCreateTapOutcome {
+        bridge_ifname: Some(intent.bridge_ifname.clone()),
+        tap_ifname: intent.tap_ifname.clone(),
+        fd: None,
+    }))
 }
 
 pub fn live_create_macvtap_fd(intent: &ResolvedMacvtapIntent) -> Result<OwnedFd, super::OpError> {

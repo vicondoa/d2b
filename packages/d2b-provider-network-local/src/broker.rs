@@ -26,6 +26,8 @@ pub enum NetworkBrokerError {
     Rejected,
     /// The installed bundle generation no longer matches the request.
     StaleGeneration,
+    /// The attachment generation no longer matches the request.
+    StaleAttachmentGeneration,
     /// A foreign ownership marker blocked the mutation.
     ForeignOwnership,
     /// A transient host operation should be retried.
@@ -41,6 +43,7 @@ impl NetworkBrokerError {
             Self::Transport => "network-broker-transport",
             Self::Rejected => "network-broker-rejected",
             Self::StaleGeneration => "stale-projection-generation",
+            Self::StaleAttachmentGeneration => "stale-attachment-generation",
             Self::ForeignOwnership => "foreign-nft-rule-preserved",
             Self::Transient => "network-broker-transient",
             Self::EastWestHostOptInRequired => "east-west-host-opt-in-required",
@@ -179,13 +182,6 @@ pub trait NetworkBroker: Send + Sync {
     ) -> Result<FirewallDigest, NetworkBrokerError>;
     /// Apply the trusted NetworkManager unmanaged projection.
     fn apply_nm_unmanaged(&self, context: &NetworkEffectContext) -> Result<(), NetworkBrokerError>;
-    /// Remove the trusted NetworkManager unmanaged projection.
-    fn remove_nm_unmanaged(
-        &self,
-        _context: &NetworkEffectContext,
-    ) -> Result<(), NetworkBrokerError> {
-        Ok(())
-    }
     /// Apply all trusted route intents for the Network.
     fn apply_routes(&self, context: &NetworkEffectContext) -> Result<(), NetworkBrokerError>;
     /// Remove all trusted route intents for the Network.
@@ -196,10 +192,6 @@ pub trait NetworkBroker: Send + Sync {
     fn apply_sysctls(&self, context: &NetworkEffectContext) -> Result<(), NetworkBrokerError>;
     /// Apply the trusted `/etc/hosts` projection.
     fn update_hosts(&self, context: &NetworkEffectContext) -> Result<(), NetworkBrokerError>;
-    /// Remove the trusted `/etc/hosts` projection.
-    fn remove_hosts(&self, _context: &NetworkEffectContext) -> Result<(), NetworkBrokerError> {
-        Ok(())
-    }
     /// Seed the Network's DHCP state.
     fn seed_dhcp(&self, context: &NetworkEffectContext) -> Result<(), NetworkBrokerError>;
     /// Delete one generation-fenced persistent TAP.
@@ -284,12 +276,6 @@ impl<B: NetworkBroker> NetworkEffectPort for BrokerNetworkEffectPort<B> {
             .map_err(map_broker_error)
     }
 
-    async fn remove_nm_unmanaged(&self) -> Result<(), NetworkEffectError> {
-        self.broker
-            .remove_nm_unmanaged(&self.context)
-            .map_err(map_broker_error)
-    }
-
     async fn apply_routes(&self, _: &ResourceUid) -> Result<(), NetworkEffectError> {
         self.broker
             .apply_routes(&self.context)
@@ -305,12 +291,6 @@ impl<B: NetworkBroker> NetworkEffectPort for BrokerNetworkEffectPort<B> {
     async fn update_hosts(&self, _: &ResourceUid) -> Result<(), NetworkEffectError> {
         self.broker
             .update_hosts(&self.context)
-            .map_err(map_broker_error)
-    }
-
-    async fn remove_hosts(&self, _: &ResourceUid) -> Result<(), NetworkEffectError> {
-        self.broker
-            .remove_hosts(&self.context)
             .map_err(map_broker_error)
     }
 
@@ -340,6 +320,9 @@ impl<B: NetworkBroker> NetworkEffectPort for BrokerNetworkEffectPort<B> {
 fn map_broker_error(error: NetworkBrokerError) -> NetworkEffectError {
     match error {
         NetworkBrokerError::StaleGeneration => NetworkEffectError::StaleConfigurationGeneration,
+        NetworkBrokerError::StaleAttachmentGeneration => {
+            NetworkEffectError::StaleAttachmentGeneration
+        }
         NetworkBrokerError::ForeignOwnership => NetworkEffectError::ForeignOwnership,
         NetworkBrokerError::EastWestHostOptInRequired => {
             NetworkEffectError::EastWestHostOptInRequired

@@ -34,7 +34,7 @@ impl<'a> DaemonNetworkBroker<'a> {
 
     fn dispatch(&self, request: BrokerRequest) -> Result<(), NetworkBrokerError> {
         match crate::dispatch_broker_request_as(self.state, request, self.caller_role.clone()) {
-            Ok(BrokerResponse::Error(error)) => Err(map_broker_error(&error.kind)),
+            Ok(BrokerResponse::Error(error)) => Err(map_broker_error(&error.kind, &error.message)),
             Ok(_) => Ok(()),
             Err(_) => Err(NetworkBrokerError::Transport),
         }
@@ -99,18 +99,6 @@ impl NetworkBroker for DaemonNetworkBroker<'_> {
         }))
     }
 
-    fn remove_nm_unmanaged(
-        &self,
-        context: &NetworkEffectContext,
-    ) -> Result<(), NetworkBrokerError> {
-        self.dispatch(BrokerRequest::ApplyNmUnmanaged(ApplyNmUnmanagedRequest {
-            bundle_nm_intent_ref: context.nm_intent_ref().clone(),
-            scope_id: context.scope_id().clone(),
-            destroy: true,
-            tracing_span_id: None,
-        }))
-    }
-
     fn apply_routes(&self, context: &NetworkEffectContext) -> Result<(), NetworkBrokerError> {
         for intent_ref in context.route_intent_refs() {
             self.dispatch(BrokerRequest::ApplyRoute(ApplyRouteRequest {
@@ -155,14 +143,6 @@ impl NetworkBroker for DaemonNetworkBroker<'_> {
         }))
     }
 
-    fn remove_hosts(&self, context: &NetworkEffectContext) -> Result<(), NetworkBrokerError> {
-        self.dispatch(BrokerRequest::UpdateHostsFile(UpdateHostsFileRequest {
-            bundle_hosts_intent_ref: context.hosts_intent_ref().clone(),
-            destroy: true,
-            tracing_span_id: None,
-        }))
-    }
-
     fn seed_dhcp(&self, context: &NetworkEffectContext) -> Result<(), NetworkBrokerError> {
         self.dispatch(BrokerRequest::SeedDnsmasqLease(SeedDnsmasqLeaseRequest {
             vm_id: context.dnsmasq_vm_id().clone(),
@@ -188,16 +168,58 @@ impl NetworkBroker for DaemonNetworkBroker<'_> {
 }
 
 #[allow(dead_code)]
-fn map_broker_error(kind: &str) -> NetworkBrokerError {
-    match kind {
-        "Broker.NftablesDriftDetected"
-        | "Broker.StaleProjectionGeneration"
-        | "stale-projection-generation" => NetworkBrokerError::StaleGeneration,
-        "Broker.ForeignOwnership"
-        | "foreign-nft-rule-preserved"
-        | "nm-managed-foreign-conflict" => NetworkBrokerError::ForeignOwnership,
-        "Broker.Transient" | "network-effect-transient" => NetworkBrokerError::Transient,
-        "east-west-host-opt-in-required" => NetworkBrokerError::EastWestHostOptInRequired,
+fn map_broker_error(kind: &str, message: &str) -> NetworkBrokerError {
+    let reason = message
+        .split_once("failed: ")
+        .map_or(message, |(_, reason)| reason);
+    match (kind, reason) {
+        ("Broker.NftablesDriftDetected", _)
+        | ("Broker.StaleProjectionGeneration", _)
+        | ("Broker.RequestValidation", "stale-projection-generation")
+        | ("Broker.RequestValidation", "stale-network-generation") => {
+            NetworkBrokerError::StaleGeneration
+        }
+        ("Broker.ForeignOwnership", _)
+        | ("Broker.RequestValidation", "foreign-nft-rule-preserved")
+        | ("Broker.RequestValidation", "nm-managed-foreign-conflict")
+        | ("Broker.RequestValidation", "attachment-ownership-conflict") => {
+            NetworkBrokerError::ForeignOwnership
+        }
+        ("Broker.RequestValidation", "stale-attachment-generation") => {
+            NetworkBrokerError::StaleAttachmentGeneration
+        }
+        ("Broker.Transient", _) | (_, "network-effect-transient") => NetworkBrokerError::Transient,
+        (_, "east-west-host-opt-in-required") => NetworkBrokerError::EastWestHostOptInRequired,
         _ => NetworkBrokerError::Rejected,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn request_validation_reasons_keep_provider_retry_and_block_states() {
+        assert_eq!(
+            map_broker_error(
+                "Broker.RequestValidation",
+                "broker request validation failed: stale-projection-generation",
+            ),
+            NetworkBrokerError::StaleGeneration
+        );
+        assert_eq!(
+            map_broker_error(
+                "Broker.RequestValidation",
+                "broker request validation failed: stale-attachment-generation",
+            ),
+            NetworkBrokerError::StaleAttachmentGeneration
+        );
+        assert_eq!(
+            map_broker_error(
+                "Broker.RequestValidation",
+                "broker request validation failed: attachment-ownership-conflict",
+            ),
+            NetworkBrokerError::ForeignOwnership
+        );
     }
 }
