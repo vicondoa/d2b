@@ -2641,6 +2641,11 @@ let
           message = "${row.path}: device-gpu requires a physical DRM Device (gpu-device-shape-invalid).";
         }
         {
+          assertion = provider != "device-gpu"
+            || pkgs.stdenv.hostPlatform.system == "x86_64-linux";
+          message = "${row.path}: device-gpu requires an x86_64-linux host (gpu-platform-unsupported).";
+        }
+        {
           assertion = !(provider == "device-tpm"
             && builtins.isAttrs settings
             && builtins.hasAttr "startupClear" settings);

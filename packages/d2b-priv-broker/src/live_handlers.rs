@@ -3510,6 +3510,11 @@ pub fn live_spawn_runner(
         }
     }
     validate_qemu_media_runner_hardening(&plan)?;
+    crate::ops::gpu::validate_spawn_plan_preflight(&plan).map_err(|error| {
+        LiveHandlerError::SpawnFailed {
+            detail: error.to_string(),
+        }
+    })?;
 
     let (binary, argv, env) =
         build_cstring_vectors(&plan).map_err(LiveHandlerError::SpawnPreflight)?;
@@ -3553,6 +3558,11 @@ pub fn live_spawn_runner(
         })?;
         pre_opened_device_fds.push(render_fd);
     }
+    crate::ops::gpu::validate_spawn_plan(&plan, pre_opened_device_fds.len()).map_err(|error| {
+        LiveHandlerError::SpawnFailed {
+            detail: error.to_string(),
+        }
+    })?;
 
     let memlock_guest_bytes = qemu_media_memlock_guest_bytes(&plan)?;
     let memlock_limit_bytes = memlock_guest_bytes.map(|guest_bytes| {
