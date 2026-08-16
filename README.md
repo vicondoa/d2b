@@ -177,7 +177,7 @@ d2b into an existing host config.
 | Path | Audience | Notes |
 | --- | --- | --- |
 | [`templates/default`](./templates/default) | New host, fastest setup | `nix flake init -t github:vicondoa/d2b` - sentinel TODOs + assertion gates |
-| [`examples/personal-dev`](./examples/personal-dev) | Read-and-copy headless starter | Alias of the checked [`examples/minimal`](./examples/minimal) flake; VM name `personal-dev`. |
+| [`examples/minimal`](./examples/minimal) | Read-and-copy headless starter | Canonical headless example; VM name `personal-dev`. |
 | [`examples/graphics-workstation`](./examples/graphics-workstation) | Desktop VM with Wayland + audio + USBIP | Requires a compositor on the host; `waylandUser` must be non-null. |
 | [`examples/multi-env`](./examples/multi-env) | Two isolated runtime envs (work + personal) | Demonstrates the transition substrate that realms can point at with `network.mode = "inherit-env"`. |
 | [`examples/with-observability`](./examples/with-observability) | Single-host telemetry sink + monitored workload VM | Auto-declares the `sys-obs` VM (native SigNoz + ClickHouse) and wires host/guest OTel collectors over virtio-vsock. |
@@ -190,13 +190,9 @@ one of these checked example layouts and use the native `guest start`
 path:
 
 ```bash
-# headless personal workspace (examples/personal-dev → examples/minimal)
+# headless personal workspace (examples/minimal)
 sudo d2b guest start personal-dev --apply
 ```
-
-The alias directory exists so the README, examples index, and migration
-notes can use a stable VM name while CI keeps the checked flake in
-`examples/minimal`.
 
 ## Quick start (template path)
 
@@ -450,7 +446,7 @@ For security disclosure, see [`SECURITY.md`](SECURITY.md).
 
 | Goal                                  | Read                                                            |
 |---------------------------------------|-----------------------------------------------------------------|
-| New user, fastest start               | [`templates/default/`](templates/default/) → [`examples/personal-dev/`](examples/personal-dev/) |
+| New user, fastest start               | [`templates/default/`](templates/default/) → [`examples/minimal/`](examples/minimal/) |
 | Migrating from `microvm.nix`          | [`docs/how-to/migrating-from-microvm.md`](docs/how-to/migrating-from-microvm.md) |
 | Is this secure?                       | [`docs/explanation/design.md`](docs/explanation/design.md) → [`SECURITY.md`](SECURITY.md) |
 | Security incident / USBIP emergency   | [`docs/reference/security-runbook.md`](docs/reference/security-runbook.md) |

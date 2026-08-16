@@ -22,7 +22,6 @@
 pub mod bridge_port;
 pub mod cgroup;
 pub mod devices;
-pub mod fake;
 pub mod ifname;
 pub mod ioctl_policy;
 pub mod modules;
@@ -34,8 +33,6 @@ pub mod netlink;
 pub mod nftables;
 pub mod routes;
 pub mod seccomp;
-// Runner-shape preflight + CH net-handoff probe.
-pub mod runner_shape;
 // Static runner lifecycle metadata used by host-side argv dispatch.
 pub mod runner_process;
 // Pure CH argv generator. Consumed by d2bd via the SpawnRunner
