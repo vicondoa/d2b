@@ -152,10 +152,17 @@ impl ProviderConfig {
     pub fn project_controller(&self) -> ControllerConfigProjection {
         ControllerConfigProjection {
             controller_execution_ref: self.controller_execution_ref.to_canonical_string(),
+            qemu_binary_artifact_id: self.qemu_binary_artifact_id.clone(),
             qmp_ready_timeout_seconds: self.qmp_ready_timeout_seconds,
             qmp_operation_timeout_seconds: self.qmp_operation_timeout_seconds,
             paused_at_boot_default: self.paused_at_boot_default,
+            display_provider_ref: self
+                .display_provider_ref
+                .as_ref()
+                .map(ResourceRef::to_canonical_string),
             display_provider_configured: self.display_provider_ref.is_some(),
+            network_provider_ref: self.network_provider_ref.to_canonical_string(),
+            volume_provider_ref: self.volume_provider_ref.to_canonical_string(),
             runtime_tmpfs_quota_bytes: self.runtime_tmpfs_quota_bytes,
             runtime_tmpfs_quota_inodes: self.runtime_tmpfs_quota_inodes,
         }
@@ -196,14 +203,22 @@ impl core::fmt::Debug for ProviderConfig {
 pub struct ControllerConfigProjection {
     /// Host placement reference.
     pub controller_execution_ref: String,
+    /// Artifact catalog identifier for the QEMU binary closure.
+    pub qemu_binary_artifact_id: String,
     /// QMP greeting deadline.
     pub qmp_ready_timeout_seconds: u32,
     /// QMP operation deadline.
     pub qmp_operation_timeout_seconds: u32,
     /// Pause-at-boot default.
     pub paused_at_boot_default: bool,
+    /// Optional display Provider reference.
+    pub display_provider_ref: Option<String>,
     /// Whether display Provider configuration is available.
     pub display_provider_configured: bool,
+    /// Network Provider reference.
+    pub network_provider_ref: String,
+    /// Volume Provider reference.
+    pub volume_provider_ref: String,
     /// Runtime tmpfs byte quota.
     pub runtime_tmpfs_quota_bytes: u64,
     /// Runtime tmpfs inode quota.
@@ -214,6 +229,26 @@ impl ControllerConfigProjection {
     /// Borrow the controller placement reference.
     pub fn controller_execution_ref(&self) -> &str {
         &self.controller_execution_ref
+    }
+
+    /// Borrow the QEMU binary artifact identifier.
+    pub fn qemu_binary_artifact_id(&self) -> &str {
+        &self.qemu_binary_artifact_id
+    }
+
+    /// Borrow the optional display Provider reference.
+    pub fn display_provider_ref(&self) -> Option<&str> {
+        self.display_provider_ref.as_deref()
+    }
+
+    /// Borrow the Network Provider reference.
+    pub fn network_provider_ref(&self) -> &str {
+        &self.network_provider_ref
+    }
+
+    /// Borrow the Volume Provider reference.
+    pub fn volume_provider_ref(&self) -> &str {
+        &self.volume_provider_ref
     }
 }
 

@@ -3,6 +3,7 @@
 use crate::{
     adoption::{AdoptionOutcome, ProcessIdentity, verify_identity},
     config::{ProviderConfig, ProviderConfigError},
+    controller::process_builder::PROCESS_TEMPLATE,
     controller::{
         DeviceAdmission, DeviceAdmissionError, DeviceObservation, LaunchTicket, ProcessSpec,
         ProcessSpecError,
@@ -128,6 +129,14 @@ pub struct QemuMediaDependencies {
     pub qmp_ready: bool,
     /// Current QMP VM state.
     pub qmp_status: Option<QmpVmStatus>,
+    /// Authorized media Volume refs for the LaunchTicket.
+    pub media_refs: Vec<ResourceRef>,
+    /// Authorized display Endpoint ref for the LaunchTicket.
+    pub display_ref: Option<ResourceRef>,
+    /// Controller-created runtime Volume is Ready.
+    pub runtime_volume_ready: bool,
+    /// Elapsed seconds since runner launch while waiting for QMP.
+    pub qmp_elapsed_seconds: u32,
 }
 
 impl Default for QemuMediaDependencies {
@@ -139,6 +148,10 @@ impl Default for QemuMediaDependencies {
             display_ready: true,
             qmp_ready: false,
             qmp_status: None,
+            media_refs: Vec::new(),
+            display_ref: None,
+            runtime_volume_ready: false,
+            qmp_elapsed_seconds: 0,
         }
     }
 }
@@ -153,6 +166,10 @@ impl QemuMediaDependencies {
             display_ready: true,
             qmp_ready: true,
             qmp_status: Some(QmpVmStatus::Paused),
+            media_refs: Vec::new(),
+            display_ref: None,
+            runtime_volume_ready: true,
+            qmp_elapsed_seconds: 0,
         }
     }
 }
@@ -165,20 +182,22 @@ pub trait QemuMediaEffectPort {
     fn observe(&mut self) -> Result<Option<ProcessIdentity>, QemuMediaError>;
     /// Open a pidfd after identity verification.
     fn open_pidfd(&mut self, identity: &ProcessIdentity) -> Result<(), QemuMediaError>;
+    /// Reserve the Host-global Device authority before launch or adoption.
+    fn reserve_device_authority(
+        &mut self,
+        authority_key: [u8; 32],
+        owner_ref: &ResourceRef,
+    ) -> Result<(), QemuMediaError>;
     /// Close all QMP/media effects before stopping the Process.
-    fn close_media_effects(&mut self) -> Result<(), QemuMediaError> {
-        Ok(())
-    }
+    fn close_media_effects(&mut self) -> Result<(), QemuMediaError>;
+    /// Continue a paused Guest when pauseAtBoot is false.
+    fn continue_guest(&mut self) -> Result<(), QemuMediaError>;
     /// Stop exactly one verified Process.
     fn stop(&mut self, identity: &ProcessIdentity) -> Result<(), QemuMediaError>;
     /// Release the retained Host-global Device authority.
-    fn release_device_authority(&mut self) -> Result<(), QemuMediaError> {
-        Ok(())
-    }
+    fn release_device_authority(&mut self) -> Result<(), QemuMediaError>;
     /// Delete the controller-created runtime Volume after Process exit.
-    fn delete_runtime_volume(&mut self) -> Result<(), QemuMediaError> {
-        Ok(())
-    }
+    fn delete_runtime_volume(&mut self) -> Result<(), QemuMediaError>;
 }
 
 /// Durable non-secret recovery state.
@@ -190,17 +209,25 @@ pub struct QemuMediaRecoveryState {
     pub finalizer_installed: bool,
     /// Expected process identity, if a prior launch committed it.
     pub expected_identity: Option<ProcessIdentity>,
+    /// Whether authority was reserved.
+    pub authority_reserved: bool,
 }
 
 /// QEMU media lifecycle controller.
 pub struct QemuMediaController<E> {
-    config: ProviderConfig,
+    config: crate::config::ControllerConfigProjection,
     settings: GuestProviderSpecSettings,
     process: ProcessSpec,
     guest_ref: ResourceRef,
     phase: QemuMediaPhase,
     expected_identity: Option<ProcessIdentity>,
     finalizer_installed: bool,
+    authority_reserved: bool,
+    pidfd_opened: bool,
+    media_closed: bool,
+    process_stopped: bool,
+    authority_released: bool,
+    runtime_volume_deleted: bool,
     marker: PhantomData<E>,
 }
 
@@ -213,6 +240,7 @@ impl<E> QemuMediaController<E> {
         guest_ref: ResourceRef,
     ) -> Result<Self, QemuMediaError> {
         config.validate()?;
+        let config = config.project_controller();
         settings.validate()?;
         process.validate()?;
         if guest_ref.resource_type().as_str() != "Guest" {
@@ -226,6 +254,12 @@ impl<E> QemuMediaController<E> {
             phase: QemuMediaPhase::Pending,
             expected_identity: None,
             finalizer_installed: true,
+            authority_reserved: false,
+            pidfd_opened: false,
+            media_closed: false,
+            process_stopped: false,
+            authority_released: false,
+            runtime_volume_deleted: false,
             marker: PhantomData,
         })
     }
@@ -251,6 +285,7 @@ impl<E> QemuMediaController<E> {
             phase: self.phase,
             finalizer_installed: self.finalizer_installed,
             expected_identity: self.expected_identity.clone(),
+            authority_reserved: self.authority_reserved,
         }
     }
 
@@ -265,6 +300,13 @@ impl<E> QemuMediaController<E> {
         self.phase = recovery.phase;
         self.finalizer_installed = recovery.finalizer_installed;
         self.expected_identity = recovery.expected_identity;
+        self.authority_reserved =
+            recovery.authority_reserved && recovery.phase != QemuMediaPhase::Finalized;
+        self.pidfd_opened = false;
+        self.media_closed = false;
+        self.process_stopped = recovery.phase == QemuMediaPhase::Finalized;
+        self.authority_released = recovery.phase == QemuMediaPhase::Finalized;
+        self.runtime_volume_deleted = recovery.phase == QemuMediaPhase::Finalized;
         Ok(self)
     }
 
@@ -273,6 +315,7 @@ impl<E> QemuMediaController<E> {
     pub fn mark_ready_for_test(&mut self) {
         self.phase = QemuMediaPhase::Ready;
         self.finalizer_installed = true;
+        self.authority_reserved = true;
     }
 }
 
@@ -292,14 +335,19 @@ impl<E: QemuMediaEffectPort> QemuMediaController<E> {
         };
         if !dependencies.network_ready
             || !dependencies.media_ready
+            || !dependencies.runtime_volume_ready
             || (self.settings.display_window && !dependencies.display_ready)
         {
             self.phase = QemuMediaPhase::Pending;
             return Ok(QemuMediaReconcileOutcome::Retry { after_ms: 500 });
         }
-        let expected_process = device.process_identity.as_deref().unwrap_or("qemu-media");
+        let expected_process = PROCESS_TEMPLATE;
         DeviceAdmission::validate(&self.guest_ref, device, expected_process, "qemu-media/v1")
             .map_err(QemuMediaError::Device)?;
+        if !self.authority_reserved {
+            effect.reserve_device_authority(device.authority_key, &self.guest_ref)?;
+            self.authority_reserved = true;
+        }
 
         let observed = effect.observe()?;
         let identity = match observed {
@@ -313,27 +361,73 @@ impl<E: QemuMediaEffectPort> QemuMediaController<E> {
                     return Err(QemuMediaError::AdoptionAmbiguous);
                 }
                 self.phase = QemuMediaPhase::Starting;
-                effect.open_pidfd(&candidate)?;
+                if !self.pidfd_opened {
+                    effect.open_pidfd(&candidate)?;
+                    self.pidfd_opened = true;
+                }
                 candidate
             }
             None => {
-                self.phase = QemuMediaPhase::Starting;
-                let ticket =
-                    LaunchTicket::new(self.process.clone(), Vec::<ResourceRef>::new(), None)?;
-                let candidate = effect.launch(&ticket)?;
-                if !candidate.matches_process_token(expected_process) {
+                if self.expected_identity.is_some() {
                     self.phase = QemuMediaPhase::Failed;
                     return Err(QemuMediaError::AdoptionAmbiguous);
                 }
+                self.phase = QemuMediaPhase::Starting;
+                let ticket = LaunchTicket::new(
+                    self.process.clone(),
+                    dependencies.media_refs.clone(),
+                    dependencies.display_ref.clone(),
+                )?;
+                let candidate = effect.launch(&ticket)?;
+                if !candidate.matches_process_token(expected_process) {
+                    let _ = effect.stop(&candidate);
+                    self.phase = QemuMediaPhase::Failed;
+                    return Err(QemuMediaError::AdoptionAmbiguous);
+                }
+                if let Err(error) = effect.open_pidfd(&candidate) {
+                    let _ = effect.stop(&candidate);
+                    self.phase = QemuMediaPhase::Failed;
+                    return Err(error);
+                }
+                self.pidfd_opened = true;
                 self.expected_identity = Some(candidate.clone());
-                effect.open_pidfd(&candidate)?;
                 candidate
             }
         };
 
         if !dependencies.qmp_ready {
+            if dependencies.qmp_elapsed_seconds >= self.config.qmp_ready_timeout_seconds {
+                if effect.stop(&identity).is_ok() && matches!(effect.observe(), Ok(None)) {
+                    self.process_stopped = true;
+                    if self.authority_reserved && !self.authority_released {
+                        effect.release_device_authority()?;
+                        self.authority_released = true;
+                        self.authority_reserved = false;
+                    }
+                }
+                self.phase = QemuMediaPhase::Failed;
+                return Err(QemuMediaError::QmpNotReady);
+            }
             self.phase = QemuMediaPhase::WaitingQmp;
             return Ok(QemuMediaReconcileOutcome::Retry { after_ms: 250 });
+        }
+        let Some(qmp_status) = dependencies.qmp_status else {
+            self.phase = QemuMediaPhase::WaitingQmp;
+            return Ok(QemuMediaReconcileOutcome::Retry { after_ms: 250 });
+        };
+        match qmp_status {
+            QmpVmStatus::Stopped => {
+                self.phase = QemuMediaPhase::Failed;
+                return Err(QemuMediaError::QmpNotReady);
+            }
+            QmpVmStatus::Paused if !self.settings.pause_at_boot => {
+                effect.continue_guest()?;
+            }
+            QmpVmStatus::Running if self.settings.pause_at_boot => {
+                self.phase = QemuMediaPhase::Degraded;
+                return Err(QemuMediaError::QmpNotReady);
+            }
+            QmpVmStatus::Paused | QmpVmStatus::Running => {}
         }
         self.expected_identity = Some(identity);
         self.phase = if self.settings.pause_at_boot {
@@ -350,23 +444,53 @@ impl<E: QemuMediaEffectPort> QemuMediaController<E> {
             return Ok(());
         }
         self.phase = QemuMediaPhase::Finalizing;
-        effect.close_media_effects()?;
+        if !self.media_closed {
+            effect.close_media_effects()?;
+            self.media_closed = true;
+        }
+        let observed = effect.observe()?;
+        if self.expected_identity.is_none() && observed.is_some() {
+            self.phase = QemuMediaPhase::Degraded;
+            return Err(QemuMediaError::AdoptionAmbiguous);
+        }
         if let Some(identity) = self.expected_identity.as_ref() {
-            effect.stop(identity)?;
-            if effect.observe()?.is_some() {
-                self.phase = QemuMediaPhase::Degraded;
-                return Err(QemuMediaError::FinalizationIncomplete);
+            if let Some(candidate) = observed {
+                if verify_identity(identity, &candidate) != AdoptionOutcome::Adopted {
+                    self.phase = QemuMediaPhase::Degraded;
+                    return Err(QemuMediaError::AdoptionAmbiguous);
+                }
+                if !self.pidfd_opened {
+                    effect.open_pidfd(&candidate)?;
+                    self.pidfd_opened = true;
+                }
+                if !self.process_stopped {
+                    effect.stop(identity)?;
+                    self.process_stopped = true;
+                }
+                if effect.observe()?.is_some() {
+                    self.phase = QemuMediaPhase::Degraded;
+                    return Err(QemuMediaError::FinalizationIncomplete);
+                }
+            } else {
+                self.process_stopped = true;
             }
         }
-        effect.release_device_authority()?;
-        effect.delete_runtime_volume()?;
+        if self.authority_reserved && !self.authority_released {
+            effect.release_device_authority()?;
+            self.authority_released = true;
+            self.authority_reserved = false;
+        }
+        if !self.runtime_volume_deleted {
+            effect.delete_runtime_volume()?;
+            self.runtime_volume_deleted = true;
+        }
         self.finalizer_installed = false;
         self.phase = QemuMediaPhase::Finalized;
         Ok(())
     }
 
     /// Borrow the controller's Provider configuration projection.
-    pub const fn config(&self) -> &ProviderConfig {
+    pub const fn config(&self) -> &crate::config::ControllerConfigProjection {
         &self.config
     }
 }

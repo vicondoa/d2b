@@ -94,6 +94,7 @@ pub struct MediaReadiness {
 pub struct MediaWatch {
     guest_ref: ResourceRef,
     boot_media_ref: Option<ResourceRef>,
+    boot_media_view: String,
     removable_refs: Vec<RemovableVolumeRef>,
 }
 
@@ -107,8 +108,15 @@ impl MediaWatch {
         Self {
             guest_ref,
             boot_media_ref,
+            boot_media_view: "guest-attach".to_owned(),
             removable_refs,
         }
+    }
+
+    /// Set the configured boot Volume view.
+    pub fn with_boot_media_view(mut self, view: impl Into<String>) -> Self {
+        self.boot_media_view = view.into();
+        self
     }
 
     /// Validate all required Volume observations.
@@ -132,7 +140,7 @@ impl MediaWatch {
                 if observation.phase != VolumePhase::Ready {
                     return Err(MediaObservationError::NotReady);
                 }
-                observation.has_virtio_blk_for(&self.guest_ref, "guest-attach")
+                observation.has_virtio_blk_for(&self.guest_ref, &self.boot_media_view)
             }
         };
         if !boot_ready {

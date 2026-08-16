@@ -1,6 +1,8 @@
 use d2b_provider_runtime_qemu_media::{
-    QmpCommand, QmpHealth, QmpReply, QmpSession, ScriptedQmpTransport,
+    QmpCommand, QmpError, QmpGreeting, QmpHealth, QmpReply, QmpSession, QmpTransport,
+    ScriptedQmpTransport,
 };
+use std::collections::VecDeque;
 
 #[test]
 fn capability_negotiation_and_boot_commands_are_typed() {
@@ -62,4 +64,50 @@ fn health_degrades_after_bounded_failures() {
     assert_eq!(health.phase(), "ready");
     assert!(health.record_failure().is_err());
     assert_eq!(health.phase(), "degraded");
+}
+
+#[test]
+fn failed_capability_negotiation_poisoned_session_rejects_commands() {
+    let transport = ScriptedQmpTransport::new()
+        .with_greeting("8.2")
+        .with_error(QmpError::CapabilitiesFailed);
+    let mut session = QmpSession::new(transport);
+    assert!(session.negotiate().is_err());
+    assert_eq!(session.cont().unwrap_err(), QmpError::NotReady);
+}
+
+#[derive(Default)]
+struct RenegotiatingTransport {
+    greetings: VecDeque<QmpGreeting>,
+    replies: VecDeque<Result<QmpReply, QmpError>>,
+}
+
+impl QmpTransport for RenegotiatingTransport {
+    fn receive_greeting(&mut self) -> Result<QmpGreeting, QmpError> {
+        self.greetings.pop_front().ok_or(QmpError::GreetingTimeout)
+    }
+
+    fn execute(&mut self, _command: &QmpCommand) -> Result<QmpReply, QmpError> {
+        self.replies.pop_front().unwrap_or(Err(QmpError::Timeout))
+    }
+}
+
+#[test]
+fn failed_renegotiation_clears_previous_session() {
+    let mut transport = RenegotiatingTransport::default();
+    transport.greetings.push_back(QmpGreeting {
+        version: "8.2".to_owned(),
+    });
+    transport.greetings.push_back(QmpGreeting {
+        version: "8.2".to_owned(),
+    });
+    transport.replies.push_back(Ok(QmpReply::ok()));
+    transport
+        .replies
+        .push_back(Err(QmpError::CapabilitiesFailed));
+
+    let mut session = QmpSession::new(transport);
+    session.negotiate().unwrap();
+    assert!(session.negotiate().is_err());
+    assert_eq!(session.cont().unwrap_err(), QmpError::NotReady);
 }

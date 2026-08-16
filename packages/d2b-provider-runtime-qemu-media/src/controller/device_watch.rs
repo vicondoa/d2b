@@ -93,7 +93,11 @@ impl DeviceAdmission {
         if observation.phase != DevicePhase::Ready {
             return Err(DeviceAdmissionError::NotReady);
         }
-        if observation.owner_ref.as_ref() != Some(guest_ref) {
+        if observation
+            .owner_ref
+            .as_ref()
+            .is_some_and(|owner| owner != guest_ref)
+        {
             return Err(DeviceAdmissionError::WrongOwner);
         }
         if observation.platform != PlatformClass::X86_64Linux {

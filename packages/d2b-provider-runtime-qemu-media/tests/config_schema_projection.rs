@@ -15,10 +15,12 @@ fn provider_config_requires_host_and_projects_controller_only() {
     .unwrap();
     assert!(config.validate().is_ok());
     assert_eq!(config.project_worker(), WorkerConfigProjection);
-    assert_eq!(
-        config.project_controller().controller_execution_ref(),
-        "Host/host-system"
-    );
+    let projection = config.project_controller();
+    assert_eq!(projection.controller_execution_ref(), "Host/host-system");
+    assert_eq!(projection.qemu_binary_artifact_id(), "qemu-system-x86-64");
+    assert_eq!(projection.network_provider_ref(), "Provider/network-local");
+    assert_eq!(projection.volume_provider_ref(), "Provider/volume-local");
+    assert_eq!(projection.display_provider_ref(), None);
 }
 
 #[test]

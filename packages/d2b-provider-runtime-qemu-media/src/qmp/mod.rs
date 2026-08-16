@@ -233,12 +233,17 @@ impl<T: QmpTransport> QmpSession<T> {
 
     /// Negotiate QMP capabilities.
     pub fn negotiate(&mut self) -> Result<(), QmpError> {
+        self.negotiated = false;
+        self.greeting = None;
         let greeting = self.transport.receive_greeting()?;
         if greeting.version.is_empty() || greeting.version.len() > 64 {
             return Err(QmpError::GreetingInvalid);
         }
         self.greeting = Some(greeting);
-        self.execute(QmpCommand::Capabilities)?;
+        if let Err(error) = self.execute(QmpCommand::Capabilities) {
+            self.greeting = None;
+            return Err(error);
+        }
         self.negotiated = true;
         Ok(())
     }
@@ -277,10 +282,15 @@ impl<T: QmpTransport> QmpSession<T> {
             fd_slot,
             read_only,
         })?;
-        self.execute(QmpCommand::DeviceAdd {
+        if let Err(error) = self.execute(QmpCommand::DeviceAdd {
             device_id: node_name.to_owned(),
             drive: node_name.to_owned(),
-        })?;
+        }) {
+            let _ = self.execute(QmpCommand::BlockdevDel {
+                node_name: node_name.to_owned(),
+            });
+            return Err(error);
+        }
         Ok(())
     }
 
@@ -327,13 +337,13 @@ impl<T: QmpTransport> QmpSession<T> {
     }
 
     fn execute(&mut self, command: QmpCommand) -> Result<QmpReply, QmpError> {
-        if !matches!(command, QmpCommand::Capabilities)
-            && !self.negotiated
-            && self.greeting.is_none()
-        {
+        if !matches!(command, QmpCommand::Capabilities) && !self.negotiated {
             return Err(QmpError::NotReady);
         }
         self.commands.push(command.clone());
+        if self.commands.len() > 128 {
+            self.commands.remove(0);
+        }
         self.transport.execute(&command)
     }
 }

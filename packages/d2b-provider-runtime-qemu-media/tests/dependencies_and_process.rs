@@ -13,6 +13,17 @@ fn runtime_volume_is_ephemeral_and_waits_for_process_proof() {
     let volume = RuntimeVolumeSpec::new(guest(), "corp", 10 * 1024 * 1024, 1024).unwrap();
     assert_eq!(volume.cleanup_policy(), "vm-stop-with-proof");
     assert_eq!(volume.owner_ref(), &guest());
+    assert_eq!(
+        volume.provider_ref.to_canonical_string(),
+        "Provider/volume-local"
+    );
+    assert_eq!(volume.views.len(), 2);
+    assert_eq!(
+        volume.layout[0].restart_policy,
+        "preserve-across-controller-restart"
+    );
+    assert_eq!(volume.layout[1].restart_policy, "clear-on-runner-restart");
+    assert_eq!(volume.layout[2].restart_policy, "clear-on-runner-restart");
     assert!(volume.validate().is_ok());
     assert!(serde_json::to_string(&volume).unwrap().contains("qmp.sock"));
 }
@@ -52,6 +63,11 @@ fn device_admission_rejects_wrong_owner_platform_and_process_contract() {
         ..observation
     };
     assert!(DeviceAdmission::validate(&guest(), &owned, "process-a", "qemu-media/v1").is_ok());
+    let shared = DeviceObservation {
+        owner_ref: None,
+        ..owned
+    };
+    assert!(DeviceAdmission::validate(&guest(), &shared, "process-a", "qemu-media/v1").is_ok());
     let _reservation = authority.reserve(key, guest()).unwrap();
     assert!(authority.reserve(key, guest()).is_err());
 }

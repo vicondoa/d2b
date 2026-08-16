@@ -91,7 +91,25 @@ impl RuntimeVolumeSpec {
         quota_bytes: u64,
         quota_inodes: u32,
     ) -> Result<Self, VolumeSpecError> {
+        Self::new_with_provider(
+            guest_ref,
+            zone,
+            ResourceRef::parse("Provider/volume-local").expect("frozen Volume Provider ref"),
+            quota_bytes,
+            quota_inodes,
+        )
+    }
+
+    /// Build the runtime Volume with an explicit typed Volume Provider.
+    pub fn new_with_provider(
+        guest_ref: ResourceRef,
+        zone: impl Into<String>,
+        provider_ref: ResourceRef,
+        quota_bytes: u64,
+        quota_inodes: u32,
+    ) -> Result<Self, VolumeSpecError> {
         if guest_ref.resource_type().as_str() != "Guest"
+            || provider_ref.resource_type().as_str() != "Provider"
             || !(1024 * 1024..=256 * 1024 * 1024).contains(&quota_bytes)
             || !(64..=65_536).contains(&quota_inodes)
         {
@@ -106,37 +124,55 @@ impl RuntimeVolumeSpec {
             short_guest_key(&guest_ref.to_canonical_string())
         );
         let layout = vec![
-            layout("", VolumeLayoutType::Directory, "0700", "directory"),
-            layout("qmp.sock", VolumeLayoutType::UnixSocket, "0600", "qmp"),
+            layout(
+                "",
+                VolumeLayoutType::Directory,
+                "0700",
+                "preserve-across-controller-restart",
+            ),
+            layout(
+                "qmp.sock",
+                VolumeLayoutType::UnixSocket,
+                "0600",
+                "clear-on-runner-restart",
+            ),
             layout(
                 "serial.sock",
                 VolumeLayoutType::UnixSocket,
                 "0600",
-                "serial",
+                "clear-on-runner-restart",
             ),
         ];
         Ok(Self {
             name,
             zone,
             owner_ref: guest_ref,
-            provider_ref: ResourceRef::parse("Provider/volume-local")
-                .expect("frozen Volume Provider ref"),
+            provider_ref,
             source_kind: "tmpfs".to_owned(),
             source_policy_id: "runtime-qemu-media-runtime-tmpfs".to_owned(),
             layout,
-            views: vec![(
-                "runner".to_owned(),
-                RuntimeVolumeView {
-                    path: String::new(),
-                    rights: vec![
-                        "read".to_owned(),
-                        "write".to_owned(),
-                        "create".to_owned(),
-                        "delete".to_owned(),
-                        "traverse".to_owned(),
-                    ],
-                },
-            )],
+            views: vec![
+                (
+                    "runner".to_owned(),
+                    RuntimeVolumeView {
+                        path: String::new(),
+                        rights: vec![
+                            "read".to_owned(),
+                            "write".to_owned(),
+                            "create".to_owned(),
+                            "delete".to_owned(),
+                            "traverse".to_owned(),
+                        ],
+                    },
+                ),
+                (
+                    "controller-observe".to_owned(),
+                    RuntimeVolumeView {
+                        path: String::new(),
+                        rights: vec!["read".to_owned(), "traverse".to_owned()],
+                    },
+                ),
+            ],
             quota: VolumeQuota {
                 max_bytes: quota_bytes,
                 max_inodes: quota_inodes,
@@ -161,16 +197,64 @@ impl RuntimeVolumeSpec {
 
     /// Validate the canonical runtime Volume shape.
     pub fn validate(&self) -> Result<(), VolumeSpecError> {
-        if self.source_kind != "tmpfs"
+        let expected_layout = vec![
+            layout(
+                "",
+                VolumeLayoutType::Directory,
+                "0700",
+                "preserve-across-controller-restart",
+            ),
+            layout(
+                "qmp.sock",
+                VolumeLayoutType::UnixSocket,
+                "0600",
+                "clear-on-runner-restart",
+            ),
+            layout(
+                "serial.sock",
+                VolumeLayoutType::UnixSocket,
+                "0600",
+                "clear-on-runner-restart",
+            ),
+        ];
+        let expected_views = vec![
+            (
+                "runner".to_owned(),
+                RuntimeVolumeView {
+                    path: String::new(),
+                    rights: vec![
+                        "read".to_owned(),
+                        "write".to_owned(),
+                        "create".to_owned(),
+                        "delete".to_owned(),
+                        "traverse".to_owned(),
+                    ],
+                },
+            ),
+            (
+                "controller-observe".to_owned(),
+                RuntimeVolumeView {
+                    path: String::new(),
+                    rights: vec!["read".to_owned(), "traverse".to_owned()],
+                },
+            ),
+        ];
+        let expected_name = format!(
+            "{}-runtime",
+            short_guest_key(&self.owner_ref.to_canonical_string())
+        );
+        if self.owner_ref.resource_type().as_str() != "Guest"
+            || self.provider_ref.resource_type().as_str() != "Provider"
+            || !valid_token(&self.zone)
+            || self.name != expected_name
+            || self.source_kind != "tmpfs"
             || self.source_policy_id != "runtime-qemu-media-runtime-tmpfs"
             || self.finalizer != RUNTIME_VOLUME_FINALIZER
-            || self.layout.len() != 3
-            || self.views.len() != 1
-            || self.layout.iter().any(|entry| {
-                entry.cleanup_policy != "vm-stop-with-proof"
-                    || entry.adoption_policy != "quarantine-on-ambiguity"
-                    || entry.restart_policy != "preserve-across-controller-restart"
-            })
+            || self.layout != expected_layout
+            || self.views != expected_views
+            || !(1024 * 1024..=256 * 1024 * 1024).contains(&self.quota.max_bytes)
+            || !(64..=65_536).contains(&self.quota.max_inodes)
+            || self.quota.enforcement != "hard"
         {
             return Err(VolumeSpecError::Invalid);
         }
@@ -185,14 +269,19 @@ pub enum VolumeSpecError {
     Invalid,
 }
 
-fn layout(path: &str, entry_type: VolumeLayoutType, mode: &str, _purpose: &str) -> LayoutEntry {
+fn layout(
+    path: &str,
+    entry_type: VolumeLayoutType,
+    mode: &str,
+    restart_policy: &str,
+) -> LayoutEntry {
     LayoutEntry {
         path: path.to_owned(),
         entry_type,
         mode: mode.to_owned(),
         cleanup_policy: "vm-stop-with-proof".to_owned(),
         adoption_policy: "quarantine-on-ambiguity".to_owned(),
-        restart_policy: "preserve-across-controller-restart".to_owned(),
+        restart_policy: restart_policy.to_owned(),
     }
 }
 
@@ -206,6 +295,7 @@ fn short_guest_key(value: &str) -> String {
 
 fn valid_token(value: &str) -> bool {
     !value.is_empty()
+        && value.len() <= 63
         && value.as_bytes()[0].is_ascii_lowercase()
         && value
             .bytes()

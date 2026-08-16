@@ -430,6 +430,17 @@ impl GuestSpec {
         if self.system_artifact_id.is_some() {
             return Err(GuestSpecError::SystemArtifactUnsupported);
         }
+        if self
+            .network_attachments
+            .iter()
+            .any(|attachment| attachment.network_ref.resource_type().as_str() != "Network")
+            || self
+                .device_attachments
+                .iter()
+                .any(|attachment| attachment.device_ref.resource_type().as_str() != "Device")
+        {
+            return Err(GuestSpecError::InvalidReference);
+        }
         if self.provider.schema_id != GUEST_SPEC_SCHEMA_ID
             || self.provider.schema_version != "1.0.0"
         {
@@ -694,6 +705,8 @@ pub enum GuestSpecError {
     InvalidNetworkRef,
     /// A Device reference had the wrong ResourceType.
     InvalidDeviceRef,
+    /// A base attachment reference had the wrong ResourceType.
+    InvalidReference,
     /// A Volume view was not a bounded token.
     InvalidView,
     /// Too many removable Volumes were requested.
@@ -722,6 +735,7 @@ impl core::fmt::Display for GuestSpecError {
             Self::InvalidVolumeRef => "qemu-media-volume-ref-invalid",
             Self::InvalidNetworkRef => "qemu-media-network-ref-invalid",
             Self::InvalidDeviceRef => "qemu-media-device-ref-invalid",
+            Self::InvalidReference => "qemu-media-reference-invalid",
             Self::InvalidView => "qemu-media-volume-view-invalid",
             Self::TooManyRemovableVolumes => "qemu-media-too-many-removable-volumes",
             Self::DuplicateVolumeRef => "qemu-media-duplicate-volume-ref",

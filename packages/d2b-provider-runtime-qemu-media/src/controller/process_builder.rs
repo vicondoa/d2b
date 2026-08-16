@@ -118,12 +118,26 @@ impl ProcessSpec {
 
     /// Validate the no-ambient-authority Process shape.
     pub fn validate(&self) -> Result<(), ProcessSpecError> {
-        if self.process_class != "worker"
+        if self.provider_ref.to_canonical_string() != PROCESS_PROVIDER_REF
+            || self.execution_ref.resource_type().as_str() != "Host"
+            || self.runtime_volume_ref.resource_type().as_str() != "Volume"
+            || self
+                .device_ref
+                .as_ref()
+                .is_some_and(|reference| reference.resource_type().as_str() != "Device")
+            || self
+                .network_refs
+                .iter()
+                .any(|reference| reference.resource_type().as_str() != "Network")
+            || self.process_class != "worker"
             || self.template != PROCESS_TEMPLATE
+            || self.namespace_classes != ["pid".to_owned(), "mount".to_owned()]
             || !self.capability_classes.is_empty()
             || !self.no_new_privileges
             || !self.read_only_root
+            || self.seccomp_class != "qemu-media-runner"
             || self.restart_policy != "never"
+            || self.desired_lifecycle != "running"
         {
             return Err(ProcessSpecError::InvalidShape);
         }
@@ -195,8 +209,19 @@ impl LaunchTicket {
         self.process.validate()?;
         let mut slots = std::collections::BTreeSet::new();
         for attachment in &self.attachments {
-            if !slots.insert(&attachment.slot) {
+            if !valid_slot(&attachment.slot) || !slots.insert(&attachment.slot) {
                 return Err(ProcessSpecError::DuplicateAttachmentSlot);
+            }
+            let expected = match attachment.kind {
+                AttachmentKind::Kvm => "Device",
+                AttachmentKind::Tap => "Network",
+                AttachmentKind::Media => "Volume",
+                AttachmentKind::Display | AttachmentKind::Qmp | AttachmentKind::Serial => {
+                    "Endpoint"
+                }
+            };
+            if attachment.source_ref.resource_type().as_str() != expected {
+                return Err(ProcessSpecError::InvalidReference);
             }
         }
         Ok(())
@@ -212,4 +237,13 @@ pub enum ProcessSpecError {
     InvalidShape,
     /// Two attachment slots have the same label.
     DuplicateAttachmentSlot,
+}
+
+fn valid_slot(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 63
+        && value.as_bytes()[0].is_ascii_lowercase()
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
 }
