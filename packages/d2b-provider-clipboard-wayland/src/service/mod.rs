@@ -936,7 +936,7 @@ impl ClipdHost {
     pub fn authorize_paste_after_picker(
         &self,
         route: &AuthenticatedPasteRoute,
-        receipt: PickerReceipt,
+        receipt: &PickerReceipt,
         entry_digest: &str,
         now_secs: u64,
     ) -> Result<(), ClipboardServiceError> {
@@ -960,7 +960,7 @@ impl ClipdHost {
         entry_digest: &str,
         now_secs: u64,
     ) -> Result<Vec<u8>, ClipboardServiceError> {
-        self.authorize_paste_after_picker(route, receipt, entry_digest, now_secs)?;
+        self.authorize_paste_after_picker(route, &receipt, entry_digest, now_secs)?;
         self.history
             .materialize(
                 entry_digest,
@@ -1228,7 +1228,7 @@ mod tests {
             )
             .expect("picker receipt");
         assert!(
-            host.authorize_paste_after_picker(&route, receipt, &digest, 3_700)
+            host.authorize_paste_after_picker(&route, &receipt, &digest, 3_700)
                 == Err(ClipboardServiceError::PickerReceiptInvalid)
         );
         assert_eq!(
@@ -1467,7 +1467,7 @@ mod tests {
         .unwrap();
         host.purge_guest("Host/zone-a");
         assert_eq!(
-            host.authorize_paste_after_picker(&route, receipt, &digest, 101),
+            host.authorize_paste_after_picker(&route, &receipt, &digest, 101),
             Err(ClipboardServiceError::PickerReceiptInvalid)
         );
     }

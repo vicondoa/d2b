@@ -1553,10 +1553,6 @@ where
             ) => {
                 let request: PickerMaterializeRequest = serde_json::from_slice(payload)
                     .map_err(|_| InteractionDispatchError::InvalidPayload)?;
-                let receipt = self
-                    .pending_picker_receipts
-                    .remove(&request.operation_id)
-                    .ok_or(InteractionDispatchError::SessionUnavailable)?;
                 let source_route = self
                     .route_for_session(session_key)
                     .filter(|route| {
@@ -1608,6 +1604,25 @@ where
                         &destination,
                     )
                     .map_err(|_| InteractionDispatchError::SessionUnavailable)?;
+                let now_secs = daemon_now_secs();
+                let receipt = self
+                    .pending_picker_receipts
+                    .get(&request.operation_id)
+                    .ok_or(InteractionDispatchError::SessionUnavailable)?;
+                self.clipboard
+                    .as_ref()
+                    .expect("clipboard runtime was just admitted")
+                    .authorize_paste_after_picker(
+                        &paste_route,
+                        receipt,
+                        &request.entry_digest,
+                        now_secs,
+                    )
+                    .map_err(|_| InteractionDispatchError::RuntimeFailure)?;
+                let receipt = self
+                    .pending_picker_receipts
+                    .remove(&request.operation_id)
+                    .ok_or(InteractionDispatchError::SessionUnavailable)?;
                 let bytes = self
                     .clipboard
                     .as_mut()
@@ -1616,7 +1631,7 @@ where
                         &paste_route,
                         receipt,
                         &request.entry_digest,
-                        daemon_now_secs(),
+                        now_secs,
                     )
                     .map_err(|_| InteractionDispatchError::RuntimeFailure)?;
                 Ok((
@@ -2332,6 +2347,9 @@ where
             .ok_or(DisplayRuntimeError::InvalidPolicy)?;
         if request.spec.policy_ref() != &evidence.policy_ref {
             return Err(DisplayRuntimeError::InvalidPolicy);
+        }
+        if request.spec.user_ref() != &evidence.observer_user_ref {
+            return Err(DisplayRuntimeError::SessionMismatch);
         }
         if !evidence.resource_ready
             || evidence.resource_revision.get() == 0
@@ -5389,6 +5407,49 @@ mod tests {
         )
         .await;
         assert_eq!(reconcile.status().code(), TtrpcCode::OK);
+        let wrong_user_spec = WaylandSessionSpec::new(
+            ResourceRef::parse("Guest/work").unwrap(),
+            ResourceRef::parse("Host/host").unwrap(),
+            ResourceRef::parse("User/bob").unwrap(),
+            ResourceRef::parse("display-wayland.d2bus.org.WaylandPolicy/display-wayland").unwrap(),
+            d2b_provider_display_wayland::DisplayIdentity::new(
+                "wrong-user-display",
+                "#112233",
+                "#223344",
+                "#334455",
+            )
+            .unwrap(),
+            true,
+        )
+        .unwrap();
+        let wrong_user = dispatch_test_request(
+            display,
+            display_service,
+            111,
+            "DisplayService/Reconcile",
+            serde_json::to_vec(&serde_json::json!({
+                "spec": wrong_user_spec,
+            }))
+            .unwrap(),
+        )
+        .await;
+        assert_eq!(wrong_user.status().code(), TtrpcCode::FAILED_PRECONDITION);
+        let restart_reconcile = dispatch_test_request(
+            display,
+            display_service,
+            112,
+            "DisplayService/Reconcile",
+            serde_json::to_vec(&serde_json::json!({
+                "spec": display_spec,
+            }))
+            .unwrap(),
+        )
+        .await;
+        assert_eq!(restart_reconcile.status().code(), TtrpcCode::OK);
+        let restart_payload: serde_json::Value =
+            serde_json::from_slice(&restart_reconcile.payload).unwrap();
+        assert_eq!(restart_payload["phase"], "Ready");
+        assert_eq!(restart_payload["worker_actions"], 0);
         let wrong_display_spec = WaylandSessionSpec::new(
             ResourceRef::parse("Guest/other").unwrap(),
             ResourceRef::parse("Host/host").unwrap(),
@@ -5570,6 +5631,184 @@ mod tests {
                 .map_or(0, InteractionComposition::session_count),
             0
         );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn picker_materialize_rejects_guest_or_zone_without_consuming_receipt() {
+        let directory = tempfile::tempdir().unwrap();
+        let zone = ZoneId::parse("work").unwrap();
+        let uid = nix::unistd::getuid().as_raw();
+        let runtime = Arc::new(AsyncMutex::new(Some(committed_test_interaction_runtime(
+            &zone, uid,
+        ))));
+        let services = [
+            d2b_provider_display_wayland::SERVICE_PACKAGE,
+            d2b_provider_clipboard_wayland::BRIDGE_SERVICE,
+            d2b_provider_clipboard_wayland::PICKER_SERVICE,
+        ];
+        let mut clients = Vec::new();
+        for service in services {
+            let path = directory
+                .path()
+                .join(service.replace('.', "-"))
+                .with_extension("sock");
+            let listener = bind_interaction_listener(&path, uid).unwrap();
+            let (client, server) =
+                establish_test_client(&listener, &runtime, &zone, service, uid, &path).await;
+            clients.push((service, path, listener, client, server));
+        }
+
+        let (display_service, _, _, display, _) = &clients[0];
+        let display_spec = WaylandSessionSpec::new(
+            ResourceRef::parse("Guest/work").unwrap(),
+            ResourceRef::parse("Host/host").unwrap(),
+            ResourceRef::parse("User/alice").unwrap(),
+            ResourceRef::parse("display-wayland.d2bus.org.WaylandPolicy/display-wayland").unwrap(),
+            d2b_provider_display_wayland::DisplayIdentity::new(
+                "picker-materialize",
+                "#112233",
+                "#223344",
+                "#334455",
+            )
+            .unwrap(),
+            true,
+        )
+        .unwrap();
+        let ready = dispatch_test_request(
+            display,
+            display_service,
+            400,
+            "DisplayService/Reconcile",
+            serde_json::to_vec(&serde_json::json!({"spec": display_spec})).unwrap(),
+        )
+        .await;
+        assert_eq!(ready.status().code(), TtrpcCode::OK);
+
+        let (bridge_service, _, _, bridge, _) = &clients[1];
+        let capture = dispatch_test_request(
+            bridge,
+            bridge_service,
+            401,
+            "ClipboardBridgeService/CaptureGuest",
+            serde_json::to_vec(&serde_json::json!({
+                "guest_ref": "Guest/work",
+                "zone": "work",
+                "mime": "text/plain",
+                "bytes": [112, 105, 99, 107],
+            }))
+            .unwrap(),
+        )
+        .await;
+        assert_eq!(capture.status().code(), TtrpcCode::OK);
+        let capture_payload: serde_json::Value = serde_json::from_slice(&capture.payload).unwrap();
+        let entry_digest = capture_payload["entry_digest"].as_str().unwrap().to_owned();
+
+        let (picker_service, _, _, picker, _) = &clients[2];
+        let completion = dispatch_test_request(
+            picker,
+            picker_service,
+            402,
+            "ClipboardPickerService/Complete",
+            serde_json::to_vec(&serde_json::json!({
+                "guest_ref": "Guest/work",
+                "zone": "work",
+                "entry_digest": entry_digest,
+                "mime_types": ["text/plain"],
+                "selected_digest": entry_digest,
+            }))
+            .unwrap(),
+        )
+        .await;
+        assert_eq!(completion.status().code(), TtrpcCode::OK);
+        let completion_payload: serde_json::Value =
+            serde_json::from_slice(&completion.payload).unwrap();
+        let operation_id = completion_payload["operation_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+
+        let wrong_guest = dispatch_test_request(
+            picker,
+            picker_service,
+            403,
+            "ClipboardPickerService/Materialize",
+            serde_json::to_vec(&serde_json::json!({
+                "operation_id": operation_id,
+                "entry_digest": entry_digest,
+                "guest_ref": "Guest/third",
+                "zone": "work",
+            }))
+            .unwrap(),
+        )
+        .await;
+        assert_eq!(wrong_guest.status().code(), TtrpcCode::UNAUTHENTICATED);
+
+        let wrong_zone = dispatch_test_request(
+            picker,
+            picker_service,
+            404,
+            "ClipboardPickerService/Materialize",
+            serde_json::to_vec(&serde_json::json!({
+                "operation_id": operation_id,
+                "entry_digest": entry_digest,
+                "guest_ref": "Guest/work",
+                "zone": "other",
+            }))
+            .unwrap(),
+        )
+        .await;
+        assert_eq!(wrong_zone.status().code(), TtrpcCode::UNAUTHENTICATED);
+
+        let materialized = dispatch_test_request(
+            picker,
+            picker_service,
+            405,
+            "ClipboardPickerService/Materialize",
+            serde_json::to_vec(&serde_json::json!({
+                "operation_id": operation_id,
+                "entry_digest": entry_digest,
+                "guest_ref": "Guest/work",
+                "zone": "work",
+            }))
+            .unwrap(),
+        )
+        .await;
+        assert_eq!(materialized.status().code(), TtrpcCode::OK);
+        let materialized_payload: serde_json::Value =
+            serde_json::from_slice(&materialized.payload).unwrap();
+        assert_eq!(
+            materialized_payload["bytes"],
+            serde_json::json!([112, 105, 99, 107])
+        );
+
+        let replay = dispatch_test_request(
+            picker,
+            picker_service,
+            406,
+            "ClipboardPickerService/Materialize",
+            serde_json::to_vec(&serde_json::json!({
+                "operation_id": operation_id,
+                "entry_digest": entry_digest,
+                "guest_ref": "Guest/work",
+                "zone": "work",
+            }))
+            .unwrap(),
+        )
+        .await;
+        assert_eq!(replay.status().code(), TtrpcCode::UNAUTHENTICATED);
+
+        let finalize = dispatch_test_request(
+            display,
+            display_service,
+            407,
+            "DisplayService/Finalize",
+            Vec::new(),
+        )
+        .await;
+        assert_eq!(finalize.status().code(), TtrpcCode::OK);
+        for (_, _, _, _, server) in clients {
+            assert!(server.await.unwrap().is_ok());
+        }
     }
 
     #[tokio::test(flavor = "current_thread")]

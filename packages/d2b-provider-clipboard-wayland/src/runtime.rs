@@ -294,7 +294,7 @@ impl<E: ClipboardProcessEffectPort> ClipboardRuntime<E> {
     pub fn authorize_paste_after_picker(
         &self,
         route: &AuthenticatedPasteRoute,
-        receipt: crate::PickerReceipt,
+        receipt: &crate::PickerReceipt,
         entry_digest: &str,
         now_secs: u64,
     ) -> Result<(), ClipboardRuntimeError> {

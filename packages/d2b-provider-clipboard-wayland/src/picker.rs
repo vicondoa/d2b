@@ -143,7 +143,7 @@ pub enum PickerResult {
 ///
 /// The receipt is intentionally not cloneable and exposes no constructor.
 /// Only [`PickerAuthority::complete`] can mint it, and the clipboard service
-/// consumes it before authorizing a paste.
+/// consumes it only after authorizing the exact authenticated paste route.
 pub struct PickerReceipt {
     operation_id: String,
     source_zone: String,
