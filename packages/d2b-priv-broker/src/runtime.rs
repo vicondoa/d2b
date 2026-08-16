@@ -1870,6 +1870,11 @@ fn dispatch_request(
     }
 }
 
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn request_accepts_fd(request: &BrokerRequest) -> bool {
+    matches!(request, BrokerRequest::OpenPeerPidfdFromAcceptedSocket(_))
+}
+
 /// Real-wire dispatch. Matches the opaque-ID
 /// `d2b_contracts::broker_wire::BrokerRequest` tuple-newtype shape and
 /// wires the live executors into the dispatch arms that have a ready
@@ -1992,11 +1997,7 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
             write_success_op_record_impl($($args)* audit_context)
         };
     }
-    let accepts_request_fd = matches!(
-        &request,
-        RealBrokerRequest::OpenPeerPidfdFromAcceptedSocket(_)
-    );
-    if !accepts_request_fd && !request_fds.is_empty() {
+    if !request_accepts_fd(&request) && !request_fds.is_empty() {
         return Err(BrokerError::Protocol(
             "unexpected request SCM_RIGHTS descriptor".to_owned(),
         ));
