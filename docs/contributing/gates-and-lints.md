@@ -115,8 +115,7 @@ make test
 
 ### Optional Bazel parity facade
 
-The committed Bazel graph can be exercised without changing the Layer-1
-scheduler:
+`make check` schedules the Bazel aggregate:
 
 ```bash
 make bazel-check
@@ -124,10 +123,10 @@ make bazel-check
 tests/tools/bazel-check --profile local
 ```
 
-The facade runs the complete local `//...` graph. It is not in
-`tests/layer1-jobs.json`, does not replace `make check`, and does not make
-BuildBuddy qualification evidence enforcing. Keep Cargo and the existing Make
-targets available for standalone and CI workflows.
+The facade runs the complete local `//...` graph. Remote-cache read and write
+bytes are the BuildBuddy provider evidence. Keep Cargo and the existing Make
+targets available for standalone workflows. GitHub Layer-1 runners stay on
+generated Cargo/Make jobs until those runners host Bazel.
 
 Local `make check` runs `test-lint` as a serial fail-fast phase before
 inventory and the long parallel jobs. That lane checks every gated Rust

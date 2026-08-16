@@ -135,12 +135,9 @@ settings or claim atomic base binding.
 
 ## Critical subsystem index
 
-The Bazel graph is available as an optional parity facade:
-`make bazel-check` (or `tests/tools/bazel-check --profile local`) runs the
-same local `//...` target set. It is not part of the Layer-1 manifest and does
-not replace `make check` or the standalone Cargo workflows. Remote and
-qualification profiles remain opt-in until provider-accounted transfer
-evidence qualifies them.
+`make check` schedules the Bazel aggregate (`make bazel-check`) plus the
+remaining local Layer-1 jobs. Remote-cache read and write bytes are the
+BuildBuddy provider evidence. Standalone Cargo workflows remain available.
 
 The full invariants are in
 [`docs/contributing/critical-subsystems.md`](./docs/contributing/critical-subsystems.md).

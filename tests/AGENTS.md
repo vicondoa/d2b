@@ -198,12 +198,9 @@ mode and must not be used as an aggregate scheduler. The broker passes remain
 serial, and the main workspace, schema, and inventory leaves retain their
 dependency edges.
 
-The optional Bazel parity facade is `make bazel-check` or
-`tests/tools/bazel-check --profile local`. It runs the complete local `//...`
-graph outside the Layer-1 manifest. Do not add `test-bazel-rust` aliases or
-route the Cargo leaves through Bazel: `make check`, the manifest, and the
-standalone Cargo workflows remain authoritative until provider qualification
-is complete.
+`make check` schedules `make bazel-check`, which runs the complete local
+`//...` graph. Remote-cache read and write bytes are the BuildBuddy
+provider evidence. Standalone Cargo workflows remain available.
 
 Those dependency edges are warm-local-profile only. CI dispatches main, broker,
 guest, no-bash, schema, inventory and supply-chain Make targets as seven
