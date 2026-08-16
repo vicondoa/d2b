@@ -33,8 +33,8 @@
   and synced crate source lists and library deps with the merged workspace.
 - Compile `d2bd_lib_test_support` against the production first-party graph
   so it does not link two `d2b_contracts` crates.
-- Keep Nix, fixture, nested-Bazel, and host-namespace tests out of the
-  default Bazel aggregate with local/manual tags.
+- Keep Nix, fixture, nested-Bazel, host-namespace, and Cargo-spawning
+  tests out of the default Bazel aggregate with local/manual tags.
 - Fixed default-config Bazel Rust tests to carry Cargo dev-dependency feature
   variants transitively, including d2bd's `test-support` dependencies.
 - Fixed upstream Gazelle idempotence for hand-owned Bazel package BUILD files.

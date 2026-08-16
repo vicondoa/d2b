@@ -132,6 +132,7 @@ rust_test(
         "tests/public_mint_surface.rs",
     ],
     data = ["//bazel/checks/rust:cargo_workspace_sources"],
+    tags = ["local"],
     visibility = ["//visibility:public"],
     deps = [
         "@crates//:quote",
