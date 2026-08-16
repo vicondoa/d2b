@@ -324,12 +324,10 @@ where
             self.port.close_listener(listener).await?;
             self.listener = None;
         }
-        let reservation = self
-            .reservation
-            .as_ref()
-            .ok_or(RelayEffectError::CloseUnconfirmed)?;
-        self.port.release_cid(reservation).await?;
-        self.reservation = None;
+        if let Some(reservation) = self.reservation.as_ref() {
+            self.port.release_cid(reservation).await?;
+            self.reservation = None;
+        }
         self.phase = RelayPhase::Closed;
         Ok(())
     }

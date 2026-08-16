@@ -25,6 +25,7 @@ use tokio::{
 };
 
 const PROVIDER_REF: &str = "Provider/transport-vsock";
+const CLOSE_COMPLETION_BUDGET_MS: u64 = CLOSE_GRACE_MS * 2;
 
 /// Request to open one ZoneLink byte transport.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -266,9 +267,8 @@ where
             .try_acquire_owned()
             .map_err(|_| ServiceError::ProviderOverloaded)?;
         let deadline = Instant::now() + Duration::from_millis(u64::from(request.deadline_ms));
-        let open_deadline = Duration::from_millis(u64::from(request.deadline_ms));
         let effect_stream = timeout(
-            open_deadline,
+            remaining_until(deadline),
             self.effect.open(
                 &request.endpoint_id,
                 &request.binding_id,
@@ -280,15 +280,13 @@ where
         .map_err(|_| ServiceError::Effect(VsockEffectError::DeadlineExceeded))?
         .map_err(ServiceError::Effect)?;
         let (stream_id, named_stream) =
-            match timeout(open_deadline, self.streams.open_named_stream()).await {
+            match timeout(remaining_until(deadline), self.streams.open_named_stream()).await {
                 Ok(Ok(value)) => value,
                 Ok(Err(_)) => {
-                    let closed = timeout(
-                        Duration::from_millis(CLOSE_GRACE_MS),
-                        self.effect.close(effect_stream),
-                    )
-                    .await
-                    .is_ok_and(|result| result.is_ok());
+                    let closed =
+                        timeout(remaining_until(deadline), self.effect.close(effect_stream))
+                            .await
+                            .is_ok_and(|result| result.is_ok());
                     return Err(if closed {
                         ServiceError::StreamUnavailable
                     } else {
@@ -296,12 +294,10 @@ where
                     });
                 }
                 Err(_) => {
-                    let closed = timeout(
-                        Duration::from_millis(CLOSE_GRACE_MS),
-                        self.effect.close(effect_stream),
-                    )
-                    .await
-                    .is_ok_and(|result| result.is_ok());
+                    let closed =
+                        timeout(remaining_until(deadline), self.effect.close(effect_stream))
+                            .await
+                            .is_ok_and(|result| result.is_ok());
                     return Err(if closed {
                         ServiceError::Effect(VsockEffectError::DeadlineExceeded)
                     } else {
@@ -450,9 +446,12 @@ where
                 *entry_phase = TransportPhase::Closing;
             }
         }
-        if timeout(Duration::from_millis(CLOSE_GRACE_MS), completion.wait())
-            .await
-            .is_err()
+        if timeout(
+            Duration::from_millis(CLOSE_COMPLETION_BUDGET_MS),
+            completion.wait(),
+        )
+        .await
+        .is_err()
         {
             let entry = self.active.lock().await.remove(&request.transport_handle);
             if let Some(entry) = entry {
@@ -608,13 +607,20 @@ where
             last_exit: *entry.exit.lock().await,
         };
         let mut completed = self.completed.lock().await;
-        if completed.len() >= MAX_ACTIVE_TRANSPORTS
-            && let Some(oldest) = completed.keys().next().copied()
-        {
-            completed.remove(&oldest);
+        if completed.len() >= MAX_ACTIVE_TRANSPORTS {
+            let released = completed.iter().find_map(|(handle, observation)| {
+                (observation.phase == TransportPhase::Released).then_some(*handle)
+            });
+            if let Some(released) = released {
+                completed.remove(&released);
+            }
         }
         completed.insert(handle, observation);
     }
+}
+
+fn remaining_until(deadline: Instant) -> Duration {
+    deadline.saturating_duration_since(Instant::now())
 }
 
 async fn emit_event(

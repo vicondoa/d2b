@@ -4,7 +4,14 @@ use d2b_provider_transport_vsock::{
     GuestControlKey, GuestIdentity, NativeGuestRelay, PeerCid, RelayBinding, RelayEffectError,
     RelayEffectPort, RelayObservation, RelayPhase, SessionAuthority, SessionProof,
 };
+use ring::rand::{SecureRandom, SystemRandom};
 use std::sync::{Arc, Mutex};
+
+fn nonce() -> [u8; 32] {
+    let mut nonce = [0_u8; 32];
+    SystemRandom::new().fill(&mut nonce).unwrap();
+    nonce
+}
 
 #[derive(Default)]
 struct FakeRelayPort {
@@ -121,7 +128,7 @@ fn finalization_closes_relay_before_releasing_cid_authority() {
         let session = authority
             .authenticate(
                 PeerCid::from_core(42).unwrap(),
-                SessionProof::sign(&key, &guest, [1; 32], 1),
+                SessionProof::sign(&key, &guest, nonce(), 1),
             )
             .unwrap();
         let mut relay = NativeGuestRelay::new(port, binding());
@@ -193,6 +200,7 @@ fn reserve_failure_leaves_relay_retryable() {
         .unwrap();
     runtime.block_on(async {
         let port = FakeRelayPort::default();
+        let fail_reserve = Arc::clone(&port.fail_reserve);
         *port.fail_reserve.lock().unwrap() = true;
         let key = GuestControlKey::from_core([7; 32]);
         let guest = binding().guest().clone();
@@ -200,7 +208,7 @@ fn reserve_failure_leaves_relay_retryable() {
         let session = authority
             .authenticate(
                 PeerCid::from_core(42).unwrap(),
-                SessionProof::sign(&key, &guest, [4; 32], 1),
+                SessionProof::sign(&key, &guest, nonce(), 1),
             )
             .unwrap();
         let mut relay = NativeGuestRelay::new(port, binding());
@@ -209,6 +217,15 @@ fn reserve_failure_leaves_relay_retryable() {
             RelayEffectError::CidAuthorityConflict
         );
         assert_eq!(relay.phase(), RelayPhase::Idle);
+
+        relay.finalize().await.unwrap();
+        assert_eq!(relay.phase(), RelayPhase::Closed);
+
+        *fail_reserve.lock().unwrap() = false;
+        relay.start(&session).await.unwrap();
+        assert_eq!(relay.phase(), RelayPhase::Ready);
+        relay.finalize().await.unwrap();
+        assert_eq!(relay.phase(), RelayPhase::Closed);
     });
 }
 
@@ -227,7 +244,7 @@ fn failed_cid_release_retains_authority_for_retry() {
         let session = authority
             .authenticate(
                 PeerCid::from_core(42).unwrap(),
-                SessionProof::sign(&key, &guest, [3; 32], 1),
+                SessionProof::sign(&key, &guest, nonce(), 1),
             )
             .unwrap();
         let mut relay = NativeGuestRelay::new(port, binding());
@@ -262,7 +279,7 @@ fn listener_close_failure_keeps_cid_authority_for_retry() {
         let session = authority
             .authenticate(
                 PeerCid::from_core(42).unwrap(),
-                SessionProof::sign(&key, &guest, [13; 32], 1),
+                SessionProof::sign(&key, &guest, nonce(), 1),
             )
             .unwrap();
         let mut relay = NativeGuestRelay::new(port, binding());

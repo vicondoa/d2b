@@ -3,6 +3,14 @@ use d2b_provider_transport_vsock::{
     GuestControlKey, GuestIdentity, MAX_REPLAY_ENTRIES, PeerCid, SessionAuthority, SessionProof,
     SessionRejectReason, SessionState,
 };
+use ring::rand::{SecureRandom, SystemRandom};
+
+fn nonce_for(index: u16) -> [u8; 32] {
+    let mut nonce = [0_u8; 32];
+    SystemRandom::new().fill(&mut nonce).unwrap();
+    nonce[..2].copy_from_slice(&index.to_be_bytes());
+    nonce
+}
 
 fn identity(cid: u32) -> GuestIdentity {
     GuestIdentity::new(
@@ -19,7 +27,7 @@ fn correct_cid_signature_guest_zone_and_session_establish_ready() {
     let key = GuestControlKey::from_core([7; 32]);
     let expected = identity(42);
     let mut authority = SessionAuthority::new(expected.clone(), key.clone(), 3);
-    let proof = SessionProof::sign(&key, &expected, [9; 32], 3);
+    let proof = SessionProof::sign(&key, &expected, nonce_for(1), 3);
 
     let session = authority
         .authenticate(PeerCid::from_core(42).unwrap(), proof)
@@ -34,7 +42,7 @@ fn cid_reuse_and_replay_are_rejected() {
     let key = GuestControlKey::from_core([8; 32]);
     let expected = identity(42);
     let mut authority = SessionAuthority::new(expected.clone(), key.clone(), 3);
-    let proof = SessionProof::sign(&key, &expected, [4; 32], 3);
+    let proof = SessionProof::sign(&key, &expected, nonce_for(2), 3);
     authority
         .authenticate(PeerCid::from_core(42).unwrap(), proof.clone())
         .unwrap();
@@ -46,7 +54,7 @@ fn cid_reuse_and_replay_are_rejected() {
     );
 
     let mut other = identity(43);
-    let proof = SessionProof::sign(&key, &other, [5; 32], 3);
+    let proof = SessionProof::sign(&key, &other, nonce_for(3), 3);
     assert_eq!(
         authority
             .authenticate(PeerCid::from_core(42).unwrap(), proof)
@@ -54,7 +62,7 @@ fn cid_reuse_and_replay_are_rejected() {
         SessionRejectReason::CidMismatch
     );
     other = identity(42);
-    let proof = SessionProof::sign(&key, &other, [6; 32], 2);
+    let proof = SessionProof::sign(&key, &other, nonce_for(4), 2);
     assert_eq!(
         authority
             .authenticate(PeerCid::from_core(42).unwrap(), proof)
@@ -69,22 +77,18 @@ fn replay_cache_refuses_new_sessions_at_its_bound() {
     let expected = identity(42);
     let mut authority = SessionAuthority::new(expected.clone(), key.clone(), 3);
     for index in 0..MAX_REPLAY_ENTRIES {
-        let mut nonce = [0_u8; 32];
-        nonce[..2].copy_from_slice(&(index as u16).to_be_bytes());
         authority
             .authenticate(
                 PeerCid::from_core(42).unwrap(),
-                SessionProof::sign(&key, &expected, nonce, 3),
+                SessionProof::sign(&key, &expected, nonce_for(index as u16), 3),
             )
             .unwrap();
     }
-    let mut nonce = [0_u8; 32];
-    nonce[..2].copy_from_slice(&(MAX_REPLAY_ENTRIES as u16).to_be_bytes());
     assert_eq!(
         authority
             .authenticate(
                 PeerCid::from_core(42).unwrap(),
-                SessionProof::sign(&key, &expected, nonce, 3),
+                SessionProof::sign(&key, &expected, nonce_for(MAX_REPLAY_ENTRIES as u16), 3),
             )
             .unwrap_err(),
         SessionRejectReason::AuthorityUnavailable
@@ -109,7 +113,7 @@ fn guest_zone_and_signature_mismatches_are_refused() {
         authority
             .authenticate(
                 PeerCid::from_core(42).unwrap(),
-                SessionProof::sign(&key, &guest, [10; 32], 3),
+                SessionProof::sign(&key, &guest, nonce_for(5), 3),
             )
             .unwrap_err(),
         SessionRejectReason::GuestMismatch
@@ -126,7 +130,7 @@ fn guest_zone_and_signature_mismatches_are_refused() {
         authority
             .authenticate(
                 PeerCid::from_core(42).unwrap(),
-                SessionProof::sign(&key, &zone, [11; 32], 3),
+                SessionProof::sign(&key, &zone, nonce_for(6), 3),
             )
             .unwrap_err(),
         SessionRejectReason::ZoneMismatch
@@ -136,7 +140,7 @@ fn guest_zone_and_signature_mismatches_are_refused() {
         authority
             .authenticate(
                 PeerCid::from_core(42).unwrap(),
-                SessionProof::sign(&wrong_key, &expected, [12; 32], 3),
+                SessionProof::sign(&wrong_key, &expected, nonce_for(7), 3),
             )
             .unwrap_err(),
         SessionRejectReason::SignatureInvalid

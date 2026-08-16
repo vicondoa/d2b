@@ -1,22 +1,31 @@
 use async_trait::async_trait;
 use d2b_contracts::v3::{ResourceRef, ZoneId};
 use d2b_provider_transport_vsock::{
-    GuestControlKey, GuestIdentity, NamedStreamError, NamedStreamId, NamedStreamPort,
-    OpaqueBindingId, OpaqueEndpointId, OpenTransportRequest, PeerCid, ReadySession, ServiceError,
-    SessionAuthority, SessionProof, TransportPhase, TransportRole, VsockEffectError,
-    VsockEffectPort, VsockTransportService,
+    CLOSE_GRACE_MS, GuestControlKey, GuestIdentity, MAX_ACTIVE_TRANSPORTS, NamedStreamError,
+    NamedStreamId, NamedStreamPort, OpaqueBindingId, OpaqueEndpointId, OpenTransportRequest,
+    PeerCid, ReadySession, ServiceError, SessionAuthority, SessionProof, TransportPhase,
+    TransportRole, VsockEffectError, VsockEffectPort, VsockTransportService,
 };
+use ring::rand::{SecureRandom, SystemRandom};
 use std::{
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream, duplex};
 
+fn nonce() -> [u8; 32] {
+    let mut nonce = [0_u8; 32];
+    SystemRandom::new().fill(&mut nonce).unwrap();
+    nonce
+}
+
 #[derive(Clone)]
 struct FakeEffect {
     peers: Arc<Mutex<Vec<DuplexStream>>>,
     closes: Arc<Mutex<usize>>,
     open_delay: Option<Duration>,
+    close_delay: Option<Duration>,
+    hang_close: bool,
     fail_close: Arc<Mutex<bool>>,
 }
 
@@ -41,6 +50,12 @@ impl VsockEffectPort for FakeEffect {
 
     async fn close(&self, _: Self::Stream) -> Result<(), VsockEffectError> {
         *self.closes.lock().unwrap() += 1;
+        if self.hang_close {
+            std::future::pending::<()>().await;
+        }
+        if let Some(delay) = self.close_delay {
+            tokio::time::sleep(delay).await;
+        }
         if *self.fail_close.lock().unwrap() {
             Err(VsockEffectError::Transient)
         } else {
@@ -54,6 +69,9 @@ struct FakeStreams {
     next: Arc<Mutex<u64>>,
     closes: Arc<Mutex<usize>>,
     peers: Arc<Mutex<Vec<DuplexStream>>>,
+    open_delay: Option<Duration>,
+    close_delay: Option<Duration>,
+    hang_close: bool,
 }
 
 #[async_trait]
@@ -61,6 +79,9 @@ impl NamedStreamPort for FakeStreams {
     type Stream = DuplexStream;
 
     async fn open_named_stream(&self) -> Result<(NamedStreamId, Self::Stream), NamedStreamError> {
+        if let Some(delay) = self.open_delay {
+            tokio::time::sleep(delay).await;
+        }
         let mut next = self.next.lock().unwrap();
         *next += 1;
         let (local, peer) = duplex(1024);
@@ -70,6 +91,12 @@ impl NamedStreamPort for FakeStreams {
 
     async fn close_named_stream(&self, _: NamedStreamId) -> Result<(), NamedStreamError> {
         *self.closes.lock().unwrap() += 1;
+        if self.hang_close {
+            std::future::pending::<()>().await;
+        }
+        if let Some(delay) = self.close_delay {
+            tokio::time::sleep(delay).await;
+        }
         Ok(())
     }
 }
@@ -91,7 +118,7 @@ fn session() -> ReadySession {
     authority
         .authenticate(
             PeerCid::from_core(42).unwrap(),
-            SessionProof::sign(&key, &identity, [2; 32], 1),
+            SessionProof::sign(&key, &identity, nonce(), 1),
         )
         .unwrap()
 }
@@ -116,6 +143,8 @@ fn open_observe_and_close_release_the_bridge() {
             peers: Arc::new(Mutex::new(Vec::new())),
             closes: Arc::new(Mutex::new(0)),
             open_delay: None,
+            close_delay: None,
+            hang_close: false,
             fail_close: Arc::new(Mutex::new(false)),
         };
         let effect_closes = Arc::clone(&effect.closes);
@@ -124,6 +153,9 @@ fn open_observe_and_close_release_the_bridge() {
             next: Arc::new(Mutex::new(0)),
             closes: Arc::new(Mutex::new(0)),
             peers: Arc::new(Mutex::new(Vec::new())),
+            open_delay: None,
+            close_delay: None,
+            hang_close: false,
         };
         let stream_closes = Arc::clone(&streams.closes);
         let stream_peers = Arc::clone(&streams.peers);
@@ -218,6 +250,8 @@ fn open_effect_is_bounded_by_the_request_deadline() {
             peers: Arc::new(Mutex::new(Vec::new())),
             closes: Arc::new(Mutex::new(0)),
             open_delay: Some(Duration::from_millis(1_100)),
+            close_delay: None,
+            hang_close: false,
             fail_close: Arc::new(Mutex::new(false)),
         };
         let service = VsockTransportService::new(
@@ -226,9 +260,50 @@ fn open_effect_is_bounded_by_the_request_deadline() {
                 next: Arc::new(Mutex::new(0)),
                 closes: Arc::new(Mutex::new(0)),
                 peers: Arc::new(Mutex::new(Vec::new())),
+                open_delay: None,
+                close_delay: None,
+                hang_close: false,
             },
             identity(),
         );
+        assert_eq!(
+            service
+                .open_transport(&session(), request())
+                .await
+                .unwrap_err(),
+            ServiceError::Effect(VsockEffectError::DeadlineExceeded)
+        );
+    });
+}
+
+#[test]
+fn named_stream_open_uses_remaining_end_to_end_deadline() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let effect = FakeEffect {
+            peers: Arc::new(Mutex::new(Vec::new())),
+            closes: Arc::new(Mutex::new(0)),
+            open_delay: Some(Duration::from_millis(850)),
+            close_delay: None,
+            hang_close: false,
+            fail_close: Arc::new(Mutex::new(false)),
+        };
+        let service = VsockTransportService::new(
+            effect,
+            FakeStreams {
+                next: Arc::new(Mutex::new(0)),
+                closes: Arc::new(Mutex::new(0)),
+                peers: Arc::new(Mutex::new(Vec::new())),
+                open_delay: Some(Duration::from_millis(200)),
+                close_delay: None,
+                hang_close: false,
+            },
+            identity(),
+        );
+
         assert_eq!(
             service
                 .open_transport(&session(), request())
@@ -250,6 +325,8 @@ fn failed_endpoint_close_is_reported_as_degraded() {
             peers: Arc::new(Mutex::new(Vec::new())),
             closes: Arc::new(Mutex::new(0)),
             open_delay: None,
+            close_delay: None,
+            hang_close: false,
             fail_close: Arc::new(Mutex::new(true)),
         };
         let service = VsockTransportService::new(
@@ -258,6 +335,9 @@ fn failed_endpoint_close_is_reported_as_degraded() {
                 next: Arc::new(Mutex::new(0)),
                 closes: Arc::new(Mutex::new(0)),
                 peers: Arc::new(Mutex::new(Vec::new())),
+                open_delay: None,
+                close_delay: None,
+                hang_close: false,
             },
             identity(),
         );
@@ -308,6 +388,174 @@ fn failed_endpoint_close_is_reported_as_degraded() {
                 kind: "close-unconfirmed",
                 recoverable: true,
             })
+        );
+    });
+}
+
+#[test]
+fn close_waits_for_both_endpoint_grace_periods() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let effect = FakeEffect {
+            peers: Arc::new(Mutex::new(Vec::new())),
+            closes: Arc::new(Mutex::new(0)),
+            open_delay: None,
+            close_delay: Some(Duration::from_millis(CLOSE_GRACE_MS / 2 + 25)),
+            hang_close: false,
+            fail_close: Arc::new(Mutex::new(false)),
+        };
+        let streams = FakeStreams {
+            next: Arc::new(Mutex::new(0)),
+            closes: Arc::new(Mutex::new(0)),
+            peers: Arc::new(Mutex::new(Vec::new())),
+            open_delay: None,
+            close_delay: Some(Duration::from_millis(CLOSE_GRACE_MS / 2 + 25)),
+            hang_close: false,
+        };
+        let service = VsockTransportService::new(effect, streams, identity());
+        let opened = service.open_transport(&session(), request()).await.unwrap();
+
+        service
+            .close_transport(d2b_provider_transport_vsock::CloseTransportRequest {
+                transport_handle: opened.transport_handle,
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            service
+                .observe_snapshot(d2b_provider_transport_vsock::ObserveTransportRequest {
+                    transport_handle: opened.transport_handle,
+                    include_bytes: false,
+                })
+                .await
+                .unwrap()
+                .phase,
+            TransportPhase::Released
+        );
+    });
+}
+
+#[test]
+fn hung_endpoint_close_remains_degraded() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let effect = FakeEffect {
+            peers: Arc::new(Mutex::new(Vec::new())),
+            closes: Arc::new(Mutex::new(0)),
+            open_delay: None,
+            close_delay: None,
+            hang_close: true,
+            fail_close: Arc::new(Mutex::new(false)),
+        };
+        let streams = FakeStreams {
+            next: Arc::new(Mutex::new(0)),
+            closes: Arc::new(Mutex::new(0)),
+            peers: Arc::new(Mutex::new(Vec::new())),
+            open_delay: None,
+            close_delay: None,
+            hang_close: false,
+        };
+        let service = VsockTransportService::new(effect, streams, identity());
+        let opened = service.open_transport(&session(), request()).await.unwrap();
+
+        assert_eq!(
+            service
+                .close_transport(d2b_provider_transport_vsock::CloseTransportRequest {
+                    transport_handle: opened.transport_handle,
+                })
+                .await
+                .unwrap_err(),
+            ServiceError::CloseUnconfirmed
+        );
+        assert_eq!(
+            service
+                .observe_snapshot(d2b_provider_transport_vsock::ObserveTransportRequest {
+                    transport_handle: opened.transport_handle,
+                    include_bytes: false,
+                })
+                .await
+                .unwrap()
+                .phase,
+            TransportPhase::Degraded
+        );
+    });
+}
+
+#[test]
+fn degraded_close_survives_completed_observation_eviction() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let effect = FakeEffect {
+            peers: Arc::new(Mutex::new(Vec::new())),
+            closes: Arc::new(Mutex::new(0)),
+            open_delay: None,
+            close_delay: None,
+            hang_close: false,
+            fail_close: Arc::new(Mutex::new(true)),
+        };
+        let fail_close = Arc::clone(&effect.fail_close);
+        let service = VsockTransportService::new(
+            effect,
+            FakeStreams {
+                next: Arc::new(Mutex::new(0)),
+                closes: Arc::new(Mutex::new(0)),
+                peers: Arc::new(Mutex::new(Vec::new())),
+                open_delay: None,
+                close_delay: None,
+                hang_close: false,
+            },
+            identity(),
+        );
+        let degraded = service.open_transport(&session(), request()).await.unwrap();
+        assert_eq!(
+            service
+                .close_transport(d2b_provider_transport_vsock::CloseTransportRequest {
+                    transport_handle: degraded.transport_handle,
+                })
+                .await
+                .unwrap_err(),
+            ServiceError::CloseUnconfirmed
+        );
+
+        *fail_close.lock().unwrap() = false;
+        for _ in 0..=MAX_ACTIVE_TRANSPORTS {
+            let opened = service.open_transport(&session(), request()).await.unwrap();
+            service
+                .close_transport(d2b_provider_transport_vsock::CloseTransportRequest {
+                    transport_handle: opened.transport_handle,
+                })
+                .await
+                .unwrap();
+        }
+
+        assert_eq!(
+            service
+                .observe_snapshot(d2b_provider_transport_vsock::ObserveTransportRequest {
+                    transport_handle: degraded.transport_handle,
+                    include_bytes: false,
+                })
+                .await
+                .unwrap()
+                .phase,
+            TransportPhase::Degraded
+        );
+        assert_eq!(
+            service
+                .close_transport(d2b_provider_transport_vsock::CloseTransportRequest {
+                    transport_handle: degraded.transport_handle,
+                })
+                .await
+                .unwrap_err(),
+            ServiceError::CloseUnconfirmed
         );
     });
 }
