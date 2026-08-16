@@ -1224,6 +1224,14 @@ dependencies = [
 [[package]]
 name = "d2b-provider-clipboard-wayland"
 version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-contracts",
+ "d2b-provider-toolkit",
+ "rustix 0.38.44",
+ "serde",
+ "serde_json",
+ "sha2",
+]
 
 [[package]]
 name = "d2b-provider-credential-entra"
@@ -1286,6 +1294,13 @@ dependencies = [
 [[package]]
 name = "d2b-provider-display-wayland"
 version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-contracts",
+ "d2b-provider-toolkit",
+ "serde",
+ "serde_json",
+ "sha2",
+]
 
 [[package]]
 name = "d2b-provider-network-local"
@@ -1297,6 +1312,14 @@ dependencies = [
 [[package]]
 name = "d2b-provider-notification-desktop"
 version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-contracts",
+ "d2b-provider-toolkit",
+ "getrandom 0.2.17",
+ "serde",
+ "serde_json",
+ "sha2",
+]
 
 [[package]]
 name = "d2b-provider-observability-otel"
@@ -1423,6 +1446,7 @@ dependencies = [
  "d2b-contracts",
  "d2b-provider",
  "d2b-session",
+ "d2b-session-unix",
  "schemars",
  "serde_json",
  "sha2",
@@ -1744,9 +1768,12 @@ dependencies = [
  "d2b-provider",
  "d2b-provider-activation-nixos",
  "d2b-provider-audio-pipewire",
+ "d2b-provider-clipboard-wayland",
  "d2b-provider-device-security-key",
  "d2b-provider-device-tpm",
  "d2b-provider-device-usbip",
+ "d2b-provider-display-wayland",
+ "d2b-provider-notification-desktop",
  "d2b-provider-runtime-azure-container-apps",
  "d2b-provider-supervisor",
  "d2b-provider-system-core",
@@ -1764,6 +1791,7 @@ dependencies = [
  "getrandom 0.2.17",
  "libc",
  "nix 0.29.0",
+ "notify-rust",
  "parking_lot",
  "protobuf",
  "regex",

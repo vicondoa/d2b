@@ -171,6 +171,13 @@ impl UnixAttachmentPayload {
         }
     }
 
+    /// Transfer the received file descriptor after ComponentSession has
+    /// authenticated and bound its descriptor metadata.
+    pub fn into_owned_file(self) -> OwnedFd {
+        let UnixAttachmentValue::File(fd) = self.value;
+        fd
+    }
+
     fn received(
         value: UnixAttachmentValue,
         resolver: DescriptorPolicyResolver,
@@ -922,6 +929,7 @@ fn validate_value(
             UnixAttachmentValue::File(fd),
             AttachmentKind::FileDescriptor,
             DescriptorPolicy::File(_)
+            | DescriptorPolicy::ProviderValidatedFile
             | DescriptorPolicy::SealedReadOnlyMemfd
             | DescriptorPolicy::Pidfd(_),
         ) => validate_owned_file_identity(fd, descriptor, policy).map(Some),

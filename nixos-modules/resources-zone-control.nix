@@ -67,6 +67,7 @@ let
     "updatePolicy"
   ];
   executionPolicyFields = [
+    "providerRef"
     "defaultDomain"
     "allowedDomains"
     "defaultUserRef"

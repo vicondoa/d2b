@@ -10,12 +10,12 @@ use d2b_session::{
     OwnedTransport, SessionEngine, SessionEvent, TransportPacket,
 };
 use d2b_session_unix::{
-    AncillaryCapacity, CreditPool, CreditScopeSet, DescriptorPolicy, ObjectIdentity,
-    OutboundPacket, OwnedUnixAttachment, PeerIdentityPolicy, PidfdEvidence, PidfdIdentityPolicy,
-    PidfdInfoSource, ProcPidfdIdentityVerifier, ProcSelfFdInfoSource, ProcessCreditLimit,
-    SentPacket, SeqpacketSocket, StreamRead, StreamSocket, UnixAttachmentPayload,
-    UnixSeqpacketTransport, UnixSessionError, UnixStreamTransport, parse_pidfd_fdinfo,
-    prearmed_seqpacket_pair,
+    AcceptedAttachment, AncillaryCapacity, CreditPool, CreditScopeSet, DescriptorPolicy,
+    ObjectIdentity, OutboundPacket, OwnedUnixAttachment, PeerIdentityPolicy, PidfdEvidence,
+    PidfdIdentityPolicy, PidfdInfoSource, ProcPidfdIdentityVerifier, ProcSelfFdInfoSource,
+    ProcessCreditLimit, SentPacket, SeqpacketSocket, StreamRead, StreamSocket,
+    UnixAttachmentPayload, UnixSeqpacketTransport, UnixSessionError, UnixStreamTransport,
+    VerifiedPacket, parse_pidfd_fdinfo, prearmed_seqpacket_pair,
 };
 use rustix::{
     fd::BorrowedFd,
@@ -181,6 +181,30 @@ fn ancillary_capacity_is_derived_from_closed_hard_bounds() {
         AncillaryCapacity::from_policy(AttachmentPolicy::disabled()),
         Err(UnixSessionError::AncillaryCapacity)
     );
+}
+
+#[test]
+fn provider_validated_fd_transfers_only_after_bound_descriptor_admission() {
+    let (read_end, write_end) = pipe_with(PipeFlags::CLOEXEC).unwrap();
+    let mut metadata = descriptor(
+        0,
+        KernelObjectType::PipeRead,
+        AttachmentAccess::ReadOnly,
+        false,
+    );
+    metadata.purpose = AttachmentPurpose::ClipboardTransfer;
+    metadata.service = ServicePackage::ClipboardBridgeV3;
+    let attachment =
+        OwnedUnixAttachment::file(metadata, read_end, DescriptorPolicy::ProviderValidatedFile)
+            .unwrap();
+
+    let packet = VerifiedPacket::from_bound_attachments(vec![attachment]).unwrap();
+    assert!(packet.payload().is_empty());
+    assert!(matches!(
+        packet.attachments(),
+        [AcceptedAttachment::File(_)]
+    ));
+    drop(write_end);
 }
 
 #[test]

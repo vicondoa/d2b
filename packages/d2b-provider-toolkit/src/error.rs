@@ -35,6 +35,12 @@ pub enum ProviderToolkitError {
     NonMonotoneAttachmentIndexes,
     /// The authenticated ComponentSession closed while serving the agent.
     SessionClosed,
+    /// The ComponentSession route did not authenticate for this Provider.
+    SessionUnauthenticated,
+    /// The authenticated operation was refused by current session policy.
+    AuthorizationDenied,
+    /// The generated service loop failed after session admission.
+    SessionLoopFailed,
     /// A ComponentSession frame did not satisfy the Provider wire contract.
     WireInvalid,
 }
@@ -52,12 +58,15 @@ impl ProviderToolkitError {
             Self::DispatchSaturated => "dispatch-saturated",
             Self::NonMonotoneAttachmentIndexes => "non-monotone-attachment-indexes",
             Self::SessionClosed => "session-closed",
+            Self::SessionUnauthenticated => "session-unauthenticated",
+            Self::AuthorizationDenied => "authorization-denied",
+            Self::SessionLoopFailed => "session-loop-failed",
             Self::WireInvalid => "wire-invalid",
         }
     }
 
     /// The complete closed code set, for conformance assertions.
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 13] = [
         Self::BootstrapProviderMismatch,
         Self::BootstrapZoneMismatch,
         Self::BootstrapRefWrongType,
@@ -67,6 +76,9 @@ impl ProviderToolkitError {
         Self::DispatchSaturated,
         Self::NonMonotoneAttachmentIndexes,
         Self::SessionClosed,
+        Self::SessionUnauthenticated,
+        Self::AuthorizationDenied,
+        Self::SessionLoopFailed,
         Self::WireInvalid,
     ];
 }
