@@ -205,6 +205,7 @@ pub mod autostart;
 // `d2b-sys-<env>-usbipd-{backend,proxy}.{service,socket}` units into
 // broker `SpawnRunner` with `RunnerRole::Usbip`, keyed per-env on
 // `vm_id = sys-<env>-usbipd` with role_ids `backend` / `proxy`.
+pub mod usbip_production;
 pub mod usbipd_perenv_autostart;
 // Audio policy dispatch: OFD-locked state I/O, provider capability
 // resolution, host PipeWire enforcement, and guestd RPC dispatch.
@@ -7726,6 +7727,16 @@ fn ensure_usbipd_env_ready_for_attach(
             format!("trusted bundle has no complete per-env USBIP runner plan for env '{env}'"),
         ));
     }
+
+    // Core context must be valid before firewall or runner effects.
+    let _production_context = usbip_production::UsbipBindingContext::before_host_effects(
+        vm,
+        env,
+        intent_id_usbip_bind(env, vm, bus_id),
+        intent_id_runner(vm, "usbip"),
+        format!("{env}:{bus_id}").as_bytes(),
+    )
+    .map_err(|error| daemon_failure_response(verb, error.to_string()))?;
 
     dispatch_broker_ack_request(
         state,

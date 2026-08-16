@@ -1735,6 +1735,7 @@ dependencies = [
  "d2b-provider-audio-pipewire",
  "d2b-provider-device-security-key",
  "d2b-provider-device-tpm",
+ "d2b-provider-device-usbip",
  "d2b-provider-runtime-azure-container-apps",
  "d2b-provider-supervisor",
  "d2b-provider-system-core",
