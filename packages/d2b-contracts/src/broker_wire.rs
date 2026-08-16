@@ -133,6 +133,12 @@ pub enum BrokerRequest {
     /// SCM_RIGHTS; if start-time drifted the broker closes the fd and
     /// surfaces a typed pidfd-race error.
     OpenPidfd(OpenPidfdRequest),
+    /// Obtain a pidfd for the peer of exactly one accepted Unix socket.
+    ///
+    /// The accepted socket is the sole SCM_RIGHTS request attachment. The
+    /// request body deliberately contains no descriptor number, PID,
+    /// credential tuple, path, or subject claim.
+    OpenPeerPidfdFromAcceptedSocket(OpenPeerPidfdFromAcceptedSocketRequest),
     /// Observe one broker-owned runner after validating its retained
     /// pidfd-backed identity against the trusted bundle.
     ObserveRunner(ObserveRunnerRequest),
@@ -354,6 +360,7 @@ impl BrokerRequest {
             Self::QemuMediaAttach(_) => "QemuMediaAttach",
             Self::QemuMediaDetach(_) => "QemuMediaDetach",
             Self::OpenPidfd(_) => "OpenPidfd",
+            Self::OpenPeerPidfdFromAcceptedSocket(_) => "OpenPeerPidfdFromAcceptedSocket",
             Self::ObserveRunner(_) => "ObserveRunner",
             Self::PipeWireAudio(_) => "PipeWireAudio",
             Self::StartSystemdUnit(_) => "StartSystemdUnit",
@@ -421,6 +428,7 @@ impl BrokerRequest {
             Self::ExportBrokerAudit(_) => "audit-log",
             Self::PollChildReaped => "pidfd-reap-buffer",
             Self::OpenZoneStore(_) => "zone-store",
+            Self::OpenPeerPidfdFromAcceptedSocket(_) => "accepted-socket",
             _ => "operation",
         }
     }
@@ -609,6 +617,7 @@ impl BrokerRequest {
                 request.vm_id.to_string(),
                 format!("{}:{}:{}", self.op_name(), request.vm_id, request.role_id),
             ),
+            Self::OpenPeerPidfdFromAcceptedSocket(_) => return None,
             Self::ObserveRunner(request) => (
                 request.vm_id.to_string(),
                 format!("{}:{}:{}", self.op_name(), request.vm_id, request.role_id),
@@ -891,6 +900,22 @@ impl BrokerRequest {
             crate::v3::canonical_digest("d2b:broker-operation:v2", operation.as_bytes()),
         ))
     }
+
+    /// Return whether this request participates in authoritative audit join.
+    ///
+    /// This is the allocation-free companion of [`Self::authoritative_audit_join`].
+    pub fn requires_authoritative_audit_join(&self) -> bool {
+        !matches!(
+            self,
+            Self::OpenPeerPidfdFromAcceptedSocket(_)
+                | Self::ValidateBundle
+                | Self::ExportBrokerAudit(_)
+                | Self::Hello(_)
+                | Self::PauseBroker
+                | Self::PollChildReaped
+                | Self::ResumeBroker
+        )
+    }
 }
 
 /// Broker-side installer driver. The broker resolves the bundle's
@@ -1115,6 +1140,9 @@ pub enum BrokerResponse {
     /// on the same frame; the JSON body confirms which `(pid,
     /// start_time_ticks)` the broker verified.
     OpenPidfd(OpenPidfdResponse),
+    /// Response for [`BrokerRequest::OpenPeerPidfdFromAcceptedSocket`].
+    /// The only attachment is the returned close-on-exec pidfd.
+    OpenPeerPidfdFromAcceptedSocket(OpenPeerPidfdFromAcceptedSocketResponse),
     /// Observation of a broker-owned runner. No pidfd is returned because
     /// the operation is a status query over the broker's retained registry.
     ObserveRunner(ObserveRunnerResponse),
@@ -1869,6 +1897,19 @@ pub struct OpenPidfdResponse {
     pub verified_start_time_ticks: u64,
     /// Always `0` today; reserved for future multi-fd
     /// SCM_RIGHTS handoffs.
+    pub pidfd_index: u32,
+}
+
+/// A request whose authority is the sole attached accepted Unix socket.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OpenPeerPidfdFromAcceptedSocketRequest {}
+
+/// Response metadata for an accepted-socket-bound peer pidfd handoff.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OpenPeerPidfdFromAcceptedSocketResponse {
+    /// The sole SCM_RIGHTS pidfd attachment index.
     pub pidfd_index: u32,
 }
 

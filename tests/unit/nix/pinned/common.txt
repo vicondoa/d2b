@@ -733,6 +733,8 @@ realms/zone-control-role-binding-has-no-expiry-field
 realms/zone-control-role-binding-subjects-are-resolved-and-bounded
 realms/zone-control-role-keeps-resource-and-session-verbs-closed
 realms/zone-control-seals-parent-map-without-zone-spec-parent
+realms/zone-control-unix-transport-keeps-settings-closed
+realms/zone-control-unix-transport-refuses-credentials
 realms/zone-control-zone-link-child-name-is-local
 realms/zone-control-zone-link-limits-are-bounded
 realms/zone-control-zone-link-requires-transport-provider-shape
@@ -855,6 +857,7 @@ usbip-gating/disabled-proxy-firewall-rule-absent
 usbip-gating/disabled-socket-absent
 usbip-gating/enabled-backend-absent
 usbip-gating/enabled-backend-firewall-rule-absent
+usbip-gating/enabled-host-busid-claim-emitted
 usbip-gating/enabled-kernel-module-present
 usbip-gating/enabled-proxy-absent
 usbip-gating/enabled-proxy-firewall-rule-absent
@@ -869,6 +872,7 @@ usbip-gating/multi-env-work-backend-firewall-rule-absent
 usbip-gating/multi-env-work-proxy-absent
 usbip-gating/multi-env-work-proxy-firewall-rule-absent
 usbip-gating/multi-env-work-socket-absent
+usbip-gating/site-disabled-host-busid-claim-absent
 usbip-gating/site-enabled-disabled-vm-backend-absent
 usbip-gating/site-enabled-disabled-vm-backend-firewall-rule-absent
 usbip-gating/site-enabled-disabled-vm-kernel-module-absent

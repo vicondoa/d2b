@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque, hash_map:
 use std::ffi::OsStr;
 use std::fs::{self, File, OpenOptions};
 use std::future::Future;
-use std::io::{self, IoSliceMut, Read, Write};
+use std::io::{self, IoSlice, IoSliceMut, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::os::fd::{AsFd, AsRawFd, OwnedFd, RawFd};
 use std::os::unix::ffi::OsStrExt;
@@ -117,8 +117,8 @@ use d2b_realm_provider::provider::WorkloadProvider;
 use nix::cmsg_space;
 use nix::fcntl::{FcntlArg, FdFlag, Flock, FlockArg, fcntl};
 use nix::sys::socket::{
-    AddressFamily, ControlMessageOwned, MsgFlags, SockFlag, SockType, UnixAddr, connect, recv,
-    recvmsg, send, sendto, socket,
+    AddressFamily, ControlMessage, ControlMessageOwned, MsgFlags, SockFlag, SockType, UnixAddr,
+    connect, recv, recvmsg, send, sendmsg, sendto, socket,
 };
 use nix::unistd::{self, Gid, Group, Uid, User};
 use serde::{Deserialize, Serialize};
@@ -215,6 +215,7 @@ pub mod autostart;
 // `d2b-sys-<env>-usbipd-{backend,proxy}.{service,socket}` units into
 // broker `SpawnRunner` with `RunnerRole::Usbip`, keyed per-env on
 // `vm_id = sys-<env>-usbipd` with role_ids `backend` / `proxy`.
+pub mod usbip_production;
 pub mod usbipd_perenv_autostart;
 // Audio policy dispatch: OFD-locked state I/O, provider capability
 // resolution, host PipeWire enforcement, and guestd RPC dispatch.
@@ -7710,6 +7711,16 @@ fn ensure_usbipd_env_ready_for_attach(
         ));
     }
 
+    // Core context must be valid before firewall or runner effects.
+    let _production_context = usbip_production::UsbipBindingContext::before_host_effects(
+        vm,
+        env,
+        intent_id_usbip_bind(env, vm, bus_id),
+        intent_id_runner(vm, "usbip"),
+        format!("{env}:{bus_id}").as_bytes(),
+    )
+    .map_err(|error| daemon_failure_response(verb, error.to_string()))?;
+
     dispatch_broker_ack_request(
         state,
         verb,
@@ -13123,6 +13134,91 @@ fn dispatch_broker_request_with_fds_timeout_as(
     caller_role: BrokerCallerRole,
     timeout: Duration,
 ) -> Result<(BrokerResponse, Vec<RawFd>), TypedError> {
+    dispatch_broker_request_with_optional_request_fds(state, request, caller_role, &[], timeout)
+}
+
+/// Ask the broker for the peer pidfd bound to one accepted local socket.
+///
+/// The accepted socket remains daemon-owned; this performs one SCM_RIGHTS
+/// request handoff and transfers ownership only of the broker's returned
+/// pidfd.  The broker never accepts a numeric PID or caller-supplied
+/// credential claim for this operation.
+#[allow(dead_code)]
+pub(crate) fn open_accepted_socket_peer_pidfd(
+    state: &ServerState,
+    accepted_socket: &OwnedFd,
+    timeout: Duration,
+) -> Result<OwnedFd, TypedError> {
+    let socket_path = broker_socket_path(state);
+    let (response, received_fds) = dispatch_broker_request_with_request_fd_timeout_as(
+        state,
+        BrokerRequest::OpenPeerPidfdFromAcceptedSocket(
+            d2b_contracts::broker_wire::OpenPeerPidfdFromAcceptedSocketRequest {},
+        ),
+        BrokerCallerRole::AdminUid {
+            uid: state.daemon_uid,
+        },
+        accepted_socket,
+        timeout,
+    )?;
+
+    let result = match response {
+        BrokerResponse::OpenPeerPidfdFromAcceptedSocket(response)
+            if response.pidfd_index == 0 && received_fds.len() == 1 =>
+        {
+            duplicate_received_fd(
+                &received_fds,
+                response.pidfd_index,
+                "duplicate accepted-peer pidfd",
+            )
+        }
+        BrokerResponse::OpenPeerPidfdFromAcceptedSocket(_) => {
+            Err(TypedError::InternalBrokerUnavailable {
+                path: socket_path,
+                detail: "accepted-peer pidfd response did not return exactly one descriptor"
+                    .to_owned(),
+            })
+        }
+        BrokerResponse::Error(error) => Err(TypedError::InternalBrokerUnavailable {
+            path: socket_path,
+            detail: format!("accepted-peer pidfd refused: {}", error.kind),
+        }),
+        other => Err(TypedError::InternalBrokerUnavailable {
+            path: socket_path,
+            detail: format!(
+                "accepted-peer pidfd returned unexpected response: {}",
+                broker_response_kind(&other)
+            ),
+        }),
+    };
+    close_received_fds(&received_fds);
+    result
+}
+
+#[allow(dead_code)]
+fn dispatch_broker_request_with_request_fd_timeout_as(
+    state: &ServerState,
+    request: BrokerRequest,
+    caller_role: BrokerCallerRole,
+    request_fd: &OwnedFd,
+    timeout: Duration,
+) -> Result<(BrokerResponse, Vec<RawFd>), TypedError> {
+    dispatch_broker_request_with_optional_request_fds(
+        state,
+        request,
+        caller_role,
+        &[request_fd.as_raw_fd()],
+        timeout,
+    )
+}
+
+fn dispatch_broker_request_with_optional_request_fds(
+    state: &ServerState,
+    request: BrokerRequest,
+    caller_role: BrokerCallerRole,
+    request_fds: &[RawFd],
+    timeout: Duration,
+) -> Result<(BrokerResponse, Vec<RawFd>), TypedError> {
     let socket_path = broker_socket_path(state);
     let audit_join = default_audit_join_context(&request);
     let socket = Socket::from(connect_seqpacket_with_timeout(&socket_path, Some(timeout))?);
@@ -13138,7 +13234,7 @@ fn dispatch_broker_request_with_fds_timeout_as(
             context: format!("set broker write timeout to {timeout:?}"),
             detail: err.to_string(),
         })?;
-    write_json_frame(
+    write_json_frame_with_fds(
         &socket,
         &BrokerRequestEnvelope {
             request,
@@ -13146,6 +13242,7 @@ fn dispatch_broker_request_with_fds_timeout_as(
             test_peer_uid: None,
             audit_join: audit_join.clone(),
         },
+        request_fds,
     )?;
     let (response, received_fds) = read_frame_with_fds(&socket)?;
     let decoded = serde_json::from_slice(&response).map_err(|err| {
@@ -24836,11 +24933,22 @@ fn write_json_frame<T>(socket: &impl AsRawFd, value: &T) -> Result<(), TypedErro
 where
     T: Serialize,
 {
+    write_json_frame_with_fds(socket, value, &[])
+}
+
+fn write_json_frame_with_fds<T>(
+    socket: &impl AsRawFd,
+    value: &T,
+    fds: &[RawFd],
+) -> Result<(), TypedError>
+where
+    T: Serialize,
+{
     let bytes = serde_json::to_vec(value).map_err(|err| TypedError::InternalIo {
         context: "serialize JSON frame".to_owned(),
         detail: err.to_string(),
     })?;
-    write_frame(socket, &bytes)
+    write_frame_with_fds(socket, &bytes, fds)
 }
 
 /// Set (or clear, with `None`) the read timeout on a connection socket.
@@ -24887,6 +24995,14 @@ fn drain_rejected_peer_input(socket: &Socket) {
 }
 
 fn write_frame(socket: &impl AsRawFd, body: &[u8]) -> Result<(), TypedError> {
+    write_frame_with_fds(socket, body, &[])
+}
+
+fn write_frame_with_fds(
+    socket: &impl AsRawFd,
+    body: &[u8],
+    fds: &[RawFd],
+) -> Result<(), TypedError> {
     if body.len() > wire::MAX_FRAME_SIZE {
         return Err(TypedError::WireFrameTooLarge {
             declared: body.len(),
@@ -24895,11 +25011,16 @@ fn write_frame(socket: &impl AsRawFd, body: &[u8]) -> Result<(), TypedError> {
     let mut frame = Vec::with_capacity(body.len() + 4);
     frame.extend_from_slice(&(body.len() as u32).to_le_bytes());
     frame.extend_from_slice(body);
-    let written = send(socket.as_raw_fd(), &frame, MsgFlags::empty()).map_err(|err| {
-        TypedError::InternalIo {
-            context: "send seqpacket frame".to_owned(),
-            detail: err.to_string(),
-        }
+    let written = if fds.is_empty() {
+        send(socket.as_raw_fd(), &frame, MsgFlags::empty())
+    } else {
+        let iov = [IoSlice::new(&frame)];
+        let cmsgs = [ControlMessage::ScmRights(fds)];
+        sendmsg::<()>(socket.as_raw_fd(), &iov, &cmsgs, MsgFlags::empty(), None)
+    }
+    .map_err(|err| TypedError::InternalIo {
+        context: "send seqpacket frame".to_owned(),
+        detail: err.to_string(),
     })?;
     if written != frame.len() {
         return Err(TypedError::InternalIo {
@@ -25003,6 +25124,15 @@ fn read_frame_with_fds(socket: &impl AsRawFd) -> Result<(Vec<u8>, Vec<RawFd>), T
             received_fds.extend(fds);
         }
     }
+    if message
+        .flags
+        .intersects(MsgFlags::MSG_TRUNC | MsgFlags::MSG_CTRUNC)
+    {
+        close_received_fds(&received_fds);
+        return Err(TypedError::WireInvalidFrame {
+            detail: "truncated seqpacket frame with fds".to_owned(),
+        });
+    }
     for fd in &received_fds {
         if let Err(error) = mark_fd_cloexec(*fd, "mark received fd cloexec") {
             close_received_fds(&received_fds);
@@ -25039,6 +25169,48 @@ fn read_frame_with_fds(socket: &impl AsRawFd) -> Result<(Vec<u8>, Vec<RawFd>), T
 fn close_received_fds(fds: &[RawFd]) {
     for fd in fds {
         let _ = unistd::close(*fd);
+    }
+}
+
+#[cfg(test)]
+mod broker_fd_tests {
+    use super::*;
+    use nix::{
+        fcntl::{FcntlArg, FdFlag, fcntl},
+        sys::socket::{AddressFamily, SockFlag, SockType, socketpair},
+        unistd::pipe,
+    };
+    use std::os::fd::AsRawFd;
+
+    #[test]
+    fn request_fd_sender_transfers_one_cloexec_descriptor() {
+        let (sender, receiver) = socketpair(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            None,
+            SockFlag::SOCK_CLOEXEC,
+        )
+        .expect("socket pair");
+        let (read_end, _write_end) = pipe().expect("pipe");
+
+        write_json_frame_with_fds(
+            &sender,
+            &json!({ "request": "peer-pidfd" }),
+            &[read_end.as_raw_fd()],
+        )
+        .expect("send request fd");
+        let (body, received) = read_frame_with_fds(&receiver).expect("receive request fd");
+
+        assert_eq!(body, br#"{"request":"peer-pidfd"}"#);
+        assert_eq!(received.len(), 1);
+        assert!(
+            FdFlag::from_bits_truncate(
+                fcntl(received[0], FcntlArg::F_GETFD).expect("get received fd flags")
+            )
+            .contains(FdFlag::FD_CLOEXEC),
+            "received request fd must be close-on-exec"
+        );
+        close_received_fds(&received);
     }
 }
 

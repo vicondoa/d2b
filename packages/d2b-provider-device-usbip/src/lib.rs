@@ -12,7 +12,9 @@ mod arbitration;
 mod busid;
 mod controller;
 mod firewall;
+mod lifecycle;
 mod process;
+mod production;
 mod workers;
 
 pub use arbitration::{UsbipArbitrator, UsbipClaim, UsbipClaimError};
@@ -26,7 +28,14 @@ pub use firewall::{
     FirewallObservation, FirewallProjectionAction, FirewallProjectionIntent, FirewallToken,
     RelayAuthorityLease, UsbipEffectError, UsbipEffectPort,
 };
+pub use lifecycle::{
+    AttachProcessIdentity, AttachmentObservation, BindingIdentity, BindingLifecycle,
+    BindingLifecycleError, BindingPhase, BindingPort, BindingProxyLease, BindingSlotLease,
+    OwnedBusBinding, PhysicalAuthorityLease, ServiceLifecycle, ServiceLifecycleError, ServicePhase,
+    ServicePort, ServiceRelayLease, SupervisorFinalizeError, UsbipSupervisor,
+};
 pub use process::{AttachSource, EphemeralProcessIntent, EphemeralProcessKind, UsbipDaemonProcess};
+pub use production::{ProductionPort, UsbipBrokerDispatcher};
 pub use workers::{
     AttachmentActivation, AttachmentCommand, UsbipWorkerClass, UsbipWorkerDeclaration,
 };

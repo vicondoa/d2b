@@ -131,6 +131,34 @@ pub fn peer_uid(fd: RawFd) -> io::Result<u32> {
     peer_credentials(fd).map(|(uid, _, _)| uid)
 }
 
+/// Obtain the peer pidfd from one exact accepted Unix socket.
+///
+/// No numeric PID fallback is permitted: `SO_PEERPIDFD` binds the returned
+/// pidfd to the accepted socket's current kernel peer and returns
+/// `ENOPROTOOPT` on kernels that cannot provide that proof.
+#[allow(unsafe_code)]
+pub fn peer_pidfd_from_accepted_socket(fd: RawFd) -> io::Result<OwnedFd> {
+    let pidfd = unsafe { getsockopt_int(fd, libc::SO_PEERPIDFD) }?;
+    if pidfd < 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "SO_PEERPIDFD returned an invalid descriptor",
+        ));
+    }
+    let pidfd = owned_fd_from_raw(pidfd);
+    let flags = unsafe { libc::fcntl(pidfd.as_raw_fd(), libc::F_GETFD) };
+    if flags < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    if flags & libc::FD_CLOEXEC == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "SO_PEERPIDFD descriptor missing close-on-exec",
+        ));
+    }
+    Ok(pidfd)
+}
+
 /// Audited `TUNSETIFF` helper. Opens a TAP and binds the requested ifname.
 #[allow(unsafe_code)]
 pub fn tun_create_tap_fd(fd: &OwnedFd, ifname: &str) -> io::Result<()> {
@@ -3378,7 +3406,9 @@ mod tests {
     use std::os::unix::fs::{PermissionsExt, symlink};
 
     use d2b_core::minijail_profile::{MountPolicy, NamespaceSet};
+    use nix::fcntl::{FcntlArg, FdFlag, fcntl};
     use nix::libc;
+    use nix::sys::socket::{AddressFamily, SockFlag, SockType, socketpair};
     use tempfile::tempdir;
 
     fn test_namespaces(pid: bool) -> NamespaceSet {
@@ -3400,6 +3430,32 @@ mod tests {
             hide_device_nodes_by_default: true,
             device_binds,
             bind_mounts: vec![],
+        }
+    }
+
+    #[test]
+    fn accepted_socket_peer_pidfd_is_cloexec_or_kernel_refuses_it() {
+        let (accepted, _peer) = socketpair(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            None,
+            SockFlag::SOCK_CLOEXEC,
+        )
+        .expect("socket pair");
+
+        match super::peer_pidfd_from_accepted_socket(accepted.as_raw_fd()) {
+            Ok(pidfd) => {
+                let flags = fcntl(pidfd.as_raw_fd(), FcntlArg::F_GETFD).expect("get fd flags");
+                assert!(
+                    FdFlag::from_bits_truncate(flags).contains(FdFlag::FD_CLOEXEC),
+                    "SO_PEERPIDFD must produce a close-on-exec pidfd"
+                );
+            }
+            Err(error) => assert_eq!(
+                error.raw_os_error(),
+                Some(libc::ENOPROTOOPT),
+                "kernel support must either produce a pidfd or fail closed"
+            ),
         }
     }
 
