@@ -71,11 +71,11 @@ let
           closureDigest = acceptanceArtifactCatalogDigest;
           closureSize = 0;
         })
-        [ "acceptance-provider" "volume-local-provider" "volume-virtiofs-provider" ];
+        [ "acceptance-provider" ];
     });
   artifacts = lib.listToAttrs (map
     (artifactId: lib.nameValuePair artifactId providerArtifact)
-    [ "acceptance-provider" "volume-local-provider" "volume-virtiofs-provider" ]);
+    [ "acceptance-provider" ]);
 in
 pkgs.testers.runNixOSTest {
   name = "d2b-unsafe-local-helper";
@@ -174,11 +174,41 @@ pkgs.testers.runNixOSTest {
               };
             };
           };
+          volume-local = {
+            type = "Provider";
+            spec = {
+              artifactId = "acceptance-provider";
+              config = { };
+            };
+          };
+          volume-virtiofs = {
+            type = "Provider";
+            spec = {
+              artifactId = "acceptance-provider";
+              config = { };
+            };
+          };
           };
         };
         other = {
           parentZone = "local-root";
           trustedPublishers.d2b-acceptance.signingKey = acceptancePublisherKey;
+          resources = {
+            volume-local = {
+              type = "Provider";
+              spec = {
+                artifactId = "acceptance-provider";
+                config = { };
+              };
+            };
+            volume-virtiofs = {
+              type = "Provider";
+              spec = {
+                artifactId = "acceptance-provider";
+                config = { };
+              };
+            };
+          };
         };
       };
       d2b.realms.host = {
