@@ -177,12 +177,13 @@ head-changing update, validate the new head and obtain fresh independent
 review. Missing review evidence fails closed to fresh review. No actionable
 finding remains at merge.
 
-The Bazel graph is an optional local parity check, not a scheduler cutover.
-Use `make bazel-check` or
-`tests/tools/bazel-check --profile local` when the Bazel surface needs direct
-validation. Keep `make check`, the Cargo targets, and the Cargo-based CI
-workflows usable; provider-accounted transfer evidence is required before any
-remote profile can become enforcing.
+The Bazel graph is an enforcing part of Layer-1. Bare local `make check` uses
+BuildBuddy for eligible Bazel leaves, while generated CI runs the same
+non-crate, main-workspace, broker, and guest-shell-runner leaves with local
+Bazel execution and no remote credential. `bazel-check` and `test-rust` own
+non-overlapping leaves so the scheduler does not duplicate crate tests. See
+[Bazel and BuildBuddy](../reference/bazel-buildbuddy.md) for the execution,
+cache, failure, and update contracts.
 
 Review evidence is bound to the repository, PR, review head OID, observed base
 ref and OID, and verdict. It is not reusable after the head changes. A review

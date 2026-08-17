@@ -1,180 +1,323 @@
 # Bazel and BuildBuddy
 
-This repository keeps Bazel's complete target set and uses BuildBuddy only
-through the typed `tests/tools/bazel-check` facade. The facade owns the U9
-evidence gate, credential policy, redaction, and the one permitted local
-retry.
+d2b pins the unmodified upstream Bazel 9.2.0 release and uses Bazel as an
+enforcing execution path inside `make check`. BuildBuddy supplies remote
+execution, action caching, and invocation results for eligible developer
+work. Tests that need host devices, privileged host state, nested build tools,
+or non-hermetic fixtures remain in the existing local, preflight, or
+integration lanes.
 
-## Profiles
-
-The committed `.bazelrc` defines `common`, `local`, `remote`, `trusted-seed`,
-and `qualification` over the same `//...` target set. Remote profiles use:
-
-- Bazel 9.2 credential-helper authentication only (never `--remote_header`);
-- the d2b BuildBuddy workspace at `d2b.buildbuddy.io`;
-- `--remote_download_minimal` / `--remote_download_outputs=minimal`;
-- `--jobs=50`, `--remote_cache_compression`, and profile labels;
-- zero Bazel remote retries, because the facade owns fallback;
-- the immutable `d2b-bazel-worker/v1` platform contract;
-- BuildBuddy Ubuntu GCC via `@toolchains_buildbuddy//toolchains/cc:ubuntu_gcc_x86_64`; and
-- separate developer, trusted-seed, and qualification instance namespaces.
-
-Header authentication is forbidden. Do not add `--remote_header`,
-`--bes_header`, API keys, bearer values, or provider-specific experimental
-remote flags to repository configuration. The Gas City BuildBuddy proxy is a
-separate service and is not part of these profiles.
-
-Copy `.bazelrc.user.example` to `.bazelrc.user` only for a private local
-credential-helper setup. Store the key in the protected file named by
-`D2B_BUILDBUDDY_CREDENTIAL_FILE` (default:
-`~/.config/d2b/buildbuddy-api-key`). The key is read by the helper and is
-never an argument, repository rule input, action environment value, platform
-property, BEP field, or checked-in evidence field.
-
-## U9 gate
-
-Every non-local profile first validates
-`tests/golden/bazel/cache-transfer-representative.json` against the committed
-eligibility digest and cache policy. The current representative bounds are:
-
-- 207 actions;
-- 162901404939 gross input bytes;
-- 1034798612 unique input bytes;
-- compact remote class limited to 59 `ExtractCargoTomlEnvVars` and
-  `TestRunner` actions (467 MB gross, 82 MB unique);
-- `Rustc` on BuildBuddy RBE (client remote-cache traffic stayed low);
-- `CargoBuildScriptRun` forced local after it dominated remote-cache bytes; and
-- pipelining rejected because it increases gross inputs and fan-out.
-
-The graph, configuration, platform, toolchain, and pipelining values must also
-match the policy. A missing, stale, or mismatched report blocks all remote
-profiles. The local transfer command remains credential-free:
+The normal contributor entry point is:
 
 ```bash
-make bazel-cache-transfer-report
+make check
 ```
 
-## Running the facade
+No Bazel profile argument is needed. Local Layer-1 execution defaults to the
+BuildBuddy `remote` profile and uses the `local` profile automatically when a
+developer credential is unavailable. GitHub Actions deliberately uses Bazel
+with the `local` profile and receives no BuildBuddy credential.
 
-Use the pinned Bazel provider in the Bazel Nix shell:
+## Graph ownership
+
+Cargo remains the source of truth for Rust workspace membership and dependency
+resolution:
+
+- `Cargo.toml` and `Cargo.lock` define the production Rust workspace.
+- `MODULE.bazel` and `MODULE.bazel.lock` pin Bazel modules and
+  `crate_universe` resolution.
+- `crate_universe` exposes third-party Cargo dependencies to Bazel.
+- Upstream `gazelle_rust` maintains ordinary first-party `BUILD.bazel`
+  targets.
+- Explicit `BUILD.bazel` rules cover cases Gazelle cannot express. Every such
+  rule uses a `# keep` or `# gazelle:ignore` marker and is recorded in
+  `bazel/exceptions/manifest.json`.
+
+Rust source and tests stay in Cargo-standard crate paths. Each crate has its
+own Bazel package and test targets, so Bazel schedules, caches, and reports
+crate tests separately instead of treating the workspace as one opaque test
+command.
+
+## How `make check` executes Bazel
+
+`tests/layer1-jobs.json` is the shared local and CI scheduler manifest. During
+a local `make check`, its parallel phase runs both `bazel-check` and
+`test-rust`:
+
+```text
+make check
+  bazel-check
+    tests/tools/bazel-check --profile remote --leaf rest
+  test-rust
+    main workspace
+      tests/tools/bazel-check --profile remote --leaf main
+    privileged broker
+      tests/tools/bazel-check --profile remote --leaf broker
+    guest shell runner
+      tests/tools/bazel-check --profile remote --leaf guest
+    no-bash AST, schema, inventory, and supply-chain leaves
+      local Cargo, Nix, and repository tools
+  test-fixture-contracts
+    separate local Cargo and Nix fixture lane
+```
+
+The target leaves prevent duplicate package test execution:
+
+| Leaf | Scheduled by | Bazel target set |
+| --- | --- | --- |
+| `rest` | `make bazel-check` | Non-crate tests under `//tests/...` and `//bazel/checks/{nix,policy,fixtures}/...`; Gas City fixtures are excluded |
+| `main` | `make test-rust-main` and `make test-rust` | `//packages/...` plus `//bazel/checks/rust/...`, excluding broker, guest shell runner, and compile-fail UI suites |
+| `broker` | `make test-rust-broker` and `make test-rust` | `//packages/d2b-priv-broker/...` |
+| `guest` | `make test-rust-guest-shell-runner` and `make test-rust` | `//packages/d2b-guest-shell-runner/...` |
+| `all` | Manual diagnostics only | The combined graph, with the documented UI and Gas City exclusions |
+
+`rest` does not rerun Rust package tests, and `main` does not rerun the broker
+or guest shell runner. The manual `all` leaf intentionally overlaps the
+scheduled leaves and must not be added to `make check`.
+
+The facade adds `--build_tests_only`, prints test errors, and filters targets
+tagged `local`, `manual`, `gpu`, or `kvm`. Targets tagged `exclusive` run only
+from the broker leaf. Compile-fail UI suites remain on Cargo, and Gas City
+fixture genrules remain outside this aggregate because they need a
+user-namespace FHS environment.
+
+## Local and CI commands
+
+Use the Make targets for normal work:
 
 ```bash
-nix develop .#bazel
+# Full Layer-1 gate. BuildBuddy is the local default.
+make check
+
+# Non-crate Bazel leaf only.
 make bazel-check
-tests/tools/bazel-check --profile local
-tests/tools/bazel-check --profile remote
+
+# Complete Rust DAG. Main, broker, and guest package tests use Bazel.
+make test-rust
+
+# Focused Bazel-backed Rust leaves.
+make test-rust-main
+make test-rust-broker
+make test-rust-guest-shell-runner
+
+# Explicitly disable BuildBuddy for a local reproduction.
+D2B_BAZEL_PROFILE=local make check
 ```
 
-`make check` schedules `make bazel-check`. On a developer host that
-defaults to the remote profile so supported Rustc actions use BuildBuddy,
-and falls back to local execution when credentials are withheld. GitHub
-Layer-1 runs `nix develop .#bazel -c make bazel-check` with
-`D2B_BAZEL_PROFILE=local` and `D2B_BAZEL_UNTRUSTED=1`. Cargo remains
-available as a standalone workflow.
-
-The facade always supplies `--repo_contents_cache=` as a local command option.
-Repository-content caching is not a remote profile feature. It runs the
-identical target set locally when credentials are unavailable, when an
-untrusted job requests a remote profile, or when trusted injection is not
-authorized.
-
-Only these pre-dispatch infrastructure classes permit one local retry:
-missing credentials, authentication, endpoint, worker, and transport. A
-post-dispatch uncertainty, analysis failure, policy failure, test failure, or
-ordinary build failure is fail-closed and is never retried locally.
-
-## Trusted injection
-
-Untrusted pull-request jobs receive no BuildBuddy credential and use the local
-profile. Trusted profiles require all of:
-
-1. `D2B_BAZEL_TRUSTED=1`;
-2. `GITHUB_REF=refs/heads/v3`; and
-3. a security digest allowlisted by `tests/golden/bazel/cache-policy.json`.
-
-The digest covers the Bazel security configuration, module lock, platform and
-remote policy, and this facade. A change to an endpoint, instance, module
-source, repository rule, action environment, or security file therefore
-withholds trusted credentials until the digest is explicitly reviewed and
-allowlisted.
-
-The same protected-ref and digest checks apply to any remote profile running in
-GitHub Actions, not only the trusted-seed and qualification profiles.
-
-Trusted seeds write only to the trusted namespace. Developer and qualification
-namespaces are partitioned by trust, architecture, toolchain, platform,
-worker-image contract, feature set, and lock. Branch and commit names do not
-create cache namespaces.
-
-## Evidence and sentinels
-
-Provider evidence must be emitted by the credential-helper probe for the
-one-run nonce and bind the invocation, sample, commit, worker image,
-fresh-worktree provenance, and candidate identity. It must separate action-cache,
-CAS, output, stdout/stderr, BES, repository, retry, provider-accounted
-transfer, and local U9 measurements.
-Evidence is projected through `xtask buildbuddy-probe`; credential fields,
-header-auth fields, bearer values, API-key values, and configured plain,
-encoded, or split sentinels are rejected. Logs and BEP output are redacted
-before they are retained.
-The projection is not a provider attestation. Caller-authored candidate or
-provider JSON is therefore quarantined as non-qualifying outside the explicit
-sanitized test-fixture mode until a provider attestation or generated evidence
-collector establishes the production origin.
-
-No live BuildBuddy account run is part of this change. Live qualification
-requires a protected credential-helper environment and sanitized provider
-evidence. The qualification wrapper owns the one-run nonce, passes it to the
-provider evidence output path, and refuses a dirty worktree. If the live
-attempt does not produce a complete provider-accounted record, the wrapper
-emits a non-qualifying report rather than inventing metrics. Never place a
-real key in the repository or print it during a probe.
-
-## Qualification evidence
-
-U7 keeps scheduler replacement fail-closed. The qualification command consumes
-local candidate evidence plus a sanitized provider observation:
+For direct facade or Bazel commands, enter the focused shell so the exact
+upstream binary and action shell are selected:
 
 ```bash
-tests/tools/buildbuddy-qualification \
-  --mode acceptance \
-  --candidate .scratch/bazel-qualification/candidate.json \
-  --provider-evidence .scratch/bazel-qualification/provider.json \
-  --output .scratch/bazel-qualification/report.json
+nix develop --no-write-lock-file .#bazel
+bazel --version
+tests/tools/bazel-check --profile local --leaf rest
+tests/tools/bazel-check --profile remote --leaf main
 ```
 
-The report binds the current commit, sorted target-set digest, committed
-configuration digest, selected-closure digest, qualification namespace, and
-toolchain. It also records coverage parity, trusted-seed completion,
-unchanged-cache behavior, typed fallback, action-cache/CAS/BES/repository and
-retry traffic, local Nix time, provider-accounted upload and download, worker
-identity, and fresh-worktree wall-time distributions.
-Qualification runs reject an ignored workspace `.bazelrc.user` and disable
-system and home Bazel rc files so the committed `.bazelrc` digest is the
-effective configuration binding.
+The shell exports `D2B_BAZEL_BIN` and `BAZEL_SH`; do not substitute an ambient
+Bazel installation when validating the repository graph.
 
-Provider transfer is the sum of uploaded and downloaded bytes. The monthly
-projection is `floor(80,000,000,000 / T_99)` where `T_99` is the observed
-99th-percentile transfer, and leaves 20,000,000,000 bytes of the stated
-allowance as headroom. Qualification requires five independent
-fresh-worktree samples. Upload and download distributions are checked against
-the U9 input and output bounds before the combined transfer comparison; the U9
-representative report supplies the pessimistic upper bound, and material
-divergence is reported rather than silently rewriting the local model. The
-canonical U9 report is also pinned to the qualification target-set and
-configuration digests; either change invalidates the bounds until a new
-representative report is accepted.
+CI is generated from `tests/layer1-jobs.json`. It runs separate
+`bazel-check`, `test-rust-main`, `test-rust-broker`, and
+`test-rust-guest-shell-runner` jobs with:
 
-Missing or incomplete provider-accounted transfer produces
-`"status": "non-qualifying"` with null transfer percentiles and monthly runs.
-The command never replaces missing metrics with zero; a valid `T_99` may still
-publish its projection when another qualification reason blocks the result.
-Stale, duplicate,
-replayed, forged, path-bearing, secret-bearing, client-supplied, and
-cross-commit evidence is rejected. Only the five typed pre-dispatch
-infrastructure classes may receive one local retry; post-dispatch uncertainty
-and product failures remain fail-closed.
+```text
+D2B_BAZEL_PROFILE=local
+D2B_BAZEL_UNTRUSTED=1
+```
 
-Qualification is evidence gathering, not the U8 cutover. The current Make and
-CI scheduler remains authoritative until a complete sanitized report and the
-remaining cutover gates are accepted.
+The `test-rust` CI job is a rollup over those Bazel jobs and the remaining
+local Rust jobs. It does not execute the crate tests again.
+
+## BuildBuddy profiles and caching
+
+The committed `.bazelrc` defines four profiles:
+
+| Profile | Purpose |
+| --- | --- |
+| `local` | Same selected target leaf with no remote executor, cache, or Build Event Service |
+| `remote` | Normal developer remote execution and cache namespace |
+| `trusted-seed` | Protected `v3` cache seeding with synchronous uploads |
+| `qualification` | Isolated measurement and provider-evidence runs |
+
+The remote profiles use:
+
+- `grpcs://d2b.buildbuddy.io` for execution, action cache, CAS, and BES;
+- credential-helper authentication through `tests/tools/bazel-check`;
+- the BuildBuddy Linux x86_64 platform and Ubuntu GCC toolchain;
+- remote Rust compilation and build-script actions when they are eligible;
+- `--remote_download_outputs=minimal` and remote cache compression;
+- up to 50 Bazel jobs;
+- zero Bazel remote retries, because the facade owns the single permitted
+  local fallback; and
+- separate developer, trusted-seed, and qualification instance names.
+
+Bazel computes an action key from declared inputs, tools, command line,
+environment, and execution platform. An unchanged action can therefore reuse
+the BuildBuddy action cache and CAS even when another crate or test changed.
+The developer instance name is intentionally shared across branches; branch
+and commit names are not part of the namespace. Trust level, platform,
+toolchain, worker contract, output mode, and module lock remain part of the
+namespace or action identity so incompatible results cannot collide.
+
+Minimal output download keeps successful intermediate artifacts in BuildBuddy
+unless a downstream action or the user requests them. BES still publishes the
+invocation graph, target results, and logs to:
+
+```text
+https://d2b.buildbuddy.io/invocation/
+```
+
+## Credentials and fallback
+
+Store the developer API key as a single line in the protected file named by
+`D2B_BUILDBUDDY_CREDENTIAL_FILE`. The default is:
+
+```text
+~/.config/d2b/buildbuddy-api-key
+```
+
+Use owner-only file permissions. The helper reads the key from the file and
+returns it only through Bazel's credential-helper protocol. Never add
+`--remote_header`, `--bes_header`, an API key, or a bearer value to `.bazelrc`,
+the command line, an action environment, a platform property, or committed
+evidence.
+
+The facade preserves the selected target leaf when it changes execution mode:
+
+- A missing or withheld credential selects `local` before Bazel starts.
+- An untrusted GitHub job always selects `local`.
+- A missing-credential, authentication, endpoint, worker, or transport failure
+  before remote dispatch permits one retry of the identical leaf locally.
+- An analysis failure, policy failure, test failure, build failure, or any
+  post-dispatch uncertainty fails closed and is not retried locally.
+
+Trusted seed and qualification profiles additionally require
+`D2B_BAZEL_TRUSTED=1`, `GITHUB_REF=refs/heads/v3`, and an allowlisted security
+digest from `tests/golden/bazel/cache-policy.json`.
+
+## Logs and troubleshooting
+
+The facade writes redacted output below `.scratch/bazel-check/`:
+
+```text
+<profile>.<leaf>.log
+<profile>.<leaf>.bep.json
+```
+
+On failure it prints the captured log to stderr after redaction, including a
+local fallback log when that fallback also fails. A successful run prints only
+the facade result and the normal Make job summary.
+
+Reproduce failures through the same leaf before calling Bazel directly:
+
+```bash
+D2B_BAZEL_PROFILE=local make bazel-check
+D2B_BAZEL_PROFILE=local make test-rust-main
+```
+
+This preserves the target exclusions, tags, test environment, redaction, and
+fallback policy used by `make check`.
+
+## Updating first-party targets
+
+For an ordinary Rust crate or test change:
+
+1. Update the Cargo-standard source, test, and manifest files.
+2. Preview Gazelle changes from the pinned Bazel shell:
+
+   ```bash
+   bazel run --config=local //:gazelle -- -mode=diff
+   ```
+
+3. Apply ordinary generated changes:
+
+   ```bash
+   bazel run --config=local //:gazelle
+   ```
+
+4. If Gazelle cannot represent the target, add the smallest explicit rule,
+   preserve it with `# keep` or `# gazelle:ignore`, and update
+   `bazel/exceptions/manifest.json`.
+5. Run the focused Make leaf, then `make check`.
+
+Do not fork or patch Gazelle or Bazel to support a repository-specific target.
+Keep exceptional checked-in rules explicit and reviewable.
+
+## Updating dependencies and modules
+
+Cargo dependency changes start in Cargo manifests and locks. Bazel module or
+toolchain dependency changes start in `MODULE.bazel`. Refresh the Bzlmod lock
+only for an intentional dependency change:
+
+```bash
+bazel mod deps --lockfile_mode=update
+```
+
+Normal commands use `.bazelrc` with `--lockfile_mode=error`, so a stale or
+implicitly rewritten `MODULE.bazel.lock` fails rather than changing during a
+test run.
+
+Because `MODULE.bazel` and `MODULE.bazel.lock` are trusted-injection inputs,
+review their resolved sources and refresh the allowlisted security digest:
+
+```bash
+cargo run --quiet --locked -p xtask -- bazel-evidence security-digest
+```
+
+Copy a newly reviewed digest into
+`tests/golden/bazel/cache-policy.json`, then verify it:
+
+```bash
+cargo run --quiet --locked -p xtask -- bazel-evidence check-security
+```
+
+Never allowlist an unexplained digest only to make the check pass.
+
+## Updating Bazel itself
+
+Bazel is an exact upstream binary, not a nixpkgs wrapper and not a patched
+fork. A version update must keep all version-bearing surfaces in sync:
+
+- `.bazelversion`;
+- `pkgs/bazel-<version>/default.nix`, including official x86_64 and aarch64
+  release URLs and hashes;
+- the Bazel provider, package, shell, and check bindings in `flake.nix`;
+- `tests/unit/smoke/bazel-provider.nix`;
+- the provider source path in the root `BUILD.bazel`;
+- the fallback binary selection in `tests/tools/bazel-check`; and
+- version references in contributor documentation and changelog entries.
+
+Use `rg` for both the old version and its compact Nix binding name before
+declaring the update complete. Verify the official release bytes and the
+focused shell:
+
+```bash
+nix build --no-link .#checks.x86_64-linux.bazel-9_2_0-provider-smoke
+nix develop --no-write-lock-file .#bazel -c bazel --version
+```
+
+Rename the check attribute for a new version instead of leaving
+`bazel-9_2_0-provider-smoke` behind.
+
+## Updating remote policy or CI mapping
+
+Changes to `.bazelrc`, module locks, platforms, remote policy, or the facade
+change trusted cache identity. After reviewing the change:
+
+1. Recompute and allowlist the security digest as described above.
+2. Regenerate cache-transfer evidence when the action graph, platform,
+   toolchain, or remote policy changes. Follow
+   [Local Bazel cache-transfer model](bazel-cache-transfer.md).
+3. Run `cargo run --quiet --locked -p xtask -- bazel-evidence check-u9`.
+4. If `tests/layer1-jobs.json` changed, regenerate and verify CI:
+
+   ```bash
+   make layer1-workflow
+   make layer1-workflow-check
+   ```
+
+5. Run the focused leaf and bare `make check`.
+
+The cache-transfer and qualification tools measure remote suitability; they do
+not replace the Make entry points or create a second scheduler.

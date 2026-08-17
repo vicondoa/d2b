@@ -62,13 +62,13 @@ profiles retain panic line tables but omit dependency DWARF; use
 `cargo build --profile debugging` or `cargo test --profile debugging` for full
 debugger symbols.
 
-Rust tests run under `cargo-nextest`. Two surfaces need explicit companion
-runs, so do not "simplify" them away: **doctests** (several `compile_fail`
-ones are capability seals) and **`harness = false` binaries**
+The main workspace, privileged broker, and guest shell runner tests use Bazel
+inside `make check`. Cargo remains an explicit compatibility and local-tool
+path. That compatibility path needs companion runs for **doctests** (several
+`compile_fail` cases are capability seals) and **`harness = false` binaries**
 (`d2b-core-smoke` carries fail-closed minijail assertions). The harness-free
-set comes from `nextest list`, not a pin. The privileged broker workspace stays
-on `cargo test`: its tests are not process-per-test safe, and it runs 528 tests
-in about 1.4 s.
+set comes from `nextest list`, not a pin. The broker Cargo compatibility
+contexts stay serial because those tests are not process-per-test safe.
 
 `make test-runtime-ledger` also stays on `cargo test`, and that is load
 bearing. It enforces an aggregate process-CPU budget, and nextest's
@@ -113,20 +113,32 @@ make check-static
 make test
 ```
 
-### Optional Bazel parity facade
+### Bazel and BuildBuddy execution
 
-`make check` schedules the Bazel aggregate:
+`make check` uses Bazel in two non-overlapping parts of the Layer-1 graph:
 
 ```bash
+# Non-crate Bazel tests.
 make bazel-check
-# equivalent direct invocation
-tests/tools/bazel-check --profile local
+
+# Rust DAG. Main, broker, and guest crate tests use separate Bazel leaves.
+make test-rust
 ```
 
-The facade runs the complete local `//...` graph. Remote-cache read and write
-bytes are the BuildBuddy provider evidence. Keep Cargo and the existing Make
-targets available for standalone workflows. GitHub Layer-1 runners stay on
-generated Cargo/Make jobs until those runners host Bazel.
+Bare local `make check` defaults these Bazel leaves to the BuildBuddy remote
+profile. `bazel-check` owns the non-crate `rest` leaf; `test-rust` owns the
+`main`, `broker`, and `guest` crate leaves plus the remaining local Cargo/Nix
+leaves. This split prevents the aggregate from running the same crate tests
+twice.
+
+GitHub Layer-1 runs separate Bazel jobs for `bazel-check`,
+`test-rust-main`, `test-rust-broker`, and
+`test-rust-guest-shell-runner`. Those jobs use `D2B_BAZEL_PROFILE=local` and
+receive no BuildBuddy credential; the stable `test-rust` job is their rollup
+with the remaining local Rust jobs.
+
+See [Bazel and BuildBuddy](../reference/bazel-buildbuddy.md) for target leaves,
+credentials, caching, failure output, direct commands, and update procedures.
 
 Local `make check` runs `test-lint` as a serial fail-fast phase before
 inventory and the long parallel jobs. That lane checks every gated Rust
@@ -174,10 +186,11 @@ fixture behavior.
 ### Rust leaves
 
 CI runs seven independent Rust leaf jobs behind the stable required
-`test-rust` rollup context: main workspace, broker, guest shell runner, no-bash
-AST, schema, inventory, and supply chain. Each focused target receives the
-full runner budget and drops local-only dependency edges, so a shard does not
-repeat another shard's work. `make test-rust` remains the local aggregate.
+`test-rust` rollup context: Bazel-backed main workspace, broker, and guest
+shell runner jobs, plus local no-bash AST, schema, inventory, and supply-chain
+jobs. Each focused target receives the full runner budget and drops
+local-only dependency edges, so a shard does not repeat another shard's work.
+`make test-rust` remains the local aggregate.
 
 `make test-cargo-compat` is the standalone Cargo proof for the root workspace.
 It checks generic nextest exclusions, the serial broker default,
