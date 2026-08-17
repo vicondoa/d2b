@@ -254,6 +254,18 @@ pkgs.testers.runNixOSTest {
           parentZone = "local-root";
           trustedPublishers.d2b-acceptance.signingKey = acceptancePublisherKey;
           resources = {
+            host-system = {
+              type = "Host";
+              spec = {
+                providerRef = "Provider/system-core";
+                defaultDomain = "system";
+                allowedDomains = [ "system" ];
+                budget = { };
+                networkAttachments = [ ];
+                deviceAttachments = [ ];
+                volumeAttachmentDefaults = [ ];
+              };
+            };
             volume-local = {
               type = "Provider";
               spec = {
