@@ -10897,15 +10897,18 @@ impl BrokerError {
                 field,
                 requested,
                 resolved,
-            } => error_response(
-                "Broker.SpawnRunnerIntentMismatch",
-                "SpawnRunner",
-                Some("P1"),
-                &format!(
-                    "SpawnRunner {field} mismatch: request `{requested}` does not match trusted bundle intent `{resolved}`"
-                ),
-                "Use the BundleOpId that matches the requested VM/role; daemon and broker versions may be out of sync.",
-            ),
+            } => {
+                tracing::warn!(field, "SpawnRunner trusted intent mismatch");
+                error_response(
+                    "Broker.SpawnRunnerIntentMismatch",
+                    "SpawnRunner",
+                    Some("P1"),
+                    &format!(
+                        "SpawnRunner {field} mismatch: request `{requested}` does not match trusted bundle intent `{resolved}`"
+                    ),
+                    "Use the BundleOpId that matches the requested VM/role; daemon and broker versions may be out of sync.",
+                )
+            }
             Self::StoreSyncFailed {
                 error_stage,
                 message,
