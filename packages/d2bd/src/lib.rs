@@ -4082,17 +4082,36 @@ fn dispatch_wave6_resource_reconcile(
             "device-tpm-reconciled"
         }
         "Guest" => {
+            let guest_vm = resource_ref.name().as_str();
             let providers = state
                 .provider_runtime
                 .process_providers()
-                .ok_or(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
-            let guest_vm = resource_ref.name().as_str();
+                .ok_or_else(|| {
+                    tracing::warn!(
+                        guest = guest_vm,
+                        "Guest Provider process runtime is unavailable"
+                    );
+                    resource_runtime::ResourceRuntimeError::ProviderPathUnavailable
+                })?;
             let node = providers
                 .node_for_role(guest_vm, "ch-runner")
-                .ok_or(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+                .ok_or_else(|| {
+                    tracing::warn!(
+                        guest = guest_vm,
+                        "Guest Provider Cloud Hypervisor node is missing"
+                    );
+                    resource_runtime::ResourceRuntimeError::ProviderPathUnavailable
+                })?;
             if !providers.has_active_role(guest_vm, "ch-runner") {
                 block_on_future(providers.launch_node(guest_vm, &node, Duration::from_secs(30)))
-                    .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+                    .map_err(|error| {
+                        tracing::warn!(
+                            guest = guest_vm,
+                            error = %error,
+                            "Guest Provider Cloud Hypervisor launch failed"
+                        );
+                        resource_runtime::ResourceRuntimeError::ProviderPathUnavailable
+                    })?;
             }
             "cloud-hypervisor-adopted"
         }
