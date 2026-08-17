@@ -826,10 +826,13 @@ fn acquire_lock(path: &AnchoredPath) -> Result<MigrationLock, LegacyMigrationErr
     .map_err(|_| LegacyMigrationError::InventoryInvalid)?;
     let stat = crate::sys::path_safe::fstat_fd(fd.as_fd())
         .map_err(|_| LegacyMigrationError::InventoryInvalid)?;
+    // The per-VM state parent is setgid `users`, so a newly-created lock
+    // inherits that group even though the broker owns the file. The lock is
+    // mode 0600 and anchored below the broker-owned VM directory; the owner
+    // and mode are the security boundary, not the inherited group.
     if stat.st_mode & libc::S_IFMT != libc::S_IFREG
         || stat.st_mode & 0o077 != 0
         || stat.st_uid != nix::unistd::geteuid().as_raw()
-        || stat.st_gid != nix::unistd::getegid().as_raw()
     {
         return Err(LegacyMigrationError::ForeignOwner);
     }
