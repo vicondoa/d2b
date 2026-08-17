@@ -159,6 +159,7 @@ pub(crate) fn verb_requires_admin(verb: &str) -> bool {
             | "hostDestroy"
             | "hostInstall"
             | "hostReconcile"
+            | "resourceReconcile"
             | "readGuestConfig"
             | "exec"
             | "shell"

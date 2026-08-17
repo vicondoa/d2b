@@ -4078,7 +4078,7 @@ fn dispatch_wave6_resource_reconcile(
                 "operationId": operation_id,
                 "logLevel": 20,
             });
-            dispatch_device_tpm_reconcile_inner(state, peer, &device_request, false)?;
+            dispatch_device_tpm_reconcile_inner(state, peer, &device_request)?;
             "device-tpm-reconciled"
         }
         "Guest" => {
@@ -4172,16 +4172,15 @@ fn dispatch_device_tpm_reconcile(
     peer: &PeerIdentity,
     request: &Value,
 ) -> Result<Value, resource_runtime::ResourceRuntimeError> {
-    dispatch_device_tpm_reconcile_inner(state, peer, request, true)
+    dispatch_device_tpm_reconcile_inner(state, peer, request)
 }
 
 fn dispatch_device_tpm_reconcile_inner(
     state: &ServerState,
     peer: &PeerIdentity,
     request: &Value,
-    require_admin: bool,
 ) -> Result<Value, resource_runtime::ResourceRuntimeError> {
-    if require_admin && !matches!(peer.role, PeerRole::Admin) {
+    if !matches!(peer.role, PeerRole::Admin) {
         return Err(resource_runtime::ResourceRuntimeError::AuthenticationUnavailable);
     }
     let zone = request
