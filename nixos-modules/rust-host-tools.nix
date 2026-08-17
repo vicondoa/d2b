@@ -42,8 +42,8 @@ let
     dummySrc = dummySource;
     sourceRoot = "d2b-provider-rust-src/packages";
     inherit cargoLock outputHashes;
-    cargoCheckExtraArgs = "--workspace";
-    cargoBuildExtraArgs = "--workspace";
+    cargoCheckExtraArgs = "--package d2bd";
+    cargoBuildExtraArgs = "--package d2bd";
   });
 
   installBinaries = binaries:
