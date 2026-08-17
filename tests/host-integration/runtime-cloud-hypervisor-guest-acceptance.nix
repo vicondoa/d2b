@@ -41,14 +41,11 @@ pkgs.testers.runNixOSTest {
     machine.wait_for_unit("d2bd.service")
     machine.wait_for_file("/run/d2b/public.sock")
 
-    # The VM runner requires a writable same-filesystem store fixture. Keep
-    # this exact target fail-closed rather than claiming a native pass when
-    # the runNixOSTest image cannot provide it.
+    # The VM runner owns store preparation through its trusted broker path.
+    # Require the two anchored roots to exist, then exercise the real launch
+    # and adoption path rather than treating a read-only probe as a pass.
     store_fixture = machine.succeed(
-        "if mkdir -p /nix/store/zz-d2b-vms-test /var/lib/d2b/vms 2>/dev/null && "
-        "test -w /nix/store/zz-d2b-vms-test && "
-        "test \"$(stat -c %d /nix/store)\" = \"$(stat -c %d /var/lib/d2b/vms)\"; "
-        "then echo ready; else echo skipped-read-only-store; fi"
+        "test -d /nix/store && test -d /var/lib/d2b/vms && echo ready"
     ).strip()
     if store_fixture != "ready":
         print(
