@@ -4,7 +4,7 @@ let
   d2bLib = import ./lib.nix { inherit lib; };
   craneLib = inputs.crane.mkLib pkgs;
   packagesSrc = d2bLib.cleanRustPackagesSource ../packages;
-  hostSource = pkgs.runCommand "d2b-host-tools-rust-src" { } ''
+  hostSource = pkgs.runCommand "d2b-provider-rust-src" { } ''
     mkdir -p "$out/packages"
     cp -r ${packagesSrc}/. "$out/packages/"
     mkdir -p "$out/docs/reference/schemas/v3/providers"
@@ -14,6 +14,13 @@ let
       "$out/docs/reference/schemas/v3/providers/transport-vsock.transport-binding.json"
   '';
   cargoLock = ../packages/Cargo.lock;
+  dummySource = pkgs.runCommand "d2b-provider-rust-src" { } ''
+    mkdir -p "$out/packages"
+    cp -r ${craneLib.mkDummySrc {
+      src = packagesSrc;
+      inherit cargoLock;
+    }}/. "$out/packages/"
+  '';
   outputHashes = {
     "git+https://github.com/vicondoa/wl-proxy.git?rev=072945b59fef21a2a8166460454280d543f48772#072945b59fef21a2a8166460454280d543f48772" =
       "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";
@@ -31,7 +38,9 @@ let
   cargoArtifacts = craneLib.buildDepsOnly (commonBuildArgs // {
     pname = "d2b-host-tools";
     version = "0.0.0-bootstrap";
-    src = craneLib.cleanCargoSource packagesSrc;
+    src = hostSource;
+    dummySrc = dummySource;
+    sourceRoot = "d2b-provider-rust-src/packages";
     inherit cargoLock outputHashes;
     cargoCheckExtraArgs = "--workspace";
     cargoBuildExtraArgs = "--workspace";
