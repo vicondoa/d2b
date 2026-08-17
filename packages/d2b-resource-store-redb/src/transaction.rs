@@ -110,7 +110,7 @@ struct WaylandPolicySpec {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct WaylandPolicyDefaults {
     accelerated_rendering: WaylandPolicyDecision,
-    clipboard_boundary: WaylandPolicyDecision,
+    clipboard_boundary: WaylandClipboardBoundary,
     high_risk: WaylandPolicyDecision,
     app_defaults: WaylandPolicyDecision,
     off_defaults: WaylandPolicyDecision,
@@ -125,6 +125,13 @@ enum WaylandPolicyDecision {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum WaylandClipboardBoundary {
+    Deny,
+    Virtualize,
+}
+
+#[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct WaylandSessionSpec {
     guest_ref: ResourceRef,
@@ -133,7 +140,8 @@ struct WaylandSessionSpec {
     policy_ref: ResourceRef,
     identity: WaylandDisplayIdentity,
     cross_domain_trusted: bool,
-    reconnect_generation: u64,
+    #[serde(default)]
+    reconnect_generation: Option<u64>,
     virgl_video: bool,
     filter: WaylandFilterSpec,
 }
@@ -1791,7 +1799,7 @@ fn valid_wayland_session(session: WaylandSessionSpec) -> bool {
         && session.policy_ref.resource_type().as_str()
             == "display-wayland.d2bus.org.WaylandPolicy"
         && session.cross_domain_trusted
-        && session.reconnect_generation > 0
+        && session.reconnect_generation.is_none_or(|generation| generation > 0)
         && valid_wayland_identity(&session.identity)
         && valid_wayland_filter(
             &session.filter.allow_globals,
@@ -4562,6 +4570,57 @@ mod tests {
             .insert(key.as_slice(), value.as_slice())
             .unwrap();
         write.commit().unwrap();
+    }
+
+    #[test]
+    fn qualified_wayland_validator_accepts_schema_defaults() {
+        let policy: WaylandPolicySpec = serde_json::from_value(serde_json::json!({
+            "allowGlobals": [],
+            "denyGlobals": [],
+            "maxVersions": {},
+            "dmabufAllow": [],
+            "dmabufDeny": [],
+            "defaults": {
+                "acceleratedRendering": "deny",
+                "clipboardBoundary": "virtualize",
+                "highRisk": "deny",
+                "appDefaults": "deny",
+                "offDefaults": "deny",
+                "unclassified": "deny"
+            }
+        }))
+        .unwrap();
+        assert!(valid_wayland_policy_defaults(&policy.defaults));
+
+        let session: WaylandSessionSpec = serde_json::from_value(serde_json::json!({
+            "guestRef": "Guest/guest",
+            "hostRef": "Host/host",
+            "userRef": "User/alice",
+            "policyRef": "display-wayland.d2bus.org.WaylandPolicy/policy",
+            "identity": {
+                "label": "session",
+                "activeColor": "#112233",
+                "inactiveColor": "#223344",
+                "urgentColor": "#334455",
+                "borderEnabled": true,
+                "borderWidth": 1,
+                "labelEnabled": true,
+                "labelText": "session",
+                "labelPosition": "top-left"
+            },
+            "crossDomainTrusted": true,
+            "virglVideo": false,
+            "filter": {
+                "allowGlobals": [],
+                "denyGlobals": [],
+                "maxVersions": {},
+                "dmabufAllow": [],
+                "dmabufDeny": [],
+                "debugLogging": false
+            }
+        }))
+        .unwrap();
+        assert!(valid_wayland_session(session));
     }
 
     #[test]
