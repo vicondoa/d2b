@@ -1217,7 +1217,7 @@ impl ZoneResourceRuntime {
             )
             .await
             {
-                Ok(identity) => Some(identity),
+                Ok(identity) => identity,
                 Err(error) => {
                     tracing::error!(
                         zone = %zone.as_str(),
@@ -3496,7 +3496,7 @@ async fn load_committed_interaction_identity(
     store: &RedbResourceStore,
     current_revision: ZoneRevision,
     configuration: Option<&CommittedInteractionProviderConfiguration>,
-) -> Result<CommittedInteractionIdentity, ResourceRuntimeError> {
+) -> Result<Option<CommittedInteractionIdentity>, ResourceRuntimeError> {
     let session_resource_type = ResourceTypeName::parse("display-wayland.d2bus.org.WaylandSession")
         .map_err(|_| ResourceRuntimeError::InteractionConfigurationUnavailable)?;
     let operation = StoreOperationContext {
@@ -3519,7 +3519,17 @@ async fn load_committed_interaction_identity(
         })
         .await
         .map_err(|_| ResourceRuntimeError::InteractionConfigurationUnavailable)?;
-    if page.next_cursor.is_some() || page.resources.len() != 1 {
+    if page.next_cursor.is_some() {
+        return Err(ResourceRuntimeError::InteractionConfigurationUnavailable);
+    }
+    if page.resources.is_empty() {
+        return if configuration.is_none() {
+            Ok(None)
+        } else {
+            Err(ResourceRuntimeError::InteractionConfigurationUnavailable)
+        };
+    }
+    if page.resources.len() != 1 {
         return Err(ResourceRuntimeError::InteractionConfigurationUnavailable);
     }
     let session_resource = page
@@ -3656,7 +3666,7 @@ async fn load_committed_interaction_identity(
         }
     }
 
-    Ok(CommittedInteractionIdentity {
+    Ok(Some(CommittedInteractionIdentity {
         subject_ref,
         subject_uid,
         host_execution_ref,
@@ -3667,7 +3677,7 @@ async fn load_committed_interaction_identity(
         clipboard_provider_uid,
         notification_provider_generation,
         notification_provider_uid,
-    })
+    }))
 }
 
 fn committed_wayland_session_spec(
