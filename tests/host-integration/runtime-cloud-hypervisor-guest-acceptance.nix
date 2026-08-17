@@ -60,6 +60,14 @@ pkgs.testers.runNixOSTest {
               volumeAttachmentDefaults = [ ];
             };
           };
+          volume-local = {
+            type = "Provider";
+            spec.config = { };
+          };
+          volume-virtiofs = {
+            type = "Provider";
+            spec.config = { };
+          };
           corp-vm = {
             type = "Guest";
             spec = {
