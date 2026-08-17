@@ -176,7 +176,10 @@ pkgs.testers.runNixOSTest {
           };
           };
         };
-        other.parentZone = "local-root";
+        other = {
+          parentZone = "local-root";
+          trustedPublishers.d2b-acceptance.signingKey = acceptancePublisherKey;
+        };
       };
       d2b.realms.host = {
         allowedUsers = [ "alice" ];
