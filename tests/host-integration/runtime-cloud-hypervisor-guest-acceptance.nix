@@ -135,6 +135,14 @@ pkgs.testers.runNixOSTest {
       d2b.zones.work = {
         parentZone = "local-root";
         resources = {
+          alice = {
+            type = "User";
+            spec = {
+              displayName = "Alice";
+              groups = [ ];
+              osUsername = "alice";
+            };
+          };
           d2bd = {
             type = "User";
             spec = {
@@ -179,6 +187,68 @@ pkgs.testers.runNixOSTest {
               volumeAttachmentDefaults = [ ];
               networkAttachments = [ ];
               deviceAttachments = [ ];
+            };
+          };
+          display-wayland = {
+            type = "Provider";
+            spec = {
+              artifactId = "acceptance-provider";
+              config = {
+                principalPoolSize = 4;
+                runtimeVolumePolicyId = "display-wayland.wlproxy-runtime.v1";
+              };
+            };
+          };
+          display-wayland-policy = {
+            type = "display-wayland.d2bus.org.WaylandPolicy";
+            metadata.ownerRef = "Provider/display-wayland";
+            spec = {
+              allowGlobals = [ ];
+              denyGlobals = [ ];
+              maxVersions = { };
+              dmabufAllow = [ ];
+              dmabufDeny = [ ];
+              defaults = {
+                acceleratedRendering = "deny";
+                clipboardBoundary = "deny";
+                highRisk = "deny";
+                appDefaults = "deny";
+                offDefaults = "deny";
+                unclassified = "deny";
+              };
+            };
+          };
+          display-wayland-session = {
+            type = "display-wayland.d2bus.org.WaylandSession";
+            metadata.ownerRef = "Guest/corp-vm";
+            spec = {
+              guestRef = "Guest/corp-vm";
+              hostRef = "Host/host-system";
+              userRef = "User/alice";
+              policyRef =
+                "display-wayland.d2bus.org.WaylandPolicy/display-wayland-policy";
+              identity = {
+                label = "acceptance";
+                activeColor = "#00ff00";
+                inactiveColor = "#808080";
+                urgentColor = "#ff0000";
+                borderEnabled = true;
+                borderWidth = 2;
+                labelEnabled = true;
+                labelText = "acceptance";
+                labelPosition = "top-left";
+              };
+              crossDomainTrusted = true;
+              reconnectGeneration = 1;
+              virglVideo = false;
+              filter = {
+                allowGlobals = [ ];
+                denyGlobals = [ ];
+                maxVersions = { };
+                dmabufAllow = [ ];
+                dmabufDeny = [ ];
+                debugLogging = false;
+              };
             };
           };
         };
