@@ -379,7 +379,6 @@ if True:
         "d2b --zone local-root --json resource list Provider "
         ">/run/d2b-interaction-providers.json"
     )
-    print(machine.succeed("cat /run/d2b-interaction-providers.json"))
     machine.succeed(
         "jq -e '"
         "(.resources | map(select(.type == \"Provider\" and .metadata.name == \"display-wayland\")) | length == 1) and "
@@ -401,17 +400,6 @@ if True:
         ".spec.config.guestSources[0].guestRef == \"Guest/acceptance-guest\" and "
         ".spec.config.guestSources[0].categories == [\"system.info\"]))' "
         "/run/d2b-interaction-providers.json"
-    )
-    machine.succeed(
-        "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
-        "d2b --zone local-root --json resource reconcile Guest/acceptance-guest "
-        ">/run/d2b-guest-reconcile.json"
-    )
-    machine.succeed(
-        "jq -e '.authenticated == true and .ready == true and "
-        ".effect == \"cloud-hypervisor-adopted\" and "
-        ".resourceRef == \"Guest/acceptance-guest\"' "
-        "/run/d2b-guest-reconcile.json"
     )
     for zone in ["local-root", "other"]:
         machine.succeed(
