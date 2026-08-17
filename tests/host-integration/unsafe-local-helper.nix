@@ -10,6 +10,7 @@ pkgs.testers.runNixOSTest {
   name = "d2b-unsafe-local-helper";
 
   nodes.machine = d2bLib.d2bDaemonNode {
+    writableStore = true;
     extra = { pkgs, ... }: {
       users.users.bob = {
         isNormalUser = true;
@@ -18,7 +19,73 @@ pkgs.testers.runNixOSTest {
       d2b.site.adminUsers = [ "alice" ];
       systemd.services.d2bd.environment.D2B_SKIP_KERNEL_MODULE_CHECK = "1";
       d2b.zones = {
-        local-root = { };
+        local-root.resources = {
+          alice = {
+            type = "User";
+            spec = {
+              displayName = "Alice";
+              groups = [ ];
+              osUsername = "alice";
+            };
+          };
+          host-system = {
+            type = "Host";
+            spec = {
+              providerRef = "Provider/system-core";
+              defaultDomain = "system";
+              allowedDomains = [ "system" ];
+              budget = { };
+              networkAttachments = [ ];
+              deviceAttachments = [ ];
+              volumeAttachmentDefaults = [ ];
+            };
+          };
+          acceptance-guest = {
+            type = "Guest";
+            spec = {
+              providerRef = "Provider/system-core";
+              defaultDomain = "system";
+              allowedDomains = [ "system" ];
+              budget = { };
+              networkAttachments = [ ];
+              deviceAttachments = [ ];
+              volumeAttachmentDefaults = [ ];
+            };
+          };
+          display-wayland = {
+            type = "Provider";
+            spec = {
+              config.runtimeVolumePolicyId = "display-wayland.wlproxy-runtime.v1";
+            };
+          };
+          clipboard-wayland = {
+            type = "Provider";
+            spec = {
+              config = {
+                hostExecutionRef = "Host/host-system";
+                hostUserRef = "User/alice";
+                displayWaylandRef = "Provider/display-wayland";
+                guestSources = [ { guestRef = "Guest/acceptance-guest"; } ];
+              };
+            };
+          };
+          notification-desktop = {
+            type = "Provider";
+            spec = {
+              config = {
+                hostExecutionRef = "Host/host-system";
+                hostUserRef = "User/alice";
+                displayWaylandRef = "Provider/display-wayland";
+                guestSources = [
+                  {
+                    guestRef = "Guest/acceptance-guest";
+                    categories = [ "system.info" ];
+                  }
+                ];
+              };
+            };
+          };
+        };
         other.parentZone = "local-root";
       };
       d2b.realms.host = {
@@ -95,6 +162,44 @@ if True:
         "journalctl -u d2bd.service --no-pager | grep -Eq "
         "'interaction_runtime_ready[=: ]+true'",
         timeout=60,
+    )
+    machine.succeed(
+        "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
+        "d2b --zone local-root --json resource list Provider "
+        ">/run/d2b-interaction-providers.json"
+    )
+    machine.succeed(
+        "jq -e '"
+        "(.resources | map(select(.resourceRef == \"Provider/display-wayland\")) | length == 1) and "
+        "(.resources | map(select(.resourceRef == \"Provider/clipboard-wayland\")) | length == 1) and "
+        "(.resources | map(select(.resourceRef == \"Provider/notification-desktop\")) | length == 1) and "
+        "(.resources[] | select(.resourceRef == \"Provider/display-wayland\") | "
+        ".spec.config.runtimeVolumePolicyId == \"display-wayland.wlproxy-runtime.v1\") and "
+        "(.resources[] | select(.resourceRef == \"Provider/clipboard-wayland\") | ("
+        ".spec.config.hostExecutionRef == \"Host/host-system\" and "
+        ".spec.config.hostUserRef == \"User/alice\" and "
+        ".spec.config.displayWaylandRef == \"Provider/display-wayland\" and "
+        "(.spec.config.guestSources | length == 1) and "
+        ".spec.config.guestSources[0].guestRef == \"Guest/acceptance-guest\")) and "
+        "(.resources[] | select(.resourceRef == \"Provider/notification-desktop\") | ("
+        ".spec.config.hostExecutionRef == \"Host/host-system\" and "
+        ".spec.config.hostUserRef == \"User/alice\" and "
+        ".spec.config.displayWaylandRef == \"Provider/display-wayland\" and "
+        "(.spec.config.guestSources | length == 1) and "
+        ".spec.config.guestSources[0].guestRef == \"Guest/acceptance-guest\" and "
+        ".spec.config.guestSources[0].categories == [\"system.info\"]))' "
+        "/run/d2b-interaction-providers.json"
+    )
+    machine.succeed(
+        "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
+        "d2b --zone local-root --json resource reconcile Guest/acceptance-guest "
+        ">/run/d2b-guest-reconcile.json"
+    )
+    machine.succeed(
+        "jq -e '.authenticated == true and .ready == true and "
+        ".effect == \"cloud-hypervisor-adopted\" and "
+        ".resourceRef == \"Guest/acceptance-guest\"' "
+        "/run/d2b-guest-reconcile.json"
     )
     for zone in ["local-root", "other"]:
         machine.succeed(

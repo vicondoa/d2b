@@ -407,7 +407,7 @@ struct AnchoredPaths {
     source: AnchoredPath,
     destination: AnchoredPath,
     journal: AnchoredPath,
-    marker: AnchoredPath,
+    marker: Option<AnchoredPath>,
     lock: AnchoredPath,
 }
 
@@ -438,6 +438,23 @@ fn anchored(path: &Path) -> Result<AnchoredPath, LegacyMigrationError> {
     Ok(AnchoredPath { parent, name })
 }
 
+fn anchored_optional(path: &Path) -> Result<Option<AnchoredPath>, LegacyMigrationError> {
+    let parent = path
+        .parent()
+        .ok_or(LegacyMigrationError::InventoryInvalid)?;
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or(LegacyMigrationError::InventoryInvalid)?
+        .to_owned();
+    let parent = match crate::sys::path_safe::open_dir_path_safe(parent) {
+        Ok(parent) => parent,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err(LegacyMigrationError::InventoryInvalid),
+    };
+    Ok(Some(AnchoredPath { parent, name }))
+}
+
 fn anchored_paths(paths: &LegacyMigrationPaths) -> Result<AnchoredPaths, LegacyMigrationError> {
     let lock_path = paths
         .source
@@ -448,7 +465,7 @@ fn anchored_paths(paths: &LegacyMigrationPaths) -> Result<AnchoredPaths, LegacyM
         source: anchored(&paths.source)?,
         destination: anchored(&paths.destination)?,
         journal: anchored(&paths.journal)?,
-        marker: anchored(&paths.marker)?,
+        marker: anchored_optional(&paths.marker)?,
         lock: anchored(&lock_path)?,
     })
 }
@@ -687,7 +704,12 @@ pub(crate) fn inventory(
             )
         })
         .transpose()?;
-    let marker_digest = read_digest(&anchored.marker)?;
+    let marker_digest = anchored
+        .marker
+        .as_ref()
+        .map(read_digest)
+        .transpose()?
+        .flatten();
     let journal = read_journal(&anchored.journal)?;
     if journal
         .as_ref()
@@ -755,9 +777,32 @@ pub(crate) fn inventory(
 pub(crate) fn probe(
     paths: &LegacyMigrationPaths,
 ) -> Result<LegacyInventoryState, LegacyMigrationError> {
-    let anchored = anchored_paths(paths)?;
-    let _lock = acquire_lock(&anchored.lock)?;
-    let current = inventory(paths)?;
+    let anchored = match anchored_paths(paths) {
+        Ok(anchored) => anchored,
+        Err(error) => {
+            tracing::warn!(?error, "TPM migration probe path anchoring failed");
+            return Err(error);
+        }
+    };
+    let _lock = match acquire_lock(&anchored.lock) {
+        Ok(lock) => lock,
+        Err(error) => {
+            tracing::warn!(?error, "TPM migration probe lock failed");
+            return Err(error);
+        }
+    };
+    let current = match inventory(paths) {
+        Ok(current) => current,
+        Err(error) => {
+            tracing::warn!(?error, "TPM migration probe inventory failed");
+            return Err(error);
+        }
+    };
+    tracing::warn!(
+        ?current,
+        marker_parent_present = anchored.marker.is_some(),
+        "TPM migration inventory probe state"
+    );
     if !matches!(current.state, LegacyInventoryState::AlreadyCommitted) {
         return Ok(current.state);
     }
@@ -933,7 +978,10 @@ fn marker_matches(
     anchored: &AnchoredPaths,
     journal: &LegacyMigrationJournal,
 ) -> Result<bool, LegacyMigrationError> {
-    let bytes = match read_owned_file(&anchored.marker) {
+    let Some(marker) = anchored.marker.as_ref() else {
+        return Ok(false);
+    };
+    let bytes = match read_owned_file(marker) {
         Ok(Some(bytes)) => bytes,
         Ok(None) => return Ok(false),
         Err(LegacyMigrationError::InventoryInvalid | LegacyMigrationError::ForeignOwner) => {
@@ -1355,7 +1403,10 @@ pub(crate) fn migrate(
                 if payload_digest != journal.marker_digest() {
                     return Ok(LegacyMigrationOutcome::Ambiguous);
                 }
-                match publish_marker_at(&anchored.marker, &payload) {
+                let Some(marker) = anchored.marker.as_ref() else {
+                    return Ok(LegacyMigrationOutcome::Ambiguous);
+                };
+                match publish_marker_at(marker, &payload) {
                     Ok(()) => {}
                     Err(
                         LegacyMigrationError::InventoryInvalid | LegacyMigrationError::ForeignOwner,
@@ -1669,6 +1720,24 @@ mod tests {
         assert_eq!(probe(&paths).unwrap(), LegacyInventoryState::ValidLegacy);
         assert!(paths.source.exists());
         assert!(!paths.destination.exists());
+    }
+
+    #[test]
+    fn inventory_probe_accepts_fresh_state_before_marker_root_bootstrap() {
+        let scratch = Scratch::new("probe-marker-root-absent");
+        let paths = LegacyMigrationPaths::new(
+            scratch.0.join("legacy"),
+            scratch.0.join("state/swtpm"),
+            scratch.0.join("state/migration.journal"),
+            scratch.0.join("swtpm-markers/work"),
+            (
+                nix::unistd::geteuid().as_raw(),
+                nix::unistd::getegid().as_raw(),
+            ),
+        )
+        .unwrap();
+        assert_eq!(probe(&paths).unwrap(), LegacyInventoryState::NeverProvisioned);
+        assert!(!scratch.0.join("swtpm-markers").exists());
     }
 
     #[test]

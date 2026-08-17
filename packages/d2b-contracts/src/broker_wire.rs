@@ -250,6 +250,11 @@ pub enum BrokerRequest {
     ///
     /// Currently a typed stub (`Unimplemented`).
     UsbipExplicitFirewallRule(UsbipExplicitFirewallRuleRequest),
+    /// Record the broker durability evidence that closes an authenticated
+    /// resource-bundle activation commit. The request carries only the
+    /// canonical audit join; the broker does not accept resource rows or
+    /// caller-selected host effects over this operation.
+    ResourceActivationAudit(ResourceActivationAuditRequest),
     ValidateBundle,
     /// Write the per-VM dnsmasq lease file. Replaces leaves of the
     /// retired `microvm-setup@<vm>.service`. Currently a typed stub
@@ -405,6 +410,7 @@ impl BrokerRequest {
             Self::UsbipUnbind(_) => "UsbipUnbind",
             Self::UsbipExplicitBind(_) => "UsbipExplicitBind",
             Self::UsbipExplicitFirewallRule(_) => "UsbipExplicitFirewallRule",
+            Self::ResourceActivationAudit(_) => "ResourceActivationAudit",
             Self::ValidateBundle => "ValidateBundle",
             Self::SeedDnsmasqLease(_) => "SeedDnsmasqLease",
             Self::BindMountFromHardlinkFarm(_) => "BindMountFromHardlinkFarm",
@@ -426,6 +432,7 @@ impl BrokerRequest {
             Self::Hello(_) => "daemon-handshake",
             Self::GuestControlSign(_) => "guest-control-auth",
             Self::ValidateBundle => "bundle",
+            Self::ResourceActivationAudit(_) => "resource-activation-audit",
             Self::ExportBrokerAudit(_) => "audit-log",
             Self::PollChildReaped => "pidfd-reap-buffer",
             Self::OpenZoneStore(_) => "zone-store",
@@ -619,6 +626,10 @@ impl BrokerRequest {
                 format!("{}:{}:{}", self.op_name(), request.vm_id, request.role_id),
             ),
             Self::OpenPeerPidfdFromAcceptedSocket(_) => return None,
+            Self::ResourceActivationAudit(request) => (
+                request.audit_join.zone_id.as_str().to_owned(),
+                request.audit_join.operation_identity.as_str().to_owned(),
+            ),
             Self::ObserveRunner(request) => (
                 request.vm_id.to_string(),
                 format!("{}:{}:{}", self.op_name(), request.vm_id, request.role_id),
@@ -1166,6 +1177,8 @@ pub enum BrokerResponse {
     /// `SCM_RIGHTS` attachment on the same frame; the JSON body contains
     /// only opaque identity and disposition metadata.
     OpenZoneStore(OpenZoneStoreResponse),
+    /// Response for [`BrokerRequest::ResourceActivationAudit`].
+    ResourceActivationAudit(ResourceActivationAuditResponse),
     /// Drain response for `BrokerRequest::PollChildReaped`.
     PollChildReaped(PollChildReapedResponse),
     ReconcileStorageScope(ReconcileStorageScopeResponse),
@@ -2672,6 +2685,28 @@ pub struct BridgePortFlagsResponse {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ValidateBundleResponse {
     pub valid: bool,
+}
+
+/// Authenticated resource-bundle activation audit join. Both identities are
+/// broker-derived canonical SHA-256 values; no resource payload or path is
+/// accepted over the wire.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ResourceActivationAuditRequest {
+    pub audit_join: AuditJoinContext,
+}
+
+impl core::fmt::Debug for ResourceActivationAuditRequest {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("ResourceActivationAuditRequest(<redacted>)")
+    }
+}
+
+/// Confirmation that the broker appended the activation durability record.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ResourceActivationAuditResponse {
+    pub recorded: bool,
 }
 
 /// Runner-signal broker envelope. The live daemon stop/restart path first

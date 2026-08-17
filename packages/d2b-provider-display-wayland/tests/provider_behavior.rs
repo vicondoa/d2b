@@ -22,6 +22,42 @@ fn identity() -> DisplayIdentity {
         .with_label_position(DisplayLabelPosition::TopLeft)
 }
 
+#[test]
+fn wayland_session_accepts_the_canonical_debug_logging_filter_field() {
+    let value = serde_json::json!({
+        "guestRef": "Guest/work-vm",
+        "hostRef": "Host/host-system",
+        "userRef": "User/alice",
+        "policyRef": "display-wayland.d2bus.org.WaylandPolicy/default",
+        "identity": {
+            "label": "work-vm",
+            "activeColor": "#7fc8ff",
+            "inactiveColor": "#45475a",
+            "urgentColor": "#f38ba8",
+            "borderEnabled": true,
+            "borderWidth": 2,
+            "labelEnabled": true,
+            "labelText": "work-vm",
+            "labelPosition": "top-left"
+        },
+        "crossDomainTrusted": true,
+        "reconnectGeneration": 1,
+        "virglVideo": false,
+        "filter": {
+            "debugLogging": false,
+            "allowGlobals": [],
+            "denyGlobals": [],
+            "maxVersions": {},
+            "dmabufAllow": [],
+            "dmabufDeny": []
+        }
+    });
+
+    let spec = serde_json::from_value::<WaylandSessionSpec>(value).unwrap();
+    let encoded = serde_json::to_value(spec).unwrap();
+    assert_eq!(encoded["filter"]["debugLogging"], false);
+}
+
 fn policy_for(spec: &WaylandSessionSpec) -> WaylandPolicySnapshot {
     WaylandPolicySnapshot::from_test_core(
         spec.policy_ref().clone(),

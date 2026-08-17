@@ -2063,6 +2063,47 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
             )?;
             Ok(DispatchResult::no_fds(validate_bundle_ok_response()))
         }
+        RealBrokerRequest::ResourceActivationAudit(req) => {
+            let op_fields = OperationFields::ResourceActivationAudit {};
+            if !caller_role_is_admin(&caller_role) {
+                write_decision_op_record!(
+                    audit_log,
+                    bundle_metadata,
+                    "ResourceActivationAudit",
+                    req.audit_join.operation_identity.as_str(),
+                    caller_uid,
+                    caller_gid,
+                    &caller_role,
+                    "resource-bundle",
+                    req.audit_join.zone_id.as_str(),
+                    None,
+                    "denied-refused",
+                    Some("audit-requires-admin"),
+                    op_fields,
+                )?;
+                return Err(BrokerError::AuditRequiresAdmin);
+            }
+            write_success_op_record!(
+                audit_log,
+                bundle_metadata,
+                "ResourceActivationAudit",
+                req.audit_join.operation_identity.as_str(),
+                caller_uid,
+                caller_gid,
+                &caller_role,
+                "resource-bundle",
+                req.audit_join.zone_id.as_str(),
+                None,
+                op_fields,
+            )?;
+            Ok(DispatchResult::no_fds(
+                BrokerResponse::ResourceActivationAudit(
+                    d2b_contracts::broker_wire::ResourceActivationAuditResponse {
+                        recorded: true,
+                    },
+                ),
+            ))
+        }
         RealBrokerRequest::ExportBrokerAudit(req) => {
             // Real wire filter is a typed BrokerAuditFilter struct;
             // serialize to JSON so the daily-file export path keeps the
@@ -4229,6 +4270,7 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 (intent.owner_uid, intent.owner_gid),
             )
             .map_err(|error| BrokerError::LiveHandler(error.to_string()))?;
+            tracing::warn!(?paths, probe_only = req.probe_only, "TPM migration paths resolved");
             let wire_outcome = if req.probe_only {
                 match crate::ops::swtpm_migration::probe(&paths) {
                     Ok(crate::ops::swtpm_migration::LegacyInventoryState::NeverProvisioned) => {

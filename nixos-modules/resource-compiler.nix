@@ -32,6 +32,12 @@ let
         name = semanticSchemaFileName resourceType;
       })
       semanticResourceTypes)
+    ++ (map
+      (resourceType: {
+        path = ../docs/reference/schemas/v3 + "/${semanticSchemaFileName resourceType}";
+        name = semanticSchemaFileName resourceType;
+      })
+      providerResourceTypes)
   );
 in
 {

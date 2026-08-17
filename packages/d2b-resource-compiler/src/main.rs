@@ -32,7 +32,11 @@ const MAX_DIAGNOSTIC_BYTES: usize = d2b_resource_compiler::MAX_DIAGNOSTIC_BYTES;
 const MAX_RESOURCES: usize = 4096;
 const MAX_RESOURCE_BYTES: usize = 512 * 1024;
 const MAX_SCHEMA_BYTES: usize = 8 * 1024 * 1024;
-const ADDITIONAL_RESOURCE_TYPES: &[&str] = &[NIXOS_GENERATION_RESOURCE_TYPE];
+const ADDITIONAL_RESOURCE_TYPES: &[&str] = &[
+    NIXOS_GENERATION_RESOURCE_TYPE,
+    "display-wayland.d2bus.org.WaylandPolicy",
+    "display-wayland.d2bus.org.WaylandSession",
+];
 
 fn resource_schema_filename(resource_type: &str) -> String {
     if STANDARD_RESOURCE_TYPES.contains(&resource_type) {
@@ -1021,6 +1025,7 @@ fn validate_resource_ref_value(
     }
     if reference_scope == "same-zone"
         && !identities.contains(&(resource_type.to_owned(), resource_name.to_owned()))
+        && !is_bootstrap_external_reference(resource_type, resource_name)
     {
         return Err(CliError::new(
             "resource-compiler-reference-invalid",
@@ -1028,6 +1033,10 @@ fn validate_resource_ref_value(
         ));
     }
     Ok(())
+}
+
+fn is_bootstrap_external_reference(resource_type: &str, resource_name: &str) -> bool {
+    resource_type == "Provider" && resource_name == "system-core"
 }
 
 fn schema_shape_matches(schema: &Value, value: &Value) -> bool {
@@ -1933,6 +1942,65 @@ fn parse_digest(value: &str) -> Result<ArtifactDigest, CliError> {
 }
 
 fn contains_secret_shape(value: &Value) -> bool {
+    if value
+        .get("type")
+        .and_then(Value::as_str)
+        .is_some_and(|resource_type| resource_type == "Volume")
+    {
+        return contains_volume_secret_shape(value);
+    }
+    contains_secret_shape_at(value, false)
+}
+
+fn contains_volume_secret_shape(value: &Value) -> bool {
+    let Some(object) = value.as_object() else {
+        return contains_secret_shape_at(value, false);
+    };
+    object.iter().any(|(key, value)| {
+        if forbidden_key(key) && key != "path" {
+            return true;
+        }
+        if key == "spec" {
+            return contains_volume_spec_secret_shape(value);
+        }
+        contains_secret_shape_at(value, false)
+    })
+}
+
+fn contains_volume_spec_secret_shape(value: &Value) -> bool {
+    let Some(object) = value.as_object() else {
+        return contains_secret_shape_at(value, false);
+    };
+    object.iter().any(|(key, value)| {
+        if forbidden_key(key)
+            && key != "attachments"
+            && key != "layout"
+            && key != "views"
+        {
+            return true;
+        }
+        match key.as_str() {
+            "attachments" => value.as_array().is_none_or(|attachments| {
+                attachments
+                    .iter()
+                    .any(|attachment| contains_secret_shape_at(attachment, true))
+            }),
+            "layout" => value.as_array().is_none_or(|entries| {
+                entries
+                    .iter()
+                    .any(|entry| contains_secret_shape_at(entry, true))
+            }),
+            "views" => value.as_object().is_none_or(|views| {
+                views
+                    .values()
+                    .any(|view| contains_secret_shape_at(view, true))
+            }),
+            _ => contains_secret_shape_at(value, false),
+        }
+    })
+}
+
+fn contains_secret_shape_at(value: &Value, allow_path: bool) -> bool {
     match value {
         Value::String(value) => {
             let lower = value.to_ascii_lowercase();
@@ -1947,7 +2015,11 @@ fn contains_secret_shape(value: &Value) -> bool {
         Value::Array(values) => values.iter().any(contains_secret_shape),
         Value::Object(values) => values
             .iter()
-            .any(|(key, value)| forbidden_key(key) || contains_secret_shape(value)),
+            .any(|(key, value)| {
+                (forbidden_key(key)
+                    && !(allow_path && (key == "path" || key == "mountPath")))
+                    || contains_secret_shape_at(value, false)
+            }),
         Value::Null | Value::Bool(_) | Value::Number(_) => false,
     }
 }
@@ -2211,6 +2283,115 @@ mod tests {
                     "operations": []
                 }
             }),
+        ];
+        let input = CompileInput {
+            zone: "local-root".to_owned(),
+            resources,
+            provider_schema_digests: BTreeMap::new(),
+            providers: Vec::new(),
+            artifact_catalog_path: None,
+            expected_artifact_catalog_digest: None,
+            schema_root: Some(
+                Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/reference/schemas/v3"),
+            ),
+            expected_content_hash: None,
+            strict_secrets: false,
+        };
+        validate_resources(&input, false).unwrap();
+    }
+
+    #[test]
+    fn display_wayland_resources_validate_against_committed_schemas() {
+        let resources = vec![
+            json!({
+                "apiVersion": RESOURCE_API_VERSION,
+                "type": "Guest",
+                "metadata": {"name": "acceptance-guest", "zone": "local-root"},
+                "spec": {
+                    "allowedDomains": ["system"],
+                    "budget": {},
+                    "defaultDomain": "system",
+                    "deviceAttachments": [],
+                    "networkAttachments": [],
+                    "volumeAttachmentDefaults": []
+                }
+            }),
+            json!({
+                "apiVersion": RESOURCE_API_VERSION,
+                "type": "Host",
+                "metadata": {"name": "host-system", "zone": "local-root"},
+                "spec": {
+                    "providerRef": "Provider/system-core",
+                    "allowedDomains": ["system"],
+                    "budget": {},
+                    "defaultDomain": "system",
+                    "deviceAttachments": [],
+                    "networkAttachments": [],
+                    "volumeAttachmentDefaults": []
+                }
+            }),
+            json!({
+                "apiVersion": RESOURCE_API_VERSION,
+                "type": "User",
+                "metadata": {"name": "alice", "zone": "local-root"},
+                "spec": {
+                    "displayName": "Alice",
+                    "groups": [],
+                    "osUsername": "alice"
+                }
+            }),
+            json!({
+                "apiVersion": RESOURCE_API_VERSION,
+                "type": "display-wayland.d2bus.org.WaylandPolicy",
+                "metadata": {"name": "display-wayland-policy", "zone": "local-root"},
+                "spec": {
+                    "allowGlobals": [],
+                    "denyGlobals": [],
+                    "maxVersions": {},
+                    "dmabufAllow": [],
+                    "dmabufDeny": [],
+                    "defaults": {
+                        "acceleratedRendering": "allow",
+                        "clipboardBoundary": "virtualize",
+                        "highRisk": "deny",
+                        "appDefaults": "allow",
+                        "offDefaults": "deny",
+                        "unclassified": "deny"
+                    }
+                }
+            }),
+            json!({
+                "apiVersion": RESOURCE_API_VERSION,
+                "type": "display-wayland.d2bus.org.WaylandSession",
+                "metadata": {"name": "acceptance-wayland-session", "zone": "local-root"},
+                "spec": {
+                    "guestRef": "Guest/acceptance-guest",
+                    "hostRef": "Host/host-system",
+                    "userRef": "User/alice",
+                    "policyRef": "display-wayland.d2bus.org.WaylandPolicy/display-wayland-policy",
+                    "identity": {
+                        "label": "acceptance-guest",
+                        "activeColor": "#7fc8ff",
+                        "inactiveColor": "#45475a",
+                        "urgentColor": "#f38ba8",
+                        "borderEnabled": true,
+                        "borderWidth": 9,
+                        "labelEnabled": true,
+                        "labelText": null,
+                        "labelPosition": "top-left"
+                    },
+                    "crossDomainTrusted": true,
+                    "virglVideo": false,
+                    "filter": {
+                        "debugLogging": false,
+                        "denyGlobals": [],
+                        "allowGlobals": [],
+                        "maxVersions": {},
+                        "dmabufAllow": [],
+                        "dmabufDeny": []
+                    }
+                }
+            })
         ];
         let input = CompileInput {
             zone: "local-root".to_owned(),

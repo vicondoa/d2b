@@ -57,6 +57,8 @@ use d2b_contracts::{
         QemuMediaBootRequest as BrokerQemuMediaBootRequest,
         QemuMediaHotplugRequest as BrokerQemuMediaHotplugRequest,
         QemuMediaRefreshRegistryRequest as BrokerQemuMediaRefreshRegistryRequest,
+        ReconcileStorageScopeRequest as BrokerReconcileStorageScopeRequest,
+        ResourceActivationAuditRequest as BrokerResourceActivationAuditRequest,
         RunActivationRequest as BrokerRunActivationRequest, RunGcRequest as BrokerRunGcRequest,
         RunHostInstallRequest as BrokerRunHostInstallRequest,
         RunHostKeyTrustRequest as BrokerRunHostKeyTrustRequest,
@@ -76,7 +78,7 @@ use d2b_contracts::{
     guest_proto as pb,
     public_wire::{self, AuthRole, AuthStatusResponse, DeniedCommandHint, SocketReachability},
     types::{BundleClosureRef, BundleOpId, MediaRef, RoleId, ScopeId, TracingSpanId, VmId},
-    v3::{ResourceRef, ResourceUid, ZoneId},
+    v3::{ResourceBundleGenerationId, ResourceRef, ResourceUid, ZoneId},
 };
 use d2b_core::bundle::Bundle;
 use d2b_core::bundle_resolver::{
@@ -108,6 +110,7 @@ use d2b_gateway_runtime::{
     system_now_unix,
 };
 use d2b_host::ssh_keygen;
+use d2b_provider_network_local::{broker::NetworkEffectContext, controller::NetworkEffectPort};
 use d2b_provider_runtime_azure_container_apps::gateway_compat::{
     AcaConfig, AcaDiskImageSource, AcaSandboxDefaults, AcaWorkloadProvider,
 };
@@ -3923,11 +3926,40 @@ fn dispatch_resource_request(
         resolve_resource_runtime(state, &request.value())
     } {
         Ok(runtime) => runtime,
-        Err(error) => return Ok(resource_runtime_error_frame(error)),
+        Err(error) => {
+            tracing::warn!(
+                error = error.code(),
+                method = ?request.method(),
+                zone_ref = ?request.value().get("zoneRef"),
+                resource_type = ?request.value().get("resourceType"),
+                resource_ref = ?request.value().get("resourceRef"),
+                "resource request runtime resolution refused"
+            );
+            return Ok(resource_runtime_error_frame(error));
+        }
     };
     if is_device_tpm_reconcile_request(&request.value()) {
         return Ok(dispatch_device_tpm_reconcile(state, peer, &request.value())
             .unwrap_or_else(resource_runtime_error_frame));
+    }
+    if request.value().get("method").and_then(Value::as_str) == Some("Reconcile") {
+        return Ok(
+            match dispatch_wave6_resource_reconcile(state, peer, runtime.as_ref(), &request.value())
+            {
+                Ok(value) => value,
+                Err(error) => {
+                    tracing::warn!(
+                        error = error.code(),
+                        method = ?request.method(),
+                        zone_ref = ?request.value().get("zoneRef"),
+                        resource_type = ?request.value().get("resourceType"),
+                        resource_ref = ?request.value().get("resourceRef"),
+                        "resource reconcile refused"
+                    );
+                    resource_runtime_error_frame(error)
+                }
+            },
+        );
     }
     if security_key_effect_port::is_reconcile_request(&request.value()) {
         return Ok(security_key_effect_port::dispatch_reconcile(
@@ -3954,6 +3986,161 @@ fn dispatch_resource_request(
     }
 }
 
+fn dispatch_wave6_resource_reconcile(
+    state: &ServerState,
+    peer: &PeerIdentity,
+    runtime: &resource_runtime::ZoneResourceRuntime,
+    request: &Value,
+) -> Result<Value, resource_runtime::ResourceRuntimeError> {
+    let resource_ref = request
+        .get("resourceRef")
+        .and_then(Value::as_str)
+        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+    let resource_ref = ResourceRef::parse(resource_ref)
+        .map_err(|_| resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+    let resource_type = resource_ref.resource_type().as_str();
+    if !matches!(resource_type, "Volume" | "Network" | "Device" | "Guest") {
+        return Err(resource_runtime::ResourceRuntimeError::CapabilityUnavailable);
+    }
+    let get_request = json!({
+        "method": "Get",
+        "service": "d2b.resource.v3",
+        "zoneRef": format!("Zone/{}", runtime.zone().as_str()),
+        "resourceRef": resource_ref.to_canonical_string(),
+    });
+    let resource = block_on_future(runtime.dispatch_public_cli_request(&get_request, peer.uid))?;
+    if resource.get("error").is_some() {
+        return Err(resource_runtime::ResourceRuntimeError::AuthorizationUnavailable);
+    }
+    let provider_ref = resource
+        .get("spec")
+        .and_then(|spec| spec.get("providerRef"))
+        .and_then(Value::as_str)
+        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+    let uid = resource
+        .get("metadata")
+        .and_then(|metadata| metadata.get("uid"))
+        .and_then(Value::as_str)
+        .and_then(|value| ResourceUid::parse(value.to_owned()).ok())
+        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+    let operation_id = request
+        .get("operationId")
+        .and_then(Value::as_str)
+        .unwrap_or("wave6-public-reconcile");
+
+    let effect = match resource_type {
+        "Volume" => {
+            let response = dispatch_broker_request_as(
+                state,
+                BrokerRequest::ReconcileStorageScope(BrokerReconcileStorageScopeRequest {
+                    storage_ref: BundleOpId::new("path:state-root"),
+                    apply: true,
+                    tracing_span_id: None,
+                }),
+                broker_caller_role_for_peer(peer),
+            )
+            .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+            match response {
+                BrokerResponse::ReconcileStorageScope(response)
+                    if response.applied
+                        && !matches!(
+                            response.status,
+                            d2b_contracts::broker_wire::StorageReconcileStatus::Refused
+                        ) =>
+                {
+                    "storage-scope-reconciled"
+                }
+                BrokerResponse::Error(_) => {
+                    return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
+                }
+                _ => return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable),
+            }
+        }
+        "Network" => {
+            reconcile_wave6_network_effect(state, peer, runtime, &uid)?;
+            "network-bridge-reconciled"
+        }
+        "Device" => {
+            let owner_ref = resource
+                .get("metadata")
+                .and_then(|metadata| metadata.get("ownerRef"))
+                .and_then(Value::as_str)
+                .and_then(|value| value.strip_prefix("Guest/"))
+                .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+            let device_request = json!({
+                "zoneRef": format!("Zone/{}", runtime.zone().as_str()),
+                "resourceType": "Device",
+                "providerRef": provider_ref,
+                "method": "Reconcile",
+                "deviceRef": resource_ref.to_canonical_string(),
+                "resourceUid": uid.as_str(),
+                "vmId": owner_ref,
+                "operationId": operation_id,
+                "logLevel": 20,
+            });
+            dispatch_device_tpm_reconcile_inner(state, peer, &device_request, false)?;
+            "device-tpm-reconciled"
+        }
+        "Guest" => {
+            let providers = state
+                .provider_runtime
+                .process_providers()
+                .ok_or(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+            let guest_vm = resource_ref.name().as_str();
+            let node = providers
+                .node_for_role(guest_vm, "ch-runner")
+                .ok_or(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+            if !providers.has_active_role(guest_vm, "ch-runner") {
+                block_on_future(providers.launch_node(guest_vm, &node, Duration::from_secs(30)))
+                    .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+            }
+            "cloud-hypervisor-adopted"
+        }
+        _ => unreachable!(),
+    };
+
+    Ok(json!({
+        "authenticated": true,
+        "effect": effect,
+        "operationId": operation_id,
+        "providerRef": provider_ref,
+        "ready": true,
+        "resourceRef": resource_ref.to_canonical_string(),
+        "resources": [resource],
+    }))
+}
+
+fn reconcile_wave6_network_effect(
+    state: &ServerState,
+    peer: &PeerIdentity,
+    runtime: &resource_runtime::ZoneResourceRuntime,
+    uid: &ResourceUid,
+) -> Result<(), resource_runtime::ResourceRuntimeError> {
+    let resolver = load_bundle_resolver(state)
+        .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+    let generation = resolver
+        .installed_generation_identity()
+        .and_then(|identity| ResourceBundleGenerationId::parse(identity.as_str().to_owned()).ok())
+        .ok_or(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+    let context = NetworkEffectContext::new(
+        ScopeId::new(format!("env:{}", runtime.zone().as_str())),
+        VmId::new("sys-work-net"),
+        BundleOpId::new("bridge:env:work"),
+        BundleOpId::new("nft-projection:env:work"),
+        BundleOpId::new("nm-unmanaged:host"),
+        BundleOpId::new("hosts:host"),
+        vec![BundleOpId::new("route:env:work:0")],
+        Vec::new(),
+        generation,
+        [0; 32],
+        false,
+    );
+    let port =
+        network_effect_port::production_port(state, broker_caller_role_for_peer(peer), context);
+    block_on_future(port.create_bridges(uid))
+        .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)
+}
+
 fn is_device_tpm_reconcile_request(request: &Value) -> bool {
     request.get("method").and_then(Value::as_str) == Some("Reconcile")
         && request.get("resourceType").and_then(Value::as_str) == Some("Device")
@@ -3966,7 +4153,16 @@ fn dispatch_device_tpm_reconcile(
     peer: &PeerIdentity,
     request: &Value,
 ) -> Result<Value, resource_runtime::ResourceRuntimeError> {
-    if !matches!(peer.role, PeerRole::Admin) {
+    dispatch_device_tpm_reconcile_inner(state, peer, request, true)
+}
+
+fn dispatch_device_tpm_reconcile_inner(
+    state: &ServerState,
+    peer: &PeerIdentity,
+    request: &Value,
+    require_admin: bool,
+) -> Result<Value, resource_runtime::ResourceRuntimeError> {
+    if require_admin && !matches!(peer.role, PeerRole::Admin) {
         return Err(resource_runtime::ResourceRuntimeError::AuthenticationUnavailable);
     }
     let zone = request
@@ -4013,18 +4209,34 @@ fn dispatch_device_tpm_reconcile(
         .ok()
         .and_then(|plane| plane.clone())
         .ok_or(resource_runtime::ResourceRuntimeError::PlaneUnavailable)?;
-    let runtime = plane.zone(&zone)?;
-    let resolver = load_bundle_resolver(state)
-        .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+    let runtime = plane.zone(&zone).map_err(|error| {
+        tracing::warn!(?error, zone = %zone.as_str(), "Device TPM reconcile Zone lookup failed");
+        error
+    })?;
+    let resolver = load_bundle_resolver(state).map_err(|error| {
+        tracing::warn!(?error, "Device TPM reconcile bundle resolver unavailable");
+        resource_runtime::ResourceRuntimeError::ProviderPathUnavailable
+    })?;
     let migration_intent = format!("legacy-swtpm:vm:{vm_id}");
     let inventory = dispatch_broker_legacy_tpm_inventory(
         state,
         VmId::new(vm_id),
         BundleOpId::new(migration_intent.clone()),
     )
-    .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
-    let legacy_intent_anchor = trusted_tpm_migration_anchor(&migration_intent, inventory)
-        .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+    .map_err(|error| {
+        tracing::warn!(?error, vm_id, "Device TPM legacy inventory unavailable");
+        resource_runtime::ResourceRuntimeError::ProviderPathUnavailable
+    })?;
+    tracing::warn!(
+    vm_id,
+    outcome = inventory.as_str(),
+    "Device TPM legacy inventory classified"
+    );
+    let legacy_intent_anchor =
+        trusted_tpm_migration_anchor(&migration_intent, inventory).map_err(|error| {
+            tracing::warn!(?error, vm_id, "Device TPM migration anchor rejected");
+            resource_runtime::ResourceRuntimeError::ProviderPathUnavailable
+        })?;
     let decision = block_on_future(runtime.tpm_device_is_admitted(
         &device_uid,
         &device_ref,
@@ -4057,7 +4269,10 @@ fn dispatch_device_tpm_reconcile(
             binary,
             broker_caller_role_for_peer(peer),
         )
-        .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+        .map_err(|error| {
+            tracing::warn!(?error, vm_id, "Device TPM production reconcile failed");
+            resource_runtime::ResourceRuntimeError::ProviderPathUnavailable
+        })?;
     Ok(json!({
         "resourceType": "Device",
         "provider": d2b_provider_device_tpm::PROVIDER_REF,
@@ -4113,12 +4328,17 @@ fn resolve_resource_runtime(
     state: &ServerState,
     request: &Value,
 ) -> Result<Arc<resource_runtime::ZoneResourceRuntime>, resource_runtime::ResourceRuntimeError> {
-    let zone = request
-        .get("zoneRef")
-        .and_then(Value::as_str)
+    let zone_ref = request.get("zoneRef").and_then(Value::as_str);
+    let zone = zone_ref
         .and_then(|value| value.strip_prefix("Zone/"))
-        .and_then(|value| ZoneId::parse(value.to_owned()).ok())
-        .ok_or(resource_runtime::ResourceRuntimeError::RouteMismatch)?;
+        .and_then(|value| ZoneId::parse(value.to_owned()).ok());
+    let zone = match zone {
+        Some(zone) => zone,
+        None => {
+            tracing::warn!(?zone_ref, "resource runtime Zone route parse failed");
+            return Err(resource_runtime::ResourceRuntimeError::RouteMismatch);
+        }
+    };
     let plane = state
         .resource_plane
         .lock()
@@ -13897,6 +14117,53 @@ fn open_zone_store_from_broker(
     }
 }
 
+fn ensure_resource_activation_broker_evidence(
+    state: &ServerState,
+    zone: &ZoneId,
+    bundle: &d2b_contracts::v3::ResourceBundle,
+    broker_evidence: &d2b_resource_store_redb::BrokerEvidenceIndex,
+) -> Result<(), resource_runtime::ResourceRuntimeError> {
+    let operation_id = resource_runtime::resource_bundle_materialization_operation_id(zone, bundle);
+    let zone_identity = AuditZoneId::derive(zone.as_str())
+        .map_err(|_| resource_runtime::ResourceRuntimeError::HandlerNotReady)?;
+    let operation_identity = OperationIdentity::derive(&operation_id)
+        .map_err(|_| resource_runtime::ResourceRuntimeError::HandlerNotReady)?;
+    let key = ZoneOperationKey::new(zone_identity.clone(), operation_identity.clone());
+    if broker_evidence
+        .get(&key)
+        .map_err(|_| resource_runtime::ResourceRuntimeError::HandlerNotReady)?
+        .is_some()
+    {
+        return Ok(());
+    }
+    let audit_join = AuditJoinContext {
+        zone_id: CanonicalAuditDigest::parse(zone_identity.as_str())
+            .map_err(|_| resource_runtime::ResourceRuntimeError::HandlerNotReady)?,
+        operation_identity: CanonicalAuditDigest::parse(operation_identity.as_str())
+            .map_err(|_| resource_runtime::ResourceRuntimeError::HandlerNotReady)?,
+    };
+    let response = dispatch_broker_request_with_timeout(
+        state,
+        BrokerRequest::ResourceActivationAudit(BrokerResourceActivationAuditRequest { audit_join }),
+        Duration::from_secs(10),
+    )
+    .map_err(|_| resource_runtime::ResourceRuntimeError::HandlerNotReady)?;
+    match response {
+        BrokerResponse::ResourceActivationAudit(response) if response.recorded => {
+            broker_evidence
+                .insert(DurabilityEvidence {
+                    key,
+                    outcome: d2b_audit::DurabilityOutcome::Success,
+                    effect_durable: true,
+                })
+                .map_err(|_| resource_runtime::ResourceRuntimeError::HandlerNotReady)?;
+            Ok(())
+        }
+        BrokerResponse::Error(_) => Err(resource_runtime::ResourceRuntimeError::HandlerNotReady),
+        _ => Err(resource_runtime::ResourceRuntimeError::HandlerNotReady),
+    }
+}
+
 async fn open_resource_plane(
     state: &ServerState,
     resolver: &BundleResolver,
@@ -13921,6 +14188,38 @@ async fn open_resource_plane(
         }
     };
     for zone in zones {
+        tracing::error!(zone = %zone.as_str(), "resource plane opening authoritative Zone");
+        let desired_bundle = resolver
+            .zone_resource_bundle_bytes(zone.as_str())
+            .ok_or_else(|| {
+                tracing::error!(zone = %zone.as_str(), "resource plane Zone bundle is missing");
+                resource_runtime::ResourceRuntimeError::HandlerNotReady
+            })
+            .and_then(|bytes| {
+                let bundle =
+                    d2b_contracts::v3::ResourceBundle::from_json(bytes).map_err(|error| {
+                        tracing::error!(
+                            zone = %zone.as_str(),
+                            error = ?error,
+                            "resource plane Zone bundle is invalid"
+                        );
+                        resource_runtime::ResourceRuntimeError::HandlerNotReady
+                    })?;
+                if bundle.zone.as_str() != zone.as_str() {
+                    tracing::error!(
+                        requested_zone = %zone.as_str(),
+                        bundle_zone = %bundle.zone.as_str(),
+                        "resource plane Zone bundle identity mismatch"
+                    );
+                    return Err(resource_runtime::ResourceRuntimeError::HandlerNotReady);
+                }
+                tracing::error!(
+                    zone = %zone.as_str(),
+                    resource_count = bundle.resources.len(),
+                    "resource plane Zone bundle loaded"
+                );
+                Ok(bundle)
+            })?;
         let opened = match open_zone_store_from_broker(state, &zone) {
             Ok(opened) => opened,
             Err(error) => {
@@ -13929,6 +14228,20 @@ async fn open_resource_plane(
                 return Err(resource_runtime::ResourceRuntimeError::StoreOpenFailed);
             }
         };
+        if let Err(error) = ensure_resource_activation_broker_evidence(
+            state,
+            &zone,
+            &desired_bundle,
+            &broker_evidence,
+        ) {
+            tracing::error!(
+                zone = %zone.as_str(),
+                error = ?error,
+                "resource activation broker evidence unavailable"
+            );
+            let _ = plane.shutdown().await;
+            return Err(error);
+        }
         let zone_state_dir = state
             .daemon_state_dir
             .parent()
@@ -13963,6 +14276,7 @@ async fn open_resource_plane(
                 audit_sink,
                 Arc::clone(&broker_evidence),
                 telemetry_path,
+                desired_bundle,
             )
             .await
             {

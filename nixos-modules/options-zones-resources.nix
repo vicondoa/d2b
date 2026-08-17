@@ -630,7 +630,7 @@ let
             && builtins.stringLength spec.osUsername <= 255
             && !(lib.hasInfix "/" spec.osUsername)
             && !(lib.hasInfix "\\" spec.osUsername)
-            && !(lib.hasInfix (builtins.fromJSON "\"\\u0000\"") spec.osUsername);
+            && !(lib.hasInfix "\\u0000" (builtins.toJSON spec.osUsername));
           message = "${row.path}.spec.osUsername must be a bounded OS username without NUL or path separators.";
         }
         {

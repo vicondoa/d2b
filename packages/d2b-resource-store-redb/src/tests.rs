@@ -1,5 +1,6 @@
 use crate::audit::{DurableMutationAudit, resource_mutation_record};
 use crate::metrics::{NoopStoreTelemetry, StoreMetric};
+use crate::transaction::INSTALLED_SCHEMA_CATALOG;
 use d2b_audit::{
     AuditHash, AuditRecord, AuditRecordError, AuditRecordFields, AuditSink, DurabilityEvidence,
     DurabilityOutcome, OperationIdentity, ZoneOperationKey, genesis_hash,
@@ -781,7 +782,7 @@ async fn initialized_schema_catalog_is_digest_bound_and_complete() {
         .iter()
         .find(|table| table.name == "api_schemas")
         .expect("schema table");
-    assert_eq!(table.rows.len(), STANDARD_RESOURCE_TYPES.len());
+    assert_eq!(table.rows.len(), INSTALLED_SCHEMA_CATALOG.len());
 
     let mut resource_types = std::collections::BTreeSet::new();
     for row in &table.rows {
@@ -804,7 +805,7 @@ async fn initialized_schema_catalog_is_digest_bound_and_complete() {
     }
     assert_eq!(
         resource_types,
-        STANDARD_RESOURCE_TYPES
+        INSTALLED_SCHEMA_CATALOG
             .into_iter()
             .map(str::to_owned)
             .collect()
