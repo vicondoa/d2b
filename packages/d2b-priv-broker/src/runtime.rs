@@ -3128,13 +3128,6 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                     resolved: "nonzero".to_owned(),
                 });
             }
-            if req.resource_ref.is_some() && req.sandbox_plan.is_none() {
-                return Err(BrokerError::SpawnRunnerIntentMismatch {
-                    field: "sandbox_plan",
-                    requested: "missing".to_owned(),
-                    resolved: "required-for-generic-process".to_owned(),
-                });
-            }
             if req.resource_ref.is_some()
                 && (req.execution_ref.is_none()
                     || req.execution_domain.is_none()
@@ -3180,6 +3173,10 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 });
             }
             validate_spawn_runner_request_matches_intent(&req, intent)?;
+            // Legacy VM DAG launches carry the trusted bundle profile but no
+            // generic Process sandbox DTO. When a typed DTO is present, bind
+            // it to that same profile; otherwise the trusted intent remains
+            // the authoritative sandbox source.
             if let Some(plan) = &req.sandbox_plan {
                 validate_sandbox_launch_plan(&req, intent, plan)?;
             }
