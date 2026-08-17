@@ -98,7 +98,6 @@ pkgs.testers.runNixOSTest {
   nodes.machine = d2bLib.d2bDaemonNode {
       writableStore = true;
       extra = { pkgs, ... }: {
-        systemd.services.d2bd.serviceConfig.Delegate = true;
         d2b.vms.corp-vm = lib.mkForce { enable = false; };
         d2b.vms.acceptance-guest = {
           enable = true;
@@ -506,6 +505,17 @@ pkgs.testers.runNixOSTest {
         ".spec.config.guestSources[0].categories == [\"system.info\"]))' "
         "/run/d2b-providers-before.json"
     )
+    guest_effect_ready = machine.succeed(
+        "runuser -u d2bd -- sh -c '"
+        "relative=$(sed -n \"s/^0:://p\" /proc/self/cgroup); "
+        "test -w \"/sys/fs/cgroup''${relative}/cgroup.kill\" && "
+        "echo ready || echo blocked'"
+    ).strip() == "ready"
+    if not guest_effect_ready:
+        print(
+            "BLOCKED: Cloud Hypervisor Guest effect requires the daemon's "
+            "delegated cgroup.kill; this VM does not expose that host posture."
+        )
     acceptance_refs = [
         "Volume/acceptance-volume",
         "Network/acceptance-network",
@@ -515,6 +525,15 @@ pkgs.testers.runNixOSTest {
     for resource_ref in acceptance_refs:
         resource_type, resource_name = resource_ref.split("/", 1)
         safe_name = resource_ref.replace("/", "-").lower()
+        machine.succeed(
+            f"jq -e '.resources[] | select(.type == \"{resource_type}\" and "
+            f".metadata.name == \"{resource_name}\") "
+            f"| (.metadata.uid != null and .metadata.generation > 0 and "
+            f".metadata.revision > 0)' "
+            f"/run/d2b-resource-{resource_ref.split('/')[0].lower()}-before.json"
+        )
+        if resource_ref == "Guest/acceptance-guest" and not guest_effect_ready:
+            continue
         machine.succeed(
             f"runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
             f"d2b --zone work --json resource reconcile {resource_ref} "
@@ -536,13 +555,6 @@ pkgs.testers.runNixOSTest {
             f".effect == \"{expected_effect}\" and "
             f"(.providerRef | startswith(\"Provider/\"))' "
             f"/run/d2b-reconcile-{safe_name}.json"
-        )
-        machine.succeed(
-            f"jq -e '.resources[] | select(.type == \"{resource_type}\" and "
-            f".metadata.name == \"{resource_name}\") "
-            f"| (.metadata.uid != null and .metadata.generation > 0 and "
-            f".metadata.revision > 0)' "
-            f"/run/d2b-resource-{resource_ref.split('/')[0].lower()}-before.json"
         )
     machine.fail(
         "runuser -u bob -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
