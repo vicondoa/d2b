@@ -53,6 +53,8 @@
   inventory now accepts those Bazel-wrapped make invocations. Per-crate
   leaves keep exclusive broker tests. Host, Cargo-spawning, and
   nested-Bazel tests stay tagged local and off the hermetic leaves.
+- Retry short public-socket frames in zone doctor/support-bundle/audit
+  contract tests so CI nextest does not flake on a zero-length recv.
 - Fixed broker guest-control signing tests to use a path-safe test scratch root
   instead of a world-writable host temp directory.
 - Fixed local Bazel runfiles, Rust test-support graphs, stale coverage carriers,
